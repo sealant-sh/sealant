@@ -9,13 +9,14 @@
 import { Effect, Logger } from "effect";
 import { describe, expect, it } from "vitest";
 
-import type { SealantTarget } from "../sealantd/runtime.js";
+import type { CaptureFlushReport, SealantTarget } from "../sealantd/runtime.js";
 import { captureStatus, fakeCaptureDaemon, savedStatus } from "./capture-daemon.fixture.js";
 import { captureStatusFromStored } from "./capture-drain-ledger.js";
 import {
   InMemoryCaptureDrainStore,
   blueprintSourceKind,
-  captureDaemonAnswers,
+  ledgerObservationRecorder,
+  probeCaptureDaemon,
   captureProgressed,
   describeCaptureStatus,
   drainCaptureBeforeStop,
@@ -553,19 +554,21 @@ describe("drainCaptureBeforeStop · a newer observation of the executor (review 
     const base = inMemoryCaptureDrainLedger();
     const notSaved = captureStatus({ complete: false, incompleteReason: "snapshot-failed" });
     let injected = false;
-    // The public status route relays a newer answer while the drain is finishing: recorded
-    // against the run before the drain's own (older) reading is written.
+    // The public status route relays a newer answer right after the drain recorded its own:
+    // recorded against the run, after the drain's reading.
     const ledger: CaptureDrainLedger = {
       ...base,
-      save: (runId, token, entry, observation) =>
-        Effect.suspend(() => {
-          const row = base.store.rows.get(runId);
-          if (!injected && row !== undefined && reportsComplete(entry.last)) {
-            injected = true;
-            row.entry = { ...row.entry, last: notSaved, lastAtMs: Date.now() + 60_000 };
-          }
-          return base.save(runId, token, entry, observation);
-        }),
+      recordStatus: (runId, status, atMs, fence) =>
+        base.recordStatus(runId, status, atMs, fence).pipe(
+          Effect.tap(() =>
+            !injected && reportsComplete(status)
+              ? Effect.suspend(() => {
+                  injected = true;
+                  return base.recordStatus(runId, notSaved, atMs);
+                })
+              : Effect.void,
+          ),
+        ),
     };
     const daemon = fakeCaptureDaemon([savedStatus()]);
 
@@ -579,39 +582,119 @@ describe("drainCaptureBeforeStop · a newer observation of the executor (review 
     expect(row?.observation?.state).toBe("kept");
   });
 
-  it("never lets a drain's older reading roll back a newer one on record", async () => {
+  it("never lets a drain's progress write touch the status on record", async () => {
     const ledger = inMemoryCaptureDrainLedger();
     const claimed = await Effect.runPromise(ledger.claim("run_2"));
-    const token = claimed?.token ?? "";
     const notSaved = captureStatus({ complete: false, incompleteReason: "changed" });
-    const recorded = () => ledger.store.rows.get("run_2")?.entry;
-    const row = ledger.store.rows.get("run_2");
-    if (row !== undefined) {
-      row.entry = { ...row.entry, last: notSaved, lastAtMs: 2_000 };
-    }
-    const saveSaved = (lastAtMs: number) =>
-      Effect.runPromise(
-        ledger.save(
-          "run_2",
-          token,
-          {
-            lastProgressAt: undefined,
-            unreachableSince: undefined,
-            keptLogged: false,
-            silentLogged: false,
-            last: savedStatus(),
-            lastAtMs,
-          },
-          undefined,
-        ),
-      );
+    await Effect.runPromise(ledger.recordStatus("run_2", notSaved, 2_000));
+    await Effect.runPromise(
+      ledger.save(
+        "run_2",
+        claimed?.token ?? "",
+        {
+          lastProgressAt: 3_000,
+          unreachableSince: undefined,
+          keptLogged: false,
+          silentLogged: false,
+          last: savedStatus(),
+          lastAtMs: 3_000,
+        },
+        undefined,
+      ),
+    );
+    expect(ledger.store.rows.get("run_2")?.entry.last).toEqual(notSaved);
+    expect(ledger.store.rows.get("run_2")?.entry.lastProgressAt).toBe(3_000);
+  });
+});
 
-    await saveSaved(1_000);
-    expect(recorded()?.last).toEqual(notSaved);
-    expect(recorded()?.lastAtMs).toBe(2_000);
-    // A reading made after it does replace it.
-    await saveSaved(3_000);
-    expect(reportsComplete(recorded()?.last)).toBe(true);
+// Review 6 #6 helpers: a position in the executor's own history, and statuses stamped with it.
+// Unless a test says otherwise every boot reports generation 1: boots that share a generation
+// cannot be ordered against each other.
+const origin = (observation: number, bootId = "boot-1", bootGeneration = 1) => ({
+  epoch: 3,
+  launch: "launch-1",
+  bootId,
+  bootGeneration,
+  observation,
+  headN: 7,
+});
+const complete = (observation?: number, bootId?: string) =>
+  savedStatus(observation === undefined ? {} : { origin: origin(observation, bootId) });
+const failed = (observation?: number, bootId?: string) =>
+  captureStatus({
+    complete: false,
+    incompleteReason: "snapshot-failed",
+    ...(observation === undefined ? {} : { origin: origin(observation, bootId) }),
+  });
+const open = (ledger: ReturnType<typeof inMemoryCaptureDrainLedger>) =>
+  Effect.runPromise(ledger.openObservation("run_1", 60_000)).then((fence) => {
+    if (fence === undefined) {
+      throw new Error("no fence");
+    }
+    return fence;
+  });
+const last = (ledger: ReturnType<typeof inMemoryCaptureDrainLedger>) =>
+  ledger.store.rows.get("run_1")?.entry.last;
+
+// Review 6 #6: evidence is ordered by the executor's own history, never by a reader's clock.
+describe("recordStatus · ordered by the executor, not by clocks (review 6 #6)", () => {
+  it("keeps the answer the executor made later, whatever clock read either", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    const a = await open(ledger);
+    const b = await open(ledger);
+    // A newer failure, read by a worker whose clock is behind; then an older complete, read by a
+    // worker whose clock is ahead and recorded second.
+    await Effect.runPromise(ledger.recordStatus("run_1", failed(9), 1_000, b));
+    await Effect.runPromise(ledger.recordStatus("run_1", complete(8), 9_000, a));
+    expect(reportsComplete(last(ledger))).toBe(false);
+    // A later complete does replace it.
+    const c = await open(ledger);
+    await Effect.runPromise(ledger.recordStatus("run_1", complete(10), 500, c));
+    expect(reportsComplete(last(ledger))).toBe(true);
+  });
+
+  it("orders a recovery boot after the boot before it by its generation", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    const a = await open(ledger);
+    const b = await open(ledger);
+    // The recovery boot's complete (generation 2) outranks the first boot's failure, however
+    // high that boot's observation number went; the reverse never happens.
+    await Effect.runPromise(
+      ledger.recordStatus("run_1", savedStatus({ origin: origin(1, "boot-2", 2) }), 1_000, a),
+    );
+    await Effect.runPromise(
+      ledger.recordStatus(
+        "run_1",
+        captureStatus({
+          complete: false,
+          incompleteReason: "snapshot-failed",
+          origin: origin(500, "boot-1", 1),
+        }),
+        9_000,
+        b,
+      ),
+    );
+    expect(reportsComplete(last(ledger))).toBe(true);
+  });
+
+  it("orders by causality where no position does, and fails closed where nothing does", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    const a = await open(ledger);
+    const b = await open(ledger);
+    // Concurrent, unstamped: a complete recorded after a failure does not make it complete.
+    await Effect.runPromise(ledger.recordStatus("run_1", failed(), 9_000, a));
+    await Effect.runPromise(ledger.recordStatus("run_1", complete(), 1_000, b));
+    expect(reportsComplete(last(ledger))).toBe(false);
+    // Another boot's position cannot be compared either.
+    const c = await open(ledger);
+    const d = await open(ledger);
+    await Effect.runPromise(ledger.recordStatus("run_1", failed(50, "boot-1"), 1_000, c));
+    await Effect.runPromise(ledger.recordStatus("run_1", complete(1, "boot-2"), 2_000, d));
+    expect(reportsComplete(last(ledger))).toBe(false);
+    // Asked after the failure was recorded: the newer answer, whatever it says.
+    const e = await open(ledger);
+    await Effect.runPromise(ledger.recordStatus("run_1", complete(), 0, e));
+    expect(reportsComplete(last(ledger))).toBe(true);
   });
 });
 
@@ -727,14 +810,21 @@ describe("drain ownership within one worker", () => {
   });
 });
 
-describe("captureDaemonAnswers", () => {
-  it("counts a refusal as an answer and a failed connection as none", async () => {
-    const ask = (answer: "refused" | "unreachable") =>
+describe("probeCaptureDaemon", () => {
+  it("counts a refusal as an answer, a failed connection as none, and records what it reads", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    const probe = (answer: "refused" | "unreachable" | CaptureFlushReport) =>
       Effect.runPromise(
-        captureDaemonAnswers(TARGET, 1_000).pipe(Effect.provide(fakeCaptureDaemon([answer]).layer)),
+        probeCaptureDaemon(TARGET, 1_000, ledgerObservationRecorder(ledger, "run_1", 1_000)).pipe(
+          Effect.provide(fakeCaptureDaemon([answer]).layer),
+        ),
       );
-    expect(await ask("refused")).toBe(true);
-    expect(await ask("unreachable")).toBe(false);
+    expect((await probe("refused")).kind).toBe("refused");
+    expect((await probe("unreachable")).kind).toBe("unreachable");
+    expect(await probe(savedStatus())).toMatchObject({ kind: "status", recorded: true });
+    expect(reportsComplete(ledger.store.rows.get("run_1")?.entry.last)).toBe(true);
+    // Every observation resolved: nothing is left in flight.
+    expect(ledger.store.rows.get("run_1")?.fences?.size).toBe(0);
   });
 });
 

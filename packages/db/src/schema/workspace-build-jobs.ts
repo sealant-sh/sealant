@@ -241,6 +241,32 @@ export const workspaceCaptureDrains = pgTable(
      * against it: an observation that the work is not saved, made after a seal, revokes that seal.
      */
     lastStatusAt: timestamp("last_status_at", { mode: "date", withTimezone: true }),
+    /**
+     * When `last_status` was recorded, by the database's own clock. With an observation fence's
+     * `openedAt` (the same clock) it orders a status by causality where the executor's own
+     * position cannot (`capture-evidence-order.ts`); never compared with any process's clock.
+     */
+    lastStatusRecordedAt: timestamp("last_status_recorded_at", {
+      mode: "date",
+      withTimezone: true,
+    }),
+    /**
+     * Bumped by every change to the evidence about this executor: a status recorded, an
+     * observation opened or resolved, an attestation. A destructive decision records the version
+     * it read and commits only while it is still current (`authorizeDeletion`, decision 18).
+     */
+    evidenceVersion: bigint("evidence_version", { mode: "number" }).notNull().default(0),
+    /**
+     * Observations in flight: a status or flush request sent to the executor whose answer is not
+     * recorded yet, by token, with when it was opened and when it lapses (the database's clock).
+     * While any is unresolved, nothing Core holds of the executor is known to be current, and no
+     * deletion is authorized on it (review 6 #5). A failed record leaves its fence; a later
+     * observation opened after it lapsed resolves it.
+     */
+    observationFences: jsonb("observation_fences")
+      .$type<Readonly<Record<string, { readonly openedAt: string; readonly expiresAt: string }>>>()
+      .notNull()
+      .default({}),
     lastProgressAt: timestamp("last_progress_at", { mode: "date", withTimezone: true }),
     unreachableSince: timestamp("unreachable_since", { mode: "date", withTimezone: true }),
     keptLogged: boolean("kept_logged").notNull().default(false),
@@ -277,6 +303,8 @@ export const workspaceCaptureDrains = pgTable(
     completionLaunchId: text("completion_launch_id"),
     /** When the attesting store recorded the seal (its clock), when the attestation said. */
     completionSealedAt: timestamp("completion_sealed_at", { mode: "date", withTimezone: true }),
+    /** The seal's executor-origin position, when the attestation carried it (decision 17). */
+    completionOrigin: jsonb("completion_origin").$type<Readonly<Record<string, unknown>>>(),
     /**
      * The executor is RETAINED: kept because its disk holds work not confirmed saved (it ended
      * without a complete final flush, or its launch failed after it started). Set once (the

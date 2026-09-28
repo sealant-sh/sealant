@@ -60,6 +60,7 @@ const flushHarness = (
   const flushRequests: Array<CaptureFlushRequest | undefined> = [];
   const calls: string[] = [];
   const recorded: Array<{ runId: string; status: Readonly<Record<string, unknown>> }> = [];
+  const fences: string[] = [];
   const workspace = { id: "ws_1", ownerUserId: "usr_owner", latestRunId: "run_1" } as Workspace;
   const spec = {
     sources: {
@@ -114,11 +115,22 @@ const flushHarness = (
         } as WorkspaceRuntimeInstance),
     } as unknown as WorkspaceRuntimeInstanceRepoService),
     Layer.succeed(SealantRuntime, { connect: () => Effect.succeed(daemon) }),
-    // Every relayed answer is recorded against the run's executor (review 5 #3).
+    // Every relayed answer is recorded against the run's executor (review 5 #3), under an
+    // observation fence opened before it was asked for and resolved by the record (review 6 #5).
     Layer.mock(WorkspaceCaptureDrainRepo, {
+      openObservation: (input) =>
+        Effect.sync(() => {
+          fences.push(`open ${input.token}`);
+          return { openedAt: new Date() };
+        }),
+      closeObservation: (input) =>
+        Effect.sync(() => {
+          fences.push(`close ${input.token}`);
+        }),
       recordStatus: (input) =>
         Effect.sync(() => {
           recorded.push({ runId: input.runId, status: input.status });
+          fences.push(`record ${input.fence ?? "unfenced"}`);
           return true;
         }),
     }),
@@ -130,7 +142,7 @@ const flushHarness = (
         payload: { ownerUserId: "usr_owner", ...payload },
       }).pipe(Effect.provide(layer)),
     );
-  return { flush, flushRequests, calls, recorded };
+  return { flush, flushRequests, calls, recorded, fences };
 };
 
 /**
@@ -244,8 +256,12 @@ describe("workspace capture routes", () => {
     };
     const h = flushHarness(failing);
     expect(await h.flush({ kind: "final" })).toEqual(failing);
-    // Recorded against the run's executor before it is returned (review 5 #3).
+    // Recorded against the run's executor before it is returned (review 5 #3), the fence opened
+    // before the request resolved by the record (review 6 #5).
     expect(h.recorded).toEqual([{ runId: "run_1", status: { ...failing } }]);
+    expect(h.fences).toHaveLength(2);
+    expect(h.fences[0]?.startsWith("open ")).toBe(true);
+    expect(h.fences[1]).toBe(h.fences[0]?.replace("open ", "record "));
   });
 
   it("reject a snaps entry of an unknown class or without its failed count", () => {

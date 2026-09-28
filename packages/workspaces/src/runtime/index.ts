@@ -146,7 +146,6 @@ export {
 } from "./launch-retention.js";
 
 export {
-  ATTESTATION_CLOCK_SKEW_MS,
   attestationCoversExecutor,
   decideExecutorDeletion,
   observedCaptureFromStored,

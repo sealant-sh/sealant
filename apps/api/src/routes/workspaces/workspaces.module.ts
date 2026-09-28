@@ -73,6 +73,7 @@ import {
   WorkspaceCaptureDrainRepo,
   WorkspaceCreateReservationRepo,
   DatabaseTransaction,
+  executorOriginFromStored,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
   type ConnectedAccount,
@@ -91,6 +92,10 @@ import {
 import {
   attestationCoversExecutor,
   captureFlushAnswer,
+  captureStatusAnswer,
+  CaptureObservationUnrecordedError,
+  OBSERVATION_FENCE_MARGIN_MS,
+  type CaptureObservationRecorder,
   observedCaptureFromStored,
   storedCaptureStatus,
   bindRootMountPath,
@@ -98,7 +103,6 @@ import {
   UnknownWorkspacePackageError,
   unknownWorkspacePackageIds,
   SealantRuntime,
-  type CaptureFlushReport,
   type CaptureFlushRequest,
   type SealantError,
   type SealantSession,
@@ -2204,6 +2208,9 @@ export const mapWorkspaceCaptureDrain = (
             ...(row.completionSealedAt === null || row.completionSealedAt === undefined
               ? {}
               : { sealedAt: row.completionSealedAt.toISOString() }),
+            ...(executorOriginFromStored(row.completionOrigin) === undefined
+              ? {}
+              : { origin: executorOriginFromStored(row.completionOrigin) }),
           },
         }),
   };
@@ -2711,36 +2718,80 @@ export const flushWorkspaceCapture = (input: {
     { workspaceId: input.workspaceId, ownerUserId: input.payload.ownerUserId, verb: "flush" },
     // A FINAL's sweep closes the connection that carried it: its answer is read again over a new
     // one (and the FINAL asked again when the daemon is not at one), never the close reported.
+    // Every answer is recorded as it arrives, and when a later one is lost the last received is
+    // returned (review 6 #4).
     (target, runId) =>
-      captureFlushAnswer(target, captureFlushRequestOf(input.payload)).pipe(
-        Effect.tap((report) => recordCaptureObservation(runId, report)),
-      ),
+      Effect.gen(function* () {
+        const recorder = yield* apiObservationRecorder(runId);
+        return yield* captureFlushAnswer(target, captureFlushRequestOf(input.payload), {
+          recorder,
+          roundTripTimeoutMs: API_CAPTURE_ROUND_TRIP_MS,
+        });
+      }),
   );
+
+/** How long the API waits on one capture round trip; its observation fence outlives it. */
+const API_CAPTURE_ROUND_TRIP_MS = 55 * 60_000;
 
 /**
  * Every capture status Core relays from an executor is evidence about its disk (review 5 #3,
- * decision 14): it is recorded against the run's executor in the drain record before the answer
- * is returned, so a newer `not saved` revokes an older complete observation and an older seal —
- * at stop, at attestation and at every deletion — whoever asked. Ordered by when Core read it
- * (`recordStatus`). A failed write is logged and the answer still returned: the caller holds
- * the received answer either way, and withholding it would turn it into a lost one.
+ * decision 14), recorded against the run's executor as it arrives, before anything else is asked
+ * or the answer is returned — at stop, at attestation and at every deletion it counts, whoever
+ * asked. Fenced (review 6 #5): the observation is marked in flight in the drain record BEFORE the
+ * request is sent, so until its answer is durably recorded nothing Core holds of the executor
+ * counts as current. A fence that cannot be opened: nothing is asked (the route fails). An answer
+ * that cannot be recorded is still returned — the caller received it — and its fence stays open.
  */
-const recordCaptureObservation = (runId: string, report: CaptureFlushReport) =>
+const apiObservationRecorder = (runId: string) =>
   Effect.gen(function* () {
     const drains = yield* WorkspaceCaptureDrainRepo;
-    yield* drains.recordStatus({
-      runId,
-      status: storedCaptureStatus(report),
-      observedAt: new Date(),
-    });
-  }).pipe(
-    Effect.catchCause((cause) =>
-      Effect.logError(
-        `Capture observation of run ${runId} could not be recorded; the answer is returned, but Core's evidence for this executor does not include it.`,
-        cause,
+    return {
+      open: Effect.gen(function* () {
+        const token = randomUUID();
+        yield* drains.openObservation({
+          runId,
+          token,
+          ttlMs: API_CAPTURE_ROUND_TRIP_MS + OBSERVATION_FENCE_MARGIN_MS,
+        });
+        return { token };
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logError(
+            `Capture observation of run ${runId} could not be marked in flight; nothing is asked of its daemon.`,
+            cause,
+          ).pipe(Effect.as(undefined)),
+        ),
       ),
-    ),
-  );
+      record: (fence, report, atMs) =>
+        drains
+          .recordStatus({
+            runId,
+            status: storedCaptureStatus(report),
+            observedAt: new Date(atMs),
+            fence: fence.token,
+          })
+          .pipe(
+            Effect.as(true),
+            Effect.catchCause((cause) =>
+              Effect.logError(
+                `Capture observation of run ${runId} could not be recorded; the answer is returned, and its observation stays unresolved: nothing Core holds of this executor counts as current until a later one is recorded.`,
+                cause,
+              ).pipe(Effect.as(false)),
+            ),
+          ),
+      close: (fence) =>
+        drains
+          .closeObservation({ runId, token: fence.token })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                `Capture observation of run ${runId} received nothing and could not be resolved; it stays in flight until a later observation resolves it.`,
+                cause,
+              ),
+            ),
+          ),
+    } satisfies CaptureObservationRecorder;
+  });
 
 /** The flush request → the daemon's: `suspend` unless the caller asked for `final`. */
 const captureFlushRequestOf = (payload: FlushWorkspaceCaptureRequest): CaptureFlushRequest => ({
@@ -2757,10 +2808,13 @@ export const getWorkspaceCaptureStatus = (input: {
   readonly workspaceId: string;
   readonly query: GetWorkspaceCaptureStatusQuery;
 }) =>
-  withCaptureDaemon(
+  withCaptureTarget(
     { workspaceId: input.workspaceId, ownerUserId: input.query.ownerUserId, verb: "read" },
-    (daemon, runId) =>
-      daemon.captureStatus().pipe(Effect.tap((report) => recordCaptureObservation(runId, report))),
+    (target, runId) =>
+      Effect.gen(function* () {
+        const recorder = yield* apiObservationRecorder(runId);
+        return yield* captureStatusAnswer(target, recorder, API_CAPTURE_ROUND_TRIP_MS);
+      }),
   );
 
 /**
@@ -2804,7 +2858,10 @@ const withCaptureDaemon = <A, R = never>(
  */
 const withCaptureTarget = <A, R = never>(
   input: { readonly workspaceId: string; readonly ownerUserId: string; readonly verb: string },
-  use: (target: SealantTarget, runId: string) => Effect.Effect<A, SealantError, SealantRuntime | R>,
+  use: (
+    target: SealantTarget,
+    runId: string,
+  ) => Effect.Effect<A, SealantError | CaptureObservationUnrecordedError, SealantRuntime | R>,
 ) => {
   return Effect.gen(function* () {
     const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.ownerUserId);
@@ -2829,11 +2886,14 @@ const withCaptureTarget = <A, R = never>(
       });
     }
     return yield* use(target, runId).pipe(
-      Effect.mapError(
-        (error) =>
-          new WorkspaceConflictError({
-            message: `The workspace runtime refused the ${input.verb}: ${error.message}`,
-          }),
+      Effect.mapError((error) =>
+        error instanceof CaptureObservationUnrecordedError
+          ? new WorkspaceInternalServerError({
+              message: `Core could not record the ${input.verb}'s answer, so nothing was asked of the workspace runtime: ${error.message}`,
+            })
+          : new WorkspaceConflictError({
+              message: `The workspace runtime refused the ${input.verb}: ${error.message}`,
+            }),
       ),
     );
   });
@@ -3073,7 +3133,13 @@ export const stopWorkspace = (input: {
               attestation,
               attempt?.launchId ?? null,
               attestationCoversExecutor(
-                { ...attestation, sealedAtMs },
+                {
+                  executorId: attestation.executorId,
+                  epoch: attestation.epoch,
+                  captureN: attestation.captureN,
+                  sealedAtMs,
+                  origin: attestation.origin,
+                },
                 {
                   runId: latestRunId,
                   resourceId: instance.resourceId,
@@ -3092,6 +3158,7 @@ export const stopWorkspace = (input: {
             attestedBy: input.payload.ownerUserId,
             ...(attestation.launchId === undefined ? {} : { launchId: attestation.launchId }),
             ...(sealedAtMs === undefined ? {} : { sealedAt: new Date(sealedAtMs) }),
+            ...(attestation.origin === undefined ? {} : { origin: { ...attestation.origin } }),
           }),
           "Failed to record the completion attestation.",
         );

@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
+import { statusSupersedes } from "../capture-evidence-order.js";
 import { SealantDB } from "../client.js";
 import {
   workspaceCaptureDrains,
@@ -25,6 +26,9 @@ const workspaceCaptureDrainRepoOperationSchema = Schema.Literals([
   "recordRecoveryAttempt",
   "requestRecovery",
   "storeCaptureToken",
+  "openObservation",
+  "closeObservation",
+  "authorizeDeletion",
 ]);
 
 type WorkspaceCaptureDrainRepoOperation = typeof workspaceCaptureDrainRepoOperationSchema.Type;
@@ -56,13 +60,14 @@ const withRepoError = <A>(
     ),
   );
 
-/** The drain's progress and observation, written together on every drain iteration. */
+/**
+ * The drain's progress and observation, written together on every drain iteration. The statuses
+ * it reads are not part of it: every status is recorded as it is received (`recordStatus`), under
+ * the observation fence opened before it was asked for.
+ */
 export interface WorkspaceCaptureDrainProgress {
   readonly state?: WorkspaceCaptureDrainState;
   readonly detail?: string | null;
-  readonly lastStatus?: Readonly<Record<string, unknown>> | null;
-  /** When `lastStatus` was read. */
-  readonly lastStatusAt?: Date | null;
   readonly lastProgressAt?: Date | null;
   readonly unreachableSince?: Date | null;
   readonly keptLogged?: boolean;
@@ -120,19 +125,51 @@ export interface WorkspaceCaptureDrainRepoService {
     readonly detail: string | null;
   }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
   /**
-   * Record a capture status Core received from the run's executor outside a drain (the public
-   * flush and status routes relay the daemon's answer): the run's last status, read at
-   * `observedAt` (Core's clock). Every status Core receives is evidence about the executor's disk,
-   * whoever asked (review 5 #3): an incomplete answer revokes an older complete and an older seal.
-   * Ordered by `observedAt`: it replaces the stored status unless that one was read later, so a
-   * delayed older answer never overwrites a newer one and a complete never outlives a later
-   * incomplete. The lease is untouched. Answers whether it was written (`false`: a newer status is
-   * on record).
+   * Mark an observation of the run's executor in flight, BEFORE the request is sent (review 6
+   * #5): `token` names it until it is resolved — by `recordStatus` with its answer, or by
+   * `closeObservation` when nothing was received. While any is unresolved, nothing Core holds of
+   * the executor counts as current, and no deletion is authorized on it. It lapses `ttlMs` after
+   * it was opened (the database's clock); a lapsed fence still counts until an observation opened
+   * after it lapsed is recorded. Bumps the evidence version. Answers when it was opened.
+   */
+  readonly openObservation: (input: {
+    readonly runId: string;
+    readonly token: string;
+    readonly ttlMs: number;
+  }) => Effect.Effect<{ readonly openedAt: Date }, WorkspaceCaptureDrainRepoError>;
+  /** Resolve an observation under which nothing was received (the request failed first). */
+  readonly closeObservation: (input: {
+    readonly runId: string;
+    readonly token: string;
+  }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
+  /**
+   * Record a capture status Core received from the run's executor — a drain's, the public flush
+   * and status routes', a probe's, a sampler's: every status Core receives is evidence about the
+   * executor's disk, whoever asked (review 5 #3). `fence`: the observation it answers
+   * (`openObservation`), resolved by this write, which also resolves every fence that lapsed
+   * before it was opened. Ordered by the executor's own history, never by any process's clock
+   * (`statusSupersedes`, review 6 #6): it replaces the stored status when its executor-origin
+   * position is later, else when its request was sent after the stored one was recorded, else
+   * — nothing orders them — only when that cannot make a complete out of an incomplete. No
+   * `fence`: it is taken as read just now, after everything recorded before. `observedAt` is the
+   * reader's clock, kept for display only. Bumps the evidence version whether or not it replaced
+   * the stored status; answers whether it did. Atomic under the row lock.
    */
   readonly recordStatus: (input: {
     readonly runId: string;
     readonly status: Readonly<Record<string, unknown>>;
     readonly observedAt: Date;
+    readonly fence?: string;
+  }) => Effect.Effect<boolean, WorkspaceCaptureDrainRepoError>;
+  /**
+   * Authorize a destructive decision about the run's executor that was made on evidence version
+   * `evidenceVersion` (decision 18): under the row lock, it is still the current version and no
+   * observation is in flight. `false`: something changed since (or is unresolved); the decision
+   * must be made again on what is current.
+   */
+  readonly authorizeDeletion: (input: {
+    readonly runId: string;
+    readonly evidenceVersion: number;
   }) => Effect.Effect<boolean, WorkspaceCaptureDrainRepoError>;
   /**
    * Record the owner's request to discard the run's unsaved captures (the audit): the first
@@ -154,8 +191,10 @@ export interface WorkspaceCaptureDrainRepoService {
     readonly attestedBy: string;
     /** The launch identity the attestation named (already matched to the run's). */
     readonly launchId?: string;
-    /** When the attesting store recorded the seal, when the attestation said. */
+    /** When the attesting store recorded the seal, when the attestation said (display only). */
     readonly sealedAt?: Date;
+    /** The seal's executor-origin position, when the attestation carried it. */
+    readonly origin?: Readonly<Record<string, unknown>>;
   }) => Effect.Effect<WorkspaceCaptureDrain, WorkspaceCaptureDrainRepoError>;
   /**
    * Record that the run's executor is retained (its disk holds work not confirmed saved): the
@@ -205,40 +244,9 @@ export class WorkspaceCaptureDrainRepo extends Context.Service<
 const leaseExpiry = (leaseMs: number) =>
   sql`now() + (${Math.max(0, Math.round(leaseMs))} * interval '1 millisecond')`;
 
-/**
- * SQL: whether a status read at `at` is not older than the stored one and may replace it: nothing
- * stored, or stored no later than `at`. A read older than what is on record never replaces it.
- */
-const statusIsNewer = (at: Date) =>
-  sql`(${workspaceCaptureDrains.lastStatusAt} IS NULL OR ${workspaceCaptureDrains.lastStatusAt} <= ${at})`;
-
-/**
- * A drain's progress may carry the status it read. That status is written only when it is newer
- * than the one on record (`statusIsNewer`): a status another path received meanwhile — the public
- * status route, another drain — is never rolled back by a slower write of an older read.
- */
-const orderedStatusColumns = (progress: WorkspaceCaptureDrainProgress) => {
-  if (progress.lastStatus === undefined && progress.lastStatusAt === undefined) {
-    return {};
-  }
-  const at = progress.lastStatusAt ?? null;
-  const status = progress.lastStatus ?? null;
-  if (at === null) {
-    // A drain that holds no read of its own replaces nothing.
-    return {};
-  }
-  const newer = statusIsNewer(at);
-  return {
-    lastStatus: sql`CASE WHEN ${newer} THEN ${status === null ? null : JSON.stringify(status)}::jsonb ELSE ${workspaceCaptureDrains.lastStatus} END`,
-    lastStatusAt: sql`CASE WHEN ${newer} THEN ${at}::timestamptz ELSE ${workspaceCaptureDrains.lastStatusAt} END`,
-  };
-};
-
 const progressColumns = (progress: WorkspaceCaptureDrainProgress) => ({
   ...(progress.state === undefined ? {} : { state: progress.state }),
   ...(progress.detail === undefined ? {} : { detail: progress.detail }),
-  ...(progress.lastStatus === undefined ? {} : { lastStatus: progress.lastStatus }),
-  ...(progress.lastStatusAt === undefined ? {} : { lastStatusAt: progress.lastStatusAt }),
   ...(progress.lastProgressAt === undefined ? {} : { lastProgressAt: progress.lastProgressAt }),
   ...(progress.unreachableSince === undefined
     ? {}
@@ -290,12 +298,10 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
         withRepoError(
           "recordProgress",
           Effect.gen(function* () {
-            const { lastStatus: _status, lastStatusAt: _statusAt, ...progress } = input.progress;
             const [row] = yield* db
               .update(workspaceCaptureDrains)
               .set({
-                ...progressColumns(progress),
-                ...orderedStatusColumns(input.progress),
+                ...progressColumns(input.progress),
                 leaseExpiresAt: leaseExpiry(input.leaseMs),
               })
               .where(
@@ -374,22 +380,132 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
           }),
         ),
 
+      openObservation: (input) =>
+        withRepoError(
+          "openObservation",
+          Effect.gen(function* () {
+            const fence = sql`jsonb_build_object(${input.token}::text, jsonb_build_object('openedAt', now(), 'expiresAt', now() + (${Math.max(
+              0,
+              Math.round(input.ttlMs),
+            )} * interval '1 millisecond')))`;
+            const [row] = yield* db
+              .insert(workspaceCaptureDrains)
+              .values({
+                runId: input.runId,
+                observationFences: sql`${fence}`,
+                evidenceVersion: 1,
+              })
+              .onConflictDoUpdate({
+                target: workspaceCaptureDrains.runId,
+                set: {
+                  observationFences: sql`${workspaceCaptureDrains.observationFences} || ${fence}`,
+                  evidenceVersion: sql`${workspaceCaptureDrains.evidenceVersion} + 1`,
+                },
+              })
+              .returning({
+                openedAt: sql<string>`${workspaceCaptureDrains.observationFences} -> ${input.token}::text ->> 'openedAt'`,
+              });
+            if (row === undefined) {
+              return yield* Effect.fail(
+                new Error(`Opening an observation of run ${input.runId} wrote no row.`),
+              );
+            }
+            return { openedAt: new Date(row.openedAt) };
+          }),
+        ),
+
+      closeObservation: (input) =>
+        withRepoError(
+          "closeObservation",
+          db
+            .update(workspaceCaptureDrains)
+            .set({
+              observationFences: sql`${workspaceCaptureDrains.observationFences} - ${input.token}::text`,
+              evidenceVersion: sql`${workspaceCaptureDrains.evidenceVersion} + 1`,
+            })
+            .where(eq(workspaceCaptureDrains.runId, input.runId))
+            .pipe(Effect.asVoid),
+        ),
+
       recordStatus: (input) =>
         withRepoError(
           "recordStatus",
-          Effect.gen(function* () {
-            const set = { lastStatus: input.status, lastStatusAt: input.observedAt };
-            const rows = yield* db
-              .insert(workspaceCaptureDrains)
-              .values({ runId: input.runId, ...set } satisfies NewWorkspaceCaptureDrain)
-              .onConflictDoUpdate({
-                target: workspaceCaptureDrains.runId,
-                set,
-                setWhere: statusIsNewer(input.observedAt),
-              })
-              .returning({ runId: workspaceCaptureDrains.runId });
-            return rows.length > 0;
-          }),
+          db.transaction((tx) =>
+            Effect.gen(function* () {
+              yield* tx
+                .insert(workspaceCaptureDrains)
+                .values({ runId: input.runId } satisfies NewWorkspaceCaptureDrain)
+                .onConflictDoNothing();
+              const fences = workspaceCaptureDrains.observationFences;
+              // When this answer's request was sent (the database's clock), from its fence; a
+              // fence already resolved by a later observation leaves it unknown (null).
+              const openedAt =
+                input.fence === undefined
+                  ? sql`now()`
+                  : sql`(${fences} -> ${input.fence}::text ->> 'openedAt')::timestamptz`;
+              const [current] = yield* tx
+                .select({
+                  lastStatus: workspaceCaptureDrains.lastStatus,
+                  causallyAfter: sql<boolean>`coalesce(${workspaceCaptureDrains.lastStatusRecordedAt} IS NULL OR ${openedAt} > ${workspaceCaptureDrains.lastStatusRecordedAt}, false)`,
+                })
+                .from(workspaceCaptureDrains)
+                .where(eq(workspaceCaptureDrains.runId, input.runId))
+                .for("update");
+              if (current === undefined) {
+                return yield* Effect.fail(
+                  new Error(`Recording a status of run ${input.runId} found no row.`),
+                );
+              }
+              const replaces = statusSupersedes({
+                stored: current.lastStatus,
+                incoming: input.status,
+                causallyAfter: current.causallyAfter,
+              });
+              // This fence resolves, and so does every fence that lapsed before it was opened:
+              // this answer was asked for after their owners could still be waiting on theirs.
+              const remaining =
+                input.fence === undefined
+                  ? sql`${fences}`
+                  : sql`(SELECT coalesce(jsonb_object_agg(f.key, f.value), '{}'::jsonb) FROM jsonb_each(${fences}) AS f(key, value) WHERE f.key <> ${input.fence}::text AND coalesce((f.value ->> 'expiresAt')::timestamptz >= ${openedAt}, true))`;
+              yield* tx
+                .update(workspaceCaptureDrains)
+                .set({
+                  observationFences: remaining,
+                  evidenceVersion: sql`${workspaceCaptureDrains.evidenceVersion} + 1`,
+                  ...(replaces
+                    ? {
+                        lastStatus: input.status,
+                        lastStatusAt: input.observedAt,
+                        lastStatusRecordedAt: sql`now()`,
+                      }
+                    : {}),
+                })
+                .where(eq(workspaceCaptureDrains.runId, input.runId));
+              return replaces;
+            }),
+          ),
+        ),
+
+      authorizeDeletion: (input) =>
+        withRepoError(
+          "authorizeDeletion",
+          db.transaction((tx) =>
+            Effect.gen(function* () {
+              const [current] = yield* tx
+                .select({
+                  evidenceVersion: workspaceCaptureDrains.evidenceVersion,
+                  observationFences: workspaceCaptureDrains.observationFences,
+                })
+                .from(workspaceCaptureDrains)
+                .where(eq(workspaceCaptureDrains.runId, input.runId))
+                .for("update");
+              return (
+                current !== undefined &&
+                current.evidenceVersion === input.evidenceVersion &&
+                Object.keys(current.observationFences).length === 0
+              );
+            }),
+          ),
         ),
 
       attestCompletion: (input) =>
@@ -404,11 +520,18 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
               completionAttestedBy: input.attestedBy,
               completionLaunchId: input.launchId ?? null,
               completionSealedAt: input.sealedAt ?? null,
+              completionOrigin: input.origin ?? null,
             };
             const [row] = yield* db
               .insert(workspaceCaptureDrains)
               .values({ runId: input.runId, ...columns } satisfies NewWorkspaceCaptureDrain)
-              .onConflictDoUpdate({ target: workspaceCaptureDrains.runId, set: columns })
+              .onConflictDoUpdate({
+                target: workspaceCaptureDrains.runId,
+                set: {
+                  ...columns,
+                  evidenceVersion: sql`${workspaceCaptureDrains.evidenceVersion} + 1`,
+                },
+              })
               .returning();
             if (row === undefined) {
               return yield* Effect.fail(

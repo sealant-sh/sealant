@@ -239,6 +239,25 @@ export const captureClassSnapsSchema = Schema.Struct({
 });
 export type CaptureClassSnaps = typeof captureClassSnapsSchema.Type;
 
+/**
+ * Where in an executor's own history it made an answer or a seal (sealantd's stamp, decision 17):
+ * its capture lease epoch, the launch it runs as, the daemon boot that answered, how many daemon
+ * boots opened its disk (0: unknown), an observation number that only grows within that boot, and
+ * the capture head. Evidence about one executor is ordered by it, never by any clock: of the same
+ * epoch, launch and boot by `observation`; of the same epoch and launch and different boots whose
+ * generations are both above 0 and differ, by (`bootGeneration`, `observation`); anything else
+ * cannot be ordered.
+ */
+export const captureExecutorOriginSchema = Schema.Struct({
+  epoch: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  launch: NonEmptyString,
+  bootId: NonEmptyString,
+  bootGeneration: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  observation: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  headN: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+});
+export type CaptureExecutorOrigin = typeof captureExecutorOriginSchema.Type;
+
 export const workspaceCaptureStatusSchema = Schema.Struct({
   epoch: Schema.Number,
   worktreeId: NonEmptyString,
@@ -327,6 +346,11 @@ export const workspaceCaptureStatusSchema = Schema.Struct({
   snapFailingSinceUnixMs: Schema.optional(Schema.Number),
   /** Derived from `snaps`: failed snaps of every class since the daemon started. */
   snapsFailed: Schema.optional(Schema.Number),
+  /**
+   * Where in the executor's own history this answer was made. Absent from a daemon that predates
+   * the stamp: such answers cannot be ordered by position.
+   */
+  origin: Schema.optional(captureExecutorOriginSchema),
 });
 export type WorkspaceCaptureStatus = typeof workspaceCaptureStatusSchema.Type;
 
@@ -386,9 +410,10 @@ export const stopWorkspaceRequestSchema = Schema.Struct({
    * run id, or the runtime's `resourceId` / `reference` (`workspace.details().runtime`) — and
    * nothing the control plane observed from the executor contradicts it: an older `epoch` than
    * the executor reported, a capture past `captureN`, or — in the same epoch — a report that its
-   * work is NOT saved (incomplete, changed, unreadable, a failed snapshot) that did not come
-   * before the seal (`sealedAt`; without it, any such report at or past `captureN` counts
-   * against the seal). Otherwise ignored, and the executor is kept as before. Weighed again
+   * work is NOT saved (incomplete, changed, unreadable, a failed snapshot) that the executor's
+   * own history does not place before the seal (`origin`; without it, any such report at or past
+   * `captureN` counts against the seal). Otherwise ignored, and the executor is kept as before.
+   * Weighed again
    * when it is used: a later report that the work is not saved revokes it. A seal stands in for
    * a lost FINAL answer, never for a received one that said the work is not saved. Never a
    * reason to skip the drain of a running executor.
@@ -408,11 +433,17 @@ export const stopWorkspaceRequestSchema = Schema.Struct({
        */
       launchId: Schema.optional(NonEmptyString),
       /**
-       * When the store recorded the seal (ISO 8601). Orders the seal against the control
-       * plane's own observations of the executor; an attestation without it is taken only while
-       * nothing the control plane observed since it could contradict it.
+       * When the store recorded the seal (ISO 8601). Kept for display: clocks order nothing. It
+       * must still read as a time.
        */
       sealedAt: Schema.optional(NonEmptyString),
+      /**
+       * Where in the executor's own history the seal was made (sealantd stamps it on the
+       * `final_seal`): the one thing that orders the seal against a report of the same capture
+       * that its work is not saved. Without it, such a report at or past `captureN` counts
+       * against the seal.
+       */
+      origin: Schema.optional(captureExecutorOriginSchema),
     }),
   ),
 });
@@ -640,6 +671,8 @@ export const workspaceCaptureDrainSchema = Schema.Struct({
       launchId: Schema.optional(NonEmptyString),
       /** When the store recorded the seal, when the attestation said. */
       sealedAt: Schema.optional(Schema.String),
+      /** Where in the executor's own history the seal was made, when the attestation said. */
+      origin: Schema.optional(captureExecutorOriginSchema),
     }),
   ),
 });

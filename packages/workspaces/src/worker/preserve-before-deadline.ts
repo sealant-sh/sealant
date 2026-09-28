@@ -65,8 +65,8 @@ import {
   sealantTargetForRuntimeInstance,
   type SealantTargetDerivationOptions,
 } from "../sealantd/target.js";
-import { storedCaptureStatus } from "./capture-drain-ledger.js";
 import {
+  ledgerObservationRecorder,
   readCaptureStatus,
   runIsCaptureSourced,
   type CaptureDrainLedger,
@@ -340,7 +340,11 @@ const prepareOne = (
     } satisfies PreparedPreservation;
   });
 
-/** One `capture.status` of a candidate's daemon, recorded as evidence; `undefined` when none. */
+/**
+ * One `capture.status` of a candidate's daemon; `undefined` when none was read. What the sampler
+ * reads is evidence about the executor like any other reading (review 5 #3): recorded as it
+ * arrives, under an observation fence opened before it was asked for (review 6 #5).
+ */
 const sampleOne = (
   options: PreserveBeforeDeadlineOptions,
   candidate: PreparedPreservation,
@@ -352,28 +356,12 @@ const sampleOne = (
     if (target === undefined) {
       return undefined;
     }
-    const status = yield* readCaptureStatus(target, STATUS_TIMEOUT_MS);
-    if (status === undefined) {
-      return undefined;
-    }
-    const atMs = now();
-    // What the sampler read is evidence about this executor like any other reading (review 5
-    // #3): recorded, ordered by when it was read.
-    yield* (yield* WorkspaceCaptureDrainRepo)
-      .recordStatus({
-        runId: instance.runId,
-        status: storedCaptureStatus(status),
-        observedAt: new Date(atMs),
-      })
-      .pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning(
-            `Capture deadline sweep: recording the status read from run ${instance.runId}'s executor failed.`,
-            cause,
-          ),
-        ),
-      );
-    return { status, atMs };
+    const status = yield* readCaptureStatus(
+      target,
+      STATUS_TIMEOUT_MS,
+      ledgerObservationRecorder(options.captureDrain.ledger, instance.runId, STATUS_TIMEOUT_MS),
+    );
+    return status === undefined ? undefined : { status, atMs: now() };
   });
 
 /**

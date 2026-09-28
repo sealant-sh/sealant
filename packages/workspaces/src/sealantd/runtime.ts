@@ -24,6 +24,7 @@ import { readFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { Duplex } from "node:stream";
 
+import type { ExecutorOrigin } from "@sealant/db";
 import {
   SealantClient,
   SealantError as SdkSealantError,
@@ -279,6 +280,15 @@ export interface CaptureFlushReport {
   readonly snapFailingSinceUnixMs?: number | undefined;
   /** Derived from `snaps`: failed snaps of every class since the daemon started. */
   readonly snapsFailed?: number | undefined;
+  /**
+   * Where in the executor's own history this answer was made (decision 17): its epoch, launch,
+   * boot, boot generation and an observation number that only grows within the boot, with the
+   * capture head. Core
+   * orders and supersedes evidence by it, never by its own clocks (`statusSupersedes`). Absent
+   * from a daemon that predates the stamp: such answers cannot be ordered by position, and
+   * evidence nothing else orders fails closed.
+   */
+  readonly origin?: ExecutorOrigin | undefined;
 }
 
 /** One capture class's snaps (wire `CaptureClassSnaps`). */
@@ -421,7 +431,8 @@ type OptionalWireField =
   | "snaps"
   | "lastSnapError"
   | "snapFailingSinceUnixMs"
-  | "snapsFailed";
+  | "snapsFailed"
+  | "origin";
 
 /** One wire `CaptureClassSnaps`, read structurally; `undefined` for an unknown class. */
 const wireClassSnaps = (value: unknown): CaptureClassSnaps | undefined => {
@@ -496,6 +507,40 @@ const optionalWireFields = (report: object): Pick<CaptureFlushReport, OptionalWi
     ...(typeof bulkBuilding === "boolean" ? { bulkBuilding } : {}),
     ...(snaps === undefined ? {} : { snaps }),
     ...snapFailureSummary(snaps),
+    ...wireOrigin(report),
+  };
+};
+
+/**
+ * The executor-origin stamp a newer daemon puts on every status and FINAL answer (decision 17):
+ * wire `launch` (27), `boot_id` (28), `boot_generation` (29) and `observation` (30), with the
+ * report's own `epoch` and `head_n`. A stamp missing any of them orders nothing and is dropped.
+ */
+const wireOrigin = (report: object): Pick<CaptureFlushReport, "origin"> => {
+  const epoch = wireCount(wireField(report, "epoch"));
+  const launch = wireText(wireField(report, "launch"));
+  const bootId = wireText(wireField(report, "bootId"));
+  const bootGeneration = wireCount(wireField(report, "bootGeneration"));
+  const observation = wireCount(wireField(report, "observation"));
+  const headN = wireCount(wireField(report, "headN"));
+  if (
+    epoch === undefined ||
+    launch === undefined ||
+    bootId === undefined ||
+    bootGeneration === undefined ||
+    observation === undefined
+  ) {
+    return {};
+  }
+  return {
+    origin: {
+      epoch,
+      launch,
+      bootId,
+      bootGeneration,
+      observation,
+      ...(headN === undefined ? {} : { headN }),
+    },
   };
 };
 

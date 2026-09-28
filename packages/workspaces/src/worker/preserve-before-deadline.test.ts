@@ -73,6 +73,7 @@ const sweep = async (input: {
 }) => {
   const schedules: WorkspaceCaptureDrainSchedule[] = [];
   const statuses: Array<{ runId: string; status: Readonly<Record<string, unknown>> }> = [];
+  const ledger = inMemoryCaptureDrainLedger();
   const drains = {
     getByRunId: () =>
       Effect.succeed(input.row === undefined ? undefined : (input.row as WorkspaceCaptureDrain)),
@@ -154,7 +155,7 @@ const sweep = async (input: {
     preserveBeforeDeadlineEffect({
       runtimeAdapters: [adapter],
       captureDrain: {
-        ledger: inMemoryCaptureDrainLedger(),
+        ledger,
         settings: {
           pollIntervalMs: 1,
           stallWindowMs: 30,
@@ -170,6 +171,7 @@ const sweep = async (input: {
     driven,
     schedules,
     statuses,
+    ledger,
     stop,
     markStopped,
     setWorkspaceStatus,
@@ -294,14 +296,12 @@ describe("preserveBeforeDeadlineEffect", () => {
         uploadSampleBytes: 5_000,
       }),
     ]);
-    // The reading is evidence about the executor: recorded (review 5 #3).
-    expect(result.statuses).toEqual([
-      {
-        runId: "run_vm",
-        status: expect.objectContaining({ pending: 2, uploadedBytes: 5_000 }),
-        observedAt: new Date(NOW),
-      },
-    ]);
+    // The reading is evidence about the executor: recorded (review 5 #3), under an observation
+    // fence it resolved (review 6 #5).
+    expect(result.ledger.store.rows.get("run_vm")?.entry).toMatchObject({
+      last: expect.objectContaining({ pending: 2, uploadedBytes: 5_000 }),
+    });
+    expect(result.ledger.store.rows.get("run_vm")?.fences?.size).toBe(0);
   });
 
   it("drives a FINAL drain and a planned stop once the lead is reached", async () => {

@@ -73,6 +73,7 @@ import {
   describeDeletionBasis,
   drainCaptureBeforeStop,
   recordedDeletionEvidence,
+  authorizedDeletion,
   type CaptureDrainLedger,
   type CaptureDrainSettings,
 } from "./capture-drain.js";
@@ -251,7 +252,6 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
           );
 
     // 1. Evidence first: an attestation or a discard may have arrived since it was retained.
-    const record = yield* ledger.read(runId);
     const state = yield* runtimeNow;
 
     // An ended executor waits for its recovery with nothing running beside it: its runtime
@@ -277,10 +277,18 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
         ),
       );
     }
-    const decision = decideExecutorDeletion({
-      captureSourced: true,
-      runtime: state,
-      ...recordedDeletionEvidence(record, executor),
+    // Weighed on the evidence as it stands after the inspection and the parking, and authorized
+    // against it (decision 18): an observation recorded meanwhile, or one in flight, is weighed,
+    // never raced (review 6 #3).
+    const { decision } = yield* authorizedDeletion({
+      ledger,
+      runId,
+      decide: (record) =>
+        decideExecutorDeletion({
+          captureSourced: true,
+          runtime: state,
+          ...recordedDeletionEvidence(record, executor),
+        }),
     });
     if (decision.delete) {
       if (decision.basis === "missing") {
@@ -459,7 +467,28 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
       );
     }
     if (outcome.kind === "drained") {
-      return yield* release("observed-complete");
+      // Its final flush read complete: removed only while the record still says so, authorized
+      // against it (an observation recorded since, or in flight, keeps it).
+      const drained = yield* authorizedDeletion({
+        ledger,
+        runId,
+        decide: (record) => {
+          const evidence = recordedDeletionEvidence(record, executor);
+          return decideExecutorDeletion({
+            captureSourced: true,
+            runtime: "running",
+            ...evidence,
+            drainedNow: evidence.observedComplete,
+          });
+        },
+      });
+      if (drained.decision.delete) {
+        return yield* release(drained.decision.basis);
+      }
+      yield* Effect.logError(
+        `${prefix}: not saved · retained · its final flush read complete, but ${drained.decision.reason}.`,
+      );
+      return yield* retry(drained.decision.reason, backoff.baseMs);
     }
     if (outcome.kind === "gone") {
       const detail = `the recovered executor vanished before its final flush completed (${outcome.detail}); whatever it held that was not saved is lost`;

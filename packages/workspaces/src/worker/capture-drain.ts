@@ -55,18 +55,21 @@
  * measures its stall window from the last time anything moved, and the last observation is what
  * the API reports while a stop is in progress.
  */
-import { Clock, Effect, Result } from "effect";
+import { statusSupersedes, type ExecutorOrigin } from "@sealant/db";
+import { Clock, Effect, Exit, Result } from "effect";
 import { z } from "zod";
 
 import {
   attestationCoversExecutor,
   type ExecutorDeletionBasis,
+  type ExecutorDeletionDecision,
   type ExecutorIdentity,
   type ObservedCapture,
 } from "../runtime/executor-preservation.js";
 import {
   SealantControlError,
   SealantRuntime,
+  TransportError,
   type CaptureFlushReport,
   type CaptureFlushRequest,
   type SealantError,
@@ -173,6 +176,18 @@ export interface CaptureDrainEntry {
    * cannot weigh, so no attestation may be taken over it.
    */
   readonly lastUnreadable?: boolean | undefined;
+  /**
+   * The evidence version this entry was read at (`workspace_capture_drains.evidence_version`):
+   * every status recorded, observation opened or resolved, and attestation bumps it. A deletion
+   * decided on this entry is authorized only while it is still current (`authorizeDeletion`).
+   */
+  readonly evidenceVersion?: number | undefined;
+  /**
+   * Observations of the executor in flight or unresolved when this was read (a request sent whose
+   * answer is not recorded — possibly because recording it failed): while any is, nothing on
+   * record is known to be current, and no deletion rests on it (review 6 #5).
+   */
+  readonly observationsInFlight?: number | undefined;
   readonly unreachableSince: number | undefined;
   /** The keep was already logged; the next log line is the one that says it moved again. */
   readonly keptLogged: boolean;
@@ -193,8 +208,10 @@ export interface CaptureDrainEntry {
         readonly executorId: string;
         readonly epoch: number;
         readonly captureN: number;
-        /** When the attesting store recorded the seal, when the attestation said. */
+        /** When the attesting store recorded the seal, when the attestation said (display). */
         readonly sealedAtMs?: number | undefined;
+        /** The seal's executor-origin position, when the attestation carried it. */
+        readonly origin?: ExecutorOrigin | undefined;
         readonly atMs: number;
         readonly by: string;
       }
@@ -277,15 +294,37 @@ export interface CaptureDrainLedger {
   /** The run's recorded progress, without claiming it. */
   readonly read: (runId: string) => Effect.Effect<CaptureDrainRead>;
   /**
-   * Record a capture status read from the run's executor outside a drain (a probe, a sampler), at
-   * `atMs`: every status Core receives is evidence about its disk (review 5 #3). Ordered by when
-   * it was read (`statusReplacesRecorded`); no claim needed. Best-effort: a failed write is logged.
+   * Mark an observation of the run's executor in flight BEFORE its request is sent (review 6 #5):
+   * until it is resolved — `recordStatus` with its answer, `closeObservation` when none was
+   * received — nothing on record is known to be current and no deletion rests on it. Lapses
+   * `ttlMs` after it was opened; a lapsed fence still counts until an observation opened after it
+   * lapsed is recorded. `undefined` when it cannot be opened: then nothing may be asked.
+   */
+  readonly openObservation: (
+    runId: string,
+    ttlMs: number,
+  ) => Effect.Effect<CaptureObservationFence | undefined>;
+  /** Resolve an observation under which no answer was received. Best-effort: it may stay open. */
+  readonly closeObservation: (runId: string, fence: CaptureObservationFence) => Effect.Effect<void>;
+  /**
+   * Record a capture status received from the run's executor — by a drain, a probe, a sampler:
+   * every status Core receives is evidence about its disk (review 5 #3) — resolving `fence`, the
+   * observation it answers. Ordered by the executor's own history, never by any clock
+   * (`statusSupersedes`, review 6 #6). Answers whether it was recorded durably: `false` leaves
+   * the fence open, and the executor reads unknown until a later observation is recorded.
    */
   readonly recordStatus: (
     runId: string,
     status: CaptureFlushReport,
     atMs: number,
-  ) => Effect.Effect<void>;
+    fence?: CaptureObservationFence,
+  ) => Effect.Effect<boolean>;
+  /**
+   * Authorize a deletion decided on evidence version `evidenceVersion` (decision 18): only while
+   * it is still current and no observation is in flight, serialized with every ingestion.
+   * `false` on any change, and when it cannot be checked.
+   */
+  readonly authorizeDeletion: (runId: string, evidenceVersion: number) => Effect.Effect<boolean>;
   /**
    * Record an observation outside a drain (what the stop that followed it did); no claim needed.
    * `stopped`, `discarded` and `gone` also end a retention. Best-effort: a failed write is logged.
@@ -342,17 +381,28 @@ export const notifyingRetention = (
   notifyRetained: (runId) => Effect.sync(() => onRetained(runId)),
 });
 
-/** Rows of an in-memory ledger; share one store between ledgers to model several workers. */
-export class InMemoryCaptureDrainStore {
-  readonly rows = new Map<
+/** One row of an in-memory ledger. */
+export interface InMemoryCaptureDrainRow {
+  entry: CaptureDrainEntry;
+  observation: CaptureDrainObservation | undefined;
+  owner: string | undefined;
+  expiresAt: number | undefined;
+  /** Observations in flight, by token: when opened (the store's own order and clock), lapsing when. */
+  fences?: Map<
     string,
-    {
-      entry: CaptureDrainEntry;
-      observation: CaptureDrainObservation | undefined;
-      owner: string | undefined;
-      expiresAt: number | undefined;
-    }
-  >();
+    { readonly openedTick: number; readonly openedAtMs: number; readonly expiresAtMs: number }
+  >;
+  /** When the status on record was recorded, in the store's own order. */
+  recordedTick?: number;
+}
+
+/**
+ * Rows of an in-memory ledger; share one store between ledgers to model several workers. Its
+ * `tick` is the one clock every ledger on it shares, as workers share the database's.
+ */
+export class InMemoryCaptureDrainStore {
+  readonly rows = new Map<string, InMemoryCaptureDrainRow>();
+  tick = 0;
 }
 
 let inMemoryOwnerSequence = 0;
@@ -365,41 +415,28 @@ export const observationEndsRetention = (state: CaptureDrainState): boolean =>
 /** A lease holder for one claim: the ledger's owner plus a token unique to the claim. */
 export const claimLeaseOwner = (owner: string, token: string): string => `${owner}#${token}`;
 
+/** An in-memory row's observations in flight. */
+const fencesOf = (row: InMemoryCaptureDrainRow) => {
+  row.fences ??= new Map();
+  return row.fences;
+};
+
+/** Every change to an in-memory row's evidence bumps its version (as `evidence_version`). */
+const bump = (row: InMemoryCaptureDrainRow) => {
+  row.entry = { ...row.entry, evidenceVersion: (row.entry.evidenceVersion ?? 0) + 1 };
+};
+
+/** An in-memory row as a read answers it: its version and observations in flight included. */
+const entryOf = (row: InMemoryCaptureDrainRow): CaptureDrainEntry => ({
+  ...row.entry,
+  evidenceVersion: row.entry.evidenceVersion ?? 0,
+  observationsInFlight: row.fences?.size ?? 0,
+});
+
 /**
  * An in-memory ledger with the database ledger's lease semantics (tests, single-process tools).
  * Ledgers built on one `store` behave like workers sharing one database.
  */
-/**
- * Whether a status read at `atMs` replaces the one on record (read at `storedAtMs`): unless the
- * recorded one was read later. The rule the database applies (`WorkspaceCaptureDrainRepo`
- * `recordStatus` / `recordProgress`): a delayed older answer never overwrites a newer one, so a
- * complete never outlives a later incomplete (review 5 #3).
- */
-export const statusReplacesRecorded = (input: {
-  readonly storedAtMs: number | undefined;
-  readonly atMs: number | undefined;
-}): boolean =>
-  input.atMs !== undefined && (input.storedAtMs === undefined || input.atMs >= input.storedAtMs);
-
-/** `incoming`, keeping the recorded status where it is newer than the one `incoming` carries. */
-const withOrderedStatus = (
-  recorded: CaptureDrainEntry,
-  incoming: CaptureDrainEntry,
-): CaptureDrainEntry => {
-  const hasRecorded = recorded.last !== undefined || recorded.lastUnreadable === true;
-  const replaces =
-    !hasRecorded ||
-    statusReplacesRecorded({ storedAtMs: recorded.lastAtMs, atMs: incoming.lastAtMs });
-  return replaces
-    ? incoming
-    : {
-        ...incoming,
-        last: recorded.last,
-        lastAtMs: recorded.lastAtMs,
-        lastUnreadable: recorded.lastUnreadable,
-      };
-};
-
 export const inMemoryCaptureDrainLedger = (
   options: {
     readonly store?: InMemoryCaptureDrainStore;
@@ -413,6 +450,24 @@ export const inMemoryCaptureDrainLedger = (
   const owner = options.owner ?? `ledger-${String(inMemoryOwnerSequence)}`;
   const leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS;
   const now = options.now ?? Date.now;
+  const nextTick = () => {
+    store.tick += 1;
+    return store.tick;
+  };
+  const rowOf = (runId: string): InMemoryCaptureDrainRow => {
+    const existing = store.rows.get(runId);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const row: InMemoryCaptureDrainRow = {
+      entry: EMPTY_CAPTURE_DRAIN_ENTRY,
+      observation: undefined,
+      owner: undefined,
+      expiresAt: undefined,
+    };
+    store.rows.set(runId, row);
+    return row;
+  };
   return {
     store,
     claim: (runId) =>
@@ -422,13 +477,10 @@ export const inMemoryCaptureDrainLedger = (
         const holder = claimLeaseOwner(owner, token);
         const row = store.rows.get(runId);
         if (row === undefined) {
-          store.rows.set(runId, {
-            entry: EMPTY_CAPTURE_DRAIN_ENTRY,
-            observation: undefined,
-            owner: holder,
-            expiresAt: now() + leaseMs,
-          });
-          return { entry: EMPTY_CAPTURE_DRAIN_ENTRY, token };
+          const created = rowOf(runId);
+          created.owner = holder;
+          created.expiresAt = now() + leaseMs;
+          return { entry: entryOf(created), token };
         }
         const free =
           row.owner === undefined || row.expiresAt === undefined || row.expiresAt <= now();
@@ -437,7 +489,7 @@ export const inMemoryCaptureDrainLedger = (
         }
         row.owner = holder;
         row.expiresAt = now() + leaseMs;
-        return { entry: row.entry, token };
+        return { entry: entryOf(row), token };
       }),
     save: (runId, token, entry, observation) =>
       Effect.sync(() => {
@@ -445,7 +497,14 @@ export const inMemoryCaptureDrainLedger = (
         if (row === undefined || row.owner !== claimLeaseOwner(owner, token)) {
           return false;
         }
-        row.entry = withOrderedStatus(row.entry, entry);
+        // Progress only, as `recordProgress` writes it: statuses are recorded as they arrive.
+        row.entry = {
+          ...row.entry,
+          lastProgressAt: entry.lastProgressAt,
+          unreachableSince: entry.unreachableSince,
+          keptLogged: entry.keptLogged,
+          silentLogged: entry.silentLogged,
+        };
         row.observation = observation ?? row.observation;
         row.expiresAt = now() + leaseMs;
         return true;
@@ -459,47 +518,82 @@ export const inMemoryCaptureDrainLedger = (
         }
       }),
     read: (runId) =>
-      Effect.sync(() => ({ readable: true as const, entry: store.rows.get(runId)?.entry })),
-    recordStatus: (runId, status, atMs) =>
       Effect.sync(() => {
         const row = store.rows.get(runId);
-        const incoming = { last: status, lastAtMs: atMs, lastUnreadable: false };
-        if (row === undefined) {
-          store.rows.set(runId, {
-            entry: { ...EMPTY_CAPTURE_DRAIN_ENTRY, ...incoming },
-            observation: undefined,
-            owner: undefined,
-            expiresAt: undefined,
-          });
-        } else {
-          row.entry = withOrderedStatus(row.entry, { ...row.entry, ...incoming });
+        return { readable: true as const, entry: row === undefined ? undefined : entryOf(row) };
+      }),
+    openObservation: (runId, ttlMs) =>
+      Effect.sync(() => {
+        const row = rowOf(runId);
+        inMemoryClaimSequence += 1;
+        const token = `observation-${String(inMemoryClaimSequence)}`;
+        const openedAtMs = now();
+        fencesOf(row).set(token, {
+          openedTick: nextTick(),
+          openedAtMs,
+          expiresAtMs: openedAtMs + Math.max(0, ttlMs),
+        });
+        bump(row);
+        return { token };
+      }),
+    closeObservation: (runId, fence) =>
+      Effect.sync(() => {
+        const row = store.rows.get(runId);
+        if (row !== undefined && fencesOf(row).delete(fence.token)) {
+          bump(row);
         }
+      }),
+    recordStatus: (runId, status, atMs, fence) =>
+      Effect.sync(() => {
+        const row = rowOf(runId);
+        const fences = fencesOf(row);
+        const opened = fence === undefined ? undefined : fences.get(fence.token);
+        // Unfenced: taken as read just now, after everything already recorded.
+        const openedTick = fence === undefined ? nextTick() : opened?.openedTick;
+        const causallyAfter =
+          row.recordedTick === undefined ||
+          (openedTick !== undefined && openedTick > row.recordedTick);
+        const stored =
+          row.entry.lastUnreadable === true
+            ? { unreadable: true }
+            : row.entry.last === undefined
+              ? undefined
+              : storedStatusRecord(row.entry.last);
+        if (statusSupersedes({ stored, incoming: storedStatusRecord(status), causallyAfter })) {
+          row.entry = { ...row.entry, last: status, lastAtMs: atMs, lastUnreadable: false };
+          row.recordedTick = nextTick();
+        }
+        if (fence !== undefined) {
+          fences.delete(fence.token);
+          if (opened !== undefined) {
+            for (const [token, other] of fences) {
+              if (other.expiresAtMs < opened.openedAtMs) {
+                fences.delete(token);
+              }
+            }
+          }
+        }
+        bump(row);
+        return true;
+      }),
+    authorizeDeletion: (runId, evidenceVersion) =>
+      Effect.sync(() => {
+        const row = store.rows.get(runId);
+        return (
+          (row?.entry.evidenceVersion ?? 0) === evidenceVersion && (row?.fences?.size ?? 0) === 0
+        );
       }),
     observe: (runId, observation) =>
       Effect.sync(() => {
-        const row = store.rows.get(runId);
-        if (row === undefined) {
-          store.rows.set(runId, {
-            entry: EMPTY_CAPTURE_DRAIN_ENTRY,
-            observation,
-            owner: undefined,
-            expiresAt: undefined,
-          });
-        } else {
-          row.observation = observation;
-          if (observationEndsRetention(observation.state)) {
-            row.entry = { ...row.entry, retained: undefined };
-          }
+        const row = rowOf(runId);
+        row.observation = observation;
+        if (observationEndsRetention(observation.state)) {
+          row.entry = { ...row.entry, retained: undefined };
         }
       }),
     markRetained: (runId, reason) =>
       Effect.sync(() => {
-        const row = store.rows.get(runId) ?? {
-          entry: EMPTY_CAPTURE_DRAIN_ENTRY,
-          observation: undefined,
-          owner: undefined,
-          expiresAt: undefined,
-        };
+        const row = rowOf(runId);
         const retained = row.entry.retained;
         row.entry = {
           ...row.entry,
@@ -512,11 +606,16 @@ export const inMemoryCaptureDrainLedger = (
           },
         };
         row.observation = { state: "kept", detail: `not saved · retained · ${reason}` };
-        store.rows.set(runId, row);
         return true;
       }),
   };
 };
+
+/** A status as a record, the shape `statusSupersedes` weighs (as the database stores it). */
+const storedStatusRecord = (status: CaptureFlushReport): Readonly<Record<string, unknown>> => ({
+  ...status,
+  refused: [...status.refused],
+});
 
 /** Only the source kind is read, so a snapshot of any vintage answers. */
 const blueprintSourceSchema = z.object({
@@ -600,6 +699,7 @@ export const observedCaptureOf = (
         complete: reportsComplete(last),
         ...(last.incompleteReason === undefined ? {} : { incompleteReason: last.incompleteReason }),
         ...(entry?.lastAtMs === undefined ? {} : { atMs: entry.lastAtMs }),
+        ...(last.origin === undefined ? {} : { origin: last.origin }),
       };
 };
 
@@ -621,7 +721,12 @@ export const attestedCompleteFor = (
   );
 };
 
-/** What the drain record says of an executor, for the preservation policy. */
+/**
+ * What the drain record says of an executor, for the preservation policy. While an observation
+ * of it is in flight or unresolved (`observationsInFlight`: a request sent whose answer is not
+ * recorded — possibly because recording it failed), nothing on record is known to be current:
+ * neither an observed complete nor an attestation counts (review 6 #5). A discard still does.
+ */
 export const recordedDeletionEvidence = (
   record: CaptureDrainRead,
   executor: ExecutorIdentity,
@@ -630,20 +735,91 @@ export const recordedDeletionEvidence = (
   readonly attestedComplete: boolean;
   readonly discarded: boolean;
   readonly ledgerUnreadable: boolean;
-} =>
-  record.readable
-    ? {
-        observedComplete: observedComplete(record.entry),
-        attestedComplete: attestedCompleteFor(record.entry, executor),
-        discarded: record.entry?.discardRequested !== undefined,
-        ledgerUnreadable: false,
+} => {
+  if (!record.readable) {
+    return {
+      observedComplete: false,
+      attestedComplete: false,
+      discarded: false,
+      ledgerUnreadable: true,
+    };
+  }
+  const current = (record.entry?.observationsInFlight ?? 0) === 0;
+  return {
+    observedComplete: current && observedComplete(record.entry),
+    attestedComplete: current && attestedCompleteFor(record.entry, executor),
+    discarded: record.entry?.discardRequested !== undefined,
+    ledgerUnreadable: false,
+  };
+};
+
+/** Whether a deletion basis rests on recorded evidence a newer observation could revoke. */
+const basisRestsOnEvidence = (basis: ExecutorDeletionBasis): boolean =>
+  basis === "observed-complete" || basis === "attested-complete";
+
+/** How often a deletion is decided again when its evidence changed under it. */
+const DELETION_AUTHORIZATION_ATTEMPTS = 4;
+
+/** How long a deletion waits for an observation in flight to be recorded before deciding again. */
+const IN_FLIGHT_OBSERVATION_WAIT_MS = 200;
+
+/**
+ * Decide, and AUTHORIZE, the deletion of an executor on the evidence as it stands (decision 18):
+ * the drain record is read afresh, `decide` weighs it, and a deletion that rests on recorded
+ * evidence (an observed complete, an attestation) is authorized only while the evidence version
+ * it was decided on is still current and no observation is in flight — a compare-and-set
+ * serialized with every ingestion of evidence about the executor. Changed meanwhile, or an
+ * observation in flight (waited on briefly): decided again on what is current (at most
+ * `DELETION_AUTHORIZATION_ATTEMPTS` times, then kept). Call it
+ * AFTER the last await that learned anything about the executor (its runtime state, a drain),
+ * immediately before removing it. Without a ledger nothing is known: `decide` sees an
+ * unreadable record.
+ */
+export const authorizedDeletion = (input: {
+  readonly ledger: CaptureDrainLedger | undefined;
+  readonly runId: string;
+  readonly decide: (record: CaptureDrainRead) => ExecutorDeletionDecision;
+}): Effect.Effect<{
+  readonly decision: ExecutorDeletionDecision;
+  readonly record: CaptureDrainRead;
+}> =>
+  Effect.gen(function* () {
+    const { ledger, runId } = input;
+    let record: CaptureDrainRead = { readable: false };
+    for (let attempt = 0; attempt < DELETION_AUTHORIZATION_ATTEMPTS; attempt += 1) {
+      record = ledger === undefined ? { readable: false } : yield* ledger.read(runId);
+      const decision = input.decide(record);
+      const inFlight = record.readable && (record.entry?.observationsInFlight ?? 0) > 0;
+      if (!decision.delete && inFlight && attempt < DELETION_AUTHORIZATION_ATTEMPTS - 1) {
+        // Another path is reading the executor right now (a status poll): what it hears is
+        // weighed once it is recorded, not raced and not ignored.
+        yield* Effect.sleep(IN_FLIGHT_OBSERVATION_WAIT_MS);
+        continue;
       }
-    : {
-        observedComplete: false,
-        attestedComplete: false,
-        discarded: false,
-        ledgerUnreadable: true,
-      };
+      if (!decision.delete || !basisRestsOnEvidence(decision.basis)) {
+        return { decision, record };
+      }
+      const version = record.readable ? (record.entry?.evidenceVersion ?? 0) : undefined;
+      if (
+        ledger !== undefined &&
+        version !== undefined &&
+        (yield* ledger.authorizeDeletion(runId, version))
+      ) {
+        return { decision, record };
+      }
+      yield* Effect.logWarning(
+        `Capture drain · run ${runId}: the evidence about its executor changed while its removal was decided; deciding again on what is current.`,
+      );
+    }
+    return {
+      decision: {
+        delete: false,
+        reason:
+          "the evidence about the executor kept changing while its removal was decided (an observation in flight or newly recorded)",
+      },
+      record,
+    };
+  });
 
 /** Why a deletion was allowed, as a status line. */
 export const describeDeletionBasis = (basis: ExecutorDeletionBasis): string => {
@@ -766,45 +942,162 @@ const joinDetail = (...parts: ReadonlyArray<string | undefined>): string | undef
   return present.length === 0 ? undefined : present.join(" · ");
 };
 
+/** One observation of an executor in flight: the fence its answer resolves. */
+export interface CaptureObservationFence {
+  readonly token: string;
+}
+
+/**
+ * Where the answers of an executor's daemon are recorded, and how each is fenced (review 6 #4,
+ * #5, decision 18). Every command that can bring back a status — a flush or a status, from a
+ * drain, a probe, a sampler or the public routes — is sent only after `open` marked an
+ * observation in flight, and its answer is recorded (`record`) before anything else is asked.
+ * Nothing received: the fence is resolved (`close`). An answer received but not recorded leaves
+ * the fence open, and the executor reads unknown until a later observation is recorded.
+ */
+export interface CaptureObservationRecorder {
+  /** Mark an observation in flight; `undefined` when it cannot be marked (nothing is asked). */
+  readonly open: Effect.Effect<CaptureObservationFence | undefined>;
+  /** Record an answer received under `fence`; `false` when it could not be recorded durably. */
+  readonly record: (
+    fence: CaptureObservationFence,
+    status: CaptureFlushReport,
+    atMs: number,
+  ) => Effect.Effect<boolean>;
+  /** Resolve a fence under which nothing was received. */
+  readonly close: (fence: CaptureObservationFence) => Effect.Effect<void>;
+}
+
+/** How long past its own bound an observation's fence stays open before it may lapse. */
+export const OBSERVATION_FENCE_MARGIN_MS = 60_000;
+
+/** The recorder over a drain ledger, for one run's executor; fences lapse after `boundMs` + margin. */
+export const ledgerObservationRecorder = (
+  ledger: CaptureDrainLedger,
+  runId: string,
+  boundMs: number,
+): CaptureObservationRecorder => ({
+  open: ledger.openObservation(runId, boundMs + OBSERVATION_FENCE_MARGIN_MS),
+  record: (fence, status, atMs) => ledger.recordStatus(runId, status, atMs, fence),
+  close: (fence) => ledger.closeObservation(runId, fence),
+});
+
+/** No observation could be marked in flight, so nothing was asked of the daemon. */
+export class CaptureObservationUnrecordedError extends Error {
+  public override readonly name = "CaptureObservationUnrecordedError";
+}
+
+/** A round trip bounded by `timeoutMs`; one that runs out is a lost answer (a transport error). */
+const boundedRoundTrip = <E, R>(
+  roundTrip: Effect.Effect<CaptureFlushReport, E, R>,
+  timeoutMs: number | undefined,
+  operation: "captureFlush" | "captureStatus",
+): Effect.Effect<CaptureFlushReport, E | TransportError, R> =>
+  timeoutMs === undefined
+    ? roundTrip
+    : roundTrip.pipe(
+        Effect.timeoutOrElse({
+          duration: timeoutMs,
+          orElse: () =>
+            Effect.fail(
+              new TransportError({
+                operation,
+                message: `capture ${operation === "captureFlush" ? "flush" : "status"} got no answer within ${String(timeoutMs)} ms`,
+                cause: undefined,
+              }),
+            ),
+        }),
+      );
+
+/** An answer, and whether it is recorded (`false`: its fence stays open; nothing more is asked). */
+interface ObservedAnswer {
+  readonly status: CaptureFlushReport;
+  readonly recorded: boolean;
+}
+
+/**
+ * One round trip that can bring back a status, fenced: the observation is marked in flight before
+ * it is sent, the answer recorded as soon as it arrives, and the fence resolved when nothing
+ * arrived (a failure, a timeout, an interruption before the answer).
+ */
+const observedRoundTrip = <E, R>(
+  recorder: CaptureObservationRecorder,
+  roundTrip: Effect.Effect<CaptureFlushReport, E, R>,
+): Effect.Effect<ObservedAnswer, E | CaptureObservationUnrecordedError, R> =>
+  Effect.gen(function* () {
+    const fence = yield* recorder.open;
+    if (fence === undefined) {
+      return yield* Effect.fail(
+        new CaptureObservationUnrecordedError(
+          "no observation of the executor could be marked in flight, so nothing was asked of its daemon",
+        ),
+      );
+    }
+    const status = yield* roundTrip.pipe(
+      Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : recorder.close(fence))),
+    );
+    const atMs = yield* Clock.currentTimeMillis;
+    const recorded = yield* recorder.record(fence, status, atMs);
+    return { status, recorded };
+  });
+
 type Sample =
-  | { readonly kind: "status"; readonly status: CaptureFlushReport }
+  | {
+      readonly kind: "status";
+      readonly status: CaptureFlushReport;
+      /** `false`: the answer could not be recorded; its observation stays unresolved. */
+      readonly recorded: boolean;
+    }
   /** The daemon answered but refused the command: it is alive, the queue cannot be read. */
   | { readonly kind: "refused"; readonly detail: string }
+  /** No observation could be marked in flight: nothing was asked. */
+  | { readonly kind: "unrecorded"; readonly detail: string }
   | { readonly kind: "unreachable"; readonly detail: string };
 
 /**
- * One round trip: `{ flush }` sends that request (every drain ends the executor, so a drain's is
- * FINAL: quiesce, snapshot both classes, ship, report `complete`); a `status` reads the queue.
+ * One round trip, recorded: `{ flush }` sends that request (every drain ends the executor, so a
+ * drain's is FINAL: quiesce, snapshot both classes, ship, report `complete`); a `status` reads the
+ * queue. Every answer is recorded through `recorder` before it is returned.
  */
 const sampleCapture = (
   target: SealantTarget,
   command: { readonly flush: CaptureFlushRequest } | "status",
   timeoutMs: number,
+  recorder: CaptureObservationRecorder,
 ): Effect.Effect<Sample, never, SealantRuntime> =>
   (command === "status"
-    ? Effect.scoped(
-        Effect.gen(function* () {
-          const runtime = yield* SealantRuntime;
-          const daemon = yield* runtime.connect(target);
-          return yield* daemon.captureStatus();
-        }),
+    ? observedRoundTrip(
+        recorder,
+        boundedRoundTrip(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const runtime = yield* SealantRuntime;
+              const daemon = yield* runtime.connect(target);
+              return yield* daemon.captureStatus();
+            }),
+          ),
+          timeoutMs,
+          "captureStatus",
+        ),
       )
     : // A FINAL's sweep closes the connection that carried it: its answer is read again.
-      captureFlushAnswer(target, command.flush)
+      observedFlushAnswer(target, command.flush, { recorder, roundTripTimeoutMs: timeoutMs })
   ).pipe(
     Effect.timeout(timeoutMs),
-    Effect.map((status): Sample => ({ kind: "status", status })),
+    Effect.map((answer): Sample => ({ kind: "status", ...answer })),
     Effect.catch((error) =>
       Effect.succeed<Sample>(
-        error instanceof SealantControlError
-          ? { kind: "refused", detail: error.message }
-          : {
-              kind: "unreachable",
-              detail:
-                error instanceof Error
-                  ? error.message
-                  : `capture ${command === "status" ? "status" : "flush"} timed out`,
-            },
+        error instanceof CaptureObservationUnrecordedError
+          ? { kind: "unrecorded", detail: error.message }
+          : error instanceof SealantControlError
+            ? { kind: "refused", detail: error.message }
+            : {
+                kind: "unreachable",
+                detail:
+                  error instanceof Error
+                    ? error.message
+                    : `capture ${command === "status" ? "status" : "flush"} timed out`,
+              },
       ),
     ),
     Effect.catchDefect((defect) =>
@@ -816,39 +1109,29 @@ const sampleCapture = (
   );
 
 /**
- * One `capture.status` round trip: whether the daemon answers at all (a refusal is an answer).
- * The exit reconciler asks this before recording an exit — a runtime whose daemon still answers
- * is not dead, whatever the runtime reports, and must be drained before anything removes it.
- */
-export const captureDaemonAnswers = (
-  target: SealantTarget,
-  timeoutMs: number,
-): Effect.Effect<boolean, never, SealantRuntime> =>
-  sampleCapture(target, "status", timeoutMs).pipe(
-    Effect.map((sample) => sample.kind !== "unreachable"),
-  );
-
-/**
- * One `capture.status` round trip, as it went: the status read, a refusal (the daemon answers),
- * or unreachable. The exit reconciler's probe: it records the status as evidence and treats any
- * answer as a live daemon.
+ * One `capture.status` round trip, recorded, as it went: the status read, a refusal (the daemon
+ * answers), unreachable, or unrecorded (no observation could be marked in flight, so nothing was
+ * asked — nothing is concluded from it). The exit reconciler's probe: any answer means a live
+ * daemon.
  */
 export const probeCaptureDaemon = (
   target: SealantTarget,
   timeoutMs: number,
+  recorder: CaptureObservationRecorder,
 ): Effect.Effect<
-  | { readonly kind: "status"; readonly status: CaptureFlushReport }
-  | { readonly kind: "refused" | "unreachable"; readonly detail: string },
+  | { readonly kind: "status"; readonly status: CaptureFlushReport; readonly recorded: boolean }
+  | { readonly kind: "refused" | "unreachable" | "unrecorded"; readonly detail: string },
   never,
   SealantRuntime
-> => sampleCapture(target, "status", timeoutMs);
+> => sampleCapture(target, "status", timeoutMs, recorder);
 
-/** One `capture.status` round trip, for callers that only watch (the deadline sweep). */
+/** One recorded `capture.status` round trip, for callers that only watch (the deadline sweep). */
 export const readCaptureStatus = (
   target: SealantTarget,
   timeoutMs: number,
+  recorder: CaptureObservationRecorder,
 ): Effect.Effect<CaptureFlushReport | undefined, never, SealantRuntime> =>
-  sampleCapture(target, "status", timeoutMs).pipe(
+  sampleCapture(target, "status", timeoutMs, recorder).pipe(
     Effect.map((sample) => (sample.kind === "status" ? sample.status : undefined)),
   );
 
@@ -864,70 +1147,173 @@ const LOST_FINAL_REREADS = 5;
 const LOST_FINAL_REREAD_DELAY_MS = 500;
 
 /**
- * One `capture.flush`, as its answer should be read. A FINAL's own sweep stops every writer on the
- * executor — the relay that carried the request included (Docker reaches the daemon through a
- * `docker exec … socat` bridge, which the sweep kills) — so its connection often closes before the
- * answer arrives (e2e 6: every stop logged `refused: connection closed`). A closed connection is
- * a LOST answer, never the outcome: the status is read again over a new connection at once, and
- * the FINAL asked again when the daemon is not already at one (a repeated FINAL answers what the
- * first concluded; it stops nothing twice). Only when no answer can be read at all does the
- * original error stand. A daemon's refusal (`SealantControlError`) is an answer and is returned as
- * it is; a SUSPEND flush sweeps nothing and is asked once.
+ * One `capture.flush`, as its answer should be read, every answer recorded. A FINAL's own sweep
+ * stops every writer on the executor — the relay that carried the request included (Docker reaches
+ * the daemon through a `docker exec … socat` bridge, which the sweep kills) — so its connection
+ * often closes before the answer arrives (e2e 6: every stop logged `refused: connection closed`).
+ * A closed connection is a LOST answer, never the outcome: the status is read again over a new
+ * connection at once, and the FINAL asked again when the daemon is not already at one (a repeated
+ * FINAL answers what the first concluded; it stops nothing twice).
+ *
+ * Every answer — the FINAL's, a status read again, a repeated FINAL's — is recorded through
+ * `recorder` before the next command is sent (review 6 #4): an answer received is evidence about
+ * the executor whatever happens after it. One that cannot be recorded ends the exchange (nothing
+ * more is asked; its fence stays open and the executor reads unknown). When a later answer is lost
+ * and nothing more can be read, the LAST ANSWER RECEIVED is returned — never the transport error
+ * that followed it, which would turn a received "not saved" into a lost one. Only when no answer
+ * was received at all does the original error stand. A daemon's refusal (`SealantControlError`) is
+ * an answer and is returned as it is; a SUSPEND flush sweeps nothing and is asked once.
  */
-export const captureFlushAnswer = (
+const observedFlushAnswer = (
   target: SealantTarget,
   request: CaptureFlushRequest,
-  options: { readonly rereads?: number; readonly rereadDelayMs?: number } = {},
-): Effect.Effect<CaptureFlushReport, SealantError, SealantRuntime> =>
+  options: {
+    readonly recorder: CaptureObservationRecorder;
+    readonly rereads?: number;
+    readonly rereadDelayMs?: number;
+    /** Bound on each round trip (the whole exchange is the caller's to bound). */
+    readonly roundTripTimeoutMs?: number;
+  },
+): Effect.Effect<
+  ObservedAnswer,
+  SealantError | CaptureObservationUnrecordedError,
+  SealantRuntime
+> =>
   Effect.gen(function* () {
     const runtime = yield* SealantRuntime;
     // Whether the last round trip reached the daemon at all: a connection that never opened says
     // the daemon is not there (nothing is re-read); one that closed under the request says only
     // that its answer was lost.
     let reached = false;
-    const over = <A>(use: (daemon: SealantSession) => Effect.Effect<A, SealantError>) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          reached = false;
-          const daemon = yield* runtime.connect(target);
-          reached = true;
-          return yield* use(daemon);
-        }),
+    const over = (
+      operation: "captureFlush" | "captureStatus",
+      use: (daemon: SealantSession) => Effect.Effect<CaptureFlushReport, SealantError>,
+    ) =>
+      observedRoundTrip(
+        options.recorder,
+        boundedRoundTrip(
+          Effect.scoped(
+            Effect.gen(function* () {
+              reached = false;
+              const daemon = yield* runtime.connect(target);
+              reached = true;
+              return yield* use(daemon);
+            }),
+          ),
+          options.roundTripTimeoutMs,
+          operation,
+        ),
       );
-    const first = yield* Effect.result(over((daemon) => daemon.captureFlush(request)));
+    const first = yield* Effect.result(
+      over("captureFlush", (daemon) => daemon.captureFlush(request)),
+    );
+    if (Result.isSuccess(first)) {
+      return first.success;
+    }
     if (
-      Result.isSuccess(first) ||
       request.kind !== "final" ||
       !reached ||
-      first.failure instanceof SealantControlError
+      first.failure instanceof SealantControlError ||
+      first.failure instanceof CaptureObservationUnrecordedError
     ) {
-      return yield* fromResult(first);
+      return yield* Effect.fail(first.failure);
     }
     const rereads = options.rereads ?? LOST_FINAL_REREADS;
     const delayMs = options.rereadDelayMs ?? LOST_FINAL_REREAD_DELAY_MS;
+    // The last answer the daemon gave in this exchange: returned rather than a later lost one.
+    let last: ObservedAnswer | undefined;
     for (let attempt = 0; attempt < rereads; attempt += 1) {
-      const status = yield* Effect.result(over((daemon) => daemon.captureStatus()));
+      const status = yield* Effect.result(
+        over("captureStatus", (daemon) => daemon.captureStatus()),
+      );
       if (Result.isSuccess(status)) {
-        if (reportsComplete(status.success) || finalInProgress(status.success)) {
+        last = status.success;
+        if (
+          !status.success.recorded ||
+          reportsComplete(status.success.status) ||
+          finalInProgress(status.success.status)
+        ) {
           return status.success;
         }
-        const again = yield* Effect.result(over((daemon) => daemon.captureFlush(request)));
-        if (Result.isSuccess(again) || again.failure instanceof SealantControlError) {
-          return yield* fromResult(again);
+        const again = yield* Effect.result(
+          over("captureFlush", (daemon) => daemon.captureFlush(request)),
+        );
+        if (Result.isSuccess(again)) {
+          return again.success;
         }
-      } else if (status.failure instanceof SealantControlError) {
+        if (
+          again.failure instanceof SealantControlError ||
+          again.failure instanceof CaptureObservationUnrecordedError
+        ) {
+          return yield* Effect.fail(again.failure);
+        }
+      } else if (
+        status.failure instanceof SealantControlError ||
+        status.failure instanceof CaptureObservationUnrecordedError
+      ) {
         return yield* Effect.fail(status.failure);
       } else if (!reached) {
-        // The daemon is not answering any more: nothing to re-read.
+        // The daemon is not answering any more: nothing more to read.
         break;
       }
       yield* Effect.sleep(delayMs);
     }
-    return yield* fromResult(first);
+    if (last !== undefined) {
+      yield* Effect.logWarning(
+        `Capture flush: the FINAL's answer was lost and could not be read again; returning the last status the daemon gave (${describeCaptureStatus(last.status)}), not the lost answer (${first.failure instanceof Error ? first.failure.message : String(first.failure)}).`,
+      );
+      return last;
+    }
+    return yield* Effect.fail(first.failure);
   });
 
-const fromResult = <A, E>(result: Result.Result<A, E>): Effect.Effect<A, E> =>
-  Result.isSuccess(result) ? Effect.succeed(result.success) : Effect.fail(result.failure);
+/**
+ * One `capture.flush` relayed for a caller (the public flush route), every answer recorded
+ * through `recorder` (`observedFlushAnswer`): the answer the daemon gave — a lost FINAL answer is
+ * read again, and when a later one is lost the last received is returned.
+ */
+export const captureFlushAnswer = (
+  target: SealantTarget,
+  request: CaptureFlushRequest,
+  options: {
+    readonly recorder: CaptureObservationRecorder;
+    readonly rereads?: number;
+    readonly rereadDelayMs?: number;
+    readonly roundTripTimeoutMs?: number;
+  },
+): Effect.Effect<
+  CaptureFlushReport,
+  SealantError | CaptureObservationUnrecordedError,
+  SealantRuntime
+> => observedFlushAnswer(target, request, options).pipe(Effect.map((answer) => answer.status));
+
+/**
+ * One `capture.status` relayed for a caller (the public status route), recorded through
+ * `recorder` before it is returned.
+ */
+export const captureStatusAnswer = (
+  target: SealantTarget,
+  recorder: CaptureObservationRecorder,
+  roundTripTimeoutMs?: number,
+): Effect.Effect<
+  CaptureFlushReport,
+  SealantError | CaptureObservationUnrecordedError,
+  SealantRuntime
+> =>
+  Effect.gen(function* () {
+    const runtime = yield* SealantRuntime;
+    const roundTrip = Effect.scoped(
+      Effect.gen(function* () {
+        const daemon = yield* runtime.connect(target);
+        return yield* daemon.captureStatus();
+      }),
+    );
+    const answer = yield* observedRoundTrip(
+      recorder,
+      boundedRoundTrip(roundTrip, roundTripTimeoutMs, "captureStatus"),
+    );
+    return answer.status;
+  });
 
 export interface DrainCaptureInput {
   readonly runId: string;
@@ -994,6 +1380,9 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
   }
   const { token } = claimed;
   const prefix = `Capture drain (${label}) · run ${runId}`;
+  // Every answer this drain receives is recorded as it arrives, under a fence opened before its
+  // request was sent (review 6 #4, #5).
+  const recorder = ledgerObservationRecorder(ledger, runId, settings.requestTimeoutMs);
   let entry: CaptureDrainEntry = claimed.entry;
   let lost = false;
 
@@ -1021,11 +1410,13 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
       const newest = recorded.readable ? recorded.entry : undefined;
       const contradiction = !recorded.readable
         ? "its drain record could not be read back to confirm no newer observation contradicts it"
-        : newest?.lastUnreadable === true
-          ? "a newer observation of the executor is on record that cannot be read"
-          : newest?.last !== undefined && !reportsComplete(newest.last)
-            ? `a newer observation of the executor says its work is not saved (${describeCaptureStatus(newest.last)})`
-            : undefined;
+        : (newest?.observationsInFlight ?? 0) > 0
+          ? "another observation of the executor is in flight or could not be recorded, so what it said is not known"
+          : newest?.lastUnreadable === true
+            ? "a newer observation of the executor is on record that cannot be read"
+            : newest?.last !== undefined && !reportsComplete(newest.last)
+              ? `a newer observation of the executor says its work is not saved (${describeCaptureStatus(newest.last)})`
+              : undefined;
       if (contradiction === undefined) {
         return outcome;
       }
@@ -1057,9 +1448,27 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
         input.target,
         command === "flush" ? { flush: finalFlushRequest(settings) } : "status",
         settings.requestTimeoutMs,
+        recorder,
       );
       const now = yield* Clock.currentTimeMillis;
       let refusedDetail: string | undefined;
+
+      if (sample.kind === "unrecorded" || (sample.kind === "status" && !sample.recorded)) {
+        // What the daemon says cannot be recorded (or could not be marked in flight, and nothing
+        // was asked): nothing more is asked this call, and nothing concludes on it. An answer
+        // that was received stays unresolved on record, so the executor reads unknown.
+        const detail =
+          sample.kind === "unrecorded"
+            ? sample.detail
+            : `the daemon's answer could not be recorded (${describeCaptureStatus(sample.status)})`;
+        yield* Effect.logWarning(
+          `${prefix}: not saved · not recorded · ${detail}; the drain stops here and every sweep asks again.`,
+        );
+        return yield* finish({
+          kind: "pending",
+          status: sample.kind === "status" ? sample.status : entry.last,
+        });
+      }
 
       if (sample.kind === "unreachable") {
         const unreachableSince = entry.unreachableSince ?? now;
