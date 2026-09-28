@@ -1574,6 +1574,42 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     return { stopped: [`${reference}-docker`] };
   }
 
+  /**
+   * The container a launch of `runId` created: every launch of a run names its container
+   * `<prefix>-<run>` (`buildContainerName`), so a worker lost between `docker run` and recording
+   * the container still leaves it findable. `undefined` only when Docker says no such container.
+   */
+  public async locate(input: {
+    readonly runId: string;
+  }): Promise<RuntimeLaunchIdentity | undefined> {
+    const containerName = `${this.containerNamePrefix}-${normalizeContainerToken(input.runId) || "run"}`;
+    let id: string;
+    try {
+      const result = await this.commandRunner("docker", [
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        containerName,
+      ]);
+      id = result.stdout.trim();
+    } catch (error) {
+      if (isNoSuchContainerError(error)) return undefined;
+      throw error;
+    }
+    if (id.length === 0) {
+      throw createAdapterError(
+        "adapter-unavailable",
+        `Docker inspect did not return an id for '${containerName}'.`,
+      );
+    }
+    return {
+      adapter: this.id,
+      resourceId: id,
+      reference: containerName,
+      endpoint: this.resolveControlEndpoint(id, containerName),
+    };
+  }
+
   /** The container's name (without Docker's leading `/`), or undefined when it cannot be read. */
   private async containerName(containerId: string): Promise<string | undefined> {
     try {

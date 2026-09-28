@@ -1921,6 +1921,32 @@ describe("DockerRuntimeAdapter", () => {
     expect(calls.some((args) => args[0] === "stop")).toBe(false);
   });
 
+  it("locates the container a lost launch created by its run's name (e2e 5)", async () => {
+    const locateWith = async (answer: "found" | "missing" | "down") => {
+      const commandRunner = vi.fn<
+        (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+      >(async (_command, args) => {
+        expect(args).toEqual(["inspect", "--format", "{{.Id}}", "sealant-run_7"]);
+        if (answer === "missing") throw new Error("Error: No such object: sealant-run_7");
+        if (answer === "down") throw new Error("Cannot connect to the Docker daemon");
+        return { stdout: "container-id-7\n", stderr: "" };
+      });
+      const adapter = new DockerRuntimeAdapter({
+        commandRunner,
+        runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      });
+      return adapter.locate({ runId: "run_7" });
+    };
+    await expect(locateWith("found")).resolves.toMatchObject({
+      adapter: "docker",
+      resourceId: "container-id-7",
+      reference: "sealant-run_7",
+    });
+    await expect(locateWith("missing")).resolves.toBeUndefined();
+    // Unknown is never taken for none.
+    await expect(locateWith("down")).rejects.toThrow(/Cannot connect/);
+  });
+
   it("removes the sidecar network of a workspace whose parked sidecar is gone", async () => {
     const calls: Array<readonly string[]> = [];
     const commandRunner = vi.fn<

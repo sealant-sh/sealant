@@ -39,6 +39,7 @@ import {
   dotfilesStagingRoot,
   processWorkspaceBuildJobEffect,
   type ProcessWorkspaceBuildJobEffectOptions,
+  DEFAULT_LAUNCH_LEASE_MS,
 } from "./process-workspace-build-job.js";
 
 const workspaceBuildJobRepoStub = (
@@ -1311,7 +1312,9 @@ describe("processWorkspaceBuildJobEffect", () => {
               status: "pending",
               sourceKind: "capture",
               launchOwner: expect.stringMatching(/^worker-test:job_retained:/),
-              launchLeaseMs: expect.any(Number),
+              // The launch's own lease (2 min), not the build job's: a worker lost mid-launch
+              // leaves an executor that is adopted within minutes (e2e 5: the job lease is 15).
+              launchLeaseMs: DEFAULT_LAUNCH_LEASE_MS,
               // No image plan here: the daemon's build, and so its recovery boot, is unknown.
               daemonRecoveryBoot: null,
             },

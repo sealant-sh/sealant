@@ -508,6 +508,10 @@ export const workerRuntimeEnvSchema = z.object({
     sshEndpointExposureStrategySchema.default("host-published"),
   WORKER_ID: z.string().trim().min(1).default(defaultWorkerId),
   WORKSPACE_BUILD_JOB_LEASE_DURATION_MS: z.coerce.number().int().positive().default(900000),
+  // How long a launch owns its runtime row without renewal (renewed every third of it while it
+  // waits for readiness). A worker lost mid-launch leaves a launch the stranded-launch sweep
+  // adopts this long after its last renewal: the executor is retained and preserved.
+  WORKSPACE_LAUNCH_LEASE_MS: z.coerce.number().int().positive().default(120000),
   // How often the worker re-drives workspace build jobs stranded by a dead lease holder (#5 reaper).
   WORKSPACE_BUILD_JOB_REAPER_INTERVAL_MS: z.coerce.number().int().positive().default(30000),
   // How often the worker sweeps live runtimes for expired TTLs and stranded containers.

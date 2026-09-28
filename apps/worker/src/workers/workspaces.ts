@@ -327,6 +327,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           jobId: message.jobId,
           workerId: env.WORKER_ID,
           leaseDurationMs: env.WORKSPACE_BUILD_JOB_LEASE_DURATION_MS,
+          launchLeaseMs: env.WORKSPACE_LAUNCH_LEASE_MS,
           db,
           runtimes,
           defaultRuntimeAdapterId: env.DEFAULT_RUNTIME_ADAPTER,
@@ -425,6 +426,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       db,
       workerId: env.WORKER_ID,
       leaseDurationMs: env.WORKSPACE_BUILD_JOB_LEASE_DURATION_MS,
+      launchLeaseMs: env.WORKSPACE_LAUNCH_LEASE_MS,
       // The reaper re-drives the same pipeline as the consumer, so it takes the same registered
       // runtimes: a reaped job builds with the same builder a first delivery would.
       runtimes,

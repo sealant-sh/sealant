@@ -5,7 +5,7 @@ import {
 } from "@sealant/validators";
 import { z } from "zod";
 
-import type { RuntimeAdapterLaunchHooks } from "./launch-retention.js";
+import type { RuntimeAdapterLaunchHooks, RuntimeLaunchIdentity } from "./launch-retention.js";
 
 export const runtimeAdapterBlueprintSchema = newWorkspaceSchema;
 
@@ -354,6 +354,13 @@ export interface RuntimeAdapter {
    * what it stopped (nothing, when there was nothing running beside the executor).
    */
   parkRetained?(input: RuntimeAdapterParkInput): Promise<RuntimeAdapterParkResult>;
+  /**
+   * Optional: the executor a launch of `runId` created, found by the identity the runtime gives
+   * every executor of a run (Docker: the per-run container name) — for a launch whose worker was
+   * lost between creating the executor and recording it. `undefined` = the runtime knows none;
+   * a failed read throws (unknown is never taken for none). Absent = the runtime cannot tell.
+   */
+  locate?(input: { readonly runId: string }): Promise<RuntimeLaunchIdentity | undefined>;
 }
 
 export interface RuntimeAdapterParkInput {

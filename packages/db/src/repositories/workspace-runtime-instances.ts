@@ -76,6 +76,9 @@ const workspaceRuntimeInstanceRepoOperationSchema = Schema.Literals([
   "listRetainedLaunches",
   "listStrandedLaunches",
   "adoptStrandedLaunch",
+  "listUnidentifiedStrandedLaunches",
+  "identifyStrandedLaunch",
+  "failLostLaunch",
   "renewLaunchLease",
   "listPreservationCandidates",
   "markExited",
@@ -143,6 +146,12 @@ export interface MarkWorkspaceRuntimeInstanceStoppedInput {
   readonly stopReason: WorkspaceRuntimeInstanceStopReason;
   readonly finishedAt?: Date;
 }
+
+/**
+ * `errorCode` of a launch whose worker was lost before any executor of it can be found: nothing
+ * started (or nothing the runtime knows of), so nothing is kept. See `failLostLaunch`.
+ */
+export const LAUNCH_LOST_ERROR_CODE = "launch-lost";
 
 /** `errorCode` written by `markExited`: the runtime ended without a stop request. */
 export const RUNTIME_EXITED_ERROR_CODE = "runtime-exited";
@@ -243,6 +252,39 @@ export interface WorkspaceRuntimeInstanceRepoService {
     readonly errorMessage: string;
     readonly unownedGraceMs: number;
   }) => Effect.Effect<WorkspaceRuntimeInstance | undefined, WorkspaceRuntimeInstanceRepoError>;
+  /**
+   * Launches whose worker is gone (ownership lapsed, or — no owner — unchanged for
+   * `unownedGraceMs`) BEFORE they recorded an executor: `pending` with no `resource_id`. The
+   * executor may still have started (the worker died between creating it and recording it), so
+   * the sweep asks the runtimes for it by the run (`RuntimeAdapter.locate`).
+   */
+  readonly listUnidentifiedStrandedLaunches: (input: {
+    readonly unownedGraceMs: number;
+  }) => Effect.Effect<readonly WorkspaceRuntimeInstance[], WorkspaceRuntimeInstanceRepoError>;
+  /**
+   * Record the executor a runtime found for an unidentified stranded launch — only while it is
+   * still one (atomic; `undefined` when its worker came back and recorded it, or another sweep
+   * did). The row stays `pending` with its lapsed ownership: `adoptStrandedLaunch` adopts it.
+   */
+  readonly identifyStrandedLaunch: (input: {
+    readonly runId: string;
+    readonly adapter: RuntimeAdapterId;
+    readonly resourceId: string;
+    readonly reference: string;
+    readonly endpoint?: string;
+    readonly unownedGraceMs: number;
+  }) => Effect.Effect<WorkspaceRuntimeInstance | undefined, WorkspaceRuntimeInstanceRepoError>;
+  /**
+   * End an unidentified stranded launch no runtime knows an executor of, once its ownership has
+   * been lapsed for `lostGraceMs` (a creation still in flight when the worker died has landed by
+   * then): `failed` with `LAUNCH_LOST_ERROR_CODE`, ownership cleared. Atomic like the adoption.
+   */
+  readonly failLostLaunch: (input: {
+    readonly runId: string;
+    readonly errorMessage: string;
+    readonly unownedGraceMs: number;
+    readonly lostGraceMs: number;
+  }) => Effect.Effect<WorkspaceRuntimeInstance | undefined, WorkspaceRuntimeInstanceRepoError>;
   /** Renew `owner`'s launch ownership of a `pending` row; `false` when it is no longer theirs. */
   readonly renewLaunchLease: (input: {
     readonly runId: string;
@@ -266,6 +308,36 @@ export interface WorkspaceRuntimeInstanceRepoService {
  * `listStrandedLaunches`): `pending`, naming an executor, and its ownership lapsed — or, written
  * before ownership existed, naming no owner and unchanged for `unownedGraceMs`.
  */
+/** A `pending` launch whose worker is gone: ownership lapsed, or ownerless and stale. */
+const launchOwnershipLapsed = (unownedGraceMs: number, lapsedForMs = 0) =>
+  or(
+    and(
+      isNotNull(workspaceRuntimeInstances.launchOwner),
+      or(
+        isNull(workspaceRuntimeInstances.launchLeaseExpiresAt),
+        lte(
+          workspaceRuntimeInstances.launchLeaseExpiresAt,
+          sql`now() - (${Math.max(0, Math.round(lapsedForMs))} * interval '1 millisecond')`,
+        ),
+      ),
+    ),
+    and(
+      isNull(workspaceRuntimeInstances.launchOwner),
+      lte(
+        workspaceRuntimeInstances.updatedAt,
+        sql`now() - (${Math.max(0, Math.round(unownedGraceMs + lapsedForMs))} * interval '1 millisecond')`,
+      ),
+    ),
+  );
+
+/** A stranded launch that never recorded its executor (see `listUnidentifiedStrandedLaunches`). */
+const strandedUnidentified = (unownedGraceMs: number, lapsedForMs = 0) =>
+  and(
+    eq(workspaceRuntimeInstances.status, "pending"),
+    isNull(workspaceRuntimeInstances.resourceId),
+    launchOwnershipLapsed(unownedGraceMs, lapsedForMs),
+  );
+
 const stranded = (unownedGraceMs: number) =>
   and(
     eq(workspaceRuntimeInstances.status, "pending"),
@@ -583,6 +655,64 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               )
               .returning();
             return adopted;
+          }),
+        ),
+
+      listUnidentifiedStrandedLaunches: (input) =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "listUnidentifiedStrandedLaunches",
+          db
+            .select()
+            .from(workspaceRuntimeInstances)
+            .where(strandedUnidentified(input.unownedGraceMs))
+            .orderBy(desc(workspaceRuntimeInstances.updatedAt)),
+        ),
+
+      identifyStrandedLaunch: (input) =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "identifyStrandedLaunch",
+          Effect.gen(function* () {
+            const [identified] = yield* db
+              .update(workspaceRuntimeInstances)
+              .set({
+                adapter: input.adapter,
+                resourceId: input.resourceId,
+                reference: input.reference,
+                ...(input.endpoint === undefined ? {} : { endpoint: input.endpoint }),
+              })
+              .where(
+                and(
+                  eq(workspaceRuntimeInstances.runId, input.runId),
+                  strandedUnidentified(input.unownedGraceMs),
+                ),
+              )
+              .returning();
+            return identified;
+          }),
+        ),
+
+      failLostLaunch: (input) =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "failLostLaunch",
+          Effect.gen(function* () {
+            const [failed] = yield* db
+              .update(workspaceRuntimeInstances)
+              .set({
+                status: "failed",
+                errorCode: LAUNCH_LOST_ERROR_CODE,
+                errorMessage: input.errorMessage,
+                launchOwner: null,
+                launchLeaseExpiresAt: null,
+                finishedAt: new Date(),
+              })
+              .where(
+                and(
+                  eq(workspaceRuntimeInstances.runId, input.runId),
+                  strandedUnidentified(input.unownedGraceMs, input.lostGraceMs),
+                ),
+              )
+              .returning();
+            return failed;
           }),
         ),
 
