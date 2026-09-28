@@ -1193,6 +1193,68 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     }
   }
 
+  /** Wait until the Docker sidecar's daemon answers `docker info`, within the readiness timeout. */
+  private async awaitDockerServiceReady(containerId: string, serviceName: string): Promise<void> {
+    const deadline = Date.now() + this.readinessTimeoutMs;
+    for (;;) {
+      try {
+        await this.commandRunner("docker", [
+          "exec",
+          containerId,
+          "docker",
+          "-H",
+          "tcp://127.0.0.1:2375",
+          "info",
+        ]);
+        return;
+      } catch (error) {
+        if (Date.now() > deadline) {
+          const message = error instanceof Error ? error.message : "Docker daemon unavailable.";
+          throw createAdapterError(
+            "adapter-unavailable",
+            `Workspace Docker service '${serviceName}' did not become ready: ${message}`,
+          );
+        }
+        await delay(READINESS_POLL_INTERVAL_MS);
+      }
+    }
+  }
+
+  /**
+   * Bring back the Docker sidecar `parkRetained` stopped, before a recovery starts the workspace
+   * container (e2e 6): the container's daemon is configured for it (`DOCKER_HOST`), and a
+   * recovery started without it never completes — sealantd counts the unreachable workspace
+   * Docker daemon as a writer still there (`processes-remain`) on every FINAL. A stopped sidecar
+   * is started again; one the park removed (created `--rm`) is created again while its network
+   * says the workspace had one. Answers whether it started one (`false`: running already, or the
+   * workspace runs no Docker service).
+   */
+  private async unparkDockerService(reference: string): Promise<boolean> {
+    const serviceName = `${reference}-docker`;
+    const service = await this.inspectContainerByName(serviceName);
+    if (service?.running === true) {
+      return false;
+    }
+    if (service !== undefined) {
+      await this.commandRunner("docker", ["start", service.id]);
+      await this.awaitDockerServiceReady(service.id, serviceName);
+      return true;
+    }
+    const hasNetwork = await this.commandRunner("docker", [
+      "network",
+      "inspect",
+      `${reference}-network`,
+    ]).then(
+      () => true,
+      () => false,
+    );
+    if (!hasNetwork) {
+      return false;
+    }
+    await this.provisionDockerService(reference);
+    return true;
+  }
+
   private async provisionDockerService(containerName: string): Promise<DockerServiceProvision> {
     const networkName = `${containerName}-network`;
     const serviceName = `${containerName}-docker`;
@@ -1232,29 +1294,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     let acquisition: DockerContainerAcquisition | undefined;
     try {
       acquisition = await this.runOrAdoptContainer(args, serviceName);
-      const deadline = Date.now() + this.readinessTimeoutMs;
-      for (;;) {
-        try {
-          await this.commandRunner("docker", [
-            "exec",
-            acquisition.containerId,
-            "docker",
-            "-H",
-            "tcp://127.0.0.1:2375",
-            "info",
-          ]);
-          return { networkName, serviceName, createdNetworkId, acquisition };
-        } catch (error) {
-          if (Date.now() > deadline) {
-            const message = error instanceof Error ? error.message : "Docker daemon unavailable.";
-            throw createAdapterError(
-              "adapter-unavailable",
-              `Workspace Docker service '${serviceName}' did not become ready: ${message}`,
-            );
-          }
-          await delay(READINESS_POLL_INTERVAL_MS);
-        }
-      }
+      await this.awaitDockerServiceReady(acquisition.containerId, serviceName);
+      return { networkName, serviceName, createdNetworkId, acquisition };
     } catch (error) {
       try {
         if (acquisition === undefined) {
@@ -1535,9 +1576,23 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     // asked for by a marker in its own filesystem (sealantd reads `/.sealantd-recovery`): no
     // lifecycle step, no dotfiles, no harness, admission closed, its own staging resumed.
     await this.writeRecoveryMarker(input.resourceId);
-    await this.commandRunner("docker", ["start", input.resourceId]);
-    if (this.verifyRunning) {
-      await this.awaitControlSocketReady(input.resourceId, input.reference ?? input.resourceId);
+    // Its Docker sidecar first, when the park stopped it: without it the recovery's FINAL never
+    // completes. A recovery that fails to start parks it again (the next attempt unparks it).
+    const reference = input.reference ?? (await this.containerName(input.resourceId));
+    const unparked = reference === undefined ? false : await this.unparkDockerService(reference);
+    try {
+      await this.commandRunner("docker", ["start", input.resourceId]);
+      if (this.verifyRunning) {
+        await this.awaitControlSocketReady(input.resourceId, input.reference ?? input.resourceId);
+      }
+    } catch (error) {
+      if (unparked) {
+        await this.parkRetained({
+          resourceId: input.resourceId,
+          ...(reference === undefined ? {} : { reference }),
+        }).catch(() => undefined);
+      }
+      throw error;
     }
     return { outcome: "restarted" };
   }
@@ -1551,10 +1606,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
    * own disk is touched, and the sidecar network stays (the container is attached to it; `docker
    * start` needs it).
    *
-   * The recovery does not need the sidecar: sealantd's recovery boot runs no user code (no
-   * lifecycle step, no harness, admission closed) and captures only the executor's own
-   * filesystem, so nothing in it reaches `DOCKER_HOST`. `recover` therefore starts the workspace
-   * container alone. A recovery that ever runs user code must start the sidecar first.
+   * `recover` starts the sidecar again before it starts the workspace container (e2e 6: the
+   * recovered daemon's FINAL counts an unreachable workspace Docker daemon as a writer still
+   * there), and parks it again when that start fails.
    */
   public async parkRetained(input: RuntimeAdapterParkInput): Promise<RuntimeAdapterParkResult> {
     const container = await this.inspectContainerState(input.resourceId).catch(() => undefined);

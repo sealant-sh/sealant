@@ -1529,6 +1529,89 @@ describe("DockerRuntimeAdapter", () => {
     expect(runArgs).not.toContain("--rm");
   });
 
+  it("starts a parked Docker sidecar before the recovery boot, and parks it again when the start fails (e2e 6)", async () => {
+    // e2e 6: the park stopped `<name>-docker`, recovery started the workspace container alone,
+    // and its daemon counted the unreachable workspace Docker daemon as a writer still there on
+    // every FINAL (`processes-remain`): the recovery never completed.
+    const recoverWith = async (sidecar: "stopped" | "removed", workspaceStarts: boolean) => {
+      const steps: string[] = [];
+      let sidecarRunning = false;
+      const commandRunner = vi.fn<
+        (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+      >(async (_command, args) => {
+        const target = args.at(-1) ?? "";
+        if (args[0] === "inspect" && target === "exited-id") {
+          return {
+            stdout: '{"Status":"exited","Running":false,"ExitCode":75,"Error":""}\n',
+            stderr: "",
+          };
+        }
+        if (args[0] === "inspect" && target === "sealant-x-docker") {
+          if (sidecar === "removed" && !sidecarRunning) throw new Error("Error: No such object");
+          return { stdout: `sidecar-id\t${String(sidecarRunning)}\n`, stderr: "" };
+        }
+        if (args[0] === "network" && args[1] === "inspect") {
+          steps.push(`network inspect ${target}`);
+          return { stdout: "[]", stderr: "" };
+        }
+        if (args[0] === "cp") {
+          steps.push("cp marker");
+          return { stdout: "", stderr: "" };
+        }
+        if (args[0] === "start") {
+          steps.push(`start ${target}`);
+          if (target === "sidecar-id") sidecarRunning = true;
+          if (target === "exited-id" && !workspaceStarts) throw new Error("start failed");
+          return { stdout: "", stderr: "" };
+        }
+        if (args[0] === "run") {
+          steps.push(`run ${args[args.indexOf("--name") + 1] ?? ""}`);
+          sidecarRunning = true;
+          return { stdout: "sidecar-id\n", stderr: "" };
+        }
+        if (args[0] === "exec" && args.includes("info")) {
+          steps.push(`ready ${args[1] ?? ""}`);
+          return { stdout: "", stderr: "" };
+        }
+        if (args[0] === "stop") {
+          steps.push(`stop ${target}`);
+          sidecarRunning = false;
+          return { stdout: "", stderr: "" };
+        }
+        return { stdout: "", stderr: "" };
+      });
+      const adapter = new DockerRuntimeAdapter({
+        commandRunner,
+        runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      });
+      const outcome = await adapter
+        .recover({ resourceId: "exited-id", reference: "sealant-x" })
+        .catch((error: unknown) => (error instanceof Error ? error.message : String(error)));
+      return { outcome, steps };
+    };
+
+    const stopped = await recoverWith("stopped", true);
+    expect(stopped.outcome).toEqual({ outcome: "restarted" });
+    expect(stopped.steps).toEqual([
+      "cp marker",
+      "start sidecar-id",
+      "ready sidecar-id",
+      "start exited-id",
+    ]);
+
+    // Created `--rm`, the park removed it: created again on the workspace's network.
+    const removed = await recoverWith("removed", true);
+    expect(removed.outcome).toEqual({ outcome: "restarted" });
+    expect(removed.steps).toContain("run sealant-x-docker");
+    expect(removed.steps.indexOf("run sealant-x-docker")).toBeLessThan(
+      removed.steps.indexOf("start exited-id"),
+    );
+
+    const failed = await recoverWith("stopped", false);
+    expect(failed.outcome).toBe("start failed");
+    expect(failed.steps.at(-1)).toBe("stop sidecar-id");
+  });
+
   it("recovers a retained container by starting it on its own disk, and only an ended one", async () => {
     const states: Record<string, string> = {
       "exited-id": '{"Status":"exited","Running":false,"ExitCode":75,"Error":""}',
