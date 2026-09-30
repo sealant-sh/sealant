@@ -45,8 +45,9 @@ Built images stay in that Docker Engine: the worker tags them
 or pulled. Set `REGISTRY_BASE_URL` and `REGISTRY_PUSH_REGISTRY` together to publish to an OCI
 registry instead; Kubernetes builds require them.
 
-`WORKSPACE_BUILD_QUEUE_PREFETCH` (default `1`) sets how many deliveries one worker process handles
-at once.
+`WORKSPACE_BUILD_QUEUE_PREFETCH` (default `1`) sets how many build and lifecycle deliveries one
+worker process handles at once; `RUN_EXEC_QUEUE_CONCURRENCY` (default `4`) sets how many run-exec
+deliveries (harness runs and workspace execs) it handles at once.
 
 Image retention runs in the worker: every hour (`WORKSPACE_IMAGE_GC_INTERVAL_MS`, first pass 30 s
 after boot) it deletes workspace images no live workspace launched from and no retained plan needs

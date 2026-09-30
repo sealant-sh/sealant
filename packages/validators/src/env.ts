@@ -8,10 +8,17 @@ import { runtimeAdapterIdSchema } from "./workspaces/runtime-adapter-ids.js";
 
 /**
  * The job queue (pg-boss) lives in the control-plane database — `DATABASE_URL` is its connection
- * too, so the only queue-specific knob is how many deliveries one worker process handles at once.
+ * too, so the only queue-specific knobs are how many deliveries one worker process handles at once.
  */
 export const jobQueueEnvSchema = z.object({
   WORKSPACE_BUILD_QUEUE_PREFETCH: z.coerce.number().int().positive().default(1),
+  /**
+   * Run-exec deliveries (harness runs and workspace execs) one worker process handles at once.
+   * Separate from the build prefetch: an exec mostly waits on its executor, and a single slot let
+   * one slow exec (a cold binary read, an executor that is gone) hold every other workspace's
+   * setup for minutes (Mend alpha 2026-09-30).
+   */
+  RUN_EXEC_QUEUE_CONCURRENCY: z.coerce.number().int().positive().default(4),
 });
 
 export type JobQueueEnv = z.infer<typeof jobQueueEnvSchema>;
