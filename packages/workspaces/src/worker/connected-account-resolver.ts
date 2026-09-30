@@ -176,10 +176,16 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
     });
 
     injections.push(...planned);
+    const fileInjected = planned.some((injection) => injection.kind === "file");
     launchCredentialInjections.push({
       provider: credentialRef.provider,
       connectedAccountId: account.id,
-      injection: planned.some((injection) => injection.kind === "file") ? "file" : "env",
+      injection: fileInjected ? "file" : "env",
+      // Every Claude/Codex FILE planCredentialInjections writes is a copy that cannot refresh.
+      ...(fileInjected &&
+      (credentialRef.provider === "claude" || credentialRef.provider === "codex")
+        ? { copy: true }
+        : {}),
     });
 
     if (credentialRef.provider === "codex") {

@@ -1,4 +1,5 @@
 import {
+  claudeCredentialsCanRefresh,
   isNewerClaudeCredentials,
   isPlausibleClaudeExpiry,
   narrowClaudeCredentialsJson,
@@ -54,6 +55,7 @@ export {
 export type ClaudeCredentialsPersistOutcome =
   | "synced"
   | "skipped-invalid-file"
+  | "skipped-copy"
   | "skipped-implausible-expiry"
   | "skipped-account-unavailable"
   | "skipped-not-session-file"
@@ -87,6 +89,15 @@ export const persistClaudeCredentialsIfNewer = Effect.fn("persistClaudeCredentia
           `${describe} skipped-invalid-file: observed .credentials.json is invalid (${parsed.reason}).`,
         );
         return "skipped-invalid-file" as const;
+      }
+
+      // A copy (no refresh token) never replaces the store's login: only the store refreshes, and
+      // a copy written back would leave nothing able to refresh it (§6a "One refresher").
+      if (!claudeCredentialsCanRefresh(input.observedCredentialsJson)) {
+        yield* Effect.logWarning(
+          `${describe} skipped-copy: the observed file has no refresh token — a copy, not the login.`,
+        );
+        return "skipped-copy" as const;
       }
 
       // Plausibility belt: real session tokens expire within hours; a far-future expiresAt is a

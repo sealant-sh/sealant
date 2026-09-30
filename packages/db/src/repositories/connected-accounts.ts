@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull, lt, or } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -29,6 +29,8 @@ const connectedAccountRepoOperationSchema = Schema.Literals([
   "replacePayload",
   "updateSyncState",
   "markInvalid",
+  "claimRefresh",
+  "releaseRefresh",
   "archive",
   "restore",
   "setProfileBinding",
@@ -191,6 +193,20 @@ export interface ConnectedAccountRepoService {
   readonly markInvalid: (input: {
     readonly id: string;
   }) => Effect.Effect<ConnectedAccount | undefined, ConnectedAccountRepoError>;
+  /**
+   * One refresh per login at a time, across every worker (docs/connected-accounts-design.md §6a).
+   * True when this caller now holds the claim until `until`: no claim was held, or the one held has
+   * lapsed. A crashed pass's claim lapses on its own.
+   */
+  readonly claimRefresh: (input: {
+    readonly id: string;
+    readonly until: Date;
+    readonly now: Date;
+  }) => Effect.Effect<boolean, ConnectedAccountRepoError>;
+  /** Give the claim back once the refresh (and its push) ended, whichever way. */
+  readonly releaseRefresh: (input: {
+    readonly id: string;
+  }) => Effect.Effect<void, ConnectedAccountRepoError>;
   /** Soft delete; returns undefined when no active account matched (wrong id or wrong owner). */
   readonly archive: (
     input: ArchiveConnectedAccountInput,
@@ -393,6 +409,39 @@ export const ConnectedAccountRepoLive = Layer.effect(
 
             return connectedAccount;
           }),
+        ),
+
+      claimRefresh: (input) =>
+        withConnectedAccountRepoError(
+          "claimRefresh",
+          Effect.gen(function* () {
+            const claimed = yield* db
+              .update(connectedAccounts)
+              .set({ refreshClaimedUntil: input.until })
+              .where(
+                and(
+                  eq(connectedAccounts.id, input.id),
+                  isNull(connectedAccounts.archivedAt),
+                  or(
+                    isNull(connectedAccounts.refreshClaimedUntil),
+                    lt(connectedAccounts.refreshClaimedUntil, input.now),
+                  ),
+                ),
+              )
+              .returning({ id: connectedAccounts.id });
+
+            return claimed.length === 1;
+          }),
+        ),
+
+      releaseRefresh: (input) =>
+        withConnectedAccountRepoError(
+          "releaseRefresh",
+          db
+            .update(connectedAccounts)
+            .set({ refreshClaimedUntil: null })
+            .where(eq(connectedAccounts.id, input.id))
+            .pipe(Effect.asVoid),
         ),
 
       archive: (input) =>

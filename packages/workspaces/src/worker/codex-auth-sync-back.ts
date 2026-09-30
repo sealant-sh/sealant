@@ -1,4 +1,5 @@
 import {
+  codexAuthJsonCanRefresh,
   parseCodexAuthJson,
   parseConnectedAccountRef,
   sha256Hex,
@@ -63,6 +64,7 @@ export const isNewerCodexAuthRefresh = (input: {
 export type CodexAuthPersistOutcome =
   | "synced"
   | "skipped-invalid-file"
+  | "skipped-copy"
   | "skipped-account-unavailable"
   | "skipped-not-newer"
   | "failed";
@@ -95,6 +97,14 @@ export const persistCodexAuthJsonIfNewer = Effect.fn("persistCodexAuthJsonIfNewe
         `${describe} skipped-invalid-file: observed auth.json is invalid (${parsed.reason}).`,
       );
       return "skipped-invalid-file" as const;
+    }
+
+    // A copy (placeholder refresh token) never replaces the store's login (§6a "One refresher").
+    if (!codexAuthJsonCanRefresh(input.observedAuthJson)) {
+      yield* Effect.logWarning(
+        `${describe} skipped-copy: the observed auth.json holds the copy placeholder, not a refresh token.`,
+      );
+      return "skipped-copy" as const;
     }
 
     const accounts = yield* ConnectedAccountRepo;

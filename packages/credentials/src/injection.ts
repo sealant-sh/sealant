@@ -1,3 +1,4 @@
+import { claudeCredentialsCopy, codexAuthJsonCopy } from "./copies.js";
 import type {
   ClaudeCredentialPayload,
   CodexCredentialPayload,
@@ -39,7 +40,7 @@ export const planCredentialInjections = (
     case "claude": {
       // Shape dispatch (not the db `kind` column): a setup-token rides the documented env var; a
       // session credentials file is materialized exactly like codex's auth.json so the official
-      // CLI treats it as its own login (and can refresh it in-container).
+      // CLI treats it as its own login — as a copy it cannot refresh (§6a "One refresher").
       if ("token" in payload) {
         return [{ kind: "env", key: CLAUDE_OAUTH_TOKEN_ENV_KEY, value: payload.token }];
       }
@@ -48,7 +49,11 @@ export const planCredentialInjections = (
         {
           kind: "file",
           path: CLAUDE_CREDENTIALS_JSON_PATH,
-          contentBase64: Buffer.from(payload.credentialsJson, "utf8").toString("base64"),
+          // A copy without the refresh token: only the keep-fresh worker refreshes (§6a).
+          contentBase64: Buffer.from(
+            claudeCredentialsCopy(payload.credentialsJson),
+            "utf8",
+          ).toString("base64"),
           mode: "600",
         },
       ];
@@ -58,7 +63,10 @@ export const planCredentialInjections = (
         {
           kind: "file",
           path: CODEX_AUTH_JSON_PATH,
-          contentBase64: Buffer.from(payload.authJson, "utf8").toString("base64"),
+          // A copy with a placeholder refresh token: only the keep-fresh worker refreshes (§6a).
+          contentBase64: Buffer.from(codexAuthJsonCopy(payload.authJson), "utf8").toString(
+            "base64",
+          ),
           mode: "600",
         },
       ];

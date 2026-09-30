@@ -513,6 +513,9 @@ export const connectedAccounts = pgTable(
     lastSyncedAt: timestamp("last_synced_at", { mode: "date", withTimezone: true }),
     invalidAt: timestamp("invalid_at", { mode: "date", withTimezone: true }),
     archivedAt: timestamp("archived_at", { mode: "date", withTimezone: true }),
+    // One refresh per login at a time, across every worker (docs/connected-accounts-design.md §6a):
+    // a keep-fresh pass claims the row until this instant; a crashed pass's claim lapses on its own.
+    refreshClaimedUntil: timestamp("refresh_claimed_until", { mode: "date", withTimezone: true }),
   },
   (table) => [
     // Partial so archived rows don't block reconnecting under the same name.

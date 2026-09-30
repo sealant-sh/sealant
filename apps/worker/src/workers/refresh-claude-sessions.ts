@@ -16,6 +16,8 @@ import { tmpdir } from "node:os";
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import {
+  claudeCredentialsCanRefresh,
+  claudeCredentialsCopy,
   parseClaudeCredentialPayload,
   parseClaudeCredentialsJson,
   provisionClaudeConfigDir,
@@ -28,17 +30,29 @@ import {
   ConnectedAccountRepo,
   ConnectedAccountRepoLive,
   SealantDB,
+  WorkspaceRuntimeInstanceRepoLive,
   type ConnectedAccount,
   type DB,
 } from "@sealant/db";
-import { persistClaudeCredentialsIfNewer } from "@sealant/workspaces";
+import {
+  persistClaudeCredentialsIfNewer,
+  pushCredentialCopy,
+  type SealantTargetDerivationOptions,
+} from "@sealant/workspaces";
 import { Effect, Layer } from "effect";
 
 /** How often the sweeper scans for stale session credentials. */
 export const CLAUDE_SESSION_REFRESH_INTERVAL_MS = 15 * 60 * 1_000;
 
-/** Refresh anything expiring within this horizon (or already expired). */
-export const CLAUDE_SESSION_REFRESH_HORIZON_MS = 30 * 60 * 1_000;
+/**
+ * Refresh anything expiring within this horizon (or already expired). An hour ahead of an access
+ * token that lives about eight: four sweeps' worth of retries before a running session's copy
+ * expires (docs/connected-accounts-design.md §6a).
+ */
+export const CLAUDE_SESSION_REFRESH_HORIZON_MS = 60 * 60 * 1_000;
+
+/** How long one account's refresh (ping, persist, push) may hold its claim. */
+const REFRESH_CLAIM_MS = 10 * 60 * 1_000;
 
 /** Hard cap on one refresh ping; a hung CLI must not wedge the sweep. */
 const REFRESH_PING_TIMEOUT_MS = 3 * 60 * 1_000;
@@ -109,7 +123,24 @@ const runRefreshPing = async (configDir: string): Promise<void> => {
   }
 };
 
-export type ClaudeSessionRefreshOutcome = "refreshed" | "fresh" | "skipped" | "failed";
+/**
+ * The private copy the ping runs on: the stored file WITH its refresh token (this is the one place
+ * it goes), its `expiresAt` marked as passed so the official CLI refreshes on this exchange rather
+ * than at a moment of its own choosing. Tested 2026-10-01 (Claude Code 2.1.286): an expired
+ * `expiresAt` with a refresh token present makes the CLI refresh before the request.
+ */
+const dueForRefresh = (credentialsJson: string, now: number): string => {
+  const document = JSON.parse(credentialsJson) as Record<string, unknown>;
+  const grant = document["claudeAiOauth"] as Record<string, unknown>;
+  return JSON.stringify({ ...document, claudeAiOauth: { ...grant, expiresAt: now - 60_000 } });
+};
+
+/**
+ * - `refreshed`: the CLI refreshed, the store has the new login, running workspaces got the copy.
+ * - `refused`: the provider refused the refresh (the CLI cleared the file): the login is ended.
+ * - `failed`: nothing was learned (a network fault, a crash); the next sweep tries again.
+ */
+export type ClaudeSessionRefreshOutcome = "refreshed" | "refused" | "fresh" | "skipped" | "failed";
 
 /**
  * Refresh one account if (and only if) its stored session file is stale. Never fails; the shared
@@ -118,6 +149,7 @@ export type ClaudeSessionRefreshOutcome = "refreshed" | "fresh" | "skipped" | "f
 const refreshOneAccount = Effect.fn("refreshClaudeSessionAccount")(function* (input: {
   readonly account: ConnectedAccount;
   readonly credentialCipher: CredentialCipherService;
+  readonly targetOptions: SealantTargetDerivationOptions;
   readonly now: number;
 }) {
   const { account, credentialCipher, now } = input;
@@ -144,8 +176,24 @@ const refreshOneAccount = Effect.fn("refreshClaudeSessionAccount")(function* (in
       return "fresh" as const;
     }
 
-    // Materialize -> official-CLI ping -> read back -> persist newest-wins -> remove the dir.
-    const provisioned = provisionClaudeConfigDir({ credentialsJson: payload.credentialsJson });
+    // One refresh per login at a time, across every worker: a second refresher would spend the
+    // refresh token this one is using.
+    const accounts = yield* ConnectedAccountRepo;
+    const claimed = yield* accounts.claimRefresh({
+      id: account.id,
+      until: new Date(now + REFRESH_CLAIM_MS),
+      now: new Date(now),
+    });
+    if (!claimed) {
+      yield* Effect.logInfo(`${describe} skipped-claimed: another refresher holds this login.`);
+      return "skipped" as const;
+    }
+
+    // Materialize (refresh token included, due now) -> official-CLI ping -> read back -> persist
+    // newest-wins -> push the copy -> remove the dir -> release the claim.
+    const provisioned = provisionClaudeConfigDir({
+      credentialsJson: dueForRefresh(payload.credentialsJson, now),
+    });
 
     return yield* Effect.gen(function* () {
       const pingError = yield* Effect.tryPromise(() => runRefreshPing(provisioned.configDir)).pipe(
@@ -170,15 +218,40 @@ const refreshOneAccount = Effect.fn("refreshClaudeSessionAccount")(function* (in
         return "failed" as const;
       }
 
+      // A refused refresh clears the grant from the file (tested: "OAuth session expired and could
+      // not be refreshed" leaves no access or refresh token). The login is over: say so.
+      if (!claudeCredentialsCanRefresh(observed)) {
+        yield* accounts.markInvalid({ id: account.id });
+        yield* Effect.logWarning(
+          `${describe} refused: the provider refused the refresh and the CLI cleared the login — reconnect needed.`,
+        );
+        return "refused" as const;
+      }
+
       const persisted = yield* persistClaudeCredentialsIfNewer({
         connectedAccountId: account.id,
         observedCredentialsJson: observed,
         credentialCipher,
         source: "keep-fresh sweeper",
       });
+      if (persisted !== "synced") return "failed" as const;
 
-      return persisted === "synced" ? ("refreshed" as const) : ("failed" as const);
-    }).pipe(Effect.ensuring(Effect.sync(() => removeClaudeConfigDir(provisioned.configDir))));
+      // The previous access token is revoked now: running workspaces get the new copy at once.
+      yield* pushCredentialCopy({
+        connectedAccountId: account.id,
+        provider: "claude",
+        copyJson: claudeCredentialsCopy(observed),
+        targetOptions: input.targetOptions,
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning(`${describe}: pushing the refreshed copy failed.`, cause),
+        ),
+      );
+      return "refreshed" as const;
+    }).pipe(
+      Effect.ensuring(Effect.sync(() => removeClaudeConfigDir(provisioned.configDir))),
+      Effect.ensuring(accounts.releaseRefresh({ id: account.id }).pipe(Effect.ignore)),
+    );
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.logWarning(`${describe} failed: refresh crashed.`, cause).pipe(
@@ -193,6 +266,8 @@ const refreshOneAccount = Effect.fn("refreshClaudeSessionAccount")(function* (in
 export interface RefreshClaudeSessionCredentialsOptions {
   readonly db: DB;
   readonly credentialCipher: CredentialCipherService;
+  /** How the push reaches running workspaces (the worker's own target derivation). */
+  readonly targetOptions?: SealantTargetDerivationOptions;
 }
 
 /**
@@ -215,9 +290,10 @@ export const refreshClaudeSessionCredentials = async (
   }
   sweepInProgress = true;
 
-  const dataAccessLayer = ConnectedAccountRepoLive.pipe(
-    Layer.provide(Layer.succeed(SealantDB, options.db)),
-  );
+  const dataAccessLayer = Layer.mergeAll(
+    ConnectedAccountRepoLive,
+    WorkspaceRuntimeInstanceRepoLive,
+  ).pipe(Layer.provide(Layer.succeed(SealantDB, options.db)));
 
   const program = Effect.gen(function* () {
     const accounts = yield* ConnectedAccountRepo;
@@ -232,6 +308,7 @@ export const refreshClaudeSessionCredentials = async (
       const outcome = yield* refreshOneAccount({
         account,
         credentialCipher: options.credentialCipher,
+        targetOptions: options.targetOptions ?? {},
         now,
       });
       if (outcome === "refreshed") {

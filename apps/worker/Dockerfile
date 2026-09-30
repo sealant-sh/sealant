@@ -19,6 +19,10 @@ RUN pnpm --filter @sealant/worker build
 # next to the bundle. Stage the builder-resolved platform package so the runtime carries it at the
 # version the bundle expects — mirrors apps/api/Dockerfile.
 RUN node tooling/scripts/stage-agent-cli.mjs apps/worker /staged
+# Same for the Codex CLI: the Codex keep-fresh sweeper spawns @openai/codex/bin/codex.js
+# (`app-server`), which resolves its @openai/codex-{platform}-{arch} vendored binary next to the
+# bundle — mirrors apps/api/Dockerfile.
+RUN node tooling/scripts/stage-codex-cli.mjs apps/worker /staged
 
 # Docker 27 carries CLI/API support for named-volume subpaths (API >= 1.45). Copy the official,
 # version-pinned CLI instead of relying on Debian's older docker.io package.
@@ -44,5 +48,7 @@ COPY --from=builder /staged/node_modules ./node_modules
 # Assert the vendored claude binary resolves exactly the way the bundle will resolve it at runtime,
 # per arch — a broken layout must fail the image build, not the first sweep in production.
 RUN node -e "const{createRequire}=require('node:module');const p=createRequire('/app/dist/index.js').resolve('@anthropic-ai/claude-agent-sdk-'+process.platform+'-'+process.arch+'/claude');require('node:fs').accessSync(p);console.log('claude CLI resolvable: '+p)"
+# Same assert for the Codex CLI: the launcher AND its platform binary package must both resolve.
+RUN node -e "const{createRequire}=require('node:module');const r=createRequire('/app/dist/index.js');const launcher=r.resolve('@openai/codex/bin/codex.js');require('node:fs').accessSync(launcher);const platform=createRequire(r.resolve('@openai/codex/package.json')).resolve('@openai/codex-'+process.platform+'-'+process.arch+'/package.json');console.log('codex CLI resolvable: '+launcher+' (+ '+platform+')')"
 # Runs as root so it can reach the mounted /var/run/docker.sock (host root:docker).
 CMD ["node", "dist/index.js"]

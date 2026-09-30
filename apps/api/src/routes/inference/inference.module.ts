@@ -23,6 +23,8 @@ import {
   type InferenceTurn,
 } from "@sealant/api-contracts";
 import {
+  claudeCredentialsCopy,
+  codexAuthJsonCopy,
   CredentialCipher,
   extractClaudeOauthCredentials,
   extractCodexSecrets,
@@ -30,12 +32,9 @@ import {
   parseCodexCredentialPayload,
   provisionClaudeConfigDir,
   provisionCodexHome,
-  readClaudeConfigDirCredentials,
-  readCodexHomeAuthJson,
   removeClaudeConfigDir,
   removeCodexHome,
   type ClaudeOauthCredentials,
-  type CredentialCipherService,
 } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
@@ -44,8 +43,7 @@ import {
   type ConnectedAccount,
   type ConnectedAccountRepoService,
 } from "@sealant/db";
-import { persistClaudeCredentialsIfNewer, persistCodexAuthJsonIfNewer } from "@sealant/workspaces";
-import { Effect, Layer } from "effect";
+import { Effect } from "effect";
 
 import { env } from "../../runtime-env.js";
 import { budgetLimits } from "../../services/budget-limits.js";
@@ -229,11 +227,10 @@ const respondWithCodex = (input: {
   readonly account: ConnectedAccount;
   readonly payload: InferenceRespondRequest;
   readonly payloadJson: string;
-  readonly cipher: CredentialCipherService;
   readonly accounts: ConnectedAccountRepoService;
 }) =>
   Effect.gen(function* () {
-    const { account, payload, cipher, accounts } = input;
+    const { account, payload, accounts } = input;
 
     if ((payload.tools ?? []).length > 0) {
       return yield* new InferenceBadRequestError({
@@ -265,44 +262,17 @@ const respondWithCodex = (input: {
       Effect.asVoid,
     );
 
-    // Materialize the decrypted auth.json into a private per-invocation CODEX_HOME (0700/0600)
-    // the engine points the official CLI at. When the exchange ends — success or failure — the
-    // possibly-rotated file is read back and persisted through the same newest-wins guard the
-    // workspace sync-back uses, then the dir is removed. The repo and cipher service INSTANCES
-    // are captured here because the hook runs outside any request scope.
+    // Materialize a COPY of the decrypted auth.json into a private per-invocation CODEX_HOME
+    // (0700/0600) the engine points the official CLI at: its refresh token is the copy placeholder,
+    // so the exchange cannot rotate the login — only the keep-fresh worker refreshes
+    // (docs/connected-accounts-design.md §6a). Nothing is read back; the dir is removed at the end.
     const provisioned = yield* Effect.try({
-      try: () => provisionCodexHome({ authJson }),
+      try: () => provisionCodexHome({ authJson: codexAuthJsonCopy(authJson) }),
       catch: (cause) =>
         new InferenceInternalServerError({
           message: toErrorMessage(cause, "Failed to provision the codex home dir."),
         }),
     });
-
-    const persistRotatedAuthJson = Effect.gen(function* () {
-      const observed = readCodexHomeAuthJson(provisioned.codexHome);
-      if (observed === undefined) {
-        yield* Effect.logWarning(
-          `Codex auth.json (inference refresh): account ${account.id} failed-read: provisioned home has no readable auth.json.`,
-        );
-        return;
-      }
-      yield* persistCodexAuthJsonIfNewer({
-        connectedAccountId: account.id,
-        observedAuthJson: observed,
-        credentialCipher: cipher,
-        source: "inference refresh",
-      });
-    }).pipe(
-      Effect.ensuring(Effect.sync(() => removeCodexHome(provisioned.codexHome))),
-      Effect.provide(Layer.succeed(ConnectedAccountRepo, accounts)),
-      Effect.catchCause((cause) =>
-        Effect.logWarning(
-          `Codex auth.json (inference refresh): account ${account.id} failed: persisting after the exchange crashed.`,
-          cause,
-        ),
-      ),
-      Effect.asVoid,
-    );
 
     const engineTurn = yield* engine
       .start({
@@ -312,7 +282,7 @@ const respondWithCodex = (input: {
         ...(payload.system === undefined ? {} : { system: payload.system }),
         ...(payload.model === undefined ? {} : { model: payload.model }),
         ...(payload.responseFormat === undefined ? {} : { responseFormat: payload.responseFormat }),
-        onSessionEnd: () => Effect.runPromise(persistRotatedAuthJson),
+        onSessionEnd: () => Promise.resolve(removeCodexHome(provisioned.codexHome)),
       })
       .pipe(
         Effect.mapError(
@@ -322,7 +292,7 @@ const respondWithCodex = (input: {
           error.reason === "auth"
             ? new InferenceConflictError({
                 message:
-                  "The codex session could not authenticate. auth.json refreshes automatically at use, so this usually means the refresh token itself was revoked (e.g. by logging out of that session elsewhere) — reconnect the account.",
+                  "The Codex login did not authenticate. The platform refreshes it on a schedule, so this usually means the login itself was ended (signed out elsewhere, or revoked) — reconnect Codex.",
               })
             : mapEngineError(error),
         ),
@@ -411,7 +381,7 @@ const respondAs = (payload: InferenceRespondRequest) =>
     );
 
     if (account.provider === "codex") {
-      return yield* respondWithCodex({ account, payload, payloadJson, cipher, accounts });
+      return yield* respondWithCodex({ account, payload, payloadJson, accounts });
     }
     // Either claude payload shape works here. A setup-token rides the documented
     // CLAUDE_CODE_OAUTH_TOKEN env path. A session credentials file is materialized into a private
@@ -460,11 +430,10 @@ const respondAs = (payload: InferenceRespondRequest) =>
       Effect.asVoid,
     );
 
-    // Session-file accounts: materialize the decrypted file into a private per-invocation config
-    // dir (0700/0600) the engine points the official CLI at. When the session ends — success,
-    // failure, or idle expiry — the possibly-rotated file is read back and persisted through the
-    // same newest-wins guards the workspace sync-back uses, then the dir is removed. The repo and
-    // cipher service INSTANCES are captured here because the hook runs outside any request scope.
+    // Session-file accounts: materialize a COPY of the decrypted file (no refresh token) into a
+    // private per-invocation config dir (0700/0600) the engine points the official CLI at. The
+    // exchange cannot rotate the login — only the keep-fresh worker refreshes
+    // (docs/connected-accounts-design.md §6a). Nothing is read back; the dir is removed at the end.
     const sessionAuth = yield* Effect.try({
       try: () => {
         if (oauthCredentials.shape === "token" || oauthCredentials.credentialsJson === undefined) {
@@ -475,34 +444,8 @@ const respondAs = (payload: InferenceRespondRequest) =>
         }
 
         const provisioned = provisionClaudeConfigDir({
-          credentialsJson: oauthCredentials.credentialsJson,
+          credentialsJson: claudeCredentialsCopy(oauthCredentials.credentialsJson),
         });
-
-        const persistRotatedCredentials = Effect.gen(function* () {
-          const observed = readClaudeConfigDirCredentials(provisioned.configDir);
-          if (observed === undefined) {
-            yield* Effect.logWarning(
-              `Claude credentials (inference refresh): account ${account.id} failed-read: provisioned config dir has no readable .credentials.json.`,
-            );
-            return;
-          }
-          yield* persistClaudeCredentialsIfNewer({
-            connectedAccountId: account.id,
-            observedCredentialsJson: observed,
-            credentialCipher: cipher,
-            source: "inference refresh",
-          });
-        }).pipe(
-          Effect.ensuring(Effect.sync(() => removeClaudeConfigDir(provisioned.configDir))),
-          Effect.provide(Layer.succeed(ConnectedAccountRepo, accounts)),
-          Effect.catchCause((cause) =>
-            Effect.logWarning(
-              `Claude credentials (inference refresh): account ${account.id} failed: persisting after the session crashed.`,
-              cause,
-            ),
-          ),
-          Effect.asVoid,
-        );
 
         return {
           auth: {
@@ -510,7 +453,7 @@ const respondAs = (payload: InferenceRespondRequest) =>
             configDir: provisioned.configDir,
             accessToken: oauthCredentials.accessToken,
           },
-          onSessionEnd: () => Effect.runPromise(persistRotatedCredentials),
+          onSessionEnd: () => Promise.resolve(removeClaudeConfigDir(provisioned.configDir)),
         } as const;
       },
       catch: (cause) =>
@@ -557,7 +500,7 @@ const respondAs = (payload: InferenceRespondRequest) =>
           error.reason === "auth" && oauthCredentials.shape === "credentials-json"
             ? new InferenceConflictError({
                 message:
-                  "The claude session could not authenticate. The session refreshes automatically at use and on a schedule, so this usually means the refresh token itself was revoked (e.g. by logging out of that session elsewhere) — reconnect the account with a fresh session file.",
+                  "The Claude login did not authenticate. The platform refreshes it on a schedule, so this usually means the login itself was ended (signed out elsewhere, or revoked) — reconnect Claude.",
               })
             : mapEngineError(error),
         ),

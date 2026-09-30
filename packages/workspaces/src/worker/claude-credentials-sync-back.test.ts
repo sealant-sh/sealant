@@ -141,6 +141,19 @@ describe("persistClaudeCredentialsIfNewer", () => {
     expect(accounts.replacePayload).not.toHaveBeenCalled();
   });
 
+  it("returns skipped-copy for a file with no refresh token, even when it is newer", async () => {
+    const accounts = connectedAccountRepoStub(createClaudeAccount());
+    const copy = JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "sk-ant-oat01-copy",
+        expiresAt: STORED_EXPIRES_AT + 60_000,
+        subscriptionType: "max",
+      },
+    });
+    expect(await persist({ accounts, observed: copy })).toBe("skipped-copy");
+    expect(accounts.replacePayload).not.toHaveBeenCalled();
+  });
+
   it("returns skipped-invalid-file for unparseable content", async () => {
     const accounts = connectedAccountRepoStub(createClaudeAccount());
     expect(await persist({ accounts, observed: "{ this is not json" })).toBe(
