@@ -361,7 +361,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   // created with a `command` (harness framing) or via execWorkspace (`commands`, exec framing).
   const runExecConsumer = await consumeRunExecJobs({
     databaseUrl: env.DATABASE_URL,
-    concurrency: env.WORKSPACE_BUILD_QUEUE_PREFETCH,
+    concurrency: env.RUN_EXEC_QUEUE_CONCURRENCY,
     onMessage: async ({ message }) => {
       try {
         await processRunExecJob({
