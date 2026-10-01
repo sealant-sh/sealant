@@ -61,6 +61,10 @@ import {
   CLAUDE_SESSION_REFRESH_INTERVAL_MS,
   refreshClaudeSessionCredentials,
 } from "./refresh-claude-sessions.js";
+import {
+  CODEX_SESSION_REFRESH_INTERVAL_MS,
+  refreshCodexSessionCredentials,
+} from "./refresh-codex-sessions.js";
 
 // Build scratch older than this is a leftover, never a build in flight.
 const STALE_BUILD_CONTEXT_AGE_MS = 6 * 60 * 60 * 1000;
@@ -651,11 +655,27 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     credentialCipher === undefined
       ? undefined
       : setInterval(() => {
-          refreshClaudeSessionCredentials({ db, credentialCipher }).catch((error: unknown) => {
-            console.error("Claude session refresh tick failed", { error });
-          });
+          refreshClaudeSessionCredentials({ db, credentialCipher, targetOptions }).catch(
+            (error: unknown) => {
+              console.error("Claude session refresh tick failed", { error });
+            },
+          );
         }, CLAUDE_SESSION_REFRESH_INTERVAL_MS);
   claudeRefreshTimer?.unref();
+
+  // The only refresher of a Codex login (docs/connected-accounts-design.md §6a): workspaces and
+  // inference hold copies that cannot refresh.
+  const codexRefreshTimer =
+    credentialCipher === undefined
+      ? undefined
+      : setInterval(() => {
+          refreshCodexSessionCredentials({ db, credentialCipher, targetOptions }).catch(
+            (error: unknown) => {
+              console.error("Codex session refresh tick failed", { error });
+            },
+          );
+        }, CODEX_SESSION_REFRESH_INTERVAL_MS);
+  codexRefreshTimer?.unref();
 
   return {
     stop: async () => {
@@ -669,6 +689,9 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       if (imageRetentionTimer !== undefined) clearInterval(imageRetentionTimer);
       if (claudeRefreshTimer !== undefined) {
         clearInterval(claudeRefreshTimer);
+      }
+      if (codexRefreshTimer !== undefined) {
+        clearInterval(codexRefreshTimer);
       }
       await lifecycleConsumer.cancel();
       await runExecConsumer.cancel();

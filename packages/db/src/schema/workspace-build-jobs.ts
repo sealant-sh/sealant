@@ -104,6 +104,11 @@ export interface WorkspaceLaunchCredentialInjection {
   readonly provider: string;
   readonly connectedAccountId: string;
   readonly injection: "env" | "file";
+  /**
+   * The file was a copy its holder cannot refresh (docs/connected-accounts-design.md §6a): there is
+   * nothing newer to read back. Absent on rows launched before copies, whose files still rotate.
+   */
+  readonly copy?: boolean;
 }
 
 export const workspaceRuntimeInstances = pgTable(

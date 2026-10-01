@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "catalog:",
+    "@openai/codex": "catalog:",
     "@sealant/credentials": "workspace:*",
     "@sealant/db": "workspace:*",
     "@sealant/jobs": "workspace:*",

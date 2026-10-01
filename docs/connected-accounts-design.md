@@ -54,21 +54,22 @@ posture.
   covers "third-party apps that authenticate with your Claude subscription through the Agent SDK".
   Don't run `claude --bare` (ignores the env var). Internal features (run summaries) must go through
   the Agent SDK, never raw `POST /v1/messages`.
-- **Refresh story:** setup tokens: none — detect 401s → mark the account `invalid` → prompt re-auth;
-  record `connectedAt` and nudge near the 12-month mark. Session files: the official CLI refreshes
-  the session in-container; Sealant syncs the mutated file back after runs **and on every container
-  teardown path** (workspace stop, expiry reap — interactive/PTY sessions rotate tokens without ever
-  running an exec job), newest-wins on `claudeAiOauth.expiresAt` (mirrors the codex sync-back).
-  _Extended (Aug 2026):_ the control plane also lets the CLI refresh outside workspaces, always
-  through a private per-invocation `CLAUDE_CONFIG_DIR` (0700 dir / 0600 file) holding the decrypted
-  session file: (a) **inference at point of use** runs the Agent SDK against that config dir instead
-  of passing the access token via env, so an expired token is refreshed by the CLI right where it is
-  consumed; (b) a **keep-fresh worker sweeper** scans active session-file accounts every ~15 minutes
-  and, for any expiring within ~30 minutes, runs a minimal one-turn official-CLI exchange against
-  such a config dir (deliberately spending a trivial slice of the subscription — operator-approved).
-  Both read the rotated file back and persist it through the same newest-wins + 30-day-plausibility
-  guards. The hard rule is unchanged: Sealant NEVER calls Anthropic's token endpoint — every refresh
-  is performed by the official CLI/Agent SDK.
+- **Refresh story** _(superseded for session files by §6a, Oct 2026: the worker is the only
+  refresher and every other copy has no refresh token)_: setup tokens: none — detect 401s → mark the
+  account `invalid` → prompt re-auth; record `connectedAt` and nudge near the 12-month mark. Session
+  files: the official CLI refreshes the session in-container; Sealant syncs the mutated file back
+  after runs **and on every container teardown path** (workspace stop, expiry reap — interactive/PTY
+  sessions rotate tokens without ever running an exec job), newest-wins on `claudeAiOauth.expiresAt`
+  (mirrors the codex sync-back). _Extended (Aug 2026):_ the control plane also lets the CLI refresh
+  outside workspaces, always through a private per-invocation `CLAUDE_CONFIG_DIR` (0700 dir / 0600
+  file) holding the decrypted session file: (a) **inference at point of use** runs the Agent SDK
+  against that config dir instead of passing the access token via env, so an expired token is
+  refreshed by the CLI right where it is consumed; (b) a **keep-fresh worker sweeper** scans active
+  session-file accounts every ~15 minutes and, for any expiring within ~30 minutes, runs a minimal
+  one-turn official-CLI exchange against such a config dir (deliberately spending a trivial slice of
+  the subscription — operator-approved). Both read the rotated file back and persist it through the
+  same newest-wins + 30-day-plausibility guards. The hard rule is unchanged: Sealant NEVER calls
+  Anthropic's token endpoint — every refresh is performed by the official CLI/Agent SDK.
 - Always offer `ANTHROPIC_API_KEY` as a first-class alternative; it is Anthropic's stated preference
   for products and our fallback if policy shifts again (four swings Jan–Jun 2026).
 
@@ -81,17 +82,19 @@ posture.
   Device-auth (`codex login --device-auth`) inside a sandbox is the headless fallback.
 - **Hard don'ts:** never call `auth.openai.com` ourselves (Codex's client id is not ours to use);
   never extract `access_token` for raw Responses-API calls; never pool credentials.
-- **Refresh story:** the official Codex CLI in the sandbox refreshes (proactively at ~8 days
-  staleness, reactively on 401) and **rotates the refresh token**. We must sync the mutated
-  auth.json back after runs, only ever overwrite our stored copy with a _newer_ `last_refresh`, and
-  keep one live copy per credential (concurrent refreshes can permanently brick it). Seed the
-  sandbox only at launch; never re-seed a stale copy over a fresh one. _Extended (Aug 2026):_ the
-  control plane also lets the CLI run outside workspaces — **inference at point of use** spawns the
-  official `codex exec` against a private per-invocation `CODEX_HOME` (0700 dir / 0600 auth.json)
-  holding the decrypted file, reads the possibly-rotated auth.json back when the exchange ends, and
-  persists it through the same newest-wins guard the workspace sync-back uses
-  (`persistCodexAuthJsonIfNewer`). The hard rule is unchanged: Sealant NEVER calls OpenAI's token
-  endpoint — every refresh is performed by the official CLI.
+- **Refresh story** _(superseded by §6a, Oct 2026: the worker is the only refresher, through
+  `codex app-server`, and every other copy carries a placeholder refresh token)_: the official Codex
+  CLI in the sandbox refreshes (proactively at ~8 days staleness, reactively on 401) and **rotates
+  the refresh token**. We must sync the mutated auth.json back after runs, only ever overwrite our
+  stored copy with a _newer_ `last_refresh`, and keep one live copy per credential (concurrent
+  refreshes can permanently brick it). Seed the sandbox only at launch; never re-seed a stale copy
+  over a fresh one. _Extended (Aug 2026):_ the control plane also lets the CLI run outside
+  workspaces — **inference at point of use** spawns the official `codex exec` against a private
+  per-invocation `CODEX_HOME` (0700 dir / 0600 auth.json) holding the decrypted file, reads the
+  possibly-rotated auth.json back when the exchange ends, and persists it through the same
+  newest-wins guard the workspace sync-back uses (`persistCodexAuthJsonIfNewer`). The hard rule is
+  unchanged: Sealant NEVER calls OpenAI's token endpoint — every refresh is performed by the
+  official CLI.
 
 ### GitHub — gh CLI token now, own GitHub App user-tokens later
 
@@ -249,6 +252,54 @@ In `packages/sandboxes`:
   (`x-access-token:<token>`) — this is what lets self-hosters skip the GitHub App entirely.
 - 401/invalid detection from harness traffic is a follow-up (needs run-record signal plumbing); v1
   marks invalid only on sync-back/API-observed failures.
+
+## 6a. One refresher (Oct 2026)
+
+**Why.** On Mend's alpha (2026-09-30) one person's Claude and Codex logins were both dead at once.
+Codex had been pasted from a laptop whose own Codex refreshed first
+(`refresh token was already used`). Claude was a login of its own, and still died: the store had
+handed one login to every workspace and every inference call, each copy's CLI could refresh it, and
+a rotation that did not make it back to the store (the machine was drained, the read-back failed)
+left the store holding a revoked access token and a spent refresh token. The sync-back guards
+(newest-wins, one live copy) could not prevent that; only one refresher can.
+
+**What the harnesses do** (tested 2026-10-01, Claude Code 2.1.286 and Codex 0.159.2/0.148.0, with
+throwaway logins wherever something refreshed):
+
+|                                             | Claude Code                                              | Codex                                                                                   |
+| ------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Runs with no refresh token                  | yes, field removed                                       | yes, with a placeholder (the field is required)                                         |
+| Reads the credential file                   | before every request                                     | once; again after a 401 or within 5 min of expiry                                       |
+| Takes a replaced file mid-session           | yes, next request                                        | yes, after a 401 (reload, then retry)                                                   |
+| A refresh revokes the previous access token | yes, at once                                             | no                                                                                      |
+| Refresh with a spent refresh token          | refused; that copy's file is cleared; the login survives | accepted within a grace period                                                          |
+| Refresh on demand, through the CLI          | an expired `expiresAt` makes the CLI refresh on use      | `app-server` `getAuthStatus`/`account/read` with `refreshToken: true`, no model request |
+
+**Decision.**
+
+- **Copies cannot rotate.** `@sealant/credentials` `claudeCredentialsCopy` (no `refreshToken`) and
+  `codexAuthJsonCopy` (`CODEX_COPY_REFRESH_TOKEN`) produce every file a workspace or an inference
+  call gets. The persist cores refuse a copy (`skipped-copy`), so none can replace the stored login.
+- **The worker is the only refresher.** `refresh-claude-sessions.ts` (every 15 min, an hour before
+  expiry, the private copy's `expiresAt` marked as passed so the CLI refreshes on its ping) and
+  `refresh-codex-sessions.ts` (hourly, a day before the access token's `exp`, through
+  `codex app-server`). One refresh per login at a time across workers:
+  `connected_accounts. refresh_claimed_until`. The stored file is persisted before anything else is
+  done with it.
+- **Push.** `pushCredentialCopy` writes the new copy into every running runtime instance whose
+  launch file-injected the account, in parallel, over the control connection (the launch's
+  exec-with-stdin write), never the run-exec queue. Claude's previous token is revoked by the
+  refresh, so the push runs straight after it; a request caught between gets a 401, re-reads the
+  file and retries. Codex's previous token stays valid.
+- **Refused means ended.** A refused refresh marks the account `invalid` (`markInvalid`): the
+  resolver refuses launches with it, and inference answers `reconnect Claude` / `reconnect Codex`.
+- **Read-back only for older launches.** The runtime instance row marks copies (`copy: true` in
+  `launch_credential_injections`); sync-back skips them and still reads workspaces launched before
+  copies, whose files can rotate, until they end.
+
+**Unchanged.** Sealant never calls a provider's OAuth or token endpoint: every sign-in is the
+provider's own flow, every refresh is the provider's own CLI. A login belongs to its owner and is
+selected only for that owner's work (§5).
 
 ## 7. The `sealant` CLI — `apps/cli`
 

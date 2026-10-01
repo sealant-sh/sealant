@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import type { CredentialCipherService } from "@sealant/credentials";
-import { sha256Hex } from "@sealant/credentials";
+import { CODEX_COPY_REFRESH_TOKEN, sha256Hex } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
   type ConnectedAccount,
@@ -297,6 +297,25 @@ describe("persistCodexAuthJsonIfNewer", () => {
       });
 
       expect(outcome).toBe("skipped-not-newer");
+      expect(accounts.replacePayload).not.toHaveBeenCalled();
+    }).pipe(Effect.provide(provideAccounts(accounts)));
+  });
+
+  it.effect("reports 'skipped-copy' for a copy's placeholder refresh token, however new", () => {
+    const accounts = connectedAccountRepoStub(createCodexAccount());
+
+    return Effect.gen(function* () {
+      const outcome = yield* persistCodexAuthJsonIfNewer({
+        connectedAccountId: "cacc_codex",
+        observedAuthJson: JSON.stringify({
+          tokens: { refresh_token: CODEX_COPY_REFRESH_TOKEN },
+          last_refresh: "2099-01-01T00:00:00.000Z",
+        }),
+        credentialCipher: fakeCipher,
+        source: "test",
+      });
+
+      expect(outcome).toBe("skipped-copy");
       expect(accounts.replacePayload).not.toHaveBeenCalled();
     }).pipe(Effect.provide(provideAccounts(accounts)));
   });

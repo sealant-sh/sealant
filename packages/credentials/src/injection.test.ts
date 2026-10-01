@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { CODEX_COPY_REFRESH_TOKEN } from "./copies.js";
 import {
   CONNECTED_ACCOUNT_REF_PREFIX,
   createConnectedAccountRef,
@@ -21,54 +22,48 @@ describe("planCredentialInjections", () => {
       `);
   });
 
-  it("plans a claude credentials.json file injection for the session-file shape", () => {
-    const credentialsJson = JSON.stringify({ claudeAiOauth: { accessToken: "sk-ant-oat01-a" } });
+  it("plans a claude credentials.json file injection without the refresh token (a copy)", () => {
+    const credentialsJson = JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "sk-ant-oat01-a",
+        refreshToken: "sk-ant-ort01-r",
+        expiresAt: 1,
+      },
+    });
     const plan = planCredentialInjections("claude", { credentialsJson });
-
-    expect(plan).toMatchInlineSnapshot(`
-      [
-        {
-          "contentBase64": "eyJjbGF1ZGVBaU9hdXRoIjp7ImFjY2Vzc1Rva2VuIjoic2stYW50LW9hdDAxLWEifX0=",
-          "kind": "file",
-          "mode": "600",
-          "path": "$HOME/.claude/.credentials.json",
-        },
-      ]
-    `);
-
     const fileInjection = plan[0];
 
-    if (fileInjection === undefined || fileInjection.kind !== "file") {
-      throw new Error("Expected a file injection.");
+    if (plan.length !== 1 || fileInjection === undefined || fileInjection.kind !== "file") {
+      throw new Error("Expected one file injection.");
     }
-
-    expect(Buffer.from(fileInjection.contentBase64, "base64").toString("utf8")).toBe(
-      credentialsJson,
+    expect(fileInjection.path).toBe("$HOME/.claude/.credentials.json");
+    expect(fileInjection.mode).toBe("600");
+    expect(JSON.parse(Buffer.from(fileInjection.contentBase64, "base64").toString("utf8"))).toEqual(
+      {
+        claudeAiOauth: { accessToken: "sk-ant-oat01-a", expiresAt: 1 },
+      },
     );
   });
 
-  it("plans a codex auth.json file injection with base64 content and mode 600", () => {
-    const authJson = JSON.stringify({ tokens: { refresh_token: "rt" } });
+  it("plans a codex auth.json file injection whose refresh token is the copy placeholder", () => {
+    const authJson = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { access_token: "at", refresh_token: "rt", account_id: "acc" },
+    });
     const plan = planCredentialInjections("codex", { authJson });
-
-    expect(plan).toMatchInlineSnapshot(`
-      [
-        {
-          "contentBase64": "eyJ0b2tlbnMiOnsicmVmcmVzaF90b2tlbiI6InJ0In19",
-          "kind": "file",
-          "mode": "600",
-          "path": "$HOME/.codex/auth.json",
-        },
-      ]
-    `);
-
     const fileInjection = plan[0];
 
-    if (fileInjection === undefined || fileInjection.kind !== "file") {
-      throw new Error("Expected a file injection.");
+    if (plan.length !== 1 || fileInjection === undefined || fileInjection.kind !== "file") {
+      throw new Error("Expected one file injection.");
     }
-
-    expect(Buffer.from(fileInjection.contentBase64, "base64").toString("utf8")).toBe(authJson);
+    expect(fileInjection.path).toBe("$HOME/.codex/auth.json");
+    expect(fileInjection.mode).toBe("600");
+    expect(JSON.parse(Buffer.from(fileInjection.contentBase64, "base64").toString("utf8"))).toEqual(
+      {
+        auth_mode: "chatgpt",
+        tokens: { access_token: "at", refresh_token: CODEX_COPY_REFRESH_TOKEN, account_id: "acc" },
+      },
+    );
   });
 
   it("plans github env injections for both GITHUB_TOKEN and GH_TOKEN", () => {

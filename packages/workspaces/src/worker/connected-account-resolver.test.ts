@@ -1,6 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
 import type { CredentialCipherService } from "@sealant/credentials";
-import { CredentialCipherError } from "@sealant/credentials";
+import {
+  claudeCredentialsCopy,
+  codexAuthJsonCopy,
+  CredentialCipherError,
+} from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
   type ConnectedAccount,
@@ -204,13 +208,15 @@ describe("resolveCredentialInjections", () => {
         {
           kind: "file",
           path: "$HOME/.claude/.credentials.json",
-          contentBase64: Buffer.from(claudeCredentialsJson, "utf8").toString("base64"),
+          contentBase64: Buffer.from(claudeCredentialsCopy(claudeCredentialsJson), "utf8").toString(
+            "base64",
+          ),
           mode: "600",
         },
         {
           kind: "file",
           path: "$HOME/.codex/auth.json",
-          contentBase64: Buffer.from(codexAuthJson, "utf8").toString("base64"),
+          contentBase64: Buffer.from(codexAuthJsonCopy(codexAuthJson), "utf8").toString("base64"),
           mode: "600",
         },
         { kind: "env", key: "GITHUB_TOKEN", value: "gho_test" },
@@ -223,8 +229,13 @@ describe("resolveCredentialInjections", () => {
       // was seeded with (env-injected claude must never sync the file back).
       expect(resolved.launchCredentialInjections).toEqual([
         { provider: "claude", connectedAccountId: "cacc_1", injection: "env" },
-        { provider: "claude", connectedAccountId: "cacc_claude_session", injection: "file" },
-        { provider: "codex", connectedAccountId: "cacc_codex", injection: "file" },
+        {
+          provider: "claude",
+          connectedAccountId: "cacc_claude_session",
+          injection: "file",
+          copy: true,
+        },
+        { provider: "codex", connectedAccountId: "cacc_codex", injection: "file", copy: true },
         { provider: "github", connectedAccountId: "cacc_github", injection: "env" },
       ]);
       expect(accounts.updateSyncState).toHaveBeenCalledTimes(4);

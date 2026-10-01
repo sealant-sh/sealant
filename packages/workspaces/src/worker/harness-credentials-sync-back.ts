@@ -84,13 +84,23 @@ export const syncBackWorkspaceCredentials = Effect.fn("syncBackWorkspaceCredenti
         Effect.map((result) => result.stdout),
       );
 
+    // Only a login that can rotate here is worth reading back: a copy (§6a) holds nothing newer.
+    // Rows from before copies carry no marker and are read as before.
+    const codexEntries = input.launchCredentialInjections.filter(
+      (entry) => entry.provider === "codex",
+    );
+    const codexMayRotate =
+      codexEntries.length === 0 || codexEntries.some((entry) => entry.copy !== true);
+
     yield* isolatedSyncBack(
       "Codex auth",
-      syncBackCodexAuthJson({
-        blueprint,
-        credentialCipher: input.credentialCipher,
-        readAuthJson: () => readWorkspaceFile(CODEX_AUTH_JSON_PATH),
-      }),
+      codexMayRotate
+        ? syncBackCodexAuthJson({
+            blueprint,
+            credentialCipher: input.credentialCipher,
+            readAuthJson: () => readWorkspaceFile(CODEX_AUTH_JSON_PATH),
+          })
+        : Effect.void,
     );
 
     yield* isolatedSyncBack(
@@ -100,7 +110,10 @@ export const syncBackWorkspaceCredentials = Effect.fn("syncBackWorkspaceCredenti
         // Launch-time truth from the runtime instance row: only accounts Sealant seeded as a FILE
         // in THIS workspace may sync back (env-injected workspaces never do).
         launchFileInjectedAccountIds: input.launchCredentialInjections
-          .filter((entry) => entry.provider === "claude" && entry.injection === "file")
+          .filter(
+            (entry) =>
+              entry.provider === "claude" && entry.injection === "file" && entry.copy !== true,
+          )
           .map((entry) => entry.connectedAccountId),
         credentialCipher: input.credentialCipher,
         readCredentialsJson: () => readWorkspaceFile(CLAUDE_CREDENTIALS_JSON_PATH),

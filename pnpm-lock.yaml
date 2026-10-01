@@ -30,6 +30,9 @@ catalogs:
     '@kubernetes/client-node':
       specifier: ^2.0.0
       version: 2.0.0
+    '@openai/codex':
+      specifier: 0.148.0
+      version: 0.148.0
     '@t3-oss/env-core':
       specifier: ^0.13.11
       version: 0.13.11
@@ -223,7 +226,7 @@ importers:
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
       '@openai/codex':
-        specifier: 0.148.0
+        specifier: 'catalog:'
         version: 0.148.0
       '@scalar/hono-api-reference':
         specifier: ^0.9.13
@@ -703,6 +706,9 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: 'catalog:'
         version: 0.3.201(@anthropic-ai/sdk@0.110.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)
+      '@openai/codex':
+        specifier: 'catalog:'
+        version: 0.148.0
       '@sealant/credentials':
         specifier: workspace:*
         version: link:../../packages/credentials

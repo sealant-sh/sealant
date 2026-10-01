@@ -26,6 +26,15 @@ export {
 } from "./claude-session.js";
 
 export {
+  claudeCredentialsCanRefresh,
+  claudeCredentialsCopy,
+  CODEX_COPY_REFRESH_TOKEN,
+  codexAuthJsonCanRefresh,
+  codexAuthJsonCopy,
+  CredentialCopyError,
+} from "./copies.js";
+
+export {
   CODEX_AUTH_FILE_NAME,
   CODEX_HOME_ENV_KEY,
   provisionCodexHome,

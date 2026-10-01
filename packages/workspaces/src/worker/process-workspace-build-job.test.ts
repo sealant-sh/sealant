@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "@effect/vitest";
-import type { CredentialCipherService } from "@sealant/credentials";
+import {
+  claudeCredentialsCopy,
+  codexAuthJsonCopy,
+  type CredentialCipherService,
+} from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
   GitHubInstallationRepo,
@@ -855,7 +859,9 @@ describe("processWorkspaceBuildJobEffect", () => {
           credentialFiles: [
             {
               path: "$HOME/.codex/auth.json",
-              contentBase64: Buffer.from(codexAuthJson, "utf8").toString("base64"),
+              contentBase64: Buffer.from(codexAuthJsonCopy(codexAuthJson), "utf8").toString(
+                "base64",
+              ),
               mode: "600",
             },
           ],
@@ -919,7 +925,10 @@ describe("processWorkspaceBuildJobEffect", () => {
           credentialFiles: [
             {
               path: "$HOME/.claude/.credentials.json",
-              contentBase64: Buffer.from(claudeCredentialsJson, "utf8").toString("base64"),
+              contentBase64: Buffer.from(
+                claudeCredentialsCopy(claudeCredentialsJson),
+                "utf8",
+              ).toString("base64"),
               mode: "600",
             },
           ],
@@ -938,7 +947,12 @@ describe("processWorkspaceBuildJobEffect", () => {
       expect(runtimeInstances.upsertRuntimeInstance).toHaveBeenCalledWith(
         expect.objectContaining({
           launchCredentialInjections: [
-            { provider: "claude", connectedAccountId: "cacc_claude_session", injection: "file" },
+            {
+              provider: "claude",
+              connectedAccountId: "cacc_claude_session",
+              injection: "file",
+              copy: true,
+            },
           ],
         }),
       );

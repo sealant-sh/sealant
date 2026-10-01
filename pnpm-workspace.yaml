@@ -13,6 +13,7 @@ allowBuilds:
 
 catalog:
   "@anthropic-ai/claude-agent-sdk": ^0.3.201
+  "@openai/codex": 0.148.0
   "@effect/platform-node": 4.0.0-beta.85
   # Not a direct dependency: pinned here only so the override below shares this version line.
   "@effect/platform-node-shared": 4.0.0-beta.85

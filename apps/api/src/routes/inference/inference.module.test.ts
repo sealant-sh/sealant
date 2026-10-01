@@ -4,7 +4,7 @@
  * point-of-use auth.json persist hook — all against stub engines and repos. SEALANT_CREDENTIALS_KEY
  * is stubbed before the dynamic import because runtime-env parses process.env at module load.
  */
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -13,7 +13,11 @@ import {
   InferenceNotFoundError,
   type InferenceRespondRequest,
 } from "@sealant/api-contracts";
-import { CredentialCipher, type CredentialCipherService } from "@sealant/credentials";
+import {
+  CODEX_COPY_REFRESH_TOKEN,
+  CredentialCipher,
+  type CredentialCipherService,
+} from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
   InferenceUsageRepo,
@@ -306,17 +310,22 @@ describe("inference.module provider routing", () => {
     expect(fallback.engines.codexStart).toHaveBeenCalledOnce();
   });
 
-  it("persists a rotated auth.json through the end-of-session hook, newest-wins", async () => {
+  it("hands the CLI a copy that cannot refresh, and never writes a rotation back", async () => {
     const accounts = accountsStub();
-    const rotated = JSON.stringify({
-      tokens: { access_token: "at-2", refresh_token: "rt-2" },
-      last_refresh: "2026-07-02T00:00:00.000Z",
-    });
+    let seen: { refresh_token?: unknown } | undefined;
+    let home = "";
     const { layer } = makeLayers({
       accounts,
       codexStart: async (startInput) => {
-        // The official CLI rotates auth.json in the provisioned home; simulate, then end.
-        writeFileSync(join(startInput.codexHome, "auth.json"), rotated);
+        home = startInput.codexHome;
+        seen = (
+          JSON.parse(readFileSync(join(home, "auth.json"), "utf8")) as { tokens?: typeof seen }
+        ).tokens;
+        // Even a CLI that rewrote the file (it cannot refresh a copy) is never read back.
+        writeFileSync(
+          join(home, "auth.json"),
+          JSON.stringify({ tokens: { access_token: "at-2", refresh_token: "rt-2" } }),
+        );
         await startInput.onSessionEnd?.();
         return doneTurn("ok");
       },
@@ -324,14 +333,9 @@ describe("inference.module provider routing", () => {
 
     await run(respond(newExchange({})).pipe(Effect.provide(layer)));
 
-    const expectedPlaintext = JSON.stringify({ authJson: rotated });
-    expect(accounts.replacePayload).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "cacc_codex",
-        encryptedPayload: `sealed:${expectedPlaintext}`,
-        metadata: expect.objectContaining({ lastRefresh: "2026-07-02T00:00:00.000Z" }),
-      }),
-    );
+    expect(seen?.refresh_token).toBe(CODEX_COPY_REFRESH_TOKEN);
+    expect(accounts.replacePayload).not.toHaveBeenCalled();
+    expect(existsSync(home)).toBe(false);
   });
 
   it("serves a parked exchange only to the owner who opened it", async () => {

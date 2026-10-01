@@ -55,19 +55,18 @@ You can manage connected accounts in two places:
 
 The stored provider payloads are:
 
-| Provider | Stored payload                                                                                               | Injected into workspace as                                                                                    |
-| -------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| Claude   | Token from Anthropic's official `claude setup-token`, or a Claude Code session `.credentials.json` you paste | `CLAUDE_CODE_OAUTH_TOKEN` environment variable (token), or `$HOME/.claude/.credentials.json` file, mode `600` |
-| Codex    | Official Codex CLI `auth.json`                                                                               | `$HOME/.codex/auth.json` file with mode `600`                                                                 |
-| GitHub   | Token from `gh auth token` or a provided token                                                               | `GITHUB_TOKEN` and `GH_TOKEN` environment variables                                                           |
+| Provider | Stored payload                                                                                               | Injected into workspace as                                                                                                                                       |
+| -------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude   | Token from Anthropic's official `claude setup-token`, or a Claude Code session `.credentials.json` you paste | `CLAUDE_CODE_OAUTH_TOKEN` environment variable (token), or a copy of the session file without its refresh token at `$HOME/.claude/.credentials.json`, mode `600` |
+| Codex    | Official Codex CLI `auth.json`                                                                               | A copy of `auth.json` whose refresh token is a placeholder, at `$HOME/.codex/auth.json`, mode `600`                                                              |
+| GitHub   | Token from `gh auth token` or a provided token                                                               | `GITHUB_TOKEN` and `GH_TOKEN` environment variables                                                                                                              |
 
 For Claude, the session-file path is the recommended one: run
 `CLAUDE_CONFIG_DIR=~/.config/sealant/claude-session claude` on your machine, `/login` inside it
 (this writes a fresh session without touching your main Claude login), and paste the contents of
-`~/.config/sealant/claude-session/.credentials.json`. A session file presents as your subscription;
-workspaces refresh it and Sealant syncs it back, like Codex. A `claude setup-token` value also
-works, but Anthropic treats setup tokens as API auth, so some models are credit-gated when used
-interactively.
+`~/.config/sealant/claude-session/.credentials.json`. A session file presents as your subscription.
+A `claude setup-token` value also works, but Anthropic treats setup tokens as API auth, so some
+models are credit-gated when used interactively.
 
 The API validates the provider shape, encrypts the payload with AES-256-GCM through
 `@sealant/credentials`, and stores only the sealed payload plus non-secret metadata in Postgres
@@ -125,9 +124,29 @@ API checks ownership and status, then rewrites the workspace blueprint to opaque
 resolves those refs immediately before launch, decrypts the stored payloads, and injects env vars or
 files into the running workspace.
 
-Codex has one extra behavior: after a run, the worker best-effort reads the workspace's
-`$HOME/.codex/auth.json` and syncs back a newer refresh timestamp so rotated Codex sessions are not
-lost. This also requires `SEALANT_CREDENTIALS_KEY`.
+### How Claude and Codex logins stay fresh
+
+A Claude session file and a Codex `auth.json` carry a refresh token that rotates: each refresh
+revokes (Claude) or spends (Codex) the one before it. So Sealant keeps exactly one refresher per
+login, and every other copy cannot refresh:
+
+- **The store holds the only refresh token.** Workspaces and inference calls get a copy: Claude's
+  file without `refreshToken`, Codex's `auth.json` with a placeholder refresh token. A copy runs
+  until its access token expires and cannot rotate, spend or revoke the login.
+- **The worker is the only refresher.** It runs the official CLI against the stored login in a
+  private directory: Claude about an hour before its access token expires, Codex a day before. One
+  refresh per login at a time, across every worker. Sealant never calls a provider's OAuth or token
+  endpoint; the CLI does the refresh.
+- **Running workspaces get the new copy.** Straight after a refresh the worker writes it into every
+  running workspace launched with that login, over the executor's control connection. Claude Code
+  and Codex both pick up a replaced file without a restart.
+- **A refused refresh ends the login.** The account is marked `invalid`, launches with it are
+  refused, and inference answers with a request to reconnect. Connecting the account again clears
+  it.
+
+Refreshing requires `SEALANT_CREDENTIALS_KEY` on the worker. Workspaces launched before copies were
+introduced still hold a refresh token; the worker reads their rotations back after runs and at stop
+until they end.
 
 ## Dotfiles are still for non-secret customization
 
