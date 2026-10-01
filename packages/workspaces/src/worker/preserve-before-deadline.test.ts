@@ -242,36 +242,106 @@ describe("planPreservationStart · what the estimate must not ignore", () => {
 });
 
 describe("observeUploadThroughput", () => {
-  it("reads a rate only from an interval in which bytes moved, averaging with the last", () => {
+  const MiB = 1024 * 1024;
+
+  it("measures the link from an interval the queue held work through, averaging with the last", () => {
     expect(
       observeUploadThroughput({
         previousRate: undefined,
-        previousSample: { bytes: 1_000, atMs: 0 },
-        sample: { bytes: 3_000, atMs: 1_000 },
+        previousSample: { bytes: 1_000, atMs: 0, pendingBytes: 500 },
+        sample: { bytes: 3_000, atMs: 1_000, pendingBytes: 500 },
       }),
     ).toBe(2_000);
     expect(
       observeUploadThroughput({
         previousRate: 2_000,
-        previousSample: { bytes: 3_000, atMs: 1_000 },
-        sample: { bytes: 7_000, atMs: 2_000 },
+        previousSample: { bytes: 3_000, atMs: 1_000, pendingBytes: 500 },
+        sample: { bytes: 7_000, atMs: 2_000, pendingBytes: 1 },
       }),
     ).toBe(3_000);
     // Idle, or a daemon that restarted its counters: no reading.
     expect(
       observeUploadThroughput({
         previousRate: 3_000,
-        previousSample: { bytes: 7_000, atMs: 2_000 },
-        sample: { bytes: 7_000, atMs: 3_000 },
+        previousSample: { bytes: 7_000, atMs: 2_000, pendingBytes: 500 },
+        sample: { bytes: 7_000, atMs: 3_000, pendingBytes: 500 },
       }),
     ).toBe(3_000);
     expect(
       observeUploadThroughput({
         previousRate: 3_000,
-        previousSample: { bytes: 7_000, atMs: 2_000 },
-        sample: { bytes: 10, atMs: 3_000 },
+        previousSample: { bytes: 7_000, atMs: 2_000, pendingBytes: 500 },
+        sample: { bytes: 10, atMs: 3_000, pendingBytes: 500 },
       }),
     ).toBe(3_000);
+  });
+
+  it("takes a reading over an interval the queue may have idled through as a lower bound only", () => {
+    // Alpha 2026-10-01: 33.6 MB over a three-minute interval, the queue empty at its end.
+    const trickle = observeUploadThroughput({
+      previousRate: undefined,
+      previousSample: { bytes: 0, atMs: 0, pendingBytes: 0 },
+      sample: { bytes: 33_646_593, atMs: 235_000, pendingBytes: 0 },
+    });
+    expect(trickle).toBe(MiB);
+    // Nor does it lower a rate measured before.
+    expect(
+      observeUploadThroughput({
+        previousRate: 40 * MiB,
+        previousSample: { bytes: 0, atMs: 0 },
+        sample: { bytes: 1 * MiB, atMs: 10_000 },
+      }),
+    ).toBe(40 * MiB);
+    // It raises one: 800 MB in ten seconds shows the link does at least 80 MB/s.
+    expect(
+      observeUploadThroughput({
+        previousRate: MiB,
+        previousSample: { bytes: 0, atMs: 0, pendingBytes: 600 * MiB },
+        sample: { bytes: 800 * MiB, atMs: 10_000, pendingBytes: 0 },
+      }),
+    ).toBe(80 * MiB);
+    // An assumed rate set lower is the floor instead.
+    expect(
+      observeUploadThroughput({
+        previousRate: undefined,
+        previousSample: { bytes: 0, atMs: 0 },
+        sample: { bytes: 1_000, atMs: 1_000 },
+        assumedBytesPerSecond: 100,
+      }),
+    ).toBe(1_000);
+  });
+
+  it("still lowers the estimate for a link measured slow while the queue held work", () => {
+    expect(
+      observeUploadThroughput({
+        previousRate: undefined,
+        previousSample: { bytes: 0, atMs: 0, pendingBytes: 500 * MiB },
+        sample: { bytes: 10 * 1024 * 200, atMs: 200_000, pendingBytes: 498 * MiB },
+      }),
+    ).toBe(10 * 1024);
+  });
+
+  it("replays alpha: a MicroVM 3 min into its hour is not stopped on an idle interval's trickle", () => {
+    const deadlineMs = 60 * 60_000;
+    const nowMs = 3 * 60_000;
+    const rate = observeUploadThroughput({
+      previousRate: undefined,
+      previousSample: { bytes: 0, atMs: 0, pendingBytes: 0 },
+      sample: { bytes: 33_646_593, atMs: nowMs, pendingBytes: 0 },
+    });
+    const plan = planPreservationStart({
+      deadlineMs,
+      leadMs: 15 * 60_000,
+      pendingBytes: 0,
+      stagedBytes: 781_643_508,
+      bulkBuilding: true,
+      uploadBytesPerSecond: rate,
+      safetyFactor: 1.5,
+    });
+    // Before: 6890 s at 140 KB/s, a start 70 min in the past. Now the assumed 1 MiB/s bounds the
+    // rate: the bulk being built (781 MB) over it, times 1.5, starts the drain 26 minutes in.
+    expect(Math.round(plan.estimateMs / 1000)).toBe(1118);
+    expect(plan.startsAtMs).toBeGreaterThan(nowMs);
   });
 });
 

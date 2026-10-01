@@ -360,6 +360,12 @@ export const workspaceCaptureDrains = pgTable(
     uploadSampleBytes: doublePrecision("upload_sample_bytes"),
     uploadSampledAt: timestamp("upload_sampled_at", { mode: "date", withTimezone: true }),
     /**
+     * The sample's `pendingBytes`: whether the queue held work at that instant. A reading counts
+     * as a measurement of the link only when the queue held work at both ends of its interval;
+     * otherwise the uploader may have idled, and the reading only bounds the link from below.
+     */
+    uploadSamplePendingBytes: doublePrecision("upload_sample_pending_bytes"),
+    /**
      * The audit of a discard: when the owner asked to end this runtime without saving its
      * unsaved captures, and who asked. Set once, never cleared; every stop path honours it.
      */
