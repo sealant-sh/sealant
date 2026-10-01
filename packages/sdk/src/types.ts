@@ -49,7 +49,7 @@ export interface SealantConfig {
 // ---------------------------------------------------------------------------------------------
 
 /** The harnesses with first-class integrations baked into the platform today. */
-export type HarnessId = "opencode" | "codex" | "claude-code";
+export type HarnessId = "opencode" | "codex" | "claude-code" | "pi";
 
 /** A single one-shot command to invoke a harness against a prompt inside the workspace. */
 export interface HarnessRunCommand {

@@ -192,6 +192,7 @@ export const WORKSPACE_PACKAGE_CATALOG: Readonly<Record<string, CatalogEntry>> =
     ubuntu: { packages: ["curl", "ca-certificates"] },
     nix: { packages: ["chezmoi"] },
   },
+  "ca-certificates": everywhere("ca-certificates", "cacert"),
   curl: everywhere("curl"),
   direnv: everywhere("direnv"),
   eza: everywhere("eza"),
