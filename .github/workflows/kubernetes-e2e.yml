@@ -27,7 +27,7 @@ concurrency:
 jobs:
   docker:
     name: Docker runtime e2e
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
@@ -45,7 +45,7 @@ jobs:
 
   kubernetes:
     name: Kubernetes cross-node e2e (kind, generic RWX)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
