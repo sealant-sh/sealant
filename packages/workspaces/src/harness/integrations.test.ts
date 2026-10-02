@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { getHarnessIntegration, isHarnessId, listHarnessIntegrations } from "./integrations.js";
+import {
+  getHarnessIntegration,
+  isBakedHarnessId,
+  isHarnessId,
+  listHarnessIntegrations,
+} from "./integrations.js";
 
 describe("harness integrations", () => {
   it("returns install and launch details for known harness ids", () => {
@@ -40,6 +45,18 @@ describe("harness integrations", () => {
       .map((integration) => integration.id)
       .toSorted();
 
-    expect(ids).toEqual(["claude-code", "codex", "opencode"]);
+    expect(ids).toEqual(["claude-code", "codex", "opencode", "pi"]);
+  });
+
+  it("bakes every harness into one image, and installs pi from its checked release binary", () => {
+    expect(isBakedHarnessId("opencode")).toBe(true);
+    expect(isBakedHarnessId("pi")).toBe(true);
+    const pi = getHarnessIntegration("pi");
+    expect(pi?.installPackages).toEqual(["curl", "tar", "ca-certificates"]);
+    // No node: the binary, verified against the release's SHA256SUMS before it is unpacked.
+    expect(pi?.installCommand).toContain("pi-linux-$arch.tar.gz");
+    expect(pi?.installCommand).toContain("sha256sum -c -");
+    expect(pi?.installCommand).not.toContain("npm");
+    expect(pi?.buildRunCommand("hello")).toEqual({ executable: "pi", args: ["-p", "hello"] });
   });
 });

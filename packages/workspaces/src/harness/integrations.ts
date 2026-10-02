@@ -1,4 +1,4 @@
-export type HarnessId = "opencode" | "codex" | "claude-code";
+export type HarnessId = "opencode" | "codex" | "claude-code" | "pi";
 
 /** The one-shot invocation for a prompt, resolved SERVER-SIDE (the single source of truth). */
 export interface HarnessRunCommand {
@@ -18,6 +18,22 @@ export interface HarnessIntegration {
    */
   readonly buildRunCommand: (prompt: string) => HarnessRunCommand;
 }
+
+/** The latest pi release for this machine, checked against the release's own SHA256SUMS. */
+const PI_INSTALL_COMMAND = [
+  "set -eu",
+  'case "$(uname -m)" in x86_64) arch=x64 ;; aarch64|arm64) arch=arm64 ;; *) echo "pi: no release for $(uname -m)" >&2; exit 1 ;; esac',
+  'release="https://github.com/earendil-works/pi/releases/latest/download"',
+  'tmp="$(mktemp -d)"',
+  'curl -fsSL -o "$tmp/pi.tar.gz" "$release/pi-linux-$arch.tar.gz"',
+  'curl -fsSL -o "$tmp/SHA256SUMS" "$release/SHA256SUMS"',
+  'echo "$(awk -v f="pi-linux-$arch.tar.gz" \'$2 == f { print $1 }\' "$tmp/SHA256SUMS")  $tmp/pi.tar.gz" | sha256sum -c -',
+  "rm -rf /opt/pi && mkdir -p /opt /usr/local/bin",
+  'tar -xzf "$tmp/pi.tar.gz" -C /opt',
+  "ln -sf /opt/pi/pi /usr/local/bin/pi",
+  'rm -rf "$tmp"',
+  "pi --version",
+].join("; ");
 
 const harnessIntegrations: Record<HarnessId, HarnessIntegration> = {
   opencode: {
@@ -51,15 +67,26 @@ const harnessIntegrations: Record<HarnessId, HarnessIntegration> = {
     launchCommand: "claude",
     buildRunCommand: (prompt) => ({ executable: "claude", args: ["-p", prompt] }),
   },
+  pi: {
+    id: "pi",
+    // pi ships a self-contained binary per platform with a SHA256SUMS beside it, so it needs no
+    // node: the npm package wants node >= 22.19, newer than Ubuntu 24.04's (18). The binary needs
+    // the files it ships with, so the tree goes to /opt/pi and only the command is linked.
+    installPackages: ["curl", "tar", "ca-certificates"],
+    installCommand: PI_INSTALL_COMMAND,
+    launchCommand: "pi",
+    buildRunCommand: (prompt) => ({ executable: "pi", args: ["-p", prompt] }),
+  },
 };
 
 /**
  * The harness CLIs baked into EVERY workspace image. One image carries all
  * supported agents, so a workspace (or a shell inside one) can open any of
  * them against the same state — harness identity is a launch-time fact, not
- * an image fact. Deliberately codex + claude-code for now.
+ * an image fact. Every supported harness is baked: a session can switch to any of them, and a
+ * standby or a shell workspace has them all.
  */
-const bakedHarnessIds: readonly HarnessId[] = ["codex", "claude-code"];
+const bakedHarnessIds: readonly HarnessId[] = ["codex", "claude-code", "opencode", "pi"];
 
 export const isBakedHarnessId = (id: string): boolean =>
   bakedHarnessIds.some((baked) => baked === id);

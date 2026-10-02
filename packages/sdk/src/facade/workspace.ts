@@ -121,6 +121,7 @@ const BUILTIN_LAUNCH_COMMANDS: Record<string, string> = {
   opencode: "opencode",
   codex: "codex",
   "claude-code": "claude",
+  pi: "pi",
 };
 
 /** Wire → public snaps of one capture class. */

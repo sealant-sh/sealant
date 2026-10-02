@@ -15,7 +15,7 @@
  *   await run.record.replay()
  */
 export { Sealant } from "./client.js";
-export { claudeCode, codex, customHarness, opencode } from "./harness.js";
+export { claudeCode, codex, customHarness, opencode, pi } from "./harness.js";
 export {
   SealantApiError,
   SealantError,

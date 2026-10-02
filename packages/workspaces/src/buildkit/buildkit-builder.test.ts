@@ -1140,8 +1140,8 @@ describe("ubuntu distro family", () => {
     });
 
     expect(result.builder).toEqual({ id: "ubuntu", osFamily: "ubuntu" });
-    // opencode is not a baked harness, so the image name carries the harness suffix.
-    expect(result.buildkit.spec.imageReference).toBe("sealant-workspace-ubuntu-opencode:latest");
+    // Every harness is baked, opencode included: one image per family, no harness suffix.
+    expect(result.buildkit.spec.imageReference).toBe("sealant-workspace-ubuntu:latest");
 
     const containerfile = await readFile(result.buildkit.spec.containerfilePath, "utf8");
 
@@ -1337,7 +1337,7 @@ describe("custom base images", () => {
       "RUN git config --system --add safe.directory '/workspace/repo'",
     );
     expect(result.buildkit.spec.imageReference).toBe(
-      "sealant-workspace-custom-node-22-bookworm-opencode:latest",
+      "sealant-workspace-custom-node-22-bookworm:latest",
     );
   });
 });

@@ -10,7 +10,7 @@ export const workspaceBlueprintVersion = "1" as const;
 
 export const workspaceSourceProviderSchema = z.enum(["github", "gitlab", "generic"]);
 
-export const workspaceHarnessIdSchema = z.enum(["opencode", "codex", "claude-code"]);
+export const workspaceHarnessIdSchema = z.enum(["opencode", "codex", "claude-code", "pi"]);
 
 export const workspaceInputPurposeSchema = z.enum(["config", "dotfiles", "bootstrap"]);
 
