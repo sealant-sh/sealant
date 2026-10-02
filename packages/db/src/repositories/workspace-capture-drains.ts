@@ -92,6 +92,8 @@ export interface WorkspaceCaptureDrainSchedule {
   readonly uploadBytesPerSecond?: number | null;
   readonly uploadSampleBytes?: number | null;
   readonly uploadSampledAt?: Date | null;
+  /** The sample's `pendingBytes` (null: the daemon did not report it). */
+  readonly uploadSamplePendingBytes?: number | null;
 }
 
 export interface WorkspaceCaptureDrainRepoService {
@@ -1479,6 +1481,9 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
               ...(input.schedule.uploadSampledAt === undefined
                 ? {}
                 : { uploadSampledAt: input.schedule.uploadSampledAt }),
+              ...(input.schedule.uploadSamplePendingBytes === undefined
+                ? {}
+                : { uploadSamplePendingBytes: input.schedule.uploadSamplePendingBytes }),
             };
             const [row] = yield* db
               .insert(workspaceCaptureDrains)

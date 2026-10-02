@@ -163,13 +163,30 @@ export const planPreservationStart = (input: {
 
 /**
  * Fold one `uploadedBytes` sample into the observed throughput. Only an interval in which bytes
- * moved is a reading (an idle queue says nothing about the link); readings are averaged with
- * the previous estimate. A counter that went backwards (the daemon restarted) restarts sampling.
+ * moved is a reading (an idle queue says nothing about the link). A counter that went backwards
+ * (the daemon restarted) restarts sampling.
+ *
+ * A reading is bytes over the time between two sweeps, and captures upload in bursts: between
+ * them the uploader may idle. So a reading MEASURES the link only when the queue held work at
+ * both ends of its interval (`pendingBytes` > 0 at both samples); it is then averaged with the
+ * previous estimate and may lower it. Any other reading only bounds the link from below: it may
+ * raise the rate, never lower it under the previous estimate or, with none, the assumed rate.
+ * Alpha 2026-10-01: three minutes into a session a 33.6 MB reading over an idle interval read
+ * 140 KB/s, the estimate for 780 MB staged came to 6890 s, and a MicroVM with 57 minutes left
+ * was stopped at once; the same upload then ran at about 80 MB/s.
  */
 export const observeUploadThroughput = (input: {
   readonly previousRate: number | undefined;
-  readonly previousSample: { readonly bytes: number; readonly atMs: number } | undefined;
-  readonly sample: { readonly bytes: number; readonly atMs: number };
+  readonly previousSample:
+    | { readonly bytes: number; readonly atMs: number; readonly pendingBytes?: number | undefined }
+    | undefined;
+  readonly sample: {
+    readonly bytes: number;
+    readonly atMs: number;
+    readonly pendingBytes?: number | undefined;
+  };
+  /** The rate assumed while none has been measured (`planPreservationStart`). Default 1 MiB/s. */
+  readonly assumedBytesPerSecond?: number;
 }): number | undefined => {
   const { previousRate, previousSample, sample } = input;
   if (previousSample === undefined || sample.bytes <= previousSample.bytes) {
@@ -180,7 +197,13 @@ export const observeUploadThroughput = (input: {
     return previousRate;
   }
   const reading = ((sample.bytes - previousSample.bytes) * 1000) / elapsedMs;
-  return previousRate === undefined ? reading : (previousRate + reading) / 2;
+  const busy = (previousSample.pendingBytes ?? 0) > 0 && (sample.pendingBytes ?? 0) > 0;
+  if (busy) {
+    return previousRate === undefined ? reading : (previousRate + reading) / 2;
+  }
+  const floor =
+    previousRate ?? Math.max(1, input.assumedBytesPerSecond ?? DEFAULT_ASSUMED_BYTES_PER_SECOND);
+  return Math.max(floor, reading);
 };
 
 export interface PreserveBeforeDeadlineOptions {
@@ -723,14 +746,25 @@ const planOne = (
       row?.uploadSampleBytes === undefined ||
       row.uploadSampledAt === null
         ? undefined
-        : { bytes: row.uploadSampleBytes, atMs: row.uploadSampledAt.getTime() };
+        : {
+            bytes: row.uploadSampleBytes,
+            atMs: row.uploadSampledAt.getTime(),
+            pendingBytes: row.uploadSamplePendingBytes ?? undefined,
+          };
     const rate =
       status === undefined
         ? (row?.uploadBytesPerSecond ?? undefined)
         : observeUploadThroughput({
             previousRate: row?.uploadBytesPerSecond ?? undefined,
             previousSample,
-            sample: { bytes: status.uploadedBytes, atMs: sampledAtMs },
+            sample: {
+              bytes: status.uploadedBytes,
+              atMs: sampledAtMs,
+              pendingBytes: status.pendingBytes,
+            },
+            ...(settings.assumedBytesPerSecond === undefined
+              ? {}
+              : { assumedBytesPerSecond: settings.assumedBytesPerSecond }),
           });
     const plan = planPreservationStart({
       deadlineMs,
@@ -764,7 +798,11 @@ const planOne = (
         uploadBytesPerSecond: rate ?? null,
         ...(status === undefined
           ? {}
-          : { uploadSampleBytes: status.uploadedBytes, uploadSampledAt: new Date(sampledAtMs) }),
+          : {
+              uploadSampleBytes: status.uploadedBytes,
+              uploadSampledAt: new Date(sampledAtMs),
+              uploadSamplePendingBytes: status.pendingBytes ?? null,
+            }),
       },
     });
     if (sampledAtMs < startsAtMs) {
