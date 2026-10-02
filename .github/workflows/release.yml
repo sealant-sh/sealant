@@ -81,7 +81,7 @@ jobs:
   selfhost-smoke:
     name: Self-host install smoke
     needs: image
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     # Pull ANONYMOUSLY, exactly like a user: GHCR authorizes GITHUB_TOKEN by package↔repo linkage
     # (not visibility), and logging in with it 403'd even on public packages during the v0.1.0
     # release. Anonymous pulls of public packages always work. Consequence: the first release of any
@@ -125,7 +125,7 @@ jobs:
   # documented behavior the runtime does not honor.
   workspace-e2e:
     name: Workspace runtime e2e (pinned sealantd)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
     steps:
@@ -163,6 +163,7 @@ jobs:
     needs: workspace-e2e
     # Kept on a github-hosted runner: OIDC Trusted Publishing (tokenless npm auth + provenance)
     # should mint its id-token on infrastructure GitHub controls, not a third-party runner.
+    # npm trusted publishing (OIDC) needs a GitHub-hosted runner: this job stays off Blacksmith.
     runs-on: ubuntu-latest
     # Protected environment: configure required reviewers on `release` in repo settings, and
     # register both packages' npm Trusted Publishers against this repo + release.yml + this
@@ -216,7 +217,7 @@ jobs:
   release:
     name: Publish GitHub release
     needs: [selfhost-smoke, workspace-e2e]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
     steps:
