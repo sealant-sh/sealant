@@ -4,7 +4,7 @@
  * against git in a temporary repository.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -68,6 +68,66 @@ describe("workingTreeChangesScript", () => {
       "?? c.txt",
       "M  b.txt",
     ]);
+  });
+
+  it("keeps a refreshed copy of the index, so the next reading rehashes nothing it need not", async () => {
+    const dir = await repo();
+    const temp = await mkdtemp(path.join(tmpdir(), "sealant-keep-"));
+    dirs.push(temp);
+    const env = { ...process.env, TMPDIR: temp };
+    const read = () =>
+      splitWorkingTreeChanges(
+        execFileSync("sh", ["-c", workingTreeChangesScript()], { cwd: dir, encoding: "utf8", env }),
+      );
+    // An index whose stat data no longer matches the files: each file rewritten with the same
+    // bytes through a rename (a new inode), as a restore that lays files down after git wrote the
+    // index leaves it. git must then rehash every file each time it reads that index.
+    git(dir, "add", "b.txt");
+    for (const name of ["a.txt", "b.txt"]) {
+      const file = path.join(dir, name);
+      await writeFile(`${file}.tmp`, await readFile(file));
+      await rename(`${file}.tmp`, file);
+    }
+    const indexPath = path.join(dir, ".git", "index");
+    const before = await readFile(indexPath);
+    const inodes = (index: string) =>
+      execFileSync("git", ["ls-files", "--debug"], {
+        cwd: dir,
+        encoding: "utf8",
+        env: { ...process.env, GIT_INDEX_FILE: index },
+      })
+        .split("\n")
+        .filter((line) => line.trim().startsWith("dev:"))
+        .map((line) => Number(/ino:\s*(\d+)/.exec(line)?.[1]));
+    const onDisk = await Promise.all(
+      ["a.txt", "b.txt"].map(async (name) => (await stat(path.join(dir, name))).ino),
+    );
+    // b.txt's bytes are what the index holds (a.txt carries an unstaged edit, which is hashed
+    // whatever its stat data says).
+    expect(inodes(indexPath)[1]).not.toBe(onDisk[1]);
+
+    const first = read();
+    const kept = (await readdir(temp)).filter((name) => name.startsWith("sealant-index-"));
+    expect(kept).toHaveLength(1);
+    // Same entries as the repository's index, with b.txt's stat data as it is now.
+    expect(inodes(path.join(temp, kept[0] ?? ""))[1]).toBe(onDisk[1]);
+    expect(read()).toEqual(first);
+    expect(first.nameStatus.trim().split("\n").toSorted()).toEqual([
+      "A\tc.txt",
+      "M\ta.txt",
+      "M\tb.txt",
+    ]);
+    // The repository's own index was never written.
+    expect((await readFile(indexPath)).equals(before)).toBe(true);
+
+    // Once the repository's index changes, the next reading starts from it, and the old copy goes.
+    await writeFile(path.join(dir, ".gitignore"), "ignored.txt\n");
+    await writeFile(path.join(dir, "ignored.txt"), "forced\n");
+    git(dir, "add", "-f", "ignored.txt");
+    expect(read().nameStatus).toContain("A\tignored.txt");
+    const keptNow = (await readdir(temp)).filter((name) => name.startsWith("sealant-index-"));
+    expect(keptNow).toHaveLength(1);
+    expect(keptNow[0]).not.toBe(kept[0]);
   });
 
   it("prints nothing outside a repository", async () => {
