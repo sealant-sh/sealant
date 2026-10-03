@@ -383,7 +383,7 @@ describe("preserveBeforeDeadlineEffect", () => {
 
     expect(result.driven).toBe(1);
     expect(daemon.flushRequests).toContainEqual(expect.objectContaining({ kind: "final" }));
-    expect(result.stop).toHaveBeenCalledTimes(1);
+    expect(result.stop).toHaveBeenCalledTimes(2);
     expect(result.markStopped).toHaveBeenCalledWith({ runId: "run_vm", stopReason: "expired" });
     expect(result.setWorkspaceStatus).toHaveBeenCalledWith({ id: "ws_vm", status: "stopped" });
   });
@@ -409,7 +409,7 @@ describe("preserveBeforeDeadlineEffect", () => {
     });
 
     expect(result.driven).toBe(1);
-    expect(result.stop).toHaveBeenCalledTimes(1);
+    expect(result.stop).toHaveBeenCalledTimes(2);
     expect(result.schedules[0]?.preservationStartsAt?.getTime()).toBeLessThanOrEqual(NOW);
   });
 
@@ -665,7 +665,7 @@ describe("preserveBeforeDeadlineEffect · a launch still in progress at its pres
       expect(result.markAttemptFailed).toHaveBeenCalledTimes(1);
       expect(daemon.flushRequests[0]).toMatchObject({ kind: "final" });
       expect(result.driven).toBe(1);
-      expect(result.stop).toHaveBeenCalledTimes(1);
+      expect(result.stop).toHaveBeenCalledTimes(2);
     }
   });
 

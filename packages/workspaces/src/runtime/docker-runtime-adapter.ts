@@ -61,6 +61,7 @@ import {
   type RuntimeAdapterParkInput,
   type RuntimeAdapterParkResult,
   type RuntimeAdapterRecoverResult,
+  type RuntimeAdapterReapRemainsInput,
   type RuntimeAdapterStopInput,
   type RuntimeAdapterStopResult,
   type RuntimeAdapterSupport,
@@ -1810,6 +1811,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
    */
   public async stop(input: RuntimeAdapterStopInput): Promise<RuntimeAdapterStopResult> {
     const parsed = parseRuntimeAdapterStopInput(input);
+    if (parsed.phase === "end") return this.endContainer(parsed);
     let outcome: "stopped" | "not-found" = "stopped";
 
     // Snapshot sidecar identities before removing the workspace frees its deterministic name.
@@ -1840,20 +1842,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
             .then((result) => result.stdout.trim() || undefined)
             .catch(() => undefined);
 
-    if (parsed.fence !== true) {
-      // SIGTERM, then up to the grace for sealantd to flush and exit: the container's own
-      // StopTimeout (set at create, longer for a capture-sourced workspace), or the configured
-      // grace for a container created before it was set. Its failure is not the stop's: a
-      // container already gone or already stopped is settled by the removal below, which also
-      // surfaces a daemon that cannot be reached.
-      const graceSeconds = await this.containerStopTimeout(parsed.resourceId);
-      await this.commandRunner("docker", [
-        "stop",
-        "-t",
-        String(Math.max(graceSeconds ?? 0, this.stopGraceSeconds)),
-        parsed.resourceId,
-      ]).catch(() => undefined);
-    }
+    // The `remove` phase follows an `end` that already ran the planned stop: nothing to signal.
+    if (parsed.fence !== true && parsed.phase !== "remove") await this.plannedStop(parsed);
 
     try {
       // `-v` takes the container's anonymous volumes with it: the dind sidecar declares one for
@@ -1908,6 +1898,117 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       resourceId: parsed.resourceId,
       outcome,
     });
+  }
+
+  /**
+   * SIGTERM, then up to the grace for sealantd to flush and exit: the container's own StopTimeout
+   * (set at create, longer for a capture-sourced workspace), or the configured grace for a
+   * container created before it was set. Its failure is not the stop's: a container already gone
+   * or already stopped is settled by what follows (the end's own look, or the removal), which
+   * also surfaces a daemon that cannot be reached.
+   */
+  private async plannedStop(parsed: RuntimeAdapterStopInput): Promise<void> {
+    const graceSeconds = await this.containerStopTimeout(parsed.resourceId);
+    await this.commandRunner("docker", [
+      "stop",
+      "-t",
+      String(Math.max(graceSeconds ?? 0, this.stopGraceSeconds)),
+      parsed.resourceId,
+    ]).catch(() => undefined);
+  }
+
+  /**
+   * The `end` phase of a stop: the executor ends (the planned SIGTERM and its grace, or the
+   * fenced kill) and nothing of it runs once this returns; its container stays, exited, with its
+   * disk and sidecar, for the `remove` phase. A container still running after this is a failure
+   * (recording "stopped" over it would leak it); one already gone is `not-found`.
+   */
+  private async endContainer(parsed: RuntimeAdapterStopInput): Promise<RuntimeAdapterStopResult> {
+    if (parsed.fence !== true) await this.plannedStop(parsed);
+    // Idempotent over an exited container ("is not running"); what the planned stop did not end
+    // within its grace, or a fenced stop, ends here. The state is read after it, never assumed.
+    await this.commandRunner("docker", ["kill", parsed.resourceId]).catch(() => undefined);
+    let outcome: "stopped" | "not-found" = "stopped";
+    try {
+      const state = await this.inspectContainerState(parsed.resourceId);
+      if (state.running) {
+        throw createAdapterError(
+          "adapter-unavailable",
+          `Workspace container '${parsed.reference ?? parsed.resourceId}' is still running after it was asked to end (status: ${state.status}).`,
+        );
+      }
+    } catch (error) {
+      if (!isNoSuchContainerError(error)) throw error;
+      outcome = "not-found";
+    }
+    return parseRuntimeAdapterStopResult({
+      adapter: this.id,
+      resourceId: parsed.resourceId,
+      outcome,
+    });
+  }
+
+  /**
+   * Remove what ended executors left behind: every container of this adapter's prefix that
+   * exited more than `olderThanMs` ago, with its sidecar and network. A stop's `remove` phase
+   * takes these in the ordinary course; this is the net under a removal that failed or a worker
+   * that died between a stop's two phases. An exited container younger than the grace is left
+   * alone: it may be a crash the exit reconciler is still reading the post-mortem of.
+   */
+  public async reapRemains(input: RuntimeAdapterReapRemainsInput): Promise<number> {
+    const listed = await this.commandRunner("docker", [
+      "ps",
+      "-a",
+      "--filter",
+      `name=^/${this.containerNamePrefix}-`,
+      "--filter",
+      "status=exited",
+      "--filter",
+      "status=dead",
+      "--format",
+      "{{.ID}}",
+    ]);
+    const ids = listed.stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    if (ids.length === 0) return 0;
+    const inspected = await this.commandRunner("docker", [
+      "inspect",
+      "--format",
+      "{{.Id}}\t{{.Name}}\t{{.State.FinishedAt}}",
+      ...ids,
+    ]);
+    const cutoff = Date.now() - input.olderThanMs;
+    let removed = 0;
+    for (const line of inspected.stdout.split("\n")) {
+      const [id, rawName, finishedAt] = line.trim().split("\t");
+      if (id === undefined || rawName === undefined || finishedAt === undefined) continue;
+      const finished = Date.parse(finishedAt);
+      if (Number.isNaN(finished) || finished > cutoff) continue;
+      if (!(await this.removeContainerDefinitively(id))) continue;
+      removed += 1;
+      // A workspace container's sidecar and network go with it; a sidecar listed on its own
+      // (its workspace already removed) is just removed.
+      const name = rawName.replace(/^\//, "");
+      if (name.endsWith("-docker")) continue;
+      const service = await this.inspectContainerByName(`${name}-docker`);
+      const networkId = await this.commandRunner("docker", [
+        "network",
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        `${name}-network`,
+      ])
+        .then((result) => result.stdout.trim() || undefined)
+        .catch(() => undefined);
+      if (service !== undefined) {
+        await this.removeDockerService({ containerId: service.id, networkId });
+      } else if (networkId !== undefined) {
+        await this.commandRunner("docker", ["network", "rm", networkId]).catch(() => undefined);
+      }
+    }
+    return removed;
   }
 
   public async launch(

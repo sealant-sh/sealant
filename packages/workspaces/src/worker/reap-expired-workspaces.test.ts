@@ -111,7 +111,7 @@ describe("reapExpiredWorkspaces · retained launches", () => {
     const result = await sweep(daemon);
 
     expect(daemon.flushRequests[0]).toMatchObject({ kind: "final" });
-    expect(result.stop).toHaveBeenCalledTimes(1);
+    expect(result.stop).toHaveBeenCalledTimes(2);
     expect(result.markStopped).toHaveBeenCalledWith({
       runId: "run_retained",
       stopReason: "failed",

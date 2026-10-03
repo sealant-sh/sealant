@@ -237,6 +237,29 @@ describe("reconcileRuntimeExitsEffect", () => {
     expect(removeAll).toHaveBeenCalledWith("run_1");
   });
 
+  it("removes the remains of ended executors on a full poll, never on the check of one resource", async () => {
+    const harness = makeHarness({ instances: [] });
+    const { adapter } = stubAdapter({});
+    const reapRemains = vi.fn(async () => 2);
+    const reaping: RuntimeAdapter = { ...adapter, reapRemains };
+
+    await Effect.runPromise(
+      reconcileRuntimeExitsEffect({ runtimeAdapters: [reaping] }).pipe(
+        Effect.provide(harness.layer),
+      ),
+    );
+    expect(reapRemains).toHaveBeenCalledWith({ olderThanMs: 5 * 60_000 });
+
+    reapRemains.mockClear();
+    await Effect.runPromise(
+      reconcileRuntimeExitsEffect({
+        runtimeAdapters: [reaping],
+        resourceIds: ["container-1"],
+      }).pipe(Effect.provide(harness.layer)),
+    );
+    expect(reapRemains).not.toHaveBeenCalled();
+  });
+
   it("records a runtime the daemon no longer knows as gone", async () => {
     const harness = makeHarness({ instances: [runtimeInstance()] });
     const { adapter, stop } = stubAdapter({

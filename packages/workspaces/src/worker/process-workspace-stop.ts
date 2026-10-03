@@ -295,14 +295,35 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
         ticket: input.ticket,
         // Told once nothing can veto the removal any more (review 9 #9).
         onIssued: options.captureDrain?.onPhase?.({ kind: "removing" }) ?? Effect.void,
-        remove: Effect.tryPromise({
-          try: () =>
-            input.adapter.stop({
-              resourceId: input.resourceId,
-              ...(input.reference === null ? {} : { reference: input.reference }),
-              ...(input.fence ? { fence: true } : {}),
-            }),
-          catch: toWorkspaceStopProcessingError,
+        remove: Effect.gen(function* () {
+          const stopInput = {
+            resourceId: input.resourceId,
+            ...(input.reference === null ? {} : { reference: input.reference }),
+            ...(input.fence ? { fence: true } : {}),
+          };
+          // Two phases, with the record between them: the stop is recorded the moment nothing of
+          // the executor runs any more, not after its disk is removed too (on Docker, removing a
+          // workspace's writable layer took 4 s of every Stop; Mend, 2026-10-03). The end's failure
+          // is the stop's failure: recording "stopped" over a running container would leak it.
+          // The removal's is not: the executor has ended and is recorded, and the remains sweep
+          // (`RuntimeAdapter.reapRemains`, on the exit reconciler's poll) takes what it left.
+          yield* Effect.tryPromise({
+            try: () => input.adapter.stop({ ...stopInput, phase: "end" }),
+            catch: toWorkspaceStopProcessingError,
+          });
+          yield* runtimeInstances
+            .markStopped({ runId: options.runId, stopReason: options.stopReason })
+            .pipe(Effect.mapError(toWorkspaceStopProcessingError));
+          yield* Effect.tryPromise({
+            try: () => input.adapter.stop({ ...stopInput, phase: "remove" }),
+            catch: toWorkspaceStopProcessingError,
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning(
+                `Workspace stop: run ${options.runId} ended and was recorded stopped; removing its remains failed: ${error.message}. The remains sweep retries.`,
+              ),
+            ),
+          );
         }).pipe(keepingClaim(input.claim)),
         // Once re-checked, the removal runs to its end: a caller's bound (the deadline sweep's)
         // never interrupts a runtime call half-made or its hold's release or completion.
@@ -310,7 +331,6 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
       if (!removal.removed) {
         return "voided" as const;
       }
-      yield* runtimeInstances.markStopped({ runId: options.runId, stopReason: options.stopReason });
       return "stopped" as const;
     }).pipe(
       Effect.mapError(toWorkspaceStopProcessingError),

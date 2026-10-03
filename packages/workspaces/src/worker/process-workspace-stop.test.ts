@@ -206,7 +206,7 @@ describe("processWorkspaceStopEffect", () => {
       workspace: workspaceRow({ latestRunId: "run_old" }),
       instance: runtimeInstance(),
     });
-    const stop = vi.fn(async () => ({
+    const stop = vi.fn<RuntimeAdapter["stop"]>(async () => ({
       adapter: "docker" as const,
       resourceId: "container-1",
       outcome: "stopped" as const,
@@ -221,7 +221,41 @@ describe("processWorkspaceStopEffect", () => {
       }).pipe(Effect.provide(harness.layer)),
     );
 
-    expect(stop).toHaveBeenCalledWith({ resourceId: "container-1", reference: "sealant-run-old" });
+    // Two phases: the executor ends, the stop is recorded, then its remains go.
+    expect(stop.mock.calls.map(([input]) => input)).toEqual([
+      { resourceId: "container-1", reference: "sealant-run-old", phase: "end" },
+      { resourceId: "container-1", reference: "sealant-run-old", phase: "remove" },
+    ]);
+    expect(harness.markStopped).toHaveBeenCalledWith({ runId: "run_old", stopReason: "user" });
+    expect(harness.setWorkspaceStatus).toHaveBeenCalledWith({ id: "ws_1", status: "stopped" });
+    expect(harness.markStopped.mock.invocationCallOrder[0]).toBeLessThan(
+      stop.mock.invocationCallOrder[1] ?? 0,
+    );
+  });
+
+  it("records the stop when the executor ended but removing its remains failed (the remains sweep takes them)", async () => {
+    const harness = makeHarness({
+      captureSourced: false,
+      workspace: workspaceRow({ latestRunId: "run_old" }),
+      instance: runtimeInstance(),
+    });
+    const stop = vi.fn<RuntimeAdapter["stop"]>(async (input) => {
+      if (input.phase === "remove") {
+        throw new Error("Error response from daemon: device or resource busy");
+      }
+      return { adapter: "docker" as const, resourceId: "container-1", outcome: "stopped" as const };
+    });
+
+    await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "user",
+        runtimeAdapters: [stubAdapter(stop)],
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(stop).toHaveBeenCalledTimes(2);
     expect(harness.markStopped).toHaveBeenCalledWith({ runId: "run_old", stopReason: "user" });
     expect(harness.setWorkspaceStatus).toHaveBeenCalledWith({ id: "ws_1", status: "stopped" });
   });
@@ -386,7 +420,7 @@ describe("processWorkspaceStopEffect", () => {
     );
 
     // Rotated session files can only be read while the container is alive.
-    expect(order).toEqual(["sync-back", "adapter-stop"]);
+    expect(order).toEqual(["sync-back", "adapter-stop", "adapter-stop"]);
   });
 
   it("skips the sync-back when the adapter reports the runtime already ended, and still tears down", async () => {
@@ -422,7 +456,7 @@ describe("processWorkspaceStopEffect", () => {
 
     expect(inspect).toHaveBeenCalledWith({ resourceId: "container-1" });
     // Nothing to read from a runtime that is gone: straight to the (idempotent) teardown.
-    expect(order).toEqual(["adapter-stop"]);
+    expect(order).toEqual(["adapter-stop", "adapter-stop"]);
     expect(harness.markStopped).toHaveBeenCalledTimes(1);
     expect(harness.setWorkspaceStatus).toHaveBeenCalledWith({ id: "ws_1", status: "stopped" });
   });
@@ -460,7 +494,7 @@ describe("processWorkspaceStopEffect", () => {
       }).pipe(Effect.provide(harness.layer)),
     );
 
-    expect(order).toEqual(["sync-back", "adapter-stop"]);
+    expect(order).toEqual(["sync-back", "adapter-stop", "adapter-stop"]);
   });
 });
 
@@ -519,7 +553,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
 
     expect(outcome).toBe("stopped");
     expect(daemon.calls.slice(0, 2)).toEqual(["flush", "status"]);
-    expect(stop).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledTimes(2);
     expect(harness.markStopped).toHaveBeenCalledWith({ runId: "run_old", stopReason: "expired" });
   });
 
@@ -685,7 +719,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
     );
 
     expect(outcome).toBe("stopped");
-    expect(stop).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledTimes(2);
   });
 
   it("keeps a capture-sourced runtime this worker cannot address", async () => {
@@ -733,7 +767,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
 
     expect(outcome).toBe("stopped");
     expect(daemon.calls).toEqual([]);
-    expect(stop).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledTimes(2);
   });
 
   it("skips the drain for a runtime the adapter already reports ended", async () => {
@@ -993,7 +1027,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
     });
     const { outcome, stop } = await exitedStop(ledger);
     expect(outcome).toBe("stopped");
-    expect(stop).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledTimes(2);
     expect(ledger.store.rows.get("run_old")?.observation).toMatchObject({
       state: "stopped",
       detail: expect.stringContaining("attested a sealed final capture"),
@@ -1054,7 +1088,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
   it("removes an exited capture executor whose final flush Core itself observed complete", async () => {
     const { outcome, stop } = await exitedStop(withEntry({ last: savedStatus() }));
     expect(outcome).toBe("stopped");
-    expect(stop).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledTimes(2);
   });
 
   it("keeps an exited capture executor when its drain record cannot be read", async () => {
@@ -1143,7 +1177,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
       }).pipe(Effect.provide(harness.layer)),
     );
 
-    expect(order).toEqual(["stop-requested", "adapter-stop"]);
+    expect(order).toEqual(["stop-requested", "adapter-stop", "adapter-stop"]);
     expect(harness.markStopRequested).toHaveBeenCalledWith({
       runId: "run_old",
       stopReason: "user",
@@ -1253,6 +1287,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
       resourceId: "container-1",
       reference: "sealant-run-old",
       fence: true,
+      phase: "end",
     });
     expect(harness.markStopped).toHaveBeenCalledWith({ runId: "run_old", stopReason: "user" });
     expect(ledger.store.rows.get("run_old")?.observation).toMatchObject({
@@ -1364,7 +1399,7 @@ describe("an ended executor's removal is decided on current evidence (review 6 #
       await Effect.runPromise(ledger.closeObservation("run_old", fence));
     }
     expect(await run()).toBe("stopped");
-    expect(stop).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledTimes(2);
   });
 
   it("waits for an observation in flight to be recorded, then decides on what it said", async () => {
@@ -1399,7 +1434,7 @@ describe("an ended executor's removal is decided on current evidence (review 6 #
       }).pipe(Effect.provide(harness.layer)),
     );
     expect(outcome).toBe("stopped");
-    expect(stop).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -1551,8 +1586,8 @@ describe("an ended executor's removal is an owned transition (review 7 #5)", () 
       return { adapter: "docker" as const, resourceId: "container-1", outcome: "stopped" as const };
     });
     expect(await stopWith(ledger, harness, stop)).toBe("stopped");
-    expect(stop).toHaveBeenCalledOnce();
-    expect(admittedDuringRemoval).toEqual([false]);
+    expect(stop).toHaveBeenCalledTimes(2);
+    expect(admittedDuringRemoval).toEqual([false, false]);
     expect(ledger.store.rows.get("run_old")?.deletion?.state).toBe("deleted");
     expect(await Effect.runPromise(ledger.openObservation("run_old", 1_000))).toBeUndefined();
     expect(await Effect.runPromise(ledger.admitRecovery("run_old", NO_CLAIM))).toBe("deleted");
@@ -1639,7 +1674,7 @@ describe("processWorkspaceStopEffect · an issued removal with no recorded outco
       }).pipe(Effect.provide(harness.layer)),
     );
     expect(outcome).toBe("stopped");
-    expect(stop).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledTimes(2);
     expect(daemon.calls).toEqual([]);
     expect(ledger.store.rows.get("run_old")?.deletion?.state).toBe("deleted");
     expect(ledger.store.rows.get("run_old")?.entry.last?.headN).toBe(7);

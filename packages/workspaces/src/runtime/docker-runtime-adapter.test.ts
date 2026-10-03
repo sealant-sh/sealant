@@ -1842,6 +1842,135 @@ describe("DockerRuntimeAdapter", () => {
     });
   });
 
+  it("ends a workspace in the end phase without removing it, and removes its remains in the remove phase", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "inspect" && args.includes("{{json .State}}")) {
+        return {
+          stdout: JSON.stringify({ Status: "exited", Running: false, ExitCode: 0, Error: "" }),
+          stderr: "",
+        };
+      }
+      if (args[0] === "inspect") {
+        return { stdout: "docker-service-id\ttrue\n", stderr: "" };
+      }
+      if (args[0] === "network" && args[1] === "inspect") {
+        return { stdout: "network-id\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    const ended = await adapter.stop({
+      resourceId: "container-id-123",
+      reference: "sealant-run-abc",
+      phase: "end",
+    });
+    const endCalls = commandRunner.mock.calls.map(([, args]) => args[0]);
+    // The planned SIGTERM, the kill that makes the end certain, the look at the state: no removal.
+    expect(endCalls).toContain("stop");
+    expect(endCalls).toContain("kill");
+    expect(endCalls).not.toContain("rm");
+    expect(ended).toEqual({
+      adapter: "docker",
+      resourceId: "container-id-123",
+      outcome: "stopped",
+    });
+
+    commandRunner.mockClear();
+    const removed = await adapter.stop({
+      resourceId: "container-id-123",
+      reference: "sealant-run-abc",
+      phase: "remove",
+    });
+    const removeCalls = commandRunner.mock.calls.map(([, args]) => args);
+    // Nothing signalled again; the container, its sidecar and its network go.
+    expect(removeCalls.some((args) => args[0] === "stop" || args[0] === "kill")).toBe(false);
+    expect(
+      removeCalls.filter((args) => args[0] === "rm" || (args[0] === "network" && args[1] === "rm")),
+    ).toEqual([
+      ["rm", "-f", "-v", "container-id-123"],
+      ["rm", "-f", "-v", "docker-service-id"],
+      ["network", "rm", "network-id"],
+    ]);
+    expect(removed.outcome).toBe("stopped");
+  });
+
+  it("refuses to report an end over a container still running, and reports not-found for one already gone", async () => {
+    const running = new DockerRuntimeAdapter({
+      commandRunner: async (_command, args) =>
+        args[0] === "inspect"
+          ? {
+              stdout: JSON.stringify({ Status: "running", Running: true, ExitCode: 0, Error: "" }),
+              stderr: "",
+            }
+          : { stdout: "", stderr: "" },
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+    await expect(running.stop({ resourceId: "container-id-123", phase: "end" })).rejects.toThrow(
+      /still running/,
+    );
+
+    const gone = new DockerRuntimeAdapter({
+      commandRunner: async (_command, args) => {
+        if (args[0] === "inspect" || args[0] === "kill" || args[0] === "stop") {
+          throw new Error("Error response from daemon: No such container: container-id-123");
+        }
+        return { stdout: "", stderr: "" };
+      },
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+    expect((await gone.stop({ resourceId: "container-id-123", phase: "end" })).outcome).toBe(
+      "not-found",
+    );
+  });
+
+  it("reaps the remains of ended executors older than the grace, with their sidecar and network", async () => {
+    const old = new Date(Date.now() - 10 * 60_000).toISOString();
+    const recent = new Date(Date.now() - 30_000).toISOString();
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "ps") return { stdout: "old-id\nrecent-id\n", stderr: "" };
+      if (args[0] === "inspect" && args.includes("{{.Id}}\t{{.Name}}\t{{.State.FinishedAt}}")) {
+        return {
+          stdout: `old-id\t/sealant-run-old\t${old}\nrecent-id\t/sealant-run-recent\t${recent}\n`,
+          stderr: "",
+        };
+      }
+      if (args[0] === "inspect" && args.includes("sealant-run-old-docker")) {
+        return { stdout: "old-sidecar-id\tfalse\n", stderr: "" };
+      }
+      if (args[0] === "network" && args[1] === "inspect") {
+        return { stdout: "old-network-id\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    const removed = await adapter.reapRemains({ olderThanMs: 5 * 60_000 });
+
+    expect(removed).toBe(1);
+    const removals = commandRunner.mock.calls
+      .map(([, args]) => args)
+      .filter((args) => args[0] === "rm" || (args[0] === "network" && args[1] === "rm"));
+    expect(removals).toEqual([
+      ["rm", "-f", "-v", "old-id"],
+      ["rm", "-f", "-v", "old-sidecar-id"],
+      ["network", "rm", "old-network-id"],
+    ]);
+    expect(
+      commandRunner.mock.calls.some(([, args]) => args.includes("recent-id") && args[0] === "rm"),
+    ).toBe(false);
+  });
+
   it("sends SIGTERM with the grace before removing, and kills outright on a fenced stop", async () => {
     const calls: Array<readonly string[]> = [];
     const commandRunner = vi.fn<
