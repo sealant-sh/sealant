@@ -201,7 +201,12 @@ const isCaptureSourcedRun = (runId: string, sourceKind: string | null | undefine
  * recording "stopped" while the container still runs would leak it forever. The reverse gap
  * (container removed, then the process dies before the writes) self-heals: the message is
  * redelivered or the reaper re-drives it, and the adapter stop is idempotent (`not-found` =
- * success).
+ * success). On a runtime that keeps an ended executor's remains (`RuntimeAdapter.keepsRemains`,
+ * Docker) the stop is two adapter calls: `end` (nothing of the executor runs once it returns),
+ * then the record, then `remove` (its disk, sidecar and network) — so the stop is reported the
+ * moment the executor has ended. The removal's failure, or a worker lost between the two, leaves
+ * a `stopped` instance with no removal recorded (`markRemoved`), which the exit reconciler's
+ * remains sweep removes.
  *
  * The workspace row settles to "stopped" ONLY while this run is still the workspace's
  * `latestRunId`. A restart supersedes the old runtime with a new attempt — its stop half must
@@ -272,7 +277,9 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
   // before it propagates; the stop intent is durable, so the next sweep retries it. A removal
   // authorized on recorded evidence runs under its ticket (decision 21): re-checked right before
   // the runtime call — `voided` when newer evidence arrived since it was authorized (nothing is
-  // removed; the caller decides again) — and recorded `deleted` once the runtime removed it.
+  // removed; the caller decides again) — and recorded `deleted` once the executor was removed:
+  // on a runtime that keeps remains, once it has ENDED under this removal and been recorded
+  // stopped (its remains are slated, and the remains sweep takes them if this call cannot).
   const stopRuntime = (input: {
     readonly adapter: RuntimeAdapter;
     readonly resourceId: string;
@@ -301,26 +308,41 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
             ...(input.reference === null ? {} : { reference: input.reference }),
             ...(input.fence ? { fence: true } : {}),
           };
+          const stop = (phase?: "end" | "remove") =>
+            Effect.tryPromise({
+              try: () =>
+                input.adapter.stop(phase === undefined ? stopInput : { ...stopInput, phase }),
+              catch: toWorkspaceStopProcessingError,
+            });
+          const recordStopped = Effect.suspend(() =>
+            runtimeInstances.markStopped({ runId: options.runId, stopReason: options.stopReason }),
+          ).pipe(Effect.mapError(toWorkspaceStopProcessingError));
+          // The runtime confirmed nothing of the executor is left. Best-effort: unrecorded, the
+          // remains sweep asks the runtime once more (idempotent) and records it then.
+          const recordRemoved = Effect.suspend(() =>
+            runtimeInstances.markRemoved({ runId: options.runId, resourceId: input.resourceId }),
+          ).pipe(swallowingFailure("removal record"));
+          if (input.adapter.keepsRemains !== true) {
+            // One call ends and removes the executor: recorded stopped and removed after it.
+            yield* stop();
+            yield* recordStopped;
+            yield* recordRemoved;
+            return;
+          }
           // Two phases, with the record between them: the stop is recorded the moment nothing of
           // the executor runs any more, not after its disk is removed too (on Docker, removing a
           // workspace's writable layer took 4 s of every Stop; Mend, 2026-10-03). The end's failure
           // is the stop's failure: recording "stopped" over a running container would leak it.
-          // The removal's is not: the executor has ended and is recorded, and the remains sweep
-          // (`RuntimeAdapter.reapRemains`, on the exit reconciler's poll) takes what it left.
-          yield* Effect.tryPromise({
-            try: () => input.adapter.stop({ ...stopInput, phase: "end" }),
-            catch: toWorkspaceStopProcessingError,
-          });
-          yield* runtimeInstances
-            .markStopped({ runId: options.runId, stopReason: options.stopReason })
-            .pipe(Effect.mapError(toWorkspaceStopProcessingError));
-          yield* Effect.tryPromise({
-            try: () => input.adapter.stop({ ...stopInput, phase: "remove" }),
-            catch: toWorkspaceStopProcessingError,
-          }).pipe(
+          // The removal's is not: the executor has ended and is recorded, and the exit
+          // reconciler's remains sweep takes what a `stopped` instance with no removal recorded
+          // left (`listStoppedWithRemains`).
+          yield* stop("end");
+          yield* recordStopped;
+          yield* stop("remove").pipe(
+            Effect.flatMap(() => recordRemoved),
             Effect.catch((error) =>
               Effect.logWarning(
-                `Workspace stop: run ${options.runId} ended and was recorded stopped; removing its remains failed: ${error.message}. The remains sweep retries.`,
+                `Workspace stop: run ${options.runId} ended and was recorded stopped; removing its remains failed: ${error.message}. The exit reconciler's remains sweep retries.`,
               ),
             ),
           );

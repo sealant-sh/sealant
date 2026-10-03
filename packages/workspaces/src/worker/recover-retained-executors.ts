@@ -381,6 +381,15 @@ const recoverOne = (
           );
         }
         yield* runtimeInstances.markStopped({ runId, stopReason });
+        // Nothing of it is left: recorded (best-effort), so the exit reconciler's remains sweep
+        // never asks the runtime about it once its retention ends below.
+        yield* runtimeInstances
+          .markRemoved({ runId, resourceId })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning(`${prefix}: recording the executor's removal failed.`, cause),
+            ),
+          );
         const detail = `the retained executor was removed: ${describeDeletionBasis(basis)}${
           said === undefined ? "" : ` (${said})`
         }`;

@@ -41,6 +41,7 @@ const retainedRow: WorkspaceRuntimeInstance = {
   launchLeaseExpiresAt: null,
   daemonImage: null,
   daemonRecoveryBoot: null,
+  removedAt: null,
   sourceKind: "capture",
   createdAt: new Date("2026-09-27T00:00:00.000Z"),
   updatedAt: new Date("2026-09-27T00:00:00.000Z"),
@@ -76,6 +77,7 @@ const sweep = async (daemon: ReturnType<typeof fakeCaptureDaemon>) => {
       listRetainedLaunches: () => Effect.succeed([retainedRow]),
       getRuntimeInstanceByRunId: () => Effect.succeed(retainedRow),
       markStopped,
+      markRemoved: () => Effect.void,
       markStopRequested: () => Effect.void,
     } as unknown as WorkspaceRuntimeInstanceRepoService),
     Layer.succeed(WorkspaceRepo, { setWorkspaceStatus } as unknown as WorkspaceRepoService),
@@ -111,7 +113,7 @@ describe("reapExpiredWorkspaces · retained launches", () => {
     const result = await sweep(daemon);
 
     expect(daemon.flushRequests[0]).toMatchObject({ kind: "final" });
-    expect(result.stop).toHaveBeenCalledTimes(2);
+    expect(result.stop).toHaveBeenCalledTimes(1);
     expect(result.markStopped).toHaveBeenCalledWith({
       runId: "run_retained",
       stopReason: "failed",

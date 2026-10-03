@@ -1864,6 +1864,8 @@ describe("DockerRuntimeAdapter", () => {
       commandRunner,
       runtimeCatalogLoader: createRuntimeCatalogLoader(),
     });
+    // An exited container keeps its disk, sidecar and network: the worker stops in two phases.
+    expect(adapter.keepsRemains).toBe(true);
 
     const ended = await adapter.stop({
       resourceId: "container-id-123",
@@ -1927,48 +1929,6 @@ describe("DockerRuntimeAdapter", () => {
     expect((await gone.stop({ resourceId: "container-id-123", phase: "end" })).outcome).toBe(
       "not-found",
     );
-  });
-
-  it("reaps the remains of ended executors older than the grace, with their sidecar and network", async () => {
-    const old = new Date(Date.now() - 10 * 60_000).toISOString();
-    const recent = new Date(Date.now() - 30_000).toISOString();
-    const commandRunner = vi.fn<
-      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
-    >(async (_command, args) => {
-      if (args[0] === "ps") return { stdout: "old-id\nrecent-id\n", stderr: "" };
-      if (args[0] === "inspect" && args.includes("{{.Id}}\t{{.Name}}\t{{.State.FinishedAt}}")) {
-        return {
-          stdout: `old-id\t/sealant-run-old\t${old}\nrecent-id\t/sealant-run-recent\t${recent}\n`,
-          stderr: "",
-        };
-      }
-      if (args[0] === "inspect" && args.includes("sealant-run-old-docker")) {
-        return { stdout: "old-sidecar-id\tfalse\n", stderr: "" };
-      }
-      if (args[0] === "network" && args[1] === "inspect") {
-        return { stdout: "old-network-id\n", stderr: "" };
-      }
-      return { stdout: "", stderr: "" };
-    });
-    const adapter = new DockerRuntimeAdapter({
-      commandRunner,
-      runtimeCatalogLoader: createRuntimeCatalogLoader(),
-    });
-
-    const removed = await adapter.reapRemains({ olderThanMs: 5 * 60_000 });
-
-    expect(removed).toBe(1);
-    const removals = commandRunner.mock.calls
-      .map(([, args]) => args)
-      .filter((args) => args[0] === "rm" || (args[0] === "network" && args[1] === "rm"));
-    expect(removals).toEqual([
-      ["rm", "-f", "-v", "old-id"],
-      ["rm", "-f", "-v", "old-sidecar-id"],
-      ["network", "rm", "old-network-id"],
-    ]);
-    expect(
-      commandRunner.mock.calls.some(([, args]) => args.includes("recent-id") && args[0] === "rm"),
-    ).toBe(false);
   });
 
   it("sends SIGTERM with the grace before removing, and kills outright on a fenced stop", async () => {

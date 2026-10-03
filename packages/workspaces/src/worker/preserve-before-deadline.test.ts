@@ -59,6 +59,7 @@ const instance = (deadlineInMs: number): WorkspaceRuntimeInstance => ({
   launchLeaseExpiresAt: null,
   daemonImage: null,
   daemonRecoveryBoot: null,
+  removedAt: null,
   sourceKind: "capture",
   createdAt: new Date(NOW - 60 * MIN),
   updatedAt: new Date(NOW - 60 * MIN),
@@ -136,6 +137,7 @@ const sweep = async (input: {
       getRuntimeInstanceByRunId: () => Effect.sync(() => row),
       preemptLaunch,
       markStopped,
+      markRemoved: () => Effect.void,
       markStopRequested: () => Effect.void,
     } as unknown as WorkspaceRuntimeInstanceRepoService),
     Layer.succeed(WorkspaceRepo, {
@@ -383,7 +385,7 @@ describe("preserveBeforeDeadlineEffect", () => {
 
     expect(result.driven).toBe(1);
     expect(daemon.flushRequests).toContainEqual(expect.objectContaining({ kind: "final" }));
-    expect(result.stop).toHaveBeenCalledTimes(2);
+    expect(result.stop).toHaveBeenCalledTimes(1);
     expect(result.markStopped).toHaveBeenCalledWith({ runId: "run_vm", stopReason: "expired" });
     expect(result.setWorkspaceStatus).toHaveBeenCalledWith({ id: "ws_vm", status: "stopped" });
   });
@@ -409,7 +411,7 @@ describe("preserveBeforeDeadlineEffect", () => {
     });
 
     expect(result.driven).toBe(1);
-    expect(result.stop).toHaveBeenCalledTimes(2);
+    expect(result.stop).toHaveBeenCalledTimes(1);
     expect(result.schedules[0]?.preservationStartsAt?.getTime()).toBeLessThanOrEqual(NOW);
   });
 
@@ -542,6 +544,7 @@ describe("preserveBeforeDeadlineEffect · runtimes that are not ready (review 3 
           Effect.succeed(rows.find((candidate) => candidate.runId === runId)),
         markStopRequested: () => Effect.void,
         markStopped: () => Effect.void,
+        markRemoved: () => Effect.void,
       } as unknown as WorkspaceRuntimeInstanceRepoService),
       Layer.succeed(WorkspaceRepo, {
         getWorkspaceByAttemptId: () => Effect.succeed(undefined),
@@ -665,7 +668,7 @@ describe("preserveBeforeDeadlineEffect · a launch still in progress at its pres
       expect(result.markAttemptFailed).toHaveBeenCalledTimes(1);
       expect(daemon.flushRequests[0]).toMatchObject({ kind: "final" });
       expect(result.driven).toBe(1);
-      expect(result.stop).toHaveBeenCalledTimes(2);
+      expect(result.stop).toHaveBeenCalledTimes(1);
     }
   });
 
@@ -714,6 +717,7 @@ describe("no all-plans barrier before a due FINAL (review 6 #11)", () => {
           Effect.succeed(rows.find((row) => row.runId === runId)),
         markStopRequested: () => Effect.void,
         markStopped: () => Effect.void,
+        markRemoved: () => Effect.void,
       } as unknown as WorkspaceRuntimeInstanceRepoService),
       Layer.succeed(WorkspaceRepo, {
         getWorkspaceByAttemptId: () => Effect.succeed(undefined),
@@ -883,6 +887,7 @@ describe("every due runtime gets its first FINAL before its cap (review 7 #6)", 
           Effect.succeed(input.rows.find((row) => row.runId === runId)),
         markStopRequested: () => Effect.void,
         markStopped: () => Effect.void,
+        markRemoved: () => Effect.void,
       } as unknown as WorkspaceRuntimeInstanceRepoService),
       Layer.succeed(WorkspaceRepo, {
         getWorkspaceByAttemptId: () => Effect.succeed(undefined),

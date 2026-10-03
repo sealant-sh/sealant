@@ -48,6 +48,12 @@
  * executor nothing settled — `failed` or `stopped` with no retention and no removal recorded,
  * whatever its earlier status (`settleUnsettledExecutors`) — so a row an older worker left in
  * that state is recovered too.
+ *
+ * And every full poll removes the remains of executors recorded `stopped` whose removal nobody
+ * recorded (`removeStoppedRemains`): on a runtime that keeps an ended executor's remains (Docker),
+ * a stop ends the executor, records it stopped, then removes its disk, sidecar and network; a
+ * removal that failed or a worker lost between the two leaves a `stopped` row with no `removedAt`.
+ * Only such rows, never a retained executor's, and never one whose removal the ledger still holds.
  */
 import {
   DatabaseTransaction,
@@ -219,6 +225,12 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
           ).pipe(Effect.as(false)),
         ),
       );
+      if (removed) {
+        // Nothing of it is left: recorded, so the remains sweep never asks the runtime again.
+        yield* runtimeInstances
+          .markRemoved({ runId: instance.runId, resourceId })
+          .pipe(swallowingFailure("recording the removal", instance.runId));
+      }
       if (removed && removal.captureSourced && options.captureDrain !== undefined) {
         yield* options.captureDrain.ledger.observe(instance.runId, {
           state: "stopped",
@@ -406,44 +418,96 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
     );
   }
 
-  // The remains of ended executors (a stop whose removal failed, a worker that died between a
-  // stop's two phases): on a full poll only, never on the check of one named resource.
-  if (options.resourceIds === undefined) yield* reapRemainsOf(options.runtimeAdapters);
+  // The remains of stopped executors whose removal nobody recorded: on a full poll only, never on
+  // the check of one named resource.
+  if (options.resourceIds === undefined) {
+    yield* removeStoppedRemains(options, stager);
+  }
 
   return recorded;
 });
 
 /**
- * How long an exited container is left before the remains sweep removes it: long enough for the
- * exit reconciler to have read a crash's post-mortem and recorded it, and for a stop's own
- * `remove` phase, which follows its `end` within seconds.
+ * How long after an executor was recorded stopped its remains are left to the stop that recorded
+ * it: its own `remove` phase follows its `end` within seconds, and the removal of a large writable
+ * layer can take a while longer.
  */
 const REMAINS_GRACE_MS = 5 * 60_000;
 
-/** Every adapter that keeps remains removes those older than the grace; a failure is logged. */
-const reapRemainsOf = (adapters: readonly RuntimeAdapter[]): Effect.Effect<void> =>
-  Effect.forEach(
-    adapters,
-    (adapter) => {
-      const reap = adapter.reapRemains;
-      if (reap === undefined) return Effect.void;
-      return Effect.tryPromise(() => reap.call(adapter, { olderThanMs: REMAINS_GRACE_MS })).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning(
-            `Runtime exit reconciler: removing the remains of ended ${adapter.id} executors failed.`,
-            cause,
-          ).pipe(Effect.as(0)),
+/** How many stopped executors' remains one sweep removes. */
+const REMAINS_PER_SWEEP = 50;
+
+/**
+ * Remove the remains of executors recorded `stopped` whose removal nobody recorded
+ * (`listStoppedWithRemains`): a stop whose `remove` phase failed; a worker lost between a stop's
+ * `end` and its `remove` (the container exited, its sidecar still running, its network in place);
+ * one lost between this reconciler's own record of a planned stop and its removal. Only on a
+ * runtime that keeps remains (`RuntimeAdapter.keepsRemains`); only an instance recorded `stopped`
+ * — a stop ran its `end` under an authorized removal and recorded it, or this reconciler recorded
+ * a planned stop's exit on one; never one retained (its disk is recovery's), and never one whose
+ * removal the ledger holds or has issued with its outcome unknown (the ledger settles that from
+ * the runtime, `reconcileIssuedDeletion`). Age and name authorize nothing here: the record does.
+ * The runtime is asked for the `remove` phase by resource id and reference — the sidecar and
+ * network go with the container — and the removal recorded; a failure is logged and the next
+ * sweep tries again.
+ */
+const removeStoppedRemains = (
+  options: ReconcileRuntimeExitsEffectOptions,
+  stager: LaunchMaterialStager,
+): Effect.Effect<void, never, WorkspaceRuntimeInstanceRepo> =>
+  Effect.gen(function* () {
+    const adapters = options.runtimeAdapters.filter((adapter) => adapter.keepsRemains === true);
+    if (adapters.length === 0) {
+      return;
+    }
+    const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
+    const stopped = yield* runtimeInstances.listStoppedWithRemains({
+      adapters: adapters.map((adapter) => adapter.id),
+      olderThanMs: REMAINS_GRACE_MS,
+      limit: REMAINS_PER_SWEEP,
+    });
+    for (const instance of stopped) {
+      const adapter = adapters.find((candidate) => candidate.id === instance.adapter);
+      const resourceId = instance.resourceId;
+      if (adapter === undefined || resourceId === null) {
+        continue;
+      }
+      const where = `run ${instance.runId} (${adapter.id} ${instance.reference ?? resourceId})`;
+      yield* Effect.tryPromise(() =>
+        adapter.stop({
+          resourceId,
+          ...(instance.reference === null ? {} : { reference: instance.reference }),
+          phase: "remove",
+        }),
+      ).pipe(
+        Effect.tap(() => runtimeInstances.markRemoved({ runId: instance.runId, resourceId })),
+        Effect.tap((result) =>
+          Effect.logInfo(
+            result.outcome === "stopped"
+              ? `Runtime exit reconciler: removed the remains of ${where}, recorded stopped with no removal recorded.`
+              : `Runtime exit reconciler: nothing of ${where} was left; its removal is recorded.`,
+          ),
         ),
-        Effect.flatMap((removed) =>
-          removed > 0
-            ? Effect.logInfo(
-                `Runtime exit reconciler: removed the remains of ${removed} ended ${adapter.id} executor(s).`,
-              )
-            : Effect.void,
+        Effect.andThen(
+          Effect.tryPromise(() => stager.removeAll(instance.runId)).pipe(
+            swallowingFailure("removing staged launch material", instance.runId),
+          ),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            `Runtime exit reconciler: removing the remains of ${where} failed; the next sweep tries again.`,
+            cause,
+          ),
         ),
       );
-    },
-    { discard: true },
+    }
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning(
+        "Runtime exit reconciler: the sweep of stopped executors' remains failed.",
+        cause,
+      ),
+    ),
   );
 
 /** The retention a terminal write depends on could not be recorded; nothing was written. */

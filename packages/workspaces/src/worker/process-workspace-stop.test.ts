@@ -53,6 +53,7 @@ const runtimeInstance = (
   launchLeaseExpiresAt: null,
   daemonImage: null,
   daemonRecoveryBoot: null,
+  removedAt: null,
   // Null = a row that predates the column: the stop path reads the attempt snapshot.
   sourceKind: null,
   createdAt: new Date("2026-07-01T00:00:00.000Z"),
@@ -78,11 +79,13 @@ const workspaceRow = (overrides: Partial<Workspace> = {}): Workspace =>
     ...overrides,
   }) as Workspace;
 
+/** A Docker-like adapter: it keeps an ended executor's remains, so a stop is made in two phases. */
 const stubAdapter = (
   stop: RuntimeAdapter["stop"],
   inspect?: NonNullable<RuntimeAdapter["inspect"]>,
 ): RuntimeAdapter => ({
   id: "docker",
+  keepsRemains: true,
   supports: () => ({ supported: true }),
   launch: async () => {
     throw new Error("not used in stop tests");
@@ -93,6 +96,7 @@ const stubAdapter = (
 
 interface Harness {
   readonly markStopped: ReturnType<typeof vi.fn>;
+  readonly markRemoved: ReturnType<typeof vi.fn>;
   readonly markStopRequested: ReturnType<typeof vi.fn>;
   readonly setWorkspaceStatus: ReturnType<typeof vi.fn>;
   readonly getAttemptSnapshotByRunId: ReturnType<typeof vi.fn>;
@@ -119,6 +123,7 @@ const makeHarness = (input: {
   const markStopped = vi.fn((request: { runId: string }) =>
     Effect.succeed(runtimeInstance({ runId: request.runId, status: "stopped" })),
   );
+  const markRemoved = vi.fn((_request: { runId: string; resourceId: string }) => Effect.void);
   const setWorkspaceStatus = vi.fn(() => Effect.succeed(input.workspace ?? null));
   const markStopRequested = vi.fn((_request: { runId: string; stopReason: string }) => Effect.void);
 
@@ -158,7 +163,9 @@ const makeHarness = (input: {
     listPreservationCandidates: () => Effect.succeed([]),
     preemptLaunch: () => Effect.succeed(undefined),
     listUnsettledCaptureExecutors: () => Effect.succeed([]),
+    listStoppedWithRemains: () => Effect.succeed([]),
     markStopRequested,
+    markRemoved,
   });
 
   // The pre-teardown credential sync-back consults the attempt snapshot before the adapter stop;
@@ -185,6 +192,7 @@ const makeHarness = (input: {
 
   return {
     markStopped,
+    markRemoved,
     markStopRequested,
     setWorkspaceStatus,
     getAttemptSnapshotByRunId,
@@ -221,19 +229,63 @@ describe("processWorkspaceStopEffect", () => {
       }).pipe(Effect.provide(harness.layer)),
     );
 
-    // Two phases: the executor ends, the stop is recorded, then its remains go.
+    // Two phases on a runtime that keeps remains: the executor ends, the stop is recorded, then
+    // its remains go, and that removal is recorded.
     expect(stop.mock.calls.map(([input]) => input)).toEqual([
       { resourceId: "container-1", reference: "sealant-run-old", phase: "end" },
       { resourceId: "container-1", reference: "sealant-run-old", phase: "remove" },
     ]);
     expect(harness.markStopped).toHaveBeenCalledWith({ runId: "run_old", stopReason: "user" });
+    expect(harness.markRemoved).toHaveBeenCalledWith({
+      runId: "run_old",
+      resourceId: "container-1",
+    });
     expect(harness.setWorkspaceStatus).toHaveBeenCalledWith({ id: "ws_1", status: "stopped" });
-    expect(harness.markStopped.mock.invocationCallOrder[0]).toBeLessThan(
-      stop.mock.invocationCallOrder[1] ?? 0,
+    const [endCall, removeCall] = stop.mock.invocationCallOrder;
+    const [stoppedCall] = harness.markStopped.mock.invocationCallOrder;
+    const [removedCall] = harness.markRemoved.mock.invocationCallOrder;
+    expect(endCall).toBeLessThan(stoppedCall ?? 0);
+    expect(stoppedCall).toBeLessThan(removeCall ?? 0);
+    expect(removeCall).toBeLessThan(removedCall ?? 0);
+  });
+
+  it("stops a runtime that keeps no remains in one call, as before, and records it stopped and removed", async () => {
+    const harness = makeHarness({
+      captureSourced: false,
+      workspace: workspaceRow({ latestRunId: "run_old" }),
+      instance: runtimeInstance(),
+    });
+    const stop = vi.fn<RuntimeAdapter["stop"]>(async () => ({
+      adapter: "docker" as const,
+      resourceId: "container-1",
+      outcome: "stopped" as const,
+    }));
+    const { keepsRemains: _keepsRemains, ...withoutRemains } = stubAdapter(stop);
+
+    await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "user",
+        runtimeAdapters: [withoutRemains],
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    // No phase: the one call Kubernetes, MicroVM and Cloudflare always received.
+    expect(stop.mock.calls.map(([input]) => input)).toEqual([
+      { resourceId: "container-1", reference: "sealant-run-old" },
+    ]);
+    expect(harness.markStopped).toHaveBeenCalledWith({ runId: "run_old", stopReason: "user" });
+    expect(harness.markRemoved).toHaveBeenCalledWith({
+      runId: "run_old",
+      resourceId: "container-1",
+    });
+    expect(stop.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.markStopped.mock.invocationCallOrder[0] ?? 0,
     );
   });
 
-  it("records the stop when the executor ended but removing its remains failed (the remains sweep takes them)", async () => {
+  it("records the stop when the executor ended but removing its remains failed, and leaves the removal unrecorded for the remains sweep", async () => {
     const harness = makeHarness({
       captureSourced: false,
       workspace: workspaceRow({ latestRunId: "run_old" }),
@@ -246,7 +298,7 @@ describe("processWorkspaceStopEffect", () => {
       return { adapter: "docker" as const, resourceId: "container-1", outcome: "stopped" as const };
     });
 
-    await Effect.runPromise(
+    const outcome = await Effect.runPromise(
       processWorkspaceStopEffect({
         workspaceId: "ws_1",
         runId: "run_old",
@@ -255,9 +307,42 @@ describe("processWorkspaceStopEffect", () => {
       }).pipe(Effect.provide(harness.layer)),
     );
 
+    expect(outcome).toBe("stopped");
     expect(stop).toHaveBeenCalledTimes(2);
     expect(harness.markStopped).toHaveBeenCalledWith({ runId: "run_old", stopReason: "user" });
+    expect(harness.markRemoved).not.toHaveBeenCalled();
     expect(harness.setWorkspaceStatus).toHaveBeenCalledWith({ id: "ws_1", status: "stopped" });
+  });
+
+  it("fails the stop, recording nothing, when the executor could not be ended", async () => {
+    const harness = makeHarness({
+      captureSourced: false,
+      workspace: workspaceRow({ latestRunId: "run_old" }),
+      instance: runtimeInstance(),
+    });
+    const stop = vi.fn<RuntimeAdapter["stop"]>(async () => {
+      throw new Error(
+        "Workspace container 'sealant-run-old' is still running after it was asked to end",
+      );
+    });
+
+    await expect(
+      Effect.runPromise(
+        processWorkspaceStopEffect({
+          workspaceId: "ws_1",
+          runId: "run_old",
+          stopReason: "user",
+          runtimeAdapters: [stubAdapter(stop)],
+        }).pipe(Effect.provide(harness.layer)),
+      ),
+    ).rejects.toThrow(/still running/);
+
+    // The end's failure is the stop's: nothing is recorded over a container that may still run.
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(stop.mock.calls[0]?.[0]?.phase).toBe("end");
+    expect(harness.markStopped).not.toHaveBeenCalled();
+    expect(harness.markRemoved).not.toHaveBeenCalled();
+    expect(harness.setWorkspaceStatus).not.toHaveBeenCalled();
   });
 
   it("does NOT settle the workspace row when the stopped run is SUPERSEDED (restart race)", async () => {
@@ -1593,34 +1678,66 @@ describe("an ended executor's removal is an owned transition (review 7 #5)", () 
     expect(await Effect.runPromise(ledger.admitRecovery("run_old", NO_CLAIM))).toBe("deleted");
   });
 
-  it("gives the removal up when the runtime refused it, so observations resume", async () => {
+  it("gives the removal up when the runtime refused to end the executor, so observations resume", async () => {
     const ledger = await seededWithComplete();
     const harness = makeHarness({
       workspace: workspaceRow(),
       instance: runtimeInstance({ sourceKind: "capture" }),
       daemon: fakeCaptureDaemon(["unreachable"]).layer,
     });
-    const stop = vi.fn(async (): Promise<never> => {
-      throw removalRefused(new Error("docker rm failed: Error response from daemon"));
+    const stop = vi.fn<RuntimeAdapter["stop"]>(async (input): Promise<never> => {
+      throw removalRefused(
+        new Error(`docker ${input.phase ?? "stop"} failed: Error response from daemon`),
+      );
     });
-    await expect(stopWith(ledger, harness, stop)).rejects.toThrow("docker rm failed");
+    await expect(stopWith(ledger, harness, stop)).rejects.toThrow("docker end failed");
+    // Refused in the `end` phase: nothing of the executor is known ended, nothing is recorded.
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(harness.markStopped).not.toHaveBeenCalled();
     expect(ledger.store.rows.get("run_old")?.deletion).toBeUndefined();
     expect(await Effect.runPromise(ledger.openObservation("run_old", 1_000))).toBeDefined();
   });
 
-  // Review 9 #5 (decision 27): a failure that is not the runtime's refusal (a lost reply) may
-  // have been acted on: the removal stays issued, and nothing is observed or recovered.
-  it("keeps the removal issued when the runtime call fails with an outcome nobody knows (review 9 #5)", async () => {
+  it("records the removal done when the executor ended but the runtime refused to remove its remains (the remains sweep takes them)", async () => {
     const ledger = await seededWithComplete();
     const harness = makeHarness({
       workspace: workspaceRow(),
       instance: runtimeInstance({ sourceKind: "capture" }),
       daemon: fakeCaptureDaemon(["unreachable"]).layer,
     });
-    const stop = vi.fn(async (): Promise<never> => {
-      throw new Error("TerminateMicrovm: socket hang up");
+    const stop = vi.fn<RuntimeAdapter["stop"]>(async (input) => {
+      if (input.phase === "remove") {
+        throw removalRefused(new Error("docker rm failed: Error response from daemon"));
+      }
+      return { adapter: "docker" as const, resourceId: "container-1", outcome: "stopped" as const };
+    });
+    expect(await stopWith(ledger, harness, stop)).toBe("stopped");
+    // The executor ENDED under the authorized removal and is recorded stopped: the removal is
+    // final (`deleted`: nothing is observed or recovered again), its remains are the sweep's.
+    expect(stop).toHaveBeenCalledTimes(2);
+    expect(harness.markStopped).toHaveBeenCalledWith({ runId: "run_old", stopReason: "user" });
+    expect(harness.markRemoved).not.toHaveBeenCalled();
+    expect(ledger.store.rows.get("run_old")?.deletion?.state).toBe("deleted");
+    expect(ledger.store.rows.get("run_old")?.observation?.state).toBe("stopped");
+    expect(await Effect.runPromise(ledger.openObservation("run_old", 1_000))).toBeUndefined();
+    expect(await Effect.runPromise(ledger.admitRecovery("run_old", NO_CLAIM))).toBe("deleted");
+  });
+
+  // Review 9 #5 (decision 27): a failure that is not the runtime's refusal (a lost reply) may
+  // have been acted on: the removal stays issued, and nothing is observed or recovered.
+  it("keeps the removal issued when the end fails with an outcome nobody knows (review 9 #5)", async () => {
+    const ledger = await seededWithComplete();
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      daemon: fakeCaptureDaemon(["unreachable"]).layer,
+    });
+    const stop = vi.fn<RuntimeAdapter["stop"]>(async (): Promise<never> => {
+      throw new Error("docker stop: socket hang up");
     });
     await expect(stopWith(ledger, harness, stop)).rejects.toThrow("socket hang up");
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(harness.markStopped).not.toHaveBeenCalled();
     expect(ledger.store.rows.get("run_old")?.deletion?.state).toBe("deleting-issued");
     expect(await Effect.runPromise(ledger.openObservation("run_old", 1_000))).toBeUndefined();
     expect(await Effect.runPromise(ledger.admitRecovery("run_old", NO_CLAIM))).toBe("deleting");

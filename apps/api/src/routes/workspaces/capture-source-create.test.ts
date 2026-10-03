@@ -608,6 +608,7 @@ describe("createWorkspace · idempotency key", () => {
     launchLeaseExpiresAt: null,
     daemonImage: null,
     daemonRecoveryBoot: null,
+    removedAt: null,
     sourceKind: "capture",
     createdAt: now,
     updatedAt: now,

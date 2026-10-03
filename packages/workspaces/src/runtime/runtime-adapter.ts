@@ -149,11 +149,11 @@ export const runtimeAdapterStopInputSchema = z.strictObject({
    */
   fence: z.boolean().optional(),
   /**
-   * Which part of the stop to do. `end` ends the executor (the planned SIGTERM and its grace, or
-   * the fenced kill) and returns once nothing of it runs any more, leaving its remains (the exited
-   * container's disk, its sidecar) in place; `remove` takes the remains, idempotent over an
-   * executor already ended or gone. Absent: both, as one call. A runtime that keeps no remains
-   * does everything in `end` and reports `not-found` for `remove`. The worker's stop records
+   * Which part of the stop to do, sent only to a runtime that declares `keepsRemains`. `end` ends
+   * the executor (the planned SIGTERM and its grace, or the fenced kill) and returns once nothing
+   * of it runs any more, leaving its remains (the exited container's disk, its sidecar) in place;
+   * `remove` takes the remains, idempotent over an executor already ended or gone. Absent: both,
+   * as one call — the only form a runtime without remains ever receives. The worker's stop records
    * `stopped` between the two, so a stop is reported the moment the executor has ended, not after
    * its disk is removed too (4 s of every Stop on Docker, 2026-10-03).
    */
@@ -301,10 +301,6 @@ export interface RuntimeAdapterExitWatchInput {
   readonly onError?: (error: unknown, resourceId?: string) => void;
 }
 
-/** What `RuntimeAdapter.reapRemains` removes: remains that ended at least this long ago. */
-export interface RuntimeAdapterReapRemainsInput {
-  readonly olderThanMs: number;
-}
 /** A running exit watch; `close` stops it and releases its timer. Idempotent. */
 export interface RuntimeAdapterExitWatch {
   readonly close: () => void;
@@ -395,6 +391,14 @@ export interface RuntimeAdapter {
    * again.
    */
   readonly removalFenceMs?: number;
+  /**
+   * Optional: an ended executor leaves remains on this runtime (Docker: the exited container's
+   * disk, its sidecar and network) whose removal costs more than its end. The worker then stops it
+   * in two phases (`RuntimeAdapterStopInput.phase`: `end`, the record, `remove`) and the exit
+   * reconciler removes the remains of a `stopped` instance whose removal was never recorded. Absent
+   * (Kubernetes, MicroVM, Cloudflare): one `stop` call, no phase, as always.
+   */
+  readonly keepsRemains?: boolean;
 
   supports(input: RuntimeAdapterSupportInput): RuntimeAdapterSupport;
   /**
@@ -420,13 +424,6 @@ export interface RuntimeAdapter {
    * announced while a stream is down are not replayed — the caller's poll is the convergence net.
    */
   watchExits?(input: RuntimeAdapterExitWatchInput): RuntimeAdapterExitWatch;
-  /**
-   * Remove what ended executors left behind (a container that exited more than `olderThanMs` ago,
-   * with its sidecar and network): the net under a stop whose `remove` phase failed, or a worker
-   * that died between the two phases. Returns how many it removed. Absent where a runtime keeps
-   * no remains.
-   */
-  reapRemains?(input: RuntimeAdapterReapRemainsInput): Promise<number>;
   /**
    * Optional: bring a RETAINED executor — kept because its disk holds work not confirmed saved —
    * back up on its own disk so its daemon can finish shipping (see
