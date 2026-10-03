@@ -85,6 +85,12 @@ export const toRuntimeInfo = (runtime: WireWorkspaceRuntime): WorkspaceRuntimeIn
 // "retained" too: the executor ended and is kept for recovery; it never becomes ready.
 const FAILED_STATUSES = new Set<WorkspaceStatus>(["failed", "cancelled", "stopped", "retained"]);
 const READY_POLL_INTERVAL_MS = 2_000;
+/**
+ * `ready()` looks again soon, then less often: a Docker launch is ready in about four seconds, and
+ * a fixed 2 s interval answered up to 2 s after it was (1 s on average) on every launch.
+ */
+const READY_FIRST_POLL_MS = 100;
+const READY_MAX_POLL_MS = 1_000;
 const READY_TIMEOUT_MS = 10 * 60 * 1_000;
 const STOP_POLL_INTERVAL_MS = 1_000;
 const STOP_TIMEOUT_MS = 60 * 1_000;
@@ -397,6 +403,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
 
     ready: async () => {
       const deadline = Date.now() + READY_TIMEOUT_MS;
+      let wait = READY_FIRST_POLL_MS;
       for (;;) {
         const details: WorkspaceDetails = await ctx.runtime.run(
           getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
@@ -433,7 +440,8 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
             { code: "workspace_ready_timeout" },
           );
         }
-        await delay(READY_POLL_INTERVAL_MS);
+        await delay(wait);
+        wait = Math.min(wait * 2, READY_MAX_POLL_MS);
       }
     },
 
