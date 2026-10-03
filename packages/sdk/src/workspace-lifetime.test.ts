@@ -104,6 +104,20 @@ describe("workspace.runtimeDeadline()", () => {
   });
 });
 
+describe("workspace.ready() polling", () => {
+  it("looks again soon, so a workspace ready a moment later is answered a moment later", async () => {
+    let reads = 0;
+    const stub = makeStub(() =>
+      (reads += 1) < 3 ? details({ status: "running" }) : details({ status: "ready" }),
+    );
+    const startedAt = Date.now();
+    await workspaceFor(stub.client).ready();
+    expect(reads).toBe(3);
+    // Waits of 100 and 200 ms, where two fixed waits of 2 s used to pass.
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+  });
+});
+
 describe("workspace.ready() timeout", () => {
   afterEach(() => {
     vi.useRealTimers();
