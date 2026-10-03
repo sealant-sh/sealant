@@ -49,6 +49,7 @@ const instance = (overrides: Partial<WorkspaceRuntimeInstance> = {}): WorkspaceR
   launchLeaseExpiresAt: null,
   daemonImage: "ghcr.io/sealant-sh/sealantd:0.19.0",
   daemonRecoveryBoot: true,
+  removedAt: null,
   sourceKind: "capture",
   createdAt: new Date(NOW - 60_000),
   updatedAt: new Date(NOW - 60_000),
@@ -96,6 +97,7 @@ const harness = (input: {
     getRuntimeInstanceByRunId: () =>
       Effect.succeed(instance({ adapter: input.adapterId ?? "docker", ...input.instance })),
     markStopped,
+    markRemoved: () => Effect.void,
   } as unknown as WorkspaceRuntimeInstanceRepoService;
   const stop = vi.fn(async (request: { resourceId: string }) => ({
     adapter: input.adapterId ?? ("docker" as const),
@@ -705,6 +707,7 @@ describe("recovery attempts are independent, bounded and ordered by deadline (re
             }),
           ),
         markStopped: () => Effect.void,
+        markRemoved: () => Effect.void,
       } as unknown as WorkspaceRuntimeInstanceRepoService),
       fakeCaptureDaemon([savedStatus()]).layer,
     );

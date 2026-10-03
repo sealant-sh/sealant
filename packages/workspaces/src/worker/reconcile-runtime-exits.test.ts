@@ -76,6 +76,7 @@ const runtimeInstance = (
   launchLeaseExpiresAt: null,
   daemonImage: null,
   daemonRecoveryBoot: null,
+  removedAt: null,
   sourceKind: null,
   createdAt: new Date("2026-09-01T00:00:00.000Z"),
   updatedAt: new Date("2026-09-01T00:00:00.000Z"),
@@ -86,6 +87,8 @@ interface Harness {
   readonly repo: WorkspaceRuntimeInstanceRepoService;
   readonly markExited: ReturnType<typeof vi.fn>;
   readonly markStopped: ReturnType<typeof vi.fn>;
+  readonly markRemoved: ReturnType<typeof vi.fn>;
+  readonly listStoppedWithRemains: ReturnType<typeof vi.fn>;
   readonly layer: Layer.Layer<WorkspaceRuntimeInstanceRepo | WorkspaceAttemptRepo | SealantRuntime>;
 }
 
@@ -101,6 +104,8 @@ const makeHarness = (input: {
   readonly daemon?: Layer.Layer<SealantRuntime>;
   /** Ended capture executors nothing settled (`listUnsettledCaptureExecutors`). */
   readonly unsettled?: readonly WorkspaceRuntimeInstance[];
+  /** Stopped executors whose removal nobody recorded (`listStoppedWithRemains`). */
+  readonly stoppedWithRemains?: readonly WorkspaceRuntimeInstance[];
 }): Harness => {
   const markExited = vi.fn((request: { runId: string; resourceId: string; errorMessage: string }) =>
     Effect.succeed(
@@ -111,6 +116,11 @@ const makeHarness = (input: {
   );
   const markStopped = vi.fn((request: { runId: string; stopReason: string }) =>
     Effect.succeed(runtimeInstance({ runId: request.runId, status: "stopped" })),
+  );
+  const markRemoved = vi.fn((_request: { runId: string; resourceId: string }) => Effect.void);
+  const listStoppedWithRemains = vi.fn(
+    (_request: { adapters: readonly string[]; olderThanMs: number; limit: number }) =>
+      Effect.succeed(input.stoppedWithRemains ?? []),
   );
   const repo: WorkspaceRuntimeInstanceRepoService = {
     upsertRuntimeInstance: () => Effect.die("unused"),
@@ -129,7 +139,9 @@ const makeHarness = (input: {
     listPreservationCandidates: () => Effect.succeed([]),
     preemptLaunch: () => Effect.succeed(undefined),
     listUnsettledCaptureExecutors: () => Effect.succeed(input.unsettled ?? []),
+    listStoppedWithRemains,
     markStopRequested: () => Effect.void,
+    markRemoved,
   };
   const attempts = {
     getAttemptSnapshotByRunId: () =>
@@ -149,6 +161,8 @@ const makeHarness = (input: {
     repo,
     markExited,
     markStopped,
+    markRemoved,
+    listStoppedWithRemains,
     layer: Layer.mergeAll(
       Layer.succeed(WorkspaceRuntimeInstanceRepo, repo),
       Layer.succeed(WorkspaceAttemptRepo, attempts),
@@ -234,7 +248,105 @@ describe("reconcileRuntimeExitsEffect", () => {
         "Workspace runtime 'sealant-run-1' exited on its own (exitCode: 137). status: exited, exitCode: 137\nLogs:\nbye",
     });
     expect(stop).toHaveBeenCalledWith({ resourceId: "container-1", reference: "sealant-run-1" });
+    expect(harness.markRemoved).toHaveBeenCalledWith({ runId: "run_1", resourceId: "container-1" });
     expect(removeAll).toHaveBeenCalledWith("run_1");
+  });
+
+  describe("the remains of stopped executors whose removal nobody recorded", () => {
+    const stoppedRow = runtimeInstance({
+      runId: "run_stopped",
+      status: "stopped",
+      stopReason: "user",
+      resourceId: "container-stopped",
+      reference: "sealant-run-stopped",
+      finishedAt: new Date("2026-09-01T00:00:00.000Z"),
+    });
+
+    it("asks the runtime for the remove phase by resource id and reference, records the removal, and drops the staged material", async () => {
+      const harness = makeHarness({ instances: [], stoppedWithRemains: [stoppedRow] });
+      const { adapter, stop } = stubAdapter({});
+      const keeping: RuntimeAdapter = { ...adapter, keepsRemains: true };
+      const { stager, removeAll } = fakeStager();
+
+      await Effect.runPromise(
+        reconcileRuntimeExitsEffect({
+          runtimeAdapters: [keeping],
+          launchMaterialStager: stager,
+        }).pipe(Effect.provide(harness.layer)),
+      );
+
+      // The record authorizes the removal: stopped instances of a runtime that keeps remains,
+      // left for the grace, at most a page per sweep (the repo excludes retained ones).
+      expect(harness.listStoppedWithRemains).toHaveBeenCalledWith({
+        adapters: ["docker"],
+        olderThanMs: 5 * 60_000,
+        limit: 20,
+      });
+      expect(stop).toHaveBeenCalledWith({
+        resourceId: "container-stopped",
+        reference: "sealant-run-stopped",
+        phase: "remove",
+      });
+      expect(harness.markRemoved).toHaveBeenCalledWith({
+        runId: "run_stopped",
+        resourceId: "container-stopped",
+      });
+      expect(removeAll).toHaveBeenCalledWith("run_stopped");
+      // Nothing of the crash path ran for it: it is no `ready` instance.
+      expect(harness.markExited).not.toHaveBeenCalled();
+      expect(harness.markStopped).not.toHaveBeenCalled();
+    });
+
+    it("leaves the removal unrecorded when the runtime's removal failed, for the next sweep", async () => {
+      const harness = makeHarness({ instances: [], stoppedWithRemains: [stoppedRow] });
+      const { adapter } = stubAdapter({});
+      const failing: RuntimeAdapter = {
+        ...adapter,
+        keepsRemains: true,
+        stop: async () => {
+          throw new Error("Error response from daemon: device or resource busy");
+        },
+      };
+
+      await Effect.runPromise(
+        reconcileRuntimeExitsEffect({ runtimeAdapters: [failing] }).pipe(
+          Effect.provide(harness.layer),
+        ),
+      );
+
+      expect(harness.markRemoved).not.toHaveBeenCalled();
+    });
+
+    it("never runs on the check of one named resource", async () => {
+      const harness = makeHarness({ instances: [], stoppedWithRemains: [stoppedRow] });
+      const { adapter, stop } = stubAdapter({});
+      const keeping: RuntimeAdapter = { ...adapter, keepsRemains: true };
+
+      await Effect.runPromise(
+        reconcileRuntimeExitsEffect({
+          runtimeAdapters: [keeping],
+          resourceIds: ["container-1"],
+        }).pipe(Effect.provide(harness.layer)),
+      );
+
+      expect(harness.listStoppedWithRemains).not.toHaveBeenCalled();
+      expect(stop).not.toHaveBeenCalled();
+    });
+
+    it("never looks for the remains of a runtime that keeps none", async () => {
+      const harness = makeHarness({ instances: [], stoppedWithRemains: [stoppedRow] });
+      const { adapter, stop } = stubAdapter({});
+
+      await Effect.runPromise(
+        reconcileRuntimeExitsEffect({ runtimeAdapters: [adapter] }).pipe(
+          Effect.provide(harness.layer),
+        ),
+      );
+
+      // Kubernetes, MicroVM, Cloudflare: one stop call removed everything, as always.
+      expect(harness.listStoppedWithRemains).not.toHaveBeenCalled();
+      expect(stop).not.toHaveBeenCalled();
+    });
   });
 
   it("records a runtime the daemon no longer knows as gone", async () => {

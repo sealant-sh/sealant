@@ -148,6 +148,16 @@ export const runtimeAdapterStopInputSchema = z.strictObject({
    * runtime distinguishes the two (today: Cloudflare `stop()` versus `destroy()`).
    */
   fence: z.boolean().optional(),
+  /**
+   * Which part of the stop to do, sent only to a runtime that declares `keepsRemains`. `end` ends
+   * the executor (the planned SIGTERM and its grace, or the fenced kill) and returns once nothing
+   * of it runs any more, leaving its remains (the exited container's disk, its sidecar) in place;
+   * `remove` takes the remains, idempotent over an executor already ended or gone. Absent: both,
+   * as one call — the only form a runtime without remains ever receives. The worker's stop records
+   * `stopped` between the two, so a stop is reported the moment the executor has ended, not after
+   * its disk is removed too (4 s of every Stop on Docker, 2026-10-03).
+   */
+  phase: z.enum(["end", "remove"]).optional(),
 });
 
 export const runtimeAdapterStopResultSchema = z.strictObject({
@@ -381,6 +391,14 @@ export interface RuntimeAdapter {
    * again.
    */
   readonly removalFenceMs?: number;
+  /**
+   * Optional: an ended executor leaves remains on this runtime (Docker: the exited container's
+   * disk, its sidecar and network) whose removal costs more than its end. The worker then stops it
+   * in two phases (`RuntimeAdapterStopInput.phase`: `end`, the record, `remove`) and the exit
+   * reconciler removes the remains of a `stopped` instance whose removal was never recorded. Absent
+   * (Kubernetes, MicroVM, Cloudflare): one `stop` call, no phase, as always.
+   */
+  readonly keepsRemains?: boolean;
 
   supports(input: RuntimeAdapterSupportInput): RuntimeAdapterSupport;
   /**

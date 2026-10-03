@@ -472,6 +472,17 @@ const isNoSuchContainerError = (error: unknown): boolean => {
   return /no such (container|object)/i.test(text);
 };
 
+// `docker network rm` / `docker network inspect` against a missing network: "network X not found"
+// (the daemon) or "No such network: X" (the CLI).
+const isNoSuchNetworkError = (error: unknown): boolean => {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const stderr = "stderr" in error ? error.stderr : undefined;
+  const text = typeof stderr === "string" ? `${error.message}\n${stderr}` : error.message;
+  return /no such network|network \S+ not found/i.test(text);
+};
+
 /**
  * `docker rm` refused because another removal of the same container is under way (a planned stop
  * and the exit reconciler removing the same ended container): not a failure of the stop, which
@@ -752,6 +763,13 @@ const supportForInput = (input: RuntimeAdapterSupportInput): RuntimeAdapterSuppo
 
 export class DockerRuntimeAdapter implements RuntimeAdapter {
   public readonly id = "docker" as const;
+
+  /**
+   * An exited container keeps its writable layer, its sidecar and its network until `rm`: the
+   * worker stops in two phases (`end`, the record, `remove`), and the exit reconciler removes the
+   * remains of a `stopped` instance whose removal was never recorded.
+   */
+  public readonly keepsRemains = true;
 
   private readonly commandRunner: DockerCommandRunner;
 
@@ -1331,14 +1349,41 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     }
   }
 
-  private async removeDockerService(resources: {
-    readonly containerId: string;
-    readonly networkId: string | undefined;
-  }): Promise<void> {
-    if (!(await this.removeContainerDefinitively(resources.containerId))) return;
-    if (resources.networkId !== undefined) {
-      await this.commandRunner("docker", ["network", "rm", resources.networkId]).catch(
-        () => undefined,
+  /**
+   * A network by name: its id, `absent` (Docker knows none by that name, or answered the
+   * inspection with none), or `unknown` (the daemon failed to say). Unknown is never taken for
+   * absent.
+   */
+  private async lookupNetwork(name: string): Promise<{ id: string } | "absent" | "unknown"> {
+    try {
+      const result = await this.commandRunner("docker", [
+        "network",
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        name,
+      ]);
+      const id = result.stdout.trim();
+      return id.length === 0 ? "absent" : { id };
+    } catch (error) {
+      return isNoSuchNetworkError(error) ? "absent" : "unknown";
+    }
+  }
+
+  /**
+   * `docker network rm`: a network Docker no longer knows counts as removed; any other failure
+   * surfaces, so a network the daemon still has (an endpoint still attached) is never left behind
+   * a stop reported done.
+   */
+  private async removeNetworkDefinitively(networkId: string, name: string): Promise<void> {
+    try {
+      await this.commandRunner("docker", ["network", "rm", networkId]);
+    } catch (error) {
+      if (isNoSuchNetworkError(error)) return;
+      const message = error instanceof Error ? error.message : "Unknown docker network rm error.";
+      throw createAdapterError(
+        "adapter-unavailable",
+        `Failed to remove the network '${name}' of a removed workspace container: ${message}`,
       );
     }
   }
@@ -1807,53 +1852,38 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
    * a fenced stop kills outright. Idempotent: a container that is already gone reports
    * `not-found`, which callers treat as success. Any other failure (daemon unreachable,
    * permission) surfaces — reporting "stopped" while the container is still alive would leak it.
+   *
+   * In phases (`keepsRemains`): `end` is `endContainer` — the executor ends and nothing of it runs
+   * once it returns, its container kept exited with its disk and sidecar; `remove` is the removal
+   * below with nothing signalled again. Absent, both.
    */
   public async stop(input: RuntimeAdapterStopInput): Promise<RuntimeAdapterStopResult> {
     const parsed = parseRuntimeAdapterStopInput(input);
+    if (parsed.phase === "end") return this.endContainer(parsed);
     let outcome: "stopped" | "not-found" = "stopped";
 
+    const sidecarName = parsed.reference === undefined ? undefined : `${parsed.reference}-docker`;
+    const networkName = parsed.reference === undefined ? undefined : `${parsed.reference}-network`;
     // Snapshot sidecar identities before removing the workspace frees its deterministic name.
     // Failed or empty inspections preserve resources rather than falling back to deletion by name.
     // The sidecar network is looked up even when the sidecar is gone: a retained executor's
     // sidecar may have been parked (`parkRetained`) and removed with `--rm`, and its network
     // would otherwise outlive the workspace. Docker refuses to remove a network still in use.
     const service =
-      parsed.reference === undefined
-        ? undefined
-        : await this.inspectContainerByName(`${parsed.reference}-docker`);
+      sidecarName === undefined ? undefined : await this.inspectContainerByName(sidecarName);
     // The network without a sidecar only once the sidecar's absence is proven (a failed or
-    // inconclusive inspection keeps both).
+    // inconclusive inspection keeps both — and fails the stop below, so nothing hides them).
     const sidecarAbsent =
-      service === undefined && parsed.reference !== undefined
-        ? await this.isContainerNameAbsent(`${parsed.reference}-docker`)
+      service === undefined && sidecarName !== undefined
+        ? await this.isContainerNameAbsent(sidecarName)
         : false;
-    const networkId =
-      parsed.reference === undefined || (service === undefined && !sidecarAbsent)
+    const network =
+      networkName === undefined || (service === undefined && !sidecarAbsent)
         ? undefined
-        : await this.commandRunner("docker", [
-            "network",
-            "inspect",
-            "--format",
-            "{{.Id}}",
-            `${parsed.reference}-network`,
-          ])
-            .then((result) => result.stdout.trim() || undefined)
-            .catch(() => undefined);
+        : await this.lookupNetwork(networkName);
 
-    if (parsed.fence !== true) {
-      // SIGTERM, then up to the grace for sealantd to flush and exit: the container's own
-      // StopTimeout (set at create, longer for a capture-sourced workspace), or the configured
-      // grace for a container created before it was set. Its failure is not the stop's: a
-      // container already gone or already stopped is settled by the removal below, which also
-      // surfaces a daemon that cannot be reached.
-      const graceSeconds = await this.containerStopTimeout(parsed.resourceId);
-      await this.commandRunner("docker", [
-        "stop",
-        "-t",
-        String(Math.max(graceSeconds ?? 0, this.stopGraceSeconds)),
-        parsed.resourceId,
-      ]).catch(() => undefined);
-    }
+    // The `remove` phase follows an `end` that already ran the planned stop: nothing to signal.
+    if (parsed.fence !== true && parsed.phase !== "remove") await this.plannedStop(parsed);
 
     try {
       // `-v` takes the container's anonymous volumes with it: the dind sidecar declares one for
@@ -1896,13 +1926,99 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       outcome = "not-found";
     }
 
+    // What is left beside the container. A stop reports success only once nothing of the
+    // workspace remains: a sidecar the daemon would not remove, one whose presence (or the
+    // network's) could not be told, or a network the daemon still has fails it — the caller's
+    // record of the removal stays unwritten and the remains sweep asks again — rather than being
+    // left behind for good behind a stop reported done.
+    const workspace = parsed.reference ?? parsed.resourceId;
     if (service !== undefined) {
-      await this.removeDockerService({ containerId: service.id, networkId });
-    } else if (networkId !== undefined) {
-      await this.commandRunner("docker", ["network", "rm", networkId]).catch(() => undefined);
+      if (!(await this.removeContainerDefinitively(service.id))) {
+        throw createAdapterError(
+          "adapter-unavailable",
+          `Workspace container '${workspace}' was removed, but its Docker sidecar '${sidecarName ?? service.id}' is still present after its removal was asked.`,
+        );
+      }
+    } else if (sidecarName !== undefined && !sidecarAbsent) {
+      throw createAdapterError(
+        "adapter-unavailable",
+        `Workspace container '${workspace}' was removed, but whether its Docker sidecar '${sidecarName}' remains could not be told.`,
+      );
+    }
+    if (network === "unknown") {
+      throw createAdapterError(
+        "adapter-unavailable",
+        `Workspace container '${workspace}' was removed, but whether its network '${networkName ?? ""}' remains could not be told.`,
+      );
+    }
+    if (network !== undefined && network !== "absent") {
+      await this.removeNetworkDefinitively(network.id, networkName ?? network.id);
     }
     // Retain the control directory: a concurrent launch can reuse it immediately after removal.
 
+    return parseRuntimeAdapterStopResult({
+      adapter: this.id,
+      resourceId: parsed.resourceId,
+      outcome,
+    });
+  }
+
+  /**
+   * SIGTERM, then up to the grace for sealantd to flush and exit: the container's own StopTimeout
+   * (set at create, longer for a capture-sourced workspace), or the configured grace for a
+   * container created before it was set. Its failure is not the stop's: a container already gone
+   * or already stopped is settled by what follows (the end's own look, or the removal), which
+   * also surfaces a daemon that cannot be reached.
+   */
+  private async plannedStop(parsed: RuntimeAdapterStopInput): Promise<void> {
+    const graceSeconds = await this.containerStopTimeout(parsed.resourceId);
+    await this.commandRunner("docker", [
+      "stop",
+      "-t",
+      String(Math.max(graceSeconds ?? 0, this.stopGraceSeconds)),
+      parsed.resourceId,
+    ]).catch(() => undefined);
+  }
+
+  /**
+   * The `end` phase of a stop: the executor ends (the planned SIGTERM and its grace, or the
+   * fenced kill) and nothing of it runs once this returns; its container stays, exited, with its
+   * disk and sidecar, for the `remove` phase. A container still running after this is a failure
+   * (recording "stopped" over it would leak it); one already gone is `not-found`.
+   */
+  private async endContainer(parsed: RuntimeAdapterStopInput): Promise<RuntimeAdapterStopResult> {
+    if (parsed.fence !== true) await this.plannedStop(parsed);
+    // Idempotent over an exited container ("is not running"); what the planned stop did not end
+    // within its grace, or a fenced stop, ends here (the daemon waits for the exit before it
+    // answers a SIGKILL). The state is read after it, never assumed. Its failure is kept for
+    // that reading: the daemon answering and refusing (a permission) over a container still
+    // running is the runtime's definitive refusal (review 9 #5), so the removal is given up and
+    // decided again rather than left issued for good; any other failure is an outcome nobody
+    // knows.
+    const killFailure = await this.commandRunner("docker", ["kill", parsed.resourceId]).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    let outcome: "stopped" | "not-found" = "stopped";
+    try {
+      const state = await this.inspectContainerState(parsed.resourceId);
+      if (state.running) {
+        const kill =
+          killFailure === undefined
+            ? "the kill was accepted"
+            : `kill: ${killFailure instanceof Error ? killFailure.message : String(killFailure)}`;
+        const failure = createAdapterError(
+          "adapter-unavailable",
+          `Workspace container '${parsed.reference ?? parsed.resourceId}' is still running after it was asked to end (status: ${state.status}; ${kill}).`,
+        );
+        throw killFailure !== undefined && isDaemonErrorResponse(killFailure)
+          ? removalRefused(failure)
+          : failure;
+      }
+    } catch (error) {
+      if (!isNoSuchContainerError(error)) throw error;
+      outcome = "not-found";
+    }
     return parseRuntimeAdapterStopResult({
       adapter: this.id,
       resourceId: parsed.resourceId,

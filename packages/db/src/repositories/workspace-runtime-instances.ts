@@ -84,9 +84,11 @@ const workspaceRuntimeInstanceRepoOperationSchema = Schema.Literals([
   "preemptLaunch",
   "listPreservationCandidates",
   "listUnsettledCaptureExecutors",
+  "listStoppedWithRemains",
   "markExited",
   "markStopRequested",
   "markStopped",
+  "markRemoved",
   "upsertRuntimeInstance",
 ]);
 
@@ -209,6 +211,15 @@ export interface WorkspaceRuntimeInstanceRepoService {
   readonly markStopped: (
     input: MarkWorkspaceRuntimeInstanceStoppedInput,
   ) => Effect.Effect<WorkspaceRuntimeInstance, WorkspaceRuntimeInstanceRepoError>;
+  /**
+   * The runtime confirmed nothing of the executor is left (`removed_at`): its removal returned.
+   * Fenced on the resource the removal was made on, like `markExited`: a launch that replaced the
+   * resource under the same run is never stamped. Idempotent (the first instant stands).
+   */
+  readonly markRemoved: (input: {
+    readonly runId: string;
+    readonly resourceId: string;
+  }) => Effect.Effect<void, WorkspaceRuntimeInstanceRepoError>;
   readonly getRuntimeInstanceByRunId: (
     runId: string,
   ) => Effect.Effect<WorkspaceRuntimeInstance | undefined, WorkspaceRuntimeInstanceRepoError>;
@@ -328,6 +339,21 @@ export interface WorkspaceRuntimeInstanceRepoService {
     readonly limit: number;
     /** Only these runtime resources (an exit event names one). */
     readonly resourceIds?: readonly string[];
+  }) => Effect.Effect<readonly WorkspaceRuntimeInstance[], WorkspaceRuntimeInstanceRepoError>;
+  /**
+   * Stopped executors whose remains may still exist: `stopped`, naming an executor on one of
+   * `adapters`, with no removal recorded (`removed_at` null) for at least `olderThanMs` since
+   * they ended — a stop whose removal failed or whose worker died between ending the executor
+   * and removing it. Never one whose disk something still needs: a retention recorded on its
+   * drain record excludes it; and a capture-sourced run (or one whose source is unknown) is
+   * listed only when the ledger recorded its removal final (`deletion_state` `deleted`) or the
+   * owner discarded it — a removal voided, held or issued with its outcome unknown is the
+   * ledger's to settle, never pre-empted. The longest-ended first, at most `limit`.
+   */
+  readonly listStoppedWithRemains: (input: {
+    readonly adapters: readonly RuntimeAdapterId[];
+    readonly olderThanMs: number;
+    readonly limit: number;
   }) => Effect.Effect<readonly WorkspaceRuntimeInstance[], WorkspaceRuntimeInstanceRepoError>;
 }
 
@@ -589,6 +615,22 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
           }),
         ),
 
+      markRemoved: (input) =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "markRemoved",
+          db
+            .update(workspaceRuntimeInstances)
+            .set({ removedAt: new Date() })
+            .where(
+              and(
+                eq(workspaceRuntimeInstances.runId, input.runId),
+                eq(workspaceRuntimeInstances.resourceId, input.resourceId),
+                isNull(workspaceRuntimeInstances.removedAt),
+              ),
+            )
+            .pipe(Effect.asVoid),
+        ),
+
       getRuntimeInstanceByRunId: (runId) =>
         withWorkspaceRuntimeInstanceRepoError(
           "getRuntimeInstanceByRunId",
@@ -848,6 +890,55 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
                 ),
               )
               .orderBy(workspaceRuntimeInstances.updatedAt)
+              .limit(Math.max(1, Math.round(input.limit)));
+            return rows.map((row: { instance: WorkspaceRuntimeInstance }) => row.instance);
+          }),
+        ),
+
+      listStoppedWithRemains: (input) =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "listStoppedWithRemains",
+          Effect.gen(function* () {
+            if (input.adapters.length === 0) {
+              return [];
+            }
+            const rows = yield* db
+              .select({ instance: workspaceRuntimeInstances })
+              .from(workspaceRuntimeInstances)
+              .leftJoin(
+                workspaceCaptureDrains,
+                eq(workspaceCaptureDrains.runId, workspaceRuntimeInstances.runId),
+              )
+              .where(
+                and(
+                  eq(workspaceRuntimeInstances.status, "stopped"),
+                  isNull(workspaceRuntimeInstances.removedAt),
+                  isNotNull(workspaceRuntimeInstances.resourceId),
+                  inArray(workspaceRuntimeInstances.adapter, [...input.adapters]),
+                  lte(
+                    workspaceRuntimeInstances.finishedAt,
+                    sql`now() - (${Math.max(0, Math.round(input.olderThanMs))} * interval '1 millisecond')`,
+                  ),
+                  // Its disk is recovery's while it is retained.
+                  isNull(workspaceCaptureDrains.retainedAt),
+                  // What lets its remains go. A run whose source is not capture: the record
+                  // `stopped`. A capture-sourced run, or one whose source is unknown (fail
+                  // closed): only a removal the ledger recorded final (`deleted`), or the
+                  // owner's discard. Anything else — a removal authorized and voided before it
+                  // was issued (the record `stopped`, the ledger holding nothing), one held, one
+                  // issued with its outcome unknown — is the ledger's and the preservation
+                  // policy's to settle (`settleUnsettledExecutors`), never pre-empted here.
+                  or(
+                    and(
+                      isNotNull(workspaceRuntimeInstances.sourceKind),
+                      ne(workspaceRuntimeInstances.sourceKind, "capture"),
+                    ),
+                    eq(workspaceCaptureDrains.deletionState, "deleted"),
+                    isNotNull(workspaceCaptureDrains.discardRequestedAt),
+                  ),
+                ),
+              )
+              .orderBy(workspaceRuntimeInstances.finishedAt)
               .limit(Math.max(1, Math.round(input.limit)));
             return rows.map((row: { instance: WorkspaceRuntimeInstance }) => row.instance);
           }),

@@ -1,4 +1,5 @@
 import { runtimeAdapterIds, type NewWorkspace, type WorkspaceBuild } from "@sealant/validators";
+import { sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
@@ -133,6 +134,17 @@ export const workspaceRuntimeInstances = pgTable(
     launchedAt: timestamp("launched_at", { mode: "date", withTimezone: true }),
     finishedAt: timestamp("finished_at", { mode: "date", withTimezone: true }),
     /**
+     * When the runtime confirmed nothing of the executor is left: its removal returned (`stopped`
+     * or `not-found`). A stop records `stopped` once the executor has ENDED (`finished_at`) and
+     * this once its remains — an exited container's disk, its sidecar — are gone too; the two are
+     * one call apart on a runtime that keeps no remains, and a removal apart on one that does
+     * (Docker). A `stopped` row with this null and no retention recorded is remains the exit
+     * reconciler's sweep removes (`listStoppedWithRemains`). Rows stopped before the column
+     * existed are null until the sweep confirms each once, by the runtime's idempotent removal:
+     * nothing on record proved their removal.
+     */
+    removedAt: timestamp("removed_at", { mode: "date", withTimezone: true }),
+    /**
      * The instant the runtime itself ends the executor, whatever anyone asks (a Lambda MicroVM's
      * maximum duration, counted from its start). Null where the runtime imposes no lifetime, and
      * on rows launched before this column existed. A caller holding unsaved work on the executor
@@ -186,6 +198,10 @@ export const workspaceRuntimeInstances = pgTable(
   (table) => [
     index("workspace_runtime_instances_status_updated_at_idx").on(table.status, table.updatedAt),
     index("workspace_runtime_instances_adapter_status_idx").on(table.adapter, table.status),
+    // The remains sweep's rows (`listStoppedWithRemains`), read every exit-reconciler poll.
+    index("workspace_runtime_instances_stopped_remains_idx")
+      .on(table.finishedAt)
+      .where(sql`${table.status} = 'stopped' and ${table.removedAt} is null`),
   ],
 );
 

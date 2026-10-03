@@ -59,6 +59,7 @@ const instance = (deadlineInMs: number): WorkspaceRuntimeInstance => ({
   launchLeaseExpiresAt: null,
   daemonImage: null,
   daemonRecoveryBoot: null,
+  removedAt: null,
   sourceKind: "capture",
   createdAt: new Date(NOW - 60 * MIN),
   updatedAt: new Date(NOW - 60 * MIN),
@@ -136,6 +137,7 @@ const sweep = async (input: {
       getRuntimeInstanceByRunId: () => Effect.sync(() => row),
       preemptLaunch,
       markStopped,
+      markRemoved: () => Effect.void,
       markStopRequested: () => Effect.void,
     } as unknown as WorkspaceRuntimeInstanceRepoService),
     Layer.succeed(WorkspaceRepo, {
@@ -542,6 +544,7 @@ describe("preserveBeforeDeadlineEffect · runtimes that are not ready (review 3 
           Effect.succeed(rows.find((candidate) => candidate.runId === runId)),
         markStopRequested: () => Effect.void,
         markStopped: () => Effect.void,
+        markRemoved: () => Effect.void,
       } as unknown as WorkspaceRuntimeInstanceRepoService),
       Layer.succeed(WorkspaceRepo, {
         getWorkspaceByAttemptId: () => Effect.succeed(undefined),
@@ -714,6 +717,7 @@ describe("no all-plans barrier before a due FINAL (review 6 #11)", () => {
           Effect.succeed(rows.find((row) => row.runId === runId)),
         markStopRequested: () => Effect.void,
         markStopped: () => Effect.void,
+        markRemoved: () => Effect.void,
       } as unknown as WorkspaceRuntimeInstanceRepoService),
       Layer.succeed(WorkspaceRepo, {
         getWorkspaceByAttemptId: () => Effect.succeed(undefined),
@@ -883,6 +887,7 @@ describe("every due runtime gets its first FINAL before its cap (review 7 #6)", 
           Effect.succeed(input.rows.find((row) => row.runId === runId)),
         markStopRequested: () => Effect.void,
         markStopped: () => Effect.void,
+        markRemoved: () => Effect.void,
       } as unknown as WorkspaceRuntimeInstanceRepoService),
       Layer.succeed(WorkspaceRepo, {
         getWorkspaceByAttemptId: () => Effect.succeed(undefined),
