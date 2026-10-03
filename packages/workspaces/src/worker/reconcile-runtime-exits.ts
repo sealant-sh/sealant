@@ -434,19 +434,23 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
  */
 const REMAINS_GRACE_MS = 5 * 60_000;
 
-/** How many stopped executors' remains one sweep removes. */
-const REMAINS_PER_SWEEP = 50;
+/**
+ * How many stopped executors' remains one sweep removes: a few runtime calls each, kept well
+ * inside the poll interval (rows from before `removedAt` existed are confirmed once each).
+ */
+const REMAINS_PER_SWEEP = 20;
 
 /**
  * Remove the remains of executors recorded `stopped` whose removal nobody recorded
  * (`listStoppedWithRemains`): a stop whose `remove` phase failed; a worker lost between a stop's
  * `end` and its `remove` (the container exited, its sidecar still running, its network in place);
  * one lost between this reconciler's own record of a planned stop and its removal. Only on a
- * runtime that keeps remains (`RuntimeAdapter.keepsRemains`); only an instance recorded `stopped`
- * — a stop ran its `end` under an authorized removal and recorded it, or this reconciler recorded
- * a planned stop's exit on one; never one retained (its disk is recovery's), and never one whose
- * removal the ledger holds or has issued with its outcome unknown (the ledger settles that from
- * the runtime, `reconcileIssuedDeletion`). Age and name authorize nothing here: the record does.
+ * runtime that keeps remains (`RuntimeAdapter.keepsRemains`); only an instance recorded `stopped`;
+ * never one retained (its disk is recovery's); and a capture-sourced one (or one whose source is
+ * unknown) only once the ledger recorded its removal final (`deleted`) or the owner discarded it —
+ * one whose authorized removal was voided before it was issued, or is held or issued with its
+ * outcome unknown, is the ledger's and the preservation policy's (`settleUnsettledExecutors`).
+ * Age and name authorize nothing here: the record does.
  * The runtime is asked for the `remove` phase by resource id and reference — the sidecar and
  * network go with the container — and the removal recorded; a failure is logged and the next
  * sweep tries again.
@@ -483,9 +487,9 @@ const removeStoppedRemains = (
         Effect.tap(() => runtimeInstances.markRemoved({ runId: instance.runId, resourceId })),
         Effect.tap((result) =>
           Effect.logInfo(
-            result.outcome === "stopped"
-              ? `Runtime exit reconciler: removed the remains of ${where}, recorded stopped with no removal recorded.`
-              : `Runtime exit reconciler: nothing of ${where} was left; its removal is recorded.`,
+            `Runtime exit reconciler: removed the remains of ${where} (recorded stopped, no removal recorded; container ${
+              result.outcome === "stopped" ? "removed" : "already gone"
+            }); its removal is recorded.`,
           ),
         ),
         Effect.andThen(

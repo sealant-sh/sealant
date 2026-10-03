@@ -827,22 +827,25 @@ describe("DockerRuntimeAdapter strict named-volume mode", () => {
     },
   );
 
-  it.each(["failed", "empty", "malformed"] as const)(
-    "preserves sidecars and networks when stop inspection is %s",
+  it.each(["failed", "malformed"] as const)(
+    "preserves sidecars and networks when stop inspection is %s, and fails the stop so nothing hides them",
     async (inspection) => {
       const calls: Array<readonly string[]> = [];
       const runner: DockerCommandRunner = async (_command, args) => {
         calls.push([...args]);
-        if (args[0] === "inspect" && inspection === "failed") {
+        // Every look at the sidecar (the inspection by name, the exact-name listing) fails.
+        if ((args[0] === "inspect" || args[0] === "container") && inspection === "failed") {
           throw new Error("Docker daemon unavailable");
         }
         return { stdout: inspection === "malformed" ? "container-id\tunknown\n" : "", stderr: "" };
       };
       const adapter = new DockerRuntimeAdapter({ commandRunner: runner });
 
+      // Unknown is not gone: nothing is deleted by name, and the stop is not reported done over
+      // a sidecar that may still be there (its caller leaves the removal unrecorded and asks again).
       await expect(
         adapter.stop({ resourceId: "workspace-id", reference: "sealant-volume-1" }),
-      ).resolves.toMatchObject({ outcome: "stopped" });
+      ).rejects.toThrow(/sidecar 'sealant-volume-1-docker' remains could not be told/);
 
       expect(calls.filter((args) => args[0] === "rm")).toEqual([
         ["rm", "-f", "-v", "workspace-id"],
@@ -850,6 +853,24 @@ describe("DockerRuntimeAdapter strict named-volume mode", () => {
       expect(calls.some((args) => args[0] === "network" && args[1] === "rm")).toBe(false);
     },
   );
+
+  it("stops cleanly when the inspections answer with no sidecar and no network", async () => {
+    const calls: Array<readonly string[]> = [];
+    const runner: DockerCommandRunner = async (_command, args) => {
+      calls.push([...args]);
+      return { stdout: "", stderr: "" };
+    };
+    const adapter = new DockerRuntimeAdapter({ commandRunner: runner });
+
+    // The exact-name listing proves the sidecar absent; a network inspection answering none is
+    // none to remove.
+    await expect(
+      adapter.stop({ resourceId: "workspace-id", reference: "sealant-volume-1" }),
+    ).resolves.toMatchObject({ outcome: "stopped" });
+
+    expect(calls.filter((args) => args[0] === "rm")).toEqual([["rm", "-f", "-v", "workspace-id"]]);
+    expect(calls.some((args) => args[0] === "network" && args[1] === "rm")).toBe(false);
+  });
 
   it.each(["adopted", "unknown-id"] as const)(
     "retains an %s network after owned sidecar cleanup",

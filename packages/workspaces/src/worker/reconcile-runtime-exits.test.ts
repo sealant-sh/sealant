@@ -280,7 +280,7 @@ describe("reconcileRuntimeExitsEffect", () => {
       expect(harness.listStoppedWithRemains).toHaveBeenCalledWith({
         adapters: ["docker"],
         olderThanMs: 5 * 60_000,
-        limit: 50,
+        limit: 20,
       });
       expect(stop).toHaveBeenCalledWith({
         resourceId: "container-stopped",

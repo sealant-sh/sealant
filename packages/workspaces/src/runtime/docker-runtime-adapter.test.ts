@@ -1931,6 +1931,108 @@ describe("DockerRuntimeAdapter", () => {
     );
   });
 
+  it("marks an end the daemon refused over a running container as the runtime's refusal, and a lost reply as unknown", async () => {
+    const running = JSON.stringify({ Status: "running", Running: true, ExitCode: 0, Error: "" });
+    const endWith = async (killError: string) => {
+      const adapter = new DockerRuntimeAdapter({
+        commandRunner: async (_command, args) => {
+          if (args[0] === "inspect") return { stdout: running, stderr: "" };
+          if (args[0] === "stop" || args[0] === "kill") throw new Error(killError);
+          return { stdout: "", stderr: "" };
+        },
+        runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      });
+      return adapter.stop({ resourceId: "container-id-123", phase: "end" }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    };
+
+    // The daemon answered and did not act (review 9 #5): the removal is given up and decided
+    // again, never left issued for good on a runtime with no bound on a removal request.
+    const refused = await endWith(
+      "Error response from daemon: cannot kill container: permission denied",
+    );
+    expect(refused).toBeInstanceOf(Error);
+    expect(isRemovalRefusal(refused)).toBe(true);
+    expect(refused instanceof Error ? refused.message : "").toMatch(/still running/);
+
+    // The CLI lost the daemon mid-request: an outcome nobody knows.
+    const lost = await endWith("write EPIPE");
+    expect(lost).toBeInstanceOf(Error);
+    expect(isRemovalRefusal(lost)).toBe(false);
+  });
+
+  it("fails the removal when the sidecar is still present after it was asked to go, or when that could not be told", async () => {
+    const removeWith = (
+      runner: (args: Array<string>) => Promise<{ stdout: string; stderr: string }>,
+    ) =>
+      new DockerRuntimeAdapter({
+        commandRunner: (_command, args) => runner(args),
+        runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      }).stop({ resourceId: "container-id-123", reference: "sealant-run-abc", phase: "remove" });
+
+    // The sidecar's `rm` fails and its state still reads: present.
+    await expect(
+      removeWith(async (args) => {
+        if (args[0] === "inspect" && args.includes("sealant-run-abc-docker")) {
+          return { stdout: "sidecar-id\ttrue\n", stderr: "" };
+        }
+        if (args[0] === "inspect" && args.includes("sidecar-id")) {
+          return {
+            stdout: JSON.stringify({ Status: "running", Running: true, ExitCode: 0, Error: "" }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "rm" && args.includes("sidecar-id")) {
+          throw new Error("Error response from daemon: device or resource busy");
+        }
+        if (args[0] === "network" && args[1] === "inspect") {
+          return { stdout: "network-id\n", stderr: "" };
+        }
+        return { stdout: "", stderr: "" };
+      }),
+    ).rejects.toThrow(/sidecar 'sealant-run-abc-docker' is still present/);
+
+    // The sidecar's inspection failed for a reason other than its absence: unknown is not gone.
+    await expect(
+      removeWith(async (args) => {
+        // Every look at the sidecar (by name, and the exact-name listing) fails the same way.
+        if (args.some((arg) => arg.includes("sealant-run-abc-docker"))) {
+          throw new Error("Error response from daemon: i/o timeout");
+        }
+        return { stdout: "", stderr: "" };
+      }),
+    ).rejects.toThrow(
+      /whether its Docker sidecar 'sealant-run-abc-docker' remains could not be told/,
+    );
+  });
+
+  it("fails the removal when the network is still there, and passes one Docker no longer knows", async () => {
+    const removeWith = (networkRmError: string) =>
+      new DockerRuntimeAdapter({
+        commandRunner: async (_command, args) => {
+          if (args[0] === "inspect" && args.includes("sealant-run-abc-docker")) {
+            return { stdout: "sidecar-id\tfalse\n", stderr: "" };
+          }
+          if (args[0] === "network" && args[1] === "inspect") {
+            return { stdout: "network-id\n", stderr: "" };
+          }
+          if (args[0] === "network" && args[1] === "rm") throw new Error(networkRmError);
+          return { stdout: "", stderr: "" };
+        },
+        runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      }).stop({ resourceId: "container-id-123", reference: "sealant-run-abc", phase: "remove" });
+
+    await expect(
+      removeWith("Error response from daemon: error while removing network: has active endpoints"),
+    ).rejects.toThrow(/network 'sealant-run-abc-network'/);
+    expect(
+      (await removeWith("Error response from daemon: network sealant-run-abc-network not found"))
+        .outcome,
+    ).toBe("stopped");
+  });
+
   it("sends SIGTERM with the grace before removing, and kills outright on a fenced stop", async () => {
     const calls: Array<readonly string[]> = [];
     const commandRunner = vi.fn<

@@ -345,9 +345,10 @@ export interface WorkspaceRuntimeInstanceRepoService {
    * `adapters`, with no removal recorded (`removed_at` null) for at least `olderThanMs` since
    * they ended — a stop whose removal failed or whose worker died between ending the executor
    * and removing it. Never one whose disk something still needs: a retention recorded on its
-   * drain record excludes it, and so does a removal the ledger holds or has issued with its
-   * outcome unknown (`deletion_state` other than `deleted`): those are the ledger's to settle
-   * (`reconcileIssuedDeletion`), never pre-empted. The longest-ended first, at most `limit`.
+   * drain record excludes it; and a capture-sourced run (or one whose source is unknown) is
+   * listed only when the ledger recorded its removal final (`deletion_state` `deleted`) or the
+   * owner discarded it — a removal voided, held or issued with its outcome unknown is the
+   * ledger's to settle, never pre-empted. The longest-ended first, at most `limit`.
    */
   readonly listStoppedWithRemains: (input: {
     readonly adapters: readonly RuntimeAdapterId[];
@@ -918,12 +919,22 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
                     workspaceRuntimeInstances.finishedAt,
                     sql`now() - (${Math.max(0, Math.round(input.olderThanMs))} * interval '1 millisecond')`,
                   ),
-                  // Its disk is recovery's while it is retained; its removal is the ledger's
-                  // while the ledger holds it or has issued it with no outcome recorded.
+                  // Its disk is recovery's while it is retained.
                   isNull(workspaceCaptureDrains.retainedAt),
+                  // What lets its remains go. A run whose source is not capture: the record
+                  // `stopped`. A capture-sourced run, or one whose source is unknown (fail
+                  // closed): only a removal the ledger recorded final (`deleted`), or the
+                  // owner's discard. Anything else — a removal authorized and voided before it
+                  // was issued (the record `stopped`, the ledger holding nothing), one held, one
+                  // issued with its outcome unknown — is the ledger's and the preservation
+                  // policy's to settle (`settleUnsettledExecutors`), never pre-empted here.
                   or(
-                    isNull(workspaceCaptureDrains.deletionState),
+                    and(
+                      isNotNull(workspaceRuntimeInstances.sourceKind),
+                      ne(workspaceRuntimeInstances.sourceKind, "capture"),
+                    ),
                     eq(workspaceCaptureDrains.deletionState, "deleted"),
+                    isNotNull(workspaceCaptureDrains.discardRequestedAt),
                   ),
                 ),
               )

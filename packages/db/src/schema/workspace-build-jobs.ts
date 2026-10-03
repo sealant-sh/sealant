@@ -140,7 +140,8 @@ export const workspaceRuntimeInstances = pgTable(
      * one call apart on a runtime that keeps no remains, and a removal apart on one that does
      * (Docker). A `stopped` row with this null and no retention recorded is remains the exit
      * reconciler's sweep removes (`listStoppedWithRemains`). Rows stopped before the column
-     * existed were backfilled from `finished_at` (their stop removed them in one call).
+     * existed are null until the sweep confirms each once, by the runtime's idempotent removal:
+     * nothing on record proved their removal.
      */
     removedAt: timestamp("removed_at", { mode: "date", withTimezone: true }),
     /**
