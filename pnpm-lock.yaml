@@ -826,7 +826,7 @@ importers:
   packages/sdk:
     dependencies:
       '@sealant/api-contracts':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../api-contracts
     devDependencies:
       '@effect/vitest':
@@ -1005,10 +1005,10 @@ importers:
         specifier: workspace:*
         version: link:../jobs
       '@sealant/runtime-client':
-        specifier: ^0.19.0
+        specifier: 0.19.0
         version: 0.19.0
       '@sealant/runtime-protocol':
-        specifier: ^0.19.0
+        specifier: 0.19.0
         version: 0.19.0
       '@sealant/source-integrations':
         specifier: workspace:*

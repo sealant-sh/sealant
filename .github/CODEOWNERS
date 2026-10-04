@@ -1,0 +1,21 @@
+# What decides what gets published, and under which version or dist-tag, needs the owner's review
+# (ADR 0015 in sealant-sh/mend). Effective once main requires review from code owners.
+/.github/ @ypanagidis
+/tooling/scripts/ @ypanagidis
+/apps/api/Dockerfile @ypanagidis
+/apps/worker/Dockerfile @ypanagidis
+/apps/ssh-gateway/Dockerfile @ypanagidis
+/apps/web/Dockerfile @ypanagidis
+/.changeset/config.json @ypanagidis
+# The published packages' manifests: a lifecycle script there runs while the tarball is packed.
+/packages/sdk/package.json @ypanagidis
+/packages/api-contracts/package.json @ypanagidis
+# What configures every install and build, the credential-free pack job's included: a pnpmfile
+# runs even under --frozen-lockfile --ignore-scripts.
+/package.json @ypanagidis
+/pnpm-lock.yaml @ypanagidis
+/pnpm-workspace.yaml @ypanagidis
+.pnpmfile.cjs @ypanagidis
+# pnpm 11 loads .pnpmfile.mjs before .pnpmfile.cjs.
+.pnpmfile.mjs @ypanagidis
+.npmrc @ypanagidis

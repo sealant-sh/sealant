@@ -16,8 +16,38 @@ permissions:
   contents: read
 
 jobs:
+  # Before anything builds or publishes: the tag is a stable vX.Y.Z (prereleases publish from main,
+  # in next.yml), and no sealantd prerelease is pinned anywhere (ADR 0015 in sealant-sh/mend).
+  pins:
+    name: Check what the release pins
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    steps:
+      # Full history: the prerelease check asks whether each next build's commit is an ancestor.
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+
+      - name: Refuse a prerelease tag or a prerelease sealantd
+        run: node tooling/scripts/check-release-pins.mjs "$GITHUB_REF_NAME"
+
+      # One built from a commit this tag leaves out sorts below X.Y.Z but holds more: refuse. Main
+      # is frozen from the Version Packages merge to this tag (sealant-sh/mend
+      # docs/operations/next-channel.md); a merge during the freeze is what produces one.
+      - name: Refuse a release that leaves out one of its next builds
+        run: >-
+          node tooling/scripts/next-version.mjs --stray "$GITHUB_REF_NAME" --npm @sealant/sdk-next
+          HEAD
+
   image:
     name: Image (${{ matrix.name }})
+    needs: pins
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
@@ -36,18 +66,24 @@ jobs:
             dockerfile: apps/web/Dockerfile
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # QEMU emulates arm64 on the amd64 runner; native arm64 runners + a per-arch matrix can
       # replace this later (same follow-up as sealantd).
+      # binfmt at a fixed digest: it runs privileged and emulates every arm64 RUN.
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          image: tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
 
-      - name: Set up Docker builder (Blacksmith cache)
-        uses: useblacksmith/setup-docker-builder@v1
+      # BuildKit at a fixed digest: it runs privileged and performs the push.
+      - name: Set up Docker builder
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -55,7 +91,7 @@ jobs:
 
       - name: Docker metadata
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}
           tags: |
@@ -66,7 +102,7 @@ jobs:
       # The web image must never receive VITE_API_URL at build time — the server reads
       # CORE_API_BASE_URL at runtime, and a baked VITE_ value would shadow it.
       - name: Build and push
-        uses: useblacksmith/build-push-action@v2
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: ${{ matrix.dockerfile }}
@@ -91,7 +127,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Run installer against the tagged images
         env:
@@ -125,18 +161,19 @@ jobs:
   # documented behavior the runtime does not honor.
   workspace-e2e:
     name: Workspace runtime e2e (pinned sealantd)
+    needs: pins
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
@@ -175,18 +212,19 @@ jobs:
       id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
 
+      # No pnpm store cache: jobs running unowned code (next.yml's test and workspace-e2e,
+      # kubernetes-e2e) write it, and pnpm links store files without re-hashing them.
       # Node 24, NOT 22: trusted publishing needs the bundled npm >= 11.5 (node 22 ships npm 10,
       # which silently skips the OIDC exchange and the registry 404s the anonymous publish).
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
-          cache: pnpm
           registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
@@ -218,7 +256,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # The attached compose file is what install.sh downloads, and install.sh itself is attached so
       # `releases/latest/download/install.sh` (the get.sealant.dev redirect target) always serves
