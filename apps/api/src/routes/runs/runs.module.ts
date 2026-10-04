@@ -304,6 +304,11 @@ export const getRun = (runId: string, ownerUserId?: string) =>
 export const getRunChanges = (runId: string, ownerUserId?: string) =>
   Effect.gen(function* () {
     const run = yield* requireRun(runId, ownerUserId);
+    // A reading that succeeded records both, empty when nothing changed; a run that has not
+    // ended, or whose reading failed, records neither — never reported as "no changes".
+    const available = run.diff !== null || run.changedFiles !== null;
+    const ended =
+      run.status === "completed" || run.status === "failed" || run.status === "cancelled";
     return {
       files: (run.changedFiles ?? []).map((file) => ({
         path: file.path,
@@ -311,6 +316,14 @@ export const getRunChanges = (runId: string, ownerUserId?: string) =>
         ...(file.oldPath === undefined ? {} : { oldPath: file.oldPath }),
       })),
       diff: run.diff ?? "",
+      available,
+      ...(available
+        ? {}
+        : {
+            unavailableReason: ended
+              ? "the run's changes could not be read"
+              : "the run has not ended",
+          }),
     } satisfies RunChangesResponse;
   });
 

@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import { RunExecPublisherService } from "../../services/control-plane-capabilities.js";
 import { CurrentPrincipal, type RequestPrincipal } from "../../services/service-principals.js";
-import { createRun, getRun, listRuns, updateRun } from "./runs.module.js";
+import { createRun, getRun, getRunChanges, listRuns, updateRun } from "./runs.module.js";
 
 /**
  * CORE-03: every run operation is made for a named owner. These pin the refusals and that a
@@ -182,5 +182,38 @@ describe("the SSH gateway's secret is a narrower authority than a service key", 
     );
     expect(Result.isSuccess(recorded)).toBe(true);
     expect(sshRun.writes.length).toBeGreaterThan(0);
+  });
+});
+
+describe("a run's changes say whether they were read", () => {
+  const changesOf = async (overrides: Record<string, unknown>) => {
+    const { run } = world(runRow(overrides));
+    const result = await run(getRunChanges("run_1", "usr_a"));
+    if (!Result.isSuccess(result)) throw new Error(String(result));
+    return result.success;
+  };
+
+  it("a reading that found nothing is available and empty", async () => {
+    expect(await changesOf({ status: "completed", diff: "", changedFiles: [] })).toEqual({
+      files: [],
+      diff: "",
+      available: true,
+    });
+  });
+
+  it("a finished run whose reading failed is not reported as having no changes", async () => {
+    expect(await changesOf({ status: "completed", diff: null, changedFiles: null })).toEqual({
+      files: [],
+      diff: "",
+      available: false,
+      unavailableReason: "the run's changes could not be read",
+    });
+  });
+
+  it("a run that has not ended has no changes read yet", async () => {
+    expect(await changesOf({ status: "running" })).toMatchObject({
+      available: false,
+      unavailableReason: "the run has not ended",
+    });
   });
 });

@@ -250,6 +250,14 @@ export const runChangesResponseSchema = Schema.Struct({
   files: Schema.Array(runFileChangeSchema),
   /** Unified diff of everything that changed (empty until the run has produced changes). */
   diff: Schema.String,
+  /**
+   * Whether the run's changes were read. `false`: they were not (the run has not ended, or the
+   * reading failed), and the empty `files` and `diff` say nothing about what changed. Absent from
+   * a control plane older than the field: read as `true`.
+   */
+  available: Schema.optional(Schema.Boolean),
+  /** Why the changes are not available, when `available` is `false`. */
+  unavailableReason: Schema.optional(Schema.String),
 });
 export type RunChangesResponse = typeof runChangesResponseSchema.Type;
 
