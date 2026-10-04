@@ -28,13 +28,16 @@ export const RUNTIME_DEPENDENTS = [
   "packages/workspaces/package.json",
 ];
 
-const PRERELEASE = /^\d+\.\d+\.\d+-/;
+const RELEASED_IMAGE = /^ghcr\.io\/sealant-sh\/sealantd:\d+\.\d+\.\d+(@sha256:[0-9a-f]{64})?$/;
 
-/** Every `ghcr.io/sealant-sh/sealantd:<tag>` in `text` whose tag is a prerelease. */
+/**
+ * Every sealantd image reference in `text` that is not a release: a prerelease tag, a bare digest
+ * (which could be any build), or anything else that is not `sealantd:X.Y.Z[@sha256:…]`.
+ */
 export const prereleaseImages = (text) =>
-  [...text.matchAll(/ghcr\.io\/sealant-sh\/sealantd:([0-9A-Za-z.-]+)/g)]
+  [...text.matchAll(/ghcr\.io\/sealant-sh\/sealantd(?:[:@][0-9A-Za-z.:@-]+)?/g)]
     .map((match) => match[0])
-    .filter((reference) => PRERELEASE.test(reference.split(":")[1]));
+    .filter((reference) => !RELEASED_IMAGE.test(reference));
 
 /** `@sealant/runtime-*` ranges in a package.json that name a prerelease. */
 export const prereleaseRanges = (manifest) =>
@@ -54,7 +57,8 @@ export const prereleaseLocks = (lockfile) => [
 export const releasePinProblems = ({ imageFiles, manifests, lockfile }) => {
   const problems = [];
   for (const [file, text] of Object.entries(imageFiles)) {
-    for (const image of prereleaseImages(text)) problems.push(`${file} pins ${image}.`);
+    for (const image of prereleaseImages(text))
+      problems.push(`${file} pins ${image}, not a release.`);
   }
   for (const [file, manifest] of Object.entries(manifests)) {
     for (const range of prereleaseRanges(manifest)) problems.push(`${file} depends on ${range}.`);

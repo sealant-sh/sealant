@@ -23,8 +23,11 @@ jobs:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
+      # Full history: the prerelease check asks whether each next build's commit is an ancestor.
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -33,6 +36,13 @@ jobs:
 
       - name: Refuse a prerelease tag or a prerelease sealantd
         run: node tooling/scripts/check-release-pins.mjs "$GITHUB_REF_NAME"
+
+      # Every merge after the Version Packages pull request published another X.Y.Z-next.N. One
+      # built from a commit this tag leaves out sorts below X.Y.Z but holds more: refuse, and tag
+      # right after the Version Packages merge, or from a commit that contains it.
+      - name: Refuse a release that leaves out one of its next builds
+        run: >-
+          node tooling/scripts/next-version.mjs --stray "$GITHUB_REF_NAME" --npm @sealant/sdk HEAD
 
   image:
     name: Image (${{ matrix.name }})

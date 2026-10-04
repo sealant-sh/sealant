@@ -61,17 +61,27 @@ test("main's pins are judged as they are; a prerelease pin is named wherever it 
     ].join("\n"),
   });
   assert.deepEqual(problems, [
-    "packages/workspaces/src/buildkit/buildkit-builder.ts pins ghcr.io/sealant-sh/sealantd:0.20.0-next.7.",
+    "packages/workspaces/src/buildkit/buildkit-builder.ts pins ghcr.io/sealant-sh/sealantd:0.20.0-next.7, not a release.",
     "packages/workspaces/package.json depends on @sealant/runtime-client@0.20.0-next.7.",
     "packages/workspaces/package.json depends on @sealant/runtime-protocol@0.20.0-next.7.",
     "pnpm-lock.yaml resolves @sealant/runtime-client@0.20.0-next.7.",
   ]);
 });
 
-test("releases, latest and digests are not prereleases", () => {
+test("a sealantd pinned by digest alone, or by latest, is not a release", () => {
+  const digest = `sha256:${"c".repeat(64)}`;
   assert.deepEqual(
     prereleaseImages(
-      "ghcr.io/sealant-sh/sealantd:0.19.0 ghcr.io/sealant-sh/sealantd:latest " +
+      `FROM ghcr.io/sealant-sh/sealantd@${digest} AS d\nCOPY --from=ghcr.io/sealant-sh/sealantd:latest /a /a`,
+    ),
+    [`ghcr.io/sealant-sh/sealantd@${digest}`, "ghcr.io/sealant-sh/sealantd:latest"],
+  );
+});
+
+test("released tags, with or without a digest, are releases", () => {
+  assert.deepEqual(
+    prereleaseImages(
+      "ghcr.io/sealant-sh/sealantd:0.19.0 " +
         `ghcr.io/sealant-sh/sealantd:0.19.1@sha256:${"a".repeat(64)}`,
     ),
     [],

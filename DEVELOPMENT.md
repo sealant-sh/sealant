@@ -108,10 +108,13 @@ The pieces:
 - **Prereleases from main** (ADR 0015 in sealant-sh/mend): every merge to `main` runs
   `.github/workflows/next.yml`, which publishes
   `ghcr.io/sealant-sh/sealant-{api,worker,ssh-gateway}` and `@sealant/sdk` +
-  `@sealant/api-contracts` (npm dist-tag `next`) under one version, `X.(Y+1).0-next.N`: the next
-  minor of the highest stable tag, N the commits since that minor's first release
-  (`node tooling/scripts/next-version.mjs`). Mend pins those exact versions on its main. `latest`
-  moves only from a `vX.Y.Z` tag.
+  `@sealant/api-contracts` (npm dist-tag `next`) under one version, `B-next.N`: B is what the next
+  Version Packages pull request would release (patch changesets only: `X.Y.(Z+1)`; any minor:
+  `X.(Y+1).0`), N the commits since the last stable tag
+  (`node tooling/scripts/next-version.mjs --package packages/sdk`). Mend pins those exact versions
+  on its main. `latest` moves only from a `vX.Y.Z` tag. Only the `publish` job holds the npm
+  credential, and it runs no repository code. Tag a release right after its Version Packages merge:
+  the release refuses while an npm prerelease of that version came from a commit the tag leaves out.
 - **Pinning a sealantd prerelease** is allowed on `main`, the same way as a release: the image tag
   in `packages/workspaces/src/buildkit/buildkit-builder.ts` and `apps/cf-bridge/Dockerfile`, the
   exact `@sealant/runtime-*` versions in `packages/workspaces/package.json`, then `pnpm install`. A

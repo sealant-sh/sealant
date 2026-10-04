@@ -1,19 +1,23 @@
 # Prereleases from main (ADR 0015 in sealant-sh/mend, docs/adr/0015-next-channel.md). Every merge to
-# main publishes, under one version X.(Y+1).0-next.N (tooling/scripts/next-version.mjs):
+# main publishes, under one version B-next.N (tooling/scripts/next-version.mjs: B is what the next
+# Version Packages pull request would release, N the commits since the last stable tag):
 #
 # - ghcr.io/sealant-sh/sealant-{api,worker,ssh-gateway}:<version>, the images Mend's bundle copies,
-#   amd64 and arm64, each built natively;
-# - @sealant/sdk and @sealant/api-contracts <version> on npm's `next` dist-tag, after the images
-#   exist and the workspace runtime e2e passed against the pinned sealantd, so every SDK prerelease
-#   has its images and Mend can pin both at once.
+#   amd64 and arm64, each built natively, tagged once the tests and the workspace e2e passed;
+# - @sealant/sdk and @sealant/api-contracts <version> on npm's `next` dist-tag, after the images.
 #
 # `latest` (npm and GHCR) moves only from a vX.Y.Z tag, in release.yml. No floating tags: Mend pins
 # the exact version and the images by digest. sealant-web stays release-only: Mend does not use it.
 #
-# Main requires Lint and Typecheck on an up-to-date branch, so the merged tree is the tested tree.
-# npm authenticates with OIDC trusted publishing from the `next` environment (deployable from main
-# only): register it on both packages as a second trusted publisher, repository sealant-sh/sealant,
-# workflow next.yml, environment next.
+# The npm credential (OIDC, `id-token: write`) is held only by `publish`, which checks out nothing
+# and runs no repository code: it downloads the tarballs `pack` built, checks each one's name,
+# version and commit, and runs `npm publish --tag next` on it. A build dependency never sees the
+# credential. What this cannot stop on its own: someone who can merge an edit to this file. That
+# needs code-owner review on main (CODEOWNERS covers .github/ and the release scripts) and the
+# `next` environment limited to main; both are repository settings (ADR 0015, decision 3).
+#
+# Register the publisher on both packages as a second trusted publisher: repository
+# sealant-sh/sealant, workflow next.yml, environment next.
 name: Next
 
 on:
@@ -38,7 +42,7 @@ jobs:
       version: ${{ steps.plan.outputs.version }}
       publish: ${{ steps.plan.outputs.publish }}
     steps:
-      # Full history and tags: N counts the commits since the minor's first release.
+      # Full history and tags: N counts the commits since the last stable tag.
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -54,17 +58,23 @@ jobs:
         id: plan
         run: |
           set -euo pipefail
-          version=$(node tooling/scripts/next-version.mjs HEAD)
-          [[ $version =~ ^[0-9]+\.[0-9]+\.0-next\.[0-9]+$ ]] || {
+          version=$(node tooling/scripts/next-version.mjs --package packages/sdk HEAD)
+          [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+-next\.[0-9]+$ ]] || {
             echo "::error::\"$version\" is not a next version."
             exit 1
           }
           # npm is the last step, so a version already there was published completely: a re-run
-          # publishes nothing again.
+          # of this commit publishes nothing again. The same version from another commit (an older
+          # commit re-run after a stable tag moved the base) is refused.
           publish=true
           if [[ -n $(npm view "@sealant/sdk@$version" version 2>/dev/null) ]]; then
+            published_from=$(npm view "@sealant/sdk@$version" gitHead 2>/dev/null || true)
+            if [[ $published_from != "$GITHUB_SHA" ]]; then
+              echo "::error::@sealant/sdk@$version was published from ${published_from:-an unknown commit}, not $GITHUB_SHA."
+              exit 1
+            fi
             publish=false
-            echo "Sealant $version is already published; nothing to do."
+            echo "Sealant $version is already published from this commit; nothing to do."
           fi
           {
             echo "version=$version"
@@ -133,49 +143,53 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  image-tag:
-    name: Tag (${{ matrix.image }})
-    needs: [plan, image]
-    strategy:
-      matrix:
-        image: [api, worker, ssh-gateway]
+  # What CI runs on a pull request beyond lint and typecheck, which main requires: the unit and
+  # integration suites against a migrated Postgres. A next build never publishes over a failing one.
+  test:
+    name: Unit and integration tests
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: /tmp/digests
-          pattern: next-digests-${{ matrix.image }}--*
-          merge-multiple: true
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Tag the multi-arch image
-        working-directory: /tmp/digests
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
         env:
-          REPOSITORY: ghcr.io/${{ github.repository_owner }}/sealant-${{ matrix.image }}
-          VERSION: ${{ needs.plan.outputs.version }}
-        run: |
-          set -euo pipefail
-          # A version is tagged once: a re-run after a failed npm job keeps the image Mend may
-          # already have pinned by digest.
-          if ! docker buildx imagetools inspect "$REPOSITORY:$VERSION" >/dev/null 2>&1; then
-            sources=()
-            for digest in *; do sources+=("$REPOSITORY@sha256:$digest"); done
-            docker buildx imagetools create --tag "$REPOSITORY:$VERSION" "${sources[@]}"
-          fi
-          digest=$(docker buildx imagetools inspect "$REPOSITORY:$VERSION" --format '{{json .Manifest}}' | jq -r .digest)
-          echo "- \`$REPOSITORY:$VERSION\` (\`$digest\`)" >> "$GITHUB_STEP_SUMMARY"
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sealant_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s
+          --health-retries 12
+    env:
+      SEALANT_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sealant_test
+      SEALANT_JOBS_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sealant_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Migrate the test database
+        run: pnpm db:migrate
+        env:
+          DATABASE_URL: ${{ env.SEALANT_TEST_DATABASE_URL }}
+
+      - name: Unit and integration tests
+        run: pnpm exec turbo test --force
 
   # The same proof the release runs before it publishes the SDK: the baked workspace image with the
   # pinned sealantd, and the sealantd e2e suite in required mode.
@@ -217,16 +231,59 @@ jobs:
         run: >-
           pnpm --filter @sealant/workspaces test:e2e src/runtime/docker-volume-mounts.e2e.ts
 
-  npm:
-    name: Publish npm prereleases
-    needs: [plan, image-tag, workspace-e2e]
-    # npm trusted publishing (OIDC) needs a GitHub-hosted runner: this job stays off Blacksmith.
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    environment: next
+  # Tagged only after the tests and the e2e passed, so no version exists without its npm packages
+  # being about to follow.
+  image-tag:
+    name: Tag (${{ matrix.image }})
+    needs: [plan, image, test, workspace-e2e]
+    strategy:
+      matrix:
+        image: [api, worker, ssh-gateway]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
     permissions:
       contents: read
-      id-token: write
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: next-digests-${{ matrix.image }}--*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag the multi-arch image
+        working-directory: /tmp/digests
+        env:
+          REPOSITORY: ghcr.io/${{ github.repository_owner }}/sealant-${{ matrix.image }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          # A version is tagged once: a re-run after a failed npm job keeps the image Mend may
+          # already have pinned by digest.
+          if ! docker buildx imagetools inspect "$REPOSITORY:$VERSION" >/dev/null 2>&1; then
+            sources=()
+            for digest in *; do sources+=("$REPOSITORY@sha256:$digest"); done
+            docker buildx imagetools create --tag "$REPOSITORY:$VERSION" "${sources[@]}"
+          fi
+          digest=$(docker buildx imagetools inspect "$REPOSITORY:$VERSION" --format '{{json .Manifest}}' | jq -r .digest)
+          echo "- \`$REPOSITORY:$VERSION\` (\`$digest\`)" >> "$GITHUB_STEP_SUMMARY"
+
+  # Builds and packs the two packages. No id-token here: nothing this job runs, the dependencies'
+  # build tools included, can reach the npm credential.
+  pack:
+    name: Pack npm prereleases
+    needs: [plan, image-tag]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -236,39 +293,111 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
 
-      # Node 24: trusted publishing needs the bundled npm >= 11.5.
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
-          registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Set the prerelease version
+      # The version and the commit go into each package.json: npm records `gitHead`, which the plan
+      # job compares on a re-run and Core's release guard reads to find a prerelease's commit.
+      - name: Set the prerelease version and commit
         env:
           VERSION: ${{ needs.plan.outputs.version }}
         run: |
           set -euo pipefail
-          # Never a stable version from this workflow: `latest` is release.yml's alone.
-          [[ $VERSION == *-next.* ]] || { echo "::error::$VERSION is not a next version."; exit 1; }
-          pnpm --filter "@sealant/api-contracts" --filter "@sealant/sdk" \
-            exec npm version "$VERSION" --no-git-tag-version --allow-same-version
+          for package in packages/api-contracts packages/sdk; do
+            (cd "$package" && npm version "$VERSION" --no-git-tag-version --allow-same-version \
+              && npm pkg set "gitHead=$GITHUB_SHA")
+          done
 
-      - name: Build
-        run: pnpm --filter "@sealant/api-contracts" --filter "@sealant/sdk" run build
-
-      - name: Publish to npm under next
+      - name: Pack
         run: |
-          pnpm --filter "@sealant/api-contracts" --filter "@sealant/sdk" \
-            publish --access public --no-git-checks --provenance --tag next
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/tarballs"
+          for package in packages/api-contracts packages/sdk; do
+            (cd "$package" && pnpm pack --pack-destination "$RUNNER_TEMP/tarballs")
+          done
+          ls -l "$RUNNER_TEMP/tarballs"
 
-      - name: Summary
+      - uses: actions/upload-artifact@v4
+        with:
+          name: next-tarballs
+          path: ${{ runner.temp }}/tarballs/*.tgz
+          if-no-files-found: error
+          retention-days: 1
+
+  # Holds the npm credential and runs nothing from the repository: no checkout. It checks each
+  # tarball is ours, this version and this commit, that `next` would move forward, and publishes.
+  publish:
+    name: Publish npm prereleases
+    needs: [plan, pack]
+    # npm trusted publishing (OIDC) needs a GitHub-hosted runner: this job stays off Blacksmith.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: next
+    permissions:
+      id-token: write
+    steps:
+      # Node 24: trusted publishing needs the bundled npm >= 11.5.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: next-tarballs
+          path: tarballs
+
+      - name: Check and publish under next
+        working-directory: tarballs
         env:
           VERSION: ${{ needs.plan.outputs.version }}
         run: |
+          set -euo pipefail
+          [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+-next\.[0-9]+$ ]] || {
+            echo "::error::$VERSION is not a next version."
+            exit 1
+          }
+          # `next` only moves forward: an older commit re-run after a newer one published skips.
+          current=$(npm view @sealant/sdk dist-tags.next 2>/dev/null || true)
+          if [[ -n $current ]] && ! node -e '
+            const order = (v) => { const [core, n] = v.split("-next."); return [...core.split(".").map(Number), Number(n ?? Infinity)]; };
+            const [a, b] = [order(process.argv[1]), order(process.argv[2])];
+            const i = a.findIndex((x, k) => x !== b[k]);
+            process.exit(i >= 0 && a[i] > b[i] ? 0 : 1);
+          ' "$VERSION" "$current"; then
+            echo "::notice::npm's next is $current, not older than $VERSION; nothing published."
+            exit 0
+          fi
+          # The contract first: the SDK depends on its exact version.
+          for name in api-contracts sdk; do
+            tarball="sealant-$name-$VERSION.tgz"
+            [[ -f $tarball ]] || { echo "::error::$tarball is missing."; exit 1; }
+            # A re-run after a partial publish: the contract may already be there.
+            if [[ -n $(npm view "@sealant/$name@$VERSION" version 2>/dev/null) ]]; then
+              echo "@sealant/$name@$VERSION is already published."
+              continue
+            fi
+            # shellcheck disable=SC2016 # JavaScript template literals, not shell expansions
+            tar -xzOf "$tarball" package/package.json | node -e '
+              const manifest = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+              const [name, version, commit] = process.argv.slice(1);
+              const problems = [
+                manifest.name !== `@sealant/${name}` && `name ${manifest.name}`,
+                manifest.version !== version && `version ${manifest.version}`,
+                !/-next\.\d+$/.test(manifest.version) && `${manifest.version} is not a next version`,
+                manifest.gitHead !== commit && `gitHead ${manifest.gitHead}`,
+              ].filter(Boolean);
+              if (problems.length > 0) { console.error(`::error::${name}: ${problems.join(", ")}`); process.exit(1); }
+            ' "$name" "$VERSION" "$GITHUB_SHA"
+            npm publish "./$tarball" --tag next --access public --provenance --ignore-scripts
+          done
           {
             echo "## Sealant $VERSION"
             echo

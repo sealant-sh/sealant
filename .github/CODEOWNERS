@@ -1,0 +1,9 @@
+# What decides what gets published, and under which dist-tag, needs the owner's review (ADR 0015 in
+# sealant-sh/mend). Effective once main requires review from code owners.
+/.github/ @ypanagidis
+/tooling/scripts/ @ypanagidis
+/apps/api/Dockerfile @ypanagidis
+/apps/worker/Dockerfile @ypanagidis
+/apps/ssh-gateway/Dockerfile @ypanagidis
+/apps/web/Dockerfile @ypanagidis
+/.changeset/config.json @ypanagidis
