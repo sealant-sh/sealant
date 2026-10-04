@@ -7,3 +7,6 @@
 /apps/ssh-gateway/Dockerfile @ypanagidis
 /apps/web/Dockerfile @ypanagidis
 /.changeset/config.json @ypanagidis
+# The published packages' manifests: a lifecycle script there runs while the tarball is packed.
+/packages/sdk/package.json @ypanagidis
+/packages/api-contracts/package.json @ypanagidis

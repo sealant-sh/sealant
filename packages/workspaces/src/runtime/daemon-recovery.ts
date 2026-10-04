@@ -33,7 +33,7 @@
 export const SEALANTD_RECOVERY_BOOT_MIN_VERSION = { major: 0, minor: 19, patch: 0 } as const;
 
 const RELEASED_SEALANTD_IMAGE =
-  /^ghcr\.io\/sealant-sh\/sealantd:(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(?:@sha256:[0-9a-f]{64})?$/;
+  /^ghcr\.io\/sealant-sh\/sealantd:(\d+)\.(\d+)\.(\d+)(-next\.\d+)?(?:@sha256:[0-9a-f]{64})?$/;
 
 /** The planned Containerfile copies the daemon out of a sealantd image; which one. */
 const SEALANTD_COPY =

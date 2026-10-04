@@ -30,6 +30,9 @@ describe("sealantdHasRecoveryBoot", () => {
     // A prerelease of the first release with the recovery boot comes before it.
     expect(sealantdHasRecoveryBoot("ghcr.io/sealant-sh/sealantd:0.19.0-next.40", [])).toBe(false);
     expect(sealantdHasRecoveryBoot("ghcr.io/sealant-sh/sealantd:0.18.3-next.1", [])).toBe(false);
+    // Only sealantd's own next builds: any other prerelease suffix is unknown.
+    expect(sealantdHasRecoveryBoot("ghcr.io/sealant-sh/sealantd:0.21.0-preview.3", [])).toBeNull();
+    expect(sealantdHasRecoveryBoot("ghcr.io/sealant-sh/sealantd:0.21.0-rc.1", [])).toBeNull();
   });
 
   it("does not know any other build unless the operator declares it (fail closed)", () => {

@@ -108,13 +108,19 @@ The pieces:
 - **Prereleases from main** (ADR 0015 in sealant-sh/mend): every merge to `main` runs
   `.github/workflows/next.yml`, which publishes
   `ghcr.io/sealant-sh/sealant-{api,worker,ssh-gateway}` and `@sealant/sdk` +
-  `@sealant/api-contracts` (npm dist-tag `next`) under one version, `B-next.N`: B is what the next
-  Version Packages pull request would release (patch changesets only: `X.Y.(Z+1)`; any minor:
-  `X.(Y+1).0`), N the commits since the last stable tag
-  (`node tooling/scripts/next-version.mjs --package packages/sdk`). Mend pins those exact versions
-  on its main. `latest` moves only from a `vX.Y.Z` tag. Only the `publish` job holds the npm
-  credential, and it runs no repository code. Tag a release right after its Version Packages merge:
-  the release refuses while an npm prerelease of that version came from a commit the tag leaves out.
+  `@sealant/api-contracts` (npm dist-tag `next`) under one version, `B-next.N`: N is the commit's
+  whole history (`git rev-list --count`), B the larger of what the pending changesets would release
+  and the base of the highest next build already published above the last stable tag, so each build
+  is higher than the one before
+  (`node tooling/scripts/next-version.mjs --package packages/sdk --npm @sealant/sdk`). Mend pins
+  those exact versions on its main. `latest` moves only from a `vX.Y.Z` tag. `pack` builds, packs
+  and checks every exported file is in the tarball; only `publish` holds the npm credential, and it
+  runs no repository code.
+- **Releasing** follows one order across the three repositories (sealant-sh/mend
+  `docs/operations/next-channel.md`). For Core: pin sealantd's release, merge, merge the Version
+  Packages pull request, and **freeze main until the tag**; Mend proves that commit's next build;
+  then tag it. The release refuses while an npm prerelease of the version came from a commit the tag
+  leaves out, which is what a merge during the freeze produces.
 - **Pinning a sealantd prerelease** is allowed on `main`, the same way as a release: the image tag
   in `packages/workspaces/src/buildkit/buildkit-builder.ts` and `apps/cf-bridge/Dockerfile`, the
   exact `@sealant/runtime-*` versions in `packages/workspaces/package.json`, then `pnpm install`. A
