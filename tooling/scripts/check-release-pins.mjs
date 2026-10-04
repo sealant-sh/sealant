@@ -28,11 +28,12 @@ export const RUNTIME_DEPENDENTS = [
   "packages/workspaces/package.json",
 ];
 
-const RELEASED_IMAGE = /^ghcr\.io\/sealant-sh\/sealantd:\d+\.\d+\.\d+(@sha256:[0-9a-f]{64})?$/;
+const RELEASED_IMAGE = /^ghcr\.io\/sealant-sh\/sealantd:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}$/;
 
 /**
- * Every sealantd image reference in `text` that is not a release: a prerelease tag, a bare digest
- * (which could be any build), or anything else that is not `sealantd:X.Y.Z[@sha256:…]`.
+ * Every sealantd image reference in `text` that is not a release pinned by digest: a prerelease, a
+ * bare digest (which could be any build), a tag alone (which can be moved), or anything else that
+ * is not `sealantd:X.Y.Z@sha256:…` (the form tooling/scripts/pin-sealantd.mjs writes).
  */
 export const prereleaseImages = (text) =>
   [...text.matchAll(/ghcr\.io\/sealant-sh\/sealantd(?:-next)?(?:[:@][0-9A-Za-z.:@-]+)?/g)]
@@ -45,6 +46,20 @@ export const prereleaseRanges = (manifest) =>
     .filter(([name, range]) => name.startsWith("@sealant/runtime-") && /\d-[0-9A-Za-z]/.test(range))
     .map(([name, range]) => `${name}@${range}`);
 
+/** The packages this repository publishes: their manifests must depend on no `npm:` alias. */
+export const PUBLISHED_MANIFESTS = [
+  "packages/sdk/package.json",
+  "packages/api-contracts/package.json",
+];
+
+/** `npm:` aliases among a published manifest's dependencies (only the -next packages carry them). */
+export const aliasDependencies = (manifest) =>
+  ["dependencies", "peerDependencies", "optionalDependencies"].flatMap((field) =>
+    Object.entries(manifest[field] ?? {})
+      .filter(([, spec]) => String(spec).startsWith("npm:"))
+      .map(([name, spec]) => `${name}@${spec}`),
+  );
+
 /** `@sealant/runtime-*` versions the lockfile resolves that are prereleases. */
 export const prereleaseLocks = (lockfile) => [
   ...new Set(
@@ -56,11 +71,14 @@ export const prereleaseLocks = (lockfile) => [
   ),
 ];
 
-export const releasePinProblems = ({ imageFiles, manifests, lockfile }) => {
+export const releasePinProblems = ({ imageFiles, manifests, lockfile, published = {} }) => {
   const problems = [];
+  for (const [file, manifest] of Object.entries(published)) {
+    for (const alias of aliasDependencies(manifest)) problems.push(`${file} depends on ${alias}.`);
+  }
   for (const [file, text] of Object.entries(imageFiles)) {
     for (const image of prereleaseImages(text))
-      problems.push(`${file} pins ${image}, not a release.`);
+      problems.push(`${file} pins ${image}, not a release by digest.`);
   }
   for (const [file, manifest] of Object.entries(manifests)) {
     for (const range of prereleaseRanges(manifest)) problems.push(`${file} depends on ${range}.`);
@@ -95,6 +113,11 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       ),
     ),
     lockfile: await read("pnpm-lock.yaml"),
+    published: Object.fromEntries(
+      await Promise.all(
+        PUBLISHED_MANIFESTS.map(async (file) => [file, JSON.parse(await read(file))]),
+      ),
+    ),
   });
   if (problems.length > 0) {
     for (const problem of problems) console.error(`::error::${problem}`);

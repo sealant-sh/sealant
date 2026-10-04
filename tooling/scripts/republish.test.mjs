@@ -60,11 +60,11 @@ const tarGz = (entries) => {
   return gzipSync(Buffer.concat(blocks));
 };
 
-const NAME = "@sealant-test/sdk";
+const NAME = "@sealant/sdk-next";
 const COMMIT = "c0ffee";
-const manifest = (version, extra = {}) =>
+const manifest = (version, extra = {}, name = NAME) =>
   JSON.stringify({
-    name: NAME,
+    name,
     version,
     gitHead: COMMIT,
     main: "./dist/index.js",
@@ -150,7 +150,7 @@ const publish = async (
   entries,
   version,
   channel = "next",
-  { artifact = {}, skipCheck = false } = {},
+  { artifact = {}, skipCheck = false, name = NAME } = {},
 ) => {
   const directory = mkdtempSync(path.join(tmpdir(), "republish-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -168,7 +168,7 @@ const publish = async (
     'cd "$(mktemp -d)"',
     'publish_rebuilt "$ARTIFACTS/in.tgz" "$@"',
   ].join("\n");
-  const child = spawn("bash", ["-c", script, "republish", NAME, version, COMMIT, channel], {
+  const child = spawn("bash", ["-c", script, "republish", name, version, COMMIT, channel], {
     cwd: artifacts,
     env: {
       ...process.env,
@@ -361,18 +361,91 @@ test("a registry failure stops the job instead of being read as nothing publishe
 });
 
 test("a stable release publishes under latest with the same rewrite", async (t) => {
-  const stub = await registry(t, seeded());
-  const { status, output } = await publish(t, stub, goodEntries("0.39.0"), "0.39.0", "latest");
-  assert.equal(status, 0, output);
+  const mend = "@sealant/mend";
+  const seed = {
+    [mend]: { name: mend, versions: { "0.38.1": {} }, "dist-tags": { latest: "0.38.1" } },
+  };
+  const entries = [
+    ["package/package.json", manifest("0.39.0", {}, mend)],
+    ["package/dist/index.js", ""],
+  ];
+  const stub = await registry(t, seed);
+  const result = await publish(t, stub, entries, "0.39.0", "latest", { name: mend });
+  assert.equal(result.status, 0, result.output);
   assert.deepEqual(stub.log[0].distTags, { latest: "0.39.0" });
-  const refused = await publish(
-    t,
-    await registry(t, seeded()),
-    goodEntries("0.39.0-next.9"),
-    "0.39.0-next.9",
-    "latest",
-  );
+  const next = [
+    ["package/package.json", manifest("0.39.0-next.9", {}, mend)],
+    ["package/dist/index.js", ""],
+  ];
+  const refused = await publish(t, await registry(t, seed), next, "0.39.0-next.9", "latest", {
+    name: mend,
+  });
   assert.notEqual(refused.status, 0);
+});
+
+test("a prerelease must be a -next package, or Mend itself", async (t) => {
+  const plain = "@sealant/sdk";
+  const seed = { [plain]: { name: plain, versions: {}, "dist-tags": { latest: "0.38.1" } } };
+  const entries = [
+    ["package/package.json", manifest("0.39.0-next.9", {}, plain)],
+    ["package/dist/index.js", ""],
+  ];
+  const stub = await registry(t, seed);
+  const result = await publish(t, stub, entries, "0.39.0-next.9", "next", { name: plain });
+  assert.notEqual(result.status, 0, result.output);
+  assert.match(result.output, /@sealant\/sdk is not a -next package/);
+  assert.equal(stub.log.length, 0);
+});
+
+test("a -next package's sibling dependency must be its exact -next alias", async (t) => {
+  const exact = {
+    dependencies: { "@sealant/api-contracts": "npm:@sealant/api-contracts-next@0.39.0-next.9" },
+  };
+  const ok = await registry(t, seeded());
+  const accepted = await publish(
+    t,
+    ok,
+    [
+      ["package/package.json", manifest("0.39.0-next.9", exact)],
+      ["package/dist/index.js", ""],
+    ],
+    "0.39.0-next.9",
+  );
+  assert.equal(accepted.status, 0, accepted.output);
+  assert.deepEqual(ok.log[0].manifest.dependencies, exact.dependencies);
+  for (const spec of [
+    "npm:@evil/api-contracts@0.39.0-next.9",
+    "npm:@sealant/api-contracts-next@0.39.0-next.8",
+    "npm:@sealant/api-contracts@0.39.0",
+    "0.39.0-next.9",
+  ]) {
+    const stub = await registry(t, seeded());
+    const entries = [
+      [
+        "package/package.json",
+        manifest("0.39.0-next.9", { dependencies: { "@sealant/api-contracts": spec } }),
+      ],
+      ["package/dist/index.js", ""],
+    ];
+    const result = await publish(t, stub, entries, "0.39.0-next.9");
+    assert.notEqual(result.status, 0, spec);
+    assert.equal(stub.log.length, 0, spec);
+  }
+  // An alias to anything else is refused as well.
+  const other = await registry(t, seeded());
+  const aliased = await publish(
+    t,
+    other,
+    [
+      [
+        "package/package.json",
+        manifest("0.39.0-next.9", { dependencies: { effect: "npm:evil@1.0.0" } }),
+      ],
+      ["package/dist/index.js", ""],
+    ],
+    "0.39.0-next.9",
+  );
+  assert.notEqual(aliased.status, 0);
 });
 
 test("the archive writer makes archives npm can read", () => {

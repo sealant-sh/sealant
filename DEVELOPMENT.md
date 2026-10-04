@@ -113,16 +113,18 @@ The pieces:
   and the base of the highest next build already published above the last stable tag
   (`node tooling/scripts/next-version.mjs --package packages/sdk --npm @sealant/sdk-next`). The
   `next` trusted publisher is registered only on the two `-next` packages, so nothing in that
-  workflow can publish `@sealant/sdk` or write a stable image tag. Mend pins a prerelease through an
-  exact alias (`"@sealant/sdk": npm:@sealant/sdk-next@<version>`) and every image by digest.
-  `latest` on the stable packages moves only from a `vX.Y.Z` tag.
-- **Pinning a sealantd prerelease** is allowed on `main`: the image becomes
-  `ghcr.io/sealant-sh/sealantd-next:<version>` in
-  `packages/workspaces/src/buildkit/buildkit-builder.ts` and `apps/cf-bridge/Dockerfile`, and the
-  runtime packages in `packages/workspaces/package.json` become exact aliases
-  (`"@sealant/runtime-client": "npm:@sealant/runtime-client-next@<version>"`), then `pnpm install`.
-  A stable release refuses to start while any of those is a prerelease
-  (`tooling/scripts/check-release-pins.mjs`): release sealantd first, pin it, then tag.
+  workflow can publish `@sealant/sdk`. Images are weaker: the image jobs' `packages: write` can push
+  the stable images too (GHCR cannot scope it); their actions are pinned to commits, and Mend pins
+  every Core image by digest. Mend pins a prerelease through an exact alias
+  (`"@sealant/sdk": npm:@sealant/sdk-next@<version>`). `latest` on the stable packages moves only
+  from a `vX.Y.Z` tag.
+- **Pinning sealantd**, a release or a prerelease, is one command:
+  `node tooling/scripts/pin-sealantd.mjs <version>`. It writes the image as `tag@sha256:<digest>`
+  (`ghcr.io/sealant-sh/sealantd:X.Y.Z@…`, or `sealantd-next:X.Y.Z-next.N@…`) into
+  `packages/workspaces/src/buildkit/buildkit-builder.ts` and `apps/cf-bridge/Dockerfile`, sets the
+  runtime packages in `packages/workspaces/package.json` exactly (aliases of the `-next` packages
+  for a prerelease), and runs `pnpm install`. A stable release refuses to start while any sealantd
+  reference lacks its digest or is a prerelease (`tooling/scripts/check-release-pins.mjs`).
 - **Releasing** follows one order across the three repositories (sealant-sh/mend
   `docs/operations/next-channel.md`). For Core: pin sealantd's release, merge, merge the Version
   Packages pull request, and **freeze main until the tag**; Mend proves that commit's next build;

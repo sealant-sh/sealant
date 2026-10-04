@@ -5,6 +5,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  aliasDependencies,
   RUNTIME_DEPENDENTS,
   SEALANTD_IMAGE_FILES,
   prereleaseImages,
@@ -41,7 +42,7 @@ test("main's pins are judged as they are; a prerelease pin is named wherever it 
     imageFiles: {
       "packages/workspaces/src/buildkit/buildkit-builder.ts":
         'process.env["SEALANT_SEALANTD_IMAGE"] ?? "ghcr.io/sealant-sh/sealantd:0.20.0-next.7";',
-      "apps/cf-bridge/Dockerfile": "COPY --from=ghcr.io/sealant-sh/sealantd:0.19.0 /a /a",
+      "apps/cf-bridge/Dockerfile": `COPY --from=ghcr.io/sealant-sh/sealantd:0.19.0@sha256:${"a".repeat(64)} /a /a`,
     },
     manifests: {
       "packages/workspaces/package.json": {
@@ -61,7 +62,7 @@ test("main's pins are judged as they are; a prerelease pin is named wherever it 
     ].join("\n"),
   });
   assert.deepEqual(problems, [
-    "packages/workspaces/src/buildkit/buildkit-builder.ts pins ghcr.io/sealant-sh/sealantd:0.20.0-next.7, not a release.",
+    "packages/workspaces/src/buildkit/buildkit-builder.ts pins ghcr.io/sealant-sh/sealantd:0.20.0-next.7, not a release by digest.",
     "packages/workspaces/package.json depends on @sealant/runtime-client@0.20.0-next.7.",
     "packages/workspaces/package.json depends on @sealant/runtime-protocol@0.20.0-next.7.",
     "pnpm-lock.yaml resolves @sealant/runtime-client@0.20.0-next.7.",
@@ -94,17 +95,38 @@ test("a next build's -next image and -next packages are prereleases too", () => 
   ]);
 });
 
-test("released tags, with or without a digest, are releases", () => {
+test("a release counts only with its digest: a tag alone can be moved", () => {
   assert.deepEqual(
-    prereleaseImages(
-      "ghcr.io/sealant-sh/sealantd:0.19.0 " +
-        `ghcr.io/sealant-sh/sealantd:0.19.1@sha256:${"a".repeat(64)}`,
-    ),
+    prereleaseImages(`ghcr.io/sealant-sh/sealantd:0.19.1@sha256:${"a".repeat(64)}`),
     [],
   );
+  assert.deepEqual(prereleaseImages("ghcr.io/sealant-sh/sealantd:0.19.0"), [
+    "ghcr.io/sealant-sh/sealantd:0.19.0",
+  ]);
   assert.deepEqual(
     prereleaseRanges({ dependencies: { "@sealant/runtime-client": "^0.19.0" } }),
     [],
   );
   assert.deepEqual(prereleaseLocks("  '@sealant/runtime-client@0.19.0':\n"), []);
+});
+
+test("the published packages may depend on no npm alias", async () => {
+  for (const file of ["packages/sdk/package.json", "packages/api-contracts/package.json"]) {
+    assert.deepEqual(aliasDependencies(JSON.parse(await read(file))), [], file);
+  }
+  assert.deepEqual(
+    aliasDependencies({
+      dependencies: { "@sealant/api-contracts": "npm:@sealant/api-contracts-next@0.39.0-next.9" },
+    }),
+    ["@sealant/api-contracts@npm:@sealant/api-contracts-next@0.39.0-next.9"],
+  );
+  assert.match(
+    releasePinProblems({
+      imageFiles: {},
+      manifests: {},
+      lockfile: "",
+      published: { "packages/sdk/package.json": { dependencies: { x: "npm:y@1.0.0" } } },
+    })[0],
+    /packages\/sdk\/package\.json depends on x@npm:y@1\.0\.0/,
+  );
 });
