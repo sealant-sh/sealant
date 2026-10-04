@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -15,6 +15,7 @@ import {
   planNext,
   previewVersion,
   previewVersionOf,
+  registryRecord,
   strayNextBuilds,
 } from "./next-version.mjs";
 
@@ -286,4 +287,126 @@ test("every generated history publishes strictly increasing versions", (t) => {
     "tag",
     "version packages",
   ]);
+});
+
+const response = (status, body = {}) => ({ ok: status === 200, status, json: async () => body });
+const noWait = { delay: () => 0 };
+
+test("the npm lookup retries, and fails closed on a 404, a 5xx or a network error", async () => {
+  const record = {
+    versions: { "0.39.0-next.9": { gitHead: "abc" } },
+    "dist-tags": { next: "0.39.0-next.9" },
+  };
+  let calls = 0;
+  const flaky = async () => (++calls < 3 ? response(503) : response(200, record));
+  assert.deepEqual(await registryRecord("@sealant/sdk", { fetchImpl: flaky, ...noWait }), record);
+  assert.equal(calls, 3);
+  // Every package read here exists: a 404 is not "nothing published".
+  await assert.rejects(
+    registryRecord("@sealant/sdk", { fetchImpl: async () => response(404), ...noWait }),
+    /npm answered 404/,
+  );
+  await assert.rejects(
+    registryRecord("@sealant/sdk", { fetchImpl: async () => response(500), ...noWait }),
+    /npm answered 500/,
+  );
+  await assert.rejects(
+    registryRecord("@sealant/sdk", {
+      fetchImpl: async () => {
+        throw new Error("ECONNRESET");
+      },
+      ...noWait,
+    }),
+    /ECONNRESET/,
+  );
+});
+
+test("--newer exits 0 only for a newer next version, and fails closed on garbage", () => {
+  const newer = (a, b) =>
+    spawnSync("node", [new URL("./next-version.mjs", import.meta.url).pathname, "--newer", a, b])
+      .status;
+  assert.equal(newer("0.36.0-next.62", "0.36.0-next.60"), 0);
+  assert.equal(newer("0.37.0-next.1", "0.36.0-next.900"), 0);
+  assert.equal(newer("0.36.0-next.60", "0.36.0-next.62"), 1);
+  assert.equal(newer("0.36.0-next.60", "0.36.0-next.60"), 1);
+  assert.equal(newer("0.36.0-next.60", "0.36.0"), 1);
+  assert.equal(newer("garbage", "0.36.0-next.1"), 1);
+  assert.equal(newer("0.36.0-next.1", "garbage"), 1);
+});
+
+test("publishing only some commits, with merge commits in main, still only goes up", (t) => {
+  const levels = ["patch", "minor", "major"];
+  const bump = (version, level) => {
+    const [a, b, c] = version.split(".").map(Number);
+    return level === "major"
+      ? `${a + 1}.0.0`
+      : level === "minor"
+        ? `${a}.${b + 1}.0`
+        : `${a}.${b}.${c + 1}`;
+  };
+  const random = (seed) => () => {
+    seed = (seed * 1103515245 + 12345) % 2 ** 31;
+    return seed / 2 ** 31;
+  };
+  for (const seed of [21, 22, 23, 24, 25, 26]) {
+    const r = repository(t);
+    const pick = random(seed);
+    let tagged = "0.36.0";
+    let changesets = new Map();
+    let counter = 0;
+    r.setVersion(tagged);
+    r.commit("release");
+    r.git("tag", `v${tagged}`);
+    const published = [];
+    const steps = [];
+    for (let step = 0; step < 20; step += 1) {
+      const roll = pick();
+      let op = "plain";
+      if (roll < 0.25) {
+        op = roll < 0.15 ? "patch" : "minor";
+        const file = `.changeset/c${(counter += 1)}.md`;
+        r.write(file, changeset([["@sealant/mend", op]]));
+        changesets.set(file, op);
+        r.commit(op);
+      } else if (roll < 0.4) {
+        // A merge commit: a side branch of two commits, merged without fast-forward.
+        op = "merge a branch";
+        r.git("checkout", "-q", "-b", `side${step}`);
+        r.commit("side one");
+        r.commit("side two");
+        r.git("checkout", "-q", "main");
+        r.git("merge", "-q", "--no-ff", "-m", "merge", `side${step}`);
+      } else if (roll < 0.5) {
+        op = "revert a minor changeset";
+        const minor = [...changesets].find(([, level]) => level === "minor");
+        if (minor !== undefined) {
+          r.remove(minor[0]);
+          changesets.delete(minor[0]);
+        }
+        r.commit(op);
+      } else if (roll < 0.62 && changesets.size > 0) {
+        op = "version packages, then tag it";
+        const level = [...changesets.values()].reduce(
+          (top, value) => Math.max(top, levels.indexOf(value)),
+          0,
+        );
+        tagged = bump(tagged, levels[level]);
+        for (const file of changesets.keys()) r.remove(file);
+        changesets = new Map();
+        r.setVersion(tagged);
+        const sha = r.commit(op);
+        r.git("tag", `v${tagged}`, sha);
+      } else {
+        r.commit(op);
+      }
+      // Like Mend: only some commits get a next build handed out.
+      if (pick() < 0.5) continue;
+      const next = nextVersionOf("HEAD", "apps/cli", published);
+      steps.push(`${op} → ${next}`);
+      const last = published.at(-1);
+      if (last !== undefined)
+        assert.ok(compareNext(next, last) > 0, `seed ${seed}:\n${steps.join("\n")}`);
+      published.push(next);
+    }
+  }
 });

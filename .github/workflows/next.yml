@@ -10,9 +10,10 @@
 # the exact version and the images by digest. sealant-web stays release-only: Mend does not use it.
 #
 # The npm credential (OIDC, `id-token: write`) is held only by `publish`, which checks out nothing
-# and runs no repository code: it downloads the tarballs `pack` built and checked, refuses one with
-# an entry outside package/, reads each one's name and version the way npm will publish it, and
-# runs `npm publish --tag next` on it. A build dependency never sees the
+# and runs no repository code. It never publishes the tarballs `pack` made: it extracts each with
+# pacote (npm's own reader, pinned and installed in the job), rewrites package.json from an
+# allowlist (no `tag`, no scripts, no publishConfig but `access`), checks the name, the -next
+# version and the commit on that, repacks it, and publishes that under `next`. A build dependency never sees the
 # credential. What this cannot stop on its own: someone who can merge an edit to this file. That
 # needs code-owner review on main (CODEOWNERS covers .github/ and the release scripts) and the
 # `next` environment limited to main; both are repository settings (ADR 0015, decision 3).
@@ -43,7 +44,7 @@ jobs:
       version: ${{ steps.plan.outputs.version }}
       publish: ${{ steps.plan.outputs.publish }}
     steps:
-      # Full history and tags: N counts the commits since the last stable tag.
+      # Full history and tags: N counts the commit's whole history.
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -65,13 +66,13 @@ jobs:
             exit 1
           }
           # npm is the last step, so a version already there was published completely: a re-run
-          # of this commit publishes nothing again. The same version from another commit (an older
-          # commit re-run after a stable tag moved the base) is refused.
+          # of this commit publishes nothing again. The same version from another commit is refused.
+          # Every lookup fails the run on a registry error; nothing reads as "not published".
           publish=true
-          if [[ -n $(npm view "@sealant/sdk@$version" version 2>/dev/null) ]]; then
-            published_from=$(npm view "@sealant/sdk@$version" gitHead 2>/dev/null || true)
-            if [[ $published_from != "$GITHUB_SHA" ]]; then
-              echo "::error::@sealant/sdk@$version was published from ${published_from:-an unknown commit}, not $GITHUB_SHA."
+          from=$(node tooling/scripts/next-version.mjs --published @sealant/sdk "$version")
+          if [[ -n $from ]]; then
+            if [[ $from != "$GITHUB_SHA" ]]; then
+              echo "::error::@sealant/sdk@$version was published from $from, not $GITHUB_SHA."
               exit 1
             fi
             publish=false
@@ -79,11 +80,13 @@ jobs:
           fi
           # `next` only moves forward. Every newer commit computes a higher version, so this fails
           # only for an older commit re-run after a newer one published: loudly, before any build.
-          current=$(npm view @sealant/sdk dist-tags.next 2>/dev/null || true)
-          if [[ $publish == true && -n $current ]] &&
-            ! node tooling/scripts/next-version.mjs --newer "$version" "$current"; then
-            echo "::error::npm's next is already $current; $version from this commit is not newer. A newer commit published first."
-            exit 1
+          # `publish` checks again right before publishing.
+          if [[ $publish == true ]]; then
+            current=$(node tooling/scripts/next-version.mjs --dist-tag @sealant/sdk next)
+            if [[ -n $current ]] && ! node tooling/scripts/next-version.mjs --newer "$version" "$current"; then
+              echo "::error::npm's next is already $current; $version from this commit is not newer. A newer commit published first."
+              exit 1
+            fi
           fi
           {
             echo "version=$version"
@@ -363,76 +366,175 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
+      # npm's own tarball reader, at a fixed version, installed here and not from the repository.
+      - name: Install pacote
+        run:
+          npm install --prefix "$RUNNER_TEMP/tools" --no-save --no-package-lock --ignore-scripts
+          --no-audit --no-fund pacote@21.5.0
+
       - uses: actions/download-artifact@v4
         with:
           name: next-tarballs
           path: tarballs
 
-      - name: Check and publish under next
+      - name: Rebuild and publish under next
         working-directory: tarballs
         env:
           VERSION: ${{ needs.plan.outputs.version }}
         run: |
           set -euo pipefail
-          # --- tarball check ---
-          # tooling/scripts/check-tarball.test.mjs runs this block as written. npm extracts a tarball
-          # with strip: 1, so an entry outside package/ (or a second package/package.json) could
-          # carry the manifest npm really publishes: refuse both, then take the name and version from
-          # npm's own dry run, and require both readings to be this run's next version.
-          check_tarball() {
-            local tarball=$1 name=$2 version=$3 commit=$4 entries manifest dry
-            [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+-next\.[0-9]+$ ]] || {
-              echo "::error::$version is not a next version."
-              return 1
-            }
-            entries=$(tar -tzf "$tarball")
-            if grep -v '^package/' <<<"$entries" | grep -q .; then
-              echo "::error::$tarball has entries outside package/."
-              return 1
-            fi
-            if [[ $(grep -cx 'package/package.json' <<<"$entries" || true) != 1 ]]; then
-              echo "::error::$tarball does not have exactly one package/package.json."
-              return 1
-            fi
-            manifest=$(tar -xzOf "$tarball" package/package.json)
-            dry=$(npm publish "./$tarball" --dry-run --json --tag next 2>/dev/null)
+          # --- republish ---
+          # republish.test.mjs runs this block as written, against a stub registry. The tarball pack built is
+          # never published as it is: npm's own reader (pacote, pinned in this job) extracts it, package.json
+          # is rewritten from an allowlist (no `tag`, no scripts, no publishConfig but `access`), the rewritten
+          # manifest is checked, and `npm pack` builds the tarball that is published. What is checked is what
+          # is published. Three earlier checks of the tarball as built each missed a way npm reads it
+          # differently (a second manifest outside package/, a `tag` field, package/./package.json).
+          # Failures inside $(...) stop the job too.
+          shopt -s inherit_errexit
+          KEEP_FIELDS='["name","version","description","license","repository","homepage","bugs","keywords","type","main","module","types","typings","exports","files","bin","man","directories","engines","dependencies","peerDependencies","peerDependenciesMeta","optionalDependencies","gitHead"]'
+
+          # The registry's record of a package, retried; a failure or a 404 stops the job: never guessed.
+          packument() {
             # shellcheck disable=SC2016 # JavaScript template literals, not shell expansions
             node -e '
-              const [name, version, commit, manifestText, dryText] = process.argv.slice(1);
-              const manifest = JSON.parse(manifestText);
-              const dry = JSON.parse(dryText);
-              const problems = [
-                manifest.name !== name && `name ${manifest.name}`,
-                manifest.version !== version && `version ${manifest.version}`,
-                manifest.gitHead !== commit && `gitHead ${manifest.gitHead}`,
-                dry.name !== name && `npm would publish ${dry.name}`,
-                dry.version !== version && `npm would publish version ${dry.version}`,
-                !/-next\.\d+$/.test(String(dry.version)) && `${dry.version} is not a next version`,
-              ].filter(Boolean);
-              if (problems.length > 0) {
-                console.error(`::error::${name}: ${problems.join(", ")}`);
-                process.exit(1);
-              }
-            ' "$name" "$version" "$commit" "$manifest" "$dry"
+              const [name, registry] = process.argv.slice(1);
+              const url = new URL(name.replace("/", "%2f"), registry.endsWith("/") ? registry : `${registry}/`);
+              const run = async () => {
+                for (let attempt = 1; attempt <= 4; attempt += 1) {
+                  try {
+                    const response = await fetch(url, { headers: { accept: "application/json" } });
+                    if (response.ok) return process.stdout.write(JSON.stringify(await response.json()));
+                    if (attempt === 4) throw new Error(`the registry answered ${response.status} for ${name}`);
+                  } catch (error) {
+                    if (attempt === 4) {
+                      console.error(`::error::${error.message}`);
+                      process.exit(1);
+                    }
+                  }
+                  await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
+                }
+              };
+              run();
+            ' "$1" "$(npm config get registry)"
           }
-          # --- end tarball check ---
-          # The contract first: the SDK depends on its exact version. `plan` decided this commit
-          # publishes; a package already there is a re-run resuming after a partial publish, and
-          # must be from this commit.
+
+          # A dist-tag's version, or nothing.
+          dist_tag() {
+            local record
+            record=$(packument "$1")
+            node -e 'process.stdout.write(String(JSON.parse(process.argv[1])["dist-tags"]?.[process.argv[2]] ?? ""))' "$record" "$2"
+          }
+
+          # The commit a published version came from ("unknown" without gitHead), or nothing if unpublished.
+          published_from() {
+            local record
+            record=$(packument "$1")
+            node -e '
+              const found = JSON.parse(process.argv[1]).versions?.[process.argv[2]];
+              process.stdout.write(found === undefined ? "" : String(found.gitHead ?? "unknown"));
+            ' "$record" "$2"
+          }
+
+          # Whether $1 is a newer next version than $2 (X.Y.Z-next.N; a stable X.Y.Z sorts after them).
+          newer() {
+            node -e '
+              const order = (v) => {
+                const [core, n] = v.split("-next.");
+                return [...core.split(".").map(Number), n === undefined ? Infinity : Number(n)];
+              };
+              const [a, b] = [order(process.argv[1]), order(process.argv[2])];
+              if ([...a, ...b].some(Number.isNaN)) process.exit(2);
+              const i = a.findIndex((x, k) => x !== b[k]);
+              process.exit(i >= 0 && a[i] > b[i] ? 0 : 1);
+            ' "$1" "$2"
+          }
+
+          # Extracts <tarball> with pacote, rewrites and checks its manifest, repacks it; prints the new path.
+          rebuild_tarball() {
+            local tarball=$1 name=$2 version=$3 commit=$4 channel=$5 work packed
+            work=$(mktemp -d)
+            # shellcheck disable=SC2016 # JavaScript template literals, not shell expansions
+            node -e '
+              const fs = require("node:fs");
+              const path = require("node:path");
+              const pacote = require(process.env.PACOTE);
+              const [tarball, dir, name, version, commit, channel, keepText] = process.argv.slice(1);
+              const run = async () => {
+                await pacote.extract(`file:${path.resolve(tarball)}`, dir);
+                const read = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
+                const manifest = {};
+                for (const field of JSON.parse(keepText)) if (field in read) manifest[field] = read[field];
+                if (read.publishConfig?.access !== undefined) manifest.publishConfig = { access: read.publishConfig.access };
+                const shape = channel === "next" ? /^\d+\.\d+\.\d+-next\.\d+$/ : /^\d+\.\d+\.\d+$/;
+                const problems = [
+                  manifest.name !== name && `name ${manifest.name}, not ${name}`,
+                  manifest.version !== version && `version ${manifest.version}, not ${version}`,
+                  !shape.test(String(manifest.version)) && `${manifest.version} is not a ${channel} version`,
+                  manifest.gitHead !== commit && `gitHead ${manifest.gitHead}, not ${commit}`,
+                ].filter(Boolean);
+                if (problems.length > 0) {
+                  console.error(`::error::${name}: ${problems.join("; ")}`);
+                  process.exit(1);
+                }
+                fs.writeFileSync(path.join(dir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+              };
+              run().catch((error) => {
+                console.error(`::error::${name}: ${error.message}`);
+                process.exit(1);
+              });
+            ' "$tarball" "$work/package" "$name" "$version" "$commit" "$channel" "$KEEP_FIELDS" >&2
+            # A packed .npmrc would configure the pack below; nothing else in the tree runs.
+            find "$work/package" -name .npmrc -delete
+            packed=$(cd "$work/package" && npm pack --ignore-scripts --json --pack-destination "$work")
+            printf '%s/%s\n' "$work" "$(node -e 'process.stdout.write(JSON.parse(process.argv[1])[0].filename)' "$packed")"
+          }
+
+          # Publishes <tarball> as <name>@<version> from <commit> under <channel>; extra npm flags follow.
+          # A version already published from this commit is done; from another commit, refused. Under next:
+          # refused unless newer than the current next, checked here, right before publishing, so a re-run of
+          # an old job cannot move next back; and afterwards `latest` must not be this version.
+          publish_rebuilt() {
+            local tarball=$1 name=$2 version=$3 commit=$4 channel=$5 from current latest_before latest rebuilt
+            shift 5
+            from=$(published_from "$name" "$version")
+            if [[ -n $from ]]; then
+              if [[ $from != "$commit" ]]; then
+                echo "::error::$name@$version was published from $from, not $commit."
+                return 1
+              fi
+              echo "$name@$version is already published from this commit."
+              return 0
+            fi
+            latest_before=$(dist_tag "$name" latest)
+            if [[ $channel == next ]]; then
+              current=$(dist_tag "$name" next)
+              if [[ -n $current ]] && ! newer "$version" "$current"; then
+                echo "::error::$name's next is already $current, not older than $version. Nothing was published."
+                return 1
+              fi
+            fi
+            rebuilt=$(rebuild_tarball "$tarball" "$name" "$version" "$commit" "$channel")
+            npm publish "$rebuilt" --tag "$channel" --access public --ignore-scripts "$@"
+            if [[ $channel == next ]]; then
+              latest=$(dist_tag "$name" latest)
+              if [[ $latest == "$version" ]]; then
+                echo "::error::$name@$version became latest. Moving latest back to ${latest_before:-nothing}."
+                if [[ -z $latest_before ]] || ! npm dist-tag add "$name@$latest_before" latest; then
+                  echo "::error::Could not move latest back. Run: npm dist-tag add $name@$latest_before latest"
+                fi
+                return 1
+              fi
+            fi
+          }
+          # --- end republish ---
+
+          export PACOTE="$RUNNER_TEMP/tools/node_modules/pacote"
+          # The contract first: the SDK depends on its exact version.
           for name in api-contracts sdk; do
             tarball="sealant-$name-$VERSION.tgz"
             [[ -f $tarball ]] || { echo "::error::$tarball is missing."; exit 1; }
-            if [[ -n $(npm view "@sealant/$name@$VERSION" version 2>/dev/null) ]]; then
-              from=$(npm view "@sealant/$name@$VERSION" gitHead 2>/dev/null || true)
-              [[ $from == "$GITHUB_SHA" ]] || {
-                echo "::error::@sealant/$name@$VERSION was published from ${from:-an unknown commit}."
-                exit 1
-              }
-              echo "@sealant/$name@$VERSION is already published from this commit."
-              continue
-            fi
-            check_tarball "$tarball" "@sealant/$name" "$VERSION" "$GITHUB_SHA"
-            npm publish "./$tarball" --tag next --access public --provenance --ignore-scripts
+            publish_rebuilt "$tarball" "@sealant/$name" "$VERSION" "$GITHUB_SHA" next --provenance
           done
           {
             echo "## Sealant $VERSION"

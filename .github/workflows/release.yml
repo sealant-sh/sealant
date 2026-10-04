@@ -37,9 +37,9 @@ jobs:
       - name: Refuse a prerelease tag or a prerelease sealantd
         run: node tooling/scripts/check-release-pins.mjs "$GITHUB_REF_NAME"
 
-      # Every merge after the Version Packages pull request published another X.Y.Z-next.N. One
-      # built from a commit this tag leaves out sorts below X.Y.Z but holds more: refuse, and tag
-      # right after the Version Packages merge, or from a commit that contains it.
+      # One built from a commit this tag leaves out sorts below X.Y.Z but holds more: refuse. Main
+      # is frozen from the Version Packages merge to this tag (sealant-sh/mend
+      # docs/operations/next-channel.md); a merge during the freeze is what produces one.
       - name: Refuse a release that leaves out one of its next builds
         run: >-
           node tooling/scripts/next-version.mjs --stray "$GITHUB_REF_NAME" --npm @sealant/sdk HEAD

@@ -27,8 +27,16 @@ export const manifestTargets = (manifest) => {
 
 const entryOf = (target) => `package/${target.replace(/^\.\//, "")}`;
 
+/** An entry path as npm's reader sees it: `package/./a` and `package//a` are `package/a`. */
+export const normalizeEntry = (entry) =>
+  entry
+    .replace(/^\.\//, "")
+    .replace(/\/(\.\/)+/g, "/")
+    .replace(/\/{2,}/g, "/");
+
 /** What is wrong with a tarball, given its entries (`tar -tzf`) and its package/package.json. */
-export const tarballProblems = (entries, manifest) => {
+export const tarballProblems = (rawEntries, manifest) => {
+  const entries = rawEntries.map(normalizeEntry);
   const problems = [];
   const outside = entries.filter((entry) => !entry.startsWith("package/"));
   if (outside.length > 0) problems.push(`entries outside package/: ${outside.join(", ")}`);

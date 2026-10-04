@@ -25,6 +25,8 @@
 //   node next-version.mjs --package <dir> --preview <run> --main <ref> [--npm <package>] [commit]
 //   node next-version.mjs --stray vX.Y.Z [--npm <package>] [commit]         # exit 1 when any
 //   node next-version.mjs --newer <version> <than>                          # exit 0 when newer
+//   node next-version.mjs --published <package> <version>   # its gitHead ("unknown"), or nothing
+//   node next-version.mjs --dist-tag <package> <tag>        # the tag's version, or nothing
 //
 // The next builds already handed out are the repository's vX.Y.Z-next.N tags, plus the versions of
 // `--npm <package>` (Core and sealantd publish without tags).
@@ -132,23 +134,45 @@ const refuseShallow = () => {
   }
 };
 
+/**
+ * The registry's record of `npmPackage`, retried. Every package this reads has been published, so
+ * a 404 is an error like any other (a CDN hiccup, a typo): after the retries it throws, and the
+ * caller stops instead of reading "nothing published" and computing a lower version.
+ */
+export const registryRecord = async (
+  npmPackage,
+  { fetchImpl = fetch, attempts = 4, delay = (attempt) => attempt * 1500 } = {},
+) => {
+  const registry = process.env.NPM_CONFIG_REGISTRY ?? "https://registry.npmjs.org/";
+  const url = new URL(
+    npmPackage.replace("/", "%2f"),
+    registry.endsWith("/") ? registry : `${registry}/`,
+  );
+  let last;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetchImpl(url.toString(), { headers: { accept: "application/json" } });
+      if (response.ok) return await response.json();
+      last = new Error(`npm answered ${response.status} for ${npmPackage}.`);
+    } catch (error) {
+      last = error instanceof Error ? error : new Error(String(error));
+    }
+    if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, delay(attempt)));
+  }
+  throw last;
+};
+
 /** Every next build the repository tagged, and `npmPackage`'s published next versions. */
-export const nextBuilds = async (npmPackage, fetchImpl = fetch) => {
+export const nextBuilds = async (npmPackage, options = {}) => {
   const builds = git(["tag", "--list", "v*-next.*"])
     .split("\n")
     .filter((tag) => isNextVersion(tag.slice(1)))
     .map((tag) => ({ version: tag.slice(1), commit: git(["rev-list", "-n", "1", tag]) }));
   if (npmPackage !== undefined) {
-    const response = await fetchImpl(
-      `https://registry.npmjs.org/${npmPackage.replace("/", "%2f")}`,
-    );
-    if (response.status !== 404) {
-      if (!response.ok) throw new Error(`npm answered ${response.status} for ${npmPackage}.`);
-      const { versions = {} } = await response.json();
-      for (const [published, manifest] of Object.entries(versions)) {
-        if (!isNextVersion(published)) continue;
-        builds.push({ version: published, commit: manifest.gitHead });
-      }
+    const { versions = {} } = await registryRecord(npmPackage, options);
+    for (const [published, manifest] of Object.entries(versions)) {
+      if (!isNextVersion(published)) continue;
+      builds.push({ version: published, commit: manifest.gitHead });
     }
   }
   return builds;
@@ -217,7 +241,23 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   if (args[0] === "--newer") {
     const [version, than] = args.slice(1);
     if (version === undefined || than === undefined) throw new Error("--newer <version> <than>");
-    process.exit(compareNext(version, than) > 0 ? 0 : 1);
+    const order = compareNext(version, than);
+    // Garbage on either side is not newer: NaN fails closed.
+    process.exit(order > 0 ? 0 : 1);
+  }
+  if (args[0] === "--published" || args[0] === "--dist-tag") {
+    const [, npmPackage, key] = args;
+    if (npmPackage === undefined || key === undefined)
+      throw new Error(`${args[0]} <package> <key>`);
+    const record = await registryRecord(npmPackage);
+    const found =
+      args[0] === "--published"
+        ? record.versions?.[key] === undefined
+          ? ""
+          : String(record.versions[key].gitHead ?? "unknown")
+        : String(record["dist-tags"]?.[key] ?? "");
+    process.stdout.write(found === "" ? "" : `${found}\n`);
+    process.exit(0);
   }
   const option = (name) => {
     const index = args.indexOf(name);

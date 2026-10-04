@@ -114,8 +114,10 @@ The pieces:
   is higher than the one before
   (`node tooling/scripts/next-version.mjs --package packages/sdk --npm @sealant/sdk`). Mend pins
   those exact versions on its main. `latest` moves only from a `vX.Y.Z` tag. `pack` builds, packs
-  and checks every exported file is in the tarball; only `publish` holds the npm credential, and it
-  runs no repository code.
+  and checks every exported file is in the tarball. Only `publish` holds the npm credential; it runs
+  no repository code and never publishes the tarball it was given: it extracts it with npm's own
+  reader (pacote), rewrites `package.json` from an allowlist, checks name, version and commit on
+  that, repacks it and publishes that under `next`.
 - **Releasing** follows one order across the three repositories (sealant-sh/mend
   `docs/operations/next-channel.md`). For Core: pin sealantd's release, merge, merge the Version
   Packages pull request, and **freeze main until the tag**; Mend proves that commit's next build;
