@@ -18,6 +18,8 @@ import { makeRunRecord } from "./record.js";
 export interface RunChangesData {
   readonly files: readonly RunFileChange[];
   readonly diff: string;
+  readonly available: boolean;
+  readonly unavailableReason?: string;
 }
 
 export interface RunInit {
@@ -33,6 +35,8 @@ export const toRunChangesData = (wire: RunChangesResponse): RunChangesData => ({
     ...(file.oldPath === undefined ? {} : { oldPath: file.oldPath }),
   })),
   diff: wire.diff,
+  available: wire.available ?? true,
+  ...(wire.unavailableReason === undefined ? {} : { unavailableReason: wire.unavailableReason }),
 });
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
@@ -62,6 +66,12 @@ export const makeRun = (ctx: SdkContext, init: RunInit): Run => {
   const changes: RunChanges = {
     files: changesData?.files ?? [],
     diff: () => Promise.resolve(changesData?.diff ?? ""),
+    available: changesData?.available ?? false,
+    ...(changesData === undefined
+      ? { unavailableReason: "the run's changes have not been read yet" }
+      : changesData.unavailableReason === undefined
+        ? {}
+        : { unavailableReason: changesData.unavailableReason }),
   };
 
   return {

@@ -136,22 +136,32 @@ export const finalizeInteractiveRun = async (input: {
   readonly runId: string;
   /** The run's owner: an update that names no owner finds no run. */
   readonly ownerUserId: string;
-  readonly captureOutput: ((command: string, cwd: string) => Promise<string>) | undefined;
+  readonly captureOutput:
+    | ((
+        command: string,
+        cwd: string,
+      ) => Promise<{ readonly output: string; readonly exitCode: number | null | undefined }>)
+    | undefined;
 }): Promise<void> => {
-  let diff = "";
-  let changedFiles: FileChange[] = [];
+  // What the reading established: the changes it read (empty when nothing changed), that it
+  // failed, or nothing when no reading ran. Only a reading that exited 0 is a reading.
+  let changes:
+    | { readonly diff: string; readonly changedFiles: FileChange[] }
+    | { readonly changesReadFailed: true }
+    | Record<string, never> = {};
   if (input.captureOutput !== undefined) {
     try {
       // Staged in a throwaway index: the user's own index is never written by the recording.
-      const captured = splitWorkingTreeChanges(
-        await input.captureOutput(workingTreeChangesScript(), REPO_WORKDIR),
-      );
-      diff = captured.diff;
-      changedFiles = parseNameStatus(captured.nameStatus);
+      const result = await input.captureOutput(workingTreeChangesScript(), REPO_WORKDIR);
+      if (result.exitCode === 0) {
+        const captured = splitWorkingTreeChanges(result.output);
+        changes = { diff: captured.diff, changedFiles: parseNameStatus(captured.nameStatus) };
+      } else {
+        changes = { changesReadFailed: true };
+      }
     } catch {
-      // Diff capture is best-effort (the daemon may already be gone); the run still completes.
-      diff = "";
-      changedFiles = [];
+      // The daemon may already be gone: the reading failed; the run still completes.
+      changes = { changesReadFailed: true };
     }
   }
 
@@ -163,8 +173,7 @@ export const finalizeInteractiveRun = async (input: {
         ownerUserId: input.ownerUserId,
         status: "completed",
         exitCode: 0,
-        ...(diff.length === 0 ? {} : { diff }),
-        ...(changedFiles.length === 0 ? {} : { changedFiles }),
+        ...changes,
       },
       input.config.gatewayToken,
     );

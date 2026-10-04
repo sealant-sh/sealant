@@ -1104,6 +1104,13 @@ export interface RunChanges {
   readonly files: readonly RunFileChange[];
   /** The unified diff of everything that changed. */
   diff(): Promise<string>;
+  /**
+   * Whether the run's changes were read. `false`: they were not (the run has not ended, or the
+   * reading failed), and the empty `files` and `diff` say nothing about what changed.
+   */
+  readonly available?: boolean;
+  /** Why the changes are not available, when `available` is `false`. */
+  readonly unavailableReason?: string;
 }
 
 export interface ArtifactRef {

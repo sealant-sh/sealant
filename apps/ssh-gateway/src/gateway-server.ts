@@ -591,7 +591,7 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
             ownerUserId: recordedRunOwner,
             captureOutput: async (command, cwd) => {
               const result = await control.execCapture({ command, cwd });
-              return result.output;
+              return { output: result.output, exitCode: result.exitCode };
             },
           });
         }

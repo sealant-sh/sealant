@@ -169,6 +169,30 @@ describe("workspace.exec()", () => {
     }
   });
 
+  it("passes on that the run's changes were not read, never an apparently empty change", async () => {
+    const { client } = makeStub({ getRun: () => wireRun("completed", { exitCode: 0 }) });
+    const unread = {
+      ...client,
+      runs: {
+        ...client.runs,
+        getRunChanges: () =>
+          Effect.sync(() => ({
+            files: [],
+            diff: "",
+            available: false,
+            unavailableReason: "reading the run's changes failed",
+          })),
+      },
+    } as unknown as ControlPlaneClient;
+    const result = await execWorkspace(makeCtx(unread), WORKSPACE, ["true"]);
+    expect(result.run.changes.available).toBe(false);
+    expect(result.run.changes.unavailableReason).toBe("reading the run's changes failed");
+
+    // A control plane older than the field answers without it: the changes read as available.
+    const older = await execWorkspace(makeCtx(client), WORKSPACE, ["true"]);
+    expect(older.run.changes.available).toBe(true);
+  });
+
   it("rejects an empty argv before any request is made", async () => {
     const { client, requests } = makeStub({});
     await expect(execWorkspace(makeCtx(client), WORKSPACE, [])).rejects.toThrow(
