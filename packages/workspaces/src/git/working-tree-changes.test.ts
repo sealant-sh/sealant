@@ -264,6 +264,20 @@ describe("workingTreeChangesScript", () => {
     await chmod(locked, 0o644);
   });
 
+  it("uses no kept copy when cksum fails: every key would be the same (review round 4)", async () => {
+    const dir = await repo();
+    const temp = await mkdtemp(path.join(tmpdir(), "sealant-keep-"));
+    dirs.push(temp);
+    const env = await shims(temp, { cksum: "exit 127" });
+    await writeFile(path.join(dir, ".gitignore"), "ignored.txt\n");
+    await writeFile(path.join(dir, "ignored.txt"), "forced\n");
+    git(dir, "add", "-f", "ignored.txt");
+    expect(splitWorkingTreeChanges(readWith(dir, env)).nameStatus).toContain("A\tignored.txt");
+    git(dir, "rm", "-q", "--cached", "ignored.txt");
+    expect(splitWorkingTreeChanges(readWith(dir, env)).nameStatus).not.toContain("ignored.txt");
+    expect((await readdir(temp)).filter((name) => name.startsWith("sealant-index-"))).toEqual([]);
+  });
+
   it("prints nothing outside a repository", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "sealant-norepo-"));
     dirs.push(dir);

@@ -42,21 +42,33 @@ export const workingTreeChangesScript = (): string =>
     // named by its own checksum and used only when the bytes copied match it; anything else (a
     // copy removed or replaced meanwhile, a failed copy) falls back to the snapshot. The cache
     // may cost time, never correctness.
+    // Every checksum must be numeric, or the cache is not used: a `cksum` missing or failing
+    // would key every repository's index the same. `pair X SEP`: X is digits SEP digits.
+    `  pair() { a=\${1%%"$2"*}; b=\${1#*"$2"}; [ "$a" != "$1" ] && [ -n "$a" ] && [ -n "$b" ] && case "$a$b" in *[!0-9]*) false ;; esac; }`,
     '  repo=$(git rev-parse --absolute-git-dir | cksum | cut -d" " -f1)',
-    '  key="$dir/sealant-index-$repo-$(cksum < "$snap" | cut -d" " -f1,2 | tr " " .)"',
+    '  sum=$(cksum < "$snap" | cut -d" " -f1,2 | tr " " .)',
+    "  cache=1",
+    '  case "$repo" in ""|*[!0-9]*) cache="" ;; esac',
+    '  pair "$sum" . || cache=""',
+    '  key="$dir/sealant-index-$repo-$sum"',
     '  hit=""',
-    '  for kept in "$key".*; do',
-    '    [ -f "$kept" ] || continue',
-    '    if cp -p "$kept" "$tmp" 2>/dev/null && [ "$kept" = "$key.$(cksum < "$tmp" | cut -d" " -f1,2 | tr " " _)" ]; then hit=1; fi',
-    "    break",
-    "  done",
+    '  if [ -n "$cache" ]; then',
+    '    for kept in "$key".*; do',
+    '      [ -f "$kept" ] || continue',
+    '      got=""',
+    '      cp -p "$kept" "$tmp" 2>/dev/null && got=$(cksum < "$tmp" | cut -d" " -f1,2 | tr " " _)',
+    '      pair "$got" _ && [ "$kept" = "$key.$got" ] && hit=1',
+    "      break",
+    "    done",
+    "  fi",
     '  [ -n "$hit" ] || cp -p "$snap" "$tmp" || exit 1',
     '  GIT_INDEX_FILE="$tmp" git update-index -q --refresh >/dev/null 2>&1',
     // Published by rename only, under the checksum of exactly what is published.
     '  pub="$dir/sealant-index-$repo.pub.$$"',
-    '  if cp -p "$tmp" "$pub" 2>/dev/null; then',
-    '    mine="$key.$(cksum < "$pub" | cut -d" " -f1,2 | tr " " _)"',
-    '    if mv -f "$pub" "$mine" 2>/dev/null; then',
+    '  if [ -n "$cache" ] && cp -p "$tmp" "$pub" 2>/dev/null; then',
+    '    own=$(cksum < "$pub" | cut -d" " -f1,2 | tr " " _)',
+    '    mine="$key.$own"',
+    '    if pair "$own" _ && mv -f "$pub" "$mine" 2>/dev/null; then',
     // Older copies go; a reader copying one meanwhile finds it does not match and falls back.
     '      for old in "$dir/sealant-index-$repo-"*; do [ "$old" = "$mine" ] || rm -f "$old"; done',
     "    else",
