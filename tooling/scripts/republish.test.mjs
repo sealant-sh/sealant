@@ -12,10 +12,13 @@ import test from "node:test";
 import { gunzipSync, gzipSync } from "node:zlib";
 
 const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
-const PACOTE = path.join(
-  execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim(),
-  "npm/node_modules/pacote",
-);
+// npm's bundled pacote by default; REPUBLISH_TEST_PACOTE runs the same tests against another one.
+const PACOTE =
+  process.env.REPUBLISH_TEST_PACOTE ??
+  path.join(
+    execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim(),
+    "npm/node_modules/pacote",
+  );
 
 /** The republish block, from whichever workflow carries it. */
 const block = (() => {
@@ -205,34 +208,68 @@ test("a `tag` field in the manifest is dropped, so it cannot publish as latest",
   assert.equal(stub.packages.get(NAME)["dist-tags"].latest, "0.38.1");
 });
 
+/**
+ * The guarantee, whichever manifest a given pacote keeps from a crafted tarball: either nothing is
+ * published, or exactly the version, commit and dist-tag this run expects, from a manifest with no
+ * `tag` and no scripts. (pacote releases differ in which duplicate entry wins; both outcomes hold.)
+ */
+const publishedOnlyWhatWasChecked = (stub, result, version) => {
+  if (result.status !== 0) {
+    assert.equal(stub.log.length, 0, result.output);
+    return;
+  }
+  assert.equal(stub.log.length, 1, result.output);
+  const [entry] = stub.log;
+  assert.equal(entry.publish, version);
+  assert.deepEqual(entry.distTags, { next: version });
+  assert.equal(entry.manifest.gitHead, COMMIT);
+  assert.equal(entry.manifest.tag, undefined);
+  assert.equal(entry.manifest.scripts, undefined);
+  assert.equal(stub.packages.get(NAME)["dist-tags"].latest, "0.38.1");
+};
+
 for (const [trick, name] of [
   ["package/./package.json", "package/./package.json"],
   ["package//package.json", "package//package.json"],
   ["a second manifest outside package/", "zzz/package.json"],
 ]) {
-  test(`${trick}: npm's own reading is what is checked, and it is refused`, async (t) => {
+  test(`${trick}: only what was checked can be published`, async (t) => {
     const stub = await registry(t, seeded());
     const entries = [
       ...goodEntries("0.39.0-next.9"),
       [name, manifest("0.39.0", { tag: "latest" })],
     ];
-    const { status, output } = await publish(t, stub, entries, "0.39.0-next.9");
-    assert.notEqual(status, 0, output);
-    assert.equal(stub.log.length, 0);
-    assert.match(output, /version 0\.39\.0, not 0\.39\.0-next\.9/);
+    publishedOnlyWhatWasChecked(
+      stub,
+      await publish(t, stub, entries, "0.39.0-next.9"),
+      "0.39.0-next.9",
+    );
   });
 }
 
-test("a second manifest with this version but a forged commit is refused", async (t) => {
+test("a second manifest with this version but a forged commit cannot publish under it", async (t) => {
   const stub = await registry(t, seeded());
   const entries = [
     ...goodEntries("0.39.0-next.9"),
     ["package//package.json", manifest("0.39.0-next.9", { gitHead: "forged", tag: "latest" })],
   ];
-  const { status, output } = await publish(t, stub, entries, "0.39.0-next.9");
-  assert.notEqual(status, 0, output);
-  assert.equal(stub.log.length, 0);
-  assert.match(output, /gitHead forged, not c0ffee/);
+  publishedOnlyWhatWasChecked(
+    stub,
+    await publish(t, stub, entries, "0.39.0-next.9"),
+    "0.39.0-next.9",
+  );
+});
+
+test("with npm's own pacote today, the crafted manifests are the ones read, and refused", async (t) => {
+  // The pacote this test runs (npm's bundled one) reads the later entry; the job pins its own.
+  const stub = await registry(t, seeded());
+  const entries = [
+    ...goodEntries("0.39.0-next.9"),
+    ["zzz/package.json", manifest("0.39.0", { tag: "latest" })],
+  ];
+  const result = await publish(t, stub, entries, "0.39.0-next.9");
+  assert.notEqual(result.status, 0, result.output);
+  assert.match(result.output, /version 0\.39\.0, not 0\.39\.0-next\.9/);
 });
 
 test("next never moves back: an older version than the current next is refused", async (t) => {
