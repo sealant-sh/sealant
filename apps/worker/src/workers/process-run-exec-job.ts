@@ -227,9 +227,9 @@ const captureChanges = (runId: string, target: SealantTarget) =>
     const output = yield* shellExec(target, workingTreeChangesScript());
     if (output.exitCode !== 0) {
       yield* Effect.logWarning(
-        `Run ${runId}: its changes could not be read (the working-tree reading exited ${String(output.exitCode)}); none are recorded.`,
+        `Run ${runId}: reading its changes failed (the working-tree reading exited ${String(output.exitCode)}); recorded as failed.`,
       );
-      return {};
+      return { changesReadFailed: true };
     }
     const { diff, nameStatus } = splitWorkingTreeChanges(output.stdout);
     return { diff, changedFiles: parseNameStatus(nameStatus) };

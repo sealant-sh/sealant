@@ -60,6 +60,8 @@ export interface MarkRunCompletedInput {
   readonly finishedAt?: Date;
   readonly diff?: string;
   readonly changedFiles?: readonly RunFileChange[];
+  /** Reading the run's changes ran and failed: recorded, so it is never read as "no changes". */
+  readonly changesReadFailed?: boolean;
 }
 
 export interface MarkRunFailedInput {
@@ -69,6 +71,8 @@ export interface MarkRunFailedInput {
   readonly finishedAt?: Date;
   readonly diff?: string;
   readonly changedFiles?: readonly RunFileChange[];
+  /** Reading the run's changes ran and failed. */
+  readonly changesReadFailed?: boolean;
 }
 
 export interface ListRunsInput {
@@ -275,6 +279,7 @@ export const RunRepoLive = Layer.effect(
                 ...(input.changedFiles === undefined
                   ? {}
                   : { changedFiles: [...input.changedFiles] }),
+                ...(input.changesReadFailed === true ? { changesReadFailedAt: new Date() } : {}),
               })
               .where(eq(runs.id, input.id))
               .returning();
@@ -297,6 +302,7 @@ export const RunRepoLive = Layer.effect(
                 ...(input.changedFiles === undefined
                   ? {}
                   : { changedFiles: [...input.changedFiles] }),
+                ...(input.changesReadFailed === true ? { changesReadFailedAt: new Date() } : {}),
               })
               .where(eq(runs.id, input.id))
               .returning();

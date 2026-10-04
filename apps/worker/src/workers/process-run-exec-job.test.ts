@@ -18,6 +18,7 @@ const run = (status: Run["status"]): Run => ({
   errorMessage: null,
   diff: null,
   changedFiles: null,
+  changesReadFailedAt: null,
   startedAt: null,
   finishedAt: null,
   createdAt: new Date(0),

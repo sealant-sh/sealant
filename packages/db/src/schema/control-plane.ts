@@ -872,6 +872,9 @@ export const runs = pgTable(
     // The run's resulting file diff + change list, captured server-side when the run executes.
     diff: text(),
     changedFiles: jsonb("changed_files").$type<RunFileChange[]>(),
+    // When reading the run's changes ran and failed (diff and changed files then stay null): a
+    // failed reading is told apart from a run no reading ran for.
+    changesReadFailedAt: timestamp("changes_read_failed_at", { mode: "date", withTimezone: true }),
     startedAt: timestamp("started_at", { mode: "date", withTimezone: true }),
     finishedAt: timestamp("finished_at", { mode: "date", withTimezone: true }),
     createdAt: timestamp({ mode: "date", withTimezone: true })

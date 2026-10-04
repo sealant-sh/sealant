@@ -102,6 +102,8 @@ export const updateRunRequestSchema = Schema.Struct({
   // closing an interactive session) persist them alongside the status flip.
   diff: Schema.optional(Schema.String),
   changedFiles: Schema.optional(Schema.Array(runFileChangeSchema)),
+  /** The caller read the run's changes and the reading failed: nothing is known of them. */
+  changesReadFailed: Schema.optional(Schema.Boolean),
 });
 export type UpdateRunRequest = typeof updateRunRequestSchema.Type;
 
@@ -251,9 +253,9 @@ export const runChangesResponseSchema = Schema.Struct({
   /** Unified diff of everything that changed (empty until the run has produced changes). */
   diff: Schema.String,
   /**
-   * Whether the run's changes were read. `false`: they were not (the run has not ended, or the
-   * reading failed), and the empty `files` and `diff` say nothing about what changed. Absent from
-   * a control plane older than the field: read as `true`.
+   * Whether the run's changes were read. `false`: they were not (the run has not ended, no
+   * reading ran for it, or the reading failed), and the empty `files` and `diff` say nothing
+   * about what changed. Absent from a control plane older than the field: read as `true`.
    */
   available: Schema.optional(Schema.Boolean),
   /** Why the changes are not available, when `available` is `false`. */

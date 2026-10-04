@@ -1,0 +1,1 @@
+ALTER TABLE "runs" ADD COLUMN "changes_read_failed_at" timestamp with time zone;

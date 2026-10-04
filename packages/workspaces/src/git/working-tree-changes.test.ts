@@ -4,7 +4,7 @@
  * against git in a temporary repository.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -211,6 +211,57 @@ describe("workingTreeChangesScript", () => {
     const [kept] = (await readdir(temp)).filter((name) => name.startsWith("sealant-index-"));
     await writeFile(path.join(temp, kept ?? "missing"), "not an index");
     expect(readWith(dir, plain)).toBe(first);
+  });
+
+  it("still reports an edit of the same size made in the same second as the reading before it", async () => {
+    // git trusts an entry's stat data only when the file is older than the index file itself; a
+    // kept copy stamped "now" made the refreshed entry look settled (review round 3, F1).
+    const dir = await repo();
+    const temp = await mkdtemp(path.join(tmpdir(), "sealant-keep-"));
+    dirs.push(temp);
+    const plain = { ...process.env, TMPDIR: temp };
+    await writeFile(path.join(dir, "foo.txt"), "aaaa\n");
+    git(dir, "add", "foo.txt");
+    git(dir, "commit", "-qm", "foo");
+    const foo = path.join(dir, "foo.txt");
+    let tried = 0;
+    for (;;) {
+      tried += 1;
+      // Start at the top of a second, so the rewrite, the reading and the edit share it.
+      await new Promise((resolve) => setTimeout(resolve, 1_000 - (Date.now() % 1_000) + 10));
+      const second = Math.floor(Date.now() / 1_000);
+      await writeFile(foo, "aaaa\n");
+      readWith(dir, plain);
+      await writeFile(foo, "bbbb\n");
+      const sameSecond = Math.floor((await stat(foo)).mtimeMs / 1_000) === second;
+      if (sameSecond || tried >= 3) {
+        expect(sameSecond).toBe(true);
+        break;
+      }
+      await writeFile(foo, "aaaa\n");
+    }
+    // The next readings come in a later second, from the kept copy.
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    expect(splitWorkingTreeChanges(readWith(dir, plain)).nameStatus).toContain("M\tfoo.txt");
+    expect(splitWorkingTreeChanges(readWith(dir, plain)).nameStatus).toContain("M\tfoo.txt");
+  });
+
+  it("exits nonzero, never an empty change, when staging the working tree fails", async () => {
+    const dir = await repo();
+    const temp = await mkdtemp(path.join(tmpdir(), "sealant-keep-"));
+    dirs.push(temp);
+    const locked = path.join(dir, "locked.txt");
+    await writeFile(locked, "secret\n");
+    await chmod(locked, 0o000);
+    try {
+      await readFile(locked);
+      // Permission bits do not bind this process (root): nothing to show here.
+      return;
+    } catch {
+      // Unreadable, as intended.
+    }
+    expect(() => readWith(dir, { ...process.env, TMPDIR: temp })).toThrow();
+    await chmod(locked, 0o644);
   });
 
   it("prints nothing outside a repository", async () => {

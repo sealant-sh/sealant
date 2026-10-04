@@ -32,6 +32,7 @@ const runRow = (overrides: Record<string, unknown> = {}) => ({
   errorMessage: null,
   diff: null,
   changedFiles: null,
+  changesReadFailedAt: null,
   startedAt: null,
   finishedAt: null,
   createdAt: now,
@@ -201,13 +202,29 @@ describe("a run's changes say whether they were read", () => {
     });
   });
 
-  it("a finished run whose reading failed is not reported as having no changes", async () => {
-    expect(await changesOf({ status: "completed", diff: null, changedFiles: null })).toEqual({
+  it("a finished run whose reading failed says so, never that nothing changed", async () => {
+    expect(
+      await changesOf({
+        status: "completed",
+        diff: null,
+        changedFiles: null,
+        changesReadFailedAt: now,
+      }),
+    ).toEqual({
       files: [],
       diff: "",
       available: false,
-      unavailableReason: "the run's changes could not be read",
+      unavailableReason: "reading the run's changes failed",
     });
+  });
+
+  it("a finished run no reading ran for says that, not that a reading failed", async () => {
+    for (const status of ["completed", "cancelled", "failed"]) {
+      expect(await changesOf({ status, diff: null, changedFiles: null })).toMatchObject({
+        available: false,
+        unavailableReason: "no reading of the run's changes was recorded",
+      });
+    }
   });
 
   it("a run that has not ended has no changes read yet", async () => {

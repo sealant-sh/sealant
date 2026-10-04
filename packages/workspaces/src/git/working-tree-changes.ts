@@ -28,10 +28,13 @@ export const workingTreeChangesScript = (): string =>
     `trap 'rm -f "$tmp" "$tmp.lock" \${snap:+"$snap"}' EXIT`,
     // An empty file is not a valid index: start from the real one, or from none at all.
     'if [ -f "$real" ]; then',
+    // Every copy keeps its source's mtime (`cp -p`): git trusts an entry's stat data only when the
+    // file's mtime is older than the index's own, so a copy stamped "now" would hide an edit made
+    // in the same second, of the same size, as the reading that refreshed it.
     // One snapshot of the repository's index, read once: the key, the fallback and the copy that
     // is refreshed and kept are all that one snapshot, so an index replaced meanwhile can never
     // be kept under the other's key. Failing to take it is failing to read the changes.
-    '  snap=$(mktemp "$dir/sealant-index.XXXXXX") && cp "$real" "$snap" || exit 1',
+    '  snap=$(mktemp "$dir/sealant-index.XXXXXX") && cp -p "$real" "$snap" || exit 1',
     // A kept copy for this snapshot (same repository, same bytes) has fresh stat data, so
     // `git add -A` rehashes nothing it need not: a restored or freshly checked-out worktree's
     // index matches none of its files' stat data, and nothing rewrites it until a git command
@@ -44,14 +47,14 @@ export const workingTreeChangesScript = (): string =>
     '  hit=""',
     '  for kept in "$key".*; do',
     '    [ -f "$kept" ] || continue',
-    '    if cp "$kept" "$tmp" 2>/dev/null && [ "$kept" = "$key.$(cksum < "$tmp" | cut -d" " -f1,2 | tr " " _)" ]; then hit=1; fi',
+    '    if cp -p "$kept" "$tmp" 2>/dev/null && [ "$kept" = "$key.$(cksum < "$tmp" | cut -d" " -f1,2 | tr " " _)" ]; then hit=1; fi',
     "    break",
     "  done",
-    '  [ -n "$hit" ] || cp "$snap" "$tmp" || exit 1',
+    '  [ -n "$hit" ] || cp -p "$snap" "$tmp" || exit 1',
     '  GIT_INDEX_FILE="$tmp" git update-index -q --refresh >/dev/null 2>&1',
     // Published by rename only, under the checksum of exactly what is published.
     '  pub="$dir/sealant-index-$repo.pub.$$"',
-    '  if cp "$tmp" "$pub" 2>/dev/null; then',
+    '  if cp -p "$tmp" "$pub" 2>/dev/null; then',
     '    mine="$key.$(cksum < "$pub" | cut -d" " -f1,2 | tr " " _)"',
     '    if mv -f "$pub" "$mine" 2>/dev/null; then',
     // Older copies go; a reader copying one meanwhile finds it does not match and falls back.
@@ -63,7 +66,7 @@ export const workingTreeChangesScript = (): string =>
     "else",
     '  rm -f "$tmp"',
     "fi",
-    'GIT_INDEX_FILE="$tmp" git add -A >/dev/null 2>&1',
+    'GIT_INDEX_FILE="$tmp" git add -A >/dev/null 2>&1 || exit 1',
     'GIT_INDEX_FILE="$tmp" git --no-pager diff --cached 2>/dev/null || exit 1',
     "printf '\\0sealant-name-status\\0'",
     'GIT_INDEX_FILE="$tmp" git --no-pager diff --cached --name-status 2>/dev/null || exit 1',

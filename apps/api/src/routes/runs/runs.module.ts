@@ -305,7 +305,9 @@ export const getRunChanges = (runId: string, ownerUserId?: string) =>
   Effect.gen(function* () {
     const run = yield* requireRun(runId, ownerUserId);
     // A reading that succeeded records both, empty when nothing changed; a run that has not
-    // ended, or whose reading failed, records neither — never reported as "no changes".
+    // ended, that no reading ran for (a workspace session's run, a run cancelled or failed
+    // before its reading, a row from before readings were recorded), or whose reading failed
+    // records neither — never reported as "no changes", and each said as what happened.
     const available = run.diff !== null || run.changedFiles !== null;
     const ended =
       run.status === "completed" || run.status === "failed" || run.status === "cancelled";
@@ -320,9 +322,12 @@ export const getRunChanges = (runId: string, ownerUserId?: string) =>
       ...(available
         ? {}
         : {
-            unavailableReason: ended
-              ? "the run's changes could not be read"
-              : "the run has not ended",
+            unavailableReason:
+              run.changesReadFailedAt !== null
+                ? "reading the run's changes failed"
+                : ended
+                  ? "no reading of the run's changes was recorded"
+                  : "the run has not ended",
           }),
     } satisfies RunChangesResponse;
   });
@@ -340,6 +345,7 @@ export const updateRun = (input: { readonly runId: string; readonly payload: Upd
     const status: RunStatusWire | undefined = input.payload.status;
 
     const capturedChanges = {
+      ...(input.payload.changesReadFailed === true ? { changesReadFailed: true } : {}),
       ...(input.payload.diff === undefined ? {} : { diff: input.payload.diff }),
       ...(input.payload.changedFiles === undefined
         ? {}
