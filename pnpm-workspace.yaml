@@ -78,6 +78,8 @@ onlyBuiltDependencies:
 # with --lockfile=false, so they re-resolve that range on every run: rc.114 shipped 2026-09-11 and
 # the sealant-api image build broke with esbuild "Could not resolve effect/ByteSize" against the
 # beta.85 effect the workspace pins. Every other Effect package is either pinned exactly through the
-# catalog above or resolved as a peer of one of those pins; this is the only floating edge.
+# catalog above or resolved as a peer of one of those pins; this is the only floating edge. Image
+# builds and CI now install with --frozen-lockfile, so nothing re-resolves at build time; the
+# override stays so a lockfile regenerated from scratch picks the same line.
 overrides:
   "@effect/platform-node-shared": "catalog:"

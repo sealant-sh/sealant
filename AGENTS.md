@@ -23,7 +23,10 @@ Sealant is a `pnpm` + `turbo` monorepo for building isolated, reproducible codin
   `gh stack submit --auto --open`.
 - After code changes, always run `pnpm format:fix`.
 - For type-checking, always use `tsgo` (`pnpm typecheck`) and do not use `tsc`.
-- Never touch `pnpm-lock.yaml` (no manual edits and no workflow steps that update it).
+- `pnpm-lock.yaml` is generated, never hand-edited: let `pnpm install` / `pnpm add` write it, and
+  commit the result alongside the `package.json` change that caused it. CI and every image build
+  install with `--frozen-lockfile`, so a dependency change without its lockfile update fails CI. No
+  workflow step writes the lockfile.
 - For internal dependencies, always use `workspace:*` in `package.json` and import via
   `@sealant/<package-name>`; never import from `../packages/*` paths.
 - For external dependencies used by more than one app/package, prefer `catalog:` versions in
@@ -32,8 +35,6 @@ Sealant is a `pnpm` + `turbo` monorepo for building isolated, reproducible codin
   `pnpm-workspace.yaml` `catalog` and then reference it as `catalog:` from importers.
 - Do not duplicate shared external dependency version strings across apps/packages; keep version
   authority in `pnpm-workspace.yaml`.
-- When installing new dependencies for agent work, do not update the lockfile (for example use
-  `pnpm add --lockfile=false ...` when needed).
 - For any non-tiny UI change in `apps/web`, read `apps/web/DESIGN.md` first and follow it as the
   design source of truth.
 - Do not add `"use client"` anywhere; this repo is not Next.js.

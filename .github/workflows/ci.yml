@@ -24,7 +24,19 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --lockfile=false
+        run: pnpm install --frozen-lockfile
+
+      # Every install in a workflow or an image build reads the committed lockfile. A lockfile-free
+      # install re-resolves ranges at build time, which is how a prerelease (ours or a dependency's)
+      # drifted into images that never asked for it (2026-09-13). The bracketed patterns keep this
+      # step from matching itself.
+      - name: Installs stay bound to the lockfile
+        run: |
+          if git grep -nE 'lockfile[=]false|PNPM_CONFIG_LOCKFIL[E]|no-frozen-lockfil[e]' -- \
+            .github 'apps/*/Dockerfile' 'packages/**/Dockerfile*' 'tooling/**' '*.sh'; then
+            echo "::error::Install with --frozen-lockfile, not without the lockfile."
+            exit 1
+          fi
 
       - name: Run lint
         run: pnpm lint
@@ -46,7 +58,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --lockfile=false
+        run: pnpm install --frozen-lockfile
 
       - name: Run typecheck
         run: pnpm typecheck
@@ -88,7 +100,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --lockfile=false
+        run: pnpm install --frozen-lockfile
 
       - name: Migrate the test database
         run: pnpm db:migrate
