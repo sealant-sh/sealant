@@ -1,0 +1,278 @@
+# Prereleases from main (ADR 0015 in sealant-sh/mend, docs/adr/0015-next-channel.md). Every merge to
+# main publishes, under one version X.(Y+1).0-next.N (tooling/scripts/next-version.mjs):
+#
+# - ghcr.io/sealant-sh/sealant-{api,worker,ssh-gateway}:<version>, the images Mend's bundle copies,
+#   amd64 and arm64, each built natively;
+# - @sealant/sdk and @sealant/api-contracts <version> on npm's `next` dist-tag, after the images
+#   exist and the workspace runtime e2e passed against the pinned sealantd, so every SDK prerelease
+#   has its images and Mend can pin both at once.
+#
+# `latest` (npm and GHCR) moves only from a vX.Y.Z tag, in release.yml. No floating tags: Mend pins
+# the exact version and the images by digest. sealant-web stays release-only: Mend does not use it.
+#
+# Main requires Lint and Typecheck on an up-to-date branch, so the merged tree is the tested tree.
+# npm authenticates with OIDC trusted publishing from the `next` environment (deployable from main
+# only): register it on both packages as a second trusted publisher, repository sealant-sh/sealant,
+# workflow next.yml, environment next.
+name: Next
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: next
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Resolve the version
+    if: github.repository == 'sealant-sh/sealant'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      publish: ${{ steps.plan.outputs.publish }}
+    steps:
+      # Full history and tags: N counts the commits since the minor's first release.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Resolve the version
+        id: plan
+        run: |
+          set -euo pipefail
+          version=$(node tooling/scripts/next-version.mjs HEAD)
+          [[ $version =~ ^[0-9]+\.[0-9]+\.0-next\.[0-9]+$ ]] || {
+            echo "::error::\"$version\" is not a next version."
+            exit 1
+          }
+          # npm is the last step, so a version already there was published completely: a re-run
+          # publishes nothing again.
+          publish=true
+          if [[ -n $(npm view "@sealant/sdk@$version" version 2>/dev/null) ]]; then
+            publish=false
+            echo "Sealant $version is already published; nothing to do."
+          fi
+          {
+            echo "version=$version"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+
+  image:
+    name: Image (${{ matrix.image }}, ${{ matrix.platform.arch }})
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [api, worker, ssh-gateway]
+        platform:
+          - { arch: amd64, runner: blacksmith-4vcpu-ubuntu-2404 }
+          - { arch: arm64, runner: blacksmith-4vcpu-ubuntu-2404-arm }
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker builder (Blacksmith cache)
+        uses: useblacksmith/setup-docker-builder@v1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: useblacksmith/build-push-action@v2
+        with:
+          context: .
+          file: apps/${{ matrix.image }}/Dockerfile
+          platforms: linux/${{ matrix.platform.arch }}
+          provenance: false
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.plan.outputs.version }}
+          outputs:
+            type=image,name=ghcr.io/${{ github.repository_owner }}/sealant-${{ matrix.image
+            }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: next-digests-${{ matrix.image }}--${{ matrix.platform.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  image-tag:
+    name: Tag (${{ matrix.image }})
+    needs: [plan, image]
+    strategy:
+      matrix:
+        image: [api, worker, ssh-gateway]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: next-digests-${{ matrix.image }}--*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag the multi-arch image
+        working-directory: /tmp/digests
+        env:
+          REPOSITORY: ghcr.io/${{ github.repository_owner }}/sealant-${{ matrix.image }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          # A version is tagged once: a re-run after a failed npm job keeps the image Mend may
+          # already have pinned by digest.
+          if ! docker buildx imagetools inspect "$REPOSITORY:$VERSION" >/dev/null 2>&1; then
+            sources=()
+            for digest in *; do sources+=("$REPOSITORY@sha256:$digest"); done
+            docker buildx imagetools create --tag "$REPOSITORY:$VERSION" "${sources[@]}"
+          fi
+          digest=$(docker buildx imagetools inspect "$REPOSITORY:$VERSION" --format '{{json .Manifest}}' | jq -r .digest)
+          echo "- \`$REPOSITORY:$VERSION\` (\`$digest\`)" >> "$GITHUB_STEP_SUMMARY"
+
+  # The same proof the release runs before it publishes the SDK: the baked workspace image with the
+  # pinned sealantd, and the sealantd e2e suite in required mode.
+  workspace-e2e:
+    name: Workspace runtime e2e (pinned sealantd)
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the baked workspace image (pulls the pinned sealantd)
+        run:
+          DOCKER_BUILDKIT=1 pnpm --filter @sealant/workspaces exec tsx
+          scripts/sealantd-build-image.mts
+
+      - name: Run sealantd e2e suite (image required, never skipped)
+        env:
+          SEALANT_E2E_REQUIRE_IMAGE: "1"
+        run: pnpm --filter @sealant/workspaces test:e2e src/sealantd
+
+      - name: Containerized launcher and real workspace volume test
+        run: >-
+          pnpm --filter @sealant/workspaces test:e2e src/runtime/docker-volume-mounts.e2e.ts
+
+  npm:
+    name: Publish npm prereleases
+    needs: [plan, image-tag, workspace-e2e]
+    # npm trusted publishing (OIDC) needs a GitHub-hosted runner: this job stays off Blacksmith.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: next
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      # Node 24: trusted publishing needs the bundled npm >= 11.5.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Set the prerelease version
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Never a stable version from this workflow: `latest` is release.yml's alone.
+          [[ $VERSION == *-next.* ]] || { echo "::error::$VERSION is not a next version."; exit 1; }
+          pnpm --filter "@sealant/api-contracts" --filter "@sealant/sdk" \
+            exec npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Build
+        run: pnpm --filter "@sealant/api-contracts" --filter "@sealant/sdk" run build
+
+      - name: Publish to npm under next
+        run: |
+          pnpm --filter "@sealant/api-contracts" --filter "@sealant/sdk" \
+            publish --access public --no-git-checks --provenance --tag next
+
+      - name: Summary
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          {
+            echo "## Sealant $VERSION"
+            echo
+            echo "From \`$GITHUB_SHA\`. \`@sealant/sdk@$VERSION\` and \`@sealant/api-contracts@$VERSION\` on npm \`next\`."
+            echo
+            echo "Pin it in Mend: \`node scripts/sealant-pins.mjs pin $VERSION\`."
+          } >> "$GITHUB_STEP_SUMMARY"

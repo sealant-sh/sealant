@@ -37,7 +37,7 @@
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@sealant/api-contracts": "workspace:^"
+    "@sealant/api-contracts": "workspace:*"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",

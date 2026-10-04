@@ -16,8 +16,27 @@ permissions:
   contents: read
 
 jobs:
+  # Before anything builds or publishes: the tag is a stable vX.Y.Z (prereleases publish from main,
+  # in next.yml), and no sealantd prerelease is pinned anywhere (ADR 0015 in sealant-sh/mend).
+  pins:
+    name: Check what the release pins
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Refuse a prerelease tag or a prerelease sealantd
+        run: node tooling/scripts/check-release-pins.mjs "$GITHUB_REF_NAME"
+
   image:
     name: Image (${{ matrix.name }})
+    needs: pins
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
@@ -125,6 +144,7 @@ jobs:
   # documented behavior the runtime does not honor.
   workspace-e2e:
     name: Workspace runtime e2e (pinned sealantd)
+    needs: pins
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read

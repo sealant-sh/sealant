@@ -18,7 +18,10 @@
  * Every released sealantd reports `0.0.0` as its own version over the control protocol, so the
  * daemon cannot be asked; the image reference is the build identity. A released image
  * (`ghcr.io/sealant-sh/sealantd:X.Y.Z`) has the recovery boot from
- * `SEALANTD_RECOVERY_BOOT_MIN_VERSION` on. Any other image (a development build set with
+ * `SEALANTD_RECOVERY_BOOT_MIN_VERSION` on. So does a prerelease sealantd's main publishes
+ * (`ghcr.io/sealant-sh/sealantd:X.Y.Z-next.N`, ADR 0015 in sealant-sh/mend) of a version after it:
+ * semver puts a prerelease of X.Y.Z below X.Y.Z, so a prerelease of the minimum itself is not
+ * assumed to have it. Any other image (a development build set with
  * `SEALANT_SEALANTD_IMAGE`) is known to have it only when the operator declares it, by listing it
  * in `SEALANT_SEALANTD_RECOVERY_BOOT_IMAGES` (comma-separated image references).
  */
@@ -30,7 +33,7 @@
 export const SEALANTD_RECOVERY_BOOT_MIN_VERSION = { major: 0, minor: 19, patch: 0 } as const;
 
 const RELEASED_SEALANTD_IMAGE =
-  /^ghcr\.io\/sealant-sh\/sealantd:(\d+)\.(\d+)\.(\d+)(?:@sha256:[0-9a-f]{64})?$/;
+  /^ghcr\.io\/sealant-sh\/sealantd:(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(?:@sha256:[0-9a-f]{64})?$/;
 
 /** The planned Containerfile copies the daemon out of a sealantd image; which one. */
 const SEALANTD_COPY =
@@ -68,6 +71,7 @@ export const sealantdHasRecoveryBoot = (
     return null;
   }
   const [major, minor, patch] = [released[1], released[2], released[3]].map(Number);
+  const prerelease = released[4] !== undefined;
   const min = SEALANTD_RECOVERY_BOOT_MIN_VERSION;
   if (major === undefined || minor === undefined || patch === undefined) {
     return null;
@@ -78,5 +82,5 @@ export const sealantdHasRecoveryBoot = (
   if (minor !== min.minor) {
     return minor > min.minor;
   }
-  return patch >= min.patch;
+  return prerelease ? patch > min.patch : patch >= min.patch;
 };

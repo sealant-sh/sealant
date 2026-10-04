@@ -38,6 +38,11 @@ jobs:
             exit 1
           fi
 
+      - name: Release scripts
+        run:
+          node --test tooling/scripts/next-version.test.mjs
+          tooling/scripts/check-release-pins.test.mjs
+
       - name: Run lint
         run: pnpm lint
 

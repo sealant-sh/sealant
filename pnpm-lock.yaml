@@ -826,7 +826,7 @@ importers:
   packages/sdk:
     dependencies:
       '@sealant/api-contracts':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../api-contracts
     devDependencies:
       '@effect/vitest':
