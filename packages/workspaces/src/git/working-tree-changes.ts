@@ -5,9 +5,10 @@
  * The staging happens in a THROWAWAY index: a temporary copy of the repository's index, named
  * by `GIT_INDEX_FILE`, removed on exit. The repository's own index — what the user (or their
  * agent) staged, partially staged, or deliberately left unstaged — is never written, so reading
- * the changes never changes git state. A refreshed copy of that index is kept in `$TMPDIR`, named
- * by the repository and the index's checksum, and the next reading starts from it: same entries,
- * fresher stat data. One shell invocation produces both outputs, split by a
+ * the changes never changes git state. A refreshed copy of a snapshot of that index is kept in
+ * `$TMPDIR`, named by the repository, the snapshot's checksum and its own, and the next reading of
+ * the same index starts from it: same entries, fresher stat data. The script exits nonzero when it
+ * could not read the changes. One shell invocation produces both outputs, split by a
  * NUL-delimited separator (a diff never contains NUL; git prints binary files as a summary).
  */
 
@@ -21,28 +22,51 @@ export const WORKING_TREE_CHANGES_SEPARATOR = "\0sealant-name-status\0";
 export const workingTreeChangesScript = (): string =>
   [
     "real=$(git rev-parse --git-path index 2>/dev/null) || exit 0",
-    'tmp=$(mktemp "${TMPDIR:-/tmp}/sealant-index.XXXXXX") || exit 1',
-    `trap 'rm -f "$tmp" "$tmp.lock"' EXIT`,
+    'dir="${TMPDIR:-/tmp}"',
+    'tmp=$(mktemp "$dir/sealant-index.XXXXXX") || exit 1',
+    'snap=""',
+    `trap 'rm -f "$tmp" "$tmp.lock" \${snap:+"$snap"}' EXIT`,
     // An empty file is not a valid index: start from the real one, or from none at all.
     'if [ -f "$real" ]; then',
-    // The copy starts from a kept one when there is one for this very index (same repository,
-    // same bytes): its stat data is refreshed, so `git add -A` rehashes nothing it need not. A
-    // restored or freshly checked-out worktree's index marks every file written in its own
-    // second as possibly changed, and nothing rewrites it until a git command does, so without
-    // the kept copy every reading rehashed the whole tree (~330 ms for 1 800 files).
+    // One snapshot of the repository's index, read once: the key, the fallback and the copy that
+    // is refreshed and kept are all that one snapshot, so an index replaced meanwhile can never
+    // be kept under the other's key. Failing to take it is failing to read the changes.
+    '  snap=$(mktemp "$dir/sealant-index.XXXXXX") && cp "$real" "$snap" || exit 1',
+    // A kept copy for this snapshot (same repository, same bytes) has fresh stat data, so
+    // `git add -A` rehashes nothing it need not: a restored or freshly checked-out worktree's
+    // index matches none of its files' stat data, and nothing rewrites it until a git command
+    // does, so every reading rehashed the whole tree (~330 ms for 1 800 files). A kept copy is
+    // named by its own checksum and used only when the bytes copied match it; anything else (a
+    // copy removed or replaced meanwhile, a failed copy) falls back to the snapshot. The cache
+    // may cost time, never correctness.
     '  repo=$(git rev-parse --absolute-git-dir | cksum | cut -d" " -f1)',
-    '  keep="${TMPDIR:-/tmp}/sealant-index-$repo-$(cksum < "$real" | cut -d" " -f1,2 | tr " " .)"',
-    '  if [ -f "$keep" ]; then cp "$keep" "$tmp"; else cp "$real" "$tmp"; fi',
+    '  key="$dir/sealant-index-$repo-$(cksum < "$snap" | cut -d" " -f1,2 | tr " " .)"',
+    '  hit=""',
+    '  for kept in "$key".*; do',
+    '    [ -f "$kept" ] || continue',
+    '    if cp "$kept" "$tmp" 2>/dev/null && [ "$kept" = "$key.$(cksum < "$tmp" | cut -d" " -f1,2 | tr " " _)" ]; then hit=1; fi',
+    "    break",
+    "  done",
+    '  [ -n "$hit" ] || cp "$snap" "$tmp" || exit 1',
     '  GIT_INDEX_FILE="$tmp" git update-index -q --refresh >/dev/null 2>&1',
-    '  for old in "${TMPDIR:-/tmp}/sealant-index-$repo-"*; do [ "$old" = "$keep" ] || rm -f "$old"; done',
-    '  cp "$tmp" "$keep.$$" 2>/dev/null && mv -f "$keep.$$" "$keep" 2>/dev/null',
+    // Published by rename only, under the checksum of exactly what is published.
+    '  pub="$dir/sealant-index-$repo.pub.$$"',
+    '  if cp "$tmp" "$pub" 2>/dev/null; then',
+    '    mine="$key.$(cksum < "$pub" | cut -d" " -f1,2 | tr " " _)"',
+    '    if mv -f "$pub" "$mine" 2>/dev/null; then',
+    // Older copies go; a reader copying one meanwhile finds it does not match and falls back.
+    '      for old in "$dir/sealant-index-$repo-"*; do [ "$old" = "$mine" ] || rm -f "$old"; done',
+    "    else",
+    '      rm -f "$pub"',
+    "    fi",
+    "  fi",
     "else",
     '  rm -f "$tmp"',
     "fi",
     'GIT_INDEX_FILE="$tmp" git add -A >/dev/null 2>&1',
-    'GIT_INDEX_FILE="$tmp" git --no-pager diff --cached 2>/dev/null',
+    'GIT_INDEX_FILE="$tmp" git --no-pager diff --cached 2>/dev/null || exit 1',
     "printf '\\0sealant-name-status\\0'",
-    'GIT_INDEX_FILE="$tmp" git --no-pager diff --cached --name-status 2>/dev/null',
+    'GIT_INDEX_FILE="$tmp" git --no-pager diff --cached --name-status 2>/dev/null || exit 1',
   ].join("\n");
 
 /** Split the script's stdout; output without the separator (no repository) is no change. */

@@ -219,10 +219,18 @@ const resolveRuntimeTarget = (runId: string, targetOptions: SealantTargetDerivat
 /**
  * Captures what the run changed (shared by both framings): the working tree against HEAD, staged
  * in a throwaway index so the repository's own index — the user's git state — is never written.
+ * A reading that failed (the script exited nonzero) is no reading: the run's diff and changed
+ * files stay unrecorded (null), never an empty change that reads as "nothing changed".
  */
-const captureChanges = (target: SealantTarget) =>
+const captureChanges = (runId: string, target: SealantTarget) =>
   Effect.gen(function* () {
     const output = yield* shellExec(target, workingTreeChangesScript());
+    if (output.exitCode !== 0) {
+      yield* Effect.logWarning(
+        `Run ${runId}: its changes could not be read (the working-tree reading exited ${String(output.exitCode)}); none are recorded.`,
+      );
+      return {};
+    }
     const { diff, nameStatus } = splitWorkingTreeChanges(output.stdout);
     return { diff, changedFiles: parseNameStatus(nameStatus) };
   });
@@ -232,10 +240,10 @@ const produceHarnessRun = (runId: string, target: SealantTarget, command: RunExe
   Effect.gen(function* () {
     const runs = yield* RunRepo;
     const exitCode = yield* captureRun(runId, target, command);
-    const { diff, changedFiles } = yield* captureChanges(target);
+    const changes = yield* captureChanges(runId, target);
     yield* exitCode === 0
-      ? runs.markRunCompleted({ id: runId, exitCode: 0, diff, changedFiles })
-      : runs.markRunFailed({ id: runId, exitCode, diff, changedFiles });
+      ? runs.markRunCompleted({ id: runId, exitCode: 0, ...changes })
+      : runs.markRunFailed({ id: runId, exitCode, ...changes });
   });
 
 /**
@@ -264,8 +272,8 @@ const produceExecRun = (
       }
       lastExitCode = exitCode;
     }
-    const { diff, changedFiles } = yield* captureChanges(target);
-    yield* runs.markRunCompleted({ id: runId, exitCode: lastExitCode, diff, changedFiles });
+    const changes = yield* captureChanges(runId, target);
+    yield* runs.markRunCompleted({ id: runId, exitCode: lastExitCode, ...changes });
   });
 
 /**

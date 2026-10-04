@@ -45,6 +45,9 @@ const repo = async () => {
   return dir;
 };
 
+const readWith = (dir: string, env: NodeJS.ProcessEnv) =>
+  execFileSync("sh", ["-c", workingTreeChangesScript()], { cwd: dir, encoding: "utf8", env });
+
 describe("workingTreeChangesScript", () => {
   it("reports every change without writing the repository's index", async () => {
     const dir = await repo();
@@ -128,6 +131,86 @@ describe("workingTreeChangesScript", () => {
     const keptNow = (await readdir(temp)).filter((name) => name.startsWith("sealant-index-"));
     expect(keptNow).toHaveLength(1);
     expect(keptNow[0]).not.toBe(kept[0]);
+  });
+
+  /** A directory of PATH shims put in front of the real tools, and the environment to run with. */
+  const shims = async (temp: string, scripts: Record<string, string>) => {
+    const bin = await mkdtemp(path.join(tmpdir(), "sealant-shims-"));
+    dirs.push(bin);
+    for (const [name, body] of Object.entries(scripts)) {
+      const real = execFileSync("sh", ["-c", `command -v ${name}`], { encoding: "utf8" }).trim();
+      await writeFile(path.join(bin, name), `#!/bin/sh\nREAL=${real}\n${body}\n`, { mode: 0o755 });
+    }
+    return { ...process.env, TMPDIR: temp, PATH: `${bin}:${process.env.PATH ?? ""}` };
+  };
+
+  it("never keeps an index replaced between its checksum and its copy under the other's key", async () => {
+    const dir = await repo();
+    const temp = await mkdtemp(path.join(tmpdir(), "sealant-keep-"));
+    dirs.push(temp);
+    const indexPath = path.join(dir, ".git", "index");
+    // Index A holds a force-added ignored file; index B, the same tree without it.
+    await writeFile(path.join(dir, ".gitignore"), "ignored.txt\n");
+    await writeFile(path.join(dir, "ignored.txt"), "forced\n");
+    git(dir, "add", "-f", "ignored.txt");
+    const indexA = await readFile(indexPath);
+    git(dir, "rm", "-q", "--cached", "ignored.txt");
+    const indexB = path.join(temp, "index-b");
+    await writeFile(indexB, await readFile(indexPath));
+    await writeFile(indexPath, indexA);
+    // The index is replaced by B right after the reading checksums what it read as A.
+    const env = await shims(temp, {
+      cksum: [
+        'n=$(cat "$TMPDIR/.calls" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "$TMPDIR/.calls"',
+        '"$REAL" "$@"; code=$?',
+        `[ "$n" = 2 ] && cp "${indexB}" "${indexPath}"`,
+        "exit $code",
+      ].join("\n"),
+    });
+    readWith(dir, env);
+    // A again: the reading must see A's force-added file, from the cache or not.
+    await writeFile(indexPath, indexA);
+    const plain = { ...process.env, TMPDIR: temp };
+    expect(splitWorkingTreeChanges(readWith(dir, plain)).nameStatus).toContain("A\tignored.txt");
+    expect(splitWorkingTreeChanges(readWith(dir, plain)).nameStatus).toContain("A\tignored.txt");
+  });
+
+  it("falls back to the repository's index when a kept copy goes while it is being read", async () => {
+    const dir = await repo();
+    const temp = await mkdtemp(path.join(tmpdir(), "sealant-keep-"));
+    dirs.push(temp);
+    const plain = { ...process.env, TMPDIR: temp };
+    const first = readWith(dir, plain);
+    expect((await readdir(temp)).some((name) => name.startsWith("sealant-index-"))).toBe(true);
+    // Another reader's cleanup removes the kept copy just as this one copies it.
+    const env = await shims(temp, {
+      cp: [
+        'for a in "$@"; do case "$a" in */sealant-index-*-*) rm -f "$a" ;; esac; done',
+        'exec "$REAL" "$@"',
+      ].join("\n"),
+    });
+    const second = execFileSync("sh", ["-c", workingTreeChangesScript()], {
+      cwd: dir,
+      encoding: "utf8",
+      env,
+    });
+    expect(second).toBe(first);
+    expect(splitWorkingTreeChanges(second).nameStatus.trim().split("\n").toSorted()).toEqual([
+      "A\tc.txt",
+      "M\ta.txt",
+      "M\tb.txt",
+    ]);
+  });
+
+  it("uses no kept copy whose bytes are not the ones it is named for", async () => {
+    const dir = await repo();
+    const temp = await mkdtemp(path.join(tmpdir(), "sealant-keep-"));
+    dirs.push(temp);
+    const plain = { ...process.env, TMPDIR: temp };
+    const first = readWith(dir, plain);
+    const [kept] = (await readdir(temp)).filter((name) => name.startsWith("sealant-index-"));
+    await writeFile(path.join(temp, kept ?? "missing"), "not an index");
+    expect(readWith(dir, plain)).toBe(first);
   });
 
   it("prints nothing outside a repository", async () => {
