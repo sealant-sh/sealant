@@ -12,7 +12,7 @@
  * complete, i.e. the execution machinery broke and the exit code cannot be trusted.
  */
 import type { TimelineEntry as WireTimelineEntry } from "@sealant/api-contracts";
-import { Effect } from "effect";
+import { Duration, Effect } from "effect";
 
 import { SealantError } from "../errors.js";
 import type { SdkContext } from "../facade/context.js";
@@ -28,7 +28,13 @@ import {
 } from "./operations.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
-const POLL_INTERVAL = "500 millis";
+/**
+ * The run is read soon after it is registered, then less often, up to every 500 ms. Most execs end
+ * in 100-300 ms; a first read only after 500 ms made every one take at least half a second, and a
+ * launch that writes files and settings into its workspace runs a dozen or more of them in a row.
+ */
+const FIRST_POLL_MS = 25;
+const MAX_POLL_MS = 500;
 const EXEC_TIMEOUT_MS = 30 * 60 * 1_000;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -83,6 +89,7 @@ const execWorkspaceEffect = (
     // Block until the check run is terminal, polling the control plane (same shape as harness.run()).
     const deadline = Date.now() + EXEC_TIMEOUT_MS;
     let wire = created;
+    let wait = FIRST_POLL_MS;
     while (!TERMINAL_STATUSES.has(wire.status)) {
       if (Date.now() > deadline) {
         return yield* Effect.fail(
@@ -91,7 +98,8 @@ const execWorkspaceEffect = (
           }),
         );
       }
-      yield* Effect.sleep(POLL_INTERVAL);
+      yield* Effect.sleep(Duration.millis(wait));
+      wait = Math.min(wait * 2, MAX_POLL_MS);
       wire = yield* getRunOp(runId, ctx.config.hostLocal.ownerUserId);
     }
 
@@ -110,14 +118,20 @@ const execWorkspaceEffect = (
     const ownerUserId = ctx.config.hostLocal.ownerUserId;
     const started = yield* getRunTimelineOp(runId, { ownerUserId, kinds: "processStarted" });
     const processId = findCommandProcessId(started, executable);
-    const stdout =
-      processId === undefined ? "" : yield* readScrollback(runId, ownerUserId, processId, "stdout");
-    const stderr =
-      processId === undefined ? "" : yield* readScrollback(runId, ownerUserId, processId, "stderr");
-
-    const changes = toRunChangesData(
-      yield* getRunChangesOp(runId, ctx.config.hostLocal.ownerUserId),
+    // The three reads are independent: one round trip of waiting, not three.
+    const [stdout, stderr, wireChanges] = yield* Effect.all(
+      [
+        processId === undefined
+          ? Effect.succeed("")
+          : readScrollback(runId, ownerUserId, processId, "stdout"),
+        processId === undefined
+          ? Effect.succeed("")
+          : readScrollback(runId, ownerUserId, processId, "stderr"),
+        getRunChangesOp(runId, ownerUserId),
+      ],
+      { concurrency: "unbounded" },
     );
+    const changes = toRunChangesData(wireChanges);
     return {
       exitCode: wire.exitCode ?? -1,
       stdout,
