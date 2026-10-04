@@ -19,19 +19,30 @@ describe("sealantdHasRecoveryBoot", () => {
   });
 
   it("knows a prerelease from sealantd's main by the version it leads to", () => {
-    expect(sealantdHasRecoveryBoot("ghcr.io/sealant-sh/sealantd:0.20.0-next.7", [])).toBe(true);
+    expect(sealantdHasRecoveryBoot("ghcr.io/sealant-sh/sealantd-next:0.20.0-next.7", [])).toBe(
+      true,
+    );
     expect(
       sealantdHasRecoveryBoot(
-        `ghcr.io/sealant-sh/sealantd:0.20.0-next.7@sha256:${"b".repeat(64)}`,
+        `ghcr.io/sealant-sh/sealantd-next:0.20.0-next.7@sha256:${"b".repeat(64)}`,
         [],
       ),
     ).toBe(true);
-    expect(sealantdHasRecoveryBoot("ghcr.io/sealant-sh/sealantd:0.19.1-next.2", [])).toBe(true);
+    expect(sealantdHasRecoveryBoot("ghcr.io/sealant-sh/sealantd-next:0.19.1-next.2", [])).toBe(
+      true,
+    );
     // A prerelease of the first release with the recovery boot comes before it.
-    expect(sealantdHasRecoveryBoot("ghcr.io/sealant-sh/sealantd:0.19.0-next.40", [])).toBe(false);
-    expect(sealantdHasRecoveryBoot("ghcr.io/sealant-sh/sealantd:0.18.3-next.1", [])).toBe(false);
+    expect(sealantdHasRecoveryBoot("ghcr.io/sealant-sh/sealantd-next:0.19.0-next.40", [])).toBe(
+      false,
+    );
+    expect(sealantdHasRecoveryBoot("ghcr.io/sealant-sh/sealantd-next:0.18.3-next.1", [])).toBe(
+      false,
+    );
     // Only sealantd's own next builds: any other prerelease suffix is unknown.
     expect(sealantdHasRecoveryBoot("ghcr.io/sealant-sh/sealantd:0.21.0-preview.3", [])).toBeNull();
+    // A next build lives under sealantd-next; the names and the versions must agree.
+    expect(sealantdHasRecoveryBoot("ghcr.io/sealant-sh/sealantd:0.21.0-next.3", [])).toBeNull();
+    expect(sealantdHasRecoveryBoot("ghcr.io/sealant-sh/sealantd-next:0.21.0", [])).toBeNull();
     expect(sealantdHasRecoveryBoot("ghcr.io/sealant-sh/sealantd:0.21.0-rc.1", [])).toBeNull();
   });
 

@@ -4,7 +4,7 @@
 // sealant-sh/sealantd. Keep them identical.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -77,8 +77,8 @@ const goodEntries = (version) => [
   ["package/dist/index.js", "export {};\n"],
 ];
 
-/** A stub registry: GET packument, PUT publish, PUT dist-tag; `forceLatest` misbehaves. */
-const registry = async (t, seed = {}, { forceLatest = false } = {}) => {
+/** A stub registry: GET packument and dist-tags, PUT publish, PUT dist-tag. */
+const registry = async (t, seed = {}) => {
   const packages = new Map(Object.entries(seed));
   const log = [];
   const server = http.createServer((request, response) => {
@@ -120,7 +120,6 @@ const registry = async (t, seed = {}, { forceLatest = false } = {}) => {
         Object.assign(record.versions, published.versions);
         Object.assign(record["dist-tags"], published["dist-tags"]);
         const [version] = Object.keys(published.versions);
-        if (forceLatest) record["dist-tags"].latest = version;
         packages.set(name, record);
         log.push({
           publish: version,
@@ -139,30 +138,46 @@ const registry = async (t, seed = {}, { forceLatest = false } = {}) => {
   return { url: `http://127.0.0.1:${port}/`, log, packages };
 };
 
-/** Runs publish_rebuilt on a crafted tarball against the stub; resolves to the exit status. */
-const publish = async (t, stub, entries, version, channel = "next") => {
+/**
+ * Runs the caller's sequence on a crafted tarball against the stub, as the workflows do: check the
+ * artifact directory, then publish_rebuilt from a fresh empty directory. `artifact` adds files to
+ * the artifact directory; `skipCheck` leaves check_artifacts out, to show the empty directory alone
+ * keeps a planted .npmrc from configuring npm.
+ */
+const publish = async (
+  t,
+  stub,
+  entries,
+  version,
+  channel = "next",
+  { artifact = {}, skipCheck = false } = {},
+) => {
   const directory = mkdtempSync(path.join(tmpdir(), "republish-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  writeFileSync(path.join(directory, "in.tgz"), tarGz(entries));
+  const artifacts = path.join(directory, "artifacts");
+  mkdirSync(artifacts);
+  writeFileSync(path.join(artifacts, "in.tgz"), tarGz(entries));
+  for (const [file, text] of Object.entries(artifact))
+    writeFileSync(path.join(artifacts, file), text);
   const npmrc = path.join(directory, "npmrc");
   writeFileSync(npmrc, `${stub.url.replace("http:", "")}:_authToken=test\n`);
-  const child = spawn(
-    "bash",
-    [
-      "-c",
-      `set -euo pipefail\n${block}\npublish_rebuilt "$@"`,
-      "republish",
-      "in.tgz",
-      NAME,
-      version,
-      COMMIT,
-      channel,
-    ],
-    {
-      cwd: directory,
-      env: { ...process.env, PACOTE, NPM_CONFIG_REGISTRY: stub.url, NPM_CONFIG_USERCONFIG: npmrc },
+  const script = [
+    "set -euo pipefail",
+    block,
+    skipCheck ? "" : 'check_artifacts "$ARTIFACTS" in.tgz',
+    'cd "$(mktemp -d)"',
+    'publish_rebuilt "$ARTIFACTS/in.tgz" "$@"',
+  ].join("\n");
+  const child = spawn("bash", ["-c", script, "republish", NAME, version, COMMIT, channel], {
+    cwd: artifacts,
+    env: {
+      ...process.env,
+      ARTIFACTS: artifacts,
+      REPUBLISH_TEST_PACOTE: PACOTE,
+      NPM_CONFIG_REGISTRY: stub.url,
+      NPM_CONFIG_USERCONFIG: npmrc,
     },
-  );
+  });
   let output = "";
   child.stdout.on("data", (chunk) => (output += chunk));
   child.stderr.on("data", (chunk) => (output += chunk));
@@ -301,13 +316,40 @@ test("a version already published from this commit is done; from another, refuse
   assert.match(refused.output, /published from elsewhere/);
 });
 
-test("if latest still ends up on the new version, it is moved back and the job fails", async (t) => {
-  const stub = await registry(t, seeded(), { forceLatest: true });
-  const { status, output } = await publish(t, stub, goodEntries("0.39.0-next.9"), "0.39.0-next.9");
-  assert.notEqual(status, 0, output);
-  assert.match(output, /became latest/);
-  assert.deepEqual(stub.log.at(-1), { distTag: "latest", version: "0.38.1" });
-  assert.equal(stub.packages.get(NAME)["dist-tags"].latest, "0.38.1");
+test("an artifact holding anything but the expected tarball is refused before npm runs", async (t) => {
+  for (const [file, text] of [
+    [".npmrc", "https-proxy=http://127.0.0.1:9/\nstrict-ssl=false\n"],
+    ["extra.tgz", "x"],
+    ["notes.txt", "x"],
+  ]) {
+    const stub = await registry(t, seeded());
+    const result = await publish(t, stub, goodEntries("0.39.0-next.9"), "0.39.0-next.9", "next", {
+      artifact: { [file]: text },
+    });
+    assert.notEqual(result.status, 0, file);
+    assert.match(result.output, /more than the expected tarballs/);
+    assert.equal(stub.log.length, 0);
+  }
+});
+
+test("from the empty directory, a .npmrc beside the tarball configures nothing", async (t) => {
+  // A proxy that does not exist: npm would fail every request if it read this file.
+  const stub = await registry(t, seeded());
+  const result = await publish(t, stub, goodEntries("0.39.0-next.9"), "0.39.0-next.9", "next", {
+    artifact: { ".npmrc": "proxy=http://127.0.0.1:9/\nhttps-proxy=http://127.0.0.1:9/\n" },
+    skipCheck: true,
+  });
+  assert.equal(result.status, 0, result.output);
+  assert.deepEqual(stub.log[0].distTags, { next: "0.39.0-next.9" });
+});
+
+test("a root binding.gyp is refused: npm would turn it into an install script", async (t) => {
+  const stub = await registry(t, seeded());
+  const entries = [...goodEntries("0.39.0-next.9"), ["package/binding.gyp", "{ 'targets': [] }"]];
+  const result = await publish(t, stub, entries, "0.39.0-next.9");
+  assert.notEqual(result.status, 0, result.output);
+  assert.match(result.output, /binding\.gyp/);
+  assert.equal(stub.log.length, 0);
 });
 
 test("a registry failure stops the job instead of being read as nothing published", async (t) => {

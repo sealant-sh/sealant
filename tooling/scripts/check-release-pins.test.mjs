@@ -78,6 +78,22 @@ test("a sealantd pinned by digest alone, or by latest, is not a release", () => 
   );
 });
 
+test("a next build's -next image and -next packages are prereleases too", () => {
+  assert.deepEqual(
+    prereleaseImages("COPY --from=ghcr.io/sealant-sh/sealantd-next:0.20.0-next.7 /a /a"),
+    ["ghcr.io/sealant-sh/sealantd-next:0.20.0-next.7"],
+  );
+  assert.deepEqual(
+    prereleaseRanges({
+      dependencies: { "@sealant/runtime-client": "npm:@sealant/runtime-client-next@0.20.0-next.7" },
+    }),
+    ["@sealant/runtime-client@npm:@sealant/runtime-client-next@0.20.0-next.7"],
+  );
+  assert.deepEqual(prereleaseLocks("  '@sealant/runtime-client-next@0.20.0-next.7':\n"), [
+    "@sealant/runtime-client-next@0.20.0-next.7",
+  ]);
+});
+
 test("released tags, with or without a digest, are releases", () => {
   assert.deepEqual(
     prereleaseImages(

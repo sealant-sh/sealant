@@ -35,7 +35,7 @@ const RELEASED_IMAGE = /^ghcr\.io\/sealant-sh\/sealantd:\d+\.\d+\.\d+(@sha256:[0
  * (which could be any build), or anything else that is not `sealantd:X.Y.Z[@sha256:…]`.
  */
 export const prereleaseImages = (text) =>
-  [...text.matchAll(/ghcr\.io\/sealant-sh\/sealantd(?:[:@][0-9A-Za-z.:@-]+)?/g)]
+  [...text.matchAll(/ghcr\.io\/sealant-sh\/sealantd(?:-next)?(?:[:@][0-9A-Za-z.:@-]+)?/g)]
     .map((match) => match[0])
     .filter((reference) => !RELEASED_IMAGE.test(reference));
 
@@ -48,9 +48,11 @@ export const prereleaseRanges = (manifest) =>
 /** `@sealant/runtime-*` versions the lockfile resolves that are prereleases. */
 export const prereleaseLocks = (lockfile) => [
   ...new Set(
-    [...lockfile.matchAll(/'?(@sealant\/runtime-[a-z]+)@(\d+\.\d+\.\d+-[0-9A-Za-z.-]+)'?:/g)].map(
-      (match) => `${match[1]}@${match[2]}`,
-    ),
+    [
+      ...lockfile.matchAll(
+        /'?(@sealant\/runtime-[a-z]+(?:-next)?)@(\d+\.\d+\.\d+-[0-9A-Za-z.-]+)'?:/g,
+      ),
+    ].map((match) => `${match[1]}@${match[2]}`),
   ),
 ];
 

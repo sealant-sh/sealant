@@ -19,7 +19,7 @@
  * daemon cannot be asked; the image reference is the build identity. A released image
  * (`ghcr.io/sealant-sh/sealantd:X.Y.Z`) has the recovery boot from
  * `SEALANTD_RECOVERY_BOOT_MIN_VERSION` on. So does a prerelease sealantd's main publishes
- * (`ghcr.io/sealant-sh/sealantd:X.Y.Z-next.N`, ADR 0015 in sealant-sh/mend) of a version after it:
+ * (`ghcr.io/sealant-sh/sealantd-next:X.Y.Z-next.N`, ADR 0015 in sealant-sh/mend) of a version after it:
  * semver puts a prerelease of X.Y.Z below X.Y.Z, so a prerelease of the minimum itself is not
  * assumed to have it. Any other image (a development build set with
  * `SEALANT_SEALANTD_IMAGE`) is known to have it only when the operator declares it, by listing it
@@ -32,8 +32,13 @@
  */
 export const SEALANTD_RECOVERY_BOOT_MIN_VERSION = { major: 0, minor: 19, patch: 0 } as const;
 
+/**
+ * A released sealantd (`ghcr.io/sealant-sh/sealantd:X.Y.Z`), or one of its next builds, which live
+ * under their own name (`ghcr.io/sealant-sh/sealantd-next:X.Y.Z-next.N`). A next build under the
+ * plain name, or a plain version under the -next name, is neither.
+ */
 const RELEASED_SEALANTD_IMAGE =
-  /^ghcr\.io\/sealant-sh\/sealantd:(\d+)\.(\d+)\.(\d+)(-next\.\d+)?(?:@sha256:[0-9a-f]{64})?$/;
+  /^ghcr\.io\/sealant-sh\/(?:sealantd:(\d+)\.(\d+)\.(\d+)|sealantd-next:(\d+)\.(\d+)\.(\d+)(-next\.\d+))(?:@sha256:[0-9a-f]{64})?$/;
 
 /** The planned Containerfile copies the daemon out of a sealantd image; which one. */
 const SEALANTD_COPY =
@@ -70,8 +75,10 @@ export const sealantdHasRecoveryBoot = (
   if (released === null) {
     return null;
   }
-  const [major, minor, patch] = [released[1], released[2], released[3]].map(Number);
-  const prerelease = released[4] !== undefined;
+  const prerelease = released[7] !== undefined;
+  const [major, minor, patch] = (
+    prerelease ? [released[4], released[5], released[6]] : [released[1], released[2], released[3]]
+  ).map(Number);
   const min = SEALANTD_RECOVERY_BOOT_MIN_VERSION;
   if (major === undefined || minor === undefined || patch === undefined) {
     return null;

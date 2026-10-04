@@ -69,6 +69,8 @@ catalog:
 minimumReleaseAgeExclude:
   - "@sealant/runtime-client"
   - "@sealant/runtime-protocol"
+  - "@sealant/runtime-client-next"
+  - "@sealant/runtime-protocol-next"
 
 onlyBuiltDependencies:
   - better-sqlite3

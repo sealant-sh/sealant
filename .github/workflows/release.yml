@@ -42,7 +42,8 @@ jobs:
       # docs/operations/next-channel.md); a merge during the freeze is what produces one.
       - name: Refuse a release that leaves out one of its next builds
         run: >-
-          node tooling/scripts/next-version.mjs --stray "$GITHUB_REF_NAME" --npm @sealant/sdk HEAD
+          node tooling/scripts/next-version.mjs --stray "$GITHUB_REF_NAME" --npm @sealant/sdk-next
+          HEAD
 
   image:
     name: Image (${{ matrix.name }})

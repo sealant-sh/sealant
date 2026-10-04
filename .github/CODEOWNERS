@@ -16,4 +16,6 @@
 /pnpm-lock.yaml @ypanagidis
 /pnpm-workspace.yaml @ypanagidis
 .pnpmfile.cjs @ypanagidis
+# pnpm 11 loads .pnpmfile.mjs before .pnpmfile.cjs.
+.pnpmfile.mjs @ypanagidis
 .npmrc @ypanagidis

@@ -106,28 +106,28 @@ The pieces:
   `SEALANT_VERSION=0.0.0-dev SEALANT_COMPOSE_URL=$PWD/compose.selfhost.yaml sh install.sh`. Offset
   ports (`SEALANT_{WEB,API,SSH}_PORT`) let it coexist with the dev stack.
 - **Prereleases from main** (ADR 0015 in sealant-sh/mend): every merge to `main` runs
-  `.github/workflows/next.yml`, which publishes
-  `ghcr.io/sealant-sh/sealant-{api,worker,ssh-gateway}` and `@sealant/sdk` +
-  `@sealant/api-contracts` (npm dist-tag `next`) under one version, `B-next.N`: N is the commit's
+  `.github/workflows/next.yml`, which publishes under **separate names**:
+  `ghcr.io/sealant-sh/sealant-{api,worker,ssh-gateway}-next` and `@sealant/sdk-next` +
+  `@sealant/api-contracts-next` (npm dist-tag `next`), one version, `B-next.N`: N is the commit's
   whole history (`git rev-list --count`), B the larger of what the pending changesets would release
-  and the base of the highest next build already published above the last stable tag, so each build
-  is higher than the one before
-  (`node tooling/scripts/next-version.mjs --package packages/sdk --npm @sealant/sdk`). Mend pins
-  those exact versions on its main. `latest` moves only from a `vX.Y.Z` tag. `pack` builds, packs
-  and checks every exported file is in the tarball. Only `publish` holds the npm credential; it runs
-  no repository code and never publishes the tarball it was given: it extracts it with npm's own
-  reader (pacote), rewrites `package.json` from an allowlist, checks name, version and commit on
-  that, repacks it and publishes that under `next`.
+  and the base of the highest next build already published above the last stable tag
+  (`node tooling/scripts/next-version.mjs --package packages/sdk --npm @sealant/sdk-next`). The
+  `next` trusted publisher is registered only on the two `-next` packages, so nothing in that
+  workflow can publish `@sealant/sdk` or write a stable image tag. Mend pins a prerelease through an
+  exact alias (`"@sealant/sdk": npm:@sealant/sdk-next@<version>`) and every image by digest.
+  `latest` on the stable packages moves only from a `vX.Y.Z` tag.
+- **Pinning a sealantd prerelease** is allowed on `main`: the image becomes
+  `ghcr.io/sealant-sh/sealantd-next:<version>` in
+  `packages/workspaces/src/buildkit/buildkit-builder.ts` and `apps/cf-bridge/Dockerfile`, and the
+  runtime packages in `packages/workspaces/package.json` become exact aliases
+  (`"@sealant/runtime-client": "npm:@sealant/runtime-client-next@<version>"`), then `pnpm install`.
+  A stable release refuses to start while any of those is a prerelease
+  (`tooling/scripts/check-release-pins.mjs`): release sealantd first, pin it, then tag.
 - **Releasing** follows one order across the three repositories (sealant-sh/mend
   `docs/operations/next-channel.md`). For Core: pin sealantd's release, merge, merge the Version
   Packages pull request, and **freeze main until the tag**; Mend proves that commit's next build;
   then tag it. The release refuses while an npm prerelease of the version came from a commit the tag
   leaves out, which is what a merge during the freeze produces.
-- **Pinning a sealantd prerelease** is allowed on `main`, the same way as a release: the image tag
-  in `packages/workspaces/src/buildkit/buildkit-builder.ts` and `apps/cf-bridge/Dockerfile`, the
-  exact `@sealant/runtime-*` versions in `packages/workspaces/package.json`, then `pnpm install`. A
-  stable release refuses to start while any of those is a prerelease
-  (`tooling/scripts/check-release-pins.mjs`): release sealantd first, pin it, then tag.
 - **Migrations in the packaged path** run from the api image (`node dist/migrate.js`, programmatic
   drizzle migrator + seed) — same journal table as dev `pnpm db:migrate`, so the histories are
   interchangeable.
