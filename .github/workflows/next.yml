@@ -9,10 +9,12 @@
 #
 # Prereleases live under separate names, packages and images alike. The `next` trusted publisher is
 # registered only on the two -next packages, so even a fully compromised run cannot publish
-# @sealant/sdk or move its `latest`. Images are weaker: the token the image jobs hold
-# (`packages: write`) can push the stable images too, and GHCR cannot scope it per image. Every
-# action in those jobs is pinned to a commit and restores no cache other jobs write; Mend pins every
-# Core image by digest, so a moved tag does not reach a Mend build (ADR 0015, Known gaps).
+# @sealant/sdk or move its `latest`. Images have no such boundary: the token the image jobs hold
+# (`packages: write`) can push the stable images too, GHCR cannot scope it per image, and any
+# writer can run a branch workflow that requests it, code-owner review or not. Every action and
+# BuildKit image in those jobs is pinned and no cache other jobs write is restored; Mend's bundle
+# image pins the Core images by digest, which keeps out a tag moved after the pin (ADR 0015, Known
+# gaps).
 #
 # The npm credential (OIDC, `id-token: write`) is held only by `publish`, which checks out nothing,
 # installs nothing and runs no repository code. It refuses an artifact holding anything but the
@@ -117,8 +119,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Docker builder (Blacksmith cache)
+      # BuildKit at a fixed digest: it runs privileged and performs the push.
+      - name: Set up Docker builder
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -264,8 +269,6 @@ jobs:
           path: /tmp/digests
           pattern: next-digests-${{ matrix.image }}--*
           merge-multiple: true
-
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0

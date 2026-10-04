@@ -8,7 +8,7 @@ COPY controller.cjs /opt/sealant-volume-e2e/controller.cjs
 ENTRYPOINT ["node", "/opt/sealant-volume-e2e/controller.cjs"]
 
 # Keep the daemon and socat relay on the published version under proof.
-FROM ghcr.io/sealant-sh/sealantd:0.13.0 AS sealantd
+FROM ghcr.io/sealant-sh/sealantd:0.13.0@sha256:7656061fb4ee5b7128b6dcc8cfcd8d172a552cbb93fd13eb2e3720749b9d2028 AS sealantd
 
 FROM fedora:41 AS workspace
 RUN dnf install -y bash ca-certificates coreutils git openssh-clients shadow-utils tar \
