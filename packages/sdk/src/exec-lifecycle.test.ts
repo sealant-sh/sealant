@@ -146,6 +146,29 @@ describe("workspace.exec()", () => {
     );
   });
 
+  it("reads a quick run back soon after it ends, then less often for a slow one", async () => {
+    const quick = makeStub({ getRun: () => wireRun("completed", { exitCode: 0 }) });
+    const startedAt = Date.now();
+    await execWorkspace(makeCtx(quick.client), WORKSPACE, ["true"]);
+    // The first read comes after 25 ms, not after half a second.
+    expect(Date.now() - startedAt).toBeLessThan(250);
+
+    const reads: number[] = [];
+    const slow = makeStub({
+      getRun: () => {
+        reads.push(Date.now());
+        return reads.length < 6 ? wireRun("running") : wireRun("completed", { exitCode: 0 });
+      },
+    });
+    await execWorkspace(makeCtx(slow.client), WORKSPACE, ["sleep", "1"]);
+    const gaps = reads.slice(1).map((at, index) => at - (reads[index] ?? at));
+    // After the first read at 25 ms, waits of 50, 100, 200, 400 and 500 ms: doubling, capped.
+    expect(gaps.length).toBe(5);
+    for (const [index, gap] of gaps.entries()) {
+      expect(gap).toBeGreaterThanOrEqual(Math.min(50 * 2 ** index, 500) - 10);
+    }
+  });
+
   it("passes on that the run's changes were not read, never an apparently empty change", async () => {
     const { client } = makeStub({ getRun: () => wireRun("completed", { exitCode: 0 }) });
     const unread = {
@@ -157,13 +180,13 @@ describe("workspace.exec()", () => {
             files: [],
             diff: "",
             available: false,
-            unavailableReason: "the run's changes could not be read",
+            unavailableReason: "reading the run's changes failed",
           })),
       },
     } as unknown as ControlPlaneClient;
     const result = await execWorkspace(makeCtx(unread), WORKSPACE, ["true"]);
     expect(result.run.changes.available).toBe(false);
-    expect(result.run.changes.unavailableReason).toBe("the run's changes could not be read");
+    expect(result.run.changes.unavailableReason).toBe("reading the run's changes failed");
 
     // A control plane older than the field answers without it: the changes read as available.
     const older = await execWorkspace(makeCtx(client), WORKSPACE, ["true"]);
