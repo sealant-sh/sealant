@@ -517,6 +517,113 @@ export const restartWorkspaceResponseSchema = Schema.Struct({
 });
 export type RestartWorkspaceResponse = typeof restartWorkspaceResponseSchema.Type;
 
+/** The providers a home holds logins for (docs/connected-accounts-design.md §6c). */
+export const workspaceCredentialHomeProviders = ["claude", "codex", "github"] as const;
+export type WorkspaceCredentialHomeProvider = (typeof workspaceCredentialHomeProviders)[number];
+
+/**
+ * Put one person's logins into one home of a RUNNING workspace (docs/connected-accounts-design.md
+ * §6c). A home holds one person's logins while it is held: the first put names its person, a put
+ * for anyone else is refused (`home-held`) until the home is released. Core writes a copy of each
+ * named account (no refresh token, like a launch) owned by the home's owner, mode 0600, and keeps it
+ * refreshed there; GitHub is written as `<home>/.config/gh/hosts.yml`. Values are connected-account
+ * ids ("cacc_…") or per-provider account names of `onBehalfOfUserId`, resolved exactly as at create
+ * ("default" is the account `true` picks); `null` removes that provider's login from the home (the
+ * person has not connected it). A provider left out is left as it is.
+ */
+export const putWorkspaceCredentialsRequestSchema = Schema.Struct({
+  /** The workspace's owner (owner scope; uniform 404 otherwise). */
+  ownerUserId: NonEmptyString,
+  /** The person whose logins the home holds: every named account must be theirs. */
+  onBehalfOfUserId: NonEmptyString,
+  /**
+   * Absolute path of the home inside the executor: a person's home, a conversation home, or
+   * `/root`. Normalised, never under `/workspace`, and reached without a symbolic link. It must
+   * exist; its owner owns the files.
+   */
+  home: NonEmptyString,
+  claude: Schema.optional(Schema.NullOr(NonEmptyString)),
+  codex: Schema.optional(Schema.NullOr(NonEmptyString)),
+  github: Schema.optional(Schema.NullOr(NonEmptyString)),
+});
+export type PutWorkspaceCredentialsRequest = typeof putWorkspaceCredentialsRequestSchema.Type;
+
+/** One account whose copy a home holds. */
+export const workspaceHomeAccountSchema = Schema.Struct({
+  connectedAccountId: NonEmptyString,
+  /** The account's name under its provider, as it is now. */
+  name: NonEmptyString,
+});
+export type WorkspaceHomeAccount = typeof workspaceHomeAccountSchema.Type;
+
+/** One home of a running workspace and the logins Core keeps in it. */
+export const workspaceCredentialHomeSchema = Schema.Struct({
+  home: NonEmptyString,
+  /** The one person whose logins the home holds. */
+  onBehalfOfUserId: NonEmptyString,
+  /** By provider; a provider the home holds no login for is absent. */
+  accounts: Schema.Struct({
+    claude: Schema.optional(workspaceHomeAccountSchema),
+    codex: Schema.optional(workspaceHomeAccountSchema),
+    github: Schema.optional(workspaceHomeAccountSchema),
+  }),
+});
+export type WorkspaceCredentialHome = typeof workspaceCredentialHomeSchema.Type;
+
+export const putWorkspaceCredentialsResponseSchema = Schema.Struct({
+  workspaceId: NonEmptyString,
+  /** The launch attempt whose executor was written. */
+  runId: NonEmptyString,
+  /** The home as it is after the put. */
+  home: workspaceCredentialHomeSchema,
+});
+export type PutWorkspaceCredentialsResponse = typeof putWorkspaceCredentialsResponseSchema.Type;
+
+/** Release one home: its login files are removed and its record deleted. */
+export const releaseWorkspaceCredentialsQuerySchema = Schema.Struct({
+  ownerUserId: NonEmptyString,
+  home: NonEmptyString,
+});
+export type ReleaseWorkspaceCredentialsQuery = typeof releaseWorkspaceCredentialsQuerySchema.Type;
+
+export const releaseWorkspaceCredentialsResponseSchema = Schema.Struct({
+  workspaceId: NonEmptyString,
+  runId: NonEmptyString,
+  home: NonEmptyString,
+  /** `false`: the home held nothing (already released); its login files were removed anyway. */
+  released: Schema.Boolean,
+});
+export type ReleaseWorkspaceCredentialsResponse =
+  typeof releaseWorkspaceCredentialsResponseSchema.Type;
+
+export const listWorkspaceCredentialsQuerySchema = Schema.Struct({
+  ownerUserId: NonEmptyString,
+});
+export type ListWorkspaceCredentialsQuery = typeof listWorkspaceCredentialsQuerySchema.Type;
+
+/** The homes of the workspace's running executor, oldest first. */
+export const listWorkspaceCredentialsResponseSchema = Schema.Struct({
+  workspaceId: NonEmptyString,
+  runId: NonEmptyString,
+  homes: Schema.Array(workspaceCredentialHomeSchema),
+});
+export type ListWorkspaceCredentialsResponse = typeof listWorkspaceCredentialsResponseSchema.Type;
+
+/**
+ * Stable `code`s of the `WorkspaceConflictError` the credential routes answer:
+ * `workspace-not-running` (no ready executor), `connected-account-invalid` (a named account is
+ * marked invalid: reconnect it), `home-held` (the home holds another person's logins: release it
+ * first; or `/root` while the launch's own logins are at `$HOME`), `home-unusable` (the home does
+ * not exist, is not a directory, or is reached through a symbolic link).
+ */
+export const workspaceCredentialsConflictCodes = [
+  "workspace-not-running",
+  "connected-account-invalid",
+  "home-held",
+  "home-unusable",
+] as const;
+export type WorkspaceCredentialsConflictCode = (typeof workspaceCredentialsConflictCodes)[number];
+
 export const expireWorkspaceRequestSchema = Schema.Struct({
   ownerUserId: NonEmptyString,
   // Seconds from now until the workspace expires; null clears the TTL (never expires); omitted =
@@ -1091,6 +1198,65 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         // The workspace has never launched (no spec to relaunch from) or is mid-launch.
         WorkspaceConflictError,
         WorkspaceBadGatewayError,
+        WorkspaceInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    // Synchronous: the files are written over the control connection before this answers.
+    HttpApiEndpoint.post("putWorkspaceCredentials", "/:workspaceId/credentials", {
+      params: workspaceIdParams,
+      payload: putWorkspaceCredentialsRequestSchema,
+      success: putWorkspaceCredentialsResponseSchema,
+      error: [
+        // A malformed home, or nothing to do.
+        WorkspaceBadRequestError,
+        // The caller may not act for the people named (only a service key may).
+        WorkspaceForbiddenError,
+        // The workspace or a named account (unknown, someone else's, archived).
+        WorkspaceNotFoundError,
+        // See `workspaceCredentialsConflictCodes`.
+        WorkspaceConflictError,
+        // The executor did not confirm the write.
+        WorkspaceBadGatewayError,
+        // SEALANT_CREDENTIALS_KEY is not configured, or Core cannot reach the executor.
+        WorkspaceServiceUnavailableError,
+        WorkspaceInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    // Synchronous: the files are removed before this answers. Idempotent.
+    HttpApiEndpoint.delete("releaseWorkspaceCredentials", "/:workspaceId/credentials", {
+      params: workspaceIdParams,
+      query: releaseWorkspaceCredentialsQuerySchema,
+      success: releaseWorkspaceCredentialsResponseSchema,
+      error: [
+        // A malformed home, or nothing to do.
+        WorkspaceBadRequestError,
+        // The caller may not act for the people named (only a service key may).
+        WorkspaceForbiddenError,
+        // The workspace or a named account (unknown, someone else's, archived).
+        WorkspaceNotFoundError,
+        // See `workspaceCredentialsConflictCodes`.
+        WorkspaceConflictError,
+        // The executor did not confirm the write.
+        WorkspaceBadGatewayError,
+        // SEALANT_CREDENTIALS_KEY is not configured, or Core cannot reach the executor.
+        WorkspaceServiceUnavailableError,
+        WorkspaceInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("listWorkspaceCredentials", "/:workspaceId/credentials", {
+      params: workspaceIdParams,
+      query: listWorkspaceCredentialsQuerySchema,
+      success: listWorkspaceCredentialsResponseSchema,
+      error: [
+        WorkspaceForbiddenError,
+        WorkspaceNotFoundError,
+        WorkspaceConflictError,
         WorkspaceInternalServerError,
       ],
     }),

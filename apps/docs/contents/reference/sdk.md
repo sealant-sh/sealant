@@ -97,6 +97,11 @@ These call the live API and work end-to-end:
   reports `stopped`), `workspace.restart()` (fresh runtime from the same resolved spec),
   `workspace.expire({ in: "2h" })` (TTL; `expire()` expires now, `expire({ in: null })` clears it) —
   plus `create({ ..., ttl: "2h" })` for a create-time TTL
+- **Logins per home:** `workspace.credentials.put({ home, onBehalfOf, claude?, codex?, github? })`
+  writes a person's accounts into one home of the running workspace (`true` is their `default`
+  account, `null` removes the provider), owned by the home's owner, and keeps them refreshed; a home
+  holds one person's logins until `workspace.credentials.release(home)`, and
+  `workspace.credentials.list()` lists the homes. Needs a service key.
 - **Harness:** `workspace.harness.run(prompt)` — registers a run server-side and blocks until
   terminal; `workspace.harness.start(prompt)` — same run, returns the live handle immediately
 - **Port forwarding:** `workspace.forward(port)` — a raw TCP byte pipe to `127.0.0.1:port` inside

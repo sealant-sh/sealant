@@ -30,6 +30,9 @@ import type {
   RecoverWorkspaceRequest,
   RestartWorkspaceRequest,
   SessionInputRequest,
+  PutWorkspaceCredentialsRequest,
+  ReleaseWorkspaceCredentialsQuery,
+  ListWorkspaceCredentialsQuery,
   SessionResizeRequest,
   SessionSignalRequest,
   StopWorkspaceRequest,
@@ -123,6 +126,30 @@ export const recoverWorkspaceOp = (workspaceId: string, payload: RecoverWorkspac
 export const restartWorkspaceOp = (workspaceId: string, payload: RestartWorkspaceRequest) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.workspaces.restartWorkspace({ params: { workspaceId }, payload }),
+  );
+
+export const putWorkspaceCredentialsOp = (
+  workspaceId: string,
+  payload: PutWorkspaceCredentialsRequest,
+) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.putWorkspaceCredentials({ params: { workspaceId }, payload }),
+  );
+
+export const releaseWorkspaceCredentialsOp = (
+  workspaceId: string,
+  query: ReleaseWorkspaceCredentialsQuery,
+) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.releaseWorkspaceCredentials({ params: { workspaceId }, query }),
+  );
+
+export const listWorkspaceCredentialsOp = (
+  workspaceId: string,
+  query: ListWorkspaceCredentialsQuery,
+) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.listWorkspaceCredentials({ params: { workspaceId }, query }),
   );
 
 export const expireWorkspaceOp = (workspaceId: string, payload: ExpireWorkspaceRequest) =>

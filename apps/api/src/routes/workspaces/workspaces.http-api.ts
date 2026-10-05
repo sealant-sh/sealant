@@ -2,6 +2,11 @@ import { ControlPlaneAPI } from "@sealant/api-contracts";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 
 import {
+  listWorkspaceCredentials,
+  putWorkspaceCredentials,
+  releaseWorkspaceCredentials,
+} from "./workspace-credentials.js";
+import {
   bindWorkspace,
   cancelWorkspaceCreate,
   createWorkspace,
@@ -92,6 +97,15 @@ export const WorkspacesHandlersLive = HttpApiBuilder.group(
           workspaceId: params.workspaceId,
           payload,
         }),
+      )
+      .handle("putWorkspaceCredentials", ({ params, payload }) =>
+        putWorkspaceCredentials({ workspaceId: params.workspaceId, payload }),
+      )
+      .handle("releaseWorkspaceCredentials", ({ params, query }) =>
+        releaseWorkspaceCredentials({ workspaceId: params.workspaceId, query }),
+      )
+      .handle("listWorkspaceCredentials", ({ params, query }) =>
+        listWorkspaceCredentials({ workspaceId: params.workspaceId, query }),
       )
       .handle("expireWorkspace", ({ params, payload }) =>
         expireWorkspace({

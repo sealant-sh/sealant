@@ -129,6 +129,7 @@ import { OWNER_REQUIRED_HINT, resolveOwnerScope, scopeAdmits } from "../../servi
 import { mapRun } from "../runs/runs.module.js";
 import { resolveDaemonTarget } from "../sessions/sessions.module.js";
 import { validateClientSuppliedAuthRefs } from "./client-authrefs.js";
+import { resolveSelectedConnectedAccount } from "./connected-account-selection.js";
 import {
   captureDestinationRefusal,
   gitHubWebHostOf,
@@ -1017,40 +1018,13 @@ const resolveWorkspaceCredentialRefs = (input: {
 
         account = bound;
       } else {
-        account = explicit.startsWith("cacc_")
-          ? yield* withInternalError(
-              connectedAccountRepo.getById(explicit),
-              "Failed to load connected account.",
-            )
-          : yield* withInternalError(
-              connectedAccountRepo.getByOwnerProviderName({
-                ownerUserId: input.ownerUserId,
-                provider,
-                name: explicit,
-              }),
-              "Failed to load connected account.",
-            );
-
-        // Uniform 404: unknown, someone else's, wrong-provider, and archived accounts all look
-        // identical to the caller.
-        if (
-          account === undefined ||
-          account.ownerUserId !== input.ownerUserId ||
-          account.provider !== provider ||
-          account.archivedAt !== null
-        ) {
-          return yield* new WorkspaceNotFoundError({
-            message: `No ${provider} connected account matches "${explicit}".`,
-          });
-        }
-
-        // Explicit selection: the caller named this account, so a broken one is a hard error
-        // rather than a silent omission.
-        if (account.status !== "active") {
-          return yield* new WorkspaceConflictError({
-            message: `Connected ${provider} account "${account.name}" is invalid — reconnect it.`,
-          });
-        }
+        // Explicit selection: uniform 404 for an account the caller cannot name, 409 for a
+        // broken one (shared with the credential switch).
+        account = yield* resolveSelectedConnectedAccount({
+          ownerUserId: input.ownerUserId,
+          provider,
+          selection: explicit,
+        });
       }
 
       refs.push({ provider, ref: createConnectedAccountRef(account.id) });

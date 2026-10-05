@@ -30,6 +30,7 @@ import {
   ConnectedAccountRepo,
   ConnectedAccountRepoLive,
   SealantDB,
+  WorkspaceCredentialHomeRepoLive,
   WorkspaceRuntimeInstanceRepoLive,
   type ConnectedAccount,
   type DB,
@@ -293,6 +294,7 @@ export const refreshClaudeSessionCredentials = async (
   const dataAccessLayer = Layer.mergeAll(
     ConnectedAccountRepoLive,
     WorkspaceRuntimeInstanceRepoLive,
+    WorkspaceCredentialHomeRepoLive,
   ).pipe(Layer.provide(Layer.succeed(SealantDB, options.db)));
 
   const program = Effect.gen(function* () {

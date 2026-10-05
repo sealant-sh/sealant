@@ -980,6 +980,11 @@ export interface Workspace {
   /** Restart the workspace into a fresh runtime — a new container, no filesystem carry-over. */
   restart(): Promise<Workspace>;
   /**
+   * People's logins in this RUNNING workspace, one person per home (a person's home, a
+   * conversation home, or `/root`). Needs a service key.
+   */
+  readonly credentials: WorkspaceCredentials;
+  /**
    * Schedule the workspace to expire: `expire({ in: "2h" })` sets the TTL, `expire()` expires it
    * now (the platform reaper stops it shortly), `expire({ in: null })` clears the TTL.
    */
@@ -994,6 +999,72 @@ export interface Workspace {
    * publishes its ports.
    */
   forward(port: number, options?: WorkspaceForwardOptions): Promise<WorkspaceForward>;
+}
+
+/**
+ * One person's logins in the homes of a running workspace (see {@link Workspace.credentials}). A
+ * home holds one person's logins while it is held: the first `put` names its person and a `put` for
+ * anyone else is refused (`WorkspaceConflictError`, code `home-held`) until the home is released.
+ * Core writes a copy of each account (no refresh token, as at launch) owned by the home's owner,
+ * mode 0600, and keeps it refreshed there; GitHub is written as `<home>/.config/gh/hosts.yml`.
+ */
+export interface WorkspaceCredentials {
+  /**
+   * Put `onBehalfOf`'s logins into `home`, which must exist (its owner owns the files). Resolves
+   * with the home as it is afterwards. Rejects with `WorkspaceConflictError` and a body `code`:
+   * `home-held` (another person's home), `home-unusable` (missing, not a directory, or reached
+   * through a symbolic link), `workspace-not-running`, `connected-account-invalid`; with
+   * `WorkspaceNotFoundError` for an account `onBehalfOf` cannot name; with
+   * `WorkspaceBadGatewayError` when the executor did not confirm the write.
+   */
+  put(options: WorkspaceCredentialsPutOptions): Promise<WorkspaceCredentialHome>;
+  /**
+   * Release `home`: its login files are removed and its record deleted, so the home can be taken
+   * again. Idempotent: `released` is `false` when it held nothing.
+   */
+  release(home: string): Promise<{ readonly released: boolean }>;
+  /** The homes of the running executor and the logins Core keeps in each, oldest first. */
+  list(): Promise<readonly WorkspaceCredentialHome[]>;
+}
+
+/**
+ * A provider's account for {@link WorkspaceCredentials.put}: `true` for `onBehalfOf`'s default
+ * account, a string naming one (name or id), `null` to remove that provider's login from the home
+ * (the person has not connected it); `false` or absent leaves the provider as it is.
+ */
+export type WorkspaceCredentialsAccountChoice = boolean | string | null;
+
+/** Options for {@link WorkspaceCredentials.put}. */
+export interface WorkspaceCredentialsPutOptions {
+  /** Absolute path of the home inside the executor; never under `/workspace`. */
+  readonly home: string;
+  /**
+   * The Sealant user whose logins the home holds (their `userId`). The workspace stays the
+   * client's owner's; only a service key may name someone else.
+   */
+  readonly onBehalfOf: string;
+  readonly claude?: WorkspaceCredentialsAccountChoice;
+  readonly codex?: WorkspaceCredentialsAccountChoice;
+  readonly github?: WorkspaceCredentialsAccountChoice;
+}
+
+/** One account whose copy a home holds. */
+export interface WorkspaceCredentialHomeAccount {
+  readonly connectedAccountId: string;
+  /** The account's name under its provider, as it is now. */
+  readonly name: string;
+}
+
+/** One home of a running workspace and the logins Core keeps in it. */
+export interface WorkspaceCredentialHome {
+  readonly home: string;
+  /** The one person whose logins the home holds. */
+  readonly onBehalfOf: string;
+  readonly accounts: {
+    readonly claude?: WorkspaceCredentialHomeAccount;
+    readonly codex?: WorkspaceCredentialHomeAccount;
+    readonly github?: WorkspaceCredentialHomeAccount;
+  };
 }
 
 /** Options for {@link Workspace.forward}. */

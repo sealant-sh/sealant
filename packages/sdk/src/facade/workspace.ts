@@ -11,6 +11,7 @@ import type {
   CaptureExecutorOrigin,
   WorkspaceCaptureStatus as WireWorkspaceCaptureStatus,
   WorkspaceDetails,
+  WorkspaceCredentialHome as WireWorkspaceCredentialHome,
 } from "@sealant/api-contracts";
 
 import { execWorkspace } from "../effect/exec-workspace.js";
@@ -26,9 +27,13 @@ import {
   replanWorkspaceCaptureOp,
   recoverWorkspaceOp,
   restartWorkspaceOp,
+  listWorkspaceCredentialsOp,
+  putWorkspaceCredentialsOp,
+  releaseWorkspaceCredentialsOp,
   stopWorkspaceOp,
 } from "../effect/operations.js";
 import { SealantError, SealantNotImplementedError } from "../errors.js";
+import { mapAccountRef } from "../internal/credentials.js";
 import { parseTtlSeconds } from "../internal/duration.js";
 import type {
   Harness,
@@ -41,6 +46,8 @@ import type {
   WorkspaceLaunch,
   WorkspaceRuntimeInfo,
   WorkspaceForwardOptions,
+  WorkspaceCredentialHome,
+  WorkspaceCredentialsAccountChoice,
   WorkspaceSessions,
   WorkspaceCaptureDrain,
   WorkspaceCaptureClassSnaps,
@@ -198,6 +205,22 @@ const toCaptureOrigin = (origin: CaptureExecutorOrigin): WorkspaceCaptureOrigin 
   observation: origin.observation,
   ...(origin.headN === undefined ? {} : { headN: origin.headN }),
 });
+
+/** Wire → public credential home. */
+const toCredentialHome = (home: WireWorkspaceCredentialHome): WorkspaceCredentialHome => ({
+  home: home.home,
+  onBehalfOf: home.onBehalfOfUserId,
+  accounts: {
+    ...(home.accounts.claude === undefined ? {} : { claude: { ...home.accounts.claude } }),
+    ...(home.accounts.codex === undefined ? {} : { codex: { ...home.accounts.codex } }),
+    ...(home.accounts.github === undefined ? {} : { github: { ...home.accounts.github } }),
+  },
+});
+
+/** A provider's choice → its wire value: `null` removes, `false`/absent leaves it out. */
+const accountChoice = (
+  choice: WorkspaceCredentialsAccountChoice | undefined,
+): string | null | undefined => (choice === null ? null : mapAccountRef(choice));
 
 /** Wire → public drain observation. */
 const toCaptureDrain = (drain: WireWorkspaceCaptureDrain): WorkspaceCaptureDrain => ({
@@ -637,6 +660,43 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         status: "queued",
         ...(init.harness === undefined ? {} : { harness: init.harness }),
       });
+    },
+
+    // People's logins, one person per home; the workspace stays the client owner's.
+    credentials: {
+      put: async (options) => {
+        const choices = {
+          claude: accountChoice(options.claude),
+          codex: accountChoice(options.codex),
+          github: accountChoice(options.github),
+        };
+        const answered = await ctx.runtime.run(
+          putWorkspaceCredentialsOp(init.id, {
+            ownerUserId: ctx.config.hostLocal.ownerUserId,
+            onBehalfOfUserId: options.onBehalfOf,
+            home: options.home,
+            ...(choices.claude === undefined ? {} : { claude: choices.claude }),
+            ...(choices.codex === undefined ? {} : { codex: choices.codex }),
+            ...(choices.github === undefined ? {} : { github: choices.github }),
+          }),
+        );
+        return toCredentialHome(answered.home);
+      },
+      release: async (home) => {
+        const answered = await ctx.runtime.run(
+          releaseWorkspaceCredentialsOp(init.id, {
+            ownerUserId: ctx.config.hostLocal.ownerUserId,
+            home,
+          }),
+        );
+        return { released: answered.released };
+      },
+      list: async () => {
+        const answered = await ctx.runtime.run(
+          listWorkspaceCredentialsOp(init.id, { ownerUserId: ctx.config.hostLocal.ownerUserId }),
+        );
+        return answered.homes.map(toCredentialHome);
+      },
     },
 
     // expire({in: "2h"}) sets the TTL, expire() expires now (the platform reaper stops it on its

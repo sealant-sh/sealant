@@ -211,6 +211,9 @@ inside the deployment's trust boundary):
 - Profiles: minimal `/v1/profiles` group (list by owner; set/clear per-provider account binding) so
   web + CLI can manage bundles. (Profiles repos already exist; this is their first API surface.)
 
+`/v1/workspaces/:id/credentials` puts a person's logins into one home of a running workspace; see
+§6c for what it records and who may call it.
+
 Sandbox creation (`sandboxes.module.ts`): `NewSandbox` gains optional
 `credentials?: { profileId?: string; claude?: string; codex?: string; github?: string }` (account
 ids, or names resolved per provider). Explicit ids win over the profile's bindings. The module
@@ -287,10 +290,10 @@ throwaway logins wherever something refreshed):
   `connected_accounts. refresh_claimed_until`. The stored file is persisted before anything else is
   done with it.
 - **Push.** `pushCredentialCopy` writes the new copy into every running runtime instance whose
-  launch file-injected the account, in parallel, over the control connection (the launch's
-  exec-with-stdin write), never the run-exec queue. Claude's previous token is revoked by the
-  refresh, so the push runs straight after it; a request caught between gets a 401, re-reads the
-  file and retries. Codex's previous token stays valid.
+  launch file-injected the account, and into every home that holds it (§6c), in parallel, over the
+  control connection (the launch's exec-with-stdin write), never the run-exec queue. Claude's
+  previous token is revoked by the refresh, so the push runs straight after it; a request caught
+  between gets a 401, re-reads the file and retries. Codex's previous token stays valid.
 - **Refused means ended.** A refused refresh marks the account `invalid` (`markInvalid`): the
   resolver refuses launches with it, and inference answers `reconnect Claude` / `reconnect Codex`.
 - **Read-back only for older launches.** The runtime instance row marks copies (`copy: true` in
@@ -324,6 +327,77 @@ refreshes it.
 - A setup token lives a year and cannot be revoked by a refresh, so unlike a session copy it stays
   usable after it leaves a workspace: whoever could read the file while it was written there keeps a
   working token until it is revoked from the Claude account.
+
+## 6c. A person's logins in each home (Oct 2026)
+
+**Why.** In Mend's per-person layout (Mend ADR 0016) several people work in one executor, each as
+their own Linux user, and every process runs as one person, on that person's own logins. A
+workspace's logins can no longer be one set for the whole container: a person's logins go into that
+person's home (or a conversation home while that person's process is about to run there), and
+nowhere else. A login is never switched in place in a running process: a new sender gets a new
+process, and its home gets the sender's logins.
+
+**Endpoints.** `/v1/workspaces/:id/credentials` (SDK `workspace.credentials`):
+
+```
+POST   { ownerUserId, onBehalfOfUserId, home, claude?, codex?, github? }   → { workspaceId, runId, home: Home }
+DELETE ?ownerUserId&home                                                   → { workspaceId, runId, home, released }
+GET    ?ownerUserId                                                        → { workspaceId, runId, homes: Home[] }
+   Home = { home, onBehalfOfUserId, accounts: { claude?, codex?, github?: { connectedAccountId, name } } }
+```
+
+- **Resolve as create does.** Each value is an account id (`cacc_…`) or a name under the provider,
+  of `onBehalfOfUserId` (`true` in the SDK is `default`). Unknown, someone else's, wrong-provider
+  and archived accounts are one uniform 404; an `invalid` one is a 409 `connected-account-invalid`.
+  Create and the put share the resolver. `null` removes that provider's login from the home (the
+  person has not connected it); a provider left out is left as it is.
+- **Write a copy, owned by the home's owner.** Claude and Codex go through the injection planner, so
+  each file is exactly what a launch writes (§6a: no Claude refresh token, the Codex placeholder; a
+  setup token as the file of §6b). GitHub is written as `<home>/.config/gh/hosts.yml`
+  (`oauth_token`, `git_protocol: https`, and `user` when the account's login is known), so `gh` and
+  a credential helper that reads it find the person's own token and nothing rides the environment.
+  Every file is 0600 and owned by the home directory's owner, as is every directory the write makes.
+  One exec over the control connection per call writes and removes everything the call names;
+  payloads go over stdin, never argv.
+- **The home.** An absolute, normalised path of safe characters, never `/` or under `/workspace`
+  (everything there is saved), reached without a symbolic link (checked in the executor, at write
+  time; a link at the file's own name is replaced, never followed). It must exist: a home is made by
+  whoever made its user (409 `home-unusable` otherwise). `/root` is allowed, for a launcher whose
+  predicted per-person layout failed at prepare; while a launch's own logins are at `$HOME` (a
+  launch that named no home), `/root` is the launch's and a put or release there answers 409
+  `home-held`.
+- **One person per home, while it is held.** `workspace_credential_homes` holds one row per
+  (instance, home): the person, and the account per provider whose copy is there. The first put
+  names the home's person; a put naming anyone else is refused, 409 `home-held`, and nothing is
+  written. The same person may change an account or remove a provider. The home is held until it is
+  released: `DELETE` removes every login file Core names in it (recorded or not: an unconfirmed
+  write may have landed) and deletes the row; only then can the home be taken by another person.
+  Release is idempotent (`released: false` when it held nothing); on a stopped executor it deletes
+  the row only.
+- **One row lock.** Every write into a home (a put, a release, a refresh push) runs inside one
+  transaction that holds the home's row `FOR UPDATE`, behind a transaction-scoped advisory lock on
+  the (instance, home) key so a home with no row yet is serialised too, across its control-channel
+  write, and decides on the row as it is under the lock. Two first puts into one home take turns,
+  and the second finds the first's person.
+- **Unconfirmed writes.** A write that fails or times out can still land. A put into a home that
+  held nothing records nothing and removes, once, what it may have written; a put into a held home
+  leaves the record as it was (the same person's login either way). Both answer 502. A release that
+  is not confirmed keeps the home held.
+- **The push follows the homes.** `pushCredentialCopy` writes the new copy into every running launch
+  that holds the account as before, and into every home of a ready instance whose row holds the
+  account, at most four at a time, each under its row lock and re-read under it: a home released or
+  retaken by another person since the listing is left alone.
+- **The spec stays.** The blueprint's `credentialRefs` are unchanged; a put changes nothing a
+  restart reads.
+- **Only a running workspace.** No ready executor answers 409 `workspace-not-running`.
+
+**Who may write.** A put names two people: the workspace's owner (`ownerUserId`, owner scope,
+uniform 404) and the person whose logins are written (`onBehalfOfUserId`; every named account must
+be theirs). Only a caller that may act for both may ask, so the three routes take only a service
+key; the SSH gateway's secret and a user access token act for at most one person and are refused
+(403) by the handler. The rule that a login is selected only for its owner's work stands: the
+service key's product (Mend) puts a person's login only into that person's home, or into a
+conversation home while that person's process is about to run there.
 
 ## 7. The `sealant` CLI — `apps/cli`
 
