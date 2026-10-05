@@ -34,10 +34,18 @@ test("a release is the plain names; a next build the -next names, as exact alias
   });
 });
 
+// Main may pin a sealantd prerelease (ADR 0015 in sealant-sh/mend); a stable release refusing one
+// is check-release-pins.mjs's job. Here every reference is a release or a next build, by digest.
+const PINNED =
+  /^ghcr\.io\/sealant-sh\/(?:sealantd:\d+\.\d+\.\d+|sealantd-next:\d+\.\d+\.\d+-next\.\d+)@sha256:[0-9a-f]{64}$/;
+
 test("the checked-in pins are tag@sha256, which only this script writes", async () => {
   for (const file of IMAGE_FILES) {
     const text = await readFile(path.join(root, file), "utf8");
-    assert.match(text, /ghcr\.io\/sealant-sh\/sealantd:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}/, file);
-    assert.deepEqual(prereleaseImages(text), [], file);
+    const references = [
+      ...text.matchAll(/ghcr\.io\/sealant-sh\/sealantd(?:-next)?(?:[:@][0-9A-Za-z.:@-]+)?/g),
+    ].map((match) => match[0]);
+    assert.notEqual(references.length, 0, file);
+    for (const reference of references) assert.match(reference, PINNED, file);
   }
 });

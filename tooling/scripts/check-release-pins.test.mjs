@@ -19,7 +19,7 @@ const read = (file) => readFile(path.join(root, file), "utf8");
 
 test("every file the guard reads names sealantd, so a moved pin cannot slip past it", async () => {
   for (const file of SEALANTD_IMAGE_FILES) {
-    assert.match(await read(file), /ghcr\.io\/sealant-sh\/sealantd:/, file);
+    assert.match(await read(file), /ghcr\.io\/sealant-sh\/sealantd(?:-next)?:/, file);
   }
   for (const file of RUNTIME_DEPENDENTS) {
     const manifest = JSON.parse(await read(file));
