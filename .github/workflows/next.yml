@@ -34,9 +34,14 @@ on:
 permissions:
   contents: read
 
+# One run at a time, in push order, never one cancelled: GitHub keeps one pending run per group
+# unless `queue: max` (up to 100), so without it a third quick merge cancelled the pending second and
+# never published. actionlint 1.7.12 does not know `queue` yet (rhysd/actionlint#657);
+# .github/actionlint.yaml ignores that one finding here.
 concurrency:
   group: next
   cancel-in-progress: false
+  queue: max
 
 jobs:
   plan:

@@ -1,0 +1,10 @@
+# Configuration for `actionlint` (no workflow runs it; run it by hand on workflow changes).
+self-hosted-runner:
+  labels:
+    - blacksmith-*
+paths:
+  .github/workflows/next.yml:
+    ignore:
+      # GitHub supports `concurrency.queue` since 2026-05-07; actionlint 1.7.12 does not know it yet
+      # (rhysd/actionlint#657). Drop this once it does.
+      - 'unexpected key "queue" for "concurrency" section'
