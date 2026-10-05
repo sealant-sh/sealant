@@ -55,7 +55,7 @@ describe("microvmRecipe", () => {
 
     // Built and booted by the managed image build on 2026-09-20 exactly as generated here.
     expect(containerfile).toMatch(/^FROM public\.ecr\.aws\/docker\/library\/fedora:/m);
-    expect(containerfile).toContain("COPY --from=ghcr.io/sealant-sh/sealantd:");
+    expect(containerfile).toMatch(/COPY --from=ghcr\.io\/sealant-sh\/sealantd(?:-next)?:/);
     expect(containerfile).toContain("RUN node --version");
     expect(containerfile).toContain("COPY agent.mjs docker-service.mjs /opt/sealant/");
     expect(containerfile).toContain("ENV SEALANT_MICROVM_AGENT_PORT=8080");
