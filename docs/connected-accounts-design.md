@@ -463,6 +463,48 @@ key; the SSH gateway's secret and a user access token act for at most one person
 service key's product (Mend) puts a person's login only into that person's home, or into a
 conversation home while that person's process is about to run there.
 
+## 6d. A launch's own home (Oct 2026)
+
+**Why.** In Mend's per-person layout the launcher's logins belong in the launcher's home, not at
+`$HOME` (root's) or in the container's environment, and a cold launch makes no extra call for them.
+
+- **`credentialsHome` on create** (`spec.runtime.credentialsHome = { path, uid, gid }`, SDK
+  `create({ credentialsHome })`): the launch writes every login into that home: Claude and Codex as
+  their files, GitHub as `.config/gh/hosts.yml`, so no `GITHUB_TOKEN`, `GH_TOKEN` or
+  `CLAUDE_CODE_OAUTH_TOKEN` is in the environment. The home may not exist yet (its user is made
+  after the launch), so the launch makes it, owned by `uid`:`gid`, mode 0700; every file and every
+  directory made for it is theirs, files 0600. The home follows §6c's rules (checked at create, a
+  400 otherwise; no link on the way, checked in the executor).
+- **Recorded as a held home.** Once the executor is ready, the launch records the home for the
+  workspace's owner with the accounts it wrote, as a put would (§6c): refreshes reach it through the
+  record, nobody else's logins are put there, and a release (`DELETE`) removes the files, which is
+  how Mend falls back to `/root` when a predicted per-person layout fails at prepare. The instance's
+  `launch_credential_injections` entries name the home, so the per-instance push skips them (one
+  write per refresh, never two). A failure to record is logged, never the launch's.
+- **Cost.** Nothing new on the launch's critical path: the same launch write path writes the same
+  files (one exec per file, as before), and the record is one short transaction in the worker after
+  the executor is ready. No API call is added.
+
+## 6e. Running as a user, and an image's per-person capability (Oct 2026)
+
+- **`user` on exec and sessions** (`POST /v1/workspaces/:id/exec { user }`,
+  `POST /v1/sessions { user }`, SDK `exec(argv, { user })`, `sessions.open(argv, { user })`): a
+  Linux user name or numeric uid. Core starts processes through sealantd, and no released sealantd
+  can start one as another user yet (Mend ADR 0016 Delivery 5), so Core refuses with 409
+  `user-unsupported` before anything starts, and never runs the process as the workspace's own user
+  in its place. Wiring it through is a follow-up once sealantd's protocol carries it.
+- **The image's per-person capability.** The image build's probe (Delivery 9) records on the build's
+  metadata `personLayoutProbe`: what `sealantd capabilities --json` reports, whether the image has
+  `sudo`, `useradd` and `setfacl`, whether the reserved ids are free, and whether it is a nix image.
+  Core derives `personLayout = { status, missing, runtime, acl }` from it and the operator's
+  `SEALANT_WORKSPACE_ACLS` (whether the default runtime's `/workspace` takes ACLs). Anything not
+  known is `unknown`, never `supported`. It is reported on every workspace read's `publishedImage`,
+  so a launch's image is known with no extra call (SDK `launch.image` after `ready()`,
+  `workspace.image()`), and before a create by `POST /v1/workspaces/image { spec }` (SDK
+  `workspaces.inspectImage(options)`): the spec is planned exactly as the build plans it and the
+  latest image published for the plan answers. That read creates nothing, and names the image only
+  to the owner who built it. Mend calls it only when it has no record for the image.
+
 ## 7. The `sealant` CLI — `apps/cli`
 
 New workspace app `@sealant/cli`, bin `sealant`, built on `effect/unstable/cli` (Command/Flag/Prompt

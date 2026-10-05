@@ -408,11 +408,27 @@ export const workspaceSpecKubernetesSchema = z
   })
   .prefault({});
 
+/**
+ * The home a launch writes its logins into, instead of `$HOME` and the environment
+ * (docs/connected-accounts-design.md §6d): a person's home that may not exist yet (its user is made
+ * after the launch), so the launch makes it, owned by `uid`:`gid` with mode 0700, and writes every
+ * login there owned by them, GitHub as `.config/gh/hosts.yml`. An absolute, normalised path outside
+ * `/workspace`; the control plane checks it at create.
+ */
+export const workspaceCredentialsHomeSchema = z.strictObject({
+  path: nonEmptyStringSchema,
+  uid: z.number().int().min(0),
+  gid: z.number().int().min(0),
+});
+
+export type WorkspaceCredentialsHome = z.infer<typeof workspaceCredentialsHomeSchema>;
+
 export const workspaceSpecRuntimeSchema = z
   .strictObject({
     env: z.record(z.string(), z.string()).default({}),
     userEnv: workspaceUserEnvSchema,
     credentialRefs: z.array(workspaceCredentialRefSchema).default([]),
+    credentialsHome: workspaceCredentialsHomeSchema.optional(),
     dotfilesArchives: z.array(workspaceDotfilesArchiveSchema).max(4).default([]),
     workspaceRoot: nonEmptyStringSchema.default("/workspace"),
     workingDirectory: nonEmptyStringSchema.default("/workspace/repo"),

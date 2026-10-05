@@ -797,6 +797,16 @@ export interface CreateOptions {
   /** Connected-account credentials to attach to the workspace (see `WorkspaceCredentialsOptions`). */
   readonly credentials?: WorkspaceCredentialsOptions;
   /**
+   * Write the launch's logins into this home instead of `$HOME` and the environment: Claude and
+   * Codex as their credential files, GitHub as `<home>/.config/gh/hosts.yml` (no `GITHUB_TOKEN`
+   * or `GH_TOKEN`), every file owned by `uid`:`gid`, mode 0600. The home may not exist yet (a
+   * per-person user is made after the launch): the launch makes it, owned by `uid`:`gid`, mode
+   * 0700. The home is then held for the workspace's owner, as `workspace.credentials.put` would
+   * hold it, and kept refreshed. Absolute, normalised, never under `/workspace`. No extra call:
+   * the logins are written by the launch itself.
+   */
+  readonly credentialsHome?: WorkspaceCredentialsHomeOptions;
+  /**
    * Time-to-live for the workspace, e.g. `"90m"`, `"2h"` (also `"45s"`, `"1d"`). Once it elapses
    * the platform stops the workspace and removes its container. Omitted = the server default TTL
    * (if the install configures one).
@@ -872,6 +882,8 @@ export interface WorkspaceLaunch {
   readonly replayed: boolean;
   /** The launch identity the create named. */
   readonly launchId?: string;
+  /** The image the executor booted, with its per-person capability; filled in by `ready()`. */
+  readonly image?: WorkspaceImage;
 }
 
 export interface ListOptions {
@@ -883,6 +895,15 @@ export interface ListOptions {
 export interface WorkspaceExecOptions {
   /** Working directory inside the workspace (defaults to the repository root). */
   readonly cwd?: string;
+  /**
+   * Run the process as this Linux user: a user name of the image's passwd, or a numeric uid. It
+   * takes its uid, gid, supplementary groups and `HOME`, `USER`, `LOGNAME` and `SHELL` from the
+   * passwd entry, with umask 0002. Never run as anyone else in its place: while the workspace's
+   * runtime cannot start a process as another user (no released sealantd can yet), the call
+   * rejects with `WorkspaceConflictError` / `SessionConflictError`, body code `user-unsupported`,
+   * and nothing is started.
+   */
+  readonly user?: string;
 }
 
 /**
@@ -920,6 +941,8 @@ export interface Workspace {
    * run and deadline. `null` while no runtime is launched yet.
    */
   runtime(): Promise<WorkspaceRuntimeInfo | null>;
+  /** The image the workspace's latest launch booted, with its per-person capability. */
+  image(): Promise<WorkspaceImage | null>;
   /**
    * What this handle knows of the launch that made it (from `workspaces.create()`), including the
    * executor `ready()` saw become ready. `undefined` on handles from `get()` / `list()`.
@@ -1076,6 +1099,51 @@ export interface WorkspaceCredentialHome {
   };
 }
 
+/**
+ * Whether an image can run Mend's per-person layout on the deployment's runtime: its sealantd runs
+ * processes and dotfiles as a user and restores owners, it has `sudo`, `useradd` and `setfacl`, no
+ * user or group in 40000–49999 but `mend`, it is not a nix image, and the runtime's `/workspace`
+ * takes ACLs. What is not known is `unknown`, never `supported`.
+ */
+export interface WorkspaceImagePersonLayout {
+  readonly status: "supported" | "unsupported" | "unknown";
+  /** What the image or the runtime lacks, in words; empty when nothing is known to be missing. */
+  readonly missing: readonly string[];
+  /** The runtime the answer is for: the deployment's default adapter. */
+  readonly runtime: string;
+  /** ACLs on that runtime's `/workspace`, as the operator declared them. */
+  readonly acl: "supported" | "unsupported" | "unknown";
+}
+
+/** A published workspace image. */
+export interface WorkspaceImage {
+  readonly reference: string;
+  readonly digestReference: string;
+  readonly digest: string;
+  /** Absent from control planes before the per-person capability. */
+  readonly personLayout?: WorkspaceImagePersonLayout;
+}
+
+/** What a create would build, read before it (see `workspaces.inspectImage`). */
+export interface WorkspaceImageInspection {
+  /** The hash of the image plan: one per distinct build input. */
+  readonly planHash: string;
+  /** The latest image published for the plan, when this owner has built one. */
+  readonly image?: WorkspaceImage;
+  /** The image's per-person capability (`unknown` when none has been built yet). */
+  readonly personLayout: WorkspaceImagePersonLayout;
+}
+
+/** Where a launch writes its logins (see {@link CreateOptions.credentialsHome}). */
+export interface WorkspaceCredentialsHomeOptions {
+  /** Absolute path of the home inside the executor, e.g. `/home/m4lice000`. */
+  readonly path: string;
+  /** The home's owner: the uid its user will have. */
+  readonly uid: number;
+  /** The owner's group. */
+  readonly gid: number;
+}
+
 /** Options for {@link Workspace.forward}. */
 export interface WorkspaceForwardOptions {
   /** Target inside the workspace: its loopback (default) or the Docker sidecar. */
@@ -1145,6 +1213,15 @@ export interface SessionOptions {
   readonly mode?: SessionMode;
   /** Opaque correlation bag, stored verbatim and echoed on reads. */
   readonly metadata?: Readonly<Record<string, unknown>>;
+  /**
+   * Run the process as this Linux user: a user name of the image's passwd, or a numeric uid. It
+   * takes its uid, gid, supplementary groups and `HOME`, `USER`, `LOGNAME` and `SHELL` from the
+   * passwd entry, with umask 0002. Never run as anyone else in its place: while the workspace's
+   * runtime cannot start a process as another user (no released sealantd can yet), the call
+   * rejects with `WorkspaceConflictError` / `SessionConflictError`, body code `user-unsupported`,
+   * and nothing is started.
+   */
+  readonly user?: string;
 }
 
 /** Runs a harness in a workspace, one-shot or interactive. */

@@ -378,6 +378,11 @@ export const microvmRuntimeEnvSchema = z.object({
   SEALANT_MICROVM_BUILD_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
   SEALANT_MICROVM_BUILD_POLL_INTERVAL_MS: z.coerce.number().int().positive().optional(),
   /**
+   * Whether the default runtime's `/workspace` filesystem takes POSIX ACLs, as the operator
+   * declares it (Mend ADR 0016's per-person layout needs them). Unset: unknown, reported as such.
+   */
+  SEALANT_WORKSPACE_ACLS: z.enum(["supported", "unsupported"]).optional(),
+  /**
    * Whether a MicroVM install serves `tooling.services.docker`. Such a workspace's image is
    * created with the image-level `ALL` OS capability, an operator decision. The worker reads it
    * to build that image; the API reads it for the create-time refusal. Set the SAME value on both.

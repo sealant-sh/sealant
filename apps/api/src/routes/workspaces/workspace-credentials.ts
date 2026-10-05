@@ -204,7 +204,9 @@ const requireNotLaunchHome = (
   instance: WorkspaceRuntimeInstance,
 ) =>
   home === LAUNCH_HOME &&
-  (instance.launchCredentialInjections ?? []).some((entry) => entry.injection === "file")
+  (instance.launchCredentialInjections ?? []).some(
+    (entry) => entry.injection === "file" && entry.home === undefined,
+  )
     ? Effect.fail(
         new WorkspaceConflictError({
           message: `${home} holds the logins workspace ${workspaceId} was launched with; it is not released while the executor runs.`,

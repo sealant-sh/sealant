@@ -102,6 +102,12 @@ These call the live API and work end-to-end:
   account, `null` removes the provider), owned by the home's owner, and keeps them refreshed; a home
   holds one person's logins until `workspace.credentials.release(home)`, and
   `workspace.credentials.list()` lists the homes. Needs a service key.
+- **Per-person homes:** `create({ credentialsHome: { path, uid, gid } })` writes the launch's logins
+  into that home (no login in the environment); `workspaces.inspectImage(options)` reads, before a
+  create, the image the create would build and its per-person capability, which `launch.image`
+  (after `ready()`) and `workspace.image()` also report; `exec(argv, { user })` and
+  `sessions.open(argv, { user })` ask for a Linux user and are refused (`user-unsupported`) until
+  the workspace runtime can start a process as one.
 - **Harness:** `workspace.harness.run(prompt)` — registers a run server-side and blocks until
   terminal; `workspace.harness.start(prompt)` — same run, returns the live handle immediately
 - **Port forwarding:** `workspace.forward(port)` — a raw TCP byte pipe to `127.0.0.1:port` inside

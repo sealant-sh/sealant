@@ -20,6 +20,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import {
+  PROCESS_USER_UNSUPPORTED_CODE,
   SessionBadGatewayError,
   SessionBadRequestError,
   SessionConflictError,
@@ -62,6 +63,7 @@ import { Effect, Stream } from "effect";
 
 import { env } from "../../runtime-env.js";
 import { authPosture, servicePrincipals } from "../../services/service-principals.js";
+import { processUserUnsupportedMessage } from "../process-user.js";
 
 // StreamKind numerics from the runtime protocol (avoid a runtime dep for constants).
 const STREAM_KIND_STDOUT = 2;
@@ -397,6 +399,12 @@ export const createSession = (input: {
     if (workspace === undefined || workspace.ownerUserId !== principal.ownerUserId) {
       return yield* new SessionNotFoundError({
         message: `Workspace not found: ${input.payload.workspaceId}`,
+      });
+    }
+    if (input.payload.user !== undefined) {
+      return yield* new SessionConflictError({
+        message: processUserUnsupportedMessage(input.payload.user),
+        code: PROCESS_USER_UNSUPPORTED_CODE,
       });
     }
 

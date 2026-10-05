@@ -2,6 +2,9 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { posix } from "node:path";
 
 import {
+  type InspectWorkspaceImageRequest,
+  type InspectWorkspaceImageResponse,
+  PROCESS_USER_UNSUPPORTED_CODE,
   type BindWorkspaceRequest,
   type FlushWorkspaceCaptureRequest,
   type GetWorkspaceCaptureStatusQuery,
@@ -90,6 +93,10 @@ import {
   type NewWorkspace,
 } from "@sealant/validators";
 import {
+  personLayoutCapability,
+  planWorkspaceImageBuild,
+  type PersonLayoutContext,
+  homePathProblem,
   attestationCoversObservations,
   captureFlushAnswer,
   captureStatusAnswer,
@@ -126,6 +133,7 @@ import {
 } from "../../services/control-plane-capabilities.js";
 import { requireLiveWorkspaceRoom, spendOwnerLaunch } from "../../services/owner-budgets.js";
 import { OWNER_REQUIRED_HINT, resolveOwnerScope, scopeAdmits } from "../../services/owner-scope.js";
+import { processUserUnsupportedMessage } from "../process-user.js";
 import { mapRun } from "../runs/runs.module.js";
 import { resolveDaemonTarget } from "../sessions/sessions.module.js";
 import { validateClientSuppliedAuthRefs } from "./client-authrefs.js";
@@ -255,7 +263,13 @@ export const isUniqueConstraintError = (error: unknown): boolean => {
   );
 };
 
-const parseWorkspaceSpec = (spec: unknown) => {
+/** The runtime an image's per-person capability is answered for, and its ACL support. */
+const personLayoutContext = (): PersonLayoutContext => ({
+  runtime: env.DEFAULT_RUNTIME_ADAPTER,
+  acl: env.SEALANT_WORKSPACE_ACLS,
+});
+
+export const parseWorkspaceSpec = (spec: unknown) => {
   const parsed = newWorkspaceSchema.safeParse(spec);
 
   if (!parsed.success) {
@@ -263,6 +277,18 @@ const parseWorkspaceSpec = (spec: unknown) => {
     return Effect.fail(
       new WorkspaceBadRequestError({
         message: firstIssue ?? "Workspace spec is invalid.",
+      }),
+    );
+  }
+
+  // A launch's logins go into its credentialsHome (§6d): the same rules as any home.
+  const credentialsHome = parsed.data.runtime.credentialsHome;
+  const homeProblem =
+    credentialsHome === undefined ? undefined : homePathProblem(credentialsHome.path);
+  if (credentialsHome !== undefined && homeProblem !== undefined) {
+    return Effect.fail(
+      new WorkspaceBadRequestError({
+        message: `credentialsHome '${credentialsHome.path}': ${homeProblem}`,
       }),
     );
   }
@@ -1047,7 +1073,7 @@ const mapWorkspaceAttemptSummary = (
     ...(sshGatewayConfig === undefined ? {} : { sshGateway: sshGatewayConfig }),
     retained,
   });
-  const publishedImage = resolveWorkspacePublishedImage(latestJob);
+  const publishedImage = resolveWorkspacePublishedImage(latestJob, personLayoutContext());
   const error = resolveWorkspaceError(latestJob, runtimeInstance);
   const startedAt = attempt.startedAt ?? latestJob?.startedAt;
   const finishedAt = attempt.finishedAt ?? latestJob?.finishedAt;
@@ -1170,7 +1196,7 @@ const mapWorkspaceSummary = (
     resolvedRuntime === undefined || launchId === null
       ? resolvedRuntime
       : { ...resolvedRuntime, launchId };
-  const publishedImage = resolveWorkspacePublishedImage(latestJob);
+  const publishedImage = resolveWorkspacePublishedImage(latestJob, personLayoutContext());
   const error = resolveWorkspaceError(latestJob, runtimeInstance);
   const updatedAt = latestDate(
     workspace.updatedAt,
@@ -2569,6 +2595,12 @@ export const execWorkspace = (input: {
 }) => {
   return Effect.gen(function* () {
     const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
+    if (input.payload.user !== undefined) {
+      return yield* new WorkspaceConflictError({
+        message: processUserUnsupportedMessage(input.payload.user),
+        code: PROCESS_USER_UNSUPPORTED_CODE,
+      });
+    }
     if (workspace.latestRunId === null) {
       return yield* new WorkspaceConflictError({
         message: `Workspace ${input.workspaceId} has no launched runtime to exec in yet; wait for it to become ready.`,
@@ -3502,3 +3534,49 @@ export const expireWorkspace = (input: {
     return response;
   });
 };
+
+/**
+ * What a create would build, read before the create (Mend ADR 0016): the spec is planned exactly as
+ * the build plans it, and the latest image published for that plan answers with its per-person
+ * capability. The image's names are answered only to the owner who built it.
+ */
+export const inspectWorkspaceImage = (input: { readonly payload: InspectWorkspaceImageRequest }) =>
+  Effect.gen(function* () {
+    const body = input.payload;
+    if (body.registryId !== env.REGISTRY_NAME) {
+      return yield* new WorkspaceNotFoundError({ message: `Unknown registry: ${body.registryId}` });
+    }
+    const spec = yield* parseWorkspaceSpec(body.spec);
+    const planned = yield* Effect.try({
+      try: () => planWorkspaceImageBuild({ blueprint: spec }),
+      catch: (error) =>
+        new WorkspaceBadRequestError({
+          message: `The spec does not plan an image: ${error instanceof Error ? error.message : "unknown error"}`,
+        }),
+    });
+    const job = yield* withInternalError(
+      (yield* WorkspaceBuildJobRepo).getLatestSucceededJobByPlanHash({
+        registryId: body.registryId,
+        planHash: planned.planHash,
+      }),
+      "Failed to look up the image for the plan.",
+    );
+    const attempt =
+      job?.runId === null || job?.runId === undefined
+        ? undefined
+        : yield* withInternalError(
+            (yield* WorkspaceAttemptRepo).getAttemptById(job.runId),
+            "Failed to load the build's launch.",
+          );
+    const context = personLayoutContext();
+    const image = resolveWorkspacePublishedImage(job, context);
+    return {
+      planHash: planned.planHash,
+      ...(image === undefined || attempt?.ownerUserId !== body.ownerUserId
+        ? {}
+        : { publishedImage: image }),
+      personLayout:
+        image?.personLayout ??
+        personLayoutCapability(job?.resultPayload?.metadata?.personLayoutProbe, context),
+    } satisfies InspectWorkspaceImageResponse;
+  });

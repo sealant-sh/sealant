@@ -589,3 +589,35 @@ describe.skipIf(!dockerAvailable)(
     );
   },
 );
+describe("buildCredentialFileWriteScript for a launch's credentialsHome", () => {
+  it("makes the home for its owner and writes the bare stdin payload there", async () => {
+    const { buildCredentialFileWriteScript } = await import("./credential-files.js");
+    const home = join(scratch(), "erin");
+    const content = '{"claudeAiOauth":{"accessToken":"at-erin"}}';
+    const contentBase64 = Buffer.from(content).toString("base64");
+    const script = buildCredentialFileWriteScript({
+      path: `${home}/.claude/.credentials.json`,
+      contentBase64,
+      mode: "600",
+      home: { path: home, uid, gid },
+    });
+    // A launch pipes the base64 payload with no newline after it.
+    const result = spawnSync("sh", ["-c", script], { input: contentBase64, encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(mode(home)).toBe(0o700);
+    expect(readFileSync(join(home, ".claude/.credentials.json"), "utf8")).toBe(content);
+    expect(mode(join(home, ".claude/.credentials.json"))).toBe(0o600);
+  });
+
+  it("refuses a path that is not one of the home's login files", async () => {
+    const { buildCredentialFileWriteScript } = await import("./credential-files.js");
+    expect(() =>
+      buildCredentialFileWriteScript({
+        path: "/home/m1/.bashrc",
+        contentBase64: "eA==",
+        mode: "600",
+        home: { path: "/home/m1", uid: 40001, gid: 40000 },
+      }),
+    ).toThrow(/not one of the login files/);
+  });
+});

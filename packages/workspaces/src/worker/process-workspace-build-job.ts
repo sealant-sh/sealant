@@ -20,6 +20,8 @@ import {
   WorkspaceBuildJobRepoLive,
   WorkspaceCaptureDrainRepo,
   WorkspaceCaptureDrainRepoLive,
+  WorkspaceCredentialHomeRepo,
+  WorkspaceCredentialHomeRepoLive,
   WorkspaceRepo,
   WorkspaceRepoLive,
   WorkspaceRuntimeInstanceRepo,
@@ -30,6 +32,9 @@ import {
   WorkspaceRuntimeInstanceRepoInvariantError,
   SealantDB,
   type DB,
+  type WorkspaceCredentialHomeAccount,
+  type WorkspaceLaunchCredentialInjection,
+  workspaceCredentialHomeProviderValues,
 } from "@sealant/db";
 import { type GitHubSourceIntegration } from "@sealant/source-integrations";
 import {
@@ -37,6 +42,7 @@ import {
   workspaceImageProbeSchema,
   type NewWorkspace,
   type WorkspaceBuild,
+  type WorkspaceCredentialsHome,
 } from "@sealant/validators";
 import { Clock, Deferred, Effect, Exit, Layer, Option, Schedule } from "effect";
 import { z } from "zod";
@@ -313,6 +319,7 @@ const unsealSecretEnv = (
 /** Split the resolver's injection plan into the adapter-launch env record + file list. */
 const splitCredentialInjections = (
   injections: readonly CredentialInjection[],
+  credentialsHome: WorkspaceCredentialsHome | undefined,
 ): {
   readonly credentialEnv: Record<string, string>;
   readonly credentialFiles: readonly CredentialFileInjection[];
@@ -328,12 +335,57 @@ const splitCredentialInjections = (
         path: injection.path,
         contentBase64: injection.contentBase64,
         mode: injection.mode,
+        ...(credentialsHome === undefined ? {} : { home: credentialsHome }),
       });
     }
   }
 
   return { credentialEnv, credentialFiles };
 };
+
+/**
+ * A launch that wrote its logins into a `credentialsHome` records that home as its owner's
+ * (docs/connected-accounts-design.md §6d), as a put would: refreshes reach it through the record,
+ * and nobody else's logins are put there while it is held. A failure is logged, never the launch's:
+ * the executor is up and its logins are written; only refresh pushes into the home wait for a put.
+ */
+const recordLaunchHome = (input: {
+  readonly runId: string;
+  readonly home: string;
+  readonly ownerUserId: string | undefined;
+  readonly injections: readonly WorkspaceLaunchCredentialInjection[];
+}) =>
+  Effect.gen(function* () {
+    const homes = yield* Effect.serviceOption(WorkspaceCredentialHomeRepo);
+    if (Option.isNone(homes) || input.ownerUserId === undefined) {
+      return yield* Effect.logWarning(
+        `Launch ${input.runId}: the logins written into ${input.home} are not recorded (${Option.isNone(homes) ? "no home repository" : "no owner"}); refreshes do not reach them until they are put again.`,
+      );
+    }
+    const ownerUserId = input.ownerUserId;
+    const accounts = input.injections.flatMap((entry): WorkspaceCredentialHomeAccount[] => {
+      if (entry.injection !== "file") return [];
+      const provider = workspaceCredentialHomeProviderValues.find(
+        (candidate) => candidate === entry.provider,
+      );
+      return provider === undefined
+        ? []
+        : [{ provider, connectedAccountId: entry.connectedAccountId }];
+    });
+    yield* homes.value.withLockedHome({ runId: input.runId, home: input.home }, () =>
+      Effect.succeed({
+        result: undefined,
+        outcome: { kind: "hold" as const, onBehalfOfUserId: ownerUserId, accounts },
+      }),
+    );
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning(
+        `Launch ${input.runId}: recording the logins in ${input.home} failed; refreshes do not reach them until they are put again.`,
+        cause,
+      ),
+    ),
+  );
 
 const swallowingFailure = (operation: string) =>
   sharedSwallowingFailure("Workspace build job", operation);
@@ -883,8 +935,10 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       blueprint: spec,
       credentialCipher: options.credentialCipher,
     });
+    const credentialsHome = spec.runtime.credentialsHome;
     const { credentialEnv, credentialFiles } = splitCredentialInjections(
       resolvedCredentials.injections,
+      credentialsHome,
     );
 
     // The transient secret channel: unseal, re-validate, then hand it to the stager with the
@@ -1075,6 +1129,19 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
         );
     }
 
+    if (
+      job.runId !== null &&
+      credentialsHome !== undefined &&
+      runtimeLaunchResult.status === "ready"
+    ) {
+      yield* recordLaunchHome({
+        runId: job.runId,
+        home: credentialsHome.path,
+        ownerUserId: attemptIdentity?.ownerUserId,
+        injections: resolvedCredentials.launchCredentialInjections,
+      });
+    }
+
     if (job.runId !== null) {
       yield* attempts
         .markAttemptSucceeded({ id: job.runId })
@@ -1152,6 +1219,8 @@ export const processWorkspaceBuildJob = (
     GitHubInstallationRepoLive,
     GitHubInstallationRepositoryCacheRepoLive,
     ConnectedAccountRepoLive,
+    // A launch's credentialsHome is recorded as its owner's home.
+    WorkspaceCredentialHomeRepoLive,
     // A build failure's job, attempt and runtime writes land together or not at all.
     DatabaseTransactionLive,
   ).pipe(Layer.provide(dbLayer));

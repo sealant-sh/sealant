@@ -30,6 +30,7 @@ import {
   getWorkspaceCreateOp,
   getWorkspaceOp,
   inferenceRespondOp,
+  inspectWorkspaceImageOp,
   listConnectedAccountsOp,
   listSshKeysOp,
   listWorkspacesOp,
@@ -39,7 +40,12 @@ import { makeSdkRuntime, type SdkRuntime } from "./effect/runtime.js";
 import { SealantError } from "./errors.js";
 import type { SdkContext } from "./facade/context.js";
 import { makeRun } from "./facade/run.js";
-import { makeWorkspace, registerHarnessExecutors, toRuntimeInfo } from "./facade/workspace.js";
+import {
+  makeWorkspace,
+  registerHarnessExecutors,
+  toRuntimeInfo,
+  toWorkspaceImage,
+} from "./facade/workspace.js";
 import { buildCreateWorkspaceRequest } from "./internal/blueprint.js";
 import { resolveInternalConfig } from "./internal/config.js";
 import { parseTtlSeconds } from "./internal/duration.js";
@@ -56,6 +62,7 @@ import type {
   SshKeysNamespace,
   Workspace,
   WorkspaceCreateState,
+  WorkspaceImageInspection,
   WorkspaceSshNamespace,
   SealantConfig,
   UsersNamespace,
@@ -164,6 +171,31 @@ export class Sealant {
      * The owner's workspace a `create({ idempotencyKey })` made, or `null`: what a caller that
      * lost a create's answer uses to find the executor it started.
      */
+    /**
+     * What `create(options)` would build, read before the create: the spec is planned exactly as
+     * the build plans it, and the latest image published for that plan answers with its
+     * per-person capability (Mend ADR 0016 chooses a layout with it). Nothing is created, built or
+     * reserved. A spec whose dotfiles or source the control plane resolves at create may plan
+     * differently; then nothing is found and the capability is `unknown`.
+     */
+    inspectImage: async (options: CreateOptions): Promise<WorkspaceImageInspection> => {
+      const { payload } = buildCreateWorkspaceRequest(options, this.#ctx.config);
+      const answered = await this.#runtime.run(
+        inspectWorkspaceImageOp({
+          ownerUserId: payload.ownerUserId,
+          registryId: payload.registryId,
+          spec: payload.spec,
+        }),
+      );
+      return {
+        planHash: answered.planHash,
+        ...(answered.publishedImage === undefined
+          ? {}
+          : { image: toWorkspaceImage(answered.publishedImage) }),
+        personLayout: { ...answered.personLayout, missing: [...answered.personLayout.missing] },
+      };
+    },
+
     findByIdempotencyKey: async (idempotencyKey: string): Promise<Workspace | null> => {
       const response = await this.#runtime.run(
         listWorkspacesOp({

@@ -66,6 +66,18 @@ export const credentialFileInjectionSchema = z.strictObject({
   path: z.string().trim().min(1),
   contentBase64: z.string().min(1),
   mode: z.string().regex(/^[0-7]{3,4}$/),
+  /**
+   * The home the file belongs to (a launch's `credentialsHome`): the home is made for this owner
+   * when missing, reached without a symbolic link, and the file and the directories made for it
+   * are the owner's. `path` is then `<home>/<one of Core's login files>`.
+   */
+  home: z
+    .strictObject({
+      path: z.string().trim().min(1),
+      uid: z.number().int().min(0),
+      gid: z.number().int().min(0),
+    })
+    .optional(),
 });
 
 export const runtimeAdapterLaunchInputSchema = z.strictObject({

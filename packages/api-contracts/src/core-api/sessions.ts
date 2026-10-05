@@ -36,6 +36,22 @@ export type SessionAuthorizationHeaders = typeof sessionAuthorizationHeadersSche
 export const sessionModeSchema = Schema.Literals(["pty", "pipe"]);
 export type SessionMode = typeof sessionModeSchema.Type;
 
+/**
+ * The Linux user a process runs as (Mend ADR 0016): a user name of the image's passwd, or a numeric
+ * uid. The process takes its uid, gid, supplementary groups and `HOME`, `USER`, `LOGNAME` and
+ * `SHELL` from the passwd entry, umask 0002. Absent: the workspace's own user, as before.
+ */
+export const workspaceProcessUserSchema = Schema.String.check(
+  Schema.isPattern(/^(?:[a-z_][a-z0-9_-]{0,31}|[0-9]{1,10})$/),
+);
+export type WorkspaceProcessUser = typeof workspaceProcessUserSchema.Type;
+
+/**
+ * The stable `code` a create or exec answers while no workspace runtime can start a process as
+ * another user: Core asks sealantd to, and no released sealantd does yet. Nothing is started.
+ */
+export const PROCESS_USER_UNSUPPORTED_CODE = "user-unsupported";
+
 export const createSessionRequestSchema = Schema.Struct({
   workspaceId: NonEmptyString,
   ownerUserId: NonEmptyString,
@@ -52,6 +68,8 @@ export const createSessionRequestSchema = Schema.Struct({
   mode: Schema.optional(sessionModeSchema),
   /** Opaque caller correlation bag: stored verbatim, echoed on reads, no platform semantics. */
   metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  /** Run the session's process as this Linux user (see `workspaceProcessUserSchema`). */
+  user: Schema.optional(workspaceProcessUserSchema),
 });
 export type CreateSessionRequest = typeof createSessionRequestSchema.Type;
 
@@ -177,7 +195,11 @@ export class SessionNotFoundError extends Schema.TaggedErrorClass<SessionNotFoun
 
 export class SessionConflictError extends Schema.TaggedErrorClass<SessionConflictError>()(
   "SessionConflictError",
-  { message: Schema.String },
+  {
+    message: Schema.String,
+    /** A stable reason, where one applies (`user-unsupported`). */
+    code: Schema.optional(NonEmptyString),
+  },
   { httpApiStatus: 409 },
 ) {}
 

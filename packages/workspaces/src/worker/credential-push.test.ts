@@ -40,6 +40,16 @@ const running = [
   ]),
   instance("d", [{ provider: "claude", connectedAccountId: "cacc_1", injection: "env" }]),
   instance("e", null),
+  // Launched into a credentialsHome: reached through that home's record, never at $HOME.
+  instance("f", [
+    {
+      provider: "claude",
+      connectedAccountId: "cacc_1",
+      injection: "file",
+      copy: true,
+      home: "/home/m4lice000",
+    },
+  ]),
 ];
 
 const instancesRepo = (instances: readonly WorkspaceRuntimeInstance[]) =>

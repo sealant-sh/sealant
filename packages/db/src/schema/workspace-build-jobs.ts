@@ -112,6 +112,12 @@ export interface WorkspaceLaunchCredentialInjection {
    * nothing newer to read back. Absent on rows launched before copies, whose files still rotate.
    */
   readonly copy?: boolean;
+  /**
+   * The home the launch wrote the file into (its `credentialsHome`), whose record is a
+   * `workspace_credential_homes` row: refreshes reach it through that row. Absent when the launch
+   * wrote at `$HOME`.
+   */
+  readonly home?: string;
 }
 
 export const workspaceRuntimeInstances = pgTable(
