@@ -21,7 +21,7 @@ import {
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
 import { makeInMemoryCredentialHomes } from "@sealant/db/testing/credential-homes";
-import type { HomeCredentialChannel, HomeCredentialScript } from "@sealant/workspaces";
+import type { HomeCredentialChannel } from "@sealant/workspaces";
 import { Effect, Layer, Result } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -135,12 +135,12 @@ const instanceRow = (
 const workspace = { id: "wks_1", ownerUserId: OWNER, latestRunId: "run_1" } as Workspace;
 
 interface Ran {
-  readonly script: HomeCredentialScript;
+  readonly script: string;
   /** The decoded payloads, in order. */
   readonly payloads: readonly string[];
 }
 
-const homeOf = (entry: Ran) => entry.script.script.match(/home='([^']+)'/)?.[1];
+const homeOf = (entry: Ran) => entry.script.match(/home='([^']+)'/)?.[1];
 
 const newWorld = (instance: WorkspaceRuntimeInstance = instanceRow()) => {
   const state = { instance };
@@ -148,18 +148,19 @@ const newWorld = (instance: WorkspaceRuntimeInstance = instanceRow()) => {
   const ran: Ran[] = [];
   const exits: Array<number | "throw"> = [];
   const channel: HomeCredentialChannel = {
-    run: async (_target, script) => {
-      const next = exits.shift() ?? 0;
-      if (next === "throw") throw new Error("the daemon did not answer");
-      ran.push({
-        script,
-        payloads: script.stdin
-          .split("\n")
-          .filter((line) => line.length > 0)
-          .map((line) => Buffer.from(line, "base64").toString("utf8")),
-      });
-      return { exitCode: next };
-    },
+    run: (_target, script, stdin) =>
+      Effect.suspend(() => {
+        const next = exits.shift() ?? 0;
+        if (next === "throw") return Effect.fail(new Error("the daemon did not answer"));
+        ran.push({
+          script,
+          payloads: stdin
+            .split("\n")
+            .filter((line) => line.length > 0)
+            .map((line) => Buffer.from(line, "base64").toString("utf8")),
+        });
+        return Effect.succeed({ exitCode: next });
+      }),
   };
   const layer = Layer.mergeAll(
     Layer.succeed(CredentialCipher, fakeCipher),
@@ -277,7 +278,7 @@ describe("putWorkspaceCredentials", () => {
     expect(github).toBe(
       'github.com:\n    oauth_token: "gho_alice"\n    git_protocol: https\n    user: "alice-gh"\n',
     );
-    expect(world.ran[0]?.script.script).toContain(".config/gh/hosts.yml");
+    expect(world.ran[0]?.script).toContain(".config/gh/hosts.yml");
     expect(world.homes.rows.get(`run_1 ${HOME}`)?.onBehalfOfUserId).toBe(ALICE);
   });
 
@@ -313,7 +314,7 @@ describe("putWorkspaceCredentials", () => {
       claude: { connectedAccountId: aliceWork.id, name: "work" },
     });
     expect(world.ran[1]?.payloads).toEqual([expect.stringContaining("at-alice-work")]);
-    expect(world.ran[1]?.script.script).toContain(`rm -f "$home/.codex/auth.json"`);
+    expect(world.ran[1]?.script).toContain(`rm -f "$home/.codex/auth.json"`);
   });
 
   it("takes the home again for another person once it is released", async () => {
@@ -390,7 +391,8 @@ describe("putWorkspaceCredentials", () => {
     expect(world.homes.rows.size).toBe(0);
     expect(world.ran).toHaveLength(1);
     expect(world.ran[0]?.payloads).toEqual([]);
-    expect(world.ran[0]?.script.script).toContain(`rm -f "$home/.claude/.credentials.json"`);
+    expect(world.ran[0]?.script).toContain(`rm -f "$home/.claude/.credentials.json"`);
+    expect(world.ran[0]?.script).toContain(`rm -f "$m"`);
   });
 
   it("keeps a held home's record when a later write is unconfirmed", async () => {
@@ -403,6 +405,31 @@ describe("putWorkspaceCredentials", () => {
     expect(world.homes.rows.get(`run_1 ${HOME}`)?.accounts).toEqual([
       { provider: "claude", connectedAccountId: aliceClaude.id },
     ]);
+  });
+
+  it("fences each write by the home's hold: a take makes the marker, later writes check it", async () => {
+    const world = newWorld();
+    succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default" }));
+    const generation = world.homes.rows.get(`run_1 ${HOME}`)?.generation ?? "";
+    expect(generation).toMatch(/^[0-9a-f]{32}$/);
+    // The take clears any login file it does not write (an earlier unconfirmed write's leftovers).
+    expect(world.ran[0]?.script).toContain(`printf '%s' '${generation}' > "$m"`);
+    expect(world.ran[0]?.script).toContain(`rm -f "$home/.codex/auth.json"`);
+    expect(world.ran[0]?.script).toContain(`rm -f "$home/.config/gh/hosts.yml"`);
+
+    succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "work" }));
+    expect(world.ran[1]?.script).toContain(`!= '${generation}' ]`);
+    expect(world.homes.rows.get(`run_1 ${HOME}`)?.generation).toBe(generation);
+  });
+
+  it("answers home-held when the home carries another hold's marker, recording nothing", async () => {
+    const world = newWorld();
+    world.exits.push(76);
+    expect(failed(await world.put({ onBehalfOfUserId: ALICE, claude: "default" }))).toMatchObject({
+      _tag: "WorkspaceConflictError",
+      code: "home-held",
+    });
+    expect(world.homes.rows.size).toBe(0);
   });
 
   it("refuses a caller that cannot act for both people", async () => {
@@ -446,7 +473,7 @@ describe("releaseWorkspaceCredentials", () => {
       home: HOME,
       released: true,
     });
-    const script = world.ran[1]?.script.script ?? "";
+    const script = world.ran[1]?.script ?? "";
     for (const file of [".claude/.credentials.json", ".codex/auth.json", ".config/gh/hosts.yml"]) {
       expect(script).toContain(`rm -f "$home/${file}"`);
     }

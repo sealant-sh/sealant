@@ -234,6 +234,11 @@ export const workspaceCredentialHomes = pgTable(
     home: text().notNull(),
     /** The one person whose logins the home holds. */
     onBehalfOfUserId: text("on_behalf_of_user_id").notNull(),
+    /**
+     * The hold's generation, also written into the home as its marker: every write into the home
+     * checks the marker in the executor, so a late write from an earlier hold never lands.
+     */
+    generation: text().notNull(),
     accounts: jsonb()
       .$type<readonly WorkspaceCredentialHomeAccount[]>()
       .notNull()

@@ -378,15 +378,33 @@ GET    ?ownerUserId                                                        → {
   transaction that holds the home's row `FOR UPDATE`, behind a transaction-scoped advisory lock on
   the (instance, home) key so a home with no row yet is serialised too, across its control-channel
   write, and decides on the row as it is under the lock. Two first puts into one home take turns,
-  and the second finds the first's person.
+  and the second finds the first's person. A writer waits at most 40 s for another (`lock_timeout`),
+  and the API runs at most four locked writes at once, so waiting writers cannot take the connection
+  pool.
+- **A fence in the executor.** A lock in the database cannot stop an exec the executor runs late: a
+  write that timed out (and so released the lock) may still run after the home was released and
+  taken by someone else. So every hold has a generation, recorded on the row and written into the
+  home as its marker, `<home>/.sealant-logins`. A first put (a take) writes only into a home with no
+  marker, and makes it; every later write (a put by the same person, a refresh push) writes only
+  while the marker names its hold; a release removes the marker with the files. A late write from an
+  earlier hold finds another marker, or a take's marker where it expected none, and writes nothing
+  (exit 76: a put answers 409 `home-held`, a push counts the home as no longer held). The exec also
+  runs in the caller's fiber, so a timeout closes the control session, and a script not yet handed
+  its stdin never runs.
 - **Unconfirmed writes.** A write that fails or times out can still land. A put into a home that
-  held nothing records nothing and removes, once, what it may have written; a put into a held home
-  leaves the record as it was (the same person's login either way). Both answer 502. A release that
-  is not confirmed keeps the home held.
+  held nothing records nothing and releases the home once (files and marker); a late take landing
+  after that leaves its marker, so the next take is refused until the home is released, and nobody
+  else's process runs on it. A put into a held home leaves the record as it was (the same person's
+  login either way). Both answer 502. A release that is not confirmed keeps the home held. A first
+  take also removes every login file it does not write.
+- **Links.** No component of the home's path may be a link. In a home that is not root's, the
+  directories Core writes in may not be links either (root's own writes could otherwise be
+  redirected into another person's directories); root's home keeps the shared layout's linked
+  `~/.claude`. A link at a file's own name is removed, never followed.
 - **The push follows the homes.** `pushCredentialCopy` writes the new copy into every running launch
-  that holds the account as before, and into every home of a ready instance whose row holds the
-  account, at most four at a time, each under its row lock and re-read under it: a home released or
-  retaken by another person since the listing is left alone.
+  that holds the account and, at the same time, into every home of a ready instance whose row holds
+  the account, at most four homes at a time, each under its row lock and fence: a home released or
+  retaken since the listing is left alone.
 - **The spec stays.** The blueprint's `credentialRefs` are unchanged; a put changes nothing a
   restart reads.
 - **Only a running workspace.** No ready executor answers 409 `workspace-not-running`.

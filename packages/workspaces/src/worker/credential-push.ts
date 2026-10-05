@@ -9,6 +9,8 @@ import { Duration, Effect } from "effect";
 
 import {
   buildHomeCredentialScript,
+  HOME_SCRIPT_EXIT,
+  homeScriptStdin,
   liveHomeCredentialChannel,
   type HomeCredentialChannel,
 } from "../runtime/home-credentials.js";
@@ -100,29 +102,32 @@ export const pushCredentialCopy = Effect.fn("pushCredentialCopy")(function* (
     mode: "600",
   };
 
-  const launchOutcomes = yield* Effect.forEach(
-    holding,
-    (instance) => {
-      const target = sealantTargetForRuntimeInstance(instance, input.targetOptions ?? {});
-      if (target === undefined) return Effect.succeed("unreachable" as const);
-      return Effect.tryPromise(() => channel.writeCredentialFiles(target, [file])).pipe(
-        Effect.timeout(PUSH_TIMEOUT),
-        Effect.as("written" as const),
-        Effect.catchCause((cause) =>
-          Effect.logWarning(
-            `${describe}: workspace run ${instance.runId} was not written.`,
-            cause,
-          ).pipe(Effect.as("failed" as const)),
-        ),
-      );
-    },
-    { concurrency: "unbounded" },
-  );
-
-  const homeOutcomes = yield* Effect.forEach(
-    homes,
-    (target) => pushIntoHome({ ...input, describe, target }),
-    { concurrency: HOME_PUSH_CONCURRENCY },
+  // Launches and homes at once: a Claude refresh has just revoked the previous token everywhere.
+  const [launchOutcomes, homeOutcomes] = yield* Effect.all(
+    [
+      Effect.forEach(
+        holding,
+        (instance) => {
+          const target = sealantTargetForRuntimeInstance(instance, input.targetOptions ?? {});
+          if (target === undefined) return Effect.succeed("unreachable" as const);
+          return Effect.tryPromise(() => channel.writeCredentialFiles(target, [file])).pipe(
+            Effect.timeout(PUSH_TIMEOUT),
+            Effect.as("written" as const),
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                `${describe}: workspace run ${instance.runId} was not written.`,
+                cause,
+              ).pipe(Effect.as("failed" as const)),
+            ),
+          );
+        },
+        { concurrency: "unbounded" },
+      ),
+      Effect.forEach(homes, (target) => pushIntoHome({ ...input, describe, target }), {
+        concurrency: HOME_PUSH_CONCURRENCY,
+      }),
+    ],
+    { concurrency: 2 },
   );
 
   const outcomes = [...launchOutcomes, ...homeOutcomes];
@@ -157,25 +162,33 @@ const pushIntoHome = (
     const homeChannel = input.homeChannel ?? liveHomeCredentialChannel;
     return yield* homeRepo.withLockedHome({ runId: home.runId, home: home.home }, (held) =>
       Effect.gen(function* () {
-        const stillHeld =
-          held?.accounts.some(
+        if (
+          held === undefined ||
+          !held.accounts.some(
             (account) =>
               account.provider === input.provider &&
               account.connectedAccountId === input.connectedAccountId,
-          ) === true;
-        if (!stillHeld) {
+          )
+        ) {
           return { result: "released" as const, outcome: { kind: "keep" as const } };
         }
-        const exit = yield* Effect.tryPromise(() =>
-          homeChannel.run(
+        // Fenced by the hold's generation: a write the executor runs after the timeout, once the
+        // home is released or retaken, finds another marker and writes nothing.
+        const exit = yield* homeChannel
+          .run(
             target,
             buildHomeCredentialScript({
               home: home.home,
-              writes: [{ provider: input.provider, content: input.copyJson }],
+              fence: { kind: "held", generation: held.generation },
+              writes: [input.provider],
               removes: [],
             }),
-          ),
-        ).pipe(Effect.timeout(PUSH_TIMEOUT));
+            homeScriptStdin([input.copyJson]),
+          )
+          .pipe(Effect.timeout(PUSH_TIMEOUT));
+        if (exit.exitCode === HOME_SCRIPT_EXIT.fenced) {
+          return { result: "released" as const, outcome: { kind: "keep" as const } };
+        }
         if (exit.exitCode !== 0) {
           return yield* Effect.fail(
             new Error(`The write into ${home.home} exited with ${String(exit.exitCode)}.`),

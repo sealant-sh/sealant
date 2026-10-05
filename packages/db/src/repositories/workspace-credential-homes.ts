@@ -37,6 +37,8 @@ export type WorkspaceCredentialHomeOutcome =
       readonly kind: "hold";
       readonly onBehalfOfUserId: string;
       readonly accounts: readonly WorkspaceCredentialHomeAccount[];
+      /** The hold's generation: new when the home held nothing, the held one otherwise. */
+      readonly generation: string;
     }
   /** The home is released: the row is deleted. */
   | { readonly kind: "release" };
@@ -117,6 +119,9 @@ export const WorkspaceCredentialHomeRepoLive: Layer.Layer<
       return db
         .transaction((tx) =>
           Effect.gen(function* () {
+            // A writer waits at most this long for another's write into the home (each is bounded
+            // by its own exec timeout), never indefinitely while holding a connection.
+            yield* withRepoError("withLockedHome", tx.execute(sql`set local lock_timeout = '40s'`));
             // A home that holds nothing has no row to lock: serialise on the key instead, for the
             // rest of this transaction, so two first puts into one home take turns too.
             yield* withRepoError(
@@ -145,12 +150,14 @@ export const WorkspaceCredentialHomeRepoLive: Layer.Layer<
                     home: input.home,
                     onBehalfOfUserId: outcome.onBehalfOfUserId,
                     accounts: [...outcome.accounts],
+                    generation: outcome.generation,
                   })
                   .onConflictDoUpdate({
                     target: [workspaceCredentialHomes.runId, workspaceCredentialHomes.home],
                     set: {
                       onBehalfOfUserId: outcome.onBehalfOfUserId,
                       accounts: [...outcome.accounts],
+                      generation: outcome.generation,
                       updatedAt: new Date(),
                     },
                   }),

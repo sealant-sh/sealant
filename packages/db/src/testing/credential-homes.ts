@@ -49,6 +49,7 @@ export const makeInMemoryCredentialHomes = (
               home: input.home,
               onBehalfOfUserId: outcome.onBehalfOfUserId,
               accounts: [...outcome.accounts],
+              generation: outcome.generation,
               createdAt: previous?.createdAt ?? now,
               updatedAt: now,
             });

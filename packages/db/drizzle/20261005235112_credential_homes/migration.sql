@@ -2,6 +2,7 @@ CREATE TABLE "workspace_credential_homes" (
 	"run_id" text,
 	"home" text,
 	"on_behalf_of_user_id" text NOT NULL,
+	"generation" text NOT NULL,
 	"accounts" jsonb DEFAULT '[]' NOT NULL,
 	"created_at" timestamp with time zone NOT NULL,
 	"updated_at" timestamp with time zone NOT NULL,

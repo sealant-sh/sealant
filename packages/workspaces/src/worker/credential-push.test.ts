@@ -8,7 +8,7 @@ import {
 import { makeInMemoryCredentialHomes } from "@sealant/db/testing/credential-homes";
 import { Effect, Layer } from "effect";
 
-import type { HomeCredentialChannel, HomeCredentialScript } from "../runtime/home-credentials.js";
+import type { HomeCredentialChannel } from "../runtime/home-credentials.js";
 import type { ControlChannel } from "../runtime/kubernetes/adapter.js";
 import { instancesHoldingAccount, pushCredentialCopy } from "./credential-push.js";
 
@@ -56,14 +56,19 @@ const silentLaunchChannel: ControlChannel = {
   writeCredentialFiles: async () => {},
 };
 
-/** Records each home script, decoding its stdin payloads. */
-const recordingHomeChannel = (
-  ran: Array<{ readonly target: string; readonly script: HomeCredentialScript }>,
-): HomeCredentialChannel => ({
-  run: async (target, script) => {
-    ran.push({ target: JSON.stringify(target), script });
-    return { exitCode: 0 };
-  },
+interface RanScript {
+  readonly target: string;
+  readonly script: string;
+  readonly stdin: string;
+}
+
+/** Records each home script; answers `exitCode` (a late write the home's marker fenced: 76). */
+const recordingHomeChannel = (ran: RanScript[], exitCode = 0): HomeCredentialChannel => ({
+  run: (target, script, stdin) =>
+    Effect.sync(() => {
+      ran.push({ target: JSON.stringify(target), script, stdin });
+      return { exitCode };
+    }),
 });
 
 describe("instancesHoldingAccount", () => {
@@ -106,7 +111,7 @@ describe("pushCredentialCopy into homes", () => {
 
   it.effect("writes the copy into every home whose person holds the account, and no other", () => {
     const homes = makeInMemoryCredentialHomes(() => ready);
-    const ran: Array<{ readonly target: string; readonly script: HomeCredentialScript }> = [];
+    const ran: RanScript[] = [];
     return Effect.gen(function* () {
       const hold = (home: string, person: string, connectedAccountId: string) =>
         homes.service.withLockedHome({ runId: "h", home }, () =>
@@ -116,6 +121,7 @@ describe("pushCredentialCopy into homes", () => {
               kind: "hold" as const,
               onBehalfOfUserId: person,
               accounts: [{ provider: "claude" as const, connectedAccountId }],
+              generation: `generation-${person}`,
             },
           }),
         );
@@ -132,12 +138,15 @@ describe("pushCredentialCopy into homes", () => {
       });
 
       expect(summary).toEqual({ written: 2, failed: 0, unreachable: 0, released: 0 });
-      expect(
-        ran.map((entry) => entry.script.script.match(/home='([^']+)'/)?.[1]).toSorted(),
-      ).toEqual(["/home/alice", "/run/mend/conv/ses_1"]);
+      expect(ran.map((entry) => entry.script.match(/home='([^']+)'/)?.[1]).toSorted()).toEqual([
+        "/home/alice",
+        "/run/mend/conv/ses_1",
+      ]);
       for (const entry of ran) {
-        expect(Buffer.from(entry.script.stdin.trim(), "base64").toString()).toContain("at-alice-2");
-        expect(entry.script.script).toContain(".claude/.credentials.json");
+        expect(Buffer.from(entry.stdin.trim(), "base64").toString()).toContain("at-alice-2");
+        expect(entry.script).toContain(".claude/.credentials.json");
+        // Fenced by Alice's hold.
+        expect(entry.script).toContain("generation-usr_alice");
       }
     }).pipe(
       Effect.provide(
@@ -151,7 +160,7 @@ describe("pushCredentialCopy into homes", () => {
 
   it.effect("leaves a home released or retaken by another person since the listing", () => {
     const homes = makeInMemoryCredentialHomes(() => ready);
-    const ran: Array<{ readonly target: string; readonly script: HomeCredentialScript }> = [];
+    const ran: RanScript[] = [];
     return Effect.gen(function* () {
       yield* homes.service.withLockedHome({ runId: "h", home: "/run/mend/conv/ses_1" }, () =>
         Effect.succeed({
@@ -160,6 +169,7 @@ describe("pushCredentialCopy into homes", () => {
             kind: "hold" as const,
             onBehalfOfUserId: "usr_alice",
             accounts: [{ provider: "claude" as const, connectedAccountId: "cacc_alice" }],
+            generation: "generation-alice",
           },
         }),
       );
@@ -179,6 +189,7 @@ describe("pushCredentialCopy into homes", () => {
             kind: "hold" as const,
             onBehalfOfUserId: "usr_bob",
             accounts: [{ provider: "claude" as const, connectedAccountId: "cacc_bob" }],
+            generation: "generation-bob",
           },
         }),
       );
@@ -194,5 +205,42 @@ describe("pushCredentialCopy into homes", () => {
       expect(summary).toEqual({ written: 0, failed: 0, unreachable: 0, released: 1 });
       expect(ran).toEqual([]);
     }).pipe(Effect.provide(instancesRepo(ready)));
+  });
+});
+
+describe("pushCredentialCopy into a home whose marker moved on", () => {
+  it.effect("counts a write the executor fenced as no longer held, never as written", () => {
+    const ready = [instance("h", [])];
+    const homes = makeInMemoryCredentialHomes(() => ready);
+    const ran: RanScript[] = [];
+    return Effect.gen(function* () {
+      yield* homes.service.withLockedHome({ runId: "h", home: "/run/mend/conv/ses_1" }, () =>
+        Effect.succeed({
+          result: undefined,
+          outcome: {
+            kind: "hold" as const,
+            onBehalfOfUserId: "usr_alice",
+            accounts: [{ provider: "claude" as const, connectedAccountId: "cacc_alice" }],
+            generation: "generation-alice",
+          },
+        }),
+      );
+      const summary = yield* pushCredentialCopy({
+        connectedAccountId: "cacc_alice",
+        provider: "claude",
+        copyJson: "{}",
+        controlChannel: silentLaunchChannel,
+        homeChannel: recordingHomeChannel(ran, 76),
+      });
+      expect(summary).toEqual({ written: 0, failed: 0, unreachable: 0, released: 1 });
+      expect(ran).toHaveLength(1);
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          instancesRepo(ready),
+          Layer.succeed(WorkspaceCredentialHomeRepo, homes.service),
+        ),
+      ),
+    );
   });
 });

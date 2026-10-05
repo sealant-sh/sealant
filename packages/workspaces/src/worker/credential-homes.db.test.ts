@@ -32,6 +32,7 @@ const hold = (person: string, connectedAccountId: string) =>
     kind: "hold",
     onBehalfOfUserId: person,
     accounts: [{ provider: "claude", connectedAccountId }],
+    generation: `generation-${person}`,
   }) as const;
 
 describe.skipIf(DATABASE_URL === undefined)("credential homes (Postgres)", () => {
