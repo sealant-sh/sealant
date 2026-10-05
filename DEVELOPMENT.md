@@ -111,13 +111,14 @@ The pieces:
   `@sealant/api-contracts-next` (npm dist-tag `next`), one version, `B-next.N`: N is the commit's
   whole history (`git rev-list --count`), B the larger of what the pending changesets would release
   and the base of the highest next build already published above the last stable tag
-  (`node tooling/scripts/next-version.mjs --package packages/sdk --npm @sealant/sdk-next`). The
-  `next` trusted publisher is registered only on the two `-next` packages, so nothing in that
-  workflow can publish `@sealant/sdk`. Images have no such boundary: a job with `packages: write`
-  can push the stable images too (GHCR cannot scope it), and any of the repository's writers can run
-  a branch workflow that requests it, code-owner review or not. The image jobs' actions and BuildKit
-  are pinned, and Mend's bundle image pins the Core images by digest, which keeps out a tag moved
-  after the pin. Mend pins a prerelease through an exact alias
+  (`node tooling/scripts/next-version.mjs --package packages/sdk --npm @sealant/sdk-next`). Runs go
+  one at a time, queued in push order (`queue: max`), so no merge's run is cancelled. The `next`
+  trusted publisher is registered only on the two `-next` packages, so nothing in that workflow can
+  publish `@sealant/sdk`. Images have no such boundary: a job with `packages: write` can push the
+  stable images too (GHCR cannot scope it), and any of the repository's writers can run a branch
+  workflow that requests it, code-owner review or not. The image jobs' actions and BuildKit are
+  pinned, and Mend's bundle image pins the Core images by digest, which keeps out a tag moved after
+  the pin. Mend pins a prerelease through an exact alias
   (`"@sealant/sdk": npm:@sealant/sdk-next@<version>`). `latest` on the stable packages moves only
   from a `vX.Y.Z` tag.
 - **Pinning sealantd**, a release or a prerelease, is one command:
