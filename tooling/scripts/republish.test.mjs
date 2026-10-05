@@ -316,6 +316,41 @@ test("a version already published from this commit is done; from another, refuse
   assert.match(refused.output, /published from elsewhere/);
 });
 
+test("a package document over 256 KB is read, not passed as an argument", async (t) => {
+  // Linux caps one argument at 128 KB (MAX_ARG_STRLEN): @sealant/mend's document passed it at
+  // v0.36.0-next.601, and the job died with "Argument list too long" (run 37342721738).
+  const padding = "x".repeat(200);
+  const versions = Object.fromEntries(
+    Array.from({ length: 1500 }, (_, i) => [`0.0.${i}`, { gitHead: "older", readme: padding }]),
+  );
+  const distTags = Object.fromEntries(
+    Array.from({ length: 8000 }, (_, i) => [`channel-${i}`, `0.0.${i % 1500}`]),
+  );
+  const large = () =>
+    seeded(
+      { ...versions, "0.39.0-next.8": { gitHead: "older" } },
+      { ...distTags, latest: "0.38.1", next: "0.39.0-next.8" },
+    );
+  const stub = await registry(t, large());
+  assert.ok(JSON.stringify(stub.packages.get(NAME)).length > 256 * 1024);
+  assert.ok(JSON.stringify(stub.packages.get(NAME)["dist-tags"]).length > 128 * 1024);
+  const { status, output } = await publish(t, stub, goodEntries("0.39.0-next.9"), "0.39.0-next.9");
+  assert.equal(status, 0, output);
+  assert.equal(stub.log.length, 1);
+  assert.deepEqual(stub.log[0].distTags, { next: "0.39.0-next.9" });
+  // The same document read back: published from this commit is done; next never moves back.
+  assert.equal((await publish(t, stub, goodEntries("0.39.0-next.9"), "0.39.0-next.9")).status, 0);
+  assert.equal(stub.log.length, 1);
+  const older = await publish(
+    t,
+    await registry(t, large()),
+    goodEntries("0.39.0-next.7"),
+    "0.39.0-next.7",
+  );
+  assert.notEqual(older.status, 0, older.output);
+  assert.match(older.output, /next is already 0\.39\.0-next\.8/);
+});
+
 test("an artifact holding anything but the expected tarball is refused before npm runs", async (t) => {
   for (const [file, text] of [
     [".npmrc", "https-proxy=http://127.0.0.1:9/\nstrict-ssl=false\n"],

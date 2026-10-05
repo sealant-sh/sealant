@@ -397,7 +397,8 @@ jobs:
           # it, package.json is rewritten from an allowlist (no `tag`, no scripts, no publishConfig but
           # `access`), a root binding.gyp is refused (npm would add an install script for it), the rewritten
           # manifest is checked, and `npm pack` builds the tarball that is published.
-          # Failures inside $(...) stop the job too.
+          # Failures inside $(...) stop the job too. Registry and npm JSON reaches node on stdin, never as an
+          # argument: Linux refuses one argument over 128 KB, and a package document outgrows that.
           shopt -s inherit_errexit
           KEEP_FIELDS='["name","version","description","license","repository","homepage","bugs","keywords","type","main","module","types","typings","exports","files","bin","man","directories","engines","dependencies","peerDependencies","peerDependenciesMeta","optionalDependencies","gitHead"]'
 
@@ -447,7 +448,8 @@ jobs:
           dist_tag() {
             local tags
             tags=$(registry_get "-/package/${1/\//%2f}/dist-tags")
-            node -e 'process.stdout.write(String(JSON.parse(process.argv[1])[process.argv[2]] ?? ""))' "$tags" "$2"
+            node -e 'process.stdout.write(String(JSON.parse(require("node:fs").readFileSync(0, "utf8"))[process.argv[1]] ?? ""))' \
+              "$2" <<<"$tags"
           }
 
           # The commit a published version came from ("unknown" without gitHead), or nothing if unpublished.
@@ -455,9 +457,9 @@ jobs:
             local record
             record=$(registry_get "${1/\//%2f}")
             node -e '
-              const found = JSON.parse(process.argv[1]).versions?.[process.argv[2]];
+              const found = JSON.parse(require("node:fs").readFileSync(0, "utf8")).versions?.[process.argv[1]];
               process.stdout.write(found === undefined ? "" : String(found.gitHead ?? "unknown"));
-            ' "$record" "$2"
+            ' "$2" <<<"$record"
           }
 
           # Whether $1 is a newer next version than $2 (X.Y.Z-next.N; a stable X.Y.Z sorts after them).
@@ -531,7 +533,7 @@ jobs:
             # A packed .npmrc would configure the pack below; nothing else in the tree runs.
             find "$work/package" -name .npmrc -delete
             packed=$(cd "$work/package" && npm pack --ignore-scripts --json --pack-destination "$work")
-            printf '%s/%s\n' "$work" "$(node -e 'process.stdout.write(JSON.parse(process.argv[1])[0].filename)' "$packed")"
+            printf '%s/%s\n' "$work" "$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(0, "utf8"))[0].filename)' <<<"$packed")"
           }
 
           # Publishes <tarball> as <name>@<version> from <commit> under <channel>; extra npm flags follow.
