@@ -53,6 +53,16 @@ const INSTALL_CC: Readonly<Record<string, string>> = {
   fedora: "dnf -y -q install gcc",
 };
 
+/**
+ * A Playwright each family's Node runs: Ubuntu 24.04 ships Node 18, which Playwright left at 1.51;
+ * 1.50's unzip hangs on the Node 26 Arch ships.
+ */
+const PLAYWRIGHT: Readonly<Record<string, string>> = {
+  arch: "playwright@1.63.0",
+  ubuntu: "playwright@1.50.1",
+  fedora: "playwright@1.63.0",
+};
+
 const runScript = (image: string, family: string, script: string) =>
   docker(
     [
@@ -61,6 +71,8 @@ const runScript = (image: string, family: string, script: string) =>
       "-i",
       "-e",
       `INSTALL_CC=${INSTALL_CC[family] ?? "false"}`,
+      "-e",
+      `PLAYWRIGHT=${PLAYWRIGHT[family] ?? "playwright@1.63.0"}`,
       "--entrypoint",
       "/bin/bash",
       image,
@@ -114,8 +126,8 @@ check rustup-alice as alice 'curl -fsSL https://sh.rustup.rs | sh -s -- -y -q --
 check cargo-build-bob as bob 'cargo new -q hello && cd hello && cargo add -q itoa@1 && cargo build -q && [ -n "$(ls /var/cache/cargo/registry/cache)" ]'
 check cargo-build-alice-reuses-registry as alice 'cargo new -q hello && cd hello && cargo add -q --offline itoa@1 && cargo build -q --offline'
 
-check playwright-alice as alice 'cd /workspace/a && npx -y playwright@1.63.0 install chromium-headless-shell >/dev/null && [ -n "$(ls /opt/ms-playwright)" ]'
-check playwright-bob-reuses as bob 'cd /workspace/b && out=$(npx -y playwright@1.63.0 install chromium-headless-shell 2>&1); echo "$out"; ! grep -q Downloading <<<"$out" && [ -z "$(find /opt/ms-playwright -mindepth 1 -maxdepth 1 -user bob)" ]'
+check playwright-alice as alice 'cd /workspace/a && npx -y "$PLAYWRIGHT" install chromium-headless-shell >/dev/null && [ -n "$(ls /opt/ms-playwright)" ]'
+check playwright-bob-reuses as bob 'cd /workspace/b && [ -n "$(ls /opt/ms-playwright)" ] || exit 1; out=$(npx -y "$PLAYWRIGHT" install chromium-headless-shell 2>&1); echo "$out"; ! grep -q Downloading <<<"$out" && [ -z "$(find /opt/ms-playwright -mindepth 1 -maxdepth 1 -user bob)" ]'
 
 check git-two-people as alice 'git init -q /workspace/repo && cd /workspace/repo && git -c user.email=a@example.invalid -c user.name=a commit -q --allow-empty -m one'
 check git-bob-in-alices-worktree as bob 'cd /workspace/repo && git status --short && git -c user.email=b@example.invalid -c user.name=b commit -q --allow-empty -m two'

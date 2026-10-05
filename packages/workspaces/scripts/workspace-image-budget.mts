@@ -10,13 +10,17 @@
  * - **boot:** inside the container, `sealantd boot` started until its control socket exists, so the
  *   Engine's own container setup does not hide a change in the daemon's start.
  *
- * Prints one JSON line per family: the image size in bytes (`docker image inspect .Size`), the
- * build's wall time, and the median and 90th percentile of each timing. The images are tagged
- * `sealant-image-budget-<family>:<label>` and left in the Engine for inspection.
+ * Prints one JSON line per image: its layers' size (`docker history`, uncompressed), the Engine's
+ * own `.Size`, the build's wall time, and the median, 90th percentile and worst of each timing. The
+ * images are tagged `sealant-image-budget-<family>:<label>` and left in the Engine. `--images a,b`
+ * skips the build and times images already built, interleaved run by run, so a before-and-after
+ * comparison shares the machine's state.
  *
  * Run from the repository root:
  *   node_modules/.bin/tsx packages/workspaces/scripts/workspace-image-budget.mts \
  *     --label after --families arch,ubuntu,fedora --runs 10
+ *   node_modules/.bin/tsx packages/workspaces/scripts/workspace-image-budget.mts \
+ *     --images sealant-image-budget-arch:before,sealant-image-budget-arch:after --runs 20
  */
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -59,6 +63,7 @@ const { values } = parseArgs({
     label: { type: "string", default: "local" },
     families: { type: "string", default: "arch,ubuntu,fedora" },
     runs: { type: "string", default: "10" },
+    images: { type: "string" },
   },
 });
 const runs = Number(values.runs);
@@ -136,49 +141,70 @@ const timeBoot = async (image: string, repo: string): Promise<number> => {
   return Number(out.split("\n").at(-1)) / 1000;
 };
 
-for (const family of families) {
-  const builtAt = Date.now();
-  const result = await compileWorkspaceBuildSpec({
-    blueprint: blueprintFor(family),
-    options: { emitTarball: false },
-  });
-  const buildMs = Date.now() - builtAt;
-  const image = `sealant-image-budget-${family}:${values.label}`;
-  await run("docker", ["tag", result.buildkit.spec.imageReference, image]);
-  rmSync(result.buildkit.spec.contextDirectory, { recursive: true, force: true });
-  const sizeBytes = Number(await run("docker", ["image", "inspect", "-f", "{{.Size}}", image]));
+/** The image's layers, uncompressed, as `docker history` counts them. */
+const layerBytes = async (image: string): Promise<number> =>
+  (await run("docker", ["history", "--human=false", "--format", "{{.Size}}", image]))
+    .split("\n")
+    .reduce((total, line) => total + Number(line), 0);
 
-  const repo = mkdtempSync(join(tmpdir(), "image-budget-"));
-  mkdirSync(join(repo, ".git"));
-  const start: number[] = [];
-  const boot: number[] = [];
-  try {
-    // One unmeasured boot each, so the first run does not pay for a cold page cache.
+const summary = (samples: readonly number[]) => ({
+  median: Math.round(quantile(samples, 0.5) * 10) / 10,
+  p90: Math.round(quantile(samples, 0.9) * 10) / 10,
+  worst: Math.round(Math.max(...samples) * 10) / 10,
+});
+
+// Build (unless --images names images already built), then boot every image in turn, run by run,
+// so the images being compared share the machine's state instead of following each other.
+const images: Array<{ image: string; family?: string; planHash?: string; buildMs?: number }> =
+  values.images === undefined ? [] : values.images.split(",").map((image) => ({ image }));
+if (values.images === undefined) {
+  for (const family of families) {
+    const builtAt = Date.now();
+    const result = await compileWorkspaceBuildSpec({
+      blueprint: blueprintFor(family),
+      options: { emitTarball: false },
+    });
+    const buildMs = Date.now() - builtAt;
+    const image = `sealant-image-budget-${family}:${values.label}`;
+    await run("docker", ["tag", result.buildkit.spec.imageReference, image]);
+    rmSync(result.buildkit.spec.contextDirectory, { recursive: true, force: true });
+    images.push({ image, family, planHash: result.metadata?.planHash, buildMs });
+  }
+}
+
+const repo = mkdtempSync(join(tmpdir(), "image-budget-"));
+mkdirSync(join(repo, ".git"));
+const samples = new Map(
+  images.map(({ image }) => [image, { start: [] as number[], boot: [] as number[] }]),
+);
+try {
+  // One unmeasured boot each, so the first run does not pay for a cold page cache.
+  for (const { image } of images) {
     await timeStart(image, repo);
     await timeBoot(image, repo);
-    for (let index = 0; index < runs; index += 1) {
-      start.push(await timeStart(image, repo));
-      boot.push(await timeBoot(image, repo));
-    }
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
   }
-  const summary = (samples: readonly number[]) => ({
-    median: Math.round(quantile(samples, 0.5) * 10) / 10,
-    p90: Math.round(quantile(samples, 0.9) * 10) / 10,
-    worst: Math.round(Math.max(...samples) * 10) / 10,
-  });
+  for (let index = 0; index < runs; index += 1) {
+    for (const { image } of images) {
+      const entry = samples.get(image);
+      entry?.start.push(await timeStart(image, repo));
+      entry?.boot.push(await timeBoot(image, repo));
+    }
+  }
+} finally {
+  rmSync(repo, { recursive: true, force: true });
+}
+
+for (const entry of images) {
+  const measured = samples.get(entry.image) ?? { start: [], boot: [] };
   process.stdout.write(
     `${JSON.stringify({
-      family,
+      ...entry,
       label: values.label,
-      image,
-      planHash: result.metadata?.planHash,
-      sizeBytes,
-      buildMs,
+      layerBytes: await layerBytes(entry.image),
+      sizeBytes: Number(await run("docker", ["image", "inspect", "-f", "{{.Size}}", entry.image])),
       runs,
-      startMs: summary(start),
-      bootMs: summary(boot),
+      startMs: summary(measured.start),
+      bootMs: summary(measured.boot),
     })}\n`,
   );
 }
