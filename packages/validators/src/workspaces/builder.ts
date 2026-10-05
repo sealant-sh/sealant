@@ -66,6 +66,39 @@ export const osBuilderCompileInputSchema = z.strictObject({
   blueprint: workspaceBlueprintSchema,
 });
 
+/**
+ * What the image probe found inside a built workspace image: whether it can run one Linux user per
+ * person (Mend's ADR 0016). The image writes it to `/etc/sealant/image-probe.json` in its last
+ * filesystem step; the builder that can read it back records it on the build. Facts only: the
+ * verdict is derived from them (`imagePersonLayoutSupport` in `@sealant/workspaces`), and runtime
+ * facts such as ACL support on `/workspace` are not in it.
+ */
+export const workspaceImageProbeSchema = z.object({
+  version: z.literal(1),
+  tools: z.object({
+    sudo: z.boolean(),
+    /** `sudo` carries its setuid bit (the nix store cannot hold one). */
+    sudoSetuid: z.boolean(),
+    useradd: z.boolean(),
+    groupadd: z.boolean(),
+    setfacl: z.boolean(),
+    getfacl: z.boolean(),
+    setpriv: z.boolean(),
+  }),
+  /** `/etc/sudoers.d/mend` exists: the `mend` group's passwordless rule. */
+  sudoersMend: z.boolean(),
+  /** `/etc/passwd` is a regular, writable file (on nix it links into the read-only store). */
+  passwdWritable: z.boolean(),
+  /** The `mend` group: gid 40000, missing, or the name or the gid taken by something else. */
+  mendGroup: z.enum(["present", "absent", "conflict"]),
+  /** Users and groups other than `mend` in the reserved id range 40000–49999, as `user:name:id`. */
+  reservedIdsInUse: z.array(z.string()),
+  /** The shared toolchain and cache directories the image names, for the default ACL at boot. */
+  sharedDirs: z.array(z.string()),
+  /** What `sealantd capabilities --json` printed; null when that sealantd has no such command. */
+  sealantd: z.record(z.string(), z.unknown()).nullable(),
+});
+
 export const osBuilderCompileMetadataSchema = z.strictObject({
   defaultArtifactName: z.string().trim().min(1).optional(),
   notes: z.array(z.string().trim().min(1)).default([]),
@@ -75,6 +108,11 @@ export const osBuilderCompileMetadataSchema = z.strictObject({
    * image can be skipped entirely.
    */
   planHash: z.string().trim().min(1).optional(),
+  /**
+   * The image probe's answer, read back from the built image. Absent for images built before the
+   * probe, and for builders that cannot read the image back (they leave the answer in the image).
+   */
+  imageProbe: workspaceImageProbeSchema.optional(),
 });
 
 export const osBuilderCompileResultSchema = z.strictObject({
@@ -102,6 +140,10 @@ export const parseOsBuilderCompileResult = (input: unknown): OsBuilderCompileRes
   return osBuilderCompileResultSchema.parse(input);
 };
 
+export const parseWorkspaceImageProbe = (input: unknown): WorkspaceImageProbe => {
+  return workspaceImageProbeSchema.parse(input);
+};
+
 export type OsBuilderId = z.infer<typeof osBuilderIdSchema>;
 
 export type ConcreteWorkspaceTargetOsFamily = z.infer<typeof concreteWorkspaceTargetOsFamilySchema>;
@@ -123,6 +165,8 @@ export type OsBuilderSupport = z.infer<typeof osBuilderSupportSchema>;
 export type OsBuilderCompileInput = z.infer<typeof osBuilderCompileInputSchema>;
 
 export type OsBuilderCompileMetadata = z.infer<typeof osBuilderCompileMetadataSchema>;
+
+export type WorkspaceImageProbe = z.infer<typeof workspaceImageProbeSchema>;
 
 export type OsBuilderCompileResult = z.infer<typeof osBuilderCompileResultSchema>;
 

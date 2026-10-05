@@ -9,6 +9,7 @@ import {
   parseBuildkitOsBuilderCompileInput,
   parseBuildkitOsBuilderCompileResult,
   parseOsBuilderSupport,
+  parseWorkspaceImageProbe,
   type BuildkitBuildSpec,
   type BuildkitDistroOsFamily,
   type BuildkitOsBuilderCompileResult,
@@ -18,6 +19,7 @@ import {
   type ResolvedImagePackage,
   type ResolvedImagePlan,
   type WorkspaceBlueprint,
+  type WorkspaceImageProbe,
 } from "@sealant/validators";
 
 import {
@@ -33,6 +35,14 @@ import {
   renderReleaseInstall,
   unknownWorkspacePackageIds,
 } from "./package-catalog.js";
+import {
+  IMAGE_PROBE_PATH,
+  PERSON_LAYOUT_PACKAGES,
+  PERSON_LAYOUT_PACKAGES_IN_PACKAGE_LAYER,
+  isPersonLayoutFamily,
+  renderImageProbeStep,
+  renderPersonLayoutSteps,
+} from "./person-layout.js";
 
 /**
  * This module contains the full BuildKit-backed executor implementation used by worker-side build
@@ -784,6 +794,10 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
     // `socat` (and any other relay deps) are always installed: `sealantd boot` is the mandatory
     // PID-1 entrypoint and its control socket is bridged to the host over a `docker exec` relay.
     ...distro.sealantdPackages,
+    ...(isPersonLayoutFamily(plan.osFamily) &&
+    PERSON_LAYOUT_PACKAGES_IN_PACKAGE_LAYER.has(plan.osFamily)
+      ? PERSON_LAYOUT_PACKAGES[plan.osFamily]
+      : []),
     ...plan.packages.flatMap((pkg) => pkg.installPackages),
   ]);
 
@@ -1201,6 +1215,9 @@ const renderCustomBaseContainerfile = (plan: ResolvedImagePlan): string => {
         ]
       : []),
     "",
+    // Whatever the custom base carries decides; the probe records it and never fails the build.
+    renderImageProbeStep({ require: false }),
+    "",
     renderBootEnv(plan),
     "",
     "WORKDIR /workspace",
@@ -1219,6 +1236,8 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
   const dotfilesStep = renderDotfilesStep(plan);
   const chezmoiInstallStep = renderChezmoiInstallStep(plan);
   const harnessInstallStep = renderHarnessInstallCommand(plan);
+  const dockerService = plan.blueprint.tooling.services?.docker?.enabled === true;
+  const personLayoutFamily = isPersonLayoutFamily(plan.osFamily) ? plan.osFamily : undefined;
 
   return [
     "# syntax=docker/dockerfile:1.7",
@@ -1252,6 +1271,10 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
           "RUN chmod 755 /usr/local/bin/docker /usr/local/libexec/docker/cli-plugins/docker-compose",
         ]
       : []),
+    // Nix images take one person and get none of this (person-layout.ts says why).
+    ...(personLayoutFamily === undefined
+      ? []
+      : ["", renderPersonLayoutSteps({ family: personLayoutFamily, dockerService })]),
     // Mount-sourced workspaces bind a HOST-owned directory as the working directory; its uid
     // differs from the container user, which trips git's dubious-ownership check and would make
     // every git command fail. Trusting the fixed working directory keeps exec/record semantics
@@ -1265,6 +1288,9 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
         ]
       : []),
     ...(dotfilesStep === undefined ? [] : ["", dotfilesStep]),
+    "",
+    // A managed family's image fails its build here rather than ship without the person layout.
+    renderImageProbeStep({ require: personLayoutFamily !== undefined }),
     "",
     renderBootEnv(plan),
     "",
@@ -1503,6 +1529,7 @@ export const compileWorkspaceBuildSpec = async (input: {
   const commandRunner = input.options?.commandRunner ?? defaultCommandRunner;
   const emitTarball = input.options?.emitTarball ?? true;
 
+  let imageProbe: Awaited<ReturnType<typeof readImageProbe>>;
   try {
     await buildImageTarball(
       buildContext.spec,
@@ -1510,6 +1537,7 @@ export const compileWorkspaceBuildSpec = async (input: {
       commandRunner,
       imagePlan,
     );
+    imageProbe = await readImageProbe(buildContext.spec.imageReference, commandRunner, imagePlan);
   } catch (error) {
     // A failed build leaves nothing worth keeping; the caller never sees the context path.
     await removeBuildContext(buildContext.contextDirectory);
@@ -1551,14 +1579,49 @@ export const compileWorkspaceBuildSpec = async (input: {
     ],
     metadata: {
       defaultArtifactName: defaultImageNameForBlueprint(imagePlan.blueprint, osFamily),
-      notes: [`Compiled by the ${osFamily} BuildKit compiler.`],
+      notes: [
+        `Compiled by the ${osFamily} BuildKit compiler.`,
+        ...(imageProbe.note === undefined ? [] : [imageProbe.note]),
+      ],
       planHash: planned.planHash,
+      ...(imageProbe.probe === undefined ? {} : { imageProbe: imageProbe.probe }),
     },
     buildkit: {
       imagePlan,
       spec: buildContext.spec,
     },
   });
+};
+
+/**
+ * Reads the image probe's answer back from a built image (person-layout.ts). One short container
+ * with no network that only prints the file; an image whose answer cannot be read or parsed is
+ * recorded without one, which a reader treats as unknown, and the build stands.
+ */
+const readImageProbe = async (
+  imageReference: string,
+  commandRunner: BuildkitCommandRunner,
+  plan: ResolvedImagePlan,
+): Promise<{ readonly probe?: WorkspaceImageProbe; readonly note?: string }> => {
+  const platformArgs = plan.osFamily === "arch" ? ["--platform", "linux/amd64"] : [];
+  try {
+    const { stdout } = await commandRunner("docker", [
+      "run",
+      "--rm",
+      "--pull=never",
+      "--network=none",
+      ...platformArgs,
+      "--entrypoint",
+      "/bin/sh",
+      imageReference,
+      "-c",
+      `cat ${IMAGE_PROBE_PATH}`,
+    ]);
+    return { probe: parseWorkspaceImageProbe(JSON.parse(stdout)) };
+  } catch (error) {
+    const reason = error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error);
+    return { note: `The image probe could not be read back from the image: ${reason}` };
+  }
 };
 
 /** Public helper used by callers/tests that only need planning (without running Docker). */
