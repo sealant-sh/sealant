@@ -48,12 +48,12 @@ posture.
   inference endpoints with the subscription token; never proxy Claude traffic through Sealant
   services. Anthropic blocked and sent legal requests to tools that spoofed the Claude Code client
   (Jan–Apr 2026).
-- **Permitted consumption:** setup tokens inject as `CLAUDE_CODE_OAUTH_TOKEN`; session files are
-  materialized at `$HOME/.claude/.credentials.json` (mode 600, exactly like codex's auth.json) —
-  both only where the **official Claude Code CLI / Agent SDK** runs. Help Center 15036540 explicitly
-  covers "third-party apps that authenticate with your Claude subscription through the Agent SDK".
-  Don't run `claude --bare` (ignores the env var). Internal features (run summaries) must go through
-  the Agent SDK, never raw `POST /v1/messages`.
+- **Permitted consumption:** setup tokens inject as `CLAUDE_CODE_OAUTH_TOKEN` _(into a home: as a
+  credentials file, §6b)_; session files are materialized at `$HOME/.claude/.credentials.json` (mode
+  600, exactly like codex's auth.json) — both only where the **official Claude Code CLI / Agent
+  SDK** runs. Help Center 15036540 explicitly covers "third-party apps that authenticate with your
+  Claude subscription through the Agent SDK". Don't run `claude --bare` (ignores the env var).
+  Internal features (run summaries) must go through the Agent SDK, never raw `POST /v1/messages`.
 - **Refresh story** _(superseded for session files by §6a, Oct 2026: the worker is the only
   refresher and every other copy has no refresh token)_: setup tokens: none — detect 401s → mark the
   account `invalid` → prompt re-auth; record `connectedAt` and nudge near the 12-month mark. Session
@@ -181,8 +181,8 @@ launch):
   check, gh token shape check + scope parsing).
 - **Injection planner**: pure function from decrypted credentials → an injection plan the runtime
   adapter executes:
-  - claude (setup token) → env `CLAUDE_CODE_OAUTH_TOKEN`; claude (session file) → file
-    `$HOME/.claude/.credentials.json` (mode 0600)
+  - claude (setup token) → env `CLAUDE_CODE_OAUTH_TOKEN` (into a home: the file of §6b); claude
+    (session file) → file `$HOME/.claude/.credentials.json` (mode 0600)
   - codex → file `$HOME/.codex/auth.json` (mode 0600)
   - github → env `GITHUB_TOKEN` + `GH_TOKEN`, optional git clone auth (§6)
 - Self-host bootstrap: `install.sh` / compose generate `SEALANT_CREDENTIALS_KEY` once (follow-up in
@@ -300,6 +300,30 @@ throwaway logins wherever something refreshed):
 **Unchanged.** Sealant never calls a provider's OAuth or token endpoint: every sign-in is the
 provider's own flow, every refresh is the provider's own CLI. A login belongs to its owner and is
 selected only for that owner's work (§5).
+
+## 6b. A setup token as a credentials file (Oct 2026)
+
+`claudeCredentialsFile(payload)` turns a Claude login into the credentials file, whichever shape it
+is stored in. A session file becomes the copy a launch writes (§6a). A setup token becomes what
+Claude Code builds for itself from `CLAUDE_CODE_OAUTH_TOKEN`: the token as `accessToken`,
+`scopes: ["user:inference"]`, `subscriptionType: null`, no refresh token, and `expiresAt` in year
+2286 (a missing or past expiry would read as expired). It is a copy: nothing reads it back or
+refreshes it.
+
+- **Where it is used.** Where logins go into a home (one person's, in an executor several people
+  share), a variable would be one value for the whole container and fixed for the life of every
+  process that read it, so the file is what is written there. A launch at `$HOME` (one container,
+  one person) keeps the planner's `CLAUDE_CODE_OAUTH_TOKEN`: writing a file there would add an exec
+  to every such cold launch, for nothing. Inference outside workspaces (the Agent SDK in the API
+  process) keeps the variable too.
+- **Verified** against Claude Code 2.1.289 (the version Core's images carry), in a container, with
+  `ANTHROPIC_BASE_URL` pointed at a recording server. With only this file in `~/.claude`,
+  `claude auth status` reports `loggedIn: true, authMethod: claude.ai`. `claude -p` and the TUI both
+  send `Authorization: Bearer <token>` with the `oauth-2025-04-20` beta, and the TUI opens straight
+  to its prompt. Without the file, both say "Not logged in".
+- A setup token lives a year and cannot be revoked by a refresh, so unlike a session copy it stays
+  usable after it leaves a workspace: whoever could read the file while it was written there keeps a
+  working token until it is revoked from the Claude account.
 
 ## 7. The `sealant` CLI — `apps/cli`
 

@@ -46,6 +46,28 @@ export const claudeCredentialsCopy = (credentialsJson: string): string => {
   return JSON.stringify({ ...document, claudeAiOauth: withoutRefresh });
 };
 
+/**
+ * Never in the past: a setup token has no expiry Claude Code could read, and a file with none in
+ * the future would read as expired. Year 2286, as Mend's own seed writes it.
+ */
+export const CLAUDE_SETUP_TOKEN_EXPIRES_AT = 9_999_999_999_999;
+
+/**
+ * A Claude setup token (`claude setup-token`) as a credentials file, so it is injected like a
+ * session login and can be written per home and replaced in a running workspace
+ * (docs/connected-accounts-design.md §6b). It has what Claude Code builds for itself from `CLAUDE_CODE_OAUTH_TOKEN`: the token as the access
+ * token, inference scope, no subscription, and no refresh token, so nothing tries to refresh it.
+ */
+export const claudeSetupTokenCredentials = (token: string): string =>
+  JSON.stringify({
+    claudeAiOauth: {
+      accessToken: token,
+      expiresAt: CLAUDE_SETUP_TOKEN_EXPIRES_AT,
+      scopes: ["user:inference"],
+      subscriptionType: null,
+    },
+  });
+
 /** A Codex auth.json whose holder cannot refresh it: the refresh token is a placeholder. */
 export const codexAuthJsonCopy = (authJson: string): string => {
   const document = parseObject(authJson, "the Codex auth.json");

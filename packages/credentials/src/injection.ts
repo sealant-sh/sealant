@@ -1,4 +1,4 @@
-import { claudeCredentialsCopy, codexAuthJsonCopy } from "./copies.js";
+import { claudeCredentialsCopy, claudeSetupTokenCredentials, codexAuthJsonCopy } from "./copies.js";
 import type {
   ClaudeCredentialPayload,
   CodexCredentialPayload,
@@ -80,6 +80,18 @@ export const planCredentialInjections = (
     }
   }
 };
+
+/**
+ * A Claude login as the credentials file, whichever shape it is stored in: a session file as the
+ * copy a launch writes (no refresh token, §6a), a setup token as the file Claude Code builds for
+ * itself from `CLAUDE_CODE_OAUTH_TOKEN` (§6b). Where logins go into a home (one person's, in an
+ * executor several people share), a variable would be one value for the whole container, so the
+ * file is what is written; a launch at `$HOME` keeps the planner's variable for a setup token.
+ */
+export const claudeCredentialsFile = (payload: ClaudeCredentialPayload): string =>
+  "token" in payload
+    ? claudeSetupTokenCredentials(payload.token)
+    : claudeCredentialsCopy(payload.credentialsJson);
 
 // ---------------------------------------------------------------------------
 // Blueprint credential refs — blueprints never carry secret material, only
