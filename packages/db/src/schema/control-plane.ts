@@ -839,10 +839,16 @@ export interface RunFileChange {
   readonly oldPath?: string;
 }
 
-/** The command a server-side-executed run runs in the workspace (persisted so the run is self-describing). */
+/**
+ * The command a run ran in the workspace: its executable and cwd. Its arguments are never stored
+ * (`args` is always empty; `argCount` and `argLengths` describe them): the worker receives the
+ * full command in the job, and nothing reads it back from here.
+ */
 export interface RunExecCommandRecord {
   readonly executable: string;
   readonly args: readonly string[];
+  readonly argCount?: number;
+  readonly argLengths?: readonly number[];
   readonly cwd?: string;
 }
 
@@ -861,8 +867,8 @@ export const runs = pgTable(
     mode: text({ enum: runModeValues }).notNull().default("one-shot"),
     status: text({ enum: runStatusValues }).notNull().default("queued"),
     prompt: text(),
-    // The resolved invocation the control plane executed (server-side runs). Persisted at create
-    // so the run is self-describing before execution and a requeue never re-derives it.
+    // The invocation the run executes: executable and cwd, never its arguments (see
+    // RunExecCommandRecord). A trigger withholds arguments from any writer.
     command: jsonb().$type<RunExecCommandRecord>(),
     // Opaque caller-provided correlation bag ({ projectId, sessionId, ... }): stored verbatim,
     // echoed on reads, no platform-side semantics.
@@ -877,6 +883,8 @@ export const runs = pgTable(
     changesReadFailedAt: timestamp("changes_read_failed_at", { mode: "date", withTimezone: true }),
     startedAt: timestamp("started_at", { mode: "date", withTimezone: true }),
     finishedAt: timestamp("finished_at", { mode: "date", withTimezone: true }),
+    // When run-record retention deleted this run's record (SEALANT_RUN_RECORD_RETENTION_DAYS).
+    recordDeletedAt: timestamp("record_deleted_at", { mode: "date", withTimezone: true }),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),
@@ -893,6 +901,10 @@ export const runs = pgTable(
       table.createdAt,
     ),
     index("runs_attempt_id_idx").on(table.attemptId),
+    // Run-record retention finds the finished runs whose record it has not deleted yet.
+    index("runs_record_retention_idx")
+      .on(table.finishedAt)
+      .where(sql`${table.finishedAt} is not null and ${table.recordDeletedAt} is null`),
   ],
 );
 
@@ -924,8 +936,12 @@ export const workspaceSessions = pgTable(
     // Daemon-side identifiers (valid while the workspace runtime is alive).
     daemonSessionId: text("daemon_session_id"),
     daemonProcessId: text("daemon_process_id"),
-    // What the session runs: argv[0] is the program, the rest its arguments.
+    // What the session runs: only argv[0], the program. Its arguments are never stored (they can
+    // carry secrets): `arg_count` and `arg_lengths` (UTF-8 bytes each) describe them, and a
+    // trigger withholds them from any writer.
     argv: jsonb().$type<readonly string[]>().notNull(),
+    argCount: integer("arg_count"),
+    argLengths: jsonb("arg_lengths").$type<readonly number[]>(),
     cwd: text(),
     cols: integer().notNull(),
     rows: integer().notNull(),

@@ -1,11 +1,11 @@
 /**
- * The purge migration `processstarted_args_withheld` against a real, migrated Postgres. Gated on
+ * The migration `stored_arguments_withheld` against a real, migrated Postgres. Gated on
  * SEALANT_TEST_DATABASE_URL (a disposable database; it writes rows under fresh ids and removes
  * them).
  *
  * It puts the database back to how it was before the migration (the triggers dropped), stores
- * rows the way an older control plane did, with a secret in a process's arguments, then runs the
- * migration file as shipped and checks that:
+ * rows the way an older control plane did, with a secret in a process's arguments (the run record),
+ * a run's command and a session's argv, then runs the migration file as shipped and checks that:
  *   - the secret is in no row of any table;
  *   - each rewritten row says what TypeScript would have stored (ingest == purge);
  *   - running the file again changes nothing;
@@ -25,7 +25,9 @@ import {
   telemetryEvents,
   telemetryTimeline,
   user,
+  workspaceSessions,
   workspaces,
+  describeArguments,
   type NewTelemetryEvent,
 } from "@sealant/db";
 import { eq, sql } from "drizzle-orm";
@@ -38,7 +40,7 @@ const DATABASE_URL = process.env.SEALANT_TEST_DATABASE_URL;
 
 // @sealant/db resolves to its src/index.ts; the migrations sit beside src/.
 const MIGRATION = new URL(
-  "../drizzle/20261006015440_processstarted_args_withheld/migration.sql",
+  "../drizzle/20261006054100_stored_arguments_withheld/migration.sql",
   pathToFileURL(createRequire(import.meta.url).resolve("@sealant/db")),
 );
 
@@ -79,6 +81,7 @@ describe.skipIf(DATABASE_URL === undefined)("the process-arguments purge (Postgr
   const workspaceId = `ws_purge_${suffix}`;
   const runId = `run_purge_${suffix}`;
   const runtimeId = `rt_purge_${suffix}`;
+  const sessionRunId = `run_purge_session_${suffix}`;
   const run = <A, E>(effect: Effect.Effect<A, E, SealantDB>) =>
     Effect.runPromise(effect.pipe(Effect.provide(db)));
 
@@ -136,8 +139,38 @@ describe.skipIf(DATABASE_URL === undefined)("the process-arguments purge (Postgr
       .from(telemetryTimeline)
       .where(eq(telemetryTimeline.runId, runId))
       .orderBy(telemetryTimeline.sequence);
-    return { events, timeline };
+    const commands = yield* handle
+      .select({ id: runs.id, command: runs.command })
+      .from(runs)
+      .where(eq(runs.workspaceId, workspaceId))
+      .orderBy(runs.id);
+    const sessions = yield* handle
+      .select({
+        id: workspaceSessions.id,
+        argv: workspaceSessions.argv,
+        argCount: workspaceSessions.argCount,
+        argLengths: workspaceSessions.argLengths,
+      })
+      .from(workspaceSessions)
+      .where(eq(workspaceSessions.workspaceId, workspaceId))
+      .orderBy(workspaceSessions.id);
+    return { events, timeline, commands, sessions };
   });
+
+  /** A session (and its run) stored the way an older control plane did: the whole argv. */
+  const storeLegacySession = (id: string, argv: readonly string[]) =>
+    Effect.gen(function* () {
+      const handle = yield* SealantDB;
+      yield* handle.insert(workspaceSessions).values({
+        id: `sess_${id}_${suffix}`,
+        workspaceId,
+        runId: sessionRunId,
+        ownerUserId: userId,
+        argv,
+        cols: 80,
+        rows: 24,
+      });
+    });
 
   afterAll(async () => {
     // Whatever happened above, the database leaves with the migration applied.
@@ -179,20 +212,36 @@ describe.skipIf(DATABASE_URL === undefined)("the process-arguments purge (Postgr
         yield* handle
           .insert(workspaces)
           .values({ id: workspaceId, ownerUserId: userId, createdAt: now, updatedAt: now });
-        yield* handle.insert(runs).values({
-          id: runId,
-          workspaceId,
-          ownerUserId: userId,
-          harnessId: "exec",
-          createdAt: now,
-          updatedAt: now,
-        });
-
         // The database as it was before the migration: no triggers.
         yield* handle.execute(
           sql.raw(`DROP TRIGGER IF EXISTS "telemetry_events_withhold_process_args" ON "telemetry_events";
-            DROP TRIGGER IF EXISTS "telemetry_timeline_withhold_process_args" ON "telemetry_timeline"`),
+            DROP TRIGGER IF EXISTS "telemetry_timeline_withhold_process_args" ON "telemetry_timeline";
+            DROP TRIGGER IF EXISTS "runs_withhold_command_args" ON "runs";
+            DROP TRIGGER IF EXISTS "workspace_sessions_withhold_args" ON "workspace_sessions"`),
         );
+        yield* handle.insert(runs).values([
+          {
+            id: runId,
+            workspaceId,
+            ownerUserId: userId,
+            harnessId: "exec",
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            // A session's run kept the session's whole argv as its command.
+            id: sessionRunId,
+            workspaceId,
+            ownerUserId: userId,
+            harnessId: "session",
+            mode: "interactive",
+            command: { executable: "sh", args: ["-c", SCRIPT], cwd: "/workspace/repo" },
+            createdAt: now,
+            updatedAt: now,
+          },
+        ]);
+        yield* storeLegacySession("prompt", ["sh", "-c", SCRIPT]);
+        yield* storeLegacySession("shell", ["bash"]);
         yield* storeLegacy(1n, "processStarted", legacyStarted, legacySummary);
         yield* storeLegacy(
           2n,
@@ -209,10 +258,14 @@ describe.skipIf(DATABASE_URL === undefined)("the process-arguments purge (Postgr
         yield* storeLegacy(4n, "processExited", { exitCode: 0, reason: 1 }, "exit code=0 reason=1");
       }),
     );
-    expect(await run(tablesHolding(SECRET_B64))).toEqual([
-      "public.telemetry_events",
-      "public.telemetry_timeline",
-    ]);
+    expect(await run(tablesHolding(SECRET_B64))).toEqual(
+      expect.arrayContaining([
+        "public.runs",
+        "public.telemetry_events",
+        "public.telemetry_timeline",
+        "public.workspace_sessions",
+      ]),
+    );
 
     await run(runMigration(statements));
     const purged = await run(readRun);
@@ -247,7 +300,42 @@ describe.skipIf(DATABASE_URL === undefined)("the process-arguments purge (Postgr
       expect(purged.timeline[index]?.refJson).toEqual(rebuilt.refJson);
     }
 
-    // Idempotent: the file runs again and changes nothing.
+    // A session keeps its program; its run's command keeps its executable and cwd.
+    const lengths = describeArguments(["-c", SCRIPT]);
+    expect(purged.sessions).toEqual([
+      { id: `sess_prompt_${suffix}`, argv: ["sh"], ...lengths },
+      { id: `sess_shell_${suffix}`, argv: ["bash"], argCount: null, argLengths: null },
+    ]);
+    expect(purged.commands).toEqual([
+      { id: runId, command: null },
+      {
+        id: sessionRunId,
+        command: { executable: "sh", args: [], ...lengths, cwd: "/workspace/repo" },
+      },
+    ]);
+
+    // Idempotent: the file runs again and changes nothing, and so does the purge on its own (what
+    // an operator runs after restoring an old dump).
+    await run(runMigration(statements));
+    expect(await run(readRun)).toEqual(purged);
+    const counts = await run(
+      Effect.gen(function* () {
+        const handle = yield* SealantDB;
+        return yield* handle.execute<{ target: string; rows: string }>(
+          sql`SELECT * FROM sealant_purge_stored_arguments()`,
+        );
+      }),
+    );
+    expect(
+      counts
+        .filter((row) => row.target !== "pgboss.job")
+        .map((row) => [row.target, Number(row.rows)]),
+    ).toEqual([
+      ["telemetry_events", 0],
+      ["telemetry_timeline", 0],
+      ["runs", 0],
+      ["workspace_sessions", 0],
+    ]);
     await run(runMigration(statements));
     expect(await run(readRun)).toEqual(purged);
   });
@@ -276,6 +364,29 @@ describe.skipIf(DATABASE_URL === undefined)("the process-arguments purge (Postgr
     });
     expect(entry?.refJson).toEqual(stored?.payload);
     expect(entry?.summary).toBe("exec sh (2 arguments not recorded)");
+
+    // A run's command and a session's argv, written with their arguments, keep none of them.
+    await run(
+      Effect.gen(function* () {
+        const handle = yield* SealantDB;
+        yield* handle
+          .update(runs)
+          .set({ command: { executable: "env", args: [`TOKEN=${SECRET_B64}`, "tool"] } })
+          .where(eq(runs.id, runId));
+        yield* storeLegacySession("late", ["env", `TOKEN=${SECRET_B64}`, "tool"]);
+      }),
+    );
+    const after = await run(readRun);
+    expect(after.commands.find((row) => row.id === runId)?.command).toEqual({
+      executable: "env",
+      args: [],
+      ...describeArguments([`TOKEN=${SECRET_B64}`, "tool"]),
+    });
+    expect(after.sessions.find((row) => row.id === `sess_late_${suffix}`)).toEqual({
+      id: `sess_late_${suffix}`,
+      argv: ["env"],
+      ...describeArguments([`TOKEN=${SECRET_B64}`, "tool"]),
+    });
     expect(await run(tablesHolding(SECRET_B64))).toEqual([]);
   });
 });

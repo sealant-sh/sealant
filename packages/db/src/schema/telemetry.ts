@@ -16,9 +16,14 @@
  *   - A process's arguments are never stored: a `processStarted` payload keeps `argCount` and
  *     `argLengths`, and `args` is always empty (`withholdProcessArgs` in @sealant/telemetry). A
  *     trigger on `telemetry_events` and `telemetry_timeline` enforces it for any writer, and the
- *     migration that added it rewrote the rows stored before (the log's one rewrite).
+ *     migration that added it (`stored_arguments_withheld`) rewrote the rows stored before: the
+ *     log's one rewrite. The triggers do not fire under `session_replication_role = replica`
+ *     (which `pg_restore --disable-triggers` and logical-replication apply use) or once disabled
+ *     with `ALTER TABLE … DISABLE TRIGGER`, both superuser-only; after either, run
+ *     `SELECT * FROM sealant_purge_stored_arguments()` again.
  *   - A run's record is deleted with its run, or, when `SEALANT_RUN_RECORD_RETENTION_DAYS` is set,
- *     once the run finished longer ago than that (`deleteExpiredRunRecords`).
+ *     once the run finished longer ago than that (`deleteExpiredRunRecords`, which then sets
+ *     `runs.record_deleted_at`).
  */
 import {
   bigint,

@@ -173,14 +173,22 @@ describe.skipIf(DATABASE_URL === undefined)("run-record retention (Postgres)", (
 
   it("deletes the whole record of every run that finished before the cutoff, and nothing else", async () => {
     const finishedBefore = new Date(now - 7 * DAY_MS);
-    const deleteExpired = Effect.gen(function* () {
-      const handle = yield* SealantDB;
-      return yield* deleteExpiredRunRecords(handle, { finishedBefore, batchSize: 1 });
-    });
+    const deleteExpired = (maxRows: number) =>
+      Effect.gen(function* () {
+        const handle = yield* SealantDB;
+        return yield* deleteExpiredRunRecords(handle, { finishedBefore, chunkRows: 1, maxRows });
+      });
 
-    // Other suites share the database: count only what this one owns.
-    const first = await run(deleteExpired);
-    expect(first.runs).toBeGreaterThanOrEqual(2);
+    // A call cut short mid-record leaves the run unmarked; the next calls finish it.
+    const first = await run(deleteExpired(3));
+    expect(first.rows).toBe(3);
+    expect(first.runs).toBe(0);
+    let calls = 0;
+    for (;;) {
+      calls += 1;
+      const next = await run(deleteExpired(4));
+      if (next.rows === 0 || calls > 50) break;
+    }
 
     for (const runId of expired) {
       expect(await run(rowsPerTable(runId))).toEqual([0, 0, 0, 0, 0, 0]);
@@ -188,20 +196,23 @@ describe.skipIf(DATABASE_URL === undefined)("run-record retention (Postgres)", (
     expect(await run(rowsPerTable(recent))).toEqual([1, 1, 1, 1, 1, 1]);
     expect(await run(rowsPerTable(unfinished))).toEqual([1, 1, 1, 1, 1, 1]);
 
-    // The run rows stay: only their records go.
+    // The run rows stay and say when their record went.
     const kept = await run(
       Effect.gen(function* () {
         const handle = yield* SealantDB;
         return yield* handle
-          .select({ id: runs.id })
+          .select({ id: runs.id, recordDeletedAt: runs.recordDeletedAt })
           .from(runs)
           .where(inArray(runs.id, [...expired, recent, unfinished]));
       }),
     );
+    const deletedAt = new Map(kept.map((row) => [row.id, row.recordDeletedAt]));
     expect(kept).toHaveLength(4);
+    for (const runId of expired) expect(deletedAt.get(runId)).toBeInstanceOf(Date);
+    expect(deletedAt.get(recent)).toBeNull();
+    expect(deletedAt.get(unfinished)).toBeNull();
 
-    // A second pass finds nothing of this suite's left to delete.
-    await run(deleteExpired);
-    expect(await run(rowsPerTable(recent))).toEqual([1, 1, 1, 1, 1, 1]);
+    // Nothing of this suite's is left to delete.
+    expect((await run(deleteExpired(1_000))).rows).toBe(0);
   });
 });

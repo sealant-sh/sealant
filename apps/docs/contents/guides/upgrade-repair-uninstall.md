@@ -75,6 +75,53 @@ Two things to know:
 `SEALANT_RABBITMQ_PASSWORD` and `SEALANT_REGISTRY_PORT` lines left in `~/.config/sealant/.env` are
 harmless; nothing reads them any more, and you can delete them.
 
+### Upgrading past the release that stops storing arguments
+
+Earlier releases stored the arguments of every process a run started, of every session, and of every
+run's command, in plaintext. Arguments can carry secrets: Mend delivered secret files (such as
+`~/.aws/credentials`) and session tokens that way, and anything typed after `mend run --` rode there
+too. This release stops storing them and rewrites what is stored.
+
+**Rotate every secret delivered before this release.** Anyone with read access to the database, its
+dumps or its backups could read those arguments, and rewriting the rows cannot recall a copy someone
+already has. For Mend, that means every secret file (cloud credentials, kubeconfigs, `.npmrc`
+tokens) used in a session before the upgrade.
+
+The upgrade does the rest. The `migrate` step:
+
+1. adds triggers that withhold arguments from any row written to `telemetry_events`,
+   `telemetry_timeline`, `runs` or `workspace_sessions`;
+2. rewrites the rows already stored, keeping each command's executable, argument count and argument
+   lengths, and deletes the run-exec job copies the queue kept;
+3. after it commits, runs `VACUUM` on those tables and on `pgboss.job`, then `CHECKPOINT`, so the
+   old row versions leave the table files and the WAL can be recycled.
+
+The `migrate` step prints each of the step 3 commands with its duration. If one fails (a database
+role that may not run `CHECKPOINT`, say), it prints the command; run it as the database owner or a
+superuser:
+
+```sh
+psql "$DATABASE_URL" -c 'VACUUM telemetry_events' -c 'VACUUM telemetry_timeline' \
+  -c 'VACUUM runs' -c 'VACUUM workspace_sessions' -c 'VACUUM pgboss.job' -c 'CHECKPOINT'
+```
+
+Run the same commands if you applied migrations with `pnpm db:migrate` (drizzle-kit) rather than the
+`migrate` step, since drizzle-kit does not run them.
+
+Copies outside the database are not touched: WAL archives, `pg_dump` files, backups and snapshots
+taken before the upgrade still hold the old rows. Delete them or keep them as secret as the secrets
+they hold.
+
+**After restoring a dump taken before this release**, purge it again; the triggers do not fire for
+rows restored with `pg_restore --disable-triggers` or under `session_replication_role = replica`:
+
+```sh
+psql "$DATABASE_URL" -c 'SELECT * FROM sealant_purge_stored_arguments()'
+```
+
+It prints how many rows it rewrote in each table, and changes nothing when there is nothing left.
+Then run the `VACUUM` and `CHECKPOINT` commands above.
+
 ## Pin an exact version
 
 To install or switch to a specific version — for a reproducible deployment, or to roll back — name

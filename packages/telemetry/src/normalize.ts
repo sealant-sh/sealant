@@ -8,11 +8,12 @@ import { createHash } from "node:crypto";
  * and the projection derivations (`deriveTimelineRow` / `deriveScrollbackRow`) read ONLY from that
  * shape — so a projection built at ingest is byte-identical to one rebuilt from the log.
  */
-import type {
-  NewTelemetryEvent,
-  NewTelemetryScrollbackRow,
-  NewTelemetryTimelineRow,
-  TelemetryEvent,
+import {
+  describeArguments,
+  type NewTelemetryEvent,
+  type NewTelemetryScrollbackRow,
+  type NewTelemetryTimelineRow,
+  type TelemetryEvent,
 } from "@sealant/db";
 import { StreamKind } from "@sealant/runtime-client";
 import type { EventEnvelope } from "@sealant/runtime-protocol";
@@ -70,20 +71,16 @@ const streamLabel = (stream: number): string => {
  * The record keeps the executable, the argument count and each argument's length in UTF-8 bytes;
  * `args` stays, always empty, so a reader that decodes it keeps working.
  *
- * Idempotent: a payload already withheld (or one with no arguments) comes back unchanged. The purge
- * migration (`processstarted_args_withheld`) applies the same rule, in SQL, to rows stored earlier.
+ * Idempotent: a payload already withheld (or one with no arguments) comes back unchanged. The
+ * migration `stored_arguments_withheld` applies the same rule, in SQL, to rows stored earlier, and
+ * its triggers apply it to every writer.
  */
 export const withholdProcessArgs = (payload: Record<string, unknown>): Record<string, unknown> => {
   const args = payload.args;
   if (!Array.isArray(args) || args.length === 0) {
     return payload;
   }
-  return {
-    ...payload,
-    args: [],
-    argCount: args.length,
-    argLengths: args.map((arg) => Buffer.byteLength(String(arg), "utf8")),
-  };
+  return { ...payload, args: [], ...describeArguments(args) };
 };
 
 /** How many arguments a `processStarted` payload had, whether or not they were withheld yet. */

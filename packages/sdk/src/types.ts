@@ -1493,8 +1493,8 @@ export interface RunCommand {
    * command recorded since; `argCount` says how many there were.
    */
   readonly args: readonly string[];
-  /** How many arguments the command was started with. */
-  readonly argCount: number;
+  /** How many arguments the command was started with. Always set by `record.commands()`. */
+  readonly argCount?: number;
   /**
    * A ready-to-read line, e.g. `opencode (2 arguments not recorded)`. A command recorded before
    * arguments were withheld reads in full, e.g. `opencode run "fix the test"`.

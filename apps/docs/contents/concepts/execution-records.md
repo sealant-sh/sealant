@@ -50,18 +50,33 @@ it is repeatable and consistent every time you run it.
 
 ## What the record leaves out
 
-A process's **arguments** are never stored. They can carry secrets, such as a token a script writes
-to a file or a file's contents in base64, and redaction covers output and terminal input, not
-arguments. The record keeps the executable, its working directory, how many arguments it had and
-each one's length in bytes, so a command reads `sh (2 arguments not recorded)`. The control plane
-deletes each queued command once a worker has taken it, so its arguments are kept only until then.
+**Arguments** are never stored: not those of a process in the record, nor a run's command, nor a
+session's. They can carry secrets, such as a token a script writes to a file, a file's contents in
+base64, or `env KEY=value`, and redaction covers output and terminal input, not arguments. What is
+kept is the executable, its working directory, how many arguments it had and each one's length in
+bytes:
+
+- in the record, a command reads `sh (2 arguments not recorded)`;
+- a run's `command` has an empty `args` with `argCount` and `argLengths`;
+- a session's `argv` holds only the program, with `argCount` and `argLengths`.
+
+The control plane deletes each queued command once a worker has taken it, so its arguments are kept
+only until then. Database triggers apply the same rule to every writer.
+
+A run's **prompt** is stored: it is the run's input, and it is shown back with the run. Do not put
+secrets in a prompt; give them to the workspace as credentials instead.
+
+Releases before this rule stored arguments. See
+[Upgrade](/docs/guides/upgrade-repair-uninstall#upgrading-past-the-release-that-stops-storing-arguments)
+for what the upgrade rewrites, and why secrets delivered before it should be rotated.
 
 ## How long a record is kept
 
 By default a record is kept as long as its run: until the run's owner is deleted. An operator can
 set `SEALANT_RUN_RECORD_RETENTION_DAYS` to have the worker delete the record of every run that
-finished more than that many days ago. The run itself stays, with its status, exit code and changes;
-its record then reads as empty. See [Environment variables](/docs/reference/environment-variables).
+finished more than that many days ago. The run itself stays, with its status, exit code and changes,
+and its `recordDeletedAt` says when the record went; the record then reads as empty. See
+[Environment variables](/docs/reference/environment-variables).
 
 ## Evidence, not verdicts
 

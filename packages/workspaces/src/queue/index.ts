@@ -35,6 +35,7 @@ export {
   runExecQueue,
   runExecQueueName,
   runExecRequestedMessageKind,
+  sweepRunExecJobRows,
   type ConsumeRunExecJobsOptions,
   type RunExecCommand,
   type RunExecConsumerMessage,
