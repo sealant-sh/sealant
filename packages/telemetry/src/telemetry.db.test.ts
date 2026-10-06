@@ -1,6 +1,6 @@
 /**
  * Integration test for the vertical slice against a REAL Postgres (the dev control-plane DB).
- * Gated on DATABASE_URL so it skips where no DB is available (mirrors runtime.test.ts skipping when
+ * Gated on SEALANT_TEST_DATABASE_URL (or DATABASE_URL) so it skips where no DB is available (mirrors runtime.test.ts skipping when
  * the sealantd binary is absent). It drives the REAL PostgresTelemetrySink + Projector + Query +
  * Ingester with a STUB SealantRuntime emitting a handcrafted EventEnvelope stream, then asserts:
  *   (a) the log is written and re-ingest is idempotent (dedup)
@@ -9,6 +9,7 @@
  *   (d) projection == rebuild
  *   (e) a near-2^63 bigint round-trips losslessly
  *   (f) stream-end records an early_close loss span
+ *   (g) a secret in a process's arguments is in no row of any table
  */
 import { create } from "@bufbuild/protobuf";
 import type { MessageInitShape } from "@bufbuild/protobuf";
@@ -39,7 +40,8 @@ import { TelemetryProjector, TelemetryProjectorLive } from "./projector.js";
 import { TelemetryQuery, TelemetryQueryLive } from "./query.js";
 import { PostgresTelemetrySinkLive } from "./sink.js";
 
-const DATABASE_URL = process.env.DATABASE_URL;
+// CI sets SEALANT_TEST_DATABASE_URL (a migrated, disposable database); DATABASE_URL is the dev one.
+const DATABASE_URL = process.env.SEALANT_TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 const RUNTIME_ID = "rt_it_telemetry";
 const PROC_ID = "proc_it";
 const BIG_DURATION = 9000000000000000001n;
