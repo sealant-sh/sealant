@@ -269,7 +269,7 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
  */
 export const sealantdImageReference =
   process.env["SEALANT_SEALANTD_IMAGE"] ??
-  "ghcr.io/sealant-sh/sealantd-next:0.20.0-next.142@sha256:5983d0b8a79155b78e8b0f353c5be97f8487d38bda6bc9768982b246bcc7b1e6";
+  "ghcr.io/sealant-sh/sealantd-next:0.20.0-next.150@sha256:c292d27c4d9c853e87c58eb31472eac8e920c9c5e79e8af60a9a4d9aa7a9b138";
 const dockerCliImageReference = process.env["SEALANT_DOCKER_CLI_IMAGE"] ?? "docker:27.5.1-cli";
 
 /**

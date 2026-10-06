@@ -1,0 +1,14 @@
+---
+"@sealant/sdk": patch
+"@sealant/api-contracts": patch
+---
+
+Workspaces run the sealantd prerelease 0.20.0-next.150 (`ghcr.io/sealant-sh/sealantd-next`, pinned
+by digest). A capture leaves every harness login out of the harness home, including pi's, opencode's
+and opencode's MCP server logins, under every person's saved directory too, and a restore never
+writes one back. A restore gives each person's saved directory to their uid and the worktree to the
+group. Executions, sessions and dotfiles can run as a given user, and a per-person executor leaves
+no-new-privileges unset so every person's sudo works. A restore writes files on every core, and a
+final flush reads on every core. Upload URLs carry the SHA-256 of their bytes. The image fetches
+socat over HTTPS and checks it against a pinned checksum. A stable release refuses this pin until
+sealantd 0.20.0 is released and pinned.
