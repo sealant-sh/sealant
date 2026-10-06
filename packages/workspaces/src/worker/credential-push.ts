@@ -83,14 +83,20 @@ export interface CredentialPushSummary {
   readonly released: number;
 }
 
-/** Running instances whose launch FILE-injected this account. */
+/**
+ * Running instances whose launch FILE-injected this account at `$HOME`. A launch that wrote into a
+ * `credentialsHome` is reached through that home's record instead (§6d), never both.
+ */
 export const instancesHoldingAccount = (
   instances: readonly WorkspaceRuntimeInstance[],
   connectedAccountId: string,
 ): readonly WorkspaceRuntimeInstance[] =>
   instances.filter((instance) =>
     (instance.launchCredentialInjections ?? []).some(
-      (entry) => entry.connectedAccountId === connectedAccountId && entry.injection === "file",
+      (entry) =>
+        entry.connectedAccountId === connectedAccountId &&
+        entry.injection === "file" &&
+        entry.home === undefined,
     ),
   );
 

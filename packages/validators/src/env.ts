@@ -337,6 +337,11 @@ const addControlClientTlsIssue = (input: ControlClientTlsEnv, ctx: z.RefinementC
 export const defaultRuntimeAdapterEnvSchema = z.object({
   DEFAULT_RUNTIME_ADAPTER: runtimeAdapterIdSchema.default("docker"),
   /**
+   * Whether the workspace runtimes' `/workspace` filesystem takes POSIX ACLs, as the operator
+   * declares it (Mend ADR 0016's per-person layout needs them). Unset: unknown, reported as such.
+   */
+  SEALANT_WORKSPACE_ACLS: z.enum(["supported", "unsupported"]).optional(),
+  /**
    * Whether a Kubernetes install serves `tooling.services.docker` (a rootless dind sidecar in a
    * user-namespaced Pod — an operator decision). The worker reads it to build the Pod; the API
    * reads it for the create-time refusal (`workspace-docker-unsupported`), so a Docker-enabled

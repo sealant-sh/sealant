@@ -83,6 +83,7 @@ const execWorkspaceEffect = (
     const created = yield* execWorkspaceOp(init.id, {
       ownerUserId: ctx.config.hostLocal.ownerUserId,
       commands: [{ executable, args, ...(options?.cwd === undefined ? {} : { cwd: options.cwd }) }],
+      ...(options?.user === undefined ? {} : { user: options.user }),
     });
     const runId = created.runId;
 

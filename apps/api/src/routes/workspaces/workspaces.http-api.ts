@@ -7,6 +7,7 @@ import {
   releaseWorkspaceCredentials,
 } from "./workspace-credentials.js";
 import {
+  inspectWorkspaceImage,
   bindWorkspace,
   cancelWorkspaceCreate,
   createWorkspace,
@@ -98,6 +99,7 @@ export const WorkspacesHandlersLive = HttpApiBuilder.group(
           payload,
         }),
       )
+      .handle("inspectWorkspaceImage", ({ payload }) => inspectWorkspaceImage({ payload }))
       .handle("putWorkspaceCredentials", ({ params, payload }) =>
         putWorkspaceCredentials({ workspaceId: params.workspaceId, payload }),
       )

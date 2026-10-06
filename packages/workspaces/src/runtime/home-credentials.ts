@@ -70,6 +70,10 @@ const GENERATION_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
 /** A fresh generation for a hold. */
 export const newHomeGeneration = (): string => randomBytes(16).toString("hex");
 
+/** A launch's generation for its credentialsHome: the same for every delivery of the run. */
+export const launchHomeGeneration = (runId: string): string =>
+  createHash("sha256").update(`sealant-launch-home\n${runId}`, "utf8").digest("hex").slice(0, 32);
+
 /**
  * Which hold a write belongs to, checked against the home's marker in the executor, under the
  * home's lock, together with the write itself: nothing can change the marker between the check and

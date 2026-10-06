@@ -30,6 +30,7 @@ import type {
   RecoverWorkspaceRequest,
   RestartWorkspaceRequest,
   SessionInputRequest,
+  InspectWorkspaceImageRequest,
   PutWorkspaceCredentialsRequest,
   ReleaseWorkspaceCredentialsQuery,
   ListWorkspaceCredentialsQuery,
@@ -126,6 +127,11 @@ export const recoverWorkspaceOp = (workspaceId: string, payload: RecoverWorkspac
 export const restartWorkspaceOp = (workspaceId: string, payload: RestartWorkspaceRequest) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.workspaces.restartWorkspace({ params: { workspaceId }, payload }),
+  );
+
+export const inspectWorkspaceImageOp = (payload: InspectWorkspaceImageRequest) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.inspectWorkspaceImage({ payload }),
   );
 
 export const putWorkspaceCredentialsOp = (
@@ -283,6 +289,9 @@ export const inferenceRespondOp = (payload: InferenceRespondRequest) =>
   Effect.flatMap(SealantApiClient, (client) => client.inference.respond({ payload }));
 
 // ---- system ----
+
+export const getIndexOp = () =>
+  Effect.flatMap(SealantApiClient, (client) => client.system.getIndex({}));
 
 export const getSetupStateOp = () =>
   Effect.flatMap(SealantApiClient, (client) => client.system.getSetupState({}));

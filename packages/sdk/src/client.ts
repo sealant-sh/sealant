@@ -30,6 +30,7 @@ import {
   getWorkspaceCreateOp,
   getWorkspaceOp,
   inferenceRespondOp,
+  inspectWorkspaceImageOp,
   listConnectedAccountsOp,
   listSshKeysOp,
   listWorkspacesOp,
@@ -39,10 +40,16 @@ import { makeSdkRuntime, type SdkRuntime } from "./effect/runtime.js";
 import { SealantError } from "./errors.js";
 import type { SdkContext } from "./facade/context.js";
 import { makeRun } from "./facade/run.js";
-import { makeWorkspace, registerHarnessExecutors, toRuntimeInfo } from "./facade/workspace.js";
+import {
+  makeWorkspace,
+  registerHarnessExecutors,
+  toRuntimeInfo,
+  toWorkspaceImage,
+} from "./facade/workspace.js";
 import { buildCreateWorkspaceRequest } from "./internal/blueprint.js";
 import { resolveInternalConfig } from "./internal/config.js";
 import { parseTtlSeconds } from "./internal/duration.js";
+import { imageSpecKey } from "./internal/image-key.js";
 import { buildInferenceRespondRequest, mapInferenceResponse } from "./internal/inference.js";
 import { mapSshKey, mapWorkspaceSshInfo } from "./internal/ssh.js";
 import type {
@@ -56,6 +63,7 @@ import type {
   SshKeysNamespace,
   Workspace,
   WorkspaceCreateState,
+  WorkspaceImageInspection,
   WorkspaceSshNamespace,
   SealantConfig,
   UsersNamespace,
@@ -158,6 +166,47 @@ export class Sealant {
         name: details.name,
         status: details.status,
       });
+    },
+
+    /**
+     * A key to keep the per-person capability of `create(options)`'s image under, computed here
+     * from the spec alone, with no call. It is the same for creates whose image-shaping parts
+     * (harness, tooling, customization, lifecycle, access, target) are the same, whatever their
+     * repository, credentials or homes. It keys the capability, not the image itself. Keep what a
+     * launch's `launch.image` told you under it, and call `inspectImage` only for a key you have not
+     * seen.
+     */
+    imageKey: (options: CreateOptions): string =>
+      imageSpecKey(buildCreateWorkspaceRequest(options, this.#ctx.config).payload.spec),
+
+    /**
+     * What `create(options)` would build, read before the create: the spec is planned exactly as
+     * the build plans it, and the latest image published for that plan answers with its
+     * per-person capability (Mend ADR 0016 chooses a layout with it). Nothing is created, built or
+     * reserved. A spec whose dotfiles or source the control plane resolves at create may plan
+     * differently; then nothing is found and the capability is `unknown`.
+     */
+    inspectImage: async (options: CreateOptions): Promise<WorkspaceImageInspection> => {
+      const { payload } = buildCreateWorkspaceRequest(options, this.#ctx.config);
+      const answered = await this.#runtime.run(
+        inspectWorkspaceImageOp({
+          ownerUserId: payload.ownerUserId,
+          registryId: payload.registryId,
+          spec: payload.spec,
+        }),
+      );
+      return {
+        imageKey: imageSpecKey(payload.spec),
+        planHash: answered.planHash,
+        ...(answered.publishedImage === undefined
+          ? {}
+          : { image: toWorkspaceImage(answered.publishedImage) }),
+        personLayout: {
+          ...answered.personLayout,
+          missing: [...answered.personLayout.missing],
+          unknown: [...answered.personLayout.unknown],
+        },
+      };
     },
 
     /**

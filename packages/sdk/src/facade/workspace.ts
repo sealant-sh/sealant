@@ -12,6 +12,7 @@ import type {
   WorkspaceCaptureStatus as WireWorkspaceCaptureStatus,
   WorkspaceDetails,
   WorkspaceCredentialHome as WireWorkspaceCredentialHome,
+  WorkspaceDetails as WireWorkspaceDetails,
 } from "@sealant/api-contracts";
 
 import { execWorkspace } from "../effect/exec-workspace.js";
@@ -35,6 +36,7 @@ import {
 import { SealantError, SealantNotImplementedError } from "../errors.js";
 import { mapAccountRef } from "../internal/credentials.js";
 import { parseTtlSeconds } from "../internal/duration.js";
+import { requireProcessUser } from "../internal/process-user.js";
 import type {
   Harness,
   HarnessRunner,
@@ -48,6 +50,7 @@ import type {
   WorkspaceForwardOptions,
   WorkspaceCredentialHome,
   WorkspaceCredentialsAccountChoice,
+  WorkspaceImage,
   WorkspaceSessions,
   WorkspaceCaptureDrain,
   WorkspaceCaptureClassSnaps,
@@ -206,6 +209,25 @@ const toCaptureOrigin = (origin: CaptureExecutorOrigin): WorkspaceCaptureOrigin 
   ...(origin.headN === undefined ? {} : { headN: origin.headN }),
 });
 
+/** The wire's published image. */
+type WirePublishedImage = NonNullable<WireWorkspaceDetails["publishedImage"]>;
+
+/** Wire → public published image. */
+export const toWorkspaceImage = (image: WirePublishedImage): WorkspaceImage => ({
+  reference: image.reference,
+  digestReference: image.digestReference,
+  digest: image.digest,
+  ...(image.personLayout === undefined
+    ? {}
+    : {
+        personLayout: {
+          ...image.personLayout,
+          missing: [...image.personLayout.missing],
+          unknown: [...image.personLayout.unknown],
+        },
+      }),
+});
+
 /** Wire → public credential home. */
 const toCredentialHome = (home: WireWorkspaceCredentialHome): WorkspaceCredentialHome => ({
   home: home.home,
@@ -290,6 +312,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     argv: readonly string[],
     options?: SessionOptions,
   ): Promise<InteractiveSession> => {
+    if (options?.user !== undefined) await requireProcessUser(ctx, options.user);
     const created = await ctx.runtime.run(
       createSessionOp({
         workspaceId: init.id,
@@ -302,6 +325,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         ...(options?.term === undefined ? {} : { term: options.term }),
         ...(options?.mode === undefined ? {} : { mode: options.mode }),
         ...(options?.metadata === undefined ? {} : { metadata: { ...options.metadata } }),
+        ...(options?.user === undefined ? {} : { user: options.user }),
       }),
     );
     return makeInteractiveSession(ctx, created);
@@ -410,6 +434,13 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
       return details.runtime === undefined ? null : toRuntimeInfo(details.runtime);
     },
 
+    image: async () => {
+      const details: WorkspaceDetails = await ctx.runtime.run(
+        getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
+      );
+      return details.publishedImage === undefined ? null : toWorkspaceImage(details.publishedImage);
+    },
+
     status: async () => {
       const details: WorkspaceDetails = await ctx.runtime.run(
         getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
@@ -435,8 +466,14 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         // in-workspace daemon's control socket is accepting (readiness probe in the launch path).
         // This is honest: when ready() resolves, harness.run() can connect without racing the socket.
         if (details.status === "ready") {
-          if (launch !== undefined && details.runtime !== undefined) {
-            launch = { ...launch, runtime: toRuntimeInfo(details.runtime) };
+          if (launch !== undefined) {
+            launch = {
+              ...launch,
+              ...(details.runtime === undefined ? {} : { runtime: toRuntimeInfo(details.runtime) }),
+              ...(details.publishedImage === undefined
+                ? {}
+                : { image: toWorkspaceImage(details.publishedImage) }),
+            };
           }
           return workspace;
         }
@@ -472,7 +509,10 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
 
     sessions,
 
-    exec: (argv, options) => execWorkspace(ctx, init, argv, options),
+    exec: async (argv, options) => {
+      if (options?.user !== undefined) await requireProcessUser(ctx, options.user);
+      return execWorkspace(ctx, init, argv, options);
+    },
 
     bind: async (options) => {
       const result = await ctx.runtime.run(

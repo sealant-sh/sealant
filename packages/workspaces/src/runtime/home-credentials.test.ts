@@ -589,3 +589,44 @@ describe.skipIf(!dockerAvailable)(
     );
   },
 );
+describe("buildCredentialFileWriteScript for a launch's credentialsHome", () => {
+  it("makes the home for its owner and writes every login in one exec, taking the home", async () => {
+    const { buildCredentialFileWriteScript } = await import("./credential-files.js");
+    const w = world();
+    const home = join(w.root, "erin");
+    const claude = '{"claudeAiOauth":{"accessToken":"at-erin"}}';
+    const hostsYml = 'github.com:\n    oauth_token: "gho_erin"\n';
+    const stdin = homeScriptStdin([claude, hostsYml]);
+    const script = buildCredentialFileWriteScript(
+      {
+        path: home,
+        contentBase64: stdin,
+        mode: "600",
+        home: { uid, gid, generation: GEN_A, providers: ["claude", "github"] },
+      },
+      { stateDir: w.state, parentOwnerUid: uid },
+    );
+    // The adapters pipe `contentBase64` as it is; a launch delivered again writes again.
+    const deliveries = [1, 2].map(() =>
+      spawnSync("sh", ["-c", script], { input: stdin, encoding: "utf8" }),
+    );
+    for (const result of deliveries) expect(result.status, result.stderr).toBe(0);
+    expect(mode(home)).toBe(0o700);
+    expect(read(join(home, ".claude/.credentials.json"))).toBe(claude);
+    expect(read(join(home, ".config/gh/hosts.yml"))).toBe(hostsYml);
+    expect(mode(join(home, ".claude/.credentials.json"))).toBe(0o600);
+    expect(w.marker(home)).toBe(GEN_A);
+  });
+
+  it("refuses a home that is not one", async () => {
+    const { buildCredentialFileWriteScript } = await import("./credential-files.js");
+    expect(() =>
+      buildCredentialFileWriteScript({
+        path: "/workspace/harness-home",
+        contentBase64: "eA==",
+        mode: "600",
+        home: { uid: 40001, gid: 40000, generation: GEN_A, providers: ["claude"] },
+      }),
+    ).toThrow(/never under \/workspace/);
+  });
+});

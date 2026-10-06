@@ -278,3 +278,86 @@ describe("resolveCredentialInjections", () => {
     }).pipe(Effect.provide(provideAccounts(accounts)));
   });
 });
+
+describe("resolveCredentialInjections into a credentialsHome", () => {
+  const home = { path: "/home/m4lice000", uid: 40001, gid: 40000 };
+
+  it.effect("writes every login as a file in the home, GitHub as hosts.yml, nothing as env", () => {
+    const claude = createAccount({
+      id: "cacc_claude",
+      encryptedPayload: `sealed:${JSON.stringify({ token: "sk-ant-oat01-alice" })}`,
+    });
+    const codex = createAccount({
+      id: "cacc_codex",
+      provider: "codex",
+      kind: "auth-json",
+      encryptedPayload: `sealed:${JSON.stringify({
+        authJson: JSON.stringify({ tokens: { access_token: "at", refresh_token: "rt" } }),
+      })}`,
+    });
+    const github = createAccount({
+      id: "cacc_github",
+      provider: "github",
+      kind: "gh-cli-token",
+      encryptedPayload: `sealed:${JSON.stringify({ token: "gho_alice" })}`,
+      metadata: { login: "alice-gh" },
+    });
+    const accounts = connectedAccountRepoStub([claude, codex, github]);
+    const blueprint = newWorkspaceSchema.parse({
+      sources: { workspace: { url: "https://github.com/example/repo.git" } },
+      harness: { id: "opencode" },
+      runtime: {
+        credentialsHome: home,
+        credentialRefs: [
+          { provider: "claude", ref: "connected-account:cacc_claude" },
+          { provider: "codex", ref: "connected-account:cacc_codex" },
+          { provider: "github", ref: "connected-account:cacc_github" },
+        ],
+      },
+    });
+
+    return Effect.gen(function* () {
+      const resolved = yield* resolveCredentialInjections({
+        blueprint,
+        credentialCipher: fakeCipher,
+      });
+
+      expect(resolved.injections.every((injection) => injection.kind === "file")).toBe(true);
+      expect(
+        resolved.injections.map((injection) => (injection.kind === "file" ? injection.path : "")),
+      ).toEqual([
+        "/home/m4lice000/.claude/.credentials.json",
+        "/home/m4lice000/.codex/auth.json",
+        "/home/m4lice000/.config/gh/hosts.yml",
+      ]);
+      const hostsYml = resolved.injections[2];
+      expect(
+        hostsYml?.kind === "file" ? Buffer.from(hostsYml.contentBase64, "base64").toString() : "",
+      ).toBe(
+        'github.com:\n    oauth_token: "gho_alice"\n    git_protocol: https\n    user: "alice-gh"\n',
+      );
+      expect(resolved.launchCredentialInjections).toEqual([
+        {
+          provider: "claude",
+          connectedAccountId: "cacc_claude",
+          injection: "file",
+          copy: true,
+          home: "/home/m4lice000",
+        },
+        {
+          provider: "codex",
+          connectedAccountId: "cacc_codex",
+          injection: "file",
+          copy: true,
+          home: "/home/m4lice000",
+        },
+        {
+          provider: "github",
+          connectedAccountId: "cacc_github",
+          injection: "file",
+          home: "/home/m4lice000",
+        },
+      ]);
+    }).pipe(Effect.provide(provideAccounts(accounts)));
+  });
+});

@@ -5,6 +5,12 @@ import {
 } from "@sealant/db";
 import type { RuntimeAdapterId } from "@sealant/validators";
 
+import {
+  personLayoutCapability,
+  type PersonLayoutCapability,
+  type PersonLayoutContext,
+} from "./person-layout.js";
+
 export type WorkspaceStatus =
   | "queued"
   | "running"
@@ -39,6 +45,8 @@ export interface WorkspacePublishedImage {
   readonly reference: string;
   readonly digestReference: string;
   readonly digest: string;
+  /** Whether the image can run Mend's per-person layout here (see `personLayoutCapability`). */
+  readonly personLayout?: PersonLayoutCapability;
 }
 
 export interface WorkspaceErrorDetails {
@@ -181,6 +189,8 @@ export const resolveWorkspaceRuntime = (
 
 export const resolveWorkspacePublishedImage = (
   latestJob: WorkspaceBuildJob | undefined,
+  /** Given, the image's per-person capability is derived for this runtime. */
+  personLayout?: PersonLayoutContext,
 ): WorkspacePublishedImage | undefined => {
   if (latestJob === undefined) {
     return undefined;
@@ -198,6 +208,14 @@ export const resolveWorkspacePublishedImage = (
     reference: latestJob.publishedReference,
     digestReference: latestJob.publishedDigestReference,
     digest: latestJob.publishedDigest,
+    ...(personLayout === undefined
+      ? {}
+      : {
+          personLayout: personLayoutCapability(
+            latestJob.resultPayload?.metadata?.imageProbe,
+            personLayout,
+          ),
+        }),
   };
 };
 

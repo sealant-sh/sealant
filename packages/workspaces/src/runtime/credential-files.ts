@@ -4,12 +4,35 @@
  * streams it over the authenticated control channel's stdin. The payload is NEVER placed in argv,
  * so it cannot land in a process list or in the daemon's `processStarted` record.
  */
+import { buildHomeCredentialScript } from "./home-credentials.js";
 import type { CredentialFileInjection } from "./runtime-adapter.js";
 
 const createAdapterError = (code: string, message: string): Error & { code: string } =>
   Object.assign(new Error(message), { code });
 
-export const buildCredentialFileWriteScript = (file: CredentialFileInjection): string => {
+export const buildCredentialFileWriteScript = (
+  file: CredentialFileInjection,
+  /**
+   * For tests: where a home's marker and lock live (default `/run/sealant-homes`), and the uid its
+   * parent must belong to (default root).
+   */
+  options: { readonly stateDir?: string; readonly parentOwnerUid?: number } = {},
+): string => {
+  if (file.home !== undefined) {
+    // A launch's own home, every login in one exec: made for its owner, taken with the launch's
+    // generation as its marker, every file the owner's (home-credentials.ts).
+    return buildHomeCredentialScript({
+      home: file.path,
+      fence: { kind: "take", generation: file.home.generation },
+      // Nothing precedes a launch's take in a fresh executor (or its own earlier delivery).
+      token: "0",
+      createWithOwner: { uid: file.home.uid, gid: file.home.gid },
+      writes: file.home.providers,
+      removes: [],
+      ...(options.stateDir === undefined ? {} : { stateDir: options.stateDir }),
+      ...(options.parentOwnerUid === undefined ? {} : { parentOwnerUid: options.parentOwnerUid }),
+    });
+  }
   if (!/^[A-Za-z0-9_$/.-]+$/.test(file.path)) {
     throw createAdapterError(
       "credential-file-injection-failed",

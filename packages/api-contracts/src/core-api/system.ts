@@ -8,6 +8,16 @@ export const systemIndexResponseSchema = Schema.Struct({
   version: NonEmptyString,
   docsPath: NonEmptyString,
   openApiPath: NonEmptyString,
+  /**
+   * What this control plane can do that an older one cannot, so a client refuses a request it would
+   * otherwise send to a server that ignores part of it. Absent from older control planes: nothing.
+   */
+  features: Schema.optional(
+    Schema.Struct({
+      /** A process can run as a given Linux user (`user` on exec and sessions). */
+      processUser: Schema.Boolean,
+    }),
+  ),
 });
 export type SystemIndexResponse = typeof systemIndexResponseSchema.Type;
 

@@ -16,6 +16,8 @@ export const getIndex = () => {
     version: packageJson.version,
     docsPath: "/docs",
     openApiPath: "/openapi.json",
+    // No released sealantd can start a process as another user yet: exec and sessions refuse it.
+    features: { processUser: false },
   } satisfies SystemIndexResponse);
 };
 

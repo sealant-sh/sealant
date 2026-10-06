@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "@effect/vitest";
 import {
+  claudeSetupTokenCredentials,
   claudeCredentialsCopy,
   codexAuthJsonCopy,
   type CredentialCipherService,
@@ -19,6 +20,7 @@ import {
   WorkspaceAttemptRepo,
   WorkspaceBuildJobRepo,
   WorkspaceCaptureDrainRepo,
+  WorkspaceCredentialHomeRepo,
   WorkspaceRuntimeInstanceRepo,
   type ConnectedAccountRepoService,
   type GitHubInstallationRepoService,
@@ -28,6 +30,7 @@ import {
   type WorkspaceCaptureDrainRepoService,
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
+import { makeInMemoryCredentialHomes } from "@sealant/db/testing/credential-homes";
 import type { GitHubSourceIntegration } from "@sealant/source-integrations";
 import type { NewWorkspace, WorkspaceBuild, WorkspaceImageProbe } from "@sealant/validators";
 import { Effect, Exit, Fiber, Layer, Result } from "effect";
@@ -39,7 +42,12 @@ import {
   type WorkspaceImageBuilder,
 } from "../images/index.js";
 import type { RegistryClient } from "../registry/index.js";
-import { LaunchRetainedError, type RuntimeAdapter } from "../runtime/index.js";
+import {
+  homeScriptStdin,
+  launchHomeGeneration,
+  LaunchRetainedError,
+  type RuntimeAdapter,
+} from "../runtime/index.js";
 import { WorkspaceBuildJobProcessingError } from "./errors.js";
 import {
   dotfilesStagingRoot,
@@ -983,6 +991,180 @@ describe("processWorkspaceBuildJobEffect", () => {
         }),
       );
     }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts, connectedAccounts })));
+  });
+
+  it.effect(
+    "writes a credentialsHome launch's logins into the home and records it as the owner's",
+    () => {
+      const home = { path: "/home/m4lice000", uid: 40001, gid: 40000 };
+      const base = createWorkspaceBuildSpec({
+        osFamily: "nix",
+        credentialRefs: [
+          { provider: "claude", ref: "connected-account:cacc_claude" },
+          { provider: "github", ref: "connected-account:cacc_github" },
+        ],
+      });
+      const jobs = workspaceBuildJobRepoStub({
+        claimJobById: () => ({
+          id: "job_credentials_home",
+          runId: "run_credentials_home",
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: { ...base, runtime: { ...base.runtime, credentialsHome: home } },
+        }),
+      });
+      const attempts = {
+        ...workspaceAttemptRepoStub(),
+        getAttemptById: vi.fn((_id: string) => Effect.succeed({ ownerUserId: "usr_alice" })),
+      };
+      // The home is recorded before the instance reads `ready`, when nobody can act on it yet.
+      const homes = makeInMemoryCredentialHomes(() => []);
+      let recordedAtReady: number | undefined;
+      const runtimeInstances = {
+        ...workspaceRuntimeInstanceRepoStub(),
+        upsertRuntimeInstance: vi.fn((input: { readonly status?: string }) => {
+          if (input.status === "ready") recordedAtReady = homes.rows.size;
+          return Effect.succeed({});
+        }),
+      };
+      const accountRows = [
+        connectedAccountStub({
+          id: "cacc_claude",
+          provider: "claude",
+          payload: { token: "sk-ant-oat01-alice" },
+        }),
+        {
+          ...connectedAccountStub({
+            id: "cacc_github",
+            provider: "github",
+            payload: { token: "gho_alice" },
+          }),
+          kind: "gh-cli-token",
+        },
+      ];
+      const connectedAccounts = {
+        getById: vi.fn((id: string) =>
+          Effect.succeed(accountRows.find((account) => account.id === id)),
+        ),
+        updateSyncState: vi.fn((_input: unknown) => Effect.succeed(accountRows[0])),
+      };
+      const runtimeAdapter = createRuntimeAdapterStub("docker", {
+        launch: vi.fn(async () => ({
+          adapter: "docker" as const,
+          resourceId: "resource_123",
+          reference: "sealant-resource",
+          status: "ready" as const,
+        })),
+      });
+
+      return Effect.gen(function* () {
+        yield* processWorkspaceBuildJobEffect(
+          baseOptions({
+            jobId: "job_credentials_home",
+            runtimeAdapters: [runtimeAdapter],
+            credentialCipher: fakeCredentialCipher,
+            compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+          }),
+        );
+
+        // Every login is a file in the home, owned by its owner, all in one write (one exec);
+        // nothing rides the environment.
+        const generation = homes.rows.get("run_credentials_home /home/m4lice000")?.generation;
+        expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+          expect.objectContaining({
+            credentialFiles: [
+              {
+                path: "/home/m4lice000",
+                contentBase64: homeScriptStdin([
+                  claudeSetupTokenCredentials("sk-ant-oat01-alice"),
+                  'github.com:\n    oauth_token: "gho_alice"\n    git_protocol: https\n',
+                ]),
+                mode: "600",
+                home: { uid: 40001, gid: 40000, generation, providers: ["claude", "github"] },
+              },
+            ],
+          }),
+          expect.anything(),
+        );
+        expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+          expect.not.objectContaining({ credentialEnv: expect.anything() }),
+          expect.anything(),
+        );
+        expect(recordedAtReady).toBe(1);
+        // The hold is the run's: a second delivery of this launch writes under it again.
+        expect(generation).toBe(launchHomeGeneration("run_credentials_home"));
+        // The home is the owner's, as a put would hold it: refreshes reach it through the record.
+        expect(homes.rows.get("run_credentials_home /home/m4lice000")).toMatchObject({
+          onBehalfOfUserId: "usr_alice",
+          accounts: [
+            { provider: "claude", connectedAccountId: "cacc_claude" },
+            { provider: "github", connectedAccountId: "cacc_github" },
+          ],
+        });
+      }).pipe(
+        Effect.provide(
+          Layer.merge(
+            provideRepos({ jobs, runtimeInstances, attempts, connectedAccounts }),
+            Layer.succeed(WorkspaceCredentialHomeRepo, homes.service),
+          ),
+        ),
+      );
+    },
+  );
+
+  it.effect("leaves a credentialsHome a launch wrote no login into free for the first put", () => {
+    const home = { path: "/home/m4lice000", uid: 40001, gid: 40000 };
+    const base = createWorkspaceBuildSpec({ osFamily: "nix", credentialRefs: [] });
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_empty_home",
+        runId: "run_empty_home",
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        requestPayload: { ...base, runtime: { ...base.runtime, credentialsHome: home } },
+      }),
+    });
+    const attempts = {
+      ...workspaceAttemptRepoStub(),
+      getAttemptById: vi.fn((_id: string) => Effect.succeed({ ownerUserId: "usr_alice" })),
+    };
+    const runtimeAdapter = createRuntimeAdapterStub("docker", {
+      launch: vi.fn(async () => ({
+        adapter: "docker" as const,
+        resourceId: "resource_123",
+        reference: "sealant-resource",
+        status: "ready" as const,
+      })),
+    });
+    const homes = makeInMemoryCredentialHomes(() => []);
+    return Effect.gen(function* () {
+      yield* processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_empty_home",
+          runtimeAdapters: [runtimeAdapter],
+          credentialCipher: fakeCredentialCipher,
+          compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      );
+      // No take ran, so no hold is recorded: the launcher's first put takes the home.
+      expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+        expect.not.objectContaining({ credentialFiles: expect.anything() }),
+        expect.anything(),
+      );
+      expect(homes.rows.size).toBe(0);
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          provideRepos({
+            jobs,
+            runtimeInstances: workspaceRuntimeInstanceRepoStub(),
+            attempts,
+            connectedAccounts: {},
+          }),
+          Layer.succeed(WorkspaceCredentialHomeRepo, homes.service),
+        ),
+      ),
+    );
   });
 
   it.effect("fails the launch when refs are present but no credentials key is configured", () => {

@@ -1,4 +1,6 @@
 import {
+  claudeCredentialsFile,
+  githubHostsYml,
   parseClaudeCredentialPayload,
   parseCodexCredentialPayload,
   parseConnectedAccountRef,
@@ -12,7 +14,7 @@ import {
   type ConnectedAccount,
   type WorkspaceLaunchCredentialInjection,
 } from "@sealant/db";
-import type { NewWorkspace } from "@sealant/validators";
+import type { NewWorkspace, WorkspaceCredentialsHome } from "@sealant/validators";
 import { Effect } from "effect";
 
 import { workspaceBuildJobProcessingError, toWorkspaceBuildJobProcessingError } from "./errors.js";
@@ -52,6 +54,55 @@ export interface ResolveCredentialInjectionsInput {
    */
   readonly credentialCipher: CredentialCipherService | undefined;
 }
+
+/** `$HOME/<file>` → `<home>/<file>`: where a launch with a `credentialsHome` writes a login. */
+const HOME_PREFIX = "$HOME/";
+
+/**
+ * A launch's plan for a `credentialsHome` (docs/connected-accounts-design.md §6d): every login is a
+ * file in that home, GitHub included (as the CLI's `hosts.yml`), and nothing rides the environment.
+ */
+const intoHome = (
+  provider: "claude" | "codex" | "github",
+  planned: readonly CredentialInjection[],
+  plaintext: string,
+  account: ConnectedAccount,
+  home: WorkspaceCredentialsHome,
+): readonly CredentialInjection[] => {
+  if (provider === "github") {
+    const login = account.metadata?.["login"];
+    const hostsYml = githubHostsYml(
+      parseGitHubCredentialPayload(JSON.parse(plaintext)).token,
+      typeof login === "string" ? login : undefined,
+    );
+    return [
+      {
+        kind: "file",
+        path: `${home.path}/.config/gh/hosts.yml`,
+        contentBase64: Buffer.from(hostsYml, "utf8").toString("base64"),
+        mode: "600",
+      },
+    ];
+  }
+  if (provider === "claude") {
+    // A setup token too: the planner's variable would be everyone's in a shared executor.
+    const file = claudeCredentialsFile(parseClaudeCredentialPayload(JSON.parse(plaintext)));
+    return [
+      {
+        kind: "file",
+        path: `${home.path}/.claude/.credentials.json`,
+        contentBase64: Buffer.from(file, "utf8").toString("base64"),
+        mode: "600",
+      },
+    ];
+  }
+  return planned.map((injection) => {
+    if (injection.kind !== "file" || !injection.path.startsWith(HOME_PREFIX)) {
+      throw new Error(`A ${provider} login planned outside $HOME cannot be written into a home.`);
+    }
+    return { ...injection, path: `${home.path}/${injection.path.slice(HOME_PREFIX.length)}` };
+  });
+};
 
 /** Read `metadata.lastRefresh` defensively — metadata is a free-form Record<string, unknown>. */
 export const readStoredCodexLastRefresh = (
@@ -165,8 +216,14 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
       .decrypt(account.encryptedPayload)
       .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
 
+    const credentialsHome = input.blueprint.runtime.credentialsHome;
     const planned = yield* Effect.try({
-      try: () => parseProviderPayload(credentialRef.provider, plaintext),
+      try: () => {
+        const plan = parseProviderPayload(credentialRef.provider, plaintext);
+        return credentialsHome === undefined
+          ? plan
+          : intoHome(credentialRef.provider, plan, plaintext, account, credentialsHome);
+      },
       catch: (cause) =>
         workspaceBuildJobProcessingError({
           errorCode: "connected-account-payload-invalid",
@@ -186,6 +243,7 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
       (credentialRef.provider === "claude" || credentialRef.provider === "codex")
         ? { copy: true }
         : {}),
+      ...(credentialsHome === undefined ? {} : { home: credentialsHome.path }),
     });
 
     if (credentialRef.provider === "codex") {

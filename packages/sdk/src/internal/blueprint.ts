@@ -190,6 +190,15 @@ export const buildCreateWorkspaceRequest = (
     ...(options.kubernetes?.serviceAccountName === undefined
       ? {}
       : { kubernetes: { serviceAccountName: options.kubernetes.serviceAccountName } }),
+    ...(options.credentialsHome === undefined
+      ? {}
+      : {
+          credentialsHome: {
+            path: options.credentialsHome.path,
+            uid: options.credentialsHome.uid,
+            gid: options.credentialsHome.gid,
+          },
+        }),
   };
   const spec = {
     version: "1",
