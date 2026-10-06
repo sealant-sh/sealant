@@ -345,6 +345,8 @@ const mapSession = (session: WorkspaceSession, outputHighWater: bigint): Session
   ownerUserId: session.ownerUserId,
   status: session.status,
   argv: [...session.argv],
+  ...(session.argCount === null ? {} : { argCount: session.argCount }),
+  ...(session.argLengths === null ? {} : { argLengths: [...session.argLengths] }),
   ...(session.cwd === null ? {} : { cwd: session.cwd }),
   cols: session.cols,
   rows: session.rows,

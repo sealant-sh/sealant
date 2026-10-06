@@ -71,8 +71,21 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const SHELL_SAFE = /^[A-Za-z0-9_/.:=@%+-]+$/;
 const quoteArg = (arg: string): string =>
   arg.length > 0 && SHELL_SAFE.test(arg) ? arg : `"${arg.replace(/(["\\$`])/g, "\\$1")}"`;
-const formatCommandLine = (executable: string, args: readonly string[]): string =>
-  [executable, ...args.map(quoteArg)].join(" ");
+/**
+ * The platform never stores a process's arguments (they can carry secrets), only how many there
+ * were, so a recorded command reads `sh (2 arguments not recorded)`. A record from an older
+ * platform still carries them, and reads as the full line.
+ */
+const formatCommandLine = (
+  executable: string,
+  args: readonly string[],
+  argCount: number,
+): string => {
+  if (args.length === 0 && argCount > 0) {
+    return `${executable} (${argCount} ${argCount === 1 ? "argument" : "arguments"} not recorded)`;
+  }
+  return [executable, ...args.map(quoteArg)].join(" ");
+};
 
 const humanBytes = (n: number): string => {
   if (n < 1024) return `${n} B`;
@@ -90,7 +103,14 @@ const humanDuration = (ms: number): string =>
 export const reconstructCommands = (entries: readonly WireTimelineEntry[]): RunCommand[] => {
   const commands: RunCommand[] = [];
   let current:
-    | { executable: string; args: string[]; cwd?: string; stdoutBytes: number; stderrBytes: number }
+    | {
+        executable: string;
+        args: string[];
+        argCount: number;
+        cwd?: string;
+        stdoutBytes: number;
+        stderrBytes: number;
+      }
     | undefined;
 
   const flush = (exit?: { exitCode?: number; signal?: number; durationMs?: number }): void => {
@@ -100,7 +120,8 @@ export const reconstructCommands = (entries: readonly WireTimelineEntry[]): RunC
     commands.push({
       executable: current.executable,
       args: current.args,
-      command: formatCommandLine(current.executable, current.args),
+      argCount: current.argCount,
+      command: formatCommandLine(current.executable, current.args, current.argCount),
       ...(current.cwd === undefined ? {} : { cwd: current.cwd }),
       ...(exit?.exitCode === undefined ? {} : { exitCode: exit.exitCode }),
       ...(exit?.signal === undefined ? {} : { signal: exit.signal }),
@@ -115,10 +136,13 @@ export const reconstructCommands = (entries: readonly WireTimelineEntry[]): RunC
     const ref = isRecord(entry.ref) ? entry.ref : {};
     if (entry.kind === "processStarted") {
       flush();
-      const args = ref["args"];
+      const rawArgs: unknown = ref["args"];
+      const args = Array.isArray(rawArgs) ? rawArgs.map((a) => String(a)) : [];
+      const argCount = ref["argCount"];
       current = {
         executable: typeof ref["executable"] === "string" ? ref["executable"] : "?",
-        args: Array.isArray(args) ? (args as unknown[]).map((a) => String(a)) : [],
+        args,
+        argCount: typeof argCount === "number" ? argCount : args.length,
         ...(typeof ref["cwd"] === "string" ? { cwd: ref["cwd"] } : {}),
         stdoutBytes: 0,
         stderrBytes: 0,

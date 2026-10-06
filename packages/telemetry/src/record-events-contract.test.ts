@@ -68,7 +68,10 @@ describe("record-event taxonomy contract", () => {
       return;
     }
     expect(decoded.data.executable).toBe("pnpm");
-    expect(decoded.data.args).toEqual(["test"]);
+    // The argument itself is never stored: only how many there were and how long each was.
+    expect(decoded.data.args).toEqual([]);
+    expect(decoded.data.argCount).toBe(1);
+    expect(decoded.data.argLengths).toEqual([4]);
     // int64 survives as a decimal string, and the protobuf $typeName marker is stripped.
     expect(decoded.data.startedAt).toBe("1751846400000000");
     expect(decoded.data).not.toHaveProperty("$typeName");

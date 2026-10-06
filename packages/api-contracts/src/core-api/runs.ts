@@ -44,6 +44,18 @@ export const runCommandSchema = Schema.Struct({
 });
 export type RunCommandWire = typeof runCommandSchema.Type;
 
+/**
+ * The command a run resource reports: its executable and cwd. `args` is always empty: Sealant never
+ * stores a command's arguments, because they can carry secrets. `argCount` and `argLengths` (UTF-8
+ * bytes each) describe them; both are absent when there were none.
+ */
+export const recordedRunCommandSchema = Schema.Struct({
+  ...runCommandSchema.fields,
+  argCount: Schema.optional(Schema.Number),
+  argLengths: Schema.optional(Schema.Array(Schema.Number)),
+});
+export type RecordedRunCommandWire = typeof recordedRunCommandSchema.Type;
+
 export const runSchema = Schema.Struct({
   runId: NonEmptyString,
   workspaceId: NonEmptyString,
@@ -53,14 +65,19 @@ export const runSchema = Schema.Struct({
   mode: runModeSchema,
   status: runStatusSchema,
   prompt: Schema.optional(Schema.String),
-  /** The resolved invocation the control plane executed (server-side runs) — self-describing. */
-  command: Schema.optional(runCommandSchema),
+  /** The invocation the run executes: executable and cwd, never its arguments. */
+  command: Schema.optional(recordedRunCommandSchema),
   /** Opaque caller correlation bag, echoed verbatim (no platform semantics). */
   metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
   exitCode: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(Schema.String),
   startedAt: Schema.optional(Schema.String),
   finishedAt: Schema.optional(Schema.String),
+  /**
+   * When run-record retention deleted this run's record (the operator's
+   * `SEALANT_RUN_RECORD_RETENTION_DAYS`). Its timeline, scrollback and events then read as empty.
+   */
+  recordDeletedAt: Schema.optional(Schema.String),
   createdAt: Schema.String,
   updatedAt: Schema.String,
 });

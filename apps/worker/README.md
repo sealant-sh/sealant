@@ -55,6 +55,15 @@ after boot) it deletes workspace images no live workspace launched from and no r
 `WORKSPACE_IMAGE_MIN_AGE_HOURS` (default a week), and removes build scratch older than six hours
 from the OS temp directory. `WORKSPACE_IMAGE_GC_ENABLED=false` turns the sweep off.
 
+Run records are kept as long as their runs unless `SEALANT_RUN_RECORD_RETENTION_DAYS` is set: then,
+every hour (first pass 5 min after boot), the worker deletes the record (`telemetry_*` rows) of
+every run that finished more than that many days ago, at most 5,000 rows per statement and 500,000
+per pass, and sets the run's `record_deleted_at`. The run row stays.
+
+Every hour (first pass a minute after boot) the worker also deletes run-exec job rows left in
+`pgboss.job`: a worker deletes each job as it takes it, because the job holds the command's
+arguments, so a finished or dead-lettered copy, or one `active` for over ten minutes, is a leftover.
+
 The worker also watches launched runtimes: every `WORKSPACE_RUNTIME_EXIT_POLL_INTERVAL_MS` (default
 5 s) it asks each runtime whether its `ready` workspaces are still up, and Docker (`docker events`)
 and Kubernetes (a watch on the workspace Pods) additionally report exits as they happen. A workspace

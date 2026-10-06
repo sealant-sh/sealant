@@ -80,7 +80,15 @@ export const sessionSchema = Schema.Struct({
   runId: NonEmptyString,
   ownerUserId: NonEmptyString,
   status: sessionStatusSchema,
+  /**
+   * Only `argv[0]`, the program: Sealant never stores a session's arguments, because they can carry
+   * secrets. `argCount` and `argLengths` (UTF-8 bytes each) describe them.
+   */
   argv: Schema.Array(Schema.String),
+  /** How many arguments followed the program. Absent when there were none. */
+  argCount: Schema.optional(Schema.Number),
+  /** Each argument's length in UTF-8 bytes, in order. Absent when there were none. */
+  argLengths: Schema.optional(Schema.Array(Schema.Number)),
   cwd: Schema.optional(NonEmptyString),
   cols: Schema.Number,
   rows: Schema.Number,

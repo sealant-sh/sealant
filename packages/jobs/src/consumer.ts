@@ -13,6 +13,14 @@ export interface ConsumeJobQueueJsonOptions<TMessage> {
   readonly concurrency?: number;
   readonly parseMessage: (input: unknown) => TMessage;
   /**
+   * Delete each delivery's row as soon as it is taken, before it is parsed or handled, so its
+   * data is not kept after pickup: for a payload that can carry secrets (a command's arguments).
+   * Without the row there is no completed copy, no dead-letter copy and no expiry, so a delivery
+   * whose worker dies mid-handling leaves no trace in the queue. A row a failed delete left behind
+   * is the queue owner's to sweep.
+   */
+  readonly deleteOnPickup?: boolean;
+  /**
    * Resolving completes the delivery. Throwing (or a payload that fails to parse) fails it, which
    * copies it to the dead-letter queue — there are no automatic retries.
    */
@@ -39,6 +47,20 @@ export const consumeJobQueueJson = async <TMessage>(
     },
     async (jobs) => {
       for (const job of jobs) {
+        if (options.deleteOnPickup === true) {
+          // pg-boss treats a job its handler deleted as done: completing or failing it afterwards
+          // changes nothing, and nothing is copied to the dead-letter queue. A delete that fails
+          // (a transient database error) must not fail the delivery, which would copy its data to
+          // the dead-letter queue and leave the work undone: the work goes on, and the row is left
+          // for the queue owner's sweep.
+          await singleton.boss.deleteJob(options.queue.name, job.id).catch((error: unknown) => {
+            console.error("[jobs] could not delete a delivery at pickup; left for the sweep", {
+              queue: options.queue.name,
+              jobId: job.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }
         let message: TMessage;
         try {
           message = options.parseMessage(job.data);

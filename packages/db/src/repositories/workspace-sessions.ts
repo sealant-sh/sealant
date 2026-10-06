@@ -16,12 +16,14 @@ import {
   type WorkspaceSessionMode,
   type WorkspaceSessionStatus,
 } from "../schema.js";
+import { describeArguments } from "../withheld-arguments.js";
 
 export interface CreateWorkspaceSessionInput {
   readonly id: string;
   readonly workspaceId: string;
   readonly runId: string;
   readonly ownerUserId: string;
+  /** Only `argv[0]` is stored; the arguments' count and lengths stand in for the rest. */
   readonly argv: readonly string[];
   readonly cwd?: string;
   readonly cols: number;
@@ -156,7 +158,9 @@ export const WorkspaceSessionRepoLive = Layer.effect(
                 workspaceId: input.workspaceId,
                 runId: input.runId,
                 ownerUserId: input.ownerUserId,
-                argv: input.argv,
+                // Only the program: its arguments are withheld (withheld-arguments.ts).
+                argv: input.argv.slice(0, 1),
+                ...(input.argv.length > 1 ? describeArguments(input.argv.slice(1)) : {}),
                 ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
                 cols: input.cols,
                 rows: input.rows,

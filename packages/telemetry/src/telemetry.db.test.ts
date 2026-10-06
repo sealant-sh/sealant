@@ -1,6 +1,6 @@
 /**
  * Integration test for the vertical slice against a REAL Postgres (the dev control-plane DB).
- * Gated on DATABASE_URL so it skips where no DB is available (mirrors runtime.test.ts skipping when
+ * Gated on SEALANT_TEST_DATABASE_URL (or DATABASE_URL) so it skips where no DB is available (mirrors runtime.test.ts skipping when
  * the sealantd binary is absent). It drives the REAL PostgresTelemetrySink + Projector + Query +
  * Ingester with a STUB SealantRuntime emitting a handcrafted EventEnvelope stream, then asserts:
  *   (a) the log is written and re-ingest is idempotent (dedup)
@@ -9,6 +9,7 @@
  *   (d) projection == rebuild
  *   (e) a near-2^63 bigint round-trips losslessly
  *   (f) stream-end records an early_close loss span
+ *   (g) a secret in a process's arguments is in no row of any table
  */
 import { create } from "@bufbuild/protobuf";
 import type { MessageInitShape } from "@bufbuild/protobuf";
@@ -28,7 +29,7 @@ import {
   type SealantRuntimeService,
   type SealantSession,
 } from "@sealant/workspaces";
-import { count, eq } from "drizzle-orm";
+import { count, eq, sql } from "drizzle-orm";
 import { Effect, Layer, Stream } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -39,7 +40,8 @@ import { TelemetryProjector, TelemetryProjectorLive } from "./projector.js";
 import { TelemetryQuery, TelemetryQueryLive } from "./query.js";
 import { PostgresTelemetrySinkLive } from "./sink.js";
 
-const DATABASE_URL = process.env.DATABASE_URL;
+// CI sets SEALANT_TEST_DATABASE_URL (a migrated, disposable database); DATABASE_URL is the dev one.
+const DATABASE_URL = process.env.SEALANT_TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 const RUNTIME_ID = "rt_it_telemetry";
 const PROC_ID = "proc_it";
 const BIG_DURATION = 9000000000000000001n;
@@ -58,6 +60,9 @@ const evt = (sequence: bigint, init: MessageInitShape<typeof EventEnvelopeSchema
     ...init,
   });
 
+// A secret-looking argument, the way Mend wrote a session token: as a shell literal in `sh -c`.
+const SECRET_ARG = "mend_tok_Zq8vR3nW6yK1pL0sT9xB4cH7dF2gJ5mA";
+
 const EVENTS: readonly EventEnvelope[] = [
   evt(1n, {
     processId: PROC_ID,
@@ -67,7 +72,7 @@ const EVENTS: readonly EventEnvelope[] = [
         pid: 100,
         pgid: 100,
         executable: "/bin/sh",
-        args: ["-c", "echo hi"],
+        args: ["-c", `printf '%s' '${SECRET_ARG}' > ~/.mend/session-token.next && echo hi`],
         cwd: "/",
         startedAt: 1n,
       },
@@ -364,6 +369,22 @@ describe.skipIf(DATABASE_URL === undefined)(
           // (e) bigint fidelity.
           const exitedEvent = yield* query.getEvent(runId, 4n);
 
+          // (g) The secret argument is in no row of any table, in any schema.
+          const tables = yield* handle.execute<{ schema: string; name: string }>(sql`
+            SELECT table_schema AS schema, table_name AS name FROM information_schema.tables
+            WHERE table_type = 'BASE TABLE'
+              AND table_schema NOT IN ('pg_catalog', 'information_schema')`);
+          const tablesHoldingSecret: string[] = [];
+          for (const table of tables) {
+            const found = yield* handle.execute<{ hit: boolean }>(
+              sql`SELECT EXISTS (SELECT 1 FROM ${sql.identifier(table.schema)}.${sql.identifier(table.name)} AS t WHERE t::text LIKE ${`%${SECRET_ARG}%`}) AS hit`,
+            );
+            if (found[0]?.hit === true) {
+              tablesHoldingSecret.push(`${table.schema}.${table.name}`);
+            }
+          }
+          const started = yield* query.getEvent(runId, 1n);
+
           return {
             afterFirst,
             afterSecond,
@@ -371,6 +392,9 @@ describe.skipIf(DATABASE_URL === undefined)(
             scrollback,
             timelineBefore,
             timelineAfter,
+            tablesScanned: tables.length,
+            tablesHoldingSecret,
+            started: started.payload,
             exitedSequence: exitedEvent.sequence,
             exitedDuration: exitedEvent.payload.durationMicros,
           };
@@ -392,6 +416,12 @@ describe.skipIf(DATABASE_URL === undefined)(
       // (d) rebuild reproduces the timeline byte-identically.
       expect(result.timelineAfter).toEqual(result.timelineBefore);
       expect(result.timelineBefore).toHaveLength(7);
+
+      // (g) The process's arguments are withheld everywhere: only their count and lengths stay.
+      expect(result.tablesScanned).toBeGreaterThan(10);
+      expect(result.tablesHoldingSecret).toEqual([]);
+      expect(result.started).toMatchObject({ executable: "/bin/sh", args: [], argCount: 2 });
+      expect(result.timelineBefore[0]?.summary).toBe("exec /bin/sh (2 arguments not recorded)");
 
       // (e) near-2^63 values are stored losslessly.
       expect(result.exitedSequence).toBe(4n);

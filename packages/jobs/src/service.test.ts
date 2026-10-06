@@ -86,4 +86,41 @@ describe.skipIf(databaseUrl === undefined)("job queue (pg-boss)", () => {
     expect(attempts).toBe(1);
     expect(dlq.map((job) => job.data)).toEqual([{ id: "two" }]);
   });
+
+  it("keeps no row of a delivery taken with deleteOnPickup, whether it succeeds or fails", async () => {
+    const queue = defineJobQueue(`test-delete-on-pickup-${suffix}`, { activeTimeoutSeconds: 60 });
+    const jobs = createJobQueueService(url);
+    const secret = `ghp_${suffix}SecretLookingArgument0123456789`;
+    let handled = 0;
+    const { promise: bothHandled, resolve: resolveBoth } = Promise.withResolvers<void>();
+
+    const consumer = await jobs.consumeJson<{ readonly args: readonly string[] }>({
+      queue,
+      deleteOnPickup: true,
+      parseMessage: (input) => input as { readonly args: readonly string[] },
+      onMessage: async ({ message }) => {
+        handled += 1;
+        if (handled === 2) resolveBoth();
+        if (message.args[0] === "fail") throw new Error("boom");
+      },
+    });
+
+    await jobs.publishJson({ queue, message: { args: ["ok", secret] } });
+    await jobs.publishJson({ queue, message: { args: ["fail", secret] } });
+    await bothHandled;
+    // Let pg-boss settle the completion and the failure (both find no row).
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await consumer.cancel();
+
+    const { boss } = await getJobQueueSingleton(url);
+    expect(handled).toBe(2);
+    expect(await boss.findJobs(queue.name)).toEqual([]);
+    expect(await boss.findJobs(queue.deadLetterQueueName)).toEqual([]);
+    const db = boss.getDb();
+    const rows = await db.executeSql(
+      `SELECT count(*)::int AS n FROM pgboss.job WHERE data::text LIKE $1`,
+      [`%${secret}%`],
+    );
+    expect(rows.rows[0]).toEqual({ n: 0 });
+  });
 });

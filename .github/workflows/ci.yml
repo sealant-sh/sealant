@@ -76,7 +76,6 @@ jobs:
     # The `*.db.test.ts` suites (drain leases, retention with its exit write, launch preemption,
     # attestation freshness, idempotent creates) run against a real, migrated Postgres. They skip
     # themselves without SEALANT_TEST_DATABASE_URL, and turbo passes it to `test` (turbo.json).
-    # (`@sealant/telemetry`'s DB suite reads the bare DATABASE_URL and still skips here.)
     services:
       postgres:
         image: postgres:17

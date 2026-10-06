@@ -33,6 +33,7 @@ const runRow = (overrides: Record<string, unknown> = {}) => ({
   diff: null,
   changedFiles: null,
   changesReadFailedAt: null,
+  recordDeletedAt: null,
   startedAt: null,
   finishedAt: null,
   createdAt: now,

@@ -18,6 +18,7 @@ import {
   type RunMode,
   type RunStatus,
 } from "../schema.js";
+import { describeArguments } from "../withheld-arguments.js";
 
 export interface CreateRunInput {
   readonly id: string;
@@ -170,7 +171,19 @@ export const RunRepoLive = Layer.effect(
                 ...(input.mode === undefined ? {} : { mode: input.mode }),
                 ...(input.prompt === undefined ? {} : { prompt: input.prompt }),
                 ...(input.attemptId === undefined ? {} : { attemptId: input.attemptId }),
-                ...(input.command === undefined ? {} : { command: input.command }),
+                // The executable and cwd only: the arguments are withheld (withheld-arguments.ts).
+                ...(input.command === undefined
+                  ? {}
+                  : {
+                      command: {
+                        executable: input.command.executable,
+                        args: [],
+                        ...(input.command.args.length === 0
+                          ? {}
+                          : describeArguments(input.command.args)),
+                        ...(input.command.cwd === undefined ? {} : { cwd: input.command.cwd }),
+                      },
+                    }),
                 ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
               } satisfies NewRun)
               .returning();

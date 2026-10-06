@@ -13,6 +13,18 @@
  *     (which would silently narrow values past 2^53).
  *   - The projection tables (`telemetry_scrollback`, `telemetry_timeline`) and `telemetry_loss_spans`
  *     are rebuildable from the log; only they are mutable.
+ *   - A process's arguments are never stored: a `processStarted` payload keeps `argCount` and
+ *     `argLengths`, and `args` is always empty (`withholdProcessArgs` in @sealant/telemetry). A
+ *     trigger on `telemetry_events` and `telemetry_timeline` enforces it for any writer, and the
+ *     migration that added it (`stored_arguments_withheld`) rewrote the rows stored before: the
+ *     log's one rewrite. The triggers do not fire under `session_replication_role = replica`
+ *     (superuser-only; `pg_restore --disable-triggers` and logical-replication apply use it) or
+ *     once disabled with `ALTER TABLE … DISABLE TRIGGER` (the table's owner may do that, and
+ *     nothing in Sealant does); after either, run `SELECT * FROM sealant_purge_stored_arguments()`
+ *     again.
+ *   - A run's record is deleted with its run, or, when `SEALANT_RUN_RECORD_RETENTION_DAYS` is set,
+ *     once the run finished longer ago than that (`deleteExpiredRunRecords`, which then sets
+ *     `runs.record_deleted_at`).
  */
 import {
   bigint,

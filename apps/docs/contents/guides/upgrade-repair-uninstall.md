@@ -75,6 +75,60 @@ Two things to know:
 `SEALANT_RABBITMQ_PASSWORD` and `SEALANT_REGISTRY_PORT` lines left in `~/.config/sealant/.env` are
 harmless; nothing reads them any more, and you can delete them.
 
+### Upgrading past the release that stops storing arguments
+
+Earlier releases stored the arguments of every process a run started, of every session, and of every
+run's command, in plaintext. Arguments can carry secrets: Mend delivered secret files (such as
+`~/.aws/credentials`) and session tokens that way, and anything typed after `mend run --` rode there
+too. This release stops storing them and rewrites what is stored.
+
+**Rotate every secret delivered before this release.** Anyone with read access to the database, its
+dumps or its backups could read those arguments, and rewriting the rows cannot recall a copy someone
+already has. For Mend, that means every secret file (cloud credentials, kubeconfigs, `.npmrc`
+tokens) used in a session before the upgrade.
+
+The upgrade does the rest. The `migrate` step:
+
+1. adds triggers that withhold arguments from any row written to `telemetry_events`,
+   `telemetry_timeline`, `runs` or `workspace_sessions`;
+2. rewrites the rows already stored, keeping each command's executable, argument count and argument
+   lengths, and deletes the run-exec job copies the queue kept;
+3. after it commits, runs `VACUUM` on those tables and on `pgboss.job`.
+
+`VACUUM` marks the space the old row versions held as free, so new rows overwrite it; until then the
+bytes are still in the table files. It does not zero that space or shrink the files. To have the
+files rewritten without the old versions, run `VACUUM FULL` on the same tables. It holds an
+exclusive lock on each table while it copies it, so stop the API and worker first, and it needs free
+disk space about the size of the table. The WAL that recorded the rewrite is recycled after the next
+automatic checkpoint, within `checkpoint_timeout` (5 minutes by default).
+
+The `migrate` step prints what each `VACUUM` did: done, or skipped with Postgres's reason when the
+database role does not own the table. A skipped one has to be run by the table's owner:
+
+```sh
+psql "$DATABASE_URL" -c 'VACUUM telemetry_events' -c 'VACUUM telemetry_timeline' \
+  -c 'VACUUM runs' -c 'VACUUM workspace_sessions' -c 'VACUUM pgboss.job'
+```
+
+Run the same commands if you applied migrations with `pnpm db:migrate` (drizzle-kit) rather than the
+`migrate` step, since drizzle-kit does not run them.
+
+Copies outside the database are not touched: WAL archives, `pg_dump` files, backups and snapshots
+taken before the upgrade still hold the old rows. That includes the backup `mend server upgrade`
+writes under `~/.config/mend/backups/` before it starts the new version: the one for this upgrade
+and every earlier one hold the old arguments. Once the upgrade is healthy, delete them, or keep them
+as secret as the secrets they hold.
+
+**After restoring a dump taken before this release**, purge it again; the triggers do not fire for
+rows restored with `pg_restore --disable-triggers` or under `session_replication_role = replica`:
+
+```sh
+psql "$DATABASE_URL" -c 'SELECT * FROM sealant_purge_stored_arguments()'
+```
+
+It prints how many rows it rewrote in each table, and changes nothing when there is nothing left.
+Then run the `VACUUM` commands above.
+
 ## Pin an exact version
 
 To install or switch to a specific version — for a reproducible deployment, or to roll back — name

@@ -4,14 +4,24 @@
  * it, docker-execs the harness in the workspace, ingests telemetry, and marks the run terminal. This is
  * what lets the SDK be a thin HTTP client (it no longer docker-execs or writes telemetry itself).
  */
-import { createJobQueueService, defineJobQueue, type JobQueueConsumerMessage } from "@sealant/jobs";
+import {
+  createJobQueueService,
+  defineJobQueue,
+  getJobQueueSingleton,
+  jobQueueSchemaName,
+  type JobQueueConsumerMessage,
+} from "@sealant/jobs";
 
 export const runExecQueueName = "workspace-run-exec";
 export const runExecDeadLetterQueueName = "workspace-run-exec.dlq";
 
 export const runExecRequestedMessageKind = "workspace.run-exec.requested";
 
-/** One invocation the worker execs in the workspace. */
+/**
+ * One invocation the worker execs in the workspace. Its arguments live in the job row only until
+ * the worker takes it (`deleteOnPickup`), and the run record keeps their count and lengths, never
+ * the arguments themselves (`withholdProcessArgs` in @sealant/telemetry).
+ */
 export interface RunExecCommand {
   readonly executable: string;
   readonly args: readonly string[];
@@ -125,6 +135,41 @@ export const consumeRunExecJobs = async (options: ConsumeRunExecJobsOptions) => 
     queue: runExecQueue,
     ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
     parseMessage: parseRunExecRequestedMessage,
+    // A command's arguments can carry secrets (a token, a file's bytes), so the row holding them
+    // goes the moment the worker takes it. Nothing reads a run-exec job back, and nothing ever
+    // consumed its dead-letter copies; a run whose worker died stays `queued` or `running` either
+    // way (no reaper settles it today). `sweepRunExecJobRows` removes what a failed delete or an
+    // older worker left.
+    deleteOnPickup: true,
     onMessage: options.onMessage,
   });
+};
+
+/**
+ * Deletes run-exec job rows that should not exist: a worker deletes each job when it takes it, so
+ * a finished or dead-lettered copy, or a job `active` for over ten minutes (taken by a worker from
+ * before that rule, or whose delete failed), is a leftover holding a command's arguments. Jobs no
+ * worker has taken yet stay. The same rule as `sealant_purge_stored_arguments()` in the database.
+ */
+export const sweepRunExecJobRows = async (databaseUrl: string): Promise<number> => {
+  const { boss } = await getJobQueueSingleton(databaseUrl);
+  const result = await boss.getDb().executeSql(
+    `WITH deleted AS (
+       DELETE FROM ${jobQueueSchemaName}.job
+       WHERE name = $2
+         OR (name = $1 AND (
+           state IN ('completed', 'failed', 'cancelled')
+           OR (state = 'active' AND started_on < now() - interval '10 minutes')))
+       RETURNING 1
+     )
+     SELECT count(*)::int AS deleted FROM deleted`,
+    [runExecQueueName, runExecDeadLetterQueueName],
+  );
+  const row: unknown = result.rows[0];
+  return typeof row === "object" &&
+    row !== null &&
+    "deleted" in row &&
+    typeof row.deleted === "number"
+    ? row.deleted
+    : 0;
 };

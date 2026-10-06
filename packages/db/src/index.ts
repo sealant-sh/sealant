@@ -460,6 +460,7 @@ export {
 } from "./schema.js";
 
 export * as schema from "./schema/index.js";
+export { describeArguments, type WithheldArguments } from "./withheld-arguments.js";
 
 export {
   githubAppInstallationInsertSchema,

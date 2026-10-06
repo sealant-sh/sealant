@@ -69,7 +69,15 @@ export const processStartedEventSchema = Schema.Struct({
   pgid: Schema.Number,
   pidfd: Schema.Boolean,
   executable: Schema.String,
+  /**
+   * Always empty: Sealant never stores a process's arguments, because they can carry secrets.
+   * `argCount` and `argLengths` describe them. Kept so readers that decode it keep working.
+   */
   args: Schema.Array(Schema.String),
+  /** How many arguments the process was started with. Absent when it had none. */
+  argCount: Schema.optional(Schema.Number),
+  /** Each argument's length in UTF-8 bytes, in order. Absent when it had none. */
+  argLengths: Schema.optional(Schema.Array(Schema.Number)),
   cwd: Schema.String,
   /** Wall clock at start, microseconds (decimal-string int64). */
   startedAt: DecimalString,

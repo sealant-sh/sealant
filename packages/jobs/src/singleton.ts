@@ -52,7 +52,8 @@ const createJobQueueSingleton = async (databaseUrl: string): Promise<JobQueueSin
       expireInSeconds: definition.activeTimeoutSeconds,
       deadLetter: definition.deadLetterQueueName,
       notify: true,
-      // Completed deliveries carry no data anyone reads back; drop them quickly.
+      // Completed deliveries carry no data anyone reads back. pg-boss deletes those older than this
+      // at its maintenance, which runs once a day by default: up to about 25 h after completion.
       deleteAfterSeconds: 60 * 60,
     });
     ensured.add(definition.name);

@@ -18,8 +18,13 @@ const migrationsFolder = process.env.DRIZZLE_MIGRATIONS_DIR ?? "/app/drizzle";
 
 try {
   console.log(`[migrate] applying migrations from ${migrationsFolder}…`);
-  await runMigrations({ databaseUrl, migrationsFolder });
-  console.log("[migrate] migrations applied.");
+  // Maintenance a migration needs outside its transaction (VACUUM) runs here too.
+  const { applied } = await runMigrations({ databaseUrl, migrationsFolder });
+  console.log(
+    applied.length === 0
+      ? "[migrate] no migrations to apply."
+      : `[migrate] migrations applied: ${applied.join(", ")}.`,
+  );
 
   await runSeed({
     databaseUrl,

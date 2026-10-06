@@ -584,6 +584,10 @@ export const workerRuntimeEnvSchema = z.object({
   WORKSPACE_IMAGE_RETAINED_PLANS: z.coerce.number().int().min(0).default(10),
   // Images published within this window are never deleted, whatever the plan count says.
   WORKSPACE_IMAGE_MIN_AGE_HOURS: z.coerce.number().min(0).default(168),
+  // Run-record retention: unset keeps a run's record (timeline, scrollback, events) for as long as
+  // the run; set, the worker deletes the record of every run that finished more than this many
+  // days ago, hourly. The run row stays.
+  SEALANT_RUN_RECORD_RETENTION_DAYS: z.coerce.number().int().positive().optional(),
   // Mount-source allowlist (same operator knob as the API + daemon; see workspaceLifecycleEnvSchema).
   SEALANT_MOUNT_ALLOWED_STORE_ROOTS: z.string().optional(),
   // Optional strict Docker named-volume lowering. Semantic parsing and coherence checks live in

@@ -152,8 +152,14 @@ const asBigInt = (value: unknown): bigint => {
 const SHELL_SAFE = /^[A-Za-z0-9_/.:=@%+-]+$/;
 const quoteArg = (arg: string): string =>
   arg.length > 0 && SHELL_SAFE.test(arg) ? arg : `"${arg.replace(/(["\\$`])/g, "\\$1")}"`;
-const formatCommandLine = (executable: string, args: readonly string[]): string =>
-  [executable, ...args.map(quoteArg)].join(" ");
+/**
+ * The platform never stores a process's arguments (they can carry secrets), only how many there
+ * were. A record from before that change still carries them, and reads as the full line.
+ */
+const formatCommandLine = (executable: string, args: readonly string[], argCount: number): string =>
+  args.length === 0 && argCount > 0
+    ? `${executable} (${argCount} ${argCount === 1 ? "argument" : "arguments"} not recorded)`
+    : [executable, ...args.map(quoteArg)].join(" ");
 
 // ---------------------------------------------------------------------------------------------
 // The fold
@@ -166,6 +172,7 @@ interface CommandDraft {
   pid: number | undefined;
   executable: string;
   args: string[];
+  argCount: number;
   cwd: string | undefined;
   exit: RecordCommandExit | undefined;
   stdoutBytes: bigint;
@@ -257,7 +264,7 @@ const finishCommand = (draft: CommandDraft): RecordCommand => ({
   ...(draft.pid === undefined ? {} : { pid: draft.pid }),
   executable: draft.executable,
   args: draft.args,
-  commandLine: formatCommandLine(draft.executable, draft.args),
+  commandLine: formatCommandLine(draft.executable, draft.args, draft.argCount),
   ...(draft.cwd === undefined ? {} : { cwd: draft.cwd }),
   ...(draft.exit === undefined ? {} : { exit: draft.exit }),
   running: draft.exit === undefined,
@@ -324,6 +331,7 @@ export const foldRunRecord = (input: FoldRunRecordInput): RunRecordModel => {
           pid: asOptionalNumber(ref.pid),
           executable: asString(ref.executable) ?? "?",
           args,
+          argCount: asOptionalNumber(ref.argCount) ?? args.length,
           cwd: asString(ref.cwd),
           exit: undefined,
           stdoutBytes: 0n,

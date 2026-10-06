@@ -98,6 +98,10 @@ export const mapRun = (run: RunRecord): Run => ({
         command: {
           executable: run.command.executable,
           args: [...run.command.args],
+          ...(run.command.argCount === undefined ? {} : { argCount: run.command.argCount }),
+          ...(run.command.argLengths === undefined
+            ? {}
+            : { argLengths: [...run.command.argLengths] }),
           ...(run.command.cwd === undefined ? {} : { cwd: run.command.cwd }),
         },
       }),
@@ -106,6 +110,7 @@ export const mapRun = (run: RunRecord): Run => ({
   ...(run.errorMessage === null ? {} : { errorMessage: run.errorMessage }),
   ...(run.startedAt === null ? {} : { startedAt: run.startedAt.toISOString() }),
   ...(run.finishedAt === null ? {} : { finishedAt: run.finishedAt.toISOString() }),
+  ...(run.recordDeletedAt === null ? {} : { recordDeletedAt: run.recordDeletedAt.toISOString() }),
   createdAt: run.createdAt.toISOString(),
   updatedAt: run.updatedAt.toISOString(),
 });

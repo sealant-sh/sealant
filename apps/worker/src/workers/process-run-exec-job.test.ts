@@ -19,6 +19,7 @@ const run = (status: Run["status"]): Run => ({
   diff: null,
   changedFiles: null,
   changesReadFailedAt: null,
+  recordDeletedAt: null,
   startedAt: null,
   finishedAt: null,
   createdAt: new Date(0),
