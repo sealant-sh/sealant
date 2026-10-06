@@ -96,18 +96,20 @@ const TWO_PEOPLE = String.raw`
 mapfile -t dirs < /etc/sealant/person-shared-dirs
 setfacl -m g:mend:rwX -d -m g:mend:rwX "${"${dirs[@]}"}"
 mkdir -p /workspace && chown root:mend /workspace && chmod 2775 /workspace
+# No chmod: the image's HOME_MODE makes the homes 0700.
 for spec in alice:40001 bob:40002; do
   useradd -u "${"${spec##*:}"}" -g mend -m -s /bin/bash "${"${spec%%:*}"}"
-  chmod 0700 "/home/${"${spec%%:*}"}"
 done
-# The person environment, applied as the client applies it: literal KEY=VALUE lines, and
-# PATH_PREPEND in front of the process's PATH. Root's processes never get it.
+# The person environment, applied as sealantd applies it: a version line this reader knows, then
+# literal KEY=VALUE lines, and PATH_PREPEND in front of the process's PATH. Never root's.
 person_env=()
+[ "$(head -n1 /etc/sealant/person-env)" = "# person-env 1" ] || { echo "FAIL person-env-version"; exit 1; }
 while IFS= read -r line; do
   case "$line" in '#'*|'') ;; PATH_PREPEND=*) prepend=${"${line#PATH_PREPEND=}"} ;; *) person_env+=("$line") ;; esac
 done < /etc/sealant/person-env
 as() { local user=$1; shift; setpriv --reuid="$user" --regid=mend --init-groups -- env HOME="/home/$user" USER="$user" LOGNAME="$user" "${"${person_env[@]}"}" PATH="$prepend:$PATH" bash -c "umask 0002; cd ~; $*"; }
 
+check home-mode-0700 bash -c '[ "$(stat -c %a /home/alice)" = 700 ] && [ "$(stat -c %a /home/bob)" = 700 ]'
 check skel-links test -L /home/alice/.cargo/registry -a -L /home/alice/.cargo/bin -a -d /home/alice/.cargo/registry/
 check sudo-passwordless as alice 'sudo -n true'
 check sudo-umask as alice '[ "$(sudo -n sh -c umask)" = 0002 ]'
@@ -124,6 +126,8 @@ check npm-global-bob-removes-sudos as bob 'npm rm -g --silent is-number'
 check pnpm-alice as alice 'mkdir -p /workspace/a && cd /workspace/a && echo {} > package.json && pnpm add --silent is-number@7.0.0'
 check pnpm-store-shared as bob 'pnpm store path | grep -q ^/var/cache/pnpm/'
 check pnpm-bob-reuses as bob 'mkdir -p /workspace/b && cd /workspace/b && echo {} > package.json && out=$(pnpm add is-number@7.0.0 2>&1); echo "$out"; grep -q "downloaded 0" <<<"$out"'
+check pnpm-global-alice as alice 'pnpm add -g --silent cowsay@1.6.0 && command -v cowsay | grep -q ^/opt/pnpm/'
+check pnpm-global-bob-runs-and-removes as bob 'cowsay hi && pnpm remove -g --silent cowsay && hash -r && ! command -v cowsay'
 check pnpm-bob-in-alices-project as bob 'cd /workspace/a && pnpm add --silent is-odd@3.0.1'
 
 check mise-alice as alice 'mise use -g -y jq@1.7.1 && mise exec -- jq --version'

@@ -1,9 +1,12 @@
 import { execFile } from "node:child_process";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { parseWorkspaceBlueprint, parseWorkspaceImageProbe } from "@sealant/validators";
 import type { WorkspaceImageProbe } from "@sealant/validators";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { microvmRecipe } from "../images/microvm/recipe.js";
 import { compileWorkspaceBuildSpec, planWorkspaceImageBuild } from "./buildkit-builder.js";
@@ -13,6 +16,7 @@ import {
   PERSON_ENV,
   PERSON_ENV_FILE,
   PERSON_ENV_PATH,
+  PERSON_PATH_PREPEND,
   PERSON_SHARED_DIRS,
   PERSON_SHARED_DIRS_PATH,
   PERSON_SHARED_SUBDIRS,
@@ -103,7 +107,7 @@ describe("the person layout in the managed images", () => {
       expect(containerfile).toContain(
         `printf '%s\\n' ${dirs.map((dir) => `'${dir}'`).join(" ")} > '${PERSON_SHARED_DIRS_PATH}'`,
       );
-      for (const line of PERSON_ENV_FILE.slice(2)) expect(containerfile).toContain(`'${line}'`);
+      for (const line of PERSON_ENV_FILE.slice(3)) expect(containerfile).toContain(`'${line}'`);
       expect(containerfile).toContain(`> '${PERSON_ENV_PATH}'`);
       for (const [link, target] of PERSON_SKEL_LINKS) {
         expect(containerfile).toContain(`ln -sfn ${target} /etc/skel/${link}`);
@@ -154,6 +158,31 @@ describe("the person layout in the managed images", () => {
       expect(bootEnv).toBeGreaterThan(probe);
     });
   }
+
+  it("puts pnpm's global bins on a person's PATH, for pnpm 10 and for 11 and later", () => {
+    // pnpm 11 and 12 refuse `add -g` unless $PNPM_HOME/bin is on PATH; pnpm 10 uses $PNPM_HOME.
+    expect(PERSON_PATH_PREPEND.indexOf("/opt/pnpm/bin")).toBeGreaterThanOrEqual(0);
+    expect(PERSON_PATH_PREPEND.indexOf("/opt/pnpm/bin")).toBeLessThan(
+      PERSON_PATH_PREPEND.indexOf("/opt/pnpm"),
+    );
+    expect(PERSON_SHARED_SUBDIRS).toContain("/opt/pnpm/bin");
+    expect(PERSON_SUDOERS.find((line) => line.includes("secure_path"))).toContain(
+      "/opt/pnpm/bin:/opt/pnpm:",
+    );
+    expect(PERSON_ENV_FILE).toContain(`PATH_PREPEND=${PERSON_PATH_PREPEND.join(":")}`);
+  });
+
+  it("opens the person environment with its version, for readers that know it", () => {
+    expect(PERSON_ENV_FILE[0]).toBe("# person-env 1");
+  });
+
+  it("makes every new home 0700, whatever the family's default", () => {
+    for (const family of ["fedora", "arch", "ubuntu"]) {
+      expect(containerfileFor(family)).toContain(
+        "if grep -q '^HOME_MODE' /etc/login.defs; then sed -i 's/^HOME_MODE.*/HOME_MODE\\t0700/' /etc/login.defs; else printf 'HOME_MODE\\t0700\\n' >> /etc/login.defs; fi",
+      );
+    }
+  });
 
   it("binds every sudo default to the mend group, so root's sudo is unchanged", () => {
     const defaults = PERSON_SUDOERS.filter((line) => line.startsWith("Defaults"));
@@ -382,10 +411,52 @@ describe("imagePersonLayoutSupport", () => {
 });
 
 describe("the image probe script", () => {
-  const runProbe = (args: readonly string[]) =>
+  const runProbe = (args: readonly string[], env: Record<string, string> = {}) =>
     execFileAsync("/bin/sh", ["-c", IMAGE_PROBE_SCRIPT.join("\n"), "image-probe", ...args], {
-      env: { PATH: process.env["PATH"] ?? "/usr/bin:/bin" },
+      env: { PATH: process.env["PATH"] ?? "/usr/bin:/bin", ...env },
     });
+
+  let fakes: string | undefined;
+  beforeAll(async () => {
+    fakes = await mkdtemp(join(tmpdir(), "image-probe-sealantd-"));
+  });
+  afterAll(async () => {
+    if (fakes !== undefined) await rm(fakes, { recursive: true, force: true });
+  });
+
+  /** The probe's `sealantd` field, asking a stand-in sealantd that runs `body`. */
+  const sealantdField = async (body: string): Promise<unknown> => {
+    const path = join(fakes ?? tmpdir(), `sealantd-${String(Math.random()).slice(2)}`);
+    await writeFile(path, `#!/bin/sh\n${body}\n`);
+    await chmod(path, 0o755);
+    const { stdout } = await runProbe([], { SEALANT_PROBE_SEALANTD: path });
+    return parseWorkspaceImageProbe(JSON.parse(stdout)).sealantd;
+  };
+
+  it("records a sealantd from before the capabilities command as null", async () => {
+    // clap's answer to an unknown subcommand, today's sealantd's.
+    expect(
+      await sealantdField("echo \"error: unrecognized subcommand 'capabilities'\" >&2; exit 2"),
+    ).toBe(null);
+  });
+
+  it("records a sealantd that times out, crashes or fails otherwise as unreadable", async () => {
+    expect(await sealantdField("exit 124")).toBe("unreadable");
+    expect(await sealantdField("kill -SEGV $$")).toBe("unreadable");
+    expect(await sealantdField("exit 1")).toBe("unreadable");
+    expect(await sealantdField("echo not json")).toBe("unreadable");
+  });
+
+  it("records sealantd's answer, whitespace and all", async () => {
+    expect(
+      await sealantdField(
+        `printf '  {"schemaVersion":1,"supports":["exec.user","dotfiles.user","restore.owner_map"]}\\n\\n'`,
+      ),
+    ).toEqual({
+      schemaVersion: 1,
+      supports: ["exec.user", "dotfiles.user", "restore.owner_map"],
+    });
+  });
 
   it("prints JSON the build record accepts, on this machine", async () => {
     const { stdout } = await runProbe([]);

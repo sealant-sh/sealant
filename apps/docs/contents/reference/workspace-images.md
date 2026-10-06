@@ -10,9 +10,11 @@ Linux user of their own, with their own home, logins and credentials. The manage
 `arch`, `ubuntu`) carry what that needs. Users themselves are not made in the image: whoever starts
 the workspace makes them when it starts.
 
-None of it changes a workspace run by one person as root. The image sets no new environment variable
-and no `PATH` entry, and root's tools keep their usual locations. What points a person's tools at
-shared locations is a file the client applies to the processes it starts as a person.
+None of it changes the environment of a workspace run by one person as root. The image sets no new
+environment variable and no `PATH` entry, and root's tools keep their usual locations. (Beyond the
+environment, root sees `safe.directory = *` in `/etc/gitconfig`, and Arch and Ubuntu images now
+carry `sudo`.) What points a person's tools at shared locations is a file `sealantd` applies to
+every process it runs as a user.
 
 ## What a managed image carries
 
@@ -33,19 +35,24 @@ shared locations is a file the client applies to the processes it starts as a pe
   beside their credentials (cargo, Gradle, Maven), and pnpm 10's store setting.
 - **`safe.directory = *`** in `/etc/gitconfig`, since files in a shared worktree belong to several
   users.
+- **`HOME_MODE 0700`** in `/etc/login.defs`, so `useradd -m` makes a home only its user can enter.
+  Ubuntu's default is 0750, and every person's primary group is `mend`.
 - **A `docker` group** (gid 2375, or the image's own) when the workspace has its own Docker.
 
 ## The person environment
 
-`/etc/sealant/person-env` is the contract between the image and the client that starts processes as
-a person:
+`/etc/sealant/person-env` is the environment of a process run as a person:
 
-- one `KEY=VALUE` per line; lines starting with `#` and blank lines are comments; values are
-  literal, with no quoting and no expansion;
-- `PATH_PREPEND` is not a variable: its value goes in front of the process's `PATH`;
-- the client applies it to every process it starts as a person (agents, shells, Services,
-  deliveries), after the user's `HOME`, `USER`, `LOGNAME` and `SHELL` and before its own variables,
-  and never to root's processes or to a workspace run by one person as root.
+- **`sealantd` applies it** to every process it runs as a user: executions, sessions, and a person's
+  dotfiles bootstrap. It never applies it to root's processes. It sits over the daemon's own
+  environment and the user's `HOME`, `USER`, `LOGNAME` and `SHELL`, and under the variables the
+  caller passes. A client such as Mend applies nothing: `sealantd` starts processes a client cannot
+  reach, and it knows the base `PATH`.
+- **The first line is the version**, `# person-env 1`. A reader that does not know the version
+  applies nothing and says so.
+- **Then one `KEY=VALUE` per line.** Other lines starting with `#`, and blank lines, are comments.
+  Values are literal, with no quoting and no expansion.
+- **`PATH_PREPEND` is not a variable:** its value goes in front of the process's `PATH`.
 
 `su -` and `runuser -l` start from a clean environment, so a login shell made that way has none of
 it.
@@ -55,21 +62,29 @@ it.
 No shared path holds a credential. Registries, tokens and logins are read from per-user files, which
 stay in the user's home (`/home/<name>`, mode 0700).
 
-| Tool                                                                            | Shared (in the person environment)                                                                                                                                                                                     | Per user                                                                |
-| ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| mise                                                                            | `MISE_DATA_DIR=/opt/mise`: installs and downloads. Its shims are not put on `PATH`                                                                                                                                     | `~/.config/mise`, trust in `~/.local/state/mise`, `~/.cache/mise`       |
-| uv                                                                              | `UV_PYTHON_INSTALL_DIR=/opt/uv/python`, `UV_TOOL_DIR=/opt/uv/tools`, `UV_TOOL_BIN_DIR` and `UV_PYTHON_BIN_DIR=/opt/uv/bin` (on `PATH`), `UV_CACHE_DIR=/var/cache/uv`                                                   | `~/.local/share/uv/credentials`, `~/.config/uv`                         |
-| Rust                                                                            | `RUSTUP_HOME=/opt/rust/rustup`; `/opt/rust/cargo/bin` on `PATH`, where `~/.cargo/bin` links, so rustup's proxies and `cargo install` are everyone's; `~/.cargo/registry` and `~/.cargo/git` link to `/var/cache/cargo` | `CARGO_HOME=~/.cargo`: `credentials.toml`, `config.toml`                |
-| pnpm, npm, corepack, bun                                                        | `PNPM_HOME=/opt/pnpm` (on `PATH`), store `/var/cache/pnpm` (`pnpm_config_store_dir`; pnpm 10 reads it from `~/.config/pnpm/rc`), `npm_config_prefix=/opt/npm-global` (bin on `PATH`), `COREPACK_HOME`, `BUN_INSTALL`   | `~/.npmrc`, `~/.npm` (npm's cache and its debug logs), `~/.bunfig.toml` |
-| Browsers for tests                                                              | `PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`, `PUPPETEER_CACHE_DIR=/opt/puppeteer`, `CYPRESS_CACHE_FOLDER=/opt/cypress`                                                                                               | none                                                                    |
-| Go, pip                                                                         | `GOMODCACHE=/var/cache/go/mod`, `GOCACHE=/var/cache/go/build`, `PIP_CACHE_DIR=/var/cache/pip`                                                                                                                          | `~/.netrc`, `pip.conf`, `~/go`                                          |
-| JVM                                                                             | `~/.gradle/caches`, `~/.gradle/wrapper` and `~/.m2/repository` link to `/var/cache/gradle` and `/var/cache/m2`                                                                                                         | `~/.gradle/gradle.properties`, `~/.m2/settings.xml`                     |
-| nvm, pyenv, gcloud, AWS, kubectl, Docker, gh, Hugging Face, firebase, git, curl | none                                                                                                                                                                                                                   | their usual paths under `~`                                             |
+| Tool                                                                            | Shared (in the person environment)                                                                                                                                                                                                                                     | Per user                                                                |
+| ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| mise                                                                            | `MISE_DATA_DIR=/opt/mise`: installs and downloads. Its shims are not put on `PATH`                                                                                                                                                                                     | `~/.config/mise`, trust in `~/.local/state/mise`, `~/.cache/mise`       |
+| uv                                                                              | `UV_PYTHON_INSTALL_DIR=/opt/uv/python`, `UV_TOOL_DIR=/opt/uv/tools`, `UV_TOOL_BIN_DIR` and `UV_PYTHON_BIN_DIR=/opt/uv/bin` (on `PATH`), `UV_CACHE_DIR=/var/cache/uv`                                                                                                   | `~/.local/share/uv/credentials`, `~/.config/uv`                         |
+| Rust                                                                            | `RUSTUP_HOME=/opt/rust/rustup`; `/opt/rust/cargo/bin` on `PATH`, where `~/.cargo/bin` links, so rustup's proxies and `cargo install` are everyone's; `~/.cargo/registry` and `~/.cargo/git` link to `/var/cache/cargo`                                                 | `CARGO_HOME=~/.cargo`: `credentials.toml`, `config.toml`                |
+| pnpm, npm, corepack, bun                                                        | `PNPM_HOME=/opt/pnpm` (it and its `bin`, where pnpm 11 puts global bins, on `PATH`), store `/var/cache/pnpm` (`pnpm_config_store_dir`; pnpm 10 reads it from `~/.config/pnpm/rc`), `npm_config_prefix=/opt/npm-global` (bin on `PATH`), `COREPACK_HOME`, `BUN_INSTALL` | `~/.npmrc`, `~/.npm` (npm's cache and its debug logs), `~/.bunfig.toml` |
+| Browsers for tests                                                              | `PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`, `PUPPETEER_CACHE_DIR=/opt/puppeteer`, `CYPRESS_CACHE_FOLDER=/opt/cypress`                                                                                                                                               | none                                                                    |
+| Go, pip                                                                         | `GOMODCACHE=/var/cache/go/mod`, `GOCACHE=/var/cache/go/build`, `PIP_CACHE_DIR=/var/cache/pip`                                                                                                                                                                          | `~/.netrc`, `pip.conf`, `~/go`                                          |
+| JVM                                                                             | `~/.gradle/caches`, `~/.gradle/wrapper` and `~/.m2/repository` link to `/var/cache/gradle` and `/var/cache/m2`                                                                                                                                                         | `~/.gradle/gradle.properties`, `~/.m2/settings.xml`                     |
+| nvm, pyenv, gcloud, AWS, kubectl, Docker, gh, Hugging Face, firebase, git, curl | none                                                                                                                                                                                                                                                                   | their usual paths under `~`                                             |
 
 - **npm's cache is per user** because npm's debug logs live under it and print a token passed on the
   command line (`--//registry…:_authToken=…`) verbatim.
 - **mise's cache is per user** because mise makes its lock files writable only by their creator, so
   a second person could never take a lock in a shared one. Installs are shared all the same.
+- **cargo's package-cache locks are per user**, in `~/.cargo`, while its registry is shared. Two
+  people's cargo therefore do not wait for each other: two first extractions of the same crate at
+  the same moment can fail one build, and building again fixes it.
+- **pnpm trees do not cross layouts.** A `node_modules` records the store it was installed from:
+  root's under `/root`, a person's in `/var/cache/pnpm`. A tree installed in one layout and used in
+  the other makes `pnpm add` fail with `ERR_PNPM_UNEXPECTED_STORE` on pnpm 10 and 11, and pnpm 10's
+  `pnpm install` ask to reinstall. `pnpm install --force`, run once by whoever now uses the tree,
+  rebuilds it against their store.
 - **nvm refuses to run while an npm prefix is set.** A person who uses nvm runs
   `unset npm_config_prefix` first, as nvm itself says.
 - **A tool not in the table** keeps its state in the user's home, so it is per person by default.
