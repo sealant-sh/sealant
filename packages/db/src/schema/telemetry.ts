@@ -13,6 +13,12 @@
  *     (which would silently narrow values past 2^53).
  *   - The projection tables (`telemetry_scrollback`, `telemetry_timeline`) and `telemetry_loss_spans`
  *     are rebuildable from the log; only they are mutable.
+ *   - A process's arguments are never stored: a `processStarted` payload keeps `argCount` and
+ *     `argLengths`, and `args` is always empty (`withholdProcessArgs` in @sealant/telemetry). A
+ *     trigger on `telemetry_events` and `telemetry_timeline` enforces it for any writer, and the
+ *     migration that added it rewrote the rows stored before (the log's one rewrite).
+ *   - A run's record is deleted with its run, or, when `SEALANT_RUN_RECORD_RETENTION_DAYS` is set,
+ *     once the run finished longer ago than that (`deleteExpiredRunRecords`).
  */
 import {
   bigint,

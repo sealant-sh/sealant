@@ -8,6 +8,7 @@ import {
 import { createSealantDB, type DB } from "@sealant/db";
 import { createJobQueueService } from "@sealant/jobs";
 import { createGitHubSourceIntegration } from "@sealant/source-integrations";
+import { deleteExpiredRunRecords } from "@sealant/telemetry";
 import type { WorkerEnv } from "@sealant/validators/env";
 import {
   consumeRunExecJobs,
@@ -69,6 +70,9 @@ import {
 // Build scratch older than this is a leftover, never a build in flight.
 const STALE_BUILD_CONTEXT_AGE_MS = 6 * 60 * 60 * 1000;
 const IMAGE_RETENTION_BOOT_DELAY_MS = 30_000;
+/** Run-record retention runs hourly, its first pass five minutes after boot. */
+const RECORD_RETENTION_BOOT_DELAY_MS = 5 * 60 * 1000;
+const RECORD_RETENTION_INTERVAL_MS = 60 * 60 * 1000;
 /**
  * How many retained-executor recovery sweeps may run at once (review 9 #8). Each executor's
  * attempt holds its own recovery claim, so overlapping sweeps never recover one executor twice.
@@ -646,6 +650,37 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     : undefined;
   imageRetentionTimer?.unref();
 
+  // Run-record retention, only when the operator set SEALANT_RUN_RECORD_RETENTION_DAYS: the
+  // records of runs that finished longer ago are deleted, a batch of runs per transaction.
+  const recordRetentionDays = env.SEALANT_RUN_RECORD_RETENTION_DAYS;
+  const runRecordRetentionTick = (days: number): void => {
+    const finishedBefore = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    void (async () => {
+      const deleted = await Effect.runPromise(deleteExpiredRunRecords(db, { finishedBefore }));
+      if (deleted.runs > 0) {
+        console.log("Run record retention", { ...deleted, retentionDays: days, finishedBefore });
+      }
+    })().catch((error: unknown) => {
+      console.error("Run record retention tick failed", { error });
+    });
+  };
+  const recordRetentionBootTimer =
+    recordRetentionDays === undefined
+      ? undefined
+      : setTimeout(
+          () => runRecordRetentionTick(recordRetentionDays),
+          RECORD_RETENTION_BOOT_DELAY_MS,
+        );
+  recordRetentionBootTimer?.unref();
+  const recordRetentionTimer =
+    recordRetentionDays === undefined
+      ? undefined
+      : setInterval(
+          () => runRecordRetentionTick(recordRetentionDays),
+          RECORD_RETENTION_INTERVAL_MS,
+        );
+  recordRetentionTimer?.unref();
+
   // Keep-fresh sweeper: claude SESSION credentials (kind "credentials-json") only stay fresh when
   // the official CLI runs against them; when no workspace uses an account for hours, the stored
   // access token expires. Every tick, stale accounts are refreshed with a minimal one-turn
@@ -687,6 +722,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       exitWatch.close();
       if (imageRetentionBootTimer !== undefined) clearTimeout(imageRetentionBootTimer);
       if (imageRetentionTimer !== undefined) clearInterval(imageRetentionTimer);
+      if (recordRetentionBootTimer !== undefined) clearTimeout(recordRetentionBootTimer);
+      if (recordRetentionTimer !== undefined) clearInterval(recordRetentionTimer);
       if (claudeRefreshTimer !== undefined) {
         clearInterval(claudeRefreshTimer);
       }
