@@ -507,15 +507,16 @@ export const imagePersonLayoutSupport = (
 };
 
 /**
- * The capability names a `sealantd capabilities --json` object lists under `capabilities`: none for
- * a sealantd without the command, unknown for an answer of another shape.
+ * The capability names a `sealantd capabilities --json` object lists under `supports` (sealantd#147:
+ * `{ schemaVersion, daemonVersion, os, arch, supports }`, the list `runtime.getCapabilities`
+ * answers): none for a sealantd without the command, unknown for an answer of another shape.
  */
 const sealantdCapabilities = (
   report: WorkspaceImageProbe["sealantd"],
 ): ReadonlySet<string> | "unknown" => {
   if (report === null) return new Set();
   if (typeof report === "string") return "unknown";
-  const listed = report["capabilities"];
+  const listed = report["supports"];
   if (!Array.isArray(listed) || !listed.every((entry) => typeof entry === "string")) {
     return "unknown";
   }

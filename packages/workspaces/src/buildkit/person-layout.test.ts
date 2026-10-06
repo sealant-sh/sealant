@@ -69,7 +69,14 @@ const readyProbe: WorkspaceImageProbe = {
   reservedIdsInUse: [],
   personEnv: true,
   sharedDirs: [...PERSON_SHARED_DIRS],
-  sealantd: { capabilities: ["exec.user", "dotfiles.user", "restore.owner_map"] },
+  // What sealantd#147's `sealantd capabilities --json` prints.
+  sealantd: {
+    schemaVersion: 1,
+    daemonVersion: "0.21.0",
+    os: "linux",
+    arch: "x86_64",
+    supports: ["dotfiles.user", "exec.user", "restore.owner_map"],
+  },
 };
 
 describe("the person layout in the managed images", () => {
@@ -278,6 +285,16 @@ describe("imagePersonLayoutSupport", () => {
     });
   });
 
+  it("names the capabilities a sealantd that answers does not list", () => {
+    expect(
+      imagePersonLayoutSupport({ ...readyProbe, sealantd: { supports: ["restore.owner_map"] } }),
+    ).toEqual({
+      status: "unsupported",
+      missing: ["sealantd:exec.user", "sealantd:dotfiles.user"],
+      unknown: [],
+    });
+  });
+
   it("names every capability a sealantd without the command cannot report", () => {
     expect(imagePersonLayoutSupport({ ...readyProbe, sealantd: null })).toEqual({
       status: "unsupported",
@@ -289,9 +306,9 @@ describe("imagePersonLayoutSupport", () => {
   it("reads an answer it cannot read as unknown, never as missing capabilities", () => {
     for (const sealantd of [
       "unreadable" as const,
-      { capabilities: { "exec.user": true } },
-      { capabilities: ["exec.user", 7] },
-      { features: ["exec.user"] },
+      { supports: { "exec.user": true } },
+      { supports: ["exec.user", 7] },
+      { capabilities: ["exec.user", "dotfiles.user", "restore.owner_map"] },
     ]) {
       expect(imagePersonLayoutSupport({ ...readyProbe, sealantd })).toEqual({
         status: "unknown",
