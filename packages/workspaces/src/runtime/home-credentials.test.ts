@@ -63,6 +63,7 @@ const world = () => {
       ...input,
       token: input.token ?? nextToken(),
       stateDir: state,
+      parentOwnerUid: input.parentOwnerUid ?? uid,
       writes: input.writes.map(({ provider }) => provider),
     });
   const run = (input: RunInput) =>
@@ -226,6 +227,80 @@ describe("buildHomeCredentialScript", () => {
     ).toBe(HOME_SCRIPT_EXIT.fenced);
     expect(read(join(home, ".claude/.credentials.json"))).toBe("bob-v1");
     expect(w.marker(home)).toBe(GEN_B);
+  });
+
+  it("refuses every token while the mark is not a number", () => {
+    const w = world();
+    const home = w.home("hal");
+    mkdirSync(w.state, { recursive: true });
+    writeFileSync(join(w.state, `${homeStateKey(home)}.hw`), "");
+    expect(
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_A },
+        writes: [{ provider: "claude", content: "x" }],
+        removes: [],
+        token: "999",
+      }).status,
+    ).toBe(HOME_SCRIPT_EXIT.fenced);
+    expect(existsSync(join(home, ".claude"))).toBe(false);
+  });
+
+  it("refuses a home in a parent its owner could rename it in", () => {
+    const w = world();
+    const parent = join(w.root, "shared");
+    mkdirSync(parent, { mode: 0o775 });
+    spawnSync("chmod", ["0775", parent]);
+    const home = join(parent, "ivy");
+    mkdirSync(home, { mode: 0o700 });
+    const take = (parentOwnerUid?: number) =>
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_A },
+        writes: [{ provider: "claude", content: "x" }],
+        removes: [],
+        ...(parentOwnerUid === undefined ? {} : { parentOwnerUid }),
+      }).status;
+    // Group-writable without the sticky bit.
+    expect(take()).toBe(HOME_SCRIPT_EXIT.untrusted);
+    // Belonging to someone else.
+    spawnSync("chmod", ["0755", parent]);
+    expect(take(uid + 1)).toBe(HOME_SCRIPT_EXIT.untrusted);
+    expect(existsSync(join(home, ".claude"))).toBe(false);
+    expect(take()).toBe(0);
+  });
+
+  it("counts a take its own hold already made as done, even after later writes", () => {
+    const w = world();
+    const home = w.home("jo");
+    expect(
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_A },
+        writes: [{ provider: "claude", content: "launch" }],
+        removes: [],
+        token: "0",
+      }).status,
+    ).toBe(0);
+    expect(
+      w.run({
+        home,
+        fence: { kind: "held", generation: GEN_A },
+        writes: [{ provider: "claude", content: "refreshed" }],
+        removes: [],
+      }).status,
+    ).toBe(0);
+    // The launch delivered again: nothing is rewritten, nothing fails.
+    expect(
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_A },
+        writes: [{ provider: "claude", content: "launch" }],
+        removes: [],
+        token: "0",
+      }).status,
+    ).toBe(0);
+    expect(read(join(home, ".claude/.credentials.json"))).toBe("refreshed");
   });
 
   it("fences takes, writes and releases by the marker", () => {
@@ -450,18 +525,49 @@ describe.skipIf(!dockerAvailable)(
         writeFileSync(join(dir, "take.sh"), script({ kind: "take", generation: GEN_B }, "1"));
         writeFileSync(join(dir, "write.sh"), script({ kind: "held", generation: GEN_B }, "2"));
         writeFileSync(join(dir, "payload"), homeScriptStdin(["bob-claude", "bob-codex"]));
+        writeFileSync(
+          join(dir, "srv.sh"),
+          buildHomeCredentialScript({
+            home: "/srv/x",
+            fence: { kind: "take", generation: GEN_A },
+            token: "1",
+            writes: ["claude", "codex"],
+            removes: [],
+            stateDir: "/run/sealant-homes",
+          }),
+        );
+        writeFileSync(
+          join(dir, "cy.sh"),
+          buildHomeCredentialScript({
+            home: "/home/cy",
+            fence: { kind: "take", generation: GEN_A },
+            token: "1",
+            writes: ["claude", "codex"],
+            removes: [],
+            stateDir: "/run/sealant-homes",
+          }),
+        );
         // Root's files the person must never reach through root's writes, chmods or chowns.
         const driver = [
           "set -u",
           "useradd -m -u 1234 bob",
           "printf root-data > /victim; chmod 644 /victim; mkdir /rootdir",
+          // Tokens in the exec's environment, where the person could read them through /proc.
+          "export GITHUB_TOKEN=owner-github CLAUDE_CODE_OAUTH_TOKEN=owner-oauth SEALANT_SECRET=owner-secret",
+          "touch /tmp/seen; chown bob /tmp/seen",
           "sh /t/take.sh < /t/payload",
           // The person swaps a link to /victim in at the file's name, and a link to /rootdir in at a
           // login directory, as fast as they can.
-          `setpriv --reuid=1234 --regid=1234 --clear-groups sh -c 'cd ${home}/.claude; while :; do ln -sf /victim .l; mv -fT .l .credentials.json 2>/dev/null; rm -f .credentials.json; done' >/dev/null 2>&1 & s1=$!`,
-          `setpriv --reuid=1234 --regid=1234 --clear-groups sh -c 'cd ${home}; while :; do ln -sfn /rootdir .x; mv -fT .x .codex 2>/dev/null; rm -f .codex; mkdir .codex 2>/dev/null; done' >/dev/null 2>&1 & s2=$!`,
+          `env -i PATH=/usr/bin:/bin setpriv --reuid=1234 --regid=1234 --clear-groups sh -c 'cd ${home}/.claude; while :; do ln -sf /victim .l; mv -fT .l .credentials.json 2>/dev/null; rm -f .credentials.json; done' >/dev/null 2>&1 & s1=$!`,
+          `env -i PATH=/usr/bin:/bin setpriv --reuid=1234 --regid=1234 --clear-groups sh -c 'cd ${home}; while :; do ln -sfn /rootdir .x; mv -fT .x .codex 2>/dev/null; rm -f .codex; mkdir .codex 2>/dev/null; done' >/dev/null 2>&1 & s2=$!`,
+          `env -i PATH=/usr/bin:/bin setpriv --reuid=1234 --regid=1234 --clear-groups sh -c 'while :; do for e in /proc/[0-9]*/environ; do tr "\\0" "\\n" < "$e" 2>/dev/null | grep "^[A-Z_]*=owner-" >> /tmp/seen; done; done' >/dev/null 2>&1 & s3=$!`,
           "i=0; while [ $i -lt 300 ]; do sh /t/write.sh < /t/payload >/dev/null 2>&1 || true; i=$((i+1)); done",
-          'kill "$s1" "$s2"; wait "$s1" "$s2" 2>/dev/null || true',
+          'kill "$s1" "$s2" "$s3"; wait "$s1" "$s2" "$s3" 2>/dev/null || true',
+          'echo "seen=$(sort -u /tmp/seen | tr "\n" ",")"',
+          // A home root owns, other than /root, is not written into.
+          "mkdir -p /srv/x; sh /t/srv.sh < /t/payload; echo \"srv=$? $(ls -A /srv/x | tr '\\n' ',')\"",
+          // An executor that cannot drop to the owner: unusable, and no marker left behind.
+          'useradd -m -u 1235 cy; setpriv --bounding-set=-setuid,-setgid sh /t/cy.sh < /t/payload; echo "cy=$? marker=$(ls /run/sealant-homes | grep -c generation || true)"',
           'echo "victim=$(cat /victim) owner=$(stat -c %U:%a /victim)"',
           'echo "rootdir=$(ls -A /rootdir | tr "\\n" ",")"',
         ].join("\n");
@@ -474,6 +580,11 @@ describe.skipIf(!dockerAvailable)(
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout).toContain("victim=root-data owner=root:644");
         expect(result.stdout).toContain("rootdir=\n");
+        // The owner's half never carries the exec's tokens.
+        expect(result.stdout).toContain("seen=\n");
+        expect(result.stdout).toContain(`srv=${HOME_SCRIPT_EXIT.untrusted} \n`);
+        // Bob's marker only (from his take): cy's take left none.
+        expect(result.stdout).toContain(`cy=${HOME_SCRIPT_EXIT.cannotDrop} marker=1`);
       },
     );
   },

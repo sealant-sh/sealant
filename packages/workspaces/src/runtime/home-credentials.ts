@@ -119,6 +119,8 @@ export interface HomeCredentialScriptInput {
   readonly lockWaitSeconds?: number;
   /** Where markers and locks live (default `HOME_STATE_DIR`; absolute, safe characters). */
   readonly stateDir?: string;
+  /** For tests: the uid a home's parent must belong to (default 0, root). */
+  readonly parentOwnerUid?: number;
 }
 
 /** Exit codes the script answers a refusal with. */
@@ -135,9 +137,19 @@ export const HOME_SCRIPT_EXIT = {
   noLock: 77,
   /** Another write into the home held its lock for too long. */
   busy: 78,
+  /**
+   * The home is not one Core writes into: root's other than `/root`, or in a parent the person
+   * could rename it in (not root's, or group- or world-writable without the sticky bit).
+   */
+  untrusted: 79,
+  /** The executor cannot run a process as the home's owner (`setpriv` refused). */
+  cannotDrop: 80,
 } as const;
 
 const quote = (value: string): string => `'${value}'`;
+
+/** The owner's half's whole PATH. */
+const SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 /** The base64 payload lines a script reads, one per write, in order. */
 export const homeScriptStdin = (contents: readonly string[]): string =>
@@ -198,7 +210,6 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
   input.writes.forEach((_, index) => {
     lines.push(
       `IFS= read -r p${index} || [ -n "$p${index}" ] || exit ${HOME_SCRIPT_EXIT.shortPayload}`,
-      `export p${index}`,
     );
   });
 
@@ -219,8 +230,16 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
     `flock -w ${wait} 9 || exit ${HOME_SCRIPT_EXIT.busy}`,
   );
 
-  // 4. The home itself: root makes the directory, nothing in it.
-  lines.push("seed=");
+  // 4. The home itself: root makes the directory, nothing in it, and only in a parent the person
+  //    cannot rename it in (so the home root checks is the home it writes for).
+  const parentOwner = input.parentOwnerUid ?? 0;
+  if (!Number.isInteger(parentOwner) || parentOwner < 0) {
+    throw new Error("A parent owner is a non-negative integer uid.");
+  }
+  lines.push(
+    "seed=",
+    `trusted_parent() { par=$(dirname "$home"); [ -d "$par" ] && [ ! -L "$par" ] || exit ${HOME_SCRIPT_EXIT.untrusted}; po=$(stat -c %u "$par"); pm=$(stat -c %a "$par"); [ "$po" = ${parentOwner} ] || exit ${HOME_SCRIPT_EXIT.untrusted}; if [ $(( 0$pm & 022 )) -ne 0 ] && [ $(( 0$pm & 01000 )) -eq 0 ]; then exit ${HOME_SCRIPT_EXIT.untrusted}; fi; }`,
+  );
   if (input.createWithOwner === undefined) {
     lines.push(`if [ ! -d "$home" ]; then exit ${HOME_SCRIPT_EXIT.missing}; fi`);
   } else {
@@ -229,18 +248,25 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
       throw new Error("A home's owner is a non-negative integer uid and gid.");
     }
     lines.push(
-      `if [ ! -e "$home" ] && [ ! -L "$home" ]; then (umask 022; mkdir -p "$(dirname "$home")"); mkdir -m 700 "$home"; chown ${uid}:${gid} "$home"; seed=1; fi`,
+      `if [ ! -e "$home" ] && [ ! -L "$home" ]; then (umask 022; mkdir -p "$(dirname "$home")"); trusted_parent; mkdir -m 700 "$home"; chown -h ${uid}:${gid} "$home"; seed=1; fi`,
       `if [ -L "$home" ] || [ ! -d "$home" ]; then exit ${HOME_SCRIPT_EXIT.missing}; fi`,
     );
   }
   lines.push(
+    "trusted_parent",
     `uid=$(stat -c %u "$home"); gid=$(stat -c %g "$home")`,
+    // Root's own home is `/root` alone: anything else root owns is not a person's home.
+    `if [ "$uid" = 0 ] && [ "$home" != /root ]; then exit ${HOME_SCRIPT_EXIT.untrusted}; fi`,
     `held=; if [ -f "$m" ]; then held=$(cat "$m"); fi`,
-    `mark=0; if [ -f "$hw" ]; then mark=$(cat "$hw"); fi`,
+    // A mark that is not a number (a write cut short) refuses every token, never lets one through.
+    `mark=0; if [ -e "$hw" ]; then mark=$(cat "$hw"); case "$mark" in ''|*[!0-9]*) exit ${HOME_SCRIPT_EXIT.fenced} ;; esac; fi`,
   );
 
-  // 5. The fence: a token below the mark, or another hold's marker, writes nothing.
-  lines.push(`if [ "$token" -lt "$mark" ]; then exit ${HOME_SCRIPT_EXIT.fenced}; fi`);
+  // 5. The fence: a token below the mark, or another hold's marker, writes nothing; a take its own
+  //    hold already made (a launch delivered again after a later write) is done.
+  lines.push(
+    `if [ "$token" -lt "$mark" ]; then ${input.fence.kind === "take" ? `if [ "$held" = ${quote(input.fence.generation)} ]; then exit 0; fi; ` : ""}exit ${HOME_SCRIPT_EXIT.fenced}; fi`,
+  );
   switch (input.fence.kind) {
     case "take":
       lines.push(
@@ -260,9 +286,16 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
       }
       break;
   }
-  lines.push(`printf '%s' "$token" > "$hw"`);
+  // The owner's half must be able to run before the hold changes: a home whose owner cannot be
+  // dropped to is unusable, and leaves no marker behind.
+  lines.push(
+    `if [ "$(id -u)" = 0 ]; then g=--clear-groups; else g=--keep-groups; fi`,
+    `if [ "$uid" != 0 ]; then env -i PATH=${SAFE_PATH} setpriv --reuid="$uid" --regid="$gid" "$g" true || exit ${HOME_SCRIPT_EXIT.cannotDrop}; fi`,
+    // Written whole or not at all (a temporary file, then a rename).
+    `printf '%s' "$token" > "$hw.tmp"; mv -f "$hw.tmp" "$hw"`,
+  );
   if (input.fence.kind === "take") {
-    lines.push(`printf '%s' ${quote(input.fence.generation)} > "$m"`);
+    lines.push(`printf '%s' ${quote(input.fence.generation)} > "$m.tmp"; mv -f "$m.tmp" "$m"`);
   }
 
   // 6–7. Inside the home, as its owner.
@@ -306,12 +339,20 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
     inner.push(`rm -f "$home/${HOME_CREDENTIAL_FILES[provider]}"`);
   }
 
+  // The owner's half starts from a clean environment: only a fixed PATH, its flags and its own
+  // payloads, never the exec's (a token, the secret env), which the person could read through /proc.
+  const environment = [
+    `PATH=${SAFE_PATH}`,
+    `seed="$seed"`,
+    `uid="$uid"`,
+    ...input.writes.map((_, index) => `p${index}="$p${index}"`),
+  ].join(" ");
   lines.push(
-    "export seed uid",
     `inner=${quote(inner.join("\n").replaceAll("'", "'\\''"))}`,
     // Root's own home is root's to write; anyone else's is written as them. As root the person
     // gets no supplementary group; a caller that is not root keeps its own (tests).
-    `if [ "$uid" = 0 ]; then sh -c "$inner"; else if [ "$(id -u)" = 0 ]; then g=--clear-groups; else g=--keep-groups; fi; setpriv --reuid="$uid" --regid="$gid" "$g" sh -c "$inner"; fi`,
+    // The environment is cleared while still root: no process of the person's ever holds it.
+    `if [ "$uid" = 0 ]; then env -i ${environment} sh -c "$inner"; else env -i ${environment} setpriv --reuid="$uid" --regid="$gid" "$g" sh -c "$inner"; fi`,
   );
   if (input.fence.kind === "release") {
     lines.push(`rm -f "$m"`);
@@ -389,6 +430,10 @@ export const homeScriptRefusal = (
       return `${home} carries another hold's marker: it was released or taken since this write was issued, or an earlier write landed there. Release it first.`;
     case HOME_SCRIPT_EXIT.busy:
       return `Another write into ${home} held it for too long; try again.`;
+    case HOME_SCRIPT_EXIT.untrusted:
+      return `${home} is not a home Core writes into: it belongs to root and is not /root, or its parent is one its owner could rename it in.`;
+    case HOME_SCRIPT_EXIT.cannotDrop:
+      return `The workspace cannot run a process as ${home}'s owner (setpriv was refused).`;
     case HOME_SCRIPT_EXIT.noLock:
       return `The workspace's image has no flock or setpriv (util-linux), which every write into a home needs.`;
     default:

@@ -413,10 +413,24 @@ GET    ?ownerUserId                                                        → {
 
 - **Inside the home, as its owner.** The person owns their home and can swap any entry in it for a
   link at any moment, so nothing inside a home that is not root's is touched with root's rights:
-  root makes only the home directory itself (in a parent the person cannot write) and keeps the
-  lock, mark and marker; every directory, file and removal inside the home runs as the home's owner
+  root makes only the home directory itself (`chown -h`) and keeps the lock, mark and marker; every
+  directory, file and removal inside the home runs as the home's owner
   (`setpriv --reuid --regid --clear-groups`). Whatever a planted link points at, the kernel refuses
   what the person could not do themselves, so root never writes, `chmod`s or `chown`s through it.
+  That half starts from a clean environment, cleared while still root (`env -i` before `setpriv`): a
+  fixed `PATH`, its flags and the person's own payloads, never the exec's environment (a token, the
+  workspace's secret env), which the person could otherwise read through `/proc`. Before the hold
+  changes, the script checks that it can drop to the owner at all; an executor that cannot answers
+  `home-unusable` and leaves no marker.
+- **Homes Core writes into.** A home's parent must be root's and not group- or world-writable
+  (unless sticky), so the person cannot rename the home between the checks and the writes; a home
+  root owns is refused unless it is `/root` (root's own, with the shared layout's links). Both
+  answer `home-unusable`. A mark that is not a number (a write cut short) refuses every token, and
+  the mark and the marker are written through a temporary file and a rename.
+- **Images.** Every write into a home needs util-linux's `flock` and `setpriv` and a writable
+  `/run`; the image probe (`metadata.imageProbe`) records both tools, and a managed image without
+  them fails its build. Nix images have neither: they are one person's (the shared layout), and a
+  home write there fails safe (`home-unusable`), writing nothing.
 - **Unconfirmed writes.** A write that fails or times out can still land. A put into a home that
   held nothing records nothing and releases its own take once (files and marker); a late take
   landing after that leaves its marker, so the next take is refused until the home is released, and

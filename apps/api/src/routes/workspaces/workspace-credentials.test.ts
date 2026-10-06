@@ -418,7 +418,7 @@ describe("putWorkspaceCredentials", () => {
     const generation = world.homes.rows.get(`run_1 ${HOME}`)?.generation ?? "";
     expect(generation).toMatch(/^[0-9a-f]{32}$/);
     // The take clears any login file it does not write (an earlier unconfirmed write's leftovers).
-    expect(world.ran[0]?.script).toContain(`printf '%s' '${generation}' > "$m"`);
+    expect(world.ran[0]?.script).toContain(`printf '%s' '${generation}' > "$m.tmp"`);
     expect(world.ran[0]?.script).toContain(`rm -f "$home/.codex/auth.json"`);
     expect(world.ran[0]?.script).toContain(`rm -f "$home/.config/gh/hosts.yml"`);
 
@@ -446,7 +446,7 @@ describe("putWorkspaceCredentials", () => {
       await world.put({ onBehalfOfUserId: ALICE, claude: "default", uid: 40001, gid: 40000 }),
     );
     expect(world.ran[0]?.script).toContain(`mkdir -m 700 "$home"`);
-    expect(world.ran[0]?.script).toContain(`chown 40001:40000 "$home"`);
+    expect(world.ran[0]?.script).toContain(`chown -h 40001:40000 "$home"`);
     expect(
       failed(await world.put({ onBehalfOfUserId: ALICE, claude: "default", uid: 40001 })),
     ).toMatchObject({ _tag: "WorkspaceBadRequestError" });
