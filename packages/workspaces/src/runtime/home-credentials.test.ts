@@ -253,6 +253,25 @@ describe("buildHomeCredentialScript", () => {
     expect(mode(join(home, ".."))).toBe(0o755);
   });
 
+  it("seeds a home it makes from the skeleton, and keeps the home 0700", () => {
+    const root = scratch();
+    const skel = join(root, "skel");
+    mkdirSync(skel, { mode: 0o755 });
+    writeFileSync(join(skel, ".profile"), "# skel");
+    const home = join(root, "frank");
+    const made = run({
+      home,
+      skel,
+      fence: { kind: "take", generation: GEN_A },
+      createWithOwner: { uid, gid },
+      writes: [{ provider: "claude", content: "{}" }],
+      removes: [],
+    });
+    expect(made.status, made.stderr).toBe(0);
+    expect(readFileSync(join(home, ".profile"), "utf8")).toBe("# skel");
+    expect(mode(home)).toBe(0o700);
+  });
+
   it("never puts a payload in the script itself", () => {
     const script = buildHomeCredentialScript({
       home: "/home/m1",

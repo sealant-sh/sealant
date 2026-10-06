@@ -84,6 +84,8 @@ export interface HomeCredentialScriptInput {
    * made its user.
    */
   readonly createWithOwner?: HomeOwner;
+  /** The directory a created home is seeded from (default `/etc/skel`; absolute, safe characters). */
+  readonly skel?: string;
   /** Files to write, each a provider's login (already the copy Core injects), in stdin order. */
   readonly writes: readonly HomeCredentialProvider[];
   /** Providers whose login file is removed (a release removes them all). */
@@ -146,8 +148,13 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
       throw new Error("A home's owner is a non-negative integer uid and gid.");
     }
     // Seeded from /etc/skel as useradd -m would (it copies nothing into a home that exists).
+    const skel = input.skel ?? "/etc/skel";
+    if (!HOME_PATTERN.test(skel)) {
+      throw new Error(`A skeleton directory is an absolute path of safe characters: '${skel}'.`);
+    }
+    // `cp -a skel/. home/` also gives the home the skeleton's own mode: 0700 is set after it.
     lines.push(
-      `if [ ! -e "$home" ]; then (umask 022; mkdir -p "$(dirname "$home")"); mkdir -m 700 "$home"; if [ -d /etc/skel ]; then cp -a /etc/skel/. "$home"/; fi; chown -R ${uid}:${gid} "$home"; fi`,
+      `if [ ! -e "$home" ]; then (umask 022; mkdir -p "$(dirname "$home")"); mkdir -m 700 "$home"; if [ -d ${quote(skel)} ]; then cp -a ${quote(skel)}/. "$home"/; fi; chmod 700 "$home"; chown -R ${uid}:${gid} "$home"; fi`,
       `if [ ! -d "$home" ]; then exit ${HOME_SCRIPT_EXIT.missing}; fi`,
     );
   }
