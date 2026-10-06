@@ -590,34 +590,37 @@ describe.skipIf(!dockerAvailable)(
   },
 );
 describe("buildCredentialFileWriteScript for a launch's credentialsHome", () => {
-  it("makes the home for its owner and writes the bare stdin payload there", async () => {
+  it("makes the home for its owner and writes every login in one exec, taking the home", async () => {
     const { buildCredentialFileWriteScript } = await import("./credential-files.js");
     const home = join(scratch(), "erin");
-    const content = '{"claudeAiOauth":{"accessToken":"at-erin"}}';
-    const contentBase64 = Buffer.from(content).toString("base64");
+    const claude = '{"claudeAiOauth":{"accessToken":"at-erin"}}';
+    const hostsYml = 'github.com:\n    oauth_token: "gho_erin"\n';
+    const stdin = homeScriptStdin([claude, hostsYml]);
     const script = buildCredentialFileWriteScript({
-      path: `${home}/.claude/.credentials.json`,
-      contentBase64,
+      path: home,
+      contentBase64: stdin,
       mode: "600",
-      home: { path: home, uid, gid },
+      home: { uid, gid, generation: GEN_A, providers: ["claude", "github"] },
     });
-    // A launch pipes the base64 payload with no newline after it.
-    const result = spawnSync("sh", ["-c", script], { input: contentBase64, encoding: "utf8" });
+    // The adapters pipe `contentBase64` as it is.
+    const result = spawnSync("sh", ["-c", script], { input: stdin, encoding: "utf8" });
     expect(result.status, result.stderr).toBe(0);
     expect(mode(home)).toBe(0o700);
-    expect(readFileSync(join(home, ".claude/.credentials.json"), "utf8")).toBe(content);
+    expect(readFileSync(join(home, ".claude/.credentials.json"), "utf8")).toBe(claude);
+    expect(readFileSync(join(home, ".config/gh/hosts.yml"), "utf8")).toBe(hostsYml);
     expect(mode(join(home, ".claude/.credentials.json"))).toBe(0o600);
+    expect(marker(home)).toBe(GEN_A);
   });
 
-  it("refuses a path that is not one of the home's login files", async () => {
+  it("refuses a home that is not one", async () => {
     const { buildCredentialFileWriteScript } = await import("./credential-files.js");
     expect(() =>
       buildCredentialFileWriteScript({
-        path: "/home/m1/.bashrc",
+        path: "/workspace/harness-home",
         contentBase64: "eA==",
         mode: "600",
-        home: { path: "/home/m1", uid: 40001, gid: 40000 },
+        home: { uid: 40001, gid: 40000, generation: GEN_A, providers: ["claude"] },
       }),
-    ).toThrow(/not one of the login files/);
+    ).toThrow(/never under \/workspace/);
   });
 });

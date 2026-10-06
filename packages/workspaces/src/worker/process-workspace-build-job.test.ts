@@ -41,7 +41,7 @@ import {
   type WorkspaceImageBuilder,
 } from "../images/index.js";
 import type { RegistryClient } from "../registry/index.js";
-import { LaunchRetainedError, type RuntimeAdapter } from "../runtime/index.js";
+import { homeScriptStdin, LaunchRetainedError, type RuntimeAdapter } from "../runtime/index.js";
 import { WorkspaceBuildJobProcessingError } from "./errors.js";
 import {
   dotfilesStagingRoot,
@@ -1011,7 +1011,16 @@ describe("processWorkspaceBuildJobEffect", () => {
         ...workspaceAttemptRepoStub(),
         getAttemptById: vi.fn((_id: string) => Effect.succeed({ ownerUserId: "usr_alice" })),
       };
-      const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+      // The home is recorded before the instance reads `ready`, when nobody can act on it yet.
+      const homes = makeInMemoryCredentialHomes(() => []);
+      let recordedAtReady: number | undefined;
+      const runtimeInstances = {
+        ...workspaceRuntimeInstanceRepoStub(),
+        upsertRuntimeInstance: vi.fn((input: { readonly status?: string }) => {
+          if (input.status === "ready") recordedAtReady = homes.rows.size;
+          return Effect.succeed({});
+        }),
+      };
       const accountRows = [
         connectedAccountStub({
           id: "cacc_claude",
@@ -1041,7 +1050,6 @@ describe("processWorkspaceBuildJobEffect", () => {
           status: "ready" as const,
         })),
       });
-      const homes = makeInMemoryCredentialHomes(() => []);
 
       return Effect.gen(function* () {
         yield* processWorkspaceBuildJobEffect(
@@ -1053,12 +1061,21 @@ describe("processWorkspaceBuildJobEffect", () => {
           }),
         );
 
-        // Every login is a file in the home, owned by its owner; nothing rides the environment.
+        // Every login is a file in the home, owned by its owner, all in one write (one exec);
+        // nothing rides the environment.
+        const generation = homes.rows.get("run_credentials_home /home/m4lice000")?.generation;
         expect(runtimeAdapter.launch).toHaveBeenCalledWith(
           expect.objectContaining({
             credentialFiles: [
-              expect.objectContaining({ path: "/home/m4lice000/.claude/.credentials.json", home }),
-              expect.objectContaining({ path: "/home/m4lice000/.config/gh/hosts.yml", home }),
+              {
+                path: "/home/m4lice000",
+                contentBase64: homeScriptStdin([
+                  claudeSetupTokenCredentials("sk-ant-oat01-alice"),
+                  'github.com:\n    oauth_token: "gho_alice"\n    git_protocol: https\n',
+                ]),
+                mode: "600",
+                home: { uid: 40001, gid: 40000, generation, providers: ["claude", "github"] },
+              },
             ],
           }),
           expect.anything(),
@@ -1067,6 +1084,7 @@ describe("processWorkspaceBuildJobEffect", () => {
           expect.not.objectContaining({ credentialEnv: expect.anything() }),
           expect.anything(),
         );
+        expect(recordedAtReady).toBe(1);
         // The home is the owner's, as a put would hold it: refreshes reach it through the record.
         expect(homes.rows.get("run_credentials_home /home/m4lice000")).toMatchObject({
           onBehalfOfUserId: "usr_alice",

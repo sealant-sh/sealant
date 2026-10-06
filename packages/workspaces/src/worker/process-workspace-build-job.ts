@@ -56,7 +56,11 @@ import {
   sealantdHasRecoveryBoot,
   sealantdImageOfContainerfile,
   selectRuntimeAdapter,
+  homeCredentialProviderOf,
+  homeScriptStdin,
+  newHomeGeneration,
   type CredentialFileInjection,
+  type HomeCredentialProvider,
   type PublishedImage,
   type RegisteredRuntime,
   type RuntimeAdapter,
@@ -319,25 +323,59 @@ const unsealSecretEnv = (
 /** Split the resolver's injection plan into the adapter-launch env record + file list. */
 const splitCredentialInjections = (
   injections: readonly CredentialInjection[],
-  credentialsHome: WorkspaceCredentialsHome | undefined,
+  credentialsHome:
+    | { readonly home: WorkspaceCredentialsHome; readonly generation: string }
+    | undefined,
 ): {
   readonly credentialEnv: Record<string, string>;
   readonly credentialFiles: readonly CredentialFileInjection[];
 } => {
   const credentialEnv: Record<string, string> = {};
   const credentialFiles: CredentialFileInjection[] = [];
+  const homeFiles: Array<{ readonly provider: HomeCredentialProvider; readonly content: string }> =
+    [];
 
   for (const injection of injections) {
     if (injection.kind === "env") {
       credentialEnv[injection.key] = injection.value;
-    } else {
+      continue;
+    }
+    if (credentialsHome === undefined) {
       credentialFiles.push({
         path: injection.path,
         contentBase64: injection.contentBase64,
         mode: injection.mode,
-        ...(credentialsHome === undefined ? {} : { home: credentialsHome }),
       });
+      continue;
     }
+    const prefix = `${credentialsHome.home.path}/`;
+    const provider = injection.path.startsWith(prefix)
+      ? homeCredentialProviderOf(injection.path.slice(prefix.length))
+      : undefined;
+    if (provider === undefined) {
+      throw new Error(
+        `Credential file '${injection.path}' is not one of the login files of home '${credentialsHome.home.path}'.`,
+      );
+    }
+    homeFiles.push({
+      provider,
+      content: Buffer.from(injection.contentBase64, "base64").toString("utf8"),
+    });
+  }
+
+  // A credentialsHome's logins are one write, one exec, whatever their number (§6d).
+  if (credentialsHome !== undefined && homeFiles.length > 0) {
+    credentialFiles.push({
+      path: credentialsHome.home.path,
+      contentBase64: homeScriptStdin(homeFiles.map(({ content }) => content)),
+      mode: "600",
+      home: {
+        uid: credentialsHome.home.uid,
+        gid: credentialsHome.home.gid,
+        generation: credentialsHome.generation,
+        providers: homeFiles.map(({ provider }) => provider),
+      },
+    });
   }
 
   return { credentialEnv, credentialFiles };
@@ -352,6 +390,7 @@ const splitCredentialInjections = (
 const recordLaunchHome = (input: {
   readonly runId: string;
   readonly home: string;
+  readonly generation: string;
   readonly ownerUserId: string | undefined;
   readonly injections: readonly WorkspaceLaunchCredentialInjection[];
 }) =>
@@ -372,10 +411,19 @@ const recordLaunchHome = (input: {
         ? []
         : [{ provider, connectedAccountId: entry.connectedAccountId }];
     });
-    yield* homes.value.withLockedHome({ runId: input.runId, home: input.home }, () =>
+    // Only into a home nobody holds: never over a record someone else made.
+    yield* homes.value.withLockedHome({ runId: input.runId, home: input.home }, (held) =>
       Effect.succeed({
         result: undefined,
-        outcome: { kind: "hold" as const, onBehalfOfUserId: ownerUserId, accounts },
+        outcome:
+          held === undefined
+            ? {
+                kind: "hold" as const,
+                onBehalfOfUserId: ownerUserId,
+                accounts,
+                generation: input.generation,
+              }
+            : { kind: "keep" as const },
       }),
     );
   }).pipe(
@@ -936,10 +984,18 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       credentialCipher: options.credentialCipher,
     });
     const credentialsHome = spec.runtime.credentialsHome;
-    const { credentialEnv, credentialFiles } = splitCredentialInjections(
-      resolvedCredentials.injections,
-      credentialsHome,
-    );
+    // The launch's hold on its credentialsHome: written as the home's marker, recorded on its row.
+    const homeGeneration = newHomeGeneration();
+    const { credentialEnv, credentialFiles } = yield* Effect.try({
+      try: () =>
+        splitCredentialInjections(
+          resolvedCredentials.injections,
+          credentialsHome === undefined
+            ? undefined
+            : { home: credentialsHome, generation: homeGeneration },
+        ),
+      catch: toWorkspaceBuildJobProcessingError,
+    });
 
     // The transient secret channel: unseal, re-validate, then hand it to the stager with the
     // dotfiles archives. For Docker the stager writes a 0600 boot file the adapter bind-mounts
@@ -1081,6 +1137,23 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
         ),
     );
 
+    // Before the instance reads `ready`: nobody acts on the home (a put, a release) until then, so
+    // the launch's record can never come back after a release (its row already exists, `pending`,
+    // from the launch's start).
+    if (
+      job.runId !== null &&
+      credentialsHome !== undefined &&
+      runtimeLaunchResult.status === "ready"
+    ) {
+      yield* recordLaunchHome({
+        runId: job.runId,
+        home: credentialsHome.path,
+        generation: homeGeneration,
+        ownerUserId: attemptIdentity?.ownerUserId,
+        injections: resolvedCredentials.launchCredentialInjections,
+      });
+    }
+
     if (job.runId !== null) {
       const launchedRunId = job.runId;
       yield* runtimeInstances
@@ -1127,19 +1200,6 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
             ),
           ),
         );
-    }
-
-    if (
-      job.runId !== null &&
-      credentialsHome !== undefined &&
-      runtimeLaunchResult.status === "ready"
-    ) {
-      yield* recordLaunchHome({
-        runId: job.runId,
-        home: credentialsHome.path,
-        ownerUserId: attemptIdentity?.ownerUserId,
-        injections: resolvedCredentials.launchCredentialInjections,
-      });
     }
 
     if (job.runId !== null) {

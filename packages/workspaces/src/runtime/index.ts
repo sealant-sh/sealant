@@ -55,6 +55,7 @@ export {
   HOME_STATE_DIR,
   homeStateKey,
   HOME_SCRIPT_EXIT,
+  homeCredentialProviderOf,
   homePathProblem,
   homeScriptRefusal,
   homeScriptStdin,

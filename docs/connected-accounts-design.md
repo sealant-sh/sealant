@@ -471,19 +471,22 @@ conversation home while that person's process is about to run there.
 - **`credentialsHome` on create** (`spec.runtime.credentialsHome = { path, uid, gid }`, SDK
   `create({ credentialsHome })`): the launch writes every login into that home: Claude and Codex as
   their files, GitHub as `.config/gh/hosts.yml`, so no `GITHUB_TOKEN`, `GH_TOKEN` or
-  `CLAUDE_CODE_OAUTH_TOKEN` is in the environment. The home may not exist yet (its user is made
-  after the launch), so the launch makes it, owned by `uid`:`gid`, mode 0700; every file and every
-  directory made for it is theirs, files 0600. The home follows §6c's rules (checked at create, a
-  400 otherwise; no link on the way, checked in the executor).
-- **Recorded as a held home.** Once the executor is ready, the launch records the home for the
-  workspace's owner with the accounts it wrote, as a put would (§6c): refreshes reach it through the
-  record, nobody else's logins are put there, and a release (`DELETE`) removes the files, which is
-  how Mend falls back to `/root` when a predicted per-person layout fails at prepare. The instance's
-  `launch_credential_injections` entries name the home, so the per-instance push skips them (one
-  write per refresh, never two). A failure to record is logged, never the launch's.
-- **Cost.** Nothing new on the launch's critical path: the same launch write path writes the same
-  files (one exec per file, as before), and the record is one short transaction in the worker after
-  the executor is ready. No API call is added.
+  `CLAUDE_CODE_OAUTH_TOKEN` is in the environment. All of them go in one write, one exec. The home
+  may not exist yet (its user is made after the launch), so the launch makes it, owned by
+  `uid`:`gid`, mode 0700, seeded from `/etc/skel` as `useradd -m` would (it copies nothing into a
+  home that already exists). Every file and every directory made for it is theirs, files 0600. The
+  home follows §6c's rules (checked at create, a 400 otherwise; no link on the way, checked in the
+  executor), and the launch takes it as a first put would, writing its marker.
+- **Recorded as a held home.** Before the instance reads `ready` (when nobody can act on the home
+  yet), the launch records the home for the workspace's owner with the accounts it wrote and the
+  generation of its marker, as a put would (§6c), only if the home holds nothing. Refreshes reach it
+  through the record, nobody else's logins are put there, and a release (`DELETE`) removes the
+  files. That release is how Mend falls back to `/root` when a predicted per-person layout fails at
+  prepare. The instance's `launch_credential_injections` entries name the home, so the per-instance
+  push skips them: one write per refresh, never two. A failure to record is logged, never the
+  launch's.
+- **Cost.** No API call is added, and no exec: one exec writes every login, where a launch at
+  `$HOME` runs one per file. The record is one short transaction in the worker.
 
 ## 6e. Running as a user, and an image's per-person capability (Oct 2026)
 

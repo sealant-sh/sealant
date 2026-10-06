@@ -67,15 +67,17 @@ export const credentialFileInjectionSchema = z.strictObject({
   contentBase64: z.string().min(1),
   mode: z.string().regex(/^[0-7]{3,4}$/),
   /**
-   * The home the file belongs to (a launch's `credentialsHome`): the home is made for this owner
-   * when missing, reached without a symbolic link, and the file and the directories made for it
-   * are the owner's. `path` is then `<home>/<one of Core's login files>`.
+   * A launch's whole `credentialsHome` in one write (docs/connected-accounts-design.md §6d): `path`
+   * is the home, `contentBase64` holds one base64 line per login, in `providers` order. The home is
+   * made for `uid`:`gid` when missing, reached without a symbolic link, taken with `generation` as
+   * its marker, and every file and directory made for it is the owner's.
    */
   home: z
     .strictObject({
-      path: z.string().trim().min(1),
       uid: z.number().int().min(0),
       gid: z.number().int().min(0),
+      generation: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/),
+      providers: z.array(z.enum(["claude", "codex", "github"])).min(1),
     })
     .optional(),
 });

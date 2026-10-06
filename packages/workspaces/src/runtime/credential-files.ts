@@ -4,7 +4,7 @@
  * streams it over the authenticated control channel's stdin. The payload is NEVER placed in argv,
  * so it cannot land in a process list or in the daemon's `processStarted` record.
  */
-import { buildHomeCredentialScript, homeCredentialProviderOf } from "./home-credentials.js";
+import { buildHomeCredentialScript } from "./home-credentials.js";
 import type { CredentialFileInjection } from "./runtime-adapter.js";
 
 const createAdapterError = (code: string, message: string): Error & { code: string } =>
@@ -12,23 +12,15 @@ const createAdapterError = (code: string, message: string): Error & { code: stri
 
 export const buildCredentialFileWriteScript = (file: CredentialFileInjection): string => {
   if (file.home !== undefined) {
-    // A launch's own home: made for its owner, every file the owner's (home-credentials.ts).
-    const prefix = `${file.home.path}/`;
-    const provider = file.path.startsWith(prefix)
-      ? homeCredentialProviderOf(file.path.slice(prefix.length))
-      : undefined;
-    if (provider === undefined) {
-      throw createAdapterError(
-        "credential-file-injection-failed",
-        `Credential file path '${file.path}' is not one of the login files of home '${file.home.path}'.`,
-      );
-    }
+    // A launch's own home, every login in one exec: made for its owner, taken with the launch's
+    // generation as its marker, every file the owner's (home-credentials.ts).
     return buildHomeCredentialScript({
-      home: file.home.path,
+      home: file.path,
+      fence: { kind: "take", generation: file.home.generation },
       createWithOwner: { uid: file.home.uid, gid: file.home.gid },
-      writes: [{ provider, content: "" }],
+      writes: file.home.providers,
       removes: [],
-    }).script;
+    });
   }
   if (!/^[A-Za-z0-9_$/.-]+$/.test(file.path)) {
     throw createAdapterError(
