@@ -3,6 +3,7 @@
   "pages": [
     "environment-variables",
     "workspace-packages",
+    "workspace-images",
     "ports-and-data",
     "installer-and-compose",
     "http-api",

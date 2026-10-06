@@ -789,10 +789,18 @@ describe("compileWorkspaceBuildSpec", () => {
 
     const buildCommandArgs = (commandRunner.mock.calls[0]?.[1] ?? []) as string[];
     const saveCommandArgs = (commandRunner.mock.calls[1]?.[1] ?? []) as string[];
-    expect(commandRunner).toHaveBeenCalledTimes(2);
+    const probeCommandArgs = (commandRunner.mock.calls[2]?.[1] ?? []) as string[];
+    expect(commandRunner).toHaveBeenCalledTimes(3);
     expect(buildCommandArgs.slice(0, 4)).toEqual(["build", "--file", expect.any(String), "--tag"]);
     expect(saveCommandArgs.slice(0, 2)).toEqual(["save", "--output"]);
     expect(saveCommandArgs[2]).toMatch(/workspace-image\.tar$/);
+    // The image probe is read back from the built image; the stub printed nothing, so the build
+    // stands without an answer and says why.
+    expect(probeCommandArgs.slice(0, 4)).toEqual(["run", "--rm", "--pull=never", "--network=none"]);
+    expect(result.metadata?.imageProbe).toBeUndefined();
+    expect(
+      result.metadata?.notes.some((note) => note.startsWith("The image probe could not")),
+    ).toBe(true);
     expect(result.builder).toEqual({
       id: "fedora",
       osFamily: "fedora",
