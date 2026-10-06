@@ -3,11 +3,12 @@
  * needs so that every person who runs something in a workspace can be a Linux user of their own,
  * and the probe that records, inside every built image, whether it can.
  *
- * **The image changes nothing for today's processes.** It sets no `ENV`: root and every process
- * of the shared layout see exactly the environment and `PATH` they saw before. What points a
- * person's tools at the shared locations is a file, {@link PERSON_ENV_PATH}, that the client
- * (Mend) applies to the processes it starts as a person, and to nothing else. An earlier draft set
- * those variables image-wide; it broke nvm (`npm_config_prefix`), the pyenv installer (an existing
+ * **The image changes no environment of today's processes.** It sets no `ENV`: root and every
+ * process of the shared layout see exactly the environment and `PATH` they saw before (beyond the
+ * environment, root sees `safe.directory = *`, and Arch and Ubuntu gain a `sudo` binary). What
+ * points a person's tools at the shared locations is a file, {@link PERSON_ENV_PATH}, that sealantd
+ * applies to every process it runs as a user, and never to root's. An earlier draft set those
+ * variables image-wide; it broke nvm (`npm_config_prefix`), the pyenv installer (an existing
  * `PYENV_ROOT`) and every `node_modules` installed against root's pnpm store (2026-10-06 review).
  *
  * What the managed families (Fedora, Arch, Ubuntu) get:
@@ -29,6 +30,8 @@
  *   is not touched. {@link PERSON_TOOLCHAINS} lists what is shared and what stays per user.
  * - **`safe.directory = *`** in `/etc/gitconfig`: files in a shared worktree belong to several uids,
  *   and git before 2.46 has no prefix wildcard for nested and linked repositories.
+ * - **`HOME_MODE 0700`** in `/etc/login.defs`, so `useradd -m` makes a home only its user can enter
+ *   (Ubuntu's default is 0750, and every person's primary group is `mend`).
  *
  * Nix images get none of it and take one person: their passwd is in the read-only store, the store
  * cannot hold a setuid `sudo`, and non-root nix needs the daemon. Custom base images get only the
@@ -52,16 +55,20 @@ export const IMAGE_PROBE_PATH = "/etc/sealant/image-probe.json";
 export const IMAGE_PROBE_SCRIPT_PATH = "/usr/local/lib/sealant/image-probe";
 
 /**
- * The environment of a process run as a person. The contract for the client that starts them:
+ * The environment of a process run as a person, version {@link PERSON_ENV_VERSION}. The contract:
  *
- * - one `KEY=VALUE` per line; `#` lines and blank lines are comments; values are literal (no
- *   quoting, no expansion);
- * - `PATH_PREPEND` is not a variable: its value goes in front of the process's `PATH`;
- * - apply it to every process started as a person (agents, shells, Services, deliveries), after
- *   the passwd entry's `HOME`/`USER`/`LOGNAME`/`SHELL` and before the client's own variables; never
- *   to root's processes or to a `shared`-layout executor.
+ * - **Who applies it:** sealantd, to every process it runs as a user (executions, sessions, a
+ *   person's dotfiles bootstrap), and never to root's. It sits over the daemon's environment and
+ *   the passwd entry's `HOME`/`USER`/`LOGNAME`/`SHELL`, and under the variables the caller passes.
+ *   Clients (Mend) apply nothing: sealantd starts processes a client cannot reach (the dotfiles
+ *   bootstrap) and has the base `PATH` at hand.
+ * - **Format:** the first line is `# person-env <version>`. A reader that does not know the
+ *   version applies nothing and says so. Then one `KEY=VALUE` per line; other `#` lines and blank
+ *   lines are comments; values are literal (no quoting, no expansion).
+ * - **`PATH_PREPEND`** is not a variable: its value goes in front of the process's `PATH`.
  */
 export const PERSON_ENV_PATH = "/etc/sealant/person-env";
+export const PERSON_ENV_VERSION = 1;
 /** The shared directories, one per line, for sealantd's default ACL at boot. */
 export const PERSON_SHARED_DIRS_PATH = "/etc/sealant/person-shared-dirs";
 
@@ -99,7 +106,11 @@ export const PERSON_TOOLCHAINS: ReadonlyArray<{
       "/opt/rust/cargo/bin (on PATH; ~/.cargo/bin links here, so rustup's proxies and `cargo install` are everyone's)",
       "/var/cache/cargo/registry and /var/cache/cargo/git (~/.cargo/registry and ~/.cargo/git link here)",
     ],
-    perUser: ["~/.cargo (CARGO_HOME): credentials.toml, config.toml"],
+    // Cargo's package-cache locks live in CARGO_HOME, so two people's cargo do not wait for each
+    // other on the shared registry: two first extractions of one crate at the same moment can fail
+    // one build, which a rebuild fixes. Sharing the locks would need cargo's own lock and its
+    // last-use database (SQLite) group-writable across users, which is unproven.
+    perUser: ["~/.cargo (CARGO_HOME): credentials.toml, config.toml, the package-cache locks"],
   },
   {
     tool: "pnpm, npm, corepack, bun",
@@ -177,6 +188,7 @@ export const PERSON_SHARED_SUBDIRS: readonly string[] = [
   "/opt/uv/bin",
   "/opt/rust/rustup",
   "/opt/rust/cargo/bin",
+  "/opt/pnpm/bin",
   "/opt/npm-global/bin",
   "/opt/npm-global/lib",
   "/opt/bun/bin",
@@ -209,6 +221,9 @@ export const PERSON_SKEL_FILES: ReadonlyArray<readonly [path: string, lines: rea
 /** Shared bin directories, ahead of a person's `PATH`, so a person's install wins. */
 export const PERSON_PATH_PREPEND: readonly string[] = [
   "/opt/npm-global/bin",
+  // pnpm 11 and later put global bins in $PNPM_HOME/bin and refuse `add -g` without it on PATH;
+  // pnpm 10 puts them in $PNPM_HOME.
+  "/opt/pnpm/bin",
   "/opt/pnpm",
   "/opt/uv/bin",
   "/opt/rust/cargo/bin",
@@ -240,7 +255,8 @@ export const PERSON_ENV: ReadonlyArray<readonly [string, string]> = [
 
 /** {@link PERSON_ENV_PATH}'s lines. */
 export const PERSON_ENV_FILE: readonly string[] = [
-  "# The environment of a process run as a person (Mend ADR 0016). Never root's.",
+  `# person-env ${String(PERSON_ENV_VERSION)}`,
+  "# The environment sealantd gives every process it runs as a user (Mend ADR 0016). Never root's.",
   "# KEY=VALUE per line, values literal. PATH_PREPEND goes in front of the process's PATH.",
   ...PERSON_ENV.map(([key, value]) => `${key}=${value}`),
   `PATH_PREPEND=${PERSON_PATH_PREPEND.join(":")}`,
@@ -347,6 +363,8 @@ export const renderPersonLayoutSteps = (input: {
     ...PERSON_SKEL_LINKS.map(([link, target]) => `ln -sfn ${target} /etc/skel/${link}`),
     ...PERSON_SKEL_FILES.map(([path, lines]) => writeLines(`/etc/skel/${path}`, lines)),
     "git config --system --replace-all safe.directory '*'",
+    // useradd -m makes homes with HOME_MODE: Ubuntu's is 0750, and every person's group is mend.
+    "if grep -q '^HOME_MODE' /etc/login.defs; then sed -i 's/^HOME_MODE.*/HOME_MODE\\t0700/' /etc/login.defs; else printf 'HOME_MODE\\t0700\\n' >> /etc/login.defs; fi",
   ];
   return [
     "# Mend's person layout (ADR 0016): the mend group, sudo for it, shared toolchain directories",
@@ -402,11 +420,15 @@ export const IMAGE_PROBE_SCRIPT: readonly string[] = [
   // `null`: this sealantd has no `capabilities` command. `"unreadable"`: it answered, but not with
   // a JSON object, which a reader takes as unknown rather than as missing capabilities.
   "sealantd_json=null",
-  "if [ -x /usr/local/bin/sealantd ]; then",
-  "  if has timeout; then out=$(timeout 10 /usr/local/bin/sealantd capabilities --json 2>/dev/null); else out=$(/usr/local/bin/sealantd capabilities --json 2>/dev/null); fi",
+  // The daemon to ask: the image's own, or another one a test names.
+  "sealantd_bin=${SEALANT_PROBE_SEALANTD:-/usr/local/bin/sealantd}",
+  'if [ -x "$sealantd_bin" ]; then',
+  '  if has timeout; then out=$(timeout 10 "$sealantd_bin" capabilities --json 2>/dev/null); else out=$("$sealantd_bin" capabilities --json 2>/dev/null); fi',
   "  status=$?",
   '  out=${out#"${out%%[![:space:]]*}"}; out=${out%"${out##*[![:space:]]}"}',
-  "  if [ \"$status\" -eq 0 ]; then case \"$out\" in '{'*'}') sealantd_json=$out;; *) sealantd_json='\"unreadable\"';; esac; fi",
+  // Exit 2 is clap's "unrecognized subcommand": a sealantd from before the command. A timeout
+  // (124), a crash or any other failure says nothing about what the daemon can do.
+  '  if [ "$status" -eq 0 ]; then case "$out" in \'{\'*\'}\') sealantd_json=$out;; *) sealantd_json=\'"unreadable"\';; esac; elif [ "$status" -ne 2 ]; then sealantd_json=\'"unreadable"\'; fi',
   "fi",
   "sudoers_mend=$(flag test -f /etc/sudoers.d/mend)",
   `person_env=$(flag test -f ${PERSON_ENV_PATH})`,
