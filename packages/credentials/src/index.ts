@@ -34,6 +34,7 @@ export {
   codexAuthJsonCanRefresh,
   codexAuthJsonCopy,
   CredentialCopyError,
+  githubHostsYml,
 } from "./copies.js";
 
 export {

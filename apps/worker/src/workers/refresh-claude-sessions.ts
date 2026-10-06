@@ -30,6 +30,7 @@ import {
   ConnectedAccountRepo,
   ConnectedAccountRepoLive,
   SealantDB,
+  WorkspaceCredentialHomeRepoLive,
   WorkspaceRuntimeInstanceRepoLive,
   type ConnectedAccount,
   type DB,
@@ -242,6 +243,7 @@ const refreshOneAccount = Effect.fn("refreshClaudeSessionAccount")(function* (in
         provider: "claude",
         copyJson: claudeCredentialsCopy(observed),
         targetOptions: input.targetOptions,
+        credentialCipher,
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning(`${describe}: pushing the refreshed copy failed.`, cause),
@@ -293,6 +295,7 @@ export const refreshClaudeSessionCredentials = async (
   const dataAccessLayer = Layer.mergeAll(
     ConnectedAccountRepoLive,
     WorkspaceRuntimeInstanceRepoLive,
+    WorkspaceCredentialHomeRepoLive,
   ).pipe(Layer.provide(Layer.succeed(SealantDB, options.db)));
 
   const program = Effect.gen(function* () {

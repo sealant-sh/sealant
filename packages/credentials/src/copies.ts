@@ -110,3 +110,21 @@ export const codexAuthJsonCanRefresh = (authJson: string): boolean => {
     return false;
   }
 };
+
+/**
+ * A GitHub token as the GitHub CLI's `hosts.yml` (`$GH_CONFIG_DIR`, by default
+ * `~/.config/gh/hosts.yml`), the file a home holds GitHub in (docs/connected-accounts-design.md
+ * §6c): `gh` and any credential helper that reads it find the person's own token, and nothing rides
+ * the environment. Values are written as double-quoted scalars (JSON strings are valid YAML).
+ */
+export const githubHostsYml = (token: string, login?: string): string => {
+  const lines = [
+    "github.com:",
+    `    oauth_token: ${JSON.stringify(token)}`,
+    "    git_protocol: https",
+  ];
+  if (login !== undefined && login.length > 0) {
+    lines.push(`    user: ${JSON.stringify(login)}`);
+  }
+  return `${lines.join("\n")}\n`;
+};

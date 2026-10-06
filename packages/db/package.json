@@ -10,7 +10,8 @@
     "./seed-core": "./src/seed-core.ts",
     "./testing/review9-capture-drains": "./src/testing/review9-workspace-capture-drains.ts",
     "./testing/review11-capture-drains": "./src/testing/review11-workspace-capture-drains.ts",
-    "./testing/capture-ledger-writes": "./src/testing/capture-ledger-writes.ts"
+    "./testing/capture-ledger-writes": "./src/testing/capture-ledger-writes.ts",
+    "./testing/credential-homes": "./src/testing/credential-homes.ts"
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",

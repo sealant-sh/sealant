@@ -49,6 +49,24 @@ export {
 
 export * from "./kubernetes/index.js";
 export { buildCredentialFileWriteScript } from "./credential-files.js";
+export {
+  buildHomeCredentialScript,
+  HOME_CREDENTIAL_FILES,
+  HOME_STATE_DIR,
+  homeStateKey,
+  HOME_SCRIPT_EXIT,
+  homePathProblem,
+  homeScriptRefusal,
+  homeScriptStdin,
+  liveHomeCredentialChannel,
+  newHomeGeneration,
+  type HomeCredentialChannel,
+  type HomeCredentialProvider,
+  type HomeCredentialScriptInput,
+  type HomeWriteFence,
+  type HomeOwner,
+  type HomeScriptExit,
+} from "./home-credentials.js";
 
 export {
   CAPTURE_ENDPOINT_ENV,

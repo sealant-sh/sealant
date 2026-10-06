@@ -1,11 +1,16 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
+  ConnectedAccountRepo,
+  type ConnectedAccountRepoService,
+  WorkspaceCredentialHomeRepo,
   WorkspaceRuntimeInstanceRepo,
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
+import { makeInMemoryCredentialHomes } from "@sealant/db/testing/credential-homes";
 import { Effect, Layer } from "effect";
 
+import type { HomeCredentialChannel } from "../runtime/home-credentials.js";
 import type { ControlChannel } from "../runtime/kubernetes/adapter.js";
 import { instancesHoldingAccount, pushCredentialCopy } from "./credential-push.js";
 
@@ -37,9 +42,36 @@ const running = [
   instance("e", null),
 ];
 
-const repo = Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-  listRunningInstances: () => Effect.succeed(running),
-} as unknown as WorkspaceRuntimeInstanceRepoService);
+const instancesRepo = (instances: readonly WorkspaceRuntimeInstance[]) =>
+  Layer.succeed(WorkspaceRuntimeInstanceRepo, {
+    listRunningInstances: () => Effect.succeed(instances),
+  } as unknown as WorkspaceRuntimeInstanceRepoService);
+
+const noHomes = makeInMemoryCredentialHomes(() => running);
+const repo = Layer.merge(
+  instancesRepo(running),
+  Layer.succeed(WorkspaceCredentialHomeRepo, noHomes.service),
+);
+
+const silentLaunchChannel: ControlChannel = {
+  health: async () => {},
+  writeCredentialFiles: async () => {},
+};
+
+interface RanScript {
+  readonly target: string;
+  readonly script: string;
+  readonly stdin: string;
+}
+
+/** Records each home script; answers `exitCode` (a late write the home's marker fenced: 76). */
+const recordingHomeChannel = (ran: RanScript[], exitCode = 0): HomeCredentialChannel => ({
+  run: (target, script, stdin) =>
+    Effect.sync(() => {
+      ran.push({ target: JSON.stringify(target), script, stdin });
+      return { exitCode };
+    }),
+});
 
 describe("instancesHoldingAccount", () => {
   it("picks the running workspaces that were FILE-injected with the account", () => {
@@ -68,10 +100,208 @@ describe("pushCredentialCopy", () => {
         copyJson: JSON.stringify({ claudeAiOauth: { accessToken: "at-new" } }),
         controlChannel: channel,
       });
-      expect(summary).toEqual({ written: 1, failed: 1, unreachable: 0 });
+      expect(summary).toEqual({ written: 1, failed: 1, unreachable: 0, released: 0 });
       expect(written).toHaveLength(1);
       expect(written[0]?.endpoint).toContain("/a.sock");
       expect(written[0]?.content).toContain("at-new");
     }).pipe(Effect.provide(repo));
   });
+});
+
+describe("pushCredentialCopy into homes", () => {
+  const ready = [instance("h", [])];
+
+  it.effect("writes the copy into every home whose person holds the account, and no other", () => {
+    const homes = makeInMemoryCredentialHomes(() => ready);
+    const ran: RanScript[] = [];
+    return Effect.gen(function* () {
+      const hold = (home: string, person: string, connectedAccountId: string) =>
+        homes.service.withLockedHome({ runId: "h", home }, () =>
+          Effect.succeed({
+            result: undefined,
+            outcome: {
+              kind: "hold" as const,
+              onBehalfOfUserId: person,
+              accounts: [{ provider: "claude" as const, connectedAccountId }],
+              generation: `generation-${person}`,
+            },
+          }),
+        );
+      yield* hold("/home/alice", "usr_alice", "cacc_alice");
+      yield* hold("/run/mend/conv/ses_1", "usr_alice", "cacc_alice");
+      yield* hold("/home/bob", "usr_bob", "cacc_bob");
+
+      const summary = yield* pushCredentialCopy({
+        connectedAccountId: "cacc_alice",
+        provider: "claude",
+        copyJson: JSON.stringify({ claudeAiOauth: { accessToken: "at-alice-2" } }),
+        controlChannel: silentLaunchChannel,
+        homeChannel: recordingHomeChannel(ran),
+      });
+
+      expect(summary).toEqual({ written: 2, failed: 0, unreachable: 0, released: 0 });
+      expect(ran.map((entry) => entry.script.match(/home='([^']+)'/)?.[1]).toSorted()).toEqual([
+        "/home/alice",
+        "/run/mend/conv/ses_1",
+      ]);
+      for (const entry of ran) {
+        expect(Buffer.from(entry.stdin.trim(), "base64").toString()).toContain("at-alice-2");
+        expect(entry.script).toContain(".claude/.credentials.json");
+        // Fenced by Alice's hold.
+        expect(entry.script).toContain("generation-usr_alice");
+      }
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          instancesRepo(ready),
+          Layer.succeed(WorkspaceCredentialHomeRepo, homes.service),
+        ),
+      ),
+    );
+  });
+
+  it.effect("leaves a home released or retaken by another person since the listing", () => {
+    const homes = makeInMemoryCredentialHomes(() => ready);
+    const ran: RanScript[] = [];
+    return Effect.gen(function* () {
+      yield* homes.service.withLockedHome({ runId: "h", home: "/run/mend/conv/ses_1" }, () =>
+        Effect.succeed({
+          result: undefined,
+          outcome: {
+            kind: "hold" as const,
+            onBehalfOfUserId: "usr_alice",
+            accounts: [{ provider: "claude" as const, connectedAccountId: "cacc_alice" }],
+            generation: "generation-alice",
+          },
+        }),
+      );
+      // The listing still names Alice's home; under its lock, Bob holds it now.
+      const listed = yield* homes.service.listReadyHoldingAccount("cacc_alice");
+      const stale = {
+        ...homes.service,
+        listReadyHoldingAccount: () => Effect.succeed(listed),
+      };
+      yield* homes.service.withLockedHome({ runId: "h", home: "/run/mend/conv/ses_1" }, () =>
+        Effect.succeed({ result: undefined, outcome: { kind: "release" as const } }),
+      );
+      yield* homes.service.withLockedHome({ runId: "h", home: "/run/mend/conv/ses_1" }, () =>
+        Effect.succeed({
+          result: undefined,
+          outcome: {
+            kind: "hold" as const,
+            onBehalfOfUserId: "usr_bob",
+            accounts: [{ provider: "claude" as const, connectedAccountId: "cacc_bob" }],
+            generation: "generation-bob",
+          },
+        }),
+      );
+
+      const summary = yield* pushCredentialCopy({
+        connectedAccountId: "cacc_alice",
+        provider: "claude",
+        copyJson: JSON.stringify({ claudeAiOauth: { accessToken: "at-alice-2" } }),
+        controlChannel: silentLaunchChannel,
+        homeChannel: recordingHomeChannel(ran),
+      }).pipe(Effect.provideService(WorkspaceCredentialHomeRepo, stale));
+
+      expect(summary).toEqual({ written: 0, failed: 0, unreachable: 0, released: 1 });
+      expect(ran).toEqual([]);
+    }).pipe(Effect.provide(instancesRepo(ready)));
+  });
+});
+
+describe("pushCredentialCopy into a home whose marker moved on", () => {
+  it.effect("counts a write the executor fenced as no longer held, never as written", () => {
+    const ready = [instance("h", [])];
+    const homes = makeInMemoryCredentialHomes(() => ready);
+    const ran: RanScript[] = [];
+    return Effect.gen(function* () {
+      yield* homes.service.withLockedHome({ runId: "h", home: "/run/mend/conv/ses_1" }, () =>
+        Effect.succeed({
+          result: undefined,
+          outcome: {
+            kind: "hold" as const,
+            onBehalfOfUserId: "usr_alice",
+            accounts: [{ provider: "claude" as const, connectedAccountId: "cacc_alice" }],
+            generation: "generation-alice",
+          },
+        }),
+      );
+      const summary = yield* pushCredentialCopy({
+        connectedAccountId: "cacc_alice",
+        provider: "claude",
+        copyJson: "{}",
+        controlChannel: silentLaunchChannel,
+        homeChannel: recordingHomeChannel(ran, 76),
+      });
+      expect(summary).toEqual({ written: 0, failed: 0, unreachable: 0, released: 1 });
+      expect(ran).toHaveLength(1);
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          instancesRepo(ready),
+          Layer.succeed(WorkspaceCredentialHomeRepo, homes.service),
+        ),
+      ),
+    );
+  });
+});
+
+describe("pushCredentialCopy re-reads the account under each home's lock", () => {
+  it.effect(
+    "writes the account as stored when the home's lock is taken, not the copy it was handed",
+    () => {
+      const ready = [instance("h", [])];
+      const homes = makeInMemoryCredentialHomes(() => ready);
+      const ran: RanScript[] = [];
+      const stored = JSON.stringify({
+        credentialsJson: JSON.stringify({
+          claudeAiOauth: { accessToken: "at-newer", refreshToken: "rt", expiresAt: 2 },
+        }),
+      });
+      const accounts = Layer.succeed(ConnectedAccountRepo, {
+        getById: () =>
+          Effect.succeed({
+            id: "cacc_alice",
+            archivedAt: null,
+            encryptedPayload: `sealed:${stored}`,
+          }),
+      } as unknown as ConnectedAccountRepoService);
+      return Effect.gen(function* () {
+        yield* homes.service.withLockedHome({ runId: "h", home: "/home/alice" }, () =>
+          Effect.succeed({
+            result: undefined,
+            outcome: {
+              kind: "hold" as const,
+              onBehalfOfUserId: "usr_alice",
+              accounts: [{ provider: "claude" as const, connectedAccountId: "cacc_alice" }],
+              generation: "generation-alice",
+            },
+          }),
+        );
+        yield* pushCredentialCopy({
+          connectedAccountId: "cacc_alice",
+          provider: "claude",
+          copyJson: JSON.stringify({ claudeAiOauth: { accessToken: "at-older" } }),
+          controlChannel: silentLaunchChannel,
+          homeChannel: recordingHomeChannel(ran),
+          credentialCipher: {
+            encrypt: (plaintext) => Effect.succeed({ sealed: `sealed:${plaintext}`, keyId: "k" }),
+            decrypt: (sealed) => Effect.succeed(sealed.slice("sealed:".length)),
+          },
+        });
+        const written = Buffer.from(ran[0]?.stdin.trim() ?? "", "base64").toString();
+        expect(written).toContain("at-newer");
+        expect(written).not.toContain("rt");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            instancesRepo(ready),
+            Layer.succeed(WorkspaceCredentialHomeRepo, homes.service),
+            accounts,
+          ),
+        ),
+      );
+    },
+  );
 });

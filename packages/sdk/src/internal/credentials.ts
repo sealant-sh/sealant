@@ -19,7 +19,8 @@ export interface WorkspaceCredentialsPayload {
   readonly github?: string;
 }
 
-const mapAccountRef = (value: boolean | string | undefined): string | undefined => {
+/** `true` → the account named `default`; a string passes through; `false`/absent → none. */
+export const mapAccountRef = (value: boolean | string | undefined): string | undefined => {
   if (value === undefined || value === false) {
     return undefined;
   }

@@ -7,6 +7,8 @@ import {
   index,
   integer,
   jsonb,
+  pgSequence,
+  primaryKey,
   snakeCase,
   text,
   timestamp,
@@ -203,6 +205,62 @@ export const workspaceRuntimeInstances = pgTable(
       .on(table.finishedAt)
       .where(sql`${table.status} = 'stopped' and ${table.removedAt} is null`),
   ],
+);
+
+/**
+ * Fencing tokens for writes into homes (docs/connected-accounts-design.md §6c): every write, take
+ * and release presents one, issued under the home's lock, and the executor refuses any token below
+ * the highest it has seen for the home. A value is never reused, so a late exec from before any
+ * later write is refused, whatever was released or taken in between.
+ */
+export const workspaceCredentialHomeFences = pgSequence("workspace_credential_home_fences");
+
+/** The providers a home's logins are written for (docs/connected-accounts-design.md §6c). */
+export const workspaceCredentialHomeProviderValues = ["claude", "codex", "github"] as const;
+export type WorkspaceCredentialHomeProvider =
+  (typeof workspaceCredentialHomeProviderValues)[number];
+
+/** One account whose copy Core wrote into a home, and keeps refreshed there. */
+export interface WorkspaceCredentialHomeAccount {
+  readonly provider: WorkspaceCredentialHomeProvider;
+  readonly connectedAccountId: string;
+}
+
+/**
+ * The logins Core wrote into one home of a running instance (docs/connected-accounts-design.md
+ * §6c): one person per home while it is held, so a home never holds two people's logins and a
+ * refresh push reaches only homes whose person owns the account. The row is the lock: every write
+ * into the home (a put, a release, a refresh push) holds it `FOR UPDATE` across its control-channel
+ * write, so no write lands over another's. Released (deleted) with the files, and with the instance.
+ */
+export const workspaceCredentialHomes = pgTable(
+  "workspace_credential_homes",
+  {
+    runId: text("run_id")
+      .notNull()
+      .references(() => workspaceRuntimeInstances.runId, { onDelete: "cascade" }),
+    /** Absolute path of the home inside the executor (a person's home, a conversation home). */
+    home: text().notNull(),
+    /** The one person whose logins the home holds. */
+    onBehalfOfUserId: text("on_behalf_of_user_id").notNull(),
+    /**
+     * The hold's generation, also written into the home as its marker: every write into the home
+     * checks the marker in the executor, so a late write from an earlier hold never lands.
+     */
+    generation: text().notNull(),
+    accounts: jsonb()
+      .$type<readonly WorkspaceCredentialHomeAccount[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    createdAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [primaryKey({ columns: [table.runId, table.home] })],
 );
 
 /**
@@ -456,6 +514,7 @@ export type NewOciImageBuildJob = typeof ociImageBuildJobs.$inferInsert;
 
 export type WorkspaceRuntimeInstance = typeof workspaceRuntimeInstances.$inferSelect;
 export type NewWorkspaceRuntimeInstance = typeof workspaceRuntimeInstances.$inferInsert;
+export type WorkspaceCredentialHome = typeof workspaceCredentialHomes.$inferSelect;
 
 // Compatibility exports while the rest of the codebase migrates away from
 // workspace_build_jobs naming.

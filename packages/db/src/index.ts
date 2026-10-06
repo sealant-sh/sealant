@@ -181,6 +181,17 @@ export {
 } from "./repositories/workspace-runtime-instances.js";
 
 export {
+  WorkspaceCredentialHomeBusyError,
+  WorkspaceCredentialHomeRepo,
+  WorkspaceCredentialHomeRepoError,
+  WorkspaceCredentialHomeRepoLive,
+  makeWorkspaceCredentialHomeRepoLayer,
+  type WorkspaceCredentialHomeOutcome,
+  type WorkspaceCredentialHomeRepoService,
+  type WorkspaceCredentialHomeTarget,
+} from "./repositories/workspace-credential-homes.js";
+
+export {
   WorkspaceAttemptRepo,
   WorkspaceAttemptRepoInvariantError,
   WorkspaceAttemptRepoLive,
@@ -334,6 +345,9 @@ export {
   ociImageBuildJobs,
   ociImageBuildJobStatusValues,
   workspaceRuntimeInstances,
+  workspaceCredentialHomes,
+  workspaceCredentialHomeFences,
+  workspaceCredentialHomeProviderValues,
   workspaceRuntimeInstanceStatusValues,
   workspaceCaptureDrains,
   workspaceCreateReservations,
@@ -398,6 +412,9 @@ export {
   type WorkspaceAttemptTriggerType,
   type WorkspaceLaunchCredentialInjection,
   type WorkspaceRuntimeInstance,
+  type WorkspaceCredentialHome,
+  type WorkspaceCredentialHomeAccount,
+  type WorkspaceCredentialHomeProvider,
   type WorkspaceRuntimeInstanceStatus,
   type WorkspaceRuntimeInstanceStopReason,
   type NewWorkspaceCaptureDrain,
