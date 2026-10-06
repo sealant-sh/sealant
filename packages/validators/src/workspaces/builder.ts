@@ -87,16 +87,28 @@ export const workspaceImageProbeSchema = z.object({
   }),
   /** `/etc/sudoers.d/mend` exists: the `mend` group's passwordless rule. */
   sudoersMend: z.boolean(),
+  /** `/etc/sudoers` reads `/etc/sudoers.d`, so a rule can be added there. */
+  sudoersIncludesDir: z.boolean(),
+  /**
+   * The probe ran under `no_new_privs`, where `sudo` cannot raise a person's privileges. Always
+   * false at build; a probe run at prepare sees the runtime's (Kubernetes pods set it).
+   */
+  noNewPrivileges: z.boolean(),
   /** `/etc/passwd` is a regular, writable file (on nix it links into the read-only store). */
   passwdWritable: z.boolean(),
   /** The `mend` group: gid 40000, missing, or the name or the gid taken by something else. */
   mendGroup: z.enum(["present", "absent", "conflict"]),
   /** Users and groups other than `mend` in the reserved id range 40000–49999, as `user:name:id`. */
   reservedIdsInUse: z.array(z.string()),
+  /** `/etc/sealant/person-env` exists: the environment of a process run as a person. */
+  personEnv: z.boolean(),
   /** The shared toolchain and cache directories the image names, for the default ACL at boot. */
   sharedDirs: z.array(z.string()),
-  /** What `sealantd capabilities --json` printed; null when that sealantd has no such command. */
-  sealantd: z.record(z.string(), z.unknown()).nullable(),
+  /**
+   * What `sealantd capabilities --json` printed: null when that sealantd has no such command,
+   * `"unreadable"` when it answered with something other than a JSON object.
+   */
+  sealantd: z.union([z.record(z.string(), z.unknown()), z.literal("unreadable")]).nullable(),
 });
 
 export const osBuilderCompileMetadataSchema = z.strictObject({

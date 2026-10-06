@@ -2,7 +2,7 @@
 title: Workspace Images and People
 description:
   What a managed workspace image carries so that each person in a workspace can be a Linux user of
-  their own, which toolchain paths are shared, and what the image probe records.
+  their own, the environment a person's processes get, and what the image probe records.
 ---
 
 A workspace can be used by more than one person at a time. Mend runs each person's processes as a
@@ -10,67 +10,107 @@ Linux user of their own, with their own home, logins and credentials. The manage
 `arch`, `ubuntu`) carry what that needs. Users themselves are not made in the image: whoever starts
 the workspace makes them when it starts.
 
+None of it changes a workspace run by one person as root. The image sets no new environment variable
+and no `PATH` entry, and root's tools keep their usual locations. What points a person's tools at
+shared locations is a file the client applies to the processes it starts as a person.
+
 ## What a managed image carries
 
 - **The `mend` group** (gid 40000). Uids and gids 40000–49999 are left free for the people.
-- **Passwordless `sudo` for the group**, with `umask 0002` and the toolchain variables below kept,
-  so `sudo npm i -g` lands where a person's own `npm i -g` would. This is not isolation: anyone in
-  the group, and their agents, can read and change anyone's files.
+- **Passwordless `sudo` for the group.** Its defaults are bound to the group, so root's own `sudo`
+  is unchanged: `umask 0002`, the person environment kept, and the shared bin directories on
+  `secure_path`, so `sudo npm i -g` lands where a person's own `npm i -g` would. This is not
+  isolation: anyone in the group, and their agents, can read and change anyone's files.
 - **`useradd` and the ACL tools** (`setfacl`, `getfacl`) on every family: Sealant adds `sudo` on
   Arch and Ubuntu, `acl` on Ubuntu and Fedora, and `util-linux` on Fedora.
-- **Shared toolchains under `/opt` and caches under `/var/cache`**, owned by root and `mend`, mode
-  2775, named in the image environment so every process sees them. The image lists the directories
-  it makes in `SEALANT_PERSON_SHARED_DIRS`; `sealantd` gives them the group's default ACL when the
-  workspace starts (an ACL set while the image builds does not survive into it).
-- **`/etc/skel` links** from each new home into the shared caches, for tools whose cache sits beside
-  their credentials (cargo, Gradle, Maven).
+- **Shared toolchain and cache directories** under `/opt` and `/var/cache`, empty, owned by root and
+  `mend`, mode 2775, listed one per line in `/etc/sealant/person-shared-dirs`. `sealantd` gives them
+  the group's default ACL when the workspace starts (an ACL set while the image builds does not
+  survive into it). No installer's own target directory is made in advance: pyenv's and nvm's
+  installers refuse a directory that already exists.
+- **`/etc/sealant/person-env`**, the environment of a process run as a person (below).
+- **`/etc/skel`**: links from each new home into the shared caches, for tools whose cache sits
+  beside their credentials (cargo, Gradle, Maven), and pnpm 10's store setting.
 - **`safe.directory = *`** in `/etc/gitconfig`, since files in a shared worktree belong to several
   users.
-- **A `docker` group** (gid 2375) when the workspace has its own Docker.
+- **A `docker` group** (gid 2375, or the image's own) when the workspace has its own Docker.
+
+## The person environment
+
+`/etc/sealant/person-env` is the contract between the image and the client that starts processes as
+a person:
+
+- one `KEY=VALUE` per line; lines starting with `#` and blank lines are comments; values are
+  literal, with no quoting and no expansion;
+- `PATH_PREPEND` is not a variable: its value goes in front of the process's `PATH`;
+- the client applies it to every process it starts as a person (agents, shells, Services,
+  deliveries), after the user's `HOME`, `USER`, `LOGNAME` and `SHELL` and before its own variables,
+  and never to root's processes or to a workspace run by one person as root.
+
+`su -` and `runuser -l` start from a clean environment, so a login shell made that way has none of
+it.
 
 ## Shared and per-user paths
 
 No shared path holds a credential. Registries, tokens and logins are read from per-user files, which
 stay in the user's home (`/home/<name>`, mode 0700).
 
-| Tool                                                                | Shared (image environment)                                                                                                                                                                                                                      | Per user                                                                                                                     |
-| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| mise                                                                | `MISE_DATA_DIR=/opt/mise`: installs, downloads, shims (on `PATH`)                                                                                                                                                                               | `~/.config/mise`, trust in `~/.local/state/mise`, `~/.cache/mise` (mise makes its lock files readable only by their creator) |
-| uv                                                                  | `UV_PYTHON_INSTALL_DIR=/opt/uv/python`, `UV_TOOL_DIR=/opt/uv/tools`, `UV_TOOL_BIN_DIR` and `UV_PYTHON_BIN_DIR=/opt/uv/bin` (on `PATH`), `UV_CACHE_DIR=/var/cache/uv`                                                                            | `~/.local/share/uv/credentials`, `~/.config/uv`                                                                              |
-| Rust                                                                | `RUSTUP_HOME=/opt/rust/rustup`; `/opt/rust/cargo/bin` on `PATH`, where `~/.cargo/bin` links, so rustup's proxies and `cargo install` are everyone's; `~/.cargo/registry` and `~/.cargo/git` link to `/var/cache/cargo`                          | `CARGO_HOME=~/.cargo`: `credentials.toml`, `config.toml`                                                                     |
-| pnpm, npm, corepack, bun                                            | `PNPM_HOME=/opt/pnpm`, store `/var/cache/pnpm` (`npm_config_store_dir`, `pnpm_config_store_dir`), `npm_config_cache=/var/cache/npm`, `npm_config_prefix=/opt/npm-global` (bin on `PATH`), `COREPACK_HOME=/opt/corepack`, `BUN_INSTALL=/opt/bun` | `~/.npmrc`, `~/.bunfig.toml`                                                                                                 |
-| Browsers for tests                                                  | `PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`, `PUPPETEER_CACHE_DIR=/opt/puppeteer`, `CYPRESS_CACHE_FOLDER=/opt/cypress`, `npm_config_devdir=/var/cache/node-gyp`                                                                               | none                                                                                                                         |
-| Go, pip                                                             | `GOMODCACHE=/var/cache/go/mod`, `GOCACHE=/var/cache/go/build`, `PIP_CACHE_DIR=/var/cache/pip`                                                                                                                                                   | `~/.netrc`, `pip.conf`, `~/go`                                                                                               |
-| JVM                                                                 | `~/.gradle/caches`, `~/.gradle/wrapper` and `~/.m2/repository` link to `/var/cache/gradle` and `/var/cache/m2`                                                                                                                                  | `~/.gradle/gradle.properties`, `~/.m2/settings.xml`                                                                          |
-| nvm, pyenv                                                          | `NVM_DIR=/opt/nvm`, `PYENV_ROOT=/opt/pyenv`                                                                                                                                                                                                     | none                                                                                                                         |
-| gcloud, AWS, kubectl, Docker, gh, Hugging Face, firebase, git, curl | none                                                                                                                                                                                                                                            | their usual paths under `~`                                                                                                  |
+| Tool                                                                            | Shared (in the person environment)                                                                                                                                                                                     | Per user                                                                |
+| ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| mise                                                                            | `MISE_DATA_DIR=/opt/mise`: installs and downloads. Its shims are not put on `PATH`                                                                                                                                     | `~/.config/mise`, trust in `~/.local/state/mise`, `~/.cache/mise`       |
+| uv                                                                              | `UV_PYTHON_INSTALL_DIR=/opt/uv/python`, `UV_TOOL_DIR=/opt/uv/tools`, `UV_TOOL_BIN_DIR` and `UV_PYTHON_BIN_DIR=/opt/uv/bin` (on `PATH`), `UV_CACHE_DIR=/var/cache/uv`                                                   | `~/.local/share/uv/credentials`, `~/.config/uv`                         |
+| Rust                                                                            | `RUSTUP_HOME=/opt/rust/rustup`; `/opt/rust/cargo/bin` on `PATH`, where `~/.cargo/bin` links, so rustup's proxies and `cargo install` are everyone's; `~/.cargo/registry` and `~/.cargo/git` link to `/var/cache/cargo` | `CARGO_HOME=~/.cargo`: `credentials.toml`, `config.toml`                |
+| pnpm, npm, corepack, bun                                                        | `PNPM_HOME=/opt/pnpm` (on `PATH`), store `/var/cache/pnpm` (`pnpm_config_store_dir`; pnpm 10 reads it from `~/.config/pnpm/rc`), `npm_config_prefix=/opt/npm-global` (bin on `PATH`), `COREPACK_HOME`, `BUN_INSTALL`   | `~/.npmrc`, `~/.npm` (npm's cache and its debug logs), `~/.bunfig.toml` |
+| Browsers for tests                                                              | `PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`, `PUPPETEER_CACHE_DIR=/opt/puppeteer`, `CYPRESS_CACHE_FOLDER=/opt/cypress`                                                                                               | none                                                                    |
+| Go, pip                                                                         | `GOMODCACHE=/var/cache/go/mod`, `GOCACHE=/var/cache/go/build`, `PIP_CACHE_DIR=/var/cache/pip`                                                                                                                          | `~/.netrc`, `pip.conf`, `~/go`                                          |
+| JVM                                                                             | `~/.gradle/caches`, `~/.gradle/wrapper` and `~/.m2/repository` link to `/var/cache/gradle` and `/var/cache/m2`                                                                                                         | `~/.gradle/gradle.properties`, `~/.m2/settings.xml`                     |
+| nvm, pyenv, gcloud, AWS, kubectl, Docker, gh, Hugging Face, firebase, git, curl | none                                                                                                                                                                                                                   | their usual paths under `~`                                             |
 
-A tool not in the table keeps its state in the user's home, so it is per person by default. The
-harness CLIs baked into the image stay where they were installed; `npm i -g` after the build lands
-in `/opt/npm-global`, ahead of them on `PATH`.
-
-Anything one person installs is usable by everyone. A toolchain unpacked with fixed file modes
-(mise, uv's Pythons, rustup, Playwright) can be extended or repaired by another person only with
-`sudo`.
+- **npm's cache is per user** because npm's debug logs live under it and print a token passed on the
+  command line (`--//registry…:_authToken=…`) verbatim.
+- **mise's cache is per user** because mise makes its lock files writable only by their creator, so
+  a second person could never take a lock in a shared one. Installs are shared all the same.
+- **nvm refuses to run while an npm prefix is set.** A person who uses nvm runs
+  `unset npm_config_prefix` first, as nvm itself says.
+- **A tool not in the table** keeps its state in the user's home, so it is per person by default.
+- **Fixed file modes:** anything one person installs is usable by everyone, but a toolchain unpacked
+  with fixed file modes (uv's Pythons, rustup, Playwright) can be extended or repaired by another
+  person only with `sudo`.
+- **Private artifacts are visible:** the shared caches hold what people download, so a private
+  package fetched by one person is readable by the others, as is anything in a shared Docker.
 
 ## Nix images take one person
 
-`nix` images get none of the above and run every process as root, as before. Their `/etc/passwd`
+`nix` images get only the probe step, and run every process as root, as before. Their `/etc/passwd`
 links into the read-only store, so no user can be added; the store cannot hold a setuid `sudo`; and
 nix as a non-root user needs the nix daemon. A workspace on a `nix` image serves one person.
 
 ## Custom base images
 
-A custom base image (`target.os.family: custom`) is not changed. Whether it can serve more than one
-person depends on what it carries: `sudo` with its setuid bit, `useradd`, `setfacl`, a writable
-`/etc/passwd`, and no user or group in 40000–49999 other than `mend`.
+A custom base image (`target.os.family: custom`) gets only the probe step. Whether it can serve more
+than one person depends on what it carries: `sudo` with its setuid bit, `useradd`, `setfacl`, a
+writable `/etc/passwd`, and no user or group in 40000–49999 other than `mend`. A base that builds as
+a user who cannot write `/etc` still builds; its image has no probe answer and reads as unknown.
 
 ## The image probe
 
 Every image, managed, `nix` or custom, runs a probe as its last build step and keeps the answer in
-`/etc/sealant/image-probe.json`: which of those tools it has, whether `/etc/passwd` is writable, the
-`mend` group, any user or group in the reserved range, the shared directories, and what
-`sealantd capabilities --json` reports. A managed image that lacks any of them fails its build. The
-Docker builder reads the answer back and records it on the build, so a client can learn before it
-creates a workspace whether the image can serve more than one person. The script stays in the image
-at `/usr/local/lib/sealant/image-probe`, so a running workspace can be asked the same question.
+`/etc/sealant/image-probe.json`. The answer covers:
+
+- which of the tools above the image has, and whether `sudo` carries its setuid bit;
+- the sudoers rule, and whether `/etc/sudoers` reads `/etc/sudoers.d`;
+- whether `/etc/passwd` is writable;
+- the `mend` group, and any user or group in the reserved range;
+- the person environment and the shared directories;
+- what `sealantd capabilities --json` reports;
+- whether the probe ran under `no_new_privs`.
+
+A managed image that lacks any of them fails its build. The Docker builder reads the answer back and
+records it on the build; a later build that reuses the image keeps it. A client can therefore learn
+before it creates a workspace whether the image can serve more than one person. The script stays in
+the image at `/usr/local/lib/sealant/image-probe`, so a running workspace can be asked the same
+question.
+
+The image is not the whole answer. Under `no_new_privs`, which Kubernetes pods run with
+(`allowPrivilegeEscalation: false`), `sudo` cannot raise a person's privileges; a probe run there
+reports it.

@@ -9,7 +9,9 @@
  *   uv's Pythons, rustup and `cargo build`, Playwright's browsers, and git in one worktree.
  * - **No credential crosses.** Alice's `~/.npmrc` and cargo `credentials.toml` stay in her home:
  *   Bob cannot read them, and no shared directory holds them after her installs.
- * - **One person, as today.** Root, with no users made, still runs `npm i -g` and `cargo install`.
+ * - **One person, as today.** Root, with no users made, has none of the person environment and
+ *   none of the shared paths, keeps its own pnpm store, and still runs nvm, the pyenv installer,
+ *   `npm i -g` and `cargo install` (the first three broke under an earlier image-wide `ENV`).
  *
  * Needs Docker and the network (npm, crates.io, GitHub releases, Playwright's CDN). Families come
  * from `SEALANT_PERSON_LAYOUT_E2E_FAMILIES` (default `arch,ubuntu,fedora`). Run with:
@@ -18,8 +20,11 @@
 import { spawn } from "node:child_process";
 import { rm } from "node:fs/promises";
 
-import { parseWorkspaceBlueprint } from "@sealant/validators";
-import type { WorkspaceImageProbe } from "@sealant/validators";
+import {
+  parseWorkspaceBlueprint,
+  parseWorkspaceImageProbe,
+  type WorkspaceImageProbe,
+} from "@sealant/validators";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { compileWorkspaceBuildSpec } from "./buildkit-builder.js";
@@ -88,14 +93,20 @@ check() { local name=$1; shift; if "$@" >/tmp/check.log 2>&1; then echo "OK $nam
 `;
 
 const TWO_PEOPLE = String.raw`
-IFS=: read -ra dirs <<< "$SEALANT_PERSON_SHARED_DIRS"
+mapfile -t dirs < /etc/sealant/person-shared-dirs
 setfacl -m g:mend:rwX -d -m g:mend:rwX "${"${dirs[@]}"}"
 mkdir -p /workspace && chown root:mend /workspace && chmod 2775 /workspace
 for spec in alice:40001 bob:40002; do
   useradd -u "${"${spec##*:}"}" -g mend -m -s /bin/bash "${"${spec%%:*}"}"
   chmod 0700 "/home/${"${spec%%:*}"}"
 done
-as() { local user=$1; shift; setpriv --reuid="$user" --regid=mend --init-groups -- env HOME="/home/$user" USER="$user" LOGNAME="$user" bash -c "umask 0002; cd ~; $*"; }
+# The person environment, applied as the client applies it: literal KEY=VALUE lines, and
+# PATH_PREPEND in front of the process's PATH. Root's processes never get it.
+person_env=()
+while IFS= read -r line; do
+  case "$line" in '#'*|'') ;; PATH_PREPEND=*) prepend=${"${line#PATH_PREPEND=}"} ;; *) person_env+=("$line") ;; esac
+done < /etc/sealant/person-env
+as() { local user=$1; shift; setpriv --reuid="$user" --regid=mend --init-groups -- env HOME="/home/$user" USER="$user" LOGNAME="$user" "${"${person_env[@]}"}" PATH="$prepend:$PATH" bash -c "umask 0002; cd ~; $*"; }
 
 check skel-links test -L /home/alice/.cargo/registry -a -L /home/alice/.cargo/bin -a -d /home/alice/.cargo/registry/
 check sudo-passwordless as alice 'sudo -n true'
@@ -115,8 +126,8 @@ check pnpm-store-shared as bob 'pnpm store path | grep -q ^/var/cache/pnpm/'
 check pnpm-bob-reuses as bob 'mkdir -p /workspace/b && cd /workspace/b && echo {} > package.json && out=$(pnpm add is-number@7.0.0 2>&1); echo "$out"; grep -q "downloaded 0" <<<"$out"'
 check pnpm-bob-in-alices-project as bob 'cd /workspace/a && pnpm add --silent is-odd@3.0.1'
 
-check mise-alice as alice 'mise use -g -y jq@1.7.1 && jq --version'
-check mise-bob-reuses as bob 'mise use -g -y jq@1.7.1 && jq --version && [ "$(stat -c %U /opt/mise/installs/jq/1.7.1)" = alice ]'
+check mise-alice as alice 'mise use -g -y jq@1.7.1 && mise exec -- jq --version'
+check mise-bob-reuses as bob 'mise use -g -y jq@1.7.1 && mise exec -- jq --version && [ "$(stat -c %U /opt/mise/installs/jq/1.7.1)" = alice ]'
 
 check uv-python-alice as alice 'uv python install --quiet 3.12'
 check uv-python-bob-reuses as bob 'uv run --no-project --python 3.12 python -c "import sys; assert sys.base_prefix.startswith(\"/opt/uv/python/\"), sys.base_prefix"'
@@ -133,12 +144,19 @@ check git-two-people as alice 'git init -q /workspace/repo && cd /workspace/repo
 check git-bob-in-alices-worktree as bob 'cd /workspace/repo && git status --short && git -c user.email=b@example.invalid -c user.name=b commit -q --allow-empty -m two'
 
 as alice 'echo "//registry.npmjs.org/:_authToken=canary-alice-npm" > ~/.npmrc && printf "[registry]\ntoken = \"canary-alice-cargo\"\n" > ~/.cargo/credentials.toml && npm i -g --silent is-even@1.0.0 && cd ~/hello && cargo build -q --offline'
+# A token on the command line, the CI pattern: npm's debug log prints it, so the log stays home.
+as alice 'npm view is-number version --//registry.npmjs.org/:_authToken=canary-alice-cli >/dev/null 2>&1; true'
 check credentials-private-npmrc as bob '! cat /home/alice/.npmrc'
 check credentials-private-cargo as bob '! cat /home/alice/.cargo/credentials.toml'
-check credentials-not-in-shared-dirs bash -c '! grep -rlI canary-alice /opt /var/cache'
+check npm-logs-in-home bash -c 'ls /home/alice/.npm/_logs/*-debug-0.log'
+check credentials-not-in-shared-dirs bash -c '! grep -rl canary-alice /opt /var/cache /tmp'
 `;
 
 const ONE_PERSON = String.raw`
+check root-env-has-nothing-of-the-layout bash -c 'for k in $(sed -n "s/^\([A-Za-z_]*\)=.*/\1/p" /etc/sealant/person-env); do [ -z "$(printenv "$k")" ] || { echo "$k is set"; exit 1; }; done; case ":$PATH:" in *:/opt/*) echo "$PATH"; exit 1;; esac'
+check root-pnpm-store-is-roots bash -c 'cd /tmp && store=$(pnpm store path) && echo "$store" && case "$store" in /var/cache/*) exit 1;; esac'
+check root-nvm bash -c 'curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | PROFILE=/dev/null bash >/dev/null && . "$HOME/.nvm/nvm.sh" && nvm install 22 >/dev/null && nvm use 22 >/dev/null && node --version | grep ^v22'
+check root-pyenv-installer bash -c 'curl -fsSL https://pyenv.run | bash >/dev/null && "$HOME/.pyenv/bin/pyenv" --version'
 check root-npm-global bash -c 'npm i -g --silent cowsay@1.6.0 && cowsay hi'
 check root-cargo-install bash -c 'sh -c "$INSTALL_CC" && curl -fsSL https://sh.rustup.rs | sh -s -- -y -q --profile minimal --no-modify-path && . "$HOME/.cargo/env" && cargo new -q /tmp/hello && cargo install -q --path /tmp/hello && /root/.cargo/bin/hello'
 `;
@@ -200,6 +218,38 @@ for (const family of families) {
       );
     }, 1_800_000);
 
+    it("reports sudo unusable under no_new_privs, as a Kubernetes pod runs", async () => {
+      const outcome = await docker([
+        "run",
+        "--rm",
+        "--security-opt",
+        "no-new-privileges",
+        "--entrypoint",
+        "/usr/local/lib/sealant/image-probe",
+        imageReference ?? "missing",
+      ]);
+      const underNoNewPrivileges = parseWorkspaceImageProbe(JSON.parse(outcome.stdout));
+      expect(underNoNewPrivileges.noNewPrivileges).toBe(true);
+      expect(imagePersonLayoutSupport(underNoNewPrivileges).missing).toContain(
+        "sudo-no-new-privileges",
+      );
+      const sudo = await docker(
+        [
+          "run",
+          "--rm",
+          "-i",
+          "--security-opt",
+          "no-new-privileges",
+          "--entrypoint",
+          "/bin/bash",
+          imageReference ?? "missing",
+          "-s",
+        ],
+        "useradd -u 40001 -g mend -m alice && setpriv --reuid=alice --regid=mend --init-groups -- sudo -n true; echo exit=$?",
+      );
+      expect(sudo.stdout).not.toContain("exit=0");
+    });
+
     it("still serves one person as root, as today", async () => {
       const outcome = await runScript(
         imageReference ?? "missing",
@@ -207,8 +257,9 @@ for (const family of families) {
         SCRIPT_PRELUDE + ONE_PERSON,
       );
       expect(outcome.stdout).not.toMatch(/^FAIL /m);
-      expect(outcome.stdout).toContain("OK root-npm-global");
-      expect(outcome.stdout).toContain("OK root-cargo-install");
+      expect((outcome.stdout.match(/^OK \S+/gm) ?? []).map((line) => line.slice(3))).toEqual(
+        TWO_PEOPLE_CHECKS.filter((name) => name?.startsWith("root-")),
+      );
     }, 900_000);
   });
 }

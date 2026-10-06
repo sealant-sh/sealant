@@ -10,11 +10,14 @@ import { compileWorkspaceBuildSpec, planWorkspaceImageBuild } from "./buildkit-b
 import {
   IMAGE_PROBE_PATH,
   IMAGE_PROBE_SCRIPT,
+  PERSON_ENV,
+  PERSON_ENV_FILE,
+  PERSON_ENV_PATH,
   PERSON_SHARED_DIRS,
+  PERSON_SHARED_DIRS_PATH,
   PERSON_SHARED_SUBDIRS,
   PERSON_SKEL_LINKS,
   PERSON_SUDOERS,
-  PERSON_TOOLCHAIN_ENV,
   PERSON_TOOLCHAINS,
   imagePersonLayoutSupport,
 } from "./person-layout.js";
@@ -40,6 +43,13 @@ const blueprintFor = (
 const containerfileFor = (family: string, options?: Parameters<typeof blueprintFor>[1]) =>
   planWorkspaceImageBuild({ blueprint: blueprintFor(family, options) }).containerfile;
 
+/** Every `ENV` instruction of a Containerfile, continuation lines joined. */
+const envInstructions = (containerfile: string): string[] =>
+  containerfile
+    .replaceAll("\\\n", " ")
+    .split("\n")
+    .filter((line) => line.startsWith("ENV "));
+
 const readyProbe: WorkspaceImageProbe = {
   version: 1,
   tools: {
@@ -52,47 +62,46 @@ const readyProbe: WorkspaceImageProbe = {
     setpriv: true,
   },
   sudoersMend: true,
+  sudoersIncludesDir: true,
+  noNewPrivileges: false,
   passwdWritable: true,
   mendGroup: "present",
   reservedIdsInUse: [],
+  personEnv: true,
   sharedDirs: [...PERSON_SHARED_DIRS],
   sealantd: { capabilities: ["exec.user", "dotfiles.user", "restore.owner_map"] },
 };
 
 describe("the person layout in the managed images", () => {
   const families = [
-    // Fedora's go in its package layer: a layer of their own would carry a rewritten rpmdb.
-    { family: "fedora", packages: "socat sudo acl util-linux", install: "dnf -y install bash" },
-    { family: "arch", packages: "sudo acl", install: "pacman -S --noconfirm --needed" },
+    // Fedora's and Arch's go in their package layer (person-layout.ts says why).
+    { family: "fedora", packageLine: /dnf -y install bash [^\n]* sudo acl util-linux /u },
+    { family: "arch", packageLine: /pacman -S --noconfirm --needed bash [^\n]* sudo acl /u },
     {
       family: "ubuntu",
-      packages: "sudo acl",
-      install: "apt-get install -y --no-install-recommends",
+      packageLine: /apt-get install -y --no-install-recommends sudo acl; \\/u,
     },
   ];
 
-  for (const { family, packages, install } of families) {
-    it(`gives ${family} the mend group, sudo, the ACL tools and the shared toolchains`, () => {
+  for (const { family, packageLine } of families) {
+    it(`gives ${family} the mend group, sudo, the ACL tools and the shared directories`, () => {
       const containerfile = containerfileFor(family);
 
-      expect(containerfile).toContain(install);
-      expect(containerfile).toContain(` ${packages}`);
+      expect(containerfile).toMatch(packageLine);
       expect(containerfile).toContain("groupadd -g 40000 mend");
-      for (const line of PERSON_SUDOERS) expect(containerfile).toContain(line.split("'")[0]);
+      for (const line of PERSON_SUDOERS.slice(1)) expect(containerfile).toContain(line);
       expect(containerfile).toContain("visudo -cqf /etc/sudoers.d/mend");
-      expect(containerfile).toContain(`chmod 2775 ${PERSON_SHARED_DIRS.join(" ")}`);
+      const dirs = [...PERSON_SHARED_DIRS, ...PERSON_SHARED_SUBDIRS];
+      expect(containerfile).toContain(`chmod 2775 ${dirs.join(" ")}`);
+      expect(containerfile).toContain(
+        `printf '%s\\n' ${dirs.map((dir) => `'${dir}'`).join(" ")} > '${PERSON_SHARED_DIRS_PATH}'`,
+      );
+      for (const line of PERSON_ENV_FILE.slice(2)) expect(containerfile).toContain(`'${line}'`);
+      expect(containerfile).toContain(`> '${PERSON_ENV_PATH}'`);
       for (const [link, target] of PERSON_SKEL_LINKS) {
         expect(containerfile).toContain(`ln -sfn ${target} /etc/skel/${link}`);
       }
-      for (const [name, value] of PERSON_TOOLCHAIN_ENV) {
-        expect(containerfile).toContain(`${name}='${value}'`);
-      }
-      expect(containerfile).toContain(
-        `SEALANT_PERSON_SHARED_DIRS='${[...PERSON_SHARED_DIRS, ...PERSON_SHARED_SUBDIRS].join(":")}'`,
-      );
-      expect(containerfile).toContain(
-        "PATH=/opt/mise/shims:/opt/npm-global/bin:/opt/pnpm:/opt/uv/bin:/opt/rust/cargo/bin:/opt/bun/bin:$PATH",
-      );
+      expect(containerfile).toContain("'store-dir=/var/cache/pnpm' > '/etc/skel/.config/pnpm/rc'");
       expect(containerfile).toContain("git config --system --replace-all safe.directory '*'");
       // A managed image that cannot run the person layout fails its build.
       expect(containerfile).toContain(
@@ -100,7 +109,32 @@ describe("the person layout in the managed images", () => {
       );
     });
 
-    it(`keeps ${family}'s package and harness layers ahead of the layout, and probes last`, () => {
+    it(`leaves ${family}'s environment exactly as it was`, () => {
+      const containerfile = containerfileFor(family);
+      const env = envInstructions(containerfile).join("\n");
+
+      // Root and every shared-layout process see the image ENV: nothing of the layout is in it.
+      for (const [name] of PERSON_ENV) expect(env).not.toContain(name);
+      expect(env).not.toContain("/opt/");
+      expect(env).not.toContain("/var/cache");
+      expect(env).not.toContain("SEALANT_PERSON");
+      // What broke one-person sessions in an earlier draft: nvm, the pyenv installer, the npm
+      // warnings, and every node_modules installed against root's pnpm store.
+      expect(containerfile).not.toMatch(/(^|[^p])npm_config_store_dir/mu);
+      for (const gone of [
+        "npm_config_devdir",
+        "npm_config_cache",
+        "NVM_DIR",
+        "PYENV_ROOT",
+        "/opt/nvm",
+        "/opt/pyenv",
+        "/opt/mise/shims",
+      ]) {
+        expect(containerfile).not.toContain(gone);
+      }
+    });
+
+    it(`keeps ${family}'s harness layers ahead of the layout, and probes last`, () => {
       const containerfile = containerfileFor(family);
       const layout = containerfile.indexOf("groupadd -g 40000 mend");
       const lastHarness = containerfile.lastIndexOf("RUN npm install -g");
@@ -108,45 +142,59 @@ describe("the person layout in the managed images", () => {
       const bootEnv = containerfile.indexOf("ENV SEALANT_OS_FAMILY=");
 
       expect(lastHarness).toBeGreaterThan(0);
-      // The harness layers, and the binaries' locations, are what they were before the layout:
-      // npm's global prefix moves only for what is installed after the image is built.
       expect(layout).toBeGreaterThan(lastHarness);
       expect(probe).toBeGreaterThan(layout);
       expect(bootEnv).toBeGreaterThan(probe);
     });
   }
 
-  it("installs nothing in Fedora's layout layer", () => {
-    const containerfile = containerfileFor("fedora");
-    const layout = containerfile.slice(containerfile.indexOf("# Mend's person layout"));
+  it("binds every sudo default to the mend group, so root's sudo is unchanged", () => {
+    const defaults = PERSON_SUDOERS.filter((line) => line.startsWith("Defaults"));
 
-    expect(layout.slice(0, layout.indexOf("\nENV "))).not.toContain("dnf");
-    expect(containerfile.match(/dnf -y install/g)).toHaveLength(1);
+    expect(defaults.length).toBeGreaterThan(0);
+    for (const line of defaults) expect(line.startsWith("Defaults:%mend ")).toBe(true);
+    expect(PERSON_SUDOERS.find((line) => line.includes("env_keep"))).toBe(
+      `Defaults:%mend env_keep += "${PERSON_ENV.map(([name]) => name).join(" ")}"`,
+    );
   });
 
-  it("adds the docker group, outside the reserved range, only with the workspace's own Docker", () => {
-    expect(containerfileFor("arch", { docker: true })).toContain("groupadd -f -g 2375 docker");
-    expect(containerfileFor("arch", { docker: false })).not.toContain("docker; \\");
-    expect(containerfileFor("arch", { docker: false })).not.toContain("groupadd -f -g 2375");
+  it("installs nothing in Fedora's or Arch's layout layer", () => {
+    for (const family of ["fedora", "arch"]) {
+      const containerfile = containerfileFor(family);
+      const layout = containerfile.slice(containerfile.indexOf("# Mend's person layout"));
+      const layoutRun = layout.slice(0, layout.indexOf("\n\n"));
+
+      expect(layoutRun).not.toMatch(/dnf|pacman/u);
+    }
+  });
+
+  it("adds the docker group, keeping one the image has, only with the workspace's own Docker", () => {
+    expect(containerfileFor("arch", { docker: true })).toContain(
+      "getent group docker >/dev/null || groupadd -g 2375 docker",
+    );
+    expect(containerfileFor("arch", { docker: false })).not.toContain("groupadd -g 2375");
   });
 
   it("leaves nix images one person's, and records what the probe finds there", () => {
     const containerfile = containerfileFor("nix");
 
     expect(containerfile).not.toContain("groupadd -g 40000 mend");
-    expect(containerfile).not.toContain("/etc/sudoers.d/mend; \\");
-    expect(containerfile).not.toContain("MISE_DATA_DIR");
+    expect(containerfile).not.toContain(`> '${PERSON_ENV_PATH}'`);
     expect(containerfile).toContain(`/usr/local/lib/sealant/image-probe > ${IMAGE_PROBE_PATH}`);
     expect(containerfile).not.toContain("image-probe --require");
   });
 
-  it("probes a custom base without changing it or failing its build", () => {
+  it("probes a custom base without changing it, and never fails its build", () => {
     const containerfile = containerfileFor("custom", { baseImage: "node:24-bookworm" });
 
     expect(containerfile).not.toContain("groupadd -g 40000 mend");
-    expect(containerfile).not.toContain("MISE_DATA_DIR");
+    expect(containerfile).not.toContain(`> '${PERSON_ENV_PATH}'`);
     expect(containerfile).toContain(`/usr/local/lib/sealant/image-probe > ${IMAGE_PROBE_PATH}`);
     expect(containerfile).not.toContain("image-probe --require");
+    // A base that builds as a user who cannot write /etc still builds, and reads as unknown.
+    expect(containerfile).toContain(
+      "|| echo 'sealant: the image probe could not be written; this image reads as unknown.' >&2",
+    );
   });
 
   it("carries the layout into a MicroVM image of the same base", () => {
@@ -158,7 +206,7 @@ describe("the person layout in the managed images", () => {
       contextDigest: "digest",
     });
 
-    expect(recipe.containerfile).toContain("pacman -S --noconfirm --needed sudo acl");
+    expect(recipe.containerfile).toMatch(/pacman -S --noconfirm --needed bash [^\n]* sudo acl /u);
     expect(recipe.containerfile).toContain("groupadd -g 40000 mend");
     expect(recipe.containerfile).toContain("image-probe --require");
   });
@@ -166,19 +214,15 @@ describe("the person layout in the managed images", () => {
   it("names a per-user credential store, never a shared one, for every tool it shares", () => {
     for (const toolchain of PERSON_TOOLCHAINS) {
       for (const shared of toolchain.shared) {
-        expect(shared).not.toMatch(/credential|token|\.npmrc|netrc|auth/i);
+        expect(shared).not.toMatch(/credential|token|\.npmrc|netrc|auth|npm_config_cache/i);
       }
     }
     // Cargo's home, which holds credentials.toml, is the user's; only its caches and binaries link
-    // out of it.
-    expect(PERSON_TOOLCHAIN_ENV.map(([name]) => name)).not.toContain("CARGO_HOME");
+    // out of it. npm's cache holds its debug logs, which print a token passed on the command line.
+    const names = PERSON_ENV.map(([name]) => name);
+    expect(names).not.toContain("CARGO_HOME");
+    expect(names).not.toContain("npm_config_cache");
     expect(PERSON_SKEL_LINKS.map(([link]) => link)).not.toContain(".cargo");
-    expect(PERSON_SKEL_LINKS.map(([link]) => link)).not.toContain(".cargo/credentials.toml");
-    // sudo keeps the toolchain variables and nothing else.
-    const envKeep = PERSON_SUDOERS.find((line) => line.includes("env_keep"));
-    expect(envKeep).toBe(
-      `Defaults env_keep += "${PERSON_TOOLCHAIN_ENV.map(([name]) => name).join(" ")}"`,
-    );
   });
 });
 
@@ -227,20 +271,57 @@ describe("reading the image probe back from a built image", () => {
 
 describe("imagePersonLayoutSupport", () => {
   it("says yes when the image and its sealantd have everything", () => {
-    expect(imagePersonLayoutSupport(readyProbe)).toEqual({ supported: true, missing: [] });
+    expect(imagePersonLayoutSupport(readyProbe)).toEqual({
+      status: "supported",
+      missing: [],
+      unknown: [],
+    });
   });
 
-  it("names every sealantd capability a sealantd without the command cannot report", () => {
+  it("names every capability a sealantd without the command cannot report", () => {
     expect(imagePersonLayoutSupport({ ...readyProbe, sealantd: null })).toEqual({
-      supported: false,
+      status: "unsupported",
       missing: ["sealantd:exec.user", "sealantd:dotfiles.user", "sealantd:restore.owner_map"],
+      unknown: [],
     });
+  });
+
+  it("reads an answer it cannot read as unknown, never as missing capabilities", () => {
+    for (const sealantd of [
+      "unreadable" as const,
+      { capabilities: { "exec.user": true } },
+      { capabilities: ["exec.user", 7] },
+      { features: ["exec.user"] },
+    ]) {
+      expect(imagePersonLayoutSupport({ ...readyProbe, sealantd })).toEqual({
+        status: "unknown",
+        missing: [],
+        unknown: ["sealantd"],
+      });
+    }
+  });
+
+  it("refuses sudo under no_new_privs, seen by the probe or set by the runtime", () => {
+    expect(imagePersonLayoutSupport(readyProbe, { noNewPrivileges: true }).missing).toEqual([
+      "sudo-no-new-privileges",
+    ]);
+    expect(imagePersonLayoutSupport({ ...readyProbe, noNewPrivileges: true }).missing).toEqual([
+      "sudo-no-new-privileges",
+    ]);
   });
 
   it("refuses a nix-like image: no setuid sudo, no useradd, a read-only passwd", () => {
     const probe: WorkspaceImageProbe = {
       ...readyProbe,
-      tools: { ...readyProbe.tools, sudoSetuid: false, useradd: false, setfacl: false },
+      tools: {
+        ...readyProbe.tools,
+        sudoSetuid: false,
+        useradd: false,
+        groupadd: false,
+        setfacl: false,
+      },
+      sudoersMend: false,
+      sudoersIncludesDir: false,
       passwdWritable: false,
       mendGroup: "absent",
     };
@@ -248,6 +329,8 @@ describe("imagePersonLayoutSupport", () => {
     expect(imagePersonLayoutSupport(probe).missing).toEqual([
       "setuid-sudo",
       "useradd",
+      "groupadd",
+      "sudoers",
       "setfacl",
       "passwd-writable",
     ]);
@@ -263,27 +346,34 @@ describe("imagePersonLayoutSupport", () => {
     expect(imagePersonLayoutSupport(probe).missing).toEqual(["mend-group", "reserved-ids"]);
   });
 
-  it("accepts a mend group or sudoers rule prepare can still add", () => {
+  it("accepts a mend group or sudoers rule prepare can still add, and only then", () => {
     expect(
-      imagePersonLayoutSupport({ ...readyProbe, mendGroup: "absent", sudoersMend: false }),
-    ).toEqual({ supported: true, missing: [] });
+      imagePersonLayoutSupport({ ...readyProbe, mendGroup: "absent", sudoersMend: false }).status,
+    ).toBe("supported");
+    expect(
+      imagePersonLayoutSupport({
+        ...readyProbe,
+        mendGroup: "absent",
+        tools: { ...readyProbe.tools, groupadd: false },
+      }).missing,
+    ).toEqual(["groupadd"]);
+    expect(
+      imagePersonLayoutSupport({ ...readyProbe, sudoersMend: false, sudoersIncludesDir: false })
+        .missing,
+    ).toEqual(["sudoers"]);
   });
 });
 
 describe("the image probe script", () => {
   const runProbe = (args: readonly string[]) =>
     execFileAsync("/bin/sh", ["-c", IMAGE_PROBE_SCRIPT.join("\n"), "image-probe", ...args], {
-      env: {
-        PATH: process.env["PATH"] ?? "/usr/bin:/bin",
-        SEALANT_PERSON_SHARED_DIRS: "/opt/a:/var/cache/b",
-      },
+      env: { PATH: process.env["PATH"] ?? "/usr/bin:/bin" },
     });
 
   it("prints JSON the build record accepts, on this machine", async () => {
     const { stdout } = await runProbe([]);
     const probe = parseWorkspaceImageProbe(JSON.parse(stdout));
 
-    expect(probe.sharedDirs).toEqual(["/opt/a", "/var/cache/b"]);
     expect(typeof probe.tools.useradd).toBe("boolean");
     for (const entry of probe.reservedIdsInUse) {
       expect(entry).toMatch(/^(user|group):[A-Za-z0-9._-]+:4\d{4}$/);

@@ -32,7 +32,12 @@ import {
   type DB,
 } from "@sealant/db";
 import { type GitHubSourceIntegration } from "@sealant/source-integrations";
-import { newWorkspaceSchema, type NewWorkspace, type WorkspaceBuild } from "@sealant/validators";
+import {
+  newWorkspaceSchema,
+  workspaceImageProbeSchema,
+  type NewWorkspace,
+  type WorkspaceBuild,
+} from "@sealant/validators";
 import { Clock, Deferred, Effect, Exit, Layer, Option, Schedule } from "effect";
 import { z } from "zod";
 
@@ -409,6 +414,11 @@ const attemptPlanHashReuse = (input: {
     const artifactName =
       priorJob.resultPayload?.metadata?.defaultArtifactName ??
       `sealant-workspace-${planned.osFamily}`;
+    // The image is the one the prior build probed, so its answer is this build's too: without it a
+    // client would see "unknown" for every create but the first of a plan.
+    const priorProbe = workspaceImageProbeSchema.safeParse(
+      priorJob.resultPayload?.metadata?.imageProbe,
+    );
 
     return {
       publishedImage,
@@ -433,6 +443,7 @@ const attemptPlanHashReuse = (input: {
             `Reused published image ${priorJob.publishedDigestReference}: plan hash ${planned.planHash} unchanged; build and publish skipped.`,
           ],
           planHash: planned.planHash,
+          ...(priorProbe.success ? { imageProbe: priorProbe.data } : {}),
         },
       },
     };
