@@ -162,7 +162,7 @@ describe("inspectWorkspaceImage", () => {
       publishedDigestReference: "registry/sealant/workspaces/demo@sha256:abc",
       publishedDigest: "sha256:abc",
       resultPayload: {
-        metadata: { planHash, ...(probe === undefined ? {} : { personLayoutProbe: probe }) },
+        metadata: { planHash, ...(probe === undefined ? {} : { imageProbe: probe }) },
       },
     }) as unknown as WorkspaceBuildJob;
 
@@ -187,24 +187,43 @@ describe("inspectWorkspaceImage", () => {
         ),
     );
 
+  // The image probe a managed image records (#327), able to run the layout.
   const capable = {
-    sealantd: { execUser: true, dotfilesUser: true, restoreOwnerMap: true },
-    tools: { sudo: true, useradd: true, setfacl: true },
-    reservedIdsFree: true,
-    nix: false,
+    version: 1,
+    tools: {
+      sudo: true,
+      sudoSetuid: true,
+      useradd: true,
+      groupadd: true,
+      setfacl: true,
+      getfacl: true,
+      setpriv: true,
+      flock: true,
+    },
+    sudoersMend: true,
+    sudoersIncludesDir: true,
+    noNewPrivileges: false,
+    passwdWritable: true,
+    mendGroup: "present",
+    reservedIdsInUse: [],
+    personEnv: true,
+    sharedDirs: [],
+    sealantd: { supports: ["dotfiles.user", "exec.user", "restore.owner_map"] },
   };
+  const withoutSetpriv = { ...capable, tools: { ...capable.tools, setpriv: false } };
 
   it("answers the plan's image and what it lacks, before any create", async () => {
-    const answer = await inspect(job({ ...capable, tools: { ...capable.tools, sudo: false } }));
+    const answer = await inspect(job(withoutSetpriv));
     expect(answer.planHash).toBe(planHash);
     expect(answer.publishedImage?.digest).toBe("sha256:abc");
-    expect(answer.personLayout).toMatchObject({ status: "unsupported", missing: ["sudo"] });
+    expect(answer.personLayout).toMatchObject({ status: "unsupported", missing: ["setpriv"] });
   });
 
   it("is unknown, never supported, while ACL support is undeclared or nothing is built", async () => {
     expect((await inspect(job(capable))).personLayout).toMatchObject({
       status: "unknown",
       missing: [],
+      unknown: ["acl"],
       acl: "unknown",
     });
     expect((await inspect(job(undefined))).personLayout.status).toBe("unknown");
@@ -214,10 +233,7 @@ describe("inspectWorkspaceImage", () => {
   });
 
   it("names the image only to the owner who built it", async () => {
-    const answer = await inspect(
-      job({ ...capable, tools: { ...capable.tools, sudo: false } }),
-      "usr_bob",
-    );
+    const answer = await inspect(job(withoutSetpriv), "usr_bob");
     expect(answer.publishedImage).toBeUndefined();
     expect(answer.personLayout.status).toBe("unsupported");
   });

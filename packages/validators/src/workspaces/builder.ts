@@ -84,6 +84,8 @@ export const workspaceImageProbeSchema = z.object({
     setfacl: z.boolean(),
     getfacl: z.boolean(),
     setpriv: z.boolean(),
+    /** Absent from images probed before it was recorded: unknown. */
+    flock: z.boolean().optional(),
   }),
   /** `/etc/sudoers.d/mend` exists: the `mend` group's passwordless rule. */
   sudoersMend: z.boolean(),

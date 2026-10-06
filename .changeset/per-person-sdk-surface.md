@@ -17,8 +17,9 @@ The SDK surface for per-person homes (Mend ADR 0016):
   client-side otherwise; until the runtime can start a process as another user, the control plane
   refuses it too (`409`, code `user-unsupported`). It never runs as the workspace's own user
   instead. `SessionConflictError` gains an optional `code`.
-- An image's per-person capability (`personLayout`: `status`, `missing`, `runtime`, `acl`) is on
-  every workspace read's `publishedImage`, on `launch.image` after `ready()` and from
-  `workspace.image()`. `workspaces.imageKey(options)` computes, with no call, a key for the image a
-  create would build; `workspaces.inspectImage(options)` (`POST /v1/workspaces/image`) reads the
-  capability before a create, for a key not yet known.
+- An image's per-person capability (`personLayout`: `status`, `missing`, `unknown`, `runtime`,
+  `acl`), derived from the image probe the build records (`metadata.imageProbe`), is on every
+  workspace read's `publishedImage`, on `launch.image` after `ready()` and from `workspace.image()`.
+  `workspaces.imageKey(options)` computes, with no call, a key for the image a create would build;
+  `workspaces.inspectImage(options)` (`POST /v1/workspaces/image`) reads the capability before a
+  create, for a key not yet known.

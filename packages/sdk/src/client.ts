@@ -201,7 +201,11 @@ export class Sealant {
         ...(answered.publishedImage === undefined
           ? {}
           : { image: toWorkspaceImage(answered.publishedImage) }),
-        personLayout: { ...answered.personLayout, missing: [...answered.personLayout.missing] },
+        personLayout: {
+          ...answered.personLayout,
+          missing: [...answered.personLayout.missing],
+          unknown: [...answered.personLayout.unknown],
+        },
       };
     },
 

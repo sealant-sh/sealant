@@ -1108,8 +1108,10 @@ export interface WorkspaceCredentialHome {
  */
 export interface WorkspaceImagePersonLayout {
   readonly status: "supported" | "unsupported" | "unknown";
-  /** What the image or the runtime lacks, in words; empty when nothing is known to be missing. */
+  /** Stable codes of what the image or the runtime lacks (`setuid-sudo`, `setpriv`, `acl`, …). */
   readonly missing: readonly string[];
+  /** What could not be read (`probe`, `sealantd`, `flock`, `acl`). */
+  readonly unknown: readonly string[];
   /** The runtime the answer is for: the deployment's default adapter. */
   readonly runtime: string;
   /** ACLs on that runtime's `/workspace`, as the operator declared them. */

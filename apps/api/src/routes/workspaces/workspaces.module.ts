@@ -3600,6 +3600,6 @@ export const inspectWorkspaceImage = (input: { readonly payload: InspectWorkspac
         : { publishedImage: image }),
       personLayout:
         image?.personLayout ??
-        personLayoutCapability(job?.resultPayload?.metadata?.personLayoutProbe, context),
+        personLayoutCapability(job?.resultPayload?.metadata?.imageProbe, context),
     } satisfies InspectWorkspaceImageResponse;
   });

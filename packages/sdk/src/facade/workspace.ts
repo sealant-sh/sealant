@@ -219,7 +219,13 @@ export const toWorkspaceImage = (image: WirePublishedImage): WorkspaceImage => (
   digest: image.digest,
   ...(image.personLayout === undefined
     ? {}
-    : { personLayout: { ...image.personLayout, missing: [...image.personLayout.missing] } }),
+    : {
+        personLayout: {
+          ...image.personLayout,
+          missing: [...image.personLayout.missing],
+          unknown: [...image.personLayout.unknown],
+        },
+      }),
 });
 
 /** Wire → public credential home. */

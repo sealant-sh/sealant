@@ -504,22 +504,27 @@ conversation home while that person's process is about to run there.
   failed read fifteen seconds), and refuses it client-side otherwise: an older control plane would
   decode the request without the field and run the process as the workspace's own user. Today's
   reports `false`.
-- **The image's per-person capability.** The image build's probe (Delivery 9) records on the build's
-  metadata `personLayoutProbe`: what `sealantd capabilities --json` reports, whether the image has
-  `sudo`, `useradd` and `setfacl`, whether the reserved ids are free, and whether it is a nix image.
-  Core derives `personLayout = { status, missing, runtime, acl }` from it and the operator's
-  `SEALANT_WORKSPACE_ACLS` (whether the default runtime's `/workspace` takes ACLs). Anything not
-  known is `unknown`, never `supported`. It is reported on every workspace read's `publishedImage`,
-  so a launch's image is known with no extra call (SDK `launch.image` after `ready()`,
-  `workspace.image()`), and before a create by `POST /v1/workspaces/image { spec }` (SDK
-  `workspaces.inspectImage(options)`): the spec is planned exactly as the build plans it and the
-  latest image published for the plan answers. That read creates nothing, and names the image only
-  to the owner who built it. A caller avoids it with `workspaces.imageKey(options)`, a key for the
-  capability (not the image's identity: the plan also reads the runtime's environment, roots and
-  dotfiles) that the SDK computes from the spec alone (its image-shaping parts: harness, tooling,
-  customization, lifecycle, access, target; not sources or runtime), with no call: Mend keeps what a
-  launch's `launch.image` told it under that key and calls `inspectImage` only for a key it has not
-  seen. The capability on a workspace read names that workspace's runtime.
+- **The image's per-person capability.** The image build's probe (sealant#327) records on the
+  build's metadata `imageProbe`: the tools (setuid `sudo`, `useradd`, `setfacl`, `setpriv`,
+  `flock`), the sudoers rule, a writable passwd, the `mend` group, the reserved ids, and what its
+  sealantd reports; a managed image that cannot run the layout, `setpriv` and `flock` included,
+  fails its build. Core derives `personLayout = { status, missing, unknown, runtime, acl }` from it
+  with `imagePersonLayoutSupport` (the runtime's `no_new_privs` counted: Kubernetes workspaces run
+  with it, where `sudo` cannot raise a person) and the operator's `SEALANT_WORKSPACE_ACLS`. Anything
+  not known is `unknown`, never `supported`. It is reported on every workspace read's
+  `publishedImage`, for that workspace's runtime, so a launch's image is known with no extra call
+  (SDK `launch.image` after `ready()`, `workspace.image()`), and before a create by
+  `POST /v1/workspaces/image { spec }` (SDK `workspaces.inspectImage(options)`): the spec is planned
+  exactly as the build plans it and the latest image published for the plan answers. That read
+  creates nothing, and names the image only to the owner who built it. A caller avoids it with
+  `workspaces.imageKey(options)`, a key for the capability (not the image's identity: the plan also
+  reads the runtime's environment, roots and dotfiles) that the SDK computes from the spec alone
+  (its image-shaping parts: harness, tooling, customization, lifecycle, access, target; not sources
+  or runtime), with no call: Mend keeps what a launch's `launch.image` told it under that key and
+  calls `inspectImage` only for a key it has not seen. On a MicroVM deployment the build's plan hash
+  is its recipe's, which depends on worker configuration, so the read finds nothing and answers
+  `unknown`; the capability is still on every read of a launched workspace. A reused image carries
+  its build's probe forward.
 
 ## 7. The `sealant` CLI — `apps/cli`
 

@@ -25,7 +25,8 @@ const config = resolveInternalConfig({ baseUrl: "http://stub.invalid", ownerUser
 
 const personLayout = {
   status: "unsupported" as const,
-  missing: ["sudo"],
+  missing: ["setpriv"],
+  unknown: [],
   runtime: "docker",
   acl: "unknown" as const,
 };

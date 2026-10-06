@@ -65,17 +65,23 @@ export const workspaceSshTargetSchema = Schema.Struct({
 export type WorkspaceSshTarget = typeof workspaceSshTargetSchema.Type;
 
 /**
- * Whether an image can run Mend's per-person layout on this deployment's runtime (Mend ADR 0016):
- * its sealantd runs processes and dotfiles as a user and restores owners, it has `sudo`, `useradd`
- * and `setfacl`, no user or group in 40000–49999 but `mend`, it is not a nix image, and the
- * runtime's `/workspace` takes ACLs. From the image build's probe and the operator's declaration
- * of ACL support (`SEALANT_WORKSPACE_ACLS`); what is not known is `unknown`, never `supported`.
+ * Whether an image can run Mend's per-person layout on a runtime (Mend ADR 0016): the verdict of
+ * the image build's probe (`metadata.imageProbe`: setuid `sudo` and a usable sudoers rule,
+ * `useradd`, `setfacl`, `setpriv`, `flock`, a writable passwd, the `mend` group and the reserved
+ * ids, and what its sealantd reports), the runtime's `no_new_privs` (Kubernetes), and ACLs on
+ * `/workspace` as the operator declares them (`SEALANT_WORKSPACE_ACLS`). What is not known is
+ * `unknown`, never `supported`.
  */
 export const workspaceImagePersonLayoutSchema = Schema.Struct({
   status: Schema.Literals(["supported", "unsupported", "unknown"]),
-  /** What the image or the runtime lacks, in words; empty when nothing is known to be missing. */
+  /**
+   * Stable codes of what the image or the runtime lacks (`setuid-sudo`, `sudo-no-new-privileges`,
+   * `useradd`, `setpriv`, `flock`, `reserved-ids`, `sealantd:<capability>`, `acl`, …).
+   */
   missing: Schema.Array(Schema.String),
-  /** The runtime the answer is for: the deployment's default adapter. */
+  /** What could not be read: `probe` (an image built before the probe), `sealantd`, `flock`, `acl`. */
+  unknown: Schema.Array(Schema.String),
+  /** The runtime the answer is for: the workspace's, or the deployment's default before create. */
   runtime: NonEmptyString,
   /** ACLs on that runtime's `/workspace`, as the operator declared them. */
   acl: Schema.Literals(["supported", "unsupported", "unknown"]),

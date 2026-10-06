@@ -432,8 +432,8 @@ export const IMAGE_PROBE_SCRIPT: readonly string[] = [
   "fi",
   "sudoers_mend=$(flag test -f /etc/sudoers.d/mend)",
   `person_env=$(flag test -f ${PERSON_ENV_PATH})`,
-  'printf \'{"version":1,"tools":{"sudo":%s,"sudoSetuid":%s,"useradd":%s,"groupadd":%s,"setfacl":%s,"getfacl":%s,"setpriv":%s},\' \\',
-  '  "$(flag has sudo)" "$sudo_setuid" "$(flag has useradd)" "$(flag has groupadd)" "$(flag has setfacl)" "$(flag has getfacl)" "$(flag has setpriv)"',
+  'printf \'{"version":1,"tools":{"sudo":%s,"sudoSetuid":%s,"useradd":%s,"groupadd":%s,"setfacl":%s,"getfacl":%s,"setpriv":%s,"flock":%s},\' \\',
+  '  "$(flag has sudo)" "$sudo_setuid" "$(flag has useradd)" "$(flag has groupadd)" "$(flag has setfacl)" "$(flag has getfacl)" "$(flag has setpriv)" "$(flag has flock)"',
   'printf \'"sudoersMend":%s,"sudoersIncludesDir":%s,"noNewPrivileges":%s,"passwdWritable":%s,"mendGroup":"%s","reservedIdsInUse":[%s],"personEnv":%s,"sharedDirs":[%s],"sealantd":%s}\\n\' \\',
   '  "$sudoers_mend" "$includes_dir" "$no_new_privs" "$passwd_writable" "$mend_group" "$ids" "$person_env" "$dirs" "$sealantd_json"',
   'if [ "${1:-}" = --require ]; then',
@@ -444,6 +444,9 @@ export const IMAGE_PROBE_SCRIPT: readonly string[] = [
   '  has useradd || missing="$missing useradd"',
   '  has setfacl || missing="$missing setfacl"',
   '  has getfacl || missing="$missing getfacl"',
+  // Every write of a person's logins into their home takes flock and drops to them with setpriv.
+  '  has setpriv || missing="$missing setpriv"',
+  '  has flock || missing="$missing flock"',
   '  [ "$passwd_writable" = true ] || missing="$missing passwd-writable"',
   '  [ "$mend_group" = present ] || missing="$missing mend-group"',
   '  [ "$person_env" = true ] || missing="$missing person-env"',
@@ -494,7 +497,8 @@ export type PersonLayoutSupport = {
  * `no_new_privs`, or the runtime sets it: Kubernetes pods run with `allowPrivilegeEscalation:
  * false`), `useradd`, `groupadd` (no `mend` group and nothing to add it with), `sudoers` (no rule
  * and no `includedir` to add one in), `setfacl`, `passwd-writable`, `mend-group` (its name or gid
- * taken), `reserved-ids`, and `sealantd:<capability>` for each capability a sealantd that answers
+ * taken), `reserved-ids`, `setpriv` and `flock` (every write into a person's home needs them;
+ * `flock` is unknown on images probed before it was recorded), and `sealantd:<capability>` for each capability a sealantd that answers
  * does not list (all three for a sealantd without the command). `unknown` holds `sealantd` when it
  * answered with something this reader cannot read. ACL support on `/workspace` is the runtime's to
  * report.
@@ -513,6 +517,10 @@ export const imagePersonLayoutSupport = (
   if (probe.mendGroup === "absent" && !probe.tools.groupadd) missing.push("groupadd");
   if (!probe.sudoersMend && !probe.sudoersIncludesDir) missing.push("sudoers");
   if (!probe.tools.setfacl) missing.push("setfacl");
+  // Core writes a person's logins into their home under flock, as them through setpriv.
+  if (!probe.tools.setpriv) missing.push("setpriv");
+  if (probe.tools.flock === false) missing.push("flock");
+  if (probe.tools.flock === undefined) unknown.push("flock");
   if (!probe.passwdWritable) missing.push("passwd-writable");
   if (probe.mendGroup === "conflict") missing.push("mend-group");
   if (probe.reservedIdsInUse.length > 0) missing.push("reserved-ids");

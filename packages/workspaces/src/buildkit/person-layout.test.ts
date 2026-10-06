@@ -64,6 +64,7 @@ const readyProbe: WorkspaceImageProbe = {
     setfacl: true,
     getfacl: true,
     setpriv: true,
+    flock: true,
   },
   sudoersMend: true,
   sudoersIncludesDir: true,
@@ -306,6 +307,31 @@ describe("reading the image probe back from a built image", () => {
 });
 
 describe("imagePersonLayoutSupport", () => {
+  it("needs setpriv and flock, which every write into a person's home takes", () => {
+    expect(
+      imagePersonLayoutSupport({ ...readyProbe, tools: { ...readyProbe.tools, setpriv: false } })
+        .missing,
+    ).toEqual(["setpriv"]);
+    expect(
+      imagePersonLayoutSupport({ ...readyProbe, tools: { ...readyProbe.tools, flock: false } })
+        .missing,
+    ).toEqual(["flock"]);
+    // An image probed before flock was recorded: unknown, never supported.
+    const withoutFlock = {
+      sudo: true,
+      sudoSetuid: true,
+      useradd: true,
+      groupadd: true,
+      setfacl: true,
+      getfacl: true,
+      setpriv: true,
+    };
+    expect(imagePersonLayoutSupport({ ...readyProbe, tools: withoutFlock })).toMatchObject({
+      status: "unknown",
+      unknown: ["flock"],
+    });
+  });
+
   it("says yes when the image and its sealantd have everything", () => {
     expect(imagePersonLayoutSupport(readyProbe)).toEqual({
       status: "supported",

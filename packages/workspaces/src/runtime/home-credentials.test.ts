@@ -604,7 +604,7 @@ describe("buildCredentialFileWriteScript for a launch's credentialsHome", () => 
         mode: "600",
         home: { uid, gid, generation: GEN_A, providers: ["claude", "github"] },
       },
-      { stateDir: w.state },
+      { stateDir: w.state, parentOwnerUid: uid },
     );
     // The adapters pipe `contentBase64` as it is; a launch delivered again writes again.
     const deliveries = [1, 2].map(() =>

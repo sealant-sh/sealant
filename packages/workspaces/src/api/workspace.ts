@@ -212,7 +212,7 @@ export const resolveWorkspacePublishedImage = (
       ? {}
       : {
           personLayout: personLayoutCapability(
-            latestJob.resultPayload?.metadata?.personLayoutProbe,
+            latestJob.resultPayload?.metadata?.imageProbe,
             personLayout,
           ),
         }),
