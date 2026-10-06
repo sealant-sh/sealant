@@ -243,6 +243,7 @@ const refreshOneAccount = Effect.fn("refreshClaudeSessionAccount")(function* (in
         provider: "claude",
         copyJson: claudeCredentialsCopy(observed),
         targetOptions: input.targetOptions,
+        credentialCipher,
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning(`${describe}: pushing the refreshed copy failed.`, cause),

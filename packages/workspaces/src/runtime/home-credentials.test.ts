@@ -1,9 +1,11 @@
 /**
- * The script that writes a person's logins into a home, run for real by `sh` against a temporary
- * directory. The test's own uid and gid stand in for the home's owner, so `chown` needs no root.
+ * The script that writes a person's logins into a home, run for real by `sh` against temporary
+ * directories. The test's own uid and gid stand in for the home's owner, so `chown` needs no root;
+ * the marker and lock live in a scratch state directory instead of `/run/sealant-homes`.
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -19,10 +21,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   buildHomeCredentialScript,
-  HOME_MARKER_FILE,
   HOME_SCRIPT_EXIT,
   homePathProblem,
   homeScriptStdin,
+  homeStateKey,
   type HomeCredentialProvider,
   type HomeCredentialScriptInput,
 } from "./home-credentials.js";
@@ -40,28 +42,42 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-const run = (
-  input: Omit<HomeCredentialScriptInput, "writes"> & {
-    readonly writes: readonly {
-      readonly provider: HomeCredentialProvider;
-      readonly content: string;
-    }[];
-  },
-) =>
-  spawnSync(
-    "sh",
-    [
-      "-c",
-      buildHomeCredentialScript({ ...input, writes: input.writes.map(({ provider }) => provider) }),
-    ],
-    { input: homeScriptStdin(input.writes.map(({ content }) => content)), encoding: "utf8" },
-  );
+type Writes = readonly { readonly provider: HomeCredentialProvider; readonly content: string }[];
+type RunInput = Omit<HomeCredentialScriptInput, "writes" | "stateDir"> & {
+  readonly writes: Writes;
+};
+
+/** One scratch world: homes under `root`, markers and locks under `state`. */
+const world = () => {
+  const root = scratch();
+  const state = join(root, "state");
+  const scriptOf = (input: RunInput) =>
+    buildHomeCredentialScript({
+      ...input,
+      stateDir: state,
+      writes: input.writes.map(({ provider }) => provider),
+    });
+  const run = (input: RunInput) =>
+    spawnSync("sh", ["-c", scriptOf(input)], {
+      input: homeScriptStdin(input.writes.map(({ content }) => content)),
+      encoding: "utf8",
+    });
+  const markerPath = (home: string) => join(state, `${homeStateKey(home)}.generation`);
+  const marker = (home: string) =>
+    existsSync(markerPath(home)) ? readFileSync(markerPath(home), "utf8") : undefined;
+  const home = (name: string) => {
+    const path = join(root, name);
+    mkdirSync(path, { mode: 0o700 });
+    return path;
+  };
+  return { root, state, scriptOf, run, marker, markerPath, home };
+};
 
 const GEN_A = "generation-alice-1";
 const GEN_B = "generation-bob-01";
-const marker = (home: string) => readFileSync(join(home, HOME_MARKER_FILE), "utf8");
 
 const mode = (path: string) => lstatSync(path).mode & 0o7777;
+const read = (path: string) => readFileSync(path, "utf8");
 
 describe("homePathProblem", () => {
   it("takes an absolute, normalised path outside /workspace", () => {
@@ -89,10 +105,10 @@ describe("homePathProblem", () => {
 });
 
 describe("buildHomeCredentialScript", () => {
-  it("writes each login 0600, owned by the home's owner, in directories it makes 0700", () => {
-    const home = join(scratch(), "alice");
-    mkdirSync(home, { mode: 0o700 });
-    const result = run({
+  it("writes each login 0600, owned by the home's owner, and keeps the marker outside the home", () => {
+    const w = world();
+    const home = w.home("alice");
+    const result = w.run({
       home,
       fence: { kind: "take", generation: GEN_A },
       writes: [
@@ -103,149 +119,210 @@ describe("buildHomeCredentialScript", () => {
     });
     expect(result.status, result.stderr).toBe(0);
     const claude = join(home, ".claude/.credentials.json");
-    expect(readFileSync(claude, "utf8")).toBe('{"claudeAiOauth":{"accessToken":"at-alice"}}');
+    expect(read(claude)).toBe('{"claudeAiOauth":{"accessToken":"at-alice"}}');
     expect(mode(claude)).toBe(0o600);
     expect(lstatSync(claude).uid).toBe(uid);
     expect(mode(join(home, ".claude"))).toBe(0o700);
-    expect(readFileSync(join(home, ".config/gh/hosts.yml"), "utf8")).toContain("gho_alice");
-    expect(mode(join(home, ".config"))).toBe(0o700);
-    expect(marker(home)).toBe(GEN_A);
+    expect(read(join(home, ".config/gh/hosts.yml"))).toContain("gho_alice");
+    expect(w.marker(home)).toBe(GEN_A);
+    expect(mode(w.state)).toBe(0o700);
   });
 
-  it("fences every write by the hold's marker: a late write from an earlier hold lands nowhere", () => {
-    const home = join(scratch(), "conv");
-    mkdirSync(home, { mode: 0o700 });
-    // Bob holds the home now (his take wrote his marker and his login).
+  it("decides a write whose stdin arrives late only once it has it, under the lock: a late write from an earlier hold lands nowhere", async () => {
+    const w = world();
+    const home = w.home("conv");
     expect(
-      run({
+      w.run({
         home,
-        fence: { kind: "take", generation: GEN_B },
-        writes: [{ provider: "claude", content: "bob" }],
+        fence: { kind: "take", generation: GEN_A },
+        writes: [{ provider: "claude", content: "alice-v1" }],
         removes: [],
       }).status,
     ).toBe(0);
-    // Alice's refresh push, issued under her earlier hold, finally runs.
-    const late = run({
-      home,
-      fence: { kind: "held", generation: GEN_A },
-      writes: [{ provider: "claude", content: "alice" }],
-      removes: [],
-    });
-    expect(late.status).toBe(HOME_SCRIPT_EXIT.fenced);
-    // So does a late first take of hers.
-    const lateTake = run({
-      home,
-      fence: { kind: "take", generation: GEN_A },
-      writes: [{ provider: "claude", content: "alice" }],
-      removes: [],
-    });
-    expect(lateTake.status).toBe(HOME_SCRIPT_EXIT.fenced);
-    expect(readFileSync(join(home, ".claude/.credentials.json"), "utf8")).toBe("bob");
-    expect(marker(home)).toBe(GEN_B);
-    // Bob's own pushes still land.
-    expect(
-      run({
-        home,
-        fence: { kind: "held", generation: GEN_B },
-        writes: [{ provider: "claude", content: "bob-2" }],
-        removes: [],
-      }).status,
-    ).toBe(0);
-    expect(readFileSync(join(home, ".claude/.credentials.json"), "utf8")).toBe("bob-2");
-  });
 
-  it("releases every login file and the marker, so the home can be taken again", () => {
-    const home = join(scratch(), "carol");
-    mkdirSync(home);
-    run({
-      home,
-      fence: { kind: "take", generation: GEN_A },
-      writes: [
-        { provider: "claude", content: "a" },
-        { provider: "codex", content: "b" },
+    // Alice's refresh push starts, and its stdin is held back (a stalled exec).
+    const late = spawn(
+      "sh",
+      [
+        "-c",
+        w.scriptOf({
+          home,
+          fence: { kind: "held", generation: GEN_A },
+          writes: [{ provider: "claude", content: "alice-v2" }],
+          removes: [],
+        }),
       ],
-      removes: [],
-    });
-    const released = run({ home, fence: { kind: "release" }, writes: [], removes: [] });
-    expect(released.status, released.stderr).toBe(0);
-    for (const file of [HOME_MARKER_FILE, ".claude/.credentials.json", ".codex/auth.json"]) {
-      expect(() => lstatSync(join(home, file))).toThrow();
-    }
+      { stdio: ["pipe", "ignore", "pipe"] },
+    );
+    const exited = new Promise<number | null>((resolve) => late.on("exit", resolve));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // Meanwhile the hand-over: the home is released and Bob takes it.
     expect(
-      run({
+      w.run({ home, fence: { kind: "release", generation: GEN_A }, writes: [], removes: [] })
+        .status,
+    ).toBe(0);
+    expect(
+      w.run({
         home,
         fence: { kind: "take", generation: GEN_B },
-        writes: [{ provider: "claude", content: "c" }],
+        writes: [{ provider: "claude", content: "bob-v1" }],
         removes: [],
       }).status,
     ).toBe(0);
+
+    // Alice's push finally gets its stdin.
+    late.stdin.end(homeScriptStdin(["alice-v2"]));
+    expect(await exited).toBe(HOME_SCRIPT_EXIT.fenced);
+    expect(read(join(home, ".claude/.credentials.json"))).toBe("bob-v1");
+    expect(w.marker(home)).toBe(GEN_B);
+  });
+
+  it("fences takes, writes and releases by the marker", () => {
+    const w = world();
+    const home = w.home("conv");
+    const take = (generation: string, content: string) =>
+      w.run({
+        home,
+        fence: { kind: "take", generation },
+        writes: [{ provider: "claude", content }],
+        removes: [],
+      }).status;
+    expect(take(GEN_B, "bob")).toBe(0);
+    // Another hold's take, write and release are refused, and change nothing.
+    expect(take(GEN_A, "alice")).toBe(HOME_SCRIPT_EXIT.fenced);
+    expect(
+      w.run({
+        home,
+        fence: { kind: "held", generation: GEN_A },
+        writes: [{ provider: "claude", content: "alice" }],
+        removes: [],
+      }).status,
+    ).toBe(HOME_SCRIPT_EXIT.fenced);
+    expect(
+      w.run({ home, fence: { kind: "release", generation: GEN_A }, writes: [], removes: [] })
+        .status,
+    ).toBe(HOME_SCRIPT_EXIT.fenced);
+    expect(read(join(home, ".claude/.credentials.json"))).toBe("bob");
+    // The same hold's take again (a launch delivered twice) is accepted.
+    expect(take(GEN_B, "bob-again")).toBe(0);
+    expect(read(join(home, ".claude/.credentials.json"))).toBe("bob-again");
+    // Bob's release removes everything; an unfenced release removes whatever is there.
+    expect(
+      w.run({ home, fence: { kind: "release", generation: GEN_B }, writes: [], removes: [] })
+        .status,
+    ).toBe(0);
+    expect(existsSync(join(home, ".claude/.credentials.json"))).toBe(false);
+    expect(w.marker(home)).toBeUndefined();
+    expect(take(GEN_A, "alice")).toBe(0);
+    expect(w.run({ home, fence: { kind: "release" }, writes: [], removes: [] }).status).toBe(0);
+    expect(w.marker(home)).toBeUndefined();
+  });
+
+  it("waits for the home's lock, and gives up after its wait", () => {
+    const w = world();
+    const home = w.home("dan");
+    mkdirSync(w.state, { recursive: true });
+    const holder = spawn("flock", [join(w.state, `${homeStateKey(home)}.lock`), "sleep", "3"]);
+    const started = Date.now();
+    while (Date.now() - started < 300) {
+      // Let the holder take the lock.
+    }
+    const result = w.run({
+      home,
+      fence: { kind: "take", generation: GEN_A },
+      writes: [{ provider: "claude", content: "x" }],
+      removes: [],
+      lockWaitSeconds: 1,
+    });
+    holder.kill();
+    expect(result.status).toBe(HOME_SCRIPT_EXIT.busy);
+    expect(existsSync(join(home, ".claude"))).toBe(false);
   });
 
   it("replaces a link at the file's name instead of writing through it", () => {
-    const root = scratch();
-    const home = join(root, "bob");
-    mkdirSync(join(home, ".codex"), { recursive: true });
-    const elsewhere = join(root, "elsewhere.json");
+    const w = world();
+    const home = w.home("bob");
+    mkdirSync(join(home, ".codex"));
+    const elsewhere = join(w.root, "elsewhere.json");
     writeFileSync(elsewhere, "untouched");
     symlinkSync(elsewhere, join(home, ".codex/auth.json"));
-    const result = run({
+    const result = w.run({
       home,
       fence: { kind: "take", generation: GEN_A },
       writes: [{ provider: "codex", content: '{"tokens":{}}' }],
       removes: [],
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(elsewhere, "utf8")).toBe("untouched");
+    expect(read(elsewhere)).toBe("untouched");
     expect(lstatSync(join(home, ".codex/auth.json")).isSymbolicLink()).toBe(false);
   });
 
-  it.skipIf(uid === 0)("refuses a linked login directory in a home that is not root's", () => {
-    const root = scratch();
-    const home = join(root, "dave");
-    mkdirSync(home);
-    mkdirSync(join(root, "someone-else"));
-    symlinkSync(join(root, "someone-else"), join(home, ".claude"));
-    const result = run({
-      home,
-      fence: { kind: "take", generation: GEN_A },
-      writes: [{ provider: "claude", content: "x" }],
-      removes: [],
-    });
-    expect(result.status).toBe(HOME_SCRIPT_EXIT.linkOnTheWay);
-    expect(() => lstatSync(join(root, "someone-else/.credentials.json"))).toThrow();
-  });
+  it.skipIf(uid === 0)(
+    "follows a login directory linked inside the home (dotfiles), refuses one linked outside it, in writes and releases",
+    () => {
+      const w = world();
+      const home = w.home("erin");
+      mkdirSync(join(home, "dotfiles/claude"), { recursive: true });
+      symlinkSync(join(home, "dotfiles/claude"), join(home, ".claude"));
+      expect(
+        w.run({
+          home,
+          fence: { kind: "take", generation: GEN_A },
+          writes: [{ provider: "claude", content: "erin" }],
+          removes: [],
+        }).status,
+      ).toBe(0);
+      expect(read(join(home, "dotfiles/claude/.credentials.json"))).toBe("erin");
+      expect(lstatSync(join(home, ".claude")).isSymbolicLink()).toBe(true);
+
+      const other = join(w.root, "someone-else");
+      mkdirSync(other);
+      writeFileSync(join(other, "auth.json"), "theirs");
+      symlinkSync(other, join(home, ".codex"));
+      expect(
+        w.run({
+          home,
+          fence: { kind: "held", generation: GEN_A },
+          writes: [{ provider: "codex", content: "x" }],
+          removes: [],
+        }).status,
+      ).toBe(HOME_SCRIPT_EXIT.linkOnTheWay);
+      expect(
+        w.run({ home, fence: { kind: "release", generation: GEN_A }, writes: [], removes: [] })
+          .status,
+      ).toBe(HOME_SCRIPT_EXIT.linkOnTheWay);
+      expect(read(join(other, "auth.json"))).toBe("theirs");
+    },
+  );
 
   it("refuses a home reached through a symbolic link, writing nothing", () => {
-    const root = scratch();
-    mkdirSync(join(root, "real"));
-    symlinkSync(join(root, "real"), join(root, "linked"));
-    const result = run({
-      home: join(root, "linked"),
+    const w = world();
+    mkdirSync(join(w.root, "real"));
+    symlinkSync(join(w.root, "real"), join(w.root, "linked"));
+    const result = w.run({
+      home: join(w.root, "linked"),
       fence: { kind: "take", generation: GEN_A },
       writes: [{ provider: "claude", content: "{}" }],
       removes: [],
     });
     expect(result.status).toBe(HOME_SCRIPT_EXIT.linkOnTheWay);
-    expect(() => lstatSync(join(root, "real/.claude"))).toThrow();
+    expect(existsSync(join(w.root, "real/.claude"))).toBe(false);
   });
 
   it("refuses a home that does not exist, unless told whose to make", () => {
-    const home = join(scratch(), "missing/erin");
-    const refused = run({
-      home,
-      fence: { kind: "take", generation: GEN_A },
-      writes: [{ provider: "claude", content: "{}" }],
-      removes: [],
-    });
-    expect(refused.status).toBe(HOME_SCRIPT_EXIT.missing);
-
-    const made = run({
-      home,
-      fence: { kind: "take", generation: GEN_A },
-      createWithOwner: { uid, gid },
-      writes: [{ provider: "claude", content: "{}" }],
-      removes: [],
-    });
+    const w = world();
+    const home = join(w.root, "missing/frank");
+    const take = (createWithOwner?: { uid: number; gid: number }) =>
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_A },
+        ...(createWithOwner === undefined ? {} : { createWithOwner }),
+        writes: [{ provider: "claude", content: "{}" }],
+        removes: [],
+      });
+    expect(take().status).toBe(HOME_SCRIPT_EXIT.missing);
+    const made = take({ uid, gid });
     expect(made.status, made.stderr).toBe(0);
     expect(mode(home)).toBe(0o700);
     expect(lstatSync(home).uid).toBe(uid);
@@ -254,12 +331,12 @@ describe("buildHomeCredentialScript", () => {
   });
 
   it("seeds a home it makes from the skeleton, and keeps the home 0700", () => {
-    const root = scratch();
-    const skel = join(root, "skel");
+    const w = world();
+    const skel = join(w.root, "skel");
     mkdirSync(skel, { mode: 0o755 });
     writeFileSync(join(skel, ".profile"), "# skel");
-    const home = join(root, "frank");
-    const made = run({
+    const home = join(w.root, "gina");
+    const made = w.run({
       home,
       skel,
       fence: { kind: "take", generation: GEN_A },
@@ -268,7 +345,7 @@ describe("buildHomeCredentialScript", () => {
       removes: [],
     });
     expect(made.status, made.stderr).toBe(0);
-    expect(readFileSync(join(home, ".profile"), "utf8")).toBe("# skel");
+    expect(read(join(home, ".profile"))).toBe("# skel");
     expect(mode(home)).toBe(0o700);
   });
 

@@ -1012,8 +1012,10 @@ export interface WorkspaceCredentials {
   /**
    * Put `onBehalfOf`'s logins into `home`, which must exist (its owner owns the files). Resolves
    * with the home as it is afterwards. Rejects with `WorkspaceConflictError` and a body `code`:
-   * `home-held` (another person's home), `home-unusable` (missing, not a directory, or reached
-   * through a symbolic link), `workspace-not-running`, `connected-account-invalid`; with
+   * `home-held` (another person's home; `/root` for anyone but the owner), `home-unusable`
+   * (missing, not a directory, reached through a symbolic link, or a login directory linking out
+   * of it), `home-busy` (another write into it is still running: retry), `workspace-not-running`,
+   * `connected-account-invalid`; with
    * `WorkspaceNotFoundError` for an account `onBehalfOf` cannot name; with
    * `WorkspaceBadGatewayError` when the executor did not confirm the write.
    */
@@ -1043,6 +1045,13 @@ export interface WorkspaceCredentialsPutOptions {
    * client's owner's; only a service key may name someone else.
    */
   readonly onBehalfOf: string;
+  /**
+   * The home's owner, given together: a home that does not exist yet is made for them (0700, from
+   * `/etc/skel`), so a put can run beside the `useradd` that makes the user. Without them a missing
+   * home is refused (`home-unusable`).
+   */
+  readonly uid?: number;
+  readonly gid?: number;
   readonly claude?: WorkspaceCredentialsAccountChoice;
   readonly codex?: WorkspaceCredentialsAccountChoice;
   readonly github?: WorkspaceCredentialsAccountChoice;

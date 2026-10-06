@@ -351,60 +351,81 @@ GET    ?ownerUserId                                                        → {
   and archived accounts are one uniform 404; an `invalid` one is a 409 `connected-account-invalid`.
   Create and the put share the resolver. `null` removes that provider's login from the home (the
   person has not connected it); a provider left out is left as it is.
-- **Write a copy, owned by the home's owner.** Claude and Codex go through the injection planner, so
-  each file is exactly what a launch writes (§6a: no Claude refresh token, the Codex placeholder; a
-  setup token as the file of §6b). GitHub is written as `<home>/.config/gh/hosts.yml`
-  (`oauth_token`, `git_protocol: https`, and `user` when the account's login is known), so `gh` and
-  a credential helper that reads it find the person's own token and nothing rides the environment.
-  Every file is 0600 and owned by the home directory's owner, as is every directory the write makes.
-  One exec over the control connection per call writes and removes everything the call names;
-  payloads go over stdin, never argv.
+- **Write a copy, owned by the home's owner.** Each account is resolved and decrypted under the
+  home's lock (below), so a refresh that persisted while the put waited is what is written, never
+  the token it revoked. Claude is written as the file of §6b (a session file's copy, or a setup
+  token's file: a variable would be everyone's in a shared executor), Codex as the copy a launch
+  writes (§6a). GitHub is written as `<home>/.config/gh/hosts.yml` (`oauth_token`,
+  `git_protocol: https`, and `user` when the account's login is known), so `gh` and a credential
+  helper that reads it find the person's own token and nothing rides the environment. Every file is
+  0600 and owned by the home directory's owner, as is every directory the write makes. One exec over
+  the control connection per call writes and removes everything the call names; payloads go over
+  stdin, never argv.
 - **The home.** An absolute, normalised path of safe characters, never `/` or under `/workspace`
   (everything there is saved), reached without a symbolic link (checked in the executor, at write
-  time; a link at the file's own name is replaced, never followed). It must exist: a home is made by
-  whoever made its user (409 `home-unusable` otherwise). `/root` is allowed, for a launcher whose
-  predicted per-person layout failed at prepare; while a launch's own logins are at `$HOME` (a
-  launch that named no home), `/root` is the launch's and a put or release there answers 409
-  `home-held`.
+  time). A put that names the home's `uid` and `gid` makes a missing home for them (0700, seeded
+  from `/etc/skel`), so it can run beside the `useradd` that makes its user; without them a missing
+  home answers 409 `home-unusable`. `/root` is allowed for the workspace's owner alone, for a
+  launcher whose predicted per-person layout failed at prepare (processes nobody started run as
+  root, so nobody else's login may be there); while a launch's own logins are at `$HOME` (a launch
+  that named no home), `/root` is the launch's and a put or release there answers 409 `home-held`.
 - **One person per home, while it is held.** `workspace_credential_homes` holds one row per
-  (instance, home): the person, and the account per provider whose copy is there. The first put
-  names the home's person; a put naming anyone else is refused, 409 `home-held`, and nothing is
-  written. The same person may change an account or remove a provider. The home is held until it is
-  released: `DELETE` removes every login file Core names in it (recorded or not: an unconfirmed
-  write may have landed) and deletes the row; only then can the home be taken by another person.
-  Release is idempotent (`released: false` when it held nothing); on a stopped executor it deletes
-  the row only.
-- **One row lock.** Every write into a home (a put, a release, a refresh push) runs inside one
-  transaction that holds the home's row `FOR UPDATE`, behind a transaction-scoped advisory lock on
-  the (instance, home) key so a home with no row yet is serialised too, across its control-channel
-  write, and decides on the row as it is under the lock. Two first puts into one home take turns,
-  and the second finds the first's person. A writer waits at most 40 s for another (`lock_timeout`),
-  and the API runs at most four locked writes at once, so waiting writers cannot take the connection
-  pool.
-- **A fence in the executor.** A lock in the database cannot stop an exec the executor runs late: a
-  write that timed out (and so released the lock) may still run after the home was released and
-  taken by someone else. So every hold has a generation, recorded on the row and written into the
-  home as its marker, `<home>/.sealant-logins`. A first put (a take) writes only into a home with no
-  marker, and makes it; every later write (a put by the same person, a refresh push) writes only
-  while the marker names its hold; a release removes the marker with the files. A late write from an
-  earlier hold finds another marker, or a take's marker where it expected none, and writes nothing
-  (exit 76: a put answers 409 `home-held`, a push counts the home as no longer held). The exec also
-  runs in the caller's fiber, so a timeout closes the control session, and a script not yet handed
-  its stdin never runs.
+  (instance, home): the person, the account per provider whose copy is there, and the hold's
+  generation. The first put names the home's person; a put naming anyone else is refused, 409
+  `home-held`, and nothing is written. The same person may change an account or remove a provider.
+  The home is held until it is released: `DELETE` removes every login file Core names in it
+  (recorded or not: an unconfirmed write may have landed) and deletes the row; only then can the
+  home be taken by another person. Release is idempotent (`released: false` when it held nothing);
+  on a stopped executor it deletes the row only.
+- **One row lock, bounded.** Every write into a home (a put, a release, a refresh push) runs inside
+  one transaction that holds the home's row `FOR UPDATE`, behind a transaction-scoped advisory lock
+  on the (instance, home) key so a home with no row yet is serialised too, across its
+  control-channel write, and decides on the row as it is under the lock. Two first puts into one
+  home take turns, and the second finds the first's person. A writer waits at most 20 s for another
+  (`lock_timeout`), and the API runs at most two locked writes at once per workspace run and waits
+  at most 10 s for one of them, so one hung executor holds back only its own workspace. Every such
+  wait that runs out answers 409 `home-busy`: nothing was done, and trying again is safe.
+- **A fence in the executor, under a lock in the executor.** A lock in the database cannot stop an
+  exec the executor runs late: a write that timed out (and so released the database lock) keeps
+  running, since sealantd ends a non-attached exec only when it exits. So every hold has a
+  generation, recorded on the row and kept in the executor as the home's marker,
+  `/run/sealant-homes/<key>.generation` (root's, outside the home and every capture root: a person
+  cleaning their home cannot remove it, nobody else can forge it). Each script:
+  1. reads every payload before it checks anything, so a script whose stdin arrives late decides
+     only once it has all of it;
+  2. takes the home's `flock` (`/run/sealant-homes/<key>.lock`), and holds it from the check to the
+     last write, so a release or a take runs wholly before or wholly after it;
+  3. checks the marker: a take writes into a home with no marker or its own generation's (a launch
+     delivered twice writes twice), and makes it; every later write (a put by the same person, a
+     refresh push) writes only while the marker names its hold; a release removes the files and the
+     marker only while the marker is absent or its own hold's (a home Core holds no record of is
+     released whatever its marker says).
+
+  A late write from an earlier hold therefore writes nothing (exit 76: a put answers 409
+  `home-held`, a push counts the home as no longer held), whatever the interleaving. A script that
+  waits too long for the executor lock answers `home-busy` (exit 78); an image without `flock`
+  answers `home-unusable`.
+
 - **Unconfirmed writes.** A write that fails or times out can still land. A put into a home that
-  held nothing records nothing and releases the home once (files and marker); a late take landing
-  after that leaves its marker, so the next take is refused until the home is released, and nobody
-  else's process runs on it. A put into a held home leaves the record as it was (the same person's
-  login either way). Both answer 502. A release that is not confirmed keeps the home held. A first
-  take also removes every login file it does not write.
-- **Links.** No component of the home's path may be a link. In a home that is not root's, the
-  directories Core writes in may not be links either (root's own writes could otherwise be
-  redirected into another person's directories); root's home keeps the shared layout's linked
-  `~/.claude`. A link at a file's own name is removed, never followed.
+  held nothing records nothing and releases its own take once (files and marker); a late take
+  landing after that leaves its marker, so the next take is refused until the home is released, and
+  nobody else's process runs on it. A put into a held home leaves the record as it was (the same
+  person's login either way). Both answer 502. A release that is not confirmed keeps the home held.
+  A first take also removes every login file it does not write.
+- **Links, and dotfiles.** No component of the home's path may be a link. In a home that is not
+  root's, a login directory (`.claude`, `.codex`, `.config`, `.config/gh`) that is a link must lead
+  inside the home: a dotfiles checkout that links `~/.claude` into `~/dotfiles/claude` keeps
+  working, and the login lands in the checkout as Claude Code itself would put it there (keep it out
+  of git). One that leads out of the home (into someone else's) is refused, 409 `home-unusable`, for
+  writes and releases alike. Root's home keeps the shared layout's linked `~/.claude`. A link at a
+  file's own name is removed, never followed. A put and the dotfiles that may link these directories
+  should not race: apply the dotfiles first.
 - **The push follows the homes.** `pushCredentialCopy` writes the new copy into every running launch
   that holds the account and, at the same time, into every home of a ready instance whose row holds
-  the account, at most four homes at a time, each under its row lock and fence: a home released or
-  retaken since the listing is left alone.
+  the account, at most four homes at a time, each under its row lock and fence. Each home's copy is
+  made from the account as stored when the home's lock is taken, not from the copy the push started
+  with, so the older of two back-to-back refreshes never lands last. A home released or retaken
+  since the listing is left alone.
 - **The spec stays.** The blueprint's `credentialRefs` are unchanged; a put changes nothing a
   restart reads.
 - **Only a running workspace.** No ready executor answers 409 `workspace-not-running`.

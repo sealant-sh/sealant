@@ -52,7 +52,8 @@ export { buildCredentialFileWriteScript } from "./credential-files.js";
 export {
   buildHomeCredentialScript,
   HOME_CREDENTIAL_FILES,
-  HOME_MARKER_FILE,
+  HOME_STATE_DIR,
+  homeStateKey,
   HOME_SCRIPT_EXIT,
   homePathProblem,
   homeScriptRefusal,

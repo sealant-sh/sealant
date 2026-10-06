@@ -1,11 +1,20 @@
-import { CLAUDE_CREDENTIALS_JSON_PATH, CODEX_AUTH_JSON_PATH } from "@sealant/credentials";
 import {
+  CLAUDE_CREDENTIALS_JSON_PATH,
+  CODEX_AUTH_JSON_PATH,
+  claudeCredentialsFile,
+  codexAuthJsonCopy,
+  parseClaudeCredentialPayload,
+  parseCodexCredentialPayload,
+  type CredentialCipherService,
+} from "@sealant/credentials";
+import {
+  ConnectedAccountRepo,
   WorkspaceCredentialHomeRepo,
   WorkspaceRuntimeInstanceRepo,
   type WorkspaceCredentialHomeTarget,
   type WorkspaceRuntimeInstance,
 } from "@sealant/db";
-import { Duration, Effect } from "effect";
+import { Duration, Effect, Option } from "effect";
 
 import {
   buildHomeCredentialScript,
@@ -58,6 +67,12 @@ export interface PushCredentialCopyInput {
   readonly controlChannel?: ControlChannel;
   /** For tests; defaults to the live home channel. */
   readonly homeChannel?: HomeCredentialChannel;
+  /**
+   * Given, each home's copy is made from the account as it is stored under that home's lock, never
+   * from `copyJson` captured before it: a later refresh that persisted while this push waited is
+   * what lands, never the token it revoked.
+   */
+  readonly credentialCipher?: CredentialCipherService;
 }
 
 export interface CredentialPushSummary {
@@ -172,8 +187,15 @@ const pushIntoHome = (
         ) {
           return { result: "released" as const, outcome: { kind: "keep" as const } };
         }
-        // Fenced by the hold's generation: a write the executor runs after the timeout, once the
-        // home is released or retaken, finds another marker and writes nothing.
+        const copyJson =
+          input.credentialCipher === undefined
+            ? input.copyJson
+            : yield* currentCopy(input.connectedAccountId, input.provider, input.credentialCipher);
+        if (copyJson === undefined) {
+          return { result: "released" as const, outcome: { kind: "keep" as const } };
+        }
+        // Fenced by the hold's generation, under the home's lock in the executor: a write the
+        // executor runs after the timeout, once the home is released or retaken, writes nothing.
         const exit = yield* homeChannel
           .run(
             target,
@@ -183,7 +205,7 @@ const pushIntoHome = (
               writes: [input.provider],
               removes: [],
             }),
-            homeScriptStdin([input.copyJson]),
+            homeScriptStdin([copyJson]),
           )
           .pipe(Effect.timeout(PUSH_TIMEOUT));
         if (exit.exitCode === HOME_SCRIPT_EXIT.fenced) {
@@ -205,3 +227,27 @@ const pushIntoHome = (
       ).pipe(Effect.as("failed" as const)),
     ),
   );
+
+/** The account's copy as it is stored now; `undefined` when it is gone or archived. */
+const currentCopy = (
+  connectedAccountId: string,
+  provider: CredentialPushProvider,
+  cipher: CredentialCipherService,
+) =>
+  Effect.gen(function* () {
+    // Read through the service only where a cipher asks for it, so a push without one needs no
+    // account repository.
+    const repo = yield* Effect.serviceOption(ConnectedAccountRepo);
+    if (Option.isNone(repo)) {
+      return yield* Effect.fail(
+        new Error("A push that re-reads the account needs its repository."),
+      );
+    }
+    const account = yield* repo.value.getById(connectedAccountId);
+    if (account === undefined || account.archivedAt !== null) return undefined;
+    const plaintext = yield* cipher.decrypt(account.encryptedPayload);
+    const parsed: unknown = JSON.parse(plaintext);
+    return provider === "claude"
+      ? claudeCredentialsFile(parseClaudeCredentialPayload(parsed))
+      : codexAuthJsonCopy(parseCodexCredentialPayload(parsed).authJson);
+  });

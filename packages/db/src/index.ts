@@ -181,9 +181,11 @@ export {
 } from "./repositories/workspace-runtime-instances.js";
 
 export {
+  WorkspaceCredentialHomeBusyError,
   WorkspaceCredentialHomeRepo,
   WorkspaceCredentialHomeRepoError,
   WorkspaceCredentialHomeRepoLive,
+  makeWorkspaceCredentialHomeRepoLayer,
   type WorkspaceCredentialHomeOutcome,
   type WorkspaceCredentialHomeRepoService,
   type WorkspaceCredentialHomeTarget,

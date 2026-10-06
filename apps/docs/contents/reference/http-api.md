@@ -55,15 +55,18 @@ The execution record is read through the run endpoints: `/timeline` is the order
 gaps. See [Execution records](/docs/concepts/execution-records) for what these mean.
 
 `/v1/workspaces/:workspaceId/credentials` holds people's logins in the homes of a running workspace,
-one person per home. `POST { ownerUserId, onBehalfOfUserId, home, claude?, codex?, github? }` writes
-copies of that person's accounts (each an account id or name; `null` removes the provider) into
-`home`, owned by the home's owner, mode `0600`, and keeps them refreshed there; GitHub is written as
-`<home>/.config/gh/hosts.yml`. A home holds one person's logins until it is released: a `POST`
-naming anyone else answers `409` `home-held`. `DELETE ?ownerUserId=&home=` releases the home (its
-login files are removed), and `GET ?ownerUserId=` lists the homes. A home is an absolute path, never
-under `/workspace`, that exists and is reached without a symbolic link (`409` `home-unusable`
-otherwise). Only a service key may call them. A workspace with no running executor answers `409`
-`workspace-not-running`.
+one person per home.
+`POST { ownerUserId, onBehalfOfUserId, home, uid?, gid?, claude?, codex?, github? }` writes copies
+of that person's accounts (each an account id or name; `null` removes the provider) into `home`,
+owned by the home's owner, mode `0600`, and keeps them refreshed there; GitHub is written as
+`<home>/.config/gh/hosts.yml`. With `uid` and `gid` a home that does not exist yet is made for them.
+A home holds one person's logins until it is released: a `POST` naming anyone else answers `409`
+`home-held`. `DELETE ?ownerUserId=&home=` releases the home (its login files are removed), and
+`GET ?ownerUserId=` lists the homes. A home is an absolute path, never under `/workspace`, reached
+without a symbolic link (`409` `home-unusable` otherwise); `/root` takes only the workspace owner's
+logins. Another write into the same home, or too many into the workspace at once, answers `409`
+`home-busy`: nothing was done, try again. Only a service key may call them. A workspace with no
+running executor answers `409` `workspace-not-running`.
 
 The registry group describes wherever workspace images live. With no registry configured (the
 single-host default) it reports the local Docker Engine store: `baseUrl` is `""`, `pushRegistry` is

@@ -17,6 +17,7 @@ import {
   workspaceAttempts,
   WorkspaceCredentialHomeRepo,
   WorkspaceCredentialHomeRepoLive,
+  makeWorkspaceCredentialHomeRepoLayer,
   WorkspaceRuntimeInstanceRepo,
   WorkspaceRuntimeInstanceRepoLive,
   type DB,
@@ -117,6 +118,39 @@ describe.skipIf(DATABASE_URL === undefined)("credential homes (Postgres)", () =>
     expect(seen.whileFirstHeld).toBe(0);
     expect(seen.observed).toHaveLength(1);
     expect(seen.observed[0]?.onBehalfOfUserId).toBe("usr_alice");
+  });
+
+  it("answers busy, retryably, when another write holds the home past the wait", async () => {
+    const runId = await launch("ready");
+    const home = "/home/m4busy000";
+    const quick = makeWorkspaceCredentialHomeRepoLayer({ lockTimeoutMs: 200 }).pipe(
+      Layer.provide(Layer.succeed(SealantDB, db)),
+    );
+    const outcome = await run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceCredentialHomeRepo;
+        const inside = yield* Deferred.make<void>();
+        const finish = yield* Deferred.make<void>();
+        const holder = yield* repo
+          .withLockedHome({ runId, home }, () =>
+            Deferred.succeed(inside, undefined).pipe(
+              Effect.andThen(Deferred.await(finish)),
+              Effect.as({ result: undefined, outcome: { kind: "keep" as const } }),
+            ),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(inside);
+        const waited = yield* Effect.gen(function* () {
+          return yield* (yield* WorkspaceCredentialHomeRepo).withLockedHome({ runId, home }, () =>
+            Effect.succeed({ result: "ran", outcome: { kind: "keep" as const } }),
+          );
+        }).pipe(Effect.provide(quick), Effect.flip);
+        yield* Deferred.succeed(finish, undefined);
+        yield* Fiber.join(holder);
+        return waited;
+      }),
+    );
+    expect(outcome).toMatchObject({ _tag: "WorkspaceCredentialHomeBusyError" });
   });
 
   it("changes nothing when the write fails, and deletes the row on release", async () => {

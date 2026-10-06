@@ -22,7 +22,7 @@ import {
 } from "@sealant/db";
 import { makeInMemoryCredentialHomes } from "@sealant/db/testing/credential-homes";
 import type { HomeCredentialChannel } from "@sealant/workspaces";
-import { Effect, Layer, Result } from "effect";
+import { Effect, Fiber, Layer, Result } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import type { RequestPrincipal } from "../../services/service-principals.js";
@@ -108,7 +108,7 @@ const bobClaude = account({
   encryptedPayload: `sealed:${JSON.stringify({ credentialsJson: claudeFile("at-bob") })}`,
 });
 
-const accounts = [
+const accounts: ConnectedAccount[] = [
   aliceClaude,
   aliceWork,
   aliceCodex,
@@ -204,6 +204,8 @@ const newWorld = (instance: WorkspaceRuntimeInstance = instanceRow()) => {
       readonly claude?: string | null;
       readonly codex?: string | null;
       readonly github?: string | null;
+      readonly uid?: number;
+      readonly gid?: number;
     },
     principal?: RequestPrincipal,
   ) =>
@@ -367,9 +369,12 @@ describe("putWorkspaceCredentials", () => {
     ).toMatchObject({ _tag: "WorkspaceConflictError", code: "home-held" });
     expect(world.ran).toEqual([]);
 
-    // A launch that wrote its logins into a named home leaves /root to the fallback.
+    // A launch that wrote its logins into a named home leaves /root to the fallback: the owner's.
     const fallback = newWorld();
-    succeeded(await fallback.put({ onBehalfOfUserId: ALICE, home: "/root", claude: "default" }));
+    expect(
+      failed(await fallback.put({ onBehalfOfUserId: ALICE, home: "/root", claude: "default" })),
+    ).toMatchObject({ _tag: "WorkspaceConflictError", code: "home-held" });
+    expect(fallback.ran).toEqual([]);
   });
 
   it("answers home-unusable when the home is missing or reached through a link", async () => {
@@ -430,6 +435,54 @@ describe("putWorkspaceCredentials", () => {
       code: "home-held",
     });
     expect(world.homes.rows.size).toBe(0);
+  });
+
+  it("makes a home that does not exist yet for the uid and gid it is given", async () => {
+    const world = newWorld();
+    succeeded(
+      await world.put({ onBehalfOfUserId: ALICE, claude: "default", uid: 40001, gid: 40000 }),
+    );
+    expect(world.ran[0]?.script).toContain(`mkdir -m 700 "$home"`);
+    expect(world.ran[0]?.script).toContain("chown -R 40001:40000");
+    expect(
+      failed(await world.put({ onBehalfOfUserId: ALICE, claude: "default", uid: 40001 })),
+    ).toMatchObject({ _tag: "WorkspaceBadRequestError" });
+  });
+
+  it("decrypts the account under the home's lock: a refresh that lands while the put waits is what it writes", async () => {
+    const world = newWorld();
+    const { promise: holding, resolve: release } = Promise.withResolvers<void>();
+    // Another write holds the home's lock.
+    const holder = Effect.runPromise(
+      world.homes.service.withLockedHome({ runId: "run_1", home: HOME }, () =>
+        Effect.promise(() => holding).pipe(
+          Effect.as({ result: undefined, outcome: { kind: "keep" as const } }),
+        ),
+      ),
+    );
+    const put = world.put({ onBehalfOfUserId: ALICE, claude: "default" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Alice's Claude is refreshed meanwhile: the token the put would have decrypted is revoked.
+    const index = accounts.findIndex((candidate) => candidate.id === aliceClaude.id);
+    const previous = accounts[index];
+    accounts[index] = account({
+      id: "cacc_alice_claude",
+      encryptedPayload: `sealed:${JSON.stringify({ credentialsJson: claudeFile("at-alice-refreshed") })}`,
+    });
+    release();
+    await holder;
+    succeeded(await put);
+    if (previous !== undefined) accounts[index] = previous;
+    expect(world.ran[0]?.payloads[0]).toContain("at-alice-refreshed");
+  });
+
+  it("answers home-busy, retryably, when the home stays locked or its lock times out", async () => {
+    const world = newWorld();
+    world.exits.push(78);
+    expect(failed(await world.put({ onBehalfOfUserId: ALICE, claude: "default" }))).toMatchObject({
+      _tag: "WorkspaceConflictError",
+      code: "home-busy",
+    });
   });
 
   it("refuses a caller that cannot act for both people", async () => {
@@ -515,5 +568,25 @@ describe("listWorkspaceCredentials", () => {
         accounts: { claude: { connectedAccountId: bobClaude.id, name: "default" } },
       },
     ]);
+  });
+});
+
+describe("withRunPermit", () => {
+  it("bounds the writes of one workspace run, never another's", async () => {
+    const hang = Effect.never;
+    const held = [
+      Effect.runFork(routes.withRunPermit("run_a", "/home/a", hang)),
+      Effect.runFork(routes.withRunPermit("run_a", "/home/b", hang)),
+    ];
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const third = await Effect.runPromise(
+      Effect.result(routes.withRunPermit("run_a", "/home/c", Effect.succeed("ran"), "50 millis")),
+    );
+    expect(failed(third)).toMatchObject({ _tag: "WorkspaceConflictError", code: "home-busy" });
+    const otherRun = await Effect.runPromise(
+      routes.withRunPermit("run_b", "/home/a", Effect.succeed("ran"), "50 millis"),
+    );
+    expect(otherRun).toBe("ran");
+    for (const fiber of held) await Effect.runPromise(Fiber.interrupt(fiber));
   });
 });

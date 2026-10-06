@@ -1,5 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
+  ConnectedAccountRepo,
+  type ConnectedAccountRepoService,
   WorkspaceCredentialHomeRepo,
   WorkspaceRuntimeInstanceRepo,
   type WorkspaceRuntimeInstance,
@@ -243,4 +245,63 @@ describe("pushCredentialCopy into a home whose marker moved on", () => {
       ),
     );
   });
+});
+
+describe("pushCredentialCopy re-reads the account under each home's lock", () => {
+  it.effect(
+    "writes the account as stored when the home's lock is taken, not the copy it was handed",
+    () => {
+      const ready = [instance("h", [])];
+      const homes = makeInMemoryCredentialHomes(() => ready);
+      const ran: RanScript[] = [];
+      const stored = JSON.stringify({
+        credentialsJson: JSON.stringify({
+          claudeAiOauth: { accessToken: "at-newer", refreshToken: "rt", expiresAt: 2 },
+        }),
+      });
+      const accounts = Layer.succeed(ConnectedAccountRepo, {
+        getById: () =>
+          Effect.succeed({
+            id: "cacc_alice",
+            archivedAt: null,
+            encryptedPayload: `sealed:${stored}`,
+          }),
+      } as unknown as ConnectedAccountRepoService);
+      return Effect.gen(function* () {
+        yield* homes.service.withLockedHome({ runId: "h", home: "/home/alice" }, () =>
+          Effect.succeed({
+            result: undefined,
+            outcome: {
+              kind: "hold" as const,
+              onBehalfOfUserId: "usr_alice",
+              accounts: [{ provider: "claude" as const, connectedAccountId: "cacc_alice" }],
+              generation: "generation-alice",
+            },
+          }),
+        );
+        yield* pushCredentialCopy({
+          connectedAccountId: "cacc_alice",
+          provider: "claude",
+          copyJson: JSON.stringify({ claudeAiOauth: { accessToken: "at-older" } }),
+          controlChannel: silentLaunchChannel,
+          homeChannel: recordingHomeChannel(ran),
+          credentialCipher: {
+            encrypt: (plaintext) => Effect.succeed({ sealed: `sealed:${plaintext}`, keyId: "k" }),
+            decrypt: (sealed) => Effect.succeed(sealed.slice("sealed:".length)),
+          },
+        });
+        const written = Buffer.from(ran[0]?.stdin.trim() ?? "", "base64").toString();
+        expect(written).toContain("at-newer");
+        expect(written).not.toContain("rt");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            instancesRepo(ready),
+            Layer.succeed(WorkspaceCredentialHomeRepo, homes.service),
+            accounts,
+          ),
+        ),
+      );
+    },
+  );
 });

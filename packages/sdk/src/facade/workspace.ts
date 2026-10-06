@@ -675,6 +675,8 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
             ownerUserId: ctx.config.hostLocal.ownerUserId,
             onBehalfOfUserId: options.onBehalfOf,
             home: options.home,
+            ...(options.uid === undefined ? {} : { uid: options.uid }),
+            ...(options.gid === undefined ? {} : { gid: options.gid }),
             ...(choices.claude === undefined ? {} : { claude: choices.claude }),
             ...(choices.codex === undefined ? {} : { codex: choices.codex }),
             ...(choices.github === undefined ? {} : { github: choices.github }),

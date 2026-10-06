@@ -32,13 +32,13 @@ import {
   type WorkspaceHomeAccount,
 } from "@sealant/api-contracts";
 import {
+  claudeCredentialsFile,
+  codexAuthJsonCopy,
   CredentialCipher,
   githubHostsYml,
   parseClaudeCredentialPayload,
   parseCodexCredentialPayload,
   parseGitHubCredentialPayload,
-  planCredentialInjections,
-  type CredentialInjection,
 } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
@@ -63,7 +63,7 @@ import {
   type HomeCredentialChannel,
   type SealantTarget,
 } from "@sealant/workspaces";
-import { Duration, Effect, Result, Semaphore } from "effect";
+import { Duration, Effect, Option, Result, Semaphore } from "effect";
 
 import { env } from "../../runtime-env.js";
 import { CurrentPrincipal } from "../../services/service-principals.js";
@@ -72,10 +72,49 @@ import { resolveSelectedConnectedAccount } from "./connected-account-selection.j
 const WRITE_TIMEOUT = Duration.seconds(15);
 
 /**
- * At most this many locked home writes at once in this process: each holds a database connection
- * while it writes (or waits for another write into the same home), and the API's pool is shared.
+ * Locked home writes run at most two at a time per workspace run in this process, each holding a
+ * database connection while it writes (or waits for another write into the same home). The limit
+ * is per run, so one hung executor holds back only its own workspace's writes, and a write waits
+ * for a permit at most `PERMIT_WAIT` before it is answered `home-busy` (retryable).
  */
-const homeWrites = Semaphore.makeUnsafe(4);
+const PERMITS_PER_RUN = 2;
+const PERMIT_WAIT = Duration.seconds(10);
+const runPermits = new Map<string, { readonly semaphore: Semaphore.Semaphore; users: number }>();
+
+const homeBusy = (home: string) =>
+  new WorkspaceConflictError({
+    message: `Another write into ${home} is still running; nothing was done. Try again.`,
+    code: "home-busy",
+  });
+
+export const withRunPermit = <A, E, R>(
+  runId: string,
+  home: string,
+  effect: Effect.Effect<A, E, R>,
+  /** For tests; defaults to `PERMIT_WAIT`. */
+  permitWait: Duration.Input = PERMIT_WAIT,
+): Effect.Effect<A, E | WorkspaceConflictError, R> =>
+  Effect.uninterruptibleMask((restore) => {
+    const entry = runPermits.get(runId) ?? {
+      semaphore: Semaphore.makeUnsafe(PERMITS_PER_RUN),
+      users: 0,
+    };
+    entry.users += 1;
+    runPermits.set(runId, entry);
+    const leave = Effect.sync(() => {
+      entry.users -= 1;
+      if (entry.users === 0) runPermits.delete(runId);
+    });
+    return restore(entry.semaphore.take(1).pipe(Effect.timeoutOption(permitWait))).pipe(
+      Effect.flatMap(
+        (taken): Effect.Effect<A, E | WorkspaceConflictError, R> =>
+          Option.isNone(taken)
+            ? Effect.fail(homeBusy(home))
+            : restore(effect).pipe(Effect.ensuring(entry.semaphore.release(1))),
+      ),
+      Effect.ensuring(leave),
+    );
+  });
 
 /** The home a launch wrote its own logins into when it named none (`$HOME`, root's home). */
 const LAUNCH_HOME = "/root";
@@ -223,13 +262,10 @@ const loginFileFor = (provider: WorkspaceCredentialHomeProvider, account: Connec
             typeof login === "string" ? login : undefined,
           );
         }
-        const planned: readonly CredentialInjection[] =
-          provider === "claude"
-            ? planCredentialInjections("claude", parseClaudeCredentialPayload(parsed))
-            : planCredentialInjections("codex", parseCodexCredentialPayload(parsed));
-        const file = planned.find((injection) => injection.kind === "file");
-        if (file === undefined) throw new Error("no credential file");
-        return Buffer.from(file.contentBase64, "base64").toString("utf8");
+        // A setup token too goes in as the file: a home is one person's, a variable is everyone's.
+        return provider === "claude"
+          ? claudeCredentialsFile(parseClaudeCredentialPayload(parsed))
+          : codexAuthJsonCopy(parseCodexCredentialPayload(parsed).authJson);
       },
       catch: () =>
         new WorkspaceConflictError({
@@ -264,6 +300,14 @@ const toHomeView = (row: {
     } satisfies WorkspaceCredentialHome;
   });
 
+/** Why a refused script is answered as it is: fenced → held, busy → busy, else unusable. */
+const refusedCode = (exitCode: number | undefined) =>
+  exitCode === HOME_SCRIPT_EXIT.fenced
+    ? "home-held"
+    : exitCode === HOME_SCRIPT_EXIT.busy
+      ? "home-busy"
+      : "home-unusable";
+
 export const putWorkspaceCredentials = (input: {
   readonly workspaceId: string;
   readonly payload: PutWorkspaceCredentialsRequest;
@@ -284,6 +328,15 @@ export const putWorkspaceCredentials = (input: {
           "Name the claude, codex or github account to put into the home, or null to remove one.",
       });
     }
+    if ((payload.uid === undefined) !== (payload.gid === undefined)) {
+      return yield* new WorkspaceBadRequestError({
+        message: "Name both the home's uid and gid, or neither.",
+      });
+    }
+    const createWithOwner =
+      payload.uid === undefined || payload.gid === undefined
+        ? undefined
+        : { uid: payload.uid, gid: payload.gid };
     const toWrite = named.flatMap(({ provider, selection }) =>
       selection === null ? [] : [{ provider, selection }],
     );
@@ -306,114 +359,122 @@ export const putWorkspaceCredentials = (input: {
       return yield* notRunning(input.workspaceId);
     }
     yield* requireNotLaunchHome(input.workspaceId, payload.home, instance);
-    const target = yield* targetFor(input.workspaceId, instance);
-
-    // Resolve every account and prepare every file before the home is locked: a refusal for one
-    // provider leaves the home as it was.
-    const writes: Array<{
-      readonly provider: WorkspaceCredentialHomeProvider;
-      readonly account: ConnectedAccount;
-      readonly content: string;
-    }> = [];
-    for (const { provider, selection } of toWrite) {
-      const account = yield* resolveSelectedConnectedAccount({
-        ownerUserId: payload.onBehalfOfUserId,
-        provider,
-        selection,
+    // Root's home serves the workspace's owner alone: processes nobody started run as root.
+    if (payload.home === LAUNCH_HOME && payload.onBehalfOfUserId !== workspace.ownerUserId) {
+      return yield* new WorkspaceConflictError({
+        message: `${LAUNCH_HOME} holds only the workspace owner's logins: processes Mend did not start run as root.`,
+        code: "home-held",
       });
-      writes.push({ provider, account, content: yield* loginFileFor(provider, account) });
     }
+    const target = yield* targetFor(input.workspaceId, instance);
 
     const channel = input.homeChannel ?? liveHomeCredentialChannel;
     const homes = yield* WorkspaceCredentialHomeRepo;
-    const written = yield* homeWrites
-      .withPermit(
-        homes.withLockedHome({ runId: instance.runId, home: payload.home }, (held) =>
-          Effect.gen(function* () {
-            if (held !== undefined && held.onBehalfOfUserId !== payload.onBehalfOfUserId) {
-              return yield* new WorkspaceConflictError({
-                message: `${payload.home} holds another person's logins in workspace ${input.workspaceId}; it is released before anyone else's are put there. Nothing was written.`,
-                code: "home-held",
-              });
-            }
-            // A first take writes a fresh marker and clears any login file it does not write (an
-            // earlier unconfirmed write's leftovers); a write under a hold checks the hold's marker.
-            const generation = held?.generation ?? newHomeGeneration();
-            const writing = writes.map(({ provider }) => provider);
-            const ran = yield* runHomeScript({
-              channel,
-              target,
-              home: payload.home,
-              script: buildHomeCredentialScript({
-                home: payload.home,
-                fence:
-                  held === undefined ? { kind: "take", generation } : { kind: "held", generation },
-                writes: writing,
-                removes:
-                  held === undefined
-                    ? workspaceCredentialHomeProviders.filter(
-                        (provider) => !writing.includes(provider),
-                      )
-                    : toRemove,
-              }),
-              stdin: homeScriptStdin(writes.map(({ content }) => content)),
+    const written = yield* withRunPermit(
+      instance.runId,
+      payload.home,
+      homes.withLockedHome({ runId: instance.runId, home: payload.home }, (held) =>
+        Effect.gen(function* () {
+          if (held !== undefined && held.onBehalfOfUserId !== payload.onBehalfOfUserId) {
+            return yield* new WorkspaceConflictError({
+              message: `${payload.home} holds another person's logins in workspace ${input.workspaceId}; it is released before anyone else's are put there. Nothing was written.`,
+              code: "home-held",
             });
-            if (ran.kind === "refused") {
-              return yield* new WorkspaceConflictError({
-                message: `${ran.message} Nothing was written.`,
-                code: ran.exitCode === HOME_SCRIPT_EXIT.fenced ? "home-held" : "home-unusable",
-              });
-            }
-            if (ran.kind === "unconfirmed") {
-              // An unconfirmed write may still land. A home that held nothing must not keep a login
-              // nobody records: release it, once, before answering. A late take that lands after
-              // that finds no marker and writes; the next take then finds its marker and is refused
-              // until the home is released, so nobody else's process ever runs on it.
-              if (held === undefined) {
-                yield* runHomeScript({
-                  channel,
-                  target,
+          }
+          // Under the lock: each account resolved and decrypted as it is stored now, so a refresh
+          // that persisted while this put waited is what is written, never the token it revoked.
+          const writes: Array<{
+            readonly provider: WorkspaceCredentialHomeProvider;
+            readonly account: ConnectedAccount;
+            readonly content: string;
+          }> = [];
+          for (const { provider, selection } of toWrite) {
+            const account = yield* resolveSelectedConnectedAccount({
+              ownerUserId: payload.onBehalfOfUserId,
+              provider,
+              selection,
+            });
+            writes.push({ provider, account, content: yield* loginFileFor(provider, account) });
+          }
+          // A first take writes a fresh marker and clears any login file it does not write (an
+          // earlier unconfirmed write's leftovers); a write under a hold checks the hold's marker.
+          const generation = held?.generation ?? newHomeGeneration();
+          const writing = writes.map(({ provider }) => provider);
+          const ran = yield* runHomeScript({
+            channel,
+            target,
+            home: payload.home,
+            script: buildHomeCredentialScript({
+              home: payload.home,
+              fence:
+                held === undefined ? { kind: "take", generation } : { kind: "held", generation },
+              ...(createWithOwner === undefined ? {} : { createWithOwner }),
+              writes: writing,
+              removes:
+                held === undefined
+                  ? workspaceCredentialHomeProviders.filter(
+                      (provider) => !writing.includes(provider),
+                    )
+                  : toRemove,
+            }),
+            stdin: homeScriptStdin(writes.map(({ content }) => content)),
+          });
+          if (ran.kind === "refused") {
+            return yield* new WorkspaceConflictError({
+              message: `${ran.message} Nothing was written.`,
+              code: refusedCode(ran.exitCode),
+            });
+          }
+          if (ran.kind === "unconfirmed") {
+            // An unconfirmed write may still land. A home that held nothing must not keep a login
+            // nobody records: release this take's hold, once, before answering. A late take that
+            // lands after that leaves its marker, so the next take is refused until the home is
+            // released, and nobody else's process ever runs on it.
+            if (held === undefined) {
+              yield* runHomeScript({
+                channel,
+                target,
+                home: payload.home,
+                script: buildHomeCredentialScript({
                   home: payload.home,
-                  script: buildHomeCredentialScript({
-                    home: payload.home,
-                    fence: { kind: "release" },
-                    writes: [],
-                    removes: [],
-                  }),
-                });
-              }
-              return yield* new WorkspaceBadGatewayError({
-                message: `The workspace's executor did not confirm the write into ${payload.home}: ${ran.message}. The home's record is unchanged${held === undefined ? " (it holds nothing)" : ""}; put again, or release it.`,
+                  fence: { kind: "release", generation },
+                  writes: [],
+                  removes: [],
+                }),
               });
             }
-            const changed = new Set<WorkspaceCredentialHomeProvider>([
-              ...toRemove,
-              ...writes.map(({ provider }) => provider),
-            ]);
-            const accounts: WorkspaceCredentialHomeAccount[] = [
-              ...(held?.accounts ?? []).filter((entry) => !changed.has(entry.provider)),
-              ...writes.map(({ provider, account }) => ({
-                provider,
-                connectedAccountId: account.id,
-              })),
-            ];
-            return {
-              result: { home: payload.home, onBehalfOfUserId: payload.onBehalfOfUserId, accounts },
-              outcome: {
-                kind: "hold" as const,
-                onBehalfOfUserId: payload.onBehalfOfUserId,
-                accounts,
-                generation,
-              },
-            };
-          }),
-        ),
-      )
-      .pipe(
-        Effect.catchTag("WorkspaceCredentialHomeRepoError", (error) =>
-          Effect.fail(new WorkspaceInternalServerError({ message: error.message })),
-        ),
-      );
+            return yield* new WorkspaceBadGatewayError({
+              message: `The workspace's executor did not confirm the write into ${payload.home}: ${ran.message}. The home's record is unchanged${held === undefined ? " (it holds nothing)" : ""}; put again, or release it.`,
+            });
+          }
+          const changed = new Set<WorkspaceCredentialHomeProvider>([...toRemove, ...writing]);
+          const accounts: WorkspaceCredentialHomeAccount[] = [
+            ...(held?.accounts ?? []).filter((entry) => !changed.has(entry.provider)),
+            ...writes.map(({ provider, account }) => ({
+              provider,
+              connectedAccountId: account.id,
+            })),
+          ];
+          return {
+            result: { home: payload.home, onBehalfOfUserId: payload.onBehalfOfUserId, accounts },
+            outcome: {
+              kind: "hold" as const,
+              onBehalfOfUserId: payload.onBehalfOfUserId,
+              accounts,
+              generation,
+            },
+          };
+        }),
+      ),
+    ).pipe(
+      // A lock timeout is busy (retryable); any other repository failure a 500.
+      Effect.catchTag("WorkspaceCredentialHomeBusyError", () =>
+        Effect.fail(homeBusy(payload.home)),
+      ),
+      Effect.catchTag("WorkspaceCredentialHomeRepoError", (error) =>
+        Effect.fail(new WorkspaceInternalServerError({ message: error.message })),
+      ),
+    );
 
     return {
       workspaceId: workspace.id,
@@ -446,48 +507,55 @@ export const releaseWorkspaceCredentials = (input: {
 
     const channel = input.homeChannel ?? liveHomeCredentialChannel;
     const homes = yield* WorkspaceCredentialHomeRepo;
-    const released = yield* homeWrites
-      .withPermit(
-        homes.withLockedHome(
-          { runId: instance.runId, home },
-          (held: WorkspaceCredentialHomeRow | undefined) =>
-            Effect.gen(function* () {
-              if (target !== undefined) {
-                // Every login file Core names is removed, recorded or not: a write that was never
-                // confirmed may have landed.
-                const ran = yield* runHomeScript({
-                  channel,
-                  target,
+    const released = yield* withRunPermit(
+      instance.runId,
+      home,
+      homes.withLockedHome(
+        { runId: instance.runId, home },
+        (held: WorkspaceCredentialHomeRow | undefined) =>
+          Effect.gen(function* () {
+            if (target !== undefined) {
+              // Every login file Core names is removed, recorded or not (an unconfirmed write may
+              // have landed), fenced by the hold's generation: a release that runs late, after the
+              // home was taken again, removes nothing of the new holder's. A home Core holds no
+              // record of is released whatever its marker says.
+              const ran = yield* runHomeScript({
+                channel,
+                target,
+                home,
+                script: buildHomeCredentialScript({
                   home,
-                  script: buildHomeCredentialScript({
-                    home,
-                    fence: { kind: "release" },
-                    writes: [],
-                    removes: [],
-                  }),
+                  fence:
+                    held === undefined
+                      ? { kind: "release" }
+                      : { kind: "release", generation: held.generation },
+                  writes: [],
+                  removes: [],
+                }),
+              });
+              const gone = ran.kind === "refused" && ran.exitCode === HOME_SCRIPT_EXIT.missing;
+              if (ran.kind === "refused" && !gone) {
+                return yield* new WorkspaceConflictError({
+                  message: `${ran.message} Nothing was removed; the home stays held.`,
+                  code: refusedCode(ran.exitCode),
                 });
-                const gone = ran.kind === "refused" && ran.exitCode === HOME_SCRIPT_EXIT.missing;
-                if (ran.kind === "refused" && !gone) {
-                  return yield* new WorkspaceConflictError({
-                    message: `${ran.message} Nothing was removed; the home stays held.`,
-                    code: "home-unusable",
-                  });
-                }
-                if (ran.kind === "unconfirmed") {
-                  return yield* new WorkspaceBadGatewayError({
-                    message: `The workspace's executor did not confirm the removal from ${home}: ${ran.message}. The home stays held; release it again.`,
-                  });
-                }
               }
-              return { result: held !== undefined, outcome: { kind: "release" as const } };
-            }),
-        ),
-      )
-      .pipe(
-        Effect.catchTag("WorkspaceCredentialHomeRepoError", (error) =>
-          Effect.fail(new WorkspaceInternalServerError({ message: error.message })),
-        ),
-      );
+              if (ran.kind === "unconfirmed") {
+                return yield* new WorkspaceBadGatewayError({
+                  message: `The workspace's executor did not confirm the removal from ${home}: ${ran.message}. The home stays held; release it again.`,
+                });
+              }
+            }
+            return { result: held !== undefined, outcome: { kind: "release" as const } };
+          }),
+      ),
+    ).pipe(
+      // A lock timeout is busy (retryable); any other repository failure a 500.
+      Effect.catchTag("WorkspaceCredentialHomeBusyError", () => Effect.fail(homeBusy(home))),
+      Effect.catchTag("WorkspaceCredentialHomeRepoError", (error) =>
+        Effect.fail(new WorkspaceInternalServerError({ message: error.message })),
+      ),
+    );
 
     return {
       workspaceId: workspace.id,

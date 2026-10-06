@@ -28,6 +28,29 @@ export class WorkspaceCredentialHomeRepoError extends Schema.TaggedErrorClass<Wo
   },
 ) {}
 
+/**
+ * Another write into the same home held it past the wait (`lock_timeout`): nothing was done, and
+ * trying again is safe.
+ */
+export class WorkspaceCredentialHomeBusyError extends Schema.TaggedErrorClass<WorkspaceCredentialHomeBusyError>()(
+  "WorkspaceCredentialHomeBusyError",
+  {
+    message: Schema.String,
+  },
+) {}
+
+/**
+ * Whether a database failure is Postgres's lock timeout (55P03), anywhere in its causes: drizzle
+ * wraps the driver's error in an Effect `Cause` (`SqlError/LockTimeoutError`), which is matched by
+ * its rendering.
+ */
+const isLockTimeout = (cause: unknown, depth = 0): boolean => {
+  if (depth > 6 || typeof cause !== "object" || cause === null) return false;
+  if ("code" in cause && cause.code === "55P03") return true;
+  if (/LockTimeoutError|lock timeout/.test(String(cause))) return true;
+  return "cause" in cause ? isLockTimeout(cause.cause, depth + 1) : false;
+};
+
 /** What a locked write leaves in the row once its effect succeeds. */
 export type WorkspaceCredentialHomeOutcome =
   /** Nothing changes (a refusal, or a push that wrote over what is recorded). */
@@ -65,7 +88,7 @@ export interface WorkspaceCredentialHomeRepoService {
       E,
       R
     >,
-  ) => Effect.Effect<A, E | WorkspaceCredentialHomeRepoError, R>;
+  ) => Effect.Effect<A, E | WorkspaceCredentialHomeRepoError | WorkspaceCredentialHomeBusyError, R>;
   /** Every home of one instance, oldest first. */
   readonly listByRunId: (
     runId: string,
@@ -97,114 +120,141 @@ const homeKey = (input: { readonly runId: string; readonly home: string }) =>
     eq(workspaceCredentialHomes.home, input.home),
   );
 
+/**
+ * The repository over a lock wait: a writer waits at most this long for another's write into the
+ * same home (each bounded by its own exec timeout), never indefinitely while holding a connection.
+ */
+export const makeWorkspaceCredentialHomeRepoLayer = (options: {
+  readonly lockTimeoutMs: number;
+}): Layer.Layer<WorkspaceCredentialHomeRepo, never, SealantDB> =>
+  Layer.effect(
+    WorkspaceCredentialHomeRepo,
+    Effect.gen(function* () {
+      const db = yield* SealantDB;
+
+      function withLockedHome<A, E, R>(
+        input: { readonly runId: string; readonly home: string },
+        use: (
+          held: WorkspaceCredentialHome | undefined,
+        ) => Effect.Effect<
+          { readonly result: A; readonly outcome: WorkspaceCredentialHomeOutcome },
+          E,
+          R
+        >,
+      ): Effect.Effect<
+        A,
+        E | WorkspaceCredentialHomeRepoError | WorkspaceCredentialHomeBusyError,
+        R
+      > {
+        return db
+          .transaction((tx) =>
+            Effect.gen(function* () {
+              // A writer waits at most this long for another's write into the home (each is bounded
+              // by its own exec timeout), never indefinitely while holding a connection.
+              yield* withRepoError(
+                "withLockedHome",
+                tx.execute(
+                  sql.raw(
+                    `set local lock_timeout = '${Math.max(1, Math.round(options.lockTimeoutMs))}ms'`,
+                  ),
+                ),
+              );
+              // A home that holds nothing has no row to lock: serialise on the key instead, for the
+              // rest of this transaction, so two first puts into one home take turns too.
+              yield* withRepoError(
+                "withLockedHome",
+                tx.execute(
+                  sql`select pg_advisory_xact_lock(hashtextextended(${`${input.runId} ${input.home}`}, 0))`,
+                ),
+              );
+              const [held] = yield* withRepoError(
+                "withLockedHome",
+                tx.select().from(workspaceCredentialHomes).where(homeKey(input)).for("update"),
+              );
+              const { result, outcome } = yield* use(held);
+              if (outcome.kind === "release") {
+                yield* withRepoError(
+                  "withLockedHome",
+                  tx.delete(workspaceCredentialHomes).where(homeKey(input)),
+                );
+              } else if (outcome.kind === "hold") {
+                yield* withRepoError(
+                  "withLockedHome",
+                  tx
+                    .insert(workspaceCredentialHomes)
+                    .values({
+                      runId: input.runId,
+                      home: input.home,
+                      onBehalfOfUserId: outcome.onBehalfOfUserId,
+                      accounts: [...outcome.accounts],
+                      generation: outcome.generation,
+                    })
+                    .onConflictDoUpdate({
+                      target: [workspaceCredentialHomes.runId, workspaceCredentialHomes.home],
+                      set: {
+                        onBehalfOfUserId: outcome.onBehalfOfUserId,
+                        accounts: [...outcome.accounts],
+                        generation: outcome.generation,
+                        updatedAt: new Date(),
+                      },
+                    }),
+                );
+              }
+              return result;
+            }),
+          )
+          .pipe(
+            // Only the database's failures are translated (a lock timeout as busy); the caller's
+            // errors pass through as they are.
+            Effect.mapError((error) =>
+              (error instanceof SqlError || error instanceof WorkspaceCredentialHomeRepoError) &&
+              isLockTimeout(error)
+                ? new WorkspaceCredentialHomeBusyError({
+                    message: "Another write into the home held it past the wait; try again.",
+                  })
+                : error instanceof SqlError
+                  ? toRepoError("withLockedHome", error)
+                  : error,
+            ),
+          );
+      }
+
+      return {
+        withLockedHome,
+
+        listByRunId: (runId) =>
+          withRepoError(
+            "listByRunId",
+            db
+              .select()
+              .from(workspaceCredentialHomes)
+              .where(eq(workspaceCredentialHomes.runId, runId))
+              .orderBy(workspaceCredentialHomes.createdAt, workspaceCredentialHomes.home),
+          ),
+
+        listReadyHoldingAccount: (connectedAccountId) =>
+          withRepoError(
+            "listReadyHoldingAccount",
+            db
+              .select({ home: workspaceCredentialHomes, instance: workspaceRuntimeInstances })
+              .from(workspaceCredentialHomes)
+              .innerJoin(
+                workspaceRuntimeInstances,
+                eq(workspaceRuntimeInstances.runId, workspaceCredentialHomes.runId),
+              )
+              .where(
+                and(
+                  eq(workspaceRuntimeInstances.status, "ready"),
+                  sql`${workspaceCredentialHomes.accounts} @> ${JSON.stringify([{ connectedAccountId }])}::jsonb`,
+                ),
+              ),
+          ),
+      } satisfies WorkspaceCredentialHomeRepoService;
+    }),
+  );
+
 export const WorkspaceCredentialHomeRepoLive: Layer.Layer<
   WorkspaceCredentialHomeRepo,
   never,
   SealantDB
-> = Layer.effect(
-  WorkspaceCredentialHomeRepo,
-  Effect.gen(function* () {
-    const db = yield* SealantDB;
-
-    function withLockedHome<A, E, R>(
-      input: { readonly runId: string; readonly home: string },
-      use: (
-        held: WorkspaceCredentialHome | undefined,
-      ) => Effect.Effect<
-        { readonly result: A; readonly outcome: WorkspaceCredentialHomeOutcome },
-        E,
-        R
-      >,
-    ): Effect.Effect<A, E | WorkspaceCredentialHomeRepoError, R> {
-      return db
-        .transaction((tx) =>
-          Effect.gen(function* () {
-            // A writer waits at most this long for another's write into the home (each is bounded
-            // by its own exec timeout), never indefinitely while holding a connection.
-            yield* withRepoError("withLockedHome", tx.execute(sql`set local lock_timeout = '40s'`));
-            // A home that holds nothing has no row to lock: serialise on the key instead, for the
-            // rest of this transaction, so two first puts into one home take turns too.
-            yield* withRepoError(
-              "withLockedHome",
-              tx.execute(
-                sql`select pg_advisory_xact_lock(hashtextextended(${`${input.runId} ${input.home}`}, 0))`,
-              ),
-            );
-            const [held] = yield* withRepoError(
-              "withLockedHome",
-              tx.select().from(workspaceCredentialHomes).where(homeKey(input)).for("update"),
-            );
-            const { result, outcome } = yield* use(held);
-            if (outcome.kind === "release") {
-              yield* withRepoError(
-                "withLockedHome",
-                tx.delete(workspaceCredentialHomes).where(homeKey(input)),
-              );
-            } else if (outcome.kind === "hold") {
-              yield* withRepoError(
-                "withLockedHome",
-                tx
-                  .insert(workspaceCredentialHomes)
-                  .values({
-                    runId: input.runId,
-                    home: input.home,
-                    onBehalfOfUserId: outcome.onBehalfOfUserId,
-                    accounts: [...outcome.accounts],
-                    generation: outcome.generation,
-                  })
-                  .onConflictDoUpdate({
-                    target: [workspaceCredentialHomes.runId, workspaceCredentialHomes.home],
-                    set: {
-                      onBehalfOfUserId: outcome.onBehalfOfUserId,
-                      accounts: [...outcome.accounts],
-                      generation: outcome.generation,
-                      updatedAt: new Date(),
-                    },
-                  }),
-              );
-            }
-            return result;
-          }),
-        )
-        .pipe(
-          // Only the transaction's own failure (begin, commit) is translated; the caller's errors
-          // pass through as they are.
-          Effect.mapError((error) =>
-            error instanceof SqlError ? toRepoError("withLockedHome", error) : error,
-          ),
-        );
-    }
-
-    return {
-      withLockedHome,
-
-      listByRunId: (runId) =>
-        withRepoError(
-          "listByRunId",
-          db
-            .select()
-            .from(workspaceCredentialHomes)
-            .where(eq(workspaceCredentialHomes.runId, runId))
-            .orderBy(workspaceCredentialHomes.createdAt, workspaceCredentialHomes.home),
-        ),
-
-      listReadyHoldingAccount: (connectedAccountId) =>
-        withRepoError(
-          "listReadyHoldingAccount",
-          db
-            .select({ home: workspaceCredentialHomes, instance: workspaceRuntimeInstances })
-            .from(workspaceCredentialHomes)
-            .innerJoin(
-              workspaceRuntimeInstances,
-              eq(workspaceRuntimeInstances.runId, workspaceCredentialHomes.runId),
-            )
-            .where(
-              and(
-                eq(workspaceRuntimeInstances.status, "ready"),
-                sql`${workspaceCredentialHomes.accounts} @> ${JSON.stringify([{ connectedAccountId }])}::jsonb`,
-              ),
-            ),
-        ),
-    } satisfies WorkspaceCredentialHomeRepoService;
-  }),
-);
+> = makeWorkspaceCredentialHomeRepoLayer({ lockTimeoutMs: 20_000 });

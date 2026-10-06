@@ -542,6 +542,13 @@ export const putWorkspaceCredentialsRequestSchema = Schema.Struct({
    * exist; its owner owns the files.
    */
   home: NonEmptyString,
+  /**
+   * The home's owner, given together: a home that does not exist yet is made for them (mode 0700,
+   * seeded from `/etc/skel`), so a put can run beside the `useradd` that makes its user. Without
+   * them a missing home is refused (`home-unusable`).
+   */
+  uid: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  gid: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   claude: Schema.optional(Schema.NullOr(NonEmptyString)),
   codex: Schema.optional(Schema.NullOr(NonEmptyString)),
   github: Schema.optional(Schema.NullOr(NonEmptyString)),
@@ -613,14 +620,17 @@ export type ListWorkspaceCredentialsResponse = typeof listWorkspaceCredentialsRe
  * Stable `code`s of the `WorkspaceConflictError` the credential routes answer:
  * `workspace-not-running` (no ready executor), `connected-account-invalid` (a named account is
  * marked invalid: reconnect it), `home-held` (the home holds another person's logins: release it
- * first; or `/root` while the launch's own logins are at `$HOME`), `home-unusable` (the home does
- * not exist, is not a directory, or is reached through a symbolic link).
+ * first; `/root` while the launch's own logins are at `$HOME`, or for anyone but the workspace's
+ * owner), `home-unusable` (the home does not exist, is not a directory, is reached through a
+ * symbolic link, or a login directory in it links outside it), `home-busy` (another write into the
+ * home, or too many into this workspace, is still running: nothing was done, try again).
  */
 export const workspaceCredentialsConflictCodes = [
   "workspace-not-running",
   "connected-account-invalid",
   "home-held",
   "home-unusable",
+  "home-busy",
 ] as const;
 export type WorkspaceCredentialsConflictCode = (typeof workspaceCredentialsConflictCodes)[number];
 
