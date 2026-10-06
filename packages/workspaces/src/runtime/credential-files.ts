@@ -21,6 +21,8 @@ export const buildCredentialFileWriteScript = (
     return buildHomeCredentialScript({
       home: file.path,
       fence: { kind: "take", generation: file.home.generation },
+      // Nothing precedes a launch's take in a fresh executor (or its own earlier delivery).
+      token: "0",
       createWithOwner: { uid: file.home.uid, gid: file.home.gid },
       writes: file.home.providers,
       removes: [],

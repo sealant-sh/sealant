@@ -500,9 +500,10 @@ conversation home while that person's process is about to run there.
   can start one as another user yet (Mend ADR 0016 Delivery 5), so Core refuses with 409
   `user-unsupported` before anything starts, and never runs the process as the workspace's own user
   in its place. Wiring it through is a follow-up once sealantd's protocol carries it. An SDK sends
-  `user` only to a control plane whose index reports `features.processUser` (read once per client),
-  and refuses it client-side otherwise: an older control plane would decode the request without the
-  field and run the process as the workspace's own user. Today's reports `false`.
+  `user` only to a control plane whose index reports `features.processUser` (kept five minutes, a
+  failed read fifteen seconds), and refuses it client-side otherwise: an older control plane would
+  decode the request without the field and run the process as the workspace's own user. Today's
+  reports `false`.
 - **The image's per-person capability.** The image build's probe (Delivery 9) records on the build's
   metadata `personLayoutProbe`: what `sealantd capabilities --json` reports, whether the image has
   `sudo`, `useradd` and `setfacl`, whether the reserved ids are free, and whether it is a nix image.
@@ -513,11 +514,12 @@ conversation home while that person's process is about to run there.
   `workspace.image()`), and before a create by `POST /v1/workspaces/image { spec }` (SDK
   `workspaces.inspectImage(options)`): the spec is planned exactly as the build plans it and the
   latest image published for the plan answers. That read creates nothing, and names the image only
-  to the owner who built it. A caller avoids it with `workspaces.imageKey(options)`, a key the SDK
-  computes from the spec alone (its image-shaping parts: harness, tooling, customization, lifecycle,
-  access, target; not sources or runtime), with no call: Mend keeps what a launch's `launch.image`
-  told it under that key and calls `inspectImage` only for a key it has not seen. The capability on
-  a workspace read names that workspace's runtime.
+  to the owner who built it. A caller avoids it with `workspaces.imageKey(options)`, a key for the
+  capability (not the image's identity: the plan also reads the runtime's environment, roots and
+  dotfiles) that the SDK computes from the spec alone (its image-shaping parts: harness, tooling,
+  customization, lifecycle, access, target; not sources or runtime), with no call: Mend keeps what a
+  launch's `launch.image` told it under that key and calls `inspectImage` only for a key it has not
+  seen. The capability on a workspace read names that workspace's runtime.
 
 ## 7. The `sealant` CLI — `apps/cli`
 

@@ -1,11 +1,13 @@
 /**
- * A key for the image a create would build, computed from the spec alone, with no call: the parts
- * of the spec that shape the image (harness, tooling, customization, lifecycle, access, target),
- * never its sources or runtime (repository, credentials, homes, environment). Two creates with
- * one key plan the same image on one control plane, so a caller can keep what it learnt about an
- * image (its per-person capability, from `launch.image` after `ready()`) under this key and skip
- * `workspaces.inspectImage` when it already knows. A control-plane upgrade can change the image a
- * key plans; what an executor of the image actually found stays the authority.
+ * A key to keep an image's per-person capability under, computed from the spec alone, with no
+ * call: the parts of the spec that decide what the image can do for the per-person layout (harness,
+ * tooling, customization, lifecycle, access, target), never its sources or runtime (repository,
+ * credentials, homes, environment). It is not the image's identity: two creates with one key can
+ * plan different images (the plan also reads the runtime's environment, roots and dotfiles), but
+ * their bases, packages and tools are the same, which is what the capability is about. A caller
+ * keeps what `launch.image` told it (after `ready()`) under this key and calls
+ * `workspaces.inspectImage` only for a key it has not seen. A control-plane upgrade can change an
+ * image; what an executor of it actually found stays the authority.
  */
 import { createHash } from "node:crypto";
 

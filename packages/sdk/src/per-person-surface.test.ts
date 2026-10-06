@@ -147,6 +147,40 @@ describe("user against a control plane that does not report it", () => {
   });
 });
 
+describe("the control plane's feature answer", () => {
+  it("is asked again after a failed read, never kept for the client's life", async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, requests } = makeStub(true);
+      let reads = 0;
+      const flaky = {
+        ...client,
+        system: {
+          getIndex: () => {
+            reads += 1;
+            return reads === 1
+              ? Effect.fail(new Error("unreachable"))
+              : (
+                  client as unknown as { system: { getIndex: () => Effect.Effect<unknown> } }
+                ).system.getIndex();
+          },
+        },
+      } as unknown as ControlPlaneClient;
+      const workspace = makeWorkspace(makeCtx(flaky), { id: "ws_1", name: "t", status: "ready" });
+
+      await expect(workspace.exec(["id"], { user: "m4lice000" })).rejects.toMatchObject({
+        code: "user-unsupported",
+      });
+      vi.setSystemTime(Date.now() + 20_000);
+      await expect(workspace.exec(["id"], { user: "m4lice000" })).rejects.toBeDefined();
+      expect(reads).toBe(2);
+      expect(requests.map((request) => request.op)).toEqual(["exec"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("workspaces.imageKey", () => {
   it("is computed without a call, the same for creates that plan one image", () => {
     const sealant = new Sealant({ baseUrl: "http://stub.invalid", ownerUserId: "usr_owner" });

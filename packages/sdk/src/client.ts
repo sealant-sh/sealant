@@ -169,10 +169,12 @@ export class Sealant {
     },
 
     /**
-     * A key for the image `create(options)` would build, computed here from the spec alone, with
-     * no call: equal for creates that plan the same image (whatever their repository, credentials
-     * or homes). Keep what a launch's `launch.image` told you under it, and call `inspectImage`
-     * only for a key you have not seen.
+     * A key to keep the per-person capability of `create(options)`'s image under, computed here
+     * from the spec alone, with no call. It is the same for creates whose image-shaping parts
+     * (harness, tooling, customization, lifecycle, access, target) are the same, whatever their
+     * repository, credentials or homes. It keys the capability, not the image itself. Keep what a
+     * launch's `launch.image` told you under it, and call `inspectImage` only for a key you have not
+     * seen.
      */
     imageKey: (options: CreateOptions): string =>
       imageSpecKey(buildCreateWorkspaceRequest(options, this.#ctx.config).payload.spec),
