@@ -93,24 +93,31 @@ The upgrade does the rest. The `migrate` step:
    `telemetry_timeline`, `runs` or `workspace_sessions`;
 2. rewrites the rows already stored, keeping each command's executable, argument count and argument
    lengths, and deletes the run-exec job copies the queue kept;
-3. after it commits, runs `VACUUM` on those tables and on `pgboss.job`, then `CHECKPOINT`, so the
-   old row versions leave the table files and the WAL can be recycled.
+3. after it commits, runs `VACUUM` on those tables and on `pgboss.job`.
 
-The `migrate` step prints each of the step 3 commands with its duration. If one fails (a database
-role that may not run `CHECKPOINT`, say), it prints the command; run it as the database owner or a
-superuser:
+`VACUUM` marks the space the old row versions held as free, so new rows overwrite it; until then the
+bytes are still in the table files. It does not zero that space or shrink the files. To have the
+files rewritten without the old versions, run `VACUUM FULL` on the same tables. It holds an
+exclusive lock on each table while it copies it, so stop the API and worker first, and it needs free
+disk space about the size of the table. The WAL that recorded the rewrite is recycled after the next
+automatic checkpoint, within `checkpoint_timeout` (5 minutes by default).
+
+The `migrate` step prints what each `VACUUM` did: done, or skipped with Postgres's reason when the
+database role does not own the table. A skipped one has to be run by the table's owner:
 
 ```sh
 psql "$DATABASE_URL" -c 'VACUUM telemetry_events' -c 'VACUUM telemetry_timeline' \
-  -c 'VACUUM runs' -c 'VACUUM workspace_sessions' -c 'VACUUM pgboss.job' -c 'CHECKPOINT'
+  -c 'VACUUM runs' -c 'VACUUM workspace_sessions' -c 'VACUUM pgboss.job'
 ```
 
 Run the same commands if you applied migrations with `pnpm db:migrate` (drizzle-kit) rather than the
 `migrate` step, since drizzle-kit does not run them.
 
 Copies outside the database are not touched: WAL archives, `pg_dump` files, backups and snapshots
-taken before the upgrade still hold the old rows. Delete them or keep them as secret as the secrets
-they hold.
+taken before the upgrade still hold the old rows. That includes the backup `mend server upgrade`
+writes under `~/.config/mend/backups/` before it starts the new version: the one for this upgrade
+and every earlier one hold the old arguments. Once the upgrade is healthy, delete them, or keep them
+as secret as the secrets they hold.
 
 **After restoring a dump taken before this release**, purge it again; the triggers do not fire for
 rows restored with `pg_restore --disable-triggers` or under `session_replication_role = replica`:
@@ -120,7 +127,7 @@ psql "$DATABASE_URL" -c 'SELECT * FROM sealant_purge_stored_arguments()'
 ```
 
 It prints how many rows it rewrote in each table, and changes nothing when there is nothing left.
-Then run the `VACUUM` and `CHECKPOINT` commands above.
+Then run the `VACUUM` commands above.
 
 ## Pin an exact version
 

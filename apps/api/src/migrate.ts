@@ -18,7 +18,7 @@ const migrationsFolder = process.env.DRIZZLE_MIGRATIONS_DIR ?? "/app/drizzle";
 
 try {
   console.log(`[migrate] applying migrations from ${migrationsFolder}…`);
-  // Maintenance a migration needs outside its transaction (VACUUM, CHECKPOINT) runs here too.
+  // Maintenance a migration needs outside its transaction (VACUUM) runs here too.
   const { applied } = await runMigrations({ databaseUrl, migrationsFolder });
   console.log(
     applied.length === 0

@@ -4,10 +4,11 @@
  * (drizzle.__drizzle_migrations, matched by content hash + name), so dev `db:migrate` runs and
  * packaged installs share one migration history.
  *
- * Some migrations need maintenance that cannot run inside the migration transaction (VACUUM,
- * CHECKPOINT). After the migrations commit, the runner runs it for each migration this run newly
- * applied (`POST_MIGRATION_MAINTENANCE`). A step that fails is logged with the command to run by
- * hand; it does not fail the migration, which has already committed.
+ * Some migrations need maintenance that cannot run inside the migration transaction (VACUUM).
+ * After the migrations commit, the runner runs it for each migration this run newly applied
+ * (`POST_MIGRATION_MAINTENANCE`), and logs what each step did: done, skipped (with Postgres's
+ * reason, for a role that may not vacuum a table), or failed. A step that does not get done never
+ * fails the migration, which has already committed.
  */
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
@@ -33,9 +34,11 @@ interface MaintenanceStep {
 
 /**
  * `stored_arguments_withheld` rewrote every stored row that held a process's or session's
- * arguments. The old row versions stay in the table files until VACUUM and in the WAL until a
- * CHECKPOINT lets it be recycled: autovacuum would not get to them soon, because the rewrite
- * touches a small share of each table.
+ * arguments. VACUUM marks the old row versions' space free for reuse, so new rows overwrite them;
+ * autovacuum would not get to them soon, because the rewrite touches a small share of each table.
+ * It does not zero that space or shrink the files (only `VACUUM FULL` rewrites them, under an
+ * exclusive lock). The WAL holding the rewrite is recycled after the next automatic checkpoint:
+ * an explicit CHECKPOINT needs a superuser or `pg_checkpoint`, which an app's owner role is not.
  */
 export const POST_MIGRATION_MAINTENANCE: Readonly<Record<string, readonly MaintenanceStep[]>> = {
   "20261006054100_stored_arguments_withheld": [
@@ -44,7 +47,6 @@ export const POST_MIGRATION_MAINTENANCE: Readonly<Record<string, readonly Mainte
     { sql: 'VACUUM "runs"' },
     { sql: 'VACUUM "workspace_sessions"' },
     { sql: 'VACUUM "pgboss"."job"', whenRelationExists: "pgboss.job" },
-    { sql: "CHECKPOINT" },
   ],
 };
 
@@ -77,14 +79,33 @@ const runMaintenance = async (
         continue;
       }
     }
+    // A VACUUM the role may not run on a table succeeds with a WARNING ("skipping …") instead of
+    // an error: collect what Postgres says, so the log reports a skip as a skip.
+    const warnings: string[] = [];
+    const onNotice = (notice: {
+      readonly severity: string | undefined;
+      readonly message: string | undefined;
+    }) => {
+      if (notice.severity === "WARNING" && notice.message !== undefined) {
+        warnings.push(notice.message);
+      }
+    };
+    client.on("notice", onNotice);
     const startedAt = Date.now();
     try {
       await client.query(step.sql);
-      log(`[migrate] after ${migration}: ${step.sql} (${Date.now() - startedAt} ms)`);
+      const elapsed = Date.now() - startedAt;
+      log(
+        warnings.length === 0
+          ? `[migrate] after ${migration}: ${step.sql} done (${elapsed} ms)`
+          : `[migrate] after ${migration}: ${step.sql} skipped: ${warnings.join("; ")}. Run it as the table's owner.`,
+      );
     } catch (error) {
       log(
-        `[migrate] after ${migration}: ${step.sql} failed (${error instanceof Error ? error.message : String(error)}). Run it as the database owner or a superuser: psql "$DATABASE_URL" -c '${step.sql}'`,
+        `[migrate] after ${migration}: ${step.sql} failed (${error instanceof Error ? error.message : String(error)}). Run it as the table's owner.`,
       );
+    } finally {
+      client.off("notice", onNotice);
     }
   }
 };

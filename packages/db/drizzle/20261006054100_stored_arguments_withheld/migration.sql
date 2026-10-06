@@ -22,8 +22,9 @@ CREATE INDEX IF NOT EXISTS "runs_record_retention_idx" ON "runs" ("finished_at")
 -- before this migration (`SELECT * FROM sealant_purge_stored_arguments();`), then VACUUM. Rows
 -- already withheld are skipped, so this whole file can run again and changes nothing.
 --
--- The purge leaves the old row versions on disk and in the WAL until VACUUM and a CHECKPOINT;
--- `apps/api/src/migrate.ts` runs both after this migration commits. It rewrites stored rows, the
+-- The purge leaves the old row versions in the table files until VACUUM marks their space free
+-- (it does not zero it; only VACUUM FULL rewrites the files), and in the WAL until the next
+-- checkpoint. `runMigrations` (@sealant/db/migrate) runs the VACUUMs after this migration commits. It rewrites stored rows, the
 -- append-only log included, once: it needs the owner's approval before it runs against a database
 -- that holds real records.
 
