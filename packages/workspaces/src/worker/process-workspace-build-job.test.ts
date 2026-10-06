@@ -29,7 +29,7 @@ import {
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
 import type { GitHubSourceIntegration } from "@sealant/source-integrations";
-import type { NewWorkspace, WorkspaceBuild } from "@sealant/validators";
+import type { NewWorkspace, WorkspaceBuild, WorkspaceImageProbe } from "@sealant/validators";
 import { Effect, Exit, Fiber, Layer, Result } from "effect";
 import { vi } from "vitest";
 
@@ -496,6 +496,28 @@ describe("processWorkspaceBuildJobEffect", () => {
 
   it.effect("skips build and publish when the plan hash matches a published image", () => {
     const priorPlanHash = "a".repeat(64);
+    // The prior build's probe of the image it published: the reused image is that image.
+    const priorProbe: WorkspaceImageProbe = {
+      version: 1,
+      tools: {
+        sudo: true,
+        sudoSetuid: true,
+        useradd: true,
+        groupadd: true,
+        setfacl: true,
+        getfacl: true,
+        setpriv: true,
+      },
+      sudoersMend: true,
+      sudoersIncludesDir: true,
+      noNewPrivileges: false,
+      passwdWritable: true,
+      mendGroup: "present",
+      reservedIdsInUse: [],
+      personEnv: true,
+      sharedDirs: ["/opt/mise"],
+      sealantd: null,
+    };
     const jobs = workspaceBuildJobRepoStub({
       // The new create has its own fresh repository:tag (the SDK stamps a random tag per
       // create) — only the plan hash links it to the prior publish.
@@ -519,6 +541,7 @@ describe("processWorkspaceBuildJobEffect", () => {
             defaultArtifactName: "sealant-workspace-fedora",
             notes: [],
             planHash: priorPlanHash,
+            imageProbe: priorProbe,
           },
         },
         publishedReference: "127.0.0.1:5000/session-aaaa:sdk-11111111",
@@ -574,7 +597,10 @@ describe("processWorkspaceBuildJobEffect", () => {
           publishedReference: "127.0.0.1:5000/session-aaaa:sdk-11111111",
           publishedDigest: "sha256:prior",
           resultPayload: expect.objectContaining({
-            metadata: expect.objectContaining({ planHash: priorPlanHash }),
+            metadata: expect.objectContaining({
+              planHash: priorPlanHash,
+              imageProbe: priorProbe,
+            }),
           }),
         }),
       );
