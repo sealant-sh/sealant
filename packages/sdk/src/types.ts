@@ -1488,9 +1488,17 @@ export interface RunReplay {
 export interface RunCommand {
   /** The executable that ran (e.g. `"opencode"`). */
   readonly executable: string;
-  /** Its arguments. */
+  /**
+   * Its arguments, which the platform no longer stores: they can carry secrets. Empty for every
+   * command recorded since; `argCount` says how many there were.
+   */
   readonly args: readonly string[];
-  /** A ready-to-read shell line, e.g. `opencode run "fix the test"`. */
+  /** How many arguments the command was started with. */
+  readonly argCount: number;
+  /**
+   * A ready-to-read line, e.g. `opencode (2 arguments not recorded)`. A command recorded before
+   * arguments were withheld reads in full, e.g. `opencode run "fix the test"`.
+   */
   readonly command: string;
   /** Working directory the command ran in. */
   readonly cwd?: string;

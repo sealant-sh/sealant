@@ -13,6 +13,13 @@ export interface ConsumeJobQueueJsonOptions<TMessage> {
   readonly concurrency?: number;
   readonly parseMessage: (input: unknown) => TMessage;
   /**
+   * Delete each delivery's row as soon as it is taken, before it is parsed or handled, so its
+   * data is not kept after pickup: for a payload that can carry secrets (a command's arguments).
+   * Without the row there is no completed copy, no dead-letter copy and no expiry, so use it only
+   * for a queue that reconciles lost work from its own records instead.
+   */
+  readonly deleteOnPickup?: boolean;
+  /**
    * Resolving completes the delivery. Throwing (or a payload that fails to parse) fails it, which
    * copies it to the dead-letter queue — there are no automatic retries.
    */
@@ -39,6 +46,11 @@ export const consumeJobQueueJson = async <TMessage>(
     },
     async (jobs) => {
       for (const job of jobs) {
+        if (options.deleteOnPickup === true) {
+          // pg-boss treats a job its handler deleted as done: completing or failing it afterwards
+          // changes nothing, and nothing is copied to the dead-letter queue.
+          await singleton.boss.deleteJob(options.queue.name, job.id);
+        }
         let message: TMessage;
         try {
           message = options.parseMessage(job.data);

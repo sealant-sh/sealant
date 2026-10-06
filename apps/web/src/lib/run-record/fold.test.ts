@@ -144,6 +144,25 @@ describe("foldRunRecord", () => {
     expect(test?.exit?.exitCode).toBe(1);
   });
 
+  it("names how many arguments a command had when the platform withheld them", () => {
+    seq = 0;
+    const model = foldRunRecord({
+      entries: [
+        entry(
+          "processStarted",
+          { executable: "sh", args: [], argCount: 2, argLengths: [2, 61], cwd: "/" },
+          { processId: "p1" },
+        ),
+        entry("processStarted", { executable: "true", args: [], cwd: "/" }, { processId: "p2" }),
+      ],
+    });
+
+    expect(model.commands.map((command) => command.commandLine)).toEqual([
+      "sh (2 arguments not recorded)",
+      "true",
+    ]);
+  });
+
   it("attributes file activity by processId and by containment fallback", () => {
     const model = foldRunRecord({ entries: buildTimeline() });
 

@@ -19,7 +19,7 @@ import {
   normalizeEnvelope,
   reassembleByStreamOffset,
 } from "./normalize.js";
-import type { GapDetectionState } from "./types.js";
+import { bigintReplacer, type GapDetectionState } from "./types.js";
 
 type EnvelopeInit = MessageInitShape<typeof EventEnvelopeSchema>;
 
@@ -147,6 +147,68 @@ describe("projection derivation is identical at ingest and rebuild", () => {
     const rebuilt = eventRowToNormalized(asStoredRow(ingest, "run_1"));
     expect(deriveTimelineRow(rebuilt, "run_1")).toEqual(deriveTimelineRow(ingest, "run_1"));
     expect(rebuilt.summary).toBe(ingest.summary);
+  });
+});
+
+describe("a process's arguments are never stored", () => {
+  // The shape Mend's secret-file delivery used: the file's bytes, base64, in `sh -c` argv.
+  const SECRET = "AKIAIOSFODNN7EXAMPLE";
+  const script = `printf '%s' '${Buffer.from(`aws_access_key_id = ${SECRET}`).toString("base64")}' | base64 -d > ~/.aws/credentials`;
+  const started = makeEnvelope({
+    processId: "proc_secret",
+    sequence: 5n,
+    payload: {
+      case: "processStarted",
+      value: { pid: 7, pgid: 7, executable: "sh", args: ["-c", script, "é"], cwd: "/root" },
+    },
+  });
+
+  it("keeps the executable, the argument count and each argument's length, never the arguments", () => {
+    const n = normalizeEnvelope(started);
+    const stored = JSON.stringify(
+      [eventRow(n, "run_1"), deriveTimelineRow(n, "run_1")],
+      bigintReplacer,
+    );
+
+    expect(n.payload.executable).toBe("sh");
+    expect(n.payload.cwd).toBe("/root");
+    expect(n.payload.args).toEqual([]);
+    expect(n.payload.argCount).toBe(3);
+    expect(n.payload.argLengths).toEqual([2, Buffer.byteLength(script), 2]);
+    expect(n.summary).toBe("exec sh (3 arguments not recorded)");
+    expect(stored).not.toContain(SECRET);
+    expect(stored).not.toContain(script.slice(20, 60));
+    expect(stored).not.toContain("printf");
+  });
+
+  it("rebuilds a row stored before arguments were withheld without them", () => {
+    const legacy: TelemetryEvent = {
+      ...asStoredRow(normalizeEnvelope(started), "run_1"),
+      payload: { pid: 7, executable: "sh", args: ["-c", script], cwd: "/root" },
+    };
+    const rebuilt = eventRowToNormalized(legacy);
+    const timeline = deriveTimelineRow(rebuilt, "run_1");
+
+    expect(rebuilt.payload.args).toEqual([]);
+    expect(rebuilt.payload.argCount).toBe(2);
+    expect(timeline.summary).toBe("exec sh (2 arguments not recorded)");
+    expect(JSON.stringify(timeline, bigintReplacer)).not.toContain("printf");
+  });
+
+  it("ingest and rebuild derive the same timeline row", () => {
+    const ingest = normalizeEnvelope(started);
+    const rebuilt = eventRowToNormalized(asStoredRow(ingest, "run_1"));
+    expect(deriveTimelineRow(rebuilt, "run_1")).toEqual(deriveTimelineRow(ingest, "run_1"));
+  });
+
+  it("a process started with no arguments reads as just its executable", () => {
+    const n = normalizeEnvelope(
+      makeEnvelope({
+        payload: { case: "processStarted", value: { executable: "bash", args: [], cwd: "/" } },
+      }),
+    );
+    expect(n.summary).toBe("exec bash");
+    expect(n.payload).not.toHaveProperty("argCount");
   });
 });
 

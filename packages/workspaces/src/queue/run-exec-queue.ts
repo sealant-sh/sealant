@@ -11,7 +11,11 @@ export const runExecDeadLetterQueueName = "workspace-run-exec.dlq";
 
 export const runExecRequestedMessageKind = "workspace.run-exec.requested";
 
-/** One invocation the worker execs in the workspace. */
+/**
+ * One invocation the worker execs in the workspace. Its arguments live in the job row only until
+ * the worker takes it (`deleteOnPickup`), and the run record keeps their count and lengths, never
+ * the arguments themselves (`withholdProcessArgs` in @sealant/telemetry).
+ */
 export interface RunExecCommand {
   readonly executable: string;
   readonly args: readonly string[];
@@ -125,6 +129,10 @@ export const consumeRunExecJobs = async (options: ConsumeRunExecJobsOptions) => 
     queue: runExecQueue,
     ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
     parseMessage: parseRunExecRequestedMessage,
+    // A command's arguments can carry secrets (a token, a file's bytes), so the row holding them
+    // goes the moment the worker takes it. Nothing reads a run-exec job back: a lost or failed run
+    // is reconciled from its run row, which records the error.
+    deleteOnPickup: true,
     onMessage: options.onMessage,
   });
 };

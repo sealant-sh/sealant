@@ -64,14 +64,43 @@ const streamLabel = (stream: number): string => {
   }
 };
 
+/**
+ * A process's arguments are never stored. They can carry secrets (a token a script writes with
+ * `printf`, a file's bytes in base64), and sealantd redacts output and terminal input, never argv.
+ * The record keeps the executable, the argument count and each argument's length in UTF-8 bytes;
+ * `args` stays, always empty, so a reader that decodes it keeps working.
+ *
+ * Idempotent: a payload already withheld (or one with no arguments) comes back unchanged. The purge
+ * migration (`processstarted_args_withheld`) applies the same rule, in SQL, to rows stored earlier.
+ */
+export const withholdProcessArgs = (payload: Record<string, unknown>): Record<string, unknown> => {
+  const args = payload.args;
+  if (!Array.isArray(args) || args.length === 0) {
+    return payload;
+  }
+  return {
+    ...payload,
+    args: [],
+    argCount: args.length,
+    argLengths: args.map((arg) => Buffer.byteLength(String(arg), "utf8")),
+  };
+};
+
+/** How many arguments a `processStarted` payload had, whether or not they were withheld yet. */
+const processArgCount = (payload: Record<string, unknown>): number => {
+  if (typeof payload.argCount === "number") return payload.argCount;
+  return Array.isArray(payload.args) ? payload.args.length : 0;
+};
+
 /** Human-readable one-line summary, computed ONLY from the stored jsonb payload (ingest == rebuild). */
 export const summarize = (payloadCase: PayloadCase, payload: Record<string, unknown>): string => {
   switch (payloadCase) {
     case "ioChunk":
       return `${streamLabel(asNumber(payload.stream))} ${String(payload.byteCount ?? "0")}B @${String(payload.streamOffset ?? "0")}`;
     case "processStarted": {
-      const args = Array.isArray(payload.args) ? payload.args.join(" ") : "";
-      return `exec ${String(payload.executable ?? "?")}${args.length > 0 ? ` ${args}` : ""}`;
+      // Never the arguments themselves: only how many there were (see `withholdProcessArgs`).
+      const argCount = processArgCount(payload);
+      return `exec ${String(payload.executable ?? "?")}${argCount === 0 ? "" : ` (${argCount} ${argCount === 1 ? "argument" : "arguments"} not recorded)`}`;
     }
     case "processExited":
       return `exit code=${payload.exitCode === undefined ? "?" : String(payload.exitCode)}${payload.signal === undefined ? "" : ` signal=${String(payload.signal)}`} reason=${String(payload.reason ?? 0)}`;
@@ -162,6 +191,11 @@ const buildPayload = (env: EventEnvelope): Record<string, unknown> => {
           }),
     };
   }
+  if (p.case === "processStarted") {
+    // The arguments are dropped before anything is cloned or stored (`withholdProcessArgs`).
+    const { args, ...started } = p.value;
+    return withholdProcessArgs({ ...toJsonSafe(started), args });
+  }
   return p.case === undefined ? {} : toJsonSafe(p.value);
 };
 
@@ -207,7 +241,8 @@ export const normalizeEnvelope = (env: EventEnvelope): NormalizedEvent => {
 /** Reconstruct a NormalizedEvent from a stored log row (rebuild path; no content bytes needed). */
 export const eventRowToNormalized = (row: TelemetryEvent): NormalizedEvent => {
   const payloadCase: PayloadCase = payloadCaseGuard(row.payloadCase) ? row.payloadCase : "unknown";
-  const payload = row.payload;
+  // A row stored before arguments were withheld rebuilds without them, too.
+  const payload = payloadCase === "processStarted" ? withholdProcessArgs(row.payload) : row.payload;
   return {
     eventId: row.eventId,
     runtimeId: row.runtimeId,

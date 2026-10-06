@@ -44,6 +44,7 @@ describe("reconstructCommands", () => {
     expect(commands).toHaveLength(2); // the orphan signal-exit + runtimeStateChanged are skipped
     expect(commands[0]?.executable).toBe("opencode");
     expect(commands[0]?.args).toEqual(["run", "Append a line."]);
+    expect(commands[0]?.argCount).toBe(2); // an older platform's record still carries its args
     expect(commands[0]?.command).toBe('opencode run "Append a line."'); // arg with spaces is quoted
     expect(commands[0]?.cwd).toBe("/workspace/repo");
     expect(commands[0]?.exitCode).toBe(0);
@@ -60,6 +61,16 @@ describe("reconstructCommands", () => {
     expect(transcript).toContain("$ sh -lc");
     expect(transcript).not.toContain("ioChunk");
     expect(transcript).not.toContain("processStarted");
+  });
+
+  it("names how many arguments a command had when the platform withheld them", () => {
+    const [command] = reconstructCommands([
+      entry("processStarted", { executable: "sh", args: [], argCount: 1, argLengths: [12] }),
+      entry("processExited", { exitCode: 0, durationMicros: "1000" }),
+    ]);
+    expect(command?.args).toEqual([]);
+    expect(command?.argCount).toBe(1);
+    expect(command?.command).toBe("sh (1 argument not recorded)");
   });
 
   it("handles an empty record", () => {

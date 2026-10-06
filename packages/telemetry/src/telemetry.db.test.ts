@@ -28,7 +28,7 @@ import {
   type SealantRuntimeService,
   type SealantSession,
 } from "@sealant/workspaces";
-import { count, eq } from "drizzle-orm";
+import { count, eq, sql } from "drizzle-orm";
 import { Effect, Layer, Stream } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -58,6 +58,9 @@ const evt = (sequence: bigint, init: MessageInitShape<typeof EventEnvelopeSchema
     ...init,
   });
 
+// A secret-looking argument, the way Mend wrote a session token: as a shell literal in `sh -c`.
+const SECRET_ARG = "mend_tok_Zq8vR3nW6yK1pL0sT9xB4cH7dF2gJ5mA";
+
 const EVENTS: readonly EventEnvelope[] = [
   evt(1n, {
     processId: PROC_ID,
@@ -67,7 +70,7 @@ const EVENTS: readonly EventEnvelope[] = [
         pid: 100,
         pgid: 100,
         executable: "/bin/sh",
-        args: ["-c", "echo hi"],
+        args: ["-c", `printf '%s' '${SECRET_ARG}' > ~/.mend/session-token.next && echo hi`],
         cwd: "/",
         startedAt: 1n,
       },
@@ -364,6 +367,22 @@ describe.skipIf(DATABASE_URL === undefined)(
           // (e) bigint fidelity.
           const exitedEvent = yield* query.getEvent(runId, 4n);
 
+          // (g) The secret argument is in no row of any table, in any schema.
+          const tables = yield* handle.execute<{ schema: string; name: string }>(sql`
+            SELECT table_schema AS schema, table_name AS name FROM information_schema.tables
+            WHERE table_type = 'BASE TABLE'
+              AND table_schema NOT IN ('pg_catalog', 'information_schema')`);
+          const tablesHoldingSecret: string[] = [];
+          for (const table of tables) {
+            const found = yield* handle.execute<{ hit: boolean }>(
+              sql`SELECT EXISTS (SELECT 1 FROM ${sql.identifier(table.schema)}.${sql.identifier(table.name)} AS t WHERE t::text LIKE ${`%${SECRET_ARG}%`}) AS hit`,
+            );
+            if (found[0]?.hit === true) {
+              tablesHoldingSecret.push(`${table.schema}.${table.name}`);
+            }
+          }
+          const started = yield* query.getEvent(runId, 1n);
+
           return {
             afterFirst,
             afterSecond,
@@ -371,6 +390,9 @@ describe.skipIf(DATABASE_URL === undefined)(
             scrollback,
             timelineBefore,
             timelineAfter,
+            tablesScanned: tables.length,
+            tablesHoldingSecret,
+            started: started.payload,
             exitedSequence: exitedEvent.sequence,
             exitedDuration: exitedEvent.payload.durationMicros,
           };
@@ -392,6 +414,12 @@ describe.skipIf(DATABASE_URL === undefined)(
       // (d) rebuild reproduces the timeline byte-identically.
       expect(result.timelineAfter).toEqual(result.timelineBefore);
       expect(result.timelineBefore).toHaveLength(7);
+
+      // (g) The process's arguments are withheld everywhere: only their count and lengths stay.
+      expect(result.tablesScanned).toBeGreaterThan(10);
+      expect(result.tablesHoldingSecret).toEqual([]);
+      expect(result.started).toMatchObject({ executable: "/bin/sh", args: [], argCount: 2 });
+      expect(result.timelineBefore[0]?.summary).toBe("exec /bin/sh (2 arguments not recorded)");
 
       // (e) near-2^63 values are stored losslessly.
       expect(result.exitedSequence).toBe(4n);
