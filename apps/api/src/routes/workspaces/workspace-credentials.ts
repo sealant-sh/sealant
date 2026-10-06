@@ -373,7 +373,7 @@ export const putWorkspaceCredentials = (input: {
     const written = yield* withRunPermit(
       instance.runId,
       payload.home,
-      homes.withLockedHome({ runId: instance.runId, home: payload.home }, (held) =>
+      homes.withLockedHome({ runId: instance.runId, home: payload.home }, (held, nextFence) =>
         Effect.gen(function* () {
           if (held !== undefined && held.onBehalfOfUserId !== payload.onBehalfOfUserId) {
             return yield* new WorkspaceConflictError({
@@ -408,6 +408,7 @@ export const putWorkspaceCredentials = (input: {
               home: payload.home,
               fence:
                 held === undefined ? { kind: "take", generation } : { kind: "held", generation },
+              token: yield* nextFence,
               ...(createWithOwner === undefined ? {} : { createWithOwner }),
               writes: writing,
               removes:
@@ -438,6 +439,7 @@ export const putWorkspaceCredentials = (input: {
                 script: buildHomeCredentialScript({
                   home: payload.home,
                   fence: { kind: "release", generation },
+                  token: yield* nextFence,
                   writes: [],
                   removes: [],
                 }),
@@ -512,7 +514,7 @@ export const releaseWorkspaceCredentials = (input: {
       home,
       homes.withLockedHome(
         { runId: instance.runId, home },
-        (held: WorkspaceCredentialHomeRow | undefined) =>
+        (held: WorkspaceCredentialHomeRow | undefined, nextFence) =>
           Effect.gen(function* () {
             if (target !== undefined) {
               // Every login file Core names is removed, recorded or not (an unconfirmed write may
@@ -529,6 +531,9 @@ export const releaseWorkspaceCredentials = (input: {
                     held === undefined
                       ? { kind: "release" }
                       : { kind: "release", generation: held.generation },
+                  // A release of a home Core has no record of is unfenced by marker, never by
+                  // token: a late one finds the mark of every later write and removes nothing.
+                  token: yield* nextFence,
                   writes: [],
                   removes: [],
                 }),

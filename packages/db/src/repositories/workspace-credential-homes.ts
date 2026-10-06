@@ -83,6 +83,8 @@ export interface WorkspaceCredentialHomeRepoService {
     input: { readonly runId: string; readonly home: string },
     use: (
       held: WorkspaceCredentialHome | undefined,
+      /** A fresh fencing token, issued in this transaction: every exec into the home presents one. */
+      nextFence: Effect.Effect<string, WorkspaceCredentialHomeRepoError>,
     ) => Effect.Effect<
       { readonly result: A; readonly outcome: WorkspaceCredentialHomeOutcome },
       E,
@@ -136,6 +138,7 @@ export const makeWorkspaceCredentialHomeRepoLayer = (options: {
         input: { readonly runId: string; readonly home: string },
         use: (
           held: WorkspaceCredentialHome | undefined,
+          nextFence: Effect.Effect<string, WorkspaceCredentialHomeRepoError>,
         ) => Effect.Effect<
           { readonly result: A; readonly outcome: WorkspaceCredentialHomeOutcome },
           E,
@@ -171,7 +174,21 @@ export const makeWorkspaceCredentialHomeRepoLayer = (options: {
                 "withLockedHome",
                 tx.select().from(workspaceCredentialHomes).where(homeKey(input)).for("update"),
               );
-              const { result, outcome } = yield* use(held);
+              const nextFence = withRepoError(
+                "nextFence",
+                tx.execute<{ readonly fence: string }>(
+                  sql`select nextval(${"workspace_credential_home_fences"}::regclass)::text as fence`,
+                ),
+              ).pipe(
+                Effect.flatMap(([row]) =>
+                  row === undefined
+                    ? Effect.fail(
+                        toRepoError("nextFence", new Error("No fencing token was issued.")),
+                      )
+                    : Effect.succeed(row.fence),
+                ),
+              );
+              const { result, outcome } = yield* use(held, nextFence);
               if (outcome.kind === "release") {
                 yield* withRepoError(
                   "withLockedHome",

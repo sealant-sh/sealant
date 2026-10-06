@@ -175,49 +175,56 @@ const pushIntoHome = (
     const target = sealantTargetForRuntimeInstance(instance, input.targetOptions ?? {});
     if (target === undefined) return "unreachable" as const;
     const homeChannel = input.homeChannel ?? liveHomeCredentialChannel;
-    return yield* homeRepo.withLockedHome({ runId: home.runId, home: home.home }, (held) =>
-      Effect.gen(function* () {
-        if (
-          held === undefined ||
-          !held.accounts.some(
-            (account) =>
-              account.provider === input.provider &&
-              account.connectedAccountId === input.connectedAccountId,
-          )
-        ) {
-          return { result: "released" as const, outcome: { kind: "keep" as const } };
-        }
-        const copyJson =
-          input.credentialCipher === undefined
-            ? input.copyJson
-            : yield* currentCopy(input.connectedAccountId, input.provider, input.credentialCipher);
-        if (copyJson === undefined) {
-          return { result: "released" as const, outcome: { kind: "keep" as const } };
-        }
-        // Fenced by the hold's generation, under the home's lock in the executor: a write the
-        // executor runs after the timeout, once the home is released or retaken, writes nothing.
-        const exit = yield* homeChannel
-          .run(
-            target,
-            buildHomeCredentialScript({
-              home: home.home,
-              fence: { kind: "held", generation: held.generation },
-              writes: [input.provider],
-              removes: [],
-            }),
-            homeScriptStdin([copyJson]),
-          )
-          .pipe(Effect.timeout(PUSH_TIMEOUT));
-        if (exit.exitCode === HOME_SCRIPT_EXIT.fenced) {
-          return { result: "released" as const, outcome: { kind: "keep" as const } };
-        }
-        if (exit.exitCode !== 0) {
-          return yield* Effect.fail(
-            new Error(`The write into ${home.home} exited with ${String(exit.exitCode)}.`),
-          );
-        }
-        return { result: "written" as const, outcome: { kind: "keep" as const } };
-      }),
+    return yield* homeRepo.withLockedHome(
+      { runId: home.runId, home: home.home },
+      (held, nextFence) =>
+        Effect.gen(function* () {
+          if (
+            held === undefined ||
+            !held.accounts.some(
+              (account) =>
+                account.provider === input.provider &&
+                account.connectedAccountId === input.connectedAccountId,
+            )
+          ) {
+            return { result: "released" as const, outcome: { kind: "keep" as const } };
+          }
+          const copyJson =
+            input.credentialCipher === undefined
+              ? input.copyJson
+              : yield* currentCopy(
+                  input.connectedAccountId,
+                  input.provider,
+                  input.credentialCipher,
+                );
+          if (copyJson === undefined) {
+            return { result: "released" as const, outcome: { kind: "keep" as const } };
+          }
+          // Fenced by the hold's generation, under the home's lock in the executor: a write the
+          // executor runs after the timeout, once the home is released or retaken, writes nothing.
+          const exit = yield* homeChannel
+            .run(
+              target,
+              buildHomeCredentialScript({
+                home: home.home,
+                fence: { kind: "held", generation: held.generation },
+                token: yield* nextFence,
+                writes: [input.provider],
+                removes: [],
+              }),
+              homeScriptStdin([copyJson]),
+            )
+            .pipe(Effect.timeout(PUSH_TIMEOUT));
+          if (exit.exitCode === HOME_SCRIPT_EXIT.fenced) {
+            return { result: "released" as const, outcome: { kind: "keep" as const } };
+          }
+          if (exit.exitCode !== 0) {
+            return yield* Effect.fail(
+              new Error(`The write into ${home.home} exited with ${String(exit.exitCode)}.`),
+            );
+          }
+          return { result: "written" as const, outcome: { kind: "keep" as const } };
+        }),
     );
   }).pipe(
     Effect.catchCause((cause) =>

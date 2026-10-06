@@ -7,6 +7,7 @@ import {
   index,
   integer,
   jsonb,
+  pgSequence,
   primaryKey,
   snakeCase,
   text,
@@ -205,6 +206,14 @@ export const workspaceRuntimeInstances = pgTable(
       .where(sql`${table.status} = 'stopped' and ${table.removedAt} is null`),
   ],
 );
+
+/**
+ * Fencing tokens for writes into homes (docs/connected-accounts-design.md §6c): every write, take
+ * and release presents one, issued under the home's lock, and the executor refuses any token below
+ * the highest it has seen for the home. A value is never reused, so a late exec from before any
+ * later write is refused, whatever was released or taken in between.
+ */
+export const workspaceCredentialHomeFences = pgSequence("workspace_credential_home_fences");
 
 /** The providers a home's logins are written for (docs/connected-accounts-design.md §6c). */
 export const workspaceCredentialHomeProviderValues = ["claude", "codex", "github"] as const;

@@ -95,6 +95,13 @@ export interface HomeCredentialScriptInput {
   readonly home: string;
   readonly fence: HomeWriteFence;
   /**
+   * This exec's fencing token, issued under the home's database lock (digits; a launch's take
+   * presents `0`, as nothing precedes it). The executor keeps the highest token it has let through
+   * for the home (`<key>.hw`, never deleted) and refuses a lower one: a late exec from before any
+   * later write, take or release writes nothing.
+   */
+  readonly token: string;
+  /**
    * Make the home, owned by this uid and gid with mode 0700 and seeded from the skeleton, when it
    * does not exist. Without it a missing home is refused (`missing`).
    */
@@ -105,7 +112,10 @@ export interface HomeCredentialScriptInput {
   readonly writes: readonly HomeCredentialProvider[];
   /** Providers whose login file is removed (a release removes them all). */
   readonly removes: readonly HomeCredentialProvider[];
-  /** How long the script waits for another write into the same home (default 20 s). */
+  /**
+   * How long the script waits for another write into the same home (default 10 s): shorter than
+   * the 15 s the caller waits for the exec, so contention answers busy, never unconfirmed.
+   */
   readonly lockWaitSeconds?: number;
   /** Where markers and locks live (default `HOME_STATE_DIR`; absolute, safe characters). */
   readonly stateDir?: string;
@@ -121,7 +131,7 @@ export const HOME_SCRIPT_EXIT = {
   shortPayload: 75,
   /** The home's marker does not match this write's hold: released or taken since it was issued. */
   fenced: 76,
-  /** The image has no `flock`. */
+  /** The image has no `flock` or `setpriv` (util-linux). */
   noLock: 77,
   /** Another write into the home held its lock for too long. */
   busy: 78,
@@ -138,15 +148,23 @@ export const homeScriptStdin = (contents: readonly string[]): string =>
  * validated before they reach it (`homePathProblem`; the relative paths are Core's own), so single
  * quotes suffice.
  *
+ * As root:
  * 1. Every payload is read before anything is checked: a script whose stdin arrives late decides
  *    only once it has all of it, under the lock.
  * 2. No component of the home's path may be a link.
  * 3. The home's lock (`flock`) is held from the fence check to the last write, so a release or a
  *    take of the home runs wholly before or wholly after this write.
- * 4. In a home that is not root's, a login directory that is a link must lead inside the home (a
- *    dotfiles checkout's `.claude`, say), never out of it into someone else's; root's home keeps the
- *    shared layout's links. A link at a file's own name is removed, never followed.
- * 5. Every directory the script makes, and every file, belongs to the home's owner; files are 0600.
+ * 4. A missing home is made (when its owner is given): root makes only the home directory itself,
+ *    in a parent the person cannot write, and gives it to them.
+ * 5. The fence: the exec's token must be at least the home's high-water mark, and the marker must
+ *    be the hold's (see `HomeWriteFence`). The mark is raised to the token.
+ *
+ * As the home's owner (`setpriv`), for a home that is not root's: everything inside the home. The
+ * person owns the home and can swap any entry in it for a link at any moment, so nothing in it is
+ * touched with root's rights: the kernel refuses whatever they could not do themselves.
+ * 6. A login directory that is a link must lead inside the home (a dotfiles checkout's `.claude`),
+ *    never out of it; in root's own home (the shared layout links `~/.claude`) links are kept.
+ * 7. The writes and removals; files are 0600 and the person's, as is every directory made for them.
  */
 export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): string => {
   const problem = homePathProblem(input.home);
@@ -157,7 +175,10 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
   if (generation !== undefined && !GENERATION_PATTERN.test(generation)) {
     throw new Error("A home's generation is 8 to 64 letters, digits, '_' or '-'.");
   }
-  const wait = input.lockWaitSeconds ?? 20;
+  if (!/^[0-9]{1,18}$/.test(input.token)) {
+    throw new Error("A fencing token is up to 18 digits.");
+  }
+  const wait = input.lockWaitSeconds ?? 10;
   if (!Number.isInteger(wait) || wait < 0) {
     throw new Error("A lock wait is a non-negative whole number of seconds.");
   }
@@ -167,12 +188,17 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
   if (!HOME_PATTERN.test(stateDir)) {
     throw new Error(`A state directory is an absolute path of safe characters: '${stateDir}'.`);
   }
-  const lines: string[] = ["set -eu", "umask 077", `home=${quote(home)}`];
+  const skel = input.skel ?? "/etc/skel";
+  if (!HOME_PATTERN.test(skel)) {
+    throw new Error(`A skeleton directory is an absolute path of safe characters: '${skel}'.`);
+  }
+  const lines: string[] = ["set -eu", "umask 077", `home=${quote(home)}`, `token=${input.token}`];
 
-  // 1. Every payload first.
+  // 1. Every payload first, handed to the owner's half through the environment.
   input.writes.forEach((_, index) => {
     lines.push(
       `IFS= read -r p${index} || [ -n "$p${index}" ] || exit ${HOME_SCRIPT_EXIT.shortPayload}`,
+      `export p${index}`,
     );
   });
 
@@ -185,12 +211,16 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
   // 3. The home's lock, held to the end.
   lines.push(
     `command -v flock >/dev/null 2>&1 || exit ${HOME_SCRIPT_EXIT.noLock}`,
+    `command -v setpriv >/dev/null 2>&1 || exit ${HOME_SCRIPT_EXIT.noLock}`,
     `st=${quote(stateDir)}; (umask 022; mkdir -p "$st"); chmod 700 "$st"`,
     `m="$st/${key}.generation"`,
+    `hw="$st/${key}.hw"`,
     `exec 9>"$st/${key}.lock"`,
     `flock -w ${wait} 9 || exit ${HOME_SCRIPT_EXIT.busy}`,
   );
 
+  // 4. The home itself: root makes the directory, nothing in it.
+  lines.push("seed=");
   if (input.createWithOwner === undefined) {
     lines.push(`if [ ! -d "$home" ]; then exit ${HOME_SCRIPT_EXIT.missing}; fi`);
   } else {
@@ -198,19 +228,19 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
     if (!Number.isInteger(uid) || uid < 0 || !Number.isInteger(gid) || gid < 0) {
       throw new Error("A home's owner is a non-negative integer uid and gid.");
     }
-    const skel = input.skel ?? "/etc/skel";
-    if (!HOME_PATTERN.test(skel)) {
-      throw new Error(`A skeleton directory is an absolute path of safe characters: '${skel}'.`);
-    }
-    // `cp -a skel/. home/` also gives the home the skeleton's own mode: 0700 is set after it.
     lines.push(
-      `if [ ! -e "$home" ]; then (umask 022; mkdir -p "$(dirname "$home")"); mkdir -m 700 "$home"; if [ -d ${quote(skel)} ]; then cp -a ${quote(skel)}/. "$home"/; fi; chmod 700 "$home"; chown -R ${uid}:${gid} "$home"; fi`,
-      `if [ ! -d "$home" ]; then exit ${HOME_SCRIPT_EXIT.missing}; fi`,
+      `if [ ! -e "$home" ] && [ ! -L "$home" ]; then (umask 022; mkdir -p "$(dirname "$home")"); mkdir -m 700 "$home"; chown ${uid}:${gid} "$home"; seed=1; fi`,
+      `if [ -L "$home" ] || [ ! -d "$home" ]; then exit ${HOME_SCRIPT_EXIT.missing}; fi`,
     );
   }
-  lines.push(`owner=$(stat -c %u:%g "$home")`, `held=; if [ -f "$m" ]; then held=$(cat "$m"); fi`);
+  lines.push(
+    `uid=$(stat -c %u "$home"); gid=$(stat -c %g "$home")`,
+    `held=; if [ -f "$m" ]; then held=$(cat "$m"); fi`,
+    `mark=0; if [ -f "$hw" ]; then mark=$(cat "$hw"); fi`,
+  );
 
-  // The fence, under the lock.
+  // 5. The fence: a token below the mark, or another hold's marker, writes nothing.
+  lines.push(`if [ "$token" -lt "$mark" ]; then exit ${HOME_SCRIPT_EXIT.fenced}; fi`);
   switch (input.fence.kind) {
     case "take":
       lines.push(
@@ -230,50 +260,59 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
       }
       break;
   }
+  lines.push(`printf '%s' "$token" > "$hw"`);
+  if (input.fence.kind === "take") {
+    lines.push(`printf '%s' ${quote(input.fence.generation)} > "$m"`);
+  }
 
+  // 6–7. Inside the home, as its owner.
   const removes =
     input.fence.kind === "release"
       ? (Object.keys(HOME_CREDENTIAL_FILES) as HomeCredentialProvider[])
       : input.removes.filter((provider) => !input.writes.includes(provider));
-
-  // 4. The login directories: a link leads inside the home, or the home is root's.
+  const inner: string[] = ["set -eu", "umask 077", `home=${quote(home)}`];
+  inner.push(
+    `if [ -n "$seed" ] && [ -d ${quote(skel)} ]; then cp -a ${quote(skel)}/. "$home"/; chmod 700 "$home"; fi`,
+  );
   const directories = new Set<string>();
   for (const provider of [...input.writes, ...removes]) {
     const segments = HOME_CREDENTIAL_FILES[provider].split("/").slice(0, -1);
     segments.forEach((_, index) => directories.add(segments.slice(0, index + 1).join("/")));
   }
   for (const directory of [...directories].toSorted()) {
-    lines.push(
-      `d="$home/${directory}"; if [ -L "$d" ]; then case "$owner" in 0:*) ;; *) t=$(readlink -f "$d" || true); case "$t" in "$home"/*) [ -d "$t" ] || exit ${HOME_SCRIPT_EXIT.linkOnTheWay} ;; *) exit ${HOME_SCRIPT_EXIT.linkOnTheWay} ;; esac ;; esac; fi`,
+    inner.push(
+      `d="$home/${directory}"; if [ -L "$d" ] && [ "$uid" != 0 ]; then t=$(readlink -f "$d" || true); case "$t" in "$home"/*) [ -d "$t" ] || exit ${HOME_SCRIPT_EXIT.linkOnTheWay} ;; *) exit ${HOME_SCRIPT_EXIT.linkOnTheWay} ;; esac; fi`,
     );
   }
-
-  if (input.fence.kind === "take") {
-    lines.push(`printf '%s' ${quote(input.fence.generation)} > "$m"`);
-  }
-
-  // 5. The writes.
   input.writes.forEach((provider, index) => {
     const relative = HOME_CREDENTIAL_FILES[provider];
     let directory = "$home";
     for (const segment of relative.split("/").slice(0, -1)) {
       directory = `${directory}/${segment}`;
-      lines.push(
-        `if [ ! -e "${directory}" ] && [ ! -L "${directory}" ]; then mkdir -m 700 "${directory}"; chown "$owner" "${directory}"; fi`,
+      inner.push(
+        `if [ ! -e "${directory}" ] && [ ! -L "${directory}" ]; then mkdir -m 700 "${directory}"; fi`,
       );
     }
     // Written in place, as a launch writes it: a temporary file beside it could be saved by a
     // capture where the directory is linked into the saved harness home (the shared layout).
-    lines.push(
+    inner.push(
       `f="$home/${relative}"`,
       `if [ -L "$f" ]; then rm -f "$f"; fi`,
       `printf '%s' "$p${index}" | base64 -d > "$f"`,
-      `chmod 600 "$f"; chown "$owner" "$f"`,
+      `chmod 600 "$f"`,
     );
   });
   for (const provider of removes) {
-    lines.push(`rm -f "$home/${HOME_CREDENTIAL_FILES[provider]}"`);
+    inner.push(`rm -f "$home/${HOME_CREDENTIAL_FILES[provider]}"`);
   }
+
+  lines.push(
+    "export seed uid",
+    `inner=${quote(inner.join("\n").replaceAll("'", "'\\''"))}`,
+    // Root's own home is root's to write; anyone else's is written as them. As root the person
+    // gets no supplementary group; a caller that is not root keeps its own (tests).
+    `if [ "$uid" = 0 ]; then sh -c "$inner"; else if [ "$(id -u)" = 0 ]; then g=--clear-groups; else g=--keep-groups; fi; setpriv --reuid="$uid" --regid="$gid" "$g" sh -c "$inner"; fi`,
+  );
   if (input.fence.kind === "release") {
     lines.push(`rm -f "$m"`);
   }
@@ -351,7 +390,7 @@ export const homeScriptRefusal = (
     case HOME_SCRIPT_EXIT.busy:
       return `Another write into ${home} held it for too long; try again.`;
     case HOME_SCRIPT_EXIT.noLock:
-      return `The workspace's image has no flock, which every write into a home takes.`;
+      return `The workspace's image has no flock or setpriv (util-linux), which every write into a home needs.`;
     default:
       return undefined;
   }

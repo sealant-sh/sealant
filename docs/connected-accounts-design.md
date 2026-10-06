@@ -387,25 +387,36 @@ GET    ?ownerUserId                                                        → {
   wait that runs out answers 409 `home-busy`: nothing was done, and trying again is safe.
 - **A fence in the executor, under a lock in the executor.** A lock in the database cannot stop an
   exec the executor runs late: a write that timed out (and so released the database lock) keeps
-  running, since sealantd ends a non-attached exec only when it exits. So every hold has a
-  generation, recorded on the row and kept in the executor as the home's marker,
-  `/run/sealant-homes/<key>.generation` (root's, outside the home and every capture root: a person
-  cleaning their home cannot remove it, nobody else can forge it). Each script:
+  running, since sealantd ends a non-attached exec only when it exits. So every exec into a home
+  presents a **fencing token**, drawn from a Postgres sequence under the home's row lock, and every
+  hold has a generation, recorded on the row. The executor keeps, root's and outside every home and
+  capture root, the home's **high-water mark** (`/run/sealant-homes/<key>.hw`, the highest token it
+  has let through, never deleted) and its **marker** (`/run/sealant-homes/<key>.generation`, the
+  hold's generation). Each script:
   1. reads every payload before it checks anything, so a script whose stdin arrives late decides
      only once it has all of it;
-  2. takes the home's `flock` (`/run/sealant-homes/<key>.lock`), and holds it from the check to the
-     last write, so a release or a take runs wholly before or wholly after it;
-  3. checks the marker: a take writes into a home with no marker or its own generation's (a launch
-     delivered twice writes twice), and makes it; every later write (a put by the same person, a
-     refresh push) writes only while the marker names its hold; a release removes the files and the
-     marker only while the marker is absent or its own hold's (a home Core holds no record of is
-     released whatever its marker says).
+  2. takes the home's `flock` (`/run/sealant-homes/<key>.lock`) for at most 10 s (shorter than the
+     15 s the caller waits for the exec, so contention answers `home-busy`, never unconfirmed), and
+     holds it from the check to the last write, so a release or a take runs wholly before or wholly
+     after it;
+  3. refuses a token below the mark, then checks the marker: a take writes into a home with no
+     marker or its own generation's (a launch delivered twice writes twice; a launch's take presents
+     token 0, as nothing precedes it), and makes it; every later write writes only while the marker
+     names its hold; a release removes the files and the marker only while the marker is absent or
+     its own hold's (a home Core holds no record of is released whatever its marker says). It then
+     raises the mark to its token.
 
-  A late write from an earlier hold therefore writes nothing (exit 76: a put answers 409
-  `home-held`, a push counts the home as no longer held), whatever the interleaving. A script that
-  waits too long for the executor lock answers `home-busy` (exit 78); an image without `flock`
-  answers `home-unusable`.
+  An exec issued before any later write, take or release into the home therefore writes nothing,
+  whatever ran in between: a late write from an earlier hold, and a late release followed by a late
+  take, alike (exit 76: a put answers 409 `home-held`, a push counts the home as no longer held). An
+  image without `flock` or `setpriv` (util-linux) answers `home-unusable`; `/run` must be writable.
 
+- **Inside the home, as its owner.** The person owns their home and can swap any entry in it for a
+  link at any moment, so nothing inside a home that is not root's is touched with root's rights:
+  root makes only the home directory itself (in a parent the person cannot write) and keeps the
+  lock, mark and marker; every directory, file and removal inside the home runs as the home's owner
+  (`setpriv --reuid --regid --clear-groups`). Whatever a planted link points at, the kernel refuses
+  what the person could not do themselves, so root never writes, `chmod`s or `chown`s through it.
 - **Unconfirmed writes.** A write that fails or times out can still land. A put into a home that
   held nothing records nothing and releases its own take once (files and marker); a late take
   landing after that leaves its marker, so the next take is refused until the home is released, and

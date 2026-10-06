@@ -153,6 +153,26 @@ describe.skipIf(DATABASE_URL === undefined)("credential homes (Postgres)", () =>
     expect(outcome).toMatchObject({ _tag: "WorkspaceCredentialHomeBusyError" });
   });
 
+  it("issues each write a fencing token above every earlier one", async () => {
+    const runId = await launch("ready");
+    const tokens = await run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceCredentialHomeRepo;
+        const draw = (home: string) =>
+          repo.withLockedHome({ runId, home }, (_held, nextFence) =>
+            Effect.gen(function* () {
+              const first = yield* nextFence;
+              const second = yield* nextFence;
+              return { result: [first, second], outcome: { kind: "keep" as const } };
+            }),
+          );
+        return [...(yield* draw("/home/a")), ...(yield* draw("/home/b"))].map(Number);
+      }),
+    );
+    expect(tokens).toEqual([...tokens].toSorted((left, right) => left - right));
+    expect(new Set(tokens).size).toBe(4);
+  });
+
   it("changes nothing when the write fails, and deletes the row on release", async () => {
     const runId = await launch("ready");
     const home = "/home/m4lice000";

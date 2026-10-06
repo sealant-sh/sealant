@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "f24f1320-8455-437f-8fe3-a93c56281006",
+  "id": "27da6714-46aa-4526-9e49-f3f0e3099396",
   "prevIds": ["5c0fa3e9-2029-4827-a234-cb4f43419111"],
   "ddl": [
     {
@@ -10286,6 +10286,17 @@
       "schema": "public",
       "table": "access_tokens",
       "entityType": "uniques"
+    },
+    {
+      "incrementBy": "1",
+      "minValue": "1",
+      "maxValue": "9223372036854775807",
+      "startWith": "1",
+      "cacheSize": 1,
+      "cycle": false,
+      "name": "workspace_credential_home_fences",
+      "entityType": "sequences",
+      "schema": "public"
     }
   ],
   "renames": []

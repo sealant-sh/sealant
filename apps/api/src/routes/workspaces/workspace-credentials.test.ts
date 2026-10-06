@@ -425,6 +425,9 @@ describe("putWorkspaceCredentials", () => {
     succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "work" }));
     expect(world.ran[1]?.script).toContain(`!= '${generation}' ]`);
     expect(world.homes.rows.get(`run_1 ${HOME}`)?.generation).toBe(generation);
+    // Every exec presents a fencing token issued under the lock, each above the last.
+    const tokens = world.ran.map((entry) => Number(entry.script.match(/^token=(\d+)$/m)?.[1]));
+    expect(tokens[1]).toBeGreaterThan(tokens[0] ?? Number.POSITIVE_INFINITY);
   });
 
   it("answers home-held when the home carries another hold's marker, recording nothing", async () => {
@@ -443,7 +446,7 @@ describe("putWorkspaceCredentials", () => {
       await world.put({ onBehalfOfUserId: ALICE, claude: "default", uid: 40001, gid: 40000 }),
     );
     expect(world.ran[0]?.script).toContain(`mkdir -m 700 "$home"`);
-    expect(world.ran[0]?.script).toContain("chown -R 40001:40000");
+    expect(world.ran[0]?.script).toContain(`chown 40001:40000 "$home"`);
     expect(
       failed(await world.put({ onBehalfOfUserId: ALICE, claude: "default", uid: 40001 })),
     ).toMatchObject({ _tag: "WorkspaceBadRequestError" });

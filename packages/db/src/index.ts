@@ -346,6 +346,7 @@ export {
   ociImageBuildJobStatusValues,
   workspaceRuntimeInstances,
   workspaceCredentialHomes,
+  workspaceCredentialHomeFences,
   workspaceCredentialHomeProviderValues,
   workspaceRuntimeInstanceStatusValues,
   workspaceCaptureDrains,

@@ -43,17 +43,25 @@ afterEach(() => {
 });
 
 type Writes = readonly { readonly provider: HomeCredentialProvider; readonly content: string }[];
-type RunInput = Omit<HomeCredentialScriptInput, "writes" | "stateDir"> & {
+type RunInput = Omit<HomeCredentialScriptInput, "writes" | "stateDir" | "token"> & {
   readonly writes: Writes;
+  /** Defaults to the next token of this world: every exec issued later than the last. */
+  readonly token?: string;
 };
 
 /** One scratch world: homes under `root`, markers and locks under `state`. */
 const world = () => {
   const root = scratch();
   const state = join(root, "state");
+  let issued = 0;
+  const nextToken = () => {
+    issued += 1;
+    return String(issued);
+  };
   const scriptOf = (input: RunInput) =>
     buildHomeCredentialScript({
       ...input,
+      token: input.token ?? nextToken(),
       stateDir: state,
       writes: input.writes.map(({ provider }) => provider),
     });
@@ -70,7 +78,7 @@ const world = () => {
     mkdirSync(path, { mode: 0o700 });
     return path;
   };
-  return { root, state, scriptOf, run, marker, markerPath, home };
+  return { root, state, scriptOf, run, marker, markerPath, home, nextToken };
 };
 
 const GEN_A = "generation-alice-1";
@@ -174,6 +182,48 @@ describe("buildHomeCredentialScript", () => {
     // Alice's push finally gets its stdin.
     late.stdin.end(homeScriptStdin(["alice-v2"]));
     expect(await exited).toBe(HOME_SCRIPT_EXIT.fenced);
+    expect(read(join(home, ".claude/.credentials.json"))).toBe("bob-v1");
+    expect(w.marker(home)).toBe(GEN_B);
+  });
+
+  it("refuses every exec issued before a later one ran: two late execs cannot cross people", () => {
+    const w = world();
+    const home = w.home("conv");
+    // An orphan marker of Alice's (an unconfirmed take landed after its own cleanup).
+    expect(
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_A },
+        writes: [{ provider: "claude", content: "alice-v1" }],
+        removes: [],
+      }).status,
+    ).toBe(0);
+    // Issued now, both stall: Alice's retried take, and Mend's release of the unrecorded home.
+    const lateTake = { token: w.nextToken() };
+    const lateRelease = { token: w.nextToken() };
+    // The release Mend retried runs, and Bob takes the home.
+    expect(w.run({ home, fence: { kind: "release" }, writes: [], removes: [] }).status).toBe(0);
+    expect(
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_B },
+        writes: [{ provider: "claude", content: "bob-v1" }],
+        removes: [],
+      }).status,
+    ).toBe(0);
+    // Now the two stalled execs run, release first.
+    expect(
+      w.run({ home, fence: { kind: "release" }, writes: [], removes: [], ...lateRelease }).status,
+    ).toBe(HOME_SCRIPT_EXIT.fenced);
+    expect(
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_A },
+        writes: [{ provider: "claude", content: "alice-v2" }],
+        removes: [],
+        ...lateTake,
+      }).status,
+    ).toBe(HOME_SCRIPT_EXIT.fenced);
     expect(read(join(home, ".claude/.credentials.json"))).toBe("bob-v1");
     expect(w.marker(home)).toBe(GEN_B);
   });
@@ -353,6 +403,7 @@ describe("buildHomeCredentialScript", () => {
     const script = buildHomeCredentialScript({
       home: "/home/m1",
       fence: { kind: "take", generation: GEN_A },
+      token: "1",
       writes: ["claude"],
       removes: [],
     });
@@ -367,9 +418,63 @@ describe("buildHomeCredentialScript", () => {
       buildHomeCredentialScript({
         home: "/workspace/repo",
         fence: { kind: "release" },
+        token: "1",
         writes: [],
         removes: [],
       }),
     ).toThrow(/never under \/workspace/);
   });
 });
+
+/** Whether a container can be run here: the root-only race needs a real root and a real person. */
+const dockerAvailable = spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0;
+
+describe.skipIf(!dockerAvailable)(
+  "buildHomeCredentialScript as root, against its own home's owner",
+  () => {
+    it(
+      "never writes outside the home while the person swaps links in it",
+      { timeout: 240_000 },
+      () => {
+        const dir = scratch();
+        const home = "/home/bob";
+        const script = (fence: HomeCredentialScriptInput["fence"], token: string) =>
+          buildHomeCredentialScript({
+            home,
+            fence,
+            token,
+            writes: ["claude", "codex"],
+            removes: [],
+            stateDir: "/run/sealant-homes",
+          });
+        writeFileSync(join(dir, "take.sh"), script({ kind: "take", generation: GEN_B }, "1"));
+        writeFileSync(join(dir, "write.sh"), script({ kind: "held", generation: GEN_B }, "2"));
+        writeFileSync(join(dir, "payload"), homeScriptStdin(["bob-claude", "bob-codex"]));
+        // Root's files the person must never reach through root's writes, chmods or chowns.
+        const driver = [
+          "set -u",
+          "useradd -m -u 1234 bob",
+          "printf root-data > /victim; chmod 644 /victim; mkdir /rootdir",
+          "sh /t/take.sh < /t/payload",
+          // The person swaps a link to /victim in at the file's name, and a link to /rootdir in at a
+          // login directory, as fast as they can.
+          `setpriv --reuid=1234 --regid=1234 --clear-groups sh -c 'cd ${home}/.claude; while :; do ln -sf /victim .l; mv -fT .l .credentials.json 2>/dev/null; rm -f .credentials.json; done' >/dev/null 2>&1 & s1=$!`,
+          `setpriv --reuid=1234 --regid=1234 --clear-groups sh -c 'cd ${home}; while :; do ln -sfn /rootdir .x; mv -fT .x .codex 2>/dev/null; rm -f .codex; mkdir .codex 2>/dev/null; done' >/dev/null 2>&1 & s2=$!`,
+          "i=0; while [ $i -lt 300 ]; do sh /t/write.sh < /t/payload >/dev/null 2>&1 || true; i=$((i+1)); done",
+          'kill "$s1" "$s2"; wait "$s1" "$s2" 2>/dev/null || true',
+          'echo "victim=$(cat /victim) owner=$(stat -c %U:%a /victim)"',
+          'echo "rootdir=$(ls -A /rootdir | tr "\\n" ",")"',
+        ].join("\n");
+        writeFileSync(join(dir, "driver.sh"), driver);
+        const result = spawnSync(
+          "docker",
+          ["run", "--rm", "-v", `${dir}:/t:ro`, "debian:bookworm-slim", "sh", "/t/driver.sh"],
+          { encoding: "utf8", timeout: 200_000 },
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("victim=root-data owner=root:644");
+        expect(result.stdout).toContain("rootdir=\n");
+      },
+    );
+  },
+);

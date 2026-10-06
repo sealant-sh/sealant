@@ -24,6 +24,7 @@ export const makeInMemoryCredentialHomes = (
   instances: () => readonly WorkspaceRuntimeInstance[],
 ): InMemoryCredentialHomes => {
   const rows = new Map<string, WorkspaceCredentialHome>();
+  let fences = 0;
   const locks = new Map<string, Semaphore.Semaphore>();
   const lockFor = (key: string) => {
     const existing = locks.get(key);
@@ -38,7 +39,11 @@ export const makeInMemoryCredentialHomes = (
       lockFor(keyOf(input)).withPermit(
         Effect.gen(function* () {
           const key = keyOf(input);
-          const { result, outcome } = yield* use(rows.get(key));
+          const nextFence = Effect.sync(() => {
+            fences += 1;
+            return String(fences);
+          });
+          const { result, outcome } = yield* use(rows.get(key), nextFence);
           if (outcome.kind === "release") {
             rows.delete(key);
           } else if (outcome.kind === "hold") {
