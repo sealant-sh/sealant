@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  HARNESS_VERSIONS,
   getHarnessIntegration,
   isBakedHarnessId,
   isHarnessId,
@@ -16,23 +17,32 @@ describe("harness integrations", () => {
     expect(opencode).toMatchObject({
       id: "opencode",
       installPackages: ["nodejs"],
-      installCommand: "npm install -g --allow-scripts=opencode-ai opencode-ai@latest",
+      installCommand: `npm install -g --allow-scripts=opencode-ai opencode-ai@${HARNESS_VERSIONS.opencode}`,
       launchCommand: "opencode",
     });
     expect(codex).toMatchObject({
       id: "codex",
       // bubblewrap rides with the CLI: Codex's sandbox prerequisite, on every family.
       installPackages: ["nodejs", "bubblewrap"],
-      installCommand: "npm install -g @openai/codex@latest",
+      installCommand: `npm install -g @openai/codex@${HARNESS_VERSIONS.codex}`,
       launchCommand: "codex",
     });
     expect(claudeCode).toMatchObject({
       id: "claude-code",
       installPackages: ["nodejs"],
-      installCommand:
-        "npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@latest",
+      installCommand: `npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@${HARNESS_VERSIONS["claude-code"]}`,
       launchCommand: "claude",
     });
+  });
+
+  it("installs a pinned version of every harness, never whatever is latest", () => {
+    for (const integration of listHarnessIntegrations()) {
+      expect(integration.installCommand).not.toMatch(/@latest\b|releases\/latest/);
+      expect(integration.installCommand).toContain(HARNESS_VERSIONS[integration.id]);
+    }
+    expect(getHarnessIntegration("pi")?.installCommand).toContain(
+      `releases/download/v${HARNESS_VERSIONS.pi}`,
+    );
   });
 
   it("rejects unknown harness ids", () => {

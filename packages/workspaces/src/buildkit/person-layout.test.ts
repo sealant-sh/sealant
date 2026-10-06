@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { microvmRecipe } from "../images/microvm/recipe.js";
 import { compileWorkspaceBuildSpec, planWorkspaceImageBuild } from "./buildkit-builder.js";
 import {
+  ARCH_ARCHIVE_POOL,
   IMAGE_PROBE_PATH,
   IMAGE_PROBE_SCRIPT,
   PERSON_ENV,
@@ -85,10 +86,10 @@ const readyProbe: WorkspaceImageProbe = {
 };
 
 describe("the person layout in the managed images", () => {
+  // Every family installs them in the layout layer, after the harnesses (person-layout.ts says why).
   const families = [
-    // Fedora's and Arch's go in their package layer (person-layout.ts says why).
-    { family: "fedora", packageLine: /dnf -y install bash [^\n]* sudo acl util-linux /u },
-    { family: "arch", packageLine: /pacman -S --noconfirm --needed bash [^\n]* sudo acl /u },
+    { family: "fedora", packageLine: /dnf -y install --refresh sudo acl util-linux; \\/u },
+    { family: "arch", packageLine: /pacman -S --noconfirm --needed sudo acl; \\/u },
     {
       family: "ubuntu",
       packageLine: /apt-get install -y --no-install-recommends sudo acl; \\/u,
@@ -119,6 +120,25 @@ describe("the person layout in the managed images", () => {
       expect(containerfile).toContain(
         `/usr/local/lib/sealant/image-probe --require > ${IMAGE_PROBE_PATH}`,
       );
+    });
+
+    it(`installs ${family}'s layout packages after the harnesses, never in the package layer`, () => {
+      const containerfile = containerfileFor(family);
+      const layout = containerfile.search(packageLine);
+      // Each RUN of the package layer and of every harness install comes first, so a change to
+      // the layout's packages rebuilds only its own layer: no OS upgrade, no harness reinstall.
+      const harnesses = [...containerfile.matchAll(/^RUN .*(npm install -g|pi-linux)/gmu)];
+      expect(harnesses.length).toBeGreaterThanOrEqual(4);
+      for (const harness of harnesses) expect(harness.index).toBeLessThan(layout);
+      // ...and before sealantd's copy, so a sealantd pin bump does not rerun its installs.
+      expect(layout).toBeLessThan(containerfile.indexOf("COPY --from=ghcr.io/sealant-sh/sealantd"));
+      // The probe stays last.
+      expect(layout).toBeLessThan(containerfile.indexOf("image-probe --require"));
+      const packageLayer = containerfile.match(
+        /^RUN [^\n]*\n?(?:.*\\\n)*.*(?:dnf -y install|pacman -S --noconfirm --needed|apt-get install) [^\n]*bash[^\n]*$/mu,
+      );
+      expect(packageLayer?.[0]).toBeDefined();
+      expect(packageLayer?.[0]).not.toMatch(/\b(sudo|acl)\b/u);
     });
 
     it(`leaves ${family}'s environment exactly as it was`, () => {
@@ -195,14 +215,25 @@ describe("the person layout in the managed images", () => {
     );
   });
 
-  it("installs nothing in Fedora's or Arch's layout layer", () => {
-    for (const family of ["fedora", "arch"]) {
-      const containerfile = containerfileFor(family);
-      const layout = containerfile.slice(containerfile.indexOf("# Mend's person layout"));
-      const layoutRun = layout.slice(0, layout.indexOf("\n\n"));
+  it("installs Arch's layout packages against its package layer's database, never -Sy", () => {
+    const containerfile = containerfileFor("arch");
+    const layout = containerfile.slice(containerfile.indexOf("# Mend's person layout"));
+    const layoutRun = layout.slice(0, layout.indexOf("\n\n"));
 
-      expect(layoutRun).not.toMatch(/dnf|pacman/u);
-    }
+    const commands = layoutRun.split("; \\\n").map((command) => command.trim());
+    // A partial upgrade is never made: the archive serves what a mirror has since dropped. Only
+    // aarch64, which the archive does not carry, upgrades the whole system first.
+    const syncs = commands.filter((command) => /pacman -S[a-z]*y/u.test(command));
+    expect(syncs).toEqual(['[ "$(uname -m)" != aarch64 ] || pacman -Syu --noconfirm']);
+    const append = commands.indexOf(
+      `echo 'Server = ${ARCH_ARCHIVE_POOL}' >> /etc/pacman.d/mirrorlist`,
+    );
+    const install = commands.indexOf("pacman -S --noconfirm --needed sudo acl");
+    const restore = commands.indexOf("mv /tmp/mirrorlist /etc/pacman.d/mirrorlist");
+    expect(commands.indexOf("cp /etc/pacman.d/mirrorlist /tmp/mirrorlist")).toBeLessThan(append);
+    expect(append).toBeGreaterThan(-1);
+    expect(install).toBeGreaterThan(append);
+    expect(restore).toBeGreaterThan(install);
   });
 
   it("adds the docker group, keeping one the image has, only with the workspace's own Docker", () => {
@@ -243,7 +274,7 @@ describe("the person layout in the managed images", () => {
       contextDigest: "digest",
     });
 
-    expect(recipe.containerfile).toMatch(/pacman -S --noconfirm --needed bash [^\n]* sudo acl /u);
+    expect(recipe.containerfile).toMatch(/pacman -S --noconfirm --needed sudo acl; \\/u);
     expect(recipe.containerfile).toContain("groupadd -g 40000 mend");
     expect(recipe.containerfile).toContain("image-probe --require");
   });

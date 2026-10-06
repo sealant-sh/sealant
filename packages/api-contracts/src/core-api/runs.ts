@@ -329,7 +329,8 @@ export const RunsGroup = HttpApiGroup.make("runs")
       params: runIdParams,
       query: runOwnerQuerySchema,
       success: runSchema,
-      error: [RunNotFoundError, RunInternalServerError],
+      // The per-credential request budget answers 429 before any handler runs.
+      error: [BudgetExceededError, RunNotFoundError, RunInternalServerError],
     }),
   )
   .add(

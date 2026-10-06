@@ -43,6 +43,25 @@ workspace can open either baked agent against the same files and state.
 > forms are the expected headless shapes but are still pending live verification. If you rely on one
 > of the latter two, confirm the one-shot command against your image.
 
+## Harness versions
+
+Every managed workspace image installs one pinned version of each baked harness, listed in
+`HARNESS_VERSIONS` in `packages/workspaces/src/harness/integrations.ts`. The pin is not `@latest` on
+purpose. Docker caches a harness layer by its text, so `@latest` installed whatever was current the
+last time an earlier layer changed, and an unrelated package change could upgrade every harness at
+once. A pinned version changes only in a pull request, and bumping one rebuilds only its layer.
+
+To bump a harness:
+
+1. Read the version to pin: `npm view @anthropic-ai/claude-code version`,
+   `npm view @openai/codex version`, `npm view opencode-ai version`, and the latest release tag of
+   `earendil-works/pi` (without its `v`).
+2. Change it in `HARNESS_VERSIONS`. The tests read the same table, so nothing else in Core changes.
+3. In Mend, check what was surveyed against an older version: the credential survey in
+   `packages/sessions/src/harness-state.ts` and `CLAUDE_CODE_PROTOCOL_VERSION` in
+   `packages/agent-protocol`.
+4. Build one image per family and start each harness once (`--version` is enough) before merging.
+
 ## Custom harnesses
 
 Anything you can install and invoke can be a harness. Through the [SDK](/docs/reference/sdk),

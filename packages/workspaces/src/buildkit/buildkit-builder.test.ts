@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { NewWorkspace } from "@sealant/validators";
 import { describe, expect, it, vi } from "vitest";
 
+import { HARNESS_VERSIONS } from "../harness/integrations.js";
 import {
   buildContextDirectoryOf,
   compileWorkspaceBuildSpec,
@@ -813,12 +814,12 @@ describe("compileWorkspaceBuildSpec", () => {
     // Thin per-distro template: FROM + harness installs + sealantd copy + boot ENV + boot entrypoint.
     expect(containerfile).toContain("FROM fedora:41");
     // Every baked harness is installed; the blueprint's own (opencode) rides as an extra.
-    expect(containerfile).toContain("RUN npm install -g @openai/codex@latest");
+    expect(containerfile).toContain(`RUN npm install -g @openai/codex@${HARNESS_VERSIONS.codex}`);
     expect(containerfile).toContain(
-      "RUN npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@latest",
+      `RUN npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@${HARNESS_VERSIONS["claude-code"]}`,
     );
     expect(containerfile).toContain(
-      "RUN npm install -g --allow-scripts=opencode-ai opencode-ai@latest",
+      `RUN npm install -g --allow-scripts=opencode-ai opencode-ai@${HARNESS_VERSIONS.opencode}`,
     );
     // Codex's sandbox prerequisite is baked with the CLI — no "could not find bubblewrap" banner.
     expect(containerfile).toMatch(/dnf -y install [^\n]*\bbubblewrap\b/);
@@ -901,9 +902,9 @@ describe("compileWorkspaceBuildSpec", () => {
     const buildCommandArgs = (commandRunner.mock.calls[0]?.[1] ?? []) as string[];
 
     expect(containerfile).toContain("RUN sed -i 's/^DownloadUser/#DownloadUser/' /etc/pacman.conf");
-    expect(containerfile).toContain("RUN npm install -g @openai/codex@latest");
+    expect(containerfile).toContain(`RUN npm install -g @openai/codex@${HARNESS_VERSIONS.codex}`);
     expect(containerfile).toContain(
-      "RUN npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@latest",
+      `RUN npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@${HARNESS_VERSIONS["claude-code"]}`,
     );
     // Harness foreground resolves its launch command from RUNTIME env (docker `-e`), not image
     // ENV. No `SEALANT_FOREGROUND_RUN_JSON` for harness kind.
@@ -967,9 +968,11 @@ describe("compileWorkspaceBuildSpec", () => {
     // The FHS loader link, or no native harness binary starts on the nix image.
     expect(containerfile).toContain("nixpkgs#glibc.outPath");
     expect(containerfile).toContain('ln -sf "$loader" "/lib64/$(basename "$loader")"');
-    expect(containerfile).toContain("RUN npm install -g --prefix /usr/local @openai/codex@latest");
     expect(containerfile).toContain(
-      "RUN npm install -g --prefix /usr/local --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@latest",
+      `RUN npm install -g --prefix /usr/local @openai/codex@${HARNESS_VERSIONS.codex}`,
+    );
+    expect(containerfile).toContain(
+      `RUN npm install -g --prefix /usr/local --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@${HARNESS_VERSIONS["claude-code"]}`,
     );
     expect(containerfile).toContain("ENV SHELL='/root/.nix-profile/bin/zsh'");
     expect(containerfile).not.toContain("RUN usermod -s");

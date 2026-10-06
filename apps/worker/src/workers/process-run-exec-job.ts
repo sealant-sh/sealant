@@ -99,8 +99,15 @@ const parseNameStatus = (output: string): RunFileChange[] => {
   return files;
 };
 
+/**
+ * Runs a script with `sh -c`, not as a login shell. The changes script needs only git and coreutils
+ * on the image's own PATH, which every managed image and the custom-base contract provide, and it
+ * prints the same bytes either way. A login shell sources `/etc/profile` and `/etc/profile.d` first:
+ * in an Arch workspace image `sh -lc true` took 14 ms against 4 ms for `sh -c true` (2026-10-06),
+ * and this runs after every exec, before the run is marked finished.
+ */
 const shellExec = (target: SealantTarget, script: string) =>
-  execInWorkspace(target, { executable: "sh", args: ["-lc", script], cwd: WORKDIR }).pipe(
+  execInWorkspace(target, { executable: "sh", args: ["-c", script], cwd: WORKDIR }).pipe(
     Effect.retry(BRIDGE_RETRY),
   );
 

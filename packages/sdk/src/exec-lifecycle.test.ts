@@ -10,12 +10,20 @@ import type {
   RunScrollbackResponse,
   RunTimelineResponse,
 } from "@sealant/api-contracts";
+import {
+  BudgetExceededError,
+  RunInternalServerError,
+  RunNotFoundError,
+} from "@sealant/api-contracts";
 import { Effect } from "effect";
-import { describe, expect, it } from "vitest";
+import { HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type ControlPlaneClient, SealantApiClient } from "./effect/api-client.js";
-import { execWorkspace } from "./effect/exec-workspace.js";
+import { execWorkspace, nextExecPollMs } from "./effect/exec-workspace.js";
+import { READ_RETRY_BUDGET_MS } from "./effect/read-retry.js";
 import type { SdkRuntime, SdkServices } from "./effect/runtime.js";
+import { SealantApiError } from "./errors.js";
 import type { SdkContext } from "./facade/context.js";
 import type { WorkspaceInit } from "./facade/workspace.js";
 import { resolveInternalConfig } from "./internal/config.js";
@@ -56,6 +64,8 @@ const scrollback = (content: string): Omit<RunScrollbackResponse, "processId" | 
 interface StubHandlers {
   readonly execWorkspace?: (payload: ExecWorkspaceRequest) => WireRun;
   readonly getRun?: () => WireRun;
+  /** A read that may fail, in place of `getRun`. */
+  readonly readRun?: () => Effect.Effect<WireRun, unknown>;
   readonly stdout?: string;
   readonly stderr?: string;
 }
@@ -71,7 +81,9 @@ const makeStub = (
     },
   };
   const runs = {
-    getRun: () => Effect.sync(() => (handlers.getRun ?? (() => wireRun("completed")))()),
+    getRun: () =>
+      handlers.readRun?.() ??
+      Effect.sync(() => (handlers.getRun ?? (() => wireRun("completed")))()),
     getRunTimeline: () => Effect.sync(() => timelineWith("pnpm", "proc_1")),
     getRunScrollback: ({ query }: { query: { stream: "stdout" | "stderr" } }) =>
       Effect.sync(() => ({
@@ -99,6 +111,16 @@ const makeCtx = (client: ControlPlaneClient): SdkContext => ({
 });
 
 const WORKSPACE: WorkspaceInit = { id: "ws_1", name: "t", status: "ready" };
+
+/** Runs an exec to its end on the fake clock; resolves with its outcome, never rejects. */
+const settle = async <A>(promise: Promise<A>, ms: number) => {
+  const outcome = promise.then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+  await vi.advanceTimersByTimeAsync(ms);
+  return outcome;
+};
 
 describe("workspace.exec()", () => {
   it("assembles exit code, stdout, and stderr from the record", async () => {
@@ -146,27 +168,148 @@ describe("workspace.exec()", () => {
     );
   });
 
-  it("reads a quick run back soon after it ends, then less often for a slow one", async () => {
-    const quick = makeStub({ getRun: () => wireRun("completed", { exitCode: 0 }) });
-    const startedAt = Date.now();
-    await execWorkspace(makeCtx(quick.client), WORKSPACE, ["true"]);
-    // The first read comes after 25 ms, not after half a second.
-    expect(Date.now() - startedAt).toBeLessThan(250);
-
-    const reads: number[] = [];
-    const slow = makeStub({
-      getRun: () => {
-        reads.push(Date.now());
-        return reads.length < 6 ? wireRun("running") : wireRun("completed", { exitCode: 0 });
-      },
-    });
-    await execWorkspace(makeCtx(slow.client), WORKSPACE, ["sleep", "1"]);
-    const gaps = reads.slice(1).map((at, index) => at - (reads[index] ?? at));
-    // After the first read at 25 ms, waits of 50, 100, 200, 400 and 500 ms: doubling, capped.
-    expect(gaps.length).toBe(5);
-    for (const [index, gap] of gaps.entries()) {
-      expect(gap).toBeGreaterThanOrEqual(Math.min(50 * 2 ** index, 500) - 10);
+  it("reads a run every 25 ms for its first half second, then less often", () => {
+    const waits: number[] = [];
+    let elapsed = 0;
+    let wait: number | undefined;
+    while (elapsed < 4_000) {
+      wait = nextExecPollMs(wait, elapsed);
+      waits.push(wait);
+      elapsed += wait;
     }
+    // 20 reads 25 ms apart; until 2 s, doubling from 50 ms up to 250 ms; then up to 500 ms.
+    expect(waits.slice(0, 20)).toEqual(Array.from({ length: 20 }, () => 25));
+    expect(waits.slice(20, 30)).toEqual([50, 100, 200, 250, 250, 250, 250, 250, 500, 500]);
+  });
+
+  describe("on a fake clock", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("sees a run that ends at 90 ms at the 100 ms read", async () => {
+      const reads: number[] = [];
+      const startedAt = Date.now();
+      const { client } = makeStub({
+        getRun: () => {
+          reads.push(Date.now() - startedAt);
+          return Date.now() - startedAt < 90 ? wireRun("running") : wireRun("completed");
+        },
+      });
+      const outcome = await settle(execWorkspace(makeCtx(client), WORKSPACE, ["true"]), 1_000);
+      expect(outcome.ok).toBe(true);
+      // Doubling read it at 25, 75 and 175 ms.
+      expect(reads).toEqual([25, 50, 75, 100]);
+    });
+
+    it("reads again after a 429, when its Retry-After says, and the exec goes on", async () => {
+      const reads: number[] = [];
+      const startedAt = Date.now();
+      const { client } = makeStub({
+        readRun: () =>
+          Effect.suspend(() => {
+            reads.push(Date.now() - startedAt);
+            if (reads.length === 5) {
+              return Effect.fail(
+                new BudgetExceededError({
+                  message: "Request budget exceeded.",
+                  budget: "principalRequestsPerMinute",
+                  limit: 12_000,
+                  retryAfterSeconds: 2,
+                }),
+              );
+            }
+            return Effect.succeed(
+              Date.now() - startedAt < 3_000 ? wireRun("running") : wireRun("completed"),
+            );
+          }),
+      });
+      const outcome = await settle(execWorkspace(makeCtx(client), WORKSPACE, ["true"]), 10_000);
+      expect(outcome.ok).toBe(true);
+      // The refused read at 125 ms is read again 2 s later, not before.
+      expect(reads[4]).toBe(125);
+      expect(reads[5]).toBe(2_125);
+    });
+
+    it("reads again after a lost request or a 5xx the contract does not name", async () => {
+      const request = HttpClientRequest.get("http://stub.invalid/v1/runs/run_exec_1");
+      const failures: unknown[] = [
+        new HttpClientError.HttpClientError({
+          reason: new HttpClientError.TransportError({ request, description: "socket hang up" }),
+        }),
+        new HttpClientError.HttpClientError({
+          reason: new HttpClientError.DecodeError({
+            request,
+            response: HttpClientResponse.fromWeb(
+              request,
+              new Response("bad gateway", { status: 502, headers: { "retry-after": "1" } }),
+            ),
+          }),
+        }),
+        new RunInternalServerError({ message: "Failed to load run." }),
+      ];
+      const reads: number[] = [];
+      const startedAt = Date.now();
+      const { client } = makeStub({
+        readRun: () =>
+          Effect.suspend(() => {
+            reads.push(Date.now() - startedAt);
+            const failure = failures.shift();
+            return failure === undefined
+              ? Effect.succeed(wireRun("completed"))
+              : Effect.fail(failure);
+          }),
+      });
+      const outcome = await settle(execWorkspace(makeCtx(client), WORKSPACE, ["true"]), 10_000);
+      expect(outcome.ok).toBe(true);
+      // 100 ms after the lost request, Retry-After's 1 s after the 502, 400 ms after the 500.
+      expect(reads).toEqual([25, 125, 1_125, 1_525]);
+    });
+
+    it("fails a read no retry can fix at once, naming the run", async () => {
+      let reads = 0;
+      const { client } = makeStub({
+        readRun: () =>
+          Effect.suspend(() => {
+            reads += 1;
+            return Effect.fail(new RunNotFoundError({ message: "Run not found: run_exec_1" }));
+          }),
+      });
+      const outcome = await settle(execWorkspace(makeCtx(client), WORKSPACE, ["true"]), 1_000);
+      expect(reads).toBe(1);
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) return;
+      expect(outcome.error).toBeInstanceOf(SealantApiError);
+      expect(String(outcome.error)).toMatch(/exec run run_exec_1 failed: Run not found/);
+    });
+
+    it("gives up after a bounded wait, naming the run and the last status", async () => {
+      let reads = 0;
+      const { client } = makeStub({
+        readRun: () =>
+          Effect.suspend(() => {
+            reads += 1;
+            return Effect.fail(new RunInternalServerError({ message: "Failed to load run." }));
+          }),
+      });
+      const outcome = await settle(
+        execWorkspace(makeCtx(client), WORKSPACE, ["true"]),
+        READ_RETRY_BUDGET_MS + 5_000,
+      );
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) return;
+      expect(outcome.error).toBeInstanceOf(SealantApiError);
+      if (!(outcome.error instanceof SealantApiError)) return;
+      expect(outcome.error.status).toBe(500);
+      expect(outcome.error.message).toMatch(
+        /^Reading the state of exec run run_exec_1 failed \(read \d+ times\): Failed to load run\.$/,
+      );
+      // 100, 200, 400, 800, 1 600 ms, then 2 s at a time, within the minute.
+      expect(reads).toBe(6 + Math.floor((READ_RETRY_BUDGET_MS - 3_100) / 2_000));
+    });
   });
 
   it("passes on that the run's changes were not read, never an apparently empty change", async () => {
