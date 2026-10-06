@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { CODEX_COPY_REFRESH_TOKEN } from "./copies.js";
 import {
+  claudeCredentialsFile,
   CONNECTED_ACCOUNT_REF_PREFIX,
   createConnectedAccountRef,
   parseConnectedAccountRef,
@@ -96,5 +97,28 @@ describe("connected account refs", () => {
     expect(parseConnectedAccountRef(undefined)).toBeUndefined();
     expect(parseConnectedAccountRef("github-installation-repository:123")).toBeUndefined();
     expect(parseConnectedAccountRef(CONNECTED_ACCOUNT_REF_PREFIX)).toBeUndefined();
+  });
+});
+
+describe("claudeCredentialsFile", () => {
+  it("writes a setup token as the file Claude Code builds from the variable", () => {
+    expect(JSON.parse(claudeCredentialsFile({ token: "sk-ant-oat01-x" }))).toEqual({
+      claudeAiOauth: {
+        accessToken: "sk-ant-oat01-x",
+        expiresAt: 9_999_999_999_999,
+        scopes: ["user:inference"],
+        subscriptionType: null,
+      },
+    });
+  });
+
+  it("writes a session file as the copy without its refresh token", () => {
+    const file = claudeCredentialsFile({
+      credentialsJson: JSON.stringify({
+        claudeAiOauth: { accessToken: "at", refreshToken: "rt", expiresAt: 1 },
+      }),
+    });
+    expect(file).toContain("at");
+    expect(file).not.toContain("rt");
   });
 });

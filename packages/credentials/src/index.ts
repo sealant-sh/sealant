@@ -28,6 +28,8 @@ export {
 export {
   claudeCredentialsCanRefresh,
   claudeCredentialsCopy,
+  claudeSetupTokenCredentials,
+  CLAUDE_SETUP_TOKEN_EXPIRES_AT,
   CODEX_COPY_REFRESH_TOKEN,
   codexAuthJsonCanRefresh,
   codexAuthJsonCopy,
@@ -44,6 +46,7 @@ export {
 } from "./codex-session.js";
 
 export {
+  claudeCredentialsFile,
   CLAUDE_CREDENTIALS_JSON_PATH,
   CLAUDE_OAUTH_TOKEN_ENV_KEY,
   CODEX_AUTH_JSON_PATH,
