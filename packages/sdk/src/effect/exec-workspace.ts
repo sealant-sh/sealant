@@ -26,6 +26,7 @@ import {
   getRunScrollbackOp,
   getRunTimelineOp,
 } from "./operations.js";
+import { retryRead } from "./read-retry.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 /**
@@ -33,19 +34,21 @@ const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
  * dozen or more of them in a row, so for its first half second the run is read every 25 ms: a result
  * is seen within about 25 ms of the run ending. Doubling from 25 ms read it at 25, 75, 175 and
  * 375 ms, so an exec that ended at 80 ms was seen at 175 ms, and 20 ms more on every exec cost
- * 100 ms each. After the first half second the waits double from 50 ms up to 500 ms, as before: an
- * exec that runs for seconds is read about twice a second.
+ * 100 ms each. Until 2 s the waits then double from 50 ms up to 250 ms, and after that up to 500 ms:
+ * an exec that runs for seconds is read about twice a second.
  */
 const POLL_MS = 25;
 const POLL_STEADY_FOR_MS = 500;
+const POLL_SOON_FOR_MS = 2_000;
+const MAX_SOON_POLL_MS = 250;
 const MAX_POLL_MS = 500;
 const EXEC_TIMEOUT_MS = 30 * 60 * 1_000;
 
 /** The wait before the next read, given the last wait and the time since the run was registered. */
 export const nextExecPollMs = (lastWaitMs: number | undefined, elapsedMs: number): number => {
   if (elapsedMs < POLL_STEADY_FOR_MS) return POLL_MS;
-  if (lastWaitMs === undefined || lastWaitMs <= POLL_MS) return POLL_MS * 2;
-  return Math.min(lastWaitMs * 2, MAX_POLL_MS);
+  const doubled = lastWaitMs === undefined || lastWaitMs <= POLL_MS ? POLL_MS * 2 : lastWaitMs * 2;
+  return Math.min(doubled, elapsedMs < POLL_SOON_FOR_MS ? MAX_SOON_POLL_MS : MAX_POLL_MS);
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -70,9 +73,15 @@ const readScrollback = (
   ownerUserId: string,
   processId: string,
   stream: "stdout" | "stderr",
+  deadline: number,
 ) =>
-  Effect.map(getRunScrollbackOp(runId, { ownerUserId, processId, stream }), (response) =>
-    Buffer.from(response.contentBase64, "base64").toString("utf8"),
+  Effect.map(
+    retryRead(getRunScrollbackOp(runId, { ownerUserId, processId, stream }), {
+      runId,
+      what: stream,
+      deadline,
+    }),
+    (response) => Buffer.from(response.contentBase64, "base64").toString("utf8"),
   );
 
 const execWorkspaceEffect = (
@@ -113,7 +122,12 @@ const execWorkspaceEffect = (
       }
       wait = nextExecPollMs(wait, Date.now() - registeredAt);
       yield* Effect.sleep(Duration.millis(wait));
-      wire = yield* getRunOp(runId, ctx.config.hostLocal.ownerUserId);
+      // One refused or lost read is read again; the run goes on either way.
+      wire = yield* retryRead(getRunOp(runId, ctx.config.hostLocal.ownerUserId), {
+        runId,
+        what: "the state",
+        deadline,
+      });
     }
 
     // Exec framing: "completed" means every command executed and was recorded — anything else means
@@ -121,7 +135,7 @@ const execWorkspaceEffect = (
     if (wire.status !== "completed") {
       return yield* Effect.fail(
         new SealantError(
-          `Workspace exec did not complete: ${wire.errorMessage ?? `run ${runId} is ${wire.status}`}`,
+          `Workspace exec run ${runId} did not complete: ${wire.errorMessage ?? `it is ${wire.status}`}`,
           { code: "exec_failed" },
         ),
       );
@@ -129,18 +143,21 @@ const execWorkspaceEffect = (
 
     // Every record read names the owner: the control plane finds nothing for a read that does not.
     const ownerUserId = ctx.config.hostLocal.ownerUserId;
-    const started = yield* getRunTimelineOp(runId, { ownerUserId, kinds: "processStarted" });
+    const started = yield* retryRead(
+      getRunTimelineOp(runId, { ownerUserId, kinds: "processStarted" }),
+      { runId, what: "the timeline", deadline },
+    );
     const processId = findCommandProcessId(started, executable);
     // The three reads are independent: one round trip of waiting, not three.
     const [stdout, stderr, wireChanges] = yield* Effect.all(
       [
         processId === undefined
           ? Effect.succeed("")
-          : readScrollback(runId, ownerUserId, processId, "stdout"),
+          : readScrollback(runId, ownerUserId, processId, "stdout", deadline),
         processId === undefined
           ? Effect.succeed("")
-          : readScrollback(runId, ownerUserId, processId, "stderr"),
-        getRunChangesOp(runId, ownerUserId),
+          : readScrollback(runId, ownerUserId, processId, "stderr", deadline),
+        retryRead(getRunChangesOp(runId, ownerUserId), { runId, what: "the changes", deadline }),
       ],
       { concurrency: "unbounded" },
     );

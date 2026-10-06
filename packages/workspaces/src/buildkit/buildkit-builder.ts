@@ -1154,6 +1154,7 @@ const renderChezmoiInstallStep = (plan: ResolvedImagePlan): string | undefined =
  *
  * Ordering is intentional:
  * - package and harness installs first to maximize layer cache reuse
+ * - the person layout right after them, so a sealantd pin bump does not rerun its installs
  * - shell configuration, then the `sealantd` binary copy
  * - optional build-time dotfiles `RUN` layer near the end because it can be highly variable
  * - the boot `ENV` block + `ENTRYPOINT` last so config changes do not bust earlier cache layers
@@ -1242,6 +1243,12 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
     ...(chezmoiInstallStep === undefined ? [] : ["", chezmoiInstallStep]),
     "",
     harnessInstallStep,
+    // The person layout comes right after the harnesses: a change to its packages reruns neither
+    // the OS upgrade nor a harness install, and a sealantd pin bump (below) does not rerun it.
+    // Nix images take one person and get none of this (person-layout.ts says why).
+    ...(personLayoutFamily === undefined
+      ? []
+      : ["", renderPersonLayoutSteps({ family: personLayoutFamily, dockerService })]),
     "",
     plan.osFamily === "nix"
       ? `ENV SHELL=${shellQuote(shellPath)}`
@@ -1265,10 +1272,6 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
           "RUN chmod 755 /usr/local/bin/docker /usr/local/libexec/docker/cli-plugins/docker-compose",
         ]
       : []),
-    // Nix images take one person and get none of this (person-layout.ts says why).
-    ...(personLayoutFamily === undefined
-      ? []
-      : ["", renderPersonLayoutSteps({ family: personLayoutFamily, dockerService })]),
     // Mount-sourced workspaces bind a HOST-owned directory as the working directory; its uid
     // differs from the container user, which trips git's dubious-ownership check and would make
     // every git command fail. Trusting the fixed working directory keeps exec/record semantics

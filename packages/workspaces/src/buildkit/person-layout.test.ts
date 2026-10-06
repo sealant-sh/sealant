@@ -130,6 +130,10 @@ describe("the person layout in the managed images", () => {
       const harnesses = [...containerfile.matchAll(/^RUN .*(npm install -g|pi-linux)/gmu)];
       expect(harnesses.length).toBeGreaterThanOrEqual(4);
       for (const harness of harnesses) expect(harness.index).toBeLessThan(layout);
+      // ...and before sealantd's copy, so a sealantd pin bump does not rerun its installs.
+      expect(layout).toBeLessThan(containerfile.indexOf("COPY --from=ghcr.io/sealant-sh/sealantd"));
+      // The probe stays last.
+      expect(layout).toBeLessThan(containerfile.indexOf("image-probe --require"));
       const packageLayer = containerfile.match(
         /^RUN [^\n]*\n?(?:.*\\\n)*.*(?:dnf -y install|pacman -S --noconfirm --needed|apt-get install) [^\n]*bash[^\n]*$/mu,
       );
@@ -216,9 +220,11 @@ describe("the person layout in the managed images", () => {
     const layout = containerfile.slice(containerfile.indexOf("# Mend's person layout"));
     const layoutRun = layout.slice(0, layout.indexOf("\n\n"));
 
-    // A partial upgrade is never made: the archive serves what a mirror has since dropped.
-    expect(layoutRun).not.toMatch(/pacman -S[a-z]*y/u);
     const commands = layoutRun.split("; \\\n").map((command) => command.trim());
+    // A partial upgrade is never made: the archive serves what a mirror has since dropped. Only
+    // aarch64, which the archive does not carry, upgrades the whole system first.
+    const syncs = commands.filter((command) => /pacman -S[a-z]*y/u.test(command));
+    expect(syncs).toEqual(['[ "$(uname -m)" != aarch64 ] || pacman -Syu --noconfirm']);
     const append = commands.indexOf(
       `echo 'Server = ${ARCH_ARCHIVE_POOL}' >> /etc/pacman.d/mirrorlist`,
     );

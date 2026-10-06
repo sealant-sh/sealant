@@ -25,8 +25,7 @@ export interface HarnessIntegration {
  * last changed. Adding two packages to the package layer (#327) upgraded the OS and moved claude
  * 2.1.287 → 2.1.291, codex 0.160.0 → 0.160.1 and pi 1.0.0 → 1.0.4 with it, unannounced, in the
  * middle of a benchmark. A pinned version changes only here, in a pull request of its own, and
- * changing one rebuilds only its own layer. Bump with `npm view <package> version` and pi's
- * latest release tag.
+ * changing one rebuilds only its own layer. How to bump: apps/docs/contents/concepts/harnesses.md.
  */
 export const HARNESS_VERSIONS = {
   opencode: "1.18.34",
