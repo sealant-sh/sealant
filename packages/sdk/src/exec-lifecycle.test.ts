@@ -14,7 +14,7 @@ import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { type ControlPlaneClient, SealantApiClient } from "./effect/api-client.js";
-import { execWorkspace } from "./effect/exec-workspace.js";
+import { execWorkspace, nextExecPollMs } from "./effect/exec-workspace.js";
 import type { SdkRuntime, SdkServices } from "./effect/runtime.js";
 import type { SdkContext } from "./facade/context.js";
 import type { WorkspaceInit } from "./facade/workspace.js";
@@ -146,26 +146,36 @@ describe("workspace.exec()", () => {
     );
   });
 
-  it("reads a quick run back soon after it ends, then less often for a slow one", async () => {
-    const quick = makeStub({ getRun: () => wireRun("completed", { exitCode: 0 }) });
-    const startedAt = Date.now();
-    await execWorkspace(makeCtx(quick.client), WORKSPACE, ["true"]);
-    // The first read comes after 25 ms, not after half a second.
-    expect(Date.now() - startedAt).toBeLessThan(250);
+  it("reads a run every 25 ms for its first half second, then less often", () => {
+    const waits: number[] = [];
+    let elapsed = 0;
+    let wait: number | undefined;
+    while (elapsed < 3_000) {
+      wait = nextExecPollMs(wait, elapsed);
+      waits.push(wait);
+      elapsed += wait;
+    }
+    // 20 reads 25 ms apart, then 50, 100, 200, 400, and 500 ms from then on.
+    expect(waits.slice(0, 20)).toEqual(Array.from({ length: 20 }, () => 25));
+    expect(waits.slice(20, 26)).toEqual([50, 100, 200, 400, 500, 500]);
+  });
 
+  it("sees a quick run within one 25 ms read of it ending", async () => {
     const reads: number[] = [];
-    const slow = makeStub({
+    const startedAt = Date.now();
+    const { client } = makeStub({
       getRun: () => {
         reads.push(Date.now());
-        return reads.length < 6 ? wireRun("running") : wireRun("completed", { exitCode: 0 });
+        // The run ends 90 ms after it was registered: doubling read it at 25, 75 and 175 ms.
+        return Date.now() - startedAt < 90 ? wireRun("running") : wireRun("completed");
       },
     });
-    await execWorkspace(makeCtx(slow.client), WORKSPACE, ["sleep", "1"]);
-    const gaps = reads.slice(1).map((at, index) => at - (reads[index] ?? at));
-    // After the first read at 25 ms, waits of 50, 100, 200, 400 and 500 ms: doubling, capped.
-    expect(gaps.length).toBe(5);
-    for (const [index, gap] of gaps.entries()) {
-      expect(gap).toBeGreaterThanOrEqual(Math.min(50 * 2 ** index, 500) - 10);
+    await execWorkspace(makeCtx(client), WORKSPACE, ["true"]);
+    const seenAt = (reads.at(-1) ?? startedAt) - startedAt;
+    expect(seenAt).toBeGreaterThanOrEqual(90);
+    expect(seenAt).toBeLessThan(170);
+    for (const [index, at] of reads.slice(1).entries()) {
+      expect(at - (reads[index] ?? at)).toBeGreaterThanOrEqual(20);
     }
   });
 

@@ -37,8 +37,6 @@ import {
 } from "./package-catalog.js";
 import {
   IMAGE_PROBE_PATH,
-  PERSON_LAYOUT_PACKAGES,
-  PERSON_LAYOUT_PACKAGES_IN_PACKAGE_LAYER,
   isPersonLayoutFamily,
   renderImageProbeStep,
   renderPersonLayoutSteps,
@@ -794,10 +792,6 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
     // `socat` (and any other relay deps) are always installed: `sealantd boot` is the mandatory
     // PID-1 entrypoint and its control socket is bridged to the host over a `docker exec` relay.
     ...distro.sealantdPackages,
-    ...(isPersonLayoutFamily(plan.osFamily) &&
-    PERSON_LAYOUT_PACKAGES_IN_PACKAGE_LAYER.has(plan.osFamily)
-      ? PERSON_LAYOUT_PACKAGES[plan.osFamily]
-      : []),
     ...plan.packages.flatMap((pkg) => pkg.installPackages),
   ]);
 

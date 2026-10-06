@@ -290,19 +290,6 @@ export const PERSON_LAYOUT_PACKAGES = {
 
 export type PersonLayoutFamily = keyof typeof PERSON_LAYOUT_PACKAGES;
 
-/**
- * The families that install those packages in their package layer rather than the layout's.
- * Fedora: any RPM install rewrites `rpmdb.sqlite` whole, so a layer of its own for `acl`'s 224 KB
- * weighed 13.7 MB (measured 2026-10-06). Arch: a later layer's `pacman -S` resolves against the
- * package layer's sync database, and Arch mirrors keep only current packages, so it 404s once that
- * layer is older than sudo's last release; `-Sy` there would be a partial upgrade. Ubuntu keeps a
- * layer of its own (apt resolves dependencies afresh), so its existing images rebuild in seconds.
- */
-export const PERSON_LAYOUT_PACKAGES_IN_PACKAGE_LAYER: ReadonlySet<PersonLayoutFamily> = new Set([
-  "fedora",
-  "arch",
-]);
-
 export const isPersonLayoutFamily = (family: string): family is PersonLayoutFamily =>
   Object.hasOwn(PERSON_LAYOUT_PACKAGES, family);
 
@@ -312,28 +299,64 @@ const shellQuote = (value: string): string => `'${value.split("'").join(`'"'"'`)
 const writeLines = (path: string, lines: readonly string[]): string =>
   `printf '%s\\n' ${lines.map(shellQuote).join(" ")} > ${shellQuote(path)}`;
 
-/** Ubuntu's install in the layout layer, with the same cache mounts as its package layer. */
-const UBUNTU_INSTALL = {
-  mounts:
-    "--mount=type=cache,target=/var/cache/apt,sharing=locked --mount=type=cache,target=/var/lib/apt,sharing=locked",
-  commands: [
-    "apt-get update",
-    `DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${PERSON_LAYOUT_PACKAGES.ubuntu.join(" ")}`,
-  ],
-} as const;
+/**
+ * Arch Linux Archive's flat pool of every package file Arch has published, signed as the mirrors'.
+ * The layout layer installs against the sync database its package layer fetched, and Arch mirrors
+ * keep only current packages: once that layer is older than sudo's or acl's last release, a mirror
+ * answers 404. Listed after the mirrors, the archive serves exactly the version that database
+ * names, so the install neither fails nor needs `-Sy`, which would be a partial upgrade.
+ */
+export const ARCH_ARCHIVE_POOL = "https://archive.archlinux.org/packages/.all";
+
+/**
+ * Each family's package install in the layout layer, with its package layer's cache mounts. The
+ * layout layer comes after the harness installs, so a change to these packages rebuilds only it:
+ * in the package layer, adding `sudo acl` (#327) ran `pacman -Syu` and `dnf upgrade` again, which
+ * upgraded the whole OS under every layer above it and reinstalled every harness. Now a change
+ * here rebuilds in seconds. Fedora pays for it in size: any RPM install rewrites `rpmdb.sqlite`
+ * whole, so its layout layer weighs 13.8 MB, while its package layer is only 0.2 MB smaller for
+ * leaving them out (measured 2026-10-06). Arch's layout layer weighs 2.5 MB.
+ */
+const LAYOUT_INSTALL: Readonly<
+  Record<PersonLayoutFamily, { readonly mounts: string; readonly commands: readonly string[] }>
+> = {
+  fedora: {
+    mounts: "--mount=type=cache,target=/var/cache/dnf",
+    // --refresh: the cache mount's metadata may name packages a mirror has since dropped.
+    commands: [
+      `dnf -y install --refresh ${PERSON_LAYOUT_PACKAGES.fedora.join(" ")}`,
+      "dnf clean all",
+    ],
+  },
+  arch: {
+    mounts: "--mount=type=cache,target=/var/cache/pacman/pkg",
+    commands: [
+      "cp /etc/pacman.d/mirrorlist /tmp/mirrorlist",
+      `echo 'Server = ${ARCH_ARCHIVE_POOL}' >> /etc/pacman.d/mirrorlist`,
+      `pacman -S --noconfirm --needed ${PERSON_LAYOUT_PACKAGES.arch.join(" ")}`,
+      "mv /tmp/mirrorlist /etc/pacman.d/mirrorlist",
+    ],
+  },
+  ubuntu: {
+    mounts:
+      "--mount=type=cache,target=/var/cache/apt,sharing=locked --mount=type=cache,target=/var/lib/apt,sharing=locked",
+    commands: [
+      "apt-get update",
+      `DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${PERSON_LAYOUT_PACKAGES.ubuntu.join(" ")}`,
+    ],
+  },
+};
 
 /**
  * The person layout's Dockerfile step for a managed family: one `RUN`, after the harness
  * installs, for the group, `sudo`, the shared directories, `/etc/skel` and the person environment
- * file (and Ubuntu's packages). No `ENV`: the image's environment is what it was.
+ * file, and the packages they need. No `ENV`: the image's environment is what it was.
  */
 export const renderPersonLayoutSteps = (input: {
   readonly family: PersonLayoutFamily;
   readonly dockerService: boolean;
 }): string => {
-  const install = PERSON_LAYOUT_PACKAGES_IN_PACKAGE_LAYER.has(input.family)
-    ? undefined
-    : UBUNTU_INSTALL;
+  const install = LAYOUT_INSTALL[input.family];
   const dirs = [...PERSON_SHARED_DIRS, ...PERSON_SHARED_SUBDIRS];
   const skelDirs = [
     ...new Set([
@@ -344,7 +367,7 @@ export const renderPersonLayoutSteps = (input: {
   const commands = [
     // `set -e` does not stop at a failed command inside `a && b`, so every step stands alone.
     "set -eu",
-    ...(install?.commands ?? []),
+    ...install.commands,
     `groupadd -g ${String(MEND_GID)} ${MEND_GROUP}`,
     // An image that already has a docker group keeps it; gid 2375 taken by another group fails.
     ...(input.dockerService
@@ -369,7 +392,7 @@ export const renderPersonLayoutSteps = (input: {
   return [
     "# Mend's person layout (ADR 0016): the mend group, sudo for it, shared toolchain directories",
     `# and ${PERSON_ENV_PATH} for processes run as a person. No ENV: root's environment is as before.`,
-    `RUN ${install === undefined ? "" : `${install.mounts} `}\\`,
+    `RUN ${install.mounts} \\`,
     `    ${commands.join("; \\\n    ")}`,
   ].join("\n");
 };

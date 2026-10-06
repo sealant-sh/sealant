@@ -29,13 +29,24 @@ import {
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 /**
- * The run is read soon after it is registered, then less often, up to every 500 ms. Most execs end
- * in 100-300 ms; a first read only after 500 ms made every one take at least half a second, and a
- * launch that writes files and settings into its workspace runs a dozen or more of them in a row.
+ * When the run is read next. A small exec ends 70-110 ms after it is registered, and a launch runs a
+ * dozen or more of them in a row, so for its first half second the run is read every 25 ms: a result
+ * is seen within about 25 ms of the run ending. Doubling from 25 ms read it at 25, 75, 175 and
+ * 375 ms, so an exec that ended at 80 ms was seen at 175 ms, and 20 ms more on every exec cost
+ * 100 ms each. After the first half second the waits double from 50 ms up to 500 ms, as before: an
+ * exec that runs for seconds is read about twice a second.
  */
-const FIRST_POLL_MS = 25;
+const POLL_MS = 25;
+const POLL_STEADY_FOR_MS = 500;
 const MAX_POLL_MS = 500;
 const EXEC_TIMEOUT_MS = 30 * 60 * 1_000;
+
+/** The wait before the next read, given the last wait and the time since the run was registered. */
+export const nextExecPollMs = (lastWaitMs: number | undefined, elapsedMs: number): number => {
+  if (elapsedMs < POLL_STEADY_FOR_MS) return POLL_MS;
+  if (lastWaitMs === undefined || lastWaitMs <= POLL_MS) return POLL_MS * 2;
+  return Math.min(lastWaitMs * 2, MAX_POLL_MS);
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -88,9 +99,10 @@ const execWorkspaceEffect = (
     const runId = created.runId;
 
     // Block until the check run is terminal, polling the control plane (same shape as harness.run()).
-    const deadline = Date.now() + EXEC_TIMEOUT_MS;
+    const registeredAt = Date.now();
+    const deadline = registeredAt + EXEC_TIMEOUT_MS;
     let wire = created;
-    let wait = FIRST_POLL_MS;
+    let wait: number | undefined;
     while (!TERMINAL_STATUSES.has(wire.status)) {
       if (Date.now() > deadline) {
         return yield* Effect.fail(
@@ -99,8 +111,8 @@ const execWorkspaceEffect = (
           }),
         );
       }
+      wait = nextExecPollMs(wait, Date.now() - registeredAt);
       yield* Effect.sleep(Duration.millis(wait));
-      wait = Math.min(wait * 2, MAX_POLL_MS);
       wire = yield* getRunOp(runId, ctx.config.hostLocal.ownerUserId);
     }
 
