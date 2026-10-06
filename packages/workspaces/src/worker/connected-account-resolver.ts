@@ -1,4 +1,5 @@
 import {
+  claudeCredentialsFile,
   githubHostsYml,
   parseClaudeCredentialPayload,
   parseCodexCredentialPayload,
@@ -79,6 +80,18 @@ const intoHome = (
         kind: "file",
         path: `${home.path}/.config/gh/hosts.yml`,
         contentBase64: Buffer.from(hostsYml, "utf8").toString("base64"),
+        mode: "600",
+      },
+    ];
+  }
+  if (provider === "claude") {
+    // A setup token too: the planner's variable would be everyone's in a shared executor.
+    const file = claudeCredentialsFile(parseClaudeCredentialPayload(JSON.parse(plaintext)));
+    return [
+      {
+        kind: "file",
+        path: `${home.path}/.claude/.credentials.json`,
+        contentBase64: Buffer.from(file, "utf8").toString("base64"),
         mode: "600",
       },
     ];

@@ -592,24 +592,30 @@ describe.skipIf(!dockerAvailable)(
 describe("buildCredentialFileWriteScript for a launch's credentialsHome", () => {
   it("makes the home for its owner and writes every login in one exec, taking the home", async () => {
     const { buildCredentialFileWriteScript } = await import("./credential-files.js");
-    const home = join(scratch(), "erin");
+    const w = world();
+    const home = join(w.root, "erin");
     const claude = '{"claudeAiOauth":{"accessToken":"at-erin"}}';
     const hostsYml = 'github.com:\n    oauth_token: "gho_erin"\n';
     const stdin = homeScriptStdin([claude, hostsYml]);
-    const script = buildCredentialFileWriteScript({
-      path: home,
-      contentBase64: stdin,
-      mode: "600",
-      home: { uid, gid, generation: GEN_A, providers: ["claude", "github"] },
-    });
-    // The adapters pipe `contentBase64` as it is.
-    const result = spawnSync("sh", ["-c", script], { input: stdin, encoding: "utf8" });
-    expect(result.status, result.stderr).toBe(0);
+    const script = buildCredentialFileWriteScript(
+      {
+        path: home,
+        contentBase64: stdin,
+        mode: "600",
+        home: { uid, gid, generation: GEN_A, providers: ["claude", "github"] },
+      },
+      { stateDir: w.state },
+    );
+    // The adapters pipe `contentBase64` as it is; a launch delivered again writes again.
+    const deliveries = [1, 2].map(() =>
+      spawnSync("sh", ["-c", script], { input: stdin, encoding: "utf8" }),
+    );
+    for (const result of deliveries) expect(result.status, result.stderr).toBe(0);
     expect(mode(home)).toBe(0o700);
-    expect(readFileSync(join(home, ".claude/.credentials.json"), "utf8")).toBe(claude);
-    expect(readFileSync(join(home, ".config/gh/hosts.yml"), "utf8")).toBe(hostsYml);
+    expect(read(join(home, ".claude/.credentials.json"))).toBe(claude);
+    expect(read(join(home, ".config/gh/hosts.yml"))).toBe(hostsYml);
     expect(mode(join(home, ".claude/.credentials.json"))).toBe(0o600);
-    expect(marker(home)).toBe(GEN_A);
+    expect(w.marker(home)).toBe(GEN_A);
   });
 
   it("refuses a home that is not one", async () => {

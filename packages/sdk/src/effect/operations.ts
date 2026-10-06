@@ -290,6 +290,9 @@ export const inferenceRespondOp = (payload: InferenceRespondRequest) =>
 
 // ---- system ----
 
+export const getIndexOp = () =>
+  Effect.flatMap(SealantApiClient, (client) => client.system.getIndex({}));
+
 export const getSetupStateOp = () =>
   Effect.flatMap(SealantApiClient, (client) => client.system.getSetupState({}));
 

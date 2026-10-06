@@ -476,15 +476,19 @@ conversation home while that person's process is about to run there.
   `uid`:`gid`, mode 0700, seeded from `/etc/skel` as `useradd -m` would (it copies nothing into a
   home that already exists). Every file and every directory made for it is theirs, files 0600. The
   home follows §6c's rules (checked at create, a 400 otherwise; no link on the way, checked in the
-  executor), and the launch takes it as a first put would, writing its marker.
+  executor), and the launch takes it as a first put would, writing its marker. The launch's
+  generation is derived from its run, so a launch delivered again (a worker restarted mid-launch, an
+  adopted Pod or MicroVM) writes again under the same hold. Not on Cloudflare, whose bridge writes
+  at `$HOME` only: a create there is refused (400), and the adapter refuses such a launch too.
 - **Recorded as a held home.** Before the instance reads `ready` (when nobody can act on the home
   yet), the launch records the home for the workspace's owner with the accounts it wrote and the
-  generation of its marker, as a put would (§6c), only if the home holds nothing. Refreshes reach it
-  through the record, nobody else's logins are put there, and a release (`DELETE`) removes the
-  files. That release is how Mend falls back to `/root` when a predicted per-person layout fails at
-  prepare. The instance's `launch_credential_injections` entries name the home, so the per-instance
-  push skips them: one write per refresh, never two. A failure to record is logged, never the
-  launch's.
+  generation of its marker, as a put would (§6c), only if the home holds nothing, and only if the
+  launch took it: a launch with no login writes nothing, and the home stays free for the first put.
+  The record is retried briefly before a failure is logged. Refreshes reach it through the record,
+  nobody else's logins are put there, and a release (`DELETE`) removes the files. That release is
+  how Mend falls back to `/root` when a predicted per-person layout fails at prepare. The instance's
+  `launch_credential_injections` entries name the home, so the per-instance push skips them: one
+  write per refresh, never two. A failure to record is logged, never the launch's.
 - **Cost.** No API call is added, and no exec: one exec writes every login, where a launch at
   `$HOME` runs one per file. The record is one short transaction in the worker.
 
@@ -495,7 +499,10 @@ conversation home while that person's process is about to run there.
   Linux user name or numeric uid. Core starts processes through sealantd, and no released sealantd
   can start one as another user yet (Mend ADR 0016 Delivery 5), so Core refuses with 409
   `user-unsupported` before anything starts, and never runs the process as the workspace's own user
-  in its place. Wiring it through is a follow-up once sealantd's protocol carries it.
+  in its place. Wiring it through is a follow-up once sealantd's protocol carries it. An SDK sends
+  `user` only to a control plane whose index reports `features.processUser` (read once per client),
+  and refuses it client-side otherwise: an older control plane would decode the request without the
+  field and run the process as the workspace's own user. Today's reports `false`.
 - **The image's per-person capability.** The image build's probe (Delivery 9) records on the build's
   metadata `personLayoutProbe`: what `sealantd capabilities --json` reports, whether the image has
   `sudo`, `useradd` and `setfacl`, whether the reserved ids are free, and whether it is a nix image.
@@ -506,7 +513,11 @@ conversation home while that person's process is about to run there.
   `workspace.image()`), and before a create by `POST /v1/workspaces/image { spec }` (SDK
   `workspaces.inspectImage(options)`): the spec is planned exactly as the build plans it and the
   latest image published for the plan answers. That read creates nothing, and names the image only
-  to the owner who built it. Mend calls it only when it has no record for the image.
+  to the owner who built it. A caller avoids it with `workspaces.imageKey(options)`, a key the SDK
+  computes from the spec alone (its image-shaping parts: harness, tooling, customization, lifecycle,
+  access, target; not sources or runtime), with no call: Mend keeps what a launch's `launch.image`
+  told it under that key and calls `inspectImage` only for a key it has not seen. The capability on
+  a workspace read names that workspace's runtime.
 
 ## 7. The `sealant` CLI — `apps/cli`
 

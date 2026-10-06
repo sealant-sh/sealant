@@ -10,7 +10,11 @@ import type { CredentialFileInjection } from "./runtime-adapter.js";
 const createAdapterError = (code: string, message: string): Error & { code: string } =>
   Object.assign(new Error(message), { code });
 
-export const buildCredentialFileWriteScript = (file: CredentialFileInjection): string => {
+export const buildCredentialFileWriteScript = (
+  file: CredentialFileInjection,
+  /** For tests: where a home's marker and lock live (default `/run/sealant-homes`). */
+  options: { readonly stateDir?: string } = {},
+): string => {
   if (file.home !== undefined) {
     // A launch's own home, every login in one exec: made for its owner, taken with the launch's
     // generation as its marker, every file the owner's (home-credentials.ts).
@@ -20,6 +24,7 @@ export const buildCredentialFileWriteScript = (file: CredentialFileInjection): s
       createWithOwner: { uid: file.home.uid, gid: file.home.gid },
       writes: file.home.providers,
       removes: [],
+      ...(options.stateDir === undefined ? {} : { stateDir: options.stateDir }),
     });
   }
   if (!/^[A-Za-z0-9_$/.-]+$/.test(file.path)) {

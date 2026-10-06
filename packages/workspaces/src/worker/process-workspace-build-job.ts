@@ -58,6 +58,7 @@ import {
   selectRuntimeAdapter,
   homeCredentialProviderOf,
   homeScriptStdin,
+  launchHomeGeneration,
   newHomeGeneration,
   type CredentialFileInjection,
   type HomeCredentialProvider,
@@ -411,21 +412,24 @@ const recordLaunchHome = (input: {
         ? []
         : [{ provider, connectedAccountId: entry.connectedAccountId }];
     });
-    // Only into a home nobody holds: never over a record someone else made.
-    yield* homes.value.withLockedHome({ runId: input.runId, home: input.home }, (held) =>
-      Effect.succeed({
-        result: undefined,
-        outcome:
-          held === undefined
-            ? {
-                kind: "hold" as const,
-                onBehalfOfUserId: ownerUserId,
-                accounts,
-                generation: input.generation,
-              }
-            : { kind: "keep" as const },
-      }),
-    );
+    // Only into a home nobody holds: never over a record someone else made. Retried briefly: a
+    // home left unrecorded would get no refreshes until it is put again.
+    yield* homes.value
+      .withLockedHome({ runId: input.runId, home: input.home }, (held) =>
+        Effect.succeed({
+          result: undefined,
+          outcome:
+            held === undefined
+              ? {
+                  kind: "hold" as const,
+                  onBehalfOfUserId: ownerUserId,
+                  accounts,
+                  generation: input.generation,
+                }
+              : { kind: "keep" as const },
+        }),
+      )
+      .pipe(Effect.retry({ times: 3, schedule: Schedule.spaced("200 millis") }));
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.logWarning(
@@ -984,8 +988,11 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       credentialCipher: options.credentialCipher,
     });
     const credentialsHome = spec.runtime.credentialsHome;
-    // The launch's hold on its credentialsHome: written as the home's marker, recorded on its row.
-    const homeGeneration = newHomeGeneration();
+    // The launch's hold on its credentialsHome, written as the home's marker and recorded on its
+    // row. Derived from the run, so a launch delivered again (a worker restarted mid-launch, an
+    // adopted Pod or MicroVM) writes again under the same hold instead of being fenced out by it.
+    const homeGeneration =
+      job.runId === null ? newHomeGeneration() : launchHomeGeneration(job.runId);
     const { credentialEnv, credentialFiles } = yield* Effect.try({
       try: () =>
         splitCredentialInjections(
@@ -1140,9 +1147,12 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     // Before the instance reads `ready`: nobody acts on the home (a put, a release) until then, so
     // the launch's record can never come back after a release (its row already exists, `pending`,
     // from the launch's start).
+    // Only a home the launch took (it wrote at least one login, and the marker with it): a home
+    // with no marker must stay free for the first put, which takes it.
     if (
       job.runId !== null &&
       credentialsHome !== undefined &&
+      credentialFiles.some((file) => file.home !== undefined) &&
       runtimeLaunchResult.status === "ready"
     ) {
       yield* recordLaunchHome({

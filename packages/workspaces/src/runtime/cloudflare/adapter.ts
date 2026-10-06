@@ -100,6 +100,14 @@ export const supportForCloudflare = (input: RuntimeAdapterSupportInput): Runtime
       message: "Extra host mounts (sources.mounts) are not available in Cloudflare sandboxes.",
     };
   }
+  if (input.blueprint.runtime.credentialsHome !== undefined) {
+    return {
+      supported: false,
+      reason: "unsupported-runtime-requirement",
+      message:
+        "A credentialsHome (logins written into a person's home) is not available in Cloudflare sandboxes: the bridge writes files at $HOME only.",
+    };
+  }
   return { supported: true };
 };
 

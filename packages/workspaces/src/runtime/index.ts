@@ -60,6 +60,7 @@ export {
   homeScriptRefusal,
   homeScriptStdin,
   liveHomeCredentialChannel,
+  launchHomeGeneration,
   newHomeGeneration,
   type HomeCredentialChannel,
   type HomeCredentialProvider,

@@ -36,6 +36,7 @@ import {
 import { SealantError, SealantNotImplementedError } from "../errors.js";
 import { mapAccountRef } from "../internal/credentials.js";
 import { parseTtlSeconds } from "../internal/duration.js";
+import { requireProcessUser } from "../internal/process-user.js";
 import type {
   Harness,
   HarnessRunner,
@@ -305,6 +306,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     argv: readonly string[],
     options?: SessionOptions,
   ): Promise<InteractiveSession> => {
+    if (options?.user !== undefined) await requireProcessUser(ctx, options.user);
     const created = await ctx.runtime.run(
       createSessionOp({
         workspaceId: init.id,
@@ -501,7 +503,10 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
 
     sessions,
 
-    exec: (argv, options) => execWorkspace(ctx, init, argv, options),
+    exec: async (argv, options) => {
+      if (options?.user !== undefined) await requireProcessUser(ctx, options.user);
+      return execWorkspace(ctx, init, argv, options);
+    },
 
     bind: async (options) => {
       const result = await ctx.runtime.run(

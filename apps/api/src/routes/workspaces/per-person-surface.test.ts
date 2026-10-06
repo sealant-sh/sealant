@@ -90,6 +90,17 @@ describe("credentialsHome at create", () => {
     expect(failureOf(await parse({ path: "/home/x", uid: -1, gid: 40000 }))).toMatchObject({
       _tag: "WorkspaceBadRequestError",
     });
+    // Not on a runtime that writes logins at $HOME only.
+    const onCloudflare = await Effect.runPromise(
+      Effect.result(
+        workspacesModule.parseWorkspaceSpec({
+          ...spec,
+          target: { runtime: { family: "cloudflare" } },
+          runtime: { credentialsHome: { path: "/home/m4lice000", uid: 40001, gid: 40000 } },
+        }),
+      ),
+    );
+    expect(failureOf(onCloudflare)).toMatchObject({ _tag: "WorkspaceBadRequestError" });
   });
 });
 

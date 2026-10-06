@@ -898,10 +898,11 @@ export interface WorkspaceExecOptions {
   /**
    * Run the process as this Linux user: a user name of the image's passwd, or a numeric uid. It
    * takes its uid, gid, supplementary groups and `HOME`, `USER`, `LOGNAME` and `SHELL` from the
-   * passwd entry, with umask 0002. Never run as anyone else in its place: while the workspace's
-   * runtime cannot start a process as another user (no released sealantd can yet), the call
-   * rejects with `WorkspaceConflictError` / `SessionConflictError`, body code `user-unsupported`,
-   * and nothing is started.
+   * passwd entry, with umask 0002. Never run as anyone else in its place: the SDK sends it only to a
+   * control plane that reports the feature (read once per client), and rejects with code
+   * `user-unsupported` otherwise; a control plane that reports it but whose runtime cannot do it
+   * yet (no released sealantd can) rejects with `WorkspaceConflictError` / `SessionConflictError`,
+   * body code `user-unsupported`. Nothing is started either way.
    */
   readonly user?: string;
 }
@@ -1126,6 +1127,8 @@ export interface WorkspaceImage {
 
 /** What a create would build, read before it (see `workspaces.inspectImage`). */
 export interface WorkspaceImageInspection {
+  /** `workspaces.imageKey(options)`: the key to keep the answer under. */
+  readonly imageKey: string;
   /** The hash of the image plan: one per distinct build input. */
   readonly planHash: string;
   /** The latest image published for the plan, when this owner has built one. */
@@ -1216,10 +1219,11 @@ export interface SessionOptions {
   /**
    * Run the process as this Linux user: a user name of the image's passwd, or a numeric uid. It
    * takes its uid, gid, supplementary groups and `HOME`, `USER`, `LOGNAME` and `SHELL` from the
-   * passwd entry, with umask 0002. Never run as anyone else in its place: while the workspace's
-   * runtime cannot start a process as another user (no released sealantd can yet), the call
-   * rejects with `WorkspaceConflictError` / `SessionConflictError`, body code `user-unsupported`,
-   * and nothing is started.
+   * passwd entry, with umask 0002. Never run as anyone else in its place: the SDK sends it only to a
+   * control plane that reports the feature (read once per client), and rejects with code
+   * `user-unsupported` otherwise; a control plane that reports it but whose runtime cannot do it
+   * yet (no released sealantd can) rejects with `WorkspaceConflictError` / `SessionConflictError`,
+   * body code `user-unsupported`. Nothing is started either way.
    */
   readonly user?: string;
 }

@@ -44,6 +44,21 @@ const json = (status: number, body: unknown): Response =>
   });
 
 describe("supportForCloudflare", () => {
+  it("refuses a credentialsHome: its bridge writes logins at $HOME only", () => {
+    const blueprint = cases.gitSource.blueprint;
+    expect(
+      supportForCloudflare({
+        blueprint: {
+          ...blueprint,
+          runtime: {
+            ...blueprint.runtime,
+            credentialsHome: { path: "/home/m4lice000", uid: 40001, gid: 40000 },
+          },
+        },
+      }),
+    ).toMatchObject({ supported: false, reason: "unsupported-runtime-requirement" });
+  });
+
   it("accepts a plain git-sourced ephemeral blueprint", () => {
     expect(supportForCloudflare({ blueprint: cases.gitSource.blueprint })).toEqual({
       supported: true,

@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "@effect/vitest";
 import {
+  claudeSetupTokenCredentials,
   claudeCredentialsCopy,
   codexAuthJsonCopy,
   type CredentialCipherService,
@@ -41,7 +42,12 @@ import {
   type WorkspaceImageBuilder,
 } from "../images/index.js";
 import type { RegistryClient } from "../registry/index.js";
-import { homeScriptStdin, LaunchRetainedError, type RuntimeAdapter } from "../runtime/index.js";
+import {
+  homeScriptStdin,
+  launchHomeGeneration,
+  LaunchRetainedError,
+  type RuntimeAdapter,
+} from "../runtime/index.js";
 import { WorkspaceBuildJobProcessingError } from "./errors.js";
 import {
   dotfilesStagingRoot,
@@ -1085,6 +1091,8 @@ describe("processWorkspaceBuildJobEffect", () => {
           expect.anything(),
         );
         expect(recordedAtReady).toBe(1);
+        // The hold is the run's: a second delivery of this launch writes under it again.
+        expect(generation).toBe(launchHomeGeneration("run_credentials_home"));
         // The home is the owner's, as a put would hold it: refreshes reach it through the record.
         expect(homes.rows.get("run_credentials_home /home/m4lice000")).toMatchObject({
           onBehalfOfUserId: "usr_alice",
@@ -1103,6 +1111,61 @@ describe("processWorkspaceBuildJobEffect", () => {
       );
     },
   );
+
+  it.effect("leaves a credentialsHome a launch wrote no login into free for the first put", () => {
+    const home = { path: "/home/m4lice000", uid: 40001, gid: 40000 };
+    const base = createWorkspaceBuildSpec({ osFamily: "nix", credentialRefs: [] });
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_empty_home",
+        runId: "run_empty_home",
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        requestPayload: { ...base, runtime: { ...base.runtime, credentialsHome: home } },
+      }),
+    });
+    const attempts = {
+      ...workspaceAttemptRepoStub(),
+      getAttemptById: vi.fn((_id: string) => Effect.succeed({ ownerUserId: "usr_alice" })),
+    };
+    const runtimeAdapter = createRuntimeAdapterStub("docker", {
+      launch: vi.fn(async () => ({
+        adapter: "docker" as const,
+        resourceId: "resource_123",
+        reference: "sealant-resource",
+        status: "ready" as const,
+      })),
+    });
+    const homes = makeInMemoryCredentialHomes(() => []);
+    return Effect.gen(function* () {
+      yield* processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_empty_home",
+          runtimeAdapters: [runtimeAdapter],
+          credentialCipher: fakeCredentialCipher,
+          compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      );
+      // No take ran, so no hold is recorded: the launcher's first put takes the home.
+      expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+        expect.not.objectContaining({ credentialFiles: expect.anything() }),
+        expect.anything(),
+      );
+      expect(homes.rows.size).toBe(0);
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          provideRepos({
+            jobs,
+            runtimeInstances: workspaceRuntimeInstanceRepoStub(),
+            attempts,
+            connectedAccounts: {},
+          }),
+          Layer.succeed(WorkspaceCredentialHomeRepo, homes.service),
+        ),
+      ),
+    );
+  });
 
   it.effect("fails the launch when refs are present but no credentials key is configured", () => {
     const jobs = workspaceBuildJobRepoStub({

@@ -87,6 +87,7 @@ import {
   createGitHubInstallationRepositoryAuthRef,
 } from "@sealant/source-integrations";
 import {
+  type RuntimeAdapterId,
   newWorkspaceSchema,
   workspaceBindSchema,
   workspaceDotfilesArchiveSchema,
@@ -264,8 +265,11 @@ export const isUniqueConstraintError = (error: unknown): boolean => {
 };
 
 /** The runtime an image's per-person capability is answered for, and its ACL support. */
-const personLayoutContext = (): PersonLayoutContext => ({
-  runtime: env.DEFAULT_RUNTIME_ADAPTER,
+const personLayoutContext = (
+  /** The workspace's own runtime when it has one; the deployment's default otherwise. */
+  adapter?: RuntimeAdapterId | null,
+): PersonLayoutContext => ({
+  runtime: adapter ?? env.DEFAULT_RUNTIME_ADAPTER,
   acl: env.SEALANT_WORKSPACE_ACLS,
 });
 
@@ -281,8 +285,21 @@ export const parseWorkspaceSpec = (spec: unknown) => {
     );
   }
 
-  // A launch's logins go into its credentialsHome (§6d): the same rules as any home.
+  // A launch's logins go into its credentialsHome (§6d): the same rules as any home, on a runtime
+  // that can write them there (not Cloudflare, whose bridge writes at $HOME only).
   const credentialsHome = parsed.data.runtime.credentialsHome;
+  const family =
+    parsed.data.target.runtime.family === "auto"
+      ? env.DEFAULT_RUNTIME_ADAPTER
+      : parsed.data.target.runtime.family;
+  if (credentialsHome !== undefined && family === "cloudflare") {
+    return Effect.fail(
+      new WorkspaceBadRequestError({
+        message:
+          "credentialsHome is not available on the Cloudflare runtime: its bridge writes logins at $HOME only.",
+      }),
+    );
+  }
   const homeProblem =
     credentialsHome === undefined ? undefined : homePathProblem(credentialsHome.path);
   if (credentialsHome !== undefined && homeProblem !== undefined) {
@@ -1073,7 +1090,10 @@ const mapWorkspaceAttemptSummary = (
     ...(sshGatewayConfig === undefined ? {} : { sshGateway: sshGatewayConfig }),
     retained,
   });
-  const publishedImage = resolveWorkspacePublishedImage(latestJob, personLayoutContext());
+  const publishedImage = resolveWorkspacePublishedImage(
+    latestJob,
+    personLayoutContext(runtimeInstance?.adapter),
+  );
   const error = resolveWorkspaceError(latestJob, runtimeInstance);
   const startedAt = attempt.startedAt ?? latestJob?.startedAt;
   const finishedAt = attempt.finishedAt ?? latestJob?.finishedAt;
@@ -1196,7 +1216,10 @@ const mapWorkspaceSummary = (
     resolvedRuntime === undefined || launchId === null
       ? resolvedRuntime
       : { ...resolvedRuntime, launchId };
-  const publishedImage = resolveWorkspacePublishedImage(latestJob, personLayoutContext());
+  const publishedImage = resolveWorkspacePublishedImage(
+    latestJob,
+    personLayoutContext(runtimeInstance?.adapter),
+  );
   const error = resolveWorkspaceError(latestJob, runtimeInstance);
   const updatedAt = latestDate(
     workspace.updatedAt,

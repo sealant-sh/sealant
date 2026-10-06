@@ -49,6 +49,7 @@ import {
 import { buildCreateWorkspaceRequest } from "./internal/blueprint.js";
 import { resolveInternalConfig } from "./internal/config.js";
 import { parseTtlSeconds } from "./internal/duration.js";
+import { imageSpecKey } from "./internal/image-key.js";
 import { buildInferenceRespondRequest, mapInferenceResponse } from "./internal/inference.js";
 import { mapSshKey, mapWorkspaceSshInfo } from "./internal/ssh.js";
 import type {
@@ -168,9 +169,14 @@ export class Sealant {
     },
 
     /**
-     * The owner's workspace a `create({ idempotencyKey })` made, or `null`: what a caller that
-     * lost a create's answer uses to find the executor it started.
+     * A key for the image `create(options)` would build, computed here from the spec alone, with
+     * no call: equal for creates that plan the same image (whatever their repository, credentials
+     * or homes). Keep what a launch's `launch.image` told you under it, and call `inspectImage`
+     * only for a key you have not seen.
      */
+    imageKey: (options: CreateOptions): string =>
+      imageSpecKey(buildCreateWorkspaceRequest(options, this.#ctx.config).payload.spec),
+
     /**
      * What `create(options)` would build, read before the create: the spec is planned exactly as
      * the build plans it, and the latest image published for that plan answers with its
@@ -188,6 +194,7 @@ export class Sealant {
         }),
       );
       return {
+        imageKey: imageSpecKey(payload.spec),
         planHash: answered.planHash,
         ...(answered.publishedImage === undefined
           ? {}
@@ -196,6 +203,10 @@ export class Sealant {
       };
     },
 
+    /**
+     * The owner's workspace a `create({ idempotencyKey })` made, or `null`: what a caller that
+     * lost a create's answer uses to find the executor it started.
+     */
     findByIdempotencyKey: async (idempotencyKey: string): Promise<Workspace | null> => {
       const response = await this.#runtime.run(
         listWorkspacesOp({
