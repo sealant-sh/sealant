@@ -1109,7 +1109,10 @@ export interface WorkspaceCredentials {
    * of it), `home-busy` (another write into it is still running: retry), `workspace-not-running`,
    * `connected-account-invalid`; with
    * `WorkspaceNotFoundError` for an account `onBehalfOf` cannot name; with
-   * `WorkspaceBadGatewayError` when the executor did not confirm the write.
+   * `WorkspaceBadGatewayError` when the executor did not confirm the write. The body code is
+   * `SealantApiError.reason`; a refused account is `reason` `connected-account-missing` (404) or
+   * `connected-account-invalid` (409) with `provider` naming the account's provider, and nothing is
+   * written.
    */
   put(options: WorkspaceCredentialsPutOptions): Promise<WorkspaceCredentialHome>;
   /**
@@ -1136,7 +1139,7 @@ export interface WorkspaceDotfiles {
    * directory of theirs, reached without a symbolic link). Resolves once every file is applied, with
    * the bootstrap still running when there is one: wait for it with `bootstrap.wait()`, or start
    * work beside it. Rejects with `SealantApiError` (`WorkspaceConflictError`) and a body `code`
-   * (`error.cause.code`): `dotfiles-user-unsupported` (the workspace's sealantd cannot apply as a
+   * (`error.reason`): `dotfiles-user-unsupported` (the workspace's sealantd cannot apply as a
    * user), `user-unknown`, `user-root`, `home-mismatch`, `home-unusable`, `home-held` (another
    * person's logins are held in the home), `workspace-not-running`; with `WorkspaceBadRequestError`
    * for root, a home under `/workspace`, a repository URL with a credential in it, or nothing to

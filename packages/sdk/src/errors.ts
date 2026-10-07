@@ -32,9 +32,26 @@ export class SealantApiError extends SealantError {
   override readonly name = "SealantApiError";
   /** HTTP status, when the failure came from a response. */
   readonly status?: number;
+  /**
+   * The stable reason the control plane gave in the error's body, when it gave one (`home-held`,
+   * `connected-account-missing`, `connected-account-invalid`, `user-unsupported`, …). `code` is the
+   * error's type (`WorkspaceConflictError`); branch on this one.
+   */
+  readonly reason?: string;
+  /**
+   * The connected account's provider a `connected-account-missing` or `connected-account-invalid`
+   * reason is about (`claude`, `codex`, `github`).
+   */
+  readonly provider?: string;
   constructor(
     message: string,
-    options?: { readonly code?: string; readonly status?: number; readonly cause?: unknown },
+    options?: {
+      readonly code?: string;
+      readonly status?: number;
+      readonly reason?: string;
+      readonly provider?: string;
+      readonly cause?: unknown;
+    },
   ) {
     super(message, {
       code: options?.code ?? "api_error",
@@ -42,6 +59,12 @@ export class SealantApiError extends SealantError {
     });
     if (options?.status !== undefined) {
       this.status = options.status;
+    }
+    if (options?.reason !== undefined) {
+      this.reason = options.reason;
+    }
+    if (options?.provider !== undefined) {
+      this.provider = options.provider;
     }
   }
 }

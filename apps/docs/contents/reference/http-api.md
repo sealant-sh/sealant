@@ -66,7 +66,11 @@ A home holds one person's logins until it is released: a `POST` naming anyone el
 without a symbolic link (`409` `home-unusable` otherwise); `/root` takes only the workspace owner's
 logins. Another write into the same home, or too many into the workspace at once, answers `409`
 `home-busy`: nothing was done, try again. Only a service key may call them. A workspace with no
-running executor answers `409` `workspace-not-running`.
+running executor answers `409` `workspace-not-running`. An account the person cannot name answers
+`404` with `code` `connected-account-missing`, and one marked invalid or holding an unusable
+credential `409` `connected-account-invalid`; both carry the account's `provider` (`claude`,
+`codex`, `github`), so a caller can tell which login is missing without reading the message, and
+nothing is written. A create's explicitly named account is refused the same way.
 
 A create's `spec.runtime.credentialsHome` (`{ path, uid, gid }`) writes the launch's logins into
 that home instead of `$HOME` and the environment (GitHub as `<home>/.config/gh/hosts.yml`), made for

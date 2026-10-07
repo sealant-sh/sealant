@@ -463,6 +463,12 @@ key; the SSH gateway's secret and a user access token act for at most one person
 service key's product (Mend) puts a person's login only into that person's home, or into a
 conversation home while that person's process is about to run there.
 
+**Refusals name their provider (Oct 2026).** A put (or a create) that names an account the person
+cannot name answers `404` `connected-account-missing`, and one marked invalid or holding an unusable
+credential `409` `connected-account-invalid`, each with the account's `provider`; the messages are
+unchanged. The SDK carries a typed error's body code as `SealantApiError.reason` and the provider as
+`.provider`, so Mend says "Connect Claude to start a session here" from the code, not the words.
+
 ## 6d. A launch's own home (Oct 2026)
 
 **Why.** In Mend's per-person layout the launcher's logins belong in the launcher's home, not at

@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi";
 
 import { BudgetExceededError } from "./budgets.js";
+import { connectedAccountProviderSchema } from "./connected-accounts.js";
 import { runCommandSchema, runSchema } from "./runs.js";
 import { workspaceProcessUserSchema } from "./sessions.js";
 
@@ -783,7 +784,7 @@ export type ListWorkspaceCredentialsResponse = typeof listWorkspaceCredentialsRe
 /**
  * Stable `code`s of the `WorkspaceConflictError` the credential routes answer:
  * `workspace-not-running` (no ready executor), `connected-account-invalid` (a named account is
- * marked invalid: reconnect it), `home-held` (the home holds another person's logins: release it
+ * marked invalid or unusable: reconnect it; `provider` names its provider), `home-held` (the home holds another person's logins: release it
  * first; `/root` while the launch's own logins are at `$HOME`, or for anyone but the workspace's
  * owner), `home-unusable` (the home does not exist, is not a directory, is reached through a
  * symbolic link, or a login directory in it links outside it), `home-busy` (another write into the
@@ -1160,10 +1161,27 @@ export class WorkspaceForbiddenError extends Schema.TaggedErrorClass<WorkspaceFo
   { httpApiStatus: 403 },
 ) {}
 
+/**
+ * Stable codes of a refused connected account, carried with the account's `provider` by the error
+ * that refuses it (a create's or a credentials put's): `connected-account-missing`
+ * (`WorkspaceNotFoundError`, 404: the person has no such account, or it is archived or someone
+ * else's) and `connected-account-invalid` (`WorkspaceConflictError`, 409: the account is marked
+ * invalid, or holds an unusable credential; reconnect it). Nothing was written either way.
+ */
+export const connectedAccountRefusalCodes = [
+  "connected-account-missing",
+  "connected-account-invalid",
+] as const;
+export type ConnectedAccountRefusalCode = (typeof connectedAccountRefusalCodes)[number];
+
 export class WorkspaceNotFoundError extends Schema.TaggedErrorClass<WorkspaceNotFoundError>()(
   "WorkspaceNotFoundError",
   {
     message: Schema.String,
+    /** A stable reason, where one applies (`connected-account-missing`). */
+    code: Schema.optional(NonEmptyString),
+    /** The provider of the connected account the reason is about. */
+    provider: Schema.optional(connectedAccountProviderSchema),
   },
   { httpApiStatus: 404 },
 ) {}
@@ -1174,6 +1192,8 @@ export class WorkspaceConflictError extends Schema.TaggedErrorClass<WorkspaceCon
     message: Schema.String,
     /** A stable reason, where one applies (`create-cancelled`: the create's key was cancelled). */
     code: Schema.optional(NonEmptyString),
+    /** The provider of the connected account the reason is about (`connected-account-invalid`). */
+    provider: Schema.optional(connectedAccountProviderSchema),
   },
   { httpApiStatus: 409 },
 ) {}
@@ -1417,7 +1437,7 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         WorkspaceBadRequestError,
         // The caller may not act for the people named (only a service key may).
         WorkspaceForbiddenError,
-        // The workspace or a named account (unknown, someone else's, archived).
+        // The workspace, or a named account (`connected-account-missing` with its `provider`).
         WorkspaceNotFoundError,
         // See `workspaceCredentialsConflictCodes`.
         WorkspaceConflictError,

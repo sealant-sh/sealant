@@ -23,6 +23,9 @@ const extractStatus = (record: Record<string, unknown> | undefined): number | un
   return undefined;
 };
 
+const nonEmptyString = (value: unknown): string | undefined =>
+  typeof value === "string" && value.length > 0 ? value : undefined;
+
 export const toSealantError = (cause: unknown): SealantError => {
   if (cause instanceof SealantError) {
     return cause;
@@ -41,9 +44,13 @@ export const toSealantError = (cause: unknown): SealantError => {
 
   if (typeof tag === "string") {
     const status = extractStatus(record);
+    const reason = nonEmptyString(record?.["code"]);
+    const provider = nonEmptyString(record?.["provider"]);
     return new SealantApiError(message, {
       code: tag,
       ...(status === undefined ? {} : { status }),
+      ...(reason === undefined ? {} : { reason }),
+      ...(provider === undefined ? {} : { provider }),
       cause,
     });
   }

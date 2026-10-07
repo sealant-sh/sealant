@@ -101,7 +101,11 @@ These call the live API and work end-to-end:
   writes a person's accounts into one home of the running workspace (`true` is their `default`
   account, `null` removes the provider), owned by the home's owner, and keeps them refreshed; a home
   holds one person's logins until `workspace.credentials.release(home)`, and
-  `workspace.credentials.list()` lists the homes. Needs a service key.
+  `workspace.credentials.list()` lists the homes. Needs a service key. A refused account rejects
+  with `SealantApiError` whose `reason` is `connected-account-missing` or
+  `connected-account-invalid` and whose `provider` names the account's provider. Every typed
+  refusal's body code is on `reason` (`home-held`, `user-unsupported`, …); `code` is the error's
+  type.
 - **Per-person homes:** `create({ credentialsHome: { path, uid, gid } })` writes the launch's logins
   into that home (no login in the environment); `launch.image` (after `ready()`) and
   `workspace.image()` report the image's per-person capability; `workspaces.imageKey(options)` keys

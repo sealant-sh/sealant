@@ -17,6 +17,33 @@ describe("toSealantError", () => {
     expect((mapped as SealantApiError).status).toBe(404);
   });
 
+  it("carries a body's stable code as `reason` and the account's `provider`", () => {
+    const missing = toSealantError({
+      _tag: "WorkspaceNotFoundError",
+      message: 'No claude connected account matches "default".',
+      code: "connected-account-missing",
+      provider: "claude",
+      status: 404,
+    });
+    expect(missing).toBeInstanceOf(SealantApiError);
+    expect(missing).toMatchObject({
+      code: "WorkspaceNotFoundError",
+      reason: "connected-account-missing",
+      provider: "claude",
+      status: 404,
+    });
+    const held = toSealantError({
+      _tag: "WorkspaceConflictError",
+      message: "m",
+      code: "home-held",
+    });
+    expect(held).toMatchObject({ reason: "home-held" });
+    expect(held).toMatchObject({ provider: undefined });
+    expect(toSealantError({ _tag: "WorkspaceNotFoundError", message: "m" })).toMatchObject({
+      reason: undefined,
+    });
+  });
+
   it("reads status from a nested HTTP response", () => {
     const mapped = toSealantError({
       _tag: "RequestError",
