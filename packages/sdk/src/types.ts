@@ -1109,7 +1109,10 @@ export interface WorkspaceCredentials {
    * of it), `home-busy` (another write into it is still running: retry), `workspace-not-running`,
    * `connected-account-invalid`; with
    * `WorkspaceNotFoundError` for an account `onBehalfOf` cannot name; with
-   * `WorkspaceBadGatewayError` when the executor did not confirm the write.
+   * `WorkspaceBadGatewayError` when the executor did not confirm the write. The body code is
+   * `SealantApiError.reason`; a refused account is `reason` `connected-account-missing` (404) or
+   * `connected-account-invalid` (409) with `provider` naming the account's provider, and nothing is
+   * written.
    */
   put(options: WorkspaceCredentialsPutOptions): Promise<WorkspaceCredentialHome>;
   /**

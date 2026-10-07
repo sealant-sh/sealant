@@ -8,10 +8,11 @@ import { Effect } from "effect";
 
 /**
  * Resolve one explicitly selected connected account, the way workspace create and a credential
- * switch both do: a value starting with "cacc_" is an account id, anything else an account name
+ * put both do: a value starting with "cacc_" is an account id, anything else an account name
  * under the provider. Unknown, someone else's, wrong-provider and archived accounts are one uniform
- * 404; the caller named this account, so one that is not `active` is a 409 (`reconnect it`) rather
- * than a silent omission.
+ * 404 (`connected-account-missing`); the caller named this account, so one that is not `active` is
+ * a 409 (`connected-account-invalid`: reconnect it) rather than a silent omission. Both name the
+ * provider, so a caller can say which login is missing without reading the words.
  */
 export const resolveSelectedConnectedAccount = (input: {
   readonly ownerUserId: string;
@@ -44,6 +45,8 @@ export const resolveSelectedConnectedAccount = (input: {
     ) {
       return yield* new WorkspaceNotFoundError({
         message: `No ${input.provider} connected account matches "${input.selection}".`,
+        code: "connected-account-missing",
+        provider: input.provider,
       });
     }
 
@@ -51,6 +54,7 @@ export const resolveSelectedConnectedAccount = (input: {
       return yield* new WorkspaceConflictError({
         message: `Connected ${input.provider} account "${account.name}" is invalid — reconnect it.`,
         code: "connected-account-invalid",
+        provider: input.provider,
       });
     }
 

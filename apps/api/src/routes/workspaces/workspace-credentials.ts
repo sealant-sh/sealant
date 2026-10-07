@@ -276,6 +276,7 @@ const loginFileFor = (provider: WorkspaceCredentialHomeProvider, account: Connec
         new WorkspaceConflictError({
           message: `Connected ${provider} account "${account.name}" holds an unusable credential — reconnect it.`,
           code: "connected-account-invalid",
+          provider,
         }),
     });
   });

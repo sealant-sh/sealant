@@ -96,6 +96,13 @@ const aliceGitHub = account({
   metadata: { login: "alice-gh" },
 });
 const aliceInvalid = account({ id: "cacc_alice_invalid", name: "broken", status: "invalid" });
+const aliceCorruptCodex = account({
+  id: "cacc_alice_corrupt",
+  provider: "codex",
+  kind: "auth-json",
+  name: "corrupt",
+  encryptedPayload: `sealed:${JSON.stringify({ authJson: "not json" })}`,
+});
 const aliceSetupToken = account({
   id: "cacc_alice_token",
   name: "token",
@@ -114,6 +121,7 @@ const accounts: ConnectedAccount[] = [
   aliceCodex,
   aliceGitHub,
   aliceInvalid,
+  aliceCorruptCodex,
   aliceSetupToken,
   bobClaude,
 ];
@@ -335,7 +343,13 @@ describe("putWorkspaceCredentials", () => {
     for (const selection of ["missing", bobClaude.id]) {
       const world = newWorld();
       expect(failed(await world.put({ onBehalfOfUserId: ALICE, claude: selection }))).toMatchObject(
-        { _tag: "WorkspaceNotFoundError" },
+        {
+          _tag: "WorkspaceNotFoundError",
+          code: "connected-account-missing",
+          provider: "claude",
+          // The words stay as they were.
+          message: `No claude connected account matches "${selection}".`,
+        },
       );
       expect(world.ran).toEqual([]);
       expect(world.homes.rows.size).toBe(0);
@@ -344,6 +358,31 @@ describe("putWorkspaceCredentials", () => {
     expect(failed(await world.put({ onBehalfOfUserId: ALICE, claude: "broken" }))).toMatchObject({
       _tag: "WorkspaceConflictError",
       code: "connected-account-invalid",
+      provider: "claude",
+      message: 'Connected claude account "broken" is invalid — reconnect it.',
+    });
+    expect(world.ran).toEqual([]);
+  });
+
+  it("names the provider a refusal is about, whichever provider of the put it is", async () => {
+    // Claude is connected; GitHub is not: the refusal names github, and nothing is written.
+    const world = newWorld();
+    expect(
+      failed(await world.put({ onBehalfOfUserId: ALICE, claude: "default", github: "work" })),
+    ).toMatchObject({ code: "connected-account-missing", provider: "github" });
+    expect(world.ran).toEqual([]);
+    // Bob has no Codex account at all.
+    expect(failed(await newWorld().put({ onBehalfOfUserId: BOB, codex: "default" }))).toMatchObject(
+      { code: "connected-account-missing", provider: "codex" },
+    );
+  });
+
+  it("answers an account whose stored credential is unusable as invalid, naming its provider", async () => {
+    const world = newWorld();
+    expect(failed(await world.put({ onBehalfOfUserId: ALICE, codex: "corrupt" }))).toMatchObject({
+      _tag: "WorkspaceConflictError",
+      code: "connected-account-invalid",
+      provider: "codex",
     });
     expect(world.ran).toEqual([]);
   });
