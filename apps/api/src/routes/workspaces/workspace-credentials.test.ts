@@ -227,6 +227,7 @@ const newWorld = (instance: WorkspaceRuntimeInstance = instanceRow()) => {
       readonly github?: string | null;
       readonly pi?: string | null;
       readonly opencode?: string | null;
+      readonly partial?: boolean;
       readonly uid?: number;
       readonly gid?: number;
     },
@@ -442,6 +443,101 @@ describe("putWorkspaceCredentials", () => {
       code: "connected-account-missing",
       provider: "codex",
     });
+  });
+
+  it("a partial put writes what is connected, in one exec, and says what it left out", async () => {
+    const world = newWorld();
+    const answer = succeeded(
+      await world.put({
+        onBehalfOfUserId: ALICE,
+        claude: "default",
+        github: "nope",
+        // Alice's default Codex account is not a ChatGPT login.
+        pi: "default",
+        partial: true,
+      }),
+    );
+    expect(answer.home.accounts).toEqual({
+      claude: { connectedAccountId: aliceClaude.id, name: "default" },
+    });
+    expect(answer.skipped).toEqual([
+      {
+        provider: "github",
+        code: "connected-account-missing",
+        message: 'No github connected account matches "nope".',
+      },
+      {
+        provider: "pi",
+        code: "connected-account-unsupported",
+        message: expect.stringContaining("not a ChatGPT login"),
+      },
+    ]);
+    expect(world.ran).toHaveLength(1);
+    expect(world.ran[0]?.payloads).toHaveLength(1);
+  });
+
+  it("a partial put removes a held login whose account is now refused", async () => {
+    const world = newWorld();
+    succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default", github: "default" }));
+    const answer = succeeded(
+      await world.put({
+        onBehalfOfUserId: ALICE,
+        claude: "default",
+        github: "gone",
+        partial: true,
+      }),
+    );
+    expect(answer.home.accounts.github).toBeUndefined();
+    expect(answer.skipped).toEqual([
+      expect.objectContaining({ provider: "github", code: "connected-account-missing" }),
+    ]);
+    expect(world.ran[1]?.script).toContain('rm -f "$home/.config/gh/hosts.yml"');
+    expect(world.homes.rows.get(`run_1 ${HOME}`)?.accounts).toEqual([
+      { provider: "claude", connectedAccountId: aliceClaude.id },
+    ]);
+  });
+
+  it("a partial put leaves out an opencode file it cannot write there, and still writes and removes the rest", async () => {
+    const world = newWorld();
+    succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default", github: "default" }));
+    // The first script finds opencode's auth.json really outside the home; the retry succeeds.
+    world.exits.push(85, 0);
+    const answer = succeeded(
+      await world.put({
+        onBehalfOfUserId: ALICE,
+        claude: "default",
+        github: "gone",
+        opencode: "chatgpt",
+        partial: true,
+      }),
+    );
+    expect(answer.skipped).toEqual([
+      expect.objectContaining({ provider: "github", code: "connected-account-missing" }),
+      expect.objectContaining({ provider: "opencode", code: "login-file-unusable" }),
+    ]);
+    // The retry wrote claude only and removed the stale GitHub login.
+    const retry = world.ran[world.ran.length - 1];
+    expect(retry?.payloads).toHaveLength(1);
+    expect(retry?.script).toContain('rm -f "$home/.config/gh/hosts.yml"');
+    expect(world.homes.rows.get(`run_1 ${HOME}`)?.accounts).toEqual([
+      { provider: "claude", connectedAccountId: aliceClaude.id },
+    ]);
+    // A whole put fails on the same file, naming it.
+    const whole = newWorld();
+    whole.exits.push(85);
+    expect(failed(await whole.put({ onBehalfOfUserId: ALICE, opencode: "chatgpt" }))).toMatchObject(
+      { code: "home-unusable" },
+    );
+  });
+
+  it("a partial put still fails on anything but a refused account, and a whole put answers no skips", async () => {
+    const world = newWorld();
+    succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default" }));
+    expect(
+      failed(await world.put({ onBehalfOfUserId: BOB, claude: "default", partial: true })),
+    ).toMatchObject({ code: "home-held" });
+    const whole = succeeded(await newWorld().put({ onBehalfOfUserId: ALICE, claude: "default" }));
+    expect(whole.skipped).toBeUndefined();
   });
 
   it("refuses a path that is not a home", async () => {

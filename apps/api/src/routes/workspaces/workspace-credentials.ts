@@ -21,6 +21,7 @@ import {
   WorkspaceInternalServerError,
   WorkspaceNotFoundError,
   WorkspaceServiceUnavailableError,
+  connectedAccountRefusalCodes,
   workspaceCredentialHomeAccountProvider,
   workspaceCredentialHomeProviders,
   type ListWorkspaceCredentialsQuery,
@@ -30,7 +31,9 @@ import {
   type ReleaseWorkspaceCredentialsQuery,
   type ReleaseWorkspaceCredentialsResponse,
   type WorkspaceCredentialHome,
+  type ConnectedAccountRefusalCode,
   type WorkspaceCredentialHomeProvider,
+  type WorkspaceCredentialSkip,
   type WorkspaceHomeAccount,
 } from "@sealant/api-contracts";
 import {
@@ -306,6 +309,17 @@ const loginFileFor = (provider: WorkspaceCredentialHomeProvider, account: Connec
     });
   });
 
+/** The stable code of a refused account (missing, invalid, unsupported), or `undefined`. */
+const accountRefusalOf = (failure: unknown): ConnectedAccountRefusalCode | undefined => {
+  if (
+    !(failure instanceof WorkspaceNotFoundError) &&
+    !(failure instanceof WorkspaceConflictError)
+  ) {
+    return undefined;
+  }
+  return connectedAccountRefusalCodes.find((code) => code === failure.code);
+};
+
 /** A home row as the API shows it, each account named as it is now. */
 const toHomeView = (row: {
   readonly home: string;
@@ -339,6 +353,15 @@ const OWNER_HALF_REFUSALS: ReadonlySet<number> = new Set([
   HOME_SCRIPT_EXIT.piLoginOutside,
   HOME_SCRIPT_EXIT.opencodeLoginOutside,
 ]);
+
+/** The pi or opencode login a refusal is about (its file unusable, or outside the home). */
+const mergedLoginOfExit = (exitCode: number | undefined): "pi" | "opencode" | undefined =>
+  exitCode === HOME_SCRIPT_EXIT.piLoginUnusable || exitCode === HOME_SCRIPT_EXIT.piLoginOutside
+    ? "pi"
+    : exitCode === HOME_SCRIPT_EXIT.opencodeLoginUnusable ||
+        exitCode === HOME_SCRIPT_EXIT.opencodeLoginOutside
+      ? "opencode"
+      : undefined;
 
 /** Why a refused script is answered as it is: fenced → held, busy → busy, else unusable. */
 const refusedCode = (exitCode: number | undefined) =>
@@ -423,91 +446,131 @@ export const putWorkspaceCredentials = (input: {
           }
           // Under the lock: each account resolved and decrypted as it is stored now, so a refresh
           // that persisted while this put waited is what is written, never the token it revoked.
-          const writes: Array<{
+          let writes: Array<{
             readonly provider: WorkspaceCredentialHomeProvider;
             readonly account: ConnectedAccount;
             readonly content: string;
           }> = [];
+          // A partial put leaves out a provider whose account is refused, and says why.
+          const skipped: WorkspaceCredentialSkip[] = [];
           for (const { provider, selection } of toWrite) {
-            // pi's and opencode's logins are made from the person's Codex account.
-            const account = yield* resolveSelectedConnectedAccount({
-              ownerUserId: payload.onBehalfOfUserId,
-              provider: workspaceCredentialHomeAccountProvider[provider],
-              selection,
-            });
-            writes.push({ provider, account, content: yield* loginFileFor(provider, account) });
+            const resolved = yield* Effect.gen(function* () {
+              // pi's and opencode's logins are made from the person's Codex account.
+              const account = yield* resolveSelectedConnectedAccount({
+                ownerUserId: payload.onBehalfOfUserId,
+                provider: workspaceCredentialHomeAccountProvider[provider],
+                selection,
+              });
+              return { provider, account, content: yield* loginFileFor(provider, account) };
+            }).pipe(Effect.result);
+            if (Result.isSuccess(resolved)) {
+              writes.push(resolved.success);
+              continue;
+            }
+            const refusal = accountRefusalOf(resolved.failure);
+            if (payload.partial !== true || refusal === undefined) {
+              return yield* resolved.failure;
+            }
+            skipped.push({ provider, code: refusal, message: resolved.failure.message });
           }
           // A first take writes a fresh marker and clears any login file it does not write (an
           // earlier unconfirmed write's leftovers); a write under a hold checks the hold's marker.
           const generation = held?.generation ?? newHomeGeneration();
-          const writing = writes.map(({ provider }) => provider);
-          const ran = yield* runHomeScript({
-            channel,
-            target,
-            home: payload.home,
-            script: buildHomeCredentialScript({
+          // A partial put whose pi or opencode file is refused in the home (unusable, or really
+          // outside it) leaves that provider out too and writes the rest, once more: every other
+          // provider is still written, and a stale login of a skipped one still removed.
+          let skipping = skipped.map(({ provider }) => provider);
+          let writing = writes.map(({ provider }) => provider);
+          for (;;) {
+            const ran = yield* runHomeScript({
+              channel,
+              target,
               home: payload.home,
-              fence:
-                held === undefined ? { kind: "take", generation } : { kind: "held", generation },
-              token: yield* nextFence,
-              ...(createWithOwner === undefined ? {} : { createWithOwner }),
-              writes: writing,
-              removes:
-                held === undefined
-                  ? workspaceCredentialHomeProviders.filter(
-                      (provider) => !writing.includes(provider),
-                    )
-                  : toRemove,
-            }),
-            stdin: homeScriptStdin(writes.map(({ content }) => content)),
-          });
-          if (ran.kind === "refused") {
-            // The owner's half refuses after a first take made its marker (a login directory linking
-            // out, a pi or opencode file outside the home or unusable): release that marker, so the
-            // home can be taken again once it is fixed, without a DELETE and never as `home-held`.
-            if (held === undefined && OWNER_HALF_REFUSALS.has(ran.exitCode ?? -1)) {
-              yield* runHomeScript({
-                channel,
-                target,
+              script: buildHomeCredentialScript({
                 home: payload.home,
-                script: buildHomeCredentialScript({
+                fence:
+                  held === undefined ? { kind: "take", generation } : { kind: "held", generation },
+                token: yield* nextFence,
+                ...(createWithOwner === undefined ? {} : { createWithOwner }),
+                writes: writing,
+                removes:
+                  held === undefined
+                    ? workspaceCredentialHomeProviders.filter(
+                        (provider) => !writing.includes(provider),
+                      )
+                    : [...toRemove, ...skipping],
+              }),
+              stdin: homeScriptStdin(writes.map(({ content }) => content)),
+            });
+            if (ran.kind === "refused") {
+              // The owner's half refuses after a first take made its marker (a login directory linking
+              // out, a pi or opencode file outside the home or unusable): release that marker, so the
+              // home can be taken again once it is fixed, without a DELETE and never as `home-held`.
+              if (held === undefined && OWNER_HALF_REFUSALS.has(ran.exitCode ?? -1)) {
+                yield* runHomeScript({
+                  channel,
+                  target,
                   home: payload.home,
-                  fence: { kind: "release", generation },
-                  token: yield* nextFence,
-                  writes: [],
-                  removes: [],
-                }),
+                  script: buildHomeCredentialScript({
+                    home: payload.home,
+                    fence: { kind: "release", generation },
+                    token: yield* nextFence,
+                    writes: [],
+                    removes: [],
+                  }),
+                });
+              }
+              const refusedLogin = mergedLoginOfExit(ran.exitCode);
+              if (
+                payload.partial === true &&
+                refusedLogin !== undefined &&
+                writing.includes(refusedLogin)
+              ) {
+                skipped.push({
+                  provider: refusedLogin,
+                  code: "login-file-unusable",
+                  message: ran.message,
+                });
+                writes = writes.filter(({ provider }) => provider !== refusedLogin);
+                writing = writes.map(({ provider }) => provider);
+                skipping = skipped.map(({ provider }) => provider);
+                continue;
+              }
+              return yield* new WorkspaceConflictError({
+                message: `${ran.message} Nothing was written.`,
+                code: refusedCode(ran.exitCode),
               });
             }
-            return yield* new WorkspaceConflictError({
-              message: `${ran.message} Nothing was written.`,
-              code: refusedCode(ran.exitCode),
-            });
-          }
-          if (ran.kind === "unconfirmed") {
-            // An unconfirmed write may still land. A home that held nothing must not keep a login
-            // nobody records: release this take's hold, once, before answering. A late take that
-            // lands after that leaves its marker, so the next take is refused until the home is
-            // released, and nobody else's process ever runs on it.
-            if (held === undefined) {
-              yield* runHomeScript({
-                channel,
-                target,
-                home: payload.home,
-                script: buildHomeCredentialScript({
+            if (ran.kind === "unconfirmed") {
+              // An unconfirmed write may still land. A home that held nothing must not keep a login
+              // nobody records: release this take's hold, once, before answering. A late take that
+              // lands after that leaves its marker, so the next take is refused until the home is
+              // released, and nobody else's process ever runs on it.
+              if (held === undefined) {
+                yield* runHomeScript({
+                  channel,
+                  target,
                   home: payload.home,
-                  fence: { kind: "release", generation },
-                  token: yield* nextFence,
-                  writes: [],
-                  removes: [],
-                }),
+                  script: buildHomeCredentialScript({
+                    home: payload.home,
+                    fence: { kind: "release", generation },
+                    token: yield* nextFence,
+                    writes: [],
+                    removes: [],
+                  }),
+                });
+              }
+              return yield* new WorkspaceBadGatewayError({
+                message: `The workspace's executor did not confirm the write into ${payload.home}: ${ran.message}. The home's record is unchanged${held === undefined ? " (it holds nothing)" : ""}; put again, or release it.`,
               });
             }
-            return yield* new WorkspaceBadGatewayError({
-              message: `The workspace's executor did not confirm the write into ${payload.home}: ${ran.message}. The home's record is unchanged${held === undefined ? " (it holds nothing)" : ""}; put again, or release it.`,
-            });
+            break;
           }
-          const changed = new Set<WorkspaceCredentialHomeProvider>([...toRemove, ...writing]);
+          const changed = new Set<WorkspaceCredentialHomeProvider>([
+            ...toRemove,
+            ...skipping,
+            ...writing,
+          ]);
           const accounts: WorkspaceCredentialHomeAccount[] = [
             ...(held?.accounts ?? []).filter((entry) => !changed.has(entry.provider)),
             ...writes.map(({ provider, account }) => ({
@@ -516,7 +579,12 @@ export const putWorkspaceCredentials = (input: {
             })),
           ];
           return {
-            result: { home: payload.home, onBehalfOfUserId: payload.onBehalfOfUserId, accounts },
+            result: {
+              home: payload.home,
+              onBehalfOfUserId: payload.onBehalfOfUserId,
+              accounts,
+              skipped,
+            },
             outcome: {
               kind: "hold" as const,
               onBehalfOfUserId: payload.onBehalfOfUserId,
@@ -540,6 +608,7 @@ export const putWorkspaceCredentials = (input: {
       workspaceId: workspace.id,
       runId: instance.runId,
       home: yield* toHomeView(written),
+      ...(payload.partial === true ? { skipped: written.skipped } : {}),
     } satisfies PutWorkspaceCredentialsResponse;
   });
 
