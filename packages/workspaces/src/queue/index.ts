@@ -37,6 +37,7 @@ export {
   runExecRequestedMessageKind,
   sweepRunExecJobRows,
   type ConsumeRunExecJobsOptions,
+  type RunDotfilesApply,
   type RunExecCommand,
   type RunExecConsumerMessage,
   type RunExecRequestedMessage,

@@ -141,6 +141,7 @@ const stubSession: SealantSession = {
   captureFlush: () => Effect.die("unused in test"),
   captureStatus: () => Effect.die("unused in test"),
   captureReplan: () => Effect.die("unused in test"),
+  dotfilesApply: () => Effect.die("unused in test"),
   closeStdin: () => Effect.die("unused in test"),
   signalProcess: () => Effect.die("unused in test"),
   openSession: () => Effect.die("unused in test"),

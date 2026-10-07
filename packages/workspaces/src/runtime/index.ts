@@ -189,3 +189,21 @@ export {
   sealantdHasRecoveryBoot,
   sealantdImageOfContainerfile,
 } from "./daemon-recovery.js";
+
+export {
+  buildDotfilesCleanupScript,
+  buildDotfilesStageScript,
+  DOTFILES_STAGE_DIR,
+  DOTFILES_STAGE_EXIT,
+  DOTFILES_USER_CAPABILITY,
+  dotfilesStagePath,
+  dotfilesStageRefusal,
+  dotfilesStageStdin,
+  dotfilesUserProblem,
+  liveDotfilesStageChannel,
+  type DotfilesStageArchive,
+  type DotfilesStageChannel,
+  type DotfilesStageRefusalCode,
+  type DotfilesStageResult,
+  type DotfilesStageScriptInput,
+} from "./dotfiles-apply.js";

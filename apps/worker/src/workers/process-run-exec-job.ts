@@ -33,7 +33,12 @@ import {
   TelemetrySink,
 } from "@sealant/telemetry";
 import {
+  buildDotfilesCleanupScript,
+  dotfilesStagePath,
   execInWorkspace,
+  liveDotfilesStageChannel,
+  type DotfilesStageChannel,
+  type RunDotfilesApply,
   type RunExecCommand,
   SealantRuntime,
   SealantRuntimeControlLive,
@@ -45,7 +50,7 @@ import {
   splitWorkingTreeChanges,
   workingTreeChangesScript,
 } from "@sealant/workspaces";
-import { Effect, Layer, Schedule, Stream } from "effect";
+import { Cause, Duration, Effect, Layer, Result, Schedule, Stream } from "effect";
 
 const WORKDIR = "/workspace/repo";
 const BATCH_SIZE = 256;
@@ -54,6 +59,11 @@ const BATCH_WINDOW = "250 millis";
 // service endpoints); retry the connect+health+exec unit with a spaced window. exec resolves on process-accept, so retry can't
 // double-run the harness.
 const BRIDGE_RETRY = { schedule: Schedule.spaced("400 millis"), times: 10 };
+/** How long `dotfiles.apply` may take to answer: the clone and the apply, not the bootstrap. */
+const DOTFILES_APPLY_TIMEOUT = Duration.minutes(10);
+/** How long a bootstrap (`./install.sh`) may run before it is stopped and its run fails. */
+const DOTFILES_BOOTSTRAP_TIMEOUT = Duration.minutes(30);
+const SIGTERM = 15;
 
 export interface ProcessRunExecJobOptions {
   readonly runId: string;
@@ -64,6 +74,8 @@ export interface ProcessRunExecJobOptions {
    * (exit codes are check DATA) and the run completes iff all of them executed and were recorded.
    */
   readonly commands?: readonly RunExecCommand[];
+  /** DOTFILES framing: a person's dotfiles applied as their user, the bootstrap recorded. */
+  readonly dotfiles?: RunDotfilesApply;
   readonly db: DB;
   /**
    * Decrypt/encrypt for connected-account credentials; undefined when SEALANT_CREDENTIALS_KEY is
@@ -283,6 +295,147 @@ const produceExecRun = (
     yield* runs.markRunCompleted({ id: runId, exitCode: lastExitCode, ...changes });
   });
 
+export interface DotfilesRunOptions {
+  /** For tests; defaults to the live channel (the staged archives' cleanup). */
+  readonly stageChannel?: DotfilesStageChannel;
+  /** For tests; defaults to `DOTFILES_APPLY_TIMEOUT`. */
+  readonly applyTimeout?: Duration.Input;
+  /** For tests; defaults to `DOTFILES_BOOTSTRAP_TIMEOUT`. */
+  readonly bootstrapTimeout?: Duration.Input;
+}
+
+/**
+ * DOTFILES framing (docs/connected-accounts-design.md §6g): `dotfiles.apply` as the person's user,
+ * with the run's id as the execution, so the bootstrap's process (`./install.sh`, started by the
+ * daemon as that user once every file is applied) is recorded in this run: its `processStarted`
+ * says the files are applied, its output and exit are the run's. The staged archives are removed
+ * once the daemon answers. The run completes, with the bootstrap's exit code (0 without one), iff
+ * the files were applied and the bootstrap's exit was recorded; it fails, with the daemon's words,
+ * when the apply was refused or did not answer, and when the bootstrap ran past its bound (it is
+ * stopped) or its exit went unobserved. Nothing of the worktree changed, so no changes are read.
+ */
+export const produceDotfilesRun = (
+  runId: string,
+  target: SealantTarget,
+  dotfiles: RunDotfilesApply,
+  options: DotfilesRunOptions = {},
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const runs = yield* RunRepo;
+      const runtime = yield* SealantRuntime;
+      const sink = yield* TelemetrySink;
+      const stageChannel = options.stageChannel ?? liveDotfilesStageChannel;
+
+      const { session, runtimeId } = yield* runtime.connect(target).pipe(
+        Effect.flatMap((connected) =>
+          Effect.map(connected.health, (health) => ({
+            session: connected,
+            runtimeId: health.runtimeId,
+          })),
+        ),
+        Effect.retry(BRIDGE_RETRY),
+      );
+      yield* sink.openEpoch({ runId, runtimeId, schemaVersion: 0 });
+
+      // Only the directory the API staged for this run is ever removed.
+      const staged =
+        dotfiles.archiveDir !== undefined && dotfiles.archiveDir === dotfilesStagePath(runId);
+      const applied = yield* session
+        .dotfilesApply({
+          user: dotfiles.user,
+          ...(dotfiles.repository === undefined ? {} : { repository: dotfiles.repository }),
+          ...(dotfiles.archiveDir === undefined ? {} : { archiveDir: dotfiles.archiveDir }),
+          executionId: runId,
+        })
+        .pipe(Effect.timeout(options.applyTimeout ?? DOTFILES_APPLY_TIMEOUT), Effect.result);
+      if (staged) {
+        yield* stageChannel
+          .run(target, buildDotfilesCleanupScript(runId))
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning(`Run ${runId}: the staged dotfiles were not removed.`, cause),
+            ),
+          );
+      }
+
+      const close = (closeReason: "stream-end" | "transport-close", suspicious: boolean) =>
+        sink.closeEpoch({ runId, runtimeId, closeReason, suspicious }).pipe(Effect.ignore);
+
+      if (Result.isFailure(applied)) {
+        yield* close("stream-end", false);
+        const failure = applied.failure;
+        const why = Cause.isTimeoutError(failure)
+          ? "the workspace did not answer within 10 minutes"
+          : failure.message;
+        yield* runs.markRunFailed({
+          id: runId,
+          errorMessage: `The dotfiles were not applied as ${dotfiles.user}: ${why}`,
+        });
+        return;
+      }
+      if (applied.success.home !== dotfiles.home) {
+        // The passwd entry changed between the API's check and the apply.
+        yield* close("stream-end", false);
+        yield* runs.markRunFailed({
+          id: runId,
+          errorMessage: `The dotfiles were applied as ${dotfiles.user} into ${applied.success.home}, which is no longer ${dotfiles.home}.`,
+        });
+        return;
+      }
+      const bootstrap = applied.success.bootstrap;
+      if (bootstrap === undefined) {
+        yield* close("stream-end", false);
+        yield* runs.markRunCompleted({ id: runId, exitCode: 0 });
+        return;
+      }
+
+      let exitCode: number | undefined;
+      const drained = yield* session.events.pipe(
+        // Only this run's own events: the bootstrap's (the daemon stamps the execution on them).
+        Stream.filter((event) => event.executionId === runId),
+        Stream.takeUntil(
+          (event) =>
+            event.payload.case === "processExited" && event.processId === bootstrap.processId,
+        ),
+        Stream.tap((event) =>
+          Effect.sync(() => {
+            if (event.payload.case === "processExited" && event.processId === bootstrap.processId) {
+              exitCode = event.payload.value.exitCode ?? -1;
+            }
+          }),
+        ),
+        Stream.groupedWithin(BATCH_SIZE, BATCH_WINDOW),
+        Stream.mapEffect((batch) =>
+          sink.appendBatch({ runId, runtimeId, batch: Array.from(batch).map(normalizeEnvelope) }),
+        ),
+        Stream.runDrain,
+        Effect.timeout(options.bootstrapTimeout ?? DOTFILES_BOOTSTRAP_TIMEOUT),
+        Effect.result,
+      );
+      yield* close(
+        exitCode === undefined ? "transport-close" : "stream-end",
+        exitCode === undefined,
+      );
+      if (Result.isFailure(drained) && Cause.isTimeoutError(drained.failure)) {
+        yield* session.signalProcess(bootstrap.processId, SIGTERM).pipe(Effect.ignore);
+        yield* runs.markRunFailed({
+          id: runId,
+          errorMessage: `The dotfiles were applied as ${dotfiles.user}; their bootstrap ran for more than 30 minutes and was stopped.`,
+        });
+        return;
+      }
+      if (exitCode === undefined) {
+        yield* runs.markRunFailed({
+          id: runId,
+          errorMessage: `The dotfiles were applied as ${dotfiles.user}; their bootstrap's exit was not observed (the connection to the workspace closed).`,
+        });
+        return;
+      }
+      yield* runs.markRunCompleted({ id: runId, exitCode });
+    }),
+  );
+
 /**
  * Pure dispatch on the claim outcome. The queue is at-least-once: a redelivered job must never
  * re-run the harness. `already-running` means a previous delivery died mid-run (worker crash,
@@ -320,8 +473,8 @@ export const processRunExecJobEffect = (
 > =>
   Effect.gen(function* () {
     const runs = yield* RunRepo;
-    const { command, commands } = options;
-    if ((command === undefined) === (commands === undefined)) {
+    const { command, commands, dotfiles } = options;
+    if ([command, commands, dotfiles].filter((framing) => framing !== undefined).length !== 1) {
       return yield* Effect.fail(
         new Error(`Run-exec job for ${options.runId} must carry exactly one framing.`),
       );
@@ -364,6 +517,21 @@ export const processRunExecJobEffect = (
           .pipe(Effect.ignore),
       ),
     );
+
+    if (dotfiles !== undefined) {
+      // A home's dotfiles touch no login and no worktree: no credential sync-back, no changes.
+      yield* produceDotfilesRun(options.runId, target, dotfiles).pipe(
+        Effect.onError(() =>
+          runs
+            .markRunFailed({
+              id: options.runId,
+              errorMessage: "Applying the dotfiles failed before completion.",
+            })
+            .pipe(Effect.ignore),
+        ),
+      );
+      return;
+    }
 
     const produce =
       commands !== undefined

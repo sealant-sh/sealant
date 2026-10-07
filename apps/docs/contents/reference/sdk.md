@@ -113,6 +113,12 @@ These call the live API and work end-to-end:
   their uid and the worktree to the group on restore, and makes the executor a per-person one (no
   no-new-privileges, so everyone's `sudo` works); see
   [Workspace Images and People](/docs/reference/workspace-images#restoring-a-capture-per-person).
+- **Dotfiles per person:** `workspace.dotfiles.apply({ user, home, repository?, archives? })`
+  applies a person's dotfiles as their Linux user into their home of a running workspace (never as
+  root, never into another home), with a create's sources and applier. It resolves once every file
+  is applied, with `bootstrap` (`./install.sh`) running as the person or `null`; `bootstrap.wait()`
+  resolves with its exit code and output. See
+  [Workspace Images and People](/docs/reference/workspace-images#a-persons-dotfiles).
 - **Harness:** `workspace.harness.run(prompt)` — registers a run server-side and blocks until
   terminal; `workspace.harness.start(prompt)` — same run, returns the live handle immediately
 - **Port forwarding:** `workspace.forward(port)` — a raw TCP byte pipe to `127.0.0.1:port` inside

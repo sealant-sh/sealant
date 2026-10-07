@@ -137,6 +137,26 @@ with `409` `owner-map-mismatch`, before anything is re-planned, on an executor l
 another. The capture status reports `ownerMap: true` for an executor that booted under one. A
 workspace without a map boots and restores exactly as before, and pays nothing for the option.
 
+## A person's dotfiles
+
+`POST /v1/workspaces/:id/dotfiles` (SDK
+`workspace.dotfiles.apply({ user, home, repository?, archives? })`) applies a person's dotfiles into
+their home of a running workspace, as their user, with the same sources and the same applier as a
+create's dotfiles: chezmoi, stow or copy, then each tree's `./install.sh`. The image's `sealantd`
+must report `dotfiles.user` (the pinned 0.20.0-next.150 and later do; otherwise `409`
+`dotfiles-user-unsupported`).
+
+- **Only as the person, only into their home.** The user must exist and must not be root or in
+  root's group, and `home` must be their passwd home, an existing directory of theirs reached
+  without a symbolic link. Every command of the apply runs as the user, and nothing is written into
+  another home or root's.
+- **The files first, `install.sh` beside the caller's work.** The call resolves once every file is
+  applied; the bootstrap then runs as the person, recorded in the run the call answers with, and
+  `bootstrap.wait()` reports its exit code and output. A bootstrap running past 30 minutes is
+  stopped.
+- **Nothing kept.** Archives are staged root-only under `/run/sealant-dotfiles` for the apply and
+  removed once it answers; a repository is cloned with no credential.
+
 ## Nix images take one person
 
 `nix` images get only the probe step, and run every process as root, as before. Their `/etc/passwd`

@@ -1072,6 +1072,11 @@ export interface Workspace {
    */
   readonly credentials: WorkspaceCredentials;
   /**
+   * A person's dotfiles applied into their home of this RUNNING workspace, as their Linux user
+   * (see {@link WorkspaceDotfiles}).
+   */
+  readonly dotfiles: WorkspaceDotfiles;
+  /**
    * Schedule the workspace to expire: `expire({ in: "2h" })` sets the TTL, `expire()` expires it
    * now (the platform reaper stops it shortly), `expire({ in: null })` clears the TTL.
    */
@@ -1114,6 +1119,64 @@ export interface WorkspaceCredentials {
   release(home: string): Promise<{ readonly released: boolean }>;
   /** The homes of the running executor and the logins Core keeps in each, oldest first. */
   list(): Promise<readonly WorkspaceCredentialHome[]>;
+}
+
+/**
+ * A person's dotfiles in a running workspace (see {@link Workspace.dotfiles}): the same sources as a
+ * create's {@link WorkspaceDotfilesOptions} (a repository cloned with no credential, caller-resolved
+ * archives, or both) and the same applier (chezmoi, stow or copy, then each tree's bootstrap,
+ * `./install.sh` by default), run as the person's user into their home, never as root and never
+ * into anyone else's home.
+ */
+export interface WorkspaceDotfiles {
+  /**
+   * Apply `options` as `user` into `home`, which must be the user's passwd home (an existing
+   * directory of theirs, reached without a symbolic link). Resolves once every file is applied, with
+   * the bootstrap still running when there is one: wait for it with `bootstrap.wait()`, or start
+   * work beside it. Rejects with `SealantApiError` (`WorkspaceConflictError`) and a body `code`
+   * (`error.cause.code`): `dotfiles-user-unsupported` (the workspace's sealantd cannot apply as a
+   * user), `user-unknown`, `user-root`, `home-mismatch`, `home-unusable`, `workspace-not-running`;
+   * with `WorkspaceBadRequestError` for root, a home under `/workspace`, or nothing to apply; and
+   * with `SealantError` code `dotfiles_failed` (the daemon's words) when the apply itself failed.
+   */
+  apply(options: WorkspaceDotfilesApplyOptions): Promise<WorkspaceDotfilesApplied>;
+}
+
+/** Options for {@link WorkspaceDotfiles.apply}. */
+export interface WorkspaceDotfilesApplyOptions extends WorkspaceDotfilesOptions {
+  /** The Linux user to apply as: a login name or a uid. Never root. */
+  readonly user: string;
+  /** The user's passwd home, e.g. `/home/m4lice000`. Never under `/workspace`. */
+  readonly home: string;
+}
+
+/** What {@link WorkspaceDotfiles.apply} did. */
+export interface WorkspaceDotfilesApplied {
+  readonly user: string;
+  readonly home: string;
+  /** The run that records the apply and the bootstrap's output (`harnessId` `dotfiles`). */
+  readonly runId: string;
+  /** The bootstrap, started as the user once every file was applied; `null` when none ran. */
+  readonly bootstrap: WorkspaceDotfilesBootstrap | null;
+}
+
+/** A dotfiles bootstrap (`./install.sh`) running as the person. */
+export interface WorkspaceDotfilesBootstrap {
+  /** The bootstrap's process in the run's record. */
+  readonly processId: string;
+  /**
+   * Resolves when the bootstrap ends, with its exit code (a datum: a failing `install.sh` resolves)
+   * and its output. Rejects with `SealantError` code `dotfiles_failed` when its end was not observed
+   * or it ran past 30 minutes (it is stopped).
+   */
+  wait(): Promise<WorkspaceDotfilesBootstrapResult>;
+}
+
+/** How a dotfiles bootstrap ended. */
+export interface WorkspaceDotfilesBootstrapResult {
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
 }
 
 /**
