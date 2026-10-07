@@ -103,6 +103,7 @@ describe("workspace.credentials", () => {
       home: "/home/m4ria0000",
       onBehalfOf: "usr_maria",
       accounts: { claude: { connectedAccountId: "cacc_maria", name: "default" } },
+      skipped: [],
     });
   });
 
@@ -155,5 +156,44 @@ describe("workspace.credentials", () => {
       },
     } as unknown as ControlPlaneClient).credentials.list();
     expect(listed[0]?.accounts.pi).toEqual({ connectedAccountId: "cacc_codex", name: "default" });
+  });
+
+  it("sends a partial put and reports the providers it left out", async () => {
+    const requests: unknown[] = [];
+    const client = {
+      workspaces: {
+        putWorkspaceCredentials: (request: { payload: PutWorkspaceCredentialsRequest }) => {
+          requests.push(request.payload);
+          return Effect.succeed({
+            workspaceId: "ws_1",
+            runId: "run_1",
+            home,
+            skipped: [
+              {
+                provider: "github",
+                code: "connected-account-missing",
+                message: 'No github connected account matches "default".',
+              },
+            ],
+          });
+        },
+      },
+    } as unknown as ControlPlaneClient;
+    const answered = await workspaceOver(client).credentials.put({
+      home: "/home/m4ria0000",
+      onBehalfOf: "usr_maria",
+      claude: true,
+      github: true,
+      partial: true,
+    });
+    expect(requests[0]).toMatchObject({ claude: "default", github: "default", partial: true });
+    expect(answered.skipped).toEqual([
+      {
+        provider: "github",
+        reason: "connected-account-missing",
+        message: 'No github connected account matches "default".',
+      },
+    ]);
+    expect(answered.accounts.claude).toEqual({ connectedAccountId: "cacc_maria", name: "default" });
   });
 });

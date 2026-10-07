@@ -743,9 +743,17 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
             ...(choices.github === undefined ? {} : { github: choices.github }),
             ...(choices.pi === undefined ? {} : { pi: choices.pi }),
             ...(choices.opencode === undefined ? {} : { opencode: choices.opencode }),
+            ...(options.partial === true ? { partial: true } : {}),
           }),
         );
-        return toCredentialHome(answered.home);
+        return {
+          ...toCredentialHome(answered.home),
+          skipped: (answered.skipped ?? []).map((skip) => ({
+            provider: skip.provider,
+            reason: skip.code,
+            message: skip.message,
+          })),
+        };
       },
       release: async (home) => {
         const answered = await ctx.runtime.run(

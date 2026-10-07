@@ -21,6 +21,7 @@ import {
   WorkspaceInternalServerError,
   WorkspaceNotFoundError,
   WorkspaceServiceUnavailableError,
+  connectedAccountRefusalCodes,
   workspaceCredentialHomeAccountProvider,
   workspaceCredentialHomeProviders,
   type ListWorkspaceCredentialsQuery,
@@ -30,7 +31,9 @@ import {
   type ReleaseWorkspaceCredentialsQuery,
   type ReleaseWorkspaceCredentialsResponse,
   type WorkspaceCredentialHome,
+  type ConnectedAccountRefusalCode,
   type WorkspaceCredentialHomeProvider,
+  type WorkspaceCredentialSkip,
   type WorkspaceHomeAccount,
 } from "@sealant/api-contracts";
 import {
@@ -306,6 +309,17 @@ const loginFileFor = (provider: WorkspaceCredentialHomeProvider, account: Connec
     });
   });
 
+/** The stable code of a refused account (missing, invalid, unsupported), or `undefined`. */
+const accountRefusalOf = (failure: unknown): ConnectedAccountRefusalCode | undefined => {
+  if (
+    !(failure instanceof WorkspaceNotFoundError) &&
+    !(failure instanceof WorkspaceConflictError)
+  ) {
+    return undefined;
+  }
+  return connectedAccountRefusalCodes.find((code) => code === failure.code);
+};
+
 /** A home row as the API shows it, each account named as it is now. */
 const toHomeView = (row: {
   readonly home: string;
@@ -428,15 +442,29 @@ export const putWorkspaceCredentials = (input: {
             readonly account: ConnectedAccount;
             readonly content: string;
           }> = [];
+          // A partial put leaves out a provider whose account is refused, and says why.
+          const skipped: WorkspaceCredentialSkip[] = [];
           for (const { provider, selection } of toWrite) {
-            // pi's and opencode's logins are made from the person's Codex account.
-            const account = yield* resolveSelectedConnectedAccount({
-              ownerUserId: payload.onBehalfOfUserId,
-              provider: workspaceCredentialHomeAccountProvider[provider],
-              selection,
-            });
-            writes.push({ provider, account, content: yield* loginFileFor(provider, account) });
+            const resolved = yield* Effect.gen(function* () {
+              // pi's and opencode's logins are made from the person's Codex account.
+              const account = yield* resolveSelectedConnectedAccount({
+                ownerUserId: payload.onBehalfOfUserId,
+                provider: workspaceCredentialHomeAccountProvider[provider],
+                selection,
+              });
+              return { provider, account, content: yield* loginFileFor(provider, account) };
+            }).pipe(Effect.result);
+            if (Result.isSuccess(resolved)) {
+              writes.push(resolved.success);
+              continue;
+            }
+            const refusal = accountRefusalOf(resolved.failure);
+            if (payload.partial !== true || refusal === undefined) {
+              return yield* resolved.failure;
+            }
+            skipped.push({ provider, code: refusal, message: resolved.failure.message });
           }
+          const skipping = skipped.map(({ provider }) => provider);
           // A first take writes a fresh marker and clears any login file it does not write (an
           // earlier unconfirmed write's leftovers); a write under a hold checks the hold's marker.
           const generation = held?.generation ?? newHomeGeneration();
@@ -457,7 +485,7 @@ export const putWorkspaceCredentials = (input: {
                   ? workspaceCredentialHomeProviders.filter(
                       (provider) => !writing.includes(provider),
                     )
-                  : toRemove,
+                  : [...toRemove, ...skipping],
             }),
             stdin: homeScriptStdin(writes.map(({ content }) => content)),
           });
@@ -507,7 +535,11 @@ export const putWorkspaceCredentials = (input: {
               message: `The workspace's executor did not confirm the write into ${payload.home}: ${ran.message}. The home's record is unchanged${held === undefined ? " (it holds nothing)" : ""}; put again, or release it.`,
             });
           }
-          const changed = new Set<WorkspaceCredentialHomeProvider>([...toRemove, ...writing]);
+          const changed = new Set<WorkspaceCredentialHomeProvider>([
+            ...toRemove,
+            ...skipping,
+            ...writing,
+          ]);
           const accounts: WorkspaceCredentialHomeAccount[] = [
             ...(held?.accounts ?? []).filter((entry) => !changed.has(entry.provider)),
             ...writes.map(({ provider, account }) => ({
@@ -516,7 +548,12 @@ export const putWorkspaceCredentials = (input: {
             })),
           ];
           return {
-            result: { home: payload.home, onBehalfOfUserId: payload.onBehalfOfUserId, accounts },
+            result: {
+              home: payload.home,
+              onBehalfOfUserId: payload.onBehalfOfUserId,
+              accounts,
+              skipped,
+            },
             outcome: {
               kind: "hold" as const,
               onBehalfOfUserId: payload.onBehalfOfUserId,
@@ -540,6 +577,7 @@ export const putWorkspaceCredentials = (input: {
       workspaceId: workspace.id,
       runId: instance.runId,
       home: yield* toHomeView(written),
+      ...(payload.partial === true ? { skipped: written.skipped } : {}),
     } satisfies PutWorkspaceCredentialsResponse;
   });
 

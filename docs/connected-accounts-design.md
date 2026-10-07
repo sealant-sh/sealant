@@ -495,6 +495,14 @@ A Codex account that is an API key, or has no account id or readable expiry, can
 login: `409` `connected-account-unsupported` with `provider: "codex"`. Choosing pi's
 `defaultProvider` stays the caller's (Mend's seed).
 
+**A partial put (Oct 2026).** `partial: true` keeps a join at exactly one Core call whatever the
+person has connected: each named provider whose account is refused (`connected-account-missing`,
+`-invalid`, `-unsupported`) is left out of the write and its login removed from the home, as `null`
+would remove it, so the home holds exactly what is connected; the answer's `skipped` lists each with
+its code and the words a whole put would have answered. Accounts are still resolved and decrypted
+under the home's lock, all before the one exec; any other refusal (`home-held`, `home-unusable`, …)
+still fails the put and writes nothing.
+
 **Refusals name their provider (Oct 2026).** A put (or a create) that names an account the person
 cannot name answers `404` `connected-account-missing`, and one marked invalid or holding an unusable
 credential `409` `connected-account-invalid`, each with the account's `provider`; the messages are

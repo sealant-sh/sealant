@@ -1115,7 +1115,7 @@ export interface WorkspaceCredentials {
    * `connected-account-invalid` (409) with `provider` naming the account's provider, and nothing is
    * written.
    */
-  put(options: WorkspaceCredentialsPutOptions): Promise<WorkspaceCredentialHome>;
+  put(options: WorkspaceCredentialsPutOptions): Promise<WorkspaceCredentialsPutResult>;
   /**
    * Release `home`: its login files are removed and its record deleted, so the home can be taken
    * again. Idempotent: `released` is `false` when it held nothing.
@@ -1233,6 +1233,30 @@ export interface WorkspaceCredentialsPutOptions {
    * release removes only Core's copy.
    */
   readonly opencode?: WorkspaceCredentialsAccountChoice;
+  /**
+   * Write what the person has connected and leave out the rest, in this one call: a provider whose
+   * account is refused (`connected-account-missing`, `-invalid` or `-unsupported`) is not written,
+   * its login is removed from the home as `null` would remove it, and the result's `skipped` says
+   * which and why, instead of the whole put rejecting. Any other refusal still rejects.
+   */
+  readonly partial?: boolean;
+}
+
+/** A provider a partial {@link WorkspaceCredentials.put} left out, and why. */
+export interface WorkspaceCredentialSkip {
+  readonly provider: "claude" | "codex" | "github" | "pi" | "opencode";
+  /** The account's refusal, as a whole put would have rejected with it. */
+  readonly reason:
+    | "connected-account-missing"
+    | "connected-account-invalid"
+    | "connected-account-unsupported";
+  readonly message: string;
+}
+
+/** What {@link WorkspaceCredentials.put} resolves with: the home, and what it left out. */
+export interface WorkspaceCredentialsPutResult extends WorkspaceCredentialHome {
+  /** A partial put's left-out providers, in the order named; always empty for a whole put. */
+  readonly skipped: readonly WorkspaceCredentialSkip[];
 }
 
 /** One account whose copy a home holds. */

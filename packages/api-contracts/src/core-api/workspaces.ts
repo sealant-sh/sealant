@@ -683,6 +683,22 @@ export const inspectWorkspaceImageResponseSchema = Schema.Struct({
 export type InspectWorkspaceImageResponse = typeof inspectWorkspaceImageResponseSchema.Type;
 
 /**
+ * Stable codes of a refused connected account, carried with the account's `provider` by the error
+ * that refuses it (a create's or a credentials put's): `connected-account-missing`
+ * (`WorkspaceNotFoundError`, 404: the person has no such account, or it is archived or someone
+ * else's) and `connected-account-invalid` (`WorkspaceConflictError`, 409: the account is marked
+ * invalid, or holds an unusable credential; reconnect it) and `connected-account-unsupported`
+ * (`WorkspaceConflictError`, 409: the account cannot serve what was asked, as a Codex API key cannot
+ * be pi's or opencode's ChatGPT login). Nothing was written either way.
+ */
+export const connectedAccountRefusalCodes = [
+  "connected-account-missing",
+  "connected-account-invalid",
+  "connected-account-unsupported",
+] as const;
+export type ConnectedAccountRefusalCode = (typeof connectedAccountRefusalCodes)[number];
+
+/**
  * The providers a home holds logins for (docs/connected-accounts-design.md §6c). `pi` and
  * `opencode` are the person's ChatGPT login (a Codex connected account), written into each tool's
  * own `auth.json`.
@@ -744,6 +760,13 @@ export const putWorkspaceCredentialsRequestSchema = Schema.Struct({
    * must be inside the home). A login the person made in opencode is never replaced or removed.
    */
   opencode: Schema.optional(Schema.NullOr(NonEmptyString)),
+  /**
+   * Write what the person has connected and leave out the rest: a provider whose account is refused
+   * (`connected-account-missing`, `-invalid` or `-unsupported`) is not written, its login is removed
+   * from the home as `null` would remove it, and the answer's `skipped` says which and why, instead
+   * of the whole put failing. Every other refusal still fails the put. Default false.
+   */
+  partial: Schema.optional(Schema.Boolean),
 });
 export type PutWorkspaceCredentialsRequest = typeof putWorkspaceCredentialsRequestSchema.Type;
 
@@ -773,12 +796,23 @@ export const workspaceCredentialHomeSchema = Schema.Struct({
 });
 export type WorkspaceCredentialHome = typeof workspaceCredentialHomeSchema.Type;
 
+/** A provider a partial put left out, and why (its account's refusal). */
+export const workspaceCredentialSkipSchema = Schema.Struct({
+  provider: Schema.Literals(workspaceCredentialHomeProviders),
+  code: Schema.Literals(connectedAccountRefusalCodes),
+  /** The refusal's words, as a whole put would have answered them. */
+  message: Schema.String,
+});
+export type WorkspaceCredentialSkip = typeof workspaceCredentialSkipSchema.Type;
+
 export const putWorkspaceCredentialsResponseSchema = Schema.Struct({
   workspaceId: NonEmptyString,
   /** The launch attempt whose executor was written. */
   runId: NonEmptyString,
   /** The home as it is after the put. */
   home: workspaceCredentialHomeSchema,
+  /** A partial put's left-out providers, in the order named (empty when all were written). */
+  skipped: Schema.optional(Schema.Array(workspaceCredentialSkipSchema)),
 });
 export type PutWorkspaceCredentialsResponse = typeof putWorkspaceCredentialsResponseSchema.Type;
 
@@ -1194,22 +1228,6 @@ export class WorkspaceForbiddenError extends Schema.TaggedErrorClass<WorkspaceFo
   },
   { httpApiStatus: 403 },
 ) {}
-
-/**
- * Stable codes of a refused connected account, carried with the account's `provider` by the error
- * that refuses it (a create's or a credentials put's): `connected-account-missing`
- * (`WorkspaceNotFoundError`, 404: the person has no such account, or it is archived or someone
- * else's) and `connected-account-invalid` (`WorkspaceConflictError`, 409: the account is marked
- * invalid, or holds an unusable credential; reconnect it) and `connected-account-unsupported`
- * (`WorkspaceConflictError`, 409: the account cannot serve what was asked, as a Codex API key cannot
- * be pi's or opencode's ChatGPT login). Nothing was written either way.
- */
-export const connectedAccountRefusalCodes = [
-  "connected-account-missing",
-  "connected-account-invalid",
-  "connected-account-unsupported",
-] as const;
-export type ConnectedAccountRefusalCode = (typeof connectedAccountRefusalCodes)[number];
 
 export class WorkspaceNotFoundError extends Schema.TaggedErrorClass<WorkspaceNotFoundError>()(
   "WorkspaceNotFoundError",
