@@ -618,6 +618,58 @@ describe("putWorkspaceCredentials", () => {
     }
   });
 
+  it("answers a whole-file login with another hard link as home-unusable, naming it, and clears the take", async () => {
+    for (const [exit, file] of [
+      [86, ".claude/.credentials.json"],
+      [87, ".codex/auth.json"],
+      [88, ".config/gh/hosts.yml"],
+    ] as const) {
+      const world = newWorld();
+      world.exits.push(exit);
+      const refusal = failed(
+        await world.put({
+          onBehalfOfUserId: ALICE,
+          claude: "default",
+          codex: "default",
+          github: "default",
+        }),
+      );
+      expect(refusal).toMatchObject({ _tag: "WorkspaceConflictError", code: "home-unusable" });
+      expect(refusal.message).toContain(`${HOME}/${file}`);
+      expect(refusal.message).toContain("hard link");
+      // The take's release followed.
+      expect(world.ran).toHaveLength(2);
+      expect(world.homes.rows.size).toBe(0);
+    }
+  });
+
+  it("sends every login on the exec's stdin, never in the script it runs", async () => {
+    const world = newWorld();
+    succeeded(
+      await world.put({
+        onBehalfOfUserId: ALICE,
+        claude: "default",
+        codex: "default",
+        github: "default",
+        pi: "chatgpt",
+        opencode: "chatgpt",
+      }),
+    );
+    succeeded(await world.release());
+    expect(world.ran).toHaveLength(2);
+    const payloads = world.ran[0]?.payloads ?? [];
+    expect(payloads).toHaveLength(5);
+    for (const { script } of world.ran) {
+      for (const payload of payloads) {
+        expect(script).not.toContain(payload);
+        expect(script).not.toContain(Buffer.from(payload, "utf8").toString("base64"));
+      }
+      for (const secret of ["at-alice", "at-codex", "gho_alice", chatgptAccess]) {
+        expect(script).not.toContain(secret);
+      }
+    }
+  });
+
   it("answers no node as home-unusable, and a release without node leaves the home held", async () => {
     const world = newWorld();
     succeeded(await world.put({ onBehalfOfUserId: ALICE, pi: "chatgpt" }));

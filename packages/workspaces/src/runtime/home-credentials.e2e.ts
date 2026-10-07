@@ -9,6 +9,8 @@
  * 2. A release removes only Core's copies; the person's own logins stay.
  * 3. Where the file really is inside `/workspace` (a plain file in the saved directory), the put is
  *    refused and nothing is written there.
+ * 4. While every login is put, again and again, root watching every process's argv and environment
+ *    never sees one; a whole-file login with another hard link is refused, its other name untouched.
  *
  * Image: `SEALANT_HOME_CREDENTIALS_E2E_IMAGE`, default `sealant-workspace-fedora:latest`. Run with:
  *   pnpm --filter @sealant/workspaces test:e2e src/runtime/home-credentials.e2e.ts
@@ -50,6 +52,9 @@ const sh = (script: string) => docker(["exec", containerId, "sh", "-c", script])
 
 const entry = (access: string) =>
   JSON.stringify({ type: "oauth", access, refresh: COPY, expires: 1, accountId: "acct_1" });
+
+/** A grep pattern for `needle` that does not match itself (in the watcher's own argv). */
+const bracketed = (needle: string) => `${needle.slice(0, -1)}[${needle.slice(-1)}]`;
 
 const runHomeScript = (input: {
   readonly fence: HomeWriteFence;
@@ -174,6 +179,60 @@ describe.skipIf(!imageAvailable)(
       });
       expect(JSON.parse(await sh(`cat ${PERSON.home}/.mend/opencode/auth.json`))).toEqual({});
     }, 60_000);
+
+    it("never shows a login in any process's argv or environment, and refuses a hard-linked file", async () => {
+      // Each payload carries a marker the watcher looks for, in plain and as its base64 line; the
+      // watcher's own patterns are bracketed so it never finds itself.
+      const logins = [
+        { provider: "claude", content: '{"claudeAiOauth":{"accessToken":"SECRET-e2e-claude"}}' },
+        { provider: "codex", content: '{"tokens":{"access_token":"SECRET-e2e-codex"}}' },
+        { provider: "github", content: 'github.com:\n    oauth_token: "SECRET-e2e-github"\n' },
+        { provider: "pi", content: entry("SECRET-e2e-pi") },
+        { provider: "opencode", content: entry("SECRET-e2e-oc") },
+      ] as const;
+      const base64Prefixes = logins.map(({ content }) =>
+        Buffer.from(content, "utf8").toString("base64").slice(0, 20),
+      );
+      const patterns = ["SECRET-e2e-", ...base64Prefixes].map(bracketed);
+      await sh(
+        [
+          ": > /tmp/seen",
+          // One grep a sweep, over every process's argv and environment at once.
+          `(while [ ! -e /tmp/stop ]; do grep -a -o -h -e '${patterns.join("' -e '")}' /proc/[0-9]*/cmdline /proc/[0-9]*/environ >> /tmp/seen; done) >/dev/null 2>&1 &`,
+        ].join("\n"),
+      );
+      const generation = "generation-watched";
+      for (let round = 0; round < 40; round += 1) {
+        const put = await runHomeScript({
+          fence: round === 0 ? { kind: "take", generation } : { kind: "held", generation },
+          writes: logins,
+        });
+        expect(put.exitCode).toBe(0);
+      }
+      await sh("touch /tmp/stop; sleep 1");
+      expect(await sh("sort -u /tmp/seen")).toBe("");
+      expect(await sh(`cat ${PERSON.home}/.claude/.credentials.json`)).toContain(
+        "SECRET-e2e-claude",
+      );
+
+      // A second name for Claude's login file, elsewhere: refused once opened, nothing written.
+      await sh(
+        [
+          `printf other > /tmp/other-name`,
+          `rm -f ${PERSON.home}/.claude/.credentials.json`,
+          `ln /tmp/other-name ${PERSON.home}/.claude/.credentials.json`,
+          `chown ${String(PERSON.uid)}:40000 /tmp/other-name`,
+        ].join(" && "),
+      );
+      const linked = await runHomeScript({
+        fence: { kind: "held", generation },
+        writes: [{ provider: "claude", content: logins[0].content }],
+      });
+      expect(linked.exitCode).toBe(HOME_SCRIPT_EXIT.claudeLoginUnusable);
+      expect(await sh("cat /tmp/other-name")).toBe("other");
+      const released = await runHomeScript({ fence: { kind: "release", generation }, writes: [] });
+      expect(released.exitCode).toBe(0);
+    }, 120_000);
 
     it("refuses a login whose file really is in saved state, writing nothing there", async () => {
       // A capture brought a plain auth.json back into the saved directory.

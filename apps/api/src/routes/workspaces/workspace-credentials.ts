@@ -345,13 +345,19 @@ const toHomeView = (row: {
     } satisfies WorkspaceCredentialHome;
   });
 
-/** Refusals the owner's half answers, after a first take has made its marker. */
+/**
+ * Refusals the owner's half answers, after a first take has made its marker: a login directory
+ * linking out, a login file unusable (another hard link, a directory there) or really outside.
+ */
 const OWNER_HALF_REFUSALS: ReadonlySet<number> = new Set([
   HOME_SCRIPT_EXIT.linkOnTheWay,
   HOME_SCRIPT_EXIT.piLoginUnusable,
   HOME_SCRIPT_EXIT.opencodeLoginUnusable,
   HOME_SCRIPT_EXIT.piLoginOutside,
   HOME_SCRIPT_EXIT.opencodeLoginOutside,
+  HOME_SCRIPT_EXIT.claudeLoginUnusable,
+  HOME_SCRIPT_EXIT.codexLoginUnusable,
+  HOME_SCRIPT_EXIT.githubLoginUnusable,
 ]);
 
 /** The pi or opencode login a refusal is about (its file unusable, or outside the home). */

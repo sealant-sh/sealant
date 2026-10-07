@@ -418,10 +418,31 @@ GET    ?ownerUserId                                                        → {
   (`setpriv --reuid --regid --clear-groups`). Whatever a planted link points at, the kernel refuses
   what the person could not do themselves, so root never writes, `chmod`s or `chown`s through it.
   That half starts from a clean environment, cleared while still root (`env -i` before `setpriv`): a
-  fixed `PATH`, its flags and the person's own payloads, never the exec's environment (a token, the
-  workspace's secret env), which the person could otherwise read through `/proc`. Before the hold
-  changes, the script checks that it can drop to the owner at all; an executor that cannot answers
-  `home-unusable` and leaves no marker.
+  fixed `PATH` and its flags, never the exec's environment (a token, the workspace's secret env),
+  which the person could otherwise read through `/proc`.
+- **No login in argv or the environment, at any step (Oct 2026).** sealantd publishes a process's
+  arguments in `processStarted`, and `/proc` shows every process's arguments and environment, so a
+  login is never in either. Core runs `sh -c <script>` with no session (a plain process, whose stdin
+  sealantd neither records nor publishes) and writes the payloads, one base64 line each, to its
+  stdin; the script holds no login. The root half reads them into shell variables it never exports
+  and hands them to the owner's half as a here-document on its stdin; the owner's half reads them
+  the same way and hands each to `base64 -d` or `node` as a here-document of its own. A shell writes
+  a here-document into a pipe (bash before 5.1, or a document larger than the pipe, uses a 0600
+  temporary file of the writing user, unlinked at once). Until this, the root half started
+  `env -i … p0="$p0" … setpriv …`, so every payload was in `env`'s argv for an instant and then in
+  the environment of `setpriv`, the owner's shell and every command it ran (`mkdir`, `base64`,
+  `node`, which also took pi's and opencode's entry as `e=`). A test runs the script with every
+  command shimmed to record its argv and environment (and under `strace` where it works), and the
+  Docker e2e watches every process's `cmdline` and `environ` as root through repeated puts.
+- **Hard links.** Each whole-file login (Claude's, Codex's, GitHub's) is opened by the owner's half
+  (made if missing, not yet truncated) and checked through its descriptor (`/proc/$$/fd/N`) before
+  any login is written: a regular file with one link, or the put is refused, `86` (Claude), `87`
+  (Codex) or `88` (GitHub), `home-unusable` naming the file; the write then goes through that
+  descriptor. pi's and opencode's files are checked the same way by the merge program (`84`/`85`). A
+  file with a second name could be saved state, or someone else's file, and an in-place write would
+  land there too. A removal unlinks only the home's name. Before the hold changes, the script checks
+  that it can drop to the owner at all; an executor that cannot answers `home-unusable` and leaves
+  no marker.
 - **Homes Core writes into.** A home's parent must be root's and not group- or world-writable
   (unless sticky), so the person cannot rename the home between the checks and the writes; a home
   root owns is refused unless it is `/root` (root's own, with the shared layout's links). Both
@@ -437,6 +458,11 @@ GET    ?ownerUserId                                                        → {
   nobody else's process runs on it. A put into a held home leaves the record as it was (the same
   person's login either way). Both answer 502. A release that is not confirmed keeps the home held.
   A first take also removes every login file it does not write.
+- **Rolling deploys.** An API older than pi's and opencode's logins releases a home by removing the
+  whole-file logins and the marker and deleting the record, leaving pi's and opencode's copies. The
+  next take of the home removes every login it does not write, and the next release removes every
+  login Core names whether or not it holds a record, so either clears them; until then the home
+  holds no record, no marker and no refresh reaches the copies.
 - **Links, and dotfiles.** No component of the home's path may be a link. In a home that is not
   root's, a login directory (`.claude`, `.codex`, `.config`, `.config/gh`) that is a link must lead
   inside the home: a dotfiles checkout that links `~/.claude` into `~/dotfiles/claude` keeps
