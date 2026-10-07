@@ -1139,7 +1139,7 @@ export interface WorkspaceDotfiles {
    * directory of theirs, reached without a symbolic link). Resolves once every file is applied, with
    * the bootstrap still running when there is one: wait for it with `bootstrap.wait()`, or start
    * work beside it. Rejects with `SealantApiError` (`WorkspaceConflictError`) and a body `code`
-   * (`error.cause.code`): `dotfiles-user-unsupported` (the workspace's sealantd cannot apply as a
+   * (`error.reason`): `dotfiles-user-unsupported` (the workspace's sealantd cannot apply as a
    * user), `user-unknown`, `user-root`, `home-mismatch`, `home-unusable`, `home-held` (another
    * person's logins are held in the home), `workspace-not-running`; with `WorkspaceBadRequestError`
    * for root, a home under `/workspace`, a repository URL with a credential in it, or nothing to
