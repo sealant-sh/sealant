@@ -112,8 +112,8 @@ process as another user they answer `409` `user-unsupported` and start nothing.
 
 `POST /v1/workspaces/:workspaceId/dotfiles { ownerUserId, onBehalfOfUserId, user, home, repository?, archives? }`
 (service key only) applies a person's dotfiles into their home of a running workspace, as their
-Linux user (`sealantd`'s archive unpacking and `copy` manager still run as root inside the home
-until its fix lands), recording `onBehalfOfUserId` on the run: the sources of a create's dotfiles
+Linux user (`sealantd` unpacks archives outside the home and writes every file in it as the user),
+recording `onBehalfOfUserId` on the run: the sources of a create's dotfiles
 (`repository: { url, ref?, manager?, bootstrap?, bootstrapCommand? }` cloned with no credential,
 `https://` only, and a URL carrying one is a `400`; up to 4
 `archives: [{ data, manager?, target?, bootstrap?, bootstrapCommand? }]`), the same applier, then

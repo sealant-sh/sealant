@@ -16,15 +16,14 @@
  *    answers. A staged directory older than an hour (a job that never ran) goes at the next stage.
  *
  * sealantd itself refuses root and a user in root's group and applies only into the user's passwd
- * home. The clone, chezmoi, stow and the bootstrap run as the user (`sealant_process::identity`).
- * **Known limit, until sealantd's fix lands:** its archive staging (`tar -xzf`, the staging
- * directory's `mkdir` and `rm -rf` under `~/.local/share/sealant-dotfiles`) and the `copy` manager's
- * copies and directories still run as root inside the person's home, and follow links there. A
- * person who plants a link (`~/.config -> /home/other/.config`) can have root write their files
- * through it, into another person's home included. Under the 0.36 posture everyone has passwordless
- * `sudo`, so this grants nothing `sudo` does not; it is still root acting for a person. The sealantd
- * fix (extract into a root-only directory outside the home, without owners or modes, and copy,
- * make and remove as the user) is in progress in parallel.
+ * home. The clone, chezmoi, stow, the `copy` manager and the bootstrap run as the user
+ * (`sealant_process::identity`), and every read and write inside the home is the user's
+ * (sealantd#149, 0.20.0-next.152 and later): root unpacks each archive, without owners, into a
+ * root-only directory outside every home, after refusing a member that is not a file, a directory
+ * or a link or that leaves the archive, and hands each file to a writer that runs as the user. A
+ * link the person planted (`~/.config -> /home/other/.config`) is followed as them, so it reaches
+ * only what they can write; a link into another person's 0700 home fails the apply. An archive that
+ * unpacks to more than 256 MiB, or 64 MiB in one file, is refused (sealantd#150).
  */
 import type { EventEnvelope } from "@sealant/runtime-protocol";
 import { Effect, Option, Stream } from "effect";

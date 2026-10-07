@@ -8,7 +8,9 @@
  *    their home only, and the bootstrap (`./install.sh`) then runs as them (its uid and `HOME` are
  *    the person's), its events stamped with the execution.
  * 3. The cleanup removes the staged archives; nothing reached another person's home or root's.
- * 4. Refusals: an unknown user, a home that is not the user's, and root (the daemon's own refusal).
+ * 4. A link the person planted into another person's home: the apply fails and that home is not
+ *    written (sealantd#149, 0.20.0-next.152).
+ * 5. Refusals: an unknown user, a home that is not the user's, and root (the daemon's own refusal).
  *
  * The image must be a managed per-person image whose sealantd reports `dotfiles.user` (the pinned
  * 0.20.0-next.150 or later): `SEALANT_DOTFILES_APPLY_E2E_IMAGE`, default
@@ -272,6 +274,57 @@ describe.skipIf(!appliesAsUser)(
         await sh(containerId, `[ -e ${dotfilesStagePath(stageId)} ] && echo kept || echo gone`),
       ).toBe("gone");
     }, 180_000);
+
+    it("follows a link the person planted only as them: another person's home is never written", async () => {
+      // sealantd#149 (0.20.0-next.152): root unpacks outside every home and writes inside it as the
+      // person, so a link into another person's 0700 home fails the apply instead of writing there.
+      await sh(
+        containerId,
+        `mkdir -p ${OTHER.home}/.config && chown ${OTHER.name}:mend ${OTHER.home}/.config && chmod 700 ${OTHER.home} && rm -rf ${PERSON.home}/.config && ln -s ${OTHER.home}/.config ${PERSON.home}/.config && chown -h ${PERSON.name}:mend ${PERSON.home}/.config`,
+      );
+      const root = [...temporaryDirectories][0] ?? tmpdir();
+      const archives = [
+        {
+          data: await tarball(root, { ".config/planted/settings.toml": "theme = 'light'\n" }),
+          manager: "copy" as const,
+          bootstrap: false,
+        },
+      ];
+      const stageId = `run_${randomUUID().replaceAll("-", "")}`;
+      const target = sealantTargetForDockerContainer(containerId);
+      const staged = await Effect.runPromise(
+        liveDotfilesStageChannel.stage(
+          target,
+          buildDotfilesStageScript({
+            user: PERSON.name,
+            home: PERSON.home,
+            stageId,
+            archiveCount: archives.length,
+          }),
+          dotfilesStageStdin(archives),
+        ),
+      );
+      expect(staged).toEqual({ supported: true, exitCode: 0 });
+      const applied = await withDaemon(containerId, (session) =>
+        session
+          .dotfilesApply({
+            user: PERSON.name,
+            archiveDir: dotfilesStagePath(stageId),
+            executionId: `e2e-${stageId}`,
+          })
+          .pipe(Effect.result),
+      );
+      await Effect.runPromise(
+        liveDotfilesStageChannel.run(target, buildDotfilesCleanupScript(stageId)),
+      );
+      expect(Result.isFailure(applied)).toBe(true);
+      expect(
+        await sh(
+          containerId,
+          `[ -e ${OTHER.home}/.config/planted ] && echo written || echo untouched`,
+        ),
+      ).toBe("untouched");
+    }, 60_000);
 
     it("refuses an unknown user, another person's home, and root", async () => {
       const target = sealantTargetForDockerContainer(containerId);

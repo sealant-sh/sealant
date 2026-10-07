@@ -1129,10 +1129,10 @@ export interface WorkspaceCredentials {
  * A person's dotfiles in a running workspace (see {@link Workspace.dotfiles}): the same sources as a
  * create's {@link WorkspaceDotfilesOptions} (a repository cloned with no credential, caller-resolved
  * archives, or both) and the same applier (chezmoi, stow or copy, then each tree's bootstrap,
- * `./install.sh` by default), applied into the person's home. The clone, chezmoi, stow and the
- * bootstrap run as the person's user. Until sealantd's fix lands, its archive staging and `copy`
- * manager still run as root inside the home and follow links the person planted there (see
- * docs/connected-accounts-design.md §6g).
+ * `./install.sh` by default), applied into the person's home. The clone, chezmoi, stow, the `copy`
+ * manager and the bootstrap run as the person's user, and every file in the home is written as
+ * them: sealantd unpacks archives outside every home, and a link the person planted is followed only
+ * as them (see docs/connected-accounts-design.md §6g).
  */
 export interface WorkspaceDotfiles {
   /**
