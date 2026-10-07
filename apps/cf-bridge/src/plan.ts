@@ -138,3 +138,113 @@ export const bearerMatches = (header: string | null, expected: string): boolean 
   }
   return mismatch === 0;
 };
+
+/**
+ * Where a launch's files are staged before they are put in place: root's only (0700), outside the
+ * workspace and every capture root. The bridge writes each file's bytes here through the sandbox's
+ * file API, so no process ever carries them in its arguments or environment.
+ */
+export const STAGING_DIR = "/run/sealant/staging";
+
+/** The directory whose atomic `mkdir` claims a sandbox for one launcher. */
+export const LAUNCH_CLAIM_DIR = "/run/sealant-launch-claim";
+
+/**
+ * Gives the claim back after a launch failed before `sealantd boot`, so a redelivered launch
+ * stages and boots again instead of waiting for a socket that never comes.
+ */
+export const RELEASE_CLAIM_SCRIPT = `rmdir ${LAUNCH_CLAIM_DIR}`;
+
+/** Makes the staging directory, root's only. */
+export const PREPARE_STAGING_SCRIPT = `umask 077; mkdir -p ${STAGING_DIR} && chmod 700 ${STAGING_DIR}`;
+
+/**
+ * Puts one staged file in place and removes the staged copy, whatever happens. Its environment
+ * carries only paths and a mode: `SEALANT_STAGED` (the staged file), `SEALANT_WRITE_PATH` (absolute,
+ * or `$HOME/…`, expanded here to the sandbox user's home) and `SEALANT_WRITE_MODE`. Exits 64, saying
+ * why on stderr, for a path that is neither, or a `$HOME/…` path with no `HOME` (it would land at
+ * `/`).
+ */
+export const INSTALL_STAGED_SCRIPT = [
+  "umask 077",
+  `refuse() { rm -f "$SEALANT_STAGED"; echo "$1" >&2; exit 64; }`,
+  `case "$SEALANT_WRITE_PATH" in '$HOME/'*) [ -n "\${HOME:-}" ] || refuse "$SEALANT_WRITE_PATH names \\$HOME, which is not set here"; p="$HOME/\${SEALANT_WRITE_PATH#'$HOME/'}" ;; /*) p="$SEALANT_WRITE_PATH" ;; *) refuse "$SEALANT_WRITE_PATH is neither absolute nor under \\$HOME" ;; esac`,
+  `mkdir -p "$(dirname "$p")" && cat "$SEALANT_STAGED" > "$p" && chmod "$SEALANT_WRITE_MODE" "$p" && s=0 || s=$?`,
+  `rm -f "$SEALANT_STAGED"`,
+  `exit "$s"`,
+].join("\n");
+
+/** One file a launch stages and puts in place. */
+export interface StagedWrite {
+  /** Where its bytes are staged, under `STAGING_DIR`. */
+  readonly stagingPath: string;
+  /** The bytes, as the sandbox's `writeFile` takes them. */
+  readonly content: string;
+  readonly encoding: "base64" | "utf-8";
+  /** The environment of the exec that puts it in place: paths and a mode, never the bytes. */
+  readonly env: Readonly<Record<string, string>>;
+}
+
+/**
+ * Every file a launch writes before `sealantd boot`, in order: the secret env file, the credential
+ * files, then the dotfiles manifest and archives. A credential file that names a `credentialsHome`
+ * is refused: Cloudflare does not support one (the adapter refuses it first).
+ */
+export const stagedWritesForLaunch = (request: BridgeLaunchRequest): readonly StagedWrite[] => {
+  const files: Array<{
+    readonly path: string;
+    readonly content: string;
+    readonly encoding: StagedWrite["encoding"];
+    readonly mode: string;
+  }> = [];
+  if (request.secretEnv !== undefined) {
+    files.push({
+      path: SECRET_ENV_FILE_PATH,
+      content: JSON.stringify(request.secretEnv),
+      encoding: "utf-8",
+      mode: "600",
+    });
+  }
+  for (const file of request.credentialFiles ?? []) {
+    if (file.home !== undefined) {
+      throw new Error(
+        `credential file '${file.path}' names a credentialsHome, which the Cloudflare runtime does not support`,
+      );
+    }
+    files.push({
+      path: file.path,
+      content: file.contentBase64,
+      encoding: "base64",
+      mode: file.mode,
+    });
+  }
+  if (request.dotfiles !== undefined) {
+    files.push({
+      path: `${DOTFILES_ARCHIVE_DIR}/manifest.json`,
+      content: request.dotfiles.manifestJson,
+      encoding: "utf-8",
+      mode: "644",
+    });
+    for (const archive of request.dotfiles.archives) {
+      files.push({
+        path: `${DOTFILES_ARCHIVE_DIR}/${archive.name}`,
+        content: archive.contentBase64,
+        encoding: "base64",
+        mode: "644",
+      });
+    }
+  }
+  return files.map((file, index) => {
+    const stagingPath = `${STAGING_DIR}/${String(index)}`;
+    return {
+      stagingPath,
+      content: file.content,
+      encoding: file.encoding,
+      env: {
+        SEALANT_STAGED: stagingPath,
+        SEALANT_WRITE_PATH: file.path,
+        SEALANT_WRITE_MODE: file.mode,
+      },
+    };
+  });
+};
