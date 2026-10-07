@@ -49,6 +49,7 @@ import {
 import { buildCreateWorkspaceRequest } from "./internal/blueprint.js";
 import { resolveInternalConfig } from "./internal/config.js";
 import { parseTtlSeconds } from "./internal/duration.js";
+import { readFeatures } from "./internal/features.js";
 import { imageSpecKey } from "./internal/image-key.js";
 import { buildInferenceRespondRequest, mapInferenceResponse } from "./internal/inference.js";
 import { mapSshKey, mapWorkspaceSshInfo } from "./internal/ssh.js";
@@ -60,6 +61,7 @@ import type {
   InferenceNamespace,
   ListOptions,
   Run,
+  SealantFeatures,
   SshKeysNamespace,
   Workspace,
   WorkspaceCreateState,
@@ -115,6 +117,14 @@ export class Sealant {
   /** The configured control-plane base URL. */
   get baseUrl(): string {
     return this.#config.baseUrl;
+  }
+
+  /**
+   * What the control plane can do that an older one cannot (see {@link SealantFeatures}), read
+   * once per client and kept five minutes. Rejects when the control plane could not be asked.
+   */
+  features(): Promise<SealantFeatures> {
+    return readFeatures(this.#ctx);
   }
 
   /** Workspace lifecycle: create, fetch, and list live environments. */

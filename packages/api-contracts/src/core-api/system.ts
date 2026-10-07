@@ -10,12 +10,27 @@ export const systemIndexResponseSchema = Schema.Struct({
   openApiPath: NonEmptyString,
   /**
    * What this control plane can do that an older one cannot, so a client refuses a request it would
-   * otherwise send to a server that ignores part of it. Absent from older control planes: nothing.
+   * otherwise send to a server that ignores part of it, and feature-detects instead of reading a
+   * version (a self-built control plane reports `0.0.0`). Absent from older control planes:
+   * nothing; an absent field: not this one.
    */
   features: Schema.optional(
     Schema.Struct({
-      /** A process can run as a given Linux user (`user` on exec and sessions). */
+      /**
+       * This control plane passes `user` on exec and sessions through to the workspace's daemon.
+       * Whether a given workspace can run a process as a user is that workspace's `processUser`
+       * (its read); an exec or session as a user on one that cannot is refused there (`409`,
+       * `user-unsupported`), never run as another user.
+       */
       processUser: Schema.Boolean,
+      /** `POST /v1/workspaces/:id/dotfiles`: a person's dotfiles applied as their user. */
+      dotfilesApply: Schema.optional(Schema.Boolean),
+      /** `partial: true` on a credentials put: what is connected is written, the rest reported. */
+      credentialsPartialPut: Schema.optional(Schema.Boolean),
+      /** `pi` and `opencode` (ChatGPT logins from a Codex account) on a credentials put. */
+      credentialsPiOpencode: Schema.optional(Schema.Boolean),
+      /** `ownerMap` on a capture source: an executor whose restore gives each person their files. */
+      captureOwnerMap: Schema.optional(Schema.Boolean),
     }),
   ),
 });

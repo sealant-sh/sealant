@@ -578,14 +578,25 @@ unchanged. The SDK carries a typed error's body code as `SealantApiError.reason`
 
 - **`user` on exec and sessions** (`POST /v1/workspaces/:id/exec { user }`,
   `POST /v1/sessions { user }`, SDK `exec(argv, { user })`, `sessions.open(argv, { user })`): a
-  Linux user name or numeric uid. Core starts processes through sealantd, and no released sealantd
-  can start one as another user yet (Mend ADR 0016 Delivery 5), so Core refuses with 409
-  `user-unsupported` before anything starts, and never runs the process as the workspace's own user
-  in its place. Wiring it through is a follow-up once sealantd's protocol carries it. An SDK sends
-  `user` only to a control plane whose index reports `features.processUser` (kept five minutes, a
-  failed read fifteen seconds), and refuses it client-side otherwise: an older control plane would
-  decode the request without the field and run the process as the workspace's own user. Today's
-  reports `false`.
+  Linux user name or numeric uid, passed to sealantd's `ExecArgs.user` / `OpenSessionArgs.user`
+  (sealantd#147, 0.20.0-next.150 and later), which starts the process as that passwd entry (uid,
+  groups, `HOME`, umask 0002, private `TMPDIR` and `XDG_RUNTIME_DIR`, the image's `person-env`, none
+  of the daemon's logins; `CAP_FOWNER` only without no-new-privileges). Before anything is created
+  Core refuses, with 409 `user-unsupported` and the reason in the message: root, a uid outside
+  40001–49999 (no I/O); then, over one control connection to the ready executor, a daemon that does
+  not report `exec.user` ("this workspace's sealantd doesn't run processes as another user"), and a
+  passwd entry that is missing or not in range (uid outside the range or primary group not `mend`,
+  checked as root with `getent`). Cloudflare's sandboxes are refused outright. A yes is kept per
+  executor and user for ten minutes in the API process, so a person's run of execs pays the check
+  once; a request without `user` takes none of these steps. The run records the user
+  (`runs.process_user`, `user` on the run resource) and nothing else of the process; argv stays
+  unstored (sealant#329). An SDK sends `user` only to a control plane whose index reports
+  `features.processUser` (kept five minutes, a failed read fifteen seconds), and refuses it
+  client-side otherwise: an older control plane would decode the request without the field and run
+  the process as the workspace's own user. The index's `features` also reports `dotfilesApply`,
+  `credentialsPartialPut`, `credentialsPiOpencode` and `captureOwnerMap`; each workspace read
+  reports `processUser` (`supported`, `unsupported`, `unknown`) from its image's sealantd (the
+  build's probe).
 - **The image's per-person capability.** The image build's probe (sealant#327) records on the
   build's metadata `imageProbe`: the tools (setuid `sudo`, `useradd`, `setfacl`, `setpriv`,
   `flock`), the sudoers rule, a writable passwd, the `mend` group, the reserved ids, and what its

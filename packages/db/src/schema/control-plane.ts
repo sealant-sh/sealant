@@ -873,6 +873,10 @@ export const runs = pgTable(
     // Opaque caller-provided correlation bag ({ projectId, sessionId, ... }): stored verbatim,
     // echoed on reads, no platform-side semantics.
     metadata: jsonb().$type<Record<string, unknown>>(),
+    // The Linux user the run's processes were started as (`user` on an exec or a session, Mend's
+    // ADR 0016): the login name or uid the caller named, nothing else of the process. Null: the
+    // workspace's own user.
+    processUser: text("process_user"),
     exitCode: integer("exit_code"),
     errorMessage: text("error_message"),
     // The run's resulting file diff + change list, captured server-side when the run executes.

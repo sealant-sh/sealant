@@ -56,6 +56,7 @@ import {
   SealantRuntime,
   sealantTargetForRuntimeInstance,
   targetDerivationOptionsFromEnv,
+  type ProcessUserChannel,
   type SealantSession as DaemonConnection,
   type SealantTarget,
 } from "@sealant/workspaces";
@@ -63,7 +64,7 @@ import { Effect, Stream } from "effect";
 
 import { env } from "../../runtime-env.js";
 import { authPosture, servicePrincipals } from "../../services/service-principals.js";
-import { processUserUnsupportedMessage } from "../process-user.js";
+import { checkProcessUser, processUserNameRefusal } from "../process-user.js";
 
 // StreamKind numerics from the runtime protocol (avoid a runtime dep for constants).
 const STREAM_KIND_STDOUT = 2;
@@ -204,6 +205,13 @@ export const requireSession = (sessionId: string, principal: SessionPrincipal) =
 
 /** Resolve the workspace's live daemon target (docker adapter, ready instance). */
 export const resolveDaemonTarget = (workspaceId: string) =>
+  resolveDaemonInstance(workspaceId).pipe(Effect.map((resolved) => resolved?.target));
+
+/**
+ * The workspace's ready executor and how to reach its daemon (`target` undefined when this process
+ * has no way to); `undefined` when there is no ready executor.
+ */
+export const resolveDaemonInstance = (workspaceId: string) =>
   Effect.gen(function* () {
     const workspaces = yield* WorkspaceRepo;
     const instances = yield* WorkspaceRuntimeInstanceRepo;
@@ -221,7 +229,10 @@ export const resolveDaemonTarget = (workspaceId: string) =>
     if (instance === undefined || instance.status !== "ready") {
       return undefined;
     }
-    return sealantTargetForRuntimeInstance(instance, targetDerivationOptionsFromEnv(env));
+    return {
+      instance,
+      target: sealantTargetForRuntimeInstance(instance, targetDerivationOptionsFromEnv(env)),
+    };
   });
 
 /** Run `f` over a short-lived daemon connection (scoped: the bridge is torn down after). */
@@ -377,6 +388,8 @@ const sessionWithHighWater = (session: WorkspaceSession) =>
 export const createSession = (input: {
   readonly payload: CreateSessionRequest;
   readonly headers: SessionAuthorizationHeaders;
+  /** For tests; defaults to the live channel (asked only for a session as a user). */
+  readonly processUserChannel?: ProcessUserChannel;
 }) =>
   Effect.gen(function* () {
     const principal = yield* authorize({
@@ -403,14 +416,39 @@ export const createSession = (input: {
         message: `Workspace not found: ${input.payload.workspaceId}`,
       });
     }
-    if (input.payload.user !== undefined) {
-      return yield* new SessionConflictError({
-        message: processUserUnsupportedMessage(input.payload.user),
-        code: PROCESS_USER_UNSUPPORTED_CODE,
-      });
+    const user = input.payload.user;
+    if (user !== undefined) {
+      const refused = processUserNameRefusal(workspace.id, user);
+      if (refused !== undefined) {
+        return yield* new SessionConflictError({
+          message: refused,
+          code: PROCESS_USER_UNSUPPORTED_CODE,
+        });
+      }
     }
 
-    const target = yield* resolveDaemonTarget(workspace.id);
+    const resolved = yield* resolveDaemonInstance(workspace.id);
+    // A session as a person: only where the executor's daemon starts one as that user, for a
+    // person in Mend's range. Asked before the run exists, so a refusal leaves nothing behind.
+    if (user !== undefined && resolved !== undefined) {
+      const verdict = yield* checkProcessUser({
+        workspaceId: workspace.id,
+        instance: resolved.instance,
+        target: resolved.target,
+        user,
+        ...(input.processUserChannel === undefined ? {} : { channel: input.processUserChannel }),
+      });
+      if (verdict.kind === "refused") {
+        return yield* new SessionConflictError({
+          message: verdict.message,
+          code: PROCESS_USER_UNSUPPORTED_CODE,
+        });
+      }
+      if (verdict.kind === "unanswered") {
+        return yield* new SessionBadGatewayError({ message: verdict.message });
+      }
+    }
+    const target = resolved?.target;
     if (target === undefined) {
       return yield* new SessionConflictError({
         message: "The workspace has no ready runtime to host a session.",
@@ -457,6 +495,7 @@ export const createSession = (input: {
         ...(input.payload.metadata === undefined
           ? {}
           : { metadata: { ...input.payload.metadata } }),
+        ...(user === undefined ? {} : { processUser: user }),
       }),
       "Failed to create session run.",
     );
@@ -526,6 +565,7 @@ export const createSession = (input: {
         rows,
         term: input.payload.term ?? DEFAULT_TERM,
         mode,
+        ...(user === undefined ? {} : { user }),
       }),
     ).pipe(
       Effect.mapError((error) => {

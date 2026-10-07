@@ -38,8 +38,12 @@ export type SessionMode = typeof sessionModeSchema.Type;
 
 /**
  * The Linux user a process runs as (Mend ADR 0016): a user name of the image's passwd, or a numeric
- * uid. The process takes its uid, gid, supplementary groups and `HOME`, `USER`, `LOGNAME` and
- * `SHELL` from the passwd entry, umask 0002. Absent: the workspace's own user, as before.
+ * uid. The workspace's sealantd starts the process as that passwd entry: its uid, gid,
+ * supplementary groups and `HOME`, `USER`, `LOGNAME` and `SHELL`, umask 0002, a private `TMPDIR`
+ * and `XDG_RUNTIME_DIR`, the image's `/etc/sealant/person-env`, and none of the daemon's logins.
+ * Only a person Mend made: a uid in 40001–49999 whose primary group is `mend` (40000), never root,
+ * on a workspace whose sealantd reports `exec.user`. Anything else is refused before anything
+ * starts (`409`, `user-unsupported`). Absent: the workspace's own user, as before.
  */
 export const workspaceProcessUserSchema = Schema.String.check(
   Schema.isPattern(/^(?:[a-z_][a-z0-9_-]{0,31}|[0-9]{1,10})$/),
@@ -47,8 +51,10 @@ export const workspaceProcessUserSchema = Schema.String.check(
 export type WorkspaceProcessUser = typeof workspaceProcessUserSchema.Type;
 
 /**
- * The stable `code` a create or exec answers while no workspace runtime can start a process as
- * another user: Core asks sealantd to, and no released sealantd does yet. Nothing is started.
+ * The stable `code` a session or exec as a user is refused with (`409`), the message saying why:
+ * the workspace's sealantd does not run processes as another user (no `exec.user`), its runtime
+ * does not (Cloudflare), the user is not in range (root, a uid outside 40001–49999, or a primary
+ * group other than `mend`), or no such user exists yet. Nothing is started.
  */
 export const PROCESS_USER_UNSUPPORTED_CODE = "user-unsupported";
 

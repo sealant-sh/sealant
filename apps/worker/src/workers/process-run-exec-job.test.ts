@@ -14,6 +14,7 @@ const run = (status: Run["status"]): Run => ({
   prompt: null,
   command: null,
   metadata: null,
+  processUser: null,
   exitCode: null,
   errorMessage: null,
   diff: null,

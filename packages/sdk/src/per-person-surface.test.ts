@@ -21,6 +21,7 @@ import { makeWorkspace } from "./facade/workspace.js";
 import { opencode } from "./harness.js";
 import { buildCreateWorkspaceRequest } from "./internal/blueprint.js";
 import { resolveInternalConfig } from "./internal/config.js";
+import { readFeatures } from "./internal/features.js";
 import type { WorkspaceCaptureOwnerMap } from "./types.js";
 
 const config = resolveInternalConfig({ baseUrl: "http://stub.invalid", ownerUserId: "usr_owner" });
@@ -348,5 +349,112 @@ describe("the image's per-person capability", () => {
       spec: buildCreateWorkspaceRequest(options, config).payload.spec,
     });
     await sealant.close();
+  });
+});
+
+const withIndex = (features: unknown) =>
+  ({
+    system: {
+      getIndex: () =>
+        Effect.succeed({
+          name: "Sealant Control Plane API",
+          version: "0.0.0",
+          docsPath: "/docs",
+          openApiPath: "/openapi.json",
+          ...(features === undefined ? {} : { features }),
+        }),
+    },
+  }) as unknown as ControlPlaneClient;
+
+const withDetails = (processUser: WorkspaceDetails["processUser"]) =>
+  ({
+    workspaces: {
+      getWorkspace: () =>
+        Effect.succeed({
+          workspaceId: "ws_1",
+          name: "t",
+          ownerUserId: "usr_owner",
+          status: "ready",
+          ...(processUser === undefined ? {} : { processUser }),
+          createdAt: "2026-10-06T00:00:00.000Z",
+          updatedAt: "2026-10-06T00:00:00.000Z",
+        } satisfies WorkspaceDetails),
+    },
+  }) as unknown as ControlPlaneClient;
+
+describe("features()", () => {
+  it("names every feature this control plane reports, and absent ones false", async () => {
+    expect(
+      await readFeatures(
+        makeCtx(
+          withIndex({
+            processUser: true,
+            dotfilesApply: true,
+            credentialsPartialPut: true,
+            credentialsPiOpencode: true,
+            captureOwnerMap: true,
+          }),
+        ),
+      ),
+    ).toEqual({
+      processUser: true,
+      dotfilesApply: true,
+      credentialsPartialPut: true,
+      credentialsPiOpencode: true,
+      captureOwnerMap: true,
+    });
+    // A control plane from before the later flags names only `processUser`.
+    expect(await readFeatures(makeCtx(withIndex({ processUser: false })))).toEqual({
+      processUser: false,
+      dotfilesApply: false,
+      credentialsPartialPut: false,
+      credentialsPiOpencode: false,
+      captureOwnerMap: false,
+    });
+    // One from before `features`: nothing.
+    expect(Object.values(await readFeatures(makeCtx(withIndex(undefined))))).toEqual([
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  it("rejects when the control plane could not be asked", async () => {
+    const failing = {
+      system: { getIndex: () => Effect.fail(new Error("unreachable")) },
+    } as unknown as ControlPlaneClient;
+    await expect(readFeatures(makeCtx(failing))).rejects.toBeDefined();
+  });
+});
+
+describe("workspace.processUser()", () => {
+  it("reads the workspace's own answer, and unknown from a control plane without one", async () => {
+    for (const answer of ["supported", "unsupported", "unknown"] as const) {
+      const workspace = makeWorkspace(makeCtx(withDetails(answer)), {
+        id: "ws_1",
+        name: "t",
+        status: "ready",
+      });
+      expect(await workspace.processUser()).toBe(answer);
+    }
+    const older = makeWorkspace(makeCtx(withDetails(undefined)), {
+      id: "ws_1",
+      name: "t",
+      status: "ready",
+    });
+    expect(await older.processUser()).toBe("unknown");
+  });
+
+  it("is filled in on the launch by ready()", async () => {
+    const workspace = makeWorkspace(makeCtx(withDetails("supported")), {
+      id: "ws_1",
+      name: "t",
+      status: "ready",
+      launch: { replayed: false },
+    });
+    await workspace.ready();
+    expect(workspace.launch?.processUser).toBe("supported");
   });
 });

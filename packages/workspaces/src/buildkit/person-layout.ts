@@ -579,6 +579,21 @@ export const imageAppliesOwnerMap = (
 };
 
 /**
+ * Whether an image's daemon starts executions and sessions as a user (`exec.user`): `yes` when the
+ * sealantd its probe asked lists it, `no` when it answered without it (or had no `capabilities`
+ * command), `unknown` when the image has no probe or the answer could not be read. A daemon
+ * without it ignores `user` and would run the process as root, so Core refuses one there.
+ */
+export const imageRunsProcessesAsUser = (
+  probe: WorkspaceImageProbe | undefined,
+): "yes" | "no" | "unknown" => {
+  if (probe === undefined) return "unknown";
+  const reported = sealantdCapabilities(probe.sealantd);
+  if (reported === "unknown") return "unknown";
+  return reported.has("exec.user") ? "yes" : "no";
+};
+
+/**
  * The capability names a `sealantd capabilities --json` object lists under `supports` (sealantd#147:
  * `{ schemaVersion, daemonVersion, os, arch, supports }`, the list `runtime.getCapabilities`
  * answers): none for a sealantd without the command, unknown for an answer of another shape.

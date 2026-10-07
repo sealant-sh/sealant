@@ -12,6 +12,8 @@ import {
   type JobQueueConsumerMessage,
 } from "@sealant/jobs";
 
+import { processUserProblem } from "../runtime/process-user.js";
+
 export const runExecQueueName = "workspace-run-exec";
 export const runExecDeadLetterQueueName = "workspace-run-exec.dlq";
 
@@ -65,6 +67,11 @@ export interface RunExecRequestedMessage {
   readonly command?: RunExecCommand;
   readonly commands?: readonly RunExecCommand[];
   readonly dotfiles?: RunDotfilesApply;
+  /**
+   * EXEC framing only: every command runs as this Linux user (a login name or a decimal uid), which
+   * the API checked against the executor (`exec.user`, Mend's uid range) before it queued the run.
+   */
+  readonly user?: string;
 }
 
 /**
@@ -106,6 +113,17 @@ const optionalString = (value: unknown, label: string): string | undefined => {
 };
 
 const MANAGERS = ["auto", "chezmoi", "stow", "copy"] as const;
+
+/** A process user as the queue carries it: never root, and never anything but a name or a uid. */
+const parseProcessUser = (value: unknown): string | undefined => {
+  const user = optionalString(value, "user");
+  if (user === undefined) return undefined;
+  const problem = processUserProblem(user);
+  if (problem !== undefined) {
+    throw new Error(`Invalid run-exec message: user '${user}' is refused (${problem.detail}).`);
+  }
+  return user;
+};
 
 const parseDotfiles = (input: unknown): RunDotfilesApply => {
   if (!isRecord(input)) {
@@ -180,11 +198,16 @@ export const parseRunExecRequestedMessage = (input: unknown): RunExecRequestedMe
     if (!Array.isArray(obj.commands) || obj.commands.length === 0) {
       throw new Error("Invalid run-exec message: commands must be a non-empty array.");
     }
+    const user = parseProcessUser(obj.user);
     return {
       kind: runExecRequestedMessageKind,
       runId: obj.runId,
       commands: obj.commands.map((entry, index) => parseCommand(entry, `commands[${index}]`)),
+      ...(user === undefined ? {} : { user }),
     };
+  }
+  if (obj.user !== undefined) {
+    throw new Error("Invalid run-exec message: only the exec framing (`commands`) names a user.");
   }
   return {
     kind: runExecRequestedMessageKind,
@@ -201,8 +224,13 @@ export const publishRunExecRequested = async (
     readonly command?: RunExecCommand;
     readonly commands?: readonly RunExecCommand[];
     readonly dotfiles?: RunDotfilesApply;
+    /** EXEC framing only: the Linux user every command runs as. */
+    readonly user?: string;
   },
 ): Promise<void> => {
+  if (input.user !== undefined && input.commands === undefined) {
+    throw new Error("Only the exec framing (`commands`) runs as a user.");
+  }
   const framings = [input.command, input.commands, input.dotfiles].filter(
     (framing) => framing !== undefined,
   );
@@ -217,6 +245,7 @@ export const publishRunExecRequested = async (
     ...(input.command === undefined ? {} : { command: input.command }),
     ...(input.commands === undefined ? {} : { commands: input.commands }),
     ...(input.dotfiles === undefined ? {} : { dotfiles: input.dotfiles }),
+    ...(input.user === undefined ? {} : { user: input.user }),
   };
   const jobs = createJobQueueService(databaseUrl);
   await jobs.publishJson({ queue: runExecQueue, message });

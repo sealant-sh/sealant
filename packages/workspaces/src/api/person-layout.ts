@@ -7,7 +7,7 @@
  */
 import type { RuntimeAdapterId, WorkspaceImageProbe } from "@sealant/validators";
 
-import { imagePersonLayoutSupport } from "../buildkit/person-layout.js";
+import { imagePersonLayoutSupport, imageRunsProcessesAsUser } from "../buildkit/person-layout.js";
 
 export type PersonLayoutStatus = "supported" | "unsupported" | "unknown";
 
@@ -52,3 +52,32 @@ export const personLayoutCapability = (
     acl,
   };
 };
+
+/** Runtimes whose daemon Core never asks to start a process as a user (no per-person capability). */
+const NO_PROCESS_USER_RUNTIMES: ReadonlySet<RuntimeAdapterId> = new Set(["cloudflare"]);
+
+/**
+ * Whether a workspace's processes can be started as a person's user (`user` on exec and sessions),
+ * as its read reports it: from the sealantd its image's probe asked (`exec.user`), on a runtime
+ * whose daemon Core reaches (Docker, MicroVM, Kubernetes; never Cloudflare's sandboxes). What is
+ * not known (an image built before the probe, an unreadable answer) is `unknown`. The exec or
+ * session itself asks the running daemon, whose answer decides.
+ */
+export const processUserCapability = (
+  probe: WorkspaceImageProbe | undefined,
+  runtime: RuntimeAdapterId,
+): PersonLayoutStatus => {
+  if (NO_PROCESS_USER_RUNTIMES.has(runtime)) return "unsupported";
+  switch (imageRunsProcessesAsUser(probe)) {
+    case "yes":
+      return "supported";
+    case "no":
+      return "unsupported";
+    case "unknown":
+      return "unknown";
+  }
+};
+
+/** Whether a runtime's daemon is ever asked to start a process as a user. */
+export const runtimeRunsProcessesAsUser = (runtime: RuntimeAdapterId): boolean =>
+  !NO_PROCESS_USER_RUNTIMES.has(runtime);

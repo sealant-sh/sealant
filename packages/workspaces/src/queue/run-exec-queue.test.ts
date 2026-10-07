@@ -106,4 +106,24 @@ describe("parseRunExecRequestedMessage", () => {
       }),
     ).toThrow(/manager is unknown/);
   });
+
+  it("carries the exec framing's user, and refuses root, a uid outside the range and a misplaced user", () => {
+    const commands = [{ executable: "id", args: [] }];
+    expect(parseRunExecRequestedMessage({ ...base, commands, user: "m4lice000" })).toEqual({
+      ...base,
+      commands,
+      user: "m4lice000",
+    });
+    expect(parseRunExecRequestedMessage({ ...base, commands }).user).toBeUndefined();
+    for (const user of ["root", "0", "1000", "a b", ""]) {
+      expect(() => parseRunExecRequestedMessage({ ...base, commands, user })).toThrow();
+    }
+    expect(() =>
+      parseRunExecRequestedMessage({
+        ...base,
+        command: { executable: "opencode", args: [] },
+        user: "m4lice000",
+      }),
+    ).toThrow(/only the exec framing/);
+  });
 });

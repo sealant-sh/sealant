@@ -89,6 +89,20 @@ export const workspaceImagePersonLayoutSchema = Schema.Struct({
 });
 export type WorkspaceImagePersonLayout = typeof workspaceImagePersonLayoutSchema.Type;
 
+/**
+ * Whether a workspace's processes can be started as a person's Linux user (`user` on exec and
+ * sessions): `supported` when the sealantd of the image its latest launch booted reports
+ * `exec.user` (the image build's probe), `unsupported` when it does not or the runtime never runs a
+ * process as a user (Cloudflare), `unknown` when nothing says (an image built before the probe).
+ * The exec or session itself asks the running daemon, whose answer decides.
+ */
+export const workspaceProcessUserCapabilitySchema = Schema.Literals([
+  "supported",
+  "unsupported",
+  "unknown",
+]);
+export type WorkspaceProcessUserCapability = typeof workspaceProcessUserCapabilitySchema.Type;
+
 export const workspacePublishedImageSchema = Schema.Struct({
   reference: NonEmptyString,
   digestReference: NonEmptyString,
@@ -189,7 +203,10 @@ export const execWorkspaceRequestSchema = Schema.Struct({
   ownerUserId: NonEmptyString,
   /** Commands execute sequentially in the workspace, each recorded like any other process. */
   commands: Schema.Array(runCommandSchema).check(Schema.isNonEmpty(), Schema.isMaxLength(32)),
-  /** Run every command as this Linux user (see `workspaceProcessUserSchema`). */
+  /**
+   * Run every command as this Linux user (see `workspaceProcessUserSchema`): checked against the
+   * running executor before the run is made, and recorded on the run (`user`).
+   */
   user: Schema.optional(workspaceProcessUserSchema),
 });
 export type ExecWorkspaceRequest = typeof execWorkspaceRequestSchema.Type;
@@ -955,6 +972,8 @@ export const workspaceSummarySchema = Schema.Struct({
   tag: Schema.optional(NonEmptyString),
   runtime: Schema.optional(workspaceRuntimeSchema),
   publishedImage: Schema.optional(workspacePublishedImageSchema),
+  /** See `workspaceProcessUserCapabilitySchema`. Absent from older control planes. */
+  processUser: Schema.optional(workspaceProcessUserCapabilitySchema),
   error: Schema.optional(workspaceErrorSchema),
   createdAt: Schema.String,
   updatedAt: Schema.String,
@@ -1061,6 +1080,8 @@ export const workspaceDetailsSchema = Schema.Struct({
   tag: Schema.optional(NonEmptyString),
   runtime: Schema.optional(workspaceRuntimeSchema),
   publishedImage: Schema.optional(workspacePublishedImageSchema),
+  /** See `workspaceProcessUserCapabilitySchema`. Absent from older control planes. */
+  processUser: Schema.optional(workspaceProcessUserCapabilitySchema),
   error: Schema.optional(workspaceErrorSchema),
   createdAt: Schema.String,
   updatedAt: Schema.String,
@@ -1398,8 +1419,11 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
       error: [
         WorkspaceBadRequestError,
         WorkspaceNotFoundError,
-        // The workspace has never launched a runtime — nothing to exec in yet.
+        // The workspace has never launched a runtime — nothing to exec in yet; or, with `user`, the
+        // executor cannot run a process as that user (`user-unsupported`) or is not running.
         WorkspaceConflictError,
+        // With `user`: the executor did not answer whether the user may run a process.
+        WorkspaceBadGatewayError,
         WorkspaceInternalServerError,
       ],
     }),

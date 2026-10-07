@@ -37,6 +37,7 @@ import {
   dotfilesStagePath,
   execInWorkspace,
   liveDotfilesStageChannel,
+  PROCESS_USER_CAPABILITY,
   type DotfilesStageChannel,
   type RunDotfilesApply,
   type RunExecCommand,
@@ -50,7 +51,7 @@ import {
   splitWorkingTreeChanges,
   workingTreeChangesScript,
 } from "@sealant/workspaces";
-import { Cause, Duration, Effect, Layer, Result, Schedule, Stream } from "effect";
+import { Cause, Duration, Effect, Layer, Result, Schedule, Schema, Stream } from "effect";
 
 const WORKDIR = "/workspace/repo";
 const BATCH_SIZE = 256;
@@ -76,6 +77,8 @@ export interface ProcessRunExecJobOptions {
   readonly commands?: readonly RunExecCommand[];
   /** DOTFILES framing: a person's dotfiles applied as their user, the bootstrap recorded. */
   readonly dotfiles?: RunDotfilesApply;
+  /** EXEC framing only: every command runs as this Linux user (the API checked the executor). */
+  readonly user?: string;
   readonly db: DB;
   /**
    * Decrypt/encrypt for connected-account credentials; undefined when SEALANT_CREDENTIALS_KEY is
@@ -123,8 +126,27 @@ const shellExec = (target: SealantTarget, script: string) =>
     Effect.retry(BRIDGE_RETRY),
   );
 
-/** Execs the harness and records its telemetry, bounded to the harness process. Returns the exit code. */
-const captureRun = (runId: string, target: SealantTarget, command: RunExecCommand) =>
+/**
+ * The executor the run reached does not report `exec.user`: a daemon without it ignores `user` and
+ * would start the process as root, so nothing is started. The API checked the executor it saw; this
+ * holds when the run reaches another one (a restart in between).
+ */
+export class ProcessUserUnavailableError extends Schema.TaggedErrorClass<ProcessUserUnavailableError>()(
+  "ProcessUserUnavailableError",
+  { message: Schema.String },
+) {}
+
+/**
+ * Execs the harness and records its telemetry, bounded to the harness process. Returns the exit
+ * code. With `user`, the daemon starts the process as that Linux user (`ExecArgs.user`), and only a
+ * daemon that reports `exec.user` is asked to (one capabilities read on the same connection).
+ */
+export const captureRun = (
+  runId: string,
+  target: SealantTarget,
+  command: RunExecCommand,
+  user?: string,
+) =>
   Effect.scoped(
     Effect.gen(function* () {
       const runtime = yield* SealantRuntime;
@@ -134,6 +156,14 @@ const captureRun = (runId: string, target: SealantTarget, command: RunExecComman
         Effect.flatMap((connected) =>
           Effect.gen(function* () {
             const health = yield* connected.health;
+            if (user !== undefined) {
+              const capabilities = yield* connected.capabilities;
+              if (!capabilities.supports.includes(PROCESS_USER_CAPABILITY)) {
+                return yield* new ProcessUserUnavailableError({
+                  message: `The workspace's sealantd doesn't run processes as another user (it does not report ${PROCESS_USER_CAPABILITY}), so nothing was started as '${user}'.`,
+                });
+              }
+            }
             const started = yield* connected.exec({
               executable: command.executable,
               args: [...command.args],
@@ -143,11 +173,15 @@ const captureRun = (runId: string, target: SealantTarget, command: RunExecComman
               executionId: runId,
               cwd: command.cwd ?? WORKDIR,
               stdin: false,
+              ...(user === undefined ? {} : { user }),
             });
             return { session: connected, runtimeId: health.runtimeId, accepted: started };
           }),
         ),
-        Effect.retry(BRIDGE_RETRY),
+        Effect.retry({
+          ...BRIDGE_RETRY,
+          while: (error) => !(error instanceof ProcessUserUnavailableError),
+        }),
       );
 
       yield* sink.openEpoch({ runId, runtimeId, schemaVersion: 0 });
@@ -272,16 +306,23 @@ const produceHarnessRun = (runId: string, target: SealantTarget, command: RunExe
  * per-command codes live in the record's `processExited` events). It fails only when the machinery
  * broke — a command that never reported an exit code means the recording cannot be trusted.
  */
-const produceExecRun = (
+export const produceExecRun = (
   runId: string,
   target: SealantTarget,
   commands: readonly RunExecCommand[],
+  user?: string,
 ) =>
   Effect.gen(function* () {
     const runs = yield* RunRepo;
     let lastExitCode = 0;
     for (const [index, command] of commands.entries()) {
-      const exitCode = yield* captureRun(runId, target, command);
+      const captured = yield* captureRun(runId, target, command, user).pipe(
+        Effect.catchTag("ProcessUserUnavailableError", (error) =>
+          runs.markRunFailed({ id: runId, errorMessage: error.message }).pipe(Effect.as(undefined)),
+        ),
+      );
+      if (captured === undefined) return;
+      const exitCode = captured;
       if (exitCode === -1) {
         yield* runs.markRunFailed({
           id: runId,
@@ -473,10 +514,15 @@ export const processRunExecJobEffect = (
 > =>
   Effect.gen(function* () {
     const runs = yield* RunRepo;
-    const { command, commands, dotfiles } = options;
+    const { command, commands, dotfiles, user } = options;
     if ([command, commands, dotfiles].filter((framing) => framing !== undefined).length !== 1) {
       return yield* Effect.fail(
         new Error(`Run-exec job for ${options.runId} must carry exactly one framing.`),
+      );
+    }
+    if (user !== undefined && commands === undefined) {
+      return yield* Effect.fail(
+        new Error(`Run-exec job for ${options.runId}: only the exec framing runs as a user.`),
       );
     }
     const claim = yield* runs.claimRunForExec({ id: options.runId });
@@ -535,7 +581,7 @@ export const processRunExecJobEffect = (
 
     const produce =
       commands !== undefined
-        ? produceExecRun(options.runId, target, commands)
+        ? produceExecRun(options.runId, target, commands, user)
         : command !== undefined
           ? produceHarnessRun(options.runId, target, command)
           : Effect.void; // unreachable: the framing guard above rejected the neither-set case

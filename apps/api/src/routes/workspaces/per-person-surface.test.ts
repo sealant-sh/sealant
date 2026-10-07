@@ -1,9 +1,10 @@
 /**
  * Mend ADR 0016's surface on create, exec and sessions: a `credentialsHome` follows the home rules;
- * a process asked to run as a Linux user is refused (`user-unsupported`) before anything starts,
- * never run as the workspace's own user, while no released sealantd can start one as another user;
- * and an image's per-person capability is readable before create. A service key is configured
- * before the dynamic imports because runtime-env parses process.env at module load.
+ * a process asked to run as a Linux user runs as them only for a person in Mend's range on an
+ * executor whose sealantd reports `exec.user`, is refused (`user-unsupported`, worded by reason)
+ * before anything starts otherwise, and is recorded on its run; the control plane reports its
+ * features; and an image's per-person capability is readable before create. A service key is
+ * configured before the dynamic imports because runtime-env parses process.env at module load.
  */
 import {
   AccessTokenRepo,
@@ -15,29 +16,41 @@ import {
   WorkspaceBuildJobRepo,
   WorkspaceRepo,
   type ConnectedAccountRepoService,
+  type Run,
   type RunRepoService,
   type Workspace,
   type WorkspaceAttemptRepoService,
   type WorkspaceBuildJob,
   type WorkspaceBuildJobRepoService,
   type WorkspaceRepoService,
+  type WorkspaceRuntimeInstance,
+  type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
 import { TelemetryQuery } from "@sealant/telemetry";
 import { newWorkspaceSchema } from "@sealant/validators";
-import { planWorkspaceImageBuild, SealantRuntime } from "@sealant/workspaces";
+import {
+  planWorkspaceImageBuild,
+  SealantRuntime,
+  type ProcessUserChannel,
+  type ProcessUserCheck,
+} from "@sealant/workspaces";
 import { Effect, Layer, Result } from "effect";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 process.env["SEALANT_SERVICE_KEYS"] = "svc-test";
 
 let workspacesModule: typeof import("./workspaces.module.js");
 let sessionsModule: typeof import("../sessions/sessions.module.js");
 let capabilities: typeof import("../../services/control-plane-capabilities.js");
+let processUser: typeof import("../process-user.js");
+let systemModule: typeof import("../system/system.module.js");
 
 beforeAll(async () => {
   workspacesModule = await import("./workspaces.module.js");
   sessionsModule = await import("../sessions/sessions.module.js");
   capabilities = await import("../../services/control-plane-capabilities.js");
+  processUser = await import("../process-user.js");
+  systemModule = await import("../system/system.module.js");
 });
 
 const OWNER = "usr_alice";
@@ -47,25 +60,6 @@ const spec = {
   sources: { workspace: { url: "https://github.com/example/repo.git" } },
   harness: { id: "opencode" },
 };
-
-const untouched = Effect.die("nothing may be started for a refused user");
-
-const repos = () =>
-  Layer.mergeAll(
-    Layer.succeed(WorkspaceRepo, {
-      getWorkspaceById: (id: string) => Effect.succeed(id === workspace.id ? workspace : undefined),
-    } as unknown as WorkspaceRepoService),
-    Layer.succeed(RunRepo, { createRun: () => untouched } as unknown as RunRepoService),
-    Layer.succeed(ConnectedAccountRepo, {} as unknown as ConnectedAccountRepoService),
-    // Never reached by a refused request: anything touching them fails the test.
-    Layer.succeed(AccessTokenRepo, {} as never),
-    Layer.succeed(SealantRuntime, {} as never),
-    Layer.succeed(TelemetryQuery, {} as never),
-    Layer.succeed(WorkspaceAttemptRepo, {} as never),
-    Layer.succeed(WorkspaceRuntimeInstanceRepo, {} as never),
-    Layer.succeed(WorkspaceSessionRepo, {} as never),
-    Layer.succeed(capabilities.RunExecPublisherService, {} as never),
-  );
 
 const failureOf = <A, E>(result: Result.Result<A, E>): E => {
   if (!Result.isFailure(result)) throw new Error("expected a refusal");
@@ -203,46 +197,239 @@ describe("a capture source's owner map at create", () => {
 });
 
 describe("a process as a Linux user", () => {
-  it("refuses an exec as a user before any run is made", async () => {
-    const result = await Effect.runPromise(
-      Effect.result(
-        workspacesModule
-          .execWorkspace({
-            workspaceId: workspace.id,
-            payload: {
-              ownerUserId: OWNER,
-              user: "m4lice000",
-              commands: [{ executable: "id", args: [] }],
-            },
-          })
-          .pipe(Effect.provide(repos())),
-      ),
-    );
-    expect(failureOf(result)).toMatchObject({
-      _tag: "WorkspaceConflictError",
-      code: "user-unsupported",
-    });
+  const instance = {
+    runId: "run_1",
+    status: "ready",
+    adapter: "docker",
+    resourceId: "container-1",
+    reference: "container-1",
+    endpoint: null,
+  } as unknown as WorkspaceRuntimeInstance;
+
+  const runRow = (input: { id: string; processUser?: string }): Run => ({
+    id: input.id,
+    workspaceId: workspace.id,
+    attemptId: null,
+    ownerUserId: OWNER,
+    harnessId: "exec",
+    mode: "one-shot",
+    status: "queued",
+    prompt: null,
+    command: null,
+    metadata: null,
+    processUser: input.processUser ?? null,
+    exitCode: null,
+    errorMessage: null,
+    diff: null,
+    changedFiles: null,
+    changesReadFailedAt: null,
+    recordDeletedAt: null,
+    startedAt: null,
+    finishedAt: null,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
   });
 
-  it("refuses a session as a user before the daemon is reached", async () => {
-    const result = await Effect.runPromise(
-      Effect.result(
+  /** A world with a ready executor, a channel that answers `answer`, and what was asked of it. */
+  const world = (
+    answer: ProcessUserCheck | "fails",
+    options: { readonly adapter?: string; readonly ready?: boolean } = {},
+  ) => {
+    const checked: string[] = [];
+    const created: Array<{ processUser?: string }> = [];
+    const published: Array<{ user?: string }> = [];
+    const opened: unknown[] = [];
+    const channel: ProcessUserChannel = {
+      check: (_target, user) => {
+        checked.push(user);
+        return answer === "fails"
+          ? Effect.fail(new Error("bridge closed"))
+          : Effect.succeed(answer);
+      },
+    };
+    const layer = Layer.mergeAll(
+      Layer.succeed(WorkspaceRepo, {
+        getWorkspaceById: (id: string) =>
+          Effect.succeed(id === workspace.id ? workspace : undefined),
+      } as unknown as WorkspaceRepoService),
+      Layer.succeed(WorkspaceRuntimeInstanceRepo, {
+        getRuntimeInstanceByRunId: () =>
+          Effect.succeed(
+            options.ready === false
+              ? undefined
+              : { ...instance, adapter: options.adapter ?? instance.adapter },
+          ),
+      } as unknown as WorkspaceRuntimeInstanceRepoService),
+      Layer.succeed(RunRepo, {
+        createRun: (input: { id: string; processUser?: string }) => {
+          created.push(input.processUser === undefined ? {} : { processUser: input.processUser });
+          return Effect.succeed(runRow(input));
+        },
+      } as unknown as RunRepoService),
+      Layer.succeed(capabilities.RunExecPublisherService, {
+        publishRequested: (input: { user?: string }) => {
+          published.push(input.user === undefined ? {} : { user: input.user });
+          return Promise.resolve();
+        },
+      }),
+      Layer.succeed(ConnectedAccountRepo, {} as unknown as ConnectedAccountRepoService),
+      Layer.succeed(AccessTokenRepo, {} as never),
+      Layer.succeed(SealantRuntime, {
+        connect: () => Effect.die("only the channel reaches the daemon here"),
+      } as never),
+      Layer.succeed(TelemetryQuery, {} as never),
+      Layer.succeed(WorkspaceAttemptRepo, {
+        getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
+      } as never),
+      Layer.succeed(WorkspaceSessionRepo, {
+        createSession: (input: unknown) => {
+          opened.push(input);
+          return Effect.die("stop once the session row is made");
+        },
+      } as never),
+    );
+    const exec = (user: string | undefined) =>
+      Effect.runPromise(
+        Effect.result(
+          workspacesModule
+            .execWorkspace({
+              workspaceId: workspace.id,
+              payload: {
+                ownerUserId: OWNER,
+                ...(user === undefined ? {} : { user }),
+                commands: [{ executable: "id", args: [] }],
+              },
+              processUserChannel: channel,
+            })
+            .pipe(Effect.provide(layer)),
+        ),
+      );
+    const session = (user: string) =>
+      Effect.runPromiseExit(
         sessionsModule
           .createSession({
             headers: { authorization: "Bearer svc-test" },
-            payload: {
-              workspaceId: workspace.id,
-              ownerUserId: OWNER,
-              argv: ["bash"],
-              user: "40001",
-            },
+            payload: { workspaceId: workspace.id, ownerUserId: OWNER, argv: ["bash"], user },
+            processUserChannel: channel,
           })
-          .pipe(Effect.provide(repos())),
-      ),
+          .pipe(Effect.provide(layer)),
+      );
+    return { exec, session, checked, created, published, opened };
+  };
+
+  const allowed: ProcessUserCheck = { supported: true, exitCode: 0 };
+  const noCapability: ProcessUserCheck = { supported: false, exitCode: undefined };
+
+  beforeEach(() => processUser.forgetProcessUserAnswers());
+
+  it("refuses root and a uid outside the range before the executor is asked", async () => {
+    for (const user of ["root", "0", "1000", "50000"]) {
+      const w = world(allowed);
+      const refused = failureOf(await w.exec(user));
+      expect(refused).toMatchObject({ _tag: "WorkspaceConflictError", code: "user-unsupported" });
+      expect(String(refused.message)).toContain(`User '${user}' is not in range`);
+      expect(w.checked).toEqual([]);
+      expect(w.created).toEqual([]);
+    }
+  });
+
+  it("refuses an exec where the workspace's sealantd does not report exec.user", async () => {
+    const w = world(noCapability);
+    const refused = failureOf(await w.exec("m4lice000"));
+    expect(refused).toMatchObject({ _tag: "WorkspaceConflictError", code: "user-unsupported" });
+    expect(String(refused.message)).toBe(
+      "Workspace wks_1's sealantd doesn't run processes as another user (its sealantd does not report exec.user), so nothing was started as 'm4lice000'.",
     );
-    expect(failureOf(result)).toMatchObject({
-      _tag: "SessionConflictError",
-      code: "user-unsupported",
+    expect(w.created).toEqual([]);
+    expect(w.published).toEqual([]);
+  });
+
+  it("refuses, by reason, a user the executor finds out of range or missing", async () => {
+    const cases = [
+      [95, "User 'm4lice000' is not in range (its uid is outside 40001–49999)"],
+      [96, "User 'm4lice000' is not in range (its primary group is not mend (40000))"],
+      [90, "User 'm4lice000' is not in workspace wks_1"],
+    ] as const;
+    for (const [exitCode, words] of cases) {
+      const w = world({ supported: true, exitCode });
+      const refused = failureOf(await w.exec("m4lice000"));
+      expect(refused).toMatchObject({ _tag: "WorkspaceConflictError", code: "user-unsupported" });
+      expect(String(refused.message)).toContain(words);
+      expect(w.created).toEqual([]);
+    }
+  });
+
+  it("refuses on Cloudflare, and answers 409 workspace-not-running with no executor", async () => {
+    const cloudflare = world(allowed, { adapter: "cloudflare" });
+    const refused = failureOf(await cloudflare.exec("m4lice000"));
+    expect(refused).toMatchObject({ code: "user-unsupported" });
+    expect(String(refused.message)).toContain("doesn't run processes as another user");
+    expect(cloudflare.checked).toEqual([]);
+
+    const stopped = world(allowed, { ready: false });
+    expect(failureOf(await stopped.exec("m4lice000"))).toMatchObject({
+      _tag: "WorkspaceConflictError",
+      code: "workspace-not-running",
+    });
+  });
+
+  it("answers 502 when the executor does not answer, and starts nothing", async () => {
+    const w = world("fails");
+    expect(failureOf(await w.exec("m4lice000"))).toMatchObject({
+      _tag: "WorkspaceBadGatewayError",
+    });
+    expect(w.created).toEqual([]);
+  });
+
+  it("runs an allowed exec as the user, recorded on the run, and asks once per executor", async () => {
+    const w = world(allowed);
+    const first = await w.exec("m4lice000");
+    expect(Result.isSuccess(first) ? first.success.user : undefined).toBe("m4lice000");
+    await w.exec("m4lice000");
+    expect(w.checked).toEqual(["m4lice000"]);
+    expect(w.created).toEqual([{ processUser: "m4lice000" }, { processUser: "m4lice000" }]);
+    expect(w.published).toEqual([{ user: "m4lice000" }, { user: "m4lice000" }]);
+  });
+
+  it("asks nothing for an exec without a user", async () => {
+    const w = world(noCapability);
+    const ran = await w.exec(undefined);
+    expect(Result.isSuccess(ran)).toBe(true);
+    expect(w.checked).toEqual([]);
+    expect(w.created).toEqual([{}]);
+    expect(w.published).toEqual([{}]);
+  });
+
+  it("refuses a session as a user the same way, before the run exists", async () => {
+    const root = world(allowed);
+    const refusedRoot = await root.session("root");
+    expect(JSON.stringify(refusedRoot)).toContain("user-unsupported");
+    expect(root.checked).toEqual([]);
+
+    const old = world(noCapability);
+    const refused = await old.session("40001");
+    expect(JSON.stringify(refused)).toContain("SessionConflictError");
+    expect(JSON.stringify(refused)).toContain("doesn't run processes as another user");
+    expect(old.created).toEqual([]);
+  });
+
+  it("records an allowed session's user on its run", async () => {
+    const w = world(allowed);
+    await w.session("m4lice000");
+    expect(w.checked).toEqual(["m4lice000"]);
+    expect(w.created).toEqual([{ processUser: "m4lice000" }]);
+  });
+});
+
+describe("the control plane's features", () => {
+  it("reports that it passes users through, and the per-person APIs it has", async () => {
+    const index = await Effect.runPromise(systemModule.getIndex());
+    expect(index.features).toEqual({
+      processUser: true,
+      dotfilesApply: true,
+      credentialsPartialPut: true,
+      credentialsPiOpencode: true,
+      captureOwnerMap: true,
     });
   });
 });

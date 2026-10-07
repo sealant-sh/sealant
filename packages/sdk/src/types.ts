@@ -947,6 +947,8 @@ export interface WorkspaceLaunch {
   readonly launchId?: string;
   /** The image the executor booted, with its per-person capability; filled in by `ready()`. */
   readonly image?: WorkspaceImage;
+  /** Whether its processes can be started as a user (`processUser()`); filled in by `ready()`. */
+  readonly processUser?: WorkspaceProcessUserCapability;
 }
 
 export interface ListOptions {
@@ -959,13 +961,18 @@ export interface WorkspaceExecOptions {
   /** Working directory inside the workspace (defaults to the repository root). */
   readonly cwd?: string;
   /**
-   * Run the process as this Linux user: a user name of the image's passwd, or a numeric uid. It
-   * takes its uid, gid, supplementary groups and `HOME`, `USER`, `LOGNAME` and `SHELL` from the
-   * passwd entry, with umask 0002. Never run as anyone else in its place: the SDK sends it only to a
-   * control plane that reports the feature (read once per client), and rejects with code
-   * `user-unsupported` otherwise; a control plane that reports it but whose runtime cannot do it
-   * yet (no released sealantd can) rejects with `WorkspaceConflictError` / `SessionConflictError`,
-   * body code `user-unsupported`. Nothing is started either way.
+   * Run the process as this Linux user: a user name of the image's passwd, or a numeric uid. The
+   * workspace's sealantd starts it as that passwd entry: its uid, gid, supplementary groups and
+   * `HOME`, `USER`, `LOGNAME` and `SHELL`, umask 0002, a private `TMPDIR` and `XDG_RUNTIME_DIR`,
+   * the image's person environment, and none of the daemon's logins. Only a person Mend made (a uid
+   * in 40001–49999 whose primary group is `mend`, never root), on a workspace whose sealantd
+   * reports `exec.user` (`workspace.processUser()`). Never run as anyone else in its place: the
+   * SDK sends it only to a control plane that reports the feature (`features().processUser`, read
+   * once per client) and rejects with code `user-unsupported` otherwise; the control plane refuses
+   * any other user or workspace with `WorkspaceConflictError` / `SessionConflictError`, body code
+   * `user-unsupported`, its message saying why (the workspace's sealantd does not run processes as
+   * another user, the user is not in range, or it does not exist yet). Nothing is started either
+   * way. The run records the user (`user` on the run), never more of the process.
    */
   readonly user?: string;
 }
@@ -1007,6 +1014,11 @@ export interface Workspace {
   runtime(): Promise<WorkspaceRuntimeInfo | null>;
   /** The image the workspace's latest launch booted, with its per-person capability. */
   image(): Promise<WorkspaceImage | null>;
+  /**
+   * Whether this workspace's processes can be started as a person's Linux user (`user` on
+   * `exec()` and `sessions.open()`), read now (see {@link WorkspaceProcessUserCapability}).
+   */
+  processUser(): Promise<WorkspaceProcessUserCapability>;
   /**
    * What this handle knows of the launch that made it (from `workspaces.create()`), including the
    * executor `ready()` saw become ready. `undefined` on handles from `get()` / `list()`.
@@ -1302,6 +1314,38 @@ export interface WorkspaceImagePersonLayout {
   readonly acl: "supported" | "unsupported" | "unknown";
 }
 
+/**
+ * Whether a workspace's processes can be started as a person's Linux user (`user` on `exec()` and
+ * `sessions.open()`): `supported` when the sealantd of the image its latest launch booted reports
+ * `exec.user`, `unsupported` when it does not or the runtime never runs a process as a user
+ * (Cloudflare), `unknown` when nothing says (an image built before the probe, or a control plane
+ * from before this report). An exec or session as a user asks the running daemon, whose answer
+ * decides.
+ */
+export type WorkspaceProcessUserCapability = "supported" | "unsupported" | "unknown";
+
+/**
+ * What the control plane can do that an older one cannot (`sealant.features()`): detect these
+ * instead of reading a version, which a self-built control plane reports as `0.0.0`. A control
+ * plane from before a feature reports it `false`.
+ */
+export interface SealantFeatures {
+  /**
+   * `user` on `exec()` and `sessions.open()` is passed through to the workspace's sealantd. Each
+   * workspace's own answer is `workspace.processUser()`; a call as a user on a workspace that
+   * cannot is refused there (code `user-unsupported`), never run as another user.
+   */
+  readonly processUser: boolean;
+  /** `workspace.dotfiles.apply()`: a person's dotfiles applied as their user. */
+  readonly dotfilesApply: boolean;
+  /** `partial: true` on `workspace.credentials.put()`. */
+  readonly credentialsPartialPut: boolean;
+  /** `pi` and `opencode` on `workspace.credentials.put()`. */
+  readonly credentialsPiOpencode: boolean;
+  /** `ownerMap` on a capture source. */
+  readonly captureOwnerMap: boolean;
+}
+
 /** A published workspace image. */
 export interface WorkspaceImage {
   readonly reference: string;
@@ -1403,13 +1447,18 @@ export interface SessionOptions {
   /** Opaque correlation bag, stored verbatim and echoed on reads. */
   readonly metadata?: Readonly<Record<string, unknown>>;
   /**
-   * Run the process as this Linux user: a user name of the image's passwd, or a numeric uid. It
-   * takes its uid, gid, supplementary groups and `HOME`, `USER`, `LOGNAME` and `SHELL` from the
-   * passwd entry, with umask 0002. Never run as anyone else in its place: the SDK sends it only to a
-   * control plane that reports the feature (read once per client), and rejects with code
-   * `user-unsupported` otherwise; a control plane that reports it but whose runtime cannot do it
-   * yet (no released sealantd can) rejects with `WorkspaceConflictError` / `SessionConflictError`,
-   * body code `user-unsupported`. Nothing is started either way.
+   * Run the process as this Linux user: a user name of the image's passwd, or a numeric uid. The
+   * workspace's sealantd starts it as that passwd entry: its uid, gid, supplementary groups and
+   * `HOME`, `USER`, `LOGNAME` and `SHELL`, umask 0002, a private `TMPDIR` and `XDG_RUNTIME_DIR`,
+   * the image's person environment, and none of the daemon's logins. Only a person Mend made (a uid
+   * in 40001–49999 whose primary group is `mend`, never root), on a workspace whose sealantd
+   * reports `exec.user` (`workspace.processUser()`). Never run as anyone else in its place: the
+   * SDK sends it only to a control plane that reports the feature (`features().processUser`, read
+   * once per client) and rejects with code `user-unsupported` otherwise; the control plane refuses
+   * any other user or workspace with `WorkspaceConflictError` / `SessionConflictError`, body code
+   * `user-unsupported`, its message saying why (the workspace's sealantd does not run processes as
+   * another user, the user is not in range, or it does not exist yet). Nothing is started either
+   * way. The run records the user (`user` on the run), never more of the process.
    */
   readonly user?: string;
 }

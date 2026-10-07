@@ -69,6 +69,11 @@ export const runSchema = Schema.Struct({
   command: Schema.optional(recordedRunCommandSchema),
   /** Opaque caller correlation bag, echoed verbatim (no platform semantics). */
   metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  /**
+   * The Linux user the run's processes were started as (`user` on an exec or a session): the login
+   * name or uid the caller named, and nothing else of the process. Absent: the workspace's own user.
+   */
+  user: Schema.optional(NonEmptyString),
   exitCode: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(Schema.String),
   startedAt: Schema.optional(Schema.String),

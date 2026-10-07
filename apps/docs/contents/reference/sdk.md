@@ -114,9 +114,13 @@ These call the live API and work end-to-end:
   into that home (no login in the environment); `launch.image` (after `ready()`) and
   `workspace.image()` report the image's per-person capability; `workspaces.imageKey(options)` keys
   the image a create would build with no call, and `workspaces.inspectImage(options)` reads its
-  capability before a create; `exec(argv, { user })` and `sessions.open(argv, { user })` ask for a
-  Linux user, sent only to a control plane that reports the feature, and refused
-  (`user-unsupported`) until the workspace runtime can start a process as one. A capture source's
+  capability before a create; `exec(argv, { user })` and `sessions.open(argv, { user })` start the
+  process as a person's Linux user (a uid in 40001–49999 whose primary group is `mend`), on a
+  workspace whose `sealantd` reports `exec.user` (`workspace.processUser()`, also
+  `launch.processUser` after `ready()`); anything else is refused (`user-unsupported`, the message
+  saying why) and nothing starts. `sealant.features()` reports what the control plane can do
+  (`processUser`, `dotfilesApply`, `credentialsPartialPut`, `credentialsPiOpencode`,
+  `captureOwnerMap`), so a client detects them rather than reading a version. A capture source's
   `ownerMap: { gid, worktreeUid, people: [{ id, uid }] }` gives each person's saved directory to
   their uid and the worktree to the group on restore, and makes the executor a per-person one (no
   no-new-privileges, so everyone's `sudo` works); see

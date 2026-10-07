@@ -99,6 +99,8 @@ import {
 } from "@sealant/validators";
 import {
   personLayoutCapability,
+  processUserCapability,
+  type ProcessUserChannel,
   planWorkspaceImageBuild,
   type PersonLayoutContext,
   homePathProblem,
@@ -138,9 +140,9 @@ import {
 } from "../../services/control-plane-capabilities.js";
 import { requireLiveWorkspaceRoom, spendOwnerLaunch } from "../../services/owner-budgets.js";
 import { OWNER_REQUIRED_HINT, resolveOwnerScope, scopeAdmits } from "../../services/owner-scope.js";
-import { processUserUnsupportedMessage } from "../process-user.js";
+import { checkProcessUser, processUserNameRefusal } from "../process-user.js";
 import { mapRun } from "../runs/runs.module.js";
-import { resolveDaemonTarget } from "../sessions/sessions.module.js";
+import { resolveDaemonInstance, resolveDaemonTarget } from "../sessions/sessions.module.js";
 import { validateClientSuppliedAuthRefs } from "./client-authrefs.js";
 import { resolveSelectedConnectedAccount } from "./connected-account-selection.js";
 import {
@@ -1254,6 +1256,14 @@ const mapWorkspaceSummary = (
     latestJob,
     personLayoutContext(runtimeInstance?.adapter),
   );
+  // From the sealantd of the image the latest launch built; the exec or session asks the daemon.
+  const processUser =
+    latestJob === undefined
+      ? undefined
+      : processUserCapability(
+          latestJob.resultPayload?.metadata?.imageProbe,
+          runtimeInstance?.adapter ?? env.DEFAULT_RUNTIME_ADAPTER,
+        );
   const error = resolveWorkspaceError(latestJob, runtimeInstance);
   const updatedAt = latestDate(
     workspace.updatedAt,
@@ -1287,6 +1297,7 @@ const mapWorkspaceSummary = (
         }),
     ...(runtime === undefined ? {} : { runtime }),
     ...(publishedImage === undefined ? {} : { publishedImage }),
+    ...(processUser === undefined ? {} : { processUser }),
     ...(error === undefined ? {} : { error }),
     createdAt: workspace.createdAt.toISOString(),
     updatedAt: updatedAt.toISOString(),
@@ -2649,19 +2660,59 @@ export const listWorkspaceEvents = (input: {
 export const execWorkspace = (input: {
   readonly workspaceId: string;
   readonly payload: ExecWorkspaceRequest;
+  /** For tests; defaults to the live channel (asked only for an exec as a user). */
+  readonly processUserChannel?: ProcessUserChannel;
 }) => {
   return Effect.gen(function* () {
     const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
-    if (input.payload.user !== undefined) {
-      return yield* new WorkspaceConflictError({
-        message: processUserUnsupportedMessage(input.payload.user),
-        code: PROCESS_USER_UNSUPPORTED_CODE,
-      });
+    const user = input.payload.user;
+    if (user !== undefined) {
+      const refused = processUserNameRefusal(workspace.id, user);
+      if (refused !== undefined) {
+        return yield* new WorkspaceConflictError({
+          message: refused,
+          code: PROCESS_USER_UNSUPPORTED_CODE,
+        });
+      }
     }
     if (workspace.latestRunId === null) {
       return yield* new WorkspaceConflictError({
         message: `Workspace ${input.workspaceId} has no launched runtime to exec in yet; wait for it to become ready.`,
       });
+    }
+    // An exec as a person: only where the running executor's daemon starts one as that user, for
+    // a person in Mend's range. Asked before the run exists, so a refusal leaves nothing behind.
+    if (user !== undefined) {
+      const resolved = yield* resolveDaemonInstance(workspace.id).pipe(
+        Effect.mapError(
+          (error) =>
+            new WorkspaceInternalServerError({
+              message: toErrorMessage(error, "Failed to load the workspace runtime."),
+            }),
+        ),
+      );
+      if (resolved === undefined) {
+        return yield* new WorkspaceConflictError({
+          message: `Workspace ${input.workspaceId} has no running executor to run a process as '${user}' in.`,
+          code: "workspace-not-running",
+        });
+      }
+      const verdict = yield* checkProcessUser({
+        workspaceId: workspace.id,
+        instance: resolved.instance,
+        target: resolved.target,
+        user,
+        ...(input.processUserChannel === undefined ? {} : { channel: input.processUserChannel }),
+      });
+      if (verdict.kind === "refused") {
+        return yield* new WorkspaceConflictError({
+          message: verdict.message,
+          code: PROCESS_USER_UNSUPPORTED_CODE,
+        });
+      }
+      if (verdict.kind === "unanswered") {
+        return yield* new WorkspaceBadGatewayError({ message: verdict.message });
+      }
     }
 
     const runs = yield* RunRepo;
@@ -2673,6 +2724,7 @@ export const execWorkspace = (input: {
         ownerUserId: input.payload.ownerUserId,
         harnessId: execRunHarnessId,
         mode: "one-shot",
+        ...(user === undefined ? {} : { processUser: user }),
       }),
       "Failed to create the exec run.",
     );
@@ -2687,6 +2739,7 @@ export const execWorkspace = (input: {
             args: [...command.args],
             ...(command.cwd === undefined ? {} : { cwd: command.cwd }),
           })),
+          ...(user === undefined ? {} : { user }),
         }),
       catch: (error) =>
         new WorkspaceInternalServerError({

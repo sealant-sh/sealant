@@ -40,6 +40,8 @@ export interface RunExecPublisher {
     readonly command?: RunExecCommand;
     readonly commands?: readonly RunExecCommand[];
     readonly dotfiles?: RunDotfilesApply;
+    /** `commands` only: every command runs as this Linux user, checked by the API first. */
+    readonly user?: string;
   }) => Promise<void>;
 }
 

@@ -66,6 +66,7 @@ const runRow = (input: { readonly id: string; readonly harnessId: string }): Run
   prompt: null,
   command: null,
   metadata: null,
+  processUser: null,
   exitCode: null,
   errorMessage: null,
   diff: null,
