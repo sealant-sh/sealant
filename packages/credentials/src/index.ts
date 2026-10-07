@@ -30,6 +30,7 @@ export {
   claudeCredentialsCopy,
   claudeSetupTokenCredentials,
   CLAUDE_SETUP_TOKEN_EXPIRES_AT,
+  chatgptLoginEntry,
   CODEX_COPY_REFRESH_TOKEN,
   codexAuthJsonCanRefresh,
   codexAuthJsonCopy,

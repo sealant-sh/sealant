@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  chatgptLoginEntry,
   claudeCredentialsCanRefresh,
   claudeCredentialsCopy,
   CODEX_COPY_REFRESH_TOKEN,
@@ -73,5 +74,42 @@ describe("codexAuthJsonCopy", () => {
   it("refuses malformed input", () => {
     expect(() => codexAuthJsonCopy("[]")).toThrow(CredentialCopyError);
     expect(() => codexAuthJsonCopy(JSON.stringify({ tokens: "x" }))).toThrow(CredentialCopyError);
+  });
+});
+
+/** A token whose claims are readable, as a ChatGPT access token's are. */
+const jwt = (claims: Record<string, unknown>) =>
+  `h.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.s`;
+
+describe("chatgptLoginEntry", () => {
+  it("makes pi's and opencode's ChatGPT entry from a Codex login, unable to refresh", () => {
+    const access = jwt({ exp: 1_900_000_000 });
+    const entry = JSON.parse(
+      chatgptLoginEntry(
+        JSON.stringify({
+          tokens: { access_token: access, refresh_token: "rt-real", account_id: "acc_1" },
+        }),
+      ),
+    );
+    expect(entry).toEqual({
+      type: "oauth",
+      access,
+      refresh: CODEX_COPY_REFRESH_TOKEN,
+      expires: 1_900_000_000_000,
+      accountId: "acc_1",
+    });
+    expect(JSON.stringify(entry)).not.toContain("rt-real");
+  });
+
+  it("refuses an API-key login and a token with no expiry", () => {
+    expect(() => chatgptLoginEntry(JSON.stringify({ OPENAI_API_KEY: "sk-x" }))).toThrow(
+      CredentialCopyError,
+    );
+    expect(() =>
+      chatgptLoginEntry(JSON.stringify({ tokens: { access_token: jwt({}), account_id: "acc_1" } })),
+    ).toThrow(/expiry/);
+    expect(() => chatgptLoginEntry(JSON.stringify({ tokens: { access_token: "opaque" } }))).toThrow(
+      CredentialCopyError,
+    );
   });
 });

@@ -4,7 +4,8 @@
  * `POST /v1/workspaces/:id/credentials` puts one person's Claude, Codex and GitHub logins into one
  * home: copies written the way a launch writes them (no Claude refresh token, a placeholder Codex
  * one, GitHub as the CLI's `hosts.yml`), owned by the home's owner, mode 0600, and kept refreshed
- * there. A home holds one person's logins for as long as it is held: a put naming anyone else is
+ * there. pi's and opencode's ChatGPT logins are made from the person's Codex account and merged
+ * into each tool's `auth.json` as one entry, leaving the person's own logins there alone. A home holds one person's logins for as long as it is held: a put naming anyone else is
  * refused (`home-held`), never written over. `DELETE` releases the home (its files are removed and
  * its record deleted), after which the home can be taken again. `GET` lists the homes.
  *
@@ -20,6 +21,7 @@ import {
   WorkspaceInternalServerError,
   WorkspaceNotFoundError,
   WorkspaceServiceUnavailableError,
+  workspaceCredentialHomeAccountProvider,
   workspaceCredentialHomeProviders,
   type ListWorkspaceCredentialsQuery,
   type ListWorkspaceCredentialsResponse,
@@ -32,6 +34,7 @@ import {
   type WorkspaceHomeAccount,
 } from "@sealant/api-contracts";
 import {
+  chatgptLoginEntry,
   claudeCredentialsFile,
   codexAuthJsonCopy,
   CredentialCipher,
@@ -245,21 +248,48 @@ const runHomeScript = (input: {
     };
   });
 
-/** The file one account's login is, as a launch would write it. */
+/**
+ * The file one account's login is, as a launch would write it; for pi and opencode, the ChatGPT
+ * entry the home script merges into the tool's own `auth.json`.
+ */
 const loginFileFor = (provider: WorkspaceCredentialHomeProvider, account: ConnectedAccount) =>
   Effect.gen(function* () {
+    const accountProvider = workspaceCredentialHomeAccountProvider[provider];
     const cipher = yield* CredentialCipher;
     const plaintext = yield* cipher.decrypt(account.encryptedPayload).pipe(
       Effect.mapError(
         (error) =>
           new WorkspaceInternalServerError({
-            message: `Connected ${provider} account "${account.name}" could not be decrypted: ${error.message}`,
+            message: `Connected ${accountProvider} account "${account.name}" could not be decrypted: ${error.message}`,
           }),
       ),
     );
+    const unusable = new WorkspaceConflictError({
+      message: `Connected ${accountProvider} account "${account.name}" holds an unusable credential — reconnect it.`,
+      code: "connected-account-invalid",
+      provider: accountProvider,
+    });
+    const parsed = yield* Effect.try({
+      try: (): unknown => JSON.parse(plaintext),
+      catch: () => unusable,
+    });
+    if (provider === "pi" || provider === "opencode") {
+      const authJson = yield* Effect.try({
+        try: () => parseCodexCredentialPayload(parsed).authJson,
+        catch: () => unusable,
+      });
+      return yield* Effect.try({
+        try: () => chatgptLoginEntry(authJson),
+        catch: () =>
+          new WorkspaceConflictError({
+            message: `Connected codex account "${account.name}" is not a ChatGPT login (an API key, or a login with no account id), so it cannot be ${provider}'s login. Nothing was written.`,
+            code: "connected-account-unsupported",
+            provider: accountProvider,
+          }),
+      });
+    }
     return yield* Effect.try({
       try: () => {
-        const parsed: unknown = JSON.parse(plaintext);
         if (provider === "github") {
           const login = account.metadata?.["login"];
           return githubHostsYml(
@@ -272,12 +302,7 @@ const loginFileFor = (provider: WorkspaceCredentialHomeProvider, account: Connec
           ? claudeCredentialsFile(parseClaudeCredentialPayload(parsed))
           : codexAuthJsonCopy(parseCodexCredentialPayload(parsed).authJson);
       },
-      catch: () =>
-        new WorkspaceConflictError({
-          message: `Connected ${provider} account "${account.name}" holds an unusable credential — reconnect it.`,
-          code: "connected-account-invalid",
-          provider,
-        }),
+      catch: () => unusable,
     });
   });
 
@@ -305,6 +330,15 @@ const toHomeView = (row: {
       accounts,
     } satisfies WorkspaceCredentialHome;
   });
+
+/** Refusals the owner's half answers, after a first take has made its marker. */
+const OWNER_HALF_REFUSALS: ReadonlySet<number> = new Set([
+  HOME_SCRIPT_EXIT.linkOnTheWay,
+  HOME_SCRIPT_EXIT.piLoginUnusable,
+  HOME_SCRIPT_EXIT.opencodeLoginUnusable,
+  HOME_SCRIPT_EXIT.piLoginOutside,
+  HOME_SCRIPT_EXIT.opencodeLoginOutside,
+]);
 
 /** Why a refused script is answered as it is: fenced → held, busy → busy, else unusable. */
 const refusedCode = (exitCode: number | undefined) =>
@@ -395,9 +429,10 @@ export const putWorkspaceCredentials = (input: {
             readonly content: string;
           }> = [];
           for (const { provider, selection } of toWrite) {
+            // pi's and opencode's logins are made from the person's Codex account.
             const account = yield* resolveSelectedConnectedAccount({
               ownerUserId: payload.onBehalfOfUserId,
-              provider,
+              provider: workspaceCredentialHomeAccountProvider[provider],
               selection,
             });
             writes.push({ provider, account, content: yield* loginFileFor(provider, account) });
@@ -427,6 +462,23 @@ export const putWorkspaceCredentials = (input: {
             stdin: homeScriptStdin(writes.map(({ content }) => content)),
           });
           if (ran.kind === "refused") {
+            // The owner's half refuses after a first take made its marker (a login directory linking
+            // out, a pi or opencode file outside the home or unusable): release that marker, so the
+            // home can be taken again once it is fixed, without a DELETE and never as `home-held`.
+            if (held === undefined && OWNER_HALF_REFUSALS.has(ran.exitCode ?? -1)) {
+              yield* runHomeScript({
+                channel,
+                target,
+                home: payload.home,
+                script: buildHomeCredentialScript({
+                  home: payload.home,
+                  fence: { kind: "release", generation },
+                  token: yield* nextFence,
+                  writes: [],
+                  removes: [],
+                }),
+              });
+            }
             return yield* new WorkspaceConflictError({
               message: `${ran.message} Nothing was written.`,
               code: refusedCode(ran.exitCode),

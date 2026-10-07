@@ -52,6 +52,7 @@ export { buildCredentialFileWriteScript } from "./credential-files.js";
 export {
   buildHomeCredentialScript,
   HOME_CREDENTIAL_FILES,
+  HOME_MERGED_LOGINS,
   HOME_STATE_DIR,
   homeStateKey,
   HOME_SCRIPT_EXIT,
@@ -64,6 +65,7 @@ export {
   newHomeGeneration,
   type HomeCredentialChannel,
   type HomeCredentialProvider,
+  type HomeFileCredentialProvider,
   type HomeCredentialScriptInput,
   type HomeWriteFence,
   type HomeOwner,

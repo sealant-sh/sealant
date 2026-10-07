@@ -222,7 +222,14 @@ export const workspaceRuntimeInstances = pgTable(
 export const workspaceCredentialHomeFences = pgSequence("workspace_credential_home_fences");
 
 /** The providers a home's logins are written for (docs/connected-accounts-design.md §6c). */
-export const workspaceCredentialHomeProviderValues = ["claude", "codex", "github"] as const;
+export const workspaceCredentialHomeProviderValues = [
+  "claude",
+  "codex",
+  "github",
+  // pi's and opencode's ChatGPT logins, made from the person's Codex account (§6c).
+  "pi",
+  "opencode",
+] as const;
 export type WorkspaceCredentialHomeProvider =
   (typeof workspaceCredentialHomeProviderValues)[number];
 

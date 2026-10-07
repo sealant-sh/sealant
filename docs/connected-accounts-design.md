@@ -463,6 +463,38 @@ key; the SSH gateway's secret and a user access token act for at most one person
 service key's product (Mend) puts a person's login only into that person's home, or into a
 conversation home while that person's process is about to run there.
 
+**pi's and opencode's ChatGPT logins (Oct 2026).** A put's `pi` and `opencode` name one of the
+person's Codex accounts; the home holds them as providers of their own (the record names the Codex
+account under `pi` and `opencode`), so a release removes them with everything else and a Codex
+refresh rewrites them (one script per home for the codex, pi and opencode logins made from it). Each
+is one entry,
+`{ type: "oauth", access, refresh: "sealant-copy-cannot-refresh", expires, accountId }`
+(`chatgptLoginEntry`), under `openai-codex` in `<home>/.pi/agent/auth.json` and `openai` in
+`<home>/.local/share/opencode/auth.json`, the shape Mend wrote by hand. The home script merges it as
+the home's owner with node:
+
+- the file is followed through every link to where it really is, a dangling last link included
+  (Mend's person layout reaches opencode's file through the saved data directory and back to
+  `~/.mend/opencode/auth.json`); in a person's home that must be inside the home and outside
+  `/workspace`, or the put is refused (`home-unusable`), so no login lands in saved state;
+- an entry the person made inside the tool (its refresh token is not the copy's) is never replaced
+  or removed (Mend ADR 0016 decision 8a); `null` and a release remove only a copy; other entries and
+  a file that is not a JSON object stay as they are; written in place, never through a rename, 0600;
+- **fails closed without node** (none on the owner's system PATH): a put naming pi or opencode, and
+  a release or a put that would remove a pi or opencode login whose file exists, are refused (`81`,
+  `home-unusable`) before the hold changes, so a release never reports a clean home while an earlier
+  holder's ChatGPT copy stays for the next one; the home stays held;
+- **each failure says what it is**: a file that is not a regular file the owner can write (a
+  directory at `auth.json`), or a node failure, is `82` (pi) or `83` (opencode); a file that really
+  is outside the home, under `/workspace`, or has another hard link is `84` or `85`; all are
+  `home-unusable` with the file named, never "a symbolic link". A removal finds nothing of Core's in
+  any of those places and succeeds, so a first take refused there releases its own marker and the
+  home is never left looking like another person's (`home-held`).
+
+A Codex account that is an API key, or has no account id or readable expiry, cannot be either tool's
+login: `409` `connected-account-unsupported` with `provider: "codex"`. Choosing pi's
+`defaultProvider` stays the caller's (Mend's seed).
+
 **Refusals name their provider (Oct 2026).** A put (or a create) that names an account the person
 cannot name answers `404` `connected-account-missing`, and one marked invalid or holding an unusable
 credential `409` `connected-account-invalid`, each with the account's `provider`; the messages are

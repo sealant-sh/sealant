@@ -83,6 +83,44 @@ export const codexAuthJsonCopy = (authJson: string): string => {
   });
 };
 
+/**
+ * The ChatGPT login pi and opencode run on, made from a Codex `auth.json` (a stored login or its
+ * copy): `{ type: "oauth", access, refresh, expires, accountId }`, the shape each tool keeps under
+ * its own key of its `auth.json` (`openai-codex` for pi, `openai` for opencode), with the copy's
+ * placeholder as the refresh token so neither can rotate the login, and the access token's own
+ * expiry in milliseconds. The same entry Mend wrote by hand (verified 2026-10-01: pi `auth check`
+ * reads it ready, opencode lists it as an OpenAI login). An API-key login, or one without an
+ * account id or a readable expiry, is not a ChatGPT login: `CredentialCopyError`.
+ */
+export const chatgptLoginEntry = (authJson: string): string => {
+  const tokens = parseObject(authJson, "the Codex auth.json")["tokens"];
+  if (typeof tokens !== "object" || tokens === null || Array.isArray(tokens)) {
+    throw new CredentialCopyError("the Codex login is not a ChatGPT login (it has no tokens)");
+  }
+  const access: unknown = Reflect.get(tokens, "access_token");
+  const accountId: unknown = Reflect.get(tokens, "account_id");
+  if (typeof access !== "string" || access === "" || typeof accountId !== "string") {
+    throw new CredentialCopyError("the Codex login has no access token or account id");
+  }
+  let exp: unknown;
+  try {
+    const payload = (access.split(".")[1] ?? "").replaceAll("-", "+").replaceAll("_", "/");
+    exp = parseObject(Buffer.from(payload, "base64").toString("utf8"), "the access token")["exp"];
+  } catch {
+    exp = undefined;
+  }
+  if (typeof exp !== "number") {
+    throw new CredentialCopyError("the Codex access token carries no readable expiry");
+  }
+  return JSON.stringify({
+    type: "oauth",
+    access,
+    refresh: CODEX_COPY_REFRESH_TOKEN,
+    expires: exp * 1000,
+    accountId,
+  });
+};
+
 /** Whether a Claude session file carries a refresh token (the store's own copy always does). */
 export const claudeCredentialsCanRefresh = (credentialsJson: string): boolean => {
   try {
