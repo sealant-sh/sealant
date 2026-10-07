@@ -146,10 +146,15 @@ create's dotfiles: chezmoi, stow or copy, then each tree's `./install.sh`. The i
 must report `dotfiles.user` (the pinned 0.20.0-next.150 and later do; otherwise `409`
 `dotfiles-user-unsupported`).
 
-- **Only as the person, only into their home.** The user must exist and must not be root or in
-  root's group, and `home` must be their passwd home, an existing directory of theirs reached
-  without a symbolic link. Every command of the apply runs as the user, and nothing is written into
-  another home or root's.
+- **As the person, into their home.** The user must exist and must not be root or in root's group,
+  and `home` must be their passwd home, an existing directory of theirs reached without a symbolic
+  link, whose logins nobody else holds (`409` `home-held`). The clone, chezmoi, stow and
+  `install.sh` run as the user.
+- **Known limit.** `sealantd` still unpacks archives and runs the `copy` manager as root inside the
+  home, following links there: a person who links a directory of their home elsewhere (another
+  person's `~/.config` included) can have root write their files through it. With passwordless
+  `sudo` for everyone this grants nothing `sudo` does not. A `sealantd` fix (unpack outside the
+  home, copy as the user) is in progress.
 - **The files first, `install.sh` beside the caller's work.** The call resolves once every file is
   applied; the bootstrap then runs as the person, recorded in the run the call answers with, and
   `bootstrap.wait()` reports its exit code and output. A bootstrap running past 30 minutes is

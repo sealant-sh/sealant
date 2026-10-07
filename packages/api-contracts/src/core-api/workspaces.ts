@@ -204,7 +204,7 @@ export const workspaceDotfilesManagerSchema = Schema.Literals(["auto", "chezmoi"
  * only the person's own identity can reach is resolved by the caller and sent as an archive).
  */
 export const applyWorkspaceDotfilesRepositorySchema = Schema.Struct({
-  /** An `https://` clone URL. */
+  /** An `https://` clone URL with no credential in it (no `user:token@`). */
   url: NonEmptyString.check(Schema.isPattern(/^https:\/\/[^\s'"\\]+$/)),
   /** Branch or tag; omitted clones the remote's default branch. */
   ref: Schema.optional(NonEmptyString),
@@ -238,8 +238,11 @@ export const applyWorkspaceDotfilesArchiveSchema = Schema.Struct({
  * order) and the same applier (sealantd's: chezmoi, stow or copy, then each tree's bootstrap).
  *
  * `user` must exist and must not be root or in root's group, and `home` must be its passwd home: an
- * existing directory of the user's, reached without a symbolic link. Every command of the apply runs
- * as the user and nothing is written into another home. Answered `202` with a run (`harnessId`
+ * existing directory of the user's, reached without a symbolic link. The clone, chezmoi, stow and the
+ * bootstrap run as the user; sealantd's archive staging and `copy` manager still run as root inside
+ * the home and follow links the person planted there, until sealantd's fix for it lands (see
+ * docs/connected-accounts-design.md §6g). `onBehalfOfUserId` names whose dotfiles they are: it is
+ * recorded on the run, and a home whose logins another person holds is refused (`home-held`). Answered `202` with a run (`harnessId`
  * `dotfiles`) once the archives are staged: the run's first `processStarted` is the bootstrap,
  * started once every file is applied; its output and exit are the run's. The run completes with the
  * bootstrap's exit code (0 when no tree had one) and fails, with the daemon's words, when the apply
@@ -248,6 +251,8 @@ export const applyWorkspaceDotfilesArchiveSchema = Schema.Struct({
 export const applyWorkspaceDotfilesRequestSchema = Schema.Struct({
   /** The workspace's owner (owner scope; uniform 404 otherwise). */
   ownerUserId: NonEmptyString,
+  /** The Sealant user whose dotfiles these are: recorded on the run (`metadata.dotfiles`). */
+  onBehalfOfUserId: NonEmptyString,
   /** The Linux user to apply as (a login name or a uid); never root. */
   user: workspaceProcessUserSchema,
   /** The user's passwd home: absolute, normalised, never under `/workspace`. */
@@ -265,7 +270,7 @@ export type ApplyWorkspaceDotfilesRequest = typeof applyWorkspaceDotfilesRequest
  * sealantd cannot apply dotfiles as a user), `user-unknown` (no such user: make it first),
  * `user-root` (the user is root or in root's group), `home-mismatch` (the home is not the user's
  * passwd home), `home-unusable` (the home is missing, not a directory, not the user's, or reached
- * through a symbolic link).
+ * through a symbolic link), `home-held` (another person's logins are held in the home).
  */
 export const workspaceDotfilesConflictCodes = [
   "workspace-not-running",
@@ -274,6 +279,7 @@ export const workspaceDotfilesConflictCodes = [
   "user-root",
   "home-mismatch",
   "home-unusable",
+  "home-held",
 ] as const;
 export type WorkspaceDotfilesConflictCode = (typeof workspaceDotfilesConflictCodes)[number];
 
@@ -1326,8 +1332,10 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
       payload: applyWorkspaceDotfilesRequestSchema,
       success: runSchema.pipe(HttpApiSchema.status(202)),
       error: [
-        // Root, a malformed home, or nothing to apply.
+        // Root, a malformed home, a URL with a credential, or nothing to apply.
         WorkspaceBadRequestError,
+        // Only a service key may apply a person's dotfiles.
+        WorkspaceForbiddenError,
         WorkspaceNotFoundError,
         // See `workspaceDotfilesConflictCodes`.
         WorkspaceConflictError,

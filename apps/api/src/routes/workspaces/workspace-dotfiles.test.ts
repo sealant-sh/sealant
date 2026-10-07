@@ -1,19 +1,27 @@
-import {
-  WorkspaceBadGatewayError,
-  WorkspaceBadRequestError,
-  WorkspaceInternalServerError,
-  WorkspaceNotFoundError,
-} from "@sealant/api-contracts";
 /**
  * `POST /v1/workspaces/:id/dotfiles` (docs/connected-accounts-design.md §6g): a person's dotfiles
- * applied as their user. The request is checked before the executor is reached (never root, a home
- * Core writes into, something to apply), the daemon must report `dotfiles.user`, the stage script's
+ * applied as their user. The request is checked before the executor is reached (a service key, never
+ * root, a home Core writes into and nobody else's logins hold, a URL with no credential, something
+ * to apply), the daemon must report `dotfiles.user`, the stage script's
  * refusals become stable codes, the archives go over stdin (never into the script or the job), and
  * a `dotfiles` run is queued naming only the staged directory. Driven against fake repositories, a
  * recording stage channel and a recording publisher; nothing reaches an executor.
  */
+import {
+  WorkspaceBadGatewayError,
+  WorkspaceBadRequestError,
+  WorkspaceForbiddenError,
+  WorkspaceInternalServerError,
+  WorkspaceNotFoundError,
+} from "@sealant/api-contracts";
 import type { Run, RunRepoService, Workspace, WorkspaceRuntimeInstance } from "@sealant/db";
-import { RunRepo, WorkspaceRepo, WorkspaceRuntimeInstanceRepo } from "@sealant/db";
+import {
+  RunRepo,
+  WorkspaceCredentialHomeRepo,
+  WorkspaceRepo,
+  WorkspaceRuntimeInstanceRepo,
+} from "@sealant/db";
+import { makeInMemoryCredentialHomes } from "@sealant/db/testing/credential-homes";
 import type {
   DotfilesStageChannel,
   DotfilesStageResult,
@@ -23,12 +31,16 @@ import { DOTFILES_STAGE_EXIT, dotfilesStagePath } from "@sealant/workspaces";
 import { Effect, Layer, Result } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 
+import type { RequestPrincipal } from "../../services/service-principals.js";
+
 let routes: typeof import("./workspace-dotfiles.js");
 let RunExecPublisherService: (typeof import("../../services/control-plane-capabilities.js"))["RunExecPublisherService"];
+let CurrentPrincipal: (typeof import("../../services/service-principals.js"))["CurrentPrincipal"];
 
 beforeAll(async () => {
   routes = await import("./workspace-dotfiles.js");
   ({ RunExecPublisherService } = await import("../../services/control-plane-capabilities.js"));
+  ({ CurrentPrincipal } = await import("../../services/service-principals.js"));
 });
 
 const OWNER = "usr_owner";
@@ -86,7 +98,9 @@ const newWorld = (stage: Partial<DotfilesStageResult> | "throw" = {}) => {
         return 0;
       }),
   };
+  const homes = makeInMemoryCredentialHomes(() => [instance]);
   const layer = Layer.mergeAll(
+    Layer.succeed(WorkspaceCredentialHomeRepo, homes.service),
     Layer.succeed(WorkspaceRepo, {
       getWorkspaceById: (id: string) => Effect.succeed(id === workspace.id ? workspace : undefined),
     } as never),
@@ -95,9 +109,13 @@ const newWorld = (stage: Partial<DotfilesStageResult> | "throw" = {}) => {
         Effect.succeed(runId === instance.runId ? instance : undefined),
     } as never),
     Layer.succeed(RunRepo, {
-      createRun: (input: { readonly id: string; readonly harnessId: string }) =>
+      createRun: (input: {
+        readonly id: string;
+        readonly harnessId: string;
+        readonly metadata?: Record<string, unknown>;
+      }) =>
         Effect.sync(() => {
-          const row = runRow(input);
+          const row = { ...runRow(input), metadata: input.metadata ?? null };
           created.push(row);
           return row;
         }),
@@ -117,20 +135,43 @@ const newWorld = (stage: Partial<DotfilesStageResult> | "throw" = {}) => {
   );
   const apply = (
     payload: Partial<Parameters<typeof routes.applyWorkspaceDotfiles>[0]["payload"]>,
+    principal: RequestPrincipal = { kind: "service" },
   ) =>
     Effect.runPromise(
       Effect.result(
         routes
           .applyWorkspaceDotfiles({
             workspaceId: workspace.id,
-            payload: { ownerUserId: OWNER, user: "m4lice000", home: HOME, ...payload },
+            payload: {
+              ownerUserId: OWNER,
+              onBehalfOfUserId: "usr_alice",
+              user: "m4lice000",
+              home: HOME,
+              ...payload,
+            },
             stageChannel: channel,
           })
-          .pipe(Effect.provide(layer)),
+          .pipe(Effect.provide(layer), Effect.provideService(CurrentPrincipal, principal)),
+      ),
+    );
+  /** Records `home` as held by `person`, as a credentials put would. */
+  const hold = (home: string, person: string) =>
+    Effect.runPromise(
+      homes.service.withLockedHome({ runId: instance.runId, home }, () =>
+        Effect.succeed({
+          result: undefined,
+          outcome: {
+            kind: "hold" as const,
+            onBehalfOfUserId: person,
+            accounts: [],
+            generation: "g-1",
+          },
+        }),
       ),
     );
   return {
     apply,
+    hold,
     staged,
     cleanups,
     created,
@@ -276,5 +317,51 @@ describe("applyWorkspaceDotfiles", () => {
       await world.apply({ ownerUserId: "usr_someone_else", archives: [{ data: ARCHIVE }] }),
     );
     expect(refusal).toBeInstanceOf(WorkspaceNotFoundError);
+  });
+
+  it("refuses a gateway or user-token principal: only a service key applies a person's dotfiles", async () => {
+    const world = newWorld();
+    const principals: readonly RequestPrincipal[] = [{ kind: "gateway" }, { kind: "bearer" }];
+    for (const principal of principals) {
+      expect(
+        failed(await world.apply({ archives: [{ data: ARCHIVE }] }, principal)),
+      ).toBeInstanceOf(WorkspaceForbiddenError);
+    }
+    expect(world.staged).toEqual([]);
+  });
+
+  it("refuses a repository URL with a credential in it, before anything is queued", async () => {
+    const world = newWorld();
+    for (const url of [
+      "https://x-access-token:ghp_secret@github.com/acme/dots.git",
+      "https://ghp_secret@github.com/acme/dots.git",
+    ]) {
+      const refusal = failed(await world.apply({ repository: { url } }));
+      expect(refusal).toBeInstanceOf(WorkspaceBadRequestError);
+      expect(JSON.stringify(refusal)).not.toContain("ghp_secret");
+    }
+    expect(world.staged).toEqual([]);
+    expect(world.published).toEqual([]);
+  });
+
+  it("refuses a home whose logins another person holds, and applies into one its own person holds", async () => {
+    const world = newWorld();
+    await world.hold(HOME, "usr_bob");
+    expect(failed(await world.apply({ archives: [{ data: ARCHIVE }] }))).toMatchObject({
+      _tag: "WorkspaceConflictError",
+      code: "home-held",
+    });
+    expect(world.staged).toEqual([]);
+    const own = newWorld();
+    await own.hold(HOME, "usr_alice");
+    succeeded(await own.apply({ archives: [{ data: ARCHIVE }] }));
+  });
+
+  it("records on the run whose dotfiles it applied, as whom, and where", async () => {
+    const world = newWorld();
+    succeeded(await world.apply({ archives: [{ data: ARCHIVE }] }));
+    expect(world.created[0]?.metadata).toEqual({
+      dotfiles: { onBehalfOfUserId: "usr_alice", user: "m4lice000", home: HOME },
+    });
   });
 });

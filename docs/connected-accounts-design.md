@@ -575,9 +575,25 @@ conversation home while that person's process is about to run there.
   the launcher's once their layout is known). The sources are a create's (`repository` cloned with
   no credential, `https://` only; caller-resolved `archives`, at most 4 of about 4 MiB each; the
   repository first, archives after, in order) and the applier is sealantd's `dotfiles.apply`
-  (sealantd#147): chezmoi, stow or copy, every command as the user, files it writes itself given to
-  them, then each tree's bootstrap (`./install.sh`, or `bootstrapCommand`) as one managed process of
-  the user.
+  (sealantd#147): the clone, chezmoi or stow as the user, files it writes itself given to them, then
+  each tree's bootstrap (`./install.sh`, or `bootstrapCommand`) as one managed process of the user.
+- **Known limit: root inside the home, until sealantd's fix.** sealantd still unpacks archives
+  (`tar -xzf`, with root's defaults, into `~/.local/share/sealant-dotfiles/<i>`, whose `mkdir` and
+  `rm -rf` are root's too) and runs the `copy` manager's copies and directories as root inside the
+  person's home, following links there; only the final `lchown` gives the result to the user. A
+  person who links a directory of their home elsewhere (`~/.config -> /home/other/.config`) can have
+  root write their files through it, into another person's home included. Under 0.36's posture
+  everyone has passwordless `sudo`, so it grants nothing `sudo` does not; it is still root acting
+  for a person, and it becomes serious once `sudo` is narrowed. The sealantd fix (unpack into a
+  root-only directory outside the home with `--no-same-owner --no-same-permissions`, refusing
+  members that are not a file, a directory or a link; copy, make and remove as the user) is in
+  progress in parallel.
+- **Whose dotfiles, and only a service key.** The route refuses a gateway or user-token principal,
+  as the credentials routes do. `onBehalfOfUserId` names whose dotfiles they are and is recorded on
+  the run (`metadata.dotfiles = { onBehalfOfUserId, user, home }`); a home whose logins another
+  person holds (`workspace_credential_homes`) is refused with `409` `home-held`, so a caller's bug
+  cannot put one person's code next to another's logins. A repository URL with userinfo (a token) is
+  refused with `400`: it would otherwise sit in the job row and in `git clone`'s argv.
 - **Checked before anything is applied, in one exec as root** (`buildDotfilesStageScript`): the user
   exists, is not root and is not in root's group (`user-unknown`, `user-root`), `home` is its passwd
   home (`home-mismatch`), an existing directory of the user's reached without a symbolic link

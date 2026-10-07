@@ -1125,8 +1125,10 @@ export interface WorkspaceCredentials {
  * A person's dotfiles in a running workspace (see {@link Workspace.dotfiles}): the same sources as a
  * create's {@link WorkspaceDotfilesOptions} (a repository cloned with no credential, caller-resolved
  * archives, or both) and the same applier (chezmoi, stow or copy, then each tree's bootstrap,
- * `./install.sh` by default), run as the person's user into their home, never as root and never
- * into anyone else's home.
+ * `./install.sh` by default), applied into the person's home. The clone, chezmoi, stow and the
+ * bootstrap run as the person's user. Until sealantd's fix lands, its archive staging and `copy`
+ * manager still run as root inside the home and follow links the person planted there (see
+ * docs/connected-accounts-design.md §6g).
  */
 export interface WorkspaceDotfiles {
   /**
@@ -1135,8 +1137,10 @@ export interface WorkspaceDotfiles {
    * the bootstrap still running when there is one: wait for it with `bootstrap.wait()`, or start
    * work beside it. Rejects with `SealantApiError` (`WorkspaceConflictError`) and a body `code`
    * (`error.cause.code`): `dotfiles-user-unsupported` (the workspace's sealantd cannot apply as a
-   * user), `user-unknown`, `user-root`, `home-mismatch`, `home-unusable`, `workspace-not-running`;
-   * with `WorkspaceBadRequestError` for root, a home under `/workspace`, or nothing to apply; and
+   * user), `user-unknown`, `user-root`, `home-mismatch`, `home-unusable`, `home-held` (another
+   * person's logins are held in the home), `workspace-not-running`; with `WorkspaceBadRequestError`
+   * for root, a home under `/workspace`, a repository URL with a credential in it, or nothing to
+   * apply; with `WorkspaceForbiddenError` without a service key; and
    * with `SealantError` code `dotfiles_failed` (the daemon's words) when the apply itself failed.
    */
   apply(options: WorkspaceDotfilesApplyOptions): Promise<WorkspaceDotfilesApplied>;
@@ -1144,6 +1148,11 @@ export interface WorkspaceDotfiles {
 
 /** Options for {@link WorkspaceDotfiles.apply}. */
 export interface WorkspaceDotfilesApplyOptions extends WorkspaceDotfilesOptions {
+  /**
+   * The Sealant user whose dotfiles these are (their `userId`): recorded on the run, and refused
+   * (`home-held`) for a home whose logins another person holds. Needs a service key.
+   */
+  readonly onBehalfOf: string;
   /** The Linux user to apply as: a login name or a uid. Never root. */
   readonly user: string;
   /** The user's passwd home, e.g. `/home/m4lice000`. Never under `/workspace`. */
@@ -1152,6 +1161,8 @@ export interface WorkspaceDotfilesApplyOptions extends WorkspaceDotfilesOptions 
 
 /** What {@link WorkspaceDotfiles.apply} did. */
 export interface WorkspaceDotfilesApplied {
+  /** Whose dotfiles they are, as the run records them. */
+  readonly onBehalfOf: string;
   readonly user: string;
   readonly home: string;
   /** The run that records the apply and the bootstrap's output (`harnessId` `dotfiles`). */

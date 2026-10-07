@@ -114,6 +114,7 @@ describe("workspace.dotfiles.apply()", () => {
       timelines: [{ items: [] }, bootstrapStarted],
     });
     const applied = await stub.workspace.dotfiles.apply({
+      onBehalfOf: "usr_alice",
       user: "m4lice000",
       home: "/home/m4lice000",
       repository: { url: "github.com/acme/dots", ref: "main", bootstrap: true },
@@ -122,6 +123,7 @@ describe("workspace.dotfiles.apply()", () => {
     expect(stub.requests).toEqual([
       {
         ownerUserId: "usr_owner",
+        onBehalfOfUserId: "usr_alice",
         user: "m4lice000",
         home: "/home/m4lice000",
         repository: { url: "https://github.com/acme/dots.git", ref: "main", bootstrap: true },
@@ -129,6 +131,7 @@ describe("workspace.dotfiles.apply()", () => {
       },
     ]);
     expect(applied).toMatchObject({
+      onBehalfOf: "usr_alice",
       user: "m4lice000",
       home: "/home/m4lice000",
       runId: "run_dots",
@@ -148,6 +151,7 @@ describe("workspace.dotfiles.apply()", () => {
       timelines: [{ items: [] }],
     });
     const applied = await stub.workspace.dotfiles.apply({
+      onBehalfOf: "usr_alice",
       user: "m4lice000",
       home: "/home/m4lice000",
       archives: [{ data: ARCHIVE }],
@@ -166,7 +170,12 @@ describe("workspace.dotfiles.apply()", () => {
       timelines: [{ items: [] }],
     });
     const outcome = await stub.workspace.dotfiles
-      .apply({ user: "m4lice000", home: "/home/m4lice000", archives: [{ data: ARCHIVE }] })
+      .apply({
+        onBehalfOf: "usr_alice",
+        user: "m4lice000",
+        home: "/home/m4lice000",
+        archives: [{ data: ARCHIVE }],
+      })
       .then(
         () => undefined,
         (error: unknown) => error,
@@ -189,6 +198,7 @@ describe("workspace.dotfiles.apply()", () => {
       timelines: [bootstrapStarted],
     });
     const applied = await stub.workspace.dotfiles.apply({
+      onBehalfOf: "usr_alice",
       user: "m4lice000",
       home: "/home/m4lice000",
       archives: [{ data: ARCHIVE }],

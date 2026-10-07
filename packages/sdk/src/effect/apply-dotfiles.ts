@@ -127,6 +127,7 @@ const applyDotfilesEffect = (
     const archives = options.archives ?? [];
     const created = yield* applyWorkspaceDotfilesOp(init.id, {
       ownerUserId,
+      onBehalfOfUserId: options.onBehalfOf,
       user: options.user,
       home: options.home,
       ...(repository === undefined
@@ -171,6 +172,7 @@ const applyDotfilesEffect = (
       );
     }
     return {
+      onBehalfOf: options.onBehalfOf,
       user: options.user,
       home: options.home,
       runId,

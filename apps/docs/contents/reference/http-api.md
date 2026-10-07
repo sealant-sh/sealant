@@ -87,10 +87,12 @@ per-person capability (`personLayout`, also on every workspace read's `published
 session requests take `user` (a Linux user name or uid); until the workspace runtime can start a
 process as another user they answer `409` `user-unsupported` and start nothing.
 
-`POST /v1/workspaces/:workspaceId/dotfiles { ownerUserId, user, home, repository?, archives? }`
-applies a person's dotfiles into their home of a running workspace, as their Linux user: the sources
-of a create's dotfiles (`repository: { url, ref?, manager?, bootstrap?, bootstrapCommand? }` cloned
-with no credential, `https://` only; up to 4
+`POST /v1/workspaces/:workspaceId/dotfiles { ownerUserId, onBehalfOfUserId, user, home, repository?, archives? }`
+(service key only) applies a person's dotfiles into their home of a running workspace, as their
+Linux user (`sealantd`'s archive unpacking and `copy` manager still run as root inside the home
+until its fix lands), recording `onBehalfOfUserId` on the run: the sources of a create's dotfiles
+(`repository: { url, ref?, manager?, bootstrap?, bootstrapCommand? }` cloned with no credential,
+`https://` only, and a URL carrying one is a `400`; up to 4
 `archives: [{ data, manager?, target?, bootstrap?, bootstrapCommand? }]`), the same applier, then
 each tree's bootstrap (`./install.sh`) as the user. `user` must not be root (`400`), and `home` must
 be its passwd home, never under `/workspace`. It answers `202` with a run (`harnessId` `dotfiles`)
@@ -99,7 +101,8 @@ file is applied, and the run ends with the bootstrap's exit code (`0` without on
 the daemon's words when the apply is refused or the bootstrap runs past 30 minutes. Nothing is
 applied when it answers `409` `dotfiles-user-unsupported` (the workspace's `sealantd` cannot apply
 as a user), `user-unknown`, `user-root`, `home-mismatch` (not the user's home), `home-unusable`
-(missing, not theirs, or reached through a symbolic link) or `workspace-not-running`.
+(missing, not theirs, or reached through a symbolic link), `home-held` (another person's logins are
+held in the home) or `workspace-not-running`.
 
 The registry group describes wherever workspace images live. With no registry configured (the
 single-host default) it reports the local Docker Engine store: `baseUrl` is `""`, `pushRegistry` is

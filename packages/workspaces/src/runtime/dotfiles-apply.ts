@@ -15,9 +15,16 @@
  * 3. **The cleanup** (`buildDotfilesCleanupScript`): the staged directory is removed once the apply
  *    answers. A staged directory older than an hour (a job that never ran) goes at the next stage.
  *
- * sealantd itself refuses root and a user in root's group, applies only into the user's passwd home,
- * and runs every command of the apply as the user (`sealant_process::identity`), so nothing of the
- * apply reaches another home with root's rights.
+ * sealantd itself refuses root and a user in root's group and applies only into the user's passwd
+ * home. The clone, chezmoi, stow and the bootstrap run as the user (`sealant_process::identity`).
+ * **Known limit, until sealantd's fix lands:** its archive staging (`tar -xzf`, the staging
+ * directory's `mkdir` and `rm -rf` under `~/.local/share/sealant-dotfiles`) and the `copy` manager's
+ * copies and directories still run as root inside the person's home, and follow links there. A
+ * person who plants a link (`~/.config -> /home/other/.config`) can have root write their files
+ * through it, into another person's home included. Under the 0.36 posture everyone has passwordless
+ * `sudo`, so this grants nothing `sudo` does not; it is still root acting for a person. The sealantd
+ * fix (extract into a root-only directory outside the home, without owners or modes, and copy,
+ * make and remove as the user) is in progress in parallel.
  */
 import type { EventEnvelope } from "@sealant/runtime-protocol";
 import { Effect, Option, Stream } from "effect";
