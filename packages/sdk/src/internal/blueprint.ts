@@ -16,6 +16,7 @@
 import { randomUUID } from "node:crypto";
 
 import { toOciRepositoryComponent, type CreateWorkspaceRequest } from "@sealant/api-contracts";
+import { captureOwnerMapProblems } from "@sealant/api-contracts/capture-owner-map";
 import {
   formatWorkspaceEnvIssue,
   parseWorkspaceEnv,
@@ -57,6 +58,17 @@ export const buildCreateWorkspaceRequest = (
   if (options.source?.kind === "capture" && options.source.token.trim().length === 0) {
     throw new SealantError(
       "A capture source needs a non-empty `token`: the session credential the daemon registers with.",
+      { code: "invalid_create_options" },
+    );
+  }
+  // The owner map's checks are the control plane's, same module and words: refused here first.
+  const ownerMapProblems =
+    options.source?.kind === "capture" && options.source.ownerMap !== undefined
+      ? captureOwnerMapProblems(options.source.ownerMap)
+      : [];
+  if (ownerMapProblems.length > 0) {
+    throw new SealantError(
+      `workspaces.create \`source.ownerMap\` was rejected: ${ownerMapProblems.join("; ")}`,
       { code: "invalid_create_options" },
     );
   }
@@ -231,6 +243,18 @@ export const buildCreateWorkspaceRequest = (
                   ...(options.source.transport === undefined
                     ? {}
                     : { transport: options.source.transport }),
+                  ...(options.source.ownerMap === undefined
+                    ? {}
+                    : {
+                        ownerMap: {
+                          gid: options.source.ownerMap.gid,
+                          worktreeUid: options.source.ownerMap.worktreeUid,
+                          people: options.source.ownerMap.people.map(({ id, uid }) => ({
+                            id,
+                            uid,
+                          })),
+                        },
+                      }),
                 }
               : { kind: "mount", hostPath: options.source?.path },
       ...(dotfilesRepository === undefined

@@ -438,6 +438,7 @@ describe("captureFlushReportFromWire", () => {
       pendingBytes: 0,
       repairing: false,
       bulkBuilding: false,
+      ownerMap: false,
     });
     expect(
       captureFlushReportFromWire(
@@ -573,6 +574,7 @@ describe("captureFlushReportFromWire past the pinned wire", () => {
       lastSnapError: "File name too long (os error 36): tree/aaaa…",
       snapFailingSinceUnixMs: 1_757_760_000_000,
       snapsFailed: 13,
+      ownerMap: false,
     });
   });
 
@@ -601,6 +603,7 @@ describe("captureFlushReportFromWire past the pinned wire", () => {
     expect(captureFlushReportFromWire(newest)).toEqual({
       repairing: false,
       bulkBuilding: false,
+      ownerMap: false,
       epoch: 2,
       worktreeId: "wt_1",
       headN: 7,
@@ -637,9 +640,15 @@ describe("captureFlushReportFromWire past the pinned wire", () => {
     expect("overdue" in captureFlushReportFromWire(unnamed)).toBe(false);
   });
 
+  it("reads whether the executor booted under an owner map (sealantd 32)", () => {
+    expect(captureFlushReportFromWire({ ...base, ownerMap: true }).ownerMap).toBe(true);
+    // A plain proto3 scalar: false from a daemon without a map, or one that predates the field.
+    expect(captureFlushReportFromWire(base).ownerMap).toBe(false);
+  });
+
   it("leaves every field the message does not carry absent, and empty text and lists absent", () => {
     const report = captureFlushReportFromWire(base);
-    // `complete`, `pendingBulk`, `pendingBytes`, `repairing` and `bulkBuilding` are plain proto3
+    // `complete`, `pendingBulk`, `pendingBytes`, `repairing`, `bulkBuilding` and `ownerMap` are plain proto3
     // scalars on the 0.19.0 wire: a decoded message always carries them (a daemon before 0.19.0
     // reads as `complete: false`, which is never taken as saved).
     for (const key of [

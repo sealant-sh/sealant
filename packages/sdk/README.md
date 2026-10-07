@@ -255,8 +255,63 @@ const workspace = await sealant.workspaces.create({
   lease is live and a stop sends SIGTERM so the daemon can flush.
 - Harness files receive the existing capture policy. This option does not add automatic credential
   discovery or change which daemon credentials are excluded from captures.
+- `ownerMap` is optional: who owns what the restore writes, for an executor where each person is a
+  Linux user of their own (Mend's per-person layout). It reaches the daemon as
+  `SEALANT_CAPTURE_OWNER_MAP`; without it everything is restored root's and the executor keeps
+  no-new-privileges, as before. See "Restoring a capture per person" below.
 - **No restart in place**: the credential is discarded once the launch settles, so `restart()` is
   refused; create a replacement workspace with a fresh token.
+
+### Restoring a capture per person
+
+```ts
+const workspace = await sealant.workspaces.create({
+  source: {
+    kind: "capture",
+    endpoint: "https://mend.example.com/session/s1",
+    worktreeId: "wt_1",
+    token: sessionToken,
+    harnessHome: "/workspace/harness-home",
+    ownerMap: {
+      gid: 40000, // the mend group
+      worktreeUid: 40012, // the change's owner
+      people: [
+        { id: "acct_a", uid: 40012 }, // <harnessHome>/people/acct_a/
+        { id: "acct_b", uid: 40031 },
+      ],
+    },
+  },
+  harness: claudeCode(),
+});
+```
+
+- Each listed person's saved directory, `<harnessHome>/people/<id>/`, comes back owned by their uid
+  and `gid`: the directory itself `0710`, its `conversations/` group-readable and -writable, the
+  rest at its recorded mode. A directory whose id is not listed (a removed member's) comes back
+  root's.
+- The worktree and its git directory are given to the group: the root owned by `worktreeUid` and
+  `gid`, setgid, every entry's owner bits copied to the group (a `0644` file comes back `0664`).
+- A map that names at least one person makes the executor a per-person one: its daemon does not set
+  no-new-privileges, so every person's passwordless `sudo` works (`runtime.getCapabilities` reports
+  `noNewPrivileges: false`). A map with no people keeps it.
+- Checked by the SDK and again by the control plane: `gid` 40000, every uid in 40001–49999, ids that
+  are one directory name (letters, digits, `.`, `_`, `-`, at most 128, not starting with `.` or
+  `-`), no id and no uid twice, at most 256 people.
+- Launched only on an image whose probe reports `restore.owner_map` from its sealantd
+  (`personLayout`); on any other image, or one with no probe, the launch fails with
+  `owner-map-unsupported` before anything starts. Refused at create on Cloudflare, and on
+  Kubernetes, whose Pods run with `allowPrivilegeEscalation: false`, so no person's `sudo` could
+  work there.
+- The map is the executor's for its life: the daemon reads it at boot. A standby's claim
+  (`capture.replan()`) and a recovery restore under the map it booted with. Pass
+  `capture.replan({ expectedOwnerMap })` (or `null` for none) to have the claim refused
+  (`owner-map-mismatch`, nothing re-planned) on an executor launched with another map;
+  `capture.status()` reports `ownerMap: true` for an executor that booted under one.
+- It is the workspace creator's choice of privilege: whoever can create the workspace can set it,
+  for that workspace, and turns off no-new-privileges there. Only this field sets it. Every capture
+  launch sets `SEALANT_CAPTURE_OWNER_MAP` last, empty without a map, so neither `env`, `secretEnv`,
+  a cluster ConfigMap nor an image `ENV` can, and an environment variable name holding `=` is
+  refused.
 
 ## Dotfiles and shell
 

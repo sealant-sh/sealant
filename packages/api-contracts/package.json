@@ -14,7 +14,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./workspace-environment": "./src/workspace-environment.ts"
+    "./workspace-environment": "./src/workspace-environment.ts",
+    "./capture-owner-map": "./src/capture-owner-map.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -26,6 +27,10 @@
       "./workspace-environment": {
         "types": "./dist/workspace-environment.d.ts",
         "import": "./dist/workspace-environment.js"
+      },
+      "./capture-owner-map": {
+        "types": "./dist/capture-owner-map.d.ts",
+        "import": "./dist/capture-owner-map.js"
       }
     }
   },

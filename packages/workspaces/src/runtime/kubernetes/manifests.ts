@@ -26,7 +26,12 @@ import type {
 } from "@kubernetes/client-node";
 
 import { getHarnessIntegration } from "../../harness/integrations.js";
-import { CAPTURE_HARNESS_HOME_ENV, captureSourceEnv } from "../capture-source.js";
+import {
+  CAPTURE_HARNESS_HOME_ENV,
+  CAPTURE_SOURCE_ONLY_ENV,
+  captureOwnerMapEnv,
+  captureSourceEnv,
+} from "../capture-source.js";
 import { bindableMountsEnv, bindsEnv } from "../mount-intent.js";
 import type { RuntimeAdapterLaunchInput } from "../runtime-adapter.js";
 import {
@@ -254,9 +259,10 @@ export const plainEnvEntries = (
   }
   for (const [key, value] of Object.entries(blueprint.runtime.env)) {
     if (
-      source.kind === "capture" &&
-      source.harnessHome !== undefined &&
-      key === CAPTURE_HARNESS_HOME_ENV
+      (source.kind === "capture" &&
+        source.harnessHome !== undefined &&
+        key === CAPTURE_HARNESS_HOME_ENV) ||
+      CAPTURE_SOURCE_ONLY_ENV.has(key)
     ) {
       continue;
     }
@@ -281,6 +287,9 @@ export const plainEnvEntries = (
   if (options.dotfilesArchiveDir !== undefined) {
     entries.push(["SEALANT_DOTFILES_ARCHIVE_DIR", options.dotfilesArchiveDir]);
   }
+  // The capture owner map after every plain entry (`captureOwnerMapEnv`); the secret references
+  // that follow carry only platform-owned and connected-account names.
+  entries.push(...captureOwnerMapEnv(source));
   return entries;
 };
 

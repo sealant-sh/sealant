@@ -8,7 +8,14 @@
  * session credential through the existing secret env channel (`SEALANT_SECRET_ENV_FILE`), where it
  * arrives as `SEALANT_CAPTURE_TOKEN` and seeds the daemon's redactor like any other secret.
  */
+import {
+  CAPTURE_OWNER_MAP_ENV,
+  encodeCaptureOwnerMap,
+} from "@sealant/api-contracts/capture-owner-map";
+
 import type { RuntimeAdapterLaunchInput } from "./runtime-adapter.js";
+
+export { CAPTURE_OWNER_MAP_ENV };
 
 export type CaptureWorkspaceSource = Extract<
   RuntimeAdapterLaunchInput["blueprint"]["sources"]["workspace"],
@@ -33,6 +40,13 @@ export const CAPTURE_HARNESS_HOME_ENV = "SEALANT_CAPTURE_HARNESS_HOME";
  * boot's environment).
  */
 export const CAPTURE_LAUNCH_ID_ENV = "SEALANT_CAPTURE_LAUNCH_ID";
+
+/**
+ * Boot env names only the capture source may set. A blueprint's legacy `runtime.env` (unrestricted,
+ * kept for stored specs) and a cluster ConfigMap never reach them: who owns what a restore writes,
+ * and with it whether the executor keeps no-new-privileges, is the launcher's statement alone.
+ */
+export const CAPTURE_SOURCE_ONLY_ENV: ReadonlySet<string> = new Set([CAPTURE_OWNER_MAP_ENV]);
 
 /** The launcher's statement that the network to the channel is private: plain HTTP is dialled. */
 export const CAPTURE_ALLOW_PLAINTEXT_ENV = "SEALANT_CAPTURE_ALLOW_PLAINTEXT";
@@ -77,7 +91,8 @@ export const shutdownFinalDeadlineMs = (stopGraceMs: number): number | undefined
  * daemon's shutdown final flush is bounded inside it (`SEALANT_SHUTDOWN_FINAL_DEADLINE_MS`), so a
  * flush that cannot finish exits 75 — the disk kept and recovered — rather than being killed.
  * An older daemon ignores it. `launchId`, when the create named one, is delivered as
- * `SEALANT_CAPTURE_LAUNCH_ID`.
+ * `SEALANT_CAPTURE_LAUNCH_ID`. The owner map is not here: see `captureOwnerMapEnv`, which every
+ * adapter emits after everything else.
  */
 export const captureSourceEnv = (
   source: CaptureWorkspaceSource,
@@ -110,3 +125,23 @@ const shutdownFinalDeadlineEnv = (
   const deadline = stopGraceMs === undefined ? undefined : shutdownFinalDeadlineMs(stopGraceMs);
   return deadline === undefined ? [] : [[SHUTDOWN_FINAL_DEADLINE_ENV, String(deadline)]];
 };
+
+/**
+ * The owner map's boot entry for a capture source, which every adapter emits LAST, after the
+ * blueprint's legacy `runtime.env` and every platform lane, so nothing a launch carries can
+ * override it: the map in the daemon's encoding, or an empty value when the source names none.
+ * sealantd reads an empty value as no map, and the entry overrides an image `ENV` of the same
+ * name (a custom base could otherwise make an executor per-person behind Core's checks). Nothing
+ * for any other source: only a capture boot reads it.
+ */
+export const captureOwnerMapEnv = (
+  source: RuntimeAdapterLaunchInput["blueprint"]["sources"]["workspace"],
+): ReadonlyArray<readonly [string, string]> =>
+  source.kind !== "capture"
+    ? []
+    : [
+        [
+          CAPTURE_OWNER_MAP_ENV,
+          source.ownerMap === undefined ? "" : encodeCaptureOwnerMap(source.ownerMap),
+        ],
+      ];

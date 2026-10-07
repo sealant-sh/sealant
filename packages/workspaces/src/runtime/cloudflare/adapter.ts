@@ -6,6 +6,7 @@
  * sealantd inside the sandbox, authenticated per-connection with the deployment's control bearer
  * token (`SEALANT_CONTROL_BEARER_TOKEN`, see `sealantd/target.ts`).
  */
+import { CAPTURE_SOURCE_ONLY_ENV, captureOwnerMapEnv } from "../capture-source.js";
 import { inlineDotfilesFromDir } from "../inline-dotfiles.js";
 import {
   parseRuntimeAdapterLaunchInput,
@@ -100,6 +101,17 @@ export const supportForCloudflare = (input: RuntimeAdapterSupportInput): Runtime
       message: "Extra host mounts (sources.mounts) are not available in Cloudflare sandboxes.",
     };
   }
+  if (
+    input.blueprint.sources.workspace.kind === "capture" &&
+    input.blueprint.sources.workspace.ownerMap !== undefined
+  ) {
+    return {
+      supported: false,
+      reason: "unsupported-runtime-requirement",
+      message:
+        "An owner map (a per-person executor) is not available in Cloudflare sandboxes: their images record no per-person capability.",
+    };
+  }
   if (input.blueprint.runtime.credentialsHome !== undefined) {
     return {
       supported: false,
@@ -184,9 +196,16 @@ export class CloudflareRuntimeAdapter implements RuntimeAdapter {
       // Later wins, matching the docker adapter's -e ordering: blueprint env, then
       // worker-resolved platform env (must not be shadowed), then credential env.
       env: {
-        ...parsed.blueprint.runtime.env,
+        ...Object.fromEntries(
+          Object.entries(parsed.blueprint.runtime.env).filter(
+            ([key]) => !CAPTURE_SOURCE_ONLY_ENV.has(key),
+          ),
+        ),
         ...parsed.platformEnv,
         ...parsed.credentialEnv,
+        // Last, so nothing overrides it: always empty here (Cloudflare refuses a map), which
+        // overrides an image `ENV` of the same name.
+        ...Object.fromEntries(captureOwnerMapEnv(parsed.blueprint.sources.workspace)),
       },
       ...(parsed.secretEnv === undefined || Object.keys(parsed.secretEnv).length === 0
         ? {}

@@ -223,6 +223,10 @@ describe("DockerRuntimeAdapter golden argv", () => {
         "SEALANT_HARNESS_LAUNCH_COMMAND=claude",
         "-e",
         "MEND_SESSION_ID=1",
+        // Intentional (sealant#333): every capture launch ends with the owner map, empty without
+        // one, so no lane and no image ENV can set it (sealantd reads empty as no map).
+        "-e",
+        "SEALANT_CAPTURE_OWNER_MAP=",
         "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
       ],
       ["inspect", "--format", "{{json .State}}", "container-id-123"],

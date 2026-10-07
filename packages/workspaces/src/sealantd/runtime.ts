@@ -297,6 +297,11 @@ export interface CaptureFlushReport {
    * is not a verdict — the step's own limit kills it and the snap fails (`snaps`).
    */
   readonly overdue?: CaptureOverdue | undefined;
+  /**
+   * The executor booted under an owner map (sealantd `owner_map`, 32). False from a daemon that
+   * predates it.
+   */
+  readonly ownerMap?: boolean | undefined;
 }
 
 /** A capture step past its bound (wire `CaptureOverdue`). */
@@ -454,7 +459,8 @@ type OptionalWireField =
   | "snapFailingSinceUnixMs"
   | "snapsFailed"
   | "origin"
-  | "overdue";
+  | "overdue"
+  | "ownerMap";
 
 /** One wire `CaptureClassSnaps`, read structurally; `undefined` for an unknown class. */
 const wireClassSnaps = (value: unknown): CaptureClassSnaps | undefined => {
@@ -502,6 +508,7 @@ const optionalWireFields = (report: object): Pick<CaptureFlushReport, OptionalWi
   const complete = wireField(report, "complete");
   const repairing = wireField(report, "repairing");
   const bulkBuilding = wireField(report, "bulkBuilding");
+  const ownerMap = wireField(report, "ownerMap");
   const pendingBytes = wireCount(wireField(report, "pendingBytes"));
   const pendingBulk = wireCount(wireField(report, "pendingBulk"));
   const unreadable = wireCount(wireField(report, "unreadable"));
@@ -531,6 +538,7 @@ const optionalWireFields = (report: object): Pick<CaptureFlushReport, OptionalWi
     ...snapFailureSummary(snaps),
     ...wireOrigin(report),
     ...wireOverdue(wireField(report, "overdue")),
+    ...(typeof ownerMap === "boolean" ? { ownerMap } : {}),
   };
 };
 

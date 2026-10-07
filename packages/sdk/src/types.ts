@@ -205,6 +205,52 @@ export interface WorkspaceCaptureSource {
    * with a certificate the public roots verify, and refuses to boot otherwise.
    */
   readonly transport?: WorkspaceCaptureTransport;
+  /**
+   * Who owns what the daemon's restore writes, for a per-person executor (Mend's ADR 0016).
+   * Omitted, everything is restored root's at its recorded mode and the executor keeps
+   * no-new-privileges, exactly as before. With a map that names someone, the executor's daemon
+   * leaves no-new-privileges unset so every person's `sudo` works. Fixed for the executor's life:
+   * the daemon reads it at boot, so a standby's claim (`capture.replan()`) and a recovery restore
+   * under the map it booted with (`replan({ expectedOwnerMap })` refuses a mismatch). Refused on
+   * Cloudflare and Kubernetes (no person's `sudo` works under `allowPrivilegeEscalation: false`),
+   * and at launch (`owner-map-unsupported`, nothing started) on an image whose probe does not
+   * report `restore.owner_map`. The workspace creator's choice of privilege; only this field sets
+   * it.
+   */
+  readonly ownerMap?: WorkspaceCaptureOwnerMap;
+}
+
+/**
+ * Who owns what a capture restore writes (sealantd ADR-0015 "Per-person saved directories"),
+ * delivered to the daemon as `SEALANT_CAPTURE_OWNER_MAP`:
+ *
+ * - each person's saved directory, `<harnessHome>/people/<id>/`, is restored owned by their uid and
+ *   `gid`, the directory itself `0710`, its `conversations/` group-readable and -writable, the rest
+ *   at its recorded mode;
+ * - the worktree and its git directory are given to the group: the root owned by `worktreeUid` and
+ *   `gid`, setgid, each entry's owner bits copied to the group;
+ * - a directory under `people/` whose id is not listed (a removed member's) is restored root's.
+ *
+ * Checked by the SDK and again by the control plane: `gid` 40000, every uid in 40001–49999, ids
+ * that are one directory name (letters, digits, `.`, `_`, `-`; at most 128), no id and no uid twice,
+ * at most 256 people. A map with no people restores the worktree to the group and keeps
+ * no-new-privileges.
+ */
+export interface WorkspaceCaptureOwnerMap {
+  /** The shared group every person is in: 40000 (Mend's `mend`). */
+  readonly gid: number;
+  /** The uid of the change's owner, who owns the worktree root and its git directory. */
+  readonly worktreeUid: number;
+  /** Each current member: their saved directory's name under `people/` and their uid. */
+  readonly people: ReadonlyArray<WorkspaceCaptureOwnerMapPerson>;
+}
+
+/** One person in a {@link WorkspaceCaptureOwnerMap}. */
+export interface WorkspaceCaptureOwnerMapPerson {
+  /** The name of their saved directory under `<harnessHome>/people/` (Mend's account id). */
+  readonly id: string;
+  /** Their Linux uid, 40001–49999. */
+  readonly uid: number;
 }
 
 /** Transport for a capture source (sealantd ADR-0015 "Transport"). Certificates are public material. */
@@ -355,6 +401,12 @@ export interface WorkspaceCaptureStatus {
    * nothing is past its bound, and from a daemon or control plane that predates it.
    */
   readonly overdue?: WorkspaceCaptureOverdue;
+  /**
+   * The executor booted under an owner map (`source.ownerMap`): its restores give each mapped
+   * person's saved directory to them and the worktree to the group. Absent from a control plane
+   * that predates it.
+   */
+  readonly ownerMap?: boolean;
 }
 
 /** A capture step past its bound (`WorkspaceCaptureStatus.overdue`). */
@@ -623,7 +675,18 @@ export interface WorkspaceCapture {
    * standby executor. Synchronous and idempotent (`unchanged: true`). Refused on workspaces that
    * are not capture-sourced.
    */
-  replan(): Promise<WorkspaceCaptureReplanned>;
+  replan(options?: WorkspaceCaptureReplanOptions): Promise<WorkspaceCaptureReplanned>;
+}
+
+/** Options of `workspace.capture.replan()`. */
+export interface WorkspaceCaptureReplanOptions {
+  /**
+   * The owner map this claim needs, or `null` for none. The daemon reads its map only at boot,
+   * so a claimed standby restores under the map it was launched with: given, and different from
+   * that map (a standby launched with none included), the claim is refused (`409`,
+   * `owner-map-mismatch`) before the daemon is reached. Omitted, nothing is compared.
+   */
+  readonly expectedOwnerMap?: WorkspaceCaptureOwnerMap | null;
 }
 
 /** How a dotfiles tree is applied inside the workspace. */

@@ -413,6 +413,7 @@ describe("microvmBootEnv", () => {
       SEALANT_LIFECYCLE_STARTUP_JSON: "[]",
       MEND_SESSION_ID: "1",
       SEALANT_SECRET_ENV_FILE: "/run/sealant/secrets/env.json",
+      SEALANT_CAPTURE_OWNER_MAP: "",
     });
   });
 

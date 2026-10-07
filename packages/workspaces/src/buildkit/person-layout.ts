@@ -563,6 +563,22 @@ export const imagePersonLayoutSupport = (
 };
 
 /**
+ * Whether an image's daemon applies a capture owner map (`SEALANT_CAPTURE_OWNER_MAP`): `yes` when
+ * the sealantd its probe asked lists `restore.owner_map`, `no` when it answered without it (or had
+ * no `capabilities` command), `unknown` when the image has no probe or the answer could not be
+ * read. A daemon that does not apply it ignores the variable: it restores everything as root's and
+ * keeps no-new-privileges, so a per-person launch on it would start with nobody able to edit.
+ */
+export const imageAppliesOwnerMap = (
+  probe: WorkspaceImageProbe | undefined,
+): "yes" | "no" | "unknown" => {
+  if (probe === undefined) return "unknown";
+  const reported = sealantdCapabilities(probe.sealantd);
+  if (reported === "unknown") return "unknown";
+  return reported.has("restore.owner_map") ? "yes" : "no";
+};
+
+/**
  * The capability names a `sealantd capabilities --json` object lists under `supports` (sealantd#147:
  * `{ schemaVersion, daemonVersion, os, arch, supports }`, the list `runtime.getCapabilities`
  * answers): none for a sealantd without the command, unknown for an answer of another shape.

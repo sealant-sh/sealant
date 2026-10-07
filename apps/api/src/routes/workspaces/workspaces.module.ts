@@ -56,6 +56,10 @@ import {
   type WorkspaceSummary,
 } from "@sealant/api-contracts";
 import {
+  CAPTURE_OWNER_MAP_ENV,
+  encodeCaptureOwnerMap,
+} from "@sealant/api-contracts/capture-owner-map";
+import {
   CAPTURE_TOKEN_SECRET_ENV_NAME,
   formatWorkspaceEnvIssue,
   parseWorkspaceSecretEnv,
@@ -297,6 +301,36 @@ export const parseWorkspaceSpec = (spec: unknown) => {
       new WorkspaceBadRequestError({
         message:
           "credentialsHome is not available on the Cloudflare runtime: its bridge writes logins at $HOME only.",
+      }),
+    );
+  }
+  // An owner map makes the executor a per-person one; only the capture source states it, and only
+  // where its people's sudo can work and an image can report that its daemon applies it: not
+  // Cloudflare's sandboxes, not Kubernetes Pods (no-new-privileges enforced by the kubelet).
+  const source = parsed.data.sources.workspace;
+  if (source.kind === "capture" && source.ownerMap !== undefined && family === "cloudflare") {
+    return Effect.fail(
+      new WorkspaceBadRequestError({
+        message:
+          "source.ownerMap is not available on the Cloudflare runtime: its sandboxes record no per-person capability.",
+      }),
+    );
+  }
+  if (
+    source.kind === "capture" &&
+    source.ownerMap !== undefined &&
+    (family === "k8s" || family === "k3s")
+  ) {
+    return Effect.fail(
+      new WorkspaceBadRequestError({
+        message: `source.ownerMap is not available on the ${family} runtime: workspace Pods run with allowPrivilegeEscalation: false, so the kubelet sets no-new-privileges and no person's sudo could work.`,
+      }),
+    );
+  }
+  if (Object.hasOwn(parsed.data.runtime.env, CAPTURE_OWNER_MAP_ENV)) {
+    return Effect.fail(
+      new WorkspaceBadRequestError({
+        message: `runtime.env may not name ${CAPTURE_OWNER_MAP_ENV}: the owner map is source.ownerMap on a capture source.`,
       }),
     );
   }
@@ -2874,10 +2908,52 @@ export const replanWorkspaceCapture = (input: {
   readonly workspaceId: string;
   readonly payload: ReplanWorkspaceCaptureRequest;
 }) =>
-  withCaptureDaemon(
-    { workspaceId: input.workspaceId, ownerUserId: input.payload.ownerUserId, verb: "re-plan" },
-    (daemon) => daemon.captureReplan(),
-  );
+  Effect.gen(function* () {
+    const expected = input.payload.expectedOwnerMap;
+    if (expected !== undefined) {
+      yield* requireLaunchOwnerMap({
+        workspaceId: input.workspaceId,
+        ownerUserId: input.payload.ownerUserId,
+        expected,
+      });
+    }
+    return yield* withCaptureDaemon(
+      { workspaceId: input.workspaceId, ownerUserId: input.payload.ownerUserId, verb: "re-plan" },
+      (daemon) => daemon.captureReplan(),
+    );
+  });
+
+/**
+ * A claim (re-plan) that names the owner map it needs runs only on an executor launched with
+ * exactly that map, "none" included: sealantd reads its map only at boot, so a standby restores
+ * under the one it booted with. Compared as the daemon receives them (`encodeCaptureOwnerMap`,
+ * people in id order), from the spec the workspace last launched from. Refused before the daemon
+ * is reached.
+ */
+const requireLaunchOwnerMap = (input: {
+  readonly workspaceId: string;
+  readonly ownerUserId: string;
+  readonly expected: NonNullable<ReplanWorkspaceCaptureRequest["expectedOwnerMap"]> | null;
+}) =>
+  Effect.gen(function* () {
+    const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.ownerUserId);
+    if (workspace.latestRunId === null) {
+      return yield* new WorkspaceConflictError({
+        message: `Workspace ${input.workspaceId} has no launched runtime to re-plan yet; wait for it to become ready.`,
+      });
+    }
+    const spec = yield* loadRecordedSpec(workspace.id, workspace.latestRunId);
+    const source = spec.sources.workspace;
+    const launched = source.kind === "capture" ? source.ownerMap : undefined;
+    const want = input.expected === null ? "none" : encodeCaptureOwnerMap(input.expected);
+    const have = launched === undefined ? "none" : encodeCaptureOwnerMap(launched);
+    if (want !== have) {
+      return yield* new WorkspaceConflictError({
+        code: "owner-map-mismatch",
+        message: `Workspace ${input.workspaceId} was launched with ${launched === undefined ? "no owner map" : `the owner map ${have}`}, not ${input.expected === null ? "none" : want}; its daemon reads the map only at boot, so a claim would restore under the wrong owners. Nothing was re-planned: launch an executor with the map this claim needs.`,
+      });
+    }
+  });
 
 /**
  * The shared gate of the synchronous capture commands: the workspace must be owned, launched,

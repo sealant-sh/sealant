@@ -1747,6 +1747,138 @@ describe("processWorkspaceBuildJobEffect", () => {
     );
   });
 
+  describe("a per-person launch: a capture source with an owner map", () => {
+    const ownerMap = {
+      gid: 40000,
+      worktreeUid: 40012,
+      people: [{ id: "acct_a", uid: 40012 }],
+    };
+    const ownerMapJob = () =>
+      workspaceBuildJobRepoStub({
+        claimJobById: () => ({
+          id: "job_owner_map",
+          runId: "run_owner_map",
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: {
+            ...createWorkspaceBuildSpec({ osFamily: "nix" }),
+            sources: {
+              workspace: {
+                kind: "capture",
+                endpoint: "https://mend.example.com/session/s1",
+                worktreeId: "wt_1",
+                harnessHome: "/workspace/harness-home",
+                ownerMap,
+              },
+              inputs: [],
+              mounts: [],
+            },
+          },
+          secretEnvSealed: SEALED_CAPTURE_TOKEN,
+        }),
+      });
+    const probed = (supports: readonly string[] | undefined): WorkspaceBuild => ({
+      ...createCompileResult({ id: "nix" }),
+      metadata: {
+        notes: [],
+        ...(supports === undefined
+          ? {}
+          : {
+              imageProbe: {
+                version: 1 as const,
+                tools: {
+                  sudo: true,
+                  sudoSetuid: true,
+                  useradd: true,
+                  groupadd: true,
+                  setfacl: true,
+                  getfacl: true,
+                  setpriv: true,
+                  flock: true,
+                },
+                sudoersMend: true,
+                sudoersIncludesDir: true,
+                noNewPrivileges: false,
+                passwdWritable: true,
+                mendGroup: "present" as const,
+                reservedIdsInUse: [],
+                personEnv: true,
+                sharedDirs: [],
+                sealantd: { schemaVersion: 1, supports: [...supports] },
+              },
+            }),
+      },
+    });
+
+    for (const [name, build] of [
+      ["an image whose sealantd does not report restore.owner_map", probed(["exec.user"])],
+      ["an image built before the probe", probed(undefined)],
+    ] as const) {
+      it.effect(`is refused on ${name}, before anything starts`, () => {
+        const jobs = ownerMapJob();
+        const attempts = workspaceAttemptRepoStub();
+        const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+        const runtimeAdapter = createRuntimeAdapterStub("docker");
+        const stager = {
+          stage: vi.fn(async () => ({})),
+          removeSecretEnv: vi.fn(async () => undefined),
+          removeAll: vi.fn(async () => undefined),
+        };
+
+        return Effect.gen(function* () {
+          const error = yield* processWorkspaceBuildJobEffect(
+            baseOptions({
+              jobId: "job_owner_map",
+              runtimeAdapters: [runtimeAdapter],
+              credentialCipher: fakeCredentialCipher,
+              compileWorkspaceSpec: vi.fn(async () => build),
+              launchMaterialStager: stager,
+            }),
+          ).pipe(Effect.flip);
+
+          expect(error.errorCode).toBe("owner-map-unsupported");
+          expect(error.message).toContain("Nothing ran");
+          expect(stager.stage).not.toHaveBeenCalled();
+          expect(runtimeAdapter.launch).not.toHaveBeenCalled();
+          expect(runtimeInstances.upsertRuntimeInstance).toHaveBeenCalledWith(
+            expect.objectContaining({
+              runId: "run_owner_map",
+              status: "failed",
+              errorCode: "owner-map-unsupported",
+            }),
+          );
+          expect(attempts.markAttemptFailed).toHaveBeenCalledWith({ id: "run_owner_map" });
+          // The build itself succeeded: only the launch was refused.
+          expect(jobs.markJobFailed).not.toHaveBeenCalled();
+        }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+      });
+    }
+
+    it.effect("launches on an image that reports it, the map in the adapter's blueprint", () => {
+      const jobs = ownerMapJob();
+      const attempts = workspaceAttemptRepoStub();
+      const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+      const runtimeAdapter = createRuntimeAdapterStub("docker");
+
+      return Effect.gen(function* () {
+        yield* processWorkspaceBuildJobEffect(
+          baseOptions({
+            jobId: "job_owner_map",
+            runtimeAdapters: [runtimeAdapter],
+            credentialCipher: fakeCredentialCipher,
+            compileWorkspaceSpec: vi.fn(async () =>
+              probed(["dotfiles.user", "exec.user", "restore.owner_map"]),
+            ),
+          }),
+        );
+        expect(runtimeAdapter.launch).toHaveBeenCalledOnce();
+        const launched = vi.mocked(runtimeAdapter.launch).mock.calls[0]?.[0];
+        const source = launched?.blueprint.sources.workspace;
+        expect(source?.kind === "capture" ? source.ownerMap : undefined).toEqual(ownerMap);
+      }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+    });
+  });
+
   describe("a capture launch whose recovery credential cannot be kept (review 5 #4)", () => {
     const captureTokenJob = () =>
       workspaceBuildJobRepoStub({

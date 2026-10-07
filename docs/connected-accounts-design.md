@@ -526,6 +526,46 @@ conversation home while that person's process is about to run there.
   `unknown`; the capability is still on every read of a launched workspace. A reused image carries
   its build's probe forward.
 
+## 6f. The capture owner map (Oct 2026)
+
+- **`ownerMap` on a capture source**
+  (`spec.sources.workspace.ownerMap = { gid, worktreeUid, people: [{ id, uid }] }`, SDK
+  `source.ownerMap`): who owns what sealantd's restore writes (its ADR-0015 "Per-person saved
+  directories", sealantd#145), and whether the executor is a per-person one (a root daemon whose map
+  names someone leaves no-new-privileges unset, sealantd#148). Core delivers it as
+  `SEALANT_CAPTURE_OWNER_MAP` in sealantd's JSON (`{"gid","worktree","people":{id: uid}}`, people in
+  id order) from `captureOwnerMapEnv`, emitted after every other entry and empty without a map, so
+  Docker, Kubernetes and MicroVM boot it alike. Cloudflare and Kubernetes refuse it at create and in
+  their adapters (Kubernetes Pods run with `allowPrivilegeEscalation: false`, so no person's `sudo`
+  could work).
+- **One definition** of its shape, bounds and encoding in `@sealant/api-contracts/capture-owner-map`
+  (`captureOwnerMapProblems`, `encodeCaptureOwnerMap`), used by the SDK's client-side refusal, the
+  blueprint schema on every parse and the adapters: gid 40000, uids 40001–49999, ids that are one
+  directory name, no id or uid twice, at most 256 people.
+- **The creator's choice, and only through the source.** Whoever can create a workspace can set a
+  map on it, and turns off no-new-privileges there; they already control its image, environment and
+  commands, and no other principal's non-root process runs there. Every caller lane already refuses
+  the `SEALANT_` prefix except a blueprint's legacy `runtime.env`, whose names must now be
+  environment variable names (a name holding `=` would split on `docker run -e` into the map's
+  name), which the API refuses for this name and every adapter drops; a bound ConfigMap's key of
+  that name is dropped; and the entry comes last and empty without a map, which also overrides an
+  image `ENV`.
+- **Refused at launch on an image that may not apply it**: the worker reads the image probe the
+  build recorded (or the reused build's) and fails the launch with `owner-map-unsupported` before
+  the runtime row, the stager or the adapter is touched, unless its sealantd reported
+  `restore.owner_map`. Unknown is refused, never launched on the hope: a daemon without it ignores
+  the variable, restores everything root's and keeps no-new-privileges.
+- **Fixed for the executor's life.** sealantd reads it at boot; a capture workspace is never
+  restarted in place (its token is not retained), Docker's recovery restarts the same container and
+  the MicroVM agent reuses the first boot's environment, so a recovery keeps it. A standby's claim
+  (`capture.replan`) restores under the map the standby booted with; `expectedOwnerMap` on the
+  re-plan (`null` for none) is compared with the map of the spec the workspace last launched from,
+  as sealantd receives it, and a mismatch is refused (`409` `owner-map-mismatch`) before the daemon
+  is reached. The daemon's `owner_map` flag is on the capture status (`ownerMap`).
+- **Cost:** without a map, one empty entry in a capture launch's boot environment and an
+  early-returning check; with one, a JSON string in the boot environment and one probe read the
+  worker already holds.
+
 ## 7. The `sealant` CLI — `apps/cli`
 
 New workspace app `@sealant/cli`, bin `sealant`, built on `effect/unstable/cli` (Command/Flag/Prompt

@@ -255,6 +255,12 @@ jobs:
         run: >-
           pnpm --filter @sealant/workspaces test:e2e src/runtime/docker-volume-mounts.e2e.ts
 
+      - name: Capture owner map through the Docker adapter and a real daemon (never skipped)
+        env:
+          SEALANT_E2E_REQUIRE_IMAGE: "1"
+        run: >-
+          pnpm --filter @sealant/workspaces test:e2e src/runtime/capture-owner-map.e2e.ts
+
   # Tagged only after the tests and the e2e passed, so no version exists without its npm packages
   # being about to follow.
   image-tag:

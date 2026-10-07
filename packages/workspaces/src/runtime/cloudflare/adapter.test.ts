@@ -188,7 +188,8 @@ describe("CloudflareRuntimeAdapter.launch", () => {
       MEND_SESSION_TOKEN: "mst_secret",
       SEALANT_CAPTURE_TOKEN: "mst_secret",
     });
-    expect(payload.env).toEqual({ MEND_SESSION_ID: "1" });
+    // The owner map is always empty on Cloudflare: it overrides an image ENV of that name.
+    expect(payload.env).toEqual({ MEND_SESSION_ID: "1", SEALANT_CAPTURE_OWNER_MAP: "" });
     // The wire payload for a git source is unchanged: no `kind` key, the contract defaults it.
     await adapter.launch(cases.gitSource);
     const gitBody = bridge.requests[1]?.body as { source?: Record<string, unknown> };

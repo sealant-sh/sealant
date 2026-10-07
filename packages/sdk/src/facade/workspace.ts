@@ -197,6 +197,7 @@ const toCaptureStatus = (status: WireWorkspaceCaptureStatus): WorkspaceCaptureSt
           boundMs: status.overdue.boundMs,
         },
       }),
+  ...(status.ownerMap === undefined ? {} : { ownerMap: status.ownerMap }),
 });
 
 /** Wire → public executor-origin position. */
@@ -538,9 +539,24 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
           ),
         ),
       status: () => readCaptureStatus(),
-      replan: async () => {
+      replan: async (options = {}) => {
+        const expected = options.expectedOwnerMap;
         const result = await ctx.runtime.run(
-          replanWorkspaceCaptureOp(init.id, { ownerUserId: ctx.config.hostLocal.ownerUserId }),
+          replanWorkspaceCaptureOp(init.id, {
+            ownerUserId: ctx.config.hostLocal.ownerUserId,
+            ...(expected === undefined
+              ? {}
+              : {
+                  expectedOwnerMap:
+                    expected === null
+                      ? null
+                      : {
+                          gid: expected.gid,
+                          worktreeUid: expected.worktreeUid,
+                          people: expected.people.map(({ id, uid }) => ({ id, uid })),
+                        },
+                }),
+          }),
         );
         return {
           worktreeId: result.worktreeId,

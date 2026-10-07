@@ -38,6 +38,7 @@ import {
   type SealantTarget,
   type SealantWebSocketClientTls,
 } from "../../sealantd/runtime.js";
+import { CAPTURE_SOURCE_ONLY_ENV } from "../capture-source.js";
 import { buildCredentialFileWriteScript } from "../credential-files.js";
 import { buildDotfilesArchiveManifest, hasDotfilesArchives } from "../launch-material.js";
 import {
@@ -206,6 +207,14 @@ export const liveControlChannel: ControlChannel = {
 void StreamKind;
 
 /** The support decision, pure. */
+/**
+ * Why a per-person executor (an owner map) is refused on Kubernetes: its Pods run with
+ * `allowPrivilegeEscalation: false`, which the kubelet enforces as no-new-privileges, so no
+ * person's `sudo` could work there whatever the daemon decides.
+ */
+export const KUBERNETES_OWNER_MAP_REFUSAL =
+  "An owner map (a per-person executor) is not available on Kubernetes: workspace Pods run with allowPrivilegeEscalation: false, so the kubelet sets no-new-privileges and no person's sudo could work.";
+
 export const supportForKubernetes = (
   id: KubernetesAdapterId,
   config: Pick<
@@ -227,6 +236,14 @@ export const supportForKubernetes = (
       supported: false,
       reason: "unsupported-runtime-requirement",
       message: "The Kubernetes adapter only supports ephemeral persistence.",
+    };
+  }
+  const source = input.blueprint.sources.workspace;
+  if (source.kind === "capture" && source.ownerMap !== undefined) {
+    return {
+      supported: false,
+      reason: "unsupported-runtime-requirement",
+      message: KUBERNETES_OWNER_MAP_REFUSAL,
     };
   }
   if (!input.blueprint.runtime.network.outbound) {
@@ -752,7 +769,8 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
     // Bound ConfigMap keys go FIRST: the Pod env list is last-wins, so every later entry —
     // caller env included — shadows them (invariant: explicit wins over bound).
     const plainEnv = [
-      ...boundSources.configMapEnv,
+      // The capture source's own names never come from a bound object.
+      ...boundSources.configMapEnv.filter(([key]) => !CAPTURE_SOURCE_ONLY_ENV.has(key)),
       ...plainEnvEntries(parsed, config, {
         secretEnvFile: secretEnv !== undefined,
         dotfilesArchiveDir,
