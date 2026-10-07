@@ -7,7 +7,12 @@
  */
 import type { BridgeLaunchRequest } from "@sealant/workspaces/cloudflare/bridge-contract";
 
-import { INSTALL_STAGED_SCRIPT, PREPARE_STAGING_SCRIPT, stagedWritesForLaunch } from "./plan.js";
+import {
+  INSTALL_STAGED_SCRIPT,
+  PREPARE_STAGING_SCRIPT,
+  RELEASE_CLAIM_SCRIPT,
+  stagedWritesForLaunch,
+} from "./plan.js";
 
 /** What staging needs of a sandbox (the SDK's `getSandbox` stub has it). */
 export interface StagingSandbox {
@@ -47,13 +52,38 @@ export const stageLaunchFiles = async (
       await sandbox.deleteFile(write.stagingPath).catch(() => undefined);
       throw cause;
     }
-    const exitCode = await execExit(sandbox, ["/bin/sh", "-c", INSTALL_STAGED_SCRIPT], {
-      ...write.env,
-    });
+    // The script removes its staged copy whatever it does; a call that never got an answer (the
+    // transport failed, the container restarted) may not have run it, so the copy is deleted here.
+    let exitCode: number;
+    try {
+      exitCode = await execExit(sandbox, ["/bin/sh", "-c", INSTALL_STAGED_SCRIPT], {
+        ...write.env,
+      });
+    } catch (cause) {
+      await sandbox.deleteFile(write.stagingPath).catch(() => undefined);
+      throw cause;
+    }
     if (exitCode !== 0) {
       throw new Error(
         `staging a workspace file failed: ${write.env["SEALANT_WRITE_PATH"] ?? "?"} (exit ${exitCode})`,
       );
     }
+  }
+};
+
+/**
+ * Stages a launch's files, and when that fails gives the launch claim back first: nothing has
+ * booted yet, so a redelivered launch can stage and boot again rather than wait for a socket that
+ * never comes.
+ */
+export const stageLaunchFilesOrReleaseClaim = async (
+  sandbox: StagingSandbox,
+  request: BridgeLaunchRequest,
+): Promise<void> => {
+  try {
+    await stageLaunchFiles(sandbox, request);
+  } catch (cause) {
+    await execExit(sandbox, ["/bin/sh", "-c", RELEASE_CLAIM_SCRIPT]).catch(() => undefined);
+    throw cause;
   }
 };

@@ -29,11 +29,12 @@ import {
   bootEnvForLaunch,
   CONTROL_RELAY_PORT,
   CONTROL_SOCKET_PATH,
+  LAUNCH_CLAIM_DIR,
   sandboxNameForRun,
   sandboxOptionsForLaunch,
   stopModeFromUrl,
 } from "./plan.js";
-import { execExit, stageLaunchFiles } from "./stage.js";
+import { execExit, stageLaunchFilesOrReleaseClaim } from "./stage.js";
 
 export { Sandbox };
 
@@ -66,7 +67,7 @@ const bootWorkspace = async (
   sandbox: SandboxClient,
   request: BridgeLaunchRequest,
 ): Promise<void> => {
-  await stageLaunchFiles(sandbox, request);
+  await stageLaunchFilesOrReleaseClaim(sandbox, request);
   await sandbox.exec(["/usr/local/bin/sealantd", "boot"], { env: bootEnvForLaunch(request) });
 };
 
@@ -108,7 +109,7 @@ const handleLaunch = async (env: Env, request: Request): Promise<Response> => {
     (await execExit(sandbox, [
       "/bin/sh",
       "-c",
-      `[ -S ${CONTROL_SOCKET_PATH} ] && exit 10; mkdir /run/sealant-launch-claim 2>/dev/null && exit 0; exit 20`,
+      `[ -S ${CONTROL_SOCKET_PATH} ] && exit 10; mkdir ${LAUNCH_CLAIM_DIR} 2>/dev/null && exit 0; exit 20`,
     ])) === 0;
   if (claimed) {
     await bootWorkspace(sandbox, body);

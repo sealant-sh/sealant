@@ -146,18 +146,29 @@ export const bearerMatches = (header: string | null, expected: string): boolean 
  */
 export const STAGING_DIR = "/run/sealant/staging";
 
+/** The directory whose atomic `mkdir` claims a sandbox for one launcher. */
+export const LAUNCH_CLAIM_DIR = "/run/sealant-launch-claim";
+
+/**
+ * Gives the claim back after a launch failed before `sealantd boot`, so a redelivered launch
+ * stages and boots again instead of waiting for a socket that never comes.
+ */
+export const RELEASE_CLAIM_SCRIPT = `rmdir ${LAUNCH_CLAIM_DIR}`;
+
 /** Makes the staging directory, root's only. */
 export const PREPARE_STAGING_SCRIPT = `umask 077; mkdir -p ${STAGING_DIR} && chmod 700 ${STAGING_DIR}`;
 
 /**
  * Puts one staged file in place and removes the staged copy, whatever happens. Its environment
  * carries only paths and a mode: `SEALANT_STAGED` (the staged file), `SEALANT_WRITE_PATH` (absolute,
- * or `$HOME/…`, expanded here to the sandbox user's home) and `SEALANT_WRITE_MODE`. Exits 64 for a
- * path that is neither.
+ * or `$HOME/…`, expanded here to the sandbox user's home) and `SEALANT_WRITE_MODE`. Exits 64, saying
+ * why on stderr, for a path that is neither, or a `$HOME/…` path with no `HOME` (it would land at
+ * `/`).
  */
 export const INSTALL_STAGED_SCRIPT = [
   "umask 077",
-  `case "$SEALANT_WRITE_PATH" in '$HOME/'*) p="$HOME/\${SEALANT_WRITE_PATH#'$HOME/'}" ;; /*) p="$SEALANT_WRITE_PATH" ;; *) rm -f "$SEALANT_STAGED"; exit 64 ;; esac`,
+  `refuse() { rm -f "$SEALANT_STAGED"; echo "$1" >&2; exit 64; }`,
+  `case "$SEALANT_WRITE_PATH" in '$HOME/'*) [ -n "\${HOME:-}" ] || refuse "$SEALANT_WRITE_PATH names \\$HOME, which is not set here"; p="$HOME/\${SEALANT_WRITE_PATH#'$HOME/'}" ;; /*) p="$SEALANT_WRITE_PATH" ;; *) refuse "$SEALANT_WRITE_PATH is neither absolute nor under \\$HOME" ;; esac`,
   `mkdir -p "$(dirname "$p")" && cat "$SEALANT_STAGED" > "$p" && chmod "$SEALANT_WRITE_MODE" "$p" && s=0 || s=$?`,
   `rm -f "$SEALANT_STAGED"`,
   `exit "$s"`,
