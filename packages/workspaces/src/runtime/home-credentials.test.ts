@@ -1,7 +1,7 @@
 /**
  * The script that writes a person's logins into a home, run for real against temporary
- * directories, under every shell images have that is installed here: the host's `sh`, dash and
- * busybox (both halves run under it). The test's own uid and gid stand in for the home's owner, so
+ * directories, under the host's `sh` and each of dash and bash installed here, plus any shell
+ * `SEALANT_TEST_SHELLS` names (busybox, for one); both halves run under it. The test's own uid and gid stand in for the home's owner, so
  * `chown` needs no root; the marker and lock live in a scratch state directory instead of
  * `/run/sealant-homes`.
  */
@@ -71,11 +71,12 @@ interface Shell {
 const hostSh = realpathSync(commandPath("sh"));
 const shellDirs: string[] = [];
 /**
- * dash, bash and busybox where installed, and any shell `SEALANT_TEST_SHELLS` names
- * (`:`-separated), each once.
+ * dash and bash where installed, and any shell `SEALANT_TEST_SHELLS` names (`:`-separated), each
+ * once. busybox only when named: some distributions build it to prefer its own applets (Ubuntu's
+ * runs its own `setpriv`, not util-linux's), which no image's `sh` does; Alpine's does not.
  */
 const otherShells = [
-  ...["dash", "bash", "busybox"].map(commandPath),
+  ...["dash", "bash"].map(commandPath),
   ...(process.env["SEALANT_TEST_SHELLS"] ?? "").split(":"),
 ]
   .filter((path) => path.startsWith("/"))
