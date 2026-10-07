@@ -20,6 +20,17 @@ export const runExecDeadLetterQueueName = "workspace-run-exec.dlq";
 export const runExecRequestedMessageKind = "workspace.run-exec.requested";
 
 /**
+ * An exec run whose commands run as a person's Linux user travels on its OWN queue, with its own
+ * kind, never on `workspace-run-exec`: a worker from before `user` neither consumes this queue nor
+ * parses this kind (its parser refuses any other kind), so during a rolling upgrade an old worker
+ * can never take the run and start the person's commands as root. The run waits for a worker that
+ * knows it. The legacy queue's parser refuses a message that names a user.
+ */
+export const runExecAsUserQueueName = "workspace-run-exec-as-user";
+export const runExecAsUserDeadLetterQueueName = "workspace-run-exec-as-user.dlq";
+export const runExecAsUserRequestedMessageKind = "workspace.run-exec-as-user.requested";
+
+/**
  * One invocation the worker execs in the workspace. Its arguments live in the job row only until
  * the worker takes it (`deleteOnPickup`), and the run record keeps their count and lengths, never
  * the arguments themselves (`withholdProcessArgs` in @sealant/telemetry).
@@ -62,16 +73,19 @@ export interface RunDotfilesApply {
  *   ended, with its exit code. See `applyWorkspaceDotfilesRequestSchema`.
  */
 export interface RunExecRequestedMessage {
-  readonly kind: typeof runExecRequestedMessageKind;
+  readonly kind: typeof runExecRequestedMessageKind | typeof runExecAsUserRequestedMessageKind;
   readonly runId: string;
   readonly command?: RunExecCommand;
   readonly commands?: readonly RunExecCommand[];
   readonly dotfiles?: RunDotfilesApply;
   /**
-   * EXEC framing only: every command runs as this Linux user (a login name or a decimal uid), which
-   * the API checked against the executor (`exec.user`, Mend's uid range) before it queued the run.
+   * EXEC framing on the as-user queue only: every command runs as this Linux user (a login name or
+   * a decimal uid), which the API checked against the executor (`exec.user`, Mend's uid range)
+   * before it queued the run.
    */
   readonly user?: string;
+  /** With `user`: the executor (its launch run id) the API checked the user against. */
+  readonly checkedExecutorRunId?: string;
 }
 
 /**
@@ -79,6 +93,11 @@ export interface RunExecRequestedMessage {
  * is a day; the run row itself is what a lost delivery is reconciled against.
  */
 export const runExecQueue = defineJobQueue(runExecQueueName, {
+  activeTimeoutSeconds: 24 * 60 * 60,
+});
+
+/** The as-user queue: the same window (see `runExecAsUserQueueName`). */
+export const runExecAsUserQueue = defineJobQueue(runExecAsUserQueueName, {
   activeTimeoutSeconds: 24 * 60 * 60,
 });
 
@@ -187,6 +206,12 @@ export const parseRunExecRequestedMessage = (input: unknown): RunExecRequestedMe
   if (typeof obj.runId !== "string" || obj.runId.length === 0) {
     throw new Error("Invalid run-exec message: missing runId.");
   }
+  // A person's run never rides this queue: refused, never run as the workspace's own user.
+  if (obj.user !== undefined || obj.checkedExecutorRunId !== undefined) {
+    throw new Error(
+      `Invalid run-exec message: a run as a user travels on ${runExecAsUserQueueName}, never here.`,
+    );
+  }
   if (obj.dotfiles !== undefined) {
     return {
       kind: runExecRequestedMessageKind,
@@ -198,16 +223,11 @@ export const parseRunExecRequestedMessage = (input: unknown): RunExecRequestedMe
     if (!Array.isArray(obj.commands) || obj.commands.length === 0) {
       throw new Error("Invalid run-exec message: commands must be a non-empty array.");
     }
-    const user = parseProcessUser(obj.user);
     return {
       kind: runExecRequestedMessageKind,
       runId: obj.runId,
       commands: obj.commands.map((entry, index) => parseCommand(entry, `commands[${index}]`)),
-      ...(user === undefined ? {} : { user }),
     };
-  }
-  if (obj.user !== undefined) {
-    throw new Error("Invalid run-exec message: only the exec framing (`commands`) names a user.");
   }
   return {
     kind: runExecRequestedMessageKind,
@@ -216,20 +236,77 @@ export const parseRunExecRequestedMessage = (input: unknown): RunExecRequestedMe
   };
 };
 
-/** Publishes a run-exec request (called by the API: createRun with a command, or execWorkspace). */
-export const publishRunExecRequested = async (
-  databaseUrl: string,
-  input: {
-    readonly runId: string;
-    readonly command?: RunExecCommand;
-    readonly commands?: readonly RunExecCommand[];
-    readonly dotfiles?: RunDotfilesApply;
-    /** EXEC framing only: the Linux user every command runs as. */
-    readonly user?: string;
-  },
-): Promise<void> => {
-  if (input.user !== undefined && input.commands === undefined) {
-    throw new Error("Only the exec framing (`commands`) runs as a user.");
+/**
+ * Parses an as-user exec message (`runExecAsUserQueue`): the exec framing, a user that is a name or
+ * a uid in Mend's range and never root, and the executor the API checked it against.
+ */
+export const parseRunExecAsUserRequestedMessage = (input: unknown): RunExecRequestedMessage => {
+  if (!isRecord(input)) {
+    throw new Error("Invalid run-exec-as-user message: not an object.");
+  }
+  if (input["kind"] !== runExecAsUserRequestedMessageKind) {
+    throw new Error(`Invalid run-exec-as-user message: unexpected kind ${String(input["kind"])}.`);
+  }
+  const runId = optionalString(input["runId"], "runId");
+  const user = parseProcessUser(input["user"]);
+  const checkedExecutorRunId = optionalString(
+    input["checkedExecutorRunId"],
+    "checkedExecutorRunId",
+  );
+  const commands = input["commands"];
+  if (runId === undefined || user === undefined || checkedExecutorRunId === undefined) {
+    throw new Error(
+      "Invalid run-exec-as-user message: it names a runId, a user and the executor checked.",
+    );
+  }
+  if (!Array.isArray(commands) || commands.length === 0) {
+    throw new Error("Invalid run-exec-as-user message: commands must be a non-empty array.");
+  }
+  if (input["command"] !== undefined || input["dotfiles"] !== undefined) {
+    throw new Error("Invalid run-exec-as-user message: only the exec framing runs as a user.");
+  }
+  return {
+    kind: runExecAsUserRequestedMessageKind,
+    runId,
+    commands: commands.map((entry, index) => parseCommand(entry, `commands[${index}]`)),
+    user,
+    checkedExecutorRunId,
+  };
+};
+
+/** What a run-exec request publishes: one framing; with `user`, the exec framing. */
+export interface RunExecRequestInput {
+  readonly runId: string;
+  readonly command?: RunExecCommand;
+  readonly commands?: readonly RunExecCommand[];
+  readonly dotfiles?: RunDotfilesApply;
+  /** EXEC framing only: the Linux user every command runs as (on the as-user queue). */
+  readonly user?: string;
+  /** With `user`: the executor the API checked the user against. */
+  readonly checkedExecutorRunId?: string;
+}
+
+/**
+ * The queue a request goes on and its message: a run as a user on the as-user queue with its own
+ * kind, every other run on the legacy queue, as before.
+ */
+export const runExecRequestEnvelope = (
+  input: RunExecRequestInput,
+): { readonly queue: typeof runExecQueue; readonly message: RunExecRequestedMessage } => {
+  if (input.user !== undefined) {
+    if (input.commands === undefined || input.checkedExecutorRunId === undefined) {
+      throw new Error("Only the exec framing (`commands`) runs as a user, on a checked executor.");
+    }
+    return {
+      queue: runExecAsUserQueue,
+      message: {
+        kind: runExecAsUserRequestedMessageKind,
+        runId: input.runId,
+        commands: input.commands,
+        user: input.user,
+        checkedExecutorRunId: input.checkedExecutorRunId,
+      },
+    };
   }
   const framings = [input.command, input.commands, input.dotfiles].filter(
     (framing) => framing !== undefined,
@@ -239,16 +316,25 @@ export const publishRunExecRequested = async (
       "A run-exec request carries exactly one of `command`, `commands` or `dotfiles`.",
     );
   }
-  const message: RunExecRequestedMessage = {
-    kind: runExecRequestedMessageKind,
-    runId: input.runId,
-    ...(input.command === undefined ? {} : { command: input.command }),
-    ...(input.commands === undefined ? {} : { commands: input.commands }),
-    ...(input.dotfiles === undefined ? {} : { dotfiles: input.dotfiles }),
-    ...(input.user === undefined ? {} : { user: input.user }),
+  return {
+    queue: runExecQueue,
+    message: {
+      kind: runExecRequestedMessageKind,
+      runId: input.runId,
+      ...(input.command === undefined ? {} : { command: input.command }),
+      ...(input.commands === undefined ? {} : { commands: input.commands }),
+      ...(input.dotfiles === undefined ? {} : { dotfiles: input.dotfiles }),
+    },
   };
-  const jobs = createJobQueueService(databaseUrl);
-  await jobs.publishJson({ queue: runExecQueue, message });
+};
+
+/** Publishes a run-exec request (called by the API: createRun with a command, or execWorkspace). */
+export const publishRunExecRequested = async (
+  databaseUrl: string,
+  input: RunExecRequestInput,
+): Promise<void> => {
+  const { queue, message } = runExecRequestEnvelope(input);
+  await createJobQueueService(databaseUrl).publishJson({ queue, message });
 };
 
 export type RunExecConsumerMessage = JobQueueConsumerMessage<RunExecRequestedMessage>;
@@ -260,20 +346,34 @@ export interface ConsumeRunExecJobsOptions {
   readonly onMessage: (message: RunExecConsumerMessage) => Promise<void>;
 }
 
+/** Consumes both run-exec queues (the legacy one and the as-user one) with one handler. */
 export const consumeRunExecJobs = async (options: ConsumeRunExecJobsOptions) => {
   const jobs = createJobQueueService(options.databaseUrl);
-  return jobs.consumeJson({
-    queue: runExecQueue,
-    ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
-    parseMessage: parseRunExecRequestedMessage,
-    // A command's arguments can carry secrets (a token, a file's bytes), so the row holding them
-    // goes the moment the worker takes it. Nothing reads a run-exec job back, and nothing ever
-    // consumed its dead-letter copies; a run whose worker died stays `queued` or `running` either
-    // way (no reaper settles it today). `sweepRunExecJobRows` removes what a failed delete or an
-    // older worker left.
-    deleteOnPickup: true,
-    onMessage: options.onMessage,
-  });
+  const consume = (
+    queue: typeof runExecQueue,
+    parseMessage: (input: unknown) => RunExecRequestedMessage,
+  ) =>
+    jobs.consumeJson({
+      queue,
+      ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
+      parseMessage,
+      // A command's arguments can carry secrets (a token, a file's bytes), so the row holding them
+      // goes the moment the worker takes it. Nothing reads a run-exec job back, and nothing ever
+      // consumed its dead-letter copies; a run whose worker died stays `queued` or `running` either
+      // way (no reaper settles it today). `sweepRunExecJobRows` removes what a failed delete or an
+      // older worker left.
+      deleteOnPickup: true,
+      onMessage: options.onMessage,
+    });
+  const consumers = [
+    await consume(runExecQueue, parseRunExecRequestedMessage),
+    await consume(runExecAsUserQueue, parseRunExecAsUserRequestedMessage),
+  ];
+  return {
+    cancel: async () => {
+      await Promise.all(consumers.map((consumer) => consumer.cancel()));
+    },
+  };
 };
 
 /**
@@ -287,14 +387,17 @@ export const sweepRunExecJobRows = async (databaseUrl: string): Promise<number> 
   const result = await boss.getDb().executeSql(
     `WITH deleted AS (
        DELETE FROM ${jobQueueSchemaName}.job
-       WHERE name = $2
-         OR (name = $1 AND (
+       WHERE name = ANY($2::text[])
+         OR (name = ANY($1::text[]) AND (
            state IN ('completed', 'failed', 'cancelled')
            OR (state = 'active' AND started_on < now() - interval '10 minutes')))
        RETURNING 1
      )
      SELECT count(*)::int AS deleted FROM deleted`,
-    [runExecQueueName, runExecDeadLetterQueueName],
+    [
+      [runExecQueueName, runExecAsUserQueueName],
+      [runExecDeadLetterQueueName, runExecAsUserDeadLetterQueueName],
+    ],
   );
   const row: unknown = result.rows[0];
   return typeof row === "object" &&

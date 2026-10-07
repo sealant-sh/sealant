@@ -5,7 +5,14 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { parseRunExecRequestedMessage, runExecRequestedMessageKind } from "./run-exec-queue.js";
+import {
+  parseRunExecAsUserRequestedMessage,
+  parseRunExecRequestedMessage,
+  runExecAsUserRequestedMessageKind,
+  runExecQueueName,
+  runExecRequestEnvelope,
+  runExecRequestedMessageKind,
+} from "./run-exec-queue.js";
 
 const base = { kind: runExecRequestedMessageKind, runId: "run_1" };
 
@@ -107,16 +114,16 @@ describe("parseRunExecRequestedMessage", () => {
     ).toThrow(/manager is unknown/);
   });
 
-  it("carries the exec framing's user, and refuses root, a uid outside the range and a misplaced user", () => {
+  it("refuses any message on the legacy queue that names a user", () => {
     const commands = [{ executable: "id", args: [] }];
-    expect(parseRunExecRequestedMessage({ ...base, commands, user: "m4lice000" })).toEqual({
-      ...base,
-      commands,
-      user: "m4lice000",
-    });
-    expect(parseRunExecRequestedMessage({ ...base, commands }).user).toBeUndefined();
-    for (const user of ["root", "0", "1000", "a b", ""]) {
-      expect(() => parseRunExecRequestedMessage({ ...base, commands, user })).toThrow();
+    for (const extra of [
+      { user: "m4lice000" },
+      { user: "m4lice000", checkedExecutorRunId: "run_1" },
+      { checkedExecutorRunId: "run_1" },
+    ]) {
+      expect(() => parseRunExecRequestedMessage({ ...base, commands, ...extra })).toThrow(
+        /workspace-run-exec-as-user/,
+      );
     }
     expect(() =>
       parseRunExecRequestedMessage({
@@ -124,6 +131,57 @@ describe("parseRunExecRequestedMessage", () => {
         command: { executable: "opencode", args: [] },
         user: "m4lice000",
       }),
-    ).toThrow(/only the exec framing/);
+    ).toThrow(/never here/);
+  });
+});
+
+describe("a run as a user (the as-user queue)", () => {
+  const commands = [{ executable: "id", args: [] }];
+  const asUser = {
+    kind: runExecAsUserRequestedMessageKind,
+    runId: "run_1",
+    commands,
+    user: "m4lice000",
+    checkedExecutorRunId: "run_launch",
+  };
+
+  it("goes on its own queue, with its own kind; every other run as before", () => {
+    const envelope = runExecRequestEnvelope({
+      runId: "run_1",
+      commands,
+      user: "m4lice000",
+      checkedExecutorRunId: "run_launch",
+    });
+    expect(envelope.queue.name).toBe("workspace-run-exec-as-user");
+    expect(envelope.queue.name).not.toBe(runExecQueueName);
+    expect(envelope.message).toEqual(asUser);
+    const plain = runExecRequestEnvelope({ runId: "run_1", commands });
+    expect(plain.queue.name).toBe(runExecQueueName);
+    expect(plain.message).toEqual({ kind: runExecRequestedMessageKind, runId: "run_1", commands });
+    expect(() => runExecRequestEnvelope({ runId: "run_1", commands, user: "m4lice000" })).toThrow(
+      /checked executor/,
+    );
+  });
+
+  it("is refused by a worker from before it: the legacy parser rejects its kind", () => {
+    // A worker that predates `user` consumes only `workspace-run-exec`, and its parser (this one,
+    // whose kind check is unchanged) refuses the kind: the run is never started as root.
+    expect(() => parseRunExecRequestedMessage(asUser)).toThrow(/unexpected kind/);
+  });
+
+  it("parses with a user in range and the executor checked, and refuses anything else", () => {
+    expect(parseRunExecAsUserRequestedMessage(asUser)).toEqual(asUser);
+    for (const bad of [
+      { ...asUser, user: "root" },
+      { ...asUser, user: "0" },
+      { ...asUser, user: "1000" },
+      { ...asUser, user: undefined },
+      { ...asUser, checkedExecutorRunId: undefined },
+      { ...asUser, commands: [] },
+      { ...asUser, kind: runExecRequestedMessageKind },
+      { ...asUser, command: { executable: "opencode", args: [] } },
+    ]) {
+      expect(() => parseRunExecAsUserRequestedMessage(bad)).toThrow();
+    }
   });
 });

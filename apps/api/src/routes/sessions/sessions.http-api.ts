@@ -18,6 +18,9 @@ export const SessionsHandlersLive = HttpApiBuilder.group(
   (handlers) => {
     return handlers
       .handle("createSession", ({ payload, headers }) => createSession({ payload, headers }))
+      .handle("createSessionAsUser", ({ payload, headers }) =>
+        createSession({ payload, headers, asUser: true }),
+      )
       .handle("listSessions", ({ query, headers }) => listSessions({ query, headers }))
       .handle("getSession", ({ params, query, headers }) =>
         getSession({ sessionId: params.sessionId, headers, ownerUserId: query.ownerUserId }),

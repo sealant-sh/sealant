@@ -84,6 +84,8 @@ if ((await sealant.features()).processUser && (await workspace.processUser()) ==
   Anything else is refused with code `user-unsupported` and the reason in its message (the
   workspace's sealantd doesn't run processes as another user, the user is not in range, or it does
   not exist yet). Nothing is started.
+- They go to their own routes (`POST /v1/workspaces/:id/exec-as-user`, `POST /v1/sessions/as-user`),
+  so a control plane from before them answers `404` instead of running the process as root.
 - The run records the user (`user` on the run resource), never the arguments.
 - `workspace.processUser()` reads `supported`, `unsupported` or `unknown` from the image's sealantd;
   `launch.processUser` has it after `ready()`. The call itself asks the running daemon, whose answer

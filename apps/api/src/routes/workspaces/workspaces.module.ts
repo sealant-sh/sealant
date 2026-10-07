@@ -140,7 +140,11 @@ import {
 } from "../../services/control-plane-capabilities.js";
 import { requireLiveWorkspaceRoom, spendOwnerLaunch } from "../../services/owner-budgets.js";
 import { OWNER_REQUIRED_HINT, resolveOwnerScope, scopeAdmits } from "../../services/owner-scope.js";
-import { checkProcessUser, processUserNameRefusal } from "../process-user.js";
+import {
+  checkProcessUser,
+  processUserNameRefusal,
+  processUserOnLegacyRoute,
+} from "../process-user.js";
 import { mapRun } from "../runs/runs.module.js";
 import { resolveDaemonInstance, resolveDaemonTarget } from "../sessions/sessions.module.js";
 import { validateClientSuppliedAuthRefs } from "./client-authrefs.js";
@@ -2662,10 +2666,24 @@ export const execWorkspace = (input: {
   readonly payload: ExecWorkspaceRequest;
   /** For tests; defaults to the live channel (asked only for an exec as a user). */
   readonly processUserChannel?: ProcessUserChannel;
+  /**
+   * The request came on `POST /v1/workspaces/:id/exec-as-user`. `user` is honoured only there: on
+   * `/exec` it is refused, so a client never learns to send it to a route an older control plane
+   * would accept and ignore.
+   */
+  readonly asUser?: boolean;
 }) => {
   return Effect.gen(function* () {
     const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
     const user = input.payload.user;
+    if (user !== undefined && input.asUser !== true) {
+      return yield* new WorkspaceConflictError({
+        message: processUserOnLegacyRoute(user, `POST /v1/workspaces/${workspace.id}/exec-as-user`),
+        code: PROCESS_USER_UNSUPPORTED_CODE,
+      });
+    }
+    // Set once the user is checked: the run goes to the as-user queue, never the legacy one.
+    let asUserRun: { readonly user: string; readonly checkedExecutorRunId: string } | undefined;
     if (user !== undefined) {
       const refused = processUserNameRefusal(workspace.id, user);
       if (refused !== undefined) {
@@ -2713,6 +2731,7 @@ export const execWorkspace = (input: {
       if (verdict.kind === "unanswered") {
         return yield* new WorkspaceBadGatewayError({ message: verdict.message });
       }
+      asUserRun = { user, checkedExecutorRunId: resolved.instance.runId };
     }
 
     const runs = yield* RunRepo;
@@ -2724,7 +2743,7 @@ export const execWorkspace = (input: {
         ownerUserId: input.payload.ownerUserId,
         harnessId: execRunHarnessId,
         mode: "one-shot",
-        ...(user === undefined ? {} : { processUser: user }),
+        ...(asUserRun === undefined ? {} : { processUser: asUserRun.user }),
       }),
       "Failed to create the exec run.",
     );
@@ -2739,7 +2758,7 @@ export const execWorkspace = (input: {
             args: [...command.args],
             ...(command.cwd === undefined ? {} : { cwd: command.cwd }),
           })),
-          ...(user === undefined ? {} : { user }),
+          ...asUserRun,
         }),
       catch: (error) =>
         new WorkspaceInternalServerError({

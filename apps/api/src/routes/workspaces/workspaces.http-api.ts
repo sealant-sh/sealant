@@ -58,6 +58,13 @@ export const WorkspacesHandlersLive = HttpApiBuilder.group(
           payload,
         }),
       )
+      .handle("execWorkspaceAsUser", ({ params, payload }) =>
+        execWorkspace({
+          workspaceId: params.workspaceId,
+          payload,
+          asUser: true,
+        }),
+      )
       .handle("applyWorkspaceDotfiles", ({ params, payload }) =>
         applyWorkspaceDotfiles({
           workspaceId: params.workspaceId,

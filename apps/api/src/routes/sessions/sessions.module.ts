@@ -56,6 +56,7 @@ import {
   SealantRuntime,
   sealantTargetForRuntimeInstance,
   targetDerivationOptionsFromEnv,
+  PROCESS_USER_CAPABILITY,
   type ProcessUserChannel,
   type SealantSession as DaemonConnection,
   type SealantTarget,
@@ -64,7 +65,12 @@ import { Effect, Stream } from "effect";
 
 import { env } from "../../runtime-env.js";
 import { authPosture, servicePrincipals } from "../../services/service-principals.js";
-import { checkProcessUser, processUserNameRefusal } from "../process-user.js";
+import {
+  checkProcessUser,
+  processUserNameRefusal,
+  processUserOnLegacyRoute,
+  processUserRefusalMessage,
+} from "../process-user.js";
 
 // StreamKind numerics from the runtime protocol (avoid a runtime dep for constants).
 const STREAM_KIND_STDOUT = 2;
@@ -388,6 +394,12 @@ const sessionWithHighWater = (session: WorkspaceSession) =>
 export const createSession = (input: {
   readonly payload: CreateSessionRequest;
   readonly headers: SessionAuthorizationHeaders;
+  /**
+   * The request came on `POST /v1/sessions/as-user`. `user` is honoured only there: on
+   * `POST /v1/sessions` it is refused, so a client never learns to send it to a route an older
+   * control plane would accept and ignore.
+   */
+  readonly asUser?: boolean;
   /** For tests; defaults to the live channel (asked only for a session as a user). */
   readonly processUserChannel?: ProcessUserChannel;
 }) =>
@@ -417,6 +429,12 @@ export const createSession = (input: {
       });
     }
     const user = input.payload.user;
+    if (user !== undefined && input.asUser !== true) {
+      return yield* new SessionConflictError({
+        message: processUserOnLegacyRoute(user, "POST /v1/sessions/as-user"),
+        code: PROCESS_USER_UNSUPPORTED_CODE,
+      });
+    }
     if (user !== undefined) {
       const refused = processUserNameRefusal(workspace.id, user);
       if (refused !== undefined) {
@@ -555,17 +573,26 @@ export const createSession = (input: {
     }
 
     const opened = yield* withDaemon(target, (daemon) =>
-      daemon.openSession({
-        executionId: runId,
-        shell: argv[0] ?? "/bin/bash",
-        args: argv.slice(1),
-        cwd,
-        ...(input.payload.env === undefined ? {} : { env: input.payload.env }),
-        cols,
-        rows,
-        term: input.payload.term ?? DEFAULT_TERM,
-        mode,
-        ...(user === undefined ? {} : { user }),
+      Effect.gen(function* () {
+        // A session as a user: the daemon this connection reached is asked again, whatever the
+        // kept answer said, so a daemon without `exec.user` (which would ignore `user` and open
+        // the session as root) is never asked to open it.
+        if (user !== undefined) {
+          const capabilities = yield* daemon.capabilities;
+          if (!capabilities.supports.includes(PROCESS_USER_CAPABILITY)) return undefined;
+        }
+        return yield* daemon.openSession({
+          executionId: runId,
+          shell: argv[0] ?? "/bin/bash",
+          args: argv.slice(1),
+          cwd,
+          ...(input.payload.env === undefined ? {} : { env: input.payload.env }),
+          cols,
+          rows,
+          term: input.payload.term ?? DEFAULT_TERM,
+          mode,
+          ...(user === undefined ? {} : { user }),
+        });
       }),
     ).pipe(
       Effect.mapError((error) => {
@@ -574,6 +601,20 @@ export const createSession = (input: {
         });
       }),
     );
+    if (opened === undefined) {
+      const message = processUserRefusalMessage(workspace.id, user ?? "", {
+        reason: "sealantd-unsupported",
+        detail: `its sealantd does not report ${PROCESS_USER_CAPABILITY}`,
+      });
+      yield* Effect.all(
+        [
+          runs.markRunFailed({ id: runId, errorMessage: message }),
+          sessions.markSessionEnded({ id: sessionId, status: "failed", errorMessage: message }),
+        ],
+        { discard: true },
+      ).pipe(Effect.ignore);
+      return yield* new SessionConflictError({ message, code: PROCESS_USER_UNSUPPORTED_CODE });
+    }
 
     const running = yield* withInternalError(
       sessions.markSessionRunning({

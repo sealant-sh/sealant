@@ -54,8 +54,18 @@ export const processUserRefusalMessage = (
       return `User '${user}' is not in range (${refusal.detail}): ${PROCESS_USER_RANGE_RULE}. Nothing was started.`;
     case "unknown-user":
       return `User '${user}' is not in workspace ${workspaceId} (${refusal.detail}). Nothing was started.`;
+    case "check-unavailable":
+      return `Workspace ${workspaceId} cannot be checked for '${user}' (${refusal.detail}). Nothing was started.`;
   }
 };
+
+/**
+ * `user` on the routes from before it (`POST /v1/workspaces/:id/exec`, `POST /v1/sessions`): refused,
+ * never ignored. A process as a user has its own route, which a control plane that cannot run one
+ * answers `404`: in a mixed-version fleet the request fails there instead of running as root.
+ */
+export const processUserOnLegacyRoute = (user: string, route: string): string =>
+  `A process as the Linux user '${user}' is asked for with ${route}, so a control plane that cannot run one answers 404 rather than running it as the workspace's own user. Nothing was started.`;
 
 /** What the check found: allowed, refused with a reason, or no answer from the executor. */
 export type ProcessUserVerdict =

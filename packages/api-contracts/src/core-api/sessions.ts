@@ -74,10 +74,25 @@ export const createSessionRequestSchema = Schema.Struct({
   mode: Schema.optional(sessionModeSchema),
   /** Opaque caller correlation bag: stored verbatim, echoed on reads, no platform semantics. */
   metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-  /** Run the session's process as this Linux user (see `workspaceProcessUserSchema`). */
+  /**
+   * Refused here (`409`, `user-unsupported`), never ignored: a session as a Linux user is opened
+   * with `POST /v1/sessions/as-user` (`createSessionAsUserRequestSchema`), a route a control plane
+   * that cannot run one answers `404`, so a mixed-version fleet never runs it as root.
+   */
   user: Schema.optional(workspaceProcessUserSchema),
 });
 export type CreateSessionRequest = typeof createSessionRequestSchema.Type;
+
+/**
+ * `POST /v1/sessions/as-user`: a session whose leader runs as `user` (see
+ * `workspaceProcessUserSchema`), otherwise as `POST /v1/sessions`. Its own route, so a control
+ * plane from before it answers `404` instead of opening the session as the workspace's own user.
+ */
+export const createSessionAsUserRequestSchema = Schema.Struct({
+  ...createSessionRequestSchema.fields,
+  user: workspaceProcessUserSchema,
+});
+export type CreateSessionAsUserRequest = typeof createSessionAsUserRequestSchema.Type;
 
 export const sessionSchema = Schema.Struct({
   sessionId: NonEmptyString,
@@ -237,6 +252,24 @@ export const SessionsGroup = HttpApiGroup.make("sessions")
     HttpApiEndpoint.post("createSession", "/", {
       headers: sessionAuthorizationHeadersSchema,
       payload: createSessionRequestSchema,
+      success: sessionSchema.pipe(HttpApiSchema.status(201)),
+      error: [
+        SessionBadRequestError,
+        SessionUnauthorizedError,
+        SessionForbiddenError,
+        SessionNotFoundError,
+        SessionConflictError,
+        SessionBadGatewayError,
+        SessionInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    // Scope: workspace:exec. `createSession` with the leader run as a Linux user (`409`
+    // `user-unsupported` where the executor cannot; `502` when it does not answer the check).
+    HttpApiEndpoint.post("createSessionAsUser", "/as-user", {
+      headers: sessionAuthorizationHeadersSchema,
+      payload: createSessionAsUserRequestSchema,
       success: sessionSchema.pipe(HttpApiSchema.status(201)),
       error: [
         SessionBadRequestError,

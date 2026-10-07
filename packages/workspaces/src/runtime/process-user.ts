@@ -56,6 +56,8 @@ export const PROCESS_USER_CHECK_EXIT = {
   uidOutOfRange: 95,
   /** The user's primary group is not `mend`. */
   groupNotMend: 96,
+  /** The image has no `getent`, so the passwd entry cannot be read the way the daemon reads it. */
+  noGetent: 97,
 } as const;
 
 /** Why a process is not started as the user. */
@@ -67,7 +69,9 @@ export type ProcessUserRefusalReason =
   /** The user is root, or their uid or primary group is outside Mend's range. */
   | "not-in-range"
   /** No passwd entry names the user. */
-  | "unknown-user";
+  | "unknown-user"
+  /** The image cannot answer the check (no `getent`). */
+  | "check-unavailable";
 
 export interface ProcessUserRefusal {
   readonly reason: ProcessUserRefusalReason;
@@ -114,6 +118,8 @@ export const buildProcessUserCheckScript = (user: string): string => {
   return [
     "set -eu",
     `user=${quote(user)}`,
+    // Without getent a failed lookup would read as an unknown user: say what is missing instead.
+    `command -v getent >/dev/null 2>&1 || exit ${String(E.noGetent)}`,
     `ent=$(getent passwd "$user") || exit ${String(E.unknownUser)}`,
     `[ -n "$ent" ] || exit ${String(E.unknownUser)}`,
     "uid=$(printf '%s' \"$ent\" | cut -d: -f3); gid=$(printf '%s' \"$ent\" | cut -d: -f4)",
@@ -156,6 +162,11 @@ export const processUserCheckOutcome = (
       return {
         reason: "not-in-range",
         detail: `its primary group is not mend (${String(PROCESS_USER_GID)})`,
+      };
+    case PROCESS_USER_CHECK_EXIT.noGetent:
+      return {
+        reason: "check-unavailable",
+        detail: "its image has no getent, so Core cannot read the user's passwd entry",
       };
     default:
       return "unanswered";

@@ -13,6 +13,11 @@ A process runs as a person's Linux user (Mend ADR 0016):
   refused before anything starts (`409`, code `user-unsupported`), the message saying why: the
   workspace's sealantd doesn't run processes as another user, the user is not in range, or it does
   not exist yet. An exec as a user whose executor does not answer the check is a `502`.
+- A process as a user has its own routes: `POST /v1/workspaces/:id/exec-as-user` and
+  `POST /v1/sessions/as-user` (`execWorkspaceAsUserRequestSchema`,
+  `createSessionAsUserRequestSchema`, `user` required). A control plane from before them answers
+  `404`, never runs the process as root; `user` on `/exec` and `/v1/sessions` is refused (`409`
+  `user-unsupported`). The SDK uses them whenever `user` is set.
 - The run records the user: `user` on the run resource. Nothing else of the process is stored.
 - `workspace.processUser()` (and `launch.processUser` after `ready()`) reads whether a workspace
   can: `supported`, `unsupported` or `unknown`, from the sealantd of the image its latest launch

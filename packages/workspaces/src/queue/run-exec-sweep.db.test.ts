@@ -10,7 +10,12 @@ import { randomUUID } from "node:crypto";
 import { closeJobQueueSingleton, getJobQueueSingleton, jobQueueSchemaName } from "@sealant/jobs";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { runExecQueue, runExecQueueName, sweepRunExecJobRows } from "./run-exec-queue.js";
+import {
+  runExecAsUserQueue,
+  runExecQueue,
+  runExecQueueName,
+  sweepRunExecJobRows,
+} from "./run-exec-queue.js";
 
 const databaseUrl = process.env.SEALANT_JOBS_TEST_DATABASE_URL;
 
@@ -24,6 +29,7 @@ describe.skipIf(databaseUrl === undefined)("the run-exec job sweep (pg-boss)", (
   it("deletes finished, dead-lettered and stale active jobs, and keeps jobs not yet taken", async () => {
     const singleton = await getJobQueueSingleton(url);
     await singleton.ensureQueue(runExecQueue);
+    await singleton.ensureQueue(runExecAsUserQueue);
     const { boss } = singleton;
     const tag = randomUUID();
     const send = async (queue: string, label: string) => {
@@ -44,19 +50,25 @@ describe.skipIf(databaseUrl === undefined)("the run-exec job sweep (pg-boss)", (
     const staleActive = await send(runExecQueueName, "stale");
     const freshActive = await send(runExecQueueName, "fresh");
     const deadLettered = await send(runExecQueue.deadLetterQueueName, "dlq");
+    // The as-user queue's rows hold arguments too: swept by the same rule.
+    const asUserWaiting = await send(runExecAsUserQueue.name, "as-user-waiting");
+    const asUserCompleted = await send(runExecAsUserQueue.name, "as-user-completed");
+    const asUserDeadLettered = await send(runExecAsUserQueue.deadLetterQueueName, "as-user-dlq");
+    await setState(asUserCompleted, "completed", 5);
     await setState(completed, "completed", 5);
     await setState(staleActive, "active", 30);
     await setState(freshActive, "active", 1);
 
-    expect(await sweepRunExecJobRows(url)).toBeGreaterThanOrEqual(3);
+    expect(await sweepRunExecJobRows(url)).toBeGreaterThanOrEqual(5);
 
     const left = await db.executeSql(
       `SELECT id FROM ${jobQueueSchemaName}.job WHERE data->>'secret' = $1`,
       [`argv-${tag}`],
     );
     const ids = new Set(left.rows.map((row: { id: string }) => row.id));
-    expect(ids).toEqual(new Set([waiting, freshActive]));
+    expect(ids).toEqual(new Set([waiting, freshActive, asUserWaiting]));
     expect(ids.has(deadLettered)).toBe(false);
+    expect(ids.has(asUserDeadLettered)).toBe(false);
 
     await db.executeSql(`DELETE FROM ${jobQueueSchemaName}.job WHERE data->>'secret' = $1`, [
       `argv-${tag}`,

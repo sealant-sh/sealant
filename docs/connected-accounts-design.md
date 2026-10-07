@@ -576,21 +576,32 @@ unchanged. The SDK carries a typed error's body code as `SealantApiError.reason`
 
 ## 6e. Running as a user, and an image's per-person capability (Oct 2026)
 
-- **`user` on exec and sessions** (`POST /v1/workspaces/:id/exec { user }`,
-  `POST /v1/sessions { user }`, SDK `exec(argv, { user })`, `sessions.open(argv, { user })`): a
-  Linux user name or numeric uid, passed to sealantd's `ExecArgs.user` / `OpenSessionArgs.user`
-  (sealantd#147, 0.20.0-next.150 and later), which starts the process as that passwd entry (uid,
-  groups, `HOME`, umask 0002, private `TMPDIR` and `XDG_RUNTIME_DIR`, the image's `person-env`, none
-  of the daemon's logins; `CAP_FOWNER` only without no-new-privileges). Before anything is created
-  Core refuses, with 409 `user-unsupported` and the reason in the message: root, a uid outside
-  40001–49999 (no I/O); then, over one control connection to the ready executor, a daemon that does
-  not report `exec.user` ("this workspace's sealantd doesn't run processes as another user"), and a
-  passwd entry that is missing or not in range (uid outside the range or primary group not `mend`,
-  checked as root with `getent`). Cloudflare's sandboxes are refused outright. A yes is kept per
-  executor and user for ten minutes in the API process, so a person's run of execs pays the check
-  once; a request without `user` takes none of these steps. The run records the user
-  (`runs.process_user`, `user` on the run resource) and nothing else of the process; argv stays
-  unstored (sealant#329). An SDK sends `user` only to a control plane whose index reports
+- **`user` on exec and sessions** (`POST /v1/workspaces/:id/exec-as-user { user }`,
+  `POST /v1/sessions/as-user { user }`, SDK `exec(argv, { user })`,
+  `sessions.open(argv, { user })`): a Linux user name or numeric uid, passed to sealantd's
+  `ExecArgs.user` / `OpenSessionArgs.user` (sealantd#147, 0.20.0-next.150 and later), which starts
+  the process as that passwd entry (uid, groups, `HOME`, umask 0002, private `TMPDIR` and
+  `XDG_RUNTIME_DIR`, the image's `person-env`, none of the daemon's logins; `CAP_FOWNER` only
+  without no-new-privileges). Before anything is created Core refuses, with 409 `user-unsupported`
+  and the reason in the message: root, a uid outside 40001–49999 (no I/O); then, over one control
+  connection to the ready executor, a daemon that does not report `exec.user` ("this workspace's
+  sealantd doesn't run processes as another user"), and a passwd entry that is missing or not in
+  range (uid outside the range or primary group not `mend`, checked as root with `getent`).
+  Cloudflare's sandboxes are refused outright. A yes is kept per executor and user for ten minutes
+  in the API process, so a person's run of execs pays the check once; a request without `user` takes
+  none of these steps. The run records the user (`runs.process_user`, `user` on the run resource)
+  and nothing else of the process; argv stays unstored (sealant#329). **Version skew.** A process as
+  a user has its own routes and its own queue (`workspace-run-exec-as-user`, kind
+  `workspace.run-exec-as-user.requested`): an API from before them answers `404`, a worker from
+  before them neither consumes the queue nor parses the kind, so neither can drop `user` and run the
+  person's commands as root. `user` on the plain routes is refused, and the legacy queue's parser
+  refuses a message naming one. The message names the executor the API checked
+  (`checkedExecutorRunId`); a worker that finds another one checks again before starting anything,
+  and every exec as a user re-reads `exec.user` on its own connection, as the session path does
+  before it opens the session. Operators still upgrade the API and the worker together (documented).
+  The uid check runs inside the executor, where a person with `sudo` could rewrite `/etc/passwd`;
+  the enforcement that holds against that belongs in sealantd (refusing uids outside the boot owner
+  map or the range). An SDK sends `user` only to a control plane whose index reports
   `features.processUser` (kept five minutes, a failed read fifteen seconds), and refuses it
   client-side otherwise: an older control plane would decode the request without the field and run
   the process as the workspace's own user. The index's `features` also reports `dotfilesApply`,

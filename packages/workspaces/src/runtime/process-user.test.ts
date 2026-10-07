@@ -93,6 +93,24 @@ describe("the check script", () => {
     expect(check("m0ut0000", people).status).toBe(PROCESS_USER_CHECK_EXIT.groupNotMend);
   });
 
+  it("says so, rather than calling the user unknown, on an image without getent", () => {
+    const root = mkdtempSync(join(tmpdir(), "sealant-process-user-"));
+    roots.push(root);
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const result = spawnSync("/bin/sh", ["-c", buildProcessUserCheckScript("m4lice000")], {
+      encoding: "utf8",
+      env: { PATH: bin },
+    });
+    expect(result.status).toBe(PROCESS_USER_CHECK_EXIT.noGetent);
+    expect(
+      processUserCheckOutcome({ supported: true, exitCode: PROCESS_USER_CHECK_EXIT.noGetent }),
+    ).toEqual({
+      reason: "check-unavailable",
+      detail: "its image has no getent, so Core cannot read the user's passwd entry",
+    });
+  });
+
   it("is never built for a name refused up front", () => {
     expect(() => buildProcessUserCheckScript("root")).toThrow(/root/);
     expect(() => buildProcessUserCheckScript("1000")).toThrow(/outside/);

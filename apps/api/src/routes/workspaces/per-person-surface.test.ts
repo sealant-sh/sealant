@@ -237,7 +237,7 @@ describe("a process as a Linux user", () => {
   ) => {
     const checked: string[] = [];
     const created: Array<{ processUser?: string }> = [];
-    const published: Array<{ user?: string }> = [];
+    const published: Array<{ user?: string; checkedExecutorRunId?: string }> = [];
     const opened: unknown[] = [];
     const channel: ProcessUserChannel = {
       check: (_target, user) => {
@@ -267,8 +267,12 @@ describe("a process as a Linux user", () => {
         },
       } as unknown as RunRepoService),
       Layer.succeed(capabilities.RunExecPublisherService, {
-        publishRequested: (input: { user?: string }) => {
-          published.push(input.user === undefined ? {} : { user: input.user });
+        publishRequested: (input: { user?: string; checkedExecutorRunId?: string }) => {
+          published.push(
+            input.user === undefined
+              ? {}
+              : { user: input.user, checkedExecutorRunId: input.checkedExecutorRunId ?? "" },
+          );
           return Promise.resolve();
         },
       }),
@@ -288,7 +292,7 @@ describe("a process as a Linux user", () => {
         },
       } as never),
     );
-    const exec = (user: string | undefined) =>
+    const exec = (user: string | undefined, asUser = true) =>
       Effect.runPromise(
         Effect.result(
           workspacesModule
@@ -300,17 +304,19 @@ describe("a process as a Linux user", () => {
                 commands: [{ executable: "id", args: [] }],
               },
               processUserChannel: channel,
+              asUser,
             })
             .pipe(Effect.provide(layer)),
         ),
       );
-    const session = (user: string) =>
+    const session = (user: string, asUser = true) =>
       Effect.runPromiseExit(
         sessionsModule
           .createSession({
             headers: { authorization: "Bearer svc-test" },
             payload: { workspaceId: workspace.id, ownerUserId: OWNER, argv: ["bash"], user },
             processUserChannel: channel,
+            asUser,
           })
           .pipe(Effect.provide(layer)),
       );
@@ -388,7 +394,23 @@ describe("a process as a Linux user", () => {
     await w.exec("m4lice000");
     expect(w.checked).toEqual(["m4lice000"]);
     expect(w.created).toEqual([{ processUser: "m4lice000" }, { processUser: "m4lice000" }]);
-    expect(w.published).toEqual([{ user: "m4lice000" }, { user: "m4lice000" }]);
+    // On the as-user queue, naming the executor the user was checked on.
+    expect(w.published).toEqual([
+      { user: "m4lice000", checkedExecutorRunId: "run_1" },
+      { user: "m4lice000", checkedExecutorRunId: "run_1" },
+    ]);
+  });
+
+  it("refuses a user on the plain routes, which an older control plane would ignore", async () => {
+    const w = world(allowed);
+    const refused = failureOf(await w.exec("m4lice000", false));
+    expect(refused).toMatchObject({ _tag: "WorkspaceConflictError", code: "user-unsupported" });
+    expect(String(refused.message)).toContain("POST /v1/workspaces/wks_1/exec-as-user");
+    const session = await w.session("m4lice000", false);
+    expect(JSON.stringify(session)).toContain("POST /v1/sessions/as-user");
+    expect(w.checked).toEqual([]);
+    expect(w.created).toEqual([]);
+    expect(w.published).toEqual([]);
   });
 
   it("asks nothing for an exec without a user", async () => {
@@ -418,6 +440,83 @@ describe("a process as a Linux user", () => {
     await w.session("m4lice000");
     expect(w.checked).toEqual(["m4lice000"]);
     expect(w.created).toEqual([{ processUser: "m4lice000" }]);
+  });
+});
+
+describe("a session as a user, on the connection that opens it", () => {
+  it("asks the daemon again and opens nothing when it does not report exec.user", async () => {
+    processUser.forgetProcessUserAnswers();
+    const settled: string[] = [];
+    let openCalls = 0;
+    const daemon = {
+      capabilities: Effect.succeed({ supports: ["restore.owner_map"] }),
+      openSession: () => {
+        openCalls += 1;
+        return Effect.die("never opened");
+      },
+    };
+    const layer = Layer.mergeAll(
+      Layer.succeed(WorkspaceRepo, {
+        getWorkspaceById: () => Effect.succeed(workspace),
+      } as unknown as WorkspaceRepoService),
+      Layer.succeed(WorkspaceRuntimeInstanceRepo, {
+        getRuntimeInstanceByRunId: () =>
+          Effect.succeed({
+            runId: "run_1",
+            status: "ready",
+            adapter: "docker",
+            resourceId: "container-1",
+            reference: "container-1",
+            endpoint: null,
+          }),
+      } as unknown as WorkspaceRuntimeInstanceRepoService),
+      Layer.succeed(WorkspaceAttemptRepo, {
+        getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
+      } as never),
+      Layer.succeed(RunRepo, {
+        createRun: () => Effect.succeed({}),
+        markRunRunning: () => Effect.succeed({}),
+        markRunFailed: (input: { errorMessage: string }) =>
+          Effect.sync(() => {
+            settled.push(`run: ${input.errorMessage}`);
+            return null;
+          }),
+      } as unknown as RunRepoService),
+      Layer.succeed(WorkspaceSessionRepo, {
+        createSession: () => Effect.succeed({}),
+        markSessionEnded: (input: { status: string }) =>
+          Effect.sync(() => {
+            settled.push(`session: ${input.status}`);
+            return null;
+          }),
+      } as never),
+      Layer.succeed(TelemetryQuery, { hasEpoch: () => Effect.succeed(true) } as never),
+      Layer.succeed(SealantRuntime, { connect: () => Effect.succeed(daemon) } as never),
+      Layer.succeed(AccessTokenRepo, {} as never),
+    );
+    // The check (or a kept yes) said the executor can; the daemon reached to open it cannot.
+    const exit = await Effect.runPromiseExit(
+      sessionsModule
+        .createSession({
+          headers: { authorization: "Bearer svc-test" },
+          payload: {
+            workspaceId: workspace.id,
+            ownerUserId: OWNER,
+            argv: ["bash"],
+            user: "m4lice000",
+          },
+          processUserChannel: { check: () => Effect.succeed({ supported: true, exitCode: 0 }) },
+          asUser: true,
+        })
+        .pipe(Effect.provide(layer)),
+    );
+    expect(JSON.stringify(exit)).toContain("SessionConflictError");
+    expect(JSON.stringify(exit)).toContain("doesn't run processes as another user");
+    expect(openCalls).toBe(0);
+    expect(settled).toEqual([
+      expect.stringContaining("run: Workspace wks_1's sealantd doesn't run processes"),
+      "session: failed",
+    ]);
   });
 });
 

@@ -58,11 +58,19 @@ const makeStub = (processUser = true) => {
       requests.push({ op: "exec", body: request.payload });
       return Effect.die("stop after the request");
     },
+    execWorkspaceAsUser: (request: { payload: ExecWorkspaceRequest }) => {
+      requests.push({ op: "exec-as-user", body: request.payload });
+      return Effect.die("stop after the request");
+    },
     getWorkspace: () => Effect.succeed(details),
   };
   const sessions = {
     createSession: (request: { payload: CreateSessionRequest }) => {
       requests.push({ op: "session", body: request.payload });
+      return Effect.die("stop after the request");
+    },
+    createSessionAsUser: (request: { payload: CreateSessionRequest }) => {
+      requests.push({ op: "session-as-user", body: request.payload });
       return Effect.die("stop after the request");
     },
   };
@@ -201,7 +209,7 @@ describe("a capture source's ownerMap", () => {
 });
 
 describe("user on exec and sessions", () => {
-  it("asks for the process to run as the user", async () => {
+  it("asks for the process to run as the user on the as-user routes, never the plain ones", async () => {
     const { client, requests } = makeStub();
     const workspace = makeWorkspace(makeCtx(client), { id: "ws_1", name: "t", status: "ready" });
 
@@ -210,7 +218,7 @@ describe("user on exec and sessions", () => {
 
     expect(requests).toEqual([
       {
-        op: "exec",
+        op: "exec-as-user",
         body: {
           ownerUserId: "usr_owner",
           commands: [{ executable: "id", args: [] }],
@@ -218,7 +226,7 @@ describe("user on exec and sessions", () => {
         },
       },
       {
-        op: "session",
+        op: "session-as-user",
         body: { workspaceId: "ws_1", ownerUserId: "usr_owner", argv: ["bash"], user: "40001" },
       },
     ]);
@@ -267,7 +275,7 @@ describe("the control plane's feature answer", () => {
       vi.setSystemTime(Date.now() + 20_000);
       await expect(workspace.exec(["id"], { user: "m4lice000" })).rejects.toBeDefined();
       expect(reads).toBe(2);
-      expect(requests.map((request) => request.op)).toEqual(["exec"]);
+      expect(requests.map((request) => request.op)).toEqual(["exec-as-user"]);
     } finally {
       vi.useRealTimers();
     }

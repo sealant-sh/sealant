@@ -42,6 +42,8 @@ export interface RunExecPublisher {
     readonly dotfiles?: RunDotfilesApply;
     /** `commands` only: every command runs as this Linux user, checked by the API first. */
     readonly user?: string;
+    /** With `user`: the executor (its launch run id) the user was checked against. */
+    readonly checkedExecutorRunId?: string;
   }) => Promise<void>;
 }
 

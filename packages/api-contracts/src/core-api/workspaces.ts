@@ -204,12 +204,26 @@ export const execWorkspaceRequestSchema = Schema.Struct({
   /** Commands execute sequentially in the workspace, each recorded like any other process. */
   commands: Schema.Array(runCommandSchema).check(Schema.isNonEmpty(), Schema.isMaxLength(32)),
   /**
-   * Run every command as this Linux user (see `workspaceProcessUserSchema`): checked against the
-   * running executor before the run is made, and recorded on the run (`user`).
+   * Refused here (`409`, `user-unsupported`), never ignored: an exec as a Linux user is asked for
+   * with `POST /v1/workspaces/:id/exec-as-user` (`execWorkspaceAsUserRequestSchema`), a route a
+   * control plane that cannot run one answers `404`, so a mixed-version fleet never runs it as root.
    */
   user: Schema.optional(workspaceProcessUserSchema),
 });
 export type ExecWorkspaceRequest = typeof execWorkspaceRequestSchema.Type;
+
+/**
+ * `POST /v1/workspaces/:id/exec-as-user`: an exec whose every command runs as `user` (see
+ * `workspaceProcessUserSchema`), checked against the running executor before the run is made and
+ * recorded on the run (`user`); otherwise as `POST /v1/workspaces/:id/exec`. Its own route, so a
+ * control plane from before it answers `404` instead of running the commands as the workspace's
+ * own user.
+ */
+export const execWorkspaceAsUserRequestSchema = Schema.Struct({
+  ...execWorkspaceRequestSchema.fields,
+  user: workspaceProcessUserSchema,
+});
+export type ExecWorkspaceAsUserRequest = typeof execWorkspaceAsUserRequestSchema.Type;
 
 /** The `harnessId` stamped on runs that apply a person's dotfiles (`applyWorkspaceDotfiles`). */
 export const dotfilesRunHarnessId = "dotfiles";
@@ -1419,10 +1433,28 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
       error: [
         WorkspaceBadRequestError,
         WorkspaceNotFoundError,
-        // The workspace has never launched a runtime — nothing to exec in yet; or, with `user`, the
-        // executor cannot run a process as that user (`user-unsupported`) or is not running.
+        // The workspace has never launched a runtime — nothing to exec in yet; or a `user`, which
+        // this route refuses (`user-unsupported`): see `execWorkspaceAsUser`.
         WorkspaceConflictError,
-        // With `user`: the executor did not answer whether the user may run a process.
+        // Shared with `execWorkspaceAsUser`'s handler; this route never reaches the executor first.
+        WorkspaceBadGatewayError,
+        WorkspaceInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    // `execWorkspace` with every command run as a Linux user: 202 + the queued run.
+    HttpApiEndpoint.post("execWorkspaceAsUser", "/:workspaceId/exec-as-user", {
+      params: workspaceIdParams,
+      payload: execWorkspaceAsUserRequestSchema,
+      success: runSchema.pipe(HttpApiSchema.status(202)),
+      error: [
+        WorkspaceBadRequestError,
+        WorkspaceNotFoundError,
+        // The executor cannot run a process as the user (`user-unsupported`, the message saying
+        // why), or none is running (`workspace-not-running`).
+        WorkspaceConflictError,
+        // The executor did not answer whether the user may run a process.
         WorkspaceBadGatewayError,
         WorkspaceInternalServerError,
       ],

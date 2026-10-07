@@ -21,6 +21,7 @@ import {
   bindWorkspaceOp,
   flushWorkspaceCaptureOp,
   getWorkspaceCaptureStatusOp,
+  createSessionAsUserOp,
   createSessionOp,
   expireWorkspaceOp,
   getSessionOp,
@@ -317,20 +318,24 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     options?: SessionOptions,
   ): Promise<InteractiveSession> => {
     if (options?.user !== undefined) await requireProcessUser(ctx, options.user);
+    const request = {
+      workspaceId: init.id,
+      ownerUserId: ctx.config.hostLocal.ownerUserId,
+      argv: [...argv],
+      ...(options?.cwd === undefined ? {} : { cwd: options.cwd }),
+      ...(options?.env === undefined ? {} : { env: options.env }),
+      ...(options?.cols === undefined ? {} : { cols: options.cols }),
+      ...(options?.rows === undefined ? {} : { rows: options.rows }),
+      ...(options?.term === undefined ? {} : { term: options.term }),
+      ...(options?.mode === undefined ? {} : { mode: options.mode }),
+      ...(options?.metadata === undefined ? {} : { metadata: { ...options.metadata } }),
+    };
+    // As a user: its own route, so a control plane that cannot open one answers 404, never opens
+    // it as the workspace's own user.
     const created = await ctx.runtime.run(
-      createSessionOp({
-        workspaceId: init.id,
-        ownerUserId: ctx.config.hostLocal.ownerUserId,
-        argv: [...argv],
-        ...(options?.cwd === undefined ? {} : { cwd: options.cwd }),
-        ...(options?.env === undefined ? {} : { env: options.env }),
-        ...(options?.cols === undefined ? {} : { cols: options.cols }),
-        ...(options?.rows === undefined ? {} : { rows: options.rows }),
-        ...(options?.term === undefined ? {} : { term: options.term }),
-        ...(options?.mode === undefined ? {} : { mode: options.mode }),
-        ...(options?.metadata === undefined ? {} : { metadata: { ...options.metadata } }),
-        ...(options?.user === undefined ? {} : { user: options.user }),
-      }),
+      options?.user === undefined
+        ? createSessionOp(request)
+        : createSessionAsUserOp({ ...request, user: options.user }),
     );
     return makeInteractiveSession(ctx, created);
   };

@@ -37,8 +37,11 @@ import {
   dotfilesStagePath,
   execInWorkspace,
   liveDotfilesStageChannel,
+  liveProcessUserChannel,
   PROCESS_USER_CAPABILITY,
+  processUserCheckOutcome,
   type DotfilesStageChannel,
+  type ProcessUserChannel,
   type RunDotfilesApply,
   type RunExecCommand,
   SealantRuntime,
@@ -79,6 +82,10 @@ export interface ProcessRunExecJobOptions {
   readonly dotfiles?: RunDotfilesApply;
   /** EXEC framing only: every command runs as this Linux user (the API checked the executor). */
   readonly user?: string;
+  /** With `user`: the executor (its launch run id) the API checked the user against. */
+  readonly checkedExecutorRunId?: string;
+  /** For tests: how the user is checked again on another executor (default: the live channel). */
+  readonly processUserChannel?: ProcessUserChannel;
   readonly db: DB;
   /**
    * Decrypt/encrypt for connected-account credentials; undefined when SEALANT_CREDENTIALS_KEY is
@@ -336,6 +343,28 @@ export const produceExecRun = (
     yield* runs.markRunCompleted({ id: runId, exitCode: lastExitCode, ...changes });
   });
 
+/**
+ * The API's check of a process user, made again on the executor the run reached: why the run must
+ * not start, or `undefined` when it may. No answer is a refusal too.
+ */
+const recheckProcessUser = (target: SealantTarget, user: string, channel: ProcessUserChannel) =>
+  channel.check(target, user).pipe(
+    Effect.timeout(Duration.seconds(30)),
+    Effect.result,
+    Effect.map((answered): string | undefined => {
+      const prefix = `The run reached another executor than the one '${user}' was checked on, and`;
+      if (Result.isFailure(answered)) {
+        return `${prefix} that executor did not answer the check again; nothing was started.`;
+      }
+      const outcome = processUserCheckOutcome(answered.success);
+      if (outcome === "ok") return undefined;
+      if (outcome === "unanswered") {
+        return `${prefix} that executor did not confirm the check (it exited ${String(answered.success.exitCode)}); nothing was started.`;
+      }
+      return `${prefix} there it is refused (${outcome.detail}); nothing was started.`;
+    }),
+  );
+
 export interface DotfilesRunOptions {
   /** For tests; defaults to the live channel (the staged archives' cleanup). */
   readonly stageChannel?: DotfilesStageChannel;
@@ -563,6 +592,20 @@ export const processRunExecJobEffect = (
           .pipe(Effect.ignore),
       ),
     );
+
+    // The run reached another executor than the API checked the user against (a restart in
+    // between): the user is checked again here, as the API would, before anything starts.
+    if (user !== undefined && attemptId !== options.checkedExecutorRunId) {
+      const refusal = yield* recheckProcessUser(
+        target,
+        user,
+        options.processUserChannel ?? liveProcessUserChannel,
+      );
+      if (refusal !== undefined) {
+        yield* runs.markRunFailed({ id: options.runId, errorMessage: refusal }).pipe(Effect.ignore);
+        return;
+      }
+    }
 
     if (dotfiles !== undefined) {
       // A home's dotfiles touch no login and no worktree: no credential sync-back, no changes.
