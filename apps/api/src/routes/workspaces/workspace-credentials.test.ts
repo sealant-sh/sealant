@@ -530,6 +530,35 @@ describe("putWorkspaceCredentials", () => {
     );
   });
 
+  it("a partial put leaves out a Claude, Codex or GitHub file with another hard link, and writes the rest", async () => {
+    for (const [exit, provider] of [
+      [86, "claude"],
+      [87, "codex"],
+      [88, "github"],
+    ] as const) {
+      const world = newWorld();
+      succeeded(await world.put({ onBehalfOfUserId: ALICE, codex: "default" }));
+      world.exits.push(exit, 0);
+      const answer = succeeded(
+        await world.put({
+          onBehalfOfUserId: ALICE,
+          claude: "default",
+          codex: "default",
+          github: "default",
+          partial: true,
+        }),
+      );
+      expect(answer.skipped).toEqual([
+        expect.objectContaining({ provider, code: "login-file-unusable" }),
+      ]);
+      const retry = world.ran[world.ran.length - 1];
+      expect(retry?.payloads).toHaveLength(2);
+      expect(
+        world.homes.rows.get(`run_1 ${HOME}`)?.accounts.map((entry) => entry.provider),
+      ).toEqual(["claude", "codex", "github"].filter((name) => name !== provider));
+    }
+  });
+
   it("a partial put still fails on anything but a refused account, and a whole put answers no skips", async () => {
     const world = newWorld();
     succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default" }));

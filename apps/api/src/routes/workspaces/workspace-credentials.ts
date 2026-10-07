@@ -58,6 +58,7 @@ import {
 } from "@sealant/db";
 import {
   buildHomeCredentialScript,
+  homeLoginOfRefusal,
   homePathProblem,
   homeScriptRefusal,
   HOME_SCRIPT_EXIT,
@@ -360,15 +361,6 @@ const OWNER_HALF_REFUSALS: ReadonlySet<number> = new Set([
   HOME_SCRIPT_EXIT.githubLoginUnusable,
 ]);
 
-/** The pi or opencode login a refusal is about (its file unusable, or outside the home). */
-const mergedLoginOfExit = (exitCode: number | undefined): "pi" | "opencode" | undefined =>
-  exitCode === HOME_SCRIPT_EXIT.piLoginUnusable || exitCode === HOME_SCRIPT_EXIT.piLoginOutside
-    ? "pi"
-    : exitCode === HOME_SCRIPT_EXIT.opencodeLoginUnusable ||
-        exitCode === HOME_SCRIPT_EXIT.opencodeLoginOutside
-      ? "opencode"
-      : undefined;
-
 /** Why a refused script is answered as it is: fenced → held, busy → busy, else unusable. */
 const refusedCode = (exitCode: number | undefined) =>
   exitCode === HOME_SCRIPT_EXIT.fenced
@@ -482,9 +474,9 @@ export const putWorkspaceCredentials = (input: {
           // A first take writes a fresh marker and clears any login file it does not write (an
           // earlier unconfirmed write's leftovers); a write under a hold checks the hold's marker.
           const generation = held?.generation ?? newHomeGeneration();
-          // A partial put whose pi or opencode file is refused in the home (unusable, or really
-          // outside it) leaves that provider out too and writes the rest, once more: every other
-          // provider is still written, and a stale login of a skipped one still removed.
+          // A partial put whose login file is refused in the home (unusable, another hard link, or
+          // really outside it) leaves that provider out too and writes the rest, once more: every
+          // other provider is still written, and a stale login of a skipped one still removed.
           let skipping = skipped.map(({ provider }) => provider);
           let writing = writes.map(({ provider }) => provider);
           for (;;) {
@@ -526,7 +518,7 @@ export const putWorkspaceCredentials = (input: {
                   }),
                 });
               }
-              const refusedLogin = mergedLoginOfExit(ran.exitCode);
+              const refusedLogin = homeLoginOfRefusal(ran.exitCode);
               if (
                 payload.partial === true &&
                 refusedLogin !== undefined &&

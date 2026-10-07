@@ -471,21 +471,40 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
     }
   }
   // Every whole-file login is opened (made if missing, never truncated yet) and checked through its
-  // descriptor before any login is written: a regular file with one link, so an in-place write
+  // descriptor before any of them is written: a regular file with one link, so an in-place write
   // never lands in a file that has another name (in saved state, or someone else's). A link at the
-  // file's name is removed first, never followed.
+  // file's name is removed first, never followed. A refusal removes the files this check made, so
+  // a refused write leaves no empty login file behind.
   const files = input.writes.flatMap((provider, index) => {
     const file = homeCredentialProviderOf(HOME_CREDENTIAL_FILES[provider]);
     return file === undefined ? [] : [{ provider: file, index }];
   });
+  if (files.length > 0) {
+    inner.push(`made=`, `refuse() { for f in $made; do rm -f "$f"; done; exit "$1"; }`);
+  }
   files.forEach(({ provider }, slot) => {
     const fd = FIRST_LOGIN_FD + slot;
     const exit = FILE_EXITS[provider];
     inner.push(
       `f="$home/${HOME_CREDENTIAL_FILES[provider]}"`,
       `if [ -L "$f" ]; then rm -f "$f"; fi`,
-      `command exec ${fd}<>"$f" || exit ${exit}`,
-      `[ -f "/proc/$$/fd/${fd}" ] && [ "$(stat -L -c %h "/proc/$$/fd/${fd}")" = 1 ] || exit ${exit}`,
+      `if [ ! -e "$f" ]; then made="$made $f"; fi`,
+      `command exec ${fd}<>"$f" || refuse ${exit}`,
+      `[ -f "/proc/$$/fd/${fd}" ] && [ "$(stat -L -c %h "/proc/$$/fd/${fd}")" = 1 ] || refuse ${exit}`,
+    );
+  });
+  // Then written, before any merge: a pi or opencode file refused below never keeps the
+  // whole-file logins of the same write (a Codex refresh's copy) from landing. In place, through
+  // the descriptor checked above, as a launch writes it: a temporary file beside it could be saved
+  // by a capture where the directory is linked into the saved harness home (the shared layout).
+  files.forEach(({ index }, slot) => {
+    const fd = FIRST_LOGIN_FD + slot;
+    inner.push(
+      `base64 -d <<SEALANT_LOGIN >"/proc/$$/fd/${fd}"`,
+      `$p${index}`,
+      "SEALANT_LOGIN",
+      `chmod 600 "/proc/$$/fd/${fd}"`,
+      `exec ${fd}>&-`,
     );
   });
   input.writes.forEach((provider, index) => {
@@ -497,19 +516,6 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
       `$p${index}`,
       "SEALANT_LOGIN",
       `case "$c" in 0) ;; 3) exit ${String(exits.outside)} ;; *) exit ${String(exits.unusable)} ;; esac`,
-    );
-  });
-  // Written in place, through the descriptor checked above, as a launch writes it: a temporary
-  // file beside it could be saved by a capture where the directory is linked into the saved
-  // harness home (the shared layout).
-  files.forEach(({ index }, slot) => {
-    const fd = FIRST_LOGIN_FD + slot;
-    inner.push(
-      `base64 -d <<SEALANT_LOGIN >"/proc/$$/fd/${fd}"`,
-      `$p${index}`,
-      "SEALANT_LOGIN",
-      `chmod 600 "/proc/$$/fd/${fd}"`,
-      `exec ${fd}>&-`,
     );
   });
   for (const provider of removes) {
@@ -525,10 +531,18 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
 
   // The owner's half starts from a clean environment: only a fixed PATH and its flags, never the
   // exec's (a token, the secret env), which the person could read through /proc, and never a
-  // payload. Its payloads go on its stdin, as a here-document: the shell writes it into a pipe
-  // (or, in an older bash, a root-only temporary file it unlinks at once), and no process is
-  // started with it in its argv or environment.
-  const environment = [`PATH=${ownerPath}`, `seed="$seed"`, `uid="$uid"`, `hn="$hn"`].join(" ");
+  // payload. Its payloads go on its stdin, as a here-document: the shell writes it into a pipe, and
+  // no process is started with it in its argv or environment. bash before 5.1, or with a document
+  // larger than a pipe, writes a 0600 temporary file in `$TMPDIR` instead and unlinks it at once:
+  // root's is in the state directory (root's only, outside every home and capture root), never
+  // where the workspace's environment points `TMPDIR`, and the owner's half's is in the home.
+  const environment = [
+    `PATH=${ownerPath}`,
+    `TMPDIR="$home"`,
+    `seed="$seed"`,
+    `uid="$uid"`,
+    `hn="$hn"`,
+  ].join(" ");
   lines.push(
     `inner=${quote(inner.join("\n").replaceAll("'", "'\\''"))}`,
     // Root's own home is root's to write; anyone else's is written as them. As root the person
@@ -536,6 +550,7 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
     // The environment is cleared while still root: no process of the person's ever holds it.
     `own() { if [ "$uid" = 0 ]; then env -i ${environment} sh -c "$inner"; else env -i ${environment} setpriv --reuid="$uid" --regid="$gid" "$g" sh -c "$inner"; fi; }`,
   );
+  lines.push(`TMPDIR="$st"`);
   if (input.writes.length === 0) {
     lines.push("own </dev/null");
   } else {
@@ -625,6 +640,32 @@ export const liveHomeCredentialChannel: HomeCredentialChannel = {
         return yield* runHomeScriptInSession(session, script, stdin);
       }),
     ).pipe(Effect.provide(SealantRuntimeControlLive)),
+};
+
+/**
+ * The provider whose login file a refusal is about (`82` to `88`: the file is unusable, has another
+ * hard link, or really is outside the home), or `undefined` for any other exit. A caller can leave
+ * that provider out and write the rest (a partial put, a refresh push).
+ */
+export const homeLoginOfRefusal = (
+  exitCode: number | undefined,
+): HomeCredentialProvider | undefined => {
+  switch (exitCode) {
+    case HOME_SCRIPT_EXIT.piLoginUnusable:
+    case HOME_SCRIPT_EXIT.piLoginOutside:
+      return "pi";
+    case HOME_SCRIPT_EXIT.opencodeLoginUnusable:
+    case HOME_SCRIPT_EXIT.opencodeLoginOutside:
+      return "opencode";
+    case HOME_SCRIPT_EXIT.claudeLoginUnusable:
+      return "claude";
+    case HOME_SCRIPT_EXIT.codexLoginUnusable:
+      return "codex";
+    case HOME_SCRIPT_EXIT.githubLoginUnusable:
+      return "github";
+    default:
+      return undefined;
+  }
 };
 
 /** A refusal the script answered with, in words, or `undefined` for success or another failure. */

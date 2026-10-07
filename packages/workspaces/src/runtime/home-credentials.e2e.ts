@@ -185,7 +185,11 @@ describe.skipIf(!imageAvailable)(
       // watcher's own patterns are bracketed so it never finds itself.
       const logins = [
         { provider: "claude", content: '{"claudeAiOauth":{"accessToken":"SECRET-e2e-claude"}}' },
-        { provider: "codex", content: '{"tokens":{"access_token":"SECRET-e2e-codex"}}' },
+        // Larger than a pipe: bash writes such a here-document to a temporary file.
+        {
+          provider: "codex",
+          content: `{"tokens":{"access_token":"SECRET-e2e-codex","pad":"${"x".repeat(100_000)}"}}`,
+        },
         { provider: "github", content: 'github.com:\n    oauth_token: "SECRET-e2e-github"\n' },
         { provider: "pi", content: entry("SECRET-e2e-pi") },
         { provider: "opencode", content: entry("SECRET-e2e-oc") },

@@ -29,8 +29,7 @@ import { readFile } from "node:fs/promises";
 
 import type { V1Pod } from "@kubernetes/client-node";
 import { StreamKind } from "@sealant/runtime-client";
-import type { EventEnvelope } from "@sealant/runtime-protocol";
-import { Effect, Option, Schedule, Stream } from "effect";
+import { Effect, Schedule } from "effect";
 
 import {
   SealantRuntime,
@@ -40,6 +39,7 @@ import {
 } from "../../sealantd/runtime.js";
 import { CAPTURE_SOURCE_ONLY_ENV } from "../capture-source.js";
 import { buildCredentialFileWriteScript } from "../credential-files.js";
+import { runHomeScriptInSession } from "../home-credentials.js";
 import { buildDotfilesArchiveManifest, hasDotfilesArchives } from "../launch-material.js";
 import {
   completeReadyLaunch,
@@ -171,24 +171,12 @@ export const liveControlChannel: ControlChannel = {
           const runtime = yield* SealantRuntime;
           const session = yield* runtime.connect(target);
           for (const file of files) {
-            const script = buildCredentialFileWriteScript(file);
-            const accepted = yield* session.exec({
-              executable: "sh",
-              args: ["-c", script],
-              stdin: true,
-            });
-            yield* session.writeStdin(accepted.processId, Buffer.from(file.contentBase64, "utf8"));
-            yield* session.closeStdin(accepted.processId);
-            const exit = yield* session.events.pipe(
-              Stream.filter((event: EventEnvelope) => event.processId === accepted.processId),
-              Stream.filter((event: EventEnvelope) => event.payload.case === "processExited"),
-              Stream.take(1),
-              Stream.runHead,
+            // The script as the exec's only argument, the content on its stdin (never recorded).
+            const { exitCode: code } = yield* runHomeScriptInSession(
+              session,
+              buildCredentialFileWriteScript(file),
+              file.contentBase64,
             );
-            const code =
-              Option.isSome(exit) && exit.value.payload.case === "processExited"
-                ? exit.value.payload.value.exitCode
-                : undefined;
             if (code !== 0) {
               return yield* Effect.fail(
                 createAdapterError(

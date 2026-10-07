@@ -10,7 +10,7 @@ import {
 import { makeInMemoryCredentialHomes } from "@sealant/db/testing/credential-homes";
 import { Effect, Layer } from "effect";
 
-import type { HomeCredentialChannel } from "../runtime/home-credentials.js";
+import { HOME_SCRIPT_EXIT, type HomeCredentialChannel } from "../runtime/home-credentials.js";
 import type { ControlChannel } from "../runtime/kubernetes/adapter.js";
 import { instancesHoldingAccount, pushCredentialCopy } from "./credential-push.js";
 
@@ -321,6 +321,74 @@ const jwt = (exp: number) => `h.${Buffer.from(JSON.stringify({ exp })).toString(
 
 describe("pushCredentialCopy into homes holding pi's and opencode's logins", () => {
   const ready = [instance("h", [])];
+
+  it.effect(
+    "leaves out a pi or opencode file the home refuses and writes the rest once more",
+    () => {
+      const homes = makeInMemoryCredentialHomes(() => ready);
+      const ran: RanScript[] = [];
+      // opencode's auth.json has a second hard link (a capture brought it back into saved state):
+      // every script that writes it is refused, 85.
+      const channel: HomeCredentialChannel = {
+        run: (target, script, stdin) =>
+          Effect.sync(() => {
+            ran.push({ target: JSON.stringify(target), script, stdin });
+            return {
+              exitCode: script.includes('.local/share/opencode/auth.json" openai ')
+                ? HOME_SCRIPT_EXIT.opencodeLoginOutside
+                : 0,
+            };
+          }),
+      };
+      return Effect.gen(function* () {
+        yield* homes.service.withLockedHome({ runId: "h", home: "/home/alice" }, () =>
+          Effect.succeed({
+            result: undefined,
+            outcome: {
+              kind: "hold" as const,
+              onBehalfOfUserId: "usr_alice",
+              accounts: [
+                { provider: "codex" as const, connectedAccountId: "cacc_codex" },
+                { provider: "pi" as const, connectedAccountId: "cacc_codex" },
+                { provider: "opencode" as const, connectedAccountId: "cacc_codex" },
+              ],
+              generation: "generation-alice",
+            },
+          }),
+        );
+        const summary = yield* pushCredentialCopy({
+          connectedAccountId: "cacc_codex",
+          provider: "codex",
+          copyJson: JSON.stringify({
+            tokens: {
+              access_token: jwt(1_900_000_000),
+              refresh_token: "sealant-copy-cannot-refresh",
+              account_id: "acc_1",
+            },
+          }),
+          controlChannel: silentLaunchChannel,
+          homeChannel: channel,
+        });
+        expect(summary).toMatchObject({ written: 1, failed: 0 });
+        expect(ran).toHaveLength(2);
+        // The second run writes the new Codex login and pi's entry, without opencode's.
+        const second = ran[1];
+        expect(second?.script).toContain(".codex/auth.json");
+        expect(second?.script).toContain("openai-codex");
+        expect(second?.script).not.toContain('.local/share/opencode/auth.json" openai ');
+        const payloads = (second?.stdin ?? "").split("\n").filter((line) => line.length > 0);
+        expect(payloads).toHaveLength(2);
+        expect(Buffer.from(payloads[0] ?? "", "base64").toString("utf8")).toContain("tokens");
+      }).pipe(
+        Effect.provide(
+          Layer.merge(
+            instancesRepo(ready),
+            Layer.succeed(WorkspaceCredentialHomeRepo, homes.service),
+          ),
+        ),
+      );
+    },
+  );
 
   it.effect(
     "writes a Codex refresh into the home's codex, pi and opencode logins in one script",
