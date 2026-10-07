@@ -42,6 +42,7 @@ export {
   type WorkspaceRuntimeInstanceStopReason,
   workspaceRuntimeInstanceStopReasonValues,
   type WorkspaceBuildJob,
+  type WorkspaceBuildJobProgress,
   type WorkspaceBuildJobStatus,
   workspaceBuildJobStatusValues,
 } from "./workspace-build-jobs.js";

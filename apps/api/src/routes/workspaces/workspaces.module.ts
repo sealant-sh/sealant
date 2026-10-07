@@ -122,6 +122,7 @@ import {
   resolveWorkspaceError,
   resolveWorkspacePublishedImage,
   resolveWorkspaceRuntime,
+  resolveWorkspacePhase,
   resolveWorkspaceStatus,
   executorIsRetained,
   type WorkspaceSshGatewayConfig,
@@ -1272,6 +1273,11 @@ const mapWorkspaceSummary = (
           ...(runtimeInstance === undefined ? {} : { runtimeInstance }),
           retained,
         });
+  const phase = resolveWorkspacePhase({
+    status,
+    ...(latestJob === undefined ? {} : { latestJob }),
+    ...(runtimeInstance === undefined ? {} : { runtimeInstance }),
+  });
 
   return {
     workspaceId: workspace.id,
@@ -1288,6 +1294,7 @@ const mapWorkspaceSummary = (
     ...(runtime === undefined ? {} : { runtime }),
     ...(publishedImage === undefined ? {} : { publishedImage }),
     ...(error === undefined ? {} : { error }),
+    ...(phase === undefined ? {} : { phase }),
     createdAt: workspace.createdAt.toISOString(),
     updatedAt: updatedAt.toISOString(),
     ...(toIsoString(startedAt) === undefined ? {} : { startedAt: toIsoString(startedAt) }),

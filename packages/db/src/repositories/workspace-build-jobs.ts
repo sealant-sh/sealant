@@ -7,6 +7,7 @@ import {
   workspaceBuildJobs,
   type NewWorkspaceBuildJob,
   type WorkspaceBuildJob,
+  type WorkspaceBuildJobProgress,
   type WorkspaceBuildJobStatus,
 } from "../schema.js";
 
@@ -85,6 +86,19 @@ export interface MarkWorkspaceBuildJobSucceededInput {
   readonly finishedAt?: Date;
 }
 
+export interface RecordWorkspaceBuildJobProgressInput {
+  readonly id: string;
+  /** Fenced like success: written only while the job is `running` under exactly this claim. */
+  readonly claim: WorkspaceBuildJobClaim;
+  readonly progress: WorkspaceBuildJobProgress;
+  /**
+   * The claim's lease is renewed by this much from now: a build that keeps moving keeps its
+   * claim, however long it takes, and only a build that stops moving lets it lapse.
+   */
+  readonly leaseDurationMs: number;
+  readonly now?: Date;
+}
+
 export interface MarkWorkspaceBuildJobFailedInput {
   readonly id: string;
   /**
@@ -126,6 +140,7 @@ const workspaceBuildJobRepoOperationSchema = Schema.Literals([
   "markJobFailed",
   "markJobRunning",
   "markJobSucceeded",
+  "recordJobProgress",
 ]);
 
 export class WorkspaceBuildJobRepoInvariantError extends Schema.TaggedErrorClass<WorkspaceBuildJobRepoInvariantError>()(
@@ -223,6 +238,13 @@ export interface WorkspaceBuildJobRepoService {
   readonly markJobFailed: (
     input: MarkWorkspaceBuildJobFailedInput,
   ) => Effect.Effect<WorkspaceBuildJob | null, WorkspaceBuildJobRepoError>;
+  /**
+   * Record the build's progress and renew the claim's lease. Answers false when the claim no
+   * longer holds the job (it was taken over, or the job settled): nothing was written.
+   */
+  readonly recordJobProgress: (
+    input: RecordWorkspaceBuildJobProgressInput,
+  ) => Effect.Effect<boolean, WorkspaceBuildJobRepoError>;
   /** Drop the sealed secret env once the launch phase has settled; idempotent. */
   readonly clearSecretEnv: (id: string) => Effect.Effect<void, WorkspaceBuildJobRepoError>;
   /**
@@ -478,6 +500,7 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
                   leaseExpiresAt,
                   startedAt: sql`coalesce(${workspaceBuildJobs.startedAt}, ${now})`,
                   attemptCount: sql`${workspaceBuildJobs.attemptCount} + 1`,
+                  progress: null,
                 })
                 .where(and(eq(workspaceBuildJobs.id, candidate.id), claimable))
                 .returning();
@@ -505,6 +528,7 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
                 leaseExpiresAt,
                 startedAt: sql`coalesce(${workspaceBuildJobs.startedAt}, ${now})`,
                 attemptCount: sql`${workspaceBuildJobs.attemptCount} + 1`,
+                progress: null,
               })
               .where(
                 and(
@@ -607,6 +631,30 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
               .returning();
 
             return job ?? null;
+          }),
+        ),
+
+      recordJobProgress: (input) =>
+        withWorkspaceBuildJobRepoError(
+          "recordJobProgress",
+          Effect.gen(function* () {
+            const now = requiredDate(input.now);
+            const updated = yield* db
+              .update(workspaceBuildJobs)
+              .set({
+                progress: input.progress,
+                leaseExpiresAt: new Date(now.getTime() + input.leaseDurationMs),
+              })
+              .where(
+                and(
+                  eq(workspaceBuildJobs.id, input.id),
+                  eq(workspaceBuildJobs.status, "running"),
+                  eq(workspaceBuildJobs.workerId, input.claim.workerId),
+                  eq(workspaceBuildJobs.attemptCount, input.claim.attemptCount),
+                ),
+              )
+              .returning({ id: workspaceBuildJobs.id });
+            return updated.length > 0;
           }),
         ),
 

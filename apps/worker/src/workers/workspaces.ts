@@ -293,7 +293,14 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   const containerImageBuilder =
     containerAdapters.length === 0
       ? undefined
-      : (imageBuilder ?? createDockerWorkspaceImageBuilder({ registryClient }));
+      : (imageBuilder ??
+        createDockerWorkspaceImageBuilder({
+          registryClient,
+          stallTimeoutMs: env.WORKSPACE_IMAGE_BUILD_STALL_MS,
+          ...(env.WORKSPACE_IMAGE_BUILD_CACHE_DIR === undefined
+            ? {}
+            : { cacheDirectory: env.WORKSPACE_IMAGE_BUILD_CACHE_DIR }),
+        }));
   const runtimes = [
     ...(containerImageBuilder === undefined
       ? []

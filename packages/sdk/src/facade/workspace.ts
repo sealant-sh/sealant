@@ -52,6 +52,8 @@ import type {
   WorkspaceCredentialHome,
   WorkspaceCredentialsAccountChoice,
   WorkspaceImage,
+  WorkspacePhase,
+  WorkspaceReadyOptions,
   WorkspaceSessions,
   WorkspaceCaptureDrain,
   WorkspaceCaptureClassSnaps,
@@ -77,6 +79,9 @@ export interface WorkspaceInit {
   readonly created?: boolean;
   /** What the create answered of the launch (run, executor when known, replayed). */
   readonly launch?: WorkspaceLaunch;
+  /** `ready()`'s bounds for this handle, from `create()` (see `WorkspaceReadyOptions`). */
+  readonly readyTimeoutMs?: number;
+  readonly imageBuildTimeoutMs?: number;
 }
 
 /** The wire runtime as the SDK reports it. */
@@ -102,7 +107,16 @@ const READY_POLL_INTERVAL_MS = 2_000;
  */
 const READY_FIRST_POLL_MS = 100;
 const READY_MAX_POLL_MS = 1_000;
-const READY_TIMEOUT_MS = 10 * 60 * 1_000;
+/** `ready()`'s default readiness bound: the launch outside an image build (queued, booting). */
+export const READY_TIMEOUT_MS = 10 * 60 * 1_000;
+/**
+ * `ready()` gives up on an image build that reported no progress for this long, or for the
+ * control plane's own stall bound plus `IMAGE_BUILD_STALL_GRACE_MS`, whichever is longer. The
+ * control plane fails a stalled build itself; this covers a worker that died mid-build and was
+ * never replaced.
+ */
+export const IMAGE_BUILD_STALL_GUARD_MS = 20 * 60 * 1_000;
+const IMAGE_BUILD_STALL_GRACE_MS = 5 * 60 * 1_000;
 const STOP_POLL_INTERVAL_MS = 1_000;
 const STOP_TIMEOUT_MS = 60 * 1_000;
 
@@ -211,8 +225,70 @@ const toCaptureOrigin = (origin: CaptureExecutorOrigin): WorkspaceCaptureOrigin 
   ...(origin.headN === undefined ? {} : { headN: origin.headN }),
 });
 
+/** The wire's launch phase. */
+type WirePhase = NonNullable<WireWorkspaceDetails["phase"]>;
+
 /** The wire's published image. */
 type WirePublishedImage = NonNullable<WireWorkspaceDetails["publishedImage"]>;
+
+/** Wire → public launch phase. */
+export const toWorkspacePhase = (phase: WirePhase): WorkspacePhase => ({
+  name: phase.name,
+  ...(phase.since === undefined ? {} : { since: phase.since }),
+  ...(phase.imageBuild === undefined
+    ? {}
+    : {
+        imageBuild: {
+          ...(phase.imageBuild.step === undefined ? {} : { step: phase.imageBuild.step }),
+          ...(phase.imageBuild.steps === undefined ? {} : { steps: phase.imageBuild.steps }),
+          ...(phase.imageBuild.stepName === undefined
+            ? {}
+            : { stepName: phase.imageBuild.stepName }),
+          progressAt: phase.imageBuild.progressAt,
+          ...(phase.imageBuild.stallTimeoutMs === undefined
+            ? {}
+            : { stallTimeoutMs: phase.imageBuild.stallTimeoutMs }),
+        },
+      }),
+});
+
+/** `Building the workspace image (step 2/12: RUN apt-get …)`, `Booting the workspace`. */
+export const describeWorkspacePhase = (phase: WorkspacePhase): string => {
+  switch (phase.name) {
+    case "queued":
+      return "Waiting for a worker to take the launch";
+    case "boot":
+      return "Booting the workspace";
+    case "image-build": {
+      const build = phase.imageBuild;
+      if (build?.step === undefined || build.steps === undefined) {
+        return "Building the workspace image";
+      }
+      return `Building the workspace image (step ${String(build.step)}/${String(build.steps)}${
+        build.stepName === undefined ? "" : `: ${build.stepName}`
+      })`;
+    }
+  }
+};
+
+/** `at step 2/12 (RUN apt-get …)`, or `before its first step`. */
+const describeBuildStep = (phase: WorkspacePhase | undefined): string => {
+  const build = phase?.imageBuild;
+  if (build?.step === undefined || build.steps === undefined) return "before its first step";
+  return `at step ${String(build.step)}/${String(build.steps)}${
+    build.stepName === undefined ? "" : ` (${build.stepName})`
+  }`;
+};
+
+/** Two phases name the same place in the launch (same phase, same build step). */
+const samePhaseStep = (a: WorkspacePhase | undefined, b: WorkspacePhase | undefined): boolean =>
+  a?.name === b?.name &&
+  a?.imageBuild?.step === b?.imageBuild?.step &&
+  a?.imageBuild?.steps === b?.imageBuild?.steps;
+
+/** `12 min`, `90 s`. */
+const formatWait = (ms: number): string =>
+  ms >= 120_000 ? `${String(Math.round(ms / 60_000))} min` : `${String(Math.round(ms / 1000))} s`;
 
 /** Wire → public published image. */
 export const toWorkspaceImage = (image: WirePublishedImage): WorkspaceImage => ({
@@ -459,13 +535,67 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
       return details.runtime?.deadline ?? null;
     },
 
-    ready: async () => {
-      const deadline = Date.now() + READY_TIMEOUT_MS;
+    phase: async () => {
+      const details: WorkspaceDetails = await ctx.runtime.run(
+        getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
+      );
+      return details.phase === undefined ? null : toWorkspacePhase(details.phase);
+    },
+
+    ready: async (options?: WorkspaceReadyOptions) => {
+      // Bounded by phase: the readiness bound is spent only outside an image build (queued,
+      // booting), so a first launch on a new image is not failed by a slow package mirror. The
+      // build has its own bound (none by default) and fails when it stops making progress. A
+      // control plane that reports no phase counts everything against the readiness bound.
+      const readyTimeoutMs = options?.readyTimeoutMs ?? init.readyTimeoutMs ?? READY_TIMEOUT_MS;
+      const imageBuildTimeoutMs = options?.imageBuildTimeoutMs ?? init.imageBuildTimeoutMs;
+      for (const [name, value] of [
+        ["readyTimeoutMs", readyTimeoutMs],
+        ["imageBuildTimeoutMs", imageBuildTimeoutMs],
+      ] as const) {
+        if (value !== undefined && !(Number.isFinite(value) && value > 0)) {
+          throw new SealantError(`${name} must be a positive number of milliseconds.`, {
+            code: "invalid_options",
+          });
+        }
+      }
+      const startedAt = Date.now();
+      let buildMs = 0;
+      let lastPollAt = startedAt;
+      let building = false;
+      // The build's last reported output, and when THIS client saw it change: the stall guard
+      // runs on the client's own clock, never on the control plane's timestamps.
+      let progressAt: string | undefined;
+      let progressSeenAt = startedAt;
       let wait = READY_FIRST_POLL_MS;
+
+      /** Give up on the launch: stop it when this handle created it, then throw. */
+      const giveUp = async (message: string, code: string): Promise<never> => {
+        // A workspace this handle created and nobody will ever use: request a stop, so its
+        // runtime does not keep running (and billing) to the platform's lifetime cap.
+        // Best-effort: the bound is what the caller must see, whatever the request answers.
+        // The request being accepted is all that is known — not that anything has stopped.
+        const accepted = init.created === true ? await requestStop() : undefined;
+        throw new SealantError(
+          `${message}${
+            accepted === undefined
+              ? ""
+              : accepted
+                ? " A stop was requested; the workspace has not been observed stopped."
+                : " Requesting a stop failed; stop it yourself."
+          }`,
+          { code },
+        );
+      };
+
       for (;;) {
         const details: WorkspaceDetails = await ctx.runtime.run(
           getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
         );
+        const now = Date.now();
+        // The time since the last look was spent building when the last look saw a build.
+        if (building) buildMs += now - lastPollAt;
+        lastPollAt = now;
         // Gate on the coarse "ready" status, which the control plane now emits ONLY after the
         // in-workspace daemon's control socket is accepting (readiness probe in the launch path).
         // This is honest: when ready() resolves, harness.run() can connect without racing the socket.
@@ -482,27 +612,54 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
           return workspace;
         }
         if (FAILED_STATUSES.has(details.status)) {
+          const reason = details.error === undefined ? "" : `: ${details.error.message}`;
           throw new SealantError(
-            `Workspace ${init.id} reached terminal status "${details.status}" before becoming ready.`,
-            { code: "workspace_not_ready" },
+            `Workspace ${init.id} reached terminal status "${details.status}" before becoming ready${reason}`,
+            {
+              code:
+                details.error?.code === "image-build-stalled"
+                  ? "workspace_image_build_stalled"
+                  : "workspace_not_ready",
+            },
           );
         }
-        if (Date.now() > deadline) {
-          // A workspace this handle created and nobody will ever use: request a stop, so its
-          // runtime does not keep running (and billing) to the platform's lifetime cap.
-          // Best-effort: the timeout is what the caller must see, whatever the request answers.
-          // The request being accepted is all that is known — not that anything has stopped.
-          const accepted = init.created === true ? await requestStop() : undefined;
-          throw new SealantError(
-            `Timed out waiting for workspace ${init.id} to become ready.${
-              accepted === undefined
-                ? ""
-                : accepted
-                  ? " A stop was requested; the workspace has not been observed stopped."
-                  : " Requesting a stop failed; stop it yourself."
-            }`,
-            { code: "workspace_ready_timeout" },
+
+        const phase = details.phase === undefined ? undefined : toWorkspacePhase(details.phase);
+        building = phase?.name === "image-build";
+        if (building) {
+          const reported = phase?.imageBuild?.progressAt;
+          if (reported !== progressAt) {
+            progressAt = reported;
+            progressSeenAt = now;
+          }
+          if (imageBuildTimeoutMs !== undefined && buildMs > imageBuildTimeoutMs) {
+            await giveUp(
+              `The image build for workspace ${init.id} took longer than ${formatWait(imageBuildTimeoutMs)} (imageBuildTimeoutMs); it was ${describeBuildStep(phase)}.`,
+              "workspace_image_build_timeout",
+            );
+          }
+          // Only a build that reports progress can be seen to stall; one that reports none is
+          // bounded by imageBuildTimeoutMs and the control plane's own bounds.
+          const stallBoundMs = Math.max(
+            IMAGE_BUILD_STALL_GUARD_MS,
+            (phase?.imageBuild?.stallTimeoutMs ?? 0) + IMAGE_BUILD_STALL_GRACE_MS,
           );
+          if (progressAt !== undefined && now - progressSeenAt > stallBoundMs) {
+            await giveUp(
+              `The image build for workspace ${init.id} reported no progress for ${formatWait(now - progressSeenAt)}; it was ${describeBuildStep(phase)}.`,
+              "workspace_image_build_stalled",
+            );
+          }
+        } else {
+          progressAt = undefined;
+          if (now - startedAt - buildMs > readyTimeoutMs) {
+            await giveUp(
+              `Timed out waiting for workspace ${init.id} to become ready${
+                phase === undefined ? "" : ` (${describeWorkspacePhase(phase).toLowerCase()})`
+              }.`,
+              "workspace_ready_timeout",
+            );
+          }
         }
         await delay(wait);
         wait = Math.min(wait * 2, READY_MAX_POLL_MS);
@@ -582,7 +739,10 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
       const ctxRun = ctx.runtime;
       async function* iterate(): AsyncGenerator<WorkspaceEvent> {
         let lastStatus: WorkspaceStatus | undefined;
-        const deadline = Date.now() + READY_TIMEOUT_MS;
+        let lastPhase: WorkspacePhase | undefined;
+        // The stream ends with the launch; this bounds it on a launch that never settles. It
+        // follows a build as long as the build is moving, like ready().
+        let deadline = Date.now() + READY_TIMEOUT_MS;
         for (;;) {
           const details = await ctxRun.run(
             getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
@@ -595,6 +755,22 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
               message: `Workspace status: ${details.status}`,
             };
           }
+          const phase = details.phase === undefined ? undefined : toWorkspacePhase(details.phase);
+          if (phase !== undefined && !samePhaseStep(phase, lastPhase)) {
+            yield {
+              type: `phase.${phase.name}`,
+              occurredAt: new Date().toISOString(),
+              message: describeWorkspacePhase(phase),
+              phase,
+            };
+          }
+          if (
+            phase?.name === "image-build" &&
+            phase.imageBuild?.progressAt !== lastPhase?.imageBuild?.progressAt
+          ) {
+            deadline = Date.now() + Math.max(READY_TIMEOUT_MS, IMAGE_BUILD_STALL_GUARD_MS);
+          }
+          lastPhase = phase;
           if (details.status === "ready" || FAILED_STATUSES.has(details.status)) {
             return;
           }
@@ -718,6 +894,10 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         name: init.name,
         status: "queued",
         ...(init.harness === undefined ? {} : { harness: init.harness }),
+        ...(init.readyTimeoutMs === undefined ? {} : { readyTimeoutMs: init.readyTimeoutMs }),
+        ...(init.imageBuildTimeoutMs === undefined
+          ? {}
+          : { imageBuildTimeoutMs: init.imageBuildTimeoutMs }),
       });
     },
 

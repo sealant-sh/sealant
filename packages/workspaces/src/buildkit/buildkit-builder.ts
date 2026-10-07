@@ -29,6 +29,11 @@ import {
   type HarnessIntegration,
 } from "../harness/integrations.js";
 import {
+  createImageBuildProgressTracker,
+  describeImageBuildStep,
+  type ImageBuildProgress,
+} from "./build-progress.js";
+import {
   RELEASE_INSTALL_PACKAGES,
   UnknownWorkspacePackageError,
   WORKSPACE_PACKAGE_CATALOG,
@@ -64,7 +69,19 @@ export interface BuildkitCommandResult {
 /** Optional execution settings passed to the command runner. */
 export interface BuildkitCommandOptions {
   readonly cwd?: string;
+  /** Called with what the command writes (stdout and stderr), as it writes it. */
+  readonly onOutput?: (text: string) => void;
+  /**
+   * Stop the command and fail it (code `command-idle-timeout`) when it writes nothing for this
+   * long. Absent: no bound.
+   */
+  readonly idleTimeoutMs?: number;
 }
+
+/** The code a command runner fails with when the command wrote nothing for `idleTimeoutMs`. */
+export const COMMAND_IDLE_TIMEOUT_CODE = "command-idle-timeout";
+/** The code an image build fails with when it wrote nothing for its stall bound. */
+export const IMAGE_BUILD_STALLED_CODE = "image-build-stalled";
 
 /**
  * Injectable command runner abstraction.
@@ -89,6 +106,22 @@ export interface BuildkitCompilerOptions {
    * Defaults to true.
    */
   readonly emitTarball?: boolean;
+  /** Called with the build's progress (step N of M, last output) as the builder reports it. */
+  readonly onProgress?: (progress: ImageBuildProgress) => void;
+  /**
+   * Fail the build (code `image-build-stalled`) when the builder writes nothing for this long. A
+   * build that keeps writing is never bounded: a slow mirror makes a slow build, not a failed one.
+   * Absent: no bound.
+   */
+  readonly stallTimeoutMs?: number;
+  /**
+   * A directory BuildKit keeps its layer cache in between builds (`--cache-from`/`--cache-to
+   * type=local`, one subdirectory per image name), so a build whose earlier steps match an
+   * earlier build's reuses them even after the builder's own cache was pruned. Needs a builder
+   * that can export cache: Docker's containerd image store (the default since Docker 29) or a
+   * `docker-container` buildx builder. Absent: only the builder's own cache.
+   */
+  readonly cacheDirectory?: string;
 }
 
 /**
@@ -122,7 +155,7 @@ interface DistroDefinition {
  * - throws with a stable `code` (`buildkit-command-failed`) on non-zero exit or signal so callers
  *   can classify failures consistently
  */
-const defaultCommandRunner: BuildkitCommandRunner = (command, args, options) => {
+export const runBuildkitCommand: BuildkitCommandRunner = (command, args, options) => {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options?.cwd,
@@ -136,18 +169,49 @@ const defaultCommandRunner: BuildkitCommandRunner = (command, args, options) => 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
 
-    child.stdout.on("data", (chunk: string | Buffer) => {
-      stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
+    // The idle bound: re-armed by every write, it stops a command that went silent (SIGTERM, then
+    // SIGKILL if it ignores that) and fails it as idle rather than as a signal exit.
+    const idleTimeoutMs = options?.idleTimeoutMs;
+    let idle = false;
+    let idleTimer: NodeJS.Timeout | undefined;
+    let killTimer: NodeJS.Timeout | undefined;
+    const armIdleTimer = () => {
+      if (idleTimeoutMs === undefined) return;
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        idle = true;
+        child.kill("SIGTERM");
+        killTimer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+        killTimer.unref();
+      }, idleTimeoutMs);
+      idleTimer.unref();
+    };
+    armIdleTimer();
 
-    child.stderr.on("data", (chunk: string | Buffer) => {
-      stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
+    const onChunk = (chunks: Buffer[]) => (chunk: string | Buffer) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      chunks.push(buffer);
+      armIdleTimer();
+      options?.onOutput?.(buffer.toString("utf8"));
+    };
+    child.stdout.on("data", onChunk(stdoutChunks));
+    child.stderr.on("data", onChunk(stderrChunks));
 
     child.on("error", reject);
     child.on("close", (code, signal) => {
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
+      if (killTimer !== undefined) clearTimeout(killTimer);
       const stdout = Buffer.concat(stdoutChunks).toString("utf8");
       const stderr = Buffer.concat(stderrChunks).toString("utf8");
+
+      if (idle) {
+        const error = new Error(
+          `${command} wrote nothing for ${String(Math.round((idleTimeoutMs ?? 0) / 1000))} s and was stopped: ${command} ${args.join(" ")}`,
+        ) as Error & { code: string };
+        error.code = COMMAND_IDLE_TIMEOUT_CODE;
+        reject(error);
+        return;
+      }
 
       if (signal !== null) {
         const error = new Error(
@@ -1430,25 +1494,61 @@ const buildImageTarball = async (
   imageTarPath: string | undefined,
   commandRunner: BuildkitCommandRunner,
   plan: ResolvedImagePlan,
+  build: Pick<BuildkitCompilerOptions, "onProgress" | "stallTimeoutMs" | "cacheDirectory"> = {},
 ) => {
   const platformArgs = plan.osFamily === "arch" ? ["--platform", "linux/amd64"] : [];
+  // One cache per image name: images of one family share their base and package steps.
+  const imageName = spec.imageReference.replace(/:[^:/]*$/, "");
+  const cacheArgs =
+    build.cacheDirectory === undefined
+      ? []
+      : [
+          "--cache-from",
+          `type=local,src=${join(build.cacheDirectory, imageName)}`,
+          "--cache-to",
+          `type=local,dest=${join(build.cacheDirectory, imageName)},mode=max`,
+        ];
   const buildArgs = [
     "build",
+    // Plain progress: one line per step and its output, as it happens. It is what the progress
+    // tracker reads, and the same text the error carries when the build fails.
+    "--progress=plain",
     "--file",
     spec.containerfilePath,
     ...spec.secrets.flatMap((secret) => ["--secret", `id=${secret.id},src=${secret.sourceRef}`]),
     ...Object.entries(spec.buildArgs).flatMap(([key, value]) => ["--build-arg", `${key}=${value}`]),
     ...platformArgs,
+    ...cacheArgs,
     "--tag",
     spec.imageReference,
     spec.contextDirectory,
   ];
+  const progress = createImageBuildProgressTracker({
+    ...(build.onProgress === undefined ? {} : { onProgress: build.onProgress }),
+    ...(build.stallTimeoutMs === undefined ? {} : { stallTimeoutMs: build.stallTimeoutMs }),
+  });
 
   try {
     await commandRunner("docker", buildArgs, {
       cwd: spec.contextDirectory,
+      onOutput: progress.write,
+      ...(build.stallTimeoutMs === undefined ? {} : { idleTimeoutMs: build.stallTimeoutMs }),
     });
   } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === COMMAND_IDLE_TIMEOUT_CODE
+    ) {
+      const last = progress.current();
+      throw createBuildkitCompilerError(
+        IMAGE_BUILD_STALLED_CODE,
+        `The workspace image build stopped making progress ${describeImageBuildStep(last)}: it wrote nothing for ${formatDuration(build.stallTimeoutMs ?? 0)}${
+          last === undefined ? "" : ` after its last output at ${last.progressAt}`
+        }, and was stopped. A package mirror or registry that stopped answering does this; build again when it answers.`,
+      );
+    }
     // A shell-less custom base dies on the very first RUN with runc's exec error; translate it
     // into the contract's own words instead of surfacing a container-runtime stack line.
     if (
@@ -1523,7 +1623,7 @@ export const compileWorkspaceBuildSpec = async (input: {
   const planned = planWorkspaceImageBuild(input);
   const { osFamily, imagePlan } = planned;
   const buildContext = await writeBuildContext(imagePlan, planned.containerfile);
-  const commandRunner = input.options?.commandRunner ?? defaultCommandRunner;
+  const commandRunner = input.options?.commandRunner ?? runBuildkitCommand;
   const emitTarball = input.options?.emitTarball ?? true;
 
   let imageProbe: Awaited<ReturnType<typeof readImageProbe>>;
@@ -1533,6 +1633,17 @@ export const compileWorkspaceBuildSpec = async (input: {
       emitTarball ? buildContext.imageTarPath : undefined,
       commandRunner,
       imagePlan,
+      {
+        ...(input.options?.onProgress === undefined
+          ? {}
+          : { onProgress: input.options.onProgress }),
+        ...(input.options?.stallTimeoutMs === undefined
+          ? {}
+          : { stallTimeoutMs: input.options.stallTimeoutMs }),
+        ...(input.options?.cacheDirectory === undefined
+          ? {}
+          : { cacheDirectory: input.options.cacheDirectory }),
+      },
     );
     imageProbe = await readImageProbe(buildContext.spec.imageReference, commandRunner, imagePlan);
   } catch (error) {
@@ -1620,6 +1731,26 @@ const readImageProbe = async (
     return { note: `The image probe could not be read back from the image: ${reason}` };
   }
 };
+
+/** `10 min`, `90 s`. */
+const formatDuration = (ms: number): string =>
+  ms >= 60_000 && ms % 60_000 === 0
+    ? `${String(ms / 60_000)} min`
+    : `${String(Math.round(ms / 1000))} s`;
+
+/**
+ * Reads the image probe back from an image already in the local Docker Engine (`readImageProbe`),
+ * for an image this compiler built earlier: the answer it recorded then is the image's answer now.
+ */
+export const readWorkspaceImageProbe = (
+  imageReference: string,
+  plan: ResolvedImagePlan,
+  commandRunner: BuildkitCommandRunner = runBuildkitCommand,
+) => readImageProbe(imageReference, commandRunner, plan);
+
+/** The local image name a compile of this plan builds and tags (`<name>:latest`). */
+export const localImageNameOf = (plan: ResolvedImagePlan): string =>
+  defaultImageNameForBlueprint(plan.blueprint, plan.osFamily);
 
 /** Public helper used by callers/tests that only need planning (without running Docker). */
 export const mapBlueprintToBuildkitImagePlan = (

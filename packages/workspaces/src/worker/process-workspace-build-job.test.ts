@@ -2967,3 +2967,122 @@ describe("the daemon build an executor boots, recorded at launch (review 3 #8)",
     }),
   );
 });
+
+describe("processWorkspaceBuildJobEffect: the image-build phase", () => {
+  const planHash = "d".repeat(64);
+  const planned = {
+    osFamily: "fedora" as const,
+    imagePlan: {} as never,
+    containerfile: "FROM fedora:41",
+    planHash,
+  };
+  const keptImage = {
+    repository: "sealant-workspace-fedora",
+    tag: "plan-dddddddddddd",
+    reference: "sealant-workspace-fedora:plan-dddddddddddd",
+    digestReference: "sha256:kept",
+    digest: "sha256:kept",
+  };
+  const job = () => ({
+    id: "job_phase",
+    runId: null,
+    registryId: "local",
+    repository: "session-cccc",
+    tag: "sdk-33333333",
+    requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
+    attemptCount: 1,
+  });
+
+  it.effect(
+    "uses the plan's image the store kept when no publish is on record, building nothing",
+    () => {
+      const jobs = workspaceBuildJobRepoStub({ claimJobById: job });
+      const attempts = workspaceAttemptRepoStub();
+      const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+      const runtimeAdapter = createRuntimeAdapterStub("docker");
+      const buildAndPublish = vi.fn(async () => {
+        throw new Error("nothing may be built when the store kept the plan's image");
+      });
+      const findPublished = vi.fn(async () => ({
+        publishedImage: keptImage,
+        build: {
+          ...createCompileResult({ id: "fedora" }),
+          metadata: { defaultArtifactName: "sealant-workspace-fedora", notes: [], planHash },
+        },
+      }));
+      const imageBuilder: WorkspaceImageBuilder = {
+        isolation: "host",
+        plan: () => planned,
+        buildAndPublish,
+        findPublished,
+      };
+
+      return Effect.gen(function* () {
+        yield* processWorkspaceBuildJobEffect(
+          baseOptions({ jobId: "job_phase", imageBuilder, runtimeAdapters: [runtimeAdapter] }),
+        );
+        expect(findPublished).toHaveBeenCalledWith({
+          planned,
+          repository: "sealant-workspace-fedora",
+          tag: "plan-dddddddddddd",
+        });
+        expect(buildAndPublish).not.toHaveBeenCalled();
+        expect(jobs.markJobSucceeded).toHaveBeenCalledWith(
+          expect.objectContaining({ id: "job_phase", publishedDigest: "sha256:kept" }),
+        );
+        expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+          expect.objectContaining({
+            publishedImage: expect.objectContaining({ digest: "sha256:kept" }),
+          }),
+          expect.anything(),
+        );
+      }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+    },
+  );
+
+  it.live("records a build's progress on its job while it runs, under its claim", () => {
+    const jobs = {
+      ...workspaceBuildJobRepoStub({ claimJobById: job }),
+      recordJobProgress: vi.fn((_input: unknown) => Effect.succeed(true)),
+    };
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const progress = {
+      step: 2,
+      steps: 12,
+      stepName: "RUN apt-get update",
+      progressAt: "2026-10-07T20:45:00.000Z",
+      stallTimeoutMs: 600_000,
+    };
+    const imageBuilder: WorkspaceImageBuilder = {
+      isolation: "host",
+      plan: () => planned,
+      // A slow build: it reports a step, then takes a while before it publishes.
+      buildAndPublish: async (input) => {
+        input.onProgress?.(progress);
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        return {
+          publishedImage: keptImage,
+          build: {
+            ...createCompileResult({ id: "fedora" }),
+            metadata: { defaultArtifactName: "sealant-workspace-fedora", notes: [], planHash },
+          },
+        };
+      },
+    };
+
+    return Effect.gen(function* () {
+      yield* processWorkspaceBuildJobEffect(
+        baseOptions({ jobId: "job_phase", imageBuilder, buildProgressIntervalMs: 100 }),
+      );
+      // Written once (it did not change again), fenced on the claim, renewing its lease.
+      expect(jobs.recordJobProgress).toHaveBeenCalledTimes(1);
+      expect(jobs.recordJobProgress).toHaveBeenCalledWith({
+        id: "job_phase",
+        claim: { workerId: "worker-test", attemptCount: 1 },
+        progress,
+        leaseDurationMs: 60000,
+      });
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+  });
+});

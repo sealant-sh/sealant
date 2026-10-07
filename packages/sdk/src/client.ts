@@ -130,6 +130,10 @@ export class Sealant {
         // A replayed create did not start this launch here: a readiness timeout on it is not an
         // abandoned launch this handle owns.
         created: created.replayed !== true,
+        ...(options.readyTimeoutMs === undefined ? {} : { readyTimeoutMs: options.readyTimeoutMs }),
+        ...(options.imageBuildTimeoutMs === undefined
+          ? {}
+          : { imageBuildTimeoutMs: options.imageBuildTimeoutMs }),
         launch: {
           replayed: created.replayed === true,
           ...(created.runId === undefined ? {} : { runId: created.runId }),

@@ -48,7 +48,7 @@ import {
 import { Clock, Deferred, Effect, Exit, Layer, Option, Schedule } from "effect";
 import { z } from "zod";
 
-import type { PlannedWorkspaceImageBuild } from "../buildkit/index.js";
+import type { ImageBuildProgress, PlannedWorkspaceImageBuild } from "../buildkit/index.js";
 import { imageAppliesOwnerMap } from "../buildkit/person-layout.js";
 import { parsePublishedReference, planImageCoordinates } from "../images/index.js";
 import { RegistryNameError, type RegistryClient } from "../registry/index.js";
@@ -143,7 +143,15 @@ export interface ProcessWorkspaceBuildJobOptions {
    * is refused. Default `DEFAULT_RECOVERY_CREDENTIAL_RETRY`.
    */
   readonly recoveryCredentialRetry?: RecoveryCredentialRetry;
+  /**
+   * How often a build's progress is written to its job row (and the claim's lease renewed with
+   * it) while the build reports any. Default `DEFAULT_BUILD_PROGRESS_INTERVAL_MS` (2 s).
+   */
+  readonly buildProgressIntervalMs?: number;
 }
+
+/** How often a build in progress records what it is doing, when the worker names nothing else. */
+export const DEFAULT_BUILD_PROGRESS_INTERVAL_MS = 2_000;
 
 /** How long a launch owns its row without renewal when the worker names nothing else. */
 export const DEFAULT_LAUNCH_LEASE_MS = 2 * 60_000;
@@ -851,16 +859,80 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       planned === null
         ? { repository: job.repository, tag: job.tag }
         : planImageCoordinates(planned);
-    const { publishedImage, build: compileResult } = yield* Effect.tryPromise({
-      try: () =>
-        imageBuilder.buildAndPublish({
-          spec,
-          repository: coordinates.repository,
-          tag: coordinates.tag,
-          buildId: job.id,
-        }),
-      catch: toWorkspaceBuildJobProcessingError,
+
+    // No publish of this plan on record (a fresh database), but an earlier build of it may still
+    // be in the store under its plan coordinates (a Docker Engine keeps its images): use it
+    // instead of building it again. Best-effort, like the reuse above: anything that fails here
+    // falls through to the build.
+    const found =
+      planned === null || imageBuilder.findPublished === undefined
+        ? null
+        : yield* Effect.tryPromise(
+            () =>
+              imageBuilder.findPublished?.({
+                planned,
+                repository: coordinates.repository,
+                tag: coordinates.tag,
+              }) ?? Promise.resolve(null),
+          ).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logDebug(
+                "Workspace build job: looking for the plan's image in the store failed; building it.",
+                cause,
+              ).pipe(Effect.as(null)),
+            ),
+          );
+
+    // The build reports its progress (step N of M, when it last wrote output) to `latest`; a fiber
+    // beside it writes what changed to the job row every interval and renews the claim's lease,
+    // so the API can report the image-build phase and a build that keeps moving keeps its claim.
+    let latest: ImageBuildProgress | undefined;
+    const progressIntervalMs = Math.max(
+      100,
+      options.buildProgressIntervalMs ?? DEFAULT_BUILD_PROGRESS_INTERVAL_MS,
+    );
+    const writeProgress = Effect.gen(function* () {
+      let written: ImageBuildProgress | undefined;
+      for (;;) {
+        yield* Effect.sleep(progressIntervalMs);
+        const progress = latest;
+        if (progress === undefined || progress === written) continue;
+        written = progress;
+        yield* jobs
+          .recordJobProgress({
+            id: job.id,
+            claim,
+            progress,
+            leaseDurationMs: options.leaseDurationMs,
+          })
+          .pipe(swallowingFailure("record-build-progress update"));
+      }
     });
+    const { publishedImage, build: compileResult } =
+      found ??
+      (yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* Effect.forkScoped(writeProgress);
+          return yield* Effect.tryPromise({
+            try: () =>
+              imageBuilder.buildAndPublish({
+                spec,
+                repository: coordinates.repository,
+                tag: coordinates.tag,
+                buildId: job.id,
+                onProgress: (progress) => {
+                  latest = progress;
+                },
+              }),
+            catch: toWorkspaceBuildJobProcessingError,
+          });
+        }),
+      ));
+    if (found !== null) {
+      yield* Effect.logInfo(
+        `Workspace image plan ${planned?.planHash ?? "?"} was already in the store; reusing ${found.publishedImage.digestReference} without a build.`,
+      );
+    }
 
     const owned = yield* markSucceeded({
       builderId: compileResult.builder.id,

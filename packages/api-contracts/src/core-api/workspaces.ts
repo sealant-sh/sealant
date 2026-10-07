@@ -945,6 +945,37 @@ export const cancelWorkspaceCreateRequestSchema = Schema.Struct({
 });
 export type CancelWorkspaceCreateRequest = typeof cancelWorkspaceCreateRequestSchema.Type;
 
+/**
+ * Where a workspace that is not ready yet is in its launch:
+ *
+ *  - `queued`: waiting for a worker to take the launch.
+ *  - `image-build`: building (or finding) the workspace image. `imageBuild` says how far the build
+ *    has got and when it last wrote output, when the builder reports it.
+ *  - `boot`: the image is ready; the executor is starting and its daemon has not answered yet.
+ *
+ * `since` is when the phase started. Absent once the workspace is ready or has ended, and from
+ * control planes that predate it.
+ */
+export const workspacePhaseSchema = Schema.Struct({
+  name: Schema.Literals(["queued", "image-build", "boot"]),
+  since: Schema.optional(Schema.String),
+  imageBuild: Schema.optional(
+    Schema.Struct({
+      /** The furthest build step reached (1-based). */
+      step: Schema.optional(Schema.Int),
+      /** How many steps the build has. */
+      steps: Schema.optional(Schema.Int),
+      /** That step's instruction, shortened (`RUN apt-get update && …`). */
+      stepName: Schema.optional(Schema.String),
+      /** ISO-8601: when the build last wrote output. */
+      progressAt: Schema.String,
+      /** How long the builder lets the build go without output before it fails it as stalled. */
+      stallTimeoutMs: Schema.optional(Schema.Int),
+    }),
+  ),
+});
+export type WorkspacePhase = typeof workspacePhaseSchema.Type;
+
 export const workspaceSummarySchema = Schema.Struct({
   workspaceId: NonEmptyString,
   name: NonEmptyString,
@@ -956,6 +987,8 @@ export const workspaceSummarySchema = Schema.Struct({
   runtime: Schema.optional(workspaceRuntimeSchema),
   publishedImage: Schema.optional(workspacePublishedImageSchema),
   error: Schema.optional(workspaceErrorSchema),
+  /** Where the launch is while the workspace is not ready (see `workspacePhaseSchema`). */
+  phase: Schema.optional(workspacePhaseSchema),
   createdAt: Schema.String,
   updatedAt: Schema.String,
   startedAt: Schema.optional(Schema.String),
@@ -1062,6 +1095,8 @@ export const workspaceDetailsSchema = Schema.Struct({
   runtime: Schema.optional(workspaceRuntimeSchema),
   publishedImage: Schema.optional(workspacePublishedImageSchema),
   error: Schema.optional(workspaceErrorSchema),
+  /** Where the launch is while the workspace is not ready (see `workspacePhaseSchema`). */
+  phase: Schema.optional(workspacePhaseSchema),
   createdAt: Schema.String,
   updatedAt: Schema.String,
   startedAt: Schema.optional(Schema.String),

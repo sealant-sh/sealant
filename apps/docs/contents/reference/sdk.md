@@ -86,13 +86,62 @@ await mine.connectedAccounts.connect({ provider: "codex", secret: authJson });
 `apiKey` is a service key (`SEALANT_SERVICE_KEYS` on the API) or a scoped user access token; see the
 [HTTP API auth section](/docs/reference/http-api).
 
+## Waiting for a workspace
+
+`create()` resolves once the workspace is ready (pass `wait: false` to get the handle at once and
+call `workspace.ready()` yourself). A launch goes through three phases, and `workspace.phase()`
+reports the one it is in while the workspace is not ready:
+
+| Phase         | What is happening                                                                                                                                                                                                                 |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `queued`      | Waiting for a worker to take the launch.                                                                                                                                                                                          |
+| `image-build` | Building the workspace image, or finding one an earlier build of the same plan left. `imageBuild` carries the step (`step`/`steps`/`stepName`) and `progressAt`, when the build last wrote output, when the builder reports them. |
+| `boot`        | The image is ready; the executor is starting and its daemon has not answered yet.                                                                                                                                                 |
+
+`ready()` bounds each phase on its own, so a first launch on a new image is not failed by a slow
+package mirror:
+
+- **`readyTimeoutMs`** (default 10 minutes) bounds the launch outside the image build: queued, then
+  booting. Past it, `ready()` rejects with `workspace_ready_timeout`.
+- **`imageBuildTimeoutMs`** (default none) bounds the image build as a whole. Past it, `ready()`
+  rejects with `workspace_image_build_timeout`.
+- A build is otherwise waited for as long as it keeps reporting progress. The worker fails a build
+  that writes nothing for `WORKSPACE_IMAGE_BUILD_STALL_MS` (10 minutes) and `ready()` rejects with
+  `workspace_image_build_stalled` and the step it stopped on. If the build stops reporting and
+  nothing fails it (a worker that died and was never replaced), `ready()` gives up on its own after
+  that bound plus five minutes, 20 minutes at least.
+
+Pass them to `create()` for the handle, or to `ready()` for one wait (these win):
+
+```ts
+const workspace = await sealant.workspaces.create({
+  repository: "github.com/acme/billing-service",
+  harness: opencode(),
+  readyTimeoutMs: 5 * 60_000,
+  imageBuildTimeoutMs: 45 * 60_000,
+  onEvent: (event) => console.log(event.message), // "Building the workspace image (step 2/12: RUN apt-get …)"
+});
+```
+
+`events()` (and `onEvent`) yields `status.<status>` on each status change and `phase.<name>` each
+time the launch moves to another phase or its build to another step; a `phase.*` event carries the
+phase. When `ready()` gives up on a bound for a workspace this handle created, it requests a stop
+first and says whether the request was accepted. A launch that fails on the control plane rejects
+with `workspace_not_ready` and the control plane's reason. A control plane that predates launch
+phases reports none; `readyTimeoutMs` then bounds the whole wait, image build included.
+
+An image is built once per plan (the rendered Containerfile): a later launch of the same plan reuses
+the published image, and on Docker a worker whose database has no record of the plan reuses the
+`sealant-workspace-<os-family>:plan-<hash>` image the Engine kept instead of building it again.
+
 ## What is implemented
 
 These call the live API and work end-to-end:
 
 - **Workspaces:** `sealant.workspaces.create()`, `.get()`, `.list()`
-- **Workspace handle:** `workspace.status()`, `workspace.ready()`, `workspace.events()` (poll-backed
-  status stream)
+- **Workspace handle:** `workspace.status()`, `workspace.ready()`, `workspace.phase()`,
+  `workspace.events()` (poll-backed status and launch-phase stream); see
+  [Waiting for a workspace](#waiting-for-a-workspace)
 - **Workspace lifecycle:** `workspace.stop()` (blocks until the container is gone and the workspace
   reports `stopped`), `workspace.restart()` (fresh runtime from the same resolved spec),
   `workspace.expire({ in: "2h" })` (TTL; `expire()` expires now, `expire({ in: null })` clears it) —

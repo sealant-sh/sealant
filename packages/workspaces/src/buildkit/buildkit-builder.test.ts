@@ -792,7 +792,13 @@ describe("compileWorkspaceBuildSpec", () => {
     const saveCommandArgs = (commandRunner.mock.calls[1]?.[1] ?? []) as string[];
     const probeCommandArgs = (commandRunner.mock.calls[2]?.[1] ?? []) as string[];
     expect(commandRunner).toHaveBeenCalledTimes(3);
-    expect(buildCommandArgs.slice(0, 4)).toEqual(["build", "--file", expect.any(String), "--tag"]);
+    expect(buildCommandArgs.slice(0, 5)).toEqual([
+      "build",
+      "--progress=plain",
+      "--file",
+      expect.any(String),
+      "--tag",
+    ]);
     expect(saveCommandArgs.slice(0, 2)).toEqual(["save", "--output"]);
     expect(saveCommandArgs[2]).toMatch(/workspace-image\.tar$/);
     // The image probe is read back from the built image; the stub printed nothing, so the build

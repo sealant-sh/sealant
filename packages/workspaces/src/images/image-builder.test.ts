@@ -8,12 +8,15 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { WorkspaceBuild } from "@sealant/validators";
+import type { WorkspaceBuild, WorkspaceImageProbe } from "@sealant/validators";
 import { describe, expect, it, vi } from "vitest";
 
+import { planWorkspaceImageBuild } from "../buildkit/index.js";
+import { PERSON_SHARED_DIRS } from "../buildkit/person-layout.js";
 import type { RegistryClient } from "../registry/index.js";
 import { cases } from "../runtime/docker-runtime-adapter.golden-fixture.js";
 import { createDockerWorkspaceImageBuilder } from "./image-builder.js";
+import { planImageCoordinates } from "./plan-coordinates.js";
 
 const build: WorkspaceBuild = {
   builder: { id: "fedora", osFamily: "fedora" },
@@ -204,5 +207,96 @@ describe("createDockerWorkspaceImageBuilder", () => {
     await expect(
       builder.buildAndPublish({ spec: cases.gitSource.blueprint, repository: "r", tag: "t" }),
     ).rejects.toThrow(/publishable OCI image artifact/);
+  });
+});
+
+/** A Docker Engine store that holds `digest` under every name, or nothing. */
+const engineStore = (digest: string | null) => {
+  const publishOciImage = vi.fn(async (input: { repository: string; tag: string }) => ({
+    repository: input.repository,
+    tag: input.tag,
+    reference: `${input.repository}:${input.tag}`,
+    digestReference: digest ?? "",
+    digest: digest ?? "",
+  }));
+  const headManifest = vi.fn(async () => digest);
+  const registryClient = {
+    imageTransport: "engine",
+    headManifest,
+    publishOciImage,
+  } as unknown as RegistryClient;
+  return { registryClient, headManifest, publishOciImage };
+};
+
+describe("createDockerWorkspaceImageBuilder.findPublished", () => {
+  const probe: WorkspaceImageProbe = {
+    version: 1,
+    tools: {
+      sudo: true,
+      sudoSetuid: true,
+      useradd: true,
+      groupadd: true,
+      setfacl: true,
+      getfacl: true,
+      setpriv: true,
+      flock: true,
+    },
+    sudoersMend: true,
+    sudoersIncludesDir: true,
+    noNewPrivileges: false,
+    passwdWritable: true,
+    mendGroup: "present",
+    reservedIdsInUse: [],
+    personEnv: true,
+    sharedDirs: [...PERSON_SHARED_DIRS],
+    sealantd: {
+      schemaVersion: 1,
+      daemonVersion: "0.21.0",
+      os: "linux",
+      arch: "x86_64",
+      supports: ["dotfiles.user", "exec.user", "restore.owner_map"],
+    },
+  };
+  const planned = planWorkspaceImageBuild({ blueprint: cases.gitSource.blueprint });
+  const coordinates = planImageCoordinates(planned);
+
+  it("reuses the plan's image the Engine kept, with the probe read back from it, building nothing", async () => {
+    const { registryClient } = engineStore("sha256:kept");
+    const commandRunner = vi.fn(async (_command: string, _args: string[]) => ({
+      stdout: JSON.stringify(probe),
+      stderr: "",
+    }));
+    const builder = createDockerWorkspaceImageBuilder({ registryClient, commandRunner });
+
+    const found = await builder.findPublished?.({ planned, ...coordinates });
+
+    expect(found?.publishedImage).toMatchObject({ digest: "sha256:kept" });
+    expect(found?.build.metadata).toMatchObject({ planHash: planned.planHash, imageProbe: probe });
+    // One short `docker run` reads the probe; there is no `docker build`.
+    expect(commandRunner).toHaveBeenCalledTimes(1);
+    expect(commandRunner.mock.calls[0]?.[1]).toEqual(
+      expect.arrayContaining(["run", `${coordinates.repository}:${coordinates.tag}`]),
+    );
+  });
+
+  it("finds nothing when the Engine has no image for the plan", async () => {
+    const { registryClient } = engineStore(null);
+    const commandRunner = vi.fn(async () => ({ stdout: "", stderr: "" }));
+    const builder = createDockerWorkspaceImageBuilder({ registryClient, commandRunner });
+    await expect(builder.findPublished?.({ planned, ...coordinates })).resolves.toBeNull();
+    expect(commandRunner).not.toHaveBeenCalled();
+  });
+
+  it("does not vouch for an image whose probe cannot be read: it is built again", async () => {
+    const { registryClient, publishOciImage } = engineStore("sha256:kept");
+    const commandRunner = vi.fn(async () => ({ stdout: "not json", stderr: "" }));
+    const builder = createDockerWorkspaceImageBuilder({ registryClient, commandRunner });
+    await expect(builder.findPublished?.({ planned, ...coordinates })).resolves.toBeNull();
+    expect(publishOciImage).not.toHaveBeenCalled();
+  });
+
+  it("is not offered for a registry store, which has its publishes on record", () => {
+    const registryClient = { publishOciImage: vi.fn() } as unknown as RegistryClient;
+    expect(createDockerWorkspaceImageBuilder({ registryClient }).findPublished).toBeUndefined();
   });
 });

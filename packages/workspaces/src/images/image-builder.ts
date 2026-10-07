@@ -16,8 +16,13 @@ import type { NewWorkspace, WorkspaceBuild } from "@sealant/validators";
 import {
   buildContextDirectoryOf,
   compileWorkspaceBuildSpec,
+  localImageNameOf,
   planWorkspaceImageBuild,
+  readWorkspaceImageProbe,
   removeBuildContext,
+  type BuildkitCommandRunner,
+  type BuildkitCompilerOptions,
+  type ImageBuildProgress,
   type PlannedWorkspaceImageBuild,
 } from "../buildkit/index.js";
 import type { RegistryClient } from "../registry/index.js";
@@ -29,6 +34,18 @@ export interface BuildAndPublishInput {
   readonly tag: string;
   /** Keys Job/ConfigMap names and logs; the build job id in practice. */
   readonly buildId?: string;
+  /**
+   * Called with the build's progress as the builder reports it (step N of M, last output). A
+   * builder that cannot observe its build never calls it.
+   */
+  readonly onProgress?: (progress: ImageBuildProgress) => void;
+}
+
+export interface FindPublishedInput {
+  readonly planned: PlannedWorkspaceImageBuild;
+  /** The plan's coordinates (`planImageCoordinates`): where a build of it was published. */
+  readonly repository: string;
+  readonly tag: string;
 }
 
 export interface BuildAndPublishResult {
@@ -54,6 +71,13 @@ export interface WorkspaceImageBuilder {
    */
   readonly plan: ((spec: NewWorkspace) => PlannedWorkspaceImageBuild) | undefined;
   readonly buildAndPublish: (input: BuildAndPublishInput) => Promise<BuildAndPublishResult>;
+  /**
+   * The image an earlier build of this exact plan left in the store, when the builder can tell it
+   * is there and read its probe back: a launch then uses it and nothing is built. This is the
+   * fallback for when no recorded publish of the plan exists (a fresh database over a Docker
+   * Engine that kept its images). Null when there is none, or it cannot be vouched for.
+   */
+  readonly findPublished?: (input: FindPublishedInput) => Promise<BuildAndPublishResult | null>;
 }
 
 export interface DockerWorkspaceImageBuilderOptions {
@@ -61,6 +85,12 @@ export interface DockerWorkspaceImageBuilderOptions {
   /** Test seams, mirroring the build job's historical `compileWorkspaceSpec` / `planWorkspaceSpec`. */
   readonly compileWorkspaceSpec?: (spec: NewWorkspace) => Promise<WorkspaceBuild>;
   readonly planWorkspaceSpec?: (spec: NewWorkspace) => PlannedWorkspaceImageBuild;
+  /** Fails a build that writes nothing for this long (`BuildkitCompilerOptions.stallTimeoutMs`). */
+  readonly stallTimeoutMs?: number;
+  /** BuildKit's layer cache between builds (`BuildkitCompilerOptions.cacheDirectory`). */
+  readonly cacheDirectory?: string;
+  /** Test seam: runs `docker` for the image probe of an image found in the Engine. */
+  readonly commandRunner?: BuildkitCommandRunner;
 }
 
 const isPublishableOciImageArtifact = (
@@ -93,13 +123,20 @@ export const createDockerWorkspaceImageBuilder = (
   options: DockerWorkspaceImageBuilderOptions,
 ): WorkspaceImageBuilder => {
   const engineTransport = options.registryClient.imageTransport === "engine";
-  const compile =
-    options.compileWorkspaceSpec ??
-    ((spec: NewWorkspace): Promise<WorkspaceBuild> =>
-      compileWorkspaceBuildSpec({
-        blueprint: spec,
-        ...(engineTransport ? { options: { emitTarball: false } } : {}),
-      }));
+  const compile = (
+    spec: NewWorkspace,
+    onProgress?: (progress: ImageBuildProgress) => void,
+  ): Promise<WorkspaceBuild> => {
+    if (options.compileWorkspaceSpec !== undefined) return options.compileWorkspaceSpec(spec);
+    const compilerOptions: BuildkitCompilerOptions = {
+      ...(engineTransport ? { emitTarball: false } : {}),
+      ...(onProgress === undefined ? {} : { onProgress }),
+      ...(options.stallTimeoutMs === undefined ? {} : { stallTimeoutMs: options.stallTimeoutMs }),
+      ...(options.cacheDirectory === undefined ? {} : { cacheDirectory: options.cacheDirectory }),
+      ...(options.commandRunner === undefined ? {} : { commandRunner: options.commandRunner }),
+    };
+    return compileWorkspaceBuildSpec({ blueprint: spec, options: compilerOptions });
+  };
   // A custom compiler without a matching planner disables the short-circuit: the planner's hash
   // would not describe what the custom compiler builds.
   const plan =
@@ -138,7 +175,7 @@ export const createDockerWorkspaceImageBuilder = (
     isolation: "host",
     plan,
     buildAndPublish: async (input) => {
-      const build = await compile(input.spec);
+      const build = await compile(input.spec, input.onProgress);
       // The scratch directory (Containerfile, plan/spec JSON, and with the tarball transport the
       // `docker save` output) is only needed until the publish has read it. Published or not, it
       // goes: the job row keeps the metadata that matters, and a leaked tarball per build is how
@@ -151,5 +188,46 @@ export const createDockerWorkspaceImageBuilder = (
         if (contextDirectory !== undefined) await removeBuildContext(contextDirectory);
       }
     },
+    // Only where the store IS the Engine that builds (and runs) the image: the image found there
+    // is the one a launch boots, and its probe is read from it with one short `docker run`. A
+    // registry store would need a pull for that, and its publishes are on record anyway.
+    ...(engineTransport && options.compileWorkspaceSpec === undefined
+      ? {
+          findPublished: async (input: FindPublishedInput) => {
+            const digest = await options.registryClient.headManifest(input.repository, input.tag);
+            if (digest === null) return null;
+            const reference = `${input.repository}:${input.tag}`;
+            const { probe } = await readWorkspaceImageProbe(
+              reference,
+              input.planned.imagePlan,
+              options.commandRunner,
+            );
+            // An image whose probe cannot be read is not vouched for: a per-person launch would be
+            // refused on it. Build it again instead.
+            if (probe === undefined) return null;
+            const publishedImage = await options.registryClient.publishOciImage({
+              repository: input.repository,
+              tag: input.tag,
+              sourceReference: digest,
+            });
+            const name = localImageNameOf(input.planned.imagePlan);
+            return {
+              publishedImage,
+              build: {
+                builder: { id: input.planned.osFamily, osFamily: input.planned.osFamily },
+                artifacts: [{ kind: "oci-image", name, reference, loader: "docker-engine" }],
+                metadata: {
+                  defaultArtifactName: name,
+                  notes: [
+                    `Reused ${reference} (${digest}) from the Docker Engine: an earlier build of plan ${input.planned.planHash} left it there; nothing was built.`,
+                  ],
+                  planHash: input.planned.planHash,
+                  imageProbe: probe,
+                },
+              },
+            };
+          },
+        }
+      : {}),
   };
 };

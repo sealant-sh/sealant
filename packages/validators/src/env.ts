@@ -520,6 +520,16 @@ export const workerRuntimeEnvSchema = z.object({
     sshEndpointExposureStrategySchema.default("host-published"),
   WORKER_ID: z.string().trim().min(1).default(defaultWorkerId),
   WORKSPACE_BUILD_JOB_LEASE_DURATION_MS: z.coerce.number().int().positive().default(900000),
+  // How long a Docker image build may write nothing before the worker stops it and fails the
+  // launch as stalled (`image-build-stalled`, naming the step it stopped on). A build that keeps
+  // writing is never bounded: a slow package mirror makes a slow build, not a failed one.
+  WORKSPACE_IMAGE_BUILD_STALL_MS: z.coerce.number().int().positive().default(600000),
+  // A directory BuildKit keeps its layer cache in between Docker image builds (`--cache-from` /
+  // `--cache-to type=local`, one subdirectory per image name), so a new plan whose base and package
+  // steps match an earlier build's reuses them after the builder's own cache was pruned. Needs a
+  // builder that exports cache (Docker's containerd image store, the default since Docker 29).
+  // Unset: only the builder's own cache.
+  WORKSPACE_IMAGE_BUILD_CACHE_DIR: z.string().trim().min(1).optional(),
   // How long a launch owns its runtime row without renewal (renewed every third of it while it
   // waits for readiness). A worker lost mid-launch leaves a launch the stranded-launch sweep
   // adopts this long after its last renewal: the executor is retained and preserved.
