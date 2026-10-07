@@ -39,7 +39,10 @@ const blueprint: NewWorkspace = {
     applyDotfiles: true,
     dotfilesBootstrap: true,
   },
-  lifecycle: { setup: [], startup: { steps: [], foreground: { kind: "harness" } } },
+  lifecycle: {
+    setup: [],
+    startup: { steps: [], foreground: { kind: "harness" } },
+  },
   runtime: {
     env: {},
     userEnv: {},
@@ -124,7 +127,9 @@ describe("runBuildkitCommand's idle bound", () => {
   it("stops a command that went silent and fails it as idle, not as a signal exit", async () => {
     const startedAt = Date.now();
     await expect(
-      runBuildkitCommand("sh", ["-c", "echo started; sleep 30"], { idleTimeoutMs: 300 }),
+      runBuildkitCommand("sh", ["-c", "echo started; sleep 30; echo never"], {
+        idleTimeoutMs: 300,
+      }),
     ).rejects.toMatchObject({
       code: COMMAND_IDLE_TIMEOUT_CODE,
       message: expect.stringContaining("wrote nothing"),
@@ -161,7 +166,11 @@ describe("compileWorkspaceBuildSpec progress", () => {
     const buildCall = commandRunner.mock.calls.find(([, args]) => args[0] === "build");
     expect(buildCall?.[2]).toMatchObject({ idleTimeoutMs: 600_000 });
     expect(buildCall?.[1]).toContain("--progress=plain");
-    expect(seen.at(-1)).toMatchObject({ step: 2, steps: 12, stallTimeoutMs: 600_000 });
+    expect(seen.at(-1)).toMatchObject({
+      step: 2,
+      steps: 12,
+      stallTimeoutMs: 600_000,
+    });
   });
 
   it("fails a build that went silent with the step it stopped on", async () => {
@@ -199,7 +208,11 @@ describe("compileWorkspaceBuildSpec progress", () => {
     }));
     const result = await compileWorkspaceBuildSpec({
       blueprint,
-      options: { commandRunner, emitTarball: false, cacheDirectory: "/var/cache/sealant-buildkit" },
+      options: {
+        commandRunner,
+        emitTarball: false,
+        cacheDirectory: "/var/cache/sealant-buildkit",
+      },
     });
     await removeBuildContext(result.buildkit.spec.contextDirectory);
 

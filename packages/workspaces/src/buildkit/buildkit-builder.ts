@@ -172,6 +172,13 @@ export const runBuildkitCommand: BuildkitCommandRunner = (command, args, options
     // The idle bound: re-armed by every write, it stops a command that went silent (SIGTERM, then
     // SIGKILL if it ignores that) and fails it as idle rather than as a signal exit.
     const idleTimeoutMs = options?.idleTimeoutMs;
+    const idleError = () => {
+      const error = new Error(
+        `${command} wrote nothing for ${String(Math.round((idleTimeoutMs ?? 0) / 1000))} s and was stopped: ${command} ${args.join(" ")}`,
+      ) as Error & { code: string };
+      error.code = COMMAND_IDLE_TIMEOUT_CODE;
+      return error;
+    };
     let idle = false;
     let idleTimer: NodeJS.Timeout | undefined;
     let killTimer: NodeJS.Timeout | undefined;
@@ -180,6 +187,14 @@ export const runBuildkitCommand: BuildkitCommandRunner = (command, args, options
       if (idleTimer !== undefined) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
         idle = true;
+        // Settled on the command's own exit, not on its pipes closing: a grandchild it left
+        // behind can hold them open long after it is gone.
+        child.once("exit", () => {
+          if (killTimer !== undefined) clearTimeout(killTimer);
+          child.stdout.destroy();
+          child.stderr.destroy();
+          reject(idleError());
+        });
         child.kill("SIGTERM");
         killTimer = setTimeout(() => child.kill("SIGKILL"), 10_000);
         killTimer.unref();
@@ -205,11 +220,7 @@ export const runBuildkitCommand: BuildkitCommandRunner = (command, args, options
       const stderr = Buffer.concat(stderrChunks).toString("utf8");
 
       if (idle) {
-        const error = new Error(
-          `${command} wrote nothing for ${String(Math.round((idleTimeoutMs ?? 0) / 1000))} s and was stopped: ${command} ${args.join(" ")}`,
-        ) as Error & { code: string };
-        error.code = COMMAND_IDLE_TIMEOUT_CODE;
-        reject(error);
+        reject(idleError());
         return;
       }
 
@@ -735,13 +746,17 @@ const mapBlueprintToResolvedImagePlan = (
             bootstrap: blueprint.customization.dotfilesBootstrap,
             ...(blueprint.customization.dotfilesBootstrapCommand === undefined
               ? {}
-              : { bootstrapCommand: blueprint.customization.dotfilesBootstrapCommand }),
+              : {
+                  bootstrapCommand: blueprint.customization.dotfilesBootstrapCommand,
+                }),
             applyAt: dotfilesGitHubInstallationRepositoryId === undefined ? "build" : "runtime",
             ...(dotfilesGitHubInstallationRepositoryId === undefined
               ? dotfiles.authRef === undefined
                 ? {}
                 : { authSecretId: "dotfiles_git_key" }
-              : { githubInstallationRepositoryId: dotfilesGitHubInstallationRepositoryId }),
+              : {
+                  githubInstallationRepositoryId: dotfilesGitHubInstallationRepositoryId,
+                }),
           },
         }),
     buildSecrets,
@@ -1312,7 +1327,13 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
     // Nix images take one person and get none of this (person-layout.ts says why).
     ...(personLayoutFamily === undefined
       ? []
-      : ["", renderPersonLayoutSteps({ family: personLayoutFamily, dockerService })]),
+      : [
+          "",
+          renderPersonLayoutSteps({
+            family: personLayoutFamily,
+            dockerService,
+          }),
+        ]),
     "",
     plan.osFamily === "nix"
       ? `ENV SHELL=${shellQuote(shellPath)}`
@@ -1431,7 +1452,9 @@ export const removeBuildContext = async (
  * this compiler — a custom compiler's artifacts live wherever it put them.
  */
 export const buildContextDirectoryOf = (
-  build: { readonly artifacts: ReadonlyArray<{ readonly path?: string | undefined }> },
+  build: {
+    readonly artifacts: ReadonlyArray<{ readonly path?: string | undefined }>;
+  },
   tmpDirectory: string = tmpdir(),
 ): string | undefined => {
   for (const artifact of build.artifacts) {
@@ -1710,7 +1733,10 @@ const readImageProbe = async (
   imageReference: string,
   commandRunner: BuildkitCommandRunner,
   plan: ResolvedImagePlan,
-): Promise<{ readonly probe?: WorkspaceImageProbe; readonly note?: string }> => {
+): Promise<{
+  readonly probe?: WorkspaceImageProbe;
+  readonly note?: string;
+}> => {
   const platformArgs = plan.osFamily === "arch" ? ["--platform", "linux/amd64"] : [];
   try {
     const { stdout } = await commandRunner("docker", [
@@ -1728,7 +1754,9 @@ const readImageProbe = async (
     return { probe: parseWorkspaceImageProbe(JSON.parse(stdout)) };
   } catch (error) {
     const reason = error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error);
-    return { note: `The image probe could not be read back from the image: ${reason}` };
+    return {
+      note: `The image probe could not be read back from the image: ${reason}`,
+    };
   }
 };
 
