@@ -143,18 +143,20 @@ workspace without a map boots and restores exactly as before, and pays nothing f
 `workspace.dotfiles.apply({ user, home, repository?, archives? })`) applies a person's dotfiles into
 their home of a running workspace, as their user, with the same sources and the same applier as a
 create's dotfiles: chezmoi, stow or copy, then each tree's `./install.sh`. The image's `sealantd`
-must report `dotfiles.user` (the pinned 0.20.0-next.150 and later do; otherwise `409`
-`dotfiles-user-unsupported`).
+must report `dotfiles.user` (0.20.0-next.150 and later do; otherwise `409`
+`dotfiles-user-unsupported`), and 0.20.0-next.152 and later, which Core pins, write every file as
+the person.
 
 - **As the person, into their home.** The user must exist and must not be root or in root's group,
   and `home` must be their passwd home, an existing directory of theirs reached without a symbolic
-  link, whose logins nobody else holds (`409` `home-held`). The clone, chezmoi, stow and
-  `install.sh` run as the user.
-- **Known limit.** `sealantd` still unpacks archives and runs the `copy` manager as root inside the
-  home, following links there: a person who links a directory of their home elsewhere (another
-  person's `~/.config` included) can have root write their files through it. With passwordless
-  `sudo` for everyone this grants nothing `sudo` does not. A `sealantd` fix (unpack outside the
-  home, copy as the user) is in progress.
+  link, whose logins nobody else holds (`409` `home-held`). The clone, chezmoi, stow, the `copy`
+  manager and `install.sh` run as the user.
+- **Every file as the person.** `sealantd` unpacks archives as root into a root-only directory
+  outside every home, and writes every file, directory and link inside the home as the person: a
+  link they planted (to another person's `~/.config`, say) is followed as them, so it reaches only
+  what they could write themselves, and a link into another person's home fails the apply. An
+  archive with a member that is not a file, a directory or a link, or that leaves the archive, is
+  refused, and so is one that unpacks to more than 256 MiB, or 64 MiB in one file.
 - **The files first, `install.sh` beside the caller's work.** The call resolves once every file is
   applied; the bootstrap then runs as the person, recorded in the run the call answers with, and
   `bootstrap.wait()` reports its exit code and output. A bootstrap running past 30 minutes is

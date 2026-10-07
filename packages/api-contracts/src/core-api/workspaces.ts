@@ -239,10 +239,10 @@ export const applyWorkspaceDotfilesArchiveSchema = Schema.Struct({
  * order) and the same applier (sealantd's: chezmoi, stow or copy, then each tree's bootstrap).
  *
  * `user` must exist and must not be root or in root's group, and `home` must be its passwd home: an
- * existing directory of the user's, reached without a symbolic link. The clone, chezmoi, stow and the
- * bootstrap run as the user; sealantd's archive staging and `copy` manager still run as root inside
- * the home and follow links the person planted there, until sealantd's fix for it lands (see
- * docs/connected-accounts-design.md §6g). `onBehalfOfUserId` names whose dotfiles they are: it is
+ * existing directory of the user's, reached without a symbolic link. The clone, chezmoi, stow, the
+ * `copy` manager and the bootstrap run as the user, and every file in the home is written as the
+ * user: sealantd unpacks archives outside every home, and a link the person planted is followed only
+ * as them (see docs/connected-accounts-design.md §6g). `onBehalfOfUserId` names whose dotfiles they are: it is
  * recorded on the run, and a home whose logins another person holds is refused (`home-held`). Answered `202` with a run (`harnessId`
  * `dotfiles`) once the archives are staged: the run's first `processStarted` is the bootstrap,
  * started once every file is applied; its output and exit are the run's. The run completes with the

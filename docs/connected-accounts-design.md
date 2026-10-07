@@ -657,19 +657,22 @@ unchanged. The SDK carries a typed error's body code as `SealantApiError.reason`
   the launcher's once their layout is known). The sources are a create's (`repository` cloned with
   no credential, `https://` only; caller-resolved `archives`, at most 4 of about 4 MiB each; the
   repository first, archives after, in order) and the applier is sealantd's `dotfiles.apply`
-  (sealantd#147): the clone, chezmoi or stow as the user, files it writes itself given to them, then
-  each tree's bootstrap (`./install.sh`, or `bootstrapCommand`) as one managed process of the user.
-- **Known limit: root inside the home, until sealantd's fix.** sealantd still unpacks archives
-  (`tar -xzf`, with root's defaults, into `~/.local/share/sealant-dotfiles/<i>`, whose `mkdir` and
-  `rm -rf` are root's too) and runs the `copy` manager's copies and directories as root inside the
-  person's home, following links there; only the final `lchown` gives the result to the user. A
-  person who links a directory of their home elsewhere (`~/.config -> /home/other/.config`) can have
-  root write their files through it, into another person's home included. Under 0.36's posture
-  everyone has passwordless `sudo`, so it grants nothing `sudo` does not; it is still root acting
-  for a person, and it becomes serious once `sudo` is narrowed. The sealantd fix (unpack into a
-  root-only directory outside the home with `--no-same-owner --no-same-permissions`, refusing
-  members that are not a file, a directory or a link; copy, make and remove as the user) is in
-  progress in parallel.
+  (sealantd#147, #149): the clone, chezmoi, stow or copy as the user, then each tree's bootstrap
+  (`./install.sh`, or `bootstrapCommand`) as one managed process of the user.
+- **Every file inside the home is the user's (sealantd#149, #150; 0.20.0-next.152 and later, which
+  Core pins).** Root reads each archive once, through a descriptor that follows no link, into a
+  root-only staging directory outside every home (under `/run/sealant/dotfiles-staging`, 0700,
+  removed when the apply ends) and unpacks it there with `--no-same-owner`. Before it unpacks, an
+  archive is refused when a member has an absolute path or a `..`, lies under a link the archive
+  makes, is a link at its root, is a hard link to anything but one of its own entries, or is not a
+  file, a directory or a link, and when its listing unpacks to more than 256 MiB in all or 64 MiB in
+  one file. Every read and write inside the home (the trees under `~/.local/share/sealant-dotfiles`,
+  the `copy` manager's copies and directories, stow's entries, a checkout's removal) runs on a
+  thread whose filesystem uid, gid and groups are the user's and that holds no capability; root
+  hands each unpacked file over as the file it opened. A link the person planted
+  (`~/.config -> /home/other/.config`) is followed as them, so it reaches only what they can write,
+  and a link into another person's 0700 home fails the apply, naming the path. Before next.152, root
+  did the unpacking and the copies inside the home and followed such links.
 - **Whose dotfiles, and only a service key.** The route refuses a gateway or user-token principal,
   as the credentials routes do. `onBehalfOfUserId` names whose dotfiles they are and is recorded on
   the run (`metadata.dotfiles = { onBehalfOfUserId, user, home }`); a home whose logins another

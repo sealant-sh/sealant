@@ -124,9 +124,9 @@ These call the live API and work end-to-end:
 - **Dotfiles per person:**
   `workspace.dotfiles.apply({ onBehalfOf, user, home, repository?, archives? })` applies a person's
   dotfiles into their home of a running workspace, with a create's sources and applier: the clone,
-  chezmoi, stow and `install.sh` as their Linux user (never root), recorded on a run naming
-  `onBehalfOf`. Until sealantd's fix lands, its archive staging and `copy` manager still run as root
-  inside the home. Needs a service key. It resolves once every file is applied, with `bootstrap`
+  chezmoi, stow, copy and `install.sh` as their Linux user (never root), recorded on a run naming
+  `onBehalfOf`. sealantd unpacks archives outside the home and writes every file in it as the
+  person. Needs a service key. It resolves once every file is applied, with `bootstrap`
   (`./install.sh`) running as the person or `null`; `bootstrap.wait()` resolves with its exit code
   and output. See
   [Workspace Images and People](/docs/reference/workspace-images#a-persons-dotfiles).

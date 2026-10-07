@@ -3,5 +3,5 @@
 # runtime family boots. Images are fixed at deploy time on Cloudflare, so per-blueprint image
 # builds do not apply here; the launch request's `image` field is recorded, not honored.
 FROM docker.io/cloudflare/sandbox:next
-COPY --chmod=755 --from=ghcr.io/sealant-sh/sealantd-next:0.20.0-next.150@sha256:c292d27c4d9c853e87c58eb31472eac8e920c9c5e79e8af60a9a4d9aa7a9b138 /usr/local/bin/sealantd /usr/local/bin/sealantd
-COPY --chmod=755 --from=ghcr.io/sealant-sh/sealantd-next:0.20.0-next.150@sha256:c292d27c4d9c853e87c58eb31472eac8e920c9c5e79e8af60a9a4d9aa7a9b138 /usr/local/bin/socat /usr/local/bin/socat
+COPY --chmod=755 --from=ghcr.io/sealant-sh/sealantd-next:0.20.0-next.152@sha256:afea9ce8cb78562de2659ff0c30c805ac31c99992e41b680fb62a194941d4e6f /usr/local/bin/sealantd /usr/local/bin/sealantd
+COPY --chmod=755 --from=ghcr.io/sealant-sh/sealantd-next:0.20.0-next.152@sha256:afea9ce8cb78562de2659ff0c30c805ac31c99992e41b680fb62a194941d4e6f /usr/local/bin/socat /usr/local/bin/socat

@@ -8,12 +8,13 @@ A person's dotfiles applied into their home of a running workspace (Mend's per-p
 - `workspace.dotfiles.apply({ onBehalfOf, user, home, repository?, archives? })` and
   `POST /v1/workspaces/:id/dotfiles` (service key only) take a create's dotfiles sources (a
   repository cloned with no credential, `https://` only and never with a credential in its URL, and
-  up to 4 archives) and apply them with the workspace daemon's applier: the clone, chezmoi and stow
-  as the user, then each tree's `./install.sh` as the user. `user` must exist and must not be root
-  or in root's group, `home` must be its passwd home, and a home whose logins another person holds
-  is refused (`home-held`). The run records `onBehalfOf` (`metadata.dotfiles`).
-- Known limit: the daemon still unpacks archives and runs the `copy` manager as root inside the
-  home, following links there, until its fix lands.
+  up to 4 archives) and apply them with the workspace daemon's applier: the clone, chezmoi, stow or
+  copy as the user, then each tree's `./install.sh` as the user. `user` must exist and must not be
+  root or in root's group, `home` must be its passwd home, and a home whose logins another person
+  holds is refused (`home-held`). The run records `onBehalfOf` (`metadata.dotfiles`).
+- Every file in the home is written as the person: the daemon unpacks archives outside every home
+  and follows a link the person planted only as them, so a link into another person's home fails the
+  apply.
 - The call resolves once every file is applied, with `bootstrap` running as the person (or `null`);
   `bootstrap.wait()` resolves with its exit code and output, read from the run the apply is recorded
   in (`harnessId` `dotfiles`). A bootstrap running past 30 minutes is stopped and the run fails.
