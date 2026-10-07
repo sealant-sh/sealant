@@ -57,12 +57,14 @@ export {
   homeStateKey,
   HOME_SCRIPT_EXIT,
   homeCredentialProviderOf,
+  homeLoginOfRefusal,
   homePathProblem,
   homeScriptRefusal,
   homeScriptStdin,
   liveHomeCredentialChannel,
   launchHomeGeneration,
   newHomeGeneration,
+  runHomeScriptInSession,
   type HomeCredentialChannel,
   type HomeCredentialProvider,
   type HomeFileCredentialProvider,
@@ -70,6 +72,7 @@ export {
   type HomeWriteFence,
   type HomeOwner,
   type HomeScriptExit,
+  type HomeScriptSession,
 } from "./home-credentials.js";
 
 export {

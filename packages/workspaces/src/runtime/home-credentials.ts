@@ -2,7 +2,11 @@
  * Writing a person's logins into one home of a running workspace (docs/connected-accounts-design.md
  * §6c). One home holds one person's logins; the files are owned by the home's owner, mode 0600, so
  * the person's own processes read them and nobody else's are pointed at them. One control-channel
- * exec per call writes and removes every file the call names: payloads go over stdin, never argv.
+ * exec per call writes and removes every file the call names. A login is never in any process's
+ * argv or environment, at any step (sealantd publishes argv in `processStarted`, and `/proc` shows
+ * both): the exec reads the payloads on its stdin, which sealantd does not record for a process; the
+ * root half hands them to the owner's half through a here-document on its stdin; the owner's half
+ * hands each to `base64` or `node` through a here-document of its own.
  */
 import { createHash, randomBytes } from "node:crypto";
 
@@ -12,6 +16,8 @@ import { Effect, Option, Stream } from "effect";
 import {
   SealantRuntime,
   SealantRuntimeControlLive,
+  type SealantError,
+  type SealantSession,
   type SealantTarget,
 } from "../sealantd/runtime.js";
 
@@ -45,8 +51,8 @@ const COPY_REFRESH_TOKEN = "sealant-copy-cannot-refresh";
 
 /**
  * Writes (`put`) or removes (`scrub`) one merged login entry, as the home's owner, in place.
- * `argv`: the file, the entry's key, the home, the mode; `e` (put) is the entry's JSON, base64;
- * `root=1` for root's own home.
+ * `argv`: the file, the entry's key, the home, the mode; a put reads the entry's JSON, base64, on
+ * stdin (never argv or the environment); `root=1` for root's own home.
  *
  * - The file is followed through every link to where it really is (a link whose target does not
  *   exist yet included: Mend's person layout reaches opencode's `auth.json` through its saved data
@@ -54,7 +60,7 @@ const COPY_REFRESH_TOKEN = "sealant-copy-cannot-refresh";
  *   inside the home and outside `/workspace`, and the file must have one link, so a login never
  *   lands in saved state: a put elsewhere exits 3.
  * - A put whose file cannot be reached, opened or written as a regular file (a directory there,
- *   the owner's permissions) exits 4. A scrub has nothing of Core's to remove in any of these cases
+ *   the owner's permissions), or whose entry is not JSON, exits 4. A scrub has nothing of Core's to remove in any of these cases
  *   (outside the home, unreachable, not a regular file) and exits 0.
  * - A put writes the entry only when there is none or it is a copy (its refresh token is
  *   `sealant-copy-cannot-refresh`): a login the person made inside pi or opencode stays (Mend's
@@ -65,6 +71,7 @@ const COPY_REFRESH_TOKEN = "sealant-copy-cannot-refresh";
  */
 const MERGED_LOGIN_PROGRAM = [
   `const fs=require("fs"),path=require("path"),[file,key,home,mode]=process.argv.slice(1),C=${JSON.stringify(COPY_REFRESH_TOKEN)},put=mode==="put";`,
+  `let entry;if(put){try{entry=JSON.parse(Buffer.from(fs.readFileSync(0,"utf8").trim(),"base64").toString("utf8"))}catch{process.exit(4)}}`,
   `function resolve(p){for(let i=0;i<40;i++){let st;try{st=fs.lstatSync(p)}catch(e){if(e.code!=="ENOENT")throw e;return path.join(fs.realpathSync(path.dirname(p)),path.basename(p))}`,
   `if(!st.isSymbolicLink())return fs.realpathSync(p);p=path.resolve(fs.realpathSync(path.dirname(p)),fs.readlinkSync(p))}throw new Error("too many links")}`,
   `let real;try{real=resolve(file)}catch{process.exit(put?4:0)}`,
@@ -74,7 +81,7 @@ const MERGED_LOGIN_PROGRAM = [
   `let raw=fs.readFileSync(fd,"utf8"),v;if(raw.trim()==="")v={};else{try{v=JSON.parse(raw)}catch{process.exit(0)}}`,
   `if(v===null||typeof v!=="object"||Array.isArray(v))process.exit(0);`,
   `const prior=v[key],copy=prior!==null&&typeof prior==="object"&&prior.refresh===C;`,
-  `if(put){if(prior!==undefined&&!copy)process.exit(0);v[key]=JSON.parse(Buffer.from(process.env.e||"","base64").toString("utf8"))}else{if(!copy)process.exit(0);delete v[key]}`,
+  `if(put){if(prior!==undefined&&!copy)process.exit(0);v[key]=entry}else{if(!copy)process.exit(0);delete v[key]}`,
   `const out=Buffer.from(JSON.stringify(v,null,2));fs.ftruncateSync(fd,0);fs.writeSync(fd,out,0,out.length,0);fs.fchmodSync(fd,0o600);fs.closeSync(fd)`,
 ].join("");
 
@@ -219,7 +226,27 @@ export const HOME_SCRIPT_EXIT = {
   piLoginOutside: 84,
   /** opencode's `auth.json` likewise (a plain file in Mend's saved data directory, for one). */
   opencodeLoginOutside: 85,
+  /**
+   * Claude's login file, once opened for the write, is not a regular file (a directory there), or
+   * has another hard link (a name for it elsewhere, in saved state or someone else's), or could not
+   * be opened as the home's owner: nothing is written into it.
+   */
+  claudeLoginUnusable: 86,
+  /** Codex's `auth.json` likewise. */
+  codexLoginUnusable: 87,
+  /** GitHub's `hosts.yml` likewise. */
+  githubLoginUnusable: 88,
 } as const;
+
+/** The exit a whole-file login's write answers when its file is unusable, per provider. */
+const FILE_EXITS: Readonly<Record<HomeFileCredentialProvider, number>> = {
+  claude: HOME_SCRIPT_EXIT.claudeLoginUnusable,
+  codex: HOME_SCRIPT_EXIT.codexLoginUnusable,
+  github: HOME_SCRIPT_EXIT.githubLoginUnusable,
+};
+
+/** The first descriptor the owner's half opens a whole-file login on (one each, at most three). */
+const FIRST_LOGIN_FD = 3;
 
 /** The exits a merged login's write or removal answers for each provider. */
 const MERGED_EXITS: Readonly<
@@ -297,7 +324,8 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
   }
   const lines: string[] = ["set -eu", "umask 077", `home=${quote(home)}`, `token=${input.token}`];
 
-  // 1. Every payload first, handed to the owner's half through the environment.
+  // 1. Every payload first, into shell variables (never exported): the owner's half gets them on
+  //    its stdin, never through argv or the environment.
   input.writes.forEach((_, index) => {
     lines.push(
       `IFS= read -r p${index} || [ -n "$p${index}" ] || exit ${HOME_SCRIPT_EXIT.shortPayload}`,
@@ -406,8 +434,15 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
     lines.push(`printf '%s' ${quote(input.fence.generation)} > "$m.tmp"; mv -f "$m.tmp" "$m"`);
   }
 
-  // 6–7. Inside the home, as its owner.
+  // 6–7. Inside the home, as its owner. Its payloads arrive on its stdin (a here-document of the
+  //      root half's), one base64 line per write, read before anything else.
   const inner: string[] = ["set -eu", "umask 077", `home=${quote(home)}`];
+  input.writes.forEach((_, index) => {
+    inner.push(
+      `IFS= read -r p${index} || [ -n "$p${index}" ] || exit ${HOME_SCRIPT_EXIT.shortPayload}`,
+    );
+  });
+  inner.push("exec </dev/null");
   const merges = [...input.writes, ...removes].some(isMergedLogin);
   if (merges) {
     inner.push(`m=${quote(MERGED_LOGIN_PROGRAM)}`, `[ "$uid" = 0 ] && rt=1 || rt=0`);
@@ -426,31 +461,61 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
       `d="$home/${directory}"; if [ -L "$d" ] && [ "$uid" != 0 ]; then t=$(readlink -f "$d" || true); case "$t" in "$home"/*) [ -d "$t" ] || exit ${HOME_SCRIPT_EXIT.linkOnTheWay} ;; *) exit ${HOME_SCRIPT_EXIT.linkOnTheWay} ;; esac; fi`,
     );
   }
-  input.writes.forEach((provider, index) => {
-    const relative = HOME_CREDENTIAL_FILES[provider];
+  for (const provider of input.writes) {
     let directory = "$home";
-    for (const segment of relative.split("/").slice(0, -1)) {
+    for (const segment of HOME_CREDENTIAL_FILES[provider].split("/").slice(0, -1)) {
       directory = `${directory}/${segment}`;
       inner.push(
         `if [ ! -e "${directory}" ] && [ ! -L "${directory}" ]; then mkdir -m 700 "${directory}"; fi`,
       );
     }
+  }
+  // Every whole-file login is opened (made if missing, never truncated yet) and checked through its
+  // descriptor before any of them is written: a regular file with one link, so an in-place write
+  // never lands in a file that has another name (in saved state, or someone else's). A link at the
+  // file's name is removed first, never followed. A refusal removes the files this check made, so
+  // a refused write leaves no empty login file behind.
+  const files = input.writes.flatMap((provider, index) => {
+    const file = homeCredentialProviderOf(HOME_CREDENTIAL_FILES[provider]);
+    return file === undefined ? [] : [{ provider: file, index }];
+  });
+  if (files.length > 0) {
+    inner.push(`made=`, `refuse() { for f in $made; do rm -f "$f"; done; exit "$1"; }`);
+  }
+  files.forEach(({ provider }, slot) => {
+    const fd = FIRST_LOGIN_FD + slot;
+    const exit = FILE_EXITS[provider];
+    inner.push(
+      `f="$home/${HOME_CREDENTIAL_FILES[provider]}"`,
+      `if [ -L "$f" ]; then rm -f "$f"; fi`,
+      `if [ ! -e "$f" ]; then made="$made $f"; fi`,
+      `command exec ${fd}<>"$f" || refuse ${exit}`,
+      `[ -f "/proc/$$/fd/${fd}" ] && [ "$(stat -L -c %h "/proc/$$/fd/${fd}")" = 1 ] || refuse ${exit}`,
+    );
+  });
+  // Then written, before any merge: a pi or opencode file refused below never keeps the
+  // whole-file logins of the same write (a Codex refresh's copy) from landing. In place, through
+  // the descriptor checked above, as a launch writes it: a temporary file beside it could be saved
+  // by a capture where the directory is linked into the saved harness home (the shared layout).
+  files.forEach(({ index }, slot) => {
+    const fd = FIRST_LOGIN_FD + slot;
+    inner.push(
+      `base64 -d <<SEALANT_LOGIN >"/proc/$$/fd/${fd}"`,
+      `$p${index}`,
+      "SEALANT_LOGIN",
+      `chmod 600 "/proc/$$/fd/${fd}"`,
+      `exec ${fd}>&-`,
+    );
+  });
+  input.writes.forEach((provider, index) => {
     const entryKey = HOME_MERGED_LOGINS[provider];
     const exits = MERGED_EXITS[provider];
-    if (entryKey !== undefined && exits !== undefined) {
-      inner.push(
-        `c=0; e="$p${index}" root="$rt" ${node} -e "$m" "$home/${relative}" ${entryKey} "$home" put || c=$?`,
-        `case "$c" in 0) ;; 3) exit ${String(exits.outside)} ;; *) exit ${String(exits.unusable)} ;; esac`,
-      );
-      return;
-    }
-    // Written in place, as a launch writes it: a temporary file beside it could be saved by a
-    // capture where the directory is linked into the saved harness home (the shared layout).
+    if (entryKey === undefined || exits === undefined) return;
     inner.push(
-      `f="$home/${relative}"`,
-      `if [ -L "$f" ]; then rm -f "$f"; fi`,
-      `printf '%s' "$p${index}" | base64 -d > "$f"`,
-      `chmod 600 "$f"`,
+      `c=0; root="$rt" ${node} -e "$m" "$home/${HOME_CREDENTIAL_FILES[provider]}" ${entryKey} "$home" put <<SEALANT_LOGIN || c=$?`,
+      `$p${index}`,
+      "SEALANT_LOGIN",
+      `case "$c" in 0) ;; 3) exit ${String(exits.outside)} ;; *) exit ${String(exits.unusable)} ;; esac`,
     );
   });
   for (const provider of removes) {
@@ -464,22 +529,37 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
     );
   }
 
-  // The owner's half starts from a clean environment: only a fixed PATH, its flags and its own
-  // payloads, never the exec's (a token, the secret env), which the person could read through /proc.
+  // The owner's half starts from a clean environment: only a fixed PATH and its flags, never the
+  // exec's (a token, the secret env), which the person could read through /proc, and never a
+  // payload. Its payloads go on its stdin, as a here-document: the shell writes it into a pipe, and
+  // no process is started with it in its argv or environment. bash before 5.1, or with a document
+  // larger than a pipe, writes a 0600 temporary file in `$TMPDIR` instead and unlinks it at once:
+  // root's is in the state directory (root's only, outside every home and capture root), never
+  // where the workspace's environment points `TMPDIR`, and the owner's half's is in the home.
   const environment = [
     `PATH=${ownerPath}`,
+    `TMPDIR="$home"`,
     `seed="$seed"`,
     `uid="$uid"`,
     `hn="$hn"`,
-    ...input.writes.map((_, index) => `p${index}="$p${index}"`),
   ].join(" ");
   lines.push(
     `inner=${quote(inner.join("\n").replaceAll("'", "'\\''"))}`,
     // Root's own home is root's to write; anyone else's is written as them. As root the person
     // gets no supplementary group; a caller that is not root keeps its own (tests).
     // The environment is cleared while still root: no process of the person's ever holds it.
-    `if [ "$uid" = 0 ]; then env -i ${environment} sh -c "$inner"; else env -i ${environment} setpriv --reuid="$uid" --regid="$gid" "$g" sh -c "$inner"; fi`,
+    `own() { if [ "$uid" = 0 ]; then env -i ${environment} sh -c "$inner"; else env -i ${environment} setpriv --reuid="$uid" --regid="$gid" "$g" sh -c "$inner"; fi; }`,
   );
+  lines.push(`TMPDIR="$st"`);
+  if (input.writes.length === 0) {
+    lines.push("own </dev/null");
+  } else {
+    lines.push(
+      "own <<SEALANT_LOGINS",
+      ...input.writes.map((_, index) => `$p${index}`),
+      "SEALANT_LOGINS",
+    );
+  }
   if (input.fence.kind === "release") {
     lines.push(`rm -f "$m"`);
   }
@@ -514,6 +594,42 @@ export interface HomeCredentialChannel {
   ) => Effect.Effect<HomeScriptExit, unknown>;
 }
 
+/** What running a home script needs of a control session. */
+export type HomeScriptSession = Pick<
+  SealantSession,
+  "exec" | "writeStdin" | "closeStdin" | "events"
+>;
+
+/**
+ * Runs one home script in a session: the script is the exec's only argument, and the payloads are
+ * written to its stdin. The exec names no session, so sealantd runs it as a plain process, whose
+ * stdin it neither records nor publishes (only a session's input is recorded, redacted).
+ */
+export const runHomeScriptInSession = (
+  session: HomeScriptSession,
+  script: string,
+  stdin: string,
+): Effect.Effect<HomeScriptExit, SealantError> =>
+  Effect.gen(function* () {
+    const accepted = yield* session.exec({ executable: "sh", args: ["-c", script], stdin: true });
+    if (stdin.length > 0) {
+      yield* session.writeStdin(accepted.processId, Buffer.from(stdin, "utf8"));
+    }
+    yield* session.closeStdin(accepted.processId);
+    const exit = yield* session.events.pipe(
+      Stream.filter((event: EventEnvelope) => event.processId === accepted.processId),
+      Stream.filter((event: EventEnvelope) => event.payload.case === "processExited"),
+      Stream.take(1),
+      Stream.runHead,
+    );
+    return {
+      exitCode:
+        Option.isSome(exit) && exit.value.payload.case === "processExited"
+          ? exit.value.payload.value.exitCode
+          : undefined,
+    } satisfies HomeScriptExit;
+  });
+
 /** The live channel: one exec over the executor's control connection, payloads on stdin. */
 export const liveHomeCredentialChannel: HomeCredentialChannel = {
   run: (target, script, stdin) =>
@@ -521,29 +637,35 @@ export const liveHomeCredentialChannel: HomeCredentialChannel = {
       Effect.gen(function* () {
         const runtime = yield* SealantRuntime;
         const session = yield* runtime.connect(target);
-        const accepted = yield* session.exec({
-          executable: "sh",
-          args: ["-c", script],
-          stdin: true,
-        });
-        if (stdin.length > 0) {
-          yield* session.writeStdin(accepted.processId, Buffer.from(stdin, "utf8"));
-        }
-        yield* session.closeStdin(accepted.processId);
-        const exit = yield* session.events.pipe(
-          Stream.filter((event: EventEnvelope) => event.processId === accepted.processId),
-          Stream.filter((event: EventEnvelope) => event.payload.case === "processExited"),
-          Stream.take(1),
-          Stream.runHead,
-        );
-        return {
-          exitCode:
-            Option.isSome(exit) && exit.value.payload.case === "processExited"
-              ? exit.value.payload.value.exitCode
-              : undefined,
-        } satisfies HomeScriptExit;
+        return yield* runHomeScriptInSession(session, script, stdin);
       }),
     ).pipe(Effect.provide(SealantRuntimeControlLive)),
+};
+
+/**
+ * The provider whose login file a refusal is about (`82` to `88`: the file is unusable, has another
+ * hard link, or really is outside the home), or `undefined` for any other exit. A caller can leave
+ * that provider out and write the rest (a partial put, a refresh push).
+ */
+export const homeLoginOfRefusal = (
+  exitCode: number | undefined,
+): HomeCredentialProvider | undefined => {
+  switch (exitCode) {
+    case HOME_SCRIPT_EXIT.piLoginUnusable:
+    case HOME_SCRIPT_EXIT.piLoginOutside:
+      return "pi";
+    case HOME_SCRIPT_EXIT.opencodeLoginUnusable:
+    case HOME_SCRIPT_EXIT.opencodeLoginOutside:
+      return "opencode";
+    case HOME_SCRIPT_EXIT.claudeLoginUnusable:
+      return "claude";
+    case HOME_SCRIPT_EXIT.codexLoginUnusable:
+      return "codex";
+    case HOME_SCRIPT_EXIT.githubLoginUnusable:
+      return "github";
+    default:
+      return undefined;
+  }
 };
 
 /** A refusal the script answered with, in words, or `undefined` for success or another failure. */
@@ -571,6 +693,17 @@ export const homeScriptRefusal = (
           ? HOME_CREDENTIAL_FILES.pi
           : HOME_CREDENTIAL_FILES.opencode;
       return `${home}/${file} really is outside ${home}, under /workspace, or has another hard link; Core writes a login only where it stays in the home, never into saved state.`;
+    }
+    case HOME_SCRIPT_EXIT.claudeLoginUnusable:
+    case HOME_SCRIPT_EXIT.codexLoginUnusable:
+    case HOME_SCRIPT_EXIT.githubLoginUnusable: {
+      const file =
+        exitCode === HOME_SCRIPT_EXIT.claudeLoginUnusable
+          ? HOME_CREDENTIAL_FILES.claude
+          : exitCode === HOME_SCRIPT_EXIT.codexLoginUnusable
+            ? HOME_CREDENTIAL_FILES.codex
+            : HOME_CREDENTIAL_FILES.github;
+      return `${home}/${file} is not a regular file its owner can write, or has another hard link (a name elsewhere, which could be saved state); Core writes a login only into a file of its own, and wrote none.`;
     }
     case HOME_SCRIPT_EXIT.missing:
       return `${home} does not exist in the workspace, or is not a directory. Make the home (its user) first.`;

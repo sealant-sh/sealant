@@ -1,33 +1,47 @@
 /**
- * The script that writes a person's logins into a home, run for real by `sh` against temporary
- * directories. The test's own uid and gid stand in for the home's owner, so `chown` needs no root;
- * the marker and lock live in a scratch state directory instead of `/run/sealant-homes`.
+ * The script that writes a person's logins into a home, run for real against temporary
+ * directories, under the host's `sh` and each of dash and bash installed here, plus any shell
+ * `SEALANT_TEST_SHELLS` names (busybox, for one); both halves run under it. The test's own uid and gid stand in for the home's owner, so
+ * `chown` needs no root; the marker and lock live in a scratch state directory instead of
+ * `/run/sealant-homes`.
  */
 import { spawn, spawnSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import {
+  create,
+  EventEnvelopeSchema,
+  ExecAcceptedSchema,
+  ProcessExitedSchema,
+} from "@sealant/runtime-protocol";
+import { Effect, Stream } from "effect";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
+import type { SealantExecOptions } from "../sealantd/runtime.js";
 import {
   buildHomeCredentialScript,
   HOME_SCRIPT_EXIT,
   homePathProblem,
   homeScriptStdin,
   homeStateKey,
+  runHomeScriptInSession,
   type HomeCredentialProvider,
   type HomeCredentialScriptInput,
+  type HomeScriptSession,
 } from "./home-credentials.js";
 
 const SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
@@ -44,6 +58,80 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
+/** Where a command really is, on this process's PATH (`""` when it is not there). */
+const commandPath = (name: string) =>
+  spawnSync("sh", ["-c", `command -v ${name}`], { encoding: "utf8" }).stdout.trim();
+
+/** A shell the scripts run under; `dir` holds an `sh` that is it, put first on both PATHs. */
+interface Shell {
+  readonly name: string;
+  readonly path: string;
+  readonly dir?: string;
+}
+const hostSh = realpathSync(commandPath("sh"));
+const shellDirs: string[] = [];
+/**
+ * dash and bash where installed, and any shell `SEALANT_TEST_SHELLS` names (`:`-separated), each
+ * once. busybox only when named: some distributions build it to prefer its own applets (Ubuntu's
+ * runs its own `setpriv`, not util-linux's), which no image's `sh` does; Alpine's does not.
+ */
+const otherShells = [
+  ...["dash", "bash"].map(commandPath),
+  ...(process.env["SEALANT_TEST_SHELLS"] ?? "").split(":"),
+]
+  .filter((path) => path.startsWith("/"))
+  .map((path) => realpathSync(path));
+const SHELLS: readonly Shell[] = [
+  { name: `sh (${basename(hostSh)})`, path: hostSh },
+  ...[...new Set(otherShells)]
+    .filter((path) => path !== hostSh)
+    .map((found): Shell => {
+      const name = basename(found);
+      const dir = mkdtempSync(join(tmpdir(), `sealant-sh-${name}-`));
+      shellDirs.push(dir);
+      symlinkSync(found, join(dir, "sh"));
+      return { name, path: join(dir, "sh"), dir };
+    }),
+];
+afterAll(() => {
+  for (const dir of shellDirs) rmSync(dir, { recursive: true, force: true });
+});
+/** Whether dash (Debian's and Ubuntu's `sh`) is among them. */
+const dashCovered = SHELLS.some(({ path }) => basename(realpathSync(path)) === "dash");
+let shell: Shell = SHELLS[0] ?? { name: "sh", path: "sh" };
+
+/** Runs `body` once under each shell. */
+const forEachShell = (name: string, body: () => void) => {
+  for (const candidate of SHELLS) {
+    describe(`${name} · ${candidate.name}`, () => {
+      beforeAll(() => {
+        shell = candidate;
+      });
+      body();
+    });
+  }
+};
+
+/**
+ * A test that cannot run here: in CI it fails, naming why, so a missing tool never passes quietly;
+ * elsewhere it is skipped, with the reason in its name.
+ */
+const unavailable = (name: string, why: string) =>
+  process.env["CI"] === undefined
+    ? it.skip(`${name} (skipped: ${why})`, () => {})
+    : it(name, () => {
+        throw new Error(`${name} cannot run on this runner: ${why}.`);
+      });
+
+describe("the shells the scripts run under", () => {
+  it("include the host's sh", () => {
+    expect(SHELLS[0]?.path).toBe(hostSh);
+  });
+  if (!dashCovered) {
+    unavailable("include dash", "dash is not installed, so the scripts did not run under it");
+  }
+});
+
 type Writes = readonly { readonly provider: HomeCredentialProvider; readonly content: string }[];
 type RunInput = Omit<HomeCredentialScriptInput, "writes" | "stateDir" | "token"> & {
   readonly writes: Writes;
@@ -51,9 +139,17 @@ type RunInput = Omit<HomeCredentialScriptInput, "writes" | "stateDir" | "token">
   readonly token?: string;
 };
 
-/** One scratch world: homes under `root`, markers and locks under `state`. */
-const world = () => {
+/**
+ * One scratch world: homes under `root`, markers and locks under `state`. `pathPrefix` goes first
+ * on both halves' PATH (the exec's, and the owner's half's fixed one), for commands that record
+ * how they were run.
+ */
+const world = (options: { readonly pathPrefix?: string } = {}) => {
   const root = scratch();
+  const prefix = [options.pathPrefix, shell.dir]
+    .flatMap((entry) => (entry === undefined ? [] : [`${entry}:`]))
+    .join("");
+  const env = { ...process.env, PATH: `${prefix}${process.env["PATH"] ?? SYSTEM_PATH}` };
   const state = join(root, "state");
   let issued = 0;
   const nextToken = () => {
@@ -67,13 +163,14 @@ const world = () => {
       stateDir: state,
       parentOwnerUid: input.parentOwnerUid ?? uid,
       // Images keep node on the fixed system PATH; this machine's may be elsewhere.
-      ownerPath: `${SYSTEM_PATH}:${dirname(process.execPath)}`,
+      ownerPath: `${prefix}${SYSTEM_PATH}:${dirname(process.execPath)}`,
       writes: input.writes.map(({ provider }) => provider),
     });
   const run = (input: RunInput) =>
-    spawnSync("sh", ["-c", scriptOf(input)], {
+    spawnSync(shell.path, ["-c", scriptOf(input)], {
       input: homeScriptStdin(input.writes.map(({ content }) => content)),
       encoding: "utf8",
+      env,
     });
   const markerPath = (home: string) => join(state, `${homeStateKey(home)}.generation`);
   const marker = (home: string) =>
@@ -83,7 +180,7 @@ const world = () => {
     mkdirSync(path, { mode: 0o700 });
     return path;
   };
-  return { root, state, scriptOf, run, marker, markerPath, home, nextToken };
+  return { root, state, env, scriptOf, run, marker, markerPath, home, nextToken };
 };
 
 const GEN_A = "generation-alice-1";
@@ -117,7 +214,7 @@ describe("homePathProblem", () => {
   });
 });
 
-describe("buildHomeCredentialScript", () => {
+forEachShell("buildHomeCredentialScript", () => {
   it("writes each login 0600, owned by the home's owner, and keeps the marker outside the home", () => {
     const w = world();
     const home = w.home("alice");
@@ -155,7 +252,7 @@ describe("buildHomeCredentialScript", () => {
 
     // Alice's refresh push starts, and its stdin is held back (a stalled exec).
     const late = spawn(
-      "sh",
+      shell.path,
       [
         "-c",
         w.scriptOf({
@@ -165,7 +262,7 @@ describe("buildHomeCredentialScript", () => {
           removes: [],
         }),
       ],
-      { stdio: ["pipe", "ignore", "pipe"] },
+      { stdio: ["pipe", "ignore", "pipe"], env: w.env },
     );
     const exited = new Promise<number | null>((resolve) => late.on("exit", resolve));
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -593,7 +690,7 @@ describe.skipIf(!dockerAvailable)(
     );
   },
 );
-describe("buildCredentialFileWriteScript for a launch's credentialsHome", () => {
+forEachShell("buildCredentialFileWriteScript for a launch's credentialsHome", () => {
   it("makes the home for its owner and writes every login in one exec, taking the home", async () => {
     const { buildCredentialFileWriteScript } = await import("./credential-files.js");
     const w = world();
@@ -612,7 +709,7 @@ describe("buildCredentialFileWriteScript for a launch's credentialsHome", () => 
     );
     // The adapters pipe `contentBase64` as it is; a launch delivered again writes again.
     const deliveries = [1, 2].map(() =>
-      spawnSync("sh", ["-c", script], { input: stdin, encoding: "utf8" }),
+      spawnSync(shell.path, ["-c", script], { input: stdin, encoding: "utf8", env: w.env }),
     );
     for (const result of deliveries) expect(result.status, result.stderr).toBe(0);
     expect(mode(home)).toBe(0o700);
@@ -635,7 +732,7 @@ describe("buildCredentialFileWriteScript for a launch's credentialsHome", () => 
   });
 });
 
-describe("pi's and opencode's ChatGPT logins", () => {
+forEachShell("pi's and opencode's ChatGPT logins", () => {
   const COPY = "sealant-copy-cannot-refresh";
   const entry = (access: string) =>
     JSON.stringify({ type: "oauth", access, refresh: COPY, expires: 1, accountId: "acc_1" });
@@ -911,3 +1008,398 @@ describe("pi's and opencode's ChatGPT logins", () => {
     expect(script).toContain(`exit ${String(HOME_SCRIPT_EXIT.noNode)}`);
   });
 });
+
+/** Where a command really is: the shell under test for `sh`, else on this process's PATH. */
+const realPath = (name: string) =>
+  name === "node" ? process.execPath : name === "sh" ? shell.path : commandPath(name);
+
+forEachShell("a login is never in any process's argv or environment", () => {
+  const COPY = "sealant-copy-cannot-refresh";
+  const entry = (access: string) =>
+    JSON.stringify({ type: "oauth", access, refresh: COPY, expires: 1, accountId: "acc_1" });
+  /** One login per provider, each carrying a secret no command line or environment may hold. */
+  const LOGINS: Writes = [
+    { provider: "claude", content: '{"claudeAiOauth":{"accessToken":"SECRET-claude-0001"}}' },
+    { provider: "codex", content: '{"tokens":{"access_token":"SECRET-codex-0002"}}' },
+    { provider: "github", content: 'github.com:\n    oauth_token: "SECRET-github-0003"\n' },
+    { provider: "pi", content: entry("SECRET-pi-0004") },
+    { provider: "opencode", content: entry("SECRET-opencode-0005") },
+  ];
+  /** What must never appear: each secret, and the start of each payload's base64 line. */
+  const NEEDLES = [
+    ...LOGINS.map(({ content }) => /SECRET-[a-z]+-\d{4}/.exec(content)?.[0] ?? content),
+    ...LOGINS.map(({ content }) => Buffer.from(content, "utf8").toString("base64").slice(0, 24)),
+  ];
+
+  /** A take, a write under the hold and a release, every login in each; all succeed. */
+  const putAndRelease = (w: ReturnType<typeof world>) => {
+    const home = w.home("alice");
+    const runs = [
+      w.run({ home, fence: { kind: "take", generation: GEN_A }, writes: LOGINS, removes: [] }),
+      w.run({ home, fence: { kind: "held", generation: GEN_A }, writes: LOGINS, removes: [] }),
+    ];
+    for (const run of runs) expect(run.status, run.stderr).toBe(0);
+    // Each login really was delivered.
+    expect(read(join(home, ".claude/.credentials.json"))).toContain("SECRET-claude-0001");
+    expect(read(join(home, ".codex/auth.json"))).toContain("SECRET-codex-0002");
+    expect(read(join(home, ".config/gh/hosts.yml"))).toContain("SECRET-github-0003");
+    expect(read(join(home, ".pi/agent/auth.json"))).toContain("SECRET-pi-0004");
+    expect(read(join(home, ".local/share/opencode/auth.json"))).toContain("SECRET-opencode-0005");
+    const released = w.run({
+      home,
+      fence: { kind: "release", generation: GEN_A },
+      writes: [],
+      removes: [],
+    });
+    expect(released.status, released.stderr).toBe(0);
+    return [...runs, released];
+  };
+
+  it.skipIf(uid === 0)(
+    "records the argv and environment of every command the script runs, and finds no login in any",
+    () => {
+      const shims = scratch();
+      const log = join(shims, "exec.log");
+      const tr = realPath("tr");
+      // Every external command the script may start: each is a shim that records its argv and
+      // the environment it was started with (its own /proc/<pid>/environ), then runs the real one.
+      const commands = [
+        "env",
+        "setpriv",
+        "sh",
+        "flock",
+        "mkdir",
+        "chmod",
+        "chown",
+        "base64",
+        "node",
+        "stat",
+        "cp",
+        "rm",
+        "mv",
+        "cat",
+        "id",
+        "dirname",
+        "readlink",
+        "ln",
+        "true",
+      ];
+      for (const name of commands) {
+        const real = realPath(name);
+        if (!real.startsWith("/")) continue;
+        const shim = join(shims, name);
+        writeFileSync(
+          shim,
+          [
+            "#!/bin/sh",
+            `{ printf 'exec %s\\n' "$0"; printf 'arg %s\\n' "$@"; ${tr} '\\0' '\\n' < /proc/$$/environ | while IFS= read -r v; do printf 'env %s\\n' "$v"; done; } >> '${log}'`,
+            `exec '${real}' "$@"`,
+          ].join("\n"),
+        );
+        chmodSync(shim, 0o755);
+      }
+      putAndRelease(world({ pathPrefix: shims }));
+
+      const recorded = read(log);
+      const started = new Set(
+        recorded
+          .split("\n")
+          .filter((line) => line.startsWith("exec "))
+          .map((line) => line.slice(`exec ${shims}/`.length)),
+      );
+      // The commands that once carried a login (env's argv, setpriv's and sh's environment, node's
+      // environment) and the ones that write them were all recorded.
+      for (const name of ["env", "setpriv", "sh", "base64", "node", "stat"]) {
+        expect(started, name).toContain(name);
+      }
+      for (const needle of NEEDLES) {
+        expect(recorded, needle).not.toContain(needle);
+      }
+    },
+  );
+
+  const straceWorks =
+    spawnSync("strace", ["-f", "-qq", "-e", "trace=execve", "-o", "/dev/null", "true"], {
+      stdio: "ignore",
+    }).status === 0;
+
+  const straceTest =
+    "under strace, no execve of the whole put carries a login, and no here-document lands in the exec's TMPDIR";
+  if (!straceWorks) {
+    unavailable(straceTest, "strace is not installed, or ptrace is refused");
+  } else {
+    it.skipIf(uid === 0)(straceTest, () => {
+      const w = world();
+      const home = w.home("bob");
+      const trace = join(w.root, "trace");
+      // Where the workspace's environment could point TMPDIR (saved state, for one).
+      const workspaceTmp = join(w.root, "workspace-tmp");
+      mkdirSync(workspaceTmp);
+      // Larger than a pipe: bash writes such a here-document to a temporary file in $TMPDIR.
+      const large: Writes = LOGINS.map((login) =>
+        login.provider === "codex"
+          ? {
+              provider: "codex",
+              content: `{"tokens":{"access_token":"SECRET-codex-0002","pad":"${"x".repeat(100_000)}"}}`,
+            }
+          : login,
+      );
+      const traced = (input: RunInput) =>
+        spawnSync(
+          "strace",
+          [
+            "-f",
+            "-qq",
+            "-v",
+            "-s",
+            "1000000",
+            "-e",
+            "trace=execve,open,openat,creat",
+            "-o",
+            trace,
+            shell.path,
+            "-c",
+          ].concat(w.scriptOf(input)),
+          {
+            input: homeScriptStdin(input.writes.map(({ content }) => content)),
+            encoding: "utf8",
+            env: { ...w.env, TMPDIR: workspaceTmp },
+            maxBuffer: 16 * 1024 * 1024,
+          },
+        );
+      const runs = [
+        traced({ home, fence: { kind: "take", generation: GEN_A }, writes: LOGINS, removes: [] }),
+        traced({ home, fence: { kind: "held", generation: GEN_A }, writes: large, removes: [] }),
+      ];
+      const traces: string[] = [];
+      for (const run of runs) {
+        expect(run.status, run.stderr).toBe(0);
+        traces.push(read(trace));
+      }
+      expect(read(join(home, ".pi/agent/auth.json"))).toContain("SECRET-pi-0004");
+      expect(read(join(home, ".codex/auth.json"))).toContain("x".repeat(100_000));
+      const all = traces.join("\n");
+      expect(all).toMatch(/execve\("[^"]*setpriv"/);
+      expect(all).toMatch(/execve\("[^"]*node"/);
+      const execs = all
+        .split("\n")
+        .filter((line) => line.includes("execve("))
+        .join("\n");
+      for (const needle of [
+        ...NEEDLES,
+        Buffer.from(large[1]?.content ?? "", "utf8")
+          .toString("base64")
+          .slice(0, 24),
+      ]) {
+        expect(execs, needle).not.toContain(needle);
+      }
+      // A here-document's temporary file (bash's `sh-thd`), if the shell makes one, is root's in
+      // the state directory or the person's in their home, never in the exec's TMPDIR.
+      const opens = all
+        .split("\n")
+        .filter((line) => /\b(open|openat|creat)\(/.test(line))
+        .join("\n");
+      expect(opens).not.toContain(workspaceTmp);
+      for (const [path] of opens.matchAll(/"[^"]*sh-thd[^"]*"/g)) {
+        expect(path.startsWith(`"${w.state}/`) || path.startsWith(`"${home}/`), path).toBe(true);
+      }
+    });
+  }
+
+  it("hands the script to the exec as its only argument and every payload to its stdin", async () => {
+    const execs: SealantExecOptions[] = [];
+    const written: string[] = [];
+    const session: HomeScriptSession = {
+      exec: (options) =>
+        Effect.sync(() => {
+          execs.push(options);
+          return create(ExecAcceptedSchema, { processId: "proc_1" });
+        }),
+      writeStdin: (_processId, data) =>
+        Effect.sync(() => {
+          written.push(Buffer.from(data).toString("utf8"));
+        }),
+      closeStdin: () => Effect.void,
+      events: Stream.make(
+        create(EventEnvelopeSchema, {
+          processId: "proc_1",
+          payload: { case: "processExited", value: create(ProcessExitedSchema, { exitCode: 0 }) },
+        }),
+      ),
+    };
+    const script = buildHomeCredentialScript({
+      home: "/home/m1",
+      fence: { kind: "take", generation: GEN_A },
+      token: "1",
+      writes: LOGINS.map(({ provider }) => provider),
+      removes: [],
+    });
+    const stdin = homeScriptStdin(LOGINS.map(({ content }) => content));
+    const exit = await Effect.runPromise(runHomeScriptInSession(session, script, stdin));
+    expect(exit.exitCode).toBe(0);
+    // A plain process (no session): sealantd neither records nor publishes its stdin.
+    expect(execs).toEqual([{ executable: "sh", args: ["-c", script], stdin: true }]);
+    for (const needle of NEEDLES) {
+      expect(JSON.stringify(execs), needle).not.toContain(needle);
+    }
+    expect(written.join("")).toBe(stdin);
+  });
+});
+
+forEachShell("a whole-file login with another hard link", () => {
+  it("is refused once opened, before any login is written, leaving no empty file behind", () => {
+    const w = world();
+    const home = w.home("alice");
+    expect(
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_A },
+        writes: [{ provider: "codex", content: "{}" }],
+        removes: [],
+      }).status,
+    ).toBe(0);
+    mkdirSync(join(home, ".claude"));
+    const saved = join(w.root, "saved-credentials.json");
+    writeFileSync(saved, "saved state");
+    linkSync(saved, join(home, ".claude/.credentials.json"));
+    // A write under the hold: no release follows it to clean up.
+    const result = w.run({
+      home,
+      fence: { kind: "held", generation: GEN_A },
+      writes: [
+        { provider: "github", content: "gh" },
+        { provider: "claude", content: "claude" },
+      ],
+      removes: [],
+    });
+    expect(result.status).toBe(HOME_SCRIPT_EXIT.claudeLoginUnusable);
+    expect(read(saved)).toBe("saved state");
+    // Checked before anything was written: GitHub's file, which the check made, is gone again.
+    expect(existsSync(join(home, ".config/gh/hosts.yml"))).toBe(false);
+  });
+
+  it("never keeps a refresh's whole-file login from landing when pi's or opencode's file is refused", () => {
+    const COPY = "sealant-copy-cannot-refresh";
+    const entry = (access: string) =>
+      JSON.stringify({ type: "oauth", access, refresh: COPY, expires: 1, accountId: "acc_1" });
+    const w = world();
+    const home = w.home("alice");
+    expect(
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_A },
+        writes: [
+          { provider: "codex", content: "codex-v1" },
+          { provider: "pi", content: entry("pi-v1") },
+          { provider: "opencode", content: entry("oc-v1") },
+        ],
+        removes: [],
+      }).status,
+    ).toBe(0);
+    // A capture brought a second name for opencode's auth.json back.
+    linkSync(join(home, ".local/share/opencode/auth.json"), join(w.root, "saved-auth.json"));
+    const pushed = w.run({
+      home,
+      fence: { kind: "held", generation: GEN_A },
+      writes: [
+        { provider: "codex", content: "codex-v2" },
+        { provider: "pi", content: entry("pi-v2") },
+        { provider: "opencode", content: entry("oc-v2") },
+      ],
+      removes: [],
+    });
+    expect(pushed.status).toBe(HOME_SCRIPT_EXIT.opencodeLoginOutside);
+    expect(read(join(home, ".codex/auth.json"))).toBe("codex-v2");
+    expect(read(join(w.root, "saved-auth.json"))).toContain("oc-v1");
+  });
+
+  it("answers each provider's file, and a directory there, with that provider's exit", () => {
+    const w = world();
+    const home = w.home("bob");
+    expect(
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_A },
+        writes: [{ provider: "codex", content: "{}" }],
+        removes: [],
+      }).status,
+    ).toBe(0);
+    const other = join(w.root, "other-hosts.yml");
+    writeFileSync(other, "theirs");
+    mkdirSync(join(home, ".config/gh"), { recursive: true });
+    linkSync(other, join(home, ".config/gh/hosts.yml"));
+    expect(
+      w.run({
+        home,
+        fence: { kind: "held", generation: GEN_A },
+        writes: [{ provider: "github", content: "gh" }],
+        removes: [],
+      }).status,
+    ).toBe(HOME_SCRIPT_EXIT.githubLoginUnusable);
+    expect(read(other)).toBe("theirs");
+    rmSync(join(home, ".codex/auth.json"));
+    mkdirSync(join(home, ".codex/auth.json"));
+    expect(
+      w.run({
+        home,
+        fence: { kind: "held", generation: GEN_A },
+        writes: [{ provider: "codex", content: "{}" }],
+        removes: [],
+      }).status,
+    ).toBe(HOME_SCRIPT_EXIT.codexLoginUnusable);
+  });
+});
+
+forEachShell(
+  "leftovers of a release that removed only some logins (an older API in a rolling deploy)",
+  () => {
+    const COPY = "sealant-copy-cannot-refresh";
+    const entry = (access: string) =>
+      JSON.stringify({ type: "oauth", access, refresh: COPY, expires: 1, accountId: "acc_1" });
+
+    /** A home whose claude, pi and opencode logins were put, then released by an older release. */
+    const leftBehind = () => {
+      const w = world();
+      const home = w.home("alice");
+      expect(
+        w.run({
+          home,
+          fence: { kind: "take", generation: GEN_A },
+          writes: [
+            { provider: "claude", content: "alice" },
+            { provider: "pi", content: entry("at-alice-pi") },
+            { provider: "opencode", content: entry("at-alice-oc") },
+          ],
+          removes: [],
+        }).status,
+      ).toBe(0);
+      // The older release: the whole-file logins and the marker removed, pi's and opencode's
+      // copies left, and the record dropped.
+      rmSync(join(home, ".claude/.credentials.json"));
+      rmSync(w.markerPath(home));
+      return { w, home };
+    };
+
+    it("are removed by the next take, which clears every login it does not write", () => {
+      const { w, home } = leftBehind();
+      const taken = w.run({
+        home,
+        fence: { kind: "take", generation: GEN_B },
+        writes: [{ provider: "codex", content: "{}" }],
+        // What the API's take removes: every provider it does not write.
+        removes: ["claude", "github", "pi", "opencode"],
+      });
+      expect(taken.status, taken.stderr).toBe(0);
+      expect(read(join(home, ".pi/agent/auth.json"))).not.toContain("at-alice-pi");
+      expect(read(join(home, ".local/share/opencode/auth.json"))).not.toContain("at-alice-oc");
+    });
+
+    it("are removed by the next release, recorded or not", () => {
+      const { w, home } = leftBehind();
+      const released = w.run({ home, fence: { kind: "release" }, writes: [], removes: [] });
+      expect(released.status, released.stderr).toBe(0);
+      expect(read(join(home, ".pi/agent/auth.json"))).not.toContain("at-alice-pi");
+      expect(read(join(home, ".local/share/opencode/auth.json"))).not.toContain("at-alice-oc");
+    });
+  },
+);
