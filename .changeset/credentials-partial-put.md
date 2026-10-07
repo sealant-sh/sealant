@@ -9,4 +9,7 @@ what they have not, in one call: a provider whose account is refused (`connected
 from the home as `null` would remove it, and the result's `skipped` lists
 `{ provider, reason, message }` for each, instead of the whole put rejecting. Every other refusal
 still rejects. The put now always resolves with `skipped` (empty for a whole put); on the wire,
-`partial` on the request and `skipped: [{ provider, code, message }]` on a partial put's answer.
+`partial` on the request and `skipped: [{ provider, code, message }]` on a partial put's answer. A
+pi or opencode `auth.json` that cannot be written in the home (not a regular file, or really outside
+it) is left out the same way, with `reason` `login-file-unusable`, and everything else is still
+written and removed.

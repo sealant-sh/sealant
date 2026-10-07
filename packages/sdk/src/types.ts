@@ -1249,7 +1249,9 @@ export interface WorkspaceCredentialSkip {
   readonly reason:
     | "connected-account-missing"
     | "connected-account-invalid"
-    | "connected-account-unsupported";
+    | "connected-account-unsupported"
+    /** pi's or opencode's `auth.json` cannot be written in the home (not a file, or outside it). */
+    | "login-file-unusable";
   readonly message: string;
 }
 

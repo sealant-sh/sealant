@@ -799,7 +799,11 @@ export type WorkspaceCredentialHome = typeof workspaceCredentialHomeSchema.Type;
 /** A provider a partial put left out, and why (its account's refusal). */
 export const workspaceCredentialSkipSchema = Schema.Struct({
   provider: Schema.Literals(workspaceCredentialHomeProviders),
-  code: Schema.Literals(connectedAccountRefusalCodes),
+  /**
+   * The account's refusal, or `login-file-unusable`: pi's or opencode's `auth.json` in the home
+   * cannot be written there (not a regular file, or really outside the home).
+   */
+  code: Schema.Literals([...connectedAccountRefusalCodes, "login-file-unusable"]),
   /** The refusal's words, as a whole put would have answered them. */
   message: Schema.String,
 });

@@ -497,6 +497,39 @@ describe("putWorkspaceCredentials", () => {
     ]);
   });
 
+  it("a partial put leaves out an opencode file it cannot write there, and still writes and removes the rest", async () => {
+    const world = newWorld();
+    succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default", github: "default" }));
+    // The first script finds opencode's auth.json really outside the home; the retry succeeds.
+    world.exits.push(85, 0);
+    const answer = succeeded(
+      await world.put({
+        onBehalfOfUserId: ALICE,
+        claude: "default",
+        github: "gone",
+        opencode: "chatgpt",
+        partial: true,
+      }),
+    );
+    expect(answer.skipped).toEqual([
+      expect.objectContaining({ provider: "github", code: "connected-account-missing" }),
+      expect.objectContaining({ provider: "opencode", code: "login-file-unusable" }),
+    ]);
+    // The retry wrote claude only and removed the stale GitHub login.
+    const retry = world.ran[world.ran.length - 1];
+    expect(retry?.payloads).toHaveLength(1);
+    expect(retry?.script).toContain('rm -f "$home/.config/gh/hosts.yml"');
+    expect(world.homes.rows.get(`run_1 ${HOME}`)?.accounts).toEqual([
+      { provider: "claude", connectedAccountId: aliceClaude.id },
+    ]);
+    // A whole put fails on the same file, naming it.
+    const whole = newWorld();
+    whole.exits.push(85);
+    expect(failed(await whole.put({ onBehalfOfUserId: ALICE, opencode: "chatgpt" }))).toMatchObject(
+      { code: "home-unusable" },
+    );
+  });
+
   it("a partial put still fails on anything but a refused account, and a whole put answers no skips", async () => {
     const world = newWorld();
     succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default" }));

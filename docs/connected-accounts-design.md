@@ -499,7 +499,10 @@ login: `409` `connected-account-unsupported` with `provider: "codex"`. Choosing 
 person has connected: each named provider whose account is refused (`connected-account-missing`,
 `-invalid`, `-unsupported`) is left out of the write and its login removed from the home, as `null`
 would remove it, so the home holds exactly what is connected; the answer's `skipped` lists each with
-its code and the words a whole put would have answered. Accounts are still resolved and decrypted
+its code and the words a whole put would have answered. A pi or opencode file the home script cannot
+write there (`82`–`85`) is left out too (`login-file-unusable`): the put runs once more without it,
+so the other providers are still written and a skipped provider's stale login still removed, rather
+than the whole put failing and leaving them as they were. Accounts are still resolved and decrypted
 under the home's lock, all before the one exec; any other refusal (`home-held`, `home-unusable`, …)
 still fails the put and writes nothing.
 
