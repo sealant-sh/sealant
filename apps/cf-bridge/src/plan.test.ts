@@ -6,6 +6,8 @@ import {
   bootEnvForLaunch,
   sandboxNameForRun,
   sandboxOptionsForLaunch,
+  stagedWritesForLaunch,
+  STAGING_DIR,
   stopModeFromUrl,
 } from "./plan.js";
 
@@ -149,5 +151,53 @@ describe("bearerMatches", () => {
 
   it("never accepts anything when the expected token is unset", () => {
     expect(bearerMatches("Bearer ", "")).toBe(false);
+  });
+});
+
+describe("stagedWritesForLaunch", () => {
+  it("stages the secret env, then the credential files, then the dotfiles, each named by path only", () => {
+    const writes = stagedWritesForLaunch(
+      bridgeLaunchRequestSchema.parse({
+        ...request,
+        credentialFiles: [
+          { path: "$HOME/.codex/auth.json", contentBase64: "c2VjcmV0", mode: "600" },
+        ],
+        dotfiles: { manifestJson: "{}", archives: [{ name: "a.tar", contentBase64: "YQ==" }] },
+      }),
+    );
+    expect(
+      writes.map(({ stagingPath, encoding, env }) => [
+        stagingPath,
+        encoding,
+        env["SEALANT_WRITE_PATH"],
+        env["SEALANT_WRITE_MODE"],
+      ]),
+    ).toEqual([
+      [`${STAGING_DIR}/0`, "utf-8", "/run/sealant/secrets/env.json", "600"],
+      [`${STAGING_DIR}/1`, "base64", "$HOME/.codex/auth.json", "600"],
+      [`${STAGING_DIR}/2`, "utf-8", "/run/sealant/dotfiles/manifest.json", "644"],
+      [`${STAGING_DIR}/3`, "base64", "/run/sealant/dotfiles/a.tar", "644"],
+    ]);
+    expect(writes[0]?.content).toBe('{"API_KEY":"secret"}');
+    const envs = JSON.stringify(writes.map(({ env }) => env));
+    for (const bytes of ["API_KEY", "c2VjcmV0", "YQ=="]) expect(envs).not.toContain(bytes);
+  });
+
+  it("refuses a credentialsHome, which the Cloudflare runtime does not support", () => {
+    expect(() =>
+      stagedWritesForLaunch(
+        bridgeLaunchRequestSchema.parse({
+          ...request,
+          credentialFiles: [
+            {
+              path: "/home/m1",
+              contentBase64: "c2VjcmV0",
+              mode: "600",
+              home: { uid: 1, gid: 1, generation: "generation-1", providers: ["claude"] },
+            },
+          ],
+        }),
+      ),
+    ).toThrow(/credentialsHome/);
   });
 });

@@ -29,12 +29,11 @@ import {
   bootEnvForLaunch,
   CONTROL_RELAY_PORT,
   CONTROL_SOCKET_PATH,
-  DOTFILES_ARCHIVE_DIR,
   sandboxNameForRun,
   sandboxOptionsForLaunch,
-  SECRET_ENV_FILE_PATH,
   stopModeFromUrl,
 } from "./plan.js";
+import { execExit, stageLaunchFiles } from "./stage.js";
 
 export { Sandbox };
 
@@ -62,72 +61,12 @@ const BOOT_WAIT_SECONDS = 180;
 
 type SandboxClient = ReturnType<typeof getSandbox<Sandbox<Env>>>;
 
-/** Run a short foreground command and return its exit code. */
-const execExit = async (
-  sandbox: SandboxClient,
-  command: readonly [string, ...string[]],
-  env?: Record<string, string>,
-): Promise<number> => {
-  const handle = await sandbox.exec([...command], env === undefined ? {} : { env });
-  const exit = await handle.waitForExit();
-  return exit.code;
-};
-
-/**
- * Write one file whose PATH may contain `$HOME` (expanded by the in-sandbox shell, matching the
- * Docker adapter's credential-file contract). Content and path travel as ENV, never argv.
- */
-const writeExpandedFile = async (
-  sandbox: SandboxClient,
-  file: { readonly path: string; readonly contentBase64: string; readonly mode: string },
-): Promise<void> => {
-  const exitCode = await execExit(
-    sandbox,
-    [
-      "/bin/sh",
-      "-c",
-      'umask 077; mkdir -p "$(dirname "$SEALANT_WRITE_PATH")" && printf %s "$SEALANT_WRITE_B64" | base64 -d > "$SEALANT_WRITE_PATH" && chmod "$SEALANT_WRITE_MODE" "$SEALANT_WRITE_PATH"',
-    ],
-    {
-      SEALANT_WRITE_PATH: file.path,
-      SEALANT_WRITE_B64: file.contentBase64,
-      SEALANT_WRITE_MODE: file.mode,
-    },
-  );
-  if (exitCode !== 0) {
-    throw new Error(`staging a workspace file failed (exit ${exitCode})`);
-  }
-};
-
 /** Stage secret env, credential files, and dotfiles; start sealantd and the control relay. */
 const bootWorkspace = async (
   sandbox: SandboxClient,
   request: BridgeLaunchRequest,
 ): Promise<void> => {
-  if (request.secretEnv !== undefined) {
-    await writeExpandedFile(sandbox, {
-      path: SECRET_ENV_FILE_PATH,
-      contentBase64: btoa(JSON.stringify(request.secretEnv)),
-      mode: "600",
-    });
-  }
-  for (const file of request.credentialFiles ?? []) {
-    await writeExpandedFile(sandbox, file);
-  }
-  if (request.dotfiles !== undefined) {
-    await writeExpandedFile(sandbox, {
-      path: `${DOTFILES_ARCHIVE_DIR}/manifest.json`,
-      contentBase64: btoa(request.dotfiles.manifestJson),
-      mode: "644",
-    });
-    for (const archive of request.dotfiles.archives) {
-      await writeExpandedFile(sandbox, {
-        path: `${DOTFILES_ARCHIVE_DIR}/${archive.name}`,
-        contentBase64: archive.contentBase64,
-        mode: "644",
-      });
-    }
-  }
+  await stageLaunchFiles(sandbox, request);
   await sandbox.exec(["/usr/local/bin/sealantd", "boot"], { env: bootEnvForLaunch(request) });
 };
 
