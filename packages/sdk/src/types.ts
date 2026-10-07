@@ -102,11 +102,74 @@ export type WorkspaceStatus =
   | "stopped"
   | "retained";
 
-/** A coarse lifecycle event observed while a workspace is being provisioned. */
+/**
+ * A coarse lifecycle event observed while a workspace is being provisioned: `status.<status>` on
+ * each status change, and `phase.<name>` when the launch moves to another phase or its image build
+ * to another step (`phase` carries it; see {@link WorkspacePhase}).
+ */
 export interface WorkspaceEvent {
   readonly type: string;
   readonly occurredAt: string;
   readonly message?: string;
+  /** The launch phase, on `phase.*` events. */
+  readonly phase?: WorkspacePhase;
+}
+
+/**
+ * Where a workspace that is not ready yet is in its launch:
+ *
+ *  - `queued`: waiting for a worker to take the launch.
+ *  - `image-build`: building (or finding) the workspace image. `imageBuild` says how far the build
+ *    has got, when the builder reports it.
+ *  - `boot`: the image is ready; the executor is starting and has not answered yet.
+ *
+ * `ready()` does not count an image build against its readiness bound (see
+ * {@link WorkspaceReadyOptions}).
+ */
+export interface WorkspacePhase {
+  readonly name: "queued" | "image-build" | "boot";
+  /** ISO-8601: when the phase started, when the control plane says. */
+  readonly since?: string;
+  readonly imageBuild?: WorkspaceImageBuildProgress;
+}
+
+/** How far an image build has got, as its builder reports it. */
+export interface WorkspaceImageBuildProgress {
+  /** The furthest build step reached (1-based). */
+  readonly step?: number;
+  /** How many steps the build has. */
+  readonly steps?: number;
+  /** That step's instruction, shortened (`RUN apt-get update && …`). */
+  readonly stepName?: string;
+  /** ISO-8601: when the build last wrote output. */
+  readonly progressAt: string;
+  /** How long the builder lets the build go without output before it fails it as stalled. */
+  readonly stallTimeoutMs?: number;
+}
+
+/**
+ * How long `ready()` waits, by phase. A launch is queued, may build its image, then boots; the
+ * image build has its own bound because a first launch on a new image can take many minutes on a
+ * slow package mirror and still come up fine.
+ */
+export interface WorkspaceReadyOptions {
+  /**
+   * The readiness bound: how long the launch may take OUTSIDE an image build (queued, then booting)
+   * before `ready()` gives up with `workspace_ready_timeout`. Default 10 minutes. A control plane
+   * that does not report the launch phase counts the whole wait here, image build included.
+   */
+  readonly readyTimeoutMs?: number;
+  /**
+   * The image-build bound: how long an image build may take in total before `ready()` gives up
+   * with `workspace_image_build_timeout`. Default: none. A build that keeps reporting progress is
+   * waited for, up to the control plane's own overall bound (`WORKSPACE_IMAGE_BUILD_MAX_MS`, 45
+   * minutes by default); one that stops is failed by the control plane (its stall bound,
+   * `workspace_image_build_stalled`), and `ready()` gives up on its own if it sees no new progress
+   * for that bound plus five minutes (20 minutes at least). A build that never reports progress (a
+   * builder that reports none) is given up on 20 minutes after it started, unless this is set:
+   * then this bounds it instead.
+   */
+  readonly imageBuildTimeoutMs?: number;
 }
 
 /** The supported workspace OS families (maps to the blueprint target). */
@@ -855,6 +918,16 @@ export interface CreateOptions {
   readonly services?: WorkspaceServicesOptions;
   /** When true (default), resolve only once the workspace runtime is live. */
   readonly wait?: boolean;
+  /**
+   * `ready()`'s readiness bound for this handle, image build excluded (see
+   * {@link WorkspaceReadyOptions.readyTimeoutMs}). Default 10 minutes.
+   */
+  readonly readyTimeoutMs?: number;
+  /**
+   * `ready()`'s image-build bound for this handle (see
+   * {@link WorkspaceReadyOptions.imageBuildTimeoutMs}). Default: none; a stalled build fails.
+   */
+  readonly imageBuildTimeoutMs?: number;
   /** Observe provisioning events as they happen. */
   readonly onEvent?: (event: WorkspaceEvent) => void;
   /** Connected-account credentials to attach to the workspace (see `WorkspaceCredentialsOptions`). */
@@ -1013,12 +1086,24 @@ export interface Workspace {
    */
   readonly launch: WorkspaceLaunch | undefined;
   /**
-   * Resolves once the workspace runtime is live and ready to accept a run. When the handle came
-   * from `workspaces.create()` and readiness times out (`workspace_ready_timeout`), a stop is
-   * requested before the error is thrown, so an abandoned launch does not keep running to its
-   * cap; the error says whether the request was accepted (not that the workspace stopped).
+   * Resolves once the workspace runtime is live and ready to accept a run. The wait is bounded by
+   * phase (see {@link WorkspaceReadyOptions}): an image build does not spend the readiness bound.
+   * Rejects with `workspace_ready_timeout` past the readiness bound, `workspace_image_build_timeout`
+   * past the image-build bound (the caller's, or the control plane's own), `workspace_image_build_stalled` when the build stopped making
+   * progress (with the step it stopped on), and `workspace_not_ready` when the launch ended
+   * otherwise (with the control plane's reason). When the handle came from
+   * `workspaces.create()` and `ready()` gives up on a bound, a stop is requested before the error
+   * is thrown, so an abandoned launch does not keep running to its cap; the error says whether the
+   * request was accepted (not that the workspace stopped). Options given here win over the ones
+   * given to `create()`.
    */
-  ready(): Promise<this>;
+  ready(options?: WorkspaceReadyOptions): Promise<this>;
+  /**
+   * Where the launch is while the workspace is not ready: queued, building its image (step N of
+   * M), or booting. `null` once it is ready or has ended, and from a control plane that predates
+   * launch phases.
+   */
+  phase(): Promise<WorkspacePhase | null>;
   /** Run a harness in this workspace. */
   readonly harness: HarnessRunner;
   /**
@@ -1040,7 +1125,8 @@ export interface Workspace {
   events(): AsyncIterable<WorkspaceEvent>;
   /**
    * Stop the workspace: remove its runtime and settle it in the terminal "stopped" status.
-   * Resolves `{ state: "stopped" }` once the runtime is observed gone. A capture-sourced
+   * Resolves `{ state: "stopped" }` once the runtime is observed gone, or at once when the stop
+   * cancelled a launch still building its image (no runtime ever ran; the status reads `cancelled`). A capture-sourced
    * workspace is drained first (its unsaved captures shipped and confirmed saved), which can take
    * minutes; if the runtime is still up after a minute, resolves with what was observed instead:
    * `draining`, `kept` (the workspace keeps running because its work is not confirmed saved), or

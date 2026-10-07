@@ -89,7 +89,11 @@ This has two practical consequences:
   build history published is deleted on an hourly sweep (`WORKSPACE_IMAGE_GC_*` in the
   [environment reference](/docs/reference/environment-variables)). A stopped workspace does not pin
   its image: a restart re-runs the build, which the unchanged plan turns into a reuse. The same
-  sweep removes build scratch left under the worker's temp directory by an interrupted build.
+  sweep removes build scratch left under the worker's temp directory by an interrupted build. A
+  worker with a fresh database still reuses a `plan-<hash>` image the Engine kept, once the image
+  carries the plan's full hash (the `sh.sealant.plan-hash` label) and its probe reads back, instead
+  of building the plan again. Such an image can be as old as the Engine has kept it: delete it to
+  build the plan fresh.
 - Stopping a workspace removes its containers together with their anonymous volumes. Installs that
   ran versions before this left one anonymous volume per workspace behind (the Docker sidecar's
   image store); `docker volume prune` removes anonymous volumes no container references.

@@ -135,6 +135,71 @@ export const resolveWorkspaceStatus = (input: {
   return "queued";
 };
 
+/** Where a launch that is not ready yet is (the wire's `workspacePhaseSchema`). */
+export interface WorkspacePhaseDetails {
+  readonly name: "queued" | "image-build" | "boot";
+  readonly since?: string;
+  readonly imageBuild?: {
+    readonly step?: number;
+    readonly steps?: number;
+    readonly stepName?: string;
+    readonly progressAt: string;
+    readonly stallTimeoutMs?: number;
+  };
+}
+
+/** `{ since }` from a row's instant, or nothing: a phase never fails a workspace read. */
+const sinceOf = (instant: Date | null | undefined): { readonly since?: string } =>
+  instant instanceof Date && !Number.isNaN(instant.getTime())
+    ? { since: instant.toISOString() }
+    : {};
+
+/**
+ * The launch phase of a workspace whose status is `queued` or `running`: waiting for a worker,
+ * building its image (with the build's progress, when the builder reports it), or booting the
+ * executor on a built image. Undefined for any other status: a ready or ended workspace is in no
+ * launch phase.
+ */
+export const resolveWorkspacePhase = (input: {
+  readonly status: WorkspaceStatus;
+  readonly latestJob?: WorkspaceBuildJob;
+  readonly runtimeInstance?: WorkspaceRuntimeInstance;
+}): WorkspacePhaseDetails | undefined => {
+  const { status, latestJob, runtimeInstance } = input;
+  if (status !== "queued" && status !== "running") return undefined;
+  if (latestJob === undefined || latestJob.status === "queued") {
+    return {
+      name: "queued",
+      ...sinceOf(latestJob?.createdAt),
+    };
+  }
+  if (latestJob.status === "running") {
+    const progress = latestJob.progress ?? null;
+    return {
+      name: "image-build",
+      ...sinceOf(latestJob.claimedAt ?? latestJob.startedAt),
+      ...(progress === null
+        ? {}
+        : {
+            imageBuild: {
+              ...(progress.step === undefined ? {} : { step: progress.step }),
+              ...(progress.steps === undefined ? {} : { steps: progress.steps }),
+              ...(progress.stepName === undefined ? {} : { stepName: progress.stepName }),
+              progressAt: progress.progressAt,
+              ...(progress.stallTimeoutMs === undefined
+                ? {}
+                : { stallTimeoutMs: progress.stallTimeoutMs }),
+            },
+          }),
+    };
+  }
+  // The image is built (the job succeeded): the executor is booting.
+  return {
+    name: "boot",
+    ...sinceOf(runtimeInstance?.createdAt ?? latestJob.finishedAt),
+  };
+};
+
 export const resolveWorkspaceRuntime = (
   runtimeInstance: WorkspaceRuntimeInstance | undefined,
   options: {
