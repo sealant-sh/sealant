@@ -800,8 +800,8 @@ export type WorkspaceCredentialHome = typeof workspaceCredentialHomeSchema.Type;
 export const workspaceCredentialSkipSchema = Schema.Struct({
   provider: Schema.Literals(workspaceCredentialHomeProviders),
   /**
-   * The account's refusal, or `login-file-unusable`: pi's or opencode's `auth.json` in the home
-   * cannot be written there (not a regular file, or really outside the home).
+   * The account's refusal, or `login-file-unusable`: the provider's login file in the home cannot
+   * be written there (not a regular file, another hard link, or really outside the home).
    */
   code: Schema.Literals([...connectedAccountRefusalCodes, "login-file-unusable"]),
   /** The refusal's words, as a whole put would have answered them. */

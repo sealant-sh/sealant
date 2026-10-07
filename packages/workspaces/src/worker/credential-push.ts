@@ -20,6 +20,8 @@ import { Duration, Effect, Option } from "effect";
 import {
   buildHomeCredentialScript,
   HOME_SCRIPT_EXIT,
+  homeLoginOfRefusal,
+  homeScriptRefusal,
   homeScriptStdin,
   liveHomeCredentialChannel,
   type HomeCredentialChannel,
@@ -238,26 +240,44 @@ const pushIntoHome = (
           }
           // Fenced by the hold's generation, under the home's lock in the executor: a write the
           // executor runs after the timeout, once the home is released or retaken, writes nothing.
-          const exit = yield* homeChannel
-            .run(
-              target,
-              buildHomeCredentialScript({
-                home: home.home,
-                fence: { kind: "held", generation: held.generation },
-                token: yield* nextFence,
-                writes: writes.map(({ provider }) => provider),
-                removes: [],
-              }),
-              homeScriptStdin(writes.map(({ content }) => content)),
-            )
-            .pipe(Effect.timeout(PUSH_TIMEOUT));
-          if (exit.exitCode === HOME_SCRIPT_EXIT.fenced) {
-            return { result: "released" as const, outcome: { kind: "keep" as const } };
-          }
-          if (exit.exitCode !== 0) {
-            return yield* Effect.fail(
-              new Error(`The write into ${home.home} exited with ${String(exit.exitCode)}.`),
-            );
+          // A login file the home refuses (pi's or opencode's unusable, any with another hard link)
+          // is left out and the rest written once more, as a partial put does: one bad file never
+          // keeps the home's other logins from this refresh.
+          let writing = writes;
+          for (;;) {
+            const exit = yield* homeChannel
+              .run(
+                target,
+                buildHomeCredentialScript({
+                  home: home.home,
+                  fence: { kind: "held", generation: held.generation },
+                  token: yield* nextFence,
+                  writes: writing.map(({ provider }) => provider),
+                  removes: [],
+                }),
+                homeScriptStdin(writing.map(({ content }) => content)),
+              )
+              .pipe(Effect.timeout(PUSH_TIMEOUT));
+            if (exit.exitCode === HOME_SCRIPT_EXIT.fenced) {
+              return { result: "released" as const, outcome: { kind: "keep" as const } };
+            }
+            const refusedLogin = homeLoginOfRefusal(exit.exitCode);
+            if (
+              refusedLogin !== undefined &&
+              writing.some(({ provider }) => provider === refusedLogin)
+            ) {
+              writing = writing.filter(({ provider }) => provider !== refusedLogin);
+              yield* Effect.logWarning(
+                `${input.describe}: ${homeScriptRefusal(home.home, exit.exitCode) ?? `${refusedLogin}'s login file was refused`} ${refusedLogin}'s login in ${home.home} is not refreshed.`,
+              );
+              if (writing.length > 0) continue;
+            }
+            if (exit.exitCode !== 0) {
+              return yield* Effect.fail(
+                new Error(`The write into ${home.home} exited with ${String(exit.exitCode)}.`),
+              );
+            }
+            break;
           }
           return { result: "written" as const, outcome: { kind: "keep" as const } };
         }),
