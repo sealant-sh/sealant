@@ -1,6 +1,6 @@
 /**
- * Unit tests for the run-exec message codec — the two framings (`command` = harness, `commands` =
- * exec/check run) must round-trip and malformed messages must be rejected before they reach the
+ * Unit tests for the run-exec message codec — the three framings (`command` = harness, `commands` =
+ * exec/check run, `dotfiles` = a person's dotfiles applied as their user) must round-trip and malformed messages must be rejected before they reach the
  * worker (a bad message dead-letters instead of poisoning the consumer).
  */
 import { describe, expect, it } from "vitest";
@@ -69,5 +69,41 @@ describe("parseRunExecRequestedMessage", () => {
         command: { executable: "x", args: [] },
       }),
     ).toThrow(/missing runId/);
+  });
+
+  it("parses the dotfiles framing: a user, a home, a staged directory and a repository", () => {
+    const parsed = parseRunExecRequestedMessage({
+      ...base,
+      dotfiles: {
+        user: "m4lice000",
+        home: "/home/m4lice000",
+        archiveDir: "/run/sealant-dotfiles/run_1",
+        repository: { url: "https://github.com/acme/dots.git", manager: "stow" },
+      },
+    });
+    expect(parsed.command).toBeUndefined();
+    expect(parsed.commands).toBeUndefined();
+    expect(parsed.dotfiles).toEqual({
+      user: "m4lice000",
+      home: "/home/m4lice000",
+      archiveDir: "/run/sealant-dotfiles/run_1",
+      // A bootstrap runs unless the repository says not to, as at create.
+      repository: { url: "https://github.com/acme/dots.git", manager: "stow", bootstrap: true },
+    });
+  });
+
+  it("rejects a dotfiles framing with nothing to apply, no user, or an unknown manager", () => {
+    expect(() =>
+      parseRunExecRequestedMessage({ ...base, dotfiles: { user: "m", home: "/home/m" } }),
+    ).toThrow(/repository or an archive directory/);
+    expect(() =>
+      parseRunExecRequestedMessage({ ...base, dotfiles: { home: "/home/m", archiveDir: "/x" } }),
+    ).toThrow(/user/);
+    expect(() =>
+      parseRunExecRequestedMessage({
+        ...base,
+        dotfiles: { user: "m", home: "/home/m", repository: { url: "u", manager: "yadm" } },
+      }),
+    ).toThrow(/manager is unknown/);
   });
 });

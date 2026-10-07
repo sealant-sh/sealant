@@ -566,6 +566,61 @@ conversation home while that person's process is about to run there.
   early-returning check; with one, a JSON string in the boot environment and one probe read the
   worker already holds.
 
+## 6g. A person's dotfiles, applied as their user (Oct 2026)
+
+- **`POST /v1/workspaces/:id/dotfiles { ownerUserId, user, home, repository?, archives? }`** (SDK
+  `workspace.dotfiles.apply({ user, home, repository?, archives? })`): a person's dotfiles applied
+  into their home of a running workspace, as their Linux user, after create (Mend ADR 0016 decision
+  11: a person's first process in an executor someone else launched, and the fallback that applies
+  the launcher's once their layout is known). The sources are a create's (`repository` cloned with
+  no credential, `https://` only; caller-resolved `archives`, at most 4 of about 4 MiB each; the
+  repository first, archives after, in order) and the applier is sealantd's `dotfiles.apply`
+  (sealantd#147): the clone, chezmoi or stow as the user, files it writes itself given to them, then
+  each tree's bootstrap (`./install.sh`, or `bootstrapCommand`) as one managed process of the user.
+- **Known limit: root inside the home, until sealantd's fix.** sealantd still unpacks archives
+  (`tar -xzf`, with root's defaults, into `~/.local/share/sealant-dotfiles/<i>`, whose `mkdir` and
+  `rm -rf` are root's too) and runs the `copy` manager's copies and directories as root inside the
+  person's home, following links there; only the final `lchown` gives the result to the user. A
+  person who links a directory of their home elsewhere (`~/.config -> /home/other/.config`) can have
+  root write their files through it, into another person's home included. Under 0.36's posture
+  everyone has passwordless `sudo`, so it grants nothing `sudo` does not; it is still root acting
+  for a person, and it becomes serious once `sudo` is narrowed. The sealantd fix (unpack into a
+  root-only directory outside the home with `--no-same-owner --no-same-permissions`, refusing
+  members that are not a file, a directory or a link; copy, make and remove as the user) is in
+  progress in parallel.
+- **Whose dotfiles, and only a service key.** The route refuses a gateway or user-token principal,
+  as the credentials routes do. `onBehalfOfUserId` names whose dotfiles they are and is recorded on
+  the run (`metadata.dotfiles = { onBehalfOfUserId, user, home }`); a home whose logins another
+  person holds (`workspace_credential_homes`) is refused with `409` `home-held`, so a caller's bug
+  cannot put one person's code next to another's logins. A repository URL with userinfo (a token) is
+  refused with `400`: it would otherwise sit in the job row and in `git clone`'s argv.
+- **Checked before anything is applied, in one exec as root** (`buildDotfilesStageScript`): the user
+  exists, is not root and is not in root's group (`user-unknown`, `user-root`), `home` is its passwd
+  home (`home-mismatch`), an existing directory of the user's reached without a symbolic link
+  (`home-unusable`), and the daemon reports `dotfiles.user` (`dotfiles-user-unsupported`); root and
+  a home under `/workspace` are refused with 400 before the executor is reached. The same exec
+  stages the archives under `/run/sealant-dotfiles/<runId>`, root's only, as the manifest and
+  `<index>.tar.gz` files the daemon reads (the launch contract of `SEALANT_DOTFILES_ARCHIVE_DIR`);
+  the bytes go over stdin, never argv. sealantd refuses root and a user in root's group on its own,
+  and applies only into the user's passwd home.
+- **A `dotfiles` run, queued on the run-exec queue** (a third framing beside harness and exec): the
+  job names the user, the home, the staged directory and the repository, never an archive's bytes,
+  and is deleted on pickup. The worker calls `dotfiles.apply` with the run's id as the execution,
+  removes the staged directory once the daemon answers, and records the run's own events (the
+  bootstrap's; another execution's and untagged events are not this run's) until the bootstrap
+  exits. Its `processStarted` is the signal that every file is applied: `apply()` resolves at it, or
+  at the run's end when there is no bootstrap, so Mend can start a joiner's agent beside
+  `install.sh`; `bootstrap.wait()` resolves with the exit code (a datum, as for exec) and the
+  output, read from the record. The run fails, with the daemon's words, when the apply is refused or
+  does not answer within 10 minutes, and when the bootstrap runs past 30 minutes (it is stopped) or
+  its exit goes unobserved. No changes are read: nothing of the worktree changed.
+- **No secret is stored.** Arguments are never recorded (sealant#329): the bootstrap's
+  `processStarted` keeps the count of its arguments only, and the staging exec's script holds no
+  archive. A staged directory a job never reached is removed by the next staging after an hour.
+- **Not covered:** applying as root into `/root` (sealantd's verb refuses root by design; a launch's
+  own dotfiles at boot still go there), and a repository only the person's own identity can reach
+  (the caller resolves it and sends it as an archive, as at create).
+
 ## 7. The `sealant` CLI — `apps/cli`
 
 New workspace app `@sealant/cli`, bin `sealant`, built on `effect/unstable/cli` (Command/Flag/Prompt

@@ -193,6 +193,96 @@ export const execWorkspaceRequestSchema = Schema.Struct({
 });
 export type ExecWorkspaceRequest = typeof execWorkspaceRequestSchema.Type;
 
+/** The `harnessId` stamped on runs that apply a person's dotfiles (`applyWorkspaceDotfiles`). */
+export const dotfilesRunHarnessId = "dotfiles";
+
+/** How a dotfiles tree is applied: chezmoi and stow layouts are detected by `auto`. */
+export const workspaceDotfilesManagerSchema = Schema.Literals(["auto", "chezmoi", "stow", "copy"]);
+
+/**
+ * A dotfiles repository cloned as the person (no credential reaches the workspace: a repository
+ * only the person's own identity can reach is resolved by the caller and sent as an archive).
+ */
+export const applyWorkspaceDotfilesRepositorySchema = Schema.Struct({
+  /** An `https://` clone URL with no credential in it (no `user:token@`). */
+  url: NonEmptyString.check(Schema.isPattern(/^https:\/\/[^\s'"\\]+$/)),
+  /** Branch or tag; omitted clones the remote's default branch. */
+  ref: Schema.optional(NonEmptyString),
+  manager: Schema.optional(workspaceDotfilesManagerSchema),
+  /** Run the bootstrap command after applying (when the checkout has it). Default true. */
+  bootstrap: Schema.optional(Schema.Boolean),
+  /** Relative to the checkout; default `./install.sh`. */
+  bootstrapCommand: Schema.optional(NonEmptyString),
+});
+
+/** A caller-resolved dotfiles tree, as at create (`spec.runtime.dotfilesArchives`). */
+export const applyWorkspaceDotfilesArchiveSchema = Schema.Struct({
+  /** base64 of a `.tar.gz`; at most 6 MiB of base64 (about 4 MiB decoded). */
+  data: Schema.String.check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(6 * 1024 * 1024),
+    Schema.isPattern(/^[A-Za-z0-9+/]+={0,2}$/),
+  ),
+  manager: Schema.optional(workspaceDotfilesManagerSchema),
+  /** Where the tree lands: `home` (default) or `config` (`~/.config`, copy manager only). */
+  target: Schema.optional(Schema.Literals(["home", "config"])),
+  /** Run `./install.sh` (or `bootstrapCommand`) after applying when present. Default true. */
+  bootstrap: Schema.optional(Schema.Boolean),
+  bootstrapCommand: Schema.optional(NonEmptyString),
+});
+
+/**
+ * Apply a person's dotfiles into their home of a RUNNING workspace, as their Linux user
+ * (docs/connected-accounts-design.md §6g; Mend's ADR 0016 decision 11): the same sources as a
+ * create's dotfiles (a repository, archives, or both; the repository first, archives after in
+ * order) and the same applier (sealantd's: chezmoi, stow or copy, then each tree's bootstrap).
+ *
+ * `user` must exist and must not be root or in root's group, and `home` must be its passwd home: an
+ * existing directory of the user's, reached without a symbolic link. The clone, chezmoi, stow and the
+ * bootstrap run as the user; sealantd's archive staging and `copy` manager still run as root inside
+ * the home and follow links the person planted there, until sealantd's fix for it lands (see
+ * docs/connected-accounts-design.md §6g). `onBehalfOfUserId` names whose dotfiles they are: it is
+ * recorded on the run, and a home whose logins another person holds is refused (`home-held`). Answered `202` with a run (`harnessId`
+ * `dotfiles`) once the archives are staged: the run's first `processStarted` is the bootstrap,
+ * started once every file is applied; its output and exit are the run's. The run completes with the
+ * bootstrap's exit code (0 when no tree had one) and fails, with the daemon's words, when the apply
+ * was refused or the bootstrap ran past 30 minutes (it is stopped).
+ */
+export const applyWorkspaceDotfilesRequestSchema = Schema.Struct({
+  /** The workspace's owner (owner scope; uniform 404 otherwise). */
+  ownerUserId: NonEmptyString,
+  /** The Sealant user whose dotfiles these are: recorded on the run (`metadata.dotfiles`). */
+  onBehalfOfUserId: NonEmptyString,
+  /** The Linux user to apply as (a login name or a uid); never root. */
+  user: workspaceProcessUserSchema,
+  /** The user's passwd home: absolute, normalised, never under `/workspace`. */
+  home: NonEmptyString,
+  repository: Schema.optional(applyWorkspaceDotfilesRepositorySchema),
+  archives: Schema.optional(
+    Schema.Array(applyWorkspaceDotfilesArchiveSchema).check(Schema.isMaxLength(4)),
+  ),
+});
+export type ApplyWorkspaceDotfilesRequest = typeof applyWorkspaceDotfilesRequestSchema.Type;
+
+/**
+ * Stable `code`s of the `WorkspaceConflictError` a dotfiles apply answers, nothing applied:
+ * `workspace-not-running` (no ready executor), `dotfiles-user-unsupported` (the workspace's
+ * sealantd cannot apply dotfiles as a user), `user-unknown` (no such user: make it first),
+ * `user-root` (the user is root or in root's group), `home-mismatch` (the home is not the user's
+ * passwd home), `home-unusable` (the home is missing, not a directory, not the user's, or reached
+ * through a symbolic link), `home-held` (another person's logins are held in the home).
+ */
+export const workspaceDotfilesConflictCodes = [
+  "workspace-not-running",
+  "dotfiles-user-unsupported",
+  "user-unknown",
+  "user-root",
+  "home-mismatch",
+  "home-unusable",
+  "home-held",
+] as const;
+export type WorkspaceDotfilesConflictCode = (typeof workspaceDotfilesConflictCodes)[number];
+
 /**
  * Bind a standby workspace's working directory, or a bindable extra mount, to one subdirectory of
  * its root (sealantd ADR-0014). `mountPath` defaults to the working directory; an empty `subpath`
@@ -1231,6 +1321,28 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         WorkspaceNotFoundError,
         // The workspace has never launched a runtime — nothing to exec in yet.
         WorkspaceConflictError,
+        WorkspaceInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    // Async like exec: 202 + the queued run once the archives are staged; poll `GET /v1/runs/:runId`.
+    HttpApiEndpoint.post("applyWorkspaceDotfiles", "/:workspaceId/dotfiles", {
+      params: workspaceIdParams,
+      payload: applyWorkspaceDotfilesRequestSchema,
+      success: runSchema.pipe(HttpApiSchema.status(202)),
+      error: [
+        // Root, a malformed home, a URL with a credential, or nothing to apply.
+        WorkspaceBadRequestError,
+        // Only a service key may apply a person's dotfiles.
+        WorkspaceForbiddenError,
+        WorkspaceNotFoundError,
+        // See `workspaceDotfilesConflictCodes`.
+        WorkspaceConflictError,
+        // The executor did not confirm the staging.
+        WorkspaceBadGatewayError,
+        // Core cannot reach the executor.
+        WorkspaceServiceUnavailableError,
         WorkspaceInternalServerError,
       ],
     }),

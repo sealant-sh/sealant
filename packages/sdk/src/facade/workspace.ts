@@ -15,6 +15,7 @@ import type {
   WorkspaceDetails as WireWorkspaceDetails,
 } from "@sealant/api-contracts";
 
+import { applyDotfiles } from "../effect/apply-dotfiles.js";
 import { execWorkspace } from "../effect/exec-workspace.js";
 import {
   bindWorkspaceOp,
@@ -755,6 +756,11 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         );
         return answered.homes.map(toCredentialHome);
       },
+    },
+
+    // A person's dotfiles, applied as their user into their home.
+    dotfiles: {
+      apply: (options) => applyDotfiles(ctx, init, options),
     },
 
     // expire({in: "2h"}) sets the TTL, expire() expires now (the platform reaper stops it on its

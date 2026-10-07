@@ -155,7 +155,10 @@ const requireHome = (home: string) => {
 };
 
 /** The owner's workspace and the instance of its latest run (ready or not). */
-const loadInstance = (input: { readonly workspaceId: string; readonly ownerUserId: string }) =>
+export const loadInstance = (input: {
+  readonly workspaceId: string;
+  readonly ownerUserId: string;
+}) =>
   Effect.gen(function* () {
     const workspace = yield* withInternalError(
       (yield* WorkspaceRepo).getWorkspaceById(input.workspaceId),
@@ -177,13 +180,13 @@ const loadInstance = (input: { readonly workspaceId: string; readonly ownerUserI
     return { workspace, instance };
   });
 
-const notRunning = (workspaceId: string) =>
+export const notRunning = (workspaceId: string) =>
   new WorkspaceConflictError({
     message: `Workspace ${workspaceId} has no running executor.`,
     code: "workspace-not-running",
   });
 
-const targetFor = (workspaceId: string, instance: WorkspaceRuntimeInstance) => {
+export const targetFor = (workspaceId: string, instance: WorkspaceRuntimeInstance) => {
   const target = sealantTargetForRuntimeInstance(instance, targetDerivationOptionsFromEnv(env));
   return target === undefined
     ? Effect.fail(

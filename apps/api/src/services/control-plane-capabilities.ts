@@ -4,6 +4,7 @@ import {
   publishWorkspaceStopRequested,
   type PackageStandardizer,
   type RegistryClient,
+  type RunDotfilesApply,
   type RunExecCommand,
   type WorkspaceStopReason,
 } from "@sealant/workspaces";
@@ -30,11 +31,15 @@ export class WorkspaceBuildJobPublisherService extends Context.Service<
 >()("@sealant/api/WorkspaceBuildJobPublisherService") {}
 
 export interface RunExecPublisher {
-  /** Exactly one framing per request: `command` (harness) or `commands` (exec/check run). */
+  /**
+   * Exactly one framing per request: `command` (harness), `commands` (exec/check run) or `dotfiles`
+   * (a person's dotfiles applied as their user).
+   */
   readonly publishRequested: (input: {
     readonly runId: string;
     readonly command?: RunExecCommand;
     readonly commands?: readonly RunExecCommand[];
+    readonly dotfiles?: RunDotfilesApply;
   }) => Promise<void>;
 }
 

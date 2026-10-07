@@ -29,18 +29,42 @@ export interface RunExecCommand {
 }
 
 /**
- * Exactly one of the two framings is set:
+ * A person's dotfiles applied as their user (`dotfiles.apply`). The archives are already staged in
+ * the executor by the API (`archiveDir`, root's only): no file's bytes ride the job, and a
+ * repository is cloned with no credential.
+ */
+export interface RunDotfilesApply {
+  /** The Linux user (a login name or a decimal uid); never root. */
+  readonly user: string;
+  /** The user's passwd home, as the API checked it. */
+  readonly home: string;
+  readonly archiveDir?: string;
+  readonly repository?: {
+    readonly url: string;
+    readonly reference?: string;
+    readonly manager?: "auto" | "chezmoi" | "stow" | "copy";
+    readonly bootstrap: boolean;
+    readonly bootstrapCommand?: string;
+  };
+}
+
+/**
+ * Exactly one of the three framings is set:
  *
  * - `command` — HARNESS framing: one invocation; a nonzero exit marks the run failed.
  * - `commands` — EXEC (check-run) framing: an ordered list; every command executes regardless of
  *   exit codes (exit codes are check DATA), and the run completes iff all of them executed and were
  *   recorded. See `execWorkspaceRequestSchema` in @sealant/api-contracts for the full semantics.
+ * - `dotfiles` — DOTFILES framing: `dotfiles.apply` as the user, then the bootstrap's process
+ *   recorded to its exit; the run completes iff the files were applied and the bootstrap (if any)
+ *   ended, with its exit code. See `applyWorkspaceDotfilesRequestSchema`.
  */
 export interface RunExecRequestedMessage {
   readonly kind: typeof runExecRequestedMessageKind;
   readonly runId: string;
   readonly command?: RunExecCommand;
   readonly commands?: readonly RunExecCommand[];
+  readonly dotfiles?: RunDotfilesApply;
 }
 
 /**
@@ -70,6 +94,70 @@ const parseCommand = (input: unknown, label: string): RunExecCommand => {
   };
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const optionalString = (value: unknown, label: string): string | undefined => {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`Invalid run-exec message: ${label} must be a non-empty string.`);
+  }
+  return value;
+};
+
+const MANAGERS = ["auto", "chezmoi", "stow", "copy"] as const;
+
+const parseDotfiles = (input: unknown): RunDotfilesApply => {
+  if (!isRecord(input)) {
+    throw new Error("Invalid run-exec message: dotfiles must be an object.");
+  }
+  const user = optionalString(input["user"], "dotfiles.user");
+  const home = optionalString(input["home"], "dotfiles.home");
+  if (user === undefined || home === undefined) {
+    throw new Error("Invalid run-exec message: dotfiles names a user and a home.");
+  }
+  const archiveDir = optionalString(input["archiveDir"], "dotfiles.archiveDir");
+  const repository = input["repository"];
+  let parsedRepository: RunDotfilesApply["repository"];
+  if (repository !== undefined) {
+    if (!isRecord(repository)) {
+      throw new Error("Invalid run-exec message: dotfiles.repository must be an object.");
+    }
+    const url = optionalString(repository["url"], "dotfiles.repository.url");
+    if (url === undefined) {
+      throw new Error("Invalid run-exec message: dotfiles.repository names a url.");
+    }
+    const manager = repository["manager"];
+    const known = MANAGERS.find((candidate) => candidate === manager);
+    if (manager !== undefined && known === undefined) {
+      throw new Error("Invalid run-exec message: dotfiles.repository.manager is unknown.");
+    }
+    const reference = optionalString(repository["reference"], "dotfiles.repository.reference");
+    const bootstrapCommand = optionalString(
+      repository["bootstrapCommand"],
+      "dotfiles.repository.bootstrapCommand",
+    );
+    parsedRepository = {
+      url,
+      ...(reference === undefined ? {} : { reference }),
+      ...(known === undefined ? {} : { manager: known }),
+      bootstrap: repository["bootstrap"] !== false,
+      ...(bootstrapCommand === undefined ? {} : { bootstrapCommand }),
+    };
+  }
+  if (archiveDir === undefined && parsedRepository === undefined) {
+    throw new Error(
+      "Invalid run-exec message: dotfiles names a repository or an archive directory.",
+    );
+  }
+  return {
+    user,
+    home,
+    ...(archiveDir === undefined ? {} : { archiveDir }),
+    ...(parsedRepository === undefined ? {} : { repository: parsedRepository }),
+  };
+};
+
 export const parseRunExecRequestedMessage = (input: unknown): RunExecRequestedMessage => {
   if (typeof input !== "object" || input === null) {
     throw new Error("Invalid run-exec message: not an object.");
@@ -80,6 +168,13 @@ export const parseRunExecRequestedMessage = (input: unknown): RunExecRequestedMe
   }
   if (typeof obj.runId !== "string" || obj.runId.length === 0) {
     throw new Error("Invalid run-exec message: missing runId.");
+  }
+  if (obj.dotfiles !== undefined) {
+    return {
+      kind: runExecRequestedMessageKind,
+      runId: obj.runId,
+      dotfiles: parseDotfiles(obj.dotfiles),
+    };
   }
   if (obj.commands !== undefined) {
     if (!Array.isArray(obj.commands) || obj.commands.length === 0) {
@@ -105,16 +200,23 @@ export const publishRunExecRequested = async (
     readonly runId: string;
     readonly command?: RunExecCommand;
     readonly commands?: readonly RunExecCommand[];
+    readonly dotfiles?: RunDotfilesApply;
   },
 ): Promise<void> => {
-  if ((input.command === undefined) === (input.commands === undefined)) {
-    throw new Error("A run-exec request carries exactly one of `command` or `commands`.");
+  const framings = [input.command, input.commands, input.dotfiles].filter(
+    (framing) => framing !== undefined,
+  );
+  if (framings.length !== 1) {
+    throw new Error(
+      "A run-exec request carries exactly one of `command`, `commands` or `dotfiles`.",
+    );
   }
   const message: RunExecRequestedMessage = {
     kind: runExecRequestedMessageKind,
     runId: input.runId,
     ...(input.command === undefined ? {} : { command: input.command }),
     ...(input.commands === undefined ? {} : { commands: input.commands }),
+    ...(input.dotfiles === undefined ? {} : { dotfiles: input.dotfiles }),
   };
   const jobs = createJobQueueService(databaseUrl);
   await jobs.publishJson({ queue: runExecQueue, message });

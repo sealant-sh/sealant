@@ -6,6 +6,7 @@ import {
   putWorkspaceCredentials,
   releaseWorkspaceCredentials,
 } from "./workspace-credentials.js";
+import { applyWorkspaceDotfiles } from "./workspace-dotfiles.js";
 import {
   inspectWorkspaceImage,
   bindWorkspace,
@@ -53,6 +54,12 @@ export const WorkspacesHandlersLive = HttpApiBuilder.group(
       )
       .handle("execWorkspace", ({ params, payload }) =>
         execWorkspace({
+          workspaceId: params.workspaceId,
+          payload,
+        }),
+      )
+      .handle("applyWorkspaceDotfiles", ({ params, payload }) =>
+        applyWorkspaceDotfiles({
           workspaceId: params.workspaceId,
           payload,
         }),

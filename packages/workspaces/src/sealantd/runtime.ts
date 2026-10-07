@@ -37,6 +37,7 @@ import {
   type Capabilities,
   type CaptureReplanned,
   type CaptureStatusReport,
+  type DotfilesApplied,
   type EventEnvelope,
   type ExecAccepted,
   type HealthReport,
@@ -139,6 +140,7 @@ const sealantOperationSchema = Schema.Literals([
   "captureFlush",
   "captureStatus",
   "captureReplan",
+  "dotfilesApply",
 ]);
 
 export type SealantOperation = typeof sealantOperationSchema.Type;
@@ -1029,6 +1031,39 @@ const toWireSessionMode = (mode: SealantSessionMode | undefined): WireSessionMod
 const fromWireSessionMode = (mode: WireSessionMode): SealantSessionMode =>
   mode === WireSessionMode.PIPE ? "pipe" : "pty";
 
+/**
+ * A person's dotfiles applied into their home, as their user (sealantd's `dotfiles.apply`, Mend's
+ * ADR 0016 decision 11): `user` is a login name or a decimal uid (never root; the daemon refuses
+ * it), its passwd home the target. At least one of `repository` and `archiveDir`; the repository
+ * applies first, as at boot. Nothing here carries a credential: a repository is cloned with none.
+ */
+export interface SealantDotfilesApplyArgs {
+  readonly user: string;
+  readonly repository?: {
+    readonly url: string;
+    /** Branch or ref; absent clones the remote's default branch. */
+    readonly reference?: string;
+    readonly manager?: "auto" | "chezmoi" | "stow" | "copy";
+    readonly target?: "home" | "config";
+    readonly bootstrap: boolean;
+    readonly bootstrapCommand?: string;
+  };
+  /** A directory of staged archives (`manifest.json` and `<index>.tar.gz`). */
+  readonly archiveDir?: string;
+  /** The execution the bootstrap's process belongs to (the run that records it). */
+  readonly executionId?: string;
+}
+
+/** The daemon's answer: every file is applied; the bootstraps, if any, run as one process. */
+export interface SealantDotfilesApplied {
+  /** The login name applied as. */
+  readonly user: string;
+  /** The home applied into (the user's passwd home). */
+  readonly home: string;
+  /** The bootstrap process, started as the user; absent when no tree had one to run. */
+  readonly bootstrap?: { readonly processId: string; readonly pid: number };
+}
+
 /** The daemon's accepted-session handle. */
 export interface SealantSessionOpened {
   readonly sessionId: string;
@@ -1143,6 +1178,15 @@ export interface SealantSession {
    * on a capture-sourced workspace.
    */
   readonly captureReplan: () => Effect.Effect<CaptureReplanReport, SealantError>;
+  /**
+   * Apply a person's dotfiles into their home, as their user (`dotfiles.apply`, sealantd 0.20):
+   * answers once every file is applied; the bootstraps (`./install.sh`) then run as one managed
+   * process of the user, whose events carry `executionId`. Only a daemon whose capabilities name
+   * `dotfiles.user` knows the command.
+   */
+  readonly dotfilesApply: (
+    args: SealantDotfilesApplyArgs,
+  ) => Effect.Effect<SealantDotfilesApplied, SealantError>;
   /** Asks the daemon to shut down gracefully. */
   readonly shutdown: (graceMillis?: number) => Effect.Effect<void, SealantError>;
   /**
@@ -1419,6 +1463,57 @@ const makeSession = (client: SealantClient): SealantSession => ({
           throw new Error(`expected result captureReplanned, got ${String(result.case)}`);
         }
         return captureReplanReportFromWire(result.value);
+      }),
+    ),
+
+  dotfilesApply: (args) =>
+    requestResult(
+      client,
+      "dotfilesApply",
+      {
+        case: "dotfilesApply",
+        value: {
+          user: args.user,
+          ...(args.repository === undefined
+            ? {}
+            : {
+                repository: {
+                  url: args.repository.url,
+                  ...(args.repository.reference === undefined
+                    ? {}
+                    : { reference: args.repository.reference }),
+                  ...(args.repository.manager === undefined
+                    ? {}
+                    : { manager: args.repository.manager }),
+                  ...(args.repository.target === undefined
+                    ? {}
+                    : { target: args.repository.target }),
+                  bootstrap: args.repository.bootstrap,
+                  ...(args.repository.bootstrapCommand === undefined
+                    ? {}
+                    : { bootstrapCommand: args.repository.bootstrapCommand }),
+                },
+              }),
+          ...(args.archiveDir === undefined ? {} : { archiveDir: args.archiveDir }),
+          ...(args.executionId === undefined ? {} : { executionId: args.executionId }),
+        },
+      },
+      "dotfilesApplied",
+    ).pipe(
+      Effect.map((value) => {
+        const applied = value as DotfilesApplied;
+        return {
+          user: applied.user,
+          home: applied.home,
+          ...(applied.bootstrap === undefined
+            ? {}
+            : {
+                bootstrap: {
+                  processId: applied.bootstrap.processId,
+                  pid: applied.bootstrap.pid,
+                },
+              }),
+        } satisfies SealantDotfilesApplied;
       }),
     ),
 

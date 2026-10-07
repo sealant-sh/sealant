@@ -376,6 +376,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           runId: message.runId,
           ...(message.command === undefined ? {} : { command: message.command }),
           ...(message.commands === undefined ? {} : { commands: message.commands }),
+          ...(message.dotfiles === undefined ? {} : { dotfiles: message.dotfiles }),
           db,
           ...(credentialCipher === undefined ? {} : { credentialCipher }),
           targetOptions,

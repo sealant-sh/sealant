@@ -33,7 +33,7 @@ import { discoverLinkedWorktreeMetadataMount } from "./linked-worktree.js";
 /** The image repository is an OCI name: the control plane refuses one outside the grammar. */
 const sanitizeRepoSlug = (value: string): string => toOciRepositoryComponent(value, "repo");
 
-const toGitUrl = (repository: string): string => {
+export const toGitUrl = (repository: string): string => {
   if (/^(https?:\/\/|git@|ssh:\/\/)/.test(repository)) {
     return repository;
   }

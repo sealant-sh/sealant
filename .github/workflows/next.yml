@@ -261,6 +261,12 @@ jobs:
         run: >-
           pnpm --filter @sealant/workspaces test:e2e src/runtime/capture-owner-map.e2e.ts
 
+      - name: Dotfiles as a person (never skipped)
+        env:
+          SEALANT_E2E_REQUIRE_IMAGE: "1"
+        run: >-
+          pnpm --filter @sealant/workspaces test:e2e src/runtime/dotfiles-apply.e2e.ts
+
   # Tagged only after the tests and the e2e passed, so no version exists without its npm packages
   # being about to follow.
   image-tag:

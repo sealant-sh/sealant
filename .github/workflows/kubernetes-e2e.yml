@@ -45,6 +45,10 @@ jobs:
       - name: Capture owner map through the Docker adapter and a real daemon
         env: { SEALANT_E2E_REQUIRE_IMAGE: "1" }
         run: pnpm --filter @sealant/workspaces test:e2e src/runtime/capture-owner-map.e2e.ts
+      - name: Dotfiles as a person (never skipped)
+        env: { SEALANT_E2E_REQUIRE_IMAGE: "1" }
+        run: >-
+          pnpm --filter @sealant/workspaces test:e2e src/runtime/dotfiles-apply.e2e.ts
 
   kubernetes:
     name: Kubernetes cross-node e2e (kind, generic RWX)
