@@ -1,4 +1,5 @@
 import {
+  chatgptLoginEntry,
   CLAUDE_CREDENTIALS_JSON_PATH,
   CODEX_AUTH_JSON_PATH,
   claudeCredentialsFile,
@@ -22,6 +23,7 @@ import {
   homeScriptStdin,
   liveHomeCredentialChannel,
   type HomeCredentialChannel,
+  type HomeCredentialProvider,
 } from "../runtime/home-credentials.js";
 import { liveControlChannel, type ControlChannel } from "../runtime/kubernetes/adapter.js";
 import {
@@ -56,6 +58,14 @@ const HOME_PUSH_CONCURRENCY = 4;
 const PUSH_TIMEOUT = Duration.seconds(15);
 
 export type CredentialPushProvider = "claude" | "codex";
+
+/** The stored login a home's provider is made from: pi's and opencode's are the Codex login. */
+const homeLoginSource = (provider: string): CredentialPushProvider | "github" | undefined =>
+  provider === "pi" || provider === "opencode"
+    ? "codex"
+    : provider === "claude" || provider === "codex" || provider === "github"
+      ? provider
+      : undefined;
 
 export interface PushCredentialCopyInput {
   readonly connectedAccountId: string;
@@ -185,14 +195,15 @@ const pushIntoHome = (
       { runId: home.runId, home: home.home },
       (held, nextFence) =>
         Effect.gen(function* () {
-          if (
-            held === undefined ||
-            !held.accounts.some(
-              (account) =>
-                account.provider === input.provider &&
-                account.connectedAccountId === input.connectedAccountId,
-            )
-          ) {
+          // The home's logins made from this account: its own provider's, and for a Codex login
+          // pi's and opencode's ChatGPT entries too.
+          const providers = (held?.accounts ?? []).flatMap((account) =>
+            account.connectedAccountId === input.connectedAccountId &&
+            homeLoginSource(account.provider) === input.provider
+              ? [account.provider]
+              : [],
+          );
+          if (held === undefined || providers.length === 0) {
             return { result: "released" as const, outcome: { kind: "keep" as const } };
           }
           const copyJson =
@@ -206,6 +217,25 @@ const pushIntoHome = (
           if (copyJson === undefined) {
             return { result: "released" as const, outcome: { kind: "keep" as const } };
           }
+          // A Codex copy is also where pi's and opencode's entries come from; a login that is not
+          // a ChatGPT login (an API key) has none, and those entries are left as they are.
+          const writes = providers.flatMap(
+            (
+              provider,
+            ): Array<{ readonly provider: HomeCredentialProvider; readonly content: string }> => {
+              if (provider !== "pi" && provider !== "opencode") {
+                return [{ provider, content: copyJson }];
+              }
+              try {
+                return [{ provider, content: chatgptLoginEntry(copyJson) }];
+              } catch {
+                return [];
+              }
+            },
+          );
+          if (writes.length === 0) {
+            return { result: "written" as const, outcome: { kind: "keep" as const } };
+          }
           // Fenced by the hold's generation, under the home's lock in the executor: a write the
           // executor runs after the timeout, once the home is released or retaken, writes nothing.
           const exit = yield* homeChannel
@@ -215,10 +245,10 @@ const pushIntoHome = (
                 home: home.home,
                 fence: { kind: "held", generation: held.generation },
                 token: yield* nextFence,
-                writes: [input.provider],
+                writes: writes.map(({ provider }) => provider),
                 removes: [],
               }),
-              homeScriptStdin([copyJson]),
+              homeScriptStdin(writes.map(({ content }) => content)),
             )
             .pipe(Effect.timeout(PUSH_TIMEOUT));
           if (exit.exitCode === HOME_SCRIPT_EXIT.fenced) {

@@ -463,6 +463,29 @@ key; the SSH gateway's secret and a user access token act for at most one person
 service key's product (Mend) puts a person's login only into that person's home, or into a
 conversation home while that person's process is about to run there.
 
+**pi's and opencode's ChatGPT logins (Oct 2026).** A put's `pi` and `opencode` name one of the
+person's Codex accounts; the home holds them as providers of their own (the record names the Codex
+account under `pi` and `opencode`), so a release removes them with everything else and a Codex
+refresh rewrites them (one script per home for the codex, pi and opencode logins made from it). Each
+is one entry,
+`{ type: "oauth", access, refresh: "sealant-copy-cannot-refresh", expires, accountId }`
+(`chatgptLoginEntry`), under `openai-codex` in `<home>/.pi/agent/auth.json` and `openai` in
+`<home>/.local/share/opencode/auth.json`, the shape Mend wrote by hand. The home script merges it as
+the home's owner with node (an image without node on its system PATH refuses such a put, `81`,
+before the home's hold changes):
+
+- the file is followed through every link to where it really is, a dangling last link included
+  (Mend's person layout reaches opencode's file through the saved data directory and back to
+  `~/.mend/opencode/auth.json`); in a person's home that must be inside the home and outside
+  `/workspace`, or the put is refused (`home-unusable`), so no login lands in saved state;
+- an entry the person made inside the tool (its refresh token is not the copy's) is never replaced
+  or removed (Mend ADR 0016 decision 8a); `null` and a release remove only a copy; other entries and
+  a file that is not a JSON object stay as they are; written in place, never through a rename, 0600.
+
+A Codex account that is an API key, or has no account id or readable expiry, cannot be either tool's
+login: `409` `connected-account-unsupported` with `provider: "codex"`. Choosing pi's
+`defaultProvider` stays the caller's (Mend's seed).
+
 **Refusals name their provider (Oct 2026).** A put (or a create) that names an account the person
 cannot name answers `404` `connected-account-missing`, and one marked invalid or holding an unusable
 credential `409` `connected-account-invalid`, each with the account's `provider`; the messages are

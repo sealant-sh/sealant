@@ -63,7 +63,7 @@ import {
   launchHomeGeneration,
   newHomeGeneration,
   type CredentialFileInjection,
-  type HomeCredentialProvider,
+  type HomeFileCredentialProvider,
   type PublishedImage,
   type RegisteredRuntime,
   type RuntimeAdapter,
@@ -335,8 +335,10 @@ const splitCredentialInjections = (
 } => {
   const credentialEnv: Record<string, string> = {};
   const credentialFiles: CredentialFileInjection[] = [];
-  const homeFiles: Array<{ readonly provider: HomeCredentialProvider; readonly content: string }> =
-    [];
+  const homeFiles: Array<{
+    readonly provider: HomeFileCredentialProvider;
+    readonly content: string;
+  }> = [];
 
   for (const injection of injections) {
     if (injection.kind === "env") {

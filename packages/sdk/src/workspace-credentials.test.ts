@@ -132,4 +132,28 @@ describe("workspace.credentials", () => {
       },
     ]);
   });
+
+  it("lowers pi's and opencode's logins onto the person's Codex accounts and maps them back", async () => {
+    const { client, requests } = makeStub();
+    await workspaceOver(client).credentials.put({
+      home: "/home/m4ria0000",
+      onBehalfOf: "usr_maria",
+      pi: true,
+      opencode: "work",
+    });
+    expect(requests[0]?.body).toMatchObject({
+      payload: { pi: "default", opencode: "work" },
+    });
+    const withPi = {
+      ...home,
+      accounts: { ...home.accounts, pi: { connectedAccountId: "cacc_codex", name: "default" } },
+    };
+    const listed = await workspaceOver({
+      workspaces: {
+        listWorkspaceCredentials: () =>
+          Effect.succeed({ workspaceId: "ws_1", runId: "run_1", homes: [withPi] }),
+      },
+    } as unknown as ControlPlaneClient).credentials.list();
+    expect(listed[0]?.accounts.pi).toEqual({ connectedAccountId: "cacc_codex", name: "default" });
+  });
 });

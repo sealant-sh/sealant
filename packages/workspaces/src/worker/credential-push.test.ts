@@ -315,3 +315,75 @@ describe("pushCredentialCopy re-reads the account under each home's lock", () =>
     },
   );
 });
+
+/** A token whose expiry is readable, as a ChatGPT access token's is. */
+const jwt = (exp: number) => `h.${Buffer.from(JSON.stringify({ exp })).toString("base64url")}.s`;
+
+describe("pushCredentialCopy into homes holding pi's and opencode's logins", () => {
+  const ready = [instance("h", [])];
+
+  it.effect(
+    "writes a Codex refresh into the home's codex, pi and opencode logins in one script",
+    () => {
+      const homes = makeInMemoryCredentialHomes(() => ready);
+      const ran: RanScript[] = [];
+      return Effect.gen(function* () {
+        yield* homes.service.withLockedHome({ runId: "h", home: "/home/alice" }, () =>
+          Effect.succeed({
+            result: undefined,
+            outcome: {
+              kind: "hold" as const,
+              onBehalfOfUserId: "usr_alice",
+              accounts: [
+                { provider: "codex" as const, connectedAccountId: "cacc_codex" },
+                { provider: "pi" as const, connectedAccountId: "cacc_codex" },
+                { provider: "opencode" as const, connectedAccountId: "cacc_codex" },
+                { provider: "claude" as const, connectedAccountId: "cacc_claude" },
+              ],
+              generation: "generation-alice",
+            },
+          }),
+        );
+        const access = jwt(1_900_000_000);
+        const summary = yield* pushCredentialCopy({
+          connectedAccountId: "cacc_codex",
+          provider: "codex",
+          copyJson: JSON.stringify({
+            tokens: {
+              access_token: access,
+              refresh_token: "sealant-copy-cannot-refresh",
+              account_id: "acc_1",
+            },
+          }),
+          controlChannel: silentLaunchChannel,
+          homeChannel: recordingHomeChannel(ran),
+        });
+        expect(summary.written).toBe(1);
+        expect(ran).toHaveLength(1);
+        const payloads = (ran[0]?.stdin ?? "")
+          .split("\n")
+          .filter((line) => line.length > 0)
+          .map((line) => Buffer.from(line, "base64").toString("utf8"));
+        expect(payloads).toHaveLength(3);
+        expect(JSON.parse(payloads[1] ?? "{}")).toEqual({
+          type: "oauth",
+          access,
+          refresh: "sealant-copy-cannot-refresh",
+          expires: 1_900_000_000_000,
+          accountId: "acc_1",
+        });
+        expect(ran[0]?.script).toContain("openai-codex");
+        expect(ran[0]?.script).toContain("openai");
+        // Claude's login is another account's: not touched by a Codex refresh.
+        expect(ran[0]?.script).not.toContain(".claude/.credentials.json");
+      }).pipe(
+        Effect.provide(
+          Layer.merge(
+            instancesRepo(ready),
+            Layer.succeed(WorkspaceCredentialHomeRepo, homes.service),
+          ),
+        ),
+      );
+    },
+  );
+});

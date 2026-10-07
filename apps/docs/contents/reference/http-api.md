@@ -60,7 +60,14 @@ one person per home.
 of that person's accounts (each an account id or name; `null` removes the provider) into `home`,
 owned by the home's owner, mode `0600`, and keeps them refreshed there; GitHub is written as
 `<home>/.config/gh/hosts.yml`. With `uid` and `gid` a home that does not exist yet is made for them.
-A home holds one person's logins until it is released: a `POST` naming anyone else answers `409`
+`pi` and `opencode` name one of the person's Codex accounts and write its ChatGPT login (no refresh
+token) as one entry of each tool's own `auth.json`: `openai-codex` in `<home>/.pi/agent/auth.json`,
+`openai` in `<home>/.local/share/opencode/auth.json`. The file is merged in place, followed through
+links to where it really is (which must be inside the home and outside `/workspace`), and its other
+entries stay; a login the person made inside pi or opencode is never replaced, and `null` or a
+release removes only Core's copy. A Codex account that is not a ChatGPT login answers `409`
+`connected-account-unsupported`. A refresh of the Codex login rewrites these entries too. A home
+holds one person's logins until it is released: a `POST` naming anyone else answers `409`
 `home-held`. `DELETE ?ownerUserId=&home=` releases the home (its login files are removed), and
 `GET ?ownerUserId=` lists the homes. A home is an absolute path, never under `/workspace`, reached
 without a symbolic link (`409` `home-unusable` otherwise); `/root` takes only the workspace owner's

@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -29,6 +29,7 @@ import {
   type HomeCredentialScriptInput,
 } from "./home-credentials.js";
 
+const SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const uid = process.getuid?.() ?? 0;
 const gid = process.getgid?.() ?? 0;
 
@@ -64,6 +65,8 @@ const world = () => {
       token: input.token ?? nextToken(),
       stateDir: state,
       parentOwnerUid: input.parentOwnerUid ?? uid,
+      // Images keep node on the fixed system PATH; this machine's may be elsewhere.
+      ownerPath: `${SYSTEM_PATH}:${dirname(process.execPath)}`,
       writes: input.writes.map(({ provider }) => provider),
     });
   const run = (input: RunInput) =>
@@ -628,5 +631,167 @@ describe("buildCredentialFileWriteScript for a launch's credentialsHome", () => 
         home: { uid: 40001, gid: 40000, generation: GEN_A, providers: ["claude"] },
       }),
     ).toThrow(/never under \/workspace/);
+  });
+});
+
+describe("pi's and opencode's ChatGPT logins", () => {
+  const COPY = "sealant-copy-cannot-refresh";
+  const entry = (access: string) =>
+    JSON.stringify({ type: "oauth", access, refresh: COPY, expires: 1, accountId: "acc_1" });
+  const json = (path: string): Record<string, unknown> => JSON.parse(read(path));
+
+  it("merges the entry into each tool's auth.json, keeping every other login, 0600", () => {
+    const w = world();
+    const home = w.home("alice");
+    mkdirSync(join(home, ".pi/agent"), { recursive: true });
+    writeFileSync(
+      join(home, ".pi/agent/auth.json"),
+      JSON.stringify({ anthropic: { type: "api", key: "sk-own" } }),
+    );
+    const result = w.run({
+      home,
+      fence: { kind: "take", generation: GEN_A },
+      writes: [
+        { provider: "pi", content: entry("at-pi") },
+        { provider: "opencode", content: entry("at-oc") },
+      ],
+      removes: [],
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const pi = join(home, ".pi/agent/auth.json");
+    expect(json(pi)).toEqual({
+      anthropic: { type: "api", key: "sk-own" },
+      "openai-codex": JSON.parse(entry("at-pi")),
+    });
+    expect(mode(pi)).toBe(0o600);
+    const opencode = join(home, ".local/share/opencode/auth.json");
+    expect(json(opencode)).toEqual({ openai: JSON.parse(entry("at-oc")) });
+    expect(lstatSync(opencode).uid).toBe(uid);
+  });
+
+  it("never replaces or removes a login the person made inside the tool (decision 8a)", () => {
+    const w = world();
+    const home = w.home("alice");
+    mkdirSync(join(home, ".local/share/opencode"), { recursive: true });
+    const own = { type: "oauth", access: "own", refresh: "own-refresh", expires: 2 };
+    writeFileSync(join(home, ".local/share/opencode/auth.json"), JSON.stringify({ openai: own }));
+    expect(
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_A },
+        writes: [{ provider: "opencode", content: entry("at-copy") }],
+        removes: [],
+      }).status,
+    ).toBe(0);
+    expect(json(join(home, ".local/share/opencode/auth.json"))).toEqual({ openai: own });
+    // A release removes only Core's copies: the person's own login stays.
+    expect(
+      w.run({ home, fence: { kind: "release", generation: GEN_A }, writes: [], removes: [] })
+        .status,
+    ).toBe(0);
+    expect(json(join(home, ".local/share/opencode/auth.json"))).toEqual({ openai: own });
+  });
+
+  it("removes only the copy on a null or a release, keeping the file and its other entries", () => {
+    const w = world();
+    const home = w.home("alice");
+    expect(
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_A },
+        writes: [
+          { provider: "pi", content: entry("at-pi") },
+          { provider: "opencode", content: entry("at-oc") },
+        ],
+        removes: [],
+      }).status,
+    ).toBe(0);
+    const pi = join(home, ".pi/agent/auth.json");
+    const withOther = { ...json(pi), google: { type: "api", key: "own" } };
+    writeFileSync(pi, JSON.stringify(withOther));
+    expect(
+      w.run({
+        home,
+        fence: { kind: "held", generation: GEN_A },
+        writes: [],
+        removes: ["pi"],
+      }).status,
+    ).toBe(0);
+    expect(json(pi)).toEqual({ google: { type: "api", key: "own" } });
+    expect(
+      w.run({ home, fence: { kind: "release", generation: GEN_A }, writes: [], removes: [] })
+        .status,
+    ).toBe(0);
+    expect(json(join(home, ".local/share/opencode/auth.json"))).toEqual({});
+  });
+
+  it("writes through Mend's links to where the file really is, inside the home", () => {
+    const w = world();
+    const home = w.home("alice");
+    // Mend's person layout: the data directory lives in the saved directory, and its auth.json
+    // is a link back into the home, whose target does not exist yet.
+    const saved = join(w.root, "saved/.local/share/opencode");
+    mkdirSync(saved, { recursive: true });
+    mkdirSync(join(home, ".local/share"), { recursive: true });
+    symlinkSync(saved, join(home, ".local/share/opencode"));
+    mkdirSync(join(home, ".mend/opencode"), { recursive: true, mode: 0o700 });
+    symlinkSync(join(home, ".mend/opencode/auth.json"), join(saved, "auth.json"));
+    const result = w.run({
+      home,
+      fence: { kind: "take", generation: GEN_A },
+      writes: [{ provider: "opencode", content: entry("at-oc") }],
+      removes: [],
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(json(join(home, ".mend/opencode/auth.json"))).toEqual({
+      openai: JSON.parse(entry("at-oc")),
+    });
+    // The link in the saved directory is still a link: no login in saved state.
+    expect(lstatSync(join(saved, "auth.json")).isSymbolicLink()).toBe(true);
+  });
+
+  it("refuses a login whose file really is outside the home, writing nothing", () => {
+    const w = world();
+    const home = w.home("alice");
+    const saved = join(w.root, "saved/.local/share/opencode");
+    mkdirSync(saved, { recursive: true });
+    mkdirSync(join(home, ".local/share"), { recursive: true });
+    symlinkSync(saved, join(home, ".local/share/opencode"));
+    const result = w.run({
+      home,
+      fence: { kind: "take", generation: GEN_A },
+      writes: [{ provider: "opencode", content: entry("at-oc") }],
+      removes: [],
+    });
+    expect(result.status).toBe(HOME_SCRIPT_EXIT.linkOnTheWay);
+    expect(existsSync(join(saved, "auth.json"))).toBe(false);
+  });
+
+  it("leaves a file that is not a JSON object as it is", () => {
+    const w = world();
+    const home = w.home("alice");
+    mkdirSync(join(home, ".pi/agent"), { recursive: true });
+    writeFileSync(join(home, ".pi/agent/auth.json"), "not json");
+    expect(
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_A },
+        writes: [{ provider: "pi", content: entry("at-pi") }],
+        removes: [],
+      }).status,
+    ).toBe(0);
+    expect(read(join(home, ".pi/agent/auth.json"))).toBe("not json");
+  });
+
+  it("carries no single quote in the merge program, which the script quotes", () => {
+    const script = buildHomeCredentialScript({
+      home: "/home/m4lice000",
+      fence: { kind: "take", generation: GEN_A },
+      token: "1",
+      writes: ["pi"],
+      removes: [],
+    });
+    expect(script).toContain("openai-codex");
+    expect(script).toContain(`exit ${String(HOME_SCRIPT_EXIT.noNode)}`);
   });
 });

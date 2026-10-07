@@ -682,9 +682,24 @@ export const inspectWorkspaceImageResponseSchema = Schema.Struct({
 });
 export type InspectWorkspaceImageResponse = typeof inspectWorkspaceImageResponseSchema.Type;
 
-/** The providers a home holds logins for (docs/connected-accounts-design.md §6c). */
-export const workspaceCredentialHomeProviders = ["claude", "codex", "github"] as const;
+/**
+ * The providers a home holds logins for (docs/connected-accounts-design.md §6c). `pi` and
+ * `opencode` are the person's ChatGPT login (a Codex connected account), written into each tool's
+ * own `auth.json`.
+ */
+export const workspaceCredentialHomeProviders = [
+  "claude",
+  "codex",
+  "github",
+  "pi",
+  "opencode",
+] as const;
 export type WorkspaceCredentialHomeProvider = (typeof workspaceCredentialHomeProviders)[number];
+
+/** The connected account's provider each home provider's login is made from. */
+export const workspaceCredentialHomeAccountProvider: Readonly<
+  Record<WorkspaceCredentialHomeProvider, "claude" | "codex" | "github">
+> = { claude: "claude", codex: "codex", github: "github", pi: "codex", opencode: "codex" };
 
 /**
  * Put one person's logins into one home of a RUNNING workspace (docs/connected-accounts-design.md
@@ -717,6 +732,18 @@ export const putWorkspaceCredentialsRequestSchema = Schema.Struct({
   claude: Schema.optional(Schema.NullOr(NonEmptyString)),
   codex: Schema.optional(Schema.NullOr(NonEmptyString)),
   github: Schema.optional(Schema.NullOr(NonEmptyString)),
+  /**
+   * pi's ChatGPT login, made from a Codex account of `onBehalfOfUserId` (an id or a Codex account
+   * name), as the `openai-codex` entry of `<home>/.pi/agent/auth.json`. The file is merged: its
+   * other entries stay, and an `openai-codex` login the person made in pi is never replaced.
+   */
+  pi: Schema.optional(Schema.NullOr(NonEmptyString)),
+  /**
+   * opencode's ChatGPT login, made the same way, as the `openai` entry of opencode's `auth.json`
+   * (`<home>/.local/share/opencode/auth.json`, followed through links to where it really is, which
+   * must be inside the home). A login the person made in opencode is never replaced or removed.
+   */
+  opencode: Schema.optional(Schema.NullOr(NonEmptyString)),
 });
 export type PutWorkspaceCredentialsRequest = typeof putWorkspaceCredentialsRequestSchema.Type;
 
@@ -738,6 +765,10 @@ export const workspaceCredentialHomeSchema = Schema.Struct({
     claude: Schema.optional(workspaceHomeAccountSchema),
     codex: Schema.optional(workspaceHomeAccountSchema),
     github: Schema.optional(workspaceHomeAccountSchema),
+    /** The Codex account pi's ChatGPT login is made from. */
+    pi: Schema.optional(workspaceHomeAccountSchema),
+    /** The Codex account opencode's ChatGPT login is made from. */
+    opencode: Schema.optional(workspaceHomeAccountSchema),
   }),
 });
 export type WorkspaceCredentialHome = typeof workspaceCredentialHomeSchema.Type;
@@ -784,7 +815,9 @@ export type ListWorkspaceCredentialsResponse = typeof listWorkspaceCredentialsRe
 /**
  * Stable `code`s of the `WorkspaceConflictError` the credential routes answer:
  * `workspace-not-running` (no ready executor), `connected-account-invalid` (a named account is
- * marked invalid or unusable: reconnect it; `provider` names its provider), `home-held` (the home holds another person's logins: release it
+ * marked invalid or unusable: reconnect it; `provider` names its provider),
+ * `connected-account-unsupported` (a Codex account named for pi or opencode is not a ChatGPT
+ * login), `home-held` (the home holds another person's logins: release it
  * first; `/root` while the launch's own logins are at `$HOME`, or for anyone but the workspace's
  * owner), `home-unusable` (the home does not exist, is not a directory, is reached through a
  * symbolic link, or a login directory in it links outside it), `home-busy` (another write into the
@@ -793,6 +826,7 @@ export type ListWorkspaceCredentialsResponse = typeof listWorkspaceCredentialsRe
 export const workspaceCredentialsConflictCodes = [
   "workspace-not-running",
   "connected-account-invalid",
+  "connected-account-unsupported",
   "home-held",
   "home-unusable",
   "home-busy",
@@ -1166,11 +1200,14 @@ export class WorkspaceForbiddenError extends Schema.TaggedErrorClass<WorkspaceFo
  * that refuses it (a create's or a credentials put's): `connected-account-missing`
  * (`WorkspaceNotFoundError`, 404: the person has no such account, or it is archived or someone
  * else's) and `connected-account-invalid` (`WorkspaceConflictError`, 409: the account is marked
- * invalid, or holds an unusable credential; reconnect it). Nothing was written either way.
+ * invalid, or holds an unusable credential; reconnect it) and `connected-account-unsupported`
+ * (`WorkspaceConflictError`, 409: the account cannot serve what was asked, as a Codex API key cannot
+ * be pi's or opencode's ChatGPT login). Nothing was written either way.
  */
 export const connectedAccountRefusalCodes = [
   "connected-account-missing",
   "connected-account-invalid",
+  "connected-account-unsupported",
 ] as const;
 export type ConnectedAccountRefusalCode = (typeof connectedAccountRefusalCodes)[number];
 

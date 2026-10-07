@@ -1107,7 +1107,8 @@ export interface WorkspaceCredentials {
    * `home-held` (another person's home; `/root` for anyone but the owner), `home-unusable`
    * (missing, not a directory, reached through a symbolic link, or a login directory linking out
    * of it), `home-busy` (another write into it is still running: retry), `workspace-not-running`,
-   * `connected-account-invalid`; with
+   * `connected-account-invalid`, `connected-account-unsupported` (a Codex account named for pi or
+   * opencode that is not a ChatGPT login); with
    * `WorkspaceNotFoundError` for an account `onBehalfOf` cannot name; with
    * `WorkspaceBadGatewayError` when the executor did not confirm the write. The body code is
    * `SealantApiError.reason`; a refused account is `reason` `connected-account-missing` (404) or
@@ -1219,6 +1220,19 @@ export interface WorkspaceCredentialsPutOptions {
   readonly claude?: WorkspaceCredentialsAccountChoice;
   readonly codex?: WorkspaceCredentialsAccountChoice;
   readonly github?: WorkspaceCredentialsAccountChoice;
+  /**
+   * pi's ChatGPT login, made from one of `onBehalfOf`'s Codex accounts (`true` is their default
+   * Codex account), written as the `openai-codex` entry of `<home>/.pi/agent/auth.json`. The file
+   * is merged: its other entries stay, and a login the person made in pi is never replaced.
+   */
+  readonly pi?: WorkspaceCredentialsAccountChoice;
+  /**
+   * opencode's ChatGPT login, made the same way, as the `openai` entry of opencode's `auth.json`
+   * (`<home>/.local/share/opencode/auth.json`, followed through links to where it really is,
+   * which must be inside the home). A login the person made in opencode is never replaced, and a
+   * release removes only Core's copy.
+   */
+  readonly opencode?: WorkspaceCredentialsAccountChoice;
 }
 
 /** One account whose copy a home holds. */
@@ -1237,6 +1251,10 @@ export interface WorkspaceCredentialHome {
     readonly claude?: WorkspaceCredentialHomeAccount;
     readonly codex?: WorkspaceCredentialHomeAccount;
     readonly github?: WorkspaceCredentialHomeAccount;
+    /** The Codex account pi's ChatGPT login is made from. */
+    readonly pi?: WorkspaceCredentialHomeAccount;
+    /** The Codex account opencode's ChatGPT login is made from. */
+    readonly opencode?: WorkspaceCredentialHomeAccount;
   };
 }
 

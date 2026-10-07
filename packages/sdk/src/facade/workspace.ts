@@ -238,6 +238,8 @@ const toCredentialHome = (home: WireWorkspaceCredentialHome): WorkspaceCredentia
     ...(home.accounts.claude === undefined ? {} : { claude: { ...home.accounts.claude } }),
     ...(home.accounts.codex === undefined ? {} : { codex: { ...home.accounts.codex } }),
     ...(home.accounts.github === undefined ? {} : { github: { ...home.accounts.github } }),
+    ...(home.accounts.pi === undefined ? {} : { pi: { ...home.accounts.pi } }),
+    ...(home.accounts.opencode === undefined ? {} : { opencode: { ...home.accounts.opencode } }),
   },
 });
 
@@ -726,6 +728,8 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
           claude: accountChoice(options.claude),
           codex: accountChoice(options.codex),
           github: accountChoice(options.github),
+          pi: accountChoice(options.pi),
+          opencode: accountChoice(options.opencode),
         };
         const answered = await ctx.runtime.run(
           putWorkspaceCredentialsOp(init.id, {
@@ -737,6 +741,8 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
             ...(choices.claude === undefined ? {} : { claude: choices.claude }),
             ...(choices.codex === undefined ? {} : { codex: choices.codex }),
             ...(choices.github === undefined ? {} : { github: choices.github }),
+            ...(choices.pi === undefined ? {} : { pi: choices.pi }),
+            ...(choices.opencode === undefined ? {} : { opencode: choices.opencode }),
           }),
         );
         return toCredentialHome(answered.home);

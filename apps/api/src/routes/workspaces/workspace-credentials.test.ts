@@ -96,6 +96,18 @@ const aliceGitHub = account({
   metadata: { login: "alice-gh" },
 });
 const aliceInvalid = account({ id: "cacc_alice_invalid", name: "broken", status: "invalid" });
+const chatgptAccess = `h.${Buffer.from(JSON.stringify({ exp: 1_900_000_000 })).toString("base64url")}.s`;
+const aliceChatGpt = account({
+  id: "cacc_alice_chatgpt",
+  provider: "codex",
+  kind: "auth-json",
+  name: "chatgpt",
+  encryptedPayload: `sealed:${JSON.stringify({
+    authJson: JSON.stringify({
+      tokens: { access_token: chatgptAccess, refresh_token: "rt-chatgpt", account_id: "acct_1" },
+    }),
+  })}`,
+});
 const aliceCorruptCodex = account({
   id: "cacc_alice_corrupt",
   provider: "codex",
@@ -122,6 +134,7 @@ const accounts: ConnectedAccount[] = [
   aliceGitHub,
   aliceInvalid,
   aliceCorruptCodex,
+  aliceChatGpt,
   aliceSetupToken,
   bobClaude,
 ];
@@ -212,6 +225,8 @@ const newWorld = (instance: WorkspaceRuntimeInstance = instanceRow()) => {
       readonly claude?: string | null;
       readonly codex?: string | null;
       readonly github?: string | null;
+      readonly pi?: string | null;
+      readonly opencode?: string | null;
       readonly uid?: number;
       readonly gid?: number;
     },
@@ -387,6 +402,48 @@ describe("putWorkspaceCredentials", () => {
     expect(world.ran).toEqual([]);
   });
 
+  it("writes pi's and opencode's ChatGPT logins from the person's Codex account", async () => {
+    const world = newWorld();
+    const answer = succeeded(
+      await world.put({ onBehalfOfUserId: ALICE, pi: "chatgpt", opencode: "chatgpt" }),
+    );
+    expect(answer.home.accounts).toEqual({
+      pi: { connectedAccountId: aliceChatGpt.id, name: "chatgpt" },
+      opencode: { connectedAccountId: aliceChatGpt.id, name: "chatgpt" },
+    });
+    expect(world.ran).toHaveLength(1);
+    const entry = {
+      type: "oauth",
+      access: chatgptAccess,
+      refresh: "sealant-copy-cannot-refresh",
+      expires: 1_900_000_000_000,
+      accountId: "acct_1",
+    };
+    expect(world.ran[0]?.payloads.map((payload) => JSON.parse(payload))).toEqual([entry, entry]);
+    // The stored refresh token never leaves the store.
+    expect(world.ran[0]?.payloads.join("")).not.toContain("rt-chatgpt");
+    expect(world.ran[0]?.script).toContain("openai-codex");
+    expect(world.homes.rows.get(`run_1 ${HOME}`)?.accounts).toEqual([
+      { provider: "pi", connectedAccountId: aliceChatGpt.id },
+      { provider: "opencode", connectedAccountId: aliceChatGpt.id },
+    ]);
+  });
+
+  it("refuses pi's login from a Codex account that is not a ChatGPT login, or that is missing", async () => {
+    const world = newWorld();
+    expect(failed(await world.put({ onBehalfOfUserId: ALICE, pi: "default" }))).toMatchObject({
+      _tag: "WorkspaceConflictError",
+      code: "connected-account-unsupported",
+      provider: "codex",
+    });
+    expect(world.ran).toEqual([]);
+    expect(failed(await world.put({ onBehalfOfUserId: BOB, opencode: "default" }))).toMatchObject({
+      _tag: "WorkspaceNotFoundError",
+      code: "connected-account-missing",
+      provider: "codex",
+    });
+  });
+
   it("refuses a path that is not a home", async () => {
     for (const home of ["relative", "/workspace/harness-home", "/home/../etc", "/home/x/"]) {
       const world = newWorld();
@@ -423,6 +480,24 @@ describe("putWorkspaceCredentials", () => {
       _tag: "WorkspaceConflictError",
       code: "home-unusable",
     });
+    expect(world.homes.rows.size).toBe(0);
+  });
+
+  it("releases a first take's marker when its owner's half refuses a link, so the home can be taken again", async () => {
+    const world = newWorld();
+    world.exits.push(73);
+    expect(failed(await world.put({ onBehalfOfUserId: ALICE, opencode: "chatgpt" }))).toMatchObject(
+      {
+        _tag: "WorkspaceConflictError",
+        code: "home-unusable",
+      },
+    );
+    // The take ran, then its release, fenced by the take's own generation.
+    expect(world.ran).toHaveLength(2);
+    const generation = world.ran[0]?.script.match(/printf '%s' '([^']+)' > "\$m.tmp"/)?.[1];
+    expect(generation).toBeDefined();
+    expect(world.ran[1]?.script).toContain(`'${generation ?? ""}'`);
+    expect(world.ran[1]?.script).toContain('rm -f "$m"');
     expect(world.homes.rows.size).toBe(0);
   });
 
