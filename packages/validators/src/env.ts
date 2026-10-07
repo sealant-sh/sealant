@@ -524,6 +524,10 @@ export const workerRuntimeEnvSchema = z.object({
   // launch as stalled (`image-build-stalled`, naming the step it stopped on). A build that keeps
   // writing is never bounded: a slow package mirror makes a slow build, not a failed one.
   WORKSPACE_IMAGE_BUILD_STALL_MS: z.coerce.number().int().positive().default(600000),
+  // How long an image build may run in total, however much it prints, before the worker stops it
+  // and fails the launch (`image-build-timeout`): a step that never ends (a dotfiles install.sh
+  // run at build time that loops while it prints) cannot hold a worker and its lease forever.
+  WORKSPACE_IMAGE_BUILD_MAX_MS: z.coerce.number().int().positive().default(2700000),
   // A directory BuildKit keeps its layer cache in between Docker image builds (`--cache-from` /
   // `--cache-to type=local`, one subdirectory per image name), so a new plan whose base and package
   // steps match an earlier build's reuses them after the builder's own cache was pruned. Needs a

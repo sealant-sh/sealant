@@ -48,7 +48,11 @@ import {
 import { Clock, Deferred, Effect, Exit, Layer, Option, Schedule } from "effect";
 import { z } from "zod";
 
-import type { ImageBuildProgress, PlannedWorkspaceImageBuild } from "../buildkit/index.js";
+import {
+  describeImageBuildStep,
+  type ImageBuildProgress,
+  type PlannedWorkspaceImageBuild,
+} from "../buildkit/index.js";
 import { imageAppliesOwnerMap } from "../buildkit/person-layout.js";
 import { parsePublishedReference, planImageCoordinates } from "../images/index.js";
 import { RegistryNameError, type RegistryClient } from "../registry/index.js";
@@ -81,6 +85,7 @@ import {
   WorkspaceBuildJobProcessingError,
   swallowingFailure as sharedSwallowingFailure,
   toWorkspaceBuildJobProcessingError,
+  workspaceBuildJobProcessingError,
 } from "./errors.js";
 import {
   resolveDotfilesRuntimeEnv,
@@ -144,14 +149,28 @@ export interface ProcessWorkspaceBuildJobOptions {
    */
   readonly recoveryCredentialRetry?: RecoveryCredentialRetry;
   /**
-   * How often a build's progress is written to its job row (and the claim's lease renewed with
-   * it) while the build reports any. Default `DEFAULT_BUILD_PROGRESS_INTERVAL_MS` (2 s).
+   * How often a build's progress is written to its job row while it changes; the claim's lease is
+   * renewed with it, and at least every third of the lease. Default
+   * `DEFAULT_BUILD_PROGRESS_INTERVAL_MS` (5 s).
    */
   readonly buildProgressIntervalMs?: number;
+  /**
+   * How long an image build may run in total, however much it prints
+   * (`WORKSPACE_IMAGE_BUILD_MAX_MS`). Past it the build is stopped and the job fails with
+   * `image-build-timeout`, so a build that never ends cannot hold a worker and its lease forever.
+   * Default `DEFAULT_IMAGE_BUILD_MAX_MS` (45 minutes).
+   */
+  readonly imageBuildMaxMs?: number;
 }
 
 /** How often a build in progress records what it is doing, when the worker names nothing else. */
-export const DEFAULT_BUILD_PROGRESS_INTERVAL_MS = 2_000;
+export const DEFAULT_BUILD_PROGRESS_INTERVAL_MS = 5_000;
+
+/** How long an image build may run, whatever it prints, when the worker names nothing else. */
+export const DEFAULT_IMAGE_BUILD_MAX_MS = 45 * 60_000;
+
+/** The code a build job fails with when its image build ran past `imageBuildMaxMs`. */
+export const IMAGE_BUILD_TIMEOUT_CODE = "image-build-timeout";
 
 /** How long a launch owns its row without renewal when the worker names nothing else. */
 export const DEFAULT_LAUNCH_LEASE_MS = 2 * 60_000;
@@ -883,51 +902,91 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
             ),
           );
 
-    // The build reports its progress (step N of M, when it last wrote output) to `latest`; a fiber
-    // beside it writes what changed to the job row every interval and renews the claim's lease,
-    // so the API can report the image-build phase and a build that keeps moving keeps its claim.
+    // The build reports its progress (step N of M, when it last wrote output) to `latest`. A
+    // heartbeat beside it writes what changed to the job row, and renews the claim's lease (with
+    // or without new progress) while the build runs, so a long push or a quiet step never loses
+    // the claim to another worker. The build itself is bounded: the builder stops a build that
+    // goes silent (its stall bound), and the worker stops one that runs past
+    // `imageBuildMaxMs` whatever it prints. A heartbeat that finds the claim gone (taken over, or
+    // the job cancelled by a stop) stops the build: nothing it makes could be recorded.
     let latest: ImageBuildProgress | undefined;
     const progressIntervalMs = Math.max(
       100,
       options.buildProgressIntervalMs ?? DEFAULT_BUILD_PROGRESS_INTERVAL_MS,
     );
-    const writeProgress = Effect.gen(function* () {
+    const imageBuildMaxMs = options.imageBuildMaxMs ?? DEFAULT_IMAGE_BUILD_MAX_MS;
+    const claimLost = yield* Deferred.make<void>();
+    const heartbeat = Effect.gen(function* () {
       let written: ImageBuildProgress | undefined;
+      let writtenAtMs = yield* Clock.currentTimeMillis;
       for (;;) {
         yield* Effect.sleep(progressIntervalMs);
+        const nowMs = yield* Clock.currentTimeMillis;
         const progress = latest;
-        if (progress === undefined || progress === written) continue;
+        const changed = progress !== undefined && progress !== written;
+        if (!changed && nowMs - writtenAtMs < options.leaseDurationMs / 3) continue;
         written = progress;
-        yield* jobs
+        writtenAtMs = nowMs;
+        const held = yield* jobs
           .recordJobProgress({
             id: job.id,
             claim,
-            progress,
+            ...(changed ? { progress } : {}),
             leaseDurationMs: options.leaseDurationMs,
           })
-          .pipe(swallowingFailure("record-build-progress update"));
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                "Workspace build job record-build-progress update failed; continuing.",
+                cause,
+              ).pipe(Effect.as(true)),
+            ),
+          );
+        if (!held) {
+          yield* Deferred.succeed(claimLost, undefined);
+          return;
+        }
       }
     });
-    const { publishedImage, build: compileResult } =
+    const build = Effect.tryPromise({
+      try: (signal) =>
+        imageBuilder.buildAndPublish({
+          spec,
+          repository: coordinates.repository,
+          tag: coordinates.tag,
+          buildId: job.id,
+          onProgress: (progress) => {
+            latest = progress;
+          },
+          signal,
+        }),
+      catch: toWorkspaceBuildJobProcessingError,
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: imageBuildMaxMs,
+        orElse: () =>
+          Effect.fail(
+            workspaceBuildJobProcessingError({
+              message: `The workspace image build ran past its bound of ${String(Math.round(imageBuildMaxMs / 60_000))} min (WORKSPACE_IMAGE_BUILD_MAX_MS) ${describeImageBuildStep(latest)} and was stopped. A step that never ends, such as a dotfiles install.sh that loops while it prints, does this.`,
+              errorCode: IMAGE_BUILD_TIMEOUT_CODE,
+            }),
+          ),
+      }),
+    );
+    const builtOrLost =
       found ??
       (yield* Effect.scoped(
         Effect.gen(function* () {
-          yield* Effect.forkScoped(writeProgress);
-          return yield* Effect.tryPromise({
-            try: () =>
-              imageBuilder.buildAndPublish({
-                spec,
-                repository: coordinates.repository,
-                tag: coordinates.tag,
-                buildId: job.id,
-                onProgress: (progress) => {
-                  latest = progress;
-                },
-              }),
-            catch: toWorkspaceBuildJobProcessingError,
-          });
+          yield* Effect.forkScoped(heartbeat);
+          return yield* Effect.raceFirst(build, Deferred.await(claimLost).pipe(Effect.as(null)));
         }),
       ));
+    if (builtOrLost === null) {
+      // The claim is gone (another worker holds the job, or a stop cancelled it): the build was
+      // stopped, and nothing is recorded over whoever holds the job now.
+      return null;
+    }
+    const { publishedImage, build: compileResult } = builtOrLost;
     if (found !== null) {
       yield* Effect.logInfo(
         `Workspace image plan ${planned?.planHash ?? "?"} was already in the store; reusing ${found.publishedImage.digestReference} without a build.`,

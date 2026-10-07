@@ -106,10 +106,17 @@ package mirror:
 - **`imageBuildTimeoutMs`** (default none) bounds the image build as a whole. Past it, `ready()`
   rejects with `workspace_image_build_timeout`.
 - A build is otherwise waited for as long as it keeps reporting progress. The worker fails a build
-  that writes nothing for `WORKSPACE_IMAGE_BUILD_STALL_MS` (10 minutes) and `ready()` rejects with
-  `workspace_image_build_stalled` and the step it stopped on. If the build stops reporting and
-  nothing fails it (a worker that died and was never replaced), `ready()` gives up on its own after
-  that bound plus five minutes, 20 minutes at least.
+  that writes nothing for `WORKSPACE_IMAGE_BUILD_STALL_MS` (10 minutes), or that runs past
+  `WORKSPACE_IMAGE_BUILD_MAX_MS` (45 minutes) however much it prints, such as a dotfiles
+  `install.sh` run at build time that loops. `ready()` then rejects with
+  `workspace_image_build_stalled` or `workspace_image_build_timeout`, with the step the build
+  stopped on.
+- If the build stops reporting and nothing fails it (a worker that died and was never replaced),
+  `ready()` gives up on its own (`workspace_image_build_stalled`) once it has seen no new progress
+  for that stall bound plus five minutes, 20 minutes at least.
+- A build that never reports progress (the Kubernetes and MicroVM builders report none, and a worker
+  can die before its first report) is given up on 20 minutes after `ready()` first saw it building.
+  Set `imageBuildTimeoutMs` to wait longer for such a builder: it then bounds the build instead.
 
 Pass them to `create()` for the handle, or to `ready()` for one wait (these win):
 
@@ -126,13 +133,18 @@ const workspace = await sealant.workspaces.create({
 `events()` (and `onEvent`) yields `status.<status>` on each status change and `phase.<name>` each
 time the launch moves to another phase or its build to another step; a `phase.*` event carries the
 phase. When `ready()` gives up on a bound for a workspace this handle created, it requests a stop
-first and says whether the request was accepted. A launch that fails on the control plane rejects
-with `workspace_not_ready` and the control plane's reason. A control plane that predates launch
-phases reports none; `readyTimeoutMs` then bounds the whole wait, image build included.
+first and says whether the request was accepted. A stop while the image is still being built cancels
+the launch: the build job fails (`launch-stopped`), the worker building it stops, nothing boots, and
+the workspace reads `cancelled`. A launch that fails on the control plane rejects with
+`workspace_not_ready` and the control plane's reason. A control plane that predates launch phases
+reports none; `readyTimeoutMs` then bounds the whole wait, image build included.
 
 An image is built once per plan (the rendered Containerfile): a later launch of the same plan reuses
 the published image, and on Docker a worker whose database has no record of the plan reuses the
-`sealant-workspace-<os-family>:plan-<hash>` image the Engine kept instead of building it again.
+`sealant-workspace-<os-family>:plan-<hash>` image the Engine kept instead of building it again, once
+the image carries the plan's full hash (the `sh.sealant.plan-hash` label its build stamps) and its
+probe reads back. Images built before the label existed are built once more. Like any reuse of a
+plan, the image is as old as its build: its base image and packages are not refreshed.
 
 ## What is implemented
 

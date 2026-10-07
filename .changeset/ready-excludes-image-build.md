@@ -17,10 +17,15 @@ though the workspace would have come up.
   (default none) bounds the build as a whole (`workspace_image_build_timeout`). Pass them to
   `create()` for the handle or to `ready(options)` for one wait. A build is otherwise waited for as
   long as it reports progress: the worker fails one that writes nothing for
-  `WORKSPACE_IMAGE_BUILD_STALL_MS` (10 minutes), and `ready()` rejects with
-  `workspace_image_build_stalled` and the step it stopped on. A launch the control plane failed
-  rejects with `workspace_not_ready` and the control plane's reason. A control plane that reports no
-  phase is bounded by `readyTimeoutMs` as before.
+  `WORKSPACE_IMAGE_BUILD_STALL_MS` (10 minutes, `workspace_image_build_stalled`) or runs past
+  `WORKSPACE_IMAGE_BUILD_MAX_MS` (45 minutes, `workspace_image_build_timeout`), naming the step.
+  `ready()` gives up on its own on a build that shows no new progress for 20 minutes, and on one
+  that never reports any 20 minutes after it started (unless `imageBuildTimeoutMs` is set). A launch
+  the control plane failed rejects with `workspace_not_ready` and the control plane's reason. A
+  control plane that reports no phase is bounded by `readyTimeoutMs` as before.
+- `stop()` while the image is still being built cancels the launch: the build stops, nothing boots,
+  and the workspace reads `cancelled`. It used to be refused until the runtime was up.
 - A Docker worker whose database has no record of a plan reuses the `plan-<hash>` image the Engine
-  kept, once it has read the image's probe back, instead of building it again.
-  `WORKSPACE_IMAGE_BUILD_CACHE_DIR` keeps BuildKit's layer cache in a directory between builds.
+  kept, once the image carries the plan's full hash (the `sh.sealant.plan-hash` label builds now
+  stamp) and its probe reads back, instead of building it again. `WORKSPACE_IMAGE_BUILD_CACHE_DIR`
+  keeps BuildKit's layer cache in a directory between builds.

@@ -18,8 +18,10 @@ import {
   compileWorkspaceBuildSpec,
   localImageNameOf,
   planWorkspaceImageBuild,
+  PLAN_HASH_LABEL,
   readWorkspaceImageProbe,
   removeBuildContext,
+  runBuildkitCommand,
   type BuildkitCommandRunner,
   type BuildkitCompilerOptions,
   type ImageBuildProgress,
@@ -39,6 +41,11 @@ export interface BuildAndPublishInput {
    * builder that cannot observe its build never calls it.
    */
   readonly onProgress?: (progress: ImageBuildProgress) => void;
+  /**
+   * Aborts when the build must stop: its worker lost the job's claim, or the build ran past the
+   * worker's bound. A builder that can stop its build does; the job is failed either way.
+   */
+  readonly signal?: AbortSignal;
 }
 
 export interface FindPublishedInput {
@@ -125,12 +132,13 @@ export const createDockerWorkspaceImageBuilder = (
   const engineTransport = options.registryClient.imageTransport === "engine";
   const compile = (
     spec: NewWorkspace,
-    onProgress?: (progress: ImageBuildProgress) => void,
+    input: Pick<BuildAndPublishInput, "onProgress" | "signal">,
   ): Promise<WorkspaceBuild> => {
     if (options.compileWorkspaceSpec !== undefined) return options.compileWorkspaceSpec(spec);
     const compilerOptions: BuildkitCompilerOptions = {
       ...(engineTransport ? { emitTarball: false } : {}),
-      ...(onProgress === undefined ? {} : { onProgress }),
+      ...(input.onProgress === undefined ? {} : { onProgress: input.onProgress }),
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
       ...(options.stallTimeoutMs === undefined ? {} : { stallTimeoutMs: options.stallTimeoutMs }),
       ...(options.cacheDirectory === undefined ? {} : { cacheDirectory: options.cacheDirectory }),
       ...(options.commandRunner === undefined ? {} : { commandRunner: options.commandRunner }),
@@ -175,7 +183,7 @@ export const createDockerWorkspaceImageBuilder = (
     isolation: "host",
     plan,
     buildAndPublish: async (input) => {
-      const build = await compile(input.spec, input.onProgress);
+      const build = await compile(input.spec, input);
       // The scratch directory (Containerfile, plan/spec JSON, and with the tarball transport the
       // `docker save` output) is only needed until the publish has read it. Published or not, it
       // goes: the job row keeps the metadata that matters, and a leaked tarball per build is how
@@ -197,8 +205,18 @@ export const createDockerWorkspaceImageBuilder = (
             const digest = await options.registryClient.headManifest(input.repository, input.tag);
             if (digest === null) return null;
             const reference = `${input.repository}:${input.tag}`;
+            // The tag names twelve characters of the plan hash and anyone with the Engine can put
+            // it on any image: the image must carry the whole hash its build stamped on it.
+            const { stdout } = await (options.commandRunner ?? runBuildkitCommand)("docker", [
+              "image",
+              "inspect",
+              "--format",
+              `{{index .Config.Labels "${PLAN_HASH_LABEL}"}}`,
+              digest,
+            ]);
+            if (stdout.trim() !== input.planned.planHash) return null;
             const { probe } = await readWorkspaceImageProbe(
-              reference,
+              digest,
               input.planned.imagePlan,
               options.commandRunner,
             );

@@ -245,6 +245,7 @@ const makeLayer = (store: Store) => {
     markJobRunning: () => Effect.die("unused"),
     markJobSucceeded: () => Effect.die("unused"),
     recordJobProgress: () => Effect.die("unused"),
+    cancelUnbuiltJob: () => Effect.die("unused"),
     markJobFailed: () => Effect.die("unused"),
     clearSecretEnv: () => Effect.die("unused"),
     listPublishedImages: () => Effect.die("unused"),

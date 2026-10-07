@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createImageBuildProgressTracker, type ImageBuildProgress } from "./build-progress.js";
 import {
+  COMMAND_ABORTED_CODE,
   COMMAND_IDLE_TIMEOUT_CODE,
   IMAGE_BUILD_STALLED_CODE,
   compileWorkspaceBuildSpec,
@@ -135,6 +136,25 @@ describe("runBuildkitCommand's idle bound", () => {
       message: expect.stringContaining("wrote nothing"),
     });
     expect(Date.now() - startedAt).toBeLessThan(10_000);
+  });
+});
+
+describe("runBuildkitCommand's stop path", () => {
+  it("settles a silent command that already exited, though a grandchild holds its output", async () => {
+    const startedAt = Date.now();
+    await expect(
+      runBuildkitCommand("sh", ["-c", "sleep 20 & exit 0"], { idleTimeoutMs: 300 }),
+    ).rejects.toMatchObject({ code: COMMAND_IDLE_TIMEOUT_CODE });
+    expect(Date.now() - startedAt).toBeLessThan(3_000);
+  });
+
+  it("stops a command when its signal aborts", async () => {
+    const controller = new AbortController();
+    const running = runBuildkitCommand("sh", ["-c", "echo started; sleep 30; echo never"], {
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 200);
+    await expect(running).rejects.toMatchObject({ code: COMMAND_ABORTED_CODE });
   });
 });
 

@@ -290,6 +290,15 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   // (docs/workspace-image-builders-design.md, D1). The container runtimes share one: the BuildKit
   // Job where a build namespace is configured, the host's Docker otherwise. It is made only where
   // one of them is registered, so a MicroVM-only worker needs no Docker and no registry to build.
+  // A silent stretch shorter than the stall bound is a build that is still alive: the bound must
+  // fall inside the build's overall bound, or the build is stopped as too long before it could
+  // ever be found stalled. (The claim's lease is renewed by the worker while it builds, so the
+  // lease does not bound a quiet step.)
+  if (env.WORKSPACE_IMAGE_BUILD_STALL_MS >= env.WORKSPACE_IMAGE_BUILD_MAX_MS) {
+    throw new Error(
+      `WORKSPACE_IMAGE_BUILD_STALL_MS (${String(env.WORKSPACE_IMAGE_BUILD_STALL_MS)}) must be shorter than WORKSPACE_IMAGE_BUILD_MAX_MS (${String(env.WORKSPACE_IMAGE_BUILD_MAX_MS)}).`,
+    );
+  }
   const containerImageBuilder =
     containerAdapters.length === 0
       ? undefined
@@ -351,6 +360,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           jobId: message.jobId,
           workerId: env.WORKER_ID,
           leaseDurationMs: env.WORKSPACE_BUILD_JOB_LEASE_DURATION_MS,
+          imageBuildMaxMs: env.WORKSPACE_IMAGE_BUILD_MAX_MS,
           launchLeaseMs: env.WORKSPACE_LAUNCH_LEASE_MS,
           preservationLeadMs: env.WORKSPACE_CAPTURE_DEADLINE_LEAD_MS,
           db,
@@ -452,6 +462,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       db,
       workerId: env.WORKER_ID,
       leaseDurationMs: env.WORKSPACE_BUILD_JOB_LEASE_DURATION_MS,
+      imageBuildMaxMs: env.WORKSPACE_IMAGE_BUILD_MAX_MS,
       launchLeaseMs: env.WORKSPACE_LAUNCH_LEASE_MS,
       preservationLeadMs: env.WORKSPACE_CAPTURE_DEADLINE_LEAD_MS,
       // The reaper re-drives the same pipeline as the consumer, so it takes the same registered

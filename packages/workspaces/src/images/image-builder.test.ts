@@ -260,23 +260,44 @@ describe("createDockerWorkspaceImageBuilder.findPublished", () => {
   const planned = planWorkspaceImageBuild({ blueprint: cases.gitSource.blueprint });
   const coordinates = planImageCoordinates(planned);
 
-  it("reuses the plan's image the Engine kept, with the probe read back from it, building nothing", async () => {
-    const { registryClient } = engineStore("sha256:kept");
-    const commandRunner = vi.fn(async (_command: string, _args: string[]) => ({
-      stdout: JSON.stringify(probe),
+  /** `docker`: the image's plan-hash label for an inspect, the probe for a run. */
+  const engine = (label: string) =>
+    vi.fn(async (_command: string, args: string[]) => ({
+      stdout: args[0] === "image" ? `${label}\n` : JSON.stringify(probe),
       stderr: "",
     }));
+
+  it("reuses the plan's image the Engine kept, with the probe read back from it, building nothing", async () => {
+    const { registryClient } = engineStore("sha256:kept");
+    const commandRunner = engine(planned.planHash);
     const builder = createDockerWorkspaceImageBuilder({ registryClient, commandRunner });
 
     const found = await builder.findPublished?.({ planned, ...coordinates });
 
     expect(found?.publishedImage).toMatchObject({ digest: "sha256:kept" });
     expect(found?.build.metadata).toMatchObject({ planHash: planned.planHash, imageProbe: probe });
-    // One short `docker run` reads the probe; there is no `docker build`.
+    // An inspect checks the label and one short `docker run` reads the probe; no `docker build`.
+    expect(commandRunner.mock.calls.map(([, args]) => args[0])).toEqual(["image", "run"]);
+    expect(commandRunner.mock.calls[1]?.[1]).toEqual(expect.arrayContaining(["sha256:kept"]));
+  });
+
+  it("does not reuse an image under the plan's tag that carries another plan's hash", async () => {
+    const { registryClient, publishOciImage } = engineStore("sha256:retagged");
+    const commandRunner = engine("e".repeat(64));
+    const builder = createDockerWorkspaceImageBuilder({ registryClient, commandRunner });
+    await expect(builder.findPublished?.({ planned, ...coordinates })).resolves.toBeNull();
+    // Nothing is probed or published: the image is not the plan's.
     expect(commandRunner).toHaveBeenCalledTimes(1);
-    expect(commandRunner.mock.calls[0]?.[1]).toEqual(
-      expect.arrayContaining(["run", `${coordinates.repository}:${coordinates.tag}`]),
-    );
+    expect(publishOciImage).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse a kept image built before images carried their plan hash", async () => {
+    const { registryClient } = engineStore("sha256:old");
+    const builder = createDockerWorkspaceImageBuilder({
+      registryClient,
+      commandRunner: engine("<no value>"),
+    });
+    await expect(builder.findPublished?.({ planned, ...coordinates })).resolves.toBeNull();
   });
 
   it("finds nothing when the Engine has no image for the plan", async () => {
@@ -289,7 +310,10 @@ describe("createDockerWorkspaceImageBuilder.findPublished", () => {
 
   it("does not vouch for an image whose probe cannot be read: it is built again", async () => {
     const { registryClient, publishOciImage } = engineStore("sha256:kept");
-    const commandRunner = vi.fn(async () => ({ stdout: "not json", stderr: "" }));
+    const commandRunner = vi.fn(async (_command: string, args: string[]) => ({
+      stdout: args[0] === "image" ? planned.planHash : "not json",
+      stderr: "",
+    }));
     const builder = createDockerWorkspaceImageBuilder({ registryClient, commandRunner });
     await expect(builder.findPublished?.({ planned, ...coordinates })).resolves.toBeNull();
     expect(publishOciImage).not.toHaveBeenCalled();

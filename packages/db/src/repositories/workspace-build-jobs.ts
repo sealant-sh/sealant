@@ -90,7 +90,8 @@ export interface RecordWorkspaceBuildJobProgressInput {
   readonly id: string;
   /** Fenced like success: written only while the job is `running` under exactly this claim. */
   readonly claim: WorkspaceBuildJobClaim;
-  readonly progress: WorkspaceBuildJobProgress;
+  /** The build's progress; absent renews the lease alone (the build is alive, and quiet). */
+  readonly progress?: WorkspaceBuildJobProgress;
   /**
    * The claim's lease is renewed by this much from now: a build that keeps moving keeps its
    * claim, however long it takes, and only a build that stops moving lets it lapse.
@@ -141,6 +142,7 @@ const workspaceBuildJobRepoOperationSchema = Schema.Literals([
   "markJobRunning",
   "markJobSucceeded",
   "recordJobProgress",
+  "cancelUnbuiltJob",
 ]);
 
 export class WorkspaceBuildJobRepoInvariantError extends Schema.TaggedErrorClass<WorkspaceBuildJobRepoInvariantError>()(
@@ -245,6 +247,17 @@ export interface WorkspaceBuildJobRepoService {
   readonly recordJobProgress: (
     input: RecordWorkspaceBuildJobProgressInput,
   ) => Effect.Effect<boolean, WorkspaceBuildJobRepoError>;
+  /**
+   * Fail a job whose image is not built yet (`queued` or `running`), because its workspace was
+   * stopped. The worker building it finds out at its next progress write (it no longer holds a
+   * running job) and stops; a fenced success can no longer land, so nothing launches. Answers the
+   * job when it was cancelled, null when it had already settled.
+   */
+  readonly cancelUnbuiltJob: (input: {
+    readonly id: string;
+    readonly errorMessage: string;
+    readonly errorCode: string;
+  }) => Effect.Effect<WorkspaceBuildJob | null, WorkspaceBuildJobRepoError>;
   /** Drop the sealed secret env once the launch phase has settled; idempotent. */
   readonly clearSecretEnv: (id: string) => Effect.Effect<void, WorkspaceBuildJobRepoError>;
   /**
@@ -642,7 +655,7 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
             const updated = yield* db
               .update(workspaceBuildJobs)
               .set({
-                progress: input.progress,
+                ...(input.progress === undefined ? {} : { progress: input.progress }),
                 leaseExpiresAt: new Date(now.getTime() + input.leaseDurationMs),
               })
               .where(
@@ -655,6 +668,30 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
               )
               .returning({ id: workspaceBuildJobs.id });
             return updated.length > 0;
+          }),
+        ),
+
+      cancelUnbuiltJob: (input) =>
+        withWorkspaceBuildJobRepoError(
+          "cancelUnbuiltJob",
+          Effect.gen(function* () {
+            const [job] = yield* db
+              .update(workspaceBuildJobs)
+              .set({
+                status: "failed",
+                errorCode: input.errorCode,
+                errorMessage: input.errorMessage,
+                finishedAt: new Date(),
+                leaseExpiresAt: null,
+              })
+              .where(
+                and(
+                  eq(workspaceBuildJobs.id, input.id),
+                  inArray(workspaceBuildJobs.status, ["queued", "running"]),
+                ),
+              )
+              .returning();
+            return job ?? null;
           }),
         ),
 

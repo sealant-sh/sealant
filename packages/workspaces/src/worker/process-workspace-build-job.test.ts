@@ -3040,6 +3040,99 @@ describe("processWorkspaceBuildJobEffect: the image-build phase", () => {
     },
   );
 
+  /** A build that never ends on its own: it reports a step, then waits until it is stopped. */
+  const endlessBuild = () => {
+    const stopped: { signal?: AbortSignal } = {};
+    const imageBuilder: WorkspaceImageBuilder = {
+      isolation: "host",
+      plan: () => planned,
+      buildAndPublish: (input) => {
+        input.onProgress?.({
+          step: 4,
+          steps: 12,
+          stepName: "RUN ./install.sh",
+          progressAt: new Date().toISOString(),
+        });
+        if (input.signal !== undefined) stopped.signal = input.signal;
+        return new Promise((_resolve, reject) => {
+          input.signal?.addEventListener("abort", () => reject(new Error("stopped")));
+        });
+      },
+    };
+    return { imageBuilder, stopped };
+  };
+
+  it.live("stops a build that runs past the worker's bound, however much it prints", () => {
+    const jobs = {
+      ...workspaceBuildJobRepoStub({ claimJobById: job }),
+      recordJobProgress: vi.fn((_input: unknown) => Effect.succeed(true)),
+    };
+    const { imageBuilder, stopped } = endlessBuild();
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        processWorkspaceBuildJobEffect(
+          baseOptions({
+            jobId: "job_phase",
+            imageBuilder,
+            buildProgressIntervalMs: 100,
+            imageBuildMaxMs: 400,
+          }),
+        ),
+      );
+      expect(Exit.isFailure(exit)).toBe(true);
+      expect(stopped.signal?.aborted).toBe(true);
+      expect(jobs.markJobFailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "job_phase",
+          errorCode: "image-build-timeout",
+          errorMessage: expect.stringContaining("at step 4/12 (RUN ./install.sh)"),
+        }),
+      );
+      expect(jobs.markJobSucceeded).not.toHaveBeenCalled();
+    }).pipe(
+      Effect.provide(
+        provideRepos({
+          jobs,
+          runtimeInstances: workspaceRuntimeInstanceRepoStub(),
+          attempts: workspaceAttemptRepoStub(),
+        }),
+      ),
+    );
+  });
+
+  it.live("stops building once its claim is gone, and records nothing over it", () => {
+    const jobs = {
+      ...workspaceBuildJobRepoStub({ claimJobById: job }),
+      // Another worker took the job over (or a stop cancelled it): the fenced write lands nowhere.
+      recordJobProgress: vi.fn((_input: unknown) => Effect.succeed(false)),
+    };
+    const { imageBuilder, stopped } = endlessBuild();
+    const runtimeAdapter = createRuntimeAdapterStub("docker");
+    return Effect.gen(function* () {
+      const result = yield* processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_phase",
+          imageBuilder,
+          buildProgressIntervalMs: 100,
+          runtimeAdapters: [runtimeAdapter],
+        }),
+      );
+      expect(result).toBeNull();
+      expect(stopped.signal?.aborted).toBe(true);
+      expect(jobs.markJobFailed).not.toHaveBeenCalled();
+      expect(jobs.markJobSucceeded).not.toHaveBeenCalled();
+      expect(runtimeAdapter.launch).not.toHaveBeenCalled();
+    }).pipe(
+      Effect.provide(
+        provideRepos({
+          jobs,
+          runtimeInstances: workspaceRuntimeInstanceRepoStub(),
+          attempts: workspaceAttemptRepoStub(),
+        }),
+      ),
+    );
+  });
+
   it.live("records a build's progress on its job while it runs, under its claim", () => {
     const jobs = {
       ...workspaceBuildJobRepoStub({ claimJobById: job }),

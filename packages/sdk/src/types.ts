@@ -162,9 +162,12 @@ export interface WorkspaceReadyOptions {
   /**
    * The image-build bound: how long an image build may take in total before `ready()` gives up
    * with `workspace_image_build_timeout`. Default: none. A build that keeps reporting progress is
-   * waited for; one that stops is failed by the control plane (its stall bound,
-   * `workspace_image_build_stalled`), and `ready()` gives up on its own if it sees no progress for
-   * that bound plus five minutes (20 minutes at least).
+   * waited for, up to the control plane's own overall bound (`WORKSPACE_IMAGE_BUILD_MAX_MS`, 45
+   * minutes by default); one that stops is failed by the control plane (its stall bound,
+   * `workspace_image_build_stalled`), and `ready()` gives up on its own if it sees no new progress
+   * for that bound plus five minutes (20 minutes at least). A build that never reports progress (a
+   * builder that reports none) is given up on 20 minutes after it started, unless this is set:
+   * then this bounds it instead.
    */
   readonly imageBuildTimeoutMs?: number;
 }
@@ -1086,7 +1089,7 @@ export interface Workspace {
    * Resolves once the workspace runtime is live and ready to accept a run. The wait is bounded by
    * phase (see {@link WorkspaceReadyOptions}): an image build does not spend the readiness bound.
    * Rejects with `workspace_ready_timeout` past the readiness bound, `workspace_image_build_timeout`
-   * past the image-build bound, `workspace_image_build_stalled` when the build stopped making
+   * past the image-build bound (the caller's, or the control plane's own), `workspace_image_build_stalled` when the build stopped making
    * progress (with the step it stopped on), and `workspace_not_ready` when the launch ended
    * otherwise (with the control plane's reason). When the handle came from
    * `workspaces.create()` and `ready()` gives up on a bound, a stop is requested before the error
@@ -1122,7 +1125,8 @@ export interface Workspace {
   events(): AsyncIterable<WorkspaceEvent>;
   /**
    * Stop the workspace: remove its runtime and settle it in the terminal "stopped" status.
-   * Resolves `{ state: "stopped" }` once the runtime is observed gone. A capture-sourced
+   * Resolves `{ state: "stopped" }` once the runtime is observed gone, or at once when the stop
+   * cancelled a launch still building its image (no runtime ever ran; the status reads `cancelled`). A capture-sourced
    * workspace is drained first (its unsaved captures shipped and confirmed saved), which can take
    * minutes; if the runtime is still up after a minute, resolves with what was observed instead:
    * `draining`, `kept` (the workspace keeps running because its work is not confirmed saved), or

@@ -94,6 +94,28 @@ describe("the image-build phase on a real Docker Engine", () => {
     expect(found?.build.metadata?.planHash).toBe(planned.planHash);
     // An inspect and one short `docker run` for the probe: seconds, not a build.
     expect(tookMs).toBeLessThan(15_000);
+
+    // Another image put under the plan's tag (it does not carry the plan's hash) is not reused.
+    const context = await mkdtemp(join(tmpdir(), "sealant-retag-e2e-"));
+    cleanup.push(() => rm(context, { recursive: true, force: true }));
+    await writeFile(join(context, "Containerfile"), `FROM scratch\nLABEL e2e=${randomUUID()}\n`);
+    const impostor = `sealant-retag-e2e:${randomUUID().slice(0, 8)}`;
+    cleanup.push(() => runBuildkitCommand("docker", ["image", "rm", "-f", impostor]));
+    await runBuildkitCommand("docker", [
+      "build",
+      "--file",
+      join(context, "Containerfile"),
+      "--tag",
+      impostor,
+      context,
+    ]);
+    const planReference = `${coordinates.repository}:${coordinates.tag}`;
+    await runBuildkitCommand("docker", ["tag", impostor, planReference]);
+    try {
+      await expect(builder.findPublished?.({ planned, ...coordinates })).resolves.toBeNull();
+    } finally {
+      await runBuildkitCommand("docker", ["tag", published.digest, planReference]);
+    }
   }, 900_000);
 
   it("stops a docker build that writes nothing for the idle bound", async () => {

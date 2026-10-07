@@ -76,10 +76,14 @@ export interface BuildkitCommandOptions {
    * long. Absent: no bound.
    */
   readonly idleTimeoutMs?: number;
+  /** Stop the command and fail it (code `command-aborted`) when this signal aborts. */
+  readonly signal?: AbortSignal;
 }
 
 /** The code a command runner fails with when the command wrote nothing for `idleTimeoutMs`. */
 export const COMMAND_IDLE_TIMEOUT_CODE = "command-idle-timeout";
+/** The code a command runner fails with when its `signal` aborted it. */
+export const COMMAND_ABORTED_CODE = "command-aborted";
 /** The code an image build fails with when it wrote nothing for its stall bound. */
 export const IMAGE_BUILD_STALLED_CODE = "image-build-stalled";
 
@@ -122,7 +126,16 @@ export interface BuildkitCompilerOptions {
    * `docker-container` buildx builder. Absent: only the builder's own cache.
    */
   readonly cacheDirectory?: string;
+  /** Stops the build (and fails the compile) when it aborts: the build lost its claim, or ran out of time. */
+  readonly signal?: AbortSignal;
 }
+
+/**
+ * The image label carrying the full plan hash an image was built from. A kept image is reused for
+ * a plan only when it carries that plan's hash here: its `plan-<12 hex>` tag alone could have been
+ * put on any image.
+ */
+export const PLAN_HASH_LABEL = "sh.sealant.plan-hash";
 
 /**
  * Per-distro behavior contract used by planning and rendering.
@@ -169,39 +182,66 @@ export const runBuildkitCommand: BuildkitCommandRunner = (command, args, options
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
 
-    // The idle bound: re-armed by every write, it stops a command that went silent (SIGTERM, then
-    // SIGKILL if it ignores that) and fails it as idle rather than as a signal exit.
-    const idleTimeoutMs = options?.idleTimeoutMs;
-    const idleError = () => {
-      const error = new Error(
-        `${command} wrote nothing for ${String(Math.round((idleTimeoutMs ?? 0) / 1000))} s and was stopped: ${command} ${args.join(" ")}`,
-      ) as Error & { code: string };
-      error.code = COMMAND_IDLE_TIMEOUT_CODE;
+    const commandError = (code: string, message: string) => {
+      const error = new Error(`${message}: ${command} ${args.join(" ")}`) as Error & {
+        code: string;
+      };
+      error.code = code;
       return error;
     };
-    let idle = false;
+
+    // Stopping the command (it went silent, or the caller aborted it): SIGTERM, then SIGKILL if
+    // it ignores that. It is settled on the command's own exit, not on its pipes closing — a
+    // grandchild it left behind can hold them open long after it is gone — and at once when it
+    // has already exited.
+    let stopped: Error | undefined;
     let idleTimer: NodeJS.Timeout | undefined;
     let killTimer: NodeJS.Timeout | undefined;
-    const armIdleTimer = () => {
-      if (idleTimeoutMs === undefined) return;
+    const settleStopped = () => {
+      if (killTimer !== undefined) clearTimeout(killTimer);
+      child.stdout.destroy();
+      child.stderr.destroy();
+      if (stopped !== undefined) reject(stopped);
+    };
+    const stop = (error: Error) => {
+      if (stopped !== undefined) return;
+      stopped = error;
       if (idleTimer !== undefined) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => {
-        idle = true;
-        // Settled on the command's own exit, not on its pipes closing: a grandchild it left
-        // behind can hold them open long after it is gone.
-        child.once("exit", () => {
-          if (killTimer !== undefined) clearTimeout(killTimer);
-          child.stdout.destroy();
-          child.stderr.destroy();
-          reject(idleError());
-        });
-        child.kill("SIGTERM");
-        killTimer = setTimeout(() => child.kill("SIGKILL"), 10_000);
-        killTimer.unref();
-      }, idleTimeoutMs);
+      if (child.exitCode !== null || child.signalCode !== null) {
+        settleStopped();
+        return;
+      }
+      child.once("exit", settleStopped);
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+      killTimer.unref();
+    };
+
+    // The idle bound: re-armed by every write.
+    const idleTimeoutMs = options?.idleTimeoutMs;
+    const armIdleTimer = () => {
+      if (idleTimeoutMs === undefined || stopped !== undefined) return;
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
+      idleTimer = setTimeout(
+        () =>
+          stop(
+            commandError(
+              COMMAND_IDLE_TIMEOUT_CODE,
+              `${command} wrote nothing for ${String(Math.round(idleTimeoutMs / 1000))} s and was stopped`,
+            ),
+          ),
+        idleTimeoutMs,
+      );
       idleTimer.unref();
     };
     armIdleTimer();
+
+    const abortSignal = options?.signal;
+    const onAbort = () => stop(commandError(COMMAND_ABORTED_CODE, `${command} was stopped`));
+    if (abortSignal !== undefined) {
+      if (abortSignal.aborted) onAbort();
+      else abortSignal.addEventListener("abort", onAbort, { once: true });
+    }
 
     const onChunk = (chunks: Buffer[]) => (chunk: string | Buffer) => {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -216,11 +256,12 @@ export const runBuildkitCommand: BuildkitCommandRunner = (command, args, options
     child.on("close", (code, signal) => {
       if (idleTimer !== undefined) clearTimeout(idleTimer);
       if (killTimer !== undefined) clearTimeout(killTimer);
+      abortSignal?.removeEventListener("abort", onAbort);
       const stdout = Buffer.concat(stdoutChunks).toString("utf8");
       const stderr = Buffer.concat(stderrChunks).toString("utf8");
 
-      if (idle) {
-        reject(idleError());
+      if (stopped !== undefined) {
+        reject(stopped);
         return;
       }
 
@@ -1517,7 +1558,10 @@ const buildImageTarball = async (
   imageTarPath: string | undefined,
   commandRunner: BuildkitCommandRunner,
   plan: ResolvedImagePlan,
-  build: Pick<BuildkitCompilerOptions, "onProgress" | "stallTimeoutMs" | "cacheDirectory"> = {},
+  build: Pick<
+    BuildkitCompilerOptions,
+    "onProgress" | "stallTimeoutMs" | "cacheDirectory" | "signal"
+  > & { readonly planHash?: string } = {},
 ) => {
   const platformArgs = plan.osFamily === "arch" ? ["--platform", "linux/amd64"] : [];
   // One cache per image name: images of one family share their base and package steps.
@@ -1542,6 +1586,7 @@ const buildImageTarball = async (
     ...Object.entries(spec.buildArgs).flatMap(([key, value]) => ["--build-arg", `${key}=${value}`]),
     ...platformArgs,
     ...cacheArgs,
+    ...(build.planHash === undefined ? [] : ["--label", `${PLAN_HASH_LABEL}=${build.planHash}`]),
     "--tag",
     spec.imageReference,
     spec.contextDirectory,
@@ -1556,6 +1601,7 @@ const buildImageTarball = async (
       cwd: spec.contextDirectory,
       onOutput: progress.write,
       ...(build.stallTimeoutMs === undefined ? {} : { idleTimeoutMs: build.stallTimeoutMs }),
+      ...(build.signal === undefined ? {} : { signal: build.signal }),
     });
   } catch (error) {
     if (
@@ -1666,6 +1712,8 @@ export const compileWorkspaceBuildSpec = async (input: {
         ...(input.options?.cacheDirectory === undefined
           ? {}
           : { cacheDirectory: input.options.cacheDirectory }),
+        ...(input.options?.signal === undefined ? {} : { signal: input.options.signal }),
+        planHash: planned.planHash,
       },
     );
     imageProbe = await readImageProbe(buildContext.spec.imageReference, commandRunner, imagePlan);

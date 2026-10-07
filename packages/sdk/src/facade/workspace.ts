@@ -110,10 +110,12 @@ const READY_MAX_POLL_MS = 1_000;
 /** `ready()`'s default readiness bound: the launch outside an image build (queued, booting). */
 export const READY_TIMEOUT_MS = 10 * 60 * 1_000;
 /**
- * `ready()` gives up on an image build that reported no progress for this long, or for the
+ * `ready()` gives up on an image build that reported no new progress for this long, or for the
  * control plane's own stall bound plus `IMAGE_BUILD_STALL_GRACE_MS`, whichever is longer. The
  * control plane fails a stalled build itself; this covers a worker that died mid-build and was
- * never replaced.
+ * never replaced. A build that never reported progress (a builder that reports none, a worker
+ * that died before its first write) is given up on this long after it started, unless the caller
+ * set `imageBuildTimeoutMs`.
  */
 export const IMAGE_BUILD_STALL_GUARD_MS = 20 * 60 * 1_000;
 const IMAGE_BUILD_STALL_GRACE_MS = 5 * 60 * 1_000;
@@ -619,16 +621,27 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
               code:
                 details.error?.code === "image-build-stalled"
                   ? "workspace_image_build_stalled"
-                  : "workspace_not_ready",
+                  : details.error?.code === "image-build-timeout"
+                    ? "workspace_image_build_timeout"
+                    : "workspace_not_ready",
             },
           );
         }
 
         const phase = details.phase === undefined ? undefined : toWorkspacePhase(details.phase);
+        const wasBuilding = building;
         building = phase?.name === "image-build";
         if (building) {
+          // The stall clock runs from when this client first saw the build, and restarts each
+          // time the build reports new progress. A reclaimed build reports none until its new
+          // worker writes: that does not restart it, so workers that keep dying before their first
+          // write are given up on too.
+          if (!wasBuilding) {
+            progressAt = undefined;
+            progressSeenAt = now;
+          }
           const reported = phase?.imageBuild?.progressAt;
-          if (reported !== progressAt) {
+          if (reported !== undefined && reported !== progressAt) {
             progressAt = reported;
             progressSeenAt = now;
           }
@@ -638,15 +651,24 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
               "workspace_image_build_timeout",
             );
           }
-          // Only a build that reports progress can be seen to stall; one that reports none is
-          // bounded by imageBuildTimeoutMs and the control plane's own bounds.
-          const stallBoundMs = Math.max(
-            IMAGE_BUILD_STALL_GUARD_MS,
-            (phase?.imageBuild?.stallTimeoutMs ?? 0) + IMAGE_BUILD_STALL_GRACE_MS,
-          );
-          if (progressAt !== undefined && now - progressSeenAt > stallBoundMs) {
+          // A build that reports progress is given up on once it stops (past the control plane's
+          // own stall bound, which should have failed it). One that never reported any (a builder
+          // that reports none, or a worker that died before its first write) is given up on after
+          // IMAGE_BUILD_STALL_GUARD_MS, unless the caller bounded the build itself.
+          const stallBoundMs =
+            progressAt === undefined
+              ? imageBuildTimeoutMs === undefined
+                ? IMAGE_BUILD_STALL_GUARD_MS
+                : undefined
+              : Math.max(
+                  IMAGE_BUILD_STALL_GUARD_MS,
+                  (phase?.imageBuild?.stallTimeoutMs ?? 0) + IMAGE_BUILD_STALL_GRACE_MS,
+                );
+          if (stallBoundMs !== undefined && now - progressSeenAt > stallBoundMs) {
             await giveUp(
-              `The image build for workspace ${init.id} reported no progress for ${formatWait(now - progressSeenAt)}; it was ${describeBuildStep(phase)}.`,
+              progressAt === undefined
+                ? `The image build for workspace ${init.id} reported no progress in the ${formatWait(now - progressSeenAt)} since it started (its builder reports none, or its worker stopped); pass imageBuildTimeoutMs to wait longer for a builder that reports none.`
+                : `The image build for workspace ${init.id} reported no progress for ${formatWait(now - progressSeenAt)}; it was ${describeBuildStep(phase)}.`,
               "workspace_image_build_stalled",
             );
           }
@@ -832,7 +854,8 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         const details: WorkspaceDetails = await ctx.runtime.run(
           getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
         );
-        if (details.status === "stopped") {
+        // `cancelled`: a stop before the image was built cancelled the launch; no runtime ever ran.
+        if (details.status === "stopped" || details.status === "cancelled") {
           return { state: "stopped", ...completion };
         }
         if (

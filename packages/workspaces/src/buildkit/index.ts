@@ -1,6 +1,8 @@
 export {
+  COMMAND_ABORTED_CODE,
   COMMAND_IDLE_TIMEOUT_CODE,
   IMAGE_BUILD_STALLED_CODE,
+  PLAN_HASH_LABEL,
   buildContextDirectoryOf,
   compileWorkspaceBuildSpec,
   localImageNameOf,

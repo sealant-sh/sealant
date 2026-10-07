@@ -792,11 +792,14 @@ describe("compileWorkspaceBuildSpec", () => {
     const saveCommandArgs = (commandRunner.mock.calls[1]?.[1] ?? []) as string[];
     const probeCommandArgs = (commandRunner.mock.calls[2]?.[1] ?? []) as string[];
     expect(commandRunner).toHaveBeenCalledTimes(3);
-    expect(buildCommandArgs.slice(0, 5)).toEqual([
+    expect(buildCommandArgs.slice(0, 7)).toEqual([
       "build",
       "--progress=plain",
       "--file",
       expect.any(String),
+      // The full plan hash, which a kept image must carry to be reused for the plan.
+      "--label",
+      `sh.sealant.plan-hash=${result.metadata?.planHash ?? ""}`,
       "--tag",
     ]);
     expect(saveCommandArgs.slice(0, 2)).toEqual(["save", "--output"]);
