@@ -8,7 +8,11 @@ import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 
 import { getHarnessIntegration } from "../harness/integrations.js";
-import { CAPTURE_HARNESS_HOME_ENV, captureSourceEnv } from "./capture-source.js";
+import {
+  CAPTURE_HARNESS_HOME_ENV,
+  CAPTURE_SOURCE_ONLY_ENV,
+  captureSourceEnv,
+} from "./capture-source.js";
 import { buildCredentialFileWriteScript } from "./credential-files.js";
 import {
   assertDockerVolumeConfiguration,
@@ -571,9 +575,10 @@ const envArgsFromBlueprint = (
 ): Array<string> => {
   const source = input.blueprint.sources.workspace;
   const runtimeEnvArgs = Object.entries(input.blueprint.runtime.env).flatMap(([key, value]) =>
-    source.kind === "capture" &&
-    source.harnessHome !== undefined &&
-    key === CAPTURE_HARNESS_HOME_ENV
+    (source.kind === "capture" &&
+      source.harnessHome !== undefined &&
+      key === CAPTURE_HARNESS_HOME_ENV) ||
+    CAPTURE_SOURCE_ONLY_ENV.has(key)
       ? []
       : ["-e", `${key}=${value}`],
   );

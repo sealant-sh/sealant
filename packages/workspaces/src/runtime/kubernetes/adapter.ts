@@ -38,6 +38,7 @@ import {
   type SealantTarget,
   type SealantWebSocketClientTls,
 } from "../../sealantd/runtime.js";
+import { CAPTURE_SOURCE_ONLY_ENV } from "../capture-source.js";
 import { buildCredentialFileWriteScript } from "../credential-files.js";
 import { buildDotfilesArchiveManifest, hasDotfilesArchives } from "../launch-material.js";
 import {
@@ -752,7 +753,8 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
     // Bound ConfigMap keys go FIRST: the Pod env list is last-wins, so every later entry —
     // caller env included — shadows them (invariant: explicit wins over bound).
     const plainEnv = [
-      ...boundSources.configMapEnv,
+      // The capture source's own names never come from a bound object.
+      ...boundSources.configMapEnv.filter(([key]) => !CAPTURE_SOURCE_ONLY_ENV.has(key)),
       ...plainEnvEntries(parsed, config, {
         secretEnvFile: secretEnv !== undefined,
         dotfilesArchiveDir,

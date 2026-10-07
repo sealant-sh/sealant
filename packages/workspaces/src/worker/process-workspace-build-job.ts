@@ -43,11 +43,13 @@ import {
   type NewWorkspace,
   type WorkspaceBuild,
   type WorkspaceCredentialsHome,
+  type WorkspaceImageProbe,
 } from "@sealant/validators";
 import { Clock, Deferred, Effect, Exit, Layer, Option, Schedule } from "effect";
 import { z } from "zod";
 
 import type { PlannedWorkspaceImageBuild } from "../buildkit/index.js";
+import { imageAppliesOwnerMap } from "../buildkit/person-layout.js";
 import { parsePublishedReference, planImageCoordinates } from "../images/index.js";
 import { RegistryNameError, type RegistryClient } from "../registry/index.js";
 import {
@@ -439,6 +441,36 @@ const recordLaunchHome = (input: {
     ),
   );
 
+/** A per-person launch refused because its image's daemon may not apply the owner map. */
+export class OwnerMapUnsupportedError extends Error {
+  override readonly name = "OwnerMapUnsupportedError";
+  readonly code = "owner-map-unsupported";
+}
+
+/**
+ * Why a launch whose capture source names an owner map cannot run on this image, or `undefined`
+ * when it can (or names none). Only an image whose probe reports `restore.owner_map` from its
+ * sealantd takes one: not known is refused too, never launched on the hope.
+ */
+export const ownerMapLaunchRefusal = (
+  spec: NewWorkspace,
+  probe: WorkspaceImageProbe | undefined,
+): OwnerMapUnsupportedError | undefined => {
+  const source = spec.sources.workspace;
+  if (source.kind !== "capture" || source.ownerMap === undefined) return undefined;
+  const applies = imageAppliesOwnerMap(probe);
+  if (applies === "yes") return undefined;
+  const why =
+    probe === undefined
+      ? "its image records no probe, so Core cannot tell whether its sealantd applies one"
+      : applies === "unknown"
+        ? "its image's sealantd answered the probe with something Core cannot read"
+        : "its image's sealantd does not report restore.owner_map";
+  return new OwnerMapUnsupportedError(
+    `The workspace was not launched: its capture source names an owner map, and ${why}. A daemon without it would restore every file as root's and keep no-new-privileges, so nobody could edit them or use sudo. Nothing ran; launch it on an image whose personLayout reports the sealantd capabilities, or without an owner map.`,
+  );
+};
+
 const swallowingFailure = (operation: string) =>
   sharedSwallowingFailure("Workspace build job", operation);
 
@@ -801,7 +833,12 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
         `Workspace image plan unchanged (hash ${reuse.planHash}); skipped build and publish, reusing ${reuse.publishedImage.digestReference}.`,
       );
 
-      return { publishedImage: reuse.publishedImage, spec, planned };
+      return {
+        publishedImage: reuse.publishedImage,
+        spec,
+        planned,
+        imageProbe: reuse.resultPayload.metadata?.imageProbe,
+      };
     }
 
     // Publish under plan-keyed coordinates — one repository per OS family, one tag per plan hash —
@@ -834,7 +871,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       return null;
     }
 
-    return { publishedImage, spec, planned };
+    return { publishedImage, spec, planned, imageProbe: compileResult.metadata?.imageProbe };
   });
 
   const built = yield* buildAndPublish.pipe(Effect.tapError(buildFailureCleanup));
@@ -846,7 +883,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     );
     return null;
   }
-  const { publishedImage, spec, planned } = built;
+  const { publishedImage, spec, planned, imageProbe } = built;
 
   // Phase B: launch the runtime instance and record its state.
   const stager = options.launchMaterialStager ?? hostDirectoryLaunchMaterialStager;
@@ -878,6 +915,13 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     options.preservationLeadMs ?? DEFAULT_CAPTURE_DEADLINE_SETTINGS.leadMs,
   );
   const launchAndRecord = Effect.gen(function* () {
+    // A per-person launch (its capture source names an owner map) needs a daemon that applies the
+    // map; one that does not would ignore it, restore everything root's and keep
+    // no-new-privileges. Refused before anything is written or started.
+    const ownerMapRefusal = ownerMapLaunchRefusal(spec, imageProbe);
+    if (ownerMapRefusal !== undefined) {
+      return yield* toWorkspaceBuildJobProcessingError(ownerMapRefusal);
+    }
     // Why this launch stops waiting on its executor, when something decides it must: its
     // ownership was taken (the deadline sweep preempted it, or the stranded-launch sweep adopted
     // it), or its runtime's preservation start arrived before it settled. A pending launch never

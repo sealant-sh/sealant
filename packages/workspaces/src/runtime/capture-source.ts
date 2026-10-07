@@ -8,7 +8,14 @@
  * session credential through the existing secret env channel (`SEALANT_SECRET_ENV_FILE`), where it
  * arrives as `SEALANT_CAPTURE_TOKEN` and seeds the daemon's redactor like any other secret.
  */
+import {
+  CAPTURE_OWNER_MAP_ENV,
+  encodeCaptureOwnerMap,
+} from "@sealant/api-contracts/capture-owner-map";
+
 import type { RuntimeAdapterLaunchInput } from "./runtime-adapter.js";
+
+export { CAPTURE_OWNER_MAP_ENV };
 
 export type CaptureWorkspaceSource = Extract<
   RuntimeAdapterLaunchInput["blueprint"]["sources"]["workspace"],
@@ -33,6 +40,13 @@ export const CAPTURE_HARNESS_HOME_ENV = "SEALANT_CAPTURE_HARNESS_HOME";
  * boot's environment).
  */
 export const CAPTURE_LAUNCH_ID_ENV = "SEALANT_CAPTURE_LAUNCH_ID";
+
+/**
+ * Boot env names only the capture source may set. A blueprint's legacy `runtime.env` (unrestricted,
+ * kept for stored specs) and a cluster ConfigMap never reach them: who owns what a restore writes,
+ * and with it whether the executor keeps no-new-privileges, is the launcher's statement alone.
+ */
+export const CAPTURE_SOURCE_ONLY_ENV: ReadonlySet<string> = new Set([CAPTURE_OWNER_MAP_ENV]);
 
 /** The launcher's statement that the network to the channel is private: plain HTTP is dialled. */
 export const CAPTURE_ALLOW_PLAINTEXT_ENV = "SEALANT_CAPTURE_ALLOW_PLAINTEXT";
@@ -77,7 +91,8 @@ export const shutdownFinalDeadlineMs = (stopGraceMs: number): number | undefined
  * daemon's shutdown final flush is bounded inside it (`SEALANT_SHUTDOWN_FINAL_DEADLINE_MS`), so a
  * flush that cannot finish exits 75 — the disk kept and recovered — rather than being killed.
  * An older daemon ignores it. `launchId`, when the create named one, is delivered as
- * `SEALANT_CAPTURE_LAUNCH_ID`.
+ * `SEALANT_CAPTURE_LAUNCH_ID`. The owner map, when the source has one, is delivered as
+ * `SEALANT_CAPTURE_OWNER_MAP` in the daemon's encoding; without one nothing is added.
  */
 export const captureSourceEnv = (
   source: CaptureWorkspaceSource,
@@ -92,6 +107,9 @@ export const captureSourceEnv = (
   ...(source.harnessHome === undefined
     ? []
     : [[CAPTURE_HARNESS_HOME_ENV, source.harnessHome] as const]),
+  ...(source.ownerMap === undefined
+    ? []
+    : [[CAPTURE_OWNER_MAP_ENV, encodeCaptureOwnerMap(source.ownerMap)] as const]),
   // Transport (sealantd 0.17+; an older daemon ignores these and dials whatever it is given).
   // Only an explicit `true` is delivered: absence is the strict default on the daemon's side.
   ...(source.transport?.plaintext === true ? [[CAPTURE_ALLOW_PLAINTEXT_ENV, "true"] as const] : []),

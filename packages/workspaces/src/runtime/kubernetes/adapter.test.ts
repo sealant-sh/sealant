@@ -615,6 +615,24 @@ describe("cluster env sources (worker-side resolution)", () => {
     expect(JSON.stringify(pod)).not.toContain("s3cret");
   });
 
+  it("never takes the capture owner map from a bound ConfigMap", async () => {
+    const cluster = fakeCluster();
+    cluster.configmaps.set("app-config", {
+      metadata: { name: "app-config", labels: optIn },
+      data: {
+        APP_MODE: "staging",
+        SEALANT_CAPTURE_OWNER_MAP: '{"gid":40000,"worktree":40001,"people":{"x":40001}}',
+      },
+    });
+    const adapter = adapterFor(cluster, controlChannel());
+
+    await adapter.launch(withRuntime({ envFrom: [{ kind: "configmap", name: "app-config" }] }));
+
+    const env = [...cluster.pods.values()][0]?.spec?.containers[0]?.env ?? [];
+    expect(env).toContainEqual({ name: "APP_MODE", value: "staging" });
+    expect(env.some((entry) => entry.name === "SEALANT_CAPTURE_OWNER_MAP")).toBe(false);
+  });
+
   it("fails readably, naming the binding, when a bound object is missing or not opted in", async () => {
     const cluster = fakeCluster();
     const adapter = adapterFor(cluster, controlChannel());

@@ -108,7 +108,11 @@ These call the live API and work end-to-end:
   the image a create would build with no call, and `workspaces.inspectImage(options)` reads its
   capability before a create; `exec(argv, { user })` and `sessions.open(argv, { user })` ask for a
   Linux user, sent only to a control plane that reports the feature, and refused
-  (`user-unsupported`) until the workspace runtime can start a process as one.
+  (`user-unsupported`) until the workspace runtime can start a process as one. A capture source's
+  `ownerMap: { gid, worktreeUid, people: [{ id, uid }] }` gives each person's saved directory to
+  their uid and the worktree to the group on restore, and makes the executor a per-person one (no
+  no-new-privileges, so everyone's `sudo` works); see
+  [Workspace Images and People](/docs/reference/workspace-images#restoring-a-capture-per-person).
 - **Harness:** `workspace.harness.run(prompt)` — registers a run server-side and blocks until
   terminal; `workspace.harness.start(prompt)` — same run, returns the live handle immediately
 - **Port forwarding:** `workspace.forward(port)` — a raw TCP byte pipe to `127.0.0.1:port` inside

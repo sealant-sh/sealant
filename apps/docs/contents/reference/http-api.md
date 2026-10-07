@@ -70,7 +70,14 @@ running executor answers `409` `workspace-not-running`.
 
 A create's `spec.runtime.credentialsHome` (`{ path, uid, gid }`) writes the launch's logins into
 that home instead of `$HOME` and the environment (GitHub as `<home>/.config/gh/hosts.yml`), made for
-that owner if missing, and records the home as the workspace owner's.
+that owner if missing, and records the home as the workspace owner's. A capture source's
+`spec.sources.workspace.ownerMap` (`{ gid, worktreeUid, people: [{ id, uid }] }`) says who owns what
+the daemon's restore writes: each person's saved directory (`<harnessHome>/people/<id>/`) theirs,
+the worktree the group's, and, when it names anyone, an executor without no-new-privileges, so every
+person's `sudo` works. It is checked at create (`400` with the reason): `gid` 40000, uids in
+40001–49999, ids that are one directory name, no id or uid twice, at most 256 people; refused on
+Cloudflare, and in `runtime.env`. The launch refuses it (`owner-map-unsupported`, nothing started)
+on an image whose probe does not report `restore.owner_map`.
 `POST /v1/workspaces/image { ownerUserId, registryId, spec }` answers, before any create, the image
 plan the spec renders, the latest image published for it, and its per-person capability
 (`personLayout`, also on every workspace read's `publishedImage`). Exec and session requests take

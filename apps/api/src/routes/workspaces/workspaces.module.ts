@@ -55,6 +55,7 @@ import {
   type WorkspaceSshTarget,
   type WorkspaceSummary,
 } from "@sealant/api-contracts";
+import { CAPTURE_OWNER_MAP_ENV } from "@sealant/api-contracts/capture-owner-map";
 import {
   CAPTURE_TOKEN_SECRET_ENV_NAME,
   formatWorkspaceEnvIssue,
@@ -297,6 +298,24 @@ export const parseWorkspaceSpec = (spec: unknown) => {
       new WorkspaceBadRequestError({
         message:
           "credentialsHome is not available on the Cloudflare runtime: its bridge writes logins at $HOME only.",
+      }),
+    );
+  }
+  // An owner map makes the executor a per-person one; only the capture source states it, and only
+  // where an image can report that its daemon applies it (not Cloudflare's sandboxes).
+  const source = parsed.data.sources.workspace;
+  if (source.kind === "capture" && source.ownerMap !== undefined && family === "cloudflare") {
+    return Effect.fail(
+      new WorkspaceBadRequestError({
+        message:
+          "source.ownerMap is not available on the Cloudflare runtime: its sandboxes record no per-person capability.",
+      }),
+    );
+  }
+  if (Object.hasOwn(parsed.data.runtime.env, CAPTURE_OWNER_MAP_ENV)) {
+    return Effect.fail(
+      new WorkspaceBadRequestError({
+        message: `runtime.env may not name ${CAPTURE_OWNER_MAP_ENV}: the owner map is source.ownerMap on a capture source.`,
       }),
     );
   }

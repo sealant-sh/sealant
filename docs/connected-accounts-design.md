@@ -526,6 +526,35 @@ conversation home while that person's process is about to run there.
   `unknown`; the capability is still on every read of a launched workspace. A reused image carries
   its build's probe forward.
 
+## 6f. The capture owner map (Oct 2026)
+
+- **`ownerMap` on a capture source**
+  (`spec.sources.workspace.ownerMap = { gid, worktreeUid, people: [{ id, uid }] }`, SDK
+  `source.ownerMap`): who owns what sealantd's restore writes (its ADR-0015 "Per-person saved
+  directories", sealantd#145), and whether the executor is a per-person one (a root daemon whose map
+  names someone leaves no-new-privileges unset, sealantd#148). Core delivers it as
+  `SEALANT_CAPTURE_OWNER_MAP` in sealantd's JSON (`{"gid","worktree","people":{id: uid}}`, people in
+  id order) from `captureSourceEnv`, so Docker, Kubernetes and MicroVM boot it alike; Cloudflare
+  refuses it at create and in its adapter.
+- **One definition** of its shape, bounds and encoding in `@sealant/api-contracts/capture-owner-map`
+  (`captureOwnerMapProblems`, `encodeCaptureOwnerMap`), used by the SDK's client-side refusal, the
+  blueprint schema on every parse and the adapters: gid 40000, uids 40001–49999, ids that are one
+  directory name, no id or uid twice, at most 256 people.
+- **Nobody else sets it.** Every caller lane already refuses the `SEALANT_` prefix except a
+  blueprint's legacy `runtime.env`, which the API refuses for this name at create and every adapter
+  drops; a bound ConfigMap's key of that name is dropped too.
+- **Refused at launch on an image that may not apply it**: the worker reads the image probe the
+  build recorded (or the reused build's) and fails the launch with `owner-map-unsupported` before
+  the runtime row, the stager or the adapter is touched, unless its sealantd reported
+  `restore.owner_map`. Unknown is refused, never launched on the hope: a daemon without it ignores
+  the variable, restores everything root's and keeps no-new-privileges.
+- **Fixed for the executor's life.** sealantd reads it at boot; a capture workspace is never
+  restarted in place (its token is not retained), Docker's recovery restarts the same container and
+  the MicroVM agent reuses the first boot's environment, so a recovery keeps it. A standby's claim
+  (`capture.replan`) takes no parameters: it restores under the map the standby booted with.
+- **Cost:** none without a map (one `undefined` check in `captureSourceEnv`); with one, a JSON
+  string in the boot environment and one probe read the worker already holds.
+
 ## 7. The `sealant` CLI — `apps/cli`
 
 New workspace app `@sealant/cli`, bin `sealant`, built on `effect/unstable/cli` (Command/Flag/Prompt

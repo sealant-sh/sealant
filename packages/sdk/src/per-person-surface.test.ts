@@ -20,6 +20,7 @@ import { makeWorkspace } from "./facade/workspace.js";
 import { opencode } from "./harness.js";
 import { buildCreateWorkspaceRequest } from "./internal/blueprint.js";
 import { resolveInternalConfig } from "./internal/config.js";
+import type { WorkspaceCaptureOwnerMap } from "./types.js";
 
 const config = resolveInternalConfig({ baseUrl: "http://stub.invalid", ownerUserId: "usr_owner" });
 
@@ -105,6 +106,68 @@ describe("credentialsHome", () => {
     expect((payload.spec as { runtime?: unknown }).runtime).toMatchObject({
       credentialsHome: { path: "/home/m4lice000", uid: 40001, gid: 40000 },
     });
+  });
+});
+
+const captureSource = (map: WorkspaceCaptureOwnerMap | undefined) => ({
+  kind: "capture" as const,
+  endpoint: "https://mend.example.com/session/s1",
+  worktreeId: "wt_1",
+  token: "mct_1",
+  harnessHome: "/workspace/harness-home",
+  ...(map === undefined ? {} : { ownerMap: map }),
+});
+
+describe("a capture source's ownerMap", () => {
+  const ownerMap = {
+    gid: 40000,
+    worktreeUid: 40012,
+    people: [
+      { id: "acct_a", uid: 40012 },
+      { id: "acct_b", uid: 40031 },
+    ],
+  };
+
+  it("rides the spec's capture source as given, and is absent when not given", () => {
+    const { payload } = buildCreateWorkspaceRequest(
+      { source: captureSource(ownerMap), harness: opencode() },
+      config,
+    );
+    const spec = payload.spec as { sources: { workspace: Record<string, unknown> } };
+    expect(spec.sources.workspace["ownerMap"]).toEqual(ownerMap);
+    const plain = buildCreateWorkspaceRequest(
+      { source: captureSource(undefined), harness: opencode() },
+      config,
+    ).payload.spec as { sources: { workspace: Record<string, unknown> } };
+    expect(plain.sources.workspace).not.toHaveProperty("ownerMap");
+  });
+
+  it("is refused here, with the control plane's words, before anything is sent", () => {
+    for (const [bad, reason] of [
+      [{ ...ownerMap, gid: 1000 }, /gid must be 40000/],
+      [{ ...ownerMap, worktreeUid: 0 }, /worktreeUid 0/],
+      [{ ...ownerMap, people: [{ id: "../x", uid: 40002 }] }, /people\[0\]\.id/],
+      [
+        {
+          ...ownerMap,
+          people: [
+            { id: "acct_a", uid: 40012 },
+            { id: "acct_b", uid: 40012 },
+          ],
+        },
+        /the same uid 40012/,
+      ],
+    ] as const) {
+      expect(() =>
+        buildCreateWorkspaceRequest(
+          {
+            source: { ...captureSource(undefined), ownerMap: bad },
+            harness: opencode(),
+          },
+          config,
+        ),
+      ).toThrow(reason);
+    }
   });
 });
 

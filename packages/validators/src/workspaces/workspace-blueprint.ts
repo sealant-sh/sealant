@@ -1,3 +1,4 @@
+import { captureOwnerMapProblems } from "@sealant/api-contracts/capture-owner-map";
 import {
   formatWorkspaceEnvIssue,
   parseWorkspaceEnv,
@@ -156,6 +157,33 @@ export const workspaceCaptureTransportSchema = z.strictObject({
   objectCaPem: pemBundleSchema.optional(),
 });
 
+/**
+ * Who owns what a capture restore writes (sealantd ADR-0015 "Per-person saved directories", Mend's
+ * ADR 0016 decision 8), delivered as `SEALANT_CAPTURE_OWNER_MAP`. Each person's saved directory
+ * (`<harness home>/people/<id>/`) comes back as theirs, the worktree as the group's, and a map that
+ * names anyone makes the executor a per-person one: its daemon leaves no-new-privileges unset, so
+ * every person's `sudo` works. Checked on every parse by `captureOwnerMapProblems`: gid 40000, uids
+ * in 40001–49999, ids that are directory names, no id or uid twice, at most 256 people.
+ */
+export const workspaceCaptureOwnerMapSchema = z
+  .strictObject({
+    gid: z.number().int(),
+    worktreeUid: z.number().int(),
+    people: z.array(
+      z.strictObject({
+        id: z.string(),
+        uid: z.number().int(),
+      }),
+    ),
+  })
+  .superRefine((value, ctx) => {
+    for (const problem of captureOwnerMapProblems(value)) {
+      ctx.addIssue({ code: "custom", message: problem });
+    }
+  });
+
+export type WorkspaceCaptureOwnerMap = z.infer<typeof workspaceCaptureOwnerMapSchema>;
+
 export const workspaceCaptureSourceSchema = z.strictObject({
   kind: z.literal("capture"),
   /** The session channel the daemon registers with (`SEALANT_CAPTURE_ENDPOINT`). */
@@ -169,6 +197,12 @@ export const workspaceCaptureSourceSchema = z.strictObject({
   harnessHome: workspaceCaptureHarnessHomeSchema.optional(),
   platform: nonEmptyStringSchema.optional(),
   transport: workspaceCaptureTransportSchema.optional(),
+  /**
+   * Who owns what the restore writes; absent, everything is restored root's as before and the
+   * executor keeps no-new-privileges. Fixed for the executor's life: the daemon reads it at boot,
+   * so a standby's claim (`capture.replan`) and a recovery restore under the map it booted with.
+   */
+  ownerMap: workspaceCaptureOwnerMapSchema.optional(),
 });
 
 // Order matters: git first, so legacy payloads that omit `kind` (relying on the default) still

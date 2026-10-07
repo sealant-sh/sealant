@@ -94,6 +94,38 @@ stay in the user's home (`/home/<name>`, mode 0700).
 - **Private artifacts are visible:** the shared caches hold what people download, so a private
   package fetched by one person is readable by the others, as is anything in a shared Docker.
 
+## Restoring a capture per person
+
+A capture workspace (one whose worktree a session channel saves and restores) is told who owns what
+its restore writes with an owner map on its source, `ownerMap: { gid, worktreeUid, people }`. Core
+passes it to `sealantd` at boot as `SEALANT_CAPTURE_OWNER_MAP`, JSON in `sealantd`'s own form
+(`{"gid":40000,"worktree":40012,"people":{"acct_a":40012}}`):
+
+- **A person's saved directory**, `<harnessHome>/people/<id>/`, is restored owned by their uid and
+  the `mend` group. The directory itself is `0710`: the group may pass through to `conversations/`,
+  not list or read the rest. Everything under `conversations/` is group-readable and -writable; the
+  rest keeps its recorded mode, so a person's own transcripts stay theirs.
+- **The worktree and its git directory** are the group's: the root is owned by `worktreeUid` and the
+  group, setgid, and every entry gets its owner's bits copied to the group (a `0644` file comes back
+  `0664`). Captures made before the per-person layout restore the same way.
+- **A directory for an id not in the map** (a member who left) is restored as before, root's.
+- **The executor's privilege posture.** A map that names at least one person makes the executor a
+  per-person one: `sealantd` does not set no-new-privileges, so every person's passwordless `sudo`
+  works, and `runtime.getCapabilities` reports `noNewPrivileges: false`. Without a map, or with one
+  that names nobody, it is set, as for every other workspace. The executor is root by design here,
+  not a sandbox.
+
+Core checks the map at create: `gid` 40000, every uid in 40001–49999 (the range's first id is the
+group's), ids that are one directory name, no id and no uid twice, at most 256 people. It launches
+one only on an image whose probe reports `restore.owner_map` from its `sealantd`; on another image,
+or one with no probe, the launch fails with `owner-map-unsupported` and nothing starts. Cloudflare
+sandboxes refuse it at create. Only the source sets it: a workspace's environment, its secret
+environment and a cluster ConfigMap never reach `SEALANT_CAPTURE_OWNER_MAP`.
+
+The map is fixed for the executor's life, since `sealantd` reads it at boot: a standby's claim and a
+recovery restore under the map the executor booted with. A workspace without a map boots and
+restores exactly as before, and pays nothing for the option.
+
 ## Nix images take one person
 
 `nix` images get only the probe step, and run every process as root, as before. Their `/etc/passwd`
