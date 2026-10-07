@@ -66,18 +66,21 @@ token) as one entry of each tool's own `auth.json`: `openai-codex` in `<home>/.p
 links to where it really is (which must be inside the home and outside `/workspace`), and its other
 entries stay; a login the person made inside pi or opencode is never replaced, and `null` or a
 release removes only Core's copy. A Codex account that is not a ChatGPT login answers `409`
-`connected-account-unsupported`. A refresh of the Codex login rewrites these entries too. A home
-holds one person's logins until it is released: a `POST` naming anyone else answers `409`
-`home-held`. `DELETE ?ownerUserId=&home=` releases the home (its login files are removed), and
-`GET ?ownerUserId=` lists the homes. A home is an absolute path, never under `/workspace`, reached
-without a symbolic link (`409` `home-unusable` otherwise); `/root` takes only the workspace owner's
-logins. Another write into the same home, or too many into the workspace at once, answers `409`
-`home-busy`: nothing was done, try again. Only a service key may call them. A workspace with no
-running executor answers `409` `workspace-not-running`. An account the person cannot name answers
-`404` with `code` `connected-account-missing`, and one marked invalid or holding an unusable
-credential `409` `connected-account-invalid`; both carry the account's `provider` (`claude`,
-`codex`, `github`), so a caller can tell which login is missing without reading the message, and
-nothing is written. A create's explicitly named account is refused the same way.
+`connected-account-unsupported`. A refresh of the Codex login rewrites these entries too. Without
+`node` on the image's system PATH such a put, and a release or put that would remove a pi or
+opencode login whose file exists, answer `409` `home-unusable` and change nothing (a release leaves
+the home held), so no earlier holder's copy is left behind. A home holds one person's logins until
+it is released: a `POST` naming anyone else answers `409` `home-held`. `DELETE ?ownerUserId=&home=`
+releases the home (its login files are removed), and `GET ?ownerUserId=` lists the homes. A home is
+an absolute path, never under `/workspace`, reached without a symbolic link (`409` `home-unusable`
+otherwise); `/root` takes only the workspace owner's logins. Another write into the same home, or
+too many into the workspace at once, answers `409` `home-busy`: nothing was done, try again. Only a
+service key may call them. A workspace with no running executor answers `409`
+`workspace-not-running`. An account the person cannot name answers `404` with `code`
+`connected-account-missing`, and one marked invalid or holding an unusable credential `409`
+`connected-account-invalid`; both carry the account's `provider` (`claude`, `codex`, `github`), so a
+caller can tell which login is missing without reading the message, and nothing is written. A
+create's explicitly named account is refused the same way.
 
 A create's `spec.runtime.credentialsHome` (`{ path, uid, gid }`) writes the launch's logins into
 that home instead of `$HOME` and the environment (GitHub as `<home>/.config/gh/hosts.yml`), made for

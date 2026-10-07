@@ -17,3 +17,7 @@ pi's and opencode's ChatGPT logins are providers of `workspace.credentials`:
   and `provider: "codex"`.
 - A first put refused because a login would land outside the home (`home-unusable`) no longer leaves
   its hold's marker behind: the home can be put into again without a release first.
+- Without node on the image's system PATH, a put naming pi or opencode, and a release or put that
+  would remove a pi or opencode login whose file exists, are refused (`home-unusable`) and the home
+  stays held: no earlier holder's copy is ever left behind. A pi or opencode file that cannot be
+  written, or really is outside the home, is refused naming the file.

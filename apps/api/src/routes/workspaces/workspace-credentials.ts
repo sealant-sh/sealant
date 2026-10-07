@@ -331,6 +331,15 @@ const toHomeView = (row: {
     } satisfies WorkspaceCredentialHome;
   });
 
+/** Refusals the owner's half answers, after a first take has made its marker. */
+const OWNER_HALF_REFUSALS: ReadonlySet<number> = new Set([
+  HOME_SCRIPT_EXIT.linkOnTheWay,
+  HOME_SCRIPT_EXIT.piLoginUnusable,
+  HOME_SCRIPT_EXIT.opencodeLoginUnusable,
+  HOME_SCRIPT_EXIT.piLoginOutside,
+  HOME_SCRIPT_EXIT.opencodeLoginOutside,
+]);
+
 /** Why a refused script is answered as it is: fenced → held, busy → busy, else unusable. */
 const refusedCode = (exitCode: number | undefined) =>
   exitCode === HOME_SCRIPT_EXIT.fenced
@@ -453,10 +462,10 @@ export const putWorkspaceCredentials = (input: {
             stdin: homeScriptStdin(writes.map(({ content }) => content)),
           });
           if (ran.kind === "refused") {
-            // A link found inside the home (a login that would land outside it) is refused by the
-            // owner's half, after a first take made its marker: release that marker, so the home
-            // can be taken again once the link is fixed, without a DELETE first.
-            if (held === undefined && ran.exitCode === HOME_SCRIPT_EXIT.linkOnTheWay) {
+            // The owner's half refuses after a first take made its marker (a login directory linking
+            // out, a pi or opencode file outside the home or unusable): release that marker, so the
+            // home can be taken again once it is fixed, without a DELETE and never as `home-held`.
+            if (held === undefined && OWNER_HALF_REFUSALS.has(ran.exitCode ?? -1)) {
               yield* runHomeScript({
                 channel,
                 target,

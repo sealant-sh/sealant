@@ -184,7 +184,7 @@ describe.skipIf(!imageAvailable)(
         fence: { kind: "take", generation: "generation-alice-2" },
         writes: [{ provider: "opencode", content: entry("at-oc") }],
       });
-      expect(put.exitCode).toBe(HOME_SCRIPT_EXIT.linkOnTheWay);
+      expect(put.exitCode).toBe(HOME_SCRIPT_EXIT.opencodeLoginOutside);
       expect(await sh(`cat ${SAVED}/.local/share/opencode/auth.json`)).toBe("{}");
     }, 60_000);
   },

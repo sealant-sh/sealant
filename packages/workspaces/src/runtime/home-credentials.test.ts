@@ -6,6 +6,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -763,8 +764,123 @@ describe("pi's and opencode's ChatGPT logins", () => {
       writes: [{ provider: "opencode", content: entry("at-oc") }],
       removes: [],
     });
-    expect(result.status).toBe(HOME_SCRIPT_EXIT.linkOnTheWay);
+    expect(result.status).toBe(HOME_SCRIPT_EXIT.opencodeLoginOutside);
     expect(existsSync(join(saved, "auth.json"))).toBe(false);
+  });
+
+  it("refuses a login file with another hard link, which could be saved state", () => {
+    const w = world();
+    const home = w.home("alice");
+    mkdirSync(join(home, ".pi/agent"), { recursive: true });
+    const elsewhere = join(w.root, "saved-auth.json");
+    writeFileSync(elsewhere, "{}");
+    linkSync(elsewhere, join(home, ".pi/agent/auth.json"));
+    const result = w.run({
+      home,
+      fence: { kind: "take", generation: GEN_A },
+      writes: [{ provider: "pi", content: entry("at-pi") }],
+      removes: [],
+    });
+    expect(result.status).toBe(HOME_SCRIPT_EXIT.piLoginOutside);
+    expect(read(elsewhere)).toBe("{}");
+  });
+
+  it("answers a directory at auth.json as unusable, never as a link, and a release clears the take", () => {
+    const w = world();
+    const home = w.home("alice");
+    mkdirSync(join(home, ".pi/agent/auth.json"), { recursive: true });
+    const put = w.run({
+      home,
+      fence: { kind: "take", generation: GEN_A },
+      writes: [{ provider: "pi", content: entry("at-pi") }],
+      removes: [],
+    });
+    expect(put.status).toBe(HOME_SCRIPT_EXIT.piLoginUnusable);
+    // The take's own release (what the API runs next) finds nothing of Core's there and clears
+    // the marker, so the next take is not answered as another person's hold.
+    expect(
+      w.run({ home, fence: { kind: "release", generation: GEN_A }, writes: [], removes: [] })
+        .status,
+    ).toBe(0);
+    expect(w.marker(home)).toBeUndefined();
+    expect(
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_B },
+        writes: [{ provider: "claude", content: "c" }],
+        removes: [],
+      }).status,
+    ).toBe(0);
+  });
+
+  it("fails closed without node: a release or a take that would leave a pi or opencode copy is refused", () => {
+    const w = world();
+    const home = w.home("alice");
+    expect(
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_A },
+        writes: [{ provider: "pi", content: entry("at-pi") }],
+        removes: [],
+      }).status,
+    ).toBe(0);
+    const pi = join(home, ".pi/agent/auth.json");
+    const noNode = { nodeCommand: "sealant-no-such-node" };
+    // A put naming pi needs node.
+    expect(
+      w.run({
+        home,
+        fence: { kind: "held", generation: GEN_A },
+        writes: [{ provider: "pi", content: entry("at-pi-2") }],
+        removes: [],
+        ...noNode,
+      }).status,
+    ).toBe(HOME_SCRIPT_EXIT.noNode);
+    // A release would leave Alice's copy for the next holder: refused, the home stays held.
+    expect(
+      w.run({
+        home,
+        fence: { kind: "release", generation: GEN_A },
+        writes: [],
+        removes: [],
+        ...noNode,
+      }).status,
+    ).toBe(HOME_SCRIPT_EXIT.noNode);
+    expect(json(pi)).toEqual({ "openai-codex": JSON.parse(entry("at-pi")) });
+    expect(w.marker(home)).toBe(GEN_A);
+    // With node, the release removes the copy.
+    expect(
+      w.run({ home, fence: { kind: "release", generation: GEN_A }, writes: [], removes: [] })
+        .status,
+    ).toBe(0);
+    expect(json(pi)).toEqual({});
+
+    // A first take that removes what it does not write is refused too when such a file exists,
+    // before it makes its marker.
+    const other = w.home("bob");
+    mkdirSync(join(other, ".local/share/opencode"), { recursive: true });
+    writeFileSync(join(other, ".local/share/opencode/auth.json"), "{}");
+    expect(
+      w.run({
+        home: other,
+        fence: { kind: "take", generation: GEN_B },
+        writes: [{ provider: "claude", content: "c" }],
+        removes: ["pi", "opencode"],
+        ...noNode,
+      }).status,
+    ).toBe(HOME_SCRIPT_EXIT.noNode);
+    expect(w.marker(other)).toBeUndefined();
+    // Where there is no such file, nothing needs node.
+    const empty = w.home("carol");
+    expect(
+      w.run({
+        home: empty,
+        fence: { kind: "take", generation: GEN_B },
+        writes: [{ provider: "claude", content: "c" }],
+        removes: ["pi", "opencode"],
+        ...noNode,
+      }).status,
+    ).toBe(0);
   });
 
   it("leaves a file that is not a JSON object as it is", () => {

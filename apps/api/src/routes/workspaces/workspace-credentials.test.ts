@@ -501,6 +501,35 @@ describe("putWorkspaceCredentials", () => {
     expect(world.homes.rows.size).toBe(0);
   });
 
+  it("answers an unusable or outside pi/opencode file as home-unusable, naming it, and clears the take", async () => {
+    for (const [exit, file] of [
+      [82, ".pi/agent/auth.json"],
+      [83, ".local/share/opencode/auth.json"],
+      [84, ".pi/agent/auth.json"],
+      [85, ".local/share/opencode/auth.json"],
+    ] as const) {
+      const world = newWorld();
+      world.exits.push(exit);
+      const refusal = failed(
+        await world.put({ onBehalfOfUserId: ALICE, pi: "chatgpt", opencode: "chatgpt" }),
+      );
+      expect(refusal).toMatchObject({ _tag: "WorkspaceConflictError", code: "home-unusable" });
+      expect(refusal.message).toContain(`${HOME}/${file}`);
+      expect(refusal.message).not.toContain("symbolic link");
+      // The take's release followed.
+      expect(world.ran).toHaveLength(2);
+      expect(world.homes.rows.size).toBe(0);
+    }
+  });
+
+  it("answers no node as home-unusable, and a release without node leaves the home held", async () => {
+    const world = newWorld();
+    succeeded(await world.put({ onBehalfOfUserId: ALICE, pi: "chatgpt" }));
+    world.exits.push(81);
+    expect(failed(await world.release())).toMatchObject({ code: "home-unusable" });
+    expect(world.homes.rows.get(`run_1 ${HOME}`)?.onBehalfOfUserId).toBe(ALICE);
+  });
+
   it("records nothing, and removes what it may have written, when a first write is unconfirmed", async () => {
     const world = newWorld();
     world.exits.push("throw");

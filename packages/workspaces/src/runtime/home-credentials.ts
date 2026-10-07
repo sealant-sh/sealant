@@ -51,8 +51,11 @@ const COPY_REFRESH_TOKEN = "sealant-copy-cannot-refresh";
  * - The file is followed through every link to where it really is (a link whose target does not
  *   exist yet included: Mend's person layout reaches opencode's `auth.json` through its saved data
  *   directory and back to `~/.mend/opencode/auth.json`). In a person's home that place must be
- *   inside the home and outside `/workspace`, so a login never lands in saved state: a put
- *   elsewhere exits 73, a scrub elsewhere has nothing of Core's to remove.
+ *   inside the home and outside `/workspace`, and the file must have one link, so a login never
+ *   lands in saved state: a put elsewhere exits 3.
+ * - A put whose file cannot be reached, opened or written as a regular file (a directory there,
+ *   the owner's permissions) exits 4. A scrub has nothing of Core's to remove in any of these cases
+ *   (outside the home, unreachable, not a regular file) and exits 0.
  * - A put writes the entry only when there is none or it is a copy (its refresh token is
  *   `sealant-copy-cannot-refresh`): a login the person made inside pi or opencode stays (Mend's
  *   ADR 0016 decision 8a). A scrub removes the entry only when it is a copy. A file that is not a
@@ -64,9 +67,10 @@ const MERGED_LOGIN_PROGRAM = [
   `const fs=require("fs"),path=require("path"),[file,key,home,mode]=process.argv.slice(1),C=${JSON.stringify(COPY_REFRESH_TOKEN)},put=mode==="put";`,
   `function resolve(p){for(let i=0;i<40;i++){let st;try{st=fs.lstatSync(p)}catch(e){if(e.code!=="ENOENT")throw e;return path.join(fs.realpathSync(path.dirname(p)),path.basename(p))}`,
   `if(!st.isSymbolicLink())return fs.realpathSync(p);p=path.resolve(fs.realpathSync(path.dirname(p)),fs.readlinkSync(p))}throw new Error("too many links")}`,
-  `let real;try{real=resolve(file)}catch{process.exit(put?73:0)}`,
-  `if(process.env.root!=="1"&&(!real.startsWith(home+"/")||real.startsWith("/workspace/")))process.exit(put?73:0);`,
-  `const F=fs.constants;let fd;try{fd=fs.openSync(real,F.O_RDWR|F.O_NOFOLLOW|(put?F.O_CREAT:0),0o600)}catch(e){process.exit(!put&&e.code==="ENOENT"?0:73)}`,
+  `let real;try{real=resolve(file)}catch{process.exit(put?4:0)}`,
+  `if(process.env.root!=="1"&&(!real.startsWith(home+"/")||real.startsWith("/workspace/")))process.exit(put?3:0);`,
+  `const F=fs.constants;let fd;try{fd=fs.openSync(real,F.O_RDWR|F.O_NOFOLLOW|(put?F.O_CREAT:0),0o600)}catch{process.exit(put?4:0)}`,
+  `const st=fs.fstatSync(fd);if(!st.isFile())process.exit(put?4:0);if(put&&st.nlink>1)process.exit(3);`,
   `let raw=fs.readFileSync(fd,"utf8"),v;if(raw.trim()==="")v={};else{try{v=JSON.parse(raw)}catch{process.exit(0)}}`,
   `if(v===null||typeof v!=="object"||Array.isArray(v))process.exit(0);`,
   `const prior=v[key],copy=prior!==null&&typeof prior==="object"&&prior.refresh===C;`,
@@ -176,6 +180,8 @@ export interface HomeCredentialScriptInput {
   readonly parentOwnerUid?: number;
   /** For tests: the owner's half's PATH (default the fixed system PATH, where images keep node). */
   readonly ownerPath?: string;
+  /** For tests: the node command (default `node`). */
+  readonly nodeCommand?: string;
 }
 
 /** Exit codes the script answers a refusal with. */
@@ -199,9 +205,29 @@ export const HOME_SCRIPT_EXIT = {
   untrusted: 79,
   /** The executor cannot run a process as the home's owner (`setpriv` refused). */
   cannotDrop: 80,
-  /** The image has no `node`, which pi's and opencode's logins are merged with. */
+  /**
+   * The image has no `node` on the owner's PATH, which pi's and opencode's logins are merged with,
+   * and the put writes one, or a login file to remove exists: refused, never skipped, so no earlier
+   * holder's copy is left behind.
+   */
   noNode: 81,
+  /** pi's `auth.json` could not be written: not a regular file the owner can write, or node failed. */
+  piLoginUnusable: 82,
+  /** opencode's `auth.json` could not be written, likewise. */
+  opencodeLoginUnusable: 83,
+  /** pi's `auth.json` really is outside the home, under `/workspace`, or has another hard link. */
+  piLoginOutside: 84,
+  /** opencode's `auth.json` likewise (a plain file in Mend's saved data directory, for one). */
+  opencodeLoginOutside: 85,
 } as const;
+
+/** The exits a merged login's write or removal answers for each provider. */
+const MERGED_EXITS: Readonly<
+  Partial<Record<HomeCredentialProvider, { readonly unusable: number; readonly outside: number }>>
+> = {
+  pi: { unusable: 82, outside: 84 },
+  opencode: { unusable: 83, outside: 85 },
+};
 
 const quote = (value: string): string => `'${value}'`;
 
@@ -262,6 +288,10 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
     throw new Error(`A skeleton directory is an absolute path of safe characters: '${skel}'.`);
   }
   const ownerPath = input.ownerPath ?? SAFE_PATH;
+  const node = input.nodeCommand ?? "node";
+  if (!/^[A-Za-z0-9._-]+$/.test(node)) {
+    throw new Error("A node command is a bare command name.");
+  }
   if (!/^\/[A-Za-z0-9._/-]*(:\/[A-Za-z0-9._/-]*)*$/.test(ownerPath)) {
     throw new Error(`An owner PATH is ':'-separated absolute paths of safe characters.`);
   }
@@ -347,17 +377,28 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
       }
       break;
   }
+  const removes: readonly HomeCredentialProvider[] =
+    input.fence.kind === "release"
+      ? [...HOME_FILE_PROVIDERS, "pi", "opencode"]
+      : input.removes.filter((provider) => !input.writes.includes(provider));
+  // A merged login to remove that exists cannot be removed without node: refused, never skipped,
+  // so an earlier holder's copy is never left behind for the next one (fail closed).
+  const mergedRemovals = removes.filter(isMergedLogin);
   // The owner's half must be able to run before the hold changes: a home whose owner cannot be
   // dropped to is unusable, and leaves no marker behind.
   lines.push(
     `if [ "$(id -u)" = 0 ]; then g=--clear-groups; else g=--keep-groups; fi`,
     `if [ "$uid" != 0 ]; then env -i PATH=${ownerPath} setpriv --reuid="$uid" --regid="$gid" "$g" true || exit ${HOME_SCRIPT_EXIT.cannotDrop}; fi`,
-    // pi's and opencode's logins are merged with node, found on the owner's half's PATH; a put
-    // that names one needs it, a removal without it has nothing of Core's to remove.
-    `hn=0; env -i PATH=${ownerPath} sh -c 'command -v node' >/dev/null 2>&1 && hn=1`,
+    // pi's and opencode's logins are merged with node, found on the owner's half's PATH: a put
+    // that names one needs it, and so does a removal whose file exists.
+    `hn=0; env -i PATH=${ownerPath} sh -c 'command -v ${node}' >/dev/null 2>&1 && hn=1`,
     ...(input.writes.some(isMergedLogin)
       ? [`[ "$hn" = 1 ] || exit ${HOME_SCRIPT_EXIT.noNode}`]
       : []),
+    ...mergedRemovals.map(
+      (provider) =>
+        `if [ "$hn" != 1 ] && { [ -e "$home/${HOME_CREDENTIAL_FILES[provider]}" ] || [ -L "$home/${HOME_CREDENTIAL_FILES[provider]}" ]; }; then exit ${HOME_SCRIPT_EXIT.noNode}; fi`,
+    ),
     // Written whole or not at all (a temporary file, then a rename).
     `printf '%s' "$token" > "$hw.tmp"; mv -f "$hw.tmp" "$hw"`,
   );
@@ -366,10 +407,6 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
   }
 
   // 6–7. Inside the home, as its owner.
-  const removes: readonly HomeCredentialProvider[] =
-    input.fence.kind === "release"
-      ? [...HOME_FILE_PROVIDERS, "pi", "opencode"]
-      : input.removes.filter((provider) => !input.writes.includes(provider));
   const inner: string[] = ["set -eu", "umask 077", `home=${quote(home)}`];
   const merges = [...input.writes, ...removes].some(isMergedLogin);
   if (merges) {
@@ -399,9 +436,11 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
       );
     }
     const entryKey = HOME_MERGED_LOGINS[provider];
-    if (entryKey !== undefined) {
+    const exits = MERGED_EXITS[provider];
+    if (entryKey !== undefined && exits !== undefined) {
       inner.push(
-        `e="$p${index}" root="$rt" node -e "$m" "$home/${relative}" ${entryKey} "$home" put || exit ${HOME_SCRIPT_EXIT.linkOnTheWay}`,
+        `c=0; e="$p${index}" root="$rt" ${node} -e "$m" "$home/${relative}" ${entryKey} "$home" put || c=$?`,
+        `case "$c" in 0) ;; 3) exit ${String(exits.outside)} ;; *) exit ${String(exits.unusable)} ;; esac`,
       );
       return;
     }
@@ -416,10 +455,12 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
   });
   for (const provider of removes) {
     const entryKey = HOME_MERGED_LOGINS[provider];
+    const exits = MERGED_EXITS[provider];
     inner.push(
-      entryKey === undefined
+      entryKey === undefined || exits === undefined
         ? `rm -f "$home/${HOME_CREDENTIAL_FILES[provider]}"`
-        : `if [ "$hn" = 1 ]; then root="$rt" node -e "$m" "$home/${HOME_CREDENTIAL_FILES[provider]}" ${entryKey} "$home" scrub || exit ${HOME_SCRIPT_EXIT.linkOnTheWay}; fi`,
+        : // Without node there is no such file (the root half refused otherwise).
+          `if [ "$hn" = 1 ]; then root="$rt" ${node} -e "$m" "$home/${HOME_CREDENTIAL_FILES[provider]}" ${entryKey} "$home" scrub || exit ${String(exits.unusable)}; fi`,
     );
   }
 
@@ -512,9 +553,25 @@ export const homeScriptRefusal = (
 ): string | undefined => {
   switch (exitCode) {
     case HOME_SCRIPT_EXIT.linkOnTheWay:
-      return `A component of ${home} is a symbolic link, or one of its login files or directories leads outside it (or into /workspace); Core writes logins only into a home reached without one, and keeps them inside it.`;
+      return `A component of ${home} is a symbolic link, or one of its login directories links outside it; Core writes logins only into a home reached without one, and keeps them inside it.`;
     case HOME_SCRIPT_EXIT.noNode:
-      return `The workspace's image has no node on its PATH, which writing pi's and opencode's logins needs.`;
+      return `The workspace's image has no node on its system PATH, which writing or removing pi's and opencode's logins in ${home} needs; nothing was changed, and a release leaves the home held.`;
+    case HOME_SCRIPT_EXIT.piLoginUnusable:
+    case HOME_SCRIPT_EXIT.opencodeLoginUnusable: {
+      const file =
+        exitCode === HOME_SCRIPT_EXIT.piLoginUnusable
+          ? HOME_CREDENTIAL_FILES.pi
+          : HOME_CREDENTIAL_FILES.opencode;
+      return `${home}/${file} could not be written as its owner: it is not a regular file they can write (a directory there, for one), or node failed.`;
+    }
+    case HOME_SCRIPT_EXIT.piLoginOutside:
+    case HOME_SCRIPT_EXIT.opencodeLoginOutside: {
+      const file =
+        exitCode === HOME_SCRIPT_EXIT.piLoginOutside
+          ? HOME_CREDENTIAL_FILES.pi
+          : HOME_CREDENTIAL_FILES.opencode;
+      return `${home}/${file} really is outside ${home}, under /workspace, or has another hard link; Core writes a login only where it stays in the home, never into saved state.`;
+    }
     case HOME_SCRIPT_EXIT.missing:
       return `${home} does not exist in the workspace, or is not a directory. Make the home (its user) first.`;
     case HOME_SCRIPT_EXIT.fenced:
