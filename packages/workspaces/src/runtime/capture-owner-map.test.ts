@@ -15,10 +15,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import { imageAppliesOwnerMap } from "../buildkit/person-layout.js";
 import { ownerMapLaunchRefusal } from "../worker/process-workspace-build-job.js";
-import { captureSourceEnv } from "./capture-source.js";
+import { captureOwnerMapEnv, captureSourceEnv } from "./capture-source.js";
 import { supportForCloudflare } from "./cloudflare/adapter.js";
 import { cases } from "./docker-runtime-adapter.golden-fixture.js";
 import { DockerRuntimeAdapter } from "./docker-runtime-adapter.js";
+import { supportForKubernetes } from "./kubernetes/adapter.js";
 import { kubernetesRuntimeConfigSchema } from "./kubernetes/config.js";
 import { plainEnvEntries } from "./kubernetes/manifests.js";
 import { microvmBootEnv } from "./microvm/adapter.js";
@@ -226,23 +227,58 @@ describe("the owner map's encoding", () => {
 });
 
 describe("the owner map in the boot env", () => {
-  it("is delivered with the capture source, once, after the harness root", () => {
-    const env = captureSourceEnv(captureSourceOf(captureLaunch({ ownerMap: OWNER_MAP })));
-    expect(ownerMapEntries(env)).toEqual([["SEALANT_CAPTURE_OWNER_MAP", ENCODED]]);
+  /** sealant#333 review P2-1: a name holding `=` that Docker would split into the map's name. */
+  const SMUGGLED = {
+    'SEALANT_CAPTURE_OWNER_MAP={"gid":40000,"worktree":1000,"people":{"x': '":1000}}',
+  };
+
+  it("is its own entry, never part of the channel facts", () => {
+    const source = captureSourceOf(captureLaunch({ ownerMap: OWNER_MAP }));
+    expect(ownerMapEntries(captureSourceEnv(source))).toEqual([]);
+    expect(captureOwnerMapEnv(source)).toEqual([["SEALANT_CAPTURE_OWNER_MAP", ENCODED]]);
   });
 
-  it("adds nothing for a capture source without one", () => {
-    expect(ownerMapEntries(captureSourceEnv(captureSourceOf(captureLaunch())))).toEqual([]);
+  it("is empty for a capture source without one (no map to sealantd, overriding image ENV)", () => {
+    expect(captureOwnerMapEnv(captureSourceOf(captureLaunch()))).toEqual([
+      ["SEALANT_CAPTURE_OWNER_MAP", ""],
+    ]);
+    expect(captureOwnerMapEnv(cases.gitSource.blueprint.sources.workspace)).toEqual([]);
   });
 
-  it("reaches Docker's argv, and a legacy runtime.env never sets or overrides it", async () => {
+  it("refuses a runtime.env name holding '=', the reviewer's exact payload, on every parse", () => {
+    expect(() => captureLaunch({ env: SMUGGLED })).toThrow(/runtime\.env names must match/);
+    expect(() => captureLaunch({ ownerMap: OWNER_MAP, env: SMUGGLED })).toThrow(
+      /runtime\.env names must match/,
+    );
+    expect(() =>
+      parseWorkspaceBlueprint({
+        sources: { workspace: { url: "https://github.com/acme/app.git" } },
+        harness: { id: "claude-code" },
+        runtime: { env: SMUGGLED },
+      }),
+    ).toThrow(/runtime\.env names must match/);
+    // The rejection never echoes the name.
+    try {
+      captureLaunch({ env: SMUGGLED });
+    } catch (error) {
+      expect(String(error)).not.toContain('"worktree":1000');
+    }
+  });
+
+  it("is Docker's last -e, so nothing a launch carries overrides it", async () => {
     const legacy = { SEALANT_CAPTURE_OWNER_MAP: '{"gid":40000,"worktree":40001,"people":{"x":1}}' };
     const withMap = await dockerArgs(captureLaunch({ ownerMap: OWNER_MAP, env: legacy }));
-    expect(withMap.filter((arg) => arg.startsWith("SEALANT_CAPTURE_OWNER_MAP="))).toEqual([
+    const envArgs = withMap.filter((arg, index) => withMap[index - 1] === "-e");
+    expect(envArgs.filter((arg) => arg.startsWith("SEALANT_CAPTURE_OWNER_MAP"))).toEqual([
       `SEALANT_CAPTURE_OWNER_MAP=${ENCODED}`,
     ]);
+    expect(envArgs.at(-1)).toBe(`SEALANT_CAPTURE_OWNER_MAP=${ENCODED}`);
     const without = await dockerArgs(captureLaunch({ env: legacy }));
-    expect(without.some((arg) => arg.startsWith("SEALANT_CAPTURE_OWNER_MAP="))).toBe(false);
+    const withoutEnv = without.filter((arg, index) => without[index - 1] === "-e");
+    expect(withoutEnv.filter((arg) => arg.startsWith("SEALANT_CAPTURE_OWNER_MAP"))).toEqual([
+      "SEALANT_CAPTURE_OWNER_MAP=",
+    ]);
+    expect(withoutEnv.at(-1)).toBe("SEALANT_CAPTURE_OWNER_MAP=");
     const git = await dockerArgs(
       parseRuntimeAdapterLaunchInput({
         ...cases.gitSource,
@@ -252,10 +288,10 @@ describe("the owner map in the boot env", () => {
         },
       }),
     );
-    expect(git.some((arg) => arg.startsWith("SEALANT_CAPTURE_OWNER_MAP="))).toBe(false);
+    expect(git.some((arg) => arg.startsWith("SEALANT_CAPTURE_OWNER_MAP"))).toBe(false);
   });
 
-  it("reaches a Kubernetes Pod's env, and a legacy runtime.env never sets or overrides it", () => {
+  it("is a Kubernetes Pod's last plain entry, and a legacy runtime.env never sets it", () => {
     const options = { secretEnvFile: true, dotfilesArchiveDir: undefined };
     const legacy = { SEALANT_CAPTURE_OWNER_MAP: "{}" };
     const withMap = plainEnvEntries(
@@ -264,15 +300,16 @@ describe("the owner map in the boot env", () => {
       options,
     );
     expect(ownerMapEntries(withMap)).toEqual([["SEALANT_CAPTURE_OWNER_MAP", ENCODED]]);
+    expect(withMap.at(-1)).toEqual(["SEALANT_CAPTURE_OWNER_MAP", ENCODED]);
     const without = plainEnvEntries(
       { ...captureLaunch({ env: legacy }), binds: undefined },
       k8sConfig,
       options,
     );
-    expect(ownerMapEntries(without)).toEqual([]);
+    expect(ownerMapEntries(without)).toEqual([["SEALANT_CAPTURE_OWNER_MAP", ""]]);
   });
 
-  it("reaches a MicroVM's boot env, and a legacy runtime.env never sets or overrides it", () => {
+  it("is a MicroVM's boot env entry, and a legacy runtime.env never sets it", () => {
     const legacy = { SEALANT_CAPTURE_OWNER_MAP: "{}" };
     expect(
       microvmBootEnv(captureLaunch({ ownerMap: OWNER_MAP, env: legacy }), {
@@ -281,14 +318,25 @@ describe("the owner map in the boot env", () => {
       })["SEALANT_CAPTURE_OWNER_MAP"],
     ).toBe(ENCODED);
     expect(
-      microvmBootEnv(captureLaunch({ env: legacy }), { secretEnvFile: true, dotfiles: false }),
-    ).not.toHaveProperty("SEALANT_CAPTURE_OWNER_MAP");
+      microvmBootEnv(captureLaunch({ env: legacy }), { secretEnvFile: true, dotfiles: false })[
+        "SEALANT_CAPTURE_OWNER_MAP"
+      ],
+    ).toBe("");
   });
 
-  it("is refused on Cloudflare, whose sandboxes record no per-person capability", () => {
-    expect(
-      supportForCloudflare({ blueprint: captureLaunch({ ownerMap: OWNER_MAP }).blueprint }),
-    ).toMatchObject({ supported: false, reason: "unsupported-runtime-requirement" });
+  it("is refused on Cloudflare and on Kubernetes, where no person's sudo could work", () => {
+    const blueprint = captureLaunch({ ownerMap: OWNER_MAP }).blueprint;
+    expect(supportForCloudflare({ blueprint })).toMatchObject({
+      supported: false,
+      reason: "unsupported-runtime-requirement",
+    });
+    for (const id of ["k8s", "k3s"] as const) {
+      expect(supportForKubernetes(id, k8sConfig, { blueprint })).toMatchObject({
+        supported: false,
+        reason: "unsupported-runtime-requirement",
+        message: expect.stringContaining("allowPrivilegeEscalation: false"),
+      });
+    }
   });
 });
 

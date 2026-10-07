@@ -17,6 +17,7 @@
  * `sealant-workspace-fedora:latest`. Run with:
  *   pnpm --filter @sealant/workspaces test:e2e src/runtime/capture-owner-map.e2e.ts
  */
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -67,6 +68,7 @@ const launchInput = (input: {
   readonly endpoint: string;
   readonly secretEnvDir: string;
   readonly ownerMap?: typeof OWNER_MAP;
+  readonly image?: string;
 }): RuntimeAdapterLaunchInput =>
   parseRuntimeAdapterLaunchInput({
     blueprint: {
@@ -93,8 +95,8 @@ const launchInput = (input: {
     publishedImage: {
       repository: "sealant-workspace-fedora",
       tag: "latest",
-      reference: IMAGE_REF,
-      digestReference: IMAGE_REF,
+      reference: input.image ?? IMAGE_REF,
+      digestReference: input.image ?? IMAGE_REF,
       digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     },
     runId: `owner-map-e2e-${randomUUID()}`,
@@ -223,18 +225,42 @@ const adapter = new DockerRuntimeAdapter({
   workspaceNetwork: "host",
 });
 
-const launch = async (ownerMap?: typeof OWNER_MAP) => {
+const launch = async (ownerMap?: typeof OWNER_MAP, image?: string) => {
   if (channel === undefined) throw new Error("the capture channel is not up");
   const launched = await adapter.launch(
     launchInput({
       endpoint: channel.endpoint,
       secretEnvDir,
       ...(ownerMap === undefined ? {} : { ownerMap }),
+      ...(image === undefined ? {} : { image }),
     }),
   );
   containers.add(launched.resourceId);
   return launched.resourceId;
 };
+
+/** Whether the daemon says it booted under an owner map (`capture.status`). */
+const bootedUnderOwnerMap = (containerId: string) =>
+  withDaemon(containerId, (session) => session.captureStatus()).then((status) => status.ownerMap);
+
+/** `docker build -t tag -` with the Dockerfile on stdin. */
+const buildFromStdin = (tag: string, dockerfile: string) =>
+  new Promise<void>((resolve, reject) => {
+    const child = spawn("docker", ["build", "-q", "-t", tag, "-"], {
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`docker build ${tag} exited ${String(code)}: ${stderr}`));
+    });
+    child.stdin.end(dockerfile);
+  });
 
 const remove = async (containerId: string) => {
   await docker(["rm", "-f", containerId]);
@@ -302,6 +328,7 @@ describe.skipIf(!imageTakesOwnerMap)(
     it("without a map: the restore is root's at the recorded modes, as today", async () => {
       const plain = await launch();
       expect(await noNewPrivileges(plain)).toBe(true);
+      expect(await bootedUnderOwnerMap(plain)).toBe(false);
       const found = await owners(plain, [REPO, `${REPO}/src/a.ts`, PERSON_DIR, TRANSCRIPT]);
       expect(found[REPO]?.startsWith("0:0:")).toBe(true);
       expect(found[`${REPO}/src/a.ts`]).toBe("0:0:644");
@@ -313,6 +340,7 @@ describe.skipIf(!imageTakesOwnerMap)(
     it("with a map: no-new-privileges unset, a person's sudo works, each file its owner's", async () => {
       const person = await launch(OWNER_MAP);
       expect(await noNewPrivileges(person)).toBe(false);
+      expect(await bootedUnderOwnerMap(person)).toBe(true);
       const sudo = await personSudo(person);
       expect(sudo.stdout).toContain("SUDO_OK");
       expect(sudo.stdout).toMatch(/NoNewPrivs:\s*0/);
@@ -358,6 +386,26 @@ describe.skipIf(!imageTakesOwnerMap)(
       );
       expect(edit.stdout).toContain("EDIT_OK");
       expect(channel?.state.errors).toEqual([]);
+    }, 240_000);
+
+    it("an image ENV naming a map is overridden: the executor keeps no-new-privileges", async () => {
+      // sealant#333 review P3-1: a custom base that sets the variable must not make an executor
+      // per-person behind Core's checks. Every capture launch sets it last, empty without a map.
+      const tag = `sealant-owner-map-e2e-env:${randomUUID().slice(0, 8)}`;
+      await buildFromStdin(
+        tag,
+        `FROM ${IMAGE_REF}\nENV SEALANT_CAPTURE_OWNER_MAP='{"gid":40000,"worktree":1000,"people":{"x":1000}}'\n`,
+      );
+      try {
+        const smuggled = await launch(undefined, tag);
+        expect(await noNewPrivileges(smuggled)).toBe(true);
+        expect(await bootedUnderOwnerMap(smuggled)).toBe(false);
+        const sudo = await personSudo(smuggled);
+        expect(sudo.stdout).toContain("SUDO_REFUSED");
+        await remove(smuggled);
+      } finally {
+        await docker(["rmi", "-f", tag]).catch(() => undefined);
+      }
     }, 240_000);
   },
 );

@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Sealant } from "./client.js";
 import { type ControlPlaneClient, SealantApiClient } from "./effect/api-client.js";
 import type { SdkRuntime, SdkServices } from "./effect/runtime.js";
+import { SealantError } from "./errors.js";
 import type { SdkContext } from "./facade/context.js";
 import { makeWorkspace } from "./facade/workspace.js";
 import { opencode } from "./harness.js";
@@ -140,6 +141,33 @@ describe("a capture source's ownerMap", () => {
       config,
     ).payload.spec as { sources: { workspace: Record<string, unknown> } };
     expect(plain.sources.workspace).not.toHaveProperty("ownerMap");
+  });
+
+  it("is refused as a SealantError, never a TypeError, when plain JavaScript hands a malformed map", () => {
+    for (const malformed of [
+      { gid: 40000, worktreeUid: 40012 },
+      { gid: 40000, worktreeUid: 40012, people: [null] },
+      { gid: 40000, worktreeUid: 40012, people: [{ uid: 40012 }] },
+      null,
+    ]) {
+      let thrown: unknown;
+      try {
+        buildCreateWorkspaceRequest(
+          {
+            // A plain JavaScript caller: nothing typed reaches here.
+            source: JSON.parse(
+              JSON.stringify({ ...captureSource(undefined), ownerMap: malformed }),
+            ),
+            harness: opencode(),
+          },
+          config,
+        );
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(SealantError);
+      expect(thrown).toMatchObject({ code: "invalid_create_options" });
+    }
   });
 
   it("is refused here, with the control plane's words, before anything is sent", () => {

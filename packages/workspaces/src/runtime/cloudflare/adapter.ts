@@ -6,7 +6,7 @@
  * sealantd inside the sandbox, authenticated per-connection with the deployment's control bearer
  * token (`SEALANT_CONTROL_BEARER_TOKEN`, see `sealantd/target.ts`).
  */
-import { CAPTURE_SOURCE_ONLY_ENV } from "../capture-source.js";
+import { CAPTURE_SOURCE_ONLY_ENV, captureOwnerMapEnv } from "../capture-source.js";
 import { inlineDotfilesFromDir } from "../inline-dotfiles.js";
 import {
   parseRuntimeAdapterLaunchInput,
@@ -203,6 +203,9 @@ export class CloudflareRuntimeAdapter implements RuntimeAdapter {
         ),
         ...parsed.platformEnv,
         ...parsed.credentialEnv,
+        // Last, so nothing overrides it: always empty here (Cloudflare refuses a map), which
+        // overrides an image `ENV` of the same name.
+        ...Object.fromEntries(captureOwnerMapEnv(parsed.blueprint.sources.workspace)),
       },
       ...(parsed.secretEnv === undefined || Object.keys(parsed.secretEnv).length === 0
         ? {}

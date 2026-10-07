@@ -119,12 +119,23 @@ Core checks the map at create: `gid` 40000, every uid in 40001–49999 (the rang
 group's), ids that are one directory name, no id and no uid twice, at most 256 people. It launches
 one only on an image whose probe reports `restore.owner_map` from its `sealantd`; on another image,
 or one with no probe, the launch fails with `owner-map-unsupported` and nothing starts. Cloudflare
-sandboxes refuse it at create. Only the source sets it: a workspace's environment, its secret
-environment and a cluster ConfigMap never reach `SEALANT_CAPTURE_OWNER_MAP`.
+sandboxes refuse it at create, and so does Kubernetes: its workspace Pods run with
+`allowPrivilegeEscalation: false`, so the kubelet sets no-new-privileges and no person's `sudo`
+could work.
+
+The map is the workspace creator's choice of privilege. Whoever can create a workspace can set one,
+for that workspace, and so turns off no-new-privileges there; they already choose its image, its
+environment and every command it runs. Only the source sets it: every capture launch sets
+`SEALANT_CAPTURE_OWNER_MAP` after everything else, empty when the source names no map (`sealantd`
+reads empty as none), so a workspace's environment, its secret environment, a cluster ConfigMap and
+an image `ENV` cannot, and an environment variable name holding `=` is refused at create.
 
 The map is fixed for the executor's life, since `sealantd` reads it at boot: a standby's claim and a
-recovery restore under the map the executor booted with. A workspace without a map boots and
-restores exactly as before, and pays nothing for the option.
+recovery restore under the map the executor booted with. A claim can name the map it needs
+(`expectedOwnerMap` on `POST /v1/workspaces/:id/capture/replan`, `null` for none) and is refused
+with `409` `owner-map-mismatch`, before anything is re-planned, on an executor launched with
+another. The capture status reports `ownerMap: true` for an executor that booted under one. A
+workspace without a map boots and restores exactly as before, and pays nothing for the option.
 
 ## Nix images take one person
 

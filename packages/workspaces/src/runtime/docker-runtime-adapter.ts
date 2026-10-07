@@ -11,6 +11,7 @@ import { getHarnessIntegration } from "../harness/integrations.js";
 import {
   CAPTURE_HARNESS_HOME_ENV,
   CAPTURE_SOURCE_ONLY_ENV,
+  captureOwnerMapEnv,
   captureSourceEnv,
 } from "./capture-source.js";
 import { buildCredentialFileWriteScript } from "./credential-files.js";
@@ -2186,6 +2187,11 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         // -e flags, so a blueprint `runtime.env` entry must not shadow the securely-resolved token
         // (e.g. a user-set GITHUB_TOKEN overriding the injected connected-account identity).
         ...credentialEnvArgs,
+        // The capture owner map after everything, so no lane can override it (`captureOwnerMapEnv`).
+        ...captureOwnerMapEnv(parsed.blueprint.sources.workspace).flatMap(([key, value]) => [
+          "-e",
+          `${key}=${value}`,
+        ]),
         imageReference,
       ];
       // Never `--rm` a capture workspace: Docker would delete its disk the moment it exits, and

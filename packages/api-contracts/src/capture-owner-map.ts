@@ -71,6 +71,14 @@ const UID_RANGE_TEXT = `${CAPTURE_OWNER_MAP_UID_RANGE.first}–${CAPTURE_OWNER_M
  * person's saved directory is never handed to another).
  */
 export const captureOwnerMapProblems = (map: CaptureOwnerMap): ReadonlyArray<string> => {
+  // A plain JavaScript caller may hand anything: refused in words, never a TypeError.
+  const shape: unknown = map;
+  if (typeof shape !== "object" || shape === null) {
+    return ["ownerMap must be an object { gid, worktreeUid, people }"];
+  }
+  if (!Array.isArray(map.people)) {
+    return ["ownerMap.people must be an array of { id, uid }"];
+  }
   const problems: string[] = [];
   if (map.gid !== CAPTURE_OWNER_MAP_GID) {
     problems.push(`ownerMap.gid must be ${CAPTURE_OWNER_MAP_GID} (the mend group), not ${map.gid}`);
@@ -87,7 +95,12 @@ export const captureOwnerMapProblems = (map: CaptureOwnerMap): ReadonlyArray<str
   const ids = new Set<string>();
   const uids = new Map<number, string>();
   for (const [index, person] of map.people.entries()) {
-    if (!CAPTURE_OWNER_MAP_ID_PATTERN.test(person.id)) {
+    const entry: unknown = person;
+    if (typeof entry !== "object" || entry === null) {
+      problems.push(`ownerMap.people[${index}] must be an object { id, uid }`);
+      continue;
+    }
+    if (typeof person.id !== "string" || !CAPTURE_OWNER_MAP_ID_PATTERN.test(person.id)) {
       problems.push(
         `ownerMap.people[${index}].id must be one directory name of letters, digits, '.', '_' or '-' (at most 128, not starting with '.' or '-')`,
       );

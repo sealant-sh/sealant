@@ -4,6 +4,7 @@ import {
   workspaceCaptureReplannedSchema,
   workspaceCaptureStatusSchema,
   type FlushWorkspaceCaptureRequest,
+  type ReplanWorkspaceCaptureRequest,
 } from "@sealant/api-contracts";
 import {
   WorkspaceAttemptRepo,
@@ -27,10 +28,10 @@ import {
   type CaptureReplanReport,
   type SealantSession,
 } from "@sealant/workspaces";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Result, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { flushWorkspaceCapture } from "./workspaces.module.js";
+import { flushWorkspaceCapture, replanWorkspaceCapture } from "./workspaces.module.js";
 
 const REPORT: CaptureFlushReport = {
   epoch: 3,
@@ -55,6 +56,8 @@ const flushHarness = (
   options: {
     /** The first flush's connection closes before its answer (a FINAL's sweep killed the relay). */
     readonly firstFlushClosed?: boolean;
+    /** The owner map the workspace's executor was launched with. */
+    readonly ownerMap?: unknown;
   } = {},
 ) => {
   const flushRequests: Array<CaptureFlushRequest | undefined> = [];
@@ -69,6 +72,7 @@ const flushHarness = (
         endpoint: "https://mend.example.com/session/s1",
         worktreeId: "wt_1",
         harnessHome: "/home/sealant/.claude",
+        ...(options.ownerMap === undefined ? {} : { ownerMap: options.ownerMap }),
       },
     },
     harness: { id: "claude-code" },
@@ -91,6 +95,10 @@ const flushHarness = (
     captureStatus: () => {
       calls.push("status");
       return Effect.succeed(report);
+    },
+    captureReplan: () => {
+      calls.push("replan");
+      return Effect.succeed(REPLANNED);
     },
   } as unknown as SealantSession;
   const layer = Layer.mergeAll(
@@ -142,7 +150,27 @@ const flushHarness = (
         payload: { ownerUserId: "usr_owner", ...payload },
       }).pipe(Effect.provide(layer)),
     );
-  return { flush, flushRequests, calls, recorded, fences };
+  const replan = (payload: Omit<ReplanWorkspaceCaptureRequest, "ownerUserId">) =>
+    Effect.runPromise(
+      Effect.result(
+        replanWorkspaceCapture({
+          workspaceId: "ws_1",
+          payload: { ownerUserId: "usr_owner", ...payload },
+        }).pipe(Effect.provide(layer)),
+      ),
+    );
+  return { flush, replan, flushRequests, calls, recorded, fences };
+};
+
+const REPLANNED: CaptureReplanReport = {
+  worktreeId: "wt_1",
+  epoch: 4,
+  filesWritten: 1,
+  bytesWritten: 10,
+  filesSkipped: 0,
+  bytesSkipped: 0,
+  removed: 0,
+  unchanged: false,
 };
 
 /**
@@ -343,5 +371,59 @@ describe("workspace capture flush request", () => {
     const h = flushHarness(saved, { firstFlushClosed: true });
     expect(await h.flush({ kind: "final" })).toEqual(saved);
     expect(h.calls).toEqual(["flush", "status"]);
+  });
+});
+
+describe("a standby's claim names the owner map it needs (sealant#333 review P2-2)", () => {
+  const ownerMap = {
+    gid: 40000,
+    worktreeUid: 40012,
+    people: [
+      { id: "acct_a", uid: 40012 },
+      { id: "acct_b", uid: 40031 },
+    ],
+  };
+
+  it("re-plans when the executor was launched with that map, in any order of people", async () => {
+    const h = flushHarness(REPORT, { ownerMap });
+    const answer = await h.replan({
+      expectedOwnerMap: { ...ownerMap, people: ownerMap.people.toReversed() },
+    });
+    expect(Result.isSuccess(answer)).toBe(true);
+    expect(h.calls).toEqual(["replan"]);
+  });
+
+  it("refuses another map, and none where one was expected, before the daemon is reached", async () => {
+    for (const [launched, expected] of [
+      [ownerMap, { ...ownerMap, people: ownerMap.people.slice(0, 1) }],
+      [ownerMap, { ...ownerMap, worktreeUid: 40031 }],
+      [undefined, ownerMap],
+      [ownerMap, null],
+    ] as const) {
+      const h = flushHarness(REPORT, { ownerMap: launched });
+      const answer = await h.replan({ expectedOwnerMap: expected });
+      expect(Result.isFailure(answer)).toBe(true);
+      if (Result.isFailure(answer)) {
+        expect(answer.failure).toMatchObject({
+          _tag: "WorkspaceConflictError",
+          code: "owner-map-mismatch",
+        });
+      }
+      expect(h.calls).toEqual([]);
+    }
+  });
+
+  it("re-plans a standby launched with none when none is expected, and compares nothing unasked", async () => {
+    const none = flushHarness(REPORT);
+    expect(Result.isSuccess(await none.replan({ expectedOwnerMap: null }))).toBe(true);
+    const unasked = flushHarness(REPORT, { ownerMap });
+    expect(Result.isSuccess(await unasked.replan({}))).toBe(true);
+    expect([...none.calls, ...unasked.calls]).toEqual(["replan", "replan"]);
+  });
+
+  it("answers whether the executor booted under an owner map in its capture status", () => {
+    const decode = Schema.decodeUnknownSync(workspaceCaptureStatusSchema);
+    expect(decode({ ...REPORT, ownerMap: true }).ownerMap).toBe(true);
+    expect("ownerMap" in decode(REPORT)).toBe(false);
   });
 });

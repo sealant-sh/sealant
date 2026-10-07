@@ -2,6 +2,7 @@ import { captureOwnerMapProblems } from "@sealant/api-contracts/capture-owner-ma
 import {
   formatWorkspaceEnvIssue,
   parseWorkspaceEnv,
+  WORKSPACE_ENV_NAME_PATTERN,
 } from "@sealant/api-contracts/workspace-environment";
 import { z } from "zod";
 
@@ -457,9 +458,28 @@ export const workspaceCredentialsHomeSchema = z.strictObject({
 
 export type WorkspaceCredentialsHome = z.infer<typeof workspaceCredentialsHomeSchema>;
 
+/**
+ * The LEGACY `runtime.env`: unrestricted values and names (platform names included) for stored
+ * specs, but every name an environment variable name. A name holding `=` would split on the
+ * runtime's side (`docker run -e NAME=VALUE`) into another variable than the one checked, so it
+ * is refused on every parse, without echoing the name.
+ */
+export const workspaceLegacyEnvSchema = z
+  .record(z.string(), z.string())
+  .default({})
+  .superRefine((value, ctx) => {
+    const invalid = Object.keys(value).filter((name) => !WORKSPACE_ENV_NAME_PATTERN.test(name));
+    if (invalid.length > 0) {
+      ctx.addIssue({
+        code: "custom",
+        message: `runtime.env names must match [A-Za-z_][A-Za-z0-9_]* (${invalid.length} do not)`,
+      });
+    }
+  });
+
 export const workspaceSpecRuntimeSchema = z
   .strictObject({
-    env: z.record(z.string(), z.string()).default({}),
+    env: workspaceLegacyEnvSchema,
     userEnv: workspaceUserEnvSchema,
     credentialRefs: z.array(workspaceCredentialRefSchema).default([]),
     credentialsHome: workspaceCredentialsHomeSchema.optional(),

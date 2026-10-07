@@ -56,7 +56,7 @@ describe("blueprint runtime.userEnv", () => {
     expect(String(thrown)).not.toContain("ghp_super_sensitive");
   });
 
-  it("leaves LEGACY runtime.env unrestricted for stored-spec compatibility", () => {
+  it("leaves LEGACY runtime.env names unrestricted for stored-spec compatibility", () => {
     // Pre-feature specs may carry entries the new policy would refuse — including platform
     // overrides. They must keep parsing (and restarting) with their previous semantics.
     const blueprint = parseWorkspaceBlueprint({
@@ -65,15 +65,28 @@ describe("blueprint runtime.userEnv", () => {
         env: {
           GITHUB_TOKEN: "stored-before-the-policy-existed",
           SEALANT_HARNESS_BANNER: "legacy override",
-          "not a valid name either": "kept",
         },
       },
     });
     expect(blueprint.runtime.env).toEqual({
       GITHUB_TOKEN: "stored-before-the-policy-existed",
       SEALANT_HARNESS_BANNER: "legacy override",
-      "not a valid name either": "kept",
     });
     expect(blueprint.runtime.userEnv).toEqual({});
+  });
+
+  it("refuses a LEGACY runtime.env name that is not an environment variable name", () => {
+    // sealant#333 review P2-1: `docker run -e NAME=VALUE` splits at the first `=`, so a name
+    // holding one becomes another variable than the one checked.
+    for (const name of [
+      "not a valid name either",
+      'SEALANT_CAPTURE_OWNER_MAP={"gid":40000,"worktree":1000,"people":{"x',
+      "A=B",
+      "",
+    ]) {
+      expect(() =>
+        parseWorkspaceBlueprint({ ...baseSpec, runtime: { env: { [name]: "x" } } }),
+      ).toThrow(/runtime\.env names must match/);
+    }
   });
 });

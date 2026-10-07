@@ -299,12 +299,19 @@ const workspace = await sealant.workspaces.create({
   `-`), no id and no uid twice, at most 256 people.
 - Launched only on an image whose probe reports `restore.owner_map` from its sealantd
   (`personLayout`); on any other image, or one with no probe, the launch fails with
-  `owner-map-unsupported` before anything starts. Refused at create on Cloudflare.
+  `owner-map-unsupported` before anything starts. Refused at create on Cloudflare, and on
+  Kubernetes, whose Pods run with `allowPrivilegeEscalation: false`, so no person's `sudo` could
+  work there.
 - The map is the executor's for its life: the daemon reads it at boot. A standby's claim
-  (`capture.replan()`) and a recovery restore under the map it booted with; nothing changes it after
-  the launch.
-- Only this field sets it: `env`, `secretEnv` and a cluster ConfigMap never reach
-  `SEALANT_CAPTURE_OWNER_MAP`.
+  (`capture.replan()`) and a recovery restore under the map it booted with. Pass
+  `capture.replan({ expectedOwnerMap })` (or `null` for none) to have the claim refused
+  (`owner-map-mismatch`, nothing re-planned) on an executor launched with another map;
+  `capture.status()` reports `ownerMap: true` for an executor that booted under one.
+- It is the workspace creator's choice of privilege: whoever can create the workspace can set it,
+  for that workspace, and turns off no-new-privileges there. Only this field sets it. Every capture
+  launch sets `SEALANT_CAPTURE_OWNER_MAP` last, empty without a map, so neither `env`, `secretEnv`,
+  a cluster ConfigMap nor an image `ENV` can, and an environment variable name holding `=` is
+  refused.
 
 ## Dotfiles and shell
 

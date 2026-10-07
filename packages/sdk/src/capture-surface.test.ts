@@ -230,6 +230,7 @@ describe("workspace.capture", () => {
         runningMs: 95_000,
         boundMs: 60_000,
       },
+      ownerMap: true,
     };
     expect(Object.keys(full).toSorted()).toEqual(
       Object.keys(workspaceCaptureStatusSchema.fields).toSorted(),
@@ -257,6 +258,7 @@ describe("workspace.capture", () => {
       "snapsFailed",
       "origin",
       "overdue",
+      "ownerMap",
     ]) {
       expect(key in status).toBe(false);
     }
@@ -271,6 +273,26 @@ describe("workspace.capture", () => {
     expect(replanned).toEqual(REPLANNED);
     expect("headN" in replanned).toBe(false);
     expect("headCaptureId" in replanned).toBe(false);
+  });
+
+  it("replan() sends the owner map the claim expects, null for none, and nothing unasked", async () => {
+    const { client, calls } = makeStub({});
+    const workspace = workspaceFor(client);
+    const expectedOwnerMap = { gid: 40000, worktreeUid: 40012, people: [{ id: "a", uid: 40012 }] };
+    await workspace.capture.replan({ expectedOwnerMap });
+    await workspace.capture.replan({ expectedOwnerMap: null });
+    await workspace.capture.replan({});
+    expect(calls.replan).toEqual([
+      {
+        params: { workspaceId: "ws_1" },
+        payload: { ownerUserId: "usr_local", expectedOwnerMap },
+      },
+      {
+        params: { workspaceId: "ws_1" },
+        payload: { ownerUserId: "usr_local", expectedOwnerMap: null },
+      },
+      { params: { workspaceId: "ws_1" }, payload: { ownerUserId: "usr_local" } },
+    ]);
   });
 
   it("replan() keeps the head fields and the idempotent flag when the daemon reports them", async () => {

@@ -399,6 +399,12 @@ export const workspaceCaptureStatusSchema = Schema.Struct({
    * past its bound, and from a daemon or control plane that predates it.
    */
   overdue: Schema.optional(captureOverdueSchema),
+  /**
+   * The executor booted under an owner map (`SEALANT_CAPTURE_OWNER_MAP`): its restores give each
+   * mapped person's saved directory to them and the worktree to the group. Absent from a control
+   * plane that predates it; false from a daemon that predates it.
+   */
+  ownerMap: Schema.optional(Schema.Boolean),
 });
 export type WorkspaceCaptureStatus = typeof workspaceCaptureStatusSchema.Type;
 
@@ -411,6 +417,22 @@ export type WorkspaceCaptureStatus = typeof workspaceCaptureStatusSchema.Type;
  */
 export const replanWorkspaceCaptureRequestSchema = Schema.Struct({
   ownerUserId: NonEmptyString,
+  /**
+   * The owner map the claim needs (a capture source's `ownerMap`), or `null` for none. The daemon
+   * reads its map only at boot, so a re-plan restores under the map the executor was launched
+   * with: when this is given and differs from that map (including a standby launched with none),
+   * the re-plan is refused with `409` code `owner-map-mismatch` before the daemon is reached.
+   * Omitted, nothing is compared.
+   */
+  expectedOwnerMap: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        gid: Schema.Number,
+        worktreeUid: Schema.Number,
+        people: Schema.Array(Schema.Struct({ id: Schema.String, uid: Schema.Number })),
+      }),
+    ),
+  ),
 });
 export type ReplanWorkspaceCaptureRequest = typeof replanWorkspaceCaptureRequestSchema.Type;
 

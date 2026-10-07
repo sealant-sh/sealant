@@ -76,13 +76,16 @@ the daemon's restore writes: each person's saved directory (`<harnessHome>/peopl
 the worktree the group's, and, when it names anyone, an executor without no-new-privileges, so every
 person's `sudo` works. It is checked at create (`400` with the reason): `gid` 40000, uids in
 40001–49999, ids that are one directory name, no id or uid twice, at most 256 people; refused on
-Cloudflare, and in `runtime.env`. The launch refuses it (`owner-map-unsupported`, nothing started)
-on an image whose probe does not report `restore.owner_map`.
-`POST /v1/workspaces/image { ownerUserId, registryId, spec }` answers, before any create, the image
-plan the spec renders, the latest image published for it, and its per-person capability
-(`personLayout`, also on every workspace read's `publishedImage`). Exec and session requests take
-`user` (a Linux user name or uid); until the workspace runtime can start a process as another user
-they answer `409` `user-unsupported` and start nothing.
+Cloudflare and Kubernetes (no person's `sudo` works under `allowPrivilegeEscalation: false`), and in
+`runtime.env`, whose names must be environment variable names. The launch refuses it
+(`owner-map-unsupported`, nothing started) on an image whose probe does not report
+`restore.owner_map`. `POST /v1/workspaces/:id/capture/replan` takes `expectedOwnerMap` (`null` for
+none) and answers `409` `owner-map-mismatch` on an executor launched with another map; the capture
+status reports `ownerMap`. `POST /v1/workspaces/image { ownerUserId, registryId, spec }` answers,
+before any create, the image plan the spec renders, the latest image published for it, and its
+per-person capability (`personLayout`, also on every workspace read's `publishedImage`). Exec and
+session requests take `user` (a Linux user name or uid); until the workspace runtime can start a
+process as another user they answer `409` `user-unsupported` and start nothing.
 
 The registry group describes wherever workspace images live. With no registry configured (the
 single-host default) it reports the local Docker Engine store: `baseUrl` is `""`, `pushRegistry` is

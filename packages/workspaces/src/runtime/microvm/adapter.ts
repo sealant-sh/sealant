@@ -35,6 +35,7 @@ import type { SealantTarget } from "../../sealantd/runtime.js";
 import {
   CAPTURE_HARNESS_HOME_ENV,
   CAPTURE_SOURCE_ONLY_ENV,
+  captureOwnerMapEnv,
   captureSourceEnv,
 } from "../capture-source.js";
 import { inlineDotfilesFromDir } from "../inline-dotfiles.js";
@@ -506,6 +507,8 @@ export const microvmBootEnv = (
     entries.push(["DOCKER_TLS_VERIFY", ""]);
     entries.push(["DOCKER_CERT_PATH", ""]);
   }
+  // The capture owner map after every lane, so nothing overrides it (`captureOwnerMapEnv`).
+  entries.push(...captureOwnerMapEnv(source));
   const env: Record<string, string> = {};
   for (const [key, value] of entries) {
     env[key] = value;

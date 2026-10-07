@@ -145,6 +145,20 @@ describe("a capture source's owner map at create", () => {
     }
   });
 
+  it("is refused on Kubernetes, saying why", async () => {
+    for (const family of ["k8s", "k3s"]) {
+      const refused = failureOf(
+        await parseSpec({
+          ...spec,
+          sources: { workspace: captureSource({ ownerMap }) },
+          target: { runtime: { family } },
+        }),
+      );
+      expect(refused).toMatchObject({ _tag: "WorkspaceBadRequestError" });
+      expect(String(refused.message)).toContain("allowPrivilegeEscalation: false");
+    }
+  });
+
   it("is refused on Cloudflare, and never through runtime.env", async () => {
     const onCloudflare = failureOf(
       await parseSpec({
@@ -163,6 +177,20 @@ describe("a capture source's owner map at create", () => {
     );
     expect(smuggled).toMatchObject({ _tag: "WorkspaceBadRequestError" });
     expect(String(smuggled.message)).toContain("SEALANT_CAPTURE_OWNER_MAP");
+    // The review's payload: the name and an `=` inside the key, which Docker would split.
+    const split = failureOf(
+      await parseSpec({
+        ...spec,
+        sources: { workspace: captureSource({ ownerMap }) },
+        runtime: {
+          env: {
+            'SEALANT_CAPTURE_OWNER_MAP={"gid":40000,"worktree":1000,"people":{"x': '":1000}}',
+          },
+        },
+      }),
+    );
+    expect(split).toMatchObject({ _tag: "WorkspaceBadRequestError" });
+    expect(String(split.message)).toMatch(/runtime\.env names must match/);
     // Every other caller lane already refuses the platform prefix.
     const throughUserEnv = failureOf(
       await parseSpec({
