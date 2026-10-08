@@ -43,7 +43,9 @@ export type SessionMode = typeof sessionModeSchema.Type;
  * and `XDG_RUNTIME_DIR`, the image's `/etc/sealant/person-env`, and none of the daemon's logins.
  * Only a person Mend made: a uid in 40001–49999 whose primary group is `mend` (40000), never root,
  * on a workspace whose sealantd reports `exec.user`. Anything else is refused before anything
- * starts (`409`, `user-unsupported`). Absent: the workspace's own user, as before.
+ * starts (`409`, `user-unsupported`). sealantd checks the passwd entry it resolves again and starts
+ * a process only as one of the executor's people (its owner map's uids, or the range), so editing
+ * `/etc/passwd` with `sudo` cannot widen it. Absent: the workspace's own user, as before.
  */
 export const workspaceProcessUserSchema = Schema.String.check(
   Schema.isPattern(/^(?:[a-z_][a-z0-9_-]{0,31}|[0-9]{1,10})$/),
