@@ -1046,8 +1046,9 @@ export interface WorkspaceExecOptions {
    * `user-unsupported`, its message saying why (the workspace's sealantd does not run processes as
    * another user, the user is not in range, or it does not exist yet). Nothing is started either
    * way. The workspace's sealantd checks the passwd entry again and starts the process only as one
-   * of the executor's people (its owner map's uids, or the range). The run records the user (`user`
-   * on the run), never more of the process.
+   * of its owner map's people or a person in Mend's reserved range (a uid in 40001–49999 whose
+   * primary group is 40000); root and anyone outside the range are refused. The run records the
+   * user (`user` on the run), never more of the process.
    */
   readonly user?: string;
 }
@@ -1547,8 +1548,9 @@ export interface SessionOptions {
    * `user-unsupported`, its message saying why (the workspace's sealantd does not run processes as
    * another user, the user is not in range, or it does not exist yet). Nothing is started either
    * way. The workspace's sealantd checks the passwd entry again and starts the process only as one
-   * of the executor's people (its owner map's uids, or the range). The run records the user (`user`
-   * on the run), never more of the process.
+   * of its owner map's people or a person in Mend's reserved range (a uid in 40001–49999 whose
+   * primary group is 40000); root and anyone outside the range are refused. The run records the
+   * user (`user` on the run), never more of the process.
    */
   readonly user?: string;
 }

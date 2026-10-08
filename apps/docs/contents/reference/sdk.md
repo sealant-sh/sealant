@@ -180,7 +180,8 @@ These call the live API and work end-to-end:
   Linux user (a uid in 40001–49999 whose primary group is `mend`), on a workspace whose `sealantd`
   reports `exec.user` (`workspace.processUser()`, also `launch.processUser` after `ready()`);
   anything else is refused (`user-unsupported`, the message saying why) and nothing starts. The
-  daemon checks the passwd entry again and runs a process only as one of the executor's people.
+  daemon checks the passwd entry again and runs a process only as one of its owner map's people or a
+  person in Mend's reserved range; root and anyone outside the range are refused.
   `sealant.features()` reports what the control plane can do (`processUserRoutes`, `dotfilesApply`,
   `credentialsPartialPut`, `credentialsPiOpencode`, `captureOwnerMap`), so a client detects them
   rather than reading a version. A capture source's

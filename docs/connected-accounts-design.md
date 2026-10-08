@@ -600,19 +600,22 @@ unchanged. The SDK carries a typed error's body code as `SealantApiError.reason`
   and every exec as a user re-reads `exec.user` on its own connection, as the session path does
   before it opens the session. Operators still upgrade the API and the worker together (documented).
   Core's uid check runs inside the executor, where a person with `sudo` could rewrite `/etc/passwd`,
-  so sealantd checks the passwd entry it resolves again (sealantd#151, 0.20.0-next.153 and later,
-  which Core pins): exec, sessions and `dotfiles.apply` start a process only as one of the
-  executor's people. With a boot owner map that is a uid of its people or its worktree uid whose
-  primary group is the map's gid; without one, a uid in 40001–49999 whose primary group is 40000.
-  Root, root's group and anyone else are refused (invalid argument) before anything starts. An SDK
-  sends `user` only to a control plane whose index reports `features.processUserRoutes` (kept five
-  minutes, a failed read fifteen seconds), only on the as-user routes, and refuses it client-side
-  otherwise. `features.processUser` stays `false`: SDKs from before the as-user routes read `true`
-  as leave to send `user` on the plain routes, which a control plane from before `user` decodes
-  without the field and runs as the workspace's own user. The index's `features` also reports
-  `dotfilesApply`, `credentialsPartialPut`, `credentialsPiOpencode` and `captureOwnerMap`; each
-  workspace read reports `processUser` (`supported`, `unsupported`, `unknown`) from its image's
-  sealantd (the build's probe).
+  so sealantd checks the passwd entry it resolves again (sealantd#151 and #152, 0.20.0-next.154 and
+  later, which Core pins): exec, sessions and `dotfiles.apply` start a process only as one of the
+  owner map's people (its people's uids or its worktree uid, in the map's gid) or a person in Mend's
+  reserved range (a uid in 40001–49999 whose primary group is 40000), with or without a map. The map
+  is read once, at boot, so a person who joins after it gets their uid in the range and is admitted
+  by it (sealantd#152, 0.20.0-next.154; #151 alone refused every later joiner). Root, root's group,
+  a uid outside the range and a reserved uid in another group are refused (invalid argument) before
+  anything starts: a person with `sudo` who edits `/etc/passwd` still cannot get the daemon to run
+  anything as root or a system user. An SDK sends `user` only to a control plane whose index reports
+  `features.processUserRoutes` (kept five minutes, a failed read fifteen seconds), only on the
+  as-user routes, and refuses it client-side otherwise. `features.processUser` stays `false`: SDKs
+  from before the as-user routes read `true` as leave to send `user` on the plain routes, which a
+  control plane from before `user` decodes without the field and runs as the workspace's own user.
+  The index's `features` also reports `dotfilesApply`, `credentialsPartialPut`,
+  `credentialsPiOpencode` and `captureOwnerMap`; each workspace read reports `processUser`
+  (`supported`, `unsupported`, `unknown`) from its image's sealantd (the build's probe).
 - **The image's per-person capability.** The image build's probe (sealant#327) records on the
   build's metadata `imageProbe`: the tools (setuid `sudo`, `useradd`, `setfacl`, `setpriv`,
   `flock`), the sudoers rule, a writable passwd, the `mend` group, the reserved ids, and what its
@@ -714,8 +717,8 @@ unchanged. The SDK carries a typed error's body code as `SealantApiError.reason`
   stages the archives under `/run/sealant-dotfiles/<runId>`, root's only, as the manifest and
   `<index>.tar.gz` files the daemon reads (the launch contract of `SEALANT_DOTFILES_ARCHIVE_DIR`);
   the bytes go over stdin, never argv. sealantd refuses root, a user in root's group and, from
-  0.20.0-next.153, anyone who is not one of the executor's people (the owner map's uids, or the
-  range; the apply fails with its words) on its own, and applies only into the user's passwd home.
+  0.20.0-next.154, anyone who is neither one of the owner map's people nor in Mend's reserved range
+  (the apply fails with its words) on its own, and applies only into the user's passwd home.
 - **A `dotfiles` run, queued on the run-exec queue** (a third framing beside harness and exec): the
   job names the user, the home, the staged directory and the repository, never an archive's bytes,
   and is deleted on pickup. The worker calls `dotfiles.apply` with the run's id as the execution,

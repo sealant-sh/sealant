@@ -6,8 +6,10 @@
  * never root, on a workspace whose daemon reports the capability. Anything else is refused with
  * `user-unsupported`, worded by reason, and nothing is started. A request without `user` never
  * comes here. This check reads the executor's passwd, which a person with `sudo` can edit; the
- * daemon checks the entry it resolves again (sealantd#151, 0.20.0-next.153 and later) and starts a
- * process only as one of the executor's people: its owner map's uids, or the range.
+ * daemon checks the entry it resolves again (sealantd#151 and #152, 0.20.0-next.154 and later) and
+ * starts a process only as one of its owner map's people or a person in Mend's reserved range (a uid
+ * in 40001–49999 whose primary group is 40000); root, root's group and anyone outside the range are
+ * refused.
  *
  * A yes is kept per executor and user for a few minutes, so a person's run of execs pays the
  * executor's answer once: the daemon's capabilities do not change while it runs, and a person's

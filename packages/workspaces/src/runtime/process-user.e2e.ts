@@ -12,12 +12,13 @@
  * 3. **A session as the person** (`OpenSessionArgs.user`): the PTY's leader is theirs.
  * 4. **A workspace whose sealantd has no `exec.user`** (the image with sealantd 0.19.0 copied over
  *    its own): the check answers unsupported and runs nothing, so Core refuses with that reason.
- * 5. **The daemon's own rule** (sealantd#151): asked directly, past Core's check, it runs nobody but
- *    the owner map's people, so an image user, a user outside `mend`, an in-range `mend` user the
- *    map does not name, and root are each refused, and nothing runs.
+ * 5. **The daemon's own rule** (sealantd#151, #152): asked directly, past Core's check, it runs the
+ *    owner map's people or a person in Mend's range (uid 40001–49999, group `mend`): an image user,
+ *    a user outside `mend` and root are each refused and nothing runs; an in-range `mend` user the
+ *    map does not name runs, and so does a person who joins after the executor booted.
  *
  * The image must be a managed per-person image whose sealantd reports `exec.user` and applies its
- * own rule (0.20.0-next.153 or later, as pinned): `SEALANT_PROCESS_USER_E2E_IMAGE`, default
+ * own rule (0.20.0-next.154 or later, as pinned): `SEALANT_PROCESS_USER_E2E_IMAGE`, default
  * `sealant-workspace-fedora:latest`. Run with:
  *   pnpm --filter @sealant/workspaces test:e2e src/runtime/process-user.e2e.ts
  */
@@ -332,11 +333,12 @@ describe.skipIf(!runsAsUser)("a process as a person, on a per-person image", () 
     expect(processUserCheckOutcome(unknown)).toMatchObject({ reason: "unknown-user" });
   }, 60_000);
 
-  it("the daemon runs nobody but the executor's people, whatever Core's check said", async () => {
-    // sealantd#151 (0.20.0-next.153): with an owner map, only its people's uids (and its worktree
-    // uid) in its gid. Straight to the daemon, past Core's check: a person with sudo who edits
-    // /etc/passwd gets no further than this.
-    for (const user of ["builder", "m0ther000", "m0utside0", "40004", "root"]) {
+  it("the daemon refuses root and anyone outside Mend's range, whatever Core's check said", async () => {
+    // sealantd#151/#152 (0.20.0-next.154): the owner map's people, or a uid in 40001-49999 whose
+    // primary group is 40000. Straight to the daemon, past Core's check: a person with sudo who
+    // edits /etc/passwd still cannot run anything as root, a system user or a reserved uid in
+    // another group.
+    for (const user of ["builder", "1500", "m0ther000", "root", "0"]) {
       const marker = `/tmp/ran-as-${user}`;
       const ran = await withDaemon(personContainer, (session) =>
         session
@@ -354,8 +356,58 @@ describe.skipIf(!runsAsUser)("a process as a person, on a per-person image", () 
         "none",
       );
     }
-    // Core's own check passes the in-range mend user; only the daemon's map refuses them.
+  }, 60_000);
+
+  it("admits a person in Mend's range whom the owner map does not name", async () => {
+    // m0utside0 (40004, mend) is not on the map the executor booted with; the range admits them.
     expect(await check("m0utside0")).toEqual({ supported: true, exitCode: 0 });
+    for (const user of ["m0utside0", "40004"]) {
+      const ran = await execAs(
+        personContainer,
+        user,
+        `printf 'uid=%s gid=%s' "$(id -u)" "$(id -g)"`,
+      );
+      expect(ran.exitCode, user).toBe(0);
+      expect(ran.output, user).toContain(`uid=40004 gid=${String(MEND_GID)}`);
+    }
+  }, 60_000);
+
+  it("runs a person who joins after the executor booted, by exec and by session", async () => {
+    // The box's failure (sealantd#152): the second person to launch in a worktree gets their Linux
+    // user at join time, inside an executor whose owner map was read at boot without them, and
+    // next.153 refused them ("not one of this executor's people").
+    const joiner = { name: "m6oiner00", uid: 40006, home: "/home/m6oiner00" };
+    await sh(
+      personContainer,
+      `useradd -u ${String(joiner.uid)} -g mend -m -d ${joiner.home} -s /bin/sh ${joiner.name} && chmod 0700 ${joiner.home}`,
+    );
+    expect(await check(joiner.name)).toEqual({ supported: true, exitCode: 0 });
+    const ran = await execAs(
+      personContainer,
+      joiner.name,
+      `printf 'uid=%s gid=%s home=%s\\n' "$(id -u)" "$(id -g)" "$HOME" && echo hi > "$HOME/joined" && stat -c %u "$HOME/joined"`,
+    );
+    expect(ran.exitCode).toBe(0);
+    expect(ran.output).toContain(
+      `uid=${String(joiner.uid)} gid=${String(MEND_GID)} home=${joiner.home}`,
+    );
+    expect(ran.output).toContain(String(joiner.uid));
+    const session = await withDaemon(personContainer, (daemon) =>
+      Effect.gen(function* () {
+        const opened = yield* daemon.openSession({
+          shell: "/bin/sh",
+          args: ["-c", 'printf "pty uid=%s home=%s\\n" "$(id -u)" "$HOME"'],
+          cwd: REPO,
+          cols: 80,
+          rows: 24,
+          mode: "pty",
+          user: joiner.name,
+        });
+        return yield* collect(daemon, opened.processId);
+      }),
+    );
+    expect(session.output).toContain(`pty uid=${String(joiner.uid)} home=${joiner.home}`);
+    expect(session.exitCode).toBe(0);
   }, 60_000);
 
   it("runs an exec as the person: their uid, the mend group, their home, files theirs", async () => {
