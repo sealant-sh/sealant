@@ -52,6 +52,9 @@ jobs:
         run: >-
           pnpm --filter @sealant/workspaces test:e2e src/runtime/dotfiles-apply.e2e.ts
           src/runtime/home-credentials.e2e.ts
+      - name: Executions and sessions as a person, and a sealantd without exec.user (never skipped)
+        env: { SEALANT_E2E_REQUIRE_IMAGE: "1" }
+        run: pnpm --filter @sealant/workspaces test:e2e src/runtime/process-user.e2e.ts
 
   kubernetes:
     name: Kubernetes cross-node e2e (kind, generic RWX)

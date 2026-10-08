@@ -20,6 +20,7 @@ import { makeRun, toRunChangesData } from "../facade/run.js";
 import type { WorkspaceInit } from "../facade/workspace.js";
 import type { WorkspaceExecOptions, WorkspaceExecResult } from "../types.js";
 import {
+  execWorkspaceAsUserOp,
   execWorkspaceOp,
   getRunChangesOp,
   getRunOp,
@@ -100,11 +101,15 @@ const execWorkspaceEffect = (
       );
     }
 
-    const created = yield* execWorkspaceOp(init.id, {
+    const request = {
       ownerUserId: ctx.config.hostLocal.ownerUserId,
       commands: [{ executable, args, ...(options?.cwd === undefined ? {} : { cwd: options.cwd }) }],
-      ...(options?.user === undefined ? {} : { user: options.user }),
-    });
+    };
+    // As a user: its own route, so a control plane that cannot run one answers 404, never runs it
+    // as the workspace's own user.
+    const created = yield* options?.user === undefined
+      ? execWorkspaceOp(init.id, request)
+      : execWorkspaceAsUserOp(init.id, { ...request, user: options.user });
     const runId = created.runId;
 
     // Block until the check run is terminal, polling the control plane (same shape as harness.run()).

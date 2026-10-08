@@ -212,3 +212,19 @@ export {
   type DotfilesStageResult,
   type DotfilesStageScriptInput,
 } from "./dotfiles-apply.js";
+
+export {
+  buildProcessUserCheckScript,
+  liveProcessUserChannel,
+  PROCESS_USER_CAPABILITY,
+  PROCESS_USER_CHECK_EXIT,
+  PROCESS_USER_GID,
+  PROCESS_USER_RANGE_RULE,
+  PROCESS_USER_UID_RANGE,
+  processUserCheckOutcome,
+  processUserProblem,
+  type ProcessUserChannel,
+  type ProcessUserCheck,
+  type ProcessUserRefusal,
+  type ProcessUserRefusalReason,
+} from "./process-user.js";

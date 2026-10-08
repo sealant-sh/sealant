@@ -16,8 +16,10 @@ import type {
   CreateSshKeyRequest,
   EnsureUserRequest,
   CreateRunRequest,
+  CreateSessionAsUserRequest,
   CreateSessionRequest,
   CreateWorkspaceRequest,
+  ExecWorkspaceAsUserRequest,
   ExecWorkspaceRequest,
   ExpireWorkspaceRequest,
   GetRunScrollbackQuery,
@@ -84,6 +86,12 @@ export const listWorkspacesOp = (query: ListWorkspacesQuery) =>
 export const execWorkspaceOp = (workspaceId: string, payload: ExecWorkspaceRequest) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.workspaces.execWorkspace({ params: { workspaceId }, payload }),
+  );
+
+/** An exec as a Linux user: its own route, which a control plane that cannot run one answers 404. */
+export const execWorkspaceAsUserOp = (workspaceId: string, payload: ExecWorkspaceAsUserRequest) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.execWorkspaceAsUser({ params: { workspaceId }, payload }),
   );
 
 export const applyWorkspaceDotfilesOp = (
@@ -218,6 +226,12 @@ export const getRunChangesOp = (runId: string, ownerUserId?: string) =>
 export const createSessionOp = (payload: CreateSessionRequest) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.sessions.createSession({ payload, headers: {} }),
+  );
+
+/** A session as a Linux user: its own route, which a control plane that cannot open one answers 404. */
+export const createSessionAsUserOp = (payload: CreateSessionAsUserRequest) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.sessions.createSessionAsUser({ payload, headers: {} }),
   );
 
 export const getSessionOp = (sessionId: string, ownerUserId?: string) =>

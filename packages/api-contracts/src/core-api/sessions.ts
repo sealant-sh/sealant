@@ -38,8 +38,12 @@ export type SessionMode = typeof sessionModeSchema.Type;
 
 /**
  * The Linux user a process runs as (Mend ADR 0016): a user name of the image's passwd, or a numeric
- * uid. The process takes its uid, gid, supplementary groups and `HOME`, `USER`, `LOGNAME` and
- * `SHELL` from the passwd entry, umask 0002. Absent: the workspace's own user, as before.
+ * uid. The workspace's sealantd starts the process as that passwd entry: its uid, gid,
+ * supplementary groups and `HOME`, `USER`, `LOGNAME` and `SHELL`, umask 0002, a private `TMPDIR`
+ * and `XDG_RUNTIME_DIR`, the image's `/etc/sealant/person-env`, and none of the daemon's logins.
+ * Only a person Mend made: a uid in 40001–49999 whose primary group is `mend` (40000), never root,
+ * on a workspace whose sealantd reports `exec.user`. Anything else is refused before anything
+ * starts (`409`, `user-unsupported`). Absent: the workspace's own user, as before.
  */
 export const workspaceProcessUserSchema = Schema.String.check(
   Schema.isPattern(/^(?:[a-z_][a-z0-9_-]{0,31}|[0-9]{1,10})$/),
@@ -47,8 +51,10 @@ export const workspaceProcessUserSchema = Schema.String.check(
 export type WorkspaceProcessUser = typeof workspaceProcessUserSchema.Type;
 
 /**
- * The stable `code` a create or exec answers while no workspace runtime can start a process as
- * another user: Core asks sealantd to, and no released sealantd does yet. Nothing is started.
+ * The stable `code` a session or exec as a user is refused with (`409`), the message saying why:
+ * the workspace's sealantd does not run processes as another user (no `exec.user`), its runtime
+ * does not (Cloudflare), the user is not in range (root, a uid outside 40001–49999, or a primary
+ * group other than `mend`), or no such user exists yet. Nothing is started.
  */
 export const PROCESS_USER_UNSUPPORTED_CODE = "user-unsupported";
 
@@ -68,10 +74,25 @@ export const createSessionRequestSchema = Schema.Struct({
   mode: Schema.optional(sessionModeSchema),
   /** Opaque caller correlation bag: stored verbatim, echoed on reads, no platform semantics. */
   metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-  /** Run the session's process as this Linux user (see `workspaceProcessUserSchema`). */
+  /**
+   * Refused here (`409`, `user-unsupported`), never ignored: a session as a Linux user is opened
+   * with `POST /v1/sessions/as-user` (`createSessionAsUserRequestSchema`), a route a control plane
+   * that cannot run one answers `404`, so a mixed-version fleet never runs it as root.
+   */
   user: Schema.optional(workspaceProcessUserSchema),
 });
 export type CreateSessionRequest = typeof createSessionRequestSchema.Type;
+
+/**
+ * `POST /v1/sessions/as-user`: a session whose leader runs as `user` (see
+ * `workspaceProcessUserSchema`), otherwise as `POST /v1/sessions`. Its own route, so a control
+ * plane from before it answers `404` instead of opening the session as the workspace's own user.
+ */
+export const createSessionAsUserRequestSchema = Schema.Struct({
+  ...createSessionRequestSchema.fields,
+  user: workspaceProcessUserSchema,
+});
+export type CreateSessionAsUserRequest = typeof createSessionAsUserRequestSchema.Type;
 
 export const sessionSchema = Schema.Struct({
   sessionId: NonEmptyString,
@@ -231,6 +252,24 @@ export const SessionsGroup = HttpApiGroup.make("sessions")
     HttpApiEndpoint.post("createSession", "/", {
       headers: sessionAuthorizationHeadersSchema,
       payload: createSessionRequestSchema,
+      success: sessionSchema.pipe(HttpApiSchema.status(201)),
+      error: [
+        SessionBadRequestError,
+        SessionUnauthorizedError,
+        SessionForbiddenError,
+        SessionNotFoundError,
+        SessionConflictError,
+        SessionBadGatewayError,
+        SessionInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    // Scope: workspace:exec. `createSession` with the leader run as a Linux user (`409`
+    // `user-unsupported` where the executor cannot; `502` when it does not answer the check).
+    HttpApiEndpoint.post("createSessionAsUser", "/as-user", {
+      headers: sessionAuthorizationHeadersSchema,
+      payload: createSessionAsUserRequestSchema,
       success: sessionSchema.pipe(HttpApiSchema.status(201)),
       error: [
         SessionBadRequestError,

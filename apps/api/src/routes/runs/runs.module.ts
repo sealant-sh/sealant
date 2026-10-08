@@ -106,6 +106,7 @@ export const mapRun = (run: RunRecord): Run => ({
         },
       }),
   ...(run.metadata === null ? {} : { metadata: run.metadata }),
+  ...(run.processUser === null ? {} : { user: run.processUser }),
   ...(run.exitCode === null ? {} : { exitCode: run.exitCode }),
   ...(run.errorMessage === null ? {} : { errorMessage: run.errorMessage }),
   ...(run.startedAt === null ? {} : { startedAt: run.startedAt.toISOString() }),

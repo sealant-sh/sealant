@@ -10,12 +10,33 @@ export const systemIndexResponseSchema = Schema.Struct({
   openApiPath: NonEmptyString,
   /**
    * What this control plane can do that an older one cannot, so a client refuses a request it would
-   * otherwise send to a server that ignores part of it. Absent from older control planes: nothing.
+   * otherwise send to a server that ignores part of it, and feature-detects instead of reading a
+   * version (a self-built control plane reports `0.0.0`). Absent from older control planes:
+   * nothing; an absent field: not this one.
    */
   features: Schema.optional(
     Schema.Struct({
-      /** A process can run as a given Linux user (`user` on exec and sessions). */
+      /**
+       * Always `false` from this control plane: `user` on the plain exec and session routes is
+       * refused. Kept, and kept false, because SDKs from before the as-user routes read `true` as
+       * leave to send `user` on the plain routes, which a control plane from before `user` would
+       * accept and run as the workspace's own user.
+       */
       processUser: Schema.Boolean,
+      /**
+       * `POST /v1/workspaces/:id/exec-as-user` and `POST /v1/sessions/as-user` exist: a process
+       * runs as a person's Linux user there. Whether a given workspace can is its read's
+       * `processUser`; one that cannot is refused there (`409`, `user-unsupported`).
+       */
+      processUserRoutes: Schema.optional(Schema.Boolean),
+      /** `POST /v1/workspaces/:id/dotfiles`: a person's dotfiles applied as their user. */
+      dotfilesApply: Schema.optional(Schema.Boolean),
+      /** `partial: true` on a credentials put: what is connected is written, the rest reported. */
+      credentialsPartialPut: Schema.optional(Schema.Boolean),
+      /** `pi` and `opencode` (ChatGPT logins from a Codex account) on a credentials put. */
+      credentialsPiOpencode: Schema.optional(Schema.Boolean),
+      /** `ownerMap` on a capture source: an executor whose restore gives each person their files. */
+      captureOwnerMap: Schema.optional(Schema.Boolean),
     }),
   ),
 });

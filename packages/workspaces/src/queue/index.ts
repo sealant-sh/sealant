@@ -30,16 +30,22 @@ export {
 
 export {
   consumeRunExecJobs,
+  parseRunExecAsUserRequestedMessage,
   parseRunExecRequestedMessage,
   publishRunExecRequested,
+  runExecAsUserQueue,
+  runExecAsUserQueueName,
+  runExecAsUserRequestedMessageKind,
   runExecQueue,
   runExecQueueName,
+  runExecRequestEnvelope,
   runExecRequestedMessageKind,
   sweepRunExecJobRows,
   type ConsumeRunExecJobsOptions,
   type RunDotfilesApply,
   type RunExecCommand,
   type RunExecConsumerMessage,
+  type RunExecRequestInput,
   type RunExecRequestedMessage,
 } from "./run-exec-queue.js";
 

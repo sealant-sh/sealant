@@ -32,6 +32,8 @@ export interface CreateRunInput {
   readonly command?: RunExecCommandRecord;
   /** Opaque caller correlation bag, stored verbatim and echoed on reads. */
   readonly metadata?: Record<string, unknown>;
+  /** The Linux user the run's processes start as (a login name or a uid); absent: the workspace's. */
+  readonly processUser?: string;
 }
 
 export interface MarkRunRunningInput {
@@ -185,6 +187,7 @@ export const RunRepoLive = Layer.effect(
                       },
                     }),
                 ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+                ...(input.processUser === undefined ? {} : { processUser: input.processUser }),
               } satisfies NewRun)
               .returning();
 

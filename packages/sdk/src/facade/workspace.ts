@@ -21,6 +21,7 @@ import {
   bindWorkspaceOp,
   flushWorkspaceCaptureOp,
   getWorkspaceCaptureStatusOp,
+  createSessionAsUserOp,
   createSessionOp,
   expireWorkspaceOp,
   getSessionOp,
@@ -395,20 +396,24 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     options?: SessionOptions,
   ): Promise<InteractiveSession> => {
     if (options?.user !== undefined) await requireProcessUser(ctx, options.user);
+    const request = {
+      workspaceId: init.id,
+      ownerUserId: ctx.config.hostLocal.ownerUserId,
+      argv: [...argv],
+      ...(options?.cwd === undefined ? {} : { cwd: options.cwd }),
+      ...(options?.env === undefined ? {} : { env: options.env }),
+      ...(options?.cols === undefined ? {} : { cols: options.cols }),
+      ...(options?.rows === undefined ? {} : { rows: options.rows }),
+      ...(options?.term === undefined ? {} : { term: options.term }),
+      ...(options?.mode === undefined ? {} : { mode: options.mode }),
+      ...(options?.metadata === undefined ? {} : { metadata: { ...options.metadata } }),
+    };
+    // As a user: its own route, so a control plane that cannot open one answers 404, never opens
+    // it as the workspace's own user.
     const created = await ctx.runtime.run(
-      createSessionOp({
-        workspaceId: init.id,
-        ownerUserId: ctx.config.hostLocal.ownerUserId,
-        argv: [...argv],
-        ...(options?.cwd === undefined ? {} : { cwd: options.cwd }),
-        ...(options?.env === undefined ? {} : { env: options.env }),
-        ...(options?.cols === undefined ? {} : { cols: options.cols }),
-        ...(options?.rows === undefined ? {} : { rows: options.rows }),
-        ...(options?.term === undefined ? {} : { term: options.term }),
-        ...(options?.mode === undefined ? {} : { mode: options.mode }),
-        ...(options?.metadata === undefined ? {} : { metadata: { ...options.metadata } }),
-        ...(options?.user === undefined ? {} : { user: options.user }),
-      }),
+      options?.user === undefined
+        ? createSessionOp(request)
+        : createSessionAsUserOp({ ...request, user: options.user }),
     );
     return makeInteractiveSession(ctx, created);
   };
@@ -523,6 +528,13 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
       return details.publishedImage === undefined ? null : toWorkspaceImage(details.publishedImage);
     },
 
+    processUser: async () => {
+      const details: WorkspaceDetails = await ctx.runtime.run(
+        getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
+      );
+      return details.processUser ?? "unknown";
+    },
+
     status: async () => {
       const details: WorkspaceDetails = await ctx.runtime.run(
         getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
@@ -609,6 +621,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
               ...(details.publishedImage === undefined
                 ? {}
                 : { image: toWorkspaceImage(details.publishedImage) }),
+              ...(details.processUser === undefined ? {} : { processUser: details.processUser }),
             };
           }
           return workspace;

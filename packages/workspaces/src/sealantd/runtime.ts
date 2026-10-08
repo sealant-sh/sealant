@@ -1000,6 +1000,13 @@ export interface SealantExecOptions {
   readonly stdin?: boolean;
   readonly timeoutMillis?: number;
   readonly background?: boolean;
+  /**
+   * Run the process as this Linux user (a login name or a decimal uid; sealantd 0.20's
+   * `ExecArgs.user`, capability `exec.user`). Only a daemon that reports `exec.user` knows the
+   * field: an older one ignores it and would run the process as root, so a caller checks the
+   * capability first (`liveProcessUserChannel`). Absent: the daemon's own user, as before.
+   */
+  readonly user?: string;
 }
 
 /** Options for opening a PTY session (mirrors the daemon's `OpenSessionArgs`). */
@@ -1023,6 +1030,8 @@ export interface SealantOpenSessionOptions {
   readonly term?: string;
   /** Leader wiring; defaults to `pty`. */
   readonly mode?: SealantSessionMode;
+  /** Run the leader as this Linux user (`OpenSessionArgs.user`; see `SealantExecOptions.user`). */
+  readonly user?: string;
 }
 
 const toWireSessionMode = (mode: SealantSessionMode | undefined): WireSessionMode =>
@@ -1274,21 +1283,46 @@ const makeSession = (client: SealantClient): SealantSession => ({
   ),
 
   exec: (options) =>
-    withSealantError(
-      "exec",
-      Effect.tryPromise(() =>
-        client.exec({
-          executable: options.executable,
-          ...(options.args === undefined ? {} : { args: [...options.args] }),
-          ...(options.executionId === undefined ? {} : { executionId: options.executionId }),
-          ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
-          ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-          ...(options.stdin === undefined ? {} : { stdin: options.stdin }),
-          ...(options.timeoutMillis === undefined ? {} : { timeoutMillis: options.timeoutMillis }),
-          ...(options.background === undefined ? {} : { background: options.background }),
-        }),
-      ),
-    ),
+    options.user === undefined
+      ? withSealantError(
+          "exec",
+          Effect.tryPromise(() =>
+            client.exec({
+              executable: options.executable,
+              ...(options.args === undefined ? {} : { args: [...options.args] }),
+              ...(options.executionId === undefined ? {} : { executionId: options.executionId }),
+              ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
+              ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+              ...(options.stdin === undefined ? {} : { stdin: options.stdin }),
+              ...(options.timeoutMillis === undefined
+                ? {}
+                : { timeoutMillis: options.timeoutMillis }),
+              ...(options.background === undefined ? {} : { background: options.background }),
+            }),
+          ),
+        )
+      : // The client's typed `exec` has no `user`: the same command, through the raw request.
+        requestResult(
+          client,
+          "exec",
+          {
+            case: "exec",
+            value: {
+              executable: options.executable,
+              args: options.args === undefined ? [] : [...options.args],
+              ...(options.executionId === undefined ? {} : { executionId: options.executionId }),
+              ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
+              ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+              stdin: options.stdin ?? false,
+              ...(options.timeoutMillis === undefined
+                ? {}
+                : { timeoutMillis: BigInt(options.timeoutMillis) }),
+              background: options.background ?? false,
+              user: options.user,
+            },
+          },
+          "execAccepted",
+        ).pipe(Effect.map((value) => value as ExecAccepted)),
 
   writeStdin: (processId, data) =>
     withSealantError(
@@ -1326,6 +1360,7 @@ const makeSession = (client: SealantClient): SealantSession => ({
           rows: options.rows,
           ...(options.term === undefined ? {} : { term: options.term }),
           mode: toWireSessionMode(options.mode),
+          ...(options.user === undefined ? {} : { user: options.user }),
         },
       },
       "sessionOpened",

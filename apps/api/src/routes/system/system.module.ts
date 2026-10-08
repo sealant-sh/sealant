@@ -16,8 +16,20 @@ export const getIndex = () => {
     version: packageJson.version,
     docsPath: "/docs",
     openApiPath: "/openapi.json",
-    // No released sealantd can start a process as another user yet: exec and sessions refuse it.
-    features: { processUser: false },
+    // What this control plane does that an older one does not (a self-built one reports 0.0.0,
+    // so a client detects these rather than reading the version). `processUserRoutes`: the as-user
+    // exec and session routes exist; each workspace's own `processUser` (its read) says whether
+    // its sealantd can, and an exec or session as a user on one that cannot is refused there.
+    // `processUser` stays false: SDKs from before the as-user routes read it as leave to send
+    // `user` on the plain routes, which a control plane from before `user` runs as root.
+    features: {
+      processUser: false,
+      processUserRoutes: true,
+      dotfilesApply: true,
+      credentialsPartialPut: true,
+      credentialsPiOpencode: true,
+      captureOwnerMap: true,
+    },
   } satisfies SystemIndexResponse);
 };
 

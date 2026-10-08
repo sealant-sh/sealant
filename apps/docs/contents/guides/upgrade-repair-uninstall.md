@@ -129,6 +129,18 @@ psql "$DATABASE_URL" -c 'SELECT * FROM sealant_purge_stored_arguments()'
 It prints how many rows it rewrote in each table, and changes nothing when there is nothing left.
 Then run the `VACUUM` commands above.
 
+### Upgrading past the release that runs processes as a person
+
+From this release, an exec or a session can run as a person's Linux user (Mend's per-person layout).
+A request for one uses its own routes (`POST /v1/workspaces/:id/exec-as-user`,
+`POST /v1/sessions/as-user`) and its own job queue (`workspace-run-exec-as-user`), so an API or a
+worker from before it answers `404` or never takes the job, rather than running the person's
+commands as root. A run sent to an older worker waits in the queue until a current worker takes it.
+
+That is a safeguard, not a way to run mixed versions: **upgrade the API and the worker together**,
+and don't leave an older API or worker serving next to a current one. The installer upgrades both at
+once; a Kubernetes or hand-built deployment should stop the old pods before it starts the new ones.
+
 ## Pin an exact version
 
 To install or switch to a specific version — for a reproducible deployment, or to roll back — name

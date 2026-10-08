@@ -66,6 +66,37 @@ const head = await workspace.exec(["pnpm", "test"]); // passes
 (`POST /v1/workspaces/:id/exec`) accepts an ordered **list** of commands recorded as one check run;
 the SDK surface starts with the single-command form.
 
+### As a person's Linux user
+
+`exec(argv, { user })` and `sessions.open(argv, { user })` start the process as a person's Linux
+user (a login name or uid), on a workspace whose sealantd reports `exec.user`:
+
+```ts
+if (
+  (await sealant.features()).processUserRoutes &&
+  (await workspace.processUser()) === "supported"
+) {
+  await workspace.exec(["pnpm", "install"], { user: "m4lice000" });
+}
+```
+
+- The daemon starts it as that passwd entry: uid, groups, `HOME`, `USER`, `LOGNAME`, `SHELL`, umask
+  0002, a private `TMPDIR` and `XDG_RUNTIME_DIR`, the image's `/etc/sealant/person-env`, and none of
+  the daemon's logins or `SEALANT_*` keys.
+- Only a person Mend made: a uid in 40001–49999 whose primary group is `mend` (40000), never root.
+  Anything else is refused with code `user-unsupported` and the reason in its message (the
+  workspace's sealantd doesn't run processes as another user, the user is not in range, or it does
+  not exist yet). Nothing is started.
+- They go to their own routes (`POST /v1/workspaces/:id/exec-as-user`, `POST /v1/sessions/as-user`),
+  so a control plane from before them answers `404` instead of running the process as root.
+- The run records the user (`user` on the run resource), never the arguments.
+- `workspace.processUser()` reads `supported`, `unsupported` or `unknown` from the image's sealantd;
+  `launch.processUser` has it after `ready()`. The call itself asks the running daemon, whose answer
+  decides.
+- `sealant.features()` reports what the control plane can do: `processUserRoutes`, `dotfilesApply`,
+  `credentialsPartialPut`, `credentialsPiOpencode` and `captureOwnerMap`. Detect them instead of
+  reading the control plane's version.
+
 ## Typed record events
 
 Timeline reads are discriminated by `kind` — switch on it and `data` narrows to the event's typed

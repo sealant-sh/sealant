@@ -106,9 +106,20 @@ Cloudflare and Kubernetes (no person's `sudo` works under `allowPrivilegeEscalat
 none) and answers `409` `owner-map-mismatch` on an executor launched with another map; the capture
 status reports `ownerMap`. `POST /v1/workspaces/image { ownerUserId, registryId, spec }` answers,
 before any create, the image plan the spec renders, the latest image published for it, and its
-per-person capability (`personLayout`, also on every workspace read's `publishedImage`). Exec and
-session requests take `user` (a Linux user name or uid); until the workspace runtime can start a
-process as another user they answer `409` `user-unsupported` and start nothing.
+per-person capability (`personLayout`, also on every workspace read's `publishedImage`). An exec or
+a session as a Linux user (a user name or uid) goes to its own route,
+`POST /v1/workspaces/:workspaceId/exec-as-user` or `POST /v1/sessions/as-user`, with the same body
+and `user` required, so a control plane that cannot run one answers `404`; `user` on `/exec` or
+`/v1/sessions` is refused (`409` `user-unsupported`). The workspace's `sealantd` starts the process
+as that user, and the run records it (`user`). Only a person in Mend's range (a uid in 40001–49999
+whose primary group is `mend`, never root), on a workspace whose `sealantd` reports `exec.user`;
+anything else answers `409` `user-unsupported`, saying why (the workspace's `sealantd` doesn't run
+processes as another user, the user is not in range, or it does not exist yet), and starts nothing.
+Every workspace read reports `processUser` (`supported`, `unsupported` or `unknown`, from its
+image's `sealantd`). `GET /` reports `features`: `processUserRoutes` (the as-user routes;
+`processUser` stays `false`, the flag SDKs from before them read), `dotfilesApply`,
+`credentialsPartialPut`, `credentialsPiOpencode` and `captureOwnerMap`, so a client detects them
+instead of reading the version.
 
 `POST /v1/workspaces/:workspaceId/dotfiles { ownerUserId, onBehalfOfUserId, user, home, repository?, archives? }`
 (service key only) applies a person's dotfiles into their home of a running workspace, as their
