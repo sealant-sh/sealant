@@ -12,9 +12,12 @@
  * 3. **A session as the person** (`OpenSessionArgs.user`): the PTY's leader is theirs.
  * 4. **A workspace whose sealantd has no `exec.user`** (the image with sealantd 0.19.0 copied over
  *    its own): the check answers unsupported and runs nothing, so Core refuses with that reason.
+ * 5. **The daemon's own rule** (sealantd#151): asked directly, past Core's check, it runs nobody but
+ *    the owner map's people, so an image user, a user outside `mend`, an in-range `mend` user the
+ *    map does not name, and root are each refused, and nothing runs.
  *
- * The image must be a managed per-person image whose sealantd reports `exec.user` (the pinned
- * 0.20.0-next.150 or later): `SEALANT_PROCESS_USER_E2E_IMAGE`, default
+ * The image must be a managed per-person image whose sealantd reports `exec.user` and applies its
+ * own rule (0.20.0-next.153 or later, as pinned): `SEALANT_PROCESS_USER_E2E_IMAGE`, default
  * `sealant-workspace-fedora:latest`. Run with:
  *   pnpm --filter @sealant/workspaces test:e2e src/runtime/process-user.e2e.ts
  */
@@ -26,7 +29,7 @@ import { join } from "node:path";
 
 import { StreamKind } from "@sealant/runtime-client";
 import type { EventEnvelope } from "@sealant/runtime-protocol";
-import { Effect, Stream } from "effect";
+import { Effect, Result, Stream } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { assertImageRequirement, docker, isImagePresent } from "../sealantd/boot.js";
@@ -290,6 +293,8 @@ beforeAll(async () => {
       `echo bob-only > ${BOB.home}/secret && chown ${BOB.name}:mend ${BOB.home}/secret && chmod 0600 ${BOB.home}/secret`,
       "useradd -u 1500 -m -s /bin/sh builder",
       "groupadd -g 41000 other && useradd -u 40003 -g other -M -s /bin/sh m0ther000",
+      // In the range and the mend group, but not one of the owner map's people.
+      "useradd -u 40004 -g mend -M -s /bin/sh m0utside0",
     ].join(" && "),
   );
 }, 240_000);
@@ -325,6 +330,32 @@ describe.skipIf(!runsAsUser)("a process as a person, on a per-person image", () 
     expect(processUserCheckOutcome(other)).toMatchObject({ reason: "not-in-range" });
     const unknown = await check("mnobody00");
     expect(processUserCheckOutcome(unknown)).toMatchObject({ reason: "unknown-user" });
+  }, 60_000);
+
+  it("the daemon runs nobody but the executor's people, whatever Core's check said", async () => {
+    // sealantd#151 (0.20.0-next.153): with an owner map, only its people's uids (and its worktree
+    // uid) in its gid. Straight to the daemon, past Core's check: a person with sudo who edits
+    // /etc/passwd gets no further than this.
+    for (const user of ["builder", "m0ther000", "m0utside0", "40004", "root"]) {
+      const marker = `/tmp/ran-as-${user}`;
+      const ran = await withDaemon(personContainer, (session) =>
+        session
+          .exec({
+            executable: "/bin/sh",
+            args: ["-c", `touch ${marker}`],
+            cwd: REPO,
+            stdin: false,
+            user,
+          })
+          .pipe(Effect.result),
+      );
+      expect(Result.isFailure(ran), user).toBe(true);
+      expect(await sh(personContainer, `[ -e ${marker} ] && echo ran || echo none`), user).toBe(
+        "none",
+      );
+    }
+    // Core's own check passes the in-range mend user; only the daemon's map refuses them.
+    expect(await check("m0utside0")).toEqual({ supported: true, exitCode: 0 });
   }, 60_000);
 
   it("runs an exec as the person: their uid, the mend group, their home, files theirs", async () => {

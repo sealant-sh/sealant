@@ -1045,7 +1045,9 @@ export interface WorkspaceExecOptions {
    * any other user or workspace with `WorkspaceConflictError` / `SessionConflictError`, body code
    * `user-unsupported`, its message saying why (the workspace's sealantd does not run processes as
    * another user, the user is not in range, or it does not exist yet). Nothing is started either
-   * way. The run records the user (`user` on the run), never more of the process.
+   * way. The workspace's sealantd checks the passwd entry again and starts the process only as one
+   * of the executor's people (its owner map's uids, or the range). The run records the user (`user`
+   * on the run), never more of the process.
    */
   readonly user?: string;
 }
@@ -1544,7 +1546,9 @@ export interface SessionOptions {
    * any other user or workspace with `WorkspaceConflictError` / `SessionConflictError`, body code
    * `user-unsupported`, its message saying why (the workspace's sealantd does not run processes as
    * another user, the user is not in range, or it does not exist yet). Nothing is started either
-   * way. The run records the user (`user` on the run), never more of the process.
+   * way. The workspace's sealantd checks the passwd entry again and starts the process only as one
+   * of the executor's people (its owner map's uids, or the range). The run records the user (`user`
+   * on the run), never more of the process.
    */
   readonly user?: string;
 }

@@ -179,7 +179,8 @@ These call the live API and work end-to-end:
   the as-user routes, which an older control plane answers `404`) start the process as a person's
   Linux user (a uid in 40001–49999 whose primary group is `mend`), on a workspace whose `sealantd`
   reports `exec.user` (`workspace.processUser()`, also `launch.processUser` after `ready()`);
-  anything else is refused (`user-unsupported`, the message saying why) and nothing starts.
+  anything else is refused (`user-unsupported`, the message saying why) and nothing starts. The
+  daemon checks the passwd entry again and runs a process only as one of the executor's people.
   `sealant.features()` reports what the control plane can do (`processUserRoutes`, `dotfilesApply`,
   `credentialsPartialPut`, `credentialsPiOpencode`, `captureOwnerMap`), so a client detects them
   rather than reading a version. A capture source's

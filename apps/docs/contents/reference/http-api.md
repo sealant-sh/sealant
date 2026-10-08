@@ -115,11 +115,13 @@ as that user, and the run records it (`user`). Only a person in Mend's range (a 
 whose primary group is `mend`, never root), on a workspace whose `sealantd` reports `exec.user`;
 anything else answers `409` `user-unsupported`, saying why (the workspace's `sealantd` doesn't run
 processes as another user, the user is not in range, or it does not exist yet), and starts nothing.
-Every workspace read reports `processUser` (`supported`, `unsupported` or `unknown`, from its
-image's `sealantd`). `GET /` reports `features`: `processUserRoutes` (the as-user routes;
-`processUser` stays `false`, the flag SDKs from before them read), `dotfilesApply`,
-`credentialsPartialPut`, `credentialsPiOpencode` and `captureOwnerMap`, so a client detects them
-instead of reading the version.
+`sealantd` checks the passwd entry it resolves again and starts a process only as one of the
+executor's people (its owner map's uids, or the range), so a person who edits `/etc/passwd` with
+`sudo` cannot run one as anyone else. Every workspace read reports `processUser` (`supported`,
+`unsupported` or `unknown`, from its image's `sealantd`). `GET /` reports `features`:
+`processUserRoutes` (the as-user routes; `processUser` stays `false`, the flag SDKs from before them
+read), `dotfilesApply`, `credentialsPartialPut`, `credentialsPiOpencode` and `captureOwnerMap`, so a
+client detects them instead of reading the version.
 
 `POST /v1/workspaces/:workspaceId/dotfiles { ownerUserId, onBehalfOfUserId, user, home, repository?, archives? }`
 (service key only) applies a person's dotfiles into their home of a running workspace, as their

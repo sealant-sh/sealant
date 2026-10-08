@@ -150,7 +150,9 @@ the person.
 - **As the person, into their home.** The user must exist and must not be root or in root's group,
   and `home` must be their passwd home, an existing directory of theirs reached without a symbolic
   link, whose logins nobody else holds (`409` `home-held`). The clone, chezmoi, stow, the `copy`
-  manager and `install.sh` run as the user.
+  manager and `install.sh` run as the user. `sealantd` also refuses anyone who is not one of the
+  executor's people (the owner map's uids, or a uid in 40001–49999 whose primary group is `mend`),
+  and the apply fails with its words.
 - **Every file as the person.** `sealantd` unpacks archives as root into a root-only directory
   outside every home, and writes every file, directory and link inside the home as the person: a
   link they planted (to another person's `~/.config`, say) is followed as them, so it reaches only

@@ -15,7 +15,9 @@
  * 3. **The cleanup** (`buildDotfilesCleanupScript`): the staged directory is removed once the apply
  *    answers. A staged directory older than an hour (a job that never ran) goes at the next stage.
  *
- * sealantd itself refuses root and a user in root's group and applies only into the user's passwd
+ * sealantd itself refuses root, a user in root's group and, from 0.20.0-next.153 (sealantd#151),
+ * anyone who is not one of the executor's people (its owner map's uids, or a uid in 40001–49999 whose
+ * primary group is 40000), and applies only into the user's passwd
  * home. The clone, chezmoi, stow, the `copy` manager and the bootstrap run as the user
  * (`sealant_process::identity`), and every read and write inside the home is the user's
  * (sealantd#149, 0.20.0-next.152 and later): root unpacks each archive, without owners, into a
