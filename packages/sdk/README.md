@@ -87,8 +87,9 @@ if (
   Anything else is refused with code `user-unsupported` and the reason in its message (the
   workspace's sealantd doesn't run processes as another user, the user is not in range, or it does
   not exist yet). Nothing is started. The daemon checks again itself: it starts a process only as
-  one of the executor's people (its owner map's uids, or the range), so a person who edits
-  `/etc/passwd` with `sudo` cannot run one as anyone else.
+  one of its owner map's people or a person in Mend's reserved range (a uid in 40001–49999 whose
+  primary group is 40000), and refuses root, root's group and anyone outside the range, so a person
+  who edits `/etc/passwd` with `sudo` cannot run one as root or a system user.
 - They go to their own routes (`POST /v1/workspaces/:id/exec-as-user`, `POST /v1/sessions/as-user`),
   so a control plane from before them answers `404` instead of running the process as root.
 - The run records the user (`user` on the run resource), never the arguments.
