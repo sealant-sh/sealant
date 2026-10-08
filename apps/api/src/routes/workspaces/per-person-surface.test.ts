@@ -524,7 +524,9 @@ describe("the control plane's features", () => {
   it("reports that it passes users through, and the per-person APIs it has", async () => {
     const index = await Effect.runPromise(systemModule.getIndex());
     expect(index.features).toEqual({
-      processUser: true,
+      // False on purpose: older SDKs read it as leave to send `user` on the plain routes.
+      processUser: false,
+      processUserRoutes: true,
       dotfilesApply: true,
       credentialsPartialPut: true,
       credentialsPiOpencode: true,

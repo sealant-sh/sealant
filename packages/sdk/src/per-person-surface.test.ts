@@ -42,7 +42,7 @@ const publishedImage = {
 };
 
 // The derived `ControlPlaneClient` surface is far wider; the narrowing cast is test-only.
-const makeStub = (processUser = true) => {
+const makeStub = (features: Record<string, boolean> = { processUserRoutes: true }) => {
   const requests: Array<{ readonly op: string; readonly body: unknown }> = [];
   const details: WorkspaceDetails = {
     workspaceId: "ws_1",
@@ -81,7 +81,7 @@ const makeStub = (processUser = true) => {
         version: "0.0.0",
         docsPath: "/docs",
         openApiPath: "/openapi.json",
-        features: { processUser },
+        features,
       }),
   };
   return { client: { workspaces, sessions, system } as unknown as ControlPlaneClient, requests };
@@ -235,7 +235,24 @@ describe("user on exec and sessions", () => {
 
 describe("user against a control plane that does not report it", () => {
   it("is refused here, and nothing is sent", async () => {
-    const { client, requests } = makeStub(false);
+    const { client, requests } = makeStub({ processUser: false });
+    const workspace = makeWorkspace(makeCtx(client), { id: "ws_1", name: "t", status: "ready" });
+
+    await expect(workspace.exec(["id"], { user: "m4lice000" })).rejects.toMatchObject({
+      code: "user-unsupported",
+    });
+    await expect(workspace.sessions.open(["bash"], { user: "40001" })).rejects.toMatchObject({
+      code: "user-unsupported",
+    });
+    expect(requests).toEqual([]);
+  });
+});
+
+describe("user against a control plane that reports only the old flag", () => {
+  it("is never sent: `features.processUser: true` is not leave to send it", async () => {
+    // An older control plane (or an older pod of a mixed fleet) that said `processUser: true`
+    // would take `user` on the plain routes; this SDK never sends it there, nor anywhere else.
+    const { client, requests } = makeStub({ processUser: true });
     const workspace = makeWorkspace(makeCtx(client), { id: "ws_1", name: "t", status: "ready" });
 
     await expect(workspace.exec(["id"], { user: "m4lice000" })).rejects.toMatchObject({
@@ -252,7 +269,7 @@ describe("the control plane's feature answer", () => {
   it("is asked again after a failed read, never kept for the client's life", async () => {
     vi.useFakeTimers();
     try {
-      const { client, requests } = makeStub(true);
+      const { client, requests } = makeStub();
       let reads = 0;
       const flaky = {
         ...client,
@@ -396,7 +413,8 @@ describe("features()", () => {
       await readFeatures(
         makeCtx(
           withIndex({
-            processUser: true,
+            processUser: false,
+            processUserRoutes: true,
             dotfilesApply: true,
             credentialsPartialPut: true,
             credentialsPiOpencode: true,
@@ -405,15 +423,16 @@ describe("features()", () => {
         ),
       ),
     ).toEqual({
-      processUser: true,
+      processUserRoutes: true,
       dotfilesApply: true,
       credentialsPartialPut: true,
       credentialsPiOpencode: true,
       captureOwnerMap: true,
     });
-    // A control plane from before the later flags names only `processUser`.
-    expect(await readFeatures(makeCtx(withIndex({ processUser: false })))).toEqual({
-      processUser: false,
+    // A control plane from before the as-user routes names only `processUser`, and its `true`
+    // is not read as the routes.
+    expect(await readFeatures(makeCtx(withIndex({ processUser: true })))).toEqual({
+      processUserRoutes: false,
       dotfilesApply: false,
       credentialsPartialPut: false,
       credentialsPiOpencode: false,

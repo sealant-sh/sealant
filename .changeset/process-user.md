@@ -23,6 +23,7 @@ A process runs as a person's Linux user (Mend ADR 0016):
   can: `supported`, `unsupported` or `unknown`, from the sealantd of the image its latest launch
   booted. On the wire: `processUser` on every workspace read.
 - `sealant.features()` reports what the control plane can do, so a client detects it instead of
-  reading the version (`0.0.0` on a self-built control plane): `processUser` (now `true`),
-  `dotfilesApply`, `credentialsPartialPut`, `credentialsPiOpencode` and `captureOwnerMap`. On the
-  wire: the index's `features`; a feature an older control plane does not name is `false`.
+  reading the version (`0.0.0` on a self-built control plane): `processUserRoutes` (the as-user
+  routes; `processUser`, which older SDKs read, stays `false`), `dotfilesApply`,
+  `credentialsPartialPut`, `credentialsPiOpencode` and `captureOwnerMap`. On the wire: the index's
+  `features`; a feature an older control plane does not name is `false`.

@@ -346,9 +346,42 @@ export interface ConsumeRunExecJobsOptions {
   readonly onMessage: (message: RunExecConsumerMessage) => Promise<void>;
 }
 
-/** Consumes both run-exec queues (the legacy one and the as-user one) with one handler. */
+/**
+ * A counting limit shared by callers: at most `permits` tasks run at once, the rest wait in order.
+ * Both run-exec queues run under one, so the second queue does not add to how many runs a worker
+ * executes at once.
+ */
+export const sharedConcurrencyLimit = (permits: number) => {
+  if (!Number.isInteger(permits) || permits < 1) {
+    throw new Error("A concurrency limit is a positive integer.");
+  }
+  let free = permits;
+  const waiting: Array<() => void> = [];
+  return async <A>(task: () => Promise<A>): Promise<A> => {
+    if (free > 0) {
+      free -= 1;
+    } else {
+      await new Promise<void>((resolve) => waiting.push(resolve));
+    }
+    try {
+      return await task();
+    } finally {
+      const next = waiting.shift();
+      if (next === undefined) free += 1;
+      else next();
+    }
+  };
+};
+
+/**
+ * Consumes both run-exec queues (the legacy one and the as-user one) with one handler, under ONE
+ * concurrency limit: `concurrency` runs at once across both, as with the single queue before. Each
+ * queue may take up to that many jobs; a job taken while the limit is full waits its turn here.
+ */
 export const consumeRunExecJobs = async (options: ConsumeRunExecJobsOptions) => {
   const jobs = createJobQueueService(options.databaseUrl);
+  const limit = sharedConcurrencyLimit(options.concurrency ?? 1);
+  const onMessage = (message: RunExecConsumerMessage) => limit(() => options.onMessage(message));
   const consume = (
     queue: typeof runExecQueue,
     parseMessage: (input: unknown) => RunExecRequestedMessage,
@@ -363,7 +396,7 @@ export const consumeRunExecJobs = async (options: ConsumeRunExecJobsOptions) => 
       // way (no reaper settles it today). `sweepRunExecJobRows` removes what a failed delete or an
       // older worker left.
       deleteOnPickup: true,
-      onMessage: options.onMessage,
+      onMessage,
     });
   const consumers = [
     await consume(runExecQueue, parseRunExecRequestedMessage),

@@ -116,7 +116,8 @@ whose primary group is `mend`, never root), on a workspace whose `sealantd` repo
 anything else answers `409` `user-unsupported`, saying why (the workspace's `sealantd` doesn't run
 processes as another user, the user is not in range, or it does not exist yet), and starts nothing.
 Every workspace read reports `processUser` (`supported`, `unsupported` or `unknown`, from its
-image's `sealantd`). `GET /` reports `features`: `processUser`, `dotfilesApply`,
+image's `sealantd`). `GET /` reports `features`: `processUserRoutes` (the as-user routes;
+`processUser` stays `false`, the flag SDKs from before them read), `dotfilesApply`,
 `credentialsPartialPut`, `credentialsPiOpencode` and `captureOwnerMap`, so a client detects them
 instead of reading the version.
 

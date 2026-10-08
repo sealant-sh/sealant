@@ -119,7 +119,7 @@ These call the live API and work end-to-end:
   Linux user (a uid in 40001–49999 whose primary group is `mend`), on a workspace whose `sealantd`
   reports `exec.user` (`workspace.processUser()`, also `launch.processUser` after `ready()`);
   anything else is refused (`user-unsupported`, the message saying why) and nothing starts.
-  `sealant.features()` reports what the control plane can do (`processUser`, `dotfilesApply`,
+  `sealant.features()` reports what the control plane can do (`processUserRoutes`, `dotfilesApply`,
   `credentialsPartialPut`, `credentialsPiOpencode`, `captureOwnerMap`), so a client detects them
   rather than reading a version. A capture source's
   `ownerMap: { gid, worktreeUid, people: [{ id, uid }] }` gives each person's saved directory to

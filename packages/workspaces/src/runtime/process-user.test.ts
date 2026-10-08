@@ -39,10 +39,19 @@ const check = (user: string, entries: Readonly<Record<string, string>>) => {
     `#!/bin/sh\n[ "$1" = passwd ] || exit 2\ncase "$2" in\n${table}\n  *) exit 2 ;;\nesac\n`,
   );
   chmodSync(join(bin, "getent"), 0o755);
-  const result = spawnSync("sh", ["-c", buildProcessUserCheckScript(user)], {
-    encoding: "utf8",
-    env: { ...process.env, PATH: `${bin}:${process.env["PATH"] ?? ""}` },
-  });
+  // The script sets its own PATH; the fake getent comes first, then this machine's own tools.
+  const result = spawnSync(
+    "sh",
+    [
+      "-c",
+      buildProcessUserCheckScript(user, {
+        prependPath: [bin, ...(process.env["PATH"] ?? "").split(":")]
+          .filter((dir) => /^\/[A-Za-z0-9._/-]+$/.test(dir))
+          .join(":"),
+      }),
+    ],
+    { encoding: "utf8" },
+  );
   return { status: result.status, stdout: result.stdout };
 };
 
@@ -98,10 +107,12 @@ describe("the check script", () => {
     roots.push(root);
     const bin = join(root, "bin");
     mkdirSync(bin);
-    const result = spawnSync("/bin/sh", ["-c", buildProcessUserCheckScript("m4lice000")], {
-      encoding: "utf8",
-      env: { PATH: bin },
-    });
+    const script = buildProcessUserCheckScript("m4lice000");
+    // The script looks only in the fixed system PATH: no `getent` where it looks, as in an image
+    // without it, is simulated by pointing those directories at an empty one.
+    expect(script).toContain("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+    const withoutGetent = script.replace(/^PATH=.*$/m, `PATH=${bin}`);
+    const result = spawnSync("/bin/sh", ["-c", withoutGetent], { encoding: "utf8" });
     expect(result.status).toBe(PROCESS_USER_CHECK_EXIT.noGetent);
     expect(
       processUserCheckOutcome({ supported: true, exitCode: PROCESS_USER_CHECK_EXIT.noGetent }),
@@ -111,7 +122,9 @@ describe("the check script", () => {
     });
   });
 
-  it("is never built for a name refused up front", () => {
+  it("is never built for a name refused up front, nor with an unsafe PATH", () => {
+    expect(() => buildProcessUserCheckScript("m4lice000", { prependPath: "relative" })).toThrow();
+    expect(() => buildProcessUserCheckScript("m4lice000", { prependPath: "/x;rm" })).toThrow();
     expect(() => buildProcessUserCheckScript("root")).toThrow(/root/);
     expect(() => buildProcessUserCheckScript("1000")).toThrow(/outside/);
     expect(() => buildProcessUserCheckScript("a'; rm -rf /")).toThrow();

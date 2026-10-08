@@ -967,7 +967,7 @@ export interface WorkspaceExecOptions {
    * the image's person environment, and none of the daemon's logins. Only a person Mend made (a uid
    * in 40001–49999 whose primary group is `mend`, never root), on a workspace whose sealantd
    * reports `exec.user` (`workspace.processUser()`). Never run as anyone else in its place: the
-   * SDK sends it only to a control plane that reports the feature (`features().processUser`, read
+   * SDK sends it only to a control plane that reports the feature (`features().processUserRoutes`, read
    * once per client) and rejects with code `user-unsupported` otherwise; the control plane refuses
    * any other user or workspace with `WorkspaceConflictError` / `SessionConflictError`, body code
    * `user-unsupported`, its message saying why (the workspace's sealantd does not run processes as
@@ -1331,11 +1331,11 @@ export type WorkspaceProcessUserCapability = "supported" | "unsupported" | "unkn
  */
 export interface SealantFeatures {
   /**
-   * `user` on `exec()` and `sessions.open()` is passed through to the workspace's sealantd. Each
-   * workspace's own answer is `workspace.processUser()`; a call as a user on a workspace that
+   * `user` on `exec()` and `sessions.open()` is honoured, on the control plane's as-user routes.
+   * Each workspace's own answer is `workspace.processUser()`; a call as a user on a workspace that
    * cannot is refused there (code `user-unsupported`), never run as another user.
    */
-  readonly processUser: boolean;
+  readonly processUserRoutes: boolean;
   /** `workspace.dotfiles.apply()`: a person's dotfiles applied as their user. */
   readonly dotfilesApply: boolean;
   /** `partial: true` on `workspace.credentials.put()`. */
@@ -1453,7 +1453,7 @@ export interface SessionOptions {
    * the image's person environment, and none of the daemon's logins. Only a person Mend made (a uid
    * in 40001–49999 whose primary group is `mend`, never root), on a workspace whose sealantd
    * reports `exec.user` (`workspace.processUser()`). Never run as anyone else in its place: the
-   * SDK sends it only to a control plane that reports the feature (`features().processUser`, read
+   * SDK sends it only to a control plane that reports the feature (`features().processUserRoutes`, read
    * once per client) and rejects with code `user-unsupported` otherwise; the control plane refuses
    * any other user or workspace with `WorkspaceConflictError` / `SessionConflictError`, body code
    * `user-unsupported`, its message saying why (the workspace's sealantd does not run processes as

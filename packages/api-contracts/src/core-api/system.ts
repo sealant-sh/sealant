@@ -17,12 +17,18 @@ export const systemIndexResponseSchema = Schema.Struct({
   features: Schema.optional(
     Schema.Struct({
       /**
-       * This control plane passes `user` on exec and sessions through to the workspace's daemon.
-       * Whether a given workspace can run a process as a user is that workspace's `processUser`
-       * (its read); an exec or session as a user on one that cannot is refused there (`409`,
-       * `user-unsupported`), never run as another user.
+       * Always `false` from this control plane: `user` on the plain exec and session routes is
+       * refused. Kept, and kept false, because SDKs from before the as-user routes read `true` as
+       * leave to send `user` on the plain routes, which a control plane from before `user` would
+       * accept and run as the workspace's own user.
        */
       processUser: Schema.Boolean,
+      /**
+       * `POST /v1/workspaces/:id/exec-as-user` and `POST /v1/sessions/as-user` exist: a process
+       * runs as a person's Linux user there. Whether a given workspace can is its read's
+       * `processUser`; one that cannot is refused there (`409`, `user-unsupported`).
+       */
+      processUserRoutes: Schema.optional(Schema.Boolean),
       /** `POST /v1/workspaces/:id/dotfiles`: a person's dotfiles applied as their user. */
       dotfilesApply: Schema.optional(Schema.Boolean),
       /** `partial: true` on a credentials put: what is connected is written, the rest reported. */

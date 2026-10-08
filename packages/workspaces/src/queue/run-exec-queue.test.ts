@@ -12,6 +12,7 @@ import {
   runExecQueueName,
   runExecRequestEnvelope,
   runExecRequestedMessageKind,
+  sharedConcurrencyLimit,
 } from "./run-exec-queue.js";
 
 const base = { kind: runExecRequestedMessageKind, runId: "run_1" };
@@ -183,5 +184,41 @@ describe("a run as a user (the as-user queue)", () => {
     ]) {
       expect(() => parseRunExecAsUserRequestedMessage(bad)).toThrow();
     }
+  });
+});
+
+describe("sharedConcurrencyLimit (both run-exec queues)", () => {
+  it("runs at most its permits at once across every caller, the rest in order", async () => {
+    const limit = sharedConcurrencyLimit(2);
+    let running = 0;
+    let most = 0;
+    const order: number[] = [];
+    const releases: Array<() => void> = [];
+    const task = (id: number) =>
+      limit(async () => {
+        running += 1;
+        most = Math.max(most, running);
+        order.push(id);
+        await new Promise<void>((resolve) => releases.push(resolve));
+        running -= 1;
+      });
+    // As if the legacy queue and the as-user queue each took two jobs.
+    const all = Promise.all([task(1), task(2), task(3), task(4)]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(order).toEqual([1, 2]);
+    while (releases.length > 0 || order.length < 4) {
+      releases.shift()?.();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    await all;
+    expect(most).toBe(2);
+    expect(order).toEqual([1, 2, 3, 4]);
+  });
+
+  it("frees a permit when a task fails", async () => {
+    const limit = sharedConcurrencyLimit(1);
+    await expect(limit(() => Promise.reject(new Error("boom")))).rejects.toThrow("boom");
+    expect(await limit(() => Promise.resolve("next"))).toBe("next");
+    expect(() => sharedConcurrencyLimit(0)).toThrow();
   });
 });

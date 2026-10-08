@@ -602,12 +602,13 @@ unchanged. The SDK carries a typed error's body code as `SealantApiError.reason`
   The uid check runs inside the executor, where a person with `sudo` could rewrite `/etc/passwd`;
   the enforcement that holds against that belongs in sealantd (refusing uids outside the boot owner
   map or the range). An SDK sends `user` only to a control plane whose index reports
-  `features.processUser` (kept five minutes, a failed read fifteen seconds), and refuses it
-  client-side otherwise: an older control plane would decode the request without the field and run
-  the process as the workspace's own user. The index's `features` also reports `dotfilesApply`,
-  `credentialsPartialPut`, `credentialsPiOpencode` and `captureOwnerMap`; each workspace read
-  reports `processUser` (`supported`, `unsupported`, `unknown`) from its image's sealantd (the
-  build's probe).
+  `features.processUserRoutes` (kept five minutes, a failed read fifteen seconds), only on the
+  as-user routes, and refuses it client-side otherwise. `features.processUser` stays `false`: SDKs
+  from before the as-user routes read `true` as leave to send `user` on the plain routes, which a
+  control plane from before `user` decodes without the field and runs as the workspace's own user.
+  The index's `features` also reports `dotfilesApply`, `credentialsPartialPut`,
+  `credentialsPiOpencode` and `captureOwnerMap`; each workspace read reports `processUser`
+  (`supported`, `unsupported`, `unknown`) from its image's sealantd (the build's probe).
 - **The image's per-person capability.** The image build's probe (sealant#327) records on the
   build's metadata `imageProbe`: the tools (setuid `sudo`, `useradd`, `setfacl`, `setpriv`,
   `flock`), the sudoers rule, a writable passwd, the `mend` group, the reserved ids, and what its

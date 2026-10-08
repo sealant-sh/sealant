@@ -23,7 +23,9 @@ const answers = new WeakMap<
 export const toFeatures = (index: SystemIndexResponse): SealantFeatures => {
   const features = index.features;
   return {
-    processUser: features?.processUser === true,
+    // Only the as-user routes' flag: `processUser` is the flag SDKs from before them read, and
+    // this control plane reports it false (see `features.processUser` in the contract).
+    processUserRoutes: features?.processUserRoutes === true,
     dotfilesApply: features?.dotfilesApply === true,
     credentialsPartialPut: features?.credentialsPartialPut === true,
     credentialsPiOpencode: features?.credentialsPiOpencode === true,

@@ -72,7 +72,10 @@ the SDK surface starts with the single-command form.
 user (a login name or uid), on a workspace whose sealantd reports `exec.user`:
 
 ```ts
-if ((await sealant.features()).processUser && (await workspace.processUser()) === "supported") {
+if (
+  (await sealant.features()).processUserRoutes &&
+  (await workspace.processUser()) === "supported"
+) {
   await workspace.exec(["pnpm", "install"], { user: "m4lice000" });
 }
 ```
@@ -90,7 +93,7 @@ if ((await sealant.features()).processUser && (await workspace.processUser()) ==
 - `workspace.processUser()` reads `supported`, `unsupported` or `unknown` from the image's sealantd;
   `launch.processUser` has it after `ready()`. The call itself asks the running daemon, whose answer
   decides.
-- `sealant.features()` reports what the control plane can do: `processUser`, `dotfilesApply`,
+- `sealant.features()` reports what the control plane can do: `processUserRoutes`, `dotfilesApply`,
   `credentialsPartialPut`, `credentialsPiOpencode` and `captureOwnerMap`. Detect them instead of
   reading the control plane's version.
 

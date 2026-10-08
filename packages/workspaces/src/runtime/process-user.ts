@@ -102,6 +102,9 @@ export const processUserProblem = (user: string): ProcessUserRefusal | undefined
   return undefined;
 };
 
+/** Where the check looks for `getent` and `cut`. */
+const SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
 const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 
 /**
@@ -109,14 +112,26 @@ const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
  * the same lookup the daemon makes), its uid is in the range and its primary group is `mend`. It
  * answers only with its exit code ({@link PROCESS_USER_CHECK_EXIT}), and prints nothing.
  */
-export const buildProcessUserCheckScript = (user: string): string => {
+export const buildProcessUserCheckScript = (
+  user: string,
+  /** For tests: directories searched before the fixed system PATH. */
+  options: { readonly prependPath?: string } = {},
+): string => {
   const problem = processUserProblem(user);
+  if (
+    options.prependPath !== undefined &&
+    !/^(\/[A-Za-z0-9._/-]+)(:\/[A-Za-z0-9._/-]+)*$/.test(options.prependPath)
+  ) {
+    throw new Error("A prepended PATH is absolute directories of safe characters.");
+  }
   if (problem !== undefined) {
     throw new Error(`Refusing to check '${user}' as a process user: ${problem.detail}.`);
   }
   const E = PROCESS_USER_CHECK_EXIT;
   return [
     "set -eu",
+    // A fixed PATH, not whatever root's environment carries: getent and cut from the system.
+    `PATH=${options.prependPath === undefined ? "" : `${options.prependPath}:`}${SYSTEM_PATH}`,
     `user=${quote(user)}`,
     // Without getent a failed lookup would read as an unknown user: say what is missing instead.
     `command -v getent >/dev/null 2>&1 || exit ${String(E.noGetent)}`,
