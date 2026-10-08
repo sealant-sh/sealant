@@ -2967,3 +2967,215 @@ describe("the daemon build an executor boots, recorded at launch (review 3 #8)",
     }),
   );
 });
+
+describe("processWorkspaceBuildJobEffect: the image-build phase", () => {
+  const planHash = "d".repeat(64);
+  const planned = {
+    osFamily: "fedora" as const,
+    imagePlan: {} as never,
+    containerfile: "FROM fedora:41",
+    planHash,
+  };
+  const keptImage = {
+    repository: "sealant-workspace-fedora",
+    tag: "plan-dddddddddddd",
+    reference: "sealant-workspace-fedora:plan-dddddddddddd",
+    digestReference: "sha256:kept",
+    digest: "sha256:kept",
+  };
+  const job = () => ({
+    id: "job_phase",
+    runId: null,
+    registryId: "local",
+    repository: "session-cccc",
+    tag: "sdk-33333333",
+    requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
+    attemptCount: 1,
+  });
+
+  it.effect(
+    "uses the plan's image the store kept when no publish is on record, building nothing",
+    () => {
+      const jobs = workspaceBuildJobRepoStub({ claimJobById: job });
+      const attempts = workspaceAttemptRepoStub();
+      const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+      const runtimeAdapter = createRuntimeAdapterStub("docker");
+      const buildAndPublish = vi.fn(async () => {
+        throw new Error("nothing may be built when the store kept the plan's image");
+      });
+      const findPublished = vi.fn(async () => ({
+        publishedImage: keptImage,
+        build: {
+          ...createCompileResult({ id: "fedora" }),
+          metadata: { defaultArtifactName: "sealant-workspace-fedora", notes: [], planHash },
+        },
+      }));
+      const imageBuilder: WorkspaceImageBuilder = {
+        isolation: "host",
+        plan: () => planned,
+        buildAndPublish,
+        findPublished,
+      };
+
+      return Effect.gen(function* () {
+        yield* processWorkspaceBuildJobEffect(
+          baseOptions({ jobId: "job_phase", imageBuilder, runtimeAdapters: [runtimeAdapter] }),
+        );
+        expect(findPublished).toHaveBeenCalledWith({
+          planned,
+          repository: "sealant-workspace-fedora",
+          tag: "plan-dddddddddddd",
+        });
+        expect(buildAndPublish).not.toHaveBeenCalled();
+        expect(jobs.markJobSucceeded).toHaveBeenCalledWith(
+          expect.objectContaining({ id: "job_phase", publishedDigest: "sha256:kept" }),
+        );
+        expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+          expect.objectContaining({
+            publishedImage: expect.objectContaining({ digest: "sha256:kept" }),
+          }),
+          expect.anything(),
+        );
+      }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+    },
+  );
+
+  /** A build that never ends on its own: it reports a step, then waits until it is stopped. */
+  const endlessBuild = () => {
+    const stopped: { signal?: AbortSignal } = {};
+    const imageBuilder: WorkspaceImageBuilder = {
+      isolation: "host",
+      plan: () => planned,
+      buildAndPublish: (input) => {
+        input.onProgress?.({
+          step: 4,
+          steps: 12,
+          stepName: "RUN ./install.sh",
+          progressAt: new Date().toISOString(),
+        });
+        if (input.signal !== undefined) stopped.signal = input.signal;
+        return new Promise((_resolve, reject) => {
+          input.signal?.addEventListener("abort", () => reject(new Error("stopped")));
+        });
+      },
+    };
+    return { imageBuilder, stopped };
+  };
+
+  it.live("stops a build that runs past the worker's bound, however much it prints", () => {
+    const jobs = {
+      ...workspaceBuildJobRepoStub({ claimJobById: job }),
+      recordJobProgress: vi.fn((_input: unknown) => Effect.succeed(true)),
+    };
+    const { imageBuilder, stopped } = endlessBuild();
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        processWorkspaceBuildJobEffect(
+          baseOptions({
+            jobId: "job_phase",
+            imageBuilder,
+            buildProgressIntervalMs: 100,
+            imageBuildMaxMs: 400,
+          }),
+        ),
+      );
+      expect(Exit.isFailure(exit)).toBe(true);
+      expect(stopped.signal?.aborted).toBe(true);
+      expect(jobs.markJobFailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "job_phase",
+          errorCode: "image-build-timeout",
+          errorMessage: expect.stringContaining("at step 4/12 (RUN ./install.sh)"),
+        }),
+      );
+      expect(jobs.markJobSucceeded).not.toHaveBeenCalled();
+    }).pipe(
+      Effect.provide(
+        provideRepos({
+          jobs,
+          runtimeInstances: workspaceRuntimeInstanceRepoStub(),
+          attempts: workspaceAttemptRepoStub(),
+        }),
+      ),
+    );
+  });
+
+  it.live("stops building once its claim is gone, and records nothing over it", () => {
+    const jobs = {
+      ...workspaceBuildJobRepoStub({ claimJobById: job }),
+      // Another worker took the job over (or a stop cancelled it): the fenced write lands nowhere.
+      recordJobProgress: vi.fn((_input: unknown) => Effect.succeed(false)),
+    };
+    const { imageBuilder, stopped } = endlessBuild();
+    const runtimeAdapter = createRuntimeAdapterStub("docker");
+    return Effect.gen(function* () {
+      const result = yield* processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_phase",
+          imageBuilder,
+          buildProgressIntervalMs: 100,
+          runtimeAdapters: [runtimeAdapter],
+        }),
+      );
+      expect(result).toBeNull();
+      expect(stopped.signal?.aborted).toBe(true);
+      expect(jobs.markJobFailed).not.toHaveBeenCalled();
+      expect(jobs.markJobSucceeded).not.toHaveBeenCalled();
+      expect(runtimeAdapter.launch).not.toHaveBeenCalled();
+    }).pipe(
+      Effect.provide(
+        provideRepos({
+          jobs,
+          runtimeInstances: workspaceRuntimeInstanceRepoStub(),
+          attempts: workspaceAttemptRepoStub(),
+        }),
+      ),
+    );
+  });
+
+  it.live("records a build's progress on its job while it runs, under its claim", () => {
+    const jobs = {
+      ...workspaceBuildJobRepoStub({ claimJobById: job }),
+      recordJobProgress: vi.fn((_input: unknown) => Effect.succeed(true)),
+    };
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const progress = {
+      step: 2,
+      steps: 12,
+      stepName: "RUN apt-get update",
+      progressAt: "2026-10-07T20:45:00.000Z",
+      stallTimeoutMs: 600_000,
+    };
+    const imageBuilder: WorkspaceImageBuilder = {
+      isolation: "host",
+      plan: () => planned,
+      // A slow build: it reports a step, then takes a while before it publishes.
+      buildAndPublish: async (input) => {
+        input.onProgress?.(progress);
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        return {
+          publishedImage: keptImage,
+          build: {
+            ...createCompileResult({ id: "fedora" }),
+            metadata: { defaultArtifactName: "sealant-workspace-fedora", notes: [], planHash },
+          },
+        };
+      },
+    };
+
+    return Effect.gen(function* () {
+      yield* processWorkspaceBuildJobEffect(
+        baseOptions({ jobId: "job_phase", imageBuilder, buildProgressIntervalMs: 100 }),
+      );
+      // Written once (it did not change again), fenced on the claim, renewing its lease.
+      expect(jobs.recordJobProgress).toHaveBeenCalledTimes(1);
+      expect(jobs.recordJobProgress).toHaveBeenCalledWith({
+        id: "job_phase",
+        claim: { workerId: "worker-test", attemptCount: 1 },
+        progress,
+        leaseDurationMs: 60000,
+      });
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+  });
+});

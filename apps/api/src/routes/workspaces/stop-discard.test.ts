@@ -7,12 +7,15 @@
 import type { CaptureExecutorOrigin } from "@sealant/api-contracts";
 import {
   WorkspaceAttemptRepo,
+  WorkspaceBuildJobRepo,
   WorkspaceCaptureDrainRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
   type Workspace,
   type WorkspaceAttempt,
   type WorkspaceAttemptRepoService,
+  type WorkspaceBuildJob,
+  type WorkspaceBuildJobRepoService,
   type WorkspaceCaptureDrain,
   type WorkspaceCaptureDrainRepoService,
   type WorkspaceRepoService,
@@ -37,8 +40,12 @@ const harness = (
     readonly retained?: boolean;
     /** The launch identity the create named (recorded on the attempt). */
     readonly launchId?: string;
+    /** No runtime yet: the launch's build job is in this state. */
+    readonly launching?: WorkspaceBuildJob["status"];
   } = {},
 ) => {
+  const cancelledJobs: string[] = [];
+  const cancelledAttempts: Array<{ id: string; cancelReason: string }> = [];
   const discards: Array<{ runId: string; requestedBy: string }> = [];
   const attestations: Array<{
     runId: string;
@@ -59,7 +66,23 @@ const harness = (
     Layer.succeed(WorkspaceAttemptRepo, {
       getAttemptById: (id: string) =>
         Effect.succeed({ id, launchId: options.launchId ?? null } as WorkspaceAttempt),
+      markAttemptCancelled: (input: { id: string; cancelReason: string }) => {
+        cancelledAttempts.push(input);
+        return Effect.succeed(null);
+      },
     } as unknown as WorkspaceAttemptRepoService),
+    Layer.succeed(WorkspaceBuildJobRepo, {
+      getLatestJobByRunId: () =>
+        Effect.succeed(
+          options.launching === undefined
+            ? undefined
+            : ({ id: "job_1", status: options.launching } as WorkspaceBuildJob),
+        ),
+      cancelUnbuiltJob: (input: { id: string }) => {
+        cancelledJobs.push(input.id);
+        return Effect.succeed({ id: input.id, status: "failed" } as WorkspaceBuildJob);
+      },
+    } as unknown as WorkspaceBuildJobRepoService),
     Layer.succeed(WorkspaceRepo, {
       getWorkspaceById: () => Effect.succeed(workspace),
       setWorkspaceStatus: (input: { status: string }) => {
@@ -69,13 +92,17 @@ const harness = (
     } as unknown as WorkspaceRepoService),
     Layer.succeed(WorkspaceRuntimeInstanceRepo, {
       getRuntimeInstanceByRunId: () =>
-        Effect.succeed({
-          runId: "run_1",
-          status: "ready",
-          adapter: "docker",
-          resourceId: "container-1",
-          reference: "sealant-run-1",
-        } as WorkspaceRuntimeInstance),
+        Effect.succeed(
+          options.launching !== undefined
+            ? undefined
+            : ({
+                runId: "run_1",
+                status: "ready",
+                adapter: "docker",
+                resourceId: "container-1",
+                reference: "sealant-run-1",
+              } as WorkspaceRuntimeInstance),
+        ),
     } as unknown as WorkspaceRuntimeInstanceRepoService),
     Layer.succeed(WorkspaceCaptureDrainRepo, {
       requestDiscard: (input: { runId: string; requestedBy: string }) => {
@@ -137,8 +164,44 @@ const harness = (
         Effect.provide(layer),
       ),
     );
-  return { stop, recover, discards, attestations, recoveries, stops, statuses };
+  return {
+    stop,
+    recover,
+    discards,
+    attestations,
+    recoveries,
+    stops,
+    statuses,
+    cancelledJobs,
+    cancelledAttempts,
+  };
 };
+
+describe("stopWorkspace · before the image is built", () => {
+  it("cancels a launch still building its image: nothing launches, and the run ends cancelled", async () => {
+    for (const launching of ["queued", "running"] as const) {
+      const h = harness("running", { launching });
+      await expect(h.stop({ ownerUserId: "user_owner" })).resolves.toEqual({
+        workspaceId: "ws_1",
+        status: "cancelled",
+      });
+      expect(h.cancelledJobs).toEqual(["job_1"]);
+      expect(h.cancelledAttempts).toEqual([
+        { id: "run_1", cancelReason: "stopped before its image was built" },
+      ]);
+      // There is no runtime to tear down: no stop is enqueued.
+      expect(h.stops).toEqual([]);
+    }
+  });
+
+  it("still refuses between the build and the runtime's first record", async () => {
+    const h = harness("running", { launching: "succeeded" });
+    await expect(h.stop({ ownerUserId: "user_owner" })).rejects.toMatchObject({
+      message: expect.stringContaining("still launching"),
+    });
+    expect(h.cancelledJobs).toEqual([]);
+  });
+});
 
 describe("stopWorkspace · discardUnsaved", () => {
   it("records who discarded the unsaved captures, then enqueues the stop", async () => {

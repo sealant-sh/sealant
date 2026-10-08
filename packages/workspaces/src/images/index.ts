@@ -1,6 +1,7 @@
 export {
   createDockerWorkspaceImageBuilder,
   type BuildAndPublishInput,
+  type FindPublishedInput,
   type BuildAndPublishResult,
   type DockerWorkspaceImageBuilderOptions,
   type WorkspaceImageBuilder,

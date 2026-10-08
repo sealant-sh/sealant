@@ -42,6 +42,8 @@ jobs:
       - name: Run the Docker sealantd e2e suite
         env: { SEALANT_E2E_REQUIRE_IMAGE: "1" }
         run: pnpm --filter @sealant/workspaces test:e2e src/sealantd
+      - name: Image-build phase (progress, a kept image reused, a silent build stopped)
+        run: pnpm --filter @sealant/workspaces test:e2e src/buildkit/build-phases.e2e.ts
       - name: Capture owner map through the Docker adapter and a real daemon
         env: { SEALANT_E2E_REQUIRE_IMAGE: "1" }
         run: pnpm --filter @sealant/workspaces test:e2e src/runtime/capture-owner-map.e2e.ts

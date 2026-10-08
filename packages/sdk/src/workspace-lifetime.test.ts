@@ -164,6 +164,220 @@ describe("workspace.ready() timeout", () => {
   });
 });
 
+describe("workspace.ready() by phase: an image build does not spend the readiness bound", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const MINUTE = 60 * 1_000;
+
+  /** An image build at step 2/12 that last wrote output at `progressAt`. */
+  const building = (progressAt: string, overrides: Partial<WorkspaceDetails> = {}) =>
+    details({
+      status: "running",
+      phase: {
+        name: "image-build",
+        since: "2026-09-27T10:00:00.000Z",
+        imageBuild: {
+          step: 2,
+          steps: 12,
+          stepName: "RUN apt-get update && apt-get install -y zsh",
+          progressAt,
+          stallTimeoutMs: 10 * MINUTE,
+        },
+      },
+      ...overrides,
+    });
+  const booting = () => details({ status: "running", phase: { name: "boot" } });
+
+  /** Runs `ready()` under fake timers for `forMs`; the outcome is the handle or the error. */
+  const readyFor = async (
+    read: () => WorkspaceDetails,
+    forMs: number,
+    init: Partial<WorkspaceInit> = {},
+    options?: Parameters<ReturnType<typeof workspaceFor>["ready"]>[0],
+  ) => {
+    vi.useFakeTimers();
+    const stub = makeStub(read);
+    let settled = false;
+    const outcome = workspaceFor(stub.client, init)
+      .ready(options)
+      .then(
+        (workspace) => workspace,
+        (error: unknown) => error,
+      )
+      .finally(() => {
+        settled = true;
+      });
+    await vi.advanceTimersByTimeAsync(forMs);
+    return { outcome: settled ? await outcome : "pending", stops: stub.stops };
+  };
+
+  it("waits out a slow build that keeps moving, then boots (a 25-minute apt step on a slow mirror)", async () => {
+    const start = Date.now();
+    const read = () => {
+      const elapsed = Date.now() - start;
+      if (elapsed < 25 * MINUTE) return building(new Date().toISOString());
+      if (elapsed < 25 * MINUTE + 5_000) return booting();
+      return details({ status: "ready" });
+    };
+    const { outcome, stops } = await readyFor(read, 26 * MINUTE, { created: true });
+    expect(outcome).toMatchObject({ id: "ws_1" });
+    expect(stops).toEqual([]);
+  });
+
+  it("spends the readiness bound only outside the build: queued and booting", async () => {
+    const start = Date.now();
+    const read = () =>
+      Date.now() - start < 30 * MINUTE ? building(new Date().toISOString()) : booting();
+    // 30 minutes of build, then a boot that never answers: the 1-minute bound is spent booting.
+    const early = await readyFor(read, 30 * MINUTE + 30_000, {}, { readyTimeoutMs: MINUTE });
+    expect(early.outcome).toBe("pending");
+    vi.useRealTimers();
+    const late = await readyFor(read, 32 * MINUTE, {}, { readyTimeoutMs: MINUTE });
+    expect(late.outcome).toMatchObject({
+      code: "workspace_ready_timeout",
+      message: expect.stringContaining("booting the workspace"),
+    });
+  });
+
+  it("takes the readiness bound from create() when ready() names none", async () => {
+    const { outcome } = await readyFor(booting, 2 * MINUTE, { readyTimeoutMs: MINUTE });
+    expect(outcome).toMatchObject({ code: "workspace_ready_timeout" });
+  });
+
+  it("gives up on a build that stopped reporting progress, naming the step, and stops it", async () => {
+    const stuck = new Date().toISOString();
+    const { outcome, stops } = await readyFor(() => building(stuck), 21 * MINUTE, {
+      created: true,
+    });
+    expect(outcome).toMatchObject({
+      code: "workspace_image_build_stalled",
+      message: expect.stringContaining("at step 2/12 (RUN apt-get update"),
+    });
+    expect(stops).toHaveLength(1);
+  });
+
+  it("gives up on a build that never reports progress 20 minutes after it started", async () => {
+    // A builder that reports none (Kubernetes, MicroVM), or a worker lost before its first write.
+    const silent = () =>
+      details({ status: "running", phase: { name: "image-build", since: "2026-09-27T10:00:00Z" } });
+    const early = await readyFor(silent, 19 * MINUTE, { created: true });
+    expect(early.outcome).toBe("pending");
+    vi.useRealTimers();
+    const late = await readyFor(silent, 21 * MINUTE, { created: true });
+    expect(late.outcome).toMatchObject({
+      code: "workspace_image_build_stalled",
+      message: expect.stringContaining("since it started"),
+    });
+    expect(late.stops).toHaveLength(1);
+  });
+
+  it("is not reset by a reclaim whose worker also dies before its first write", async () => {
+    const start = Date.now();
+    // The first worker wrote once, then died; its job was reclaimed at 16 min (progress reset to
+    // none) by a worker that never writes either.
+    const firstWrite = new Date(start + 1_000).toISOString();
+    const read = () =>
+      Date.now() - start < 16 * MINUTE
+        ? building(firstWrite)
+        : details({ status: "running", phase: { name: "image-build" } });
+    const { outcome } = await readyFor(read, 22 * MINUTE);
+    expect(outcome).toMatchObject({ code: "workspace_image_build_stalled" });
+  });
+
+  it("keeps waiting when the reclaiming worker reports progress again", async () => {
+    const start = Date.now();
+    const read = () => {
+      const elapsed = Date.now() - start;
+      if (elapsed < 16 * MINUTE)
+        return details({ status: "running", phase: { name: "image-build" } });
+      if (elapsed < 40 * MINUTE) return building(new Date().toISOString());
+      return details({ status: "ready" });
+    };
+    const { outcome } = await readyFor(read, 41 * MINUTE);
+    expect(outcome).toMatchObject({ id: "ws_1" });
+  });
+
+  it("leaves a build that reports no progress to imageBuildTimeoutMs when the caller sets it", async () => {
+    const silent = () => details({ status: "running", phase: { name: "image-build" } });
+    const early = await readyFor(silent, 25 * MINUTE, {}, { imageBuildTimeoutMs: 30 * MINUTE });
+    expect(early.outcome).toBe("pending");
+    vi.useRealTimers();
+    const late = await readyFor(silent, 31 * MINUTE, {}, { imageBuildTimeoutMs: 30 * MINUTE });
+    expect(late.outcome).toMatchObject({ code: "workspace_image_build_timeout" });
+  });
+
+  it("fails with the build's own reason when the control plane fails a stalled build", async () => {
+    const reason =
+      "The workspace image build stopped making progress at step 2/12 (RUN apt-get update): it wrote nothing for 10 min.";
+    const stub = makeStub(() =>
+      details({ status: "failed", error: { code: "image-build-stalled", message: reason } }),
+    );
+    await expect(workspaceFor(stub.client).ready()).rejects.toMatchObject({
+      code: "workspace_image_build_stalled",
+      message: expect.stringContaining(reason),
+    });
+  });
+
+  it("bounds the whole build when imageBuildTimeoutMs says so", async () => {
+    const { outcome } = await readyFor(
+      () => building(new Date().toISOString()),
+      6 * MINUTE,
+      {},
+      { imageBuildTimeoutMs: 5 * MINUTE },
+    );
+    expect(outcome).toMatchObject({ code: "workspace_image_build_timeout" });
+  });
+
+  it("refuses a bound that is not a positive number", async () => {
+    const stub = makeStub(() => details({ status: "ready" }));
+    await expect(workspaceFor(stub.client).ready({ readyTimeoutMs: 0 })).rejects.toMatchObject({
+      code: "invalid_options",
+    });
+  });
+
+  it("reports the phase, and events() says when the build moves to another step", async () => {
+    vi.useFakeTimers();
+    let reads = 0;
+    const steps: readonly WorkspaceDetails[] = [
+      details({ status: "queued", phase: { name: "queued" } }),
+      building("2026-09-27T10:00:01.000Z"),
+      building("2026-09-27T10:00:02.000Z"),
+      building("2026-09-27T10:00:03.000Z", {
+        phase: {
+          name: "image-build",
+          imageBuild: { step: 3, steps: 12, progressAt: "2026-09-27T10:00:03.000Z" },
+        },
+      }),
+      booting(),
+      details({ status: "ready" }),
+    ];
+    const stub = makeStub(() => steps[Math.min(reads++, steps.length - 1)] ?? booting());
+    const workspace = workspaceFor(stub.client);
+    const events: string[] = [];
+    const done = (async () => {
+      for await (const event of workspace.events()) events.push(`${event.type}: ${event.message}`);
+    })();
+    await vi.advanceTimersByTimeAsync(20_000);
+    await done;
+    expect(events).toEqual([
+      "status.queued: Workspace status: queued",
+      "phase.queued: Waiting for a worker to take the launch",
+      "status.running: Workspace status: running",
+      "phase.image-build: Building the workspace image (step 2/12: RUN apt-get update && apt-get install -y zsh)",
+      "phase.image-build: Building the workspace image (step 3/12)",
+      "phase.boot: Booting the workspace",
+      "status.ready: Workspace status: ready",
+    ]);
+    reads = 1;
+    await expect(workspace.phase()).resolves.toMatchObject({
+      name: "image-build",
+      imageBuild: { step: 2, steps: 12 },
+    });
+  });
+});
+
 describe("workspace.stop()", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -193,6 +407,11 @@ describe("workspace.stop()", () => {
     await vi.advanceTimersByTimeAsync(61_000);
     return outcome;
   };
+
+  it("resolves stopped when a stop before the image was built cancelled the launch", async () => {
+    const stub = makeStub(() => details({ status: "cancelled" }));
+    await expect(workspaceFor(stub.client).stop()).resolves.toEqual({ state: "stopped" });
+  });
 
   it("resolves stopped once the runtime is gone", async () => {
     let reads = 0;

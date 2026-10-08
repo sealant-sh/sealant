@@ -46,6 +46,24 @@ export const workspaceRuntimeInstanceStopReasonValues = ["user", "expired", "fai
 export type WorkspaceRuntimeInstanceStopReason =
   (typeof workspaceRuntimeInstanceStopReasonValues)[number];
 
+/**
+ * What the worker last saw of an image build in progress: the build step it is on and when the
+ * build last wrote anything. The API reports it as the workspace's `image-build` phase, so a
+ * caller can tell a slow build that is moving from one that stalled.
+ */
+export interface WorkspaceBuildJobProgress {
+  /** The step being built (1-based), from the builder's `[N/M]` step lines. */
+  readonly step?: number;
+  /** How many steps the build has. */
+  readonly steps?: number;
+  /** The step's instruction, shortened (`RUN apt-get update && …`). */
+  readonly stepName?: string;
+  /** ISO-8601: when the build last wrote output. */
+  readonly progressAt: string;
+  /** How long the builder lets a build go without output before it fails it as stalled. */
+  readonly stallTimeoutMs?: number;
+}
+
 export const ociImageBuildJobs = pgTable(
   "oci_image_build_jobs",
   {
@@ -74,6 +92,11 @@ export const ociImageBuildJobs = pgTable(
     finishedAt: timestamp({ mode: "date", withTimezone: true }),
     builderId: text(),
     resultPayload: jsonb("result_payload").$type<WorkspaceBuild>(),
+    /**
+     * The build's progress while the job is `running` (see `WorkspaceBuildJobProgress`). Written
+     * by the worker that holds the claim, and reset when a new claim starts the build again.
+     */
+    progress: jsonb("progress").$type<WorkspaceBuildJobProgress>(),
     publishedReference: text(),
     publishedDigestReference: text(),
     publishedDigest: text(),

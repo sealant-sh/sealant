@@ -124,6 +124,7 @@ import {
   resolveWorkspaceError,
   resolveWorkspacePublishedImage,
   resolveWorkspaceRuntime,
+  resolveWorkspacePhase,
   resolveWorkspaceStatus,
   executorIsRetained,
   type WorkspaceSshGatewayConfig,
@@ -1286,6 +1287,11 @@ const mapWorkspaceSummary = (
           ...(runtimeInstance === undefined ? {} : { runtimeInstance }),
           retained,
         });
+  const phase = resolveWorkspacePhase({
+    status,
+    ...(latestJob === undefined ? {} : { latestJob }),
+    ...(runtimeInstance === undefined ? {} : { runtimeInstance }),
+  });
 
   return {
     workspaceId: workspace.id,
@@ -1303,6 +1309,7 @@ const mapWorkspaceSummary = (
     ...(publishedImage === undefined ? {} : { publishedImage }),
     ...(processUser === undefined ? {} : { processUser }),
     ...(error === undefined ? {} : { error }),
+    ...(phase === undefined ? {} : { phase }),
     createdAt: workspace.createdAt.toISOString(),
     updatedAt: updatedAt.toISOString(),
     ...(toIsoString(startedAt) === undefined ? {} : { startedAt: toIsoString(startedAt) }),
@@ -3287,15 +3294,48 @@ export const stopWorkspace = (input: {
       });
     }
 
-    // Stop targets a live runtime. Mid-launch there is no container yet (and the build pipeline
-    // can't be cancelled this round), so surface that instead of recording a stop that the launch
-    // would race.
+    // Stop targets a live runtime. Before its image is built there is none: the launch's build
+    // job is cancelled instead (the worker building it stops at its next progress write, and its
+    // fenced success can no longer land), and the run ends `cancelled`. Between the build and the
+    // runtime's first row there is still nothing to stop: that is refused, as the launch would
+    // race a recorded stop.
     const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
     const instance = yield* withInternalError(
       runtimeInstances.getRuntimeInstanceByRunId(latestRunId),
       "Failed to load the workspace runtime.",
     );
     if (instance === undefined) {
+      const jobs = yield* WorkspaceBuildJobRepo;
+      const latestJob = yield* withInternalError(
+        jobs.getLatestJobByRunId(latestRunId),
+        "Failed to load the workspace build job.",
+      );
+      const cancelled =
+        latestJob === undefined || (latestJob.status !== "queued" && latestJob.status !== "running")
+          ? null
+          : yield* withInternalError(
+              jobs.cancelUnbuiltJob({
+                id: latestJob.id,
+                errorCode: "launch-stopped",
+                errorMessage:
+                  "The workspace was stopped before its image was built; nothing was launched.",
+              }),
+              "Failed to cancel the workspace build job.",
+            );
+      if (cancelled !== null) {
+        yield* withInternalError(
+          (yield* WorkspaceAttemptRepo).markAttemptCancelled({
+            id: latestRunId,
+            cancelReason: "stopped before its image was built",
+          }),
+          "Failed to record the cancelled launch.",
+        );
+        yield* Effect.logInfo(
+          `Workspace ${workspace.id}: ${input.payload.ownerUserId} stopped run ${latestRunId} before its image was built; its build job ${cancelled.id} was cancelled and nothing launches.`,
+        );
+        const response: StopWorkspaceResponse = { workspaceId: workspace.id, status: "cancelled" };
+        return response;
+      }
       return yield* new WorkspaceConflictError({
         message: `Workspace ${input.workspaceId} is still launching; stop it once the runtime is up.`,
       });
