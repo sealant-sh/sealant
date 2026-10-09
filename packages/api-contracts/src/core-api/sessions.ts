@@ -14,7 +14,13 @@
  * (create/close). Without a bearer token the pre-auth owner model applies unchanged.
  */
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi";
+import {
+  HttpApiEndpoint,
+  HttpApiGroup,
+  HttpApiMiddleware,
+  HttpApiSchema,
+  OpenApi,
+} from "effect/unstable/httpapi";
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
@@ -65,10 +71,11 @@ export const PROCESS_USER_UNSUPPORTED_CODE = "user-unsupported";
 export const SESSION_ARGV_MAX_WORDS = 64;
 
 /**
- * The most UTF-8 bytes one word of a session's argv may hold: Linux's `MAX_ARG_STRLEN`, past which
- * `execve` refuses the word (`E2BIG`) whatever the total.
+ * The most UTF-8 bytes one word of a session's argv may hold, its terminating NUL not counted:
+ * Linux's `MAX_ARG_STRLEN` (32 pages, 128 KiB on 4 KiB pages) counts the NUL, so 131,071 bytes of
+ * text is the longest word `execve` takes there; one byte more fails with `E2BIG` whatever the total.
  */
-export const SESSION_ARGV_MAX_WORD_BYTES = 128 * 1024;
+export const SESSION_ARGV_MAX_WORD_BYTES = 128 * 1024 - 1;
 
 /**
  * The most UTF-8 bytes a session's argv may hold in all: half of Linux's usual 2 MiB `ARG_MAX`,
@@ -79,12 +86,19 @@ export const SESSION_ARGV_MAX_TOTAL_BYTES = 1024 * 1024;
 const utf8Bytes = (value: string): number => new TextEncoder().encode(value).length;
 
 /**
+ * A UTF-16 surrogate with no partner (with the `u` flag a pair is one code point and never matches):
+ * it has no UTF-8 form, so it would reach the process as U+FFFD.
+ */
+const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
+
+/**
  * Why `argv` cannot start a session, or `undefined` when it can. `argv[0]`, the program, is
  * non-empty with no leading or trailing whitespace. Every later word is opaque to Sealant and may be
  * any string, empty, whitespace-led or multi-line (`bash -lc "\n echo hi"`, `git commit -m ""`),
- * except one with a NUL byte, which no process argument can carry. The reason names a word by its
- * position and size, never its text, which can carry a secret: it reaches the caller in the `400`
- * and the server's request log.
+ * except one with a NUL byte, which no process argument can carry, or a lone UTF-16 surrogate, which
+ * has no UTF-8 form and would not reach the process as sent. The reason names a word by its position
+ * and size, never its text, which can carry a secret: it reaches the caller in the `400` and the
+ * server's request log.
  */
 export const sessionArgvIssue = (argv: readonly string[]): string | undefined => {
   const program = argv[0];
@@ -101,6 +115,9 @@ export const sessionArgvIssue = (argv: readonly string[]): string | undefined =>
   for (const [index, word] of argv.entries()) {
     if (word.includes("\u0000")) {
       return `argv[${index}] contains a NUL byte, which no process argument can carry`;
+    }
+    if (LONE_SURROGATE.test(word)) {
+      return `argv[${index}] is not well-formed Unicode (a lone surrogate)`;
     }
     const bytes = utf8Bytes(word);
     if (bytes > SESSION_ARGV_MAX_WORD_BYTES) {
@@ -271,6 +288,45 @@ export class SessionBadRequestError extends Schema.TaggedErrorClass<SessionBadRe
   { httpApiStatus: 400 },
 ) {}
 
+/**
+ * On `createSession` and `createSessionAsUser`: a request the contract cannot decode (a body that is
+ * not JSON or not an object, a field missing or of the wrong type, an argv `sessionArgvIssue`
+ * refuses) answers `400` `SessionBadRequestError` naming the field or the argv position, never a
+ * value. Without it Effect answers an empty `400` and logs a cause that quotes the rejected input,
+ * which for a session can be an argument holding a secret.
+ */
+export class SessionRequestRefusal extends HttpApiMiddleware.Service<SessionRequestRefusal>()(
+  "@sealant/api-contracts/SessionRequestRefusal",
+  { error: SessionBadRequestError },
+) {}
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * Why a session create's JSON body cannot be decoded, value-free, or `undefined` when its envelope,
+ * ids and argv are sound (another field is then at fault). `SessionRequestRefusal` answers with it.
+ */
+export const sessionCreateRequestIssue = (body: unknown): string | undefined => {
+  if (!isRecord(body)) {
+    return "the request body must be a JSON object";
+  }
+  for (const field of ["workspaceId", "ownerUserId"]) {
+    const value = body[field];
+    if (value === undefined) return `${field} is required`;
+    if (typeof value !== "string") return `${field} must be a string`;
+  }
+  const argv = body["argv"];
+  if (argv === undefined) return "argv is required";
+  if (!Array.isArray(argv)) return "argv must be an array of strings";
+  const words: string[] = [];
+  for (const [index, word] of argv.entries()) {
+    if (typeof word !== "string") return `argv[${index}] must be a string`;
+    words.push(word);
+  }
+  return sessionArgvIssue(words);
+};
+
 export class SessionUnauthorizedError extends Schema.TaggedErrorClass<SessionUnauthorizedError>()(
   "SessionUnauthorizedError",
   { message: Schema.String },
@@ -329,7 +385,7 @@ export const SessionsGroup = HttpApiGroup.make("sessions")
         SessionBadGatewayError,
         SessionInternalServerError,
       ],
-    }),
+    }).middleware(SessionRequestRefusal),
   )
   .add(
     // Scope: workspace:exec. `createSession` with the leader run as a Linux user (`409`
@@ -347,7 +403,7 @@ export const SessionsGroup = HttpApiGroup.make("sessions")
         SessionBadGatewayError,
         SessionInternalServerError,
       ],
-    }),
+    }).middleware(SessionRequestRefusal),
   )
   .add(
     HttpApiEndpoint.get("listSessions", "/", {

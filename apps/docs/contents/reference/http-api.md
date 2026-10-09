@@ -130,9 +130,17 @@ must be non-empty with no leading or trailing whitespace. Every argument after i
 empty, whitespace-led or multi-line, as in `["bash", "-lc", "\n echo hi"]` or
 `["git", "commit", "-m", ""]`. `sealantd` passes the arguments to the program as an argv array,
 never through a shell, and Sealant stores only their count and lengths. Limits: at most 64 words,
-128 KiB per word (Linux's `MAX_ARG_STRLEN`) and 1 MiB in all, counted in UTF-8 bytes; a NUL byte is
-refused, since no process argument can carry one. A refused `argv` answers `400` naming the word by
-its position, never its text.
+131,071 bytes per word and 1 MiB in all, counted in UTF-8 bytes. 131,071 is the longest word
+`execve` takes on Linux with 4 KiB pages: `MAX_ARG_STRLEN` is 128 KiB and counts the terminating
+NUL. A word with a NUL byte is refused, since no process argument can carry one, and so is a lone
+UTF-16 surrogate, which has no UTF-8 form. A request either route cannot decode (a body that is not
+JSON or not an object, a field missing or of the wrong type, a refused `argv`) answers `400`
+`SessionBadRequestError` whose `message` names the field or the word's position and size, never a
+value; the server's request log does not carry the value either.
+
+Upgrade the control plane before the SDK. A control plane from before this rule refuses an empty or
+untrimmed argument with an empty `400` and logs the argument; the SDK says so when it gets that
+answer. An SDK from before this rule refuses such an argument itself, before it sends anything.
 
 `POST /v1/workspaces/:workspaceId/dotfiles { ownerUserId, onBehalfOfUserId, user, home, repository?, archives? }`
 (service key only) applies a person's dotfiles into their home of a running workspace, as their

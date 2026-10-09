@@ -1,3 +1,5 @@
+import { execFileSync, spawnSync } from "node:child_process";
+
 import { Result, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -16,6 +18,12 @@ const request = (argv: readonly string[]) => ({
 });
 
 const decode = Schema.decodeUnknownResult(createSessionRequestSchema);
+
+const pageSize = (): number => Number(execFileSync("getconf", ["PAGESIZE"], { encoding: "utf8" }));
+
+/** Starts `/bin/sh` with `word` as an argument and an empty environment, as `execve` takes it. */
+const spawnWith = (word: string) =>
+  spawnSync("/bin/sh", ["-c", "exit 0", word], { env: {}, stdio: "ignore" });
 
 const accepted = (argv: readonly string[]) => {
   const result = decode(request(argv));
@@ -73,27 +81,48 @@ describe("a session's argv", () => {
     );
   });
 
-  it("holds at most 128 KiB per word, counted in UTF-8 bytes", () => {
-    expect(SESSION_ARGV_MAX_WORD_BYTES).toBe(131_072);
+  it("holds at most 131,071 bytes per word, counted in UTF-8 bytes", () => {
+    expect(SESSION_ARGV_MAX_WORD_BYTES).toBe(131_071);
     const atLimit = "x".repeat(SESSION_ARGV_MAX_WORD_BYTES);
     expect(accepted(["bash", "-lc", atLimit])).toHaveLength(3);
     expect(refusal(["bash", "-lc", `${atLimit}x`])).toContain(
       `argv[2] is ${SESSION_ARGV_MAX_WORD_BYTES + 1} bytes; the maximum per word is ${SESSION_ARGV_MAX_WORD_BYTES}`,
     );
-    // Two bytes each in UTF-8: half as many characters reach the limit.
-    const wide = "é".repeat(SESSION_ARGV_MAX_WORD_BYTES / 2 + 1);
+    // Two bytes each in UTF-8: half as many characters pass the limit.
+    const wide = "é".repeat((SESSION_ARGV_MAX_WORD_BYTES + 1) / 2);
     expect(refusal(["bash", "-lc", wide])).toContain(
-      `argv[2] is ${SESSION_ARGV_MAX_WORD_BYTES + 2} bytes`,
+      `argv[2] is ${SESSION_ARGV_MAX_WORD_BYTES + 1} bytes`,
     );
+  });
+
+  // Linux's MAX_ARG_STRLEN is 32 pages and counts the terminating NUL: on 4 KiB pages, the longest
+  // word `execve` takes is exactly the limit, and one byte more fails with E2BIG.
+  it.runIf(process.platform === "linux" && pageSize() === 4096)(
+    "is the longest word execve takes on Linux",
+    () => {
+      const atLimit = spawnWith("x".repeat(SESSION_ARGV_MAX_WORD_BYTES));
+      expect(atLimit.error).toBeUndefined();
+      expect(atLimit.status).toBe(0);
+      const overLimit = spawnWith("x".repeat(SESSION_ARGV_MAX_WORD_BYTES + 1));
+      expect(overLimit.error).toMatchObject({ code: "E2BIG" });
+    },
+  );
+
+  it("refuses a lone surrogate, which has no UTF-8 form", () => {
+    expect(refusal(["printf", "a\ud800b"])).toContain(
+      "argv[1] is not well-formed Unicode (a lone surrogate)",
+    );
+    expect(refusal(["printf", "%s", "\udc00"])).toContain("argv[2] is not well-formed Unicode");
+    expect(accepted(["printf", "😀 é"])).toEqual(["printf", "😀 é"]);
   });
 
   it("holds at most 1 MiB in all, the program included", () => {
     expect(SESSION_ARGV_MAX_TOTAL_BYTES).toBe(1_048_576);
     const word = "x".repeat(SESSION_ARGV_MAX_WORD_BYTES);
-    // "bash" (4 bytes), seven full words and the rest of the total.
-    const atTotal = ["bash", ...Array.from({ length: 7 }, () => word), "x".repeat(131_068)];
-    expect(accepted(atTotal)).toHaveLength(9);
-    const overTotal = [...atTotal.slice(0, -1), "x".repeat(131_069)];
+    // "bash" (4 bytes), eight full words (1,048,568 bytes) and 4 bytes: exactly the total.
+    const atTotal = ["bash", ...Array.from({ length: 8 }, () => word), "xxxx"];
+    expect(accepted(atTotal)).toHaveLength(10);
+    const overTotal = [...atTotal.slice(0, -1), "xxxxx"];
     expect(refusal(overTotal)).toContain(
       `argv totals ${SESSION_ARGV_MAX_TOTAL_BYTES + 1} bytes; the maximum is ${SESSION_ARGV_MAX_TOTAL_BYTES}`,
     );

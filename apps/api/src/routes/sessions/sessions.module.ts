@@ -595,10 +595,17 @@ export const createSession = (input: {
         });
       }),
     ).pipe(
-      Effect.mapError((error) => {
-        return new SessionBadGatewayError({
-          message: `Failed to open the ${mode} session: ${toErrorMessage(error, "daemon error")}`,
-        });
+      // The run and the session exist by now: a daemon that refuses to start the leader (a spawn
+      // error, `E2BIG`) settles both, so neither is left running with nothing behind it.
+      Effect.catch((error) => {
+        const message = `Failed to open the ${mode} session: ${toErrorMessage(error, "daemon error")}`;
+        return Effect.all(
+          [
+            runs.markRunFailed({ id: runId, errorMessage: message }),
+            sessions.markSessionEnded({ id: sessionId, status: "failed", errorMessage: message }),
+          ],
+          { discard: true },
+        ).pipe(Effect.ignore, Effect.andThen(Effect.fail(new SessionBadGatewayError({ message }))));
       }),
     );
     if (opened === undefined) {
