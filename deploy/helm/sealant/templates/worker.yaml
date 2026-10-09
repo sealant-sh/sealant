@@ -57,6 +57,9 @@ spec:
             - { name: SEALANT_K8S_DOCKER_ENABLED, value: {{ .Values.workspaces.docker.enabled | quote }} }
             - { name: SEALANT_K8S_DOCKER_IMAGE, value: {{ .Values.workspaces.docker.image | quote }} }
             - { name: SEALANT_K8S_DOCKER_GRAPH_SIZE, value: {{ .Values.workspaces.docker.graphSize | quote }} }
+            {{- with .Values.workspaces.docker.registryMirrors }}
+            - { name: SEALANT_DOCKER_REGISTRY_MIRRORS, value: {{ join "," . | quote }} }
+            {{- end }}
             - { name: SEALANT_K8S_DOCKER_CPU_REQUEST, value: {{ .Values.workspaces.docker.resources.requests.cpu | quote }} }
             - { name: SEALANT_K8S_DOCKER_MEMORY_REQUEST, value: {{ .Values.workspaces.docker.resources.requests.memory | quote }} }
             - { name: SEALANT_K8S_DOCKER_CPU_LIMIT, value: {{ .Values.workspaces.docker.resources.limits.cpu | quote }} }
