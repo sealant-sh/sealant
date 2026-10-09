@@ -125,6 +125,15 @@ as-user routes; `processUser` stays `false`, the flag SDKs from before them read
 `credentialsPartialPut`, `credentialsPiOpencode` and `captureOwnerMap`, so a client detects them
 instead of reading the version.
 
+A session's `argv` (`POST /v1/sessions` and `/v1/sessions/as-user`) starts with the program, which
+must be non-empty with no leading or trailing whitespace. Every argument after it may be any string:
+empty, whitespace-led or multi-line, as in `["bash", "-lc", "\n echo hi"]` or
+`["git", "commit", "-m", ""]`. `sealantd` passes the arguments to the program as an argv array,
+never through a shell, and Sealant stores only their count and lengths. Limits: at most 64 words,
+128 KiB per word (Linux's `MAX_ARG_STRLEN`) and 1 MiB in all, counted in UTF-8 bytes; a NUL byte is
+refused, since no process argument can carry one. A refused `argv` answers `400` naming the word by
+its position, never its text.
+
 `POST /v1/workspaces/:workspaceId/dotfiles { ownerUserId, onBehalfOfUserId, user, home, repository?, archives? }`
 (service key only) applies a person's dotfiles into their home of a running workspace, as their
 Linux user (`sealantd` unpacks archives outside the home and writes every file in it as the user),
