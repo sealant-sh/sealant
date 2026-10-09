@@ -33,6 +33,18 @@ describe("parseWorkerEnv", () => {
     ).toBe("mend_default");
   });
 
+  it("keeps the registry mirrors and their container for the adapters to parse", () => {
+    const env = parseWorkerEnv({
+      SEALANT_DOCKER_REGISTRY_MIRRORS: "http://mend-docker-mirror:5000",
+      SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER: "mend-docker-mirror",
+    });
+    expect(env.SEALANT_DOCKER_REGISTRY_MIRRORS).toBe("http://mend-docker-mirror:5000");
+    expect(env.SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER).toBe("mend-docker-mirror");
+    expect(
+      parseWorkerEnv({ SEALANT_DOCKER_REGISTRY_MIRRORS: "" }).SEALANT_DOCKER_REGISTRY_MIRRORS,
+    ).toBeUndefined();
+  });
+
   it("refuses a retired one-image MicroVM setting instead of ignoring it", () => {
     expect(() =>
       parseWorkerEnv({

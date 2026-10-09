@@ -139,6 +139,10 @@ services:
       # Optional existing Docker network every workspace joins, so sibling Compose services resolve
       # by name from inside a workspace. The network must already exist; the worker never creates it.
       SEALANT_DOCKER_WORKSPACE_NETWORK: ${SEALANT_DOCKER_WORKSPACE_NETWORK:-}
+      # Optional registry mirrors each workspace's Docker service asks first for a Docker Hub image,
+      # and the container serving them (see "Registry mirrors for workspace Docker" in the docs).
+      SEALANT_DOCKER_REGISTRY_MIRRORS: ${SEALANT_DOCKER_REGISTRY_MIRRORS:-}
+      SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER: ${SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

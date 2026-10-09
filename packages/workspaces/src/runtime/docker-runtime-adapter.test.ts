@@ -198,6 +198,70 @@ describe("DockerRuntimeAdapter", () => {
     expect(workspaceArgs.join(" ")).not.toContain("/var/run/docker.sock");
   });
 
+  it("hands the Docker service its registry mirrors and puts the mirror on its network first", async () => {
+    let runCount = 0;
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "network" && args[1] === "create") {
+        return { stdout: "network-id\n", stderr: "" };
+      }
+      if (args[0] === "network" && args[1] === "connect") {
+        // A missing mirror container never fails the launch: the daemon falls back to Docker Hub.
+        throw new Error("Error response from daemon: No such container: mend-docker-mirror");
+      }
+      if (args[0] === "run") {
+        runCount += 1;
+        return {
+          stdout: runCount === 1 ? "docker-service-id\n" : "workspace-id\n",
+          stderr: "",
+        };
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      containerNamePrefix: "sealant-test",
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      verifyRunning: false,
+      workspaceNetwork: "mend_default",
+      registryMirrors: ["http://docker-mirror:5000"],
+      registryMirrorContainer: "mend-docker-mirror",
+    });
+
+    await adapter.launch(
+      createLaunchInput({
+        tooling: {
+          packages: [],
+          services: { docker: { enabled: true } },
+        },
+      }),
+    );
+
+    const calls = commandRunner.mock.calls.map((call) => call[1] ?? []);
+    const connectIndex = calls.findIndex((args) => args[0] === "network" && args[1] === "connect");
+    const daemonIndex = calls.findIndex((args) => args[0] === "run");
+    const sidecarNetwork = calls.find((args) => args[0] === "network" && args[1] === "create")?.[2];
+    expect(calls[connectIndex]).toEqual([
+      "network",
+      "connect",
+      "--alias",
+      "docker-mirror",
+      sidecarNetwork,
+      "mend-docker-mirror",
+    ]);
+    expect(connectIndex).toBeLessThan(daemonIndex);
+    const daemonArgs = calls[daemonIndex] ?? [];
+    expect(daemonArgs.slice(daemonArgs.indexOf("docker:27.5.1-dind-rootless") + 1)).toEqual([
+      "--tls=false",
+      "--registry-mirror=http://docker-mirror:5000",
+      "--insecure-registry=docker-mirror:5000",
+    ]);
+    // The daemon answers unauthenticated on 2375: it stays off the shared network.
+    expect(daemonArgs.filter((arg) => arg === "--network")).toHaveLength(1);
+    expect(daemonArgs).not.toContain("mend_default");
+  });
+
   it("refuses a workspace network name Docker would not accept", () => {
     expect(
       () =>
@@ -2294,6 +2358,50 @@ describe("DockerRuntimeAdapter", () => {
     await adapter.stop({ resourceId: "container-1", reference: "sealant-run-1", fence: true });
 
     expect(calls).toContainEqual(["network", "rm", "network-id"]);
+  });
+
+  it("disconnects the registry mirror container before it removes a sidecar network", async () => {
+    const calls: Array<readonly string[]> = [];
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      calls.push([...args]);
+      if (args[0] === "inspect" && args.at(-1) === "sealant-run-1-docker") {
+        throw new Error("Error: No such object: sealant-run-1-docker");
+      }
+      if (args[0] === "network" && args[1] === "inspect") {
+        return { stdout: "network-id\n", stderr: "" };
+      }
+      if (args[0] === "network" && args[1] === "disconnect") {
+        // Not on the network (a mirror recreated since): the removal still goes ahead.
+        throw new Error("container mend-docker-mirror is not connected to network network-id");
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      registryMirrors: ["http://docker-mirror:5000"],
+      registryMirrorContainer: "mend-docker-mirror",
+    });
+
+    await adapter.stop({ resourceId: "container-1", reference: "sealant-run-1", fence: true });
+
+    const networkCalls = calls.filter((call) => call[0] === "network" && call[1] !== "inspect");
+    expect(networkCalls).toEqual([
+      ["network", "disconnect", "--force", "network-id", "mend-docker-mirror"],
+      ["network", "rm", "network-id"],
+    ]);
+  });
+
+  it("refuses a registry mirror container name Docker would not accept", () => {
+    expect(
+      () =>
+        new DockerRuntimeAdapter({
+          runtimeCatalogLoader: createRuntimeCatalogLoader(),
+          registryMirrorContainer: "mirror; rm -rf /",
+        }),
+    ).toThrow(/SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER/);
   });
 
   it("surfaces a stop failure that is NOT a missing container (so callers never record a false stop)", async () => {

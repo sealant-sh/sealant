@@ -7,6 +7,8 @@
  */
 import { z } from "zod";
 
+import { parseDockerRegistryMirrors } from "../docker-registry-mirrors.js";
+
 /** RFC 1123 label: what namespaces, names and most identifiers must satisfy. */
 const dnsLabelSchema = z
   .string()
@@ -125,6 +127,13 @@ export const dockerServiceConfigSchema = z.strictObject({
     requests: { cpu: "100m", memory: "256Mi" },
     limits: { cpu: "2", memory: "2Gi" },
   }),
+  /**
+   * Origins the daemon asks first for a Docker Hub image (`SEALANT_DOCKER_REGISTRY_MIRRORS`), as
+   * `parseDockerRegistryMirrors` returns them; it falls back to Docker Hub when a mirror fails.
+   * The sidecar shares the Pod's network, so a cluster Service name resolves as it does for the
+   * workspace, subject to the namespace's egress policy.
+   */
+  registryMirrors: z.array(z.string()).default([]),
 });
 
 export type DockerServiceConfig = z.infer<typeof dockerServiceConfigSchema>;
@@ -247,6 +256,7 @@ export interface KubernetesRuntimeEnvLike {
   readonly SEALANT_K8S_DOCKER_MEMORY_REQUEST?: string | undefined;
   readonly SEALANT_K8S_DOCKER_CPU_LIMIT?: string | undefined;
   readonly SEALANT_K8S_DOCKER_MEMORY_LIMIT?: string | undefined;
+  readonly SEALANT_DOCKER_REGISTRY_MIRRORS?: string | undefined;
 }
 
 export class KubernetesRuntimeConfigError extends Error {
@@ -278,6 +288,16 @@ const parseMappings = (raw: string): unknown => {
  * (the worker is not configured for Kubernetes); throws a readable error when it is set but the
  * rest is incomplete or invalid.
  */
+const registryMirrorsOf = (raw: string): readonly string[] => {
+  try {
+    return parseDockerRegistryMirrors(raw);
+  } catch (error) {
+    throw new KubernetesRuntimeConfigError(
+      error instanceof Error ? error.message : "SEALANT_DOCKER_REGISTRY_MIRRORS is invalid.",
+    );
+  }
+};
+
 export const kubernetesRuntimeConfigFromEnv = (
   env: KubernetesRuntimeEnvLike,
 ): KubernetesRuntimeConfig | undefined => {
@@ -380,6 +400,9 @@ export const kubernetesRuntimeConfigFromEnv = (
       ...(env.SEALANT_K8S_DOCKER_GRAPH_SIZE === undefined
         ? {}
         : { graphSize: env.SEALANT_K8S_DOCKER_GRAPH_SIZE }),
+      ...(env.SEALANT_DOCKER_REGISTRY_MIRRORS === undefined
+        ? {}
+        : { registryMirrors: registryMirrorsOf(env.SEALANT_DOCKER_REGISTRY_MIRRORS) }),
       ...(env.SEALANT_K8S_DOCKER_CPU_REQUEST === undefined &&
       env.SEALANT_K8S_DOCKER_MEMORY_REQUEST === undefined &&
       env.SEALANT_K8S_DOCKER_CPU_LIMIT === undefined &&

@@ -15,6 +15,7 @@ import {
   captureSourceEnv,
 } from "./capture-source.js";
 import { buildCredentialFileWriteScript } from "./credential-files.js";
+import { dockerdRegistryMirrorArgs, registryMirrorHostNames } from "./docker-registry-mirrors.js";
 import {
   assertDockerVolumeConfiguration,
   assertDockerVolumeSourceDirectories,
@@ -233,6 +234,22 @@ export interface DockerRuntimeAdapterOptions {
    * default bridge, as before.
    */
   readonly workspaceNetwork?: string;
+  /**
+   * Registry mirrors every workspace's Docker service asks first for a Docker Hub image
+   * (`SEALANT_DOCKER_REGISTRY_MIRRORS`, parsed by `parseDockerRegistryMirrors`). The daemon falls
+   * back to Docker Hub when a mirror fails. Unset: no mirror, as before.
+   */
+  readonly registryMirrors?: readonly string[];
+  /**
+   * The container on this Docker host that serves `registryMirrors`
+   * (`SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER`). The Docker service stays on its own network,
+   * because its daemon answers unauthenticated on 2375 and must not be reachable from another
+   * workspace. The mirror container joins that network instead, under each mirror's host name, and
+   * leaves it before the network is removed. Joining is best effort: a mirror container that is
+   * missing or stopped leaves the daemon to fall back to Docker Hub. Unset: the mirrors must be
+   * reachable from the Docker service's own network some other way.
+   */
+  readonly registryMirrorContainer?: string;
   /** Test seam for `watchExits`: how a `docker events` stream is opened. */
   readonly eventStreamOpener?: DockerEventStreamOpener;
   /**
@@ -266,6 +283,16 @@ const assertDockerNetworkName = (name: string): string => {
   if (!DOCKER_NETWORK_NAME_PATTERN.test(name)) {
     throw new Error(
       `SEALANT_DOCKER_WORKSPACE_NETWORK is not a valid Docker network name: ${JSON.stringify(name)}.`,
+    );
+  }
+  return name;
+};
+
+/** Docker's grammar for a container name is a network name's; the value lands in argv. */
+const assertDockerContainerName = (name: string): string => {
+  if (!DOCKER_NETWORK_NAME_PATTERN.test(name)) {
+    throw new Error(
+      `SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER is not a valid Docker container name: ${JSON.stringify(name)}.`,
     );
   }
   return name;
@@ -799,6 +826,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private readonly workspaceNetwork: string | undefined;
 
+  private readonly registryMirrors: readonly string[];
+
+  private readonly registryMirrorContainer: string | undefined;
+
   private readonly allowedStoreRoots: readonly string[];
 
   private readonly eventStreamOpener: DockerEventStreamOpener;
@@ -829,6 +860,11 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       options.workspaceNetwork === undefined
         ? undefined
         : assertDockerNetworkName(options.workspaceNetwork);
+    this.registryMirrors = options.registryMirrors ?? [];
+    this.registryMirrorContainer =
+      options.registryMirrorContainer === undefined
+        ? undefined
+        : assertDockerContainerName(options.registryMirrorContainer);
     this.allowedStoreRoots =
       options.volumeMappings === undefined
         ? []
@@ -1187,6 +1223,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     if (!serviceGone || !(await this.isContainerNameAbsent(provision.serviceName))) return;
     if (provision.createdNetworkId !== undefined) {
       // Docker refuses removal while endpoints remain attached. Never resolve a reusable name here.
+      await this.leaveRegistryMirrorNetwork(provision.createdNetworkId);
       await this.commandRunner("docker", ["network", "rm", provision.createdNetworkId]);
     }
   }
@@ -1273,6 +1310,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       return false;
     }
     if (service !== undefined) {
+      // A mirror container recreated since the park is no longer on the network.
+      await this.joinRegistryMirrorNetwork(`${reference}-network`);
       await this.commandRunner("docker", ["start", service.id]);
       await this.awaitDockerServiceReady(service.id, serviceName);
       return true;
@@ -1323,6 +1362,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       `sealant.workspace=${containerName}`,
       this.dockerServiceImage,
       "--tls=false",
+      ...dockerdRegistryMirrorArgs(this.registryMirrors),
     ];
     if (this.autoRemove) {
       args.splice(2, 0, "--rm");
@@ -1330,6 +1370,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
     let acquisition: DockerContainerAcquisition | undefined;
     try {
+      // Before the daemon starts, so its first pull already resolves the mirror.
+      await this.joinRegistryMirrorNetwork(networkName);
       acquisition = await this.runOrAdoptContainer(args, serviceName);
       await this.awaitDockerServiceReady(acquisition.containerId, serviceName);
       return { networkName, serviceName, createdNetworkId, acquisition };
@@ -1337,6 +1379,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       try {
         if (acquisition === undefined) {
           if (createdNetworkId !== undefined && (await this.isContainerNameAbsent(serviceName))) {
+            await this.leaveRegistryMirrorNetwork(createdNetworkId);
             await this.commandRunner("docker", ["network", "rm", createdNetworkId]);
           }
         } else {
@@ -1381,7 +1424,49 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
    * surfaces, so a network the daemon still has (an endpoint still attached) is never left behind
    * a stop reported done.
    */
+  /**
+   * Connect the registry mirror container to a workspace's Docker service network, under each
+   * mirror's host name, so the daemon on that network resolves its mirrors. Best effort: a mirror
+   * container that is missing, or already on the network, changes nothing, and a daemon that
+   * cannot reach its mirror pulls from Docker Hub.
+   */
+  private async joinRegistryMirrorNetwork(network: string): Promise<void> {
+    if (this.registryMirrorContainer === undefined) return;
+    try {
+      await this.commandRunner("docker", [
+        "network",
+        "connect",
+        ...registryMirrorHostNames(this.registryMirrors).flatMap((host) => ["--alias", host]),
+        network,
+        this.registryMirrorContainer,
+      ]);
+    } catch {
+      return;
+    }
+  }
+
+  /**
+   * Disconnect the registry mirror container from a network about to be removed: Docker refuses to
+   * remove a network with an endpoint still attached. Best effort: a container that is not on the
+   * network, or not there at all, leaves the removal to say what Docker answered.
+   */
+  private async leaveRegistryMirrorNetwork(network: string): Promise<void> {
+    if (this.registryMirrorContainer === undefined) return;
+    try {
+      await this.commandRunner("docker", [
+        "network",
+        "disconnect",
+        "--force",
+        network,
+        this.registryMirrorContainer,
+      ]);
+    } catch {
+      return;
+    }
+  }
+
   private async removeNetworkDefinitively(networkId: string, name: string): Promise<void> {
+    await this.leaveRegistryMirrorNetwork(networkId);
     try {
       await this.commandRunner("docker", ["network", "rm", networkId]);
     } catch (error) {

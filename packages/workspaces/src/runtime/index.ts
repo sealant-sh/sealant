@@ -47,6 +47,11 @@ export {
   type ResolvedDockerVolumeMount,
 } from "./docker-volume-mounts.js";
 
+export {
+  dockerdRegistryMirrorArgs,
+  parseDockerRegistryMirrors,
+  registryMirrorHostNames,
+} from "./docker-registry-mirrors.js";
 export * from "./kubernetes/index.js";
 export { buildCredentialFileWriteScript } from "./credential-files.js";
 export {
