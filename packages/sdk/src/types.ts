@@ -943,6 +943,15 @@ export interface CreateOptions {
    */
   readonly credentialsHome?: WorkspaceCredentialsHomeOptions;
   /**
+   * The Linux user the SSH gateway runs this workspace's SSH sessions as (VS Code Remote-SSH, an
+   * `ssh` shell or command): a login name or a decimal uid in 40001–49999, never root. It need not
+   * exist yet; until it does, a session is refused, never run as root. Change it later with
+   * `workspace.setSshUser()`. Absent: root. Sent only to a control plane that reports
+   * `features().workspaceSshUser`; with another, `create` rejects (`ssh-user-unsupported`) and
+   * nothing is created.
+   */
+  readonly sshUser?: string;
+  /**
    * Time-to-live for the workspace, e.g. `"90m"`, `"2h"` (also `"45s"`, `"1d"`). Once it elapses
    * the platform stops the workspace and removes its container. Omitted = the server default TTL
    * (if the install configures one).
@@ -1182,6 +1191,13 @@ export interface Workspace {
    * now (the platform reaper stops it shortly), `expire({ in: null })` clears the TTL.
    */
   expire(options?: { readonly in?: string | null }): Promise<void>;
+  /**
+   * Who the SSH gateway runs this workspace's SSH sessions as from the next session on: a Linux
+   * user (a login name or a decimal uid in 40001–49999, never root), or `null` for root. Rejects
+   * (`ssh-user-unsupported`) on a control plane that does not report
+   * `features().workspaceSshUser`, sending nothing.
+   */
+  setSshUser(user: string | null): Promise<void>;
   /**
    * Open a raw TCP byte pipe (or a UDP datagram pipe) INSIDE the workspace — the primitive for
    * reaching a dev server or database the workspace runs. Protocol-agnostic:
@@ -1433,6 +1449,8 @@ export interface SealantFeatures {
   readonly credentialsPiOpencode: boolean;
   /** `ownerMap` on a capture source. */
   readonly captureOwnerMap: boolean;
+  /** `sshUser` on a create and `workspace.setSshUser()`: SSH sessions as a Linux user. */
+  readonly workspaceSshUser: boolean;
 }
 
 /** A published workspace image. */

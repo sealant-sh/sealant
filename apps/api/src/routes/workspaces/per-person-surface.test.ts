@@ -531,6 +531,7 @@ describe("the control plane's features", () => {
       credentialsPartialPut: true,
       credentialsPiOpencode: true,
       captureOwnerMap: true,
+      workspaceSshUser: true,
     });
   });
 });

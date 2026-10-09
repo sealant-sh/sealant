@@ -35,6 +35,8 @@ import {
   type ListWorkspacesResponse,
   type RenameWorkspaceRequest,
   type RenameWorkspaceResponse,
+  type SetWorkspaceSshUserRequest,
+  type SetWorkspaceSshUserResponse,
   execRunHarnessId,
   type ExecWorkspaceRequest,
   type ExpireWorkspaceRequest,
@@ -99,7 +101,9 @@ import {
 } from "@sealant/validators";
 import {
   personLayoutCapability,
+  PROCESS_USER_RANGE_RULE,
   processUserCapability,
+  processUserProblem,
   type ProcessUserChannel,
   planWorkspaceImageBuild,
   type PersonLayoutContext,
@@ -1619,6 +1623,9 @@ export const createWorkspace = (input: {
         message: `Unknown registry: ${body.registryId}`,
       });
     }
+    if (body.sshUser !== undefined) {
+      yield* refuseSshUserName(body.sshUser);
+    }
 
     // An idempotent create: a committed one replays; a cancelled key refuses; a create from
     // before creates were atomic that left its workspace half-made is finished (`resuming`). The
@@ -1820,6 +1827,7 @@ export const createWorkspace = (input: {
             // The workspace row is written first: a racing create with the same key fails here,
             // on the owner-scoped unique index, before anything else of it exists.
             ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+            ...(body.sshUser === undefined ? {} : { sshUser: body.sshUser }),
           }));
 
         const attempt = yield* workspaceAttempts.createQueuedAttempt({
@@ -1974,6 +1982,52 @@ export const createWorkspace = (input: {
       runId,
       ...(body.launchId === undefined ? {} : { launchId: body.launchId }),
     } satisfies CreateWorkspaceResponse;
+  });
+};
+
+/**
+ * A workspace's SSH user is a person's (`processUserProblem`, as for the as-user routes): a login
+ * name or a decimal uid in the range, never root. Whether the user exists, and is one of the
+ * executor's people, the executor's sealantd decides when a session opens; until then the gateway
+ * refuses the session rather than run it as root.
+ */
+const refuseSshUserName = (user: string) => {
+  const problem = processUserProblem(user);
+  return problem === undefined
+    ? Effect.void
+    : Effect.fail(
+        new WorkspaceBadRequestError({
+          message: `sshUser '${user}' is refused: ${problem.detail}; ${PROCESS_USER_RANGE_RULE}.`,
+        }),
+      );
+};
+
+/** `PUT /v1/workspaces/:id/ssh-user`: the owner names who the gateway runs SSH sessions as. */
+export const setWorkspaceSshUser = (input: {
+  readonly workspaceId: string;
+  readonly payload: SetWorkspaceSshUserRequest;
+}) => {
+  return Effect.gen(function* () {
+    yield* requireScopedWorkspace(input.workspaceId, input.payload.ownerUserId);
+    if (input.payload.user !== null) {
+      yield* refuseSshUserName(input.payload.user);
+    }
+    const workspace = yield* withInternalError(
+      (yield* WorkspaceRepo).setWorkspaceSshUser({
+        id: input.workspaceId,
+        sshUser: input.payload.user,
+      }),
+      "Failed to set the workspace's SSH user.",
+    );
+    if (workspace === null) {
+      return yield* new WorkspaceNotFoundError({
+        message: `Workspace not found: ${input.workspaceId}`,
+      });
+    }
+    return {
+      workspaceId: workspace.id,
+      sshUser: workspace.sshUser,
+    } satisfies SetWorkspaceSshUserResponse;
   });
 };
 
@@ -2342,6 +2396,14 @@ export const getWorkspaceSshTarget = (input: {
       });
     }
 
+    // A workspace whose sessions run as a user goes only to a gateway that runs them so: an older
+    // gateway would drop `user` and run the session as root.
+    if (workspace.sshUser !== null && input.headers["x-sealant-gateway-ssh-user"] !== "1") {
+      return yield* new WorkspaceConflictError({
+        message: `Workspace ${input.workspaceId} runs its SSH sessions as a user, which this SSH gateway cannot: upgrade the gateway with the API.`,
+      });
+    }
+
     if (workspace.latestRunId === null) {
       return yield* new WorkspaceConflictError({
         message: `Workspace ${input.workspaceId} has no active attempt with runtime metadata.`,
@@ -2377,6 +2439,7 @@ export const getWorkspaceSshTarget = (input: {
         status: runtimeInstance.status,
         endpoint: runtimeInstance.endpoint,
       },
+      ...(workspace.sshUser === null ? {} : { user: workspace.sshUser }),
     } satisfies WorkspaceSshTarget;
   });
 };

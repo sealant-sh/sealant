@@ -62,6 +62,12 @@ export const workspaceSshTargetSchema = Schema.Struct({
     status: Schema.Literals(["pending", "running", "ready", "failed", "stopped"]),
     endpoint: Schema.String,
   }),
+  /**
+   * The Linux user the gateway runs this workspace's SSH sessions as (its `sshUser`); absent:
+   * root. Sent only to a gateway that says it runs sessions as a user
+   * (`x-sealant-gateway-ssh-user: 1`); a workspace with a user refuses any other gateway.
+   */
+  user: Schema.optional(NonEmptyString),
 });
 export type WorkspaceSshTarget = typeof workspaceSshTargetSchema.Type;
 
@@ -173,6 +179,13 @@ export const createWorkspaceRequestSchema = Schema.Struct({
    * completion attestation that names a launch must name this one.
    */
   launchId: Schema.optional(NonEmptyString),
+  /**
+   * The Linux user the SSH gateway runs this workspace's SSH sessions as: a login name or a
+   * decimal uid in 40001–49999, never root (as `user` on the as-user routes). The user need not
+   * exist yet: until it does, an SSH session is refused, never run as root. Absent: root. A
+   * control plane reports it takes this with `features.workspaceSshUser`; an older one ignores it.
+   */
+  sshUser: Schema.optional(NonEmptyString),
 });
 export type CreateWorkspaceRequest = typeof createWorkspaceRequestSchema.Type;
 
@@ -579,6 +592,15 @@ export const renameWorkspaceRequestSchema = Schema.Struct({
 });
 export type RenameWorkspaceRequest = typeof renameWorkspaceRequestSchema.Type;
 
+/** `PUT /v1/workspaces/:id/ssh-user`: who the gateway runs the workspace's SSH sessions as. */
+export const setWorkspaceSshUserRequestSchema = Schema.Struct({
+  /** A login name or a decimal uid in 40001–49999, never root; `null`: root. */
+  user: Schema.NullOr(NonEmptyString),
+  /** The workspace's owner. Required by the control plane: a request that names none finds nothing. */
+  ownerUserId: Schema.optional(NonEmptyString),
+});
+export type SetWorkspaceSshUserRequest = typeof setWorkspaceSshUserRequestSchema.Type;
+
 // Lifecycle actions are owner-scoped like execWorkspace: ownerUserId rides in the payload and a
 // mismatch yields a uniform 404 (existence is not leaked).
 export const stopWorkspaceRequestSchema = Schema.Struct({
@@ -923,6 +945,13 @@ export const renameWorkspaceResponseSchema = Schema.Struct({
 });
 export type RenameWorkspaceResponse = typeof renameWorkspaceResponseSchema.Type;
 
+export const setWorkspaceSshUserResponseSchema = Schema.Struct({
+  workspaceId: NonEmptyString,
+  /** The user now set; `null`: root. */
+  sshUser: Schema.NullOr(NonEmptyString),
+});
+export type SetWorkspaceSshUserResponse = typeof setWorkspaceSshUserResponseSchema.Type;
+
 export const createWorkspaceResponseSchema = Schema.Struct({
   workspaceId: NonEmptyString,
   name: NonEmptyString,
@@ -1244,6 +1273,9 @@ export const workspaceGatewayHeadersSchema = Schema.Struct({
   // Identifies the client principal (the SSH key's owner). The API authorizes principal x workspace
   // before returning a control target (gateway-spec §3.4).
   "x-sealant-principal-id": Schema.optional(NonEmptyString),
+  // `1` from a gateway that runs a workspace's SSH sessions as its `sshUser`. A workspace with a
+  // user answers no target to a gateway without it, which would run the session as root.
+  "x-sealant-gateway-ssh-user": Schema.optional(NonEmptyString),
 });
 export type WorkspaceGatewayHeaders = typeof workspaceGatewayHeadersSchema.Type;
 
@@ -1650,6 +1682,14 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
       payload: renameWorkspaceRequestSchema,
       success: renameWorkspaceResponseSchema,
       error: [WorkspaceNotFoundError, WorkspaceInternalServerError],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.put("setWorkspaceSshUser", "/:workspaceId/ssh-user", {
+      params: workspaceIdParams,
+      payload: setWorkspaceSshUserRequestSchema,
+      success: setWorkspaceSshUserResponseSchema,
+      error: [WorkspaceBadRequestError, WorkspaceNotFoundError, WorkspaceInternalServerError],
     }),
   )
   .add(

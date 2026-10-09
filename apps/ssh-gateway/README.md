@@ -25,8 +25,12 @@ control target via the API route:
    user-registered keys in the `ssh_keys` table (principal = key owner). DB keys work immediately
    after registration — no gateway restart.
 3. Gateway extracts `<workspaceId>` from username (a routing hint only).
-4. Gateway asks API `/v1/workspaces/{workspaceId}/ssh-target` with the gateway token + principal id;
-   the API authorizes principal x workspace and returns the control target (container id).
+4. Gateway asks API `/v1/workspaces/{workspaceId}/ssh-target` with the gateway token + principal id
+   (and `x-sealant-gateway-ssh-user: 1`); the API authorizes principal x workspace (only its owner)
+   and returns the control target (container id) and the workspace's `user`, when it has one. With a
+   user, the gateway reads the daemon's capabilities once and goes on only if it reports
+   `exec.user`; every shell and exec then names the user, and SFTP is refused (the pinned sealantd
+   runs it only as root). Without one, sessions run as root.
 5. Gateway opens one sealantd control connection (docker-exec + socat) and maps SSH channels:
    - `shell` -> `openSession{login}` + `attachSession{interactive}` (PTY stream)
    - `exec` -> `exec{/bin/bash -lc …, attach}` (exit status from the channel End)

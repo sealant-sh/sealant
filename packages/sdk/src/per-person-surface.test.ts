@@ -419,6 +419,7 @@ describe("features()", () => {
             credentialsPartialPut: true,
             credentialsPiOpencode: true,
             captureOwnerMap: true,
+            workspaceSshUser: true,
           }),
         ),
       ),
@@ -428,6 +429,7 @@ describe("features()", () => {
       credentialsPartialPut: true,
       credentialsPiOpencode: true,
       captureOwnerMap: true,
+      workspaceSshUser: true,
     });
     // A control plane from before the as-user routes names only `processUser`, and its `true`
     // is not read as the routes.
@@ -437,9 +439,11 @@ describe("features()", () => {
       credentialsPartialPut: false,
       credentialsPiOpencode: false,
       captureOwnerMap: false,
+      workspaceSshUser: false,
     });
     // One from before `features`: nothing.
     expect(Object.values(await readFeatures(makeCtx(withIndex(undefined))))).toEqual([
+      false,
       false,
       false,
       false,

@@ -52,6 +52,7 @@ import { parseTtlSeconds } from "./internal/duration.js";
 import { readFeatures } from "./internal/features.js";
 import { imageSpecKey } from "./internal/image-key.js";
 import { buildInferenceRespondRequest, mapInferenceResponse } from "./internal/inference.js";
+import { requireSshUser } from "./internal/process-user.js";
 import { mapSshKey, mapWorkspaceSshInfo } from "./internal/ssh.js";
 import type {
   AccessTokensNamespace,
@@ -130,6 +131,9 @@ export class Sealant {
   /** Workspace lifecycle: create, fetch, and list live environments. */
   readonly workspaces = {
     create: async (options: CreateOptions): Promise<Workspace> => {
+      if (options.sshUser !== undefined) {
+        await requireSshUser(this.#ctx, options.sshUser);
+      }
       const { payload } = buildCreateWorkspaceRequest(options, this.#ctx.config);
       const created = await this.#runtime.run(createWorkspaceOp(payload));
       const workspace = makeWorkspace(this.#ctx, {

@@ -22,6 +22,7 @@ import type {
   ExecWorkspaceAsUserRequest,
   ExecWorkspaceRequest,
   ExpireWorkspaceRequest,
+  SetWorkspaceSshUserRequest,
   GetRunScrollbackQuery,
   GetRunTimelineQuery,
   GetSessionOutputQuery,
@@ -178,6 +179,11 @@ export const listWorkspaceCredentialsOp = (
 export const expireWorkspaceOp = (workspaceId: string, payload: ExpireWorkspaceRequest) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.workspaces.expireWorkspace({ params: { workspaceId }, payload }),
+  );
+
+export const setWorkspaceSshUserOp = (workspaceId: string, payload: SetWorkspaceSshUserRequest) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.setWorkspaceSshUser({ params: { workspaceId }, payload }),
   );
 
 // ---- runs ----

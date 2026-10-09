@@ -32,6 +32,8 @@ const workspaceSshTargetSchema = z.object({
     status: z.enum(["pending", "running", "ready", "failed", "stopped"]),
     endpoint: z.string().trim().min(1),
   }),
+  // The Linux user every session of this workspace runs as; absent: root.
+  user: z.string().trim().min(1).optional(),
 });
 
 const messageResponseSchema = z.object({
@@ -83,6 +85,9 @@ export const resolveWorkspaceControlTarget = async (input: {
       "x-sealant-gateway-token": input.gatewayToken,
       // Identifies *who* the client is, so the API can authorize principal x workspace.
       "x-sealant-principal-id": input.principalId,
+      // This gateway runs a workspace's sessions as its user; the API answers a workspace with a
+      // user only to a gateway that says so.
+      "x-sealant-gateway-ssh-user": "1",
     },
   });
   const payload = await response.json().catch(() => null);

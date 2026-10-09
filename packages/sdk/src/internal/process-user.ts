@@ -10,6 +10,24 @@ import { SealantError } from "../errors.js";
 import type { SdkContext } from "../facade/context.js";
 import { readFeatures } from "./features.js";
 
+/**
+ * A workspace's SSH user goes only to a control plane that reports it takes one
+ * (`features.workspaceSshUser`): an older one ignores `sshUser` on a create and its gateway would
+ * run the sessions as root.
+ */
+export const requireSshUser = async (ctx: SdkContext, user: string): Promise<void> => {
+  const supported = await readFeatures(ctx).then(
+    (features) => features.workspaceSshUser,
+    () => false,
+  );
+  if (!supported) {
+    throw new SealantError(
+      `This control plane cannot run SSH sessions as the Linux user '${user}' (it does not report the feature, or could not be asked); nothing was sent.`,
+      { code: "ssh-user-unsupported" },
+    );
+  }
+};
+
 export const requireProcessUser = async (ctx: SdkContext, user: string): Promise<void> => {
   const supported = await readFeatures(ctx).then(
     (features) => features.processUserRoutes,

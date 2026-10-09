@@ -1,4 +1,4 @@
-import type { CreateWorkspaceRequest } from "@sealant/api-contracts";
+import { WorkspaceBadRequestError, type CreateWorkspaceRequest } from "@sealant/api-contracts";
 import { CredentialCipher } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
@@ -82,6 +82,8 @@ interface RecordingState {
   raceOnCreate?: boolean;
   /** Keys the workspace rows were written with. */
   createdKeys?: Array<string | undefined>;
+  /** SSH users the workspace rows were written with. */
+  createdSshUsers?: Array<string | undefined>;
   runtime?: WorkspaceRuntimeInstance;
   /** The launch job of the existing workspace's latest run; absent = none (a half-made create). */
   existingJobStatus?: "queued" | "running" | "succeeded" | "failed";
@@ -172,6 +174,7 @@ const makeRecordingLayer = (
           )
         : Effect.sync(() => {
             (state.createdKeys ??= []).push(input.idempotencyKey);
+            (state.createdSshUsers ??= []).push(input.sshUser);
           }).pipe(
             Effect.andThen(
               Effect.succeed<Workspace>({
@@ -190,6 +193,7 @@ const makeRecordingLayer = (
                 archivedAt: null,
                 binds: [],
                 idempotencyKey: input.idempotencyKey ?? null,
+                sshUser: input.sshUser ?? null,
               }),
             ),
           ),
@@ -218,6 +222,7 @@ const makeRecordingLayer = (
     listWorkspaces: () => Effect.succeed([]),
     listWorkspaceAttemptLinks: () => Effect.die("unused"),
     setWorkspaceName: () => Effect.die("unused"),
+    setWorkspaceSshUser: () => Effect.die("unused"),
     setWorkspaceBinds: () => Effect.die("unused"),
     setWorkspaceExpiry: () => Effect.die("unused"),
     setWorkspaceStatus: (input) =>
@@ -592,6 +597,7 @@ describe("createWorkspace · idempotency key", () => {
     archivedAt: null,
     binds: [],
     idempotencyKey: "mend-exec-7",
+    sshUser: null,
   });
   const runtime = (): WorkspaceRuntimeInstance => ({
     runId: "run_first",
@@ -701,6 +707,7 @@ describe("createWorkspace · a create that never finished (review 3 #19)", () =>
     archivedAt: null,
     binds: [],
     idempotencyKey: "key_partial",
+    sshUser: null,
   });
 
   it("finishes a half-made workspace its repeat finds instead of replaying it forever", async () => {
@@ -849,5 +856,34 @@ describe("createWorkspace · the launch identity (decision 5)", () => {
     );
     expect(answer.launchId).toBe("launch_7");
     expect(state.attempts).toEqual([{ id: answer.runId, launchId: "launch_7" }]);
+  });
+});
+
+describe("createWorkspace · the workspace's SSH user (Mend ADR 0016)", () => {
+  it("writes the user on the workspace row, the user the gateway runs its sessions as", async () => {
+    const state: RecordingState = {};
+    await Effect.runPromise(
+      createWorkspace({
+        payload: { ...capturePayload("/workspace/harness-home"), sshUser: "m4lice000" },
+        headers: {},
+      }).pipe(Effect.provide(makeRecordingLayer(state))),
+    );
+    expect(state.createdSshUsers).toEqual(["m4lice000"]);
+  });
+
+  it("refuses root and a uid outside Mend's range before anything is written", async () => {
+    for (const sshUser of ["root", "0", "1000"]) {
+      const state: RecordingState = {};
+      const result = await Effect.runPromise(
+        createWorkspace({
+          payload: { ...capturePayload("/workspace/harness-home"), sshUser },
+          headers: {},
+        }).pipe(Effect.result, Effect.provide(makeRecordingLayer(state))),
+      );
+      expect(Result.isFailure(result) && result.failure, sshUser).toBeInstanceOf(
+        WorkspaceBadRequestError,
+      );
+      expect(state.createdSshUsers, sshUser).toBeUndefined();
+    }
   });
 });

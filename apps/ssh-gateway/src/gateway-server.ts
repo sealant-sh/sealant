@@ -10,7 +10,12 @@ import {
   type AuthorizedKeyEntry,
   type VerifyFunction,
 } from "./authorized-keys.js";
-import { ControlClient, type ShellSession, type ExecSession } from "./control-client.js";
+import {
+  ControlClient,
+  EXEC_USER_CAPABILITY,
+  type ShellSession,
+  type ExecSession,
+} from "./control-client.js";
 import type { PrincipalLookup } from "./principal-resolver.js";
 import { finalizeInteractiveRun, startInteractiveRun } from "./run-recorder.js";
 import {
@@ -190,6 +195,9 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
   // the first channel opens, and stays undefined when recording is unavailable (best-effort).
   let recordedRunId: string | undefined;
   let recordedRunOwner: string | undefined;
+  // The Linux user every shell and exec of this connection runs as (the workspace's `sshUser`,
+  // which Mend's per-person layout sets to the launcher's user); undefined: root, as before.
+  let sessionUser: string | undefined;
 
   const ensureControl = async (): Promise<ControlClient> => {
     if (workspaceId === undefined || principalId === undefined) {
@@ -220,6 +228,22 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
         const client = ControlClient.open(
           toControlTarget(target, config.controlTargetOptions ?? {}),
         );
+        if (target.user !== undefined) {
+          // An older sealantd ignores `user` and would start the session as root: never send it
+          // to one that does not say it honours it. sealantd itself refuses root and anyone who
+          // is not one of the executor's people.
+          const supports = await client.supports().catch((error: unknown) => {
+            client.close();
+            throw error;
+          });
+          if (!supports.has(EXEC_USER_CAPABILITY)) {
+            client.close();
+            throw new Error(
+              `Workspace ${resolvedWorkspaceId} runs its SSH sessions as a user, and its sealantd does not report ${EXEC_USER_CAPABILITY}.`,
+            );
+          }
+          sessionUser = target.user;
+        }
         controlClient = client;
         return client;
       })();
@@ -415,6 +439,7 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
                 command: 'exec "${SHELL:-/bin/sh}"',
                 env: sessionEnv,
                 executionId: recordedRunId,
+                user: sessionUser,
               });
               activeExec = exec;
               bridgeChannel({
@@ -439,6 +464,7 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
               term: sessionEnv.TERM,
               env: sessionEnv,
               executionId: recordedRunId,
+              user: sessionUser,
             });
             activeShell = shell;
             bridgeChannel({
@@ -475,6 +501,7 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
               command: info.command,
               env: sessionEnv,
               executionId: recordedRunId,
+              user: sessionUser,
             });
             activeExec = exec;
             bridgeChannel({
@@ -517,6 +544,16 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
         void (async () => {
           try {
             const control = await ensureControl();
+            if (sessionUser !== undefined) {
+              // The pinned sealantd runs an SFTP bridge only as root (`openSftp` takes no user
+              // before sealantd#155): refused rather than write as root for a person.
+              sshChannel.stderr.write(
+                "SFTP is not available in this workspace yet: it runs its sessions as your user, and its sealantd runs SFTP only as root. Use ssh to copy files (ssh host 'cat > file' < file).\n",
+              );
+              sshChannel.exit(1);
+              sshChannel.end();
+              return;
+            }
             // §3.3 subsystem:sftp -> openSftp; bridge the subsystem channel <-> the byte channel.
             const { channel } = await control.openSftp(
               recordedRunId === undefined ? undefined : { executionId: recordedRunId },

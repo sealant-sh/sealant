@@ -107,6 +107,7 @@ const makeLayer = (store: Store) => {
         archivedAt: null,
         binds: [],
         idempotencyKey: input.idempotencyKey ?? null,
+        sshUser: input.sshUser ?? null,
       };
       store.workspace = workspace;
       return Effect.succeed(workspace);
@@ -129,6 +130,7 @@ const makeLayer = (store: Store) => {
     listWorkspaces: () => Effect.succeed([]),
     listWorkspaceAttemptLinks: () => Effect.die("unused"),
     setWorkspaceName: () => Effect.die("unused"),
+    setWorkspaceSshUser: () => Effect.die("unused"),
     setWorkspaceBinds: () => Effect.die("unused"),
     setWorkspaceExpiry: () => Effect.succeed(store.workspace ?? null),
     setWorkspaceStatus: (input) => {

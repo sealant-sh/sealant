@@ -1,0 +1,1 @@
+ALTER TABLE "workspaces" ADD COLUMN "ssh_user" text;
