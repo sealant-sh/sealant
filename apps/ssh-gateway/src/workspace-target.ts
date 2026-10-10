@@ -32,8 +32,10 @@ const workspaceSshTargetSchema = z.object({
     status: z.enum(["pending", "running", "ready", "failed", "stopped"]),
     endpoint: z.string().trim().min(1),
   }),
-  // The Linux user every session of this workspace runs as; absent: root.
-  user: z.string().trim().min(1).optional(),
+  // Who every session of this workspace runs as, always stated: a Linux user, or null for root. An
+  // API that does not state it (one from before SSH users) fails this parse, and the session is
+  // refused: silence is never read as root.
+  sessionUser: z.string().trim().min(1).nullable(),
 });
 
 const messageResponseSchema = z.object({

@@ -25,7 +25,7 @@ import {
   createSessionAsUserOp,
   createSessionOp,
   expireWorkspaceOp,
-  setWorkspaceSshUserOp,
+  clearWorkspaceSshUserOp,
   getSessionOp,
   getWorkspaceOp,
   listSessionsOp,
@@ -40,7 +40,7 @@ import {
 import { SealantApiError, SealantError, SealantNotImplementedError } from "../errors.js";
 import { mapAccountRef } from "../internal/credentials.js";
 import { parseTtlSeconds } from "../internal/duration.js";
-import { requireProcessUser, requireSshUser } from "../internal/process-user.js";
+import { requireProcessUser } from "../internal/process-user.js";
 import type {
   Harness,
   HarnessRunner,
@@ -1052,12 +1052,9 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
       );
     },
 
-    setSshUser: async (user) => {
-      if (user !== null) {
-        await requireSshUser(ctx, user);
-      }
+    sshAsRoot: async () => {
       await ctx.runtime.run(
-        setWorkspaceSshUserOp(init.id, { user, ownerUserId: ctx.config.hostLocal.ownerUserId }),
+        clearWorkspaceSshUserOp(init.id, { ownerUserId: ctx.config.hostLocal.ownerUserId }),
       );
     },
 

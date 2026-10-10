@@ -1,16 +1,16 @@
+/**
+ * A workspace's SSH user (Mend ADR 0016: Remote-SSH runs as the launcher's Linux user): the owner's
+ * own uid, taken at create from their `credentialsHome` (`sshAsOwner`), never a user a caller
+ * names; after create it can only go back to root (`DELETE .../ssh-user`). The gateway's target
+ * always states it (`sessionUser`, `null` for root), and a workspace with a user answers no target
+ * to a gateway that does not say it runs sessions as one (it would run them as root). The gateway
+ * token is set before the dynamic imports because runtime-env parses process.env at module load.
+ */
 import {
-  WorkspaceBadRequestError,
   WorkspaceConflictError,
   WorkspaceNotFoundError,
   WorkspaceUnauthorizedError,
 } from "@sealant/api-contracts";
-/**
- * A workspace's SSH user (Mend ADR 0016: Remote-SSH runs as the launcher's Linux user): its owner
- * names it at create or with `PUT .../ssh-user`, never root or a uid outside Mend's range; the
- * gateway's target carries it, and a workspace with a user answers no target to a gateway that
- * does not say it runs sessions as one (it would run them as root). The gateway token is set
- * before the dynamic imports because runtime-env parses process.env at module load.
- */
 import {
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
@@ -82,77 +82,60 @@ const target = (
 
 describe("the gateway's target for a workspace's SSH sessions", () => {
   it("names the workspace's user to a gateway that runs sessions as one", async () => {
-    const { layer } = harness("mabcdefgh");
+    const { layer } = harness("40001");
     const result = await target(layer, { principal: OWNER, sshUserGateway: true });
-    expect(Result.isSuccess(result) && result.success.user).toBe("mabcdefgh");
+    expect(Result.isSuccess(result) && result.success.sessionUser).toBe("40001");
   });
 
   it("answers an older gateway nothing for a workspace with a user, never a root session", async () => {
-    const { layer } = harness("mabcdefgh");
+    const { layer } = harness("40001");
     const result = await target(layer, { principal: OWNER, sshUserGateway: false });
     expect(Result.isFailure(result) && result.failure).toBeInstanceOf(WorkspaceConflictError);
   });
 
-  it("names no user, as before, for a workspace without one, whatever the gateway", async () => {
+  it("says root outright for a workspace without a user, whatever the gateway", async () => {
     const { layer } = harness(null);
     for (const sshUserGateway of [true, false]) {
       const result = await target(layer, { principal: OWNER, sshUserGateway });
-      expect(Result.isSuccess(result)).toBe(true);
-      expect(Result.isSuccess(result) && "user" in result.success).toBe(false);
+      // Stated, never left out: a gateway refuses a target that does not say (an older API).
+      expect(Result.isSuccess(result) && result.success.sessionUser).toBeNull();
     }
   });
 
   it("admits only the owner: another principal is refused before any user is named", async () => {
-    const { layer } = harness("mabcdefgh");
+    const { layer } = harness("40001");
     const result = await target(layer, { principal: "usr_bob", sshUserGateway: true });
     expect(Result.isFailure(result) && result.failure).toBeInstanceOf(WorkspaceUnauthorizedError);
   });
 });
 
-describe("PUT /v1/workspaces/:id/ssh-user", () => {
-  const put = (
-    layer: ReturnType<typeof harness>["layer"],
-    payload: { readonly user: string | null; readonly ownerUserId?: string },
-  ) =>
+describe("DELETE /v1/workspaces/:id/ssh-user", () => {
+  const clear = (layer: ReturnType<typeof harness>["layer"], ownerUserId?: string) =>
     Effect.runPromise(
       workspacesModule
-        .setWorkspaceSshUser({ workspaceId: "wks_1", payload })
+        .clearWorkspaceSshUser({
+          workspaceId: "wks_1",
+          query: ownerUserId === undefined ? {} : { ownerUserId },
+        })
         .pipe(Effect.result, Effect.provide(layer)),
     );
 
-  it("sets the user, and null sets it back to root", async () => {
-    const { row, layer } = harness(null);
-    const set = await put(layer, { user: "mabcdefgh", ownerUserId: OWNER });
-    expect(Result.isSuccess(set) && set.success).toEqual({
+  it("sets the sessions back to root, the only change after create: no caller names a user", async () => {
+    const { row, layer } = harness("40001");
+    const cleared = await clear(layer, OWNER);
+    expect(Result.isSuccess(cleared) && cleared.success).toEqual({
       workspaceId: "wks_1",
-      sshUser: "mabcdefgh",
+      sshUser: null,
     });
-    expect(row.current.sshUser).toBe("mabcdefgh");
-    const cleared = await put(layer, { user: null, ownerUserId: OWNER });
-    expect(Result.isSuccess(cleared) && cleared.success.sshUser).toBeNull();
     expect(row.current.sshUser).toBeNull();
-  });
-
-  it("refuses root, a uid outside Mend's range and a malformed name, and writes nothing", async () => {
-    for (const user of ["root", "0", "1000", "50000", "Bad Name"]) {
-      const { row, layer } = harness(null);
-      const result = await put(layer, { user, ownerUserId: OWNER });
-      expect(Result.isFailure(result) && result.failure, user).toBeInstanceOf(
-        WorkspaceBadRequestError,
-      );
-      expect(row.current.sshUser, user).toBeNull();
-    }
   });
 
   it("finds nothing for another owner or for a request that names none", async () => {
     for (const ownerUserId of ["usr_bob", undefined]) {
-      const { row, layer } = harness(null);
-      const result = await put(layer, {
-        user: "mabcdefgh",
-        ...(ownerUserId === undefined ? {} : { ownerUserId }),
-      });
+      const { row, layer } = harness("40001");
+      const result = await clear(layer, ownerUserId);
       expect(Result.isFailure(result) && result.failure).toBeInstanceOf(WorkspaceNotFoundError);
-      expect(row.current.sshUser).toBeNull();
+      expect(row.current.sshUser).toBe("40001");
     }
   });
 });

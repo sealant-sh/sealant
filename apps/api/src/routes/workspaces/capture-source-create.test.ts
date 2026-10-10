@@ -860,30 +860,49 @@ describe("createWorkspace · the launch identity (decision 5)", () => {
 });
 
 describe("createWorkspace · the workspace's SSH user (Mend ADR 0016)", () => {
-  it("writes the user on the workspace row, the user the gateway runs its sessions as", async () => {
+  /** A capture create whose launch writes the owner's logins into `uid`'s home. */
+  const withHome = (uid: number): CreateWorkspaceRequest => {
+    const base = capturePayload("/workspace/harness-home");
+    return {
+      ...base,
+      spec: {
+        ...(base.spec as Record<string, unknown>),
+        runtime: { credentialsHome: { path: `/home/m${String(uid)}`, uid, gid: 40000 } },
+      },
+    };
+  };
+
+  it("runs the sessions as the owner's own user: the uid of the home their logins go to", async () => {
     const state: RecordingState = {};
     await Effect.runPromise(
-      createWorkspace({
-        payload: { ...capturePayload("/workspace/harness-home"), sshUser: "m4lice000" },
-        headers: {},
-      }).pipe(Effect.provide(makeRecordingLayer(state))),
+      createWorkspace({ payload: { ...withHome(40001), sshAsOwner: true }, headers: {} }).pipe(
+        Effect.provide(makeRecordingLayer(state)),
+      ),
     );
-    expect(state.createdSshUsers).toEqual(["m4lice000"]);
+    expect(state.createdSshUsers).toEqual(["40001"]);
   });
 
-  it("refuses root and a uid outside Mend's range before anything is written", async () => {
-    for (const sshUser of ["root", "0", "1000"]) {
+  it("names nobody without sshAsOwner, and refuses it with no owner's home or one outside the range", async () => {
+    const plain: RecordingState = {};
+    await Effect.runPromise(
+      createWorkspace({ payload: withHome(40001), headers: {} }).pipe(
+        Effect.provide(makeRecordingLayer(plain)),
+      ),
+    );
+    expect(plain.createdSshUsers).toEqual([undefined]);
+    for (const payload of [
+      { ...capturePayload("/workspace/harness-home"), sshAsOwner: true },
+      { ...withHome(1000), sshAsOwner: true },
+    ]) {
       const state: RecordingState = {};
       const result = await Effect.runPromise(
-        createWorkspace({
-          payload: { ...capturePayload("/workspace/harness-home"), sshUser },
-          headers: {},
-        }).pipe(Effect.result, Effect.provide(makeRecordingLayer(state))),
+        createWorkspace({ payload, headers: {} }).pipe(
+          Effect.result,
+          Effect.provide(makeRecordingLayer(state)),
+        ),
       );
-      expect(Result.isFailure(result) && result.failure, sshUser).toBeInstanceOf(
-        WorkspaceBadRequestError,
-      );
-      expect(state.createdSshUsers, sshUser).toBeUndefined();
+      expect(Result.isFailure(result) && result.failure).toBeInstanceOf(WorkspaceBadRequestError);
+      expect(state.createdSshUsers).toBeUndefined();
     }
   });
 });

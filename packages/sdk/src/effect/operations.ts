@@ -22,7 +22,7 @@ import type {
   ExecWorkspaceAsUserRequest,
   ExecWorkspaceRequest,
   ExpireWorkspaceRequest,
-  SetWorkspaceSshUserRequest,
+  ClearWorkspaceSshUserQuery,
   GetRunScrollbackQuery,
   GetRunTimelineQuery,
   GetSessionOutputQuery,
@@ -181,9 +181,9 @@ export const expireWorkspaceOp = (workspaceId: string, payload: ExpireWorkspaceR
     client.workspaces.expireWorkspace({ params: { workspaceId }, payload }),
   );
 
-export const setWorkspaceSshUserOp = (workspaceId: string, payload: SetWorkspaceSshUserRequest) =>
+export const clearWorkspaceSshUserOp = (workspaceId: string, query: ClearWorkspaceSshUserQuery) =>
   Effect.flatMap(SealantApiClient, (client) =>
-    client.workspaces.setWorkspaceSshUser({ params: { workspaceId }, payload }),
+    client.workspaces.clearWorkspaceSshUser({ params: { workspaceId }, query }),
   );
 
 // ---- runs ----

@@ -182,15 +182,16 @@ These call the live API and work end-to-end:
   anything else is refused (`user-unsupported`, the message saying why) and nothing starts. The
   daemon checks the passwd entry again and runs a process only as one of its owner map's people or a
   person in Mend's reserved range; root and anyone outside the range are refused.
-  `create({ sshUser })` and `workspace.setSshUser(user | null)` name the Linux user the SSH gateway
-  runs the workspace's SSH sessions as (VS Code Remote-SSH included), never root; both are refused
-  (`ssh-user-unsupported`) before anything is sent to a control plane without the feature.
-  `sealant.features()` reports what the control plane can do (`processUserRoutes`, `dotfilesApply`,
-  `credentialsPartialPut`, `credentialsPiOpencode`, `captureOwnerMap`, `workspaceSshUser`), so a
-  client detects them rather than reading a version. A capture source's
-  `ownerMap: { gid, worktreeUid, people: [{ id, uid }] }` gives each person's saved directory to
-  their uid and the worktree to the group on restore, and makes the executor a per-person one (no
-  no-new-privileges, so everyone's `sudo` works); see
+  `create({ credentialsHome, sshAsOwner: true })` runs the workspace's SSH sessions (VS Code
+  Remote-SSH included) as its owner's own Linux user, the `credentialsHome` uid, never root and
+  never a user the caller names; `workspace.sshAsRoot()` sets them back to root. A create with
+  `sshAsOwner` is refused (`ssh-user-unsupported`) before anything is sent to a control plane
+  without the feature. `sealant.features()` reports what the control plane can do
+  (`processUserRoutes`, `dotfilesApply`, `credentialsPartialPut`, `credentialsPiOpencode`,
+  `captureOwnerMap`, `workspaceSshUser`), so a client detects them rather than reading a version. A
+  capture source's `ownerMap: { gid, worktreeUid, people: [{ id, uid }] }` gives each person's saved
+  directory to their uid and the worktree to the group on restore, and makes the executor a
+  per-person one (no no-new-privileges, so everyone's `sudo` works); see
   [Workspace Images and People](/docs/reference/workspace-images#restoring-a-capture-per-person).
 - **Dotfiles per person:**
   `workspace.dotfiles.apply({ onBehalfOf, user, home, repository?, archives? })` applies a person's

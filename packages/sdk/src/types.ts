@@ -943,14 +943,14 @@ export interface CreateOptions {
    */
   readonly credentialsHome?: WorkspaceCredentialsHomeOptions;
   /**
-   * The Linux user the SSH gateway runs this workspace's SSH sessions as (VS Code Remote-SSH, an
-   * `ssh` shell or command): a login name or a decimal uid in 40001–49999, never root. It need not
-   * exist yet; until it does, a session is refused, never run as root. Change it later with
-   * `workspace.setSshUser()`. Absent: root. Sent only to a control plane that reports
-   * `features().workspaceSshUser`; with another, `create` rejects (`ssh-user-unsupported`) and
-   * nothing is created.
+   * The SSH gateway runs this workspace's SSH sessions (VS Code Remote-SSH, an `ssh` shell or
+   * command) as its owner's own Linux user: the uid of `credentialsHome`, which this requires
+   * (40001–49999, never root). No caller names the user. It need not exist yet; until it does, a
+   * session is refused, never run as root. `workspace.sshAsRoot()` sets it back to root. Absent:
+   * root. Sent only to a control plane that reports `features().workspaceSshUser`; with another,
+   * `create` rejects (`ssh-user-unsupported`) and nothing is created.
    */
-  readonly sshUser?: string;
+  readonly sshAsOwner?: boolean;
   /**
    * Time-to-live for the workspace, e.g. `"90m"`, `"2h"` (also `"45s"`, `"1d"`). Once it elapses
    * the platform stops the workspace and removes its container. Omitted = the server default TTL
@@ -1192,12 +1192,11 @@ export interface Workspace {
    */
   expire(options?: { readonly in?: string | null }): Promise<void>;
   /**
-   * Who the SSH gateway runs this workspace's SSH sessions as from the next session on: a Linux
-   * user (a login name or a decimal uid in 40001–49999, never root), or `null` for root. Rejects
-   * (`ssh-user-unsupported`) on a control plane that does not report
-   * `features().workspaceSshUser`, sending nothing.
+   * The SSH gateway runs this workspace's SSH sessions as root from the next session channel on,
+   * open connections included (`DELETE /v1/workspaces/:id/ssh-user`). The only change after
+   * create: a workspace's user is its owner's, set by `sshAsOwner`, never named by a caller.
    */
-  setSshUser(user: string | null): Promise<void>;
+  sshAsRoot(): Promise<void>;
   /**
    * Open a raw TCP byte pipe (or a UDP datagram pipe) INSIDE the workspace — the primitive for
    * reaching a dev server or database the workspace runs. Protocol-agnostic:
@@ -1449,7 +1448,7 @@ export interface SealantFeatures {
   readonly credentialsPiOpencode: boolean;
   /** `ownerMap` on a capture source. */
   readonly captureOwnerMap: boolean;
-  /** `sshUser` on a create and `workspace.setSshUser()`: SSH sessions as a Linux user. */
+  /** `sshAsOwner` on a create and `workspace.sshAsRoot()`: SSH sessions as the owner's user. */
   readonly workspaceSshUser: boolean;
 }
 

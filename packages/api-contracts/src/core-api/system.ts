@@ -38,8 +38,8 @@ export const systemIndexResponseSchema = Schema.Struct({
       /** `ownerMap` on a capture source: an executor whose restore gives each person their files. */
       captureOwnerMap: Schema.optional(Schema.Boolean),
       /**
-       * `sshUser` on a create and `PUT /v1/workspaces/:id/ssh-user`: the SSH gateway runs a
-       * workspace's SSH sessions as the Linux user its owner names, never root.
+       * `sshAsOwner` on a create and `DELETE /v1/workspaces/:id/ssh-user`: the SSH gateway runs a
+       * workspace's SSH sessions as its owner's own Linux user (their `credentialsHome` uid).
        */
       workspaceSshUser: Schema.optional(Schema.Boolean),
     }),

@@ -131,8 +131,8 @@ export class Sealant {
   /** Workspace lifecycle: create, fetch, and list live environments. */
   readonly workspaces = {
     create: async (options: CreateOptions): Promise<Workspace> => {
-      if (options.sshUser !== undefined) {
-        await requireSshUser(this.#ctx, options.sshUser);
+      if (options.sshAsOwner === true) {
+        await requireSshUser(this.#ctx);
       }
       const { payload } = buildCreateWorkspaceRequest(options, this.#ctx.config);
       const created = await this.#runtime.run(createWorkspaceOp(payload));

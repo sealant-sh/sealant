@@ -185,11 +185,14 @@ export class ControlClient {
     readonly command: string;
     readonly cwd?: string;
     readonly timeoutMs?: number;
+    /** The workspace's SSH user, whose repository this reads: the capture runs as them. */
+    readonly user?: string;
   }): Promise<{ readonly exitCode: number | undefined; readonly output: string }> {
     const exec = await this.execLogin({
       command: input.command,
       env: {},
       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+      ...(input.user === undefined ? {} : { user: input.user }),
     });
     const chunks: Buffer[] = [];
     const collect = (async () => {

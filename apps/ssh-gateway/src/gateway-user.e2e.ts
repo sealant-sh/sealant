@@ -89,6 +89,11 @@ const freePort = () =>
 
 /** The workspace's user as the stand-in API reports it; undefined: none (root). */
 let workspaceUser: string | undefined;
+/** The stand-in answers as an API from before SSH users: no `sessionUser` at all. */
+let oldApi = false;
+/** The stand-in records interactive runs; each run's final PATCH lands in `completedRuns`. */
+let recording = false;
+const completedRuns: Array<unknown> = [];
 let containerId = "";
 let gatewayPort = 0;
 let api: Server | undefined;
@@ -204,9 +209,9 @@ beforeAll(async () => {
     [await keyBlob(`${keys.bob}.pub`), OTHER],
   ]);
 
-  // The stand-in API: the target for the owner only, with the workspace's user, as the real
-  // `GET /v1/workspaces/:id/ssh-target` answers it; every other route (run recording) is a 404,
-  // which the gateway treats as recording unavailable.
+  // The stand-in API: the target for the owner only, stating the workspace's user, as the real
+  // `GET /v1/workspaces/:id/ssh-target` answers it; run recording while `recording` is on (a 404
+  // otherwise, which the gateway treats as recording unavailable).
   api = createServer((request, response) => {
     const reply = (status: number, body: unknown) => {
       response.writeHead(status, { "content-type": "application/json" });
@@ -231,7 +236,23 @@ beforeAll(async () => {
           status: "ready",
           endpoint: `docker://${containerId}`,
         },
-        ...(workspaceUser === undefined ? {} : { user: workspaceUser }),
+        ...(oldApi ? {} : { sessionUser: workspaceUser ?? null }),
+      });
+      return;
+    }
+    if (recording && request.method === "POST" && request.url === "/v1/runs") {
+      reply(200, { runId: "run_recorded" });
+      return;
+    }
+    if (recording && request.method === "PATCH" && request.url === "/v1/runs/run_recorded") {
+      let body = "";
+      request.on("data", (chunk: Buffer) => (body += chunk.toString("utf8")));
+      request.on("end", () => {
+        const parsed: unknown = JSON.parse(body);
+        if (typeof parsed === "object" && parsed !== null && "status" in parsed) {
+          if (parsed.status === "completed") completedRuns.push(parsed);
+        }
+        reply(200, {});
       });
       return;
     }
@@ -354,5 +375,67 @@ describe.skipIf(!runsAsUser)("a workspace's SSH sessions as its user", () => {
     const exec = await ssh(keys.alice, [], IDENTITY);
     expect(exec.code, exec.stderr).toBe(0);
     expect(exec.stdout.split("\n").slice(0, 2)).toEqual(["root", "/root"]);
+  });
+
+  it("runs the disconnect's working-tree capture as the workspace's user, never a root login shell", async () => {
+    workspaceUser = ALICE.name;
+    recording = true;
+    completedRuns.length = 0;
+    // Every login shell in the workspace says who it is.
+    await dockerExec(
+      "printf 'id -u >> /tmp/login-uids\\n' > /etc/profile.d/zz-uid.sh && : > /tmp/login-uids && chmod 666 /tmp/login-uids",
+    );
+    try {
+      const exec = await ssh(keys.alice, [], "true");
+      expect(exec.code, exec.stderr).toBe(0);
+      // The capture runs as the connection closes, then the run completes.
+      for (let waited = 0; completedRuns.length === 0 && waited < 100; waited += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(completedRuns).toHaveLength(1);
+      const uids = (await dockerExec("cat /tmp/login-uids")).stdout.trim().split(/\s+/);
+      // The session's own shell and the capture's: both Alice's, no root among them.
+      expect(uids.length).toBeGreaterThanOrEqual(2);
+      expect(new Set(uids)).toEqual(new Set([String(ALICE.uid)]));
+    } finally {
+      recording = false;
+      await dockerExec("rm -f /etc/profile.d/zz-uid.sh /tmp/login-uids");
+    }
+  });
+
+  it("refuses a target that does not say who the sessions run as (an older API), never reading it as root", async () => {
+    workspaceUser = ALICE.name;
+    oldApi = true;
+    try {
+      const refused = await ssh(keys.alice, [], IDENTITY);
+      expect(refused.code).not.toBe(0);
+      expect(refused.stdout).toBe("");
+    } finally {
+      oldApi = false;
+    }
+  });
+
+  it("asks again for every new channel: a connection opened as root runs its next channel as the user set since", async () => {
+    workspaceUser = undefined;
+    const control = join(scratch, "cm");
+    const shared = [
+      "-o",
+      "ControlMaster=auto",
+      "-o",
+      `ControlPath=${control}`,
+      "-o",
+      "ControlPersist=60",
+    ];
+    try {
+      const before = await ssh(keys.alice, shared, "id -u");
+      expect(before.stdout.trim()).toBe("0");
+      workspaceUser = ALICE.name;
+      // The same multiplexed SSH connection, a new exec channel on it.
+      const after = await ssh(keys.alice, shared, "id -u");
+      expect(after.code, after.stderr).toBe(0);
+      expect(after.stdout.trim()).toBe(String(ALICE.uid));
+    } finally {
+      await ssh(keys.alice, [...shared, "-O", "exit"]).catch(() => undefined);
+    }
   });
 });

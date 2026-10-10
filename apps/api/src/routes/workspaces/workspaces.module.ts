@@ -35,8 +35,8 @@ import {
   type ListWorkspacesResponse,
   type RenameWorkspaceRequest,
   type RenameWorkspaceResponse,
-  type SetWorkspaceSshUserRequest,
-  type SetWorkspaceSshUserResponse,
+  type ClearWorkspaceSshUserQuery,
+  type ClearWorkspaceSshUserResponse,
   execRunHarnessId,
   type ExecWorkspaceRequest,
   type ExpireWorkspaceRequest,
@@ -1623,10 +1623,6 @@ export const createWorkspace = (input: {
         message: `Unknown registry: ${body.registryId}`,
       });
     }
-    if (body.sshUser !== undefined) {
-      yield* refuseSshUserName(body.sshUser);
-    }
-
     // An idempotent create: a committed one replays; a cancelled key refuses; a create from
     // before creates were atomic that left its workspace half-made is finished (`resuming`). The
     // key is reserved (`pending`) before anything is written, and committed with everything the
@@ -1674,6 +1670,9 @@ export const createWorkspace = (input: {
     }
 
     const parsedSpec = yield* parseWorkspaceSpec(body.spec);
+    // The owner's own Linux user, never one the caller names (Mend ADR 0016, decision 10): the
+    // uid of the home Core writes and holds the owner's logins in.
+    const sshUser = body.sshAsOwner === true ? yield* ownerSshUser(parsedSpec) : undefined;
 
     // A managed family installs the catalog's packages only. Refuse an unknown id here, as a 400
     // naming it, rather than minutes later as a failed build. A custom base image takes any
@@ -1827,7 +1826,7 @@ export const createWorkspace = (input: {
             // The workspace row is written first: a racing create with the same key fails here,
             // on the owner-scoped unique index, before anything else of it exists.
             ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
-            ...(body.sshUser === undefined ? {} : { sshUser: body.sshUser }),
+            ...(sshUser === undefined ? {} : { sshUser }),
           }));
 
         const attempt = yield* workspaceAttempts.createQueuedAttempt({
@@ -1986,48 +1985,53 @@ export const createWorkspace = (input: {
 };
 
 /**
- * A workspace's SSH user is a person's (`processUserProblem`, as for the as-user routes): a login
- * name or a decimal uid in the range, never root. Whether the user exists, and is one of the
- * executor's people, the executor's sealantd decides when a session opens; until then the gateway
- * refuses the session rather than run it as root.
+ * The Linux user a workspace's SSH sessions run as, for `sshAsOwner`: its owner's own, the uid of
+ * the spec's `credentialsHome` (the home Core writes and holds the owner's logins in), never a user
+ * the caller names, so an owner cannot pick another person's identity. In range and never root
+ * (`processUserProblem`, as for the as-user routes); whether the user exists and is one of the
+ * executor's people, the executor's sealantd decides when a session opens, and until then the
+ * gateway refuses the session rather than run it as root.
  */
-const refuseSshUserName = (user: string) => {
+const ownerSshUser = (spec: {
+  readonly runtime: { readonly credentialsHome?: { readonly uid: number } | undefined };
+}) => {
+  const home = spec.runtime.credentialsHome;
+  if (home === undefined) {
+    return Effect.fail(
+      new WorkspaceBadRequestError({
+        message:
+          "sshAsOwner needs runtime.credentialsHome: SSH sessions run as the owner's user, the uid of the home their logins are written to.",
+      }),
+    );
+  }
+  const user = String(home.uid);
   const problem = processUserProblem(user);
   return problem === undefined
-    ? Effect.void
+    ? Effect.succeed(user)
     : Effect.fail(
         new WorkspaceBadRequestError({
-          message: `sshUser '${user}' is refused: ${problem.detail}; ${PROCESS_USER_RANGE_RULE}.`,
+          message: `sshAsOwner: the owner's uid ${user} is refused: ${problem.detail}; ${PROCESS_USER_RANGE_RULE}.`,
         }),
       );
 };
 
-/** `PUT /v1/workspaces/:id/ssh-user`: the owner names who the gateway runs SSH sessions as. */
-export const setWorkspaceSshUser = (input: {
+/** `DELETE /v1/workspaces/:id/ssh-user`: the owner sets the workspace's SSH sessions to root. */
+export const clearWorkspaceSshUser = (input: {
   readonly workspaceId: string;
-  readonly payload: SetWorkspaceSshUserRequest;
+  readonly query: ClearWorkspaceSshUserQuery;
 }) => {
   return Effect.gen(function* () {
-    yield* requireScopedWorkspace(input.workspaceId, input.payload.ownerUserId);
-    if (input.payload.user !== null) {
-      yield* refuseSshUserName(input.payload.user);
-    }
+    yield* requireScopedWorkspace(input.workspaceId, input.query.ownerUserId);
     const workspace = yield* withInternalError(
-      (yield* WorkspaceRepo).setWorkspaceSshUser({
-        id: input.workspaceId,
-        sshUser: input.payload.user,
-      }),
-      "Failed to set the workspace's SSH user.",
+      (yield* WorkspaceRepo).setWorkspaceSshUser({ id: input.workspaceId, sshUser: null }),
+      "Failed to clear the workspace's SSH user.",
     );
     if (workspace === null) {
       return yield* new WorkspaceNotFoundError({
         message: `Workspace not found: ${input.workspaceId}`,
       });
     }
-    return {
-      workspaceId: workspace.id,
-      sshUser: workspace.sshUser,
-    } satisfies SetWorkspaceSshUserResponse;
+    return { workspaceId: workspace.id, sshUser: null } satisfies ClearWorkspaceSshUserResponse;
   });
 };
 
@@ -2439,7 +2443,7 @@ export const getWorkspaceSshTarget = (input: {
         status: runtimeInstance.status,
         endpoint: runtimeInstance.endpoint,
       },
-      ...(workspace.sshUser === null ? {} : { user: workspace.sshUser }),
+      sessionUser: workspace.sshUser,
     } satisfies WorkspaceSshTarget;
   });
 };
