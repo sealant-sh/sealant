@@ -1,3 +1,5 @@
+import { inspect } from "node:util";
+
 /**
  * No credential the API receives or sends reaches a span, a log line or an error report. Each case
  * is served as the API serves it (the router with its request tracer and request logger), with a
@@ -23,7 +25,14 @@ import {
 import { TelemetryQuery } from "@sealant/telemetry";
 import { SealantRuntime } from "@sealant/workspaces";
 import { Cause, Effect, ErrorReporter, Exit, Layer, Logger, Tracer } from "effect";
-import { FetchHttpClient, HttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpRouter,
+  HttpServer,
+  HttpServerError,
+  HttpServerRequest,
+} from "effect/unstable/http";
 import { type HttpApi, HttpApiBuilder, type HttpApiGroup } from "effect/unstable/httpapi";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
@@ -122,6 +131,31 @@ beforeAll(async () => {
   ) as unknown as Layer.Layer<never>;
 });
 
+/**
+ * A cause as every way an observer might render it: pretty, and its failures serialised and
+ * inspected (a structured exporter keeps the objects, not the text).
+ */
+const structured = (cause: Cause.Cause<unknown>): string =>
+  [
+    Cause.pretty(cause),
+    ...cause.reasons.flatMap((reason) => {
+      const value = Cause.isFailReason(reason)
+        ? reason.error
+        : Cause.isDieReason(reason)
+          ? reason.defect
+          : undefined;
+      return [safeJson(value), inspect(value, { depth: 12, getters: true })];
+    }),
+  ].join("\n");
+
+const safeJson = (value: unknown): string => {
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch (error) {
+    return String(error);
+  }
+};
+
 /** The process's observers, each recording what it is given as text lines. */
 const observers = (redacted: boolean) => {
   const lines: string[] = [];
@@ -136,17 +170,17 @@ const observers = (redacted: boolean) => {
       };
       span.end = (endTime, exit) => {
         for (const [key, value] of span.attributes) lines.push(`span ${key}=${String(value)}`);
-        if (Exit.isFailure(exit)) lines.push(`span failure ${Cause.pretty(exit.cause)}`);
+        if (Exit.isFailure(exit)) lines.push(`span failure ${structured(exit.cause)}`);
         end(endTime, exit);
       };
       return span;
     },
   });
   const logger = Logger.make((options) => {
-    lines.push(`log ${JSON.stringify(options.message)} ${Cause.pretty(options.cause)}`);
+    lines.push(`log ${inspect(options.message, { depth: 12 })} ${structured(options.cause)}`);
   });
   const reporter = ErrorReporter.make(({ cause }) => {
-    lines.push(`report ${Cause.pretty(cause)}`);
+    lines.push(`report ${structured(cause)}`);
   });
   const recording = Layer.mergeAll(
     Layer.succeed(Tracer.Tracer, tracer),
@@ -304,5 +338,144 @@ describe("redactCredentialsInText", () => {
     expect(
       redaction.redactCredentialsInText("git clone https://x-access-token:ghs_1@github.com/a/b"),
     ).toBe("git clone https://REDACTED:REDACTED@github.com/a/b");
+  });
+});
+
+/** Adversarial texts of about `bytes`: dotted, scheme-like, query-like, auth-like. */
+const shapes = (bytes: number) => [
+  `/${"a.".repeat(bytes / 2)}`,
+  `/${"a.a://".repeat(bytes / 6)}`,
+  `${"http://a".repeat(bytes / 8)}`,
+  `?${"a&".repeat(bytes / 2)}`,
+  `?${"a".repeat(bytes)}`,
+  `${"bearer ".repeat(bytes / 7)}`,
+];
+
+/** How long one `redactCredentialsInText` call takes, in milliseconds. */
+const time = (text: string) => {
+  const start = performance.now();
+  redaction.redactCredentialsInText(text);
+  return performance.now() - start;
+};
+
+describe("redactValue", () => {
+  const SECRET = "review347-r5-secret-marker";
+  const leaks = (value: unknown) =>
+    [safeJson(value), inspect(value, { depth: 20, getters: true }), String(value)].some((text) =>
+      text.includes(SECRET),
+    );
+
+  it("gives an HTTP error's request as plain, redacted data, never the live request", async () => {
+    const serverError = new HttpServerError.HttpServerError({
+      reason: new HttpServerError.RequestParseError({
+        request: HttpServerRequest.fromWeb(
+          new Request(`http://localhost/v1/sessions/s/attach?ownerUserId=u&token=${SECRET}`, {
+            headers: { authorization: `Bearer ${SECRET}`, "x-sealant-gateway-token": SECRET },
+          }),
+        ),
+        description: "not an upgradeable ServerRequest",
+      }),
+    });
+    expect(leaks(serverError)).toBe(true);
+    const copy = redaction.redactValue(serverError);
+    expect(copy).toBeInstanceOf(HttpServerError.HttpServerError);
+    expect(leaks(copy)).toBe(false);
+    expect(safeJson(copy)).toContain("token=REDACTED");
+
+    const exit = await Effect.runPromiseExit(
+      HttpClient.get(`http://127.0.0.1:1/control?token=${SECRET}`).pipe(
+        Effect.provide(FetchHttpClient.layer),
+      ),
+    );
+    if (!Exit.isFailure(exit)) throw new Error("expected the request to fail");
+    const clientError = Cause.squash(exit.cause);
+    expect(leaks(clientError)).toBe(true);
+    expect(leaks(redaction.redactValue(clientError))).toBe(false);
+    // The effect's own error is untouched.
+    expect(leaks(clientError)).toBe(true);
+  });
+
+  it("redacts a repeated reference each time, and what lies too deep as a placeholder", () => {
+    const shared = { url: `https://example.com/x?token=${SECRET}` };
+    expect(leaks(redaction.redactValue([shared, shared, { again: shared }]))).toBe(false);
+    let deep: unknown = { url: `https://example.com/x?token=${SECRET}` };
+    for (let level = 0; level < 20; level++) deep = { level, deep };
+    expect(leaks(redaction.redactValue(deep))).toBe(false);
+    expect(safeJson(redaction.redactValue(deep))).toContain("nested too deep");
+  });
+
+  it("replaces a field whose name holds a credential, and keeps one that only mentions it", () => {
+    expect(
+      redaction.redactValue({
+        "x-sealant-gateway-token": SECRET,
+        accessToken: SECRET,
+        client_secret: SECRET,
+        tokenCount: 3,
+        sessionId: "sess_1",
+      }),
+    ).toEqual({
+      "x-sealant-gateway-token": "REDACTED",
+      accessToken: "REDACTED",
+      client_secret: "REDACTED",
+      tokenCount: 3,
+      sessionId: "sess_1",
+    });
+  });
+});
+
+describe("redactCredentialsInText", () => {
+  it("replaces a bearer or basic credential in any case", () => {
+    for (const scheme of ["Bearer", "bearer", "BEARER", "Basic", "basic"]) {
+      expect(redaction.redactCredentialsInText(`authorization: ${scheme} slt_a.b/c+d=`)).toBe(
+        `authorization: ${scheme} REDACTED`,
+      );
+    }
+  });
+
+  it("costs linear time on adversarial text", () => {
+    // Quadratic matching took 16-97 ms at 8 KiB and would take minutes at 1 MiB.
+    for (const text of shapes(8 * 1024)) expect(time(text)).toBeLessThan(25);
+    for (const text of shapes(1024 * 1024)) expect(time(text)).toBeLessThan(1000);
+  });
+});
+
+describe("redactCause", () => {
+  it("keeps a reason's trace annotations", async () => {
+    const exit = await Effect.runPromiseExit(
+      Effect.fail(new Error(`GET https://example.com/x?token=${MARKER}`)).pipe(
+        Effect.withSpan("Review.probe"),
+      ),
+    );
+    if (!Exit.isFailure(exit)) throw new Error("expected a failure");
+    const redacted = redaction.redactCause(exit.cause);
+    expect(Cause.pretty(redacted)).not.toContain(MARKER);
+    expect(Cause.pretty(redacted)).toContain("Review.probe");
+    expect(redacted.reasons[0]?.annotations.size).toBe(exit.cause.reasons[0]?.annotations.size);
+  });
+});
+
+describe("a reporter beneath the redaction", () => {
+  it("gets one report per report, however many sensitive failures it holds", async () => {
+    const run = async (redacted: boolean) => {
+      const reports: string[] = [];
+      const recorder = ErrorReporter.make(({ error }) => {
+        reports.push(error.message);
+      });
+      const reporters = redacted ? [redaction.redactingReporter(recorder)] : [recorder];
+      await Effect.runPromiseExit(
+        Effect.failCause(
+          Cause.combine(
+            Cause.fail(new Error(`first https://a.example/?token=${MARKER}`)),
+            Cause.fail(new Error(`second https://b.example/?token=${MARKER}`)),
+          ),
+        ).pipe(Effect.withErrorReporting, Effect.provide(ErrorReporter.layer(reporters))),
+      );
+      return reports;
+    };
+    const plain = await run(false);
+    const redacted = await run(true);
+    expect(plain).toHaveLength(2);
+    expect(redacted).toHaveLength(plain.length);
+    expect(redacted.join("\n")).not.toContain(MARKER);
   });
 });

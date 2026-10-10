@@ -19,11 +19,29 @@
  * - the error reporters: every cause;
  * - the redacted header names: Effect's defaults and every credential header.
  *
- * The request itself is untouched: a route still reads `?token=` to authenticate. Install an
- * exporter's tracer, logger or reporter beneath this layer, so its output passes through it.
+ * What they are given is data they may keep: an HTTP request or response inside an error becomes a
+ * plain snapshot (method, redacted URL, redacted headers), never the live object; errors and plain
+ * objects are copied field by field, a credential-named field (`x-sealant-gateway-token`,
+ * `accessToken`) replaced outright; a repeated reference is redacted every time; what lies deeper
+ * than the traversal follows becomes a placeholder; and a reason keeps its trace annotations. If
+ * redaction itself fails, an observer gets a placeholder, never the original.
+ *
+ * The request itself, and the error the effect handles, are untouched: a route still reads
+ * `?token=` to authenticate. Install an exporter's tracer, logger or reporter beneath this layer, so
+ * its output passes through it.
+ *
+ * Not covered: a fiber's log annotations and log-span labels (a logger reads them from the fiber),
+ * a span's name and links. No Core code puts a credential there; keep it that way.
  */
-import { Cause, Effect, ErrorReporter, Exit, Layer, Logger, Tracer } from "effect";
-import { Headers } from "effect/unstable/http";
+import { Cause, Context, Effect, ErrorReporter, Exit, Layer, Logger, Tracer } from "effect";
+import {
+  Headers,
+  HttpClientRequest,
+  HttpClientResponse,
+  HttpServerRequest,
+  HttpServerResponse,
+  UrlParams,
+} from "effect/unstable/http";
 
 const REDACTED = "REDACTED";
 
@@ -48,12 +66,20 @@ export const CREDENTIAL_QUERY_PARAMETERS: ReadonlySet<string> = new Set([
   "x-amz-security-token",
 ]);
 
+/** A name, delimited (`x-sealant-gateway-token`, `api_key`), that ends in a credential word. */
+const DELIMITED_CREDENTIAL_NAME =
+  /(?:^|[-_.\s])(?:token|secret|password|passwd|api[-_]?key|apikey|signature|credentials?|authorization|cookie)$/i;
+/** A camel-case name (`gatewayToken`, `clientSecret`) that ends in a credential word. */
+const CAMEL_CREDENTIAL_NAME =
+  /[a-z0-9](?:Token|Secret|Password|Passwd|ApiKey|Signature|Credentials?|Authorization|Cookie)$/;
+
 /**
- * Header names whose values are credentials: the standard ones and any name that says it holds a
- * token, a key, a secret, a password, a signature or a credential (`x-sealant-gateway-token`).
+ * Whether a header or field name holds a credential: `authorization`, `proxy-authorization`,
+ * `cookie`, `set-cookie`, `x-api-key`, `x-sealant-gateway-token`, `accessToken`, `client_secret`. A
+ * name that only mentions one (`x-token-usage`, `tokenCount`, `sessionId`) is not.
  */
-export const CREDENTIAL_HEADER =
-  /^(?:authorization|proxy-authorization|cookie|set-cookie)$|token|secret|password|passwd|api[-_]?key|signature|credential|session/i;
+export const isCredentialName = (name: string): boolean =>
+  DELIMITED_CREDENTIAL_NAME.test(name) || CAMEL_CREDENTIAL_NAME.test(name);
 
 const isCredentialParameter = (rawName: string): boolean => {
   let name = rawName;
@@ -77,7 +103,7 @@ export const redactQueryCredentials = (query: string): string =>
     })
     .join("&");
 
-/** A full URL with its query credentials and userinfo replaced; anything else as it is. */
+/** A full URL with its query credentials and userinfo replaced; other text through the text rules. */
 export const redactUrlCredentials = (value: string): string => {
   let url: URL;
   try {
@@ -95,118 +121,276 @@ export const redactUrlCredentials = (value: string): string => {
   return url.toString();
 };
 
-const USERINFO = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@]+@/gi;
+const SCHEME_CHAR = /[a-z0-9+.-]/i;
+const AUTHORITY_END = /[\s/?#]/;
+
+/**
+ * `scheme://user:password@host` with the userinfo replaced, in one pass: each `://` is found once,
+ * its scheme read backwards and its authority forwards, so dotted or long text costs linear time.
+ */
+const redactUserinfo = (text: string): string => {
+  let out = "";
+  let copied = 0;
+  let from = 0;
+  for (;;) {
+    const separator = text.indexOf("://", from);
+    if (separator === -1) break;
+    let schemeStart = separator;
+    while (schemeStart > 0 && SCHEME_CHAR.test(text.charAt(schemeStart - 1))) schemeStart -= 1;
+    const authorityStart = separator + 3;
+    let at = -1;
+    let end = authorityStart;
+    while (end < text.length && !AUTHORITY_END.test(text.charAt(end))) {
+      if (text.charAt(end) === "@") at = end;
+      end += 1;
+    }
+    if (
+      schemeStart < separator &&
+      /^[a-z]/i.test(text.charAt(schemeStart)) &&
+      at > authorityStart
+    ) {
+      out += `${text.slice(copied, authorityStart)}${REDACTED}:${REDACTED}`;
+      copied = at;
+    }
+    from = Math.max(end, authorityStart);
+  }
+  return copied === 0 ? text : out + text.slice(copied);
+};
+
 const QUERY_PAIR = /([?&;])([^=&\s#?;]+)=([^&\s#;"'<>)]*)/g;
-const AUTH_SCHEME = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/g;
+/** An `Authorization`-style credential, in any case, as the API's bearer parsing accepts it. */
+const AUTH_SCHEME = /\b(bearer|basic)[ \t]+[^\s"',;)]+/gi;
 
 /**
  * Free text (an error message, a stack, a log line) with every credential it can recognise
  * replaced: a URL's userinfo, a credential query parameter wherever a query appears, and a
- * `Bearer` or `Basic` credential.
+ * `Bearer` or `Basic` credential in any case. Linear in the text's length.
  */
 export const redactCredentialsInText = (text: string): string =>
-  text
-    .replace(USERINFO, `$1${REDACTED}:${REDACTED}@`)
+  redactUserinfo(text)
     .replace(QUERY_PAIR, (pair: string, separator: string, name: string) =>
       isCredentialParameter(name) ? `${separator}${name}=${REDACTED}` : pair,
     )
-    .replace(AUTH_SCHEME, `$1 ${REDACTED}`);
+    .replace(AUTH_SCHEME, (_match: string, scheme: string) => `${scheme} ${REDACTED}`);
 
-const MAX_DEPTH = 4;
+/** How deep a value is followed; what lies deeper reads as this placeholder, never itself. */
+const MAX_DEPTH = 6;
+const TOO_DEEP = "[redacted: nested too deep]";
 
 const isPlainObject = (value: object): value is Record<string, unknown> => {
   const prototype: unknown = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 };
 
-/**
- * An error with its message, stack, cause and own fields redacted. A copy with the same prototype,
- * so its name, `_tag` and `instanceof` stay; its message is an own value, which also shadows a
- * message the prototype computes from the request (as Effect's HTTP errors do).
- */
-const redactError = (error: Error, seen: WeakSet<object>, depth: number): Error => {
-  const fields = new Map<PropertyKey, unknown>();
-  for (const key of Reflect.ownKeys(error)) {
-    const descriptor = Reflect.getOwnPropertyDescriptor(error, key);
-    if (descriptor === undefined || !("value" in descriptor)) continue;
-    const redacted = redactValue(descriptor.value, seen, depth + 1);
-    if (redacted !== descriptor.value) fields.set(key, redacted);
+const readField = (value: object, key: string): unknown => Reflect.get(value, key);
+
+/** Headers as plain data, credential headers replaced. */
+const headersSnapshot = (headers: unknown): Record<string, string> => {
+  const out: Record<string, string> = {};
+  if (typeof headers !== "object" || headers === null) return out;
+  for (const [name, value] of Object.entries(headers)) {
+    if (typeof value !== "string") continue;
+    out[name] = isCredentialName(name) ? REDACTED : redactCredentialsInText(value);
   }
-  const message = redactCredentialsInText(error.message);
-  const stack = error.stack === undefined ? undefined : redactCredentialsInText(error.stack);
-  if (fields.size === 0 && message === error.message && stack === error.stack) return error;
-  const copy: Error = Object.create(Object.getPrototypeOf(error));
-  for (const key of Reflect.ownKeys(error)) {
-    const descriptor = Reflect.getOwnPropertyDescriptor(error, key);
-    if (descriptor !== undefined) Reflect.defineProperty(copy, key, descriptor);
-  }
-  for (const [key, value] of fields) {
-    Reflect.defineProperty(copy, key, { value, writable: true, configurable: true });
-  }
-  Reflect.defineProperty(copy, "message", { value: message, writable: true, configurable: true });
-  if (stack !== undefined) {
-    Reflect.defineProperty(copy, "stack", { value: stack, writable: true, configurable: true });
-  }
-  return copy;
+  return out;
 };
 
-/** `value` with every credential in its text redacted; the same value when it held none. */
-export const redactValue = (
-  value: unknown,
-  seen: WeakSet<object> = new WeakSet(),
-  depth = 0,
-): unknown => {
+/**
+ * An HTTP request or response as plain data an observer may keep: method, URL (credentials
+ * replaced) and headers (credential headers replaced), never the live object, whose URL, headers
+ * and body still hold what the request carried.
+ */
+const httpSnapshot = (value: object): Record<string, unknown> | undefined => {
+  if (HttpClientRequest.isHttpClientRequest(value)) {
+    const query = UrlParams.toString(value.urlParams);
+    return {
+      method: value.method,
+      url: redactUrlCredentials(query === "" ? value.url : `${value.url}?${query}`),
+      headers: headersSnapshot(value.headers),
+    };
+  }
+  if (HttpServerRequest.TypeId in value) {
+    const url = readField(value, "url");
+    return {
+      method: readField(value, "method"),
+      url: typeof url === "string" ? redactUrlCredentials(url) : undefined,
+      headers: headersSnapshot(readField(value, "headers")),
+    };
+  }
+  if (HttpClientResponse.TypeId in value || HttpServerResponse.isHttpServerResponse(value)) {
+    const request = readField(value, "request");
+    return {
+      status: readField(value, "status"),
+      headers: headersSnapshot(readField(value, "headers")),
+      ...(typeof request === "object" && request !== null
+        ? { request: httpSnapshot(request) }
+        : {}),
+    };
+  }
+  return undefined;
+};
+
+/**
+ * Errors seen before, with their redacted copies: the same error always yields the same copy, so a
+ * reporter that skips what it has already reported still recognises it.
+ */
+const redactedErrors = new WeakMap<object, unknown>();
+
+interface Traversal {
+  /** Values already redacted in this traversal: a repeated reference gets the same copy. */
+  readonly done: Map<object, unknown>;
+}
+
+const redactInto = (value: unknown, traversal: Traversal, depth: number): unknown => {
   if (typeof value === "string") return redactCredentialsInText(value);
-  if (typeof value !== "object" || value === null || depth > MAX_DEPTH || seen.has(value)) {
-    return value;
+  if (typeof value !== "object" || value === null) return value;
+  const known = traversal.done.get(value) ?? redactedErrors.get(value);
+  if (known !== undefined) return known;
+  if (depth > MAX_DEPTH) return TOO_DEEP;
+
+  const snapshot = httpSnapshot(value);
+  if (snapshot !== undefined) {
+    traversal.done.set(value, snapshot);
+    return snapshot;
   }
-  seen.add(value);
-  if (value instanceof Error) return redactError(value, seen, depth);
   if (Array.isArray(value)) {
-    const items = value.map((item) => redactValue(item, seen, depth + 1));
-    return items.some((item, index) => item !== value[index]) ? items : value;
+    const items: unknown[] = [];
+    traversal.done.set(value, items);
+    for (const item of value) items.push(redactInto(item, traversal, depth + 1));
+    if (items.every((item, index) => item === value[index])) {
+      traversal.done.set(value, value);
+      return value;
+    }
+    return items;
   }
-  if (isPlainObject(value)) {
-    const entries = Object.entries(value).map(
-      ([key, item]) => [key, redactValue(item, seen, depth + 1)] as const,
-    );
-    return entries.some(([key, item]) => item !== value[key]) ? Object.fromEntries(entries) : value;
-  }
+  if (isPlainObject(value) || value instanceof Error) return redactObject(value, traversal, depth);
+  // Another class instance (a date, a map, a span, a stream): kept as it is.
   return value;
 };
 
-/** `cause` with every failure and defect redacted; the same cause when it held no credential. */
+/**
+ * A plain object or an error with every field redacted: a field whose name holds a credential is
+ * replaced outright. An error stays an error with its prototype (its name, `_tag` and
+ * `instanceof`); its message and stack are own values, which shadow a message the prototype
+ * computes from the request it holds (as Effect's HTTP errors do). The original is never changed.
+ */
+const redactObject = (value: object, traversal: Traversal, depth: number): unknown => {
+  const copy: Record<PropertyKey, unknown> = Object.create(Object.getPrototypeOf(value));
+  traversal.done.set(value, copy);
+  let changed = false;
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined) continue;
+    if (!("value" in descriptor)) {
+      Reflect.defineProperty(copy, key, descriptor);
+      continue;
+    }
+    const field: unknown = descriptor.value;
+    const redacted =
+      typeof key === "string" && isCredentialName(key) && field !== undefined && field !== null
+        ? REDACTED
+        : redactInto(field, traversal, depth + 1);
+    if (redacted !== field) changed = true;
+    Reflect.defineProperty(copy, key, { ...descriptor, value: redacted });
+  }
+  if (value instanceof Error) {
+    const message = redactCredentialsInText(value.message);
+    const stack = value.stack === undefined ? undefined : redactCredentialsInText(value.stack);
+    // A message the prototype computes (an HTTP error's) is read from the original, never kept.
+    if (message !== value.message || !Object.hasOwn(value, "message")) changed = true;
+    Reflect.defineProperty(copy, "message", { value: message, writable: true, configurable: true });
+    if (stack !== undefined) {
+      if (stack !== value.stack) changed = true;
+      Reflect.defineProperty(copy, "stack", { value: stack, writable: true, configurable: true });
+    }
+  }
+  if (!changed) {
+    traversal.done.set(value, value);
+    return value;
+  }
+  if (value instanceof Error) redactedErrors.set(value, copy);
+  return copy;
+};
+
+/**
+ * `value` with every credential redacted, as data an observer may keep: strings through
+ * `redactCredentialsInText`, HTTP requests and responses as plain snapshots, errors and plain
+ * objects copied field by field, credential-named fields replaced, what lies too deep replaced by a
+ * placeholder. The same value when it held none of these.
+ */
+export const redactValue = (value: unknown): unknown => redactInto(value, { done: new Map() }, 0);
+
+/** A reason's annotations (its trace and logical stack), each redacted as a value. */
+const redactAnnotations = (annotations: ReadonlyMap<string, unknown>): Context.Context<never> =>
+  Context.makeUnsafe(
+    new Map([...annotations].map(([key, value]) => [key, redactValue(value)] as const)),
+  );
+
+const redactedCauses = new WeakMap<Cause.Cause<unknown>, Cause.Cause<unknown>>();
+
+/**
+ * `cause` with every failure and defect redacted, each reason keeping its (redacted) annotations,
+ * so the trace and logical stack an observer prints stay. The same cause when it held no
+ * credential, and the same copy each time it is redacted again.
+ */
 export const redactCause = <E>(cause: Cause.Cause<E>): Cause.Cause<unknown> => {
+  const known = redactedCauses.get(cause);
+  if (known !== undefined) return known;
   let changed = false;
   const reasons = cause.reasons.map((reason): Cause.Reason<unknown> => {
     if (Cause.isFailReason(reason)) {
       const error = redactValue(reason.error);
       if (error === reason.error) return reason;
       changed = true;
-      return Cause.makeFailReason(error);
+      return Cause.makeFailReason(error).annotate(redactAnnotations(reason.annotations));
     }
     if (Cause.isDieReason(reason)) {
       const defect = redactValue(reason.defect);
       if (defect === reason.defect) return reason;
       changed = true;
-      return Cause.makeDieReason(defect);
+      return Cause.makeDieReason(defect).annotate(redactAnnotations(reason.annotations));
     }
     return reason;
   });
-  return changed ? Cause.fromReasons(reasons) : cause;
+  const redacted = changed ? Cause.fromReasons(reasons) : cause;
+  redactedCauses.set(cause, redacted);
+  return redacted;
 };
+
+const REDACTION_FAILED = "[redacted: the redaction itself failed]";
+
+/**
+ * `redact(value)`, or a placeholder when redaction throws: an observer then gets the placeholder,
+ * never the unredacted value, and the observed effect is never failed by its observer.
+ */
+const safely =
+  <A, B>(redact: (value: A) => B, fallback: B) =>
+  (value: A): B => {
+    try {
+      return redact(value);
+    } catch {
+      return fallback;
+    }
+  };
+
+const observedValue = safely(redactValue, REDACTION_FAILED);
+const observedCause = safely(
+  (cause: Cause.Cause<unknown>) => redactCause(cause),
+  Cause.die(REDACTION_FAILED),
+);
+const observedText = safely(redactCredentialsInText, REDACTION_FAILED);
 
 const HEADER_ATTRIBUTE = /^http\.(?:request|response)\.header\.(.+)$/;
 const URL_ATTRIBUTES: ReadonlySet<string> = new Set(["url.full", "http.url"]);
 
 const redactAttribute = (key: string, value: unknown): unknown => {
   const header = HEADER_ATTRIBUTE.exec(key);
-  if (header?.[1] !== undefined && CREDENTIAL_HEADER.test(header[1])) return REDACTED;
+  if (header?.[1] !== undefined && isCredentialName(header[1])) return REDACTED;
   if (typeof value === "string") {
-    if (URL_ATTRIBUTES.has(key)) return redactUrlCredentials(value);
-    if (key === "url.query") return redactQueryCredentials(value);
+    if (URL_ATTRIBUTES.has(key)) return safely(redactUrlCredentials, REDACTION_FAILED)(value);
+    if (key === "url.query") return safely(redactQueryCredentials, REDACTION_FAILED)(value);
   }
-  return redactValue(value);
+  return observedValue(value);
 };
 
 const redactAttributes = (
@@ -229,9 +413,9 @@ export const redactingTracer = (tracer: Tracer.Tracer): Tracer.Tracer =>
       const end = span.end.bind(span);
       span.attribute = (key, value) => attribute(key, redactAttribute(key, value));
       span.event = (name, startTime, attributes) =>
-        event(redactCredentialsInText(name), startTime, redactAttributes(attributes));
+        event(observedText(name), startTime, redactAttributes(attributes));
       span.end = (endTime, exit) =>
-        end(endTime, Exit.isFailure(exit) ? Exit.failCause(redactCause(exit.cause)) : exit);
+        end(endTime, Exit.isFailure(exit) ? Exit.failCause(observedCause(exit.cause)) : exit);
       return span;
     },
   });
@@ -243,18 +427,22 @@ export const redactingLogger = <Output>(
   Logger.make((options) =>
     logger.log({
       ...options,
-      message: redactValue(options.message),
-      cause: redactCause(options.cause),
+      message: observedValue(options.message),
+      cause: observedCause(options.cause),
     }),
   );
 
-/** `reporter`, given every cause redacted. */
+/**
+ * `reporter`, given each report's cause redacted: one report in, one report out, and the same
+ * error redacts to the same copy each time, so the reporter's own skipping of what it has already
+ * reported still holds.
+ */
 export const redactingReporter = (
   reporter: ErrorReporter.ErrorReporter,
-): ErrorReporter.ErrorReporter =>
-  ErrorReporter.make(({ cause, fiber, timestamp }) =>
-    reporter.report({ cause: redactCause(cause), fiber, timestamp }),
-  );
+): ErrorReporter.ErrorReporter => ({
+  [ErrorReporter.TypeId]: ErrorReporter.TypeId,
+  report: (options) => reporter.report({ ...options, cause: observedCause(options.cause) }),
+});
 
 /** Every observer in place, wrapped as the module comment says. */
 export const CredentialRedactionLive: Layer.Layer<never> = Layer.mergeAll(
@@ -277,7 +465,8 @@ export const CredentialRedactionLive: Layer.Layer<never> = Layer.mergeAll(
     Headers.CurrentRedactedNames,
     Effect.map(Effect.service(Headers.CurrentRedactedNames), (names) => [
       ...names,
-      CREDENTIAL_HEADER,
+      DELIMITED_CREDENTIAL_NAME,
+      CAMEL_CREDENTIAL_NAME,
     ]),
   ),
 );
