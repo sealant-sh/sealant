@@ -49,9 +49,24 @@ export class TelemetrySinkUnexpectedError extends Schema.TaggedErrorClass<Teleme
   { operation: telemetrySinkOperation, message: Schema.String, cause: Schema.Defect() },
 ) {}
 
+/**
+ * An append carried an event that is not the event the log holds at its id or position (other
+ * content, or a run-tagged event stored under another run). The log keeps what it has; the append
+ * fails, so no writer takes the event as recorded.
+ */
+export class TelemetrySinkConflictError extends Schema.TaggedErrorClass<TelemetrySinkConflictError>()(
+  "TelemetrySinkConflictError",
+  {
+    operation: telemetrySinkOperation,
+    message: Schema.String,
+    eventIds: Schema.Array(Schema.String),
+  },
+) {}
+
 export const telemetrySinkErrorSchema = Schema.Union([
   TelemetrySinkInvariantError,
   TelemetrySinkUnexpectedError,
+  TelemetrySinkConflictError,
 ]);
 export type TelemetrySinkError = typeof telemetrySinkErrorSchema.Type;
 
@@ -62,7 +77,8 @@ export const mapTelemetrySinkError = (
   const unwrapped = unwrapEffectCause(cause);
   if (
     unwrapped instanceof TelemetrySinkInvariantError ||
-    unwrapped instanceof TelemetrySinkUnexpectedError
+    unwrapped instanceof TelemetrySinkUnexpectedError ||
+    unwrapped instanceof TelemetrySinkConflictError
   ) {
     return unwrapped;
   }

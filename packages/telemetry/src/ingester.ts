@@ -25,7 +25,11 @@ import {
   ExecutionRunResolver,
   type ExecutionRunResolverService,
 } from "./attribution.js";
-import { type TelemetryIngesterError, withTelemetryIngesterError } from "./errors.js";
+import {
+  TelemetrySinkConflictError,
+  type TelemetryIngesterError,
+  withTelemetryIngesterError,
+} from "./errors.js";
 import { detectGap, normalizeEnvelope } from "./normalize.js";
 import { applyOutputBudget, makeOutputBudgetState } from "./output-budget.js";
 import { TelemetrySink, type TelemetrySinkService } from "./sink.js";
@@ -135,12 +139,18 @@ export const makeTelemetryIngester = (
               }
               const normalized = budgeted.batch;
               const resolutions = yield* resolveAttributions(collectExecutionIds(normalized));
+              // A conflict is the log's answer, not a fault to retry: the sink has stored the rest
+              // of the batch and logged it, and one event must not end the runtime's recording.
               return yield* sink
                 .appendBatch({ runId, runtimeId, batch: attributeBatch(normalized, resolutions) })
                 .pipe(
-                  Effect.retry(
-                    Schedule.exponential("100 millis").pipe(Schedule.both(Schedule.recurs(5))),
-                  ),
+                  Effect.retry({
+                    schedule: Schedule.exponential("100 millis").pipe(
+                      Schedule.both(Schedule.recurs(5)),
+                    ),
+                    while: (error) => !(error instanceof TelemetrySinkConflictError),
+                  }),
+                  Effect.catchTag("TelemetrySinkConflictError", () => Effect.succeed([])),
                 );
             }),
           ),

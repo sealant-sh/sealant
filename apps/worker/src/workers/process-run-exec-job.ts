@@ -31,6 +31,7 @@ import {
   normalizeEnvelope,
   PostgresTelemetrySinkLive,
   TelemetrySink,
+  TelemetrySinkConflictError,
 } from "@sealant/telemetry";
 import {
   buildDotfilesCleanupScript,
@@ -295,12 +296,30 @@ const captureChanges = (runId: string, target: SealantTarget) =>
     return { diff, changedFiles: parseNameStatus(nameStatus) };
   });
 
+/**
+ * The run's record could not take one of its events: the log holds a different event at its id or
+ * position. Its output is not all recorded, so the run fails, saying why.
+ */
+const recordConflictMessage = (error: TelemetrySinkConflictError) =>
+  `The run's record could not take its events: ${error.message}.`;
+
 /** HARNESS framing: one command; a nonzero exit marks the run failed. */
 const produceHarnessRun = (runId: string, target: SealantTarget, command: RunExecCommand) =>
   Effect.gen(function* () {
     const runs = yield* RunRepo;
-    const exitCode = yield* captureRun(runId, target, command);
+    const captured = yield* captureRun(runId, target, command).pipe(
+      Effect.catchTag("TelemetrySinkConflictError", Effect.succeed),
+    );
     const changes = yield* captureChanges(runId, target);
+    if (typeof captured !== "number") {
+      yield* runs.markRunFailed({
+        id: runId,
+        errorMessage: recordConflictMessage(captured),
+        ...changes,
+      });
+      return;
+    }
+    const exitCode = captured;
     yield* exitCode === 0
       ? runs.markRunCompleted({ id: runId, exitCode: 0, ...changes })
       : runs.markRunFailed({ id: runId, exitCode, ...changes });
@@ -326,6 +345,18 @@ export const produceExecRun = (
       const captured = yield* captureRun(runId, target, command, user).pipe(
         Effect.catchTag("ProcessUserUnavailableError", (error) =>
           runs.markRunFailed({ id: runId, errorMessage: error.message }).pipe(Effect.as(undefined)),
+        ),
+        // The commands after it do not run; what the ones before it changed is still the run's.
+        Effect.catchTag("TelemetrySinkConflictError", (error) =>
+          Effect.gen(function* () {
+            const changes = yield* captureChanges(runId, target);
+            yield* runs.markRunFailed({
+              id: runId,
+              errorMessage: `Command ${index + 1}/${commands.length} (${command.executable}): ${recordConflictMessage(error)} Check run aborted.`,
+              ...changes,
+            });
+            return undefined;
+          }),
         ),
       );
       if (captured === undefined) return;
@@ -496,9 +527,16 @@ export const produceDotfilesRun = (
         return;
       }
       if (exitCode === undefined) {
+        const conflict =
+          Result.isFailure(drained) && drained.failure instanceof TelemetrySinkConflictError
+            ? drained.failure
+            : undefined;
         yield* runs.markRunFailed({
           id: runId,
-          errorMessage: `The dotfiles were applied as ${dotfiles.user}; their bootstrap's exit was not observed (the connection to the workspace closed).`,
+          errorMessage:
+            conflict === undefined
+              ? `The dotfiles were applied as ${dotfiles.user}; their bootstrap's exit was not observed (the connection to the workspace closed).`
+              : `The dotfiles were applied as ${dotfiles.user}; ${recordConflictMessage(conflict)}`,
         });
         return;
       }
