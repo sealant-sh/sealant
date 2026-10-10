@@ -71,6 +71,7 @@ write them for you.
 | `SEALANT_DOCKER_WORKSPACE_NETWORK`         | unset                                  | Name of an existing Docker network every workspace container joins, so sibling Compose services resolve by name from inside a workspace. Never created by the worker.     |
 | `SEALANT_DOCKER_REGISTRY_MIRRORS`          | unset                                  | Comma-separated `http(s)://host[:port]` origins every workspace Docker daemon asks first for a Docker Hub image; it falls back to Docker Hub when one fails. Worker only. |
 | `SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER` | unset                                  | Container on this Docker host serving those mirrors: joined to each workspace's Docker service network under the mirrors' host names. Worker only.                        |
+| `SEALANT_DOCKER_NETWORK_GUARD_IMAGE`       | pinned `busybox:1.37`                  | Image the worker runs for a moment in each workspace's network namespace to refuse the cloud metadata address. Needs a shell and `ip`. Worker only.                       |
 | `SEALANT_CREDENTIALS_KEY`                  | unset                                  | Base64-encoded 32-byte key shared by API and worker for connected-account credentials.                                                                                    |
 
 For example, to let a local workbench mount worktrees stored below `~/.mend/store`, add the expanded
@@ -208,6 +209,45 @@ Leave it unset when the mirrors are reachable from that network some other way, 
 
 On Kubernetes the daemon shares the Pod's network, so a cluster Service name works directly, subject
 to the namespace's egress policy. MicroVM workspaces do not read the variable.
+
+### The cloud metadata address
+
+On a cloud host, 169.254.169.254 (and fd00:ec2::254 over IPv6 on AWS) hands out the instance's own
+credentials to whoever asks. On the Docker runtime a workspace is refused that address by default: a
+connection to it fails at once (`Permission denied` from the workspace, `Connection refused` from a
+container its Docker service runs), never after a timeout. Every other address is untouched, so
+registry and package mirrors, the object store, the control plane and anything on
+`SEALANT_DOCKER_WORKSPACE_NETWORK` stay reachable.
+
+The worker runs `SEALANT_DOCKER_NETWORK_GUARD_IMAGE` for a moment with `NET_ADMIN` in the
+workspace's network namespace, and in its Docker service's, to add a `prohibit` route to each
+address. It runs as the container starts, beside the readiness wait, and again on every start of a
+recovery. The route is in before the worker reports the workspace ready, so before any session
+starts in it; steps sealantd runs at boot on its own (lifecycle steps, a foreground harness) may
+start slightly earlier, while the guard is still running. A launch whose guard fails, or does not
+finish within 60 seconds, fails with the image's name and this variable in its error. The worker
+pulls the image when it starts and logs `Cloud metadata guard image unavailable` when it cannot, so
+point the variable at a mirrored copy where the Docker host cannot pull from Docker Hub.
+
+The workspace itself never holds `NET_ADMIN`, so neither its root nor any other user in it can
+delete the route. It holds no `NET_RAW` either, so root, `sudo` included, cannot open a packet
+socket to send raw frames past the route; `ping` keeps working through Docker's `ping_group_range`.
+The containers of its rootless Docker service run in a namespace below the guarded one.
+
+A workspace that genuinely needs the address opts in at creation (`network: { cloudMetadata: true }`
+in the SDK, `runtime.network.cloudMetadata` in the spec); it keeps Docker's default capabilities.
+gVisor's netstack ignores the namespace's routes, so a `runsc` workspace is refused unless it opts
+in.
+
+Not covered:
+
+- Other credential endpoints: ECS task credentials (169.254.170.2) and EKS Pod Identity
+  (169.254.170.23, fd00:ec2::23).
+- Image builds: BuildKit build steps (package installs, a custom base's `ONBUILD`) run on the Docker
+  host without the guard.
+- Workspaces already running when the worker is upgraded: they keep the address until they stop.
+- Kubernetes and MicroVM workspaces, which do not read the setting: on those runtimes the cluster's
+  egress policy or the VM's network decides.
 
 ## GitHub App variables
 

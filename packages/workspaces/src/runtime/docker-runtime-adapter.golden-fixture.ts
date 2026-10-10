@@ -93,7 +93,8 @@ export const cases = {
         workingDirectory: "/workspace/repo",
         persistence: "ephemeral",
         ociRuntime: "runsc",
-        network: { outbound: true },
+        // gVisor cannot be guarded: a runsc workspace launches only with the address reachable.
+        network: { outbound: true, cloudMetadata: true },
       },
       harness: { id: "claude-code" },
     }),

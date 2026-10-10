@@ -118,3 +118,7 @@ jobs:
       - name: Containerized launcher and real workspace volume test
         run: >-
           pnpm --filter @sealant/workspaces test:e2e src/runtime/docker-volume-mounts.e2e.ts
+
+      - name: Cloud metadata address refused from workspaces, reached when opted in
+        run: >-
+          pnpm --filter @sealant/workspaces test:e2e src/runtime/cloud-metadata.e2e.ts

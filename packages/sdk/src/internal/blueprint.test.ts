@@ -82,6 +82,23 @@ describe("buildCreateWorkspaceRequest", () => {
     expect(spec.tooling?.services?.docker).toEqual({ enabled: true });
   });
 
+  it("opts in to the cloud metadata address only when asked", () => {
+    const build = (network?: { cloudMetadata?: boolean }) =>
+      buildCreateWorkspaceRequest(
+        {
+          repository: "github.com/acme/billing-service",
+          harness: opencode(),
+          ...(network === undefined ? {} : { network }),
+        },
+        config,
+      ).payload.spec as unknown as { runtime?: { network?: unknown } };
+
+    expect(build({ cloudMetadata: true }).runtime?.network).toEqual({ cloudMetadata: true });
+    // Absent or false sends nothing: the control plane's default refuses the address.
+    expect(build().runtime?.network).toBeUndefined();
+    expect(build({ cloudMetadata: false }).runtime?.network).toBeUndefined();
+  });
+
   it("passes through full git urls and honors an explicit ref", () => {
     const { payload } = buildCreateWorkspaceRequest(
       { repository: "https://gitlab.com/x/y.git", ref: "master", harness: opencode() },

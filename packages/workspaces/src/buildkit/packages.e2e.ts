@@ -69,7 +69,7 @@ const blueprintForOs = (
     envFrom: [],
     kubernetes: {},
     ociRuntime: "runc",
-    network: { outbound: true },
+    network: { outbound: true, cloudMetadata: false },
   },
   target: {
     os: { family: osFamily, mode: "prefer" },

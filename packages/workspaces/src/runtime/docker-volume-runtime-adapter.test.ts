@@ -19,6 +19,10 @@ interface RecordingRunner {
   readonly runner: DockerCommandRunner;
 }
 
+/** The short-lived run that refuses the cloud metadata address in a container's namespace. */
+const isMetadataGuard = (args: readonly string[]): boolean =>
+  args[0] === "run" && args.includes("NET_ADMIN");
+
 const recordingRunner = (
   options: {
     readonly missingVolume?: string;
@@ -39,6 +43,7 @@ const recordingRunner = (
       if (args[2] === options.missingVolume) throw new Error(`No such volume: ${args[2]}`);
       return { stdout: "[]\n", stderr: "" };
     }
+    if (isMetadataGuard(args)) return { stdout: "", stderr: "" };
     if (args[0] === "run") {
       if (options.runError !== undefined) throw options.runError;
       return { stdout: "container-volume-1\n", stderr: "" };
@@ -80,6 +85,7 @@ const lifecycleRunner = (options: {
     if (args[0] === "network" && args[1] === "rm" && options.cleanupError !== undefined) {
       throw options.cleanupError;
     }
+    if (isMetadataGuard(args)) return { stdout: "", stderr: "" };
     if (args[0] === "run") {
       if (args.includes("--privileged")) {
         if (options.sidecarRunError !== undefined) throw options.sidecarRunError;
@@ -431,7 +437,9 @@ describe("DockerRuntimeAdapter strict named-volume mode", () => {
     ).rejects.toThrow(/Workspace clone key could not be read/);
 
     expect(
-      recording.calls.filter((args) => args[0] === "run" && !args.includes("--privileged")),
+      recording.calls.filter(
+        (args) => args[0] === "run" && !args.includes("--privileged") && !isMetadataGuard(args),
+      ),
     ).toHaveLength(0);
     expect(recording.calls).toContainEqual(["rm", "-f", "-v", "docker-service-id"]);
     expect(recording.calls).toContainEqual(["network", "rm", "created-network-id"]);

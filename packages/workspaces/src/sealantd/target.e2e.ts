@@ -142,14 +142,15 @@ describe.skipIf(!imageAvailable)(
       workspaceMount = mkdtempSync(join(tmpdir(), "sealantd-p6-"));
       mkdirSync(join(workspaceMount, ".git"));
 
-      // Wrap the REAL docker command runner; only the `run` invocation gets the `.git` mount spliced
-      // in (the adapter has no volume knob). All other docker calls pass through unmodified.
+      // Wrap the REAL docker command runner; only the workspace's detached `run` gets the `.git`
+      // mount spliced in (the adapter has no volume knob). All other docker calls, the metadata
+      // guard's foreground `run --rm` included, pass through unmodified.
       const realRunner: DockerCommandRunner = async (command, args) => {
         const result = await execFileAsync(command, args, { maxBuffer: 1024 * 1024 * 10 });
         return { stdout: result.stdout, stderr: result.stderr };
       };
       const mountingRunner: DockerCommandRunner = async (command, args) => {
-        if (args[0] !== "run") {
+        if (args[0] !== "run" || args[1] !== "-d") {
           return realRunner(command, args);
         }
         capturedRunArgs = args;
