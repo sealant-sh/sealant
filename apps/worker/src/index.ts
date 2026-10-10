@@ -1,3 +1,5 @@
+import { urlForDisplay } from "@sealant/validators/url-for-display";
+
 import { env } from "./runtime-env.js";
 import { startWorkers } from "./workers/index.js";
 
@@ -6,7 +8,8 @@ const databaseUrl = new URL(env.DATABASE_URL);
 
 console.log("Sealant worker starting", {
   workerId: env.WORKER_ID,
-  imageStore: env.REGISTRY_BASE_URL ?? "docker-engine",
+  imageStore:
+    env.REGISTRY_BASE_URL === undefined ? "docker-engine" : urlForDisplay(env.REGISTRY_BASE_URL),
   database: `${databaseUrl.protocol}//${databaseUrl.host}${databaseUrl.pathname}`,
   defaultRuntimeAdapter: env.DEFAULT_RUNTIME_ADAPTER,
   defaultSshBindHost: env.DEFAULT_SSH_BIND_HOST,

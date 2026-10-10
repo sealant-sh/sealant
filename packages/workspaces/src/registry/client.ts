@@ -9,6 +9,7 @@ import {
   OCI_REFERENCE_MESSAGE,
   OCI_REPOSITORY_MESSAGE,
 } from "@sealant/api-contracts";
+import { splitUrlUserinfo } from "@sealant/validators/url-for-display";
 
 import { selectLoadedImageIdentifier } from "./docker-load-output.js";
 
@@ -298,7 +299,15 @@ export class ZotRegistryClient implements RegistryClient {
   public constructor(config: ZotRegistryClientConfig) {
     this.requestTimeoutMs = config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.maxResponseBytes = config.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
-    this.baseUrl = new URL(config.baseUrl);
+    // A base URL's `user:password@` is the Basic credential, never part of a request's URL: `fetch`
+    // refuses such a URL and quotes it, credential included, in its error. The explicit username
+    // and password win when both are given.
+    const {
+      url: baseUrl,
+      username: urlUsername,
+      password: urlPassword,
+    } = splitUrlUserinfo(config.baseUrl);
+    this.baseUrl = baseUrl;
     this.pushRegistry = config.pushRegistry ?? this.baseUrl.host;
     this.fetchImpl = config.fetch ?? fetch;
     this.commandRunner = config.commandRunner ?? defaultCommandRunner;
@@ -307,8 +316,10 @@ export class ZotRegistryClient implements RegistryClient {
       throw new Error("Registry username and password must be provided together.");
     }
 
-    if (config.username !== undefined && config.password !== undefined) {
-      this.authorizationHeader = buildBasicAuthHeader(config.username, config.password);
+    const username = config.username ?? urlUsername;
+    const password = config.password ?? urlPassword;
+    if (username !== undefined && password !== undefined) {
+      this.authorizationHeader = buildBasicAuthHeader(username, password);
     }
   }
 

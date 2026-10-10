@@ -6,6 +6,7 @@ import { credentialCipherLayer } from "@sealant/credentials";
 import { ControlPlaneDataAccessLive, SealantDBLive } from "@sealant/db";
 import { gitHubSourceIntegrationLayer } from "@sealant/source-integrations";
 import { InlineByteaArtifactStoreLive, TelemetryQueryLive } from "@sealant/telemetry";
+import { urlForDisplay } from "@sealant/validators/url-for-display";
 import { SealantRuntimeControlLive } from "@sealant/workspaces";
 import { Effect, Layer, Redacted } from "effect";
 import { HttpMiddleware, HttpRouter, HttpServerResponse } from "effect/unstable/http";
@@ -296,7 +297,7 @@ const serverLayer = HttpRouter.serve(appLayer, {
 const databaseUrl = new URL(env.DATABASE_URL);
 
 console.log(`[api] database: ${databaseUrl.protocol}//${databaseUrl.host}${databaseUrl.pathname}`);
-console.log(`[api] repology endpoint: ${env.REPOLOGY_API_BASE_URL}`);
+console.log(`[api] repology endpoint: ${urlForDisplay(env.REPOLOGY_API_BASE_URL)}`);
 console.log(
   authPosture.kind === "closed"
     ? "[api] authentication: service keys required on /v1"

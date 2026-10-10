@@ -18,6 +18,32 @@ const neverFetched = () => {
 };
 
 describe("ZotRegistryClient", () => {
+  it("sends a base URL's userinfo as its Basic credential, never in a URL or an error", async () => {
+    const SECRET = "registry-secret-marker";
+    const fetchMock = vi.fn(async () => new Response("unavailable", { status: 503 }));
+    const client = createZotRegistryClient({
+      baseUrl: `http://robot:${SECRET}@127.0.0.1:5000`,
+      fetch: fetchMock as typeof fetch,
+    });
+
+    const failure = await client.ping().catch((error: unknown) => error);
+
+    const [requestUrl, requestInit] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit];
+    expect(requestUrl.toString()).toBe("http://127.0.0.1:5000/v2/");
+    expect(new Headers(requestInit.headers).get("authorization")).toBe(
+      `Basic ${Buffer.from(`robot:${SECRET}`).toString("base64")}`,
+    );
+    expect(failure).toBeInstanceOf(Error);
+    expect(JSON.stringify(failure)).not.toContain(SECRET);
+    expect(String(failure)).not.toContain(SECRET);
+
+    // Node's own fetch: the URL it is given carries no userinfo, so it cannot refuse and quote it.
+    const real = createZotRegistryClient({ baseUrl: `http://robot:${SECRET}@127.0.0.1:1` });
+    const refused = await real.ping().catch((error: unknown) => error);
+    expect(String(refused)).not.toContain(SECRET);
+    expect(String((refused as { cause?: unknown }).cause ?? "")).not.toContain(SECRET);
+  });
+
   it("pings the OCI API root", async () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
     const client = createZotRegistryClient({
