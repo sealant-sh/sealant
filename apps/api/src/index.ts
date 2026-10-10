@@ -21,7 +21,6 @@ import { env } from "./runtime-env.js";
 import { budgetLimits } from "./services/budget-limits.js";
 import { budgetsOff, makeRateWindow } from "./services/budgets.js";
 import { ControlPlaneCapabilitiesLive } from "./services/control-plane-capabilities.js";
-import { CredentialRedactionLive } from "./services/credential-redaction.js";
 import {
   authPosture,
   servicePrincipalMiddleware,
@@ -287,14 +286,9 @@ const authGate = servicePrincipalMiddleware(
   },
 );
 
-// Request spans record URLs, and the browser routes take their bearer as `?token=`: every span's URL
-// attributes are redacted, as are logs and error reports (services/credential-redaction.ts).
 const serverLayer = HttpRouter.serve(appLayer, {
   middleware: (app) => corsMiddleware(authGate(app)),
-}).pipe(
-  Layer.provide(NodeHttpServer.layer(createServer, { port: env.PORT })),
-  Layer.provide(CredentialRedactionLive),
-);
+}).pipe(Layer.provide(NodeHttpServer.layer(createServer, { port: env.PORT })));
 
 /**
  * Startup diagnostics for operational visibility.

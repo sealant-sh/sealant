@@ -143,16 +143,6 @@ the caller chose, such as an `env` name, reads `[…]`. The server's request log
 and the request's tracing span carry the refusal, not the request. A handler's own failure on a
 request that decoded, a text payload's included, stays a `500`.
 
-Request spans record each request's URL and headers, and an HTTP error's message quotes its
-request's URL. The terminal attach, the output stream and the port forward take their bearer as
-`?token=`, because browser WebSocket and EventSource clients cannot set headers. What the API
-observes is redacted before it is recorded: in every span's attributes, events and ending failure,
-every log line and every error report, a credential query parameter (`token`, `access_token`,
-`ticket`, `key`, `signature` and the like), a `user:password@` and a `Bearer` or `Basic` credential
-read `REDACTED`, and so does every credential header (`authorization`, `cookie`,
-`x-sealant-gateway-token`, any header naming a token, key, secret or password). The request log
-records the path without its query.
-
 If the connection to `sealantd` drops before it answers an open, Sealant asks it again whether the
 session's program started. A program it reports is the session's leader. If it reports none, the
 session and its run are marked failed. If it cannot be asked, both stay open, and closing the
