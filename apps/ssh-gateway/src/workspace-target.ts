@@ -44,6 +44,9 @@ const messageResponseSchema = z.object({
 
 export type WorkspaceSshTarget = z.infer<typeof workspaceSshTargetSchema>;
 
+/** How long one target lookup may take before the channel that asked is refused. */
+const TARGET_TIMEOUT_MS = 10_000;
+
 /** What the gateway process has for reaching each runtime family. */
 export type ControlTargetOptions = SealantTargetDerivationOptions;
 
@@ -91,6 +94,9 @@ export const resolveWorkspaceControlTarget = async (input: {
       // user only to a gateway that says so.
       "x-sealant-gateway-ssh-user": "1",
     },
+    // Asked for every session channel: an API that does not answer refuses the channel in time,
+    // never holds it open.
+    signal: AbortSignal.timeout(TARGET_TIMEOUT_MS),
   });
   const payload = await response.json().catch(() => null);
 

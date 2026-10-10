@@ -22,7 +22,7 @@ import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
-import { createServer as createNetServer } from "node:net";
+import { createConnection, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -91,6 +91,9 @@ const freePort = () =>
 let workspaceUser: string | undefined;
 /** The stand-in answers as an API from before SSH users: no `sessionUser` at all. */
 let oldApi = false;
+/** The executor the stand-in names, and whether it answers at all (`503`). */
+let targetAttempt = "run_1";
+let targetDown = false;
 /** The stand-in records interactive runs; each run's final PATCH lands in `completedRuns`. */
 let recording = false;
 const completedRuns: Array<unknown> = [];
@@ -218,6 +221,10 @@ beforeAll(async () => {
       response.end(JSON.stringify(body));
     };
     if (request.url === `/v1/workspaces/${WORKSPACE_ID}/ssh-target`) {
+      if (targetDown) {
+        reply(503, { message: "The API is not answering." });
+        return;
+      }
       if (request.headers["x-sealant-principal-id"] !== OWNER) {
         reply(401, { message: "Principal is not authorized for this workspace." });
         return;
@@ -228,7 +235,7 @@ beforeAll(async () => {
       }
       reply(200, {
         workspaceId: WORKSPACE_ID,
-        attemptId: "run_1",
+        attemptId: targetAttempt,
         runtime: {
           adapter: "docker",
           resourceId: containerId,
@@ -436,6 +443,66 @@ describe.skipIf(!runsAsUser)("a workspace's SSH sessions as its user", () => {
       expect(after.stdout.trim()).toBe(String(ALICE.uid));
     } finally {
       await ssh(keys.alice, [...shared, "-O", "exit"]).catch(() => undefined);
+    }
+  });
+
+  it("asks again for the first session after a port forward: a reset, a restart or a refusal since is honoured", async () => {
+    const localPort = await freePort();
+    const control = join(scratch, "cm-forward");
+    const shared = ["-o", `ControlPath=${control}`];
+    // A connection that only forwards first (VS Code's), which opens the control connection.
+    const master = spawn(
+      "ssh",
+      sshArgs(keys.alice, [
+        ...shared,
+        "-o",
+        "ControlMaster=yes",
+        "-N",
+        "-L",
+        `${String(localPort)}:127.0.0.1:${String(SERVER_PORT + 1)}`,
+      ]),
+      { stdio: "ignore" },
+    );
+    const exec = (command: string) =>
+      ssh(keys.alice, [...shared, "-o", "ControlMaster=no"], command);
+    try {
+      workspaceUser = ALICE.name;
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        const ready = await new Promise<boolean>((resolve) => {
+          const socket = createConnection(localPort, "127.0.0.1");
+          socket.once("connect", () => {
+            socket.destroy();
+            resolve(true);
+          });
+          socket.once("error", () => resolve(false));
+        });
+        if (ready) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      // Give the forward's channel time to reach the gateway and open the control connection.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      // Set back to root since: the first exec is root's, not the answer the forward was given.
+      workspaceUser = undefined;
+      expect((await exec("id -u")).stdout.trim()).toBe("0");
+
+      // The API refuses: the next exec is refused, never run on the old answer.
+      workspaceUser = ALICE.name;
+      targetDown = true;
+      const refused = await exec("id -u");
+      expect(refused.code).not.toBe(0);
+      expect(refused.stdout).toBe("");
+      targetDown = false;
+
+      // Another executor since: refused on this connection, which reaches the old one.
+      targetAttempt = "run_2";
+      const elsewhere = await exec("id -u");
+      expect(elsewhere.code).not.toBe(0);
+      expect(elsewhere.stdout).toBe("");
+    } finally {
+      targetDown = false;
+      targetAttempt = "run_1";
+      master.kill();
     }
   });
 });

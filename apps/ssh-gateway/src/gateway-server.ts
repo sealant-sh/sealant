@@ -195,9 +195,6 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
   // The target the control connection was opened for: a later answer naming another executor
   // means the workspace restarted under this connection, and its channels are refused.
   let controlTarget: WorkspaceSshTarget | undefined;
-  // The answer the control connection was opened with, kept for the first session channel only, so
-  // it takes no second round trip; every later channel asks again.
-  let unusedTarget: WorkspaceSshTarget | undefined;
   // Whether the daemon runs processes as a user, read once per connection when first needed.
   let execUserSupported: Promise<boolean> | undefined;
   // The interactive run recording this connection (one SSH connection = one run). Undefined until
@@ -231,7 +228,6 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
       controlPromise = (async () => {
         const target = await resolveTarget();
         controlTarget = target;
-        unusedTarget = target;
         // Register the session's run BEFORE any daemon channel opens so its id can be threaded as
         // the execution id on every session/exec — that threading is what attributes the session's
         // telemetry to this run. Undefined (recording unavailable) never blocks access.
@@ -265,11 +261,9 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
     readonly user: string | null;
   }> => {
     const control = await ensureControl();
-    let target = unusedTarget;
-    unusedTarget = undefined;
-    if (target === undefined) {
-      target = await resolveTarget();
-    }
+    // Always a fresh answer, the first channel's included: an answer kept from opening the control
+    // connection (a port forward opens it too) could predate a reset, a restart or an API refusal.
+    const target = await resolveTarget();
     if (
       controlTarget === undefined ||
       target.attemptId !== controlTarget.attemptId ||
