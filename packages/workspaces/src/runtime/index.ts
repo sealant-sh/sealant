@@ -23,6 +23,7 @@ export {
 } from "./runtime-adapter.js";
 
 export {
+  DEFAULT_NETWORK_GUARD_IMAGE,
   DockerRuntimeAdapter,
   type DockerCommandResult,
   type DockerCommandRunner,

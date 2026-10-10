@@ -291,6 +291,18 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         }),
       ];
 
+  // Every Docker launch that does not opt in runs the metadata guard's image: pull it now, so a
+  // host that cannot reach it says so in this log at startup instead of at the first session.
+  for (const adapter of dockerAdapters) {
+    void adapter.prepareNetworkGuard().then(
+      ({ image, pulled }) => console.log("Cloud metadata guard image ready", { image, pulled }),
+      (error: unknown) =>
+        console.error("Cloud metadata guard image unavailable", {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+    );
+  }
+
   // Cloudflare: registered only when the bridge Worker is configured (URL + token pair).
   const cloudflareConfig = cloudflareRuntimeConfigFromEnv(env);
   const cloudflareAdapters =

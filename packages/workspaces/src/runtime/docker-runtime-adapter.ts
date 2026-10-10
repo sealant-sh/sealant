@@ -90,7 +90,7 @@ const READINESS_POLL_INTERVAL_MS = 250;
 const DEFAULT_READINESS_TIMEOUT_MS = 120_000;
 const DEFAULT_DOCKER_SERVICE_IMAGE = "docker:27.5.1-dind-rootless";
 /** busybox's `ip`, pinned by index digest; `SEALANT_DOCKER_NETWORK_GUARD_IMAGE` replaces it. */
-const DEFAULT_NETWORK_GUARD_IMAGE =
+export const DEFAULT_NETWORK_GUARD_IMAGE =
   "busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e";
 
 /**
@@ -104,9 +104,29 @@ const CLOUD_METADATA_GUARD_SCRIPT = [
   "ip -4 route replace prohibit 169.254.169.254/32",
   "if [ -e /proc/net/if_inet6 ]; then ip -6 route replace prohibit fd00:ec2::254/128; fi",
 ].join("\n");
+
+/** What an operator does about a guard that cannot run. */
+const NETWORK_GUARD_REMEDY =
+  "Make the image pullable from the Docker host, or point SEALANT_DOCKER_NETWORK_GUARD_IMAGE at a reachable copy. A workspace that needs the address sets runtime.network.cloudMetadata.";
+
+/** A guard run's bound, a first pull included: a hung pull or daemon never holds a launch. */
+const NETWORK_GUARD_TIMEOUT_MS = 60_000;
+/** The worker's startup pull of the guard image. */
+const NETWORK_GUARD_PULL_TIMEOUT_MS = 300_000;
 const MINIMUM_VOLUME_API_VERSION = { major: 1, minor: 45 } as const;
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Wait for a container's readiness and its metadata guard together, and report the readiness
+ * failure first: a container that exited early also fails its guard ("cannot join network of a
+ * non-running container"), and its exit code and logs say more.
+ */
+const readyThenGuarded = async (ready: Promise<void>, guarded: Promise<void>): Promise<void> => {
+  const [readiness, guard] = await Promise.allSettled([ready, guarded]);
+  if (readiness.status === "rejected") throw readiness.reason;
+  if (guard.status === "rejected") throw guard.reason;
+};
 
 export interface DockerCommandResult {
   readonly stdout: string;
@@ -119,6 +139,8 @@ export interface DockerCommandOptions {
    * in argv or `docker inspect`).
    */
   readonly input?: string;
+  /** Kill the command and fail once it has run this long. Unset: no bound. */
+  readonly timeoutMs?: number;
 }
 
 export type DockerCommandRunner = (
@@ -324,6 +346,7 @@ const createDefaultCommandRunner = (dockerSocketPath: string): DockerCommandRunn
   return async (command, args, options) => {
     const pendingResult = execFileAsync(command, args, {
       maxBuffer: 1024 * 1024 * 10,
+      ...(options?.timeoutMs === undefined ? {} : { timeout: options.timeoutMs }),
       env: {
         ...process.env,
         DOCKER_HOST: `unix://${dockerSocketPath}`,
@@ -1425,10 +1448,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       // Before the daemon starts, so its first pull already resolves the mirror.
       await this.joinRegistryMirrorNetwork(networkName);
       acquisition = await this.runOrAdoptContainer(args, serviceName);
-      await Promise.all([
-        guard(acquisition.containerId, serviceName),
+      await readyThenGuarded(
         this.awaitDockerServiceReady(acquisition.containerId, serviceName),
-      ]);
+        guard(acquisition.containerId, serviceName),
+      );
       return { networkName, serviceName, createdNetworkId, acquisition };
     } catch (error) {
       try {
@@ -1463,32 +1486,77 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
    */
   private async blockCloudMetadata(containerId: string, name: string): Promise<void> {
     try {
-      await this.commandRunner("docker", [
-        "run",
-        "--rm",
-        "--runtime",
-        "runc",
-        "--network",
-        `container:${containerId}`,
-        "--cap-drop",
-        "ALL",
-        "--cap-add",
-        "NET_ADMIN",
-        "--user",
-        "0",
-        "--entrypoint",
-        "sh",
-        this.networkGuardImage,
-        "-c",
-        CLOUD_METADATA_GUARD_SCRIPT,
-      ]);
+      await this.commandRunner(
+        "docker",
+        [
+          "run",
+          "--rm",
+          "--runtime",
+          "runc",
+          "--network",
+          `container:${containerId}`,
+          "--cap-drop",
+          "ALL",
+          "--cap-add",
+          "NET_ADMIN",
+          "--user",
+          "0",
+          "--entrypoint",
+          "sh",
+          this.networkGuardImage,
+          "-c",
+          CLOUD_METADATA_GUARD_SCRIPT,
+        ],
+        { timeoutMs: NETWORK_GUARD_TIMEOUT_MS },
+      );
+    } catch (error) {
+      const timedOut =
+        typeof error === "object" && error !== null && "killed" in error && error.killed === true;
+      const message = timedOut
+        ? `the guard did not finish within ${String(NETWORK_GUARD_TIMEOUT_MS / 1000)} s`
+        : error instanceof Error
+          ? error.message
+          : String(error);
+      throw createAdapterError(
+        "adapter-unavailable",
+        `Could not refuse the cloud metadata address in '${name}' with the guard image '${this.networkGuardImage}': ${message}. ${NETWORK_GUARD_REMEDY}`,
+      );
+    }
+  }
+
+  /**
+   * Make the guard image local before any launch needs it: the worker calls this at startup, so a
+   * Docker host that cannot pull it says so in the worker's log, not at the first session. Throws,
+   * with the remedy, when the image is neither local nor pullable.
+   */
+  public async prepareNetworkGuard(): Promise<{
+    readonly image: string;
+    readonly pulled: boolean;
+  }> {
+    const image = this.networkGuardImage;
+    const present = await this.commandRunner("docker", [
+      "image",
+      "inspect",
+      "--format",
+      "{{.Id}}",
+      image,
+    ]).then(
+      () => true,
+      () => false,
+    );
+    if (present) return { image, pulled: false };
+    try {
+      await this.commandRunner("docker", ["pull", "-q", image], {
+        timeoutMs: NETWORK_GUARD_PULL_TIMEOUT_MS,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw createAdapterError(
         "adapter-unavailable",
-        `Could not refuse the cloud metadata address in '${name}': ${message}`,
+        `The cloud metadata guard image '${image}' could not be pulled: ${message}. Every Docker launch that does not opt in fails until it can. ${NETWORK_GUARD_REMEDY}`,
       );
     }
+    return { image, pulled: true };
   }
 
   /**
@@ -1496,7 +1564,15 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
    * a guard that fails leaves the save to go on rather than lose the work it holds.
    */
   private async blockCloudMetadataForRecovery(containerId: string, name: string): Promise<void> {
-    await this.blockCloudMetadata(containerId, name).catch(() => undefined);
+    await this.blockCloudMetadata(containerId, name).catch((error: unknown) => {
+      console.warn(
+        "Cloud metadata guard failed on a recovery start; the container runs without it",
+        {
+          container: name,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
+    });
   }
 
   /**
@@ -2385,6 +2461,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
           "-e",
           `${key}=${value}`,
         ]),
+        // A packet socket skips the routing table, so root could reach the metadata address with
+        // raw frames past the guard's route. Dropped from the bounding set, `sudo` cannot get it
+        // back; `ping` keeps working through Docker's `ping_group_range`.
+        ...(cloudMetadataReachable ? [] : ["--cap-drop", "NET_RAW"]),
         imageReference,
       ];
       // Never `--rm` a capture workspace: Docker would delete its disk the moment it exits, and
@@ -2404,16 +2484,17 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       }
       const { containerId } = acquisition;
       executor = { identity: identityOf(containerId), ended: false };
-      // From the moment the container runs, beside the readiness wait: the launch is not ready, and
-      // no harness or session starts, until the route is in. An adopted container gets it too.
+      // From the moment the container runs, beside the readiness wait: the route is in before the
+      // launch reports ready, so before any session starts. What sealantd runs at boot on its own
+      // (lifecycle steps, the foreground harness) can start up to the guard's run (~0.7 s) earlier.
+      // An adopted container gets it too.
       const guarded = cloudMetadataReachable
         ? Promise.resolve()
         : this.blockCloudMetadata(containerId, containerName);
       void guarded.catch(() => undefined);
       await reportStartedLaunch(hooks, executor.identity);
 
-      await Promise.all([
-        guarded,
+      await readyThenGuarded(
         (async () => {
           if (this.verifyRunning) {
             await this.assertContainerRunning(containerId, containerName);
@@ -2423,7 +2504,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
             await this.awaitControlSocketReady(containerId, containerName);
           }
         })(),
-      ]);
+        guarded,
+      );
 
       // The endpoint is the daemon control target used by every control-plane session, independent
       // of whether the workspace also allows SSH access. Persisting it is what lets API containers

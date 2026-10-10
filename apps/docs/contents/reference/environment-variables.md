@@ -221,16 +221,33 @@ registry and package mirrors, the object store, the control plane and anything o
 
 The worker runs `SEALANT_DOCKER_NETWORK_GUARD_IMAGE` for a moment with `NET_ADMIN` in the
 workspace's network namespace, and in its Docker service's, to add a `prohibit` route to each
-address. That happens as the container starts, beside the readiness wait, and again on every start
-of a recovery; a launch whose guard fails fails. The workspace itself never holds `NET_ADMIN`, so
-neither its root nor any other user in it can delete the route, and the containers of its rootless
-Docker service run in a namespace below the guarded one. Point the variable at a mirrored copy where
-the Docker host cannot pull from Docker Hub.
+address. It runs as the container starts, beside the readiness wait, and again on every start of a
+recovery. The route is in before the worker reports the workspace ready, so before any session
+starts in it; steps sealantd runs at boot on its own (lifecycle steps, a foreground harness) may
+start slightly earlier, while the guard is still running. A launch whose guard fails, or does not
+finish within 60 seconds, fails with the image's name and this variable in its error. The worker
+pulls the image when it starts and logs `Cloud metadata guard image unavailable` when it cannot, so
+point the variable at a mirrored copy where the Docker host cannot pull from Docker Hub.
+
+The workspace itself never holds `NET_ADMIN`, so neither its root nor any other user in it can
+delete the route. It holds no `NET_RAW` either, so root, `sudo` included, cannot open a packet
+socket to send raw frames past the route; `ping` keeps working through Docker's `ping_group_range`.
+The containers of its rootless Docker service run in a namespace below the guarded one.
 
 A workspace that genuinely needs the address opts in at creation (`network: { cloudMetadata: true }`
-in the SDK, `runtime.network.cloudMetadata` in the spec). gVisor's netstack ignores the namespace's
-routes, so a `runsc` workspace is refused unless it opts in. Kubernetes and MicroVM workspaces do
-not read the setting: on those runtimes the cluster's egress policy or the VM's network decides.
+in the SDK, `runtime.network.cloudMetadata` in the spec); it keeps Docker's default capabilities.
+gVisor's netstack ignores the namespace's routes, so a `runsc` workspace is refused unless it opts
+in.
+
+Not covered:
+
+- Other credential endpoints: ECS task credentials (169.254.170.2) and EKS Pod Identity
+  (169.254.170.23, fd00:ec2::23).
+- Image builds: BuildKit build steps (package installs, a custom base's `ONBUILD`) run on the Docker
+  host without the guard.
+- Workspaces already running when the worker is upgraded: they keep the address until they stop.
+- Kubernetes and MicroVM workspaces, which do not read the setting: on those runtimes the cluster's
+  egress policy or the VM's network decides.
 
 ## GitHub App variables
 

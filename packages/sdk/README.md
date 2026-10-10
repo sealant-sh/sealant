@@ -173,8 +173,10 @@ provide both `GH_TOKEN` and `GITHUB_TOKEN` to the workspace.
 
 On a cloud host, 169.254.169.254 (and fd00:ec2::254 over IPv6 on AWS) hands out the instance's own
 credentials. On the Docker runtime a workspace is refused it by default: a connection fails at once,
-from the workspace and from every container its Docker service runs, for root and every other user
-in it. Nothing else is touched. A workspace that genuinely needs the address opts in:
+from the workspace and from every container its Docker service runs. Its users cannot remove the
+refusal, and root gets no raw sockets to send packets past it. The refusal is in place before
+`create` reports the workspace ready; steps the workspace runs at boot on its own may start slightly
+earlier. Nothing else is touched. A workspace that genuinely needs the address opts in:
 
 ```ts
 const workspace = await sealant.workspaces.create({

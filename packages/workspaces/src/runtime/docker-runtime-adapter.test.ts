@@ -1008,6 +1008,92 @@ describe("DockerRuntimeAdapter", () => {
     );
 
     expect(commandRunner.mock.calls.some((call) => isMetadataGuard(call[1]))).toBe(false);
+    // The workspace's run (the Docker service's has no working directory) keeps Docker's caps.
+    const workspaceRun = commandRunner.mock.calls.find(
+      (call) => call[1][0] === "run" && call[1].includes("-w"),
+    )?.[1];
+    expect(workspaceRun).toBeDefined();
+    expect(workspaceRun).not.toContain("NET_RAW");
+  });
+
+  it("drops NET_RAW from a guarded workspace, so no packet socket skips the route", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) =>
+      args[0] === "run"
+        ? { stdout: "container-id-guarded\n", stderr: "" }
+        : { stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n', stderr: "" },
+    );
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    await adapter.launch(createLaunchInput());
+
+    const workspaceRun = commandRunner.mock.calls.find((call) => call[1][1] === "-d")?.[1] ?? [];
+    const drop = workspaceRun.indexOf("--cap-drop");
+    expect(workspaceRun[drop + 1]).toBe("NET_RAW");
+  });
+
+  it("reports a container that exited before its guard error", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (isMetadataGuard(args)) {
+        throw new Error("cannot join network of a non-running container");
+      }
+      if (args[0] === "run") return { stdout: "container-id-exited\n", stderr: "" };
+      return {
+        stdout: '{"Status":"exited","Running":false,"ExitCode":3,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    const failure = await adapter.launch(createLaunchInput()).then(
+      () => "launched",
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    expect(failure).not.toContain("cloud metadata");
+    expect(failure).toContain("3");
+  });
+
+  it("pulls the guard image once, and names the remedy when it cannot", async () => {
+    const run = async (present: boolean, pullFails: boolean) => {
+      const commandRunner = vi.fn<
+        (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+      >(async (_command, args) => {
+        if (args[0] === "image" && !present) throw new Error("No such image");
+        if (args[0] === "pull" && pullFails) throw new Error("pull access denied");
+        return { stdout: "", stderr: "" };
+      });
+      const adapter = new DockerRuntimeAdapter({
+        commandRunner,
+        runtimeCatalogLoader: createRuntimeCatalogLoader(),
+        networkGuardImage: "mirror.local/busybox:1.37",
+      });
+      const outcome = await adapter.prepareNetworkGuard().then(
+        (ready) => ready,
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      );
+      return { outcome, pulls: commandRunner.mock.calls.filter((call) => call[1][0] === "pull") };
+    };
+
+    const present = await run(true, false);
+    expect(present.outcome).toEqual({ image: "mirror.local/busybox:1.37", pulled: false });
+    expect(present.pulls).toHaveLength(0);
+
+    const pulled = await run(false, false);
+    expect(pulled.outcome).toEqual({ image: "mirror.local/busybox:1.37", pulled: true });
+    expect(pulled.pulls[0]?.[1]).toEqual(["pull", "-q", "mirror.local/busybox:1.37"]);
+
+    const unreachable = await run(false, true);
+    expect(unreachable.outcome).toContain("'mirror.local/busybox:1.37' could not be pulled");
+    expect(unreachable.outcome).toContain("SEALANT_DOCKER_NETWORK_GUARD_IMAGE");
   });
 
   it("fails the launch when the metadata guard fails", async () => {
@@ -1026,9 +1112,15 @@ describe("DockerRuntimeAdapter", () => {
       runtimeCatalogLoader: createRuntimeCatalogLoader(),
     });
 
-    await expect(adapter.launch(createLaunchInput())).rejects.toThrow(
-      "Could not refuse the cloud metadata address",
+    const failure = await adapter.launch(createLaunchInput()).then(
+      () => "launched",
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
     );
+    expect(failure).toContain("Could not refuse the cloud metadata address");
+    // The remedy: the image, the variable that replaces it, and the opt-in.
+    expect(failure).toContain("busybox:1.37@sha256:");
+    expect(failure).toContain("SEALANT_DOCKER_NETWORK_GUARD_IMAGE");
+    expect(failure).toContain("runtime.network.cloudMetadata");
     // The unguarded container is removed with the failed launch.
     expect(
       commandRunner.mock.calls.some(
@@ -1700,6 +1792,43 @@ describe("DockerRuntimeAdapter", () => {
     expect(commandRunner.mock.calls.some((call) => call[1]?.[0] === "rm")).toBe(false);
     const runArgs = commandRunner.mock.calls.find((call) => call[1]?.[0] === "run")?.[1] ?? [];
     expect(runArgs).not.toContain("--rm");
+  });
+
+  it("says so, and recovers anyway, when a recovery start cannot be guarded", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const commandRunner = vi.fn<
+        (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+      >(async (_command, args) => {
+        if (isMetadataGuard(args)) throw new Error("pull access denied");
+        if (args[0] === "inspect" && args.at(-1) === "kept-id") {
+          return {
+            stdout: '{"Status":"exited","Running":false,"ExitCode":75,"Error":""}\n',
+            stderr: "",
+          };
+        }
+        if (args[0] === "inspect") throw new Error("Error: No such object");
+        if (args[0] === "network") throw new Error("Error: No such network");
+        return { stdout: "", stderr: "" };
+      });
+      const adapter = new DockerRuntimeAdapter({
+        commandRunner,
+        runtimeCatalogLoader: createRuntimeCatalogLoader(),
+        verifyRunning: false,
+      });
+
+      await expect(
+        adapter.recover({ resourceId: "kept-id", reference: "sealant-kept" }),
+      ).resolves.toEqual({
+        outcome: "restarted",
+      });
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("Cloud metadata guard failed on a recovery start"),
+        expect.objectContaining({ container: "sealant-kept" }),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("starts a parked Docker sidecar before the recovery boot, and parks it again when the start fails (e2e 6)", async () => {

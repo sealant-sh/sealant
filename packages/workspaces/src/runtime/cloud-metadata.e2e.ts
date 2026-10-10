@@ -224,6 +224,42 @@ describe("the cloud metadata address", () => {
     expect(probe.output).toContain("Permission denied");
   });
 
+  it("gives root no packet socket to send raw frames past the route, and keeps ping", async () => {
+    // A packet socket skips the routing table; without NET_RAW, root (or `sudo`) cannot open one.
+    const raw = await attempt([
+      "exec",
+      guarded,
+      "arping",
+      "-c",
+      "1",
+      "-w",
+      "1",
+      "-I",
+      "eth0",
+      "169.254.169.254",
+    ]);
+    expect(raw.ok).toBe(false);
+    expect(raw.output).toContain("socket(AF_PACKET");
+    expect(raw.output).toContain("Operation not permitted");
+
+    // Ping rides ICMP datagram sockets (Docker's `ping_group_range`), for root and a person.
+    for (const user of ["0", PERSON_UID]) {
+      const ping = await attempt([
+        "exec",
+        "-u",
+        user,
+        guarded,
+        "ping",
+        "-c",
+        "1",
+        "-W",
+        "5",
+        "169.254.169.10",
+      ]);
+      expect(ping.ok).toBe(true);
+    }
+  });
+
   it("is refused at once from a container the workspace's Docker service runs", async () => {
     // Timed inside the nested container, so its own start does not count.
     const timed = `start=$(date +%s); wget -T 20 -qO- ${METADATA_URL}; echo "rc=$? seconds=$(( $(date +%s) - start ))"`;
