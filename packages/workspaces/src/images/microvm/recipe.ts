@@ -13,6 +13,8 @@
  */
 import { createHash } from "node:crypto";
 
+import type { WorkspaceImagePlatform } from "@sealant/validators";
+
 import type { PlannedWorkspaceImageBuild } from "../../buildkit/index.js";
 
 /** Bump when the agent layer below changes in a way old images must not be reused across. */
@@ -22,38 +24,12 @@ export const MICROVM_RECIPE_VERSION = "2";
 export const MICROVM_AGENT_FILES = ["agent.mjs", "docker-service.mjs"] as const;
 /** Copied in as well when the blueprint asks for the workspace's own Docker. */
 export const MICROVM_DOCKER_FILES = ["download-docker.sh"] as const;
-/** Copied in for an Arch blueprint: the key the Arch Linux ARM rootfs is verified against. */
-export const MICROVM_ARCH_FILES = ["archlinuxarm-builder.asc"] as const;
 export type MicrovmContextFile =
   | (typeof MICROVM_AGENT_FILES)[number]
-  | (typeof MICROVM_DOCKER_FILES)[number]
-  | (typeof MICROVM_ARCH_FILES)[number];
+  | (typeof MICROVM_DOCKER_FILES)[number];
 
-/**
- * Arch on ARM64. Docker Hub's `archlinux` image is x86_64 only, and a MicroVM is ARM64. The
- * official ARM port, Arch Linux ARM, ships a rootfs tarball instead of an image, signed by its
- * build system key (fingerprint below, checked against a downloaded tarball on 2026-09-20). A
- * first stage fetches the tarball and its signature over the project's mirrors, verifies the
- * signature against the key shipped in the build context, and unpacks it; the image proper starts
- * from that filesystem. `pacman-key --populate archlinuxarm` then trusts the port's package keys.
- */
-export const ARCHLINUXARM_KEY_FINGERPRINT = "68B3537F39A313B3E574D06777193F152BDBE6A6";
-const ARCHLINUXARM_ROOTFS = "http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz";
-const archlinuxArmPrelude = (fetchStageImage: string): string =>
-  [
-    `FROM ${fetchStageImage} AS archlinuxarm`,
-    "RUN dnf -y install gnupg2 curl tar && dnf clean all",
-    "COPY archlinuxarm-builder.asc /tmp/archlinuxarm-builder.asc",
-    "RUN set -eu; gpg --batch --import /tmp/archlinuxarm-builder.asc; \\",
-    `    gpg --batch --list-keys --with-colons | grep -q '^fpr:.*:${ARCHLINUXARM_KEY_FINGERPRINT}:'; \\`,
-    `    curl -fsSL --retry 3 -o /tmp/rootfs.tar.gz ${ARCHLINUXARM_ROOTFS}; \\`,
-    `    curl -fsSL --retry 3 -o /tmp/rootfs.tar.gz.sig ${ARCHLINUXARM_ROOTFS}.sig; \\`,
-    "    gpg --batch --verify /tmp/rootfs.tar.gz.sig /tmp/rootfs.tar.gz; \\",
-    "    mkdir /rootfs && tar -xpf /tmp/rootfs.tar.gz --numeric-owner -C /rootfs && rm /tmp/rootfs.tar.gz*",
-    "FROM scratch",
-    "COPY --from=archlinuxarm /rootfs /",
-    "RUN pacman-key --init && pacman-key --populate archlinuxarm",
-  ].join("\n");
+/** A MicroVM is ARM64: its image is planned for `linux/arm64`, Arch from Arch Linux ARM. */
+export const MICROVM_IMAGE_PLATFORM = "linux/arm64" satisfies WorkspaceImagePlatform;
 
 /**
  * What guest-local Docker needs beside the engine itself: network namespaces and the tools
@@ -77,7 +53,7 @@ export const microvmDockerServiceFamilies = (): readonly string[] =>
 const DOCKER_HUB_LIBRARY_MIRROR = "public.ecr.aws/docker/library/";
 
 /**
- * Official Docker Hub images (`fedora:41`, `archlinux:latest`) are pulled from their public ECR
+ * Official Docker Hub images (`fedora:41`, `ubuntu:24.04`) are pulled from their public ECR
  * mirror: the managed build runs on shared AWS addresses, where anonymous Docker Hub pulls are
  * rate limited, and the build role then needs no registry permission. A reference that names a
  * registry or a namespace (a project's own base image) is left exactly as written.
@@ -127,12 +103,16 @@ export const microvmRecipe = (
   planned: PlannedWorkspaceImageBuild,
   settings: MicrovmRecipeSettings,
 ): MicrovmRecipe => {
+  if (planned.platform !== MICROVM_IMAGE_PLATFORM) {
+    throw new Error(
+      `A MicroVM is ARM64; this plan is for ${planned.platform}. Plan MicroVM images for ${MICROVM_IMAGE_PLATFORM}.`,
+    );
+  }
   if (!ENTRYPOINT.test(planned.containerfile) || !FROM_LINE.test(planned.containerfile)) {
     throw new Error(
       "The planned Containerfile has no FROM or ENTRYPOINT line to build a MicroVM recipe on.",
     );
   }
-  const fromLine = FROM_LINE.exec(planned.containerfile);
   const sealantdImage = SEALANTD_COPY.exec(planned.containerfile)?.[1];
   if (sealantdImage === undefined) {
     throw new Error(
@@ -169,11 +149,11 @@ export const microvmRecipe = (
     'RUN mkdir -p /workspace /run/sealant && git config --system safe.directory "*"',
     'ENTRYPOINT ["node", "/opt/sealant/agent.mjs"]',
   ].join("\n");
+  // The first stage's image: the base, or for Arch the stage that fetches the Arch Linux ARM rootfs.
   const containerfile = planned.containerfile
-    .replace(FROM_LINE, (_line, reference: string, rest: string) =>
-      planned.osFamily === "arch" && fromLine !== null
-        ? archlinuxArmPrelude(mirroredBaseImage("fedora:41"))
-        : `FROM ${mirroredBaseImage(reference)}${rest}`,
+    .replace(
+      FROM_LINE,
+      (_line, reference: string, rest: string) => `FROM ${mirroredBaseImage(reference)}${rest}`,
     )
     .replace(ENTRYPOINT, agentLayer);
   const planHash = createHash("sha256")

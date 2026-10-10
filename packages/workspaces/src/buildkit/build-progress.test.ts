@@ -172,6 +172,7 @@ describe("compileWorkspaceBuildSpec progress", () => {
     );
 
     const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
       blueprint,
       options: {
         commandRunner,
@@ -210,6 +211,7 @@ describe("compileWorkspaceBuildSpec progress", () => {
 
     await expect(
       compileWorkspaceBuildSpec({
+        platform: "linux/amd64",
         blueprint,
         options: { commandRunner, emitTarball: false, stallTimeoutMs: 600_000 },
       }),
@@ -227,6 +229,7 @@ describe("compileWorkspaceBuildSpec progress", () => {
       stderr: "",
     }));
     const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
       blueprint,
       options: {
         commandRunner,
@@ -253,6 +256,7 @@ describe("compileWorkspaceBuildSpec progress", () => {
       stderr: "",
     }));
     const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
       blueprint,
       options: { commandRunner, emitTarball: false },
     });

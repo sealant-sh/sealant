@@ -3,7 +3,8 @@
  * registry (design §D7). No Docker socket anywhere.
  *
  *   1. Plan with the shared compiler (`planWorkspaceImageBuild`): same Containerfile, same plan
- *      hash as the Docker path.
+ *      hash as the Docker path. The plan's platform is the build's (`--opt platform`), and the Job
+ *      runs on a node of that architecture, so the build is native.
  *   2. Job name = `build-<hash(planHash + repository + tag)>`, so a redelivered build job adopts
  *      the running Job instead of starting a second one.
  *   3. Build context (Containerfile + plan JSON) goes in a ConfigMap; build secrets (ssh keys the
@@ -20,9 +21,15 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import type { V1ConfigMap, V1Job, V1Secret } from "@kubernetes/client-node";
-import type { NewWorkspace, WorkspaceBuild } from "@sealant/validators";
+import type { NewWorkspace, WorkspaceBuild, WorkspaceImagePlatform } from "@sealant/validators";
 
-import { planWorkspaceImageBuild, type PlannedWorkspaceImageBuild } from "../../buildkit/index.js";
+import {
+  ARCHLINUXARM_BUILDER_KEY,
+  ARCHLINUXARM_KEY_FILE,
+  planWorkspaceImageBuild,
+  usesArchlinuxArm,
+  type PlannedWorkspaceImageBuild,
+} from "../../buildkit/index.js";
 import { buildRegistryImageReference, type RegistryClient } from "../../registry/index.js";
 import { LABEL_COMPONENT, LABEL_MANAGED_BY } from "../../runtime/kubernetes/config.js";
 import type {
@@ -47,6 +54,8 @@ const LOG_TAIL_LINES = 60;
 
 export interface KubernetesWorkspaceImageBuilderOptions {
   readonly config: KubernetesBuildConfig;
+  /** What images are built for: the architecture of the nodes workspaces run on. */
+  readonly platform: WorkspaceImagePlatform;
   readonly api: KubernetesBuildApi;
   readonly registryClient: RegistryClient;
   readonly pollIntervalMs?: number;
@@ -110,6 +119,9 @@ export const buildContextConfigMap = (input: BuildManifestsInput): V1ConfigMap =
   data: {
     Containerfile: input.planned.containerfile,
     "resolved-image-plan.json": `${JSON.stringify(input.planned.imagePlan, null, 2)}\n`,
+    ...(usesArchlinuxArm(input.planned.osFamily, input.planned.platform)
+      ? { [ARCHLINUXARM_KEY_FILE]: ARCHLINUXARM_BUILDER_KEY }
+      : {}),
     ...(input.config.registryInsecure
       ? {
           "buildkitd.toml": `[registry."${input.config.pushRegistry}"]\n  http = true\n`,
@@ -136,7 +148,8 @@ export const buildctlArgs = (input: BuildManifestsInput): readonly string[] => {
     `dockerfile=${CONTEXT_MOUNT}`,
     "--opt",
     "filename=Containerfile",
-    ...(input.planned.osFamily === "arch" ? ["--opt", "platform=linux/amd64"] : []),
+    "--opt",
+    `platform=${input.planned.platform}`,
     ...input.secretIds.flatMap((id) => ["--secret", `id=${id},src=${BUILD_SECRETS_MOUNT}/${id}`]),
     "--output",
     output,
@@ -162,6 +175,8 @@ export const buildJob = (input: BuildManifestsInput): V1Job => ({
       },
       spec: {
         restartPolicy: "Never",
+        // On a node of the image's architecture: anywhere else BuildKit would emulate every step.
+        nodeSelector: { "kubernetes.io/arch": input.planned.platform.slice("linux/".length) },
         serviceAccountName: input.config.serviceAccount,
         automountServiceAccountToken: false,
         enableServiceLinks: false,
@@ -282,6 +297,7 @@ const jobStatus = (job: V1Job | undefined): "succeeded" | "failed" | "running" |
 
 export class KubernetesWorkspaceImageBuilder implements WorkspaceImageBuilder {
   readonly #config: KubernetesBuildConfig;
+  readonly #platform: WorkspaceImagePlatform;
   readonly #api: KubernetesBuildApi;
   readonly #registry: RegistryClient;
   readonly #pollIntervalMs: number;
@@ -290,6 +306,7 @@ export class KubernetesWorkspaceImageBuilder implements WorkspaceImageBuilder {
 
   constructor(options: KubernetesWorkspaceImageBuilderOptions) {
     this.#config = options.config;
+    this.#platform = options.platform;
     this.#api = options.api;
     this.#registry = options.registryClient;
     this.#pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
@@ -302,7 +319,7 @@ export class KubernetesWorkspaceImageBuilder implements WorkspaceImageBuilder {
   readonly isolation = "isolated" as const;
 
   readonly plan = (spec: NewWorkspace): PlannedWorkspaceImageBuild =>
-    planWorkspaceImageBuild({ blueprint: spec });
+    planWorkspaceImageBuild({ blueprint: spec, platform: this.#platform });
 
   async buildAndPublish(input: BuildAndPublishInput): Promise<BuildAndPublishResult> {
     const config = this.#config;

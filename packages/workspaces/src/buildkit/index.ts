@@ -13,6 +13,7 @@ export {
   mapBlueprintToBuildkitImagePlan,
   planWorkspaceImageBuild,
   selectBuildkitOsFamily,
+  usesArchlinuxArm,
 } from "./buildkit-builder.js";
 
 export {
@@ -40,3 +41,16 @@ export {
   type FamilyInstall,
   type ReleaseInstall,
 } from "./package-catalog.js";
+export {
+  ARCHLINUXARM_BUILDER_KEY,
+  ARCHLINUXARM_KEY_FILE,
+  ARCHLINUXARM_KEY_FINGERPRINT,
+  ARCHLINUXARM_ROOTFS,
+  renderArchlinuxArmBase,
+} from "./archlinuxarm.js";
+export {
+  UnsupportedImagePlatformError,
+  dockerDaemonImagePlatform,
+  processImagePlatform,
+  workspaceImagePlatformOf,
+} from "./platform.js";

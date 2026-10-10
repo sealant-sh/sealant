@@ -6,11 +6,17 @@
 import type { V1ConfigMap, V1Job, V1Pod, V1Secret } from "@kubernetes/client-node";
 import { describe, expect, it, vi } from "vitest";
 
+import {
+  ARCHLINUXARM_BUILDER_KEY,
+  ARCHLINUXARM_KEY_FILE,
+  type PlannedWorkspaceImageBuild,
+} from "../../buildkit/index.js";
 import type { RegistryClient } from "../../registry/index.js";
 import { cases } from "../../runtime/docker-runtime-adapter.golden-fixture.js";
 import type { CreateOutcome, DeleteOutcome } from "../../runtime/kubernetes/api.js";
 import type { KubernetesBuildApi } from "./api.js";
 import {
+  buildContextConfigMap,
   buildctlArgs,
   buildJob,
   buildJobName,
@@ -117,6 +123,7 @@ const builderFor = (
   overrides: Partial<KubernetesBuildConfig> = {},
 ) =>
   new KubernetesWorkspaceImageBuilder({
+    platform: "linux/amd64",
     config: { ...config, ...overrides },
     api,
     registryClient,
@@ -128,6 +135,7 @@ const spec = cases.gitSource.blueprint;
 
 describe("buildctlArgs / buildJob", () => {
   const planned = new KubernetesWorkspaceImageBuilder({
+    platform: "linux/amd64",
     config,
     api: fake(),
     registryClient: registry("sha256:x"),
@@ -154,7 +162,8 @@ describe("buildctlArgs / buildJob", () => {
       "dockerfile=/workspace",
       "--opt",
       "filename=Containerfile",
-      ...(planned.osFamily === "arch" ? ["--opt", "platform=linux/amd64"] : []),
+      "--opt",
+      "platform=linux/amd64",
       "--secret",
       "id=dotfiles_git_key,src=/run/secrets/build/dotfiles_git_key",
       "--output",
@@ -206,6 +215,42 @@ describe("buildctlArgs / buildJob", () => {
       "/home/user/.config/buildkit",
     );
     expect(JSON.stringify(job)).not.toContain("u:p");
+  });
+
+  it("builds for the plan's platform on a node of that architecture", () => {
+    const manifests = (plannedFor: PlannedWorkspaceImageBuild) => ({
+      name: "build-abc",
+      config,
+      labels: {},
+      planned: plannedFor,
+      imageReference: "r/x:y",
+      secretIds: [],
+      hasDockerConfig: false,
+    });
+    const onArm = (family: "fedora" | "arch") =>
+      new KubernetesWorkspaceImageBuilder({
+        platform: "linux/arm64",
+        config,
+        api: fake(),
+        registryClient: registry("sha256:x"),
+      }).plan({ ...spec, target: { ...spec.target, os: { family, mode: "require" } } });
+
+    expect(buildJob(manifests(planned)).spec?.template.spec?.nodeSelector).toEqual({
+      "kubernetes.io/arch": "amd64",
+    });
+    const fedora = manifests(onArm("fedora"));
+    expect(buildctlArgs(fedora)).toEqual(expect.arrayContaining(["--opt", "platform=linux/arm64"]));
+    expect(buildJob(fedora).spec?.template.spec?.nodeSelector).toEqual({
+      "kubernetes.io/arch": "arm64",
+    });
+    expect(buildContextConfigMap(fedora).data?.[ARCHLINUXARM_KEY_FILE]).toBeUndefined();
+
+    // Arch on arm64 starts from the Arch Linux ARM rootfs; its key rides in the context.
+    const arch = manifests(onArm("arch"));
+    expect(arch.planned.containerfile).toContain("AS archlinuxarm");
+    expect(buildContextConfigMap(arch).data?.[ARCHLINUXARM_KEY_FILE]).toBe(
+      ARCHLINUXARM_BUILDER_KEY,
+    );
   });
 
   it("names Jobs deterministically from plan hash + repository + tag", () => {
@@ -317,6 +362,7 @@ describe("KubernetesWorkspaceImageBuilder", () => {
     api.nextStatus = "running";
     let now = 0;
     const builder = new KubernetesWorkspaceImageBuilder({
+      platform: "linux/amd64",
       config: { ...config, timeoutMs: 60_000 },
       api,
       registryClient: registry("sha256:1"),

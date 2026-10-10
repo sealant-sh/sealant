@@ -39,6 +39,19 @@ every process it runs as a user.
   Ubuntu's default is 0750, and every person's primary group is `mend`.
 - **A `docker` group** (gid 2375, or the image's own) when the workspace has its own Docker.
 
+## Architecture
+
+An image is built for the architecture of the machine that runs it: the worker's Docker daemon, or
+the Kubernetes nodes its builds run on. The architecture is part of the image's plan hash, so an
+image built for `amd64` is never reused on `arm64`, or the other way round.
+
+Fedora, Ubuntu and nix start from multi-architecture images and build natively on both. Docker Hub's
+`archlinux` image is `amd64` only, so on `arm64` an Arch image starts from Arch Linux ARM's rootfs
+instead: the build fetches the tarball and its signature, verifies the signature against the port's
+build key, and unpacks it. The board kernel, modules and firmware the tarball carries are removed,
+the tarball's `alarm` user is deleted, and root's password is locked, as Docker Hub's `archlinux`
+image ships it. Every package in the catalog installs on both.
+
 ## The person environment
 
 `/etc/sealant/person-env` is the environment of a process run as a person:

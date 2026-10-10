@@ -108,6 +108,7 @@ import {
   processUserCapability,
   type ProcessUserChannel,
   planWorkspaceImageBuild,
+  processImagePlatform,
   type PersonLayoutContext,
   homePathProblem,
   attestationCoversObservations,
@@ -3872,7 +3873,9 @@ export const expireWorkspace = (input: {
 /**
  * What a create would build, read before the create (Mend ADR 0016): the spec is planned exactly as
  * the build plans it, and the latest image published for that plan answers with its per-person
- * capability. The image's names are answered only to the owner who built it.
+ * capability. The image's names are answered only to the owner who built it. The platform is the
+ * worker's: its Docker daemon's, which is this machine's where they share a host, or what
+ * SEALANT_WORKSPACE_IMAGE_PLATFORM pins for both.
  */
 export const inspectWorkspaceImage = (input: { readonly payload: InspectWorkspaceImageRequest }) =>
   Effect.gen(function* () {
@@ -3882,7 +3885,11 @@ export const inspectWorkspaceImage = (input: { readonly payload: InspectWorkspac
     }
     const spec = yield* parseWorkspaceSpec(body.spec);
     const planned = yield* Effect.try({
-      try: () => planWorkspaceImageBuild({ blueprint: spec }),
+      try: () =>
+        planWorkspaceImageBuild({
+          blueprint: spec,
+          platform: env.SEALANT_WORKSPACE_IMAGE_PLATFORM ?? processImagePlatform(),
+        }),
       catch: (error) =>
         new WorkspaceBadRequestError({
           message: `The spec does not plan an image: ${error instanceof Error ? error.message : "unknown error"}`,
