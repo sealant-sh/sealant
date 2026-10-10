@@ -28,8 +28,10 @@ import {
 } from "@sealant/db";
 import {
   InlineByteaArtifactStoreLive,
+  makeRunRecordWriter,
   normalizeEnvelope,
   PostgresTelemetrySinkLive,
+  type RunRecordLoss,
   TelemetrySink,
 } from "@sealant/telemetry";
 import {
@@ -144,9 +146,24 @@ export class ProcessUserUnavailableError extends Schema.TaggedErrorClass<Process
 ) {}
 
 /**
+ * The command ran, but part of its record was not stored (the store refused it past every retry):
+ * its output is not all kept, so the run fails, with the exit code and changes it did record.
+ */
+export class RunRecordIncompleteError extends Schema.TaggedErrorClass<RunRecordIncompleteError>()(
+  "RunRecordIncompleteError",
+  { message: Schema.String, exitCode: Schema.Number },
+) {}
+
+const describeRecordLoss = (loss: RunRecordLoss, exitCode: number) =>
+  `${exitCode === -1 ? "The command's exit was not observed" : `The command exited ${String(exitCode)}`}, but ${String(loss.events)} event(s) of its record (sequences ${loss.fromSequence.toString()}–${loss.toSequence.toString()}) were not stored: ${loss.reason}`;
+
+/**
  * Execs the harness and records its telemetry, bounded to the harness process. Returns the exit
- * code. With `user`, the daemon starts the process as that Linux user (`ExecArgs.user`), and only a
- * daemon that reports `exec.user` is asked to (one capabilities read on the same connection).
+ * code. A batch the record store refuses does not stop the recording (see `makeRunRecordWriter`):
+ * the process is followed to its exit, and only events still not stored then fail the capture,
+ * with a {@link RunRecordIncompleteError}. With `user`, the daemon starts the process as that
+ * Linux user (`ExecArgs.user`), and only a daemon that reports `exec.user` is asked to (one
+ * capabilities read on the same connection).
  */
 export const captureRun = (
   runId: string,
@@ -192,8 +209,10 @@ export const captureRun = (
       );
 
       yield* sink.openEpoch({ runId, runtimeId, schemaVersion: 0 });
+      const record = makeRunRecordWriter(sink, { runId, runtimeId });
 
       let exitCode = -1;
+      let loss: RunRecordLoss | undefined;
       const drain = session.events.pipe(
         // Ingest this run's own events plus untagged daemon events (boot, heartbeats — the
         // pre-attribution behavior, and the compatibility path for daemons that ignore
@@ -212,26 +231,31 @@ export const captureRun = (
           }),
         ),
         Stream.groupedWithin(BATCH_SIZE, BATCH_WINDOW),
-        Stream.mapEffect((batch) =>
-          sink.appendBatch({ runId, runtimeId, batch: Array.from(batch).map(normalizeEnvelope) }),
-        ),
+        Stream.mapEffect((batch) => record.append(Array.from(batch).map(normalizeEnvelope))),
         Stream.runDrain,
       );
 
       yield* drain.pipe(
         Effect.ensuring(
-          Effect.suspend(() =>
-            sink
+          Effect.gen(function* () {
+            loss = yield* record.flush;
+            yield* sink
               .closeEpoch({
                 runId,
                 runtimeId,
                 closeReason: exitCode === -1 ? "transport-close" : "stream-end",
                 suspicious: exitCode === -1,
               })
-              .pipe(Effect.ignore),
-          ),
+              .pipe(Effect.ignore);
+          }),
         ),
       );
+      if (loss !== undefined) {
+        return yield* new RunRecordIncompleteError({
+          message: describeRecordLoss(loss, exitCode),
+          exitCode,
+        });
+      }
       return exitCode;
     }),
   );
@@ -299,8 +323,20 @@ const captureChanges = (runId: string, target: SealantTarget) =>
 const produceHarnessRun = (runId: string, target: SealantTarget, command: RunExecCommand) =>
   Effect.gen(function* () {
     const runs = yield* RunRepo;
-    const exitCode = yield* captureRun(runId, target, command);
+    const captured = yield* captureRun(runId, target, command).pipe(
+      Effect.catchTag("RunRecordIncompleteError", Effect.succeed),
+    );
     const changes = yield* captureChanges(runId, target);
+    if (captured instanceof RunRecordIncompleteError) {
+      yield* runs.markRunFailed({
+        id: runId,
+        exitCode: captured.exitCode,
+        errorMessage: captured.message,
+        ...changes,
+      });
+      return;
+    }
+    const exitCode = captured;
     yield* exitCode === 0
       ? runs.markRunCompleted({ id: runId, exitCode: 0, ...changes })
       : runs.markRunFailed({ id: runId, exitCode, ...changes });
@@ -326,6 +362,15 @@ export const produceExecRun = (
       const captured = yield* captureRun(runId, target, command, user).pipe(
         Effect.catchTag("ProcessUserUnavailableError", (error) =>
           runs.markRunFailed({ id: runId, errorMessage: error.message }).pipe(Effect.as(undefined)),
+        ),
+        Effect.catchTag("RunRecordIncompleteError", (error) =>
+          runs
+            .markRunFailed({
+              id: runId,
+              ...(error.exitCode === -1 ? {} : { exitCode: error.exitCode }),
+              errorMessage: `Command ${index + 1}/${commands.length} (${command.executable}): ${error.message}; check run aborted.`,
+            })
+            .pipe(Effect.as(undefined)),
         ),
       );
       if (captured === undefined) return;
@@ -407,6 +452,7 @@ export const produceDotfilesRun = (
         Effect.retry(BRIDGE_RETRY),
       );
       yield* sink.openEpoch({ runId, runtimeId, schemaVersion: 0 });
+      const record = makeRunRecordWriter(sink, { runId, runtimeId });
 
       // Only the directory the API staged for this run is ever removed.
       const staged =
@@ -476,13 +522,12 @@ export const produceDotfilesRun = (
           }),
         ),
         Stream.groupedWithin(BATCH_SIZE, BATCH_WINDOW),
-        Stream.mapEffect((batch) =>
-          sink.appendBatch({ runId, runtimeId, batch: Array.from(batch).map(normalizeEnvelope) }),
-        ),
+        Stream.mapEffect((batch) => record.append(Array.from(batch).map(normalizeEnvelope))),
         Stream.runDrain,
         Effect.timeout(options.bootstrapTimeout ?? DOTFILES_BOOTSTRAP_TIMEOUT),
         Effect.result,
       );
+      const loss = yield* record.flush;
       yield* close(
         exitCode === undefined ? "transport-close" : "stream-end",
         exitCode === undefined,
@@ -499,6 +544,14 @@ export const produceDotfilesRun = (
         yield* runs.markRunFailed({
           id: runId,
           errorMessage: `The dotfiles were applied as ${dotfiles.user}; their bootstrap's exit was not observed (the connection to the workspace closed).`,
+        });
+        return;
+      }
+      if (loss !== undefined) {
+        yield* runs.markRunFailed({
+          id: runId,
+          exitCode,
+          errorMessage: `The dotfiles were applied as ${dotfiles.user}; their bootstrap's record is incomplete. ${describeRecordLoss(loss, exitCode)}`,
         });
         return;
       }

@@ -1,3 +1,4 @@
+import { toJobFailure } from "./failure.js";
 import { getJobQueueSingleton } from "./singleton.js";
 import type { JobQueueDefinition } from "./topology.js";
 
@@ -70,9 +71,13 @@ export const consumeJobQueueJson = async <TMessage>(
             jobId: job.id,
             error: error instanceof Error ? error.message : String(error),
           });
-          throw error;
+          throw toJobFailure(error);
         }
-        await options.onMessage({ message, jobId: job.id });
+        try {
+          await options.onMessage({ message, jobId: job.id });
+        } catch (error) {
+          throw toJobFailure(error);
+        }
       }
     },
   );

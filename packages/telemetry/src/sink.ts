@@ -5,8 +5,14 @@
  * to the rest of the package.
  *
  * `PostgresTelemetrySinkLive` is the MVP reference adapter. `appendBatch` is the dedup core:
- * ON CONFLICT (runtime_id, sequence) DO NOTHING ... RETURNING, then the projections for ONLY the
- * newly-committed rows are written in the SAME transaction (idempotent at-least-once).
+ * ON CONFLICT DO NOTHING ... RETURNING, then the projections for ONLY the newly-committed rows are
+ * written in the SAME transaction (idempotent at-least-once). The conflict has no target: an event
+ * is unique by its id AND by its runtime and sequence, and only an arbiter index waits out a
+ * concurrent insert of the same row. With `(runtime_id, sequence)` as the only arbiter, a run-exec
+ * job and the full-stream ingester inserting the same event at once failed the second insert on
+ * the primary key (2026-10-10, a person's exec run). The events the insert did not take are then
+ * read back: the same event is nothing, a different one is logged as an error and never fails the
+ * batch (see `redelivery.ts`).
  */
 import {
   SealantDB,
@@ -19,12 +25,13 @@ import {
   type TelemetryEvent,
   type TSealantDB,
 } from "@sealant/db";
-import { and, asc, eq, max } from "drizzle-orm";
+import { and, asc, eq, inArray, max, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Stream } from "effect";
 
 import { ArtifactStore, type ArtifactStoreService } from "./artifact-store.js";
 import { type TelemetrySinkError, withTelemetrySinkError } from "./errors.js";
 import { deriveScrollbackRow, deriveTimelineRow, eventRow } from "./normalize.js";
+import { conflictingRedeliveries } from "./redelivery.js";
 import type { LossSpanInput, NormalizedEvent } from "./types.js";
 
 export interface OpenEpochInput {
@@ -88,6 +95,58 @@ const selectMaxSequence = (db: TSealantDB, runtimeId: string) =>
         return typeof value === "bigint" ? value : BigInt(value);
       }),
     );
+
+/**
+ * Reads back the events an insert did not take and reports each that is not the event the log
+ * already holds. Diagnostics only: the batch is committed either way, so a failed read is a
+ * warning, not a failed append.
+ */
+const reportConflictingRedeliveries = (
+  db: TSealantDB,
+  runId: string,
+  skipped: readonly NormalizedEvent[],
+) => {
+  const sequencesByRuntime = new Map<string, bigint[]>();
+  for (const event of skipped) {
+    const sequences = sequencesByRuntime.get(event.runtimeId) ?? [];
+    sequences.push(event.sequence);
+    sequencesByRuntime.set(event.runtimeId, sequences);
+  }
+  return db
+    .select()
+    .from(telemetryEvents)
+    .where(
+      or(
+        inArray(
+          telemetryEvents.eventId,
+          skipped.map((event) => event.eventId),
+        ),
+        ...[...sequencesByRuntime].map(([runtimeId, sequences]) =>
+          and(
+            eq(telemetryEvents.runtimeId, runtimeId),
+            inArray(telemetryEvents.sequence, sequences),
+          ),
+        ),
+      ),
+    )
+    .pipe(
+      Effect.flatMap((stored) => {
+        const conflicts = conflictingRedeliveries(skipped, stored);
+        return conflicts.length === 0
+          ? Effect.void
+          : Effect.logError(
+              `telemetry: ${String(conflicts.length)} re-delivered event(s) of run ${runId} differ from the stored ones; the stored events are kept`,
+              conflicts,
+            );
+      }),
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `telemetry: the re-delivered events of run ${runId} were not compared with the stored ones`,
+          cause,
+        ),
+      ),
+    );
+};
 
 /**
  * Deterministic, content-derived loss-span id so re-ingest (replay) is idempotent — a re-detected
@@ -167,15 +226,13 @@ export const makePostgresTelemetrySink = (
           { discard: true },
         );
 
-        return yield* db.transaction((tx) =>
+        const appended = yield* db.transaction((tx) =>
           Effect.gen(function* () {
             const inserted = yield* tx
               .insert(telemetryEvents)
               .values(batch.map((event) => eventRow(event, runIdFor(event))))
-              .onConflictDoNothing({
-                target: [telemetryEvents.runtimeId, telemetryEvents.sequence],
-              })
-              .returning();
+              .onConflictDoNothing()
+              .returning({ eventId: telemetryEvents.eventId });
 
             const committedIds = new Set(inserted.map((row) => row.eventId));
             const committed = batch.filter((event) => committedIds.has(event.eventId));
@@ -201,9 +258,12 @@ export const makePostgresTelemetrySink = (
                 maxSeq = event.sequence;
               }
             }
+            // Never lowered (GREATEST skips a NULL): a held-back batch can be appended after later ones.
             yield* tx
               .update(telemetryRunEpochs)
-              .set({ lastSequence: maxSeq })
+              .set({
+                lastSequence: sql`greatest(${telemetryRunEpochs.lastSequence}, ${maxSeq})`,
+              })
               .where(
                 and(
                   eq(telemetryRunEpochs.runId, input.runId),
@@ -214,6 +274,16 @@ export const makePostgresTelemetrySink = (
             return committed;
           }),
         );
+
+        if (appended.length < batch.length) {
+          const appendedIds = new Set(appended.map((event) => event.eventId));
+          yield* reportConflictingRedeliveries(
+            db,
+            input.runId,
+            batch.filter((event) => !appendedIds.has(event.eventId)),
+          );
+        }
+        return appended;
       }),
     ),
 

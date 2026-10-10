@@ -87,6 +87,40 @@ describe.skipIf(databaseUrl === undefined)("job queue (pg-boss)", () => {
     expect(dlq.map((job) => job.data)).toEqual([{ id: "two" }]);
   });
 
+  it("records a failure whose error carries a bigint", async () => {
+    const queue = defineJobQueue(`test-bigint-failure-${suffix}`, { activeTimeoutSeconds: 60 });
+    const jobs = createJobQueueService(url);
+    const { boss } = await getJobQueueSingleton(url);
+    const bossErrors: unknown[] = [];
+    const onError = (error: unknown) => bossErrors.push(error);
+    boss.on("error", onError);
+
+    const consumer = await jobs.consumeJson<{ readonly id: string }>({
+      queue,
+      parseMessage: (input) => input as { readonly id: string },
+      onMessage: async () => {
+        // How the run-exec worker failed: a telemetry query error with bigint parameters.
+        throw new Error("appendBatch failed", { cause: { params: ["evt_1", 257n] } });
+      },
+    });
+
+    await jobs.publishJson({ queue, message: { id: "three" } });
+    let failed: Awaited<ReturnType<typeof boss.findJobs>> = [];
+    for (let i = 0; i < 50 && failed.length === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      failed = (await boss.findJobs(queue.name)).filter((job) => job.state === "failed");
+    }
+    await consumer.cancel();
+    boss.off("error", onError);
+
+    expect(bossErrors).toEqual([]);
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.output).toMatchObject({
+      message: "appendBatch failed",
+      detail: { cause: { params: ["evt_1", "257"] } },
+    });
+  });
+
   it("keeps no row of a delivery taken with deleteOnPickup, whether it succeeds or fails", async () => {
     const queue = defineJobQueue(`test-delete-on-pickup-${suffix}`, { activeTimeoutSeconds: 60 });
     const jobs = createJobQueueService(url);

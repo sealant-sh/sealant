@@ -24,3 +24,5 @@ export {
   JobQueueConnectionConfig,
   type JobQueueService,
 } from "./service.js";
+
+export { JobFailure, toJobFailure } from "./failure.js";

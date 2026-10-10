@@ -8,4 +8,6 @@ export * from "./projector.js";
 export * from "./query.js";
 export * from "./run-telemetry.js";
 export * from "./ingester.js";
+export * from "./record-writer.js";
+export * from "./redelivery.js";
 export * from "./retention.js";
