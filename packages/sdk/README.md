@@ -169,6 +169,24 @@ operator has to enable it (`workspaces.docker.enabled`); an install that cannot 
 the gap beside your Docker switch instead of surfacing a launch failure later. GitHub credentials
 provide both `GH_TOKEN` and `GITHUB_TOKEN` to the workspace.
 
+## The cloud metadata address
+
+On a cloud host, 169.254.169.254 (and fd00:ec2::254 over IPv6 on AWS) hands out the instance's own
+credentials. On the Docker runtime a workspace is refused it by default: a connection fails at once,
+from the workspace and from every container its Docker service runs, for root and every other user
+in it. Nothing else is touched. A workspace that genuinely needs the address opts in:
+
+```ts
+const workspace = await sealant.workspaces.create({
+  repository: "github.com/acme/infra",
+  harness: codex(),
+  network: { cloudMetadata: true },
+});
+```
+
+A gVisor (`runsc`) workspace cannot be guarded, so it launches only with the opt-in. A control plane
+older than the option rejects it.
+
 ## Workspace environment variables
 
 Ordinary (non-secret) configuration set on the workspace at creation and inherited by every process

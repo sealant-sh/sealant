@@ -290,6 +290,7 @@ const createWorkspaceBuildSpec = (
       ociRuntime: "runc",
       network: {
         outbound: true,
+        cloudMetadata: false,
       },
     },
     target: {

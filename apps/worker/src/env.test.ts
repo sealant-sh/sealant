@@ -45,6 +45,16 @@ describe("parseWorkerEnv", () => {
     ).toBeUndefined();
   });
 
+  it("keeps the metadata guard image, and leaves an empty one to the adapter's default", () => {
+    expect(
+      parseWorkerEnv({ SEALANT_DOCKER_NETWORK_GUARD_IMAGE: "mirror.local/busybox:1.37" })
+        .SEALANT_DOCKER_NETWORK_GUARD_IMAGE,
+    ).toBe("mirror.local/busybox:1.37");
+    expect(
+      parseWorkerEnv({ SEALANT_DOCKER_NETWORK_GUARD_IMAGE: "" }).SEALANT_DOCKER_NETWORK_GUARD_IMAGE,
+    ).toBeUndefined();
+  });
+
   it("refuses a retired one-image MicroVM setting instead of ignoring it", () => {
     expect(() =>
       parseWorkerEnv({
