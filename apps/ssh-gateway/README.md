@@ -38,7 +38,8 @@ control target via the API route:
    registered in the database, the gateway also names its fingerprint
    (`x-sealant-ssh-key-fingerprint`), and the API answers only while that key is still the
    principal's, echoing it back (an answer without the echo, from an older API, is refused). A
-   refusal (401) ends the connection, and a logged-in connection is asked again every
+   refusal for the key (`WorkspaceSshKeyNoLongerRegisteredError`, 401) ends the connection, while
+   any other refusal refuses the channel alone; a logged-in connection is asked again every
    `SSH_GATEWAY_KEY_RECHECK_SECONDS` even when it opens nothing, so removing a key ends the
    connections it opened within that interval.
 5. Gateway opens one sealantd control connection (docker-exec + socat) and maps SSH channels:
@@ -57,21 +58,29 @@ the API. So until a connection has logged in, it is held to limits modelled on s
 (`src/admission.ts`):
 
 - **Login grace time** (`LoginGraceTime`): a connection that has not logged in within
-  `SSH_GATEWAY_LOGIN_GRACE_SECONDS` is dropped, whatever it sent.
+  `SSH_GATEWAY_LOGIN_GRACE_SECONDS` (60, room for a passphrase or a hardware key's touch) is
+  dropped, whatever it sent.
 - **Connections not yet logged in** (`MaxStartups`, `PerSourceMaxStartups`): at most
   `SSH_GATEWAY_MAX_STARTUPS` overall and `SSH_GATEWAY_PER_SOURCE_MAX_STARTUPS` from one source; one
   more is dropped as it arrives, before any SSH is spoken.
 - **Attempts per connection** (`MaxAuthTries`): after `SSH_GATEWAY_MAX_AUTH_TRIES` refused attempts
   the connection is dropped.
 - **Key lookups per source** (the role of `PerSourcePenalties`): each lookup the API is asked spends
-  one from the source's `SSH_GATEWAY_PER_SOURCE_KEY_LOOKUPS_PER_MINUTE`, refilled at that rate. A
-  source that has spent them gets no more lookups, and its new connections are dropped, until they
-  refill. A key already looked up on the connection, found or not, costs nothing again.
+  one from the source's `SSH_GATEWAY_PER_SOURCE_KEY_LOOKUPS_PER_MINUTE`, refilled at that rate, and
+  a lookup that finds a registered key is given back. Only keys nobody holds cost, so an office or a
+  CGNAT address that logs in often keeps its budget. A source that has spent them gets no more
+  lookups, and its new connections are dropped, until they refill. A key already looked up on the
+  connection, found or not, costs nothing again.
 
-A source is an IPv4 address or an IPv6 /64. The gateway sees the address the TCP connection comes
-from: behind a proxy or a load balancer that rewrites it (rootless Docker's port forwarding, a
-Kubernetes Service with `externalTrafficPolicy: Cluster`), every client is one source, and the
-per-source limits apply to all of them together. Raise them there, or set the lookup budget to `0`.
+A source is an IPv4 address or an IPv6 /64. The per-source limits need the gateway to see each
+client's own address, the one its TCP connection comes from. Behind anything that rewrites it, every
+client is one source and the per-source limits apply to all of them together: a Kubernetes Service
+with `externalTrafficPolicy: Cluster` (the Helm chart sets `Local`), rootless Docker's port
+forwarding, Docker Desktop, and docker-proxy for IPv6 clients. Publish the port so the address
+survives, raise the limits there, or set the lookup budget to `0`.
+
+A connection the gateway ends gets DISCONNECT, and its socket is destroyed 2 s later, so a client
+that ignores the DISCONNECT cannot keep writing into channels it already had open.
 
 The API budgets the gateway's key lookups apart from its other requests (subject `gateway:keys`, the
 other gateway routes `gateway`), so a flood of logins that spends the lookup budget refuses new
@@ -91,7 +100,7 @@ logins and never the channels of connections already in.
 - `SSH_GATEWAY_ALLOWED_KEYS_FILE` (default: `/keys/gateway_allowed_keys`; optional — a missing or
   empty file is fine, user keys resolve via the API)
 - `SSH_GATEWAY_WORKSPACE_USERNAME_PREFIX` (default: `ws`)
-- `SSH_GATEWAY_LOGIN_GRACE_SECONDS` (default: `30`)
+- `SSH_GATEWAY_LOGIN_GRACE_SECONDS` (default: `60`)
 - `SSH_GATEWAY_MAX_AUTH_TRIES` (default: `6`)
 - `SSH_GATEWAY_MAX_STARTUPS` (default: `100`)
 - `SSH_GATEWAY_PER_SOURCE_MAX_STARTUPS` (default: `10`)

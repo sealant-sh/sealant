@@ -808,7 +808,7 @@ export const sshGatewayCoreEnvSchema = z.object({
   // PerSourceMaxStartups, and a key lookup budget per source address in the role of
   // PerSourcePenalties). The port may be published to the internet, and every key the gateway does
   // not know costs a lookup in the API's budget.
-  SSH_GATEWAY_LOGIN_GRACE_SECONDS: z.coerce.number().int().min(1).default(30),
+  SSH_GATEWAY_LOGIN_GRACE_SECONDS: z.coerce.number().int().min(1).default(60),
   SSH_GATEWAY_MAX_AUTH_TRIES: z.coerce.number().int().min(1).default(6),
   SSH_GATEWAY_MAX_STARTUPS: z.coerce.number().int().min(1).default(100),
   SSH_GATEWAY_PER_SOURCE_MAX_STARTUPS: z.coerce.number().int().min(1).default(10),

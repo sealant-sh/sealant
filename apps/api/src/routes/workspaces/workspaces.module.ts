@@ -23,6 +23,7 @@ import {
   WorkspaceNotFoundError,
   WorkspaceServiceUnavailableError,
   WorkspaceUnauthorizedError,
+  WorkspaceSshKeyNoLongerRegisteredError,
   type CreateWorkspaceHeaders,
   type CreateWorkspaceRequest,
   type CancelWorkspaceCreateRequest,
@@ -2448,7 +2449,7 @@ export const getWorkspaceSshTarget = (input: {
         "Failed to load the connection's SSH key.",
       );
       if (sshKey === undefined || sshKey.ownerUserId !== principalId) {
-        return yield* new WorkspaceUnauthorizedError({
+        return yield* new WorkspaceSshKeyNoLongerRegisteredError({
           message: "The SSH key this connection logged in with is no longer registered.",
         });
       }

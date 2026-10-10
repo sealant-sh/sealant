@@ -1347,6 +1347,20 @@ export class WorkspaceUnauthorizedError extends Schema.TaggedErrorClass<Workspac
 ) {}
 
 /**
+ * The SSH key the gateway named (`x-sealant-ssh-key-fingerprint`) is no longer registered to the
+ * principal: removed, or registered since to someone else. Its own tag, so the gateway ends the
+ * connections opened with the key on this refusal alone, never on another 401 (a gateway token
+ * mismatch while the API and the gateway roll).
+ */
+export class WorkspaceSshKeyNoLongerRegisteredError extends Schema.TaggedErrorClass<WorkspaceSshKeyNoLongerRegisteredError>()(
+  "WorkspaceSshKeyNoLongerRegisteredError",
+  {
+    message: Schema.String,
+  },
+  { httpApiStatus: 401 },
+) {}
+
+/**
  * `sshAsOwner` refused: the owner is bound to no person (`ssh-owner-unbound`), the create carries no
  * capture owner map (`ssh-owner-needs-owner-map`), or the owner map or `credentialsHome` does not
  * give the owner's bound person their own uid and home (`ssh-owner-mismatch`). Names no path.
@@ -1764,6 +1778,7 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
       success: workspaceSshTargetSchema,
       error: [
         WorkspaceUnauthorizedError,
+        WorkspaceSshKeyNoLongerRegisteredError,
         WorkspaceNotFoundError,
         WorkspaceConflictError,
         WorkspaceServiceUnavailableError,

@@ -44,6 +44,11 @@ const messageResponseSchema = z.object({
   message: z.string().trim().min(1),
 });
 
+// The API's refusal for a key no longer registered to the principal: the one that ends a connection.
+const keyNoLongerRegisteredSchema = z.object({
+  _tag: z.literal("WorkspaceSshKeyNoLongerRegisteredError"),
+});
+
 export type WorkspaceSshTarget = z.infer<typeof workspaceSshTargetSchema>;
 
 /** How long one target lookup may take before the channel that asked is refused. */
@@ -71,12 +76,13 @@ export const toControlTarget = (
 };
 
 /**
- * The API refused the target outright (401): the principal is not the workspace's, or the key the
- * connection logged in with is no longer registered. Nothing further on that connection is
- * authorized, so the gateway ends it.
+ * The key the connection logged in with is no longer registered to its principal (the API's
+ * `WorkspaceSshKeyNoLongerRegisteredError`). Nothing further on that connection is authorized, so
+ * the gateway ends it. Any other refusal, a gateway token mismatch included, refuses the channel
+ * alone.
  */
-export class WorkspaceTargetUnauthorizedError extends Error {
-  override readonly name = "WorkspaceTargetUnauthorizedError";
+export class SshKeyNoLongerRegisteredError extends Error {
+  override readonly name = "SshKeyNoLongerRegisteredError";
 }
 
 /**
@@ -125,8 +131,8 @@ export const resolveWorkspaceControlTarget = async (input: {
     const message = parsedError.success
       ? parsedError.data.message
       : `Control target resolution failed with status ${response.status}.`;
-    throw response.status === 401
-      ? new WorkspaceTargetUnauthorizedError(message)
+    throw response.status === 401 && keyNoLongerRegisteredSchema.safeParse(payload).success
+      ? new SshKeyNoLongerRegisteredError(message)
       : new Error(message);
   }
 

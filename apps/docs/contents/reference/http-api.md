@@ -160,9 +160,10 @@ workspace with a user only to a gateway that says it runs sessions as one
 (`x-sealant-gateway-ssh-user: 1`, else `409`). Upgrade the API and the gateway together. Only the
 workspace's owner opens SSH sessions at all. When the gateway names the registered key a connection
 logged in with (`x-sealant-ssh-key-fingerprint`), the API answers only while that key is still the
-principal's (else `401`) and echoes it as `sshKeyFingerprint`; the gateway refuses an answer without
-the echo (an older API) and ends the connection on a `401`, so removing a key ends the connections
-opened with it.
+principal's (else `401` `WorkspaceSshKeyNoLongerRegisteredError`) and echoes it as
+`sshKeyFingerprint`; the gateway refuses an answer without the echo (an older API) and ends the
+connection on that refusal alone (another `401` refuses the channel), so removing a key ends the
+connections opened with it.
 
 A session's `argv` (`POST /v1/sessions` and `/v1/sessions/as-user`) starts with the program, which
 must be non-empty with no leading or trailing whitespace. Every argument after it may be any string:

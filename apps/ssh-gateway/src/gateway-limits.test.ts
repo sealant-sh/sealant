@@ -54,6 +54,8 @@ const aliceFingerprint = computeSshPublicKeyFingerprint(aliceBlob);
 
 /** Whether Alice's key is registered; a test removes it. */
 let aliceRegistered = true;
+/** The stand-in refuses every target as a gateway token mismatch would (401, another tag). */
+let tokenMismatch = false;
 let keyLookups = 0;
 /** The key fingerprint each `ssh-target` request named. */
 const targetKeys: Array<string | undefined> = [];
@@ -91,12 +93,20 @@ beforeAll(async () => {
         const named = request.headers["x-sealant-ssh-key-fingerprint"];
         const fingerprint = typeof named === "string" ? named : undefined;
         targetKeys.push(fingerprint);
+        if (tokenMismatch) {
+          reply(401, {
+            _tag: "WorkspaceUnauthorizedError",
+            message: "Invalid workspace SSH gateway token.",
+          });
+          return;
+        }
         if (request.headers["x-sealant-principal-id"] !== OWNER) {
           reply(401, { message: "Principal is not authorized for this workspace." });
           return;
         }
         if (fingerprint !== undefined && !(aliceRegistered && fingerprint === aliceFingerprint)) {
           reply(401, {
+            _tag: "WorkspaceSshKeyNoLongerRegisteredError",
             message: "The SSH key this connection logged in with is no longer registered.",
           });
           return;
@@ -303,6 +313,14 @@ describe("before login", () => {
     expect(person.kind).toBe("in");
     if (person.kind === "in") person.client.end();
   });
+
+  it("charges a source nothing for logins with a registered key: an office logs in past the budget", async () => {
+    for (let round = 0; round < LOOKUPS_PER_MINUTE + 5; round += 1) {
+      const outcome = await login("127.0.0.17", [alice.private]);
+      expect(outcome.kind, `login ${String(round + 1)}`).toBe("in");
+      if (outcome.kind === "in") outcome.client.end();
+    }
+  });
 });
 
 describe("after a key is removed", () => {
@@ -361,6 +379,22 @@ describe("after a key is removed", () => {
       expect(await ended(client, RECHECK_MS * 5)).toBe(true);
     } finally {
       aliceRegistered = true;
+    }
+  });
+
+  it("refuses only the channel on another refusal (a gateway token mismatch), and keeps the connection", async () => {
+    aliceRegistered = true;
+    const outcome = await login("127.0.0.25", [alice.private]);
+    if (outcome.kind !== "in") throw new Error("Alice did not log in");
+    const { client } = outcome;
+
+    tokenMismatch = true;
+    try {
+      expect(await exec(client, "true")).toBe(1);
+      expect(await ended(client, RECHECK_MS * 3)).toBe(false);
+    } finally {
+      tokenMismatch = false;
+      client.end();
     }
   });
 

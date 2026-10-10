@@ -5,17 +5,21 @@ Limits before login, modelled on OpenSSH's sshd: anyone who can reach the gatewa
 connections and offer keys, and every key the gateway does not know costs a lookup in the API. So
 until a connection has logged in it is held to:
 
-- a login grace time (sshd `LoginGraceTime`): the connection is dropped if it has not logged in by
-  then, whatever it sent;
+- a login grace time (sshd `LoginGraceTime`, 60 s, room for a passphrase or a hardware key's touch):
+  the connection is dropped if it has not logged in by then, whatever it sent;
 - a cap on connections not yet logged in, overall and per source (sshd `MaxStartups`,
   `PerSourceMaxStartups`): one more is dropped as it arrives;
 - a cap on refused authentication attempts per connection (sshd `MaxAuthTries`);
-- a key lookup budget per source (the role of sshd `PerSourcePenalties`): a source that spends it
-  gets no more lookups, and its new connections are dropped, until it refills. One address cannot
-  spend the API's budget the people already using the gateway rely on.
+- a key lookup budget per source (the role of sshd `PerSourcePenalties`): only a key the API does
+  not know (or a lookup that fails) spends it. A source that spends it gets no more lookups, and its
+  new connections are dropped, until it refills. One address cannot spend the API's budget the
+  people already using the gateway rely on.
 
 A source is an IPv4 address, or an IPv6 /64 (one host is routinely handed a whole /64, so a
-per-address limit would be none at all; sshd's `PerSourceNetBlockSize` does the same).
+per-address limit would be none at all; sshd's `PerSourceNetBlockSize` does the same). The limits
+need the client's own address: behind something that rewrites it (a Kubernetes Service with
+`externalTrafficPolicy: Cluster`, rootless Docker, Docker Desktop, docker-proxy over IPv6), every
+client is one source.
 */
 
 export interface AdmissionLimits {
@@ -32,7 +36,7 @@ export interface AdmissionLimits {
 }
 
 export const DEFAULT_ADMISSION_LIMITS: AdmissionLimits = {
-  loginGraceMs: 30_000,
+  loginGraceMs: 60_000,
   maxAuthTries: 6,
   maxStartups: 100,
   perSourceMaxStartups: 10,
@@ -89,6 +93,8 @@ export interface AdmissionTicket {
   readonly source: string;
   /** Spends one key lookup from the source's budget; false: none left, ask nothing. */
   readonly takeKeyLookup: () => boolean;
+  /** Gives back the lookup a registered key was found with: only unknown keys cost. */
+  readonly refundKeyLookup: () => void;
   /** Records a refused authentication attempt; true: the connection has used all it may. */
   readonly refusedAttempt: () => boolean;
   /** The connection logged in: it stops counting as a startup and its grace timer stops. */
@@ -224,6 +230,11 @@ export const createAdmission = (
         }
         sourceState.lookups -= 1;
         return true;
+      },
+      refundKeyLookup: () => {
+        if (budget === 0) return;
+        refill(sourceState);
+        sourceState.lookups = Math.min(budget, sourceState.lookups + 1);
       },
       refusedAttempt: () => {
         attempts += 1;

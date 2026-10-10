@@ -21,6 +21,9 @@ metadata:
   {{- end }}
 spec:
   type: {{ .Values.sshGateway.service.type }}
+  {{- if and (has .Values.sshGateway.service.type (list "LoadBalancer" "NodePort")) .Values.sshGateway.service.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ .Values.sshGateway.service.externalTrafficPolicy }}
+  {{- end }}
   selector: {{ include "sealant.component" (dict "root" . "name" "ssh-gateway") | nindent 4 }}
   ports: [{ name: ssh, port: {{ .Values.sshGateway.service.port }}, targetPort: ssh }]
 ---

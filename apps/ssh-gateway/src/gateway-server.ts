@@ -31,7 +31,7 @@ import {
   parseWorkspaceIdFromUsername,
   resolveWorkspaceControlTarget,
   toControlTarget,
-  WorkspaceTargetUnauthorizedError,
+  SshKeyNoLongerRegisteredError,
   type ControlTargetOptions,
   type WorkspaceSshTarget,
 } from "./workspace-target.js";
@@ -207,10 +207,14 @@ const bridgeChannel = (input: {
 
 // One incoming client connection maps to exactly one workspace and one lazily-opened control
 // connection. SSH channels are then mapped onto control commands across that connection.
+/** How long an ended connection's client has to close before its socket is destroyed. */
+const END_TO_DESTROY_MS = 2_000;
+
 const bindClientConnection = (
   incomingConnection: Connection,
   config: SshGatewayServerConfig,
   ticket: AdmissionTicket,
+  socket: Socket,
 ) => {
   // The workspace routing decision comes from the SSH username (ws-<id>); the real per-workspace gate is
   // the API, keyed by the authenticated principal. Both are set once auth passes.
@@ -230,6 +234,12 @@ const bindClientConnection = (
       console.warn("[ssh-gateway] ending a connection", { workspaceId, principalId, reason });
     }
     incomingConnection.end();
+    // `end()` sends DISCONNECT and half-closes, and ssh2 goes on reading: a client that ignores the
+    // DISCONNECT could keep writing into channels it already had open. The socket goes after a
+    // moment either way.
+    setTimeout(() => {
+      socket.destroy();
+    }, END_TO_DESTROY_MS).unref();
   };
   // A single client connection gets a single control connection. Channels multiplex over it.
   let controlPromise: Promise<ControlClient> | undefined;
@@ -264,7 +274,7 @@ const bindClientConnection = (
         ...(options.checkKey && keyFingerprint !== undefined ? { keyFingerprint } : {}),
       });
     } catch (error) {
-      if (options.checkKey && error instanceof WorkspaceTargetUnauthorizedError) {
+      if (options.checkKey && error instanceof SshKeyNoLongerRegisteredError) {
         endConnection(error.message);
       }
       throw error;
@@ -407,6 +417,10 @@ const bindClientConnection = (
         return undefined;
       }
 
+      // A registered key costs its source nothing: the budget is for keys nobody holds, so a busy
+      // office or CGNAT address that logs in often keeps it (sshd's PerSourcePenalties charges
+      // failures alone). Every channel re-checks the key, so the refund admits nothing more.
+      ticket.refundKeyLookup();
       resolvedPrincipalId = lookup.principalId;
       cachedLookup = { cacheKey, principalId: resolvedPrincipalId };
     }
@@ -848,7 +862,7 @@ export const startSshGatewayServer = (config: SshGatewayServerConfig) => {
         incomingConnection.end();
         return;
       }
-      bindClientConnection(incomingConnection, config, admitted.ticket);
+      bindClientConnection(incomingConnection, config, admitted.ticket, admitted.socket);
     },
   );
 

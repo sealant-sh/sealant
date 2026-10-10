@@ -9,6 +9,7 @@
 import {
   WorkspaceConflictError,
   WorkspaceNotFoundError,
+  WorkspaceSshKeyNoLongerRegisteredError,
   WorkspaceUnauthorizedError,
 } from "@sealant/api-contracts";
 import {
@@ -154,7 +155,9 @@ describe("the gateway's target for a connection's key", () => {
       sshUserGateway: true,
       keyFingerprint: ALICE_KEY,
     });
-    expect(Result.isFailure(result) && result.failure).toBeInstanceOf(WorkspaceUnauthorizedError);
+    expect(Result.isFailure(result) && result.failure).toBeInstanceOf(
+      WorkspaceSshKeyNoLongerRegisteredError,
+    );
   });
 
   it("refuses a key now registered to someone else", async () => {
@@ -165,7 +168,9 @@ describe("the gateway's target for a connection's key", () => {
       sshUserGateway: true,
       keyFingerprint: ALICE_KEY,
     });
-    expect(Result.isFailure(result) && result.failure).toBeInstanceOf(WorkspaceUnauthorizedError);
+    expect(Result.isFailure(result) && result.failure).toBeInstanceOf(
+      WorkspaceSshKeyNoLongerRegisteredError,
+    );
   });
 
   it("echoes no key when the gateway named none (a key from its own allowlist file)", async () => {

@@ -135,6 +135,19 @@ describe("limits before login", () => {
     expect(admission.admit("198.51.100.9", () => undefined).kind).toBe("admitted");
   });
 
+  it("gives back a lookup that found a registered key: only unknown keys cost", () => {
+    const { admission, admit } = harness();
+    // Far more logins from one address than the budget, each looking its key up once.
+    for (let login = 0; login < 20; login += 1) {
+      const ticket = admit("203.0.113.1");
+      expect(ticket.takeKeyLookup()).toBe(true);
+      ticket.refundKeyLookup();
+      ticket.loggedIn();
+      ticket.closed();
+    }
+    expect(admission.admit("203.0.113.1", () => undefined).kind).toBe("admitted");
+  });
+
   it("asks nothing of a lookup budget of 0 (off)", () => {
     const { admit } = harness({ ...LIMITS, perSourceKeyLookupsPerMinute: 0 });
     const ticket = admit("203.0.113.1");
