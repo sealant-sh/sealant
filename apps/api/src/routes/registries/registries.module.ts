@@ -9,7 +9,7 @@ import {
   type RegistryTagsResponse,
   type RegistryExtensionsResponse,
 } from "@sealant/api-contracts";
-import { urlForDisplay } from "@sealant/validators/url-for-display";
+import { splitUrlUserinfo, urlForDisplay } from "@sealant/validators/url-for-display";
 import { RegistryClientHttpError } from "@sealant/workspaces";
 import { Effect } from "effect";
 
@@ -48,6 +48,15 @@ const withRegistryFailure = <A, E, R>(effect: Effect.Effect<A, E, R>) => {
   return effect.pipe(Effect.mapError(mapRegistryFailure));
 };
 
+/**
+ * Whether the registry client sends a Basic credential: an explicit username and password, or the
+ * `user:password@` of the base URL, which the client sends the same way (ZotRegistryClient).
+ */
+const registrySendsBasicAuth = (): boolean =>
+  env.REGISTRY_USERNAME !== undefined ||
+  (env.REGISTRY_BASE_URL !== undefined &&
+    splitUrlUserinfo(env.REGISTRY_BASE_URL).username !== undefined);
+
 export const getRegistry = (registryId: string) => {
   return Effect.gen(function* () {
     yield* ensureRegistry(registryId);
@@ -57,7 +66,7 @@ export const getRegistry = (registryId: string) => {
       name: env.REGISTRY_NAME,
       baseUrl: env.REGISTRY_BASE_URL === undefined ? "" : urlForDisplay(env.REGISTRY_BASE_URL),
       pushRegistry: env.REGISTRY_PUSH_REGISTRY ?? "docker-engine",
-      hasBasicAuth: env.REGISTRY_USERNAME !== undefined,
+      hasBasicAuth: registrySendsBasicAuth(),
     } satisfies RegistrySummary;
   });
 };
