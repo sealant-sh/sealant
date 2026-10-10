@@ -1,5 +1,407 @@
 # @sealant/sdk
 
+## 0.39.0
+
+### Minor Changes
+
+- 55326dd: A capture source takes an owner map, for executors where each person is a Linux user of their own
+  (Mend's per-person layout):
+
+  - `create({ source: { kind: "capture", …, ownerMap: { gid, worktreeUid, people: [{ id, uid }] } } })`
+    reaches the workspace daemon as `SEALANT_CAPTURE_OWNER_MAP`. Its restore gives each listed
+    person's saved directory (`<harnessHome>/people/<id>/`) to their uid and the worktree to the
+    group, and a map that names anyone makes the executor a per-person one: no no-new-privileges, so
+    every person's `sudo` works. Without a map nothing changes.
+  - Checked by the SDK and the control plane alike: `gid` 40000, uids in 40001–49999, ids that are one
+    directory name, no id or uid twice, at most 256 people. Refused on Cloudflare and Kubernetes. A
+    launch on an image whose probe does not report `restore.owner_map` fails with
+    `owner-map-unsupported` before anything starts. Only the source sets the variable: it comes last
+    in every capture launch's boot environment, empty without a map, and a `runtime.env` name must be
+    an environment variable name.
+  - `workspace.capture.replan({ expectedOwnerMap })` (`null` for none) refuses a claim on an executor
+    launched with another map (`409`, `owner-map-mismatch`); `capture.status()` reports `ownerMap`.
+  - `@sealant/api-contracts/capture-owner-map` holds the shape, the checks (`captureOwnerMapProblems`)
+    and the daemon's encoding (`encodeCaptureOwnerMap`).
+
+- 4e889f0: A workspace no longer reaches the cloud metadata address by default. On the Docker runtime, a
+  connection to 169.254.169.254, or to fd00:ec2::254 over IPv6, is refused at once from the workspace
+  and from every container its Docker service runs. Users in the workspace cannot remove the refusal,
+  and the workspace runs without `NET_RAW`, so root gets no packet socket to send frames past it
+  (`ping` keeps working). The refusal is in place before the workspace is reported ready; steps
+  sealantd runs at boot on its own may start slightly earlier. Mirrors, the object store, the control
+  plane and the shared workspace network stay reachable. A workspace that genuinely needs the address
+  opts in with `workspaces.create({ network: { cloudMetadata: true } })`. A gVisor (`runsc`) workspace
+  cannot be guarded and launches only when it opts in. Workspaces already running when the worker is
+  upgraded keep the address until they stop.
+
+  The worker pulls the guard's image (a pinned busybox) when it starts and logs when it cannot;
+  `SEALANT_DOCKER_NETWORK_GUARD_IMAGE` replaces it with a reachable copy.
+
+- 78e1763: `workspace.credentials.put({ …, partial: true })` writes what the person has connected and reports
+  what they have not, in one call: a provider whose account is refused (`connected-account-missing`,
+  `connected-account-invalid` or `connected-account-unsupported`) is left out, its login is removed
+  from the home as `null` would remove it, and the result's `skipped` lists
+  `{ provider, reason, message }` for each, instead of the whole put rejecting. Every other refusal
+  still rejects. The put now always resolves with `skipped` (empty for a whole put); on the wire,
+  `partial` on the request and `skipped: [{ provider, code, message }]` on a partial put's answer. A
+  pi or opencode `auth.json` that cannot be written in the home (not a regular file, or really outside
+  it) is left out the same way, with `reason` `login-file-unusable`, and everything else is still
+  written and removed.
+- a3f65d9: pi's and opencode's ChatGPT logins are providers of `workspace.credentials`:
+
+  - `put({ …, pi, opencode })` names one of the person's Codex accounts (`true` is their default) and
+    writes its ChatGPT login, with no refresh token, as one entry of each tool's own `auth.json`:
+    `openai-codex` in `<home>/.pi/agent/auth.json`, `openai` in
+    `<home>/.local/share/opencode/auth.json`. The file is merged in place as the home's owner, through
+    links to where it really is, which must be inside the home and outside `/workspace`. Its other
+    entries stay, and a login the person made inside pi or opencode is never replaced or removed.
+  - The home's record and `list()` name the Codex account under `pi` and `opencode`; `null` or a
+    release removes only Core's copy, and a refresh of the Codex login rewrites both entries.
+  - A Codex account that is not a ChatGPT login is refused with `409` `connected-account-unsupported`
+    and `provider: "codex"`.
+  - A first put refused because a login would land outside the home (`home-unusable`) no longer leaves
+    its hold's marker behind: the home can be put into again without a release first.
+  - Without node on the image's system PATH, a put naming pi or opencode, and a release or put that
+    would remove a pi or opencode login whose file exists, are refused (`home-unusable`) and the home
+    stays held: no earlier holder's copy is ever left behind. A pi or opencode file that cannot be
+    written, or really is outside the home, is refused naming the file.
+
+- a4522bd: A refused connected account says which provider it is about, in a stable code:
+
+  - `workspace.credentials.put()` and a create that names an account answer `404` with
+    `code: "connected-account-missing"` for an account the person cannot name, and `409` with
+    `code: "connected-account-invalid"` for one marked invalid or holding an unusable credential, each
+    with `provider` (`claude`, `codex` or `github`). The messages are unchanged.
+  - `WorkspaceNotFoundError` takes an optional `code` and `provider`, and `WorkspaceConflictError` an
+    optional `provider`; `connectedAccountRefusalCodes` lists the two codes.
+  - `SealantApiError` carries the body's stable code as `reason` and the account's `provider`, so a
+    caller branches on `error.reason === "connected-account-missing"` and `error.provider` instead of
+    the words or `error.cause`.
+
+- 856412f: The SDK surface for per-person homes (Mend ADR 0016):
+
+  - `create({ credentialsHome: { path, uid, gid } })` writes the launch's logins into that home
+    instead of `$HOME` and the environment: Claude (a setup token too) and Codex as their files,
+    GitHub as `.config/gh/hosts.yml`, all in one write, every file owned by `uid`:`gid`, the home made
+    for them if it does not exist. The home is then held for the workspace's owner, as
+    `workspace.credentials.put` holds it, and kept refreshed; a launch delivered again writes again.
+    Refused on the Cloudflare runtime.
+  - `exec(argv, { user })` and `sessions.open(argv, { user })` ask for a process to run as a Linux
+    user (a name or uid); `user` is on `ExecWorkspaceRequest` and `CreateSessionRequest`. The SDK
+    sends it only to a control plane whose index reports `features.processUser`, and refuses it
+    client-side otherwise; until the runtime can start a process as another user, the control plane
+    refuses it too (`409`, code `user-unsupported`). It never runs as the workspace's own user
+    instead. `SessionConflictError` gains an optional `code`.
+  - An image's per-person capability (`personLayout`: `status`, `missing`, `unknown`, `runtime`,
+    `acl`), derived from the image probe the build records (`metadata.imageProbe`), is on every
+    workspace read's `publishedImage`, on `launch.image` after `ready()` and from `workspace.image()`.
+    `workspaces.imageKey(options)` computes, with no call, a key for the image a create would build;
+    `workspaces.inspectImage(options)` (`POST /v1/workspaces/image`) reads the capability before a
+    create, for a key not yet known.
+
+- 068d02b: pi is a harness (`pi()`, harness id `pi`), and every workspace image now carries all four agent
+  CLIs: Claude Code, Codex, opencode and pi. opencode was installed only into an opencode blueprint's
+  own image; it is baked now, so a standby or a shell workspace can run it too. pi is installed from
+  its release binary for the machine (x64 or arm64), checked against the release's SHA256SUMS, so it
+  needs no Node: its npm package wants Node 22.19 or newer, which Ubuntu 24.04 does not have.
+- 58bba78: Sealant no longer stores the arguments a process, a run's command or a session was started with.
+  Arguments can carry secrets (a token a script writes, a file's bytes in base64, `env KEY=value`),
+  and redaction covers output and terminal input, never arguments. What is kept is the executable, the
+  argument count and each argument's length in UTF-8 bytes:
+
+  - A record's `processStarted` event keeps its executable, working directory and pid, adds `argCount`
+    and `argLengths`, and its `args` is always empty. The timeline summary reads
+    `exec sh (2 arguments not recorded)`.
+  - A run's `command` has an empty `args`, with `argCount` and `argLengths`.
+  - A session's `argv` holds only the program, with `argCount` and `argLengths`.
+  - A run's `recordDeletedAt` says when run-record retention deleted its record.
+
+  In the SDK, `RunCommand` gains an optional `argCount` (always set by `record.commands()`), and
+  `command` reads `opencode (2 arguments not recorded)`. A record written by an older control plane
+  still carries its arguments, and reads in full until the upgrade's migration rewrites it.
+
+  Rotate every secret delivered through arguments before this release, such as Mend's secret files.
+  Anyone with read access to the database, its dumps or its backups could read them, and rewriting the
+  rows cannot recall a copy already taken.
+
+- 720a38b: A process runs as a person's Linux user (Mend ADR 0016):
+
+  - `exec(argv, { user })` and `sessions.open(argv, { user })` now start the process as that user,
+    through the workspace's sealantd (`exec.user`, 0.20.0-next.150 and later): their uid, groups,
+    `HOME`, umask 0002, a private `TMPDIR` and `XDG_RUNTIME_DIR`, the image's person environment, and
+    none of the daemon's logins. Only a person in Mend's range (a uid in 40001–49999 whose primary
+    group is `mend`, never root), on a workspace whose sealantd reports `exec.user`. Anything else is
+    refused before anything starts (`409`, code `user-unsupported`), the message saying why: the
+    workspace's sealantd doesn't run processes as another user, the user is not in range, or it does
+    not exist yet. An exec as a user whose executor does not answer the check is a `502`.
+  - A process as a user has its own routes: `POST /v1/workspaces/:id/exec-as-user` and
+    `POST /v1/sessions/as-user` (`execWorkspaceAsUserRequestSchema`,
+    `createSessionAsUserRequestSchema`, `user` required). A control plane from before them answers
+    `404`, never runs the process as root; `user` on `/exec` and `/v1/sessions` is refused (`409`
+    `user-unsupported`). The SDK uses them whenever `user` is set.
+  - The run records the user: `user` on the run resource. Nothing else of the process is stored.
+  - `workspace.processUser()` (and `launch.processUser` after `ready()`) reads whether a workspace
+    can: `supported`, `unsupported` or `unknown`, from the sealantd of the image its latest launch
+    booted. On the wire: `processUser` on every workspace read.
+  - `sealant.features()` reports what the control plane can do, so a client detects it instead of
+    reading the version (`0.0.0` on a self-built control plane): `processUserRoutes` (the as-user
+    routes; `processUser`, which older SDKs read, stays `false`), `dotfilesApply`,
+    `credentialsPartialPut`, `credentialsPiOpencode` and `captureOwnerMap`. On the wire: the index's
+    `features`; a feature an older control plane does not name is `false`.
+
+- 4cfff68: `ready()` no longer spends its readiness bound on an image build. A first launch on a new image
+  whose `apt-get install` took eight minutes on a slow mirror used to fail at the 10-minute bound even
+  though the workspace would have come up.
+
+  - A launch reports its phase while the workspace is not ready: `queued`, `image-build` (with the
+    build's `step`/`steps`/`stepName` and `progressAt`, when it last wrote output) or `boot`. Read it
+    with `workspace.phase()`; on the wire it is `phase` on a workspace read. `events()` (and
+    `onEvent`) yields `phase.<name>` each time the launch moves to another phase or its build to
+    another step, e.g. `Building the workspace image (step 2/12: RUN apt-get update …)`.
+  - `ready()` bounds each phase on its own. `readyTimeoutMs` (default 10 minutes) bounds the launch
+    outside the image build, queued and booting (`workspace_ready_timeout`); `imageBuildTimeoutMs`
+    (default none) bounds the build as a whole (`workspace_image_build_timeout`). Pass them to
+    `create()` for the handle or to `ready(options)` for one wait. A build is otherwise waited for as
+    long as it reports progress: the worker fails one that writes nothing for
+    `WORKSPACE_IMAGE_BUILD_STALL_MS` (10 minutes, `workspace_image_build_stalled`) or runs past
+    `WORKSPACE_IMAGE_BUILD_MAX_MS` (45 minutes, `workspace_image_build_timeout`), naming the step.
+    `ready()` gives up on its own on a build that shows no new progress for 20 minutes, and on one
+    that never reports any 20 minutes after it started (unless `imageBuildTimeoutMs` is set). A launch
+    the control plane failed rejects with `workspace_not_ready` and the control plane's reason. A
+    control plane that reports no phase is bounded by `readyTimeoutMs` as before.
+  - `stop()` while the image is still being built cancels the launch: the build stops, nothing boots,
+    and the workspace reads `cancelled`. It used to be refused until the runtime was up.
+  - A Docker worker whose database has no record of a plan reuses the `plan-<hash>` image the Engine
+    kept, once the image carries the plan's full hash (the `sh.sealant.plan-hash` label builds now
+    stamp) and its probe reads back, instead of building it again. `WORKSPACE_IMAGE_BUILD_CACHE_DIR`
+    keeps BuildKit's layer cache in a directory between builds.
+
+- 5049cf2: A run's changes say whether they were read. `GET /v1/runs/:runId/changes` answers `available` and,
+  when it is `false`, `unavailableReason`, which says what happened: the run has not ended, no reading
+  of its changes was recorded, or reading them failed. The SDK's `run.changes` carries both. Until now
+  a failed reading came back as an empty diff and no files, which read as "nothing changed". A control
+  plane older than the field answers without it, and the SDK reads that as available.
+  `PATCH /v1/runs/:runId` takes `changesReadFailed` for a caller that read a run's changes and failed.
+- 15c5e87: A session's arguments may be any string. `argv[0]`, the program, must still be non-empty with no
+  leading or trailing whitespace; every word after it is passed to the program as it was sent: empty,
+  whitespace-led or multi-line, so `["bash", "-lc", "\n echo hi"]` and `["git", "commit", "-m", ""]`
+  now open a session where both were refused. This applies to `POST /v1/sessions`,
+  `POST /v1/sessions/as-user` and the SDK's `sessions.open(argv)`, which checks the same rule before
+  it sends.
+
+  - Limits: at most 64 words (as before), 131,071 bytes per word and 1 MiB in all, counted in UTF-8
+    bytes. 131,071 is the longest word `execve` takes on Linux with 4 KiB pages (`MAX_ARG_STRLEN` is
+    128 KiB and counts the terminating NUL). A word with a NUL byte is refused, since no process
+    argument can carry one, and so is a lone UTF-16 surrogate, which has no UTF-8 form.
+    `@sealant/api-contracts` exports the limits as `SESSION_ARGV_MAX_WORDS`,
+    `SESSION_ARGV_MAX_WORD_BYTES` and `SESSION_ARGV_MAX_TOTAL_BYTES`, the rule as
+    `sessionArgvIssue(argv)` and `sessionArgvSchema`.
+  - A request any control plane route cannot decode (a body that is not JSON or not an object, a field
+    missing or of the wrong type, a refused `argv`) answers `400` `RequestRefusedError`. Its `message`
+    names where the request is wrong and what was expected, never a value it held. The
+    `RequestRefusal` middleware is applied to the whole `ControlPlaneAPI`, so every route has it.
+    `describeRequestIssue` words the reason. Before this, such a request got an empty `400`, and the
+    server's request log, error reporters and tracing span quoted the rejected input: a session's
+    arguments, an exec's command, a run's command. A handler's own failure on a request that decoded
+    stays a `500`, a text payload's (GitHub's webhook) included.
+  - In the SDK, `sessions.open(argv)` throws `SealantError` `invalid_argv` with the same reason before
+    it sends a refused argv, surfaces a control plane's `RequestRefusedError` with its reason, and
+    explains an older control plane's empty `400`.
+  - If `sealantd` refuses to start the program, the session and its run are now marked failed. Before
+    this, both were left running. If the answer to an open is lost instead, Sealant asks `sealantd`
+    again: a program it reports becomes the session's leader, and one it cannot report about leaves
+    the session open for a close to find and stop. A close that cannot reach `sealantd` changes
+    nothing and answers `502`, so it can be retried.
+  - Upgrade the control plane before the SDK. An older control plane refuses an empty or untrimmed
+    argument with an empty `400` and logs the argument. An older SDK refuses such an argument itself.
+  - The arguments still reach `sealantd` as an argv array, never a shell string, and Sealant still
+    stores only their count and lengths.
+
+- c50b6ca: A person's logins can be put into one home of a running workspace:
+  `workspace.credentials.put({ home, onBehalfOf, uid?, gid?, claude?, codex?, github? })`,
+  `POST /v1/workspaces/:id/credentials`. Accounts resolve as at create (`true` is the account named
+  `default`) and are read under the home's lock; `null` removes that provider's login from the home.
+  Core writes copies (no refresh token; a Claude setup token as its credentials file) owned by the
+  home's owner, mode `0600`, keeps them refreshed there, and writes GitHub as
+  `<home>/.config/gh/hosts.yml`. With `uid` and `gid` a home that does not exist yet is made for them.
+  A home holds one person's logins until it is released: a put naming anyone else is refused
+  (`409 home-held`), and `/root` takes only the workspace owner's.
+  `workspace.credentials.release(home)` (`DELETE`) removes the files and the record;
+  `workspace.credentials.list()` (`GET`) lists the homes. Every write into a home is fenced in the
+  executor, under a lock there, so a late write from an earlier hold never lands. A write that waits
+  too long answers `409 home-busy` (retryable). Only a service key may call these.
+- 2f3ddc3: A person's dotfiles applied into their home of a running workspace (Mend's per-person layout):
+
+  - `workspace.dotfiles.apply({ onBehalfOf, user, home, repository?, archives? })` and
+    `POST /v1/workspaces/:id/dotfiles` (service key only) take a create's dotfiles sources (a
+    repository cloned with no credential, `https://` only and never with a credential in its URL, and
+    up to 4 archives) and apply them with the workspace daemon's applier: the clone, chezmoi, stow or
+    copy as the user, then each tree's `./install.sh` as the user. `user` must exist and must not be
+    root or in root's group, `home` must be its passwd home, and a home whose logins another person
+    holds is refused (`home-held`). The run records `onBehalfOf` (`metadata.dotfiles`).
+  - Every file in the home is written as the person: the daemon unpacks archives outside every home
+    and follows a link the person planted only as them, so a link into another person's home fails the
+    apply.
+  - The call resolves once every file is applied, with `bootstrap` running as the person (or `null`);
+    `bootstrap.wait()` resolves with its exit code and output, read from the run the apply is recorded
+    in (`harnessId` `dotfiles`). A bootstrap running past 30 minutes is stopped and the run fails.
+  - Refusals, nothing applied: `409` `dotfiles-user-unsupported` (the workspace's sealantd cannot
+    apply as a user), `user-unknown`, `user-root`, `home-mismatch`, `home-unusable`, `home-held`,
+    `workspace-not-running`; `400` for root, a home under `/workspace`, a URL with a credential, or
+    nothing to apply; `403` without a service key. A failed apply rejects with `dotfiles_failed` and
+    the daemon's words.
+  - Archives are staged root-only in the workspace over stdin and removed once the daemon answers; no
+    archive's bytes reach a job row or the run's record.
+
+- 9af9707: A workspace's SSH sessions run as its owner's own Linux user (Mend's per-person layout runs VS Code
+  Remote-SSH as the launcher's user, never root).
+
+  - A user's person is bound once: `POST /v1/users/:id/person { id, uid, home }` (owner-map id, a uid
+    in 40001–49999, a home under `SEALANT_PERSON_HOMES_ROOT`). The same values again are a no-op; a
+    different binding, or a person id or uid another user holds, answers `409`
+    (`person-binding-differs`, `person-taken`) and changes nothing. There is no rebind route.
+  - `sshAsOwner: true` on a create runs the sessions as that bound person. The create's capture owner
+    map must give the person their bound uid, and its `credentialsHome` must be their bound uid and
+    home; otherwise `403` (`WorkspaceSshOwnerRefusedError`). No caller names the user.
+    `DELETE /v1/workspaces/:id/ssh-user` sets the sessions back to root, the only change after create.
+  - The SSH gateway starts every shell and command, and its disconnect-time working-tree capture, as
+    that user, on a `sealantd` that reports `exec.user`, and refuses the session otherwise rather than
+    run it as root. It asks who for every new session channel, so a change reaches a connection
+    already open. `GET .../ssh-target` always states `sessionUser` (`null` for root), and the gateway
+    refuses an answer without it. SFTP runs as the user too, on a `sealantd` that reports `sftp.user`
+    (refused on one that does not), so an upload is theirs, in the directory's group, with its default
+    ACL inherited.
+  - SDK: `users.bindPerson()`, `create({ sshAsOwner })`, `workspace.sshAsRoot()`,
+    `features().workspaceSshUser` and `features().personBinding`. A create with `sshAsOwner` is
+    refused (`ssh-user-unsupported`) with nothing sent to a control plane without the feature.
+
+### Patch Changes
+
+- 1e2df7d: `workspace.credentials.put()` and `release()` keep every login out of every process's arguments and
+  environment inside the workspace. The home script used to start `env -i … p0="$p0" … setpriv …`, so
+  each login was in `env`'s arguments for an instant and in the environment of the person's shell and
+  every command it ran (`/proc/<pid>/environ`), including the launch's own write into a
+  `credentialsHome` and a refresh's rewrite. The logins now travel on standard input at every step,
+  and a shell's temporary file for one never lands where the workspace's `TMPDIR` points.
+
+  A Claude, Codex or GitHub login file in the home that is not a regular file, or that has another
+  hard link, is refused with `409` `home-unusable` naming the file, and nothing is written into it. A
+  `partial: true` put leaves such a provider out with `reason` `login-file-unusable` and writes the
+  rest, as it already did for pi's and opencode's files, and a refresh does the same for the file it
+  cannot write, so one bad file never keeps the home's other logins stale.
+
+- 8906fb4: Deadline preservation no longer stops a MicroVM early on an idle interval's throughput. A reading of
+  uploaded bytes over the time between two sweeps measures the link only when the capture queue held
+  work at both ends of that interval; any other reading now only raises the estimated rate, never
+  lowering it under the previous estimate or the assumed 1 MiB/s. On a one-hour MicroVM, a reading of
+  140 KB/s taken three minutes in (the uploader idle most of the interval) put the estimate for 780 MB
+  at 6890 s and started the final drain at once; the same upload then ran at about 80 MB/s. The
+  sample's pending bytes are kept beside it (`upload_sample_pending_bytes`).
+- e8ad7f7: Workspace Docker services can pull Docker Hub images through registry mirrors. A worker with
+  `SEALANT_DOCKER_REGISTRY_MIRRORS=http://docker-mirror:5000` starts every workspace's Docker daemon,
+  on the Docker and Kubernetes runtimes, with `--registry-mirror` for each origin, plus
+  `--insecure-registry` for a plain-http one so BuildKit reaches it too. The daemon falls back to
+  Docker Hub when a mirror fails. On Docker, `SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER` names the
+  container serving the mirrors: it joins each workspace's Docker service network under the mirrors'
+  host names before the daemon starts, and leaves it before the network is removed. The daemon itself
+  stays off every shared network. An entry that is not a bare origin, or carries credentials, is
+  refused at startup.
+- ef9e537: `@sealant/sdk` depends on the exact `@sealant/api-contracts` version it was published with, not a
+  caret range. The two are versioned together, and a caret on a prerelease (`^0.39.0-next.9`) would
+  accept any later prerelease of the contract.
+- 3599f9d: `workspace.exec()` reads its run back 25 ms after registering it, then waits twice as long each
+  time, up to 500 ms; it used to wait 500 ms before the first read. Most execs end in 100-300 ms, so
+  each one took at least half a second: on a Docker host, a launch that writes skills, memory and
+  settings into its workspace ran 20 to 125 of them in a row before its agent started. The stdout,
+  stderr and changes reads after the run ends go out together. `workspace.ready()` looks again after
+  100 ms, then twice as long each time up to 1 s, instead of every 2 s, so it answers within about a
+  second of the workspace becoming ready rather than up to 2 s after.
+- 597db62: `workspace.exec()` reads its run every 25 ms for the first half second, then waits twice as long
+  each time, from 50 ms up to 250 ms until 2 s and up to 500 ms after that. Doubling from 25 ms read
+  it at 25, 75, 175 and 375 ms, so an exec that ended at 80 ms was seen at 175 ms; it is now seen
+  within about 25 ms of ending.
+
+  A read of the exec's run that is refused (429), fails on the control plane (5xx) or is lost in
+  transport is read again, after the `Retry-After` the answer named or a backoff from 100 ms to 2 s,
+  for up to a minute. One failed read used to reject the exec while its run went on. Every read error
+  `exec()` rejects with names the run. `GET /v1/runs/:runId` declares `BudgetExceededError`, so a 429
+  from the request budget decodes as one.
+
+- 7295e64: An image whose git does not trust the worktree no longer reads as able to run the per-person layout.
+  The image probe now records whether git trusts `/workspace/repo` whoever owns it (`safe.directory`
+  lists `*` or that path). Without that trust, `personLayout` is `unsupported`, missing
+  `git-safe-directory`. Under an owner map the worktree is a person's and `.git` is root's, so
+  sealantd's own restore failed at boot ("capture materialize failed: /workspace/repo is not a git
+  repository"). A custom base that cannot write `/etc/gitconfig` at build now falls back to the shared
+  layout instead. An image probed before this is `unknown` until it is built again. The probe script
+  is part of every image, so every image is built once more.
+- 43bed8e: An exec run no longer fails at random when its events reach the record twice at the same moment. The
+  run-exec job and the full-stream ingester both record a run's events, each on its own connection to
+  the runtime. When their inserts of the same event overlapped, the second one failed on the event's
+  id (`telemetry_events_pkey`), and the run failed with "Run execution failed before completion" while
+  its process went on and exited. The append now skips an event already stored under its id or under
+  its runtime and sequence, and reads it back: the same event is nothing. A different event at that id
+  or position (in the log, or earlier in the same batch, which used to be dropped without a word), or
+  a run's own event stored under another run, is a conflict: the record keeps what it has, the rest of
+  the batch is stored, and the append fails naming the events. The exec run then fails saying why,
+  with the changes its commands made. A failed job's error is recorded with bigints as strings:
+  pg-boss used to log "Do not know how to serialize a BigInt" instead.
+- a8b2d5c: Workspaces run the sealantd prerelease 0.20.0-next.157 (`ghcr.io/sealant-sh/sealantd-next`, pinned
+  by digest). A capture leaves every harness login out of the harness home, including pi's, opencode's
+  and opencode's MCP server logins, under every person's saved directory too, and a restore never
+  writes one back. A restore gives each person's saved directory to their uid and the worktree to the
+  group. Executions, sessions and dotfiles can run as a given user, and a per-person executor leaves
+  no-new-privileges unset so every person's sudo works. A person's dotfiles are unpacked by root
+  outside every home and written as the person, so a link they planted cannot redirect them, and an
+  archive that unpacks to more than 256 MiB, or 64 MiB in one file, is refused. The daemon runs an
+  exec, a session or a dotfiles apply only as one of the owner map's people or a person in Mend's
+  reserved range (a uid in 40001-49999 whose primary group is 40000, so a person who joins after boot
+  runs), checking the passwd entry it resolves itself, and refuses root, root's group and anyone
+  outside the range. A restore writes files on every core, and a final flush reads on every core.
+  Upload URLs carry the SHA-256 of their bytes. The image fetches socat over HTTPS and checks it
+  against a pinned checksum. A process's `process.started` event carries the count and UTF-8 lengths
+  of its arguments (`argCount`, `argLengths`), never their text, so no argument reaches an event
+  subscriber or the daemon's spool, and spool segments an older daemon wrote are rewritten without it.
+  A failed lifecycle step is logged by its step, program and argument sizes, and a clone URL without
+  its credentials. An SFTP bridge runs as a given user (`sftp.user`), admitted as an exec is, and the
+  managed Fedora and Ubuntu images carry an `sftp-server`, so a workspace's SFTP works and runs as its
+  SSH user. A stable release refuses this pin until sealantd 0.20.0 is released and pinned.
+- e4a3593: Removing an SSH key ends the gateway connections opened with it. `GET /v1/workspaces/:id/ssh-target`
+  takes an optional `x-sealant-ssh-key-fingerprint` header: when the gateway names the key a
+  connection logged in with, the API answers only while that key is still registered to the principal
+  (else `401` `WorkspaceSshKeyNoLongerRegisteredError`, the one refusal on which the gateway ends a
+  connection), and echoes it as `sshKeyFingerprint`. The control plane reports this as
+  `features().sshKeyRemovalEndsConnections`, so a client can say whether removing a key ends what is
+  already open.
+- cc83f27: The workspace package catalog knows `bun` and `unzip`. `bun` installs bun 1.4.2 on Fedora, Arch and
+  Ubuntu from its pinned release zip, checksummed before it is unpacked (the baseline build on x86_64,
+  so a CPU without AVX2 runs it), and links `bunx`; on nix it is the `bun` package. It adds about 80
+  MB to an image. A release may now ship as a `.zip`; the build installs `unzip` beside the release's
+  other tools only when one does.
+- Updated dependencies [55326dd]
+- Updated dependencies [1e2df7d]
+- Updated dependencies [78e1763]
+- Updated dependencies [a3f65d9]
+- Updated dependencies [a4522bd]
+- Updated dependencies [8906fb4]
+- Updated dependencies [e8ad7f7]
+- Updated dependencies [ef9e537]
+- Updated dependencies [597db62]
+- Updated dependencies [856412f]
+- Updated dependencies [068d02b]
+- Updated dependencies [58bba78]
+- Updated dependencies [720a38b]
+- Updated dependencies [4cfff68]
+- Updated dependencies [5049cf2]
+- Updated dependencies [a8b2d5c]
+- Updated dependencies [15c5e87]
+- Updated dependencies [e4a3593]
+- Updated dependencies [c50b6ca]
+- Updated dependencies [2f3ddc3]
+- Updated dependencies [cc83f27]
+- Updated dependencies [9af9707]
+  - @sealant/api-contracts@0.39.0
+
 ## 0.38.1
 
 ### Patch Changes
