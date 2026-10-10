@@ -22,7 +22,7 @@ import { env } from "./runtime-env.js";
 import { budgetLimits } from "./services/budget-limits.js";
 import { budgetsOff, makeRateWindow } from "./services/budgets.js";
 import { ControlPlaneCapabilitiesLive } from "./services/control-plane-capabilities.js";
-import { CredentialRedactionLive } from "./services/credential-redaction.js";
+import { CredentialRedactionLive, observedMain } from "./services/credential-redaction.js";
 import {
   authPosture,
   servicePrincipalMiddleware,
@@ -329,4 +329,6 @@ if (!env.SEALANT_REQUIRE_OWNER_SCOPE) {
  *
  * This call keeps the process alive and supervises the launched layer graph.
  */
-NodeRuntime.runMain(Layer.launch(serverLayer));
+// A startup failure is logged by the runtime, outside the server layer's observers: observed
+// before it leaves, so that log line holds plain, redacted data too.
+NodeRuntime.runMain(observedMain(Layer.launch(serverLayer)));

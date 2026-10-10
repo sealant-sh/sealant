@@ -24,6 +24,11 @@
  *   redacted data;
  * - anything else (another class instance, a function): its label only.
  *
+ * Nothing is read through the given value's own code: an array is walked by index (never its
+ * `map` or species), a built-in through its built-in methods, a label through data properties
+ * only, an HTTP object only for primitive fields. The process's main effect is wrapped too
+ * (`observedMain`), since the runtime logs a failed main effect outside every layer.
+ *
  * A cause is rebuilt the same way, every reason and its annotations observed (an Effect stack frame
  * as a fresh frame with redacted text, so the logical trace still prints). The program itself is
  * untouched: the request a route authenticates with, and the error an effect handles, keep their
@@ -44,6 +49,7 @@ import {
 } from "effect/unstable/http";
 
 const REDACTED = "REDACTED";
+const REDACTION_FAILED = "[redacted: the redaction itself failed]";
 
 // ---------------------------------------------------------------------------------------------
 // Names
@@ -143,8 +149,11 @@ const isSchemeChar = (char: string): boolean => /[a-z0-9+.-]/i.test(char);
 
 /** The scheme separator at `index` (`://`, a slash-escaped `:\/\/`, an encoded `%3A%2F%2F`). */
 const SCHEME_SEPARATORS = ["://", ":\\/\\/", "%3a%2f%2f"] as const;
-/** Where an authority ends: a path, a query, a fragment, a quote, a space, encoded or escaped. */
-const AUTHORITY_ENDS = ["%2f", "%3f", "%23", "\\/"] as const;
+/**
+ * Where an authority written percent-encoded (`%3A%2F%2F`) ends: an encoded path, query or
+ * fragment. In a URL written plainly these are ordinary characters of a password.
+ */
+const ENCODED_AUTHORITY_ENDS = ["%2f", "%3f", "%23"] as const;
 /** What ends userinfo: `@`, or `%40` encoded. */
 const USERINFO_ENDS = ["@", "%40"] as const;
 
@@ -170,13 +179,17 @@ const redactUserinfo = (text: string): string => {
       continue;
     }
     const hasScheme = index > 0 && isSchemeChar(text.charAt(index - 1));
+    const encoded = char === "%";
     const authorityStart = index + separator;
     let end = authorityStart;
     let userinfoEnd = -1;
     while (end < text.length) {
       const at = text.charAt(end);
+      // An unencoded path, query or fragment (or an escaped slash `\/`) ends any authority; the
+      // userinfo is everything to its last `@` before that.
       if (/[\s/?#"'<>]/.test(at)) break;
-      if ((at === "%" || at === "\\") && literalAt(text, end, AUTHORITY_ENDS) > 0) break;
+      if (at === "\\" && text.charAt(end + 1) === "/") break;
+      if (encoded && at === "%" && literalAt(text, end, ENCODED_AUTHORITY_ENDS) > 0) break;
       if (at === "@" || (at === "%" && literalAt(text, end, USERINFO_ENDS) > 0)) userinfoEnd = end;
       end += 1;
     }
@@ -191,12 +204,8 @@ const redactUserinfo = (text: string): string => {
 
 const QUERY_PAIR = /([?&;])([^=&\s#?;]+)=([^&\s#;"'<>)\\]*)/g;
 
-/**
- * An `Authorization`-style credential in any case, bare or quoted, plain or JSON-escaped:
- * `Bearer x`, `bearer "x"`, `\"Bearer \\\"x\\\"\"`. A quoted credential runs to its closing quote.
- */
-const AUTH_SCHEME =
-  /\b(bearer|basic)[ \t]+(?:\\*"(?:[^"\\]|\\(?![\\"])){0,1024}\\*"|'[^']{0,1024}'|[^\s"',;)\\]+)/gi;
+/** An `Authorization` scheme, in any case, before its credential. */
+const AUTH_SCHEME = /\b(bearer|basic)[ \t]+/gi;
 
 /**
  * Where a quoted value opened with `escapes` backslashes before `quote` ends: after the first
@@ -220,6 +229,41 @@ const closingQuote = (text: string, from: number, quote: string, escapes: number
     index += 1;
   }
   return text.length;
+};
+
+const BARE_VALUE_END = /[\s"',;)\\]/;
+
+/**
+ * Every `Bearer` or `Basic` credential, in any case, replaced: bare (`Bearer x`), quoted
+ * (`bearer "x"`, `'x'`) or JSON-escaped (`\"x\"`, `\\\"x\\\"`), however long. A quoted credential
+ * runs to its own closing quote (the end of the text when it never closes), and the scan resumes
+ * after it, so the cost stays linear.
+ */
+const redactAuthSchemes = (text: string): string => {
+  let out = "";
+  let copied = 0;
+  const scheme = new RegExp(AUTH_SCHEME.source, "gi");
+  for (;;) {
+    const match = scheme.exec(text);
+    if (match === null) break;
+    const valueStart = match.index + match[0].length;
+    let escapes = 0;
+    while (text.charAt(valueStart + escapes) === "\\") escapes += 1;
+    const quote = text.charAt(valueStart + escapes);
+    let valueEnd: number;
+    if (quote === '"' || quote === "'") {
+      valueEnd = closingQuote(text, valueStart + escapes + 1, quote, escapes);
+    } else {
+      valueEnd = valueStart;
+      while (valueEnd < text.length && !BARE_VALUE_END.test(text.charAt(valueEnd))) valueEnd += 1;
+    }
+    if (valueEnd > valueStart) {
+      out += `${text.slice(copied, valueStart)}${REDACTED}`;
+      copied = valueEnd;
+    }
+    scheme.lastIndex = Math.max(valueEnd, valueStart);
+  }
+  return copied === 0 ? text : out + text.slice(copied);
 };
 
 const KEY_CHAR = /[A-Za-z0-9_.-]/;
@@ -301,11 +345,11 @@ const redactNamedValues = (text: string): string => {
  */
 export const redactCredentialsInText = (text: string): string =>
   redactNamedValues(
-    redactUserinfo(text)
-      .replace(QUERY_PAIR, (pair: string, separator: string, name: string) =>
+    redactAuthSchemes(
+      redactUserinfo(text).replace(QUERY_PAIR, (pair: string, separator: string, name: string) =>
         isCredentialParameter(name) ? `${separator}${name}=${REDACTED}` : pair,
-      )
-      .replace(AUTH_SCHEME, (_match: string, scheme: string) => `${scheme} ${REDACTED}`),
+      ),
+    ),
   );
 
 // ---------------------------------------------------------------------------------------------
@@ -317,85 +361,190 @@ const MAX_DEPTH = 6;
 const TOO_DEEP = "[redacted: nested too deep]";
 const CIRCULAR = "[redacted: circular]";
 
+/** How many items of an array, a set or a map are observed; the rest are counted, not shown. */
+const MAX_ITEMS = 200;
+
+/** `value`'s prototype, or `undefined` when even asking throws (a revoked or hostile proxy). */
+const prototypeOf = (value: object): unknown => {
+  try {
+    return Reflect.getPrototypeOf(value);
+  } catch {
+    return undefined;
+  }
+};
+
 const isPlainObject = (value: object): boolean => {
-  const prototype: unknown = Object.getPrototypeOf(value);
+  const prototype = prototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 };
 
-const isPlainArray = (value: object): value is readonly unknown[] =>
-  Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype;
-
-const labelOf = (value: object): string => {
-  const constructor: unknown = Reflect.get(value, "constructor");
-  const name =
-    typeof constructor === "function" && typeof constructor.name === "string"
-      ? constructor.name
-      : "";
-  return `[${name === "" ? "object" : name}]`;
-};
-
-/** A data property's value along the prototype chain; never an accessor's. */
-const dataProperty = (value: object, key: string): unknown => {
-  let current: object | null = value;
-  while (current !== null) {
+/** A data property's value along the prototype chain; never an accessor's, never a proxy's trap. */
+const dataProperty = (value: object, key: PropertyKey): unknown => {
+  let current: unknown = value;
+  for (
+    let hops = 0;
+    hops < 32 && (typeof current === "object" || typeof current === "function") && current !== null;
+    hops++
+  ) {
     const descriptor = Reflect.getOwnPropertyDescriptor(current, key);
     if (descriptor !== undefined) return "value" in descriptor ? descriptor.value : undefined;
-    current = Reflect.getPrototypeOf(current);
+    current = prototypeOf(current);
   }
   return undefined;
 };
 
-const headersOf = (entries: Iterable<readonly [string, unknown]>): Record<string, string> => {
-  const out: Record<string, string> = {};
-  for (const [name, value] of entries) {
-    if (typeof value !== "string") continue;
-    out[name] = isCredentialName(name) ? REDACTED : redactCredentialsInText(value);
+/**
+ * `value`'s label, `[Name]`, read only through data properties (its prototype's `constructor` and
+ * that function's `name`), never a getter, and its name through the text rules.
+ */
+const labelOf = (value: object): string => {
+  const prototype = prototypeOf(value);
+  const constructor =
+    typeof prototype === "object" && prototype !== null
+      ? dataProperty(prototype, "constructor")
+      : undefined;
+  const name = typeof constructor === "function" ? dataProperty(constructor, "name") : undefined;
+  return `[${typeof name === "string" && name !== "" ? redactCredentialsInText(name) : "object"}]`;
+};
+
+/** A fresh object with `entries` as own data fields (`__proto__` included, as a plain field). */
+const freshObject = (entries: Iterable<readonly [string, unknown]>): Record<string, unknown> => {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of entries) {
+    Object.defineProperty(out, key, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
   return out;
 };
 
-const readString = (value: object, key: string): string | undefined => {
-  const field: unknown = Reflect.get(value, key);
+/** Headers as plain data: credential headers replaced, every name and value through the text rules. */
+const headersOf = (entries: Iterable<readonly [string, unknown]>): Record<string, string> => {
+  const out: Array<readonly [string, string]> = [];
+  for (const [name, value] of entries) {
+    if (typeof value !== "string") continue;
+    out.push([
+      redactCredentialsInText(name),
+      isCredentialName(name) ? REDACTED : redactCredentialsInText(value),
+    ]);
+  }
+  return freshObject(out) as Record<string, string>;
+};
+
+/** A plain object's own string-valued data fields (headers as Effect and Node keep them). */
+const plainEntries = (value: unknown): Array<readonly [string, unknown]> => {
+  if (typeof value !== "object" || value === null || !isPlainObject(value)) return [];
+  const out: Array<readonly [string, unknown]> = [];
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") continue;
+    const field = dataProperty(value, key);
+    if (typeof field === "string") out.push([key, field]);
+  }
+  return out;
+};
+
+/**
+ * A field read by its built-in meaning (a prototype getter of a recognised type), kept only when it
+ * is a string or a number: never an object, so nothing live is handed on.
+ */
+const fieldRead = (value: object, key: string): unknown => {
+  try {
+    return Reflect.get(value, key);
+  } catch {
+    return undefined;
+  }
+};
+
+const stringField = (value: object, key: string): string | undefined => {
+  const field = fieldRead(value, key);
   return typeof field === "string" ? field : undefined;
 };
 
-/** A value the allowlist knows how to give as plain, redacted data, or `undefined`. */
+const numberField = (value: object, key: string): number | undefined => {
+  const field = fieldRead(value, key);
+  return typeof field === "number" ? field : undefined;
+};
+
+const intrinsicGetter = (prototype: object, key: string) => {
+  const descriptor = Reflect.getOwnPropertyDescriptor(prototype, key);
+  return descriptor?.get;
+};
+
+const urlHref = intrinsicGetter(URL.prototype, "href");
+const requestUrl =
+  typeof Request === "function" ? intrinsicGetter(Request.prototype, "url") : undefined;
+const requestMethod =
+  typeof Request === "function" ? intrinsicGetter(Request.prototype, "method") : undefined;
+
+/**
+ * A value the allowlist knows how to give as plain, redacted data, or `undefined`. Built-in types
+ * are read through their built-in methods (`URL.prototype` getters, `Headers.prototype.forEach`),
+ * never the value's own overrides; Effect's HTTP objects only for primitive fields.
+ */
 const knownForm = (value: object): unknown => {
-  if (value instanceof URL) return redactUrlCredentials(value.href);
-  if (value instanceof URLSearchParams) return redactQueryCredentials(value.toString());
-  if (value instanceof Date)
-    return Number.isNaN(value.getTime()) ? "Invalid Date" : value.toISOString();
-  if (typeof globalThis.Headers === "function" && value instanceof globalThis.Headers) {
-    return headersOf(value.entries());
+  if (value instanceof URL) {
+    const href: unknown = urlHref?.call(value);
+    return typeof href === "string" ? redactUrlCredentials(href) : labelOf(value);
   }
-  if (typeof globalThis.Request === "function" && value instanceof globalThis.Request) {
-    return { method: value.method, url: redactUrlCredentials(value.url) };
+  if (value instanceof URLSearchParams) {
+    return redactQueryCredentials(URLSearchParams.prototype.toString.call(value));
+  }
+  if (value instanceof Date) {
+    const time = Date.prototype.getTime.call(value);
+    return Number.isNaN(time) ? "Invalid Date" : Date.prototype.toISOString.call(value);
+  }
+  if (typeof globalThis.Headers === "function" && value instanceof globalThis.Headers) {
+    const entries: Array<readonly [string, string]> = [];
+    globalThis.Headers.prototype.forEach.call(value, (item: string, name: string) => {
+      if (entries.length < MAX_ITEMS) entries.push([name, item]);
+    });
+    return headersOf(entries);
+  }
+  if (typeof Request === "function" && value instanceof Request) {
+    const url: unknown = requestUrl?.call(value);
+    const method: unknown = requestMethod?.call(value);
+    return freshObject([
+      ["method", typeof method === "string" ? method : undefined],
+      ["url", typeof url === "string" ? redactUrlCredentials(url) : undefined],
+    ]);
   }
   if (HttpClientRequest.isHttpClientRequest(value)) {
-    const query = UrlParams.toString(value.urlParams);
-    return {
-      method: value.method,
-      url: redactUrlCredentials(query === "" ? value.url : `${value.url}?${query}`),
-      headers: headersOf(Object.entries(value.headers)),
-    };
+    const url = stringField(value, "url");
+    let query = "";
+    try {
+      query = UrlParams.toString(value.urlParams);
+    } catch {
+      query = "";
+    }
+    return freshObject([
+      ["method", stringField(value, "method")],
+      [
+        "url",
+        url === undefined
+          ? undefined
+          : redactUrlCredentials(query === "" ? url : `${url}?${query}`),
+      ],
+      ["headers", headersOf(plainEntries(dataProperty(value, "headers")))],
+    ]);
   }
   if (HttpServerRequest.TypeId in value) {
-    const url = readString(value, "url");
-    const headers: unknown = Reflect.get(value, "headers");
-    return {
-      method: readString(value, "method"),
-      url: url === undefined ? undefined : redactUrlCredentials(url),
-      headers:
-        typeof headers === "object" && headers !== null ? headersOf(Object.entries(headers)) : {},
-    };
+    const url = stringField(value, "url");
+    const headers = fieldRead(value, "headers");
+    return freshObject([
+      ["method", stringField(value, "method")],
+      ["url", url === undefined ? undefined : redactUrlCredentials(url)],
+      ["headers", headersOf(plainEntries(headers))],
+    ]);
   }
   if (HttpClientResponse.TypeId in value || HttpServerResponse.isHttpServerResponse(value)) {
-    const headers: unknown = Reflect.get(value, "headers");
-    return {
-      status: Reflect.get(value, "status"),
-      headers:
-        typeof headers === "object" && headers !== null ? headersOf(Object.entries(headers)) : {},
-    };
+    const headers = fieldRead(value, "headers");
+    return freshObject([
+      ["status", numberField(value, "status")],
+      ["headers", headersOf(plainEntries(headers))],
+    ]);
   }
   return undefined;
 };
@@ -416,14 +565,14 @@ const observeInto = (value: unknown, walk: Walk, depth: number): unknown => {
     case "bigint":
       return value.toString();
     case "symbol":
-      return value.toString();
+      return redactCredentialsInText(value.toString());
     case "function":
       return "[function]";
     default:
       break;
   }
   if (value === null) return null;
-  if (typeof value !== "object") return String(value);
+  if (typeof value !== "object") return "[unknown]";
   if (walk.path.has(value)) return CIRCULAR;
   if (depth > MAX_DEPTH) return TOO_DEEP;
   walk.path.add(value);
@@ -434,79 +583,140 @@ const observeInto = (value: unknown, walk: Walk, depth: number): unknown => {
   }
 };
 
+/** A field: replaced when its name holds a credential, otherwise observed. */
+const observeField = (key: string, field: unknown, walk: Walk, depth: number): unknown =>
+  isCredentialName(key) && field !== undefined && field !== null
+    ? REDACTED
+    : observeInto(field, walk, depth + 1);
+
+/** An object's own enumerable string-keyed fields: names through the text rules, accessors named. */
 const observeFields = (
   value: object,
   walk: Walk,
   depth: number,
   skip: ReadonlySet<string> = new Set(),
-): Record<string, unknown> => {
-  const out: Record<string, unknown> = {};
-  for (const key of Object.keys(value)) {
-    if (skip.has(key)) continue;
+): Array<readonly [string, unknown]> => {
+  const out: Array<readonly [string, unknown]> = [];
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string" || skip.has(key)) continue;
     const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
-    if (descriptor === undefined) continue;
-    if (!("value" in descriptor)) {
-      out[key] = "[accessor]";
-      continue;
-    }
-    const field: unknown = descriptor.value;
-    out[key] =
-      isCredentialName(key) && field !== undefined && field !== null
-        ? REDACTED
-        : observeInto(field, walk, depth + 1);
+    if (descriptor === undefined || descriptor.enumerable !== true) continue;
+    const name = redactCredentialsInText(key);
+    out.push([
+      name,
+      "value" in descriptor ? observeField(key, descriptor.value, walk, depth) : "[accessor]",
+    ]);
   }
   return out;
 };
 
-const ERROR_OWN = new Set(["message", "stack", "cause", "name"]);
+/**
+ * An array walked by index into a fresh array: each element's descriptor read, an accessor named
+ * and never called, none of the array's own methods (`map`, its species) used. At most
+ * `MAX_ITEMS`, then a count.
+ */
+const observeArray = (value: readonly unknown[], walk: Walk, depth: number): unknown[] => {
+  const out: unknown[] = [];
+  const length = dataProperty(value, "length");
+  const count = typeof length === "number" ? length : 0;
+  for (let index = 0; index < Math.min(count, MAX_ITEMS); index++) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(value, String(index));
+    out[index] =
+      descriptor === undefined
+        ? undefined
+        : "value" in descriptor
+          ? observeInto(descriptor.value, walk, depth + 1)
+          : "[accessor]";
+  }
+  if (count > MAX_ITEMS) out[MAX_ITEMS] = `[${count - MAX_ITEMS} more]`;
+  return out;
+};
+
+const ERROR_OWN = new Set(["message", "stack", "cause", "name", "errors", "_tag"]);
 
 /** An error as plain data: what observers print and report, and the flags reporters read. */
 const errorForm = (error: Error, walk: Walk, depth: number): Record<string, unknown> => {
   const name = dataProperty(error, "name");
   const tag = dataProperty(error, "_tag");
   // `message` may be a getter (Effect's HTTP errors compute it from the request): read once, here,
-  // and kept only redacted.
-  const message = typeof error.message === "string" ? redactCredentialsInText(error.message) : "";
-  const stack = typeof error.stack === "string" ? redactCredentialsInText(error.stack) : undefined;
+  // and kept only as redacted text.
+  let message = "";
+  let stack: string | undefined;
+  try {
+    message = typeof error.message === "string" ? redactCredentialsInText(error.message) : "";
+    stack = typeof error.stack === "string" ? redactCredentialsInText(error.stack) : undefined;
+  } catch {
+    message = REDACTION_FAILED;
+  }
   const cause = dataProperty(error, "cause");
+  const errors = dataProperty(error, "errors");
   const ignore = dataProperty(error, ErrorReporter.ignore);
   const severity = dataProperty(error, ErrorReporter.severity);
   const attributes = dataProperty(error, ErrorReporter.attributes);
-  return {
+  return freshObject([
     ...observeFields(error, walk, depth, ERROR_OWN),
-    name: typeof name === "string" ? name : "Error",
-    ...(typeof tag === "string" ? { _tag: tag } : {}),
-    message,
-    ...(stack === undefined ? {} : { stack }),
-    ...(cause === undefined ? {} : { cause: observeInto(cause, walk, depth + 1) }),
-    ...(ignore === true ? { [ErrorReporter.ignore]: true } : {}),
-    ...(typeof severity === "string" ? { [ErrorReporter.severity]: severity } : {}),
+    ["name", typeof name === "string" ? redactCredentialsInText(name) : "Error"],
+    ...(typeof tag === "string" ? [["_tag", redactCredentialsInText(tag)] as const] : []),
+    ["message", message],
+    ...(stack === undefined ? [] : [["stack", stack] as const]),
+    ...(cause === undefined ? [] : [["cause", observeInto(cause, walk, depth + 1)] as const]),
+    // An AggregateError's failures, each as plain data.
+    ...(Array.isArray(errors) ? [["errors", observeArray(errors, walk, depth + 1)] as const] : []),
+    ...(ignore === true ? [[ErrorReporter.ignore, true] as const] : []),
+    ...(typeof severity === "string" ? [[ErrorReporter.severity, severity] as const] : []),
     ...(typeof attributes === "object" && attributes !== null
-      ? { [ErrorReporter.attributes]: observeInto(attributes, walk, depth + 1) }
-      : {}),
-  };
+      ? [[ErrorReporter.attributes, observeInto(attributes, walk, depth + 1)] as const]
+      : []),
+  ]);
+};
+
+/** A map as a plain object: keys through the text rules, credential-named entries replaced. */
+const observeMap = (value: Map<unknown, unknown>, walk: Walk, depth: number) => {
+  const out: Array<readonly [string, unknown]> = [];
+  let total = 0;
+  Map.prototype.forEach.call(value, (item: unknown, key: unknown) => {
+    total += 1;
+    if (out.length >= MAX_ITEMS) return;
+    const name = typeof key === "string" ? key : String(observeInto(key, walk, depth + 1));
+    out.push([
+      redactCredentialsInText(name),
+      typeof key === "string"
+        ? observeField(key, item, walk, depth)
+        : observeInto(item, walk, depth + 1),
+    ]);
+  });
+  if (total > MAX_ITEMS) out.push(["[more]", `[${total - MAX_ITEMS} more]`]);
+  return freshObject(out);
+};
+
+const observeSet = (value: Set<unknown>, walk: Walk, depth: number): unknown[] => {
+  const out: unknown[] = [];
+  let total = 0;
+  Set.prototype.forEach.call(value, (item: unknown) => {
+    total += 1;
+    if (out.length < MAX_ITEMS) out.push(observeInto(item, walk, depth + 1));
+  });
+  if (total > MAX_ITEMS) out.push(`[${total - MAX_ITEMS} more]`);
+  return out;
 };
 
 const observeObject = (value: object, walk: Walk, depth: number): unknown => {
-  if (isPlainArray(value)) return value.map((item) => observeInto(item, walk, depth + 1));
-  if (isPlainObject(value)) return observeFields(value, walk, depth);
+  if (Array.isArray(value)) {
+    // An array subclass may run its own code (its species, its methods): only its label.
+    return prototypeOf(value) === Array.prototype
+      ? observeArray(value, walk, depth)
+      : labelOf(value);
+  }
+  if (isPlainObject(value)) return freshObject(observeFields(value, walk, depth));
   if (value instanceof Error) return errorForm(value, walk, depth);
   const known = knownForm(value);
   if (known !== undefined) return known;
-  if (value instanceof Map) {
-    const out: Record<string, unknown> = {};
-    for (const [key, item] of value) {
-      const name = typeof key === "string" ? key : String(observeInto(key, walk, depth + 1));
-      out[name] =
-        typeof key === "string" && isCredentialName(key)
-          ? REDACTED
-          : observeInto(item, walk, depth + 1);
-    }
-    return out;
+  if (value instanceof Map) return observeMap(value, walk, depth);
+  if (value instanceof Set) return observeSet(value, walk, depth);
+  if (ArrayBuffer.isView(value)) {
+    const bytes = dataProperty(value, "byteLength");
+    return `${labelOf(value).slice(0, -1)}${typeof bytes === "number" ? ` ${bytes} bytes` : ""}]`;
   }
-  if (value instanceof Set) return [...value].map((item) => observeInto(item, walk, depth + 1));
-  if (ArrayBuffer.isView(value))
-    return `[${labelOf(value).slice(1, -1)} ${value.byteLength} bytes]`;
   return labelOf(value);
 };
 
@@ -579,8 +789,6 @@ export const observeCause = (cause: Cause.Cause<unknown>): Cause.Cause<unknown> 
 // ---------------------------------------------------------------------------------------------
 // Observers
 // ---------------------------------------------------------------------------------------------
-
-const REDACTION_FAILED = "[redacted: the redaction itself failed]";
 
 /** `redact(value)`, or a placeholder when it throws: never the original, never a failed effect. */
 const safely =
@@ -680,6 +888,17 @@ export const redactingReporter = (
     },
   };
 };
+
+/**
+ * `effect` (the process's main effect) with its failure observed before it leaves: the runtime's
+ * own failure logger (`NodeRuntime.runMain` logs a failed main effect outside every layer the
+ * effect provides) then prints plain, redacted data. Interruption stays interruption, so a clean
+ * shutdown is still quiet.
+ */
+export const observedMain = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, unknown, R> =>
+  effect.pipe(Effect.catchCause((cause) => Effect.failCause(observedCause(cause))));
 
 /** Every observer in place, wrapped as the module comment says. */
 export const CredentialRedactionLive: Layer.Layer<never> = Layer.mergeAll(

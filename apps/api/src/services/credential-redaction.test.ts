@@ -24,6 +24,8 @@ import { Cause, Context, Effect, ErrorReporter, Exit, Layer, Logger, Tracer } fr
 import {
   FetchHttpClient,
   HttpClient,
+  HttpClientRequest,
+  HttpClientResponse,
   HttpRouter,
   HttpServer,
   HttpServerError,
@@ -31,6 +33,8 @@ import {
 } from "effect/unstable/http";
 import { type HttpApi, HttpApiBuilder, type HttpApiGroup } from "effect/unstable/httpapi";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+
+import { RequestRefusalLive } from "../routes/request-refusal.js";
 
 const MARKER = "slt_review347-query-credential-marker";
 const GATEWAY_MARKER = "review347-gateway-credential-marker";
@@ -216,6 +220,7 @@ const sshApi = () =>
         HttpApiGroup.ToService<"sealantControlPlaneApi", ControlPlaneGroups>
       >,
     ),
+    Layer.provide(RequestRefusalLive),
     Layer.provide(HttpServer.layerServices),
   );
 
@@ -349,6 +354,9 @@ const shapes = (bytes: number) => [
   `${'a:"'.repeat(bytes / 3)}`,
   `${":\\/\\/".repeat(bytes / 5)}`,
   `x${"%3A%2F%2Fa".repeat(bytes / 10)}`,
+  `bearer "${"a".repeat(bytes)}`,
+  `${'bearer \\"'.repeat(bytes / 9)}`,
+  `https://u:${"%2F".repeat(bytes / 3)}`,
   `${"a%40".repeat(bytes / 4)}`,
 ];
 
@@ -630,5 +638,168 @@ describe("what an observer receives", () => {
     );
     if (!Exit.isFailure(exit)) throw new Error("expected a failure");
     expect(Cause.pretty(redaction.observeCause(exit.cause))).toContain("Review.probe");
+  });
+});
+
+describe("round 1 of the review of #351", () => {
+  const SECRET = "slt_review351_marker";
+  const leaks = (value: unknown) =>
+    [safeJson(value), inspect(value, { depth: 20, getters: true }), String(value)].some((text) =>
+      text.includes(SECRET),
+    );
+
+  it("F1: walks an array by index into a fresh array, never calling the array's own code", () => {
+    const overridden = [{ authorization: SECRET }];
+    Object.defineProperty(overridden, "map", { value: () => overridden });
+    const species = [{ authorization: SECRET }];
+    const item = species[0];
+    Object.defineProperty(species, "constructor", {
+      value: { [Symbol.species]: () => species },
+    });
+    let calls = 0;
+    const accessor: unknown[] = [];
+    Object.defineProperty(accessor, "0", {
+      get: () => {
+        calls += 1;
+        return SECRET;
+      },
+      enumerable: true,
+    });
+    class Subclassed extends Array<unknown> {}
+    const subclassed = Subclassed.from([SECRET]);
+
+    const observed = [overridden, species, accessor, subclassed].map((input) =>
+      redaction.observe(input),
+    );
+    // Counted before any assertion: a matcher may read the input's elements itself.
+    expect(calls).toBe(0);
+    for (const [index, input] of [overridden, species, accessor, subclassed].entries()) {
+      expect(observed[index] === input).toBe(false);
+      expectPlainData(observed[index]);
+      expect(leaks(observed[index])).toBe(false);
+    }
+    expect(species[0] === item).toBe(true);
+    expect(redaction.observe(accessor)).toEqual(["[accessor]"]);
+    expect(redaction.observe(subclassed)).toBe("[Subclassed]");
+  });
+
+  it("F1: takes an HTTP response's status only as a number", () => {
+    const response = HttpClientResponse.fromWeb(
+      HttpClientRequest.get("https://example.com/"),
+      new Response(null, { status: 503 }),
+    );
+    Object.defineProperty(response, "status", { value: { authorization: SECRET } });
+    const observed = redaction.observe(response);
+    expectPlainData(observed);
+    expect(leaks(observed)).toBe(false);
+    expect(observed).toMatchObject({ status: undefined });
+  });
+
+  it("F2: puts names, tags, symbols, keys and labels through the text rules, calling no getter", () => {
+    let calls = 0;
+    class Named {
+      readonly kind = "named";
+    }
+    Object.defineProperty(Named, "name", { value: `https://example.com/x?token=${SECRET}` });
+    class Guarded {
+      readonly kind = "guarded";
+    }
+    Object.defineProperty(Guarded.prototype, "constructor", {
+      get: () => {
+        calls += 1;
+        return Named;
+      },
+    });
+    const observed = redaction.observe({
+      error: Object.assign(new Error("failed"), {
+        name: `https://example.com/x?token=${SECRET}`,
+        _tag: `Bearer ${SECRET}`,
+      }),
+      symbol: Symbol(`https://example.com/x?token=${SECRET}`),
+      map: new Map([[`https://example.com/x?token=${SECRET}`, "failed"]]),
+      object: { [`https://example.com/x?token=${SECRET}`]: "failed" },
+      named: new Named(),
+      guarded: new Guarded(),
+    });
+    expectPlainData(observed);
+    expect(leaks(observed)).toBe(false);
+    expect(calls).toBe(0);
+    expect(observed).toMatchObject({ guarded: "[object]" });
+  });
+
+  it("F3: replaces a quoted Bearer or Basic credential of any length, plain or escaped", () => {
+    const long = `${"x".repeat(5000)}${SECRET}`;
+    for (const text of [
+      `Authorization: Bearer "${long}"`,
+      `sent basic "${long}" then`,
+      JSON.stringify({ header: `Bearer "${long}"` }),
+      JSON.stringify(JSON.stringify({ header: `Bearer "${long}"` })),
+      `Bearer "${long}`,
+    ]) {
+      expect(redaction.redactCredentialsInText(text).includes(SECRET), text.slice(0, 40)).toBe(
+        false,
+      );
+    }
+  });
+
+  it("F4: replaces a literal URL's userinfo to its last @, encoded delimiters included", () => {
+    for (const password of [
+      `pa%2Fss${SECRET}`,
+      `pa%3Fss${SECRET}`,
+      `pa%23ss${SECRET}`,
+      `a@b${SECRET}`,
+    ]) {
+      const text = `failed https://user:${password}@registry.example/v2/ here`;
+      const redacted = redaction.redactCredentialsInText(text);
+      expect(redacted, password).not.toContain(SECRET);
+      expect(redacted).toContain("registry.example/v2/");
+    }
+  });
+
+  it("F5: keeps an AggregateError's failures, each plain and redacted", () => {
+    const observed = redaction.observe(
+      new AggregateError(
+        [new Error(`https://example.com/x?token=${SECRET}`), new Error("second")],
+        "both failed",
+      ),
+    );
+    expectPlainData(observed);
+    expect(leaks(observed)).toBe(false);
+    expect(observed).toMatchObject({
+      name: "AggregateError",
+      message: "both failed",
+      errors: [{ message: "https://example.com/x?token=REDACTED" }, { message: "second" }],
+    });
+  });
+
+  it("F6: a main effect's failure reaches the runtime's own logger observed", async () => {
+    const run = async (observed: boolean) => {
+      const lines: string[] = [];
+      const capture = Logger.make((options) => {
+        lines.push(`${inspect(options.message, { depth: 12 })} ${structured(options.cause)}`);
+      });
+      const main = Effect.fail(new Error(`startup https://example.com/x?token=${SECRET}`));
+      // What NodeRuntime.runMain does with a failed main effect, outside every layer it provides.
+      await Effect.runPromiseExit(
+        (observed ? redaction.observedMain(main) : main).pipe(
+          Effect.tapCause((cause) => Effect.logError(cause)),
+          Effect.provide(Logger.layer([capture])),
+        ),
+      );
+      return lines.join("\n");
+    };
+    expect(await run(true)).not.toContain(SECRET);
+    expect(await run(false)).toContain(SECRET);
+
+    const interrupted = await Effect.runPromiseExit(redaction.observedMain(Effect.interrupt));
+    expect(Exit.isFailure(interrupted) && Cause.hasInterruptsOnly(interrupted.cause)).toBe(true);
+  });
+
+  it("F7: keeps a `__proto__` field a plain field, never the copy's prototype", () => {
+    const input: unknown = JSON.parse(`{"__proto__": {"token": "${SECRET}"}, "ok": 1}`);
+    const observed = redaction.observe(input);
+    expect(Object.getPrototypeOf(observed)).toBe(Object.prototype);
+    expect(Object.hasOwn(observed as object, "__proto__")).toBe(true);
+    expect(leaks(observed)).toBe(false);
   });
 });
