@@ -56,6 +56,42 @@ describe.skipIf(databaseUrl === undefined)("job queue (pg-boss)", () => {
     expect(completed?.state).toBe("completed");
   });
 
+  it("delivers two messages that share one wake-up without waiting out pg-boss's NOTIFY backstop", async () => {
+    const queue = defineJobQueue(`test-shared-wakeup-${suffix}`, { activeTimeoutSeconds: 60 });
+    const jobs = createJobQueueService(url);
+    const { boss } = await getJobQueueSingleton(url);
+    let handled = 0;
+    const { promise: bothHandled, resolve: resolveBoth } = Promise.withResolvers<void>();
+
+    const consumer = await jobs.consumeJson<{ readonly n: number }>({
+      queue,
+      parseMessage: (input) => input as { readonly n: number },
+      onMessage: async () => {
+        handled += 1;
+        if (handled === 2) resolveBoth();
+      },
+    });
+
+    // Wait until the worker's first fetch came back empty, so it is asleep until a NOTIFY or
+    // its polling backstop.
+    while (
+      !boss
+        .getWipData()
+        .some((worker) => worker.name === queue.name && worker.lastFetchedOn !== null)
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    // One statement, one NOTIFY, two deliveries: the worker wakes once and takes one.
+    const startedAt = Date.now();
+    await boss.insert(queue.name, [{ data: { n: 1 } }, { data: { n: 2 } }]);
+    await bothHandled;
+    const latencyMs = Date.now() - startedAt;
+    await consumer.cancel();
+
+    // The second waits for the 1 s backstop, not pg-boss's 30 s default.
+    expect(latencyMs).toBeLessThan(10_000);
+  }, 20_000);
+
   it("dead-letters a delivery whose handler throws, without retrying it", async () => {
     const queue = defineJobQueue(`test-dlq-${suffix}`, { activeTimeoutSeconds: 60 });
     const jobs = createJobQueueService(url);
@@ -142,8 +178,8 @@ describe.skipIf(databaseUrl === undefined)("job queue (pg-boss)", () => {
     await jobs.publishJson({ queue, message: { args: ["ok", secret] } });
     await jobs.publishJson({ queue, message: { args: ["fail", secret] } });
     await bothHandled;
-    // Let pg-boss settle the completion and the failure (both find no row).
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // Waits for the worker loop to stop, which settles the completion and the failure (both find
+    // no row) before it returns.
     await consumer.cancel();
 
     const { boss } = await getJobQueueSingleton(url);
