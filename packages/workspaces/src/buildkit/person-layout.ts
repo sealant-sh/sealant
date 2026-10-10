@@ -34,8 +34,8 @@
  *   (Ubuntu's default is 0750, and every person's primary group is `mend`).
  *
  * Nix images get none of it and take one person: their passwd is in the read-only store, the store
- * cannot hold a setuid `sudo`, and non-root nix needs the daemon. Custom base images get only the
- * probe step: whatever the base carries decides.
+ * cannot hold a setuid `sudo`, and non-root nix needs the daemon. Custom base images get the probe
+ * step and {@link GIT_SAFE_DIRECTORY_ANY}, nothing else: whatever else the base carries decides.
  */
 import type { WorkspaceImageProbe } from "@sealant/validators";
 
@@ -295,6 +295,15 @@ export const isPersonLayoutFamily = (family: string): family is PersonLayoutFami
 
 const shellQuote = (value: string): string => `'${value.split("'").join(`'"'"'`)}'`;
 
+/**
+ * Root's git, and every person's, trusts a repository whoever owns it. Under an owner map the
+ * worktree belongs to its change's owner, `.git` to root and the files to whoever wrote them, and
+ * git refuses a repository another uid owns: without this line sealantd's own restore fails at
+ * boot ("/workspace/repo is not a git repository") and nobody's git runs in the worktree. Every
+ * image that can run the person layout carries it, custom bases included.
+ */
+export const GIT_SAFE_DIRECTORY_ANY = "git config --system --replace-all safe.directory '*'";
+
 /** `printf` of lines into a file, as one Dockerfile-safe shell command. */
 const writeLines = (path: string, lines: readonly string[]): string =>
   `printf '%s\\n' ${lines.map(shellQuote).join(" ")} > ${shellQuote(path)}`;
@@ -388,7 +397,7 @@ export const renderPersonLayoutSteps = (input: {
     `mkdir -p ${skelDirs.map((dir) => `/etc/skel/${dir}`).join(" ")}`,
     ...PERSON_SKEL_LINKS.map(([link, target]) => `ln -sfn ${target} /etc/skel/${link}`),
     ...PERSON_SKEL_FILES.map(([path, lines]) => writeLines(`/etc/skel/${path}`, lines)),
-    "git config --system --replace-all safe.directory '*'",
+    GIT_SAFE_DIRECTORY_ANY,
     // useradd -m makes homes with HOME_MODE: Ubuntu's is 0750, and every person's group is mend.
     "if grep -q '^HOME_MODE' /etc/login.defs; then sed -i 's/^HOME_MODE.*/HOME_MODE\\t0700/' /etc/login.defs; else printf 'HOME_MODE\\t0700\\n' >> /etc/login.defs; fi",
   ];
