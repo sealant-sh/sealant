@@ -18,6 +18,11 @@ import {
   selectBuildkitOsFamily,
   sweepStaleBuildContexts,
 } from "./buildkit-builder.js";
+import {
+  GIT_SAFE_DIRECTORY_ANY,
+  IMAGE_PROBE_SCRIPT_PATH,
+  renderPersonLayoutSteps,
+} from "./person-layout.js";
 
 const createWorkspaceBuildSpec = (overrides: Partial<NewWorkspace> = {}): NewWorkspace => {
   const base: NewWorkspace = {
@@ -1262,6 +1267,29 @@ describe("custom base images", () => {
     expect(containerfile).toContain('ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]');
     // A custom base makes no PATH promises; the baked binaries must resolve by name anyway.
     expect(containerfile).toContain("ENV PATH=/usr/local/bin:$PATH");
+  });
+
+  it("trusts every repository for git before the probe, as the managed families do", async () => {
+    // A custom base with sudo and ACLs probes as able to run one user per person; its owner map
+    // then gives the worktree to a person, and without this line sealantd's own git refused it at
+    // boot ("/workspace/repo is not a git repository"), so no second session ever started.
+    const commandRunner = vi.fn<
+      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+    >(async () => ({ stdout: "", stderr: "" }));
+
+    const result = await compileWorkspaceBuildSpec({
+      blueprint: createWorkspaceBuildSpec({ target: customTarget("node:26-bookworm") }),
+      options: { commandRunner },
+    });
+
+    const containerfile = await readFile(result.buildkit.spec.containerfilePath, "utf8");
+    const trust = containerfile.indexOf(`RUN ${GIT_SAFE_DIRECTORY_ANY} || echo `);
+    expect(trust).toBeGreaterThan(-1);
+    expect(trust).toBeLessThan(containerfile.indexOf(IMAGE_PROBE_SCRIPT_PATH));
+    // The same line the managed families' person layout runs.
+    expect(renderPersonLayoutSteps({ family: "ubuntu", dockerService: false })).toContain(
+      GIT_SAFE_DIRECTORY_ANY,
+    );
   });
 
   it("installs requested packages through the base's detected package manager", async () => {

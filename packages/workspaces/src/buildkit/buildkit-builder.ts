@@ -41,6 +41,7 @@ import {
   unknownWorkspacePackageIds,
 } from "./package-catalog.js";
 import {
+  GIT_SAFE_DIRECTORY_ANY,
   IMAGE_PROBE_PATH,
   isPersonLayoutFamily,
   renderImageProbeStep,
@@ -1307,8 +1308,8 @@ const renderChezmoiInstallStep = (plan: ResolvedImagePlan): string | undefined =
 /**
  * The custom-base Containerfile: an arbitrary caller-supplied base, overlaid with ONLY the
  * sealantd supervisor (+ its static socat relay, vendored in the sealantd image), the harness
- * CLIs via npm, and any explicitly requested packages through the base's own package manager.
- * No distro package installs, no shell reconfiguration — the contract (see the SDK README's
+ * CLIs via npm, any explicitly requested packages through the base's own package manager, git's
+ * `safe.directory = *` for the person layout, and the image probe. No distro package installs, no shell reconfiguration — the contract (see the SDK README's
  * "Custom base images") is: any Linux base, amd64/arm64, with a POSIX shell; node + npm for the
  * node-based harness CLIs; git for clone/mount workspace sources.
  *
@@ -1354,6 +1355,12 @@ const renderCustomBaseContainerfile = (plan: ResolvedImagePlan): string => {
           )}`,
         ]
       : []),
+    "",
+    // The person layout's git trust, as the managed families carry it: the probe can say a custom
+    // base runs one user per person, and then the worktree is not root's. A base that builds as a
+    // user who cannot write /etc builds on; its probe reads /etc/passwd as not writable, so it
+    // never runs the layout.
+    `RUN ${GIT_SAFE_DIRECTORY_ANY} || echo 'sealant: /etc/gitconfig could not be written; git trusts only repositories its user owns.' >&2`,
     "",
     // Whatever the custom base carries decides; the probe records it and never fails the build.
     renderImageProbeStep({ require: false }),
