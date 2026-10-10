@@ -153,6 +153,19 @@ Upgrade the control plane before the SDK. A control plane from before this rule 
 untrimmed argument with an empty `400` and logs the argument; the SDK says so when it gets that
 answer. An SDK from before this rule refuses such an argument itself, before it sends anything.
 
+What the API observes (request spans, log lines, error reports) can hold credentials: the terminal
+attach, the output stream and the port forward take their bearer as `?token=`, because browser
+WebSocket and EventSource clients cannot set headers; request spans record URLs and headers; an HTTP
+error quotes its request's URL and holds the request itself. Observers receive plain data only,
+built when they observe it: text has every credential it can recognise replaced by `REDACTED`
+(userinfo, plain, slash-escaped or percent-encoded; credential query parameters such as `token`,
+`access_token`, `ticket`, `key` and `signature`; `Bearer` and `Basic` credentials in any case,
+quoted or escaped; and the value of any field or header named for a credential, such as
+`authorization`, `cookie` or `x-sealant-gateway-token`), an error arrives as its plain form (name,
+tag, message, stack, fields), URLs, headers and requests as redacted plain data, and any other
+object as its label. `?token=` is still accepted. Not redacted: a fiber's log annotations and
+log-span labels, and a span's name and links; Sealant puts no credential there.
+
 `POST /v1/workspaces/:workspaceId/dotfiles { ownerUserId, onBehalfOfUserId, user, home, repository?, archives? }`
 (service key only) applies a person's dotfiles into their home of a running workspace, as their
 Linux user (`sealantd` unpacks archives outside the home and writes every file in it as the user),
