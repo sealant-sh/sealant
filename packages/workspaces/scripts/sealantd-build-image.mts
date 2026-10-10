@@ -23,8 +23,10 @@ import { parseWorkspaceBlueprint } from "@sealant/validators";
 
 import {
   compileWorkspaceBuildSpec,
+  runBuildkitCommand,
   type BuildkitCommandRunner,
 } from "../src/buildkit/buildkit-builder.js";
+import { dockerDaemonImagePlatform } from "../src/buildkit/platform.js";
 
 // A streaming command runner so we can watch `docker build` progress live.
 // Mirrors the package default runner (forces DOCKER_BUILDKIT=1) but pipes
@@ -81,6 +83,8 @@ const main = async () => {
   const startedAt = Date.now();
   const result = await compileWorkspaceBuildSpec({
     blueprint,
+    // The daemon's own architecture, as the worker builds for it.
+    platform: await dockerDaemonImagePlatform(runBuildkitCommand),
     options: { commandRunner: streamingCommandRunner },
   });
   const durationMs = Date.now() - startedAt;

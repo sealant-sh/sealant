@@ -37,7 +37,9 @@ import { parseArgs } from "node:util";
 
 import { parseWorkspaceBlueprint } from "@sealant/validators";
 
-import { planWorkspaceImageBuild } from "../src/buildkit/buildkit-builder.js";
+import { ARCHLINUXARM_BUILDER_KEY, ARCHLINUXARM_KEY_FILE } from "../src/buildkit/archlinuxarm.js";
+import { planWorkspaceImageBuild, usesArchlinuxArm } from "../src/buildkit/buildkit-builder.js";
+import { dockerDaemonImagePlatform } from "../src/buildkit/platform.js";
 
 const run = (command: string, args: readonly string[], input = ""): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -110,8 +112,12 @@ const bootEnv = [
   "-e",
   "SEALANT_FOREGROUND_COMMAND=sleep infinity",
 ];
-const platformFor = (image: string): string[] =>
-  image.includes("-arch") ? ["--platform", "linux/amd64"] : [];
+// Images are built and run for the Docker daemon's own architecture, as the worker builds them.
+const platform = await dockerDaemonImagePlatform(async (command, args) => ({
+  stdout: await run(command, args),
+  stderr: "",
+}));
+const platformFor = (_image: string): string[] => ["--platform", platform];
 
 const scratch = mkdtempSync(join(tmpdir(), "image-budget-"));
 const repo = join(scratch, "repo");
@@ -315,16 +321,20 @@ const summary = (samples: readonly number[]) =>
 const build = async (
   family: string,
 ): Promise<{ image: string; buildMs: number; planHash: string }> => {
-  const planned = planWorkspaceImageBuild({ blueprint: blueprintFor(family) });
+  const planned = planWorkspaceImageBuild({ blueprint: blueprintFor(family), platform });
   const context = mkdtempSync(join(tmpdir(), "image-budget-build-"));
   const image = `sealant-image-budget-${family}:${values.label}`;
   try {
     writeFileSync(join(context, "Containerfile"), planned.containerfile);
+    if (usesArchlinuxArm(planned.osFamily, platform)) {
+      writeFileSync(join(context, ARCHLINUXARM_KEY_FILE), ARCHLINUXARM_BUILDER_KEY);
+    }
     const builtAt = Date.now();
     await run("docker", [
       "build",
       ...(values["no-cache"] ? ["--no-cache", "--pull"] : []),
-      ...(family === "arch" ? ["--platform", "linux/amd64"] : []),
+      "--platform",
+      platform,
       "--file",
       join(context, "Containerfile"),
       "--tag",
