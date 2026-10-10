@@ -18,8 +18,9 @@ Remote-SSH as the launcher's user, never root).
   that user, on a `sealantd` that reports `exec.user`, and refuses the session otherwise rather than
   run it as root. It asks who for every new session channel, so a change reaches a connection
   already open. `GET .../ssh-target` always states `sessionUser` (`null` for root), and the gateway
-  refuses an answer without it. SFTP is refused for such a workspace until the pinned `sealantd`
-  runs it as the user.
+  refuses an answer without it. SFTP runs as the user too, on a `sealantd` that reports `sftp.user`
+  (refused on one that does not), so an upload is theirs, in the directory's group, with its default
+  ACL inherited.
 - SDK: `users.bindPerson()`, `create({ sshAsOwner })`, `workspace.sshAsRoot()`,
   `features().workspaceSshUser` and `features().personBinding`. A create with `sshAsOwner` is
   refused (`ssh-user-unsupported`) with nothing sent to a control plane without the feature.

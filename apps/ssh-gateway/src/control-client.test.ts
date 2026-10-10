@@ -344,4 +344,16 @@ describe("ControlClient as a workspace's user", () => {
 
     client.close();
   });
+
+  it("openSftp carries the user, and names none without one", async () => {
+    const daemon = new FakeDaemon();
+    const client = ControlClient.fromStream(daemon);
+
+    await client.openSftp({ user: "40001" });
+    expect(lastCommand(daemon)).toMatchObject({ case: "openSftp", value: { user: "40001" } });
+    await client.openSftp();
+    expect(lastCommand(daemon)?.value).not.toHaveProperty("user", expect.any(String));
+
+    client.close();
+  });
 });

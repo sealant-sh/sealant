@@ -36,6 +36,9 @@ const LOGIN_SHELL = "/bin/bash";
 /** The capability a daemon names when it starts executions and sessions as a user. */
 export const EXEC_USER_CAPABILITY = "exec.user";
 
+/** The capability a daemon names when it runs an SFTP bridge as a user (sealantd#155). */
+export const SFTP_USER_CAPABILITY = "sftp.user";
+
 /** A PTY interactive session bound to a daemon byte channel, ready to bridge to an SSH shell channel. */
 export interface ShellSession {
   /** Daemon session id (for `resizePty` / `closeSession` / input via `writeStdin`). */
@@ -274,10 +277,13 @@ export class ControlClient {
   async openSftp(options?: {
     readonly cwd?: string;
     readonly executionId?: string;
+    /** The Linux user the sftp-server runs as (a daemon that names `sftp.user`); absent: root. */
+    readonly user?: string;
   }): Promise<{ result: SftpOpened; channel: Channel }> {
     return this.#client.openSftp({
       ...(options?.cwd === undefined ? {} : { cwd: options.cwd }),
       ...(options?.executionId === undefined ? {} : { executionId: options.executionId }),
+      ...(options?.user === undefined ? {} : { user: options.user }),
     });
   }
 

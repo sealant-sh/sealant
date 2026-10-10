@@ -309,10 +309,11 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
       "coreutils",
       "git",
       // KEEP openssh-clients: git-over-ssh clone needs the ssh client (GIT_SSH_COMMAND in boot/git.rs).
-      // The inner sshd is gone (gateway reaches the daemon control socket, not an inner sshd), so the
-      // openssh-server package is dropped here. Fedora's standalone sftp-server ships in openssh-server,
-      // so SFTP-via-exec (gateway-spec §1.C) is unavailable on Fedora until that note is resolved.
       "openssh-clients",
+      // The standalone sftp-server the gateway's SFTP bridge runs (gateway-spec §1.C, as the
+      // workspace's SSH user): Fedora ships it only in openssh-server. Its sshd is never started
+      // (the gateway reaches the daemon's control socket, not an inner sshd).
+      "openssh-server",
       "shadow-utils",
     ],
     sealantdPackages: ["socat"],
@@ -346,6 +347,8 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
       // openssh-client (Debian naming): git-over-ssh clone needs the ssh client, same as the
       // fedora note above. No inner sshd — the gateway reaches the daemon control socket.
       "openssh-client",
+      // The standalone sftp-server the gateway's SFTP bridge runs (gateway-spec §1.C).
+      "openssh-sftp-server",
       // usermod lives in `passwd` on Debian/Ubuntu (preinstalled in the base image, pinned
       // explicitly so the `usermod -s` shell step never depends on base-image contents).
       "passwd",
@@ -383,7 +386,7 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
  */
 export const sealantdImageReference =
   process.env["SEALANT_SEALANTD_IMAGE"] ??
-  "ghcr.io/sealant-sh/sealantd-next:0.20.0-next.155@sha256:96bc1d3179acfd24f6fb7c481d4a798a782ea5fdbc108a3660960b375c98e6ac";
+  "ghcr.io/sealant-sh/sealantd-next:0.20.0-next.157@sha256:b59b6e6ba1792f3a2ddf3cf02e12f415c4bf7e6888cbadaa4b61d7a8a6cdd3f5";
 const dockerCliImageReference = process.env["SEALANT_DOCKER_CLI_IMAGE"] ?? "docker:27.5.1-cli";
 
 /**

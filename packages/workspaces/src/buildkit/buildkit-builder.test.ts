@@ -854,9 +854,12 @@ describe("compileWorkspaceBuildSpec", () => {
       `SEALANT_FOREGROUND_RUN_JSON='${JSON.stringify({ run: "pnpm dev", shell: "bash" })}'`,
     );
 
-    // §4.1: the inner sshd is gone — no openssh-server in the install layer — but the ssh *client*
-    // (git-over-ssh clone) and socat (control-socket relay) are retained.
-    expect(containerfile).not.toContain("openssh-server");
+    // §4.1: the inner sshd is gone: nothing starts one (the entrypoint is sealantd). The ssh
+    // *client* (git-over-ssh clone) and socat (control-socket relay) are retained, and so is the
+    // standalone sftp-server the gateway's SFTP bridge runs, which Fedora ships only in
+    // openssh-server.
+    expect(containerfile).toContain("openssh-server");
+    expect(containerfile).not.toMatch(/sshd(?!_config)\b.*-D|systemctl/u);
     expect(containerfile).toContain("openssh-clients");
     expect(containerfile).toContain("socat");
 
@@ -1176,6 +1179,7 @@ describe("ubuntu distro family", () => {
     for (const expectedPackage of [
       "ca-certificates",
       "openssh-client",
+      "openssh-sftp-server",
       "passwd",
       "socat",
       "ripgrep",

@@ -11,7 +11,9 @@
  *    loopback, and the client reaches it through a forwarded port (`-L`, direct-tcpip).
  * 3. Another person's key is refused: the API admits only the workspace's owner.
  * 4. A workspace without a user runs as root, as before.
- * 5. SFTP is refused for a workspace with a user (the pinned sealantd runs it only as root).
+ * 5. SFTP runs as the workspace's user: an upload into a person's repository (theirs, group
+ *    `mend`, setgid, a default ACL) is theirs, in the repository's group, with the ACL inherited,
+ *    so another person can edit it; a workspace without a user uploads as root, as before.
  *
  * Needs Docker, OpenSSH's `ssh`, `ssh-keygen` and `sftp`, and a managed per-person image whose
  * sealantd reports `exec.user`: `SEALANT_PROCESS_USER_E2E_IMAGE`, default
@@ -20,7 +22,7 @@
  */
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { createConnection, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -369,12 +371,66 @@ describe.skipIf(!runsAsUser)("a workspace's SSH sessions as its user", () => {
     expect(refused.stdout).toBe("");
   });
 
-  it("refuses SFTP for a workspace with a user rather than run it as root", async () => {
+  it("uploads over SFTP as the workspace's user, in the repository's group, the ACL inherited, editable by another person", async () => {
     workspaceUser = ALICE.name;
-    const sftp = await ssh(keys.alice, ["-b", "-"], undefined, "pwd\n", "sftp");
-    expect(sftp.code).not.toBe(0);
-    // The gateway's refusal, not a missing sftp-server: nothing was opened as root.
-    expect(sftp.stderr).toContain("SFTP is not available in this workspace yet");
+    // A repository as Mend's per-person layout leaves it: the person's, group mend, setgid, with a
+    // default ACL that gives the group rwx on everything made in it.
+    await dockerExec(
+      [
+        "mkdir -p /srv/repo",
+        `chown ${ALICE.name}:mend /srv/repo`,
+        "chmod 2775 /srv/repo",
+        "setfacl -m g:mend:rwx /srv/repo",
+        "setfacl -d -m g:mend:rwx /srv/repo",
+      ].join(" && "),
+    );
+    // A file the editor writes group-writable (0664), as a person's tools do under umask 0002.
+    const local = join(scratch, "upload.txt");
+    await writeFile(local, "uploaded over sftp\n", { mode: 0o664 });
+    await chmod(local, 0o664);
+    const sftp = await ssh(
+      keys.alice,
+      ["-b", "-"],
+      undefined,
+      `put ${local} /srv/repo/uploaded.txt\n`,
+      "sftp",
+    );
+    expect(sftp.code, sftp.stderr).toBe(0);
+
+    const stat = await dockerExec("stat -c '%U:%G %a' /srv/repo/uploaded.txt");
+    expect(stat.stdout.trim()).toBe(`${ALICE.name}:mend 664`);
+    const acl = await dockerExec("getfacl -p /srv/repo/uploaded.txt");
+    // The default ACL reached the file: the group's entry is there and its mask leaves it rw.
+    expect(acl.stdout).toMatch(/^group:mend:rwx\s+#effective:rw-$/mu);
+    expect(acl.stdout).toMatch(/^mask::rw-$/mu);
+    // Another person (Bob, in the mend group) can edit it.
+    await run("docker", [
+      "exec",
+      "--user",
+      `${String(BOB.uid)}:40000`,
+      containerId,
+      "sh",
+      "-c",
+      "echo edited by bob >> /srv/repo/uploaded.txt",
+    ]);
+    expect((await dockerExec("cat /srv/repo/uploaded.txt")).stdout).toBe(
+      "uploaded over sftp\nedited by bob\n",
+    );
+  });
+
+  it("uploads over SFTP as root in a workspace without a user, as before", async () => {
+    workspaceUser = undefined;
+    const local = join(scratch, "root-upload.txt");
+    await writeFile(local, "as root\n");
+    const sftp = await ssh(
+      keys.alice,
+      ["-b", "-"],
+      undefined,
+      `put ${local} /tmp/root-upload.txt\n`,
+      "sftp",
+    );
+    expect(sftp.code, sftp.stderr).toBe(0);
+    expect((await dockerExec("stat -c '%U' /tmp/root-upload.txt")).stdout.trim()).toBe("root");
   });
 
   it("runs a workspace without a user as root, as before", async () => {

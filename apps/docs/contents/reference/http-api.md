@@ -148,10 +148,12 @@ workspace's sessions as that user, with `HOME` and the rest from passwd, only on
 reports `exec.user`, and the daemon admits only one of the executor's people; until the user exists
 a session is refused, never run as root. The gateway asks who for every new session channel, so a
 change reaches an SSH connection that is already open, and its disconnect-time working-tree capture
-runs as the user too. SFTP is refused for such a workspace until the pinned `sealantd` runs it as
-the user. `GET /v1/workspaces/:id/ssh-target` always states `sessionUser` (`null` for root), and a
-gateway refuses an answer without it (an older API), never reading the silence as root; the API
-answers a workspace with a user only to a gateway that says it runs sessions as one
+runs as the user too. SFTP runs as the user as well, on a `sealantd` that reports `sftp.user` (the
+managed images carry an `sftp-server`), and is refused on one that does not: an upload is the
+user's, takes a setgid directory's group, and inherits its default ACL.
+`GET /v1/workspaces/:id/ssh-target` always states `sessionUser` (`null` for root), and a gateway
+refuses an answer without it (an older API), never reading the silence as root; the API answers a
+workspace with a user only to a gateway that says it runs sessions as one
 (`x-sealant-gateway-ssh-user: 1`, else `409`). Upgrade the API and the gateway together. Only the
 workspace's owner opens SSH sessions at all.
 

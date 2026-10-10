@@ -33,7 +33,8 @@ control target via the API route:
    connection already open; a channel whose answer names another executor is refused. With a user,
    it reads the daemon's capabilities once per connection and goes on only if it reports
    `exec.user`; every shell and exec names the user, the disconnect-time working-tree capture runs
-   as them too, and SFTP is refused (the pinned sealantd runs it only as root).
+   as them too, and SFTP runs as them on a sealantd that reports `sftp.user` (refused on one that
+   does not, which would write as root).
 5. Gateway opens one sealantd control connection (docker-exec + socat) and maps SSH channels:
    - `shell` -> `openSession{login}` + `attachSession{interactive}` (PTY stream)
    - `exec` -> `exec{/bin/bash -lc …, attach}` (exit status from the channel End)

@@ -13,6 +13,7 @@ import {
 import {
   ControlClient,
   EXEC_USER_CAPABILITY,
+  SFTP_USER_CAPABILITY,
   type ShellSession,
   type ExecSession,
 } from "./control-client.js";
@@ -196,7 +197,7 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
   // means the workspace restarted under this connection, and its channels are refused.
   let controlTarget: WorkspaceSshTarget | undefined;
   // Whether the daemon runs processes as a user, read once per connection when first needed.
-  let execUserSupported: Promise<boolean> | undefined;
+  let daemonSupports: Promise<ReadonlySet<string>> | undefined;
   // The interactive run recording this connection (one SSH connection = one run). Undefined until
   // the first channel opens, and stays undefined when recording is unavailable (best-effort).
   let recordedRunId: string | undefined;
@@ -275,10 +276,8 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
     }
     const user = target.sessionUser;
     if (user !== null) {
-      execUserSupported ??= control
-        .supports()
-        .then((supports) => supports.has(EXEC_USER_CAPABILITY));
-      if (!(await execUserSupported)) {
+      daemonSupports ??= control.supports();
+      if (!(await daemonSupports).has(EXEC_USER_CAPABILITY)) {
         throw new Error(
           `Workspace ${String(workspaceId)} runs its SSH sessions as a user, and its sealantd does not report ${EXEC_USER_CAPABILITY}.`,
         );
@@ -582,19 +581,23 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
           try {
             const { control, user } = await sessionChannel();
             if (user !== null) {
-              // The pinned sealantd runs an SFTP bridge only as root (`openSftp` takes no user
-              // before sealantd#155): refused rather than write as root for a person.
-              sshChannel.stderr.write(
-                "SFTP is not available in this workspace yet: it runs its sessions as your user, and its sealantd runs SFTP only as root. Use ssh to copy files (ssh host 'cat > file' < file).\n",
-              );
-              sshChannel.exit(1);
-              sshChannel.end();
-              return;
+              // An older sealantd ignores `user` on `openSftp` and would write as root: SFTP runs
+              // as the workspace's user only on one that reports it does, and is refused elsewhere.
+              daemonSupports ??= control.supports();
+              if (!(await daemonSupports).has(SFTP_USER_CAPABILITY)) {
+                sshChannel.stderr.write(
+                  "SFTP is not available in this workspace: it runs its sessions as your user, and its sealantd runs SFTP only as root. Use ssh to copy files (ssh host 'cat > file' < file).\n",
+                );
+                sshChannel.exit(1);
+                sshChannel.end();
+                return;
+              }
             }
             // §3.3 subsystem:sftp -> openSftp; bridge the subsystem channel <-> the byte channel.
-            const { channel } = await control.openSftp(
-              recordedRunId === undefined ? undefined : { executionId: recordedRunId },
-            );
+            const { channel } = await control.openSftp({
+              ...(recordedRunId === undefined ? {} : { executionId: recordedRunId }),
+              ...(user === null ? {} : { user }),
+            });
             bridgeChannel({
               sshChannel,
               channel,
