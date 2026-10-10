@@ -1408,9 +1408,12 @@ export interface WorkspaceCredentialHome {
  */
 export interface WorkspaceImagePersonLayout {
   readonly status: "supported" | "unsupported" | "unknown";
-  /** Stable codes of what the image or the runtime lacks (`setuid-sudo`, `setpriv`, `acl`, …). */
+  /**
+   * Stable codes of what the image or the runtime lacks (`setuid-sudo`, `setpriv`,
+   * `git-safe-directory`, `acl`, …).
+   */
   readonly missing: readonly string[];
-  /** What could not be read (`probe`, `sealantd`, `flock`, `acl`). */
+  /** What could not be read (`probe`, `sealantd`, `flock`, `git-safe-directory`, `acl`). */
   readonly unknown: readonly string[];
   /** The runtime the answer is for: the deployment's default adapter. */
   readonly runtime: string;

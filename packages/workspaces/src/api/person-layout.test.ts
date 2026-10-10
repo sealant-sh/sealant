@@ -28,6 +28,7 @@ const ready: WorkspaceImageProbe = {
   reservedIdsInUse: [],
   personEnv: true,
   sharedDirs: [],
+  gitTrustsWorktree: true,
   sealantd: { supports: ["dotfiles.user", "exec.user", "restore.owner_map"] },
 };
 

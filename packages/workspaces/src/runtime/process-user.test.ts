@@ -172,6 +172,7 @@ const probe = (sealantd: WorkspaceImageProbe["sealantd"]): WorkspaceImageProbe =
   reservedIdsInUse: [],
   personEnv: true,
   sharedDirs: [],
+  gitTrustsWorktree: true,
   sealantd,
 });
 

@@ -524,6 +524,7 @@ describe("processWorkspaceBuildJobEffect", () => {
       reservedIdsInUse: [],
       personEnv: true,
       sharedDirs: ["/opt/mise"],
+      gitTrustsWorktree: true,
       sealantd: null,
     };
     const jobs = workspaceBuildJobRepoStub({
@@ -1804,6 +1805,7 @@ describe("processWorkspaceBuildJobEffect", () => {
                 reservedIdsInUse: [],
                 personEnv: true,
                 sharedDirs: [],
+                gitTrustsWorktree: true,
                 sealantd: { schemaVersion: 1, supports: [...supports] },
               },
             }),

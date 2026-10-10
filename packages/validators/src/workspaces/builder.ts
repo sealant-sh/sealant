@@ -107,6 +107,11 @@ export const workspaceImageProbeSchema = z.object({
   /** The shared toolchain and cache directories the image names, for the default ACL at boot. */
   sharedDirs: z.array(z.string()),
   /**
+   * git, as the probe's user, trusts `/workspace/repo` whoever owns it (`safe.directory` lists `*`
+   * or that path). Absent from images probed before it was recorded: unknown.
+   */
+  gitTrustsWorktree: z.boolean().optional(),
+  /**
    * What `sealantd capabilities --json` printed: null when that sealantd has no such command,
    * `"unreadable"` when it answered with something other than a JSON object.
    */

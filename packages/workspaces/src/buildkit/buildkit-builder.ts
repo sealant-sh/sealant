@@ -1358,8 +1358,8 @@ const renderCustomBaseContainerfile = (plan: ResolvedImagePlan): string => {
     "",
     // The person layout's git trust, as the managed families carry it: the probe can say a custom
     // base runs one user per person, and then the worktree is not root's. A base that builds as a
-    // user who cannot write /etc builds on; its probe reads /etc/passwd as not writable, so it
-    // never runs the layout.
+    // user who cannot write /etc builds on; its probe finds git trusting no foreign worktree
+    // (`git-safe-directory`), so it never runs the layout.
     `RUN ${GIT_SAFE_DIRECTORY_ANY} || echo 'sealant: /etc/gitconfig could not be written; git trusts only repositories its user owns.' >&2`,
     "",
     // Whatever the custom base carries decides; the probe records it and never fails the build.

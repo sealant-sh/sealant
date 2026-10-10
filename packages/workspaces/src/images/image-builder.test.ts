@@ -249,6 +249,7 @@ describe("createDockerWorkspaceImageBuilder.findPublished", () => {
     reservedIdsInUse: [],
     personEnv: true,
     sharedDirs: [...PERSON_SHARED_DIRS],
+    gitTrustsWorktree: true,
     sealantd: {
       schemaVersion: 1,
       daemonVersion: "0.21.0",
