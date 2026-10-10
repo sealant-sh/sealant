@@ -16,24 +16,30 @@ Three kinds of entry:
 - **A repository package**, in the family's own name. This is the first choice.
 - **A pinned upstream release**, where the family's repositories have no package, or lag the
   architecture (Arch Linux ARM carries no `mise`). The build downloads the archive for the machine's
-  architecture, checks its SHA-256 against the pinned value before unpacking, and installs the
-  binaries to `/usr/local/bin` (a zsh plugin's script to its own directory under
-  `/usr/local/share`). The version and the checksum move together, by pull request to Sealant.
+  architecture (a `.tar.gz`, or a `.zip` unpacked with `unzip`, which the build installs with it),
+  checks its SHA-256 against the pinned value before unpacking, and installs the binaries to
+  `/usr/local/bin` (a zsh plugin's script to its own directory under `/usr/local/share`). The
+  version and the checksum move together, by pull request to Sealant.
 - **npm**, for a tool a family does not package but npm does (`pnpm` on Ubuntu).
 
 Where a repository installs a binary under another name, the build links the name the blueprint
-asked for (`fd` for Debian's `fdfind`, `bat` for its `batcat`).
+asked for (`fd` for Debian's `fdfind`, `bat` for its `batcat`). The `bun` release also links `bunx`
+to `bun`, as bun's own installer does. On x86_64 it is bun's baseline build, which runs on a CPU
+without AVX2.
 
 Every entry was built and run on every family, on ARM64 Lambda MicroVMs, on 2026-09-21, except the
 shell prompt's six (`starship`, `direnv`, `eza` and the three zsh plugins), added on 2026-09-26:
 those were built from the catalog in x86_64 containers of every family, and their ARM64 packages
-checked in each family's repositories.
+checked in each family's repositories. `bun` and `unzip`, added on 2026-10-10, were built from the
+catalog in x86_64 containers of Fedora, Arch and Ubuntu; the ARM64 zip's checksum was checked
+against bun's published `SHASUMS256.txt`, and nixpkgs carries `bun` for both architectures.
 
 | Package                        | fedora                    | arch                           | ubuntu                     | nix                            |
 | ------------------------------ | ------------------------- | ------------------------------ | -------------------------- | ------------------------------ |
 | `bash`                         | `bash`                    | `bash`                         | `bash`                     | `bash`                         |
 | `bat`                          | `bat`                     | `bat`                          | `bat`                      | `bat`                          |
 | `bubblewrap`                   | `bubblewrap`              | `bubblewrap`                   | `bubblewrap`               | `bubblewrap`                   |
+| `bun`                          | release 1.4.2             | release 1.4.2                  | release 1.4.2              | `bun`                          |
 | `chezmoi`                      | `chezmoi`                 | `chezmoi`                      | `curl` `ca-certificates`   | `chezmoi`                      |
 | `curl`                         | `curl`                    | `curl`                         | `curl`                     | `curl`                         |
 | `direnv`                       | `direnv`                  | `direnv`                       | `direnv`                   | `direnv`                       |
@@ -57,6 +63,7 @@ checked in each family's repositories.
 | `stow`                         | `stow`                    | `stow`                         | `stow`                     | `stow`                         |
 | `tar`                          | `tar`                     | `tar`                          | `tar`                      | `gnutar`                       |
 | `tmux`                         | `tmux`                    | `tmux`                         | `tmux`                     | `tmux`                         |
+| `unzip`                        | `unzip`                   | `unzip`                        | `unzip`                    | `unzip`                        |
 | `uv`                           | `uv`                      | `uv`                           | release 0.12.17            | `uv`                           |
 | `zsh`                          | `zsh`                     | `zsh`                          | `zsh`                      | `zsh`                          |
 | `zsh-autosuggestions`          | `zsh-autosuggestions`     | `zsh-autosuggestions`          | `zsh-autosuggestions`      | `zsh-autosuggestions`          |

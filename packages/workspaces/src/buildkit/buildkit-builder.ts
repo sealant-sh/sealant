@@ -34,7 +34,7 @@ import {
   type ImageBuildProgress,
 } from "./build-progress.js";
 import {
-  RELEASE_INSTALL_PACKAGES,
+  releaseInstallPackages,
   UnknownWorkspacePackageError,
   WORKSPACE_PACKAGE_CATALOG,
   renderReleaseInstall,
@@ -931,7 +931,7 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
   const extras = catalogExtras(plan);
   const packageList = normalizeInstallPackages([
     ...distro.internalPackages,
-    ...(extras.releases.length > 0 ? RELEASE_INSTALL_PACKAGES[plan.osFamily] : []),
+    ...releaseInstallPackages(plan.osFamily, extras.releases),
     // `socat` (and any other relay deps) are always installed: `sealantd boot` is the mandatory
     // PID-1 entrypoint and its control socket is bridged to the host over a `docker exec` relay.
     ...distro.sealantdPackages,

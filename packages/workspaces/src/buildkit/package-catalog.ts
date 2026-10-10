@@ -15,6 +15,8 @@
  * `gh`; Ubuntu 24.04 also lacks `uv` and `pnpm`; Arch Linux ARM lacks `mise`; nixpkgs has all.
  * Measured on 2026-09-26: neither Fedora 41 nor Ubuntu 24.04 has `starship` or
  * `zsh-history-substring-search`; Arch (x86_64 and ARM) and nixpkgs have both.
+ * Measured on 2026-10-10: Fedora 41 and Ubuntu 24.04 have no `bun`; Arch packages it on x86_64
+ * only; nixpkgs has it. Every family packages `unzip`.
  *
  * A zsh plugin's `.zsh` file lands where its family puts it, which differs:
  *
@@ -44,8 +46,10 @@ export interface ReleaseInstall {
   /** For the log and the error. */
   readonly name: string;
   readonly version: string;
-  /** Download URL and SHA-256 of the `.tar.gz` for each architecture. */
+  /** Download URL and SHA-256 of the archive for each architecture. */
   readonly archives: Readonly<Record<ReleaseArchitecture, { url: string; sha256: string }>>;
+  /** `tar.gz` unless set. A `zip` needs `unzip`, which the build installs with it. */
+  readonly format?: "tar.gz" | "zip";
   /** Paths inside the archive to install, each to /usr/local/bin/<basename>. */
   readonly members: Readonly<Record<ReleaseArchitecture, readonly string[]>>;
   /**
@@ -167,6 +171,28 @@ const zshHistorySubstringSearch: ReleaseInstall = {
   directory: "/usr/local/share/zsh-history-substring-search",
 };
 
+// The baseline build on x86_64: the default one needs AVX2 and dies on a CPU without it, and an
+// image runs on whatever machine it lands on. Each zip holds one directory with `bun` in it.
+const BUN_VERSION = "1.4.2";
+const bun: ReleaseInstall = {
+  name: "bun",
+  version: BUN_VERSION,
+  format: "zip",
+  archives: {
+    x86_64: {
+      url: `https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-x64-baseline.zip`,
+      sha256: "c678040f14fe0440eb839d37cbd0ce4c051a32da72806ac97de6a6aab6bf728f",
+    },
+    aarch64: {
+      url: `https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-aarch64.zip`,
+      sha256: "54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7",
+    },
+  },
+  members: { x86_64: ["bun-linux-x64-baseline/bun"], aarch64: ["bun-linux-aarch64/bun"] },
+};
+// `bunx` is `bun` called by another name, as bun's own installer links it.
+const bunx = "ln -sf /usr/local/bin/bun /usr/local/bin/bunx";
+
 const fd: CatalogEntry = {
   fedora: { packages: ["fd-find"] },
   arch: { packages: ["fd"] },
@@ -184,6 +210,13 @@ export const WORKSPACE_PACKAGE_CATALOG: Readonly<Record<string, CatalogEntry>> =
     // Debian installs it as `batcat`, to leave the name to another package.
     ubuntu: { packages: ["bat"], postInstall: ["ln -sf /usr/bin/batcat /usr/local/bin/bat"] },
     nix: { packages: ["bat"] },
+  },
+  bun: {
+    fedora: { release: bun, postInstall: [bunx] },
+    // Arch packages it on x86_64 and not on ARM; the release serves both.
+    arch: { release: bun, postInstall: [bunx] },
+    ubuntu: { release: bun, postInstall: [bunx] },
+    nix: { packages: ["bun"] },
   },
   chezmoi: {
     fedora: { packages: ["chezmoi"] },
@@ -252,6 +285,7 @@ export const WORKSPACE_PACKAGE_CATALOG: Readonly<Record<string, CatalogEntry>> =
   stow: everywhere("stow"),
   tar: everywhere("tar", "gnutar"),
   tmux: everywhere("tmux"),
+  unzip: everywhere("unzip"),
   uv: {
     fedora: { packages: ["uv"] },
     arch: { packages: ["uv"] },
@@ -296,6 +330,16 @@ export const RELEASE_INSTALL_PACKAGES: Readonly<Record<CatalogOsFamily, readonly
   nix: ["curl", "gnutar", "cacert"],
 };
 
+/** The family's packages these releases need to download and unpack: `unzip` for a zip. */
+export const releaseInstallPackages = (
+  family: CatalogOsFamily,
+  releases: readonly ReleaseInstall[],
+): readonly string[] => {
+  if (releases.length === 0) return [];
+  const zip = releases.some((release) => release.format === "zip");
+  return [...RELEASE_INSTALL_PACKAGES[family], ...(zip ? ["unzip"] : [])];
+};
+
 const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
 
 /**
@@ -315,15 +359,18 @@ export const renderReleaseInstall = (release: ReleaseInstall): string => {
       ? `install -m 0755 "$d/$m" "/usr/local/bin/$(basename "$m")"`
       : `install -D -m 0644 "$d/$m" ${shellSingleQuote(release.directory)}"/$(basename "$m")"`;
   const installAll = `for m in $members; do ${installOne}; done`;
+  const zip = release.format === "zip";
+  const archive = `$d/archive.${zip ? "zip" : "tar.gz"}`;
+  const unpack = zip ? `unzip -q "${archive}" -d "$d"` : `tar -xzf "${archive}" -C "$d"`;
   return [
     `# ${release.name} ${release.version}: the project's own release, pinned by checksum, since the`,
     "# repositories of this family or this architecture have no package for it.",
     "RUN set -eu; \\",
     `    case "$(uname -m)" in ${branch("x86_64")} ${branch("aarch64")} *) echo "${release.name}: no release for $(uname -m)" >&2; exit 1;; esac; \\`,
     '    d="$(mktemp -d)"; \\',
-    `    curl -fsSL --retry 3 -o "$d/archive.tar.gz" "$url"; \\`,
-    '    echo "$sha  $d/archive.tar.gz" | sha256sum -c - >/dev/null; \\',
-    '    tar -xzf "$d/archive.tar.gz" -C "$d"; \\',
+    `    curl -fsSL --retry 3 -o "${archive}" "$url"; \\`,
+    `    echo "$sha  ${archive}" | sha256sum -c - >/dev/null; \\`,
+    `    ${unpack}; \\`,
     `    ${installAll}; \\`,
     '    rm -rf "$d"',
   ].join("\n");
