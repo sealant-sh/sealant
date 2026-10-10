@@ -13,8 +13,8 @@
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@sealant/runtime-client": "npm:@sealant/runtime-client-next@0.20.0-next.155",
-    "@sealant/runtime-protocol": "npm:@sealant/runtime-protocol-next@0.20.0-next.155",
+    "@sealant/runtime-client": "npm:@sealant/runtime-client-next@0.20.0-next.157",
+    "@sealant/runtime-protocol": "npm:@sealant/runtime-protocol-next@0.20.0-next.157",
     "@sealant/validators": "workspace:*",
     "@sealant/workspaces": "workspace:*",
     "ssh2": "^1.17.0",

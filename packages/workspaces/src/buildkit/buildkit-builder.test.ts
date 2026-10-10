@@ -12,6 +12,7 @@ import {
   compileWorkspaceBuildSpec,
   mapBlueprintToBuildkitImagePlan,
   planWorkspaceImageBuild,
+  SSHD_UNITS_MASKED,
   removeBuildContext,
   sealantdImageReference,
   selectBuildkitOsFamily,
@@ -854,9 +855,18 @@ describe("compileWorkspaceBuildSpec", () => {
       `SEALANT_FOREGROUND_RUN_JSON='${JSON.stringify({ run: "pnpm dev", shell: "bash" })}'`,
     );
 
-    // §4.1: the inner sshd is gone — no openssh-server in the install layer — but the ssh *client*
-    // (git-over-ssh clone) and socat (control-socket relay) are retained.
-    expect(containerfile).not.toContain("openssh-server");
+    // §4.1: the inner sshd is gone: nothing starts one (the entrypoint is sealantd). The ssh
+    // *client* (git-over-ssh clone) and socat (control-socket relay) are retained, and so is the
+    // standalone sftp-server the gateway's SFTP bridge runs, which Fedora ships only in
+    // openssh-server.
+    expect(containerfile).toContain("openssh-server");
+    expect(containerfile).not.toMatch(/sshd(?!_config)\b.*-D|systemctl/u);
+    // openssh-server presets sshd.service enabled on install: every sshd unit is masked after it,
+    // in the same layer, so no systemd boot of the image starts one.
+    for (const unit of SSHD_UNITS_MASKED) expect(containerfile).toContain(unit);
+    expect(containerfile).toMatch(
+      /dnf -y install [^\n]*openssh-server[\s\S]*ln -sfn \/dev\/null \/etc\/systemd\/system\/"\$unit"/u,
+    );
     expect(containerfile).toContain("openssh-clients");
     expect(containerfile).toContain("socat");
 
@@ -1176,6 +1186,7 @@ describe("ubuntu distro family", () => {
     for (const expectedPackage of [
       "ca-certificates",
       "openssh-client",
+      "openssh-sftp-server",
       "passwd",
       "socat",
       "ripgrep",

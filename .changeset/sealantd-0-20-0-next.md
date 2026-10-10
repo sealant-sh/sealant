@@ -3,7 +3,7 @@
 "@sealant/api-contracts": patch
 ---
 
-Workspaces run the sealantd prerelease 0.20.0-next.155 (`ghcr.io/sealant-sh/sealantd-next`, pinned
+Workspaces run the sealantd prerelease 0.20.0-next.157 (`ghcr.io/sealant-sh/sealantd-next`, pinned
 by digest). A capture leaves every harness login out of the harness home, including pi's, opencode's
 and opencode's MCP server logins, under every person's saved directory too, and a restore never
 writes one back. A restore gives each person's saved directory to their uid and the worktree to the
@@ -20,4 +20,6 @@ against a pinned checksum. A process's `process.started` event carries the count
 of its arguments (`argCount`, `argLengths`), never their text, so no argument reaches an event
 subscriber or the daemon's spool, and spool segments an older daemon wrote are rewritten without it.
 A failed lifecycle step is logged by its step, program and argument sizes, and a clone URL without
-its credentials. A stable release refuses this pin until sealantd 0.20.0 is released and pinned.
+its credentials. An SFTP bridge runs as a given user (`sftp.user`), admitted as an exec is, and the
+managed Fedora and Ubuntu images carry an `sftp-server`, so a workspace's SFTP works and runs as its
+SSH user. A stable release refuses this pin until sealantd 0.20.0 is released and pinned.

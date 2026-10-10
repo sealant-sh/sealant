@@ -128,12 +128,15 @@ client detects them instead of reading the version.
 A user's person (Mend's per-person layout: a person's Linux identity, the same in every workspace)
 is bound once with `POST /v1/users/:userId/person { id, uid, home }`: the owner-map id, a uid in
 40001–49999 (never root, never the `mend` group) and a home, an absolute normalised path under
-`SEALANT_PERSON_HOMES_ROOT` (`400` otherwise). The same values again answer `created: false`.
-Another person for a bound user (`person-binding-differs`), or a person id or uid that another user
-holds (`person-taken`), answers `409` and changes nothing: each person id and uid belongs to at most
-one user. There is no rebind route. An operator who must change a binding deletes that user's row in
-`user_person_binding` (a change to the database, which your database audit records) and binds again.
-Every new binding is logged at info with the user id, person id and uid.
+`SEALANT_PERSON_HOMES_ROOT` (`400` otherwise). The home is checked by its spelling: the API sees no
+executor's filesystem, so the prefix is no filesystem boundary (a link or a mount inside an executor
+can lead elsewhere); what writes into a home in the executor refuses links and untrusted parents
+itself. The same values again answer `created: false`. Another person for a bound user
+(`person-binding-differs`), or a person id or uid that another user holds (`person-taken`), answers
+`409` and changes nothing: each person id and uid belongs to at most one user. There is no rebind
+route. An operator who must change a binding deletes that user's row in `user_person_binding` (a
+change to the database, which your database audit records) and binds again. Every new binding is
+logged at info with the user id, person id and uid.
 
 A workspace's SSH sessions (an `ssh` shell or command, VS Code Remote-SSH) run as root unless its
 create asks for its owner's own Linux user: `sshAsOwner: true` on `POST /v1/workspaces`. Core takes
@@ -148,10 +151,12 @@ workspace's sessions as that user, with `HOME` and the rest from passwd, only on
 reports `exec.user`, and the daemon admits only one of the executor's people; until the user exists
 a session is refused, never run as root. The gateway asks who for every new session channel, so a
 change reaches an SSH connection that is already open, and its disconnect-time working-tree capture
-runs as the user too. SFTP is refused for such a workspace until the pinned `sealantd` runs it as
-the user. `GET /v1/workspaces/:id/ssh-target` always states `sessionUser` (`null` for root), and a
-gateway refuses an answer without it (an older API), never reading the silence as root; the API
-answers a workspace with a user only to a gateway that says it runs sessions as one
+runs as the user too. SFTP runs as the user as well, on a `sealantd` that reports `sftp.user` (the
+managed images carry an `sftp-server`), and is refused on one that does not: an upload is the
+user's, takes a setgid directory's group, and inherits its default ACL.
+`GET /v1/workspaces/:id/ssh-target` always states `sessionUser` (`null` for root), and a gateway
+refuses an answer without it (an older API), never reading the silence as root; the API answers a
+workspace with a user only to a gateway that says it runs sessions as one
 (`x-sealant-gateway-ssh-user: 1`, else `409`). Upgrade the API and the gateway together. Only the
 workspace's owner opens SSH sessions at all.
 

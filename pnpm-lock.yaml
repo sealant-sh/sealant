@@ -537,11 +537,11 @@ importers:
   apps/ssh-gateway:
     dependencies:
       '@sealant/runtime-client':
-        specifier: npm:@sealant/runtime-client-next@0.20.0-next.155
-        version: '@sealant/runtime-client-next@0.20.0-next.155'
+        specifier: npm:@sealant/runtime-client-next@0.20.0-next.157
+        version: '@sealant/runtime-client-next@0.20.0-next.157'
       '@sealant/runtime-protocol':
-        specifier: npm:@sealant/runtime-protocol-next@0.20.0-next.155
-        version: '@sealant/runtime-protocol-next@0.20.0-next.155'
+        specifier: npm:@sealant/runtime-protocol-next@0.20.0-next.157
+        version: '@sealant/runtime-protocol-next@0.20.0-next.157'
       '@sealant/validators':
         specifier: workspace:*
         version: link:../../packages/validators
@@ -858,11 +858,11 @@ importers:
         specifier: workspace:*
         version: link:../db
       '@sealant/runtime-client':
-        specifier: npm:@sealant/runtime-client-next@0.20.0-next.155
-        version: '@sealant/runtime-client-next@0.20.0-next.155'
+        specifier: npm:@sealant/runtime-client-next@0.20.0-next.157
+        version: '@sealant/runtime-client-next@0.20.0-next.157'
       '@sealant/runtime-protocol':
-        specifier: npm:@sealant/runtime-protocol-next@0.20.0-next.155
-        version: '@sealant/runtime-protocol-next@0.20.0-next.155'
+        specifier: npm:@sealant/runtime-protocol-next@0.20.0-next.157
+        version: '@sealant/runtime-protocol-next@0.20.0-next.157'
       '@sealant/workspaces':
         specifier: workspace:*
         version: link:../workspaces
@@ -1005,11 +1005,11 @@ importers:
         specifier: workspace:*
         version: link:../jobs
       '@sealant/runtime-client':
-        specifier: npm:@sealant/runtime-client-next@0.20.0-next.155
-        version: '@sealant/runtime-client-next@0.20.0-next.155'
+        specifier: npm:@sealant/runtime-client-next@0.20.0-next.157
+        version: '@sealant/runtime-client-next@0.20.0-next.157'
       '@sealant/runtime-protocol':
-        specifier: npm:@sealant/runtime-protocol-next@0.20.0-next.155
-        version: '@sealant/runtime-protocol-next@0.20.0-next.155'
+        specifier: npm:@sealant/runtime-protocol-next@0.20.0-next.157
+        version: '@sealant/runtime-protocol-next@0.20.0-next.157'
       '@sealant/source-integrations':
         specifier: workspace:*
         version: link:../source-integrations
@@ -3524,12 +3524,12 @@ packages:
     resolution: {integrity: sha512-fZkelRwcEeAhsn4c0wjYXWrzSzLaEyfxTn/eazXJ4XfCIsgJTQyK0FD8mnOBZJ2vEIbtT2E1mBKnCbDxrJIlxA==}
     engines: {node: '>=20'}
 
-  '@sealant/runtime-client-next@0.20.0-next.155':
-    resolution: {integrity: sha512-Y1V0THUdv+oKTM8gmktGFETuzhU+Ys2Cl1iW+ieI7hfKarPxrT5YeiqONY6o2uoseVR6DbdlTd8N7jZcdBJuZg==}
+  '@sealant/runtime-client-next@0.20.0-next.157':
+    resolution: {integrity: sha512-trckXBcoDTfpV0vynvAOMjS1eI5j48OxGvPKPmCh8BR9732Ukqwc43SlME2sx4vqHO7605QWDTnmEiDFi72v9A==}
     engines: {node: '>=20'}
 
-  '@sealant/runtime-protocol-next@0.20.0-next.155':
-    resolution: {integrity: sha512-vq891ed1B9AqF0iIseJIkPLznhAdYX/YISopiDwoG+rsV6fPWJS649t4VL8xDSQ7yFOiCV0/JbPvmSSZLFlV5A==}
+  '@sealant/runtime-protocol-next@0.20.0-next.157':
+    resolution: {integrity: sha512-x/fHz8UWyX8NGV5X6uvDbggFGZeh3gnwuDe2U0c1oHwvEzjzrWsVMZDpTBi2GNw8HxTQt1IBaRtJsxzUN7RcAA==}
     engines: {node: '>=20'}
 
   '@sec-ant/readable-stream@0.4.1':
@@ -10157,12 +10157,12 @@ snapshots:
       type-fest: 5.7.0
       zod: 4.4.3
 
-  '@sealant/runtime-client-next@0.20.0-next.155':
+  '@sealant/runtime-client-next@0.20.0-next.157':
     dependencies:
       '@bufbuild/protobuf': 2.12.0
-      '@sealant/runtime-protocol': '@sealant/runtime-protocol-next@0.20.0-next.155'
+      '@sealant/runtime-protocol': '@sealant/runtime-protocol-next@0.20.0-next.157'
 
-  '@sealant/runtime-protocol-next@0.20.0-next.155':
+  '@sealant/runtime-protocol-next@0.20.0-next.157':
     dependencies:
       '@bufbuild/protobuf': 2.12.0
 

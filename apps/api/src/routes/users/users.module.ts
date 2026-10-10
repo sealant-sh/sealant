@@ -77,7 +77,10 @@ export const getUser = (userId: string) =>
 /**
  * Why a person binding is refused before anything is written: an id that cannot name an owner-map
  * person, a uid outside the people's range (never 0, never the `mend` group), or a home that is not
- * an absolute normalised path under the homes root. Undefined when it may be bound.
+ * an absolute normalised path under the homes root. Undefined when it may be bound. The home is
+ * checked by its spelling only: the API sees no executor's filesystem, so this is no filesystem
+ * boundary (a link or a mount in an executor can lead elsewhere); the credential-home writer in the
+ * executor refuses links and untrusted parents itself.
  */
 export const personBindingProblem = (
   person: PersonBindingWire,
