@@ -309,6 +309,18 @@ export interface DockerRuntimeAdapterOptions {
    * longer. Defaults to 3600 s.
    */
   readonly captureStopGraceSeconds?: number;
+  /**
+   * The workspace container's own StopTimeout (`SEALANT_DOCKER_CONTAINER_STOP_TIMEOUT_SECONDS`):
+   * what a stop Sealant did not plan gives sealantd after SIGTERM — a plain `docker stop`, and
+   * dockerd's own shutdown and restore, which honor each container's StopTimeout over their own
+   * `shutdown-timeout`. Bounded so `systemctl stop docker` ends inside systemd's 90 s stop timeout;
+   * a longer one made dockerd outlast it, get SIGKILLed, leave the workspace running, then wait the
+   * whole timeout in "Restoring containers" before it started anything. A workspace killed there
+   * loses no capture: its staging is on its disk, the container is kept, and recovery ships it.
+   * A planned stop still gives the full grace (`docker stop -t`, from `STOP_GRACE_LABEL`).
+   * Defaults to 60 s; never above the planned grace.
+   */
+  readonly containerStopTimeoutSeconds?: number;
 }
 
 /** `docker stop -t` for a planned stop: long enough for sealantd's SIGTERM flush to ship. */
@@ -316,6 +328,24 @@ export const DEFAULT_DOCKER_STOP_GRACE_SECONDS = 120;
 
 /** The planned-stop window of a capture-sourced workspace container. */
 export const DEFAULT_DOCKER_CAPTURE_STOP_GRACE_SECONDS = 3600;
+
+/**
+ * A workspace container's own StopTimeout: inside systemd's default 90 s stop timeout for
+ * `docker.service` with room for dockerd's 5 s shutdown grace and its own teardown.
+ */
+export const DEFAULT_DOCKER_CONTAINER_STOP_TIMEOUT_SECONDS = 60;
+
+/**
+ * The label that carries a workspace container's planned-stop grace in seconds: its StopTimeout
+ * is bounded (`containerStopTimeoutSeconds`), so a planned stop reads its grace here.
+ */
+export const STOP_GRACE_LABEL = "sealant.stop-grace";
+
+/** A whole number of seconds above zero as `docker inspect` prints it; `undefined` otherwise. */
+const positiveSeconds = (value: string | undefined): number | undefined => {
+  const trimmed = value?.trim() ?? "";
+  return /^\d+$/.test(trimmed) && Number(trimmed) > 0 ? Number(trimmed) : undefined;
+};
 
 /**
  * Docker's own grammar for a network name (`docker network create`): the value lands in argv, so
@@ -636,9 +666,10 @@ const captureSourceEnvArgs = (
   stopGraceSeconds: number,
   launchId: string | undefined,
 ): Array<string> =>
-  captureSourceEnv(source, { stopGraceMs: stopGraceSeconds * 1000, launchId }).flatMap(
-    ([key, value]) => ["-e", `${key}=${value}`],
-  );
+  captureSourceEnv(source, {
+    stopGraceMs: stopGraceSeconds * 1000,
+    launchId,
+  }).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
 
 const envArgsFromBlueprint = (
   input: RuntimeAdapterLaunchInput,
@@ -896,6 +927,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private readonly stopGraceSeconds: number;
   private readonly captureStopGraceSeconds: number;
+  private readonly containerStopTimeoutSeconds: number;
 
   public constructor(options: DockerRuntimeAdapterOptions = {}) {
     const dockerSocketPath = options.dockerSocketPath ?? "/var/run/docker.sock";
@@ -914,6 +946,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     this.stopGraceSeconds = options.stopGraceSeconds ?? DEFAULT_DOCKER_STOP_GRACE_SECONDS;
     this.captureStopGraceSeconds =
       options.captureStopGraceSeconds ?? DEFAULT_DOCKER_CAPTURE_STOP_GRACE_SECONDS;
+    this.containerStopTimeoutSeconds =
+      options.containerStopTimeoutSeconds ?? DEFAULT_DOCKER_CONTAINER_STOP_TIMEOUT_SECONDS;
     this.controlSocketHostDir = options.controlSocketHostDir;
     this.mountAllowedStoreRoots = options.mountAllowedStoreRoots;
     this.volumeMappings = options.volumeMappings;
@@ -1243,17 +1277,21 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     }
   }
 
-  /** The container's configured StopTimeout in seconds; `undefined` when unset or unreadable. */
-  private async containerStopTimeout(containerId: string): Promise<number | undefined> {
+  /**
+   * The grace the container was created to get on a planned stop, in seconds: its
+   * `STOP_GRACE_LABEL`, else (a container created before the label) its StopTimeout; `undefined`
+   * when neither is set or the container cannot be read.
+   */
+  private async containerStopGrace(containerId: string): Promise<number | undefined> {
     try {
       const result = await this.commandRunner("docker", [
         "inspect",
         "--format",
-        "{{.Config.StopTimeout}}",
+        `{{index .Config.Labels "${STOP_GRACE_LABEL}"}}|{{.Config.StopTimeout}}`,
         containerId,
       ]);
-      const seconds = Number.parseInt(result.stdout.trim(), 10);
-      return Number.isInteger(seconds) && seconds > 0 ? seconds : undefined;
+      const [label, stopTimeout] = result.stdout.trim().split("|");
+      return positiveSeconds(label) ?? positiveSeconds(stopTimeout);
     } catch {
       return undefined;
     }
@@ -2235,14 +2273,14 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   }
 
   /**
-   * SIGTERM, then up to the grace for sealantd to flush and exit: the container's own StopTimeout
-   * (set at create, longer for a capture-sourced workspace), or the configured grace for a
-   * container created before it was set. Its failure is not the stop's: a container already gone
+   * SIGTERM, then up to the grace for sealantd to flush and exit: the grace the container was
+   * created with (`STOP_GRACE_LABEL`, longer for a capture-sourced workspace; its StopTimeout on a
+   * container created before the label), never below the configured grace. Its failure is not the stop's: a container already gone
    * or already stopped is settled by what follows (the end's own look, or the removal), which
    * also surfaces a daemon that cannot be reached.
    */
   private async plannedStop(parsed: RuntimeAdapterStopInput): Promise<void> {
-    const graceSeconds = await this.containerStopTimeout(parsed.resourceId);
+    const graceSeconds = await this.containerStopGrace(parsed.resourceId);
     await this.commandRunner("docker", [
       "stop",
       "-t",
@@ -2314,6 +2352,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
     const containerName = buildContainerName(parsed, this.containerNamePrefix);
     const holdsCaptures = launchHoldsCaptures(parsed.blueprint);
+    const plannedStopGrace = holdsCaptures ? this.captureStopGraceSeconds : this.stopGraceSeconds;
     let acquisition: DockerContainerAcquisition | undefined;
     let dockerService: DockerServiceProvision | undefined;
     // The executor this launch created, adopted or found ended: from the moment it exists a
@@ -2416,16 +2455,14 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         parsed.blueprint.runtime.ociRuntime,
         "--name",
         containerName,
-        // The container's own StopTimeout: a plain `docker stop` (an operator, a host restart,
-        // Docker Desktop quitting) gives sealantd this long after SIGTERM, not Docker's 10 s — a
-        // SIGKILL mid-flush loses whatever was not yet shipped. The daemon's own
-        // `shutdown-timeout` still bounds a daemon shutdown.
+        // The planned-stop grace rides a label (`plannedStop` reads it). The container's own
+        // StopTimeout is what a stop nobody planned gives sealantd — a plain `docker stop`, and
+        // dockerd's shutdown and restore, which honor it — so it stays bounded: an hour of it
+        // outlasted systemd's stop of docker.service and hung dockerd's restart behind it.
+        "--label",
+        `${STOP_GRACE_LABEL}=${String(plannedStopGrace)}`,
         "--stop-timeout",
-        String(
-          launchHoldsCaptures(parsed.blueprint)
-            ? this.captureStopGraceSeconds
-            : this.stopGraceSeconds,
-        ),
+        String(Math.min(this.containerStopTimeoutSeconds, plannedStopGrace)),
         // Caller/project env comes FIRST among all `-e` emissions — see `userEnvArgs`.
         ...userEnvArgs(parsed),
         // Networks: the per-workspace sidecar network first (it carries the `docker` alias the

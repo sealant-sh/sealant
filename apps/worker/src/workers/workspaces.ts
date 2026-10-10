@@ -319,6 +319,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
             : { networkGuardImage: env.SEALANT_DOCKER_NETWORK_GUARD_IMAGE }),
           stopGraceSeconds: env.SEALANT_DOCKER_STOP_GRACE_SECONDS,
           captureStopGraceSeconds: env.SEALANT_DOCKER_CAPTURE_STOP_GRACE_SECONDS,
+          containerStopTimeoutSeconds: env.SEALANT_DOCKER_CONTAINER_STOP_TIMEOUT_SECONDS,
         }),
       ];
 
