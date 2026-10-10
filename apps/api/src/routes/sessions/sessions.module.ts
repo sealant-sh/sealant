@@ -259,6 +259,41 @@ const withDaemon = <A, E>(
 const isDaemonSessionGone = (error: unknown): boolean =>
   error instanceof SealantControlError && error.code === DAEMON_SESSION_NOT_FOUND;
 
+type OpenedLeader =
+  | {
+      readonly kind: "found";
+      readonly leader: {
+        readonly sessionId: string;
+        readonly processId: string;
+        readonly pid: number;
+      };
+    }
+  | { readonly kind: "absent" }
+  | { readonly kind: "unknown"; readonly reason: string };
+
+/**
+ * The leader the daemon opened for `runId` (its sessions carry the run as `executionId`), asked on
+ * a fresh connection: how an open whose answer was lost learns whether it happened.
+ */
+const findOpenedLeader = (target: SealantTarget, runId: string) =>
+  withDaemon(target, (daemon) => daemon.listSessions).pipe(
+    Effect.map((listed): OpenedLeader => {
+      const leader = listed.find((summary) => summary.executionId === runId);
+      return leader === undefined
+        ? { kind: "absent" }
+        : {
+            kind: "found",
+            leader: { sessionId: leader.sessionId, processId: leader.processId, pid: leader.pid },
+          };
+    }),
+    Effect.catch((error) =>
+      Effect.succeed<OpenedLeader>({
+        kind: "unknown",
+        reason: toErrorMessage(error, "daemon error"),
+      }),
+    ),
+  );
+
 // ---------------------------------------------------------------------------------------------
 // Settlement — telemetry is the source of truth for how a session ended
 // ---------------------------------------------------------------------------------------------
@@ -595,17 +630,33 @@ export const createSession = (input: {
         });
       }),
     ).pipe(
-      // The run and the session exist by now: a daemon that refuses to start the leader (a spawn
-      // error, `E2BIG`) settles both, so neither is left running with nothing behind it.
+      // The run and the session exist by now. A daemon that refused to start the leader (a spawn
+      // error, `E2BIG`) settles both. Any other failure (a dropped connection, a lost answer) says
+      // nothing about whether the leader runs, so the daemon is asked again before anything is
+      // settled: a leader it reports is the session's, and one it does not report never started.
       Effect.catch((error) => {
         const message = `Failed to open the ${mode} session: ${toErrorMessage(error, "daemon error")}`;
-        return Effect.all(
+        const settle = Effect.all(
           [
             runs.markRunFailed({ id: runId, errorMessage: message }),
             sessions.markSessionEnded({ id: sessionId, status: "failed", errorMessage: message }),
           ],
           { discard: true },
         ).pipe(Effect.ignore, Effect.andThen(Effect.fail(new SessionBadGatewayError({ message }))));
+        if (error instanceof SealantControlError) return settle;
+        return findOpenedLeader(target, runId).pipe(
+          Effect.flatMap((found) => {
+            if (found.kind === "found") return Effect.succeed(found.leader);
+            if (found.kind === "absent") return settle;
+            // Neither answer: the run keeps recording and the session stays open, so a later
+            // close finds the leader by its run and stops it.
+            return Effect.fail(
+              new SessionBadGatewayError({
+                message: `${message}. Whether it started is unknown (${found.reason}); session ${sessionId} stays open, and closing it stops the program if it runs.`,
+              }),
+            );
+          }),
+        );
       }),
     );
     if (opened === undefined) {
@@ -900,8 +951,26 @@ export const closeSession = (input: {
     }
 
     const target = yield* resolveDaemonTarget(session.workspaceId);
-    if (target !== undefined && session.daemonSessionId !== null) {
-      const daemonSessionId = session.daemonSessionId;
+    // An open whose answer was lost left no daemon ids: the leader, if it runs, is found by its run
+    // and recorded first, so it is stopped here and its exit is recognised below.
+    let current = session;
+    if (target !== undefined && current.daemonSessionId === null) {
+      const found = yield* findOpenedLeader(target, current.runId);
+      if (found.kind === "found") {
+        const sessions = yield* WorkspaceSessionRepo;
+        const recorded = yield* withInternalError(
+          sessions.markSessionRunning({
+            id: current.id,
+            daemonSessionId: found.leader.sessionId,
+            daemonProcessId: found.leader.processId,
+          }),
+          "Failed to record the session's leader.",
+        );
+        current = recorded ?? current;
+      }
+    }
+    if (target !== undefined && current.daemonSessionId !== null) {
+      const daemonSessionId = current.daemonSessionId;
       yield* withDaemon(target, (daemon) => daemon.closeSession(daemonSessionId)).pipe(
         // Already gone daemon-side is success for a close.
         Effect.catchIf(isDaemonSessionGone, () => Effect.void),
@@ -919,7 +988,7 @@ export const closeSession = (input: {
     // after close still sees byte-exact history.
     const deadline = Date.now() + EXIT_WAIT_TIMEOUT_MS;
     for (;;) {
-      const reconciled = yield* reconcileSession(session);
+      const reconciled = yield* reconcileSession(current);
       if (reconciled.status === "exited" || reconciled.status === "failed") {
         return yield* sessionWithHighWater(reconciled);
       }
@@ -928,14 +997,14 @@ export const closeSession = (input: {
         const sessions = yield* WorkspaceSessionRepo;
         const runs = yield* RunRepo;
         const updated = yield* withInternalError(
-          sessions.markSessionEnded({ id: session.id, status: "exited" }),
+          sessions.markSessionEnded({ id: current.id, status: "exited" }),
           "Failed to settle session.",
         );
         yield* withInternalError(
-          runs.markRunCompleted({ id: session.runId, exitCode: 0 }),
+          runs.markRunCompleted({ id: current.runId, exitCode: 0 }),
           "Failed to settle session run.",
         );
-        return yield* sessionWithHighWater(updated ?? session);
+        return yield* sessionWithHighWater(updated ?? current);
       }
       yield* delay(EXIT_WAIT_INTERVAL_MS);
     }

@@ -1,8 +1,6 @@
 import { ControlPlaneAPI } from "@sealant/api-contracts";
-import { Layer } from "effect";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 
-import { SessionRequestRefusalLive } from "./session-request-refusal.js";
 import {
   closeSession,
   createSession,
@@ -43,4 +41,4 @@ export const SessionsHandlersLive = HttpApiBuilder.group(
         closeSession({ sessionId: params.sessionId, headers, payload }),
       );
   },
-).pipe(Layer.provide(SessionRequestRefusalLive));
+);

@@ -96,13 +96,12 @@ describe("sessions.open(argv)", () => {
   });
 
   it("surfaces the control plane's reason", async () => {
-    serve(() => json({ _tag: "SessionBadRequestError", message: "argv[1] must be a string" }, 400));
-    const error = await refusal(["printf", "x"]);
-    expect(error).toBeInstanceOf(SealantApiError);
-    expect(error).toMatchObject({
-      code: "SessionBadRequestError",
-      message: "argv[1] must be a string",
-    });
+    for (const tag of ["RequestRefusedError", "SessionBadRequestError"]) {
+      serve(() => json({ _tag: tag, message: "argv[1] must be a string" }, 400));
+      const error = await refusal(["printf", "x"]);
+      expect(error).toBeInstanceOf(SealantApiError);
+      expect(error).toMatchObject({ code: tag, message: "argv[1] must be a string" });
+    }
   });
 
   it("explains an older control plane's empty 400, naming the argument it refuses", async () => {

@@ -133,10 +133,20 @@ never through a shell, and Sealant stores only their count and lengths. Limits: 
 131,071 bytes per word and 1 MiB in all, counted in UTF-8 bytes. 131,071 is the longest word
 `execve` takes on Linux with 4 KiB pages: `MAX_ARG_STRLEN` is 128 KiB and counts the terminating
 NUL. A word with a NUL byte is refused, since no process argument can carry one, and so is a lone
-UTF-16 surrogate, which has no UTF-8 form. A request either route cannot decode (a body that is not
-JSON or not an object, a field missing or of the wrong type, a refused `argv`) answers `400`
-`SessionBadRequestError` whose `message` names the field or the word's position and size, never a
-value; the server's request log does not carry the value either.
+UTF-16 surrogate, which has no UTF-8 form.
+
+A request any route cannot decode (a body that is not JSON or not an object, a field missing or of
+the wrong type, a refused `argv`) answers `400` `RequestRefusedError` whose `message` names where
+the request is wrong and what was expected (`argv[1] must be a string`,
+`commands[0].args[1] must be a string`, `argv[1] contains a NUL byte`), never a value it held; a key
+the caller chose, such as an `env` name, reads `[…]`. The server's request log, its error reporters
+and the request's tracing span carry the refusal, not the request. A request's URL, query included,
+is still recorded on its tracing span, so nothing secret belongs in a query string.
+
+If the connection to `sealantd` drops before it answers an open, Sealant asks it again whether the
+session's program started. A program it reports is the session's leader. If it reports none, the
+session and its run are marked failed. If it cannot be asked, both stay open, and closing the
+session finds the program and stops it.
 
 Upgrade the control plane before the SDK. A control plane from before this rule refuses an empty or
 untrimmed argument with an empty `400` and logs the argument; the SDK says so when it gets that

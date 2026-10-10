@@ -1998,7 +1998,7 @@ export interface WorkspaceSessions {
    * whitespace-led or multi-line. At most 64 words, 131,071 bytes each and 1 MiB in all (UTF-8
    * bytes), no NUL byte and no lone surrogate (`sessionArgvIssue` and `SESSION_ARGV_MAX_*` in
    * `@sealant/api-contracts`). An argv the rule refuses throws `SealantError` `invalid_argv` before
-   * anything is sent; a control plane's refusal is `SealantApiError` `SessionBadRequestError` with
+   * anything is sent; a control plane's refusal is `SealantApiError` `RequestRefusedError` with
    * its reason.
    */
   open(argv: readonly string[], options?: SessionOptions): Promise<InteractiveSession>;

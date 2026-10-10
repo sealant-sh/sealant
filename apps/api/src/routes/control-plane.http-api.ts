@@ -9,6 +9,7 @@ import { InferenceHandlersLive } from "./inference/inference.http-api.js";
 import { PackagesHandlersLive } from "./packages/packages.http-api.js";
 import { ProfilesHandlersLive } from "./profiles/profiles.http-api.js";
 import { RegistriesHandlersLive } from "./registries/registries.http-api.js";
+import { RequestRefusalLive } from "./request-refusal.js";
 import { RunsHandlersLive } from "./runs/runs.http-api.js";
 import { SessionsHandlersLive } from "./sessions/sessions.http-api.js";
 import { SshKeysHandlersLive } from "./ssh-keys/ssh-keys.http-api.js";
@@ -35,5 +36,6 @@ const ControlPlaneHandlersLive = Layer.mergeAll(
 export const makeControlPlaneHttpApiLayer = () => {
   return HttpApiBuilder.layer(ControlPlaneAPI, { openapiPath: "/openapi.json" }).pipe(
     Layer.provide(ControlPlaneHandlersLive),
+    Layer.provide(RequestRefusalLive),
   );
 };

@@ -16,17 +16,21 @@ it sends.
   argument can carry one, and so is a lone UTF-16 surrogate, which has no UTF-8 form.
   `@sealant/api-contracts` exports the limits as `SESSION_ARGV_MAX_WORDS`,
   `SESSION_ARGV_MAX_WORD_BYTES` and `SESSION_ARGV_MAX_TOTAL_BYTES`, the rule as
-  `sessionArgvIssue(argv)` and `sessionArgvSchema`, and `sessionCreateRequestIssue(body)`.
-- A session create either route cannot decode (a body that is not JSON or not an object, a field
-  missing or of the wrong type, a refused `argv`) answers `400` `SessionBadRequestError` whose
-  `message` names the field or the word's position and size, never a value (the
-  `SessionRequestRefusal` middleware). Before this it answered an empty `400`, and the server's
-  request log quoted the rejected input, arguments included.
+  `sessionArgvIssue(argv)` and `sessionArgvSchema`.
+- A request any control plane route cannot decode (a body that is not JSON or not an object, a field
+  missing or of the wrong type, a refused `argv`) answers `400` `RequestRefusedError`. Its `message`
+  names where the request is wrong and what was expected, never a value it held. The
+  `RequestRefusal` middleware is applied to the whole `ControlPlaneAPI`, so every route has it.
+  `describeRequestIssue` words the reason. Before this, such a request got an empty `400`, and the
+  server's request log, error reporters and tracing span quoted the rejected input: a session's
+  arguments, an exec's command, a run's command.
 - In the SDK, `sessions.open(argv)` throws `SealantError` `invalid_argv` with the same reason before
-  it sends a refused argv, surfaces a control plane's `SessionBadRequestError` with its reason, and
+  it sends a refused argv, surfaces a control plane's `RequestRefusedError` with its reason, and
   explains an older control plane's empty `400`.
-- If `sealantd` cannot start the program, the session and its run are now marked failed. Before
-  this, both were left running.
+- If `sealantd` refuses to start the program, the session and its run are now marked failed. Before
+  this, both were left running. If the answer to an open is lost instead, Sealant asks `sealantd`
+  again: a program it reports becomes the session's leader, and one it cannot report about leaves
+  the session open for a close to find and stop.
 - Upgrade the control plane before the SDK. An older control plane refuses an empty or untrimmed
   argument with an empty `400` and logs the argument. An older SDK refuses such an argument itself.
 - The arguments still reach `sealantd` as an argv array, never a shell string, and Sealant still

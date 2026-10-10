@@ -14,13 +14,7 @@
  * (create/close). Without a bearer token the pre-auth owner model applies unchanged.
  */
 import { Schema } from "effect";
-import {
-  HttpApiEndpoint,
-  HttpApiGroup,
-  HttpApiMiddleware,
-  HttpApiSchema,
-  OpenApi,
-} from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi";
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
@@ -288,45 +282,6 @@ export class SessionBadRequestError extends Schema.TaggedErrorClass<SessionBadRe
   { httpApiStatus: 400 },
 ) {}
 
-/**
- * On `createSession` and `createSessionAsUser`: a request the contract cannot decode (a body that is
- * not JSON or not an object, a field missing or of the wrong type, an argv `sessionArgvIssue`
- * refuses) answers `400` `SessionBadRequestError` naming the field or the argv position, never a
- * value. Without it Effect answers an empty `400` and logs a cause that quotes the rejected input,
- * which for a session can be an argument holding a secret.
- */
-export class SessionRequestRefusal extends HttpApiMiddleware.Service<SessionRequestRefusal>()(
-  "@sealant/api-contracts/SessionRequestRefusal",
-  { error: SessionBadRequestError },
-) {}
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-/**
- * Why a session create's JSON body cannot be decoded, value-free, or `undefined` when its envelope,
- * ids and argv are sound (another field is then at fault). `SessionRequestRefusal` answers with it.
- */
-export const sessionCreateRequestIssue = (body: unknown): string | undefined => {
-  if (!isRecord(body)) {
-    return "the request body must be a JSON object";
-  }
-  for (const field of ["workspaceId", "ownerUserId"]) {
-    const value = body[field];
-    if (value === undefined) return `${field} is required`;
-    if (typeof value !== "string") return `${field} must be a string`;
-  }
-  const argv = body["argv"];
-  if (argv === undefined) return "argv is required";
-  if (!Array.isArray(argv)) return "argv must be an array of strings";
-  const words: string[] = [];
-  for (const [index, word] of argv.entries()) {
-    if (typeof word !== "string") return `argv[${index}] must be a string`;
-    words.push(word);
-  }
-  return sessionArgvIssue(words);
-};
-
 export class SessionUnauthorizedError extends Schema.TaggedErrorClass<SessionUnauthorizedError>()(
   "SessionUnauthorizedError",
   { message: Schema.String },
@@ -385,7 +340,7 @@ export const SessionsGroup = HttpApiGroup.make("sessions")
         SessionBadGatewayError,
         SessionInternalServerError,
       ],
-    }).middleware(SessionRequestRefusal),
+    }),
   )
   .add(
     // Scope: workspace:exec. `createSession` with the leader run as a Linux user (`409`
@@ -403,7 +358,7 @@ export const SessionsGroup = HttpApiGroup.make("sessions")
         SessionBadGatewayError,
         SessionInternalServerError,
       ],
-    }).middleware(SessionRequestRefusal),
+    }),
   )
   .add(
     HttpApiEndpoint.get("listSessions", "/", {

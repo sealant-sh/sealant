@@ -391,6 +391,11 @@ const toCaptureDrain = (drain: WireWorkspaceCaptureDrain): WorkspaceCaptureDrain
       }),
 });
 
+const REASONED_REFUSALS: ReadonlySet<string> = new Set([
+  "RequestRefusedError",
+  "SessionBadRequestError",
+]);
+
 /**
  * A control plane older than this SDK refuses an argument that is empty or untrimmed with an empty
  * `400` (and logs the argument). Said here, where the argv is known, so the caller learns why.
@@ -443,12 +448,13 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
           : createSessionAsUserOp({ ...request, user: options.user }),
       )
       .catch((error: unknown) => {
-        // A control plane with the rule answers `SessionBadRequestError` with its reason; any
-        // other 400 is one from before it.
+        // A control plane with the rule answers a typed 400 with its reason (`RequestRefusedError`
+        // for a request it cannot decode, `SessionBadRequestError` for one it refuses); an empty
+        // 400 is one from before it.
         if (
           error instanceof SealantApiError &&
           error.status === 400 &&
-          error.code !== "SessionBadRequestError"
+          !REASONED_REFUSALS.has(error.code)
         ) {
           throw olderControlPlaneRefusal(argv, error);
         }
