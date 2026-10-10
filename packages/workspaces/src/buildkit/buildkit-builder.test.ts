@@ -12,6 +12,7 @@ import {
   compileWorkspaceBuildSpec,
   mapBlueprintToBuildkitImagePlan,
   planWorkspaceImageBuild,
+  SSHD_UNITS_MASKED,
   removeBuildContext,
   sealantdImageReference,
   selectBuildkitOsFamily,
@@ -860,6 +861,12 @@ describe("compileWorkspaceBuildSpec", () => {
     // openssh-server.
     expect(containerfile).toContain("openssh-server");
     expect(containerfile).not.toMatch(/sshd(?!_config)\b.*-D|systemctl/u);
+    // openssh-server presets sshd.service enabled on install: every sshd unit is masked after it,
+    // in the same layer, so no systemd boot of the image starts one.
+    for (const unit of SSHD_UNITS_MASKED) expect(containerfile).toContain(unit);
+    expect(containerfile).toMatch(
+      /dnf -y install [^\n]*openssh-server[\s\S]*ln -sfn \/dev\/null \/etc\/systemd\/system\/"\$unit"/u,
+    );
     expect(containerfile).toContain("openssh-clients");
     expect(containerfile).toContain("socat");
 

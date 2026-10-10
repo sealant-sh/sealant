@@ -128,12 +128,15 @@ client detects them instead of reading the version.
 A user's person (Mend's per-person layout: a person's Linux identity, the same in every workspace)
 is bound once with `POST /v1/users/:userId/person { id, uid, home }`: the owner-map id, a uid in
 40001–49999 (never root, never the `mend` group) and a home, an absolute normalised path under
-`SEALANT_PERSON_HOMES_ROOT` (`400` otherwise). The same values again answer `created: false`.
-Another person for a bound user (`person-binding-differs`), or a person id or uid that another user
-holds (`person-taken`), answers `409` and changes nothing: each person id and uid belongs to at most
-one user. There is no rebind route. An operator who must change a binding deletes that user's row in
-`user_person_binding` (a change to the database, which your database audit records) and binds again.
-Every new binding is logged at info with the user id, person id and uid.
+`SEALANT_PERSON_HOMES_ROOT` (`400` otherwise). The home is checked by its spelling: the API sees no
+executor's filesystem, so the prefix is no filesystem boundary (a link or a mount inside an executor
+can lead elsewhere); what writes into a home in the executor refuses links and untrusted parents
+itself. The same values again answer `created: false`. Another person for a bound user
+(`person-binding-differs`), or a person id or uid that another user holds (`person-taken`), answers
+`409` and changes nothing: each person id and uid belongs to at most one user. There is no rebind
+route. An operator who must change a binding deletes that user's row in `user_person_binding` (a
+change to the database, which your database audit records) and binds again. Every new binding is
+logged at info with the user id, person id and uid.
 
 A workspace's SSH sessions (an `ssh` shell or command, VS Code Remote-SSH) run as root unless its
 create asks for its owner's own Linux user: `sshAsOwner: true` on `POST /v1/workspaces`. Core takes

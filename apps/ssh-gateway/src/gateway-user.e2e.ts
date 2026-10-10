@@ -561,4 +561,23 @@ describe.skipIf(!runsAsUser)("a workspace's SSH sessions as its user", () => {
       master.kill();
     }
   });
+
+  it("runs no inner sshd: its units are masked, no host keys, no process, no listener, and the sftp-server is there", async () => {
+    const inspection = await dockerExec(
+      [
+        "printf 'units='; systemctl is-enabled sshd.service sshd.socket 2>&1 | tr '\\n' ' '; echo",
+        "printf 'wants='; ls /etc/systemd/system/*.wants 2>/dev/null | grep -c '^sshd' || true",
+        "printf 'keys='; find /etc/ssh -name 'ssh_host*' | wc -l",
+        "printf 'sftp='; test -x /usr/libexec/openssh/sftp-server && echo yes",
+        "printf 'processes\\n'; for f in /proc/[0-9]*/comm; do cat \"$f\" 2>/dev/null || :; done",
+        "printf 'tcp\\n'; cat /proc/net/tcp /proc/net/tcp6",
+      ].join("; "),
+    );
+    expect(inspection.stdout).toContain("units=masked masked");
+    expect(inspection.stdout).toContain("wants=0");
+    expect(inspection.stdout).toContain("keys=0");
+    expect(inspection.stdout).toContain("sftp=yes");
+    expect(inspection.stdout).not.toMatch(/^sshd$/mu);
+    expect(inspection.stdout).not.toMatch(/[0-9A-F]+:0016\s/u);
+  });
 });

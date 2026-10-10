@@ -902,6 +902,25 @@ const renderCatalogExtras = (plan: ResolvedImagePlan): string[] => {
   return lines;
 };
 
+/**
+ * The sshd units a package may enable (Fedora's openssh-server presets sshd.service on install,
+ * pulled in for its sftp-server), masked after every install: the inner sshd is gone (gateway-spec
+ * §4.1), and a systemd boot of the image must start none. Masked by link, which needs no
+ * `systemctl`; the standalone sftp-server stays.
+ */
+export const SSHD_UNITS_MASKED = [
+  "sshd.service",
+  "sshd.socket",
+  "sshd@.service",
+  "sshd-keygen.target",
+  "sshd-keygen@.service",
+] as const;
+
+const maskSshdUnits = [
+  "mkdir -p /etc/systemd/system",
+  `for unit in ${SSHD_UNITS_MASKED.join(" ")}; do rm -f /etc/systemd/system/*.wants/"$unit" && ln -sfn /dev/null /etc/systemd/system/"$unit"; done`,
+].join(" && ");
+
 const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
   if (plan.osFamily === "custom") {
     throw new Error("Custom-base plans render through renderCustomBasePackageInstallCommand.");
@@ -923,7 +942,8 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
       "RUN --mount=type=cache,target=/var/cache/dnf \\",
       "    dnf -y upgrade --refresh && \\",
       `    dnf -y install ${packageList.join(" ")} && \\`,
-      "    dnf clean all",
+      "    dnf clean all && \\",
+      `    ${maskSshdUnits}`,
     ].join("\n");
   }
 
@@ -936,6 +956,7 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
       // steps later on a missing `npm` (Arch Linux ARM, 2026-09-21).
       "    pacman -Syu --noconfirm && \\",
       `    pacman -S --noconfirm --needed ${packageList.join(" ")} && \\`,
+      `    ${maskSshdUnits} && \\`,
       "    { pacman -Scc --noconfirm || true; }",
     ].join("\n");
   }
@@ -949,7 +970,8 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
       "    --mount=type=cache,target=/var/lib/apt,sharing=locked \\",
       "    rm -f /etc/apt/apt.conf.d/docker-clean && \\",
       "    apt-get update && \\",
-      `    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${packageList.join(" ")}`,
+      `    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${packageList.join(" ")} && \\`,
+      `    ${maskSshdUnits}`,
     ].join("\n");
   }
 
