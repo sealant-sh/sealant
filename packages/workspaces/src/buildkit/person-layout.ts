@@ -465,12 +465,17 @@ export const IMAGE_PROBE_SCRIPT: readonly string[] = [
   // (124), a crash or any other failure says nothing about what the daemon can do.
   '  if [ "$status" -eq 0 ]; then case "$out" in \'{\'*\'}\') sealantd_json=$out;; *) sealantd_json=\'"unreadable"\';; esac; elif [ "$status" -ne 2 ]; then sealantd_json=\'"unreadable"\'; fi',
   "fi",
+  // Whether git, as the user the probe runs as, trusts the worktree whoever owns it: under an owner
+  // map `/workspace/repo` is a person's and `.git` root's, and sealantd restores it as root. An
+  // empty value resets the list, as git reads it.
+  "git_trust=false",
+  `if has git; then git_trust=$(cd / && git config --get-all safe.directory 2>/dev/null | { t=false; while IFS= read -r v; do case "$v" in '') t=false;; '*'|/workspace/repo|/workspace/repo/) t=true;; esac; done; printf %s "$t"; }); fi`,
   "sudoers_mend=$(flag test -f /etc/sudoers.d/mend)",
   `person_env=$(flag test -f ${PERSON_ENV_PATH})`,
   'printf \'{"version":1,"tools":{"sudo":%s,"sudoSetuid":%s,"useradd":%s,"groupadd":%s,"setfacl":%s,"getfacl":%s,"setpriv":%s,"flock":%s},\' \\',
   '  "$(flag has sudo)" "$sudo_setuid" "$(flag has useradd)" "$(flag has groupadd)" "$(flag has setfacl)" "$(flag has getfacl)" "$(flag has setpriv)" "$(flag has flock)"',
-  'printf \'"sudoersMend":%s,"sudoersIncludesDir":%s,"noNewPrivileges":%s,"passwdWritable":%s,"mendGroup":"%s","reservedIdsInUse":[%s],"personEnv":%s,"sharedDirs":[%s],"sealantd":%s}\\n\' \\',
-  '  "$sudoers_mend" "$includes_dir" "$no_new_privs" "$passwd_writable" "$mend_group" "$ids" "$person_env" "$dirs" "$sealantd_json"',
+  'printf \'"sudoersMend":%s,"sudoersIncludesDir":%s,"noNewPrivileges":%s,"passwdWritable":%s,"mendGroup":"%s","reservedIdsInUse":[%s],"personEnv":%s,"sharedDirs":[%s],"gitTrustsWorktree":%s,"sealantd":%s}\\n\' \\',
+  '  "$sudoers_mend" "$includes_dir" "$no_new_privs" "$passwd_writable" "$mend_group" "$ids" "$person_env" "$dirs" "$git_trust" "$sealantd_json"',
   'if [ "${1:-}" = --require ]; then',
   "  missing=''",
   '  [ "$sudo_setuid" = true ] || missing="$missing setuid-sudo"',
@@ -485,6 +490,7 @@ export const IMAGE_PROBE_SCRIPT: readonly string[] = [
   '  [ "$passwd_writable" = true ] || missing="$missing passwd-writable"',
   '  [ "$mend_group" = present ] || missing="$missing mend-group"',
   '  [ "$person_env" = true ] || missing="$missing person-env"',
+  '  [ "$git_trust" = true ] || missing="$missing git-safe-directory"',
   '  [ -z "$ids" ] || missing="$missing reserved-ids:$ids"',
   '  if [ -n "$missing" ]; then echo "sealant: this image cannot run the person layout; missing:$missing" >&2; exit 1; fi',
   "fi",
@@ -533,7 +539,9 @@ export type PersonLayoutSupport = {
  * false`), `useradd`, `groupadd` (no `mend` group and nothing to add it with), `sudoers` (no rule
  * and no `includedir` to add one in), `setfacl`, `passwd-writable`, `mend-group` (its name or gid
  * taken), `reserved-ids`, `setpriv` and `flock` (every write into a person's home needs them;
- * `flock` is unknown on images probed before it was recorded), and `sealantd:<capability>` for each capability a sealantd that answers
+ * `flock` is unknown on images probed before it was recorded), `git-safe-directory` (git does not
+ * trust `/workspace/repo` whoever owns it, so under an owner map sealantd's restore fails; unknown on
+ * images probed before it was recorded), and `sealantd:<capability>` for each capability a sealantd that answers
  * does not list (all three for a sealantd without the command). `unknown` holds `sealantd` when it
  * answered with something this reader cannot read. ACL support on `/workspace` is the runtime's to
  * report.
@@ -559,6 +567,9 @@ export const imagePersonLayoutSupport = (
   if (!probe.passwdWritable) missing.push("passwd-writable");
   if (probe.mendGroup === "conflict") missing.push("mend-group");
   if (probe.reservedIdsInUse.length > 0) missing.push("reserved-ids");
+  // Without it sealantd's own restore of a person's worktree fails at boot.
+  if (probe.gitTrustsWorktree === false) missing.push("git-safe-directory");
+  if (probe.gitTrustsWorktree === undefined) unknown.push("git-safe-directory");
   const reported = sealantdCapabilities(probe.sealantd);
   if (reported === "unknown") {
     unknown.push("sealantd");

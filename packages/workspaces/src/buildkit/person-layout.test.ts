@@ -75,6 +75,7 @@ const readyProbe: WorkspaceImageProbe = {
   reservedIdsInUse: [],
   personEnv: true,
   sharedDirs: [...PERSON_SHARED_DIRS],
+  gitTrustsWorktree: true,
   // What sealantd#147's `sealantd capabilities --json` prints.
   sealantd: {
     schemaVersion: 1,
@@ -363,6 +364,23 @@ describe("imagePersonLayoutSupport", () => {
     });
   });
 
+  it("needs git to trust the worktree whoever owns it, or the restore fails at boot", () => {
+    // A custom base whose build could not write /etc/gitconfig: under an owner map the worktree is
+    // a person's, and sealantd's own git (root) refused it ("/workspace/repo is not a git
+    // repository"), so the layout is refused and the launch stays shared.
+    expect(imagePersonLayoutSupport({ ...readyProbe, gitTrustsWorktree: false })).toEqual({
+      status: "unsupported",
+      missing: ["git-safe-directory"],
+      unknown: [],
+    });
+    // An image probed before it was recorded: unknown, never supported.
+    const { gitTrustsWorktree: _recorded, ...before } = readyProbe;
+    expect(imagePersonLayoutSupport(before)).toMatchObject({
+      status: "unknown",
+      unknown: ["git-safe-directory"],
+    });
+  });
+
   it("says yes when the image and its sealantd have everything", () => {
     expect(imagePersonLayoutSupport(readyProbe)).toEqual({
       status: "supported",
@@ -513,6 +531,38 @@ describe("the image probe script", () => {
       schemaVersion: 1,
       supports: ["exec.user", "dotfiles.user", "restore.owner_map"],
     });
+  });
+
+  /** The probe's `gitTrustsWorktree`, with git reading only `system` as its system config. */
+  const gitTrust = async (system: string, args: readonly string[] = []) => {
+    const dir = await mkdtemp(join(fakes ?? tmpdir(), "git-"));
+    await writeFile(join(dir, "gitconfig"), system);
+    const env = {
+      GIT_CONFIG_SYSTEM: join(dir, "gitconfig"),
+      GIT_CONFIG_GLOBAL: join(dir, "global"),
+      HOME: dir,
+    };
+    return runProbe(args, env).then(
+      ({ stdout }) => ({
+        trusts: parseWorkspaceImageProbe(JSON.parse(stdout)).gitTrustsWorktree,
+        stderr: "",
+      }),
+      (error: { stdout?: string; stderr?: string }) => ({
+        trusts: parseWorkspaceImageProbe(JSON.parse(error.stdout ?? "")).gitTrustsWorktree,
+        stderr: error.stderr ?? "",
+      }),
+    );
+  };
+
+  it("records whether git trusts /workspace/repo whoever owns it", async () => {
+    expect((await gitTrust("")).trusts).toBe(false);
+    expect((await gitTrust("[safe]\n\tdirectory = *\n")).trusts).toBe(true);
+    expect((await gitTrust("[safe]\n\tdirectory = /workspace/repo\n")).trusts).toBe(true);
+    expect((await gitTrust("[safe]\n\tdirectory = /srv/other\n")).trusts).toBe(false);
+    // An empty value resets the list, as git reads it.
+    expect((await gitTrust("[safe]\n\tdirectory = *\n\tdirectory =\n")).trusts).toBe(false);
+    // With --require, a missing trust is named.
+    expect((await gitTrust("", ["--require"])).stderr).toContain(" git-safe-directory");
   });
 
   it("prints JSON the build record accepts, on this machine", async () => {
