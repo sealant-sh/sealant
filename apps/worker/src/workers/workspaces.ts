@@ -26,6 +26,7 @@ import {
   CloudflareRuntimeAdapter,
   cloudflareRuntimeConfigFromEnv,
   createDockerWorkspaceImageBuilder,
+  dockerDaemonImagePlatform,
   DockerRuntimeAdapter,
   K3sRuntimeAdapter,
   K8sRuntimeAdapter,
@@ -40,6 +41,7 @@ import {
   parseDockerRegistryMirrors,
   parseDockerVolumeMappings,
   preserveBeforeDeadline,
+  processImagePlatform,
   processWorkspaceBuildJob,
   processWorkspaceStop,
   reapExpiredWorkspaces,
@@ -51,9 +53,11 @@ import {
   reapWorkspaceImages,
   reconcileRuntimeExits,
   recoverRetainedExecutors,
+  runBuildkitCommand,
   sweepStaleBuildContexts,
   targetDerivationOptionsFromEnv,
   watchRuntimeExits,
+  UnsupportedImagePlatformError,
   type CaptureDrainSettings,
   type RegistryClient,
 } from "@sealant/workspaces";
@@ -112,6 +116,25 @@ const createCredentialCipherFromEnv = (env: WorkerEnv): CredentialCipherService 
 /**
  * Starts the workspace worker loop and returns a graceful shutdown handle.
  */
+/**
+ * What this worker's Docker daemon builds for. A daemon that does not answer yet (it is still
+ * starting) leaves the worker's own architecture, which is the daemon's wherever the two share a
+ * host; one that answers with an architecture images are not built for stops the worker.
+ */
+const dockerImagePlatform = () =>
+  dockerDaemonImagePlatform(runBuildkitCommand).catch((error: unknown) => {
+    if (error instanceof UnsupportedImagePlatformError) throw error;
+    const platform = processImagePlatform();
+    console.warn(
+      "The Docker daemon did not name its architecture; workspace images are built for this machine's",
+      {
+        platform,
+        error: error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error),
+      },
+    );
+    return platform;
+  });
+
 export const startWorkspaceWorker = async (env: WorkerEnv) => {
   const db = await createDatabaseFromEnv(env);
   // The job queue lives in the same Postgres database as the control plane (pg-boss); one
@@ -238,6 +261,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       ? undefined
       : new KubernetesWorkspaceImageBuilder({
           config: kubernetesBuildConfig,
+          // This worker's own node: workspaces run on the cluster it runs on.
+          platform: env.SEALANT_WORKSPACE_IMAGE_PLATFORM ?? processImagePlatform(),
           api: createLiveKubernetesBuildApi({
             namespace: kubernetesBuildConfig.namespace,
             ...(kubernetesBuildConfig.kubeconfigPath === undefined
@@ -331,6 +356,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       : (imageBuilder ??
         createDockerWorkspaceImageBuilder({
           registryClient,
+          platform: env.SEALANT_WORKSPACE_IMAGE_PLATFORM ?? (await dockerImagePlatform()),
           stallTimeoutMs: env.WORKSPACE_IMAGE_BUILD_STALL_MS,
           ...(env.WORKSPACE_IMAGE_BUILD_CACHE_DIR === undefined
             ? {}

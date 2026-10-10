@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { planWorkspaceImageBuild } from "../../buildkit/index.js";
+import { ARCHLINUXARM_KEY_FINGERPRINT, planWorkspaceImageBuild } from "../../buildkit/index.js";
 import { cases } from "../../runtime/docker-runtime-adapter.golden-fixture.js";
 import {
-  ARCHLINUXARM_KEY_FINGERPRINT,
+  MICROVM_IMAGE_PLATFORM,
   microvmImageName,
   microvmRecipe,
   mirroredBaseImage,
@@ -18,6 +18,7 @@ const settings = {
 
 const plannedFor = (family: "fedora" | "arch" | "ubuntu") =>
   planWorkspaceImageBuild({
+    platform: MICROVM_IMAGE_PLATFORM,
     blueprint: {
       ...cases.gitSource.blueprint,
       target: { ...cases.gitSource.blueprint.target, os: { family, mode: "require" } },
@@ -82,10 +83,18 @@ describe("microvmRecipe", () => {
     );
     expect(containerfile).toMatch(/^FROM scratch$/m);
     expect(containerfile).toContain("pacman-key --populate archlinuxarm");
-    expect(containerfile).not.toContain("FROM public.ecr.aws/docker/library/archlinux");
+    expect(containerfile).not.toContain("archlinux:latest");
     // The rest of the planned recipe, the family's own packages and the agent, follows unchanged.
     expect(containerfile).toContain("pacman -S");
     expect(containerfile).toContain('ENTRYPOINT ["node", "/opt/sealant/agent.mjs"]');
+  });
+
+  it("refuses a plan for any platform but ARM64", () => {
+    const planned = planWorkspaceImageBuild({
+      platform: "linux/amd64",
+      blueprint: cases.gitSource.blueprint,
+    });
+    expect(() => microvmRecipe(planned, settings)).toThrow(/linux\/arm64/);
   });
 
   it("takes sealantctl from the same released daemon image as sealantd, for the hooks' capture flush", () => {

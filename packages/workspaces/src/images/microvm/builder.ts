@@ -16,7 +16,13 @@ import { randomUUID } from "node:crypto";
 
 import type { NewWorkspace, WorkspaceBuild } from "@sealant/validators";
 
-import { planWorkspaceImageBuild, type PlannedWorkspaceImageBuild } from "../../buildkit/index.js";
+import {
+  ARCHLINUXARM_BUILDER_KEY,
+  ARCHLINUXARM_KEY_FILE,
+  planWorkspaceImageBuild,
+  usesArchlinuxArm,
+  type PlannedWorkspaceImageBuild,
+} from "../../buildkit/index.js";
 import { microvmImageReference } from "../../runtime/microvm/image-reference.js";
 import type { PublishedImage } from "../../runtime/runtime-adapter.js";
 import type {
@@ -32,8 +38,8 @@ import type {
 import {
   isMicrovmImageNameOf,
   MICROVM_AGENT_FILES,
-  MICROVM_ARCH_FILES,
   MICROVM_DOCKER_FILES,
+  MICROVM_IMAGE_PLATFORM,
   microvmImageName,
   microvmRecipe,
   type MicrovmContextFile,
@@ -121,7 +127,8 @@ export class MicrovmWorkspaceImageBuilder implements WorkspaceImageBuilder {
   readonly plan = (spec: NewWorkspace): PlannedWorkspaceImageBuild => {
     const planned = (
       this.#options.planWorkspaceSpec ??
-      ((blueprint: NewWorkspace) => planWorkspaceImageBuild({ blueprint }))
+      ((blueprint: NewWorkspace) =>
+        planWorkspaceImageBuild({ blueprint, platform: MICROVM_IMAGE_PLATFORM }))
     )(spec);
     const recipe = microvmRecipe(planned, {
       agentPort: this.#options.config.agentPort,
@@ -226,12 +233,11 @@ export class MicrovmWorkspaceImageBuilder implements WorkspaceImageBuilder {
     const entries: ZipEntry[] = [
       { name: "Dockerfile", content: Buffer.from(planned.containerfile, "utf8") },
     ];
-    for (const file of [
-      ...MICROVM_AGENT_FILES,
-      ...(dockerService ? MICROVM_DOCKER_FILES : []),
-      ...(planned.osFamily === "arch" ? MICROVM_ARCH_FILES : []),
-    ]) {
+    for (const file of [...MICROVM_AGENT_FILES, ...(dockerService ? MICROVM_DOCKER_FILES : [])]) {
       entries.push({ name: file, content: await this.#options.readContextFile(file) });
+    }
+    if (usesArchlinuxArm(planned.osFamily, planned.platform)) {
+      entries.push({ name: ARCHLINUXARM_KEY_FILE, content: Buffer.from(ARCHLINUXARM_BUILDER_KEY) });
     }
     // An unguessable key: a build role cannot list the bucket, so it cannot find another build's.
     const attempt = (this.#options.uniqueId ?? randomUUID)();

@@ -567,7 +567,10 @@ describe("createWorkspace package ids", () => {
           ]);
           expect(state.job?.tooling.packages).toEqual([{ id: "python" }, { id: "github-cli" }]);
           if (state.job === undefined) throw new Error("no job was queued");
-          const { containerfile } = planWorkspaceImageBuild({ blueprint: state.job });
+          const { containerfile } = planWorkspaceImageBuild({
+            platform: "linux/amd64",
+            blueprint: state.job,
+          });
           expect(containerfile).toMatch(family === "arch" ? /\bgithub-cli\b/ : /\bgh\b/);
         }).pipe(Effect.provide(makeRecordingLayer(state, standardizer))),
       );

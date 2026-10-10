@@ -13,6 +13,7 @@ import { promisify } from "node:util";
 import type { WorkspaceBlueprint } from "@sealant/validators";
 import { Effect } from "effect";
 
+import { processImagePlatform } from "../buildkit/platform.js";
 import { createLiveKubernetesBuildApi } from "../images/kubernetes/api.js";
 import { KubernetesWorkspaceImageBuilder } from "../images/kubernetes/builder.js";
 import { kubernetesBuildConfigSchema } from "../images/kubernetes/config.js";
@@ -160,6 +161,7 @@ export const buildWorkspaceImage = async (input: {
     ...(input.kubeconfigPath === undefined ? {} : { kubeconfigPath: input.kubeconfigPath }),
   });
   const builder = new KubernetesWorkspaceImageBuilder({
+    platform: processImagePlatform(),
     config: buildConfig,
     api: createLiveKubernetesBuildApi({
       namespace: NAMESPACE,

@@ -33,6 +33,7 @@ import {
   removeBuildContext,
   runBuildkitCommand,
 } from "./buildkit-builder.js";
+import { processImagePlatform } from "./platform.js";
 
 const blueprint = parseWorkspaceBlueprint({
   sources: {
@@ -55,6 +56,7 @@ describe("the image-build phase on a real Docker Engine", () => {
   it("reports the build's steps, then reuses the kept image without a build", async () => {
     const seen: ImageBuildProgress[] = [];
     const result = await compileWorkspaceBuildSpec({
+      platform: processImagePlatform(),
       blueprint,
       options: {
         emitTarball: false,
@@ -72,7 +74,7 @@ describe("the image-build phase on a real Docker Engine", () => {
     expect(last?.stallTimeoutMs).toBe(10 * 60_000);
 
     // The worker publishes the build under its plan coordinates in the Engine.
-    const planned = planWorkspaceImageBuild({ blueprint });
+    const planned = planWorkspaceImageBuild({ platform: processImagePlatform(), blueprint });
     expect(result.metadata?.planHash).toBe(planned.planHash);
     const store = new LocalDockerImageStore();
     const coordinates = planImageCoordinates(planned);
@@ -83,6 +85,7 @@ describe("the image-build phase on a real Docker Engine", () => {
 
     // A fresh database has no record of that publish; the Engine still has the image.
     const builder = createDockerWorkspaceImageBuilder({
+      platform: processImagePlatform(),
       registryClient: store,
     });
     const startedAt = Date.now();

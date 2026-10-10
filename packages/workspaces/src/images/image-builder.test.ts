@@ -43,7 +43,11 @@ describe("createDockerWorkspaceImageBuilder", () => {
     }));
     const registryClient = { publishOciImage } as unknown as RegistryClient;
     const compileWorkspaceSpec = vi.fn(async () => build);
-    const builder = createDockerWorkspaceImageBuilder({ registryClient, compileWorkspaceSpec });
+    const builder = createDockerWorkspaceImageBuilder({
+      platform: "linux/amd64",
+      registryClient,
+      compileWorkspaceSpec,
+    });
 
     const result = await builder.buildAndPublish({
       spec: cases.gitSource.blueprint,
@@ -86,6 +90,7 @@ describe("createDockerWorkspaceImageBuilder", () => {
       ],
     };
     const builder = createDockerWorkspaceImageBuilder({
+      platform: "linux/amd64",
       registryClient,
       compileWorkspaceSpec: async () => engineBuild,
     });
@@ -117,6 +122,7 @@ describe("createDockerWorkspaceImageBuilder", () => {
       publishOciImage,
     } as unknown as RegistryClient;
     const builder = createDockerWorkspaceImageBuilder({
+      platform: "linux/amd64",
       registryClient,
       compileWorkspaceSpec: async () => build,
     });
@@ -162,6 +168,7 @@ describe("createDockerWorkspaceImageBuilder", () => {
       })),
     } as unknown as RegistryClient;
     const builder = createDockerWorkspaceImageBuilder({
+      platform: "linux/amd64",
       registryClient,
       compileWorkspaceSpec: async () => scratch,
     });
@@ -179,6 +186,7 @@ describe("createDockerWorkspaceImageBuilder", () => {
       }),
     } as unknown as RegistryClient;
     const builder = createDockerWorkspaceImageBuilder({
+      platform: "linux/amd64",
       registryClient,
       compileWorkspaceSpec: async () => scratch,
     });
@@ -192,15 +200,21 @@ describe("createDockerWorkspaceImageBuilder", () => {
   it("disables the plan-hash short-circuit for a custom compiler without a planner", () => {
     const registryClient = {} as RegistryClient;
     expect(
-      createDockerWorkspaceImageBuilder({ registryClient, compileWorkspaceSpec: async () => build })
-        .plan,
+      createDockerWorkspaceImageBuilder({
+        platform: "linux/amd64",
+        registryClient,
+        compileWorkspaceSpec: async () => build,
+      }).plan,
     ).toBeUndefined();
-    expect(createDockerWorkspaceImageBuilder({ registryClient }).plan).toBeDefined();
+    expect(
+      createDockerWorkspaceImageBuilder({ platform: "linux/amd64", registryClient }).plan,
+    ).toBeDefined();
   });
 
   it("fails when the compiler returns no publishable artifact", async () => {
     const registryClient = { publishOciImage: vi.fn() } as unknown as RegistryClient;
     const builder = createDockerWorkspaceImageBuilder({
+      platform: "linux/amd64",
       registryClient,
       compileWorkspaceSpec: async () => ({ ...build, artifacts: [] }),
     });
@@ -258,7 +272,10 @@ describe("createDockerWorkspaceImageBuilder.findPublished", () => {
       supports: ["dotfiles.user", "exec.user", "restore.owner_map"],
     },
   };
-  const planned = planWorkspaceImageBuild({ blueprint: cases.gitSource.blueprint });
+  const planned = planWorkspaceImageBuild({
+    platform: "linux/amd64",
+    blueprint: cases.gitSource.blueprint,
+  });
   const coordinates = planImageCoordinates(planned);
 
   /** `docker`: the image's plan-hash label for an inspect, the probe for a run. */
@@ -271,7 +288,11 @@ describe("createDockerWorkspaceImageBuilder.findPublished", () => {
   it("reuses the plan's image the Engine kept, with the probe read back from it, building nothing", async () => {
     const { registryClient } = engineStore("sha256:kept");
     const commandRunner = engine(planned.planHash);
-    const builder = createDockerWorkspaceImageBuilder({ registryClient, commandRunner });
+    const builder = createDockerWorkspaceImageBuilder({
+      platform: "linux/amd64",
+      registryClient,
+      commandRunner,
+    });
 
     const found = await builder.findPublished?.({ planned, ...coordinates });
 
@@ -285,7 +306,11 @@ describe("createDockerWorkspaceImageBuilder.findPublished", () => {
   it("does not reuse an image under the plan's tag that carries another plan's hash", async () => {
     const { registryClient, publishOciImage } = engineStore("sha256:retagged");
     const commandRunner = engine("e".repeat(64));
-    const builder = createDockerWorkspaceImageBuilder({ registryClient, commandRunner });
+    const builder = createDockerWorkspaceImageBuilder({
+      platform: "linux/amd64",
+      registryClient,
+      commandRunner,
+    });
     await expect(builder.findPublished?.({ planned, ...coordinates })).resolves.toBeNull();
     // Nothing is probed or published: the image is not the plan's.
     expect(commandRunner).toHaveBeenCalledTimes(1);
@@ -295,6 +320,7 @@ describe("createDockerWorkspaceImageBuilder.findPublished", () => {
   it("does not reuse a kept image built before images carried their plan hash", async () => {
     const { registryClient } = engineStore("sha256:old");
     const builder = createDockerWorkspaceImageBuilder({
+      platform: "linux/amd64",
       registryClient,
       commandRunner: engine("<no value>"),
     });
@@ -304,7 +330,11 @@ describe("createDockerWorkspaceImageBuilder.findPublished", () => {
   it("finds nothing when the Engine has no image for the plan", async () => {
     const { registryClient } = engineStore(null);
     const commandRunner = vi.fn(async () => ({ stdout: "", stderr: "" }));
-    const builder = createDockerWorkspaceImageBuilder({ registryClient, commandRunner });
+    const builder = createDockerWorkspaceImageBuilder({
+      platform: "linux/amd64",
+      registryClient,
+      commandRunner,
+    });
     await expect(builder.findPublished?.({ planned, ...coordinates })).resolves.toBeNull();
     expect(commandRunner).not.toHaveBeenCalled();
   });
@@ -315,13 +345,19 @@ describe("createDockerWorkspaceImageBuilder.findPublished", () => {
       stdout: args[0] === "image" ? planned.planHash : "not json",
       stderr: "",
     }));
-    const builder = createDockerWorkspaceImageBuilder({ registryClient, commandRunner });
+    const builder = createDockerWorkspaceImageBuilder({
+      platform: "linux/amd64",
+      registryClient,
+      commandRunner,
+    });
     await expect(builder.findPublished?.({ planned, ...coordinates })).resolves.toBeNull();
     expect(publishOciImage).not.toHaveBeenCalled();
   });
 
   it("is not offered for a registry store, which has its publishes on record", () => {
     const registryClient = { publishOciImage: vi.fn() } as unknown as RegistryClient;
-    expect(createDockerWorkspaceImageBuilder({ registryClient }).findPublished).toBeUndefined();
+    expect(
+      createDockerWorkspaceImageBuilder({ platform: "linux/amd64", registryClient }).findPublished,
+    ).toBeUndefined();
   });
 });

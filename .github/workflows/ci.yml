@@ -122,3 +122,35 @@ jobs:
       - name: Cloud metadata address refused from workspaces, reached when opted in
         run: >-
           pnpm --filter @sealant/workspaces test:e2e src/runtime/cloud-metadata.e2e.ts
+
+  # An Arch workspace image built and run on each architecture's own Docker daemon: Docker Hub's
+  # `archlinux` on amd64, Arch Linux ARM's verified rootfs on arm64. It carries every catalog
+  # package and every baked harness, and checks they run natively (`uname -m`, the harnesses).
+  arch-native:
+    name: Arch image (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: blacksmith-4vcpu-ubuntu-2404 }
+          - { arch: arm64, runner: blacksmith-4vcpu-ubuntu-2404-arm }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and run an Arch workspace image
+        run: pnpm --filter @sealant/workspaces test:e2e src/buildkit/arch-native.e2e.ts

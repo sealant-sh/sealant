@@ -11,7 +11,7 @@
  *   - `KubernetesWorkspaceImageBuilder` (`./kubernetes/`) runs one rootless BuildKit Job per build
  *     that pushes straight to the registry.
  */
-import type { NewWorkspace, WorkspaceBuild } from "@sealant/validators";
+import type { NewWorkspace, WorkspaceBuild, WorkspaceImagePlatform } from "@sealant/validators";
 
 import {
   buildContextDirectoryOf,
@@ -89,6 +89,8 @@ export interface WorkspaceImageBuilder {
 
 export interface DockerWorkspaceImageBuilderOptions {
   readonly registryClient: RegistryClient;
+  /** What images are built for: the Docker daemon's own architecture (`dockerDaemonImagePlatform`). */
+  readonly platform: WorkspaceImagePlatform;
   /** Test seams, mirroring the build job's historical `compileWorkspaceSpec` / `planWorkspaceSpec`. */
   readonly compileWorkspaceSpec?: (spec: NewWorkspace) => Promise<WorkspaceBuild>;
   readonly planWorkspaceSpec?: (spec: NewWorkspace) => PlannedWorkspaceImageBuild;
@@ -143,7 +145,11 @@ export const createDockerWorkspaceImageBuilder = (
       ...(options.cacheDirectory === undefined ? {} : { cacheDirectory: options.cacheDirectory }),
       ...(options.commandRunner === undefined ? {} : { commandRunner: options.commandRunner }),
     };
-    return compileWorkspaceBuildSpec({ blueprint: spec, options: compilerOptions });
+    return compileWorkspaceBuildSpec({
+      blueprint: spec,
+      platform: options.platform,
+      options: compilerOptions,
+    });
   };
   // A custom compiler without a matching planner disables the short-circuit: the planner's hash
   // would not describe what the custom compiler builds.
@@ -151,7 +157,7 @@ export const createDockerWorkspaceImageBuilder = (
     options.planWorkspaceSpec ??
     (options.compileWorkspaceSpec === undefined
       ? (spec: NewWorkspace): PlannedWorkspaceImageBuild =>
-          planWorkspaceImageBuild({ blueprint: spec })
+          planWorkspaceImageBuild({ blueprint: spec, platform: options.platform })
       : undefined);
 
   const publish = async (input: BuildAndPublishInput, build: WorkspaceBuild) => {
@@ -217,7 +223,7 @@ export const createDockerWorkspaceImageBuilder = (
             if (stdout.trim() !== input.planned.planHash) return null;
             const { probe } = await readWorkspaceImageProbe(
               digest,
-              input.planned.imagePlan,
+              input.planned.platform,
               options.commandRunner,
             );
             // An image whose probe cannot be read is not vouched for: a per-person launch would be

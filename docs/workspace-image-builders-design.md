@@ -179,8 +179,10 @@ itself: a single-user self-host is a supported shape.
     ARM64, so no Arch workspace could be built there at all. The official ARM port, Arch Linux ARM,
     ships a rootfs tarball signed by its build system key. The recipe's first stage fetches the
     tarball and its signature over the port's mirrors, verifies the signature against the key
-    shipped in the build context (`microvm-image/archlinuxarm-builder.asc`, fingerprint pinned in
-    the recipe), unpacks it, and the image starts from that filesystem.
+    shipped in the build context (fingerprint pinned beside it), unpacks it, and the image starts
+    from that filesystem. Since 2026-10-10 the Docker and Kubernetes builders start every arm64 Arch
+    image from the same stages (`buildkit/archlinuxarm.ts`), so Arch no longer runs under emulation
+    on arm64 hosts; the plan hash covers the platform.
   - **No native harness binary started on the nix image.** It has no `/lib64/ld-linux-*`: every
     binary in it names a loader inside the store. `codex`, `claude` and `opencode` install and then
     fail to execute. The nix package layer now links glibc's loader into `/lib` and `/lib64`. This

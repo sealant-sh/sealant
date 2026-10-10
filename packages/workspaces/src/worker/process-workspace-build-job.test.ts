@@ -381,6 +381,7 @@ const baseOptions = (overrides: BuildJobTestOverrides): ProcessWorkspaceBuildJob
   const builder =
     imageBuilder ??
     createDockerWorkspaceImageBuilder({
+      platform: "linux/amd64",
       registryClient,
       ...(compileWorkspaceSpec === undefined ? {} : { compileWorkspaceSpec }),
       ...(planWorkspaceSpec === undefined ? {} : { planWorkspaceSpec }),
@@ -564,6 +565,7 @@ describe("processWorkspaceBuildJobEffect", () => {
     const compileWorkspaceSpec = vi.fn(async () => createCompileResult({ id: "fedora" }));
     const planWorkspaceSpec = vi.fn(() => ({
       osFamily: "fedora" as const,
+      platform: "linux/amd64" as const,
       imagePlan: {} as never,
       containerfile: "FROM fedora:41",
       planHash: priorPlanHash,
@@ -655,6 +657,7 @@ describe("processWorkspaceBuildJobEffect", () => {
     const compileWorkspaceSpec = vi.fn(async () => createCompileResult({ id: "fedora" }));
     const planWorkspaceSpec = vi.fn(() => ({
       osFamily: "fedora" as const,
+      platform: "linux/amd64" as const,
       imagePlan: {} as never,
       containerfile: "FROM fedora:41",
       planHash: priorPlanHash,
@@ -704,6 +707,7 @@ describe("processWorkspaceBuildJobEffect", () => {
     const compileWorkspaceSpec = vi.fn(async () => createCompileResult({ id: "fedora" }));
     const planWorkspaceSpec = vi.fn(() => ({
       osFamily: "fedora" as const,
+      platform: "linux/amd64" as const,
       imagePlan: {} as never,
       containerfile: "FROM fedora:41",
       planHash,
@@ -768,6 +772,7 @@ describe("processWorkspaceBuildJobEffect", () => {
     const compileWorkspaceSpec = vi.fn(async () => createCompileResult({ id: "fedora" }));
     const planWorkspaceSpec = vi.fn(() => ({
       osFamily: "fedora" as const,
+      platform: "linux/amd64" as const,
       imagePlan: {} as never,
       containerfile: "FROM fedora:41",
       planHash: priorPlanHash,
@@ -818,6 +823,7 @@ describe("processWorkspaceBuildJobEffect", () => {
     const compileWorkspaceSpec = vi.fn(async () => createCompileResult({ id: "fedora" }));
     const planWorkspaceSpec = vi.fn(() => ({
       osFamily: "fedora" as const,
+      platform: "linux/amd64" as const,
       imagePlan: {} as never,
       containerfile: "FROM fedora:41",
       planHash: "c".repeat(64),
@@ -2923,6 +2929,7 @@ describe("the daemon build an executor boots, recorded at launch (review 3 #8)",
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
     const planWorkspaceSpec = vi.fn(() => ({
       osFamily: "nix" as const,
+      platform: "linux/amd64" as const,
       imagePlan: {} as never,
       containerfile: [
         "FROM nixos/nix:2.24.9",
@@ -2975,6 +2982,7 @@ describe("processWorkspaceBuildJobEffect: the image-build phase", () => {
   const planHash = "d".repeat(64);
   const planned = {
     osFamily: "fedora" as const,
+    platform: "linux/amd64" as const,
     imagePlan: {} as never,
     containerfile: "FROM fedora:41",
     planHash,

@@ -30,6 +30,7 @@ import { TelemetryQuery } from "@sealant/telemetry";
 import { newWorkspaceSchema } from "@sealant/validators";
 import {
   planWorkspaceImageBuild,
+  processImagePlatform,
   SealantRuntime,
   type ProcessUserChannel,
   type ProcessUserCheck,
@@ -539,8 +540,11 @@ describe("the control plane's features", () => {
 });
 
 describe("inspectWorkspaceImage", () => {
-  // The plan the build would make of this spec.
-  const planHash = planWorkspaceImageBuild({ blueprint: newWorkspaceSchema.parse(spec) }).planHash;
+  // The plan the build would make of this spec, on this machine's platform as the API plans it.
+  const planHash = planWorkspaceImageBuild({
+    platform: processImagePlatform(),
+    blueprint: newWorkspaceSchema.parse(spec),
+  }).planHash;
 
   const job = (probe: unknown) =>
     ({
