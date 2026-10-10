@@ -69,3 +69,22 @@ postgresql://sealant:$(SEALANT_DB_PASSWORD)@{{ .Release.Name }}-postgres:5432/se
 {{- range .Values.workspaces.volumeMappings -}}{{- $roots = append $roots .logicalRoot -}}{{- end -}}
 {{ join ":" $roots }}
 {{- end -}}
+{{- /*
+What workspace images are built for: `workspaces.imagePlatform`, else the architecture
+`workspaces.nodeSelector` selects (`kubernetes.io/arch`), else empty, and the worker takes its own
+node's. Rendered into the API and the worker alike, so both plan the same image.
+*/ -}}
+{{- define "sealant.workspaceImagePlatform" -}}
+{{- $pinned := .Values.workspaces.imagePlatform | default "" -}}
+{{- $arch := index (.Values.workspaces.nodeSelector | default dict) "kubernetes.io/arch" | default "" -}}
+{{- if and $pinned (not (has $pinned (list "linux/amd64" "linux/arm64"))) -}}
+{{- fail (printf "workspaces.imagePlatform must be linux/amd64 or linux/arm64, not %s" $pinned) -}}
+{{- end -}}
+{{- if and $arch (not (has $arch (list "amd64" "arm64"))) -}}
+{{- fail (printf "workspaces.nodeSelector selects kubernetes.io/arch=%s; workspace images are built for amd64 and arm64" $arch) -}}
+{{- end -}}
+{{- if and $pinned $arch (ne $pinned (printf "linux/%s" $arch)) -}}
+{{- fail (printf "workspaces.imagePlatform is %s but workspaces.nodeSelector selects kubernetes.io/arch=%s" $pinned $arch) -}}
+{{- end -}}
+{{- if $pinned -}}{{ $pinned }}{{- else if $arch -}}linux/{{ $arch }}{{- end -}}
+{{- end -}}

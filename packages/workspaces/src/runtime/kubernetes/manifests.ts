@@ -25,6 +25,7 @@ import type {
   V1VolumeMount,
 } from "@kubernetes/client-node";
 
+import { imagePlatformArchitecture } from "../../buildkit/platform.js";
 import { getHarnessIntegration } from "../../harness/integrations.js";
 import {
   CAPTURE_HARNESS_HOME_ENV,
@@ -44,12 +45,29 @@ import {
   LABEL_PRINCIPAL,
   LABEL_RUN_ID,
   LABEL_WORKSPACE_ID,
+  NODE_ARCH_LABEL,
   type KubernetesRuntimeConfig,
 } from "./config.js";
 import { workspaceServiceDnsName, type WorkspaceResourceNames } from "./names.js";
 import type { LoweredMounts } from "./volumes.js";
 
 /** Fixed in-container layout; `sealantd boot` reads these paths. */
+/**
+ * The operator's node selector, and the architecture workspace images are built for: a Pod never
+ * lands on a node that cannot run its image. Empty when neither is set.
+ */
+export const workspaceNodeSelector = (
+  config: Pick<KubernetesRuntimeConfig, "nodeSelector" | "imagePlatform">,
+): { readonly nodeSelector?: Record<string, string> } => {
+  const nodeSelector = {
+    ...config.nodeSelector,
+    ...(config.imagePlatform === undefined
+      ? {}
+      : { [NODE_ARCH_LABEL]: imagePlatformArchitecture(config.imagePlatform) }),
+  };
+  return Object.keys(nodeSelector).length === 0 ? {} : { nodeSelector };
+};
+
 export const RUN_SEALANT_PATH = "/run/sealant";
 export const LAUNCH_MOUNT_PATH = "/run/sealant/launch";
 export const TLS_MOUNT_PATH = "/run/sealant/tls";
@@ -630,9 +648,7 @@ export const buildPod = (build: BuildPodInput): V1Pod => {
         ? {}
         : { priorityClassName: build.priorityClassName }),
       ...(runtimeClassName === undefined ? {} : { runtimeClassName }),
-      ...(Object.keys(config.nodeSelector).length === 0
-        ? {}
-        : { nodeSelector: { ...config.nodeSelector } }),
+      ...workspaceNodeSelector(config),
       ...(config.imagePullSecret === undefined
         ? {}
         : { imagePullSecrets: [{ name: config.imagePullSecret }] }),

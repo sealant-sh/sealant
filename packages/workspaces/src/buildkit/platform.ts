@@ -32,6 +32,10 @@ export const workspaceImagePlatformOf = (
   }
 };
 
+/** `amd64` or `arm64`: the architecture as Docker and Kubernetes (`kubernetes.io/arch`) name it. */
+export const imagePlatformArchitecture = (platform: WorkspaceImagePlatform): "amd64" | "arm64" =>
+  platform === "linux/arm64" ? "arm64" : "amd64";
+
 /** The platform of the machine this process runs on. */
 export const processImagePlatform = (
   architecture: string = process.arch,

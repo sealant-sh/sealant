@@ -15,6 +15,7 @@ import type { NewWorkspace, WorkspaceBuild, WorkspaceImagePlatform } from "@seal
 
 import {
   buildContextDirectoryOf,
+  buildPlatformOf,
   compileWorkspaceBuildSpec,
   localImageNameOf,
   planWorkspaceImageBuild,
@@ -223,7 +224,7 @@ export const createDockerWorkspaceImageBuilder = (
             if (stdout.trim() !== input.planned.planHash) return null;
             const { probe } = await readWorkspaceImageProbe(
               digest,
-              input.planned.platform,
+              buildPlatformOf(input.planned),
               options.commandRunner,
             );
             // An image whose probe cannot be read is not vouched for: a per-person launch would be

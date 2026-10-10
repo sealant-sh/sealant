@@ -4,6 +4,7 @@ export {
   IMAGE_BUILD_STALLED_CODE,
   PLAN_HASH_LABEL,
   buildContextDirectoryOf,
+  buildPlatformOf,
   compileWorkspaceBuildSpec,
   localImageNameOf,
   readWorkspaceImageProbe,
@@ -51,6 +52,7 @@ export {
 export {
   UnsupportedImagePlatformError,
   dockerDaemonImagePlatform,
+  imagePlatformArchitecture,
   processImagePlatform,
   workspaceImagePlatformOf,
 } from "./platform.js";

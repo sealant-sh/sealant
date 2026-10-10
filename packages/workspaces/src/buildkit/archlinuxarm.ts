@@ -102,7 +102,10 @@ export const renderArchlinuxArmBase = (fetchStageImage: string): string =>
     "    mkdir /rootfs && tar -xpf /tmp/rootfs.tar.gz --numeric-owner -C /rootfs && rm /tmp/rootfs.tar.gz*",
     "FROM scratch",
     "COPY --from=archlinuxarm /rootfs /",
-    "RUN pacman-key --init && pacman-key --populate archlinuxarm && \\",
-    `    pacman -Rns --noconfirm $(pacman -Qq | grep -E '${ARCHLINUXARM_BOARD_PACKAGES}') && \\`,
-    "    userdel alarm && rm -rf /home/alarm && usermod -p '*' root",
+    "RUN set -eu; pacman-key --init; pacman-key --populate archlinuxarm; \\",
+    // A tarball that ships none of them (renamed, or dropped) has nothing to remove, and `pacman
+    // -R` with no targets fails: the removal runs only with some.
+    `    board="$(pacman -Qq | grep -E '${ARCHLINUXARM_BOARD_PACKAGES}' || true)"; \\`,
+    '    if [ -n "$board" ]; then pacman -Rns --noconfirm $board; fi; \\',
+    "    if id alarm >/dev/null 2>&1; then userdel alarm; fi; rm -rf /home/alarm; usermod -p '*' root",
   ].join("\n");

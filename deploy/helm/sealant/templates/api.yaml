@@ -78,6 +78,13 @@ spec:
             - { name: GITHUB_APP_ID, value: {{ .Values.github.appId | quote }} }
             - name: SEALANT_MOUNT_ALLOWED_STORE_ROOTS
               value: {{ (include "sealant.allowedRoots" .) | quote }}
+            # The platform the worker builds workspace images for: the API plans the same image.
+            {{- with include "sealant.workspaceImagePlatform" . }}
+            - { name: SEALANT_WORKSPACE_IMAGE_PLATFORM, value: {{ . | quote }} }
+            {{- end }}
+            {{- range .Values.api.extraEnv }}
+            - { name: {{ .name | quote }}, value: {{ .value | quote }} }
+            {{- end }}
           volumeMounts:
             - { name: control-tls, mountPath: /etc/sealant/control-tls, readOnly: true }
           readinessProbe:

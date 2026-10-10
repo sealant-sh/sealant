@@ -42,8 +42,11 @@ every process it runs as a user.
 ## Architecture
 
 An image is built for the architecture of the machine that runs it: the worker's Docker daemon, or
-the Kubernetes nodes its builds run on. The architecture is part of the image's plan hash, so an
-image built for `amd64` is never reused on `arm64`, or the other way round.
+the Kubernetes nodes workspaces run on (the `kubernetes.io/arch` the workspace node selector names,
+else the worker's own node's). On Kubernetes, workspace Pods and build Jobs select nodes of that
+architecture. The architecture is part of the image's plan hash, so an image built for `amd64` is
+never reused on `arm64`, or the other way round. A custom base image is built for the platform its
+manifest offers: an `amd64`-only base stays `amd64`, and runs emulated on an `arm64` host.
 
 Fedora, Ubuntu and nix start from multi-architecture images and build natively on both. Docker Hub's
 `archlinux` image is `amd64` only, so on `arm64` an Arch image starts from Arch Linux ARM's rootfs

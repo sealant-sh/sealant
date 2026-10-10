@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { processImagePlatform } from "../../buildkit/platform.js";
 import {
   KubernetesRuntimeConfigError,
+  kubernetesImagePlatform,
   kubernetesRuntimeConfigFromEnv,
   volumeMappingsSchema,
 } from "./config.js";
@@ -138,5 +140,43 @@ describe("kubernetesRuntimeConfigFromEnv", () => {
         SEALANT_DOCKER_REGISTRY_MIRRORS: "http://user:token@docker-mirror:5000",
       }),
     ).toThrow(/SEALANT_DOCKER_REGISTRY_MIRRORS/);
+  });
+});
+
+describe("kubernetesImagePlatform", () => {
+  const pool = { "sealant.sh/pool": "workspaces" };
+
+  it("takes the pinned platform, else the arch the workspace selector names, else the worker's", () => {
+    expect(kubernetesImagePlatform("linux/arm64", pool)).toBe("linux/arm64");
+    expect(kubernetesImagePlatform(undefined, { ...pool, "kubernetes.io/arch": "arm64" })).toBe(
+      "linux/arm64",
+    );
+    expect(kubernetesImagePlatform("linux/arm64", { "kubernetes.io/arch": "arm64" })).toBe(
+      "linux/arm64",
+    );
+    expect(kubernetesImagePlatform(undefined, pool)).toBe(processImagePlatform());
+  });
+
+  it("refuses a pin the selector contradicts, and an arch images are not built for", () => {
+    expect(() => kubernetesImagePlatform("linux/amd64", { "kubernetes.io/arch": "arm64" })).toThrow(
+      KubernetesRuntimeConfigError,
+    );
+    expect(() => kubernetesImagePlatform(undefined, { "kubernetes.io/arch": "s390x" })).toThrow(
+      /s390x/,
+    );
+  });
+
+  it("is resolved into the runtime configuration", () => {
+    expect(
+      kubernetesRuntimeConfigFromEnv({
+        ...base,
+        SEALANT_K8S_WORKSPACE_NODE_SELECTOR: JSON.stringify({ "kubernetes.io/arch": "arm64" }),
+      })?.imagePlatform,
+    ).toBe("linux/arm64");
+    expect(
+      kubernetesRuntimeConfigFromEnv({ ...base, SEALANT_WORKSPACE_IMAGE_PLATFORM: "linux/arm64" })
+        ?.imagePlatform,
+    ).toBe("linux/arm64");
+    expect(kubernetesRuntimeConfigFromEnv(base)?.imagePlatform).toBe(processImagePlatform());
   });
 });

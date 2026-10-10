@@ -5,8 +5,10 @@
  * this file touches the cluster. Docker deployments never construct this — the adapter is only
  * built when the worker is configured for Kubernetes.
  */
+import { workspaceImagePlatformSchema, type WorkspaceImagePlatform } from "@sealant/validators";
 import { z } from "zod";
 
+import { processImagePlatform, workspaceImagePlatformOf } from "../../buildkit/platform.js";
 import { parseDockerRegistryMirrors } from "../docker-registry-mirrors.js";
 
 /** RFC 1123 label: what namespaces, names and most identifiers must satisfy. */
@@ -203,6 +205,12 @@ export const kubernetesRuntimeConfigSchema = z.strictObject({
   topologySpread: z.boolean().default(true),
   /** Pin workspace Pods to a node pool (e.g. `{ "sealant.sh/pool": "workspaces" }`). */
   nodeSelector: z.record(z.string().min(1), z.string()).default({}),
+  /**
+   * What workspace images are built for (`kubernetesImagePlatform`). Workspace Pods and build Jobs
+   * select nodes of its architecture (`kubernetes.io/arch`) beside `nodeSelector`, so an image
+   * never lands on a node that cannot run it. Absent: no architecture is selected.
+   */
+  imagePlatform: workspaceImagePlatformSchema.optional(),
   /** Development/test only: path to a kubeconfig instead of in-cluster configuration. */
   kubeconfigPath: z.string().trim().min(1).optional(),
   /** Stamped on every object; lets operators see which worker created a resource. */
@@ -257,7 +265,36 @@ export interface KubernetesRuntimeEnvLike {
   readonly SEALANT_K8S_DOCKER_CPU_LIMIT?: string | undefined;
   readonly SEALANT_K8S_DOCKER_MEMORY_LIMIT?: string | undefined;
   readonly SEALANT_DOCKER_REGISTRY_MIRRORS?: string | undefined;
+  readonly SEALANT_WORKSPACE_IMAGE_PLATFORM?: WorkspaceImagePlatform | undefined;
 }
+
+/** The node label every kubelet sets to its architecture (`amd64`, `arm64`). */
+export const NODE_ARCH_LABEL = "kubernetes.io/arch";
+
+/**
+ * What workspace images are built for on a cluster: the arch the operator pins
+ * (`SEALANT_WORKSPACE_IMAGE_PLATFORM`), else the one the workspace node selector names, else the
+ * worker's own node's. The worker may run on another pool than workspaces do (an amd64 control
+ * plane beside an arm64 workspace pool), so its own architecture is only the last word.
+ */
+export const kubernetesImagePlatform = (
+  pinned: WorkspaceImagePlatform | undefined,
+  nodeSelector: Readonly<Record<string, string>>,
+): WorkspaceImagePlatform => {
+  const selected = nodeSelector[NODE_ARCH_LABEL];
+  const fromSelector = selected === undefined ? undefined : workspaceImagePlatformOf(selected);
+  if (selected !== undefined && fromSelector === undefined) {
+    throw new KubernetesRuntimeConfigError(
+      `SEALANT_K8S_WORKSPACE_NODE_SELECTOR selects ${NODE_ARCH_LABEL}=${selected}; workspace images are built for amd64 and arm64.`,
+    );
+  }
+  if (pinned !== undefined && fromSelector !== undefined && pinned !== fromSelector) {
+    throw new KubernetesRuntimeConfigError(
+      `SEALANT_WORKSPACE_IMAGE_PLATFORM is ${pinned}, but SEALANT_K8S_WORKSPACE_NODE_SELECTOR selects ${NODE_ARCH_LABEL}=${String(selected)}: workspace Pods would land on nodes that cannot run their images.`,
+    );
+  }
+  return pinned ?? fromSelector ?? processImagePlatform();
+};
 
 export class KubernetesRuntimeConfigError extends Error {
   override readonly name = "KubernetesRuntimeConfigError";
@@ -430,7 +467,13 @@ export const kubernetesRuntimeConfigFromEnv = (
         .join("; ")}`,
     );
   }
-  const config = parsed.data;
+  const config = {
+    ...parsed.data,
+    imagePlatform: kubernetesImagePlatform(
+      env.SEALANT_WORKSPACE_IMAGE_PLATFORM,
+      parsed.data.nodeSelector,
+    ),
+  };
   if (
     config.staging !== undefined &&
     !config.volumeMappings.some((mapping) => mapping.logicalRoot === config.staging?.logicalRoot)

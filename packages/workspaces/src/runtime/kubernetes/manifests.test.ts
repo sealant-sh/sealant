@@ -449,6 +449,31 @@ describe("Kubernetes manifests", () => {
     ]);
   });
 
+  it("puts workspace Pods on nodes of the image's architecture, in the operator's pool", () => {
+    const podWith = (overrides: Partial<KubernetesRuntimeConfig>) =>
+      buildPod({
+        names,
+        config: { ...config, ...overrides },
+        labels,
+        input: cases.gitSource,
+        lowered: { volumes: [], volumeMounts: [] },
+        plainEnv: [],
+        secretEnvKeys: [],
+        launchSecret: undefined,
+        priorityClassName: undefined,
+      });
+    expect(
+      podWith({ imagePlatform: "linux/arm64", nodeSelector: { "sealant.sh/pool": "workspaces" } })
+        .spec?.nodeSelector,
+    ).toEqual({ "sealant.sh/pool": "workspaces", "kubernetes.io/arch": "arm64" });
+    expect(podWith({ imagePlatform: "linux/amd64", nodeSelector: {} }).spec?.nodeSelector).toEqual({
+      "kubernetes.io/arch": "amd64",
+    });
+    expect(
+      podWith({ imagePlatform: undefined, nodeSelector: {} }).spec?.nodeSelector,
+    ).toBeUndefined();
+  });
+
   it("omits runtimeClassName for runc and topology spread when disabled", () => {
     const pod = buildPod({
       names,

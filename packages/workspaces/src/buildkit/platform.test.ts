@@ -139,6 +139,45 @@ describe("the platform a workspace image is built for", () => {
     }
   });
 
+  it("leaves a custom base on the platform its manifest offers", async () => {
+    const commandRunner = vi.fn(async (_command: string, _args: string[]) => ({
+      stdout: "",
+      stderr: "",
+    }));
+    const blueprint = {
+      ...cases.gitSource.blueprint,
+      customization: {
+        ...cases.gitSource.blueprint.customization,
+        defaultShell: "bash" as const,
+        applyDotfiles: false,
+      },
+      target: {
+        ...cases.gitSource.blueprint.target,
+        os: { family: "custom" as const, mode: "require" as const, baseImage: "acme/base:1" },
+      },
+    };
+    const result = await compileWorkspaceBuildSpec({
+      blueprint,
+      platform: "linux/arm64",
+      options: { commandRunner, emitTarball: false },
+    });
+    try {
+      // Asked for no platform, BuildKit takes an amd64-only base's own and labels the image amd64.
+      for (const [, args] of commandRunner.mock.calls) {
+        expect(args).not.toContain("--platform");
+      }
+      // Still keyed by the host's platform: a multi-arch base resolves per host.
+      expect(result.metadata?.planHash).toBe(
+        planWorkspaceImageBuild({ blueprint, platform: "linux/arm64" }).planHash,
+      );
+      expect(result.metadata?.planHash).not.toBe(
+        planWorkspaceImageBuild({ blueprint, platform: "linux/amd64" }).planHash,
+      );
+    } finally {
+      await removeBuildContext(result.buildkit.spec.contextDirectory);
+    }
+  });
+
   it("verifies the rootfs, drops the board's kernel and firmware, and locks its default accounts", () => {
     const base = renderArchlinuxArmBase("fedora:41");
     expect(base).toMatch(/^FROM fedora:41 AS archlinuxarm$/m);
@@ -148,7 +187,12 @@ describe("the platform a workspace image is built for", () => {
     expect(base).toMatch(/^FROM scratch$/m);
     expect(base).toContain("pacman-key --populate archlinuxarm");
     expect(base).toContain("linux-aarch64|linux-firmware(-.+)?|mkinitcpio(-busybox)?");
-    expect(base).toContain("userdel alarm && rm -rf /home/alarm && usermod -p '*' root");
+    // Neither a tarball without the board packages nor one without `alarm` fails the build.
+    expect(base).toContain(`|| true)"`);
+    expect(base).toContain('if [ -n "$board" ]; then pacman -Rns --noconfirm $board; fi');
+    expect(base).toContain(
+      "if id alarm >/dev/null 2>&1; then userdel alarm; fi; rm -rf /home/alarm; usermod -p '*' root",
+    );
     expect(ARCHLINUXARM_BUILDER_KEY).toMatch(/^-----BEGIN PGP PUBLIC KEY BLOCK-----\n/);
     expect(ARCHLINUXARM_BUILDER_KEY.trimEnd()).toMatch(/\n-----END PGP PUBLIC KEY BLOCK-----$/);
   });

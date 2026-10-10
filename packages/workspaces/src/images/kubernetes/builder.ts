@@ -20,18 +20,24 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
-import type { V1ConfigMap, V1Job, V1Secret } from "@kubernetes/client-node";
+import type { V1ConfigMap, V1Job, V1Pod, V1Secret } from "@kubernetes/client-node";
 import type { NewWorkspace, WorkspaceBuild, WorkspaceImagePlatform } from "@sealant/validators";
 
 import {
   ARCHLINUXARM_BUILDER_KEY,
   ARCHLINUXARM_KEY_FILE,
+  buildPlatformOf,
+  imagePlatformArchitecture,
   planWorkspaceImageBuild,
   usesArchlinuxArm,
   type PlannedWorkspaceImageBuild,
 } from "../../buildkit/index.js";
 import { buildRegistryImageReference, type RegistryClient } from "../../registry/index.js";
-import { LABEL_COMPONENT, LABEL_MANAGED_BY } from "../../runtime/kubernetes/config.js";
+import {
+  LABEL_COMPONENT,
+  LABEL_MANAGED_BY,
+  NODE_ARCH_LABEL,
+} from "../../runtime/kubernetes/config.js";
 import type {
   BuildAndPublishInput,
   BuildAndPublishResult,
@@ -50,12 +56,21 @@ const BUILD_SECRETS_MOUNT = "/run/secrets/build";
 const DOCKER_CONFIG_MOUNT = "/run/secrets/docker";
 const CONTAINER_NAME = "buildkit";
 const POLL_INTERVAL_MS = 2000;
+/**
+ * How long a build Pod may stay unschedulable before the build fails. Long enough for a cluster
+ * autoscaler to bring up a node of the pool; far shorter than the build's own bound, which a Pod
+ * no node can take would otherwise wait out.
+ */
+const UNSCHEDULABLE_GRACE_MS = 5 * 60_000;
 const LOG_TAIL_LINES = 60;
 
 export interface KubernetesWorkspaceImageBuilderOptions {
   readonly config: KubernetesBuildConfig;
   /** What images are built for: the architecture of the nodes workspaces run on. */
   readonly platform: WorkspaceImagePlatform;
+  /** The workspace Pods' node selector: builds run in the same pool. */
+  readonly nodeSelector?: Readonly<Record<string, string>>;
+  readonly unschedulableGraceMs?: number;
   readonly api: KubernetesBuildApi;
   readonly registryClient: RegistryClient;
   readonly pollIntervalMs?: number;
@@ -100,6 +115,8 @@ export interface BuildManifestsInput {
   /** Build secret ids the Containerfile mounts; contents live in the build Secret. */
   readonly secretIds: readonly string[];
   readonly hasDockerConfig: boolean;
+  /** The workspace Pods' node selector; the image's architecture is added to it. */
+  readonly nodeSelector?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -148,8 +165,10 @@ export const buildctlArgs = (input: BuildManifestsInput): readonly string[] => {
     `dockerfile=${CONTEXT_MOUNT}`,
     "--opt",
     "filename=Containerfile",
-    "--opt",
-    `platform=${input.planned.platform}`,
+    // No platform for a custom base: BuildKit follows the platform its manifest offers.
+    ...(buildPlatformOf(input.planned) === undefined
+      ? []
+      : ["--opt", `platform=${input.planned.platform}`]),
     ...input.secretIds.flatMap((id) => ["--secret", `id=${id},src=${BUILD_SECRETS_MOUNT}/${id}`]),
     "--output",
     output,
@@ -175,8 +194,9 @@ export const buildJob = (input: BuildManifestsInput): V1Job => ({
       },
       spec: {
         restartPolicy: "Never",
-        // On a node of the image's architecture: anywhere else BuildKit would emulate every step.
-        nodeSelector: { "kubernetes.io/arch": input.planned.platform.slice("linux/".length) },
+        // In the workspaces' pool, on a node of the image's architecture: anywhere else BuildKit
+        // would emulate every step.
+        nodeSelector: buildJobNodeSelector(input.nodeSelector ?? {}, input.planned.platform),
         serviceAccountName: input.config.serviceAccount,
         automountServiceAccountToken: false,
         enableServiceLinks: false,
@@ -271,6 +291,28 @@ export const buildJob = (input: BuildManifestsInput): V1Job => ({
 
 const b64 = (value: string | Buffer): string => Buffer.from(value).toString("base64");
 
+/** The workspace Pods' node selector, with the image's architecture. */
+export const buildJobNodeSelector = (
+  nodeSelector: Readonly<Record<string, string>>,
+  platform: WorkspaceImagePlatform,
+): Record<string, string> => ({
+  ...nodeSelector,
+  [NODE_ARCH_LABEL]: imagePlatformArchitecture(platform),
+});
+
+/** The scheduler's word when no Pod of the Job can be placed; undefined while one can. */
+const unschedulableCondition = (pods: readonly V1Pod[]): string | undefined => {
+  const condition = pods
+    .flatMap((pod) => pod.status?.conditions ?? [])
+    .find(
+      (candidate) =>
+        candidate.type === "PodScheduled" &&
+        candidate.status === "False" &&
+        candidate.reason === "Unschedulable",
+    );
+  return condition === undefined ? undefined : (condition.message ?? "Unschedulable");
+};
+
 export const dockerConfigJson = (
   pushRegistry: string,
   credentials: { readonly username: string; readonly password: string },
@@ -298,6 +340,8 @@ const jobStatus = (job: V1Job | undefined): "succeeded" | "failed" | "running" |
 export class KubernetesWorkspaceImageBuilder implements WorkspaceImageBuilder {
   readonly #config: KubernetesBuildConfig;
   readonly #platform: WorkspaceImagePlatform;
+  readonly #nodeSelector: Readonly<Record<string, string>>;
+  readonly #unschedulableGraceMs: number;
   readonly #api: KubernetesBuildApi;
   readonly #registry: RegistryClient;
   readonly #pollIntervalMs: number;
@@ -307,6 +351,8 @@ export class KubernetesWorkspaceImageBuilder implements WorkspaceImageBuilder {
   constructor(options: KubernetesWorkspaceImageBuilderOptions) {
     this.#config = options.config;
     this.#platform = options.platform;
+    this.#nodeSelector = options.nodeSelector ?? {};
+    this.#unschedulableGraceMs = options.unschedulableGraceMs ?? UNSCHEDULABLE_GRACE_MS;
     this.#api = options.api;
     this.#registry = options.registryClient;
     this.#pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
@@ -348,6 +394,7 @@ export class KubernetesWorkspaceImageBuilder implements WorkspaceImageBuilder {
       imageReference,
       secretIds,
       hasDockerConfig,
+      nodeSelector: this.#nodeSelector,
     };
 
     const cleanupInputs = async (): Promise<void> => {
@@ -463,6 +510,7 @@ export class KubernetesWorkspaceImageBuilder implements WorkspaceImageBuilder {
 
   async #awaitJob(name: string): Promise<void> {
     const deadline = this.#now() + this.#config.timeoutMs;
+    let unschedulableSince: number | undefined;
     for (;;) {
       const job = await this.#api.getJob(name);
       const status = jobStatus(job);
@@ -479,6 +527,21 @@ export class KubernetesWorkspaceImageBuilder implements WorkspaceImageBuilder {
             tail.length === 0 ? "" : `\n--- buildkit log tail ---\n${tail}`
           }`,
         );
+      }
+      const unschedulable = unschedulableCondition(await this.#api.listPods(`job-name=${name}`));
+      if (unschedulable === undefined) {
+        unschedulableSince = undefined;
+      } else {
+        unschedulableSince ??= this.#now();
+        if (this.#now() - unschedulableSince >= this.#unschedulableGraceMs) {
+          await this.#api.deleteJob(name);
+          const selector = Object.entries(buildJobNodeSelector(this.#nodeSelector, this.#platform))
+            .map(([key, value]) => `${key}=${value}`)
+            .join(", ");
+          throw new KubernetesImageBuildError(
+            `Build Job ${name} could not be scheduled for ${String(Math.round(this.#unschedulableGraceMs / 60_000))} min: no node it can run on has ${selector}. ${unschedulable}`,
+          );
+        }
       }
       await sleep(this.#pollIntervalMs);
     }

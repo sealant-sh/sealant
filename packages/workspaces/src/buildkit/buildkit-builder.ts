@@ -392,6 +392,18 @@ export const usesArchlinuxArm = (
   platform: WorkspaceImagePlatform,
 ): boolean => osFamily === "arch" && platform === "linux/arm64";
 
+/**
+ * The platform a build asks BuildKit for: the plan's, but none for a custom base. Asked for none,
+ * BuildKit builds for the platform the base's manifest offers and labels the image with it, so an
+ * amd64-only base stays amd64 (and runs emulated on arm64) instead of being labelled arm64 while
+ * it holds amd64 binaries.
+ */
+export const buildPlatformOf = (planned: {
+  readonly osFamily: BuildkitTargetOsFamily;
+  readonly platform: WorkspaceImagePlatform;
+}): WorkspaceImagePlatform | undefined =>
+  planned.osFamily === "custom" ? undefined : planned.platform;
+
 /** The image's first stages: its base image, or the Arch Linux ARM rootfs. */
 const renderBase = (plan: ResolvedImagePlan, platform: WorkspaceImagePlatform): string =>
   usesArchlinuxArm(plan.osFamily, platform)
@@ -1652,8 +1664,7 @@ const buildImageTarball = async (
     spec.containerfilePath,
     ...spec.secrets.flatMap((secret) => ["--secret", `id=${secret.id},src=${secret.sourceRef}`]),
     ...Object.entries(spec.buildArgs).flatMap(([key, value]) => ["--build-arg", `${key}=${value}`]),
-    "--platform",
-    platform,
+    ...platformArgs(buildPlatformOf({ osFamily: plan.osFamily, platform })),
     ...cacheArgs,
     ...(build.planHash === undefined ? [] : ["--label", `${PLAN_HASH_LABEL}=${build.planHash}`]),
     "--tag",
@@ -1796,7 +1807,11 @@ export const compileWorkspaceBuildSpec = async (input: {
         planHash: planned.planHash,
       },
     );
-    imageProbe = await readImageProbe(buildContext.spec.imageReference, commandRunner, platform);
+    imageProbe = await readImageProbe(
+      buildContext.spec.imageReference,
+      commandRunner,
+      buildPlatformOf(planned),
+    );
   } catch (error) {
     // A failed build leaves nothing worth keeping; the caller never sees the context path.
     await removeBuildContext(buildContext.contextDirectory);
@@ -1860,7 +1875,7 @@ export const compileWorkspaceBuildSpec = async (input: {
 const readImageProbe = async (
   imageReference: string,
   commandRunner: BuildkitCommandRunner,
-  platform: WorkspaceImagePlatform,
+  platform: WorkspaceImagePlatform | undefined,
 ): Promise<{
   readonly probe?: WorkspaceImageProbe;
   readonly note?: string;
@@ -1871,8 +1886,7 @@ const readImageProbe = async (
       "--rm",
       "--pull=never",
       "--network=none",
-      "--platform",
-      platform,
+      ...platformArgs(platform),
       "--entrypoint",
       "/bin/sh",
       imageReference,
@@ -1888,6 +1902,9 @@ const readImageProbe = async (
   }
 };
 
+const platformArgs = (platform: WorkspaceImagePlatform | undefined): string[] =>
+  platform === undefined ? [] : ["--platform", platform];
+
 /** `10 min`, `90 s`. */
 const formatDuration = (ms: number): string =>
   ms >= 60_000 && ms % 60_000 === 0
@@ -1900,7 +1917,7 @@ const formatDuration = (ms: number): string =>
  */
 export const readWorkspaceImageProbe = (
   imageReference: string,
-  platform: WorkspaceImagePlatform,
+  platform: WorkspaceImagePlatform | undefined,
   commandRunner: BuildkitCommandRunner = runBuildkitCommand,
 ) => readImageProbe(imageReference, commandRunner, platform);
 

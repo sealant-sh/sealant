@@ -261,8 +261,14 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       ? undefined
       : new KubernetesWorkspaceImageBuilder({
           config: kubernetesBuildConfig,
-          // This worker's own node: workspaces run on the cluster it runs on.
-          platform: env.SEALANT_WORKSPACE_IMAGE_PLATFORM ?? processImagePlatform(),
+          // What the workspace Pods run on (kubernetesImagePlatform), in the same node pool.
+          platform:
+            kubernetesConfig?.imagePlatform ??
+            env.SEALANT_WORKSPACE_IMAGE_PLATFORM ??
+            processImagePlatform(),
+          ...(kubernetesConfig === undefined
+            ? {}
+            : { nodeSelector: kubernetesConfig.nodeSelector }),
           api: createLiveKubernetesBuildApi({
             namespace: kubernetesBuildConfig.namespace,
             ...(kubernetesBuildConfig.kubeconfigPath === undefined
