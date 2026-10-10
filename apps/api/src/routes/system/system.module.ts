@@ -31,6 +31,7 @@ export const getIndex = () => {
       captureOwnerMap: true,
       workspaceSshUser: true,
       personBinding: true,
+      sshKeyRemovalEndsConnections: true,
     },
   } satisfies SystemIndexResponse);
 };

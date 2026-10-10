@@ -533,6 +533,7 @@ describe("the control plane's features", () => {
       captureOwnerMap: true,
       workspaceSshUser: true,
       personBinding: true,
+      sshKeyRemovalEndsConnections: true,
     });
   });
 });

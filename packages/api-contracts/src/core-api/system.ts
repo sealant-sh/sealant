@@ -44,6 +44,12 @@ export const systemIndexResponseSchema = Schema.Struct({
       workspaceSshUser: Schema.optional(Schema.Boolean),
       /** `POST /v1/users/:id/person`: a user's person bound once (what `sshAsOwner` checks). */
       personBinding: Schema.optional(Schema.Boolean),
+      /**
+       * Removing an SSH key ends the gateway connections opened with it: none opens a new channel
+       * or forward once it is removed, and each ends within a minute (the gateway's re-check).
+       * From an older control plane they stay open until the workspace stops.
+       */
+      sshKeyRemovalEndsConnections: Schema.optional(Schema.Boolean),
     }),
   ),
 });
