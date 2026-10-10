@@ -1471,6 +1471,11 @@ export interface SealantFeatures {
   readonly workspaceSshUser: boolean;
   /** `users.bindPerson()`: a user's person, bound once. */
   readonly personBinding: boolean;
+  /**
+   * Removing an SSH key (`sshKeys.remove()`) ends the gateway connections opened with it, within
+   * a minute; from an older control plane they stay open until the workspace stops.
+   */
+  readonly sshKeyRemovalEndsConnections: boolean;
 }
 
 /** A published workspace image. */

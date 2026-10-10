@@ -67,6 +67,10 @@ sshGateway:
     type: ClusterIP # LoadBalancer to expose; no public exposure by default
     annotations: {}
     port: 2222
+    # For a LoadBalancer or NodePort. `Local` keeps each client's own address, which the gateway's
+    # limits before login count per source; `Cluster` SNATs it to a node's, so every client would
+    # share one budget.
+    externalTrafficPolicy: Local
   hostKeyStorage: 1Gi
   hostKeyStorageClassName: "" # empty = the cluster default StorageClass
 

@@ -183,4 +183,34 @@ describe("service principal middleware", () => {
       retryAfterSeconds: 60,
     });
   });
+
+  it("budgets the gateway's key lookups apart, so spending them leaves connected people's checks", async () => {
+    const gate = servicePrincipalMiddleware(makeServicePrincipals("k"), "gateway-secret", {
+      window: makeRateWindow(),
+      requestsPerMinute: 2,
+      now: () => 1_000,
+    });
+    const send = (url: string, method: string) =>
+      Effect.runPromise(
+        gate(ok).pipe(
+          Effect.provideService(
+            HttpServerRequest.HttpServerRequest,
+            HttpServerRequest.fromWeb(
+              new Request(`http://localhost${url}`, {
+                method,
+                headers: { "x-sealant-gateway-token": "gateway-secret" },
+              }),
+            ),
+          ),
+          Effect.map((response) => response.status),
+        ),
+      );
+    const lookup = () => send("/v1/ssh-keys/resolve-principal", "POST");
+    expect(await lookup()).toBe(200);
+    expect(await lookup()).toBe(200);
+    expect(await lookup()).toBe(429);
+    // A login flood spent the lookups; a connection already in still opens its channels.
+    expect(await send("/v1/workspaces/w/ssh-target", "GET")).toBe(200);
+    expect(await send("/v1/runs", "POST")).toBe(200);
+  });
 });

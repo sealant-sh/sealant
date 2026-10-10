@@ -246,6 +246,11 @@ beforeAll(async () => {
           endpoint: `docker://${containerId}`,
         },
         ...(oldApi ? {} : { sessionUser: workspaceUser ?? null }),
+        // Every key here stays registered: the key a connection logged in with is echoed as
+        // checked (`gateway-limits.test.ts` covers a removed one).
+        ...(typeof request.headers["x-sealant-ssh-key-fingerprint"] === "string"
+          ? { sshKeyFingerprint: request.headers["x-sealant-ssh-key-fingerprint"] }
+          : {}),
       });
       return;
     }

@@ -70,6 +70,12 @@ export const workspaceSshTargetSchema = Schema.Struct({
    * (`x-sealant-gateway-ssh-user: 1`); a workspace with a user refuses any other gateway.
    */
   sessionUser: Schema.NullOr(NonEmptyString),
+  /**
+   * The key fingerprint the gateway named in `x-sealant-ssh-key-fingerprint`, echoed once the API
+   * found it still registered to the principal. Absent when the gateway named none. A gateway that
+   * named one refuses a target without it (an older API, which never checked the key).
+   */
+  sshKeyFingerprint: Schema.optional(NonEmptyString),
 });
 export type WorkspaceSshTarget = typeof workspaceSshTargetSchema.Type;
 
@@ -1285,6 +1291,10 @@ export const workspaceGatewayHeadersSchema = Schema.Struct({
   // `1` from a gateway that runs a workspace's SSH sessions as its `sshUser`. A workspace with a
   // user answers no target to a gateway without it, which would run the session as root.
   "x-sealant-gateway-ssh-user": Schema.optional(NonEmptyString),
+  // The fingerprint (`SHA256:…`) of the registered key the client logged in with. When it is
+  // named, the API answers a target only while that key is still registered to the principal, so
+  // removing a key ends what connections opened with it can still open.
+  "x-sealant-ssh-key-fingerprint": Schema.optional(NonEmptyString),
 });
 export type WorkspaceGatewayHeaders = typeof workspaceGatewayHeadersSchema.Type;
 
@@ -1330,6 +1340,20 @@ export class WorkspaceDockerServiceUnsupportedError extends Schema.TaggedErrorCl
 
 export class WorkspaceUnauthorizedError extends Schema.TaggedErrorClass<WorkspaceUnauthorizedError>()(
   "WorkspaceUnauthorizedError",
+  {
+    message: Schema.String,
+  },
+  { httpApiStatus: 401 },
+) {}
+
+/**
+ * The SSH key the gateway named (`x-sealant-ssh-key-fingerprint`) is no longer registered to the
+ * principal: removed, or registered since to someone else. Its own tag, so the gateway ends the
+ * connections opened with the key on this refusal alone, never on another 401 (a gateway token
+ * mismatch while the API and the gateway roll).
+ */
+export class WorkspaceSshKeyNoLongerRegisteredError extends Schema.TaggedErrorClass<WorkspaceSshKeyNoLongerRegisteredError>()(
+  "WorkspaceSshKeyNoLongerRegisteredError",
   {
     message: Schema.String,
   },
@@ -1754,6 +1778,7 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
       success: workspaceSshTargetSchema,
       error: [
         WorkspaceUnauthorizedError,
+        WorkspaceSshKeyNoLongerRegisteredError,
         WorkspaceNotFoundError,
         WorkspaceConflictError,
         WorkspaceServiceUnavailableError,

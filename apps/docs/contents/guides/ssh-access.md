@@ -107,6 +107,15 @@ With that in place, `ssh ws-<workspace-id>` and the editor buttons both resolve 
 - **Changed port or host.** The `2222` / `localhost` defaults come from `SEALANT_SSH_PORT` and
   `SEALANT_SSH_HOST`. If your install overrides them, every command and config entry above uses your
   values instead.
+- **Removing a key ends its connections.** A connection opened with a key you remove gets no new
+  shell, command, file transfer or port forward, and the gateway ends it at once when it asks, or
+  within `SSH_GATEWAY_KEY_RECHECK_SECONDS` (60 by default) when it asks nothing.
+- **Limits before login.** The gateway drops a connection that has not logged in within 60 seconds
+  or after 6 refused attempts, and holds each source (an IPv4 address or an IPv6 /64) to 10
+  connections not yet logged in and 60 lookups a minute of keys nobody holds. The limits need the
+  gateway to see each client's own address: behind a proxy, rootless Docker, Docker Desktop or
+  docker-proxy over IPv6, every client counts as one source. See the gateway knobs in
+  [Environment variables](/docs/reference/environment-variables).
 - **The workspace must be up.** Principal resolution only authorizes a target whose runtime is
   `running` or `ready`. A queued, building, or failed workspace refuses SSH.
 
