@@ -302,7 +302,7 @@ describe("opening a session's leader", () => {
     ]);
   });
 
-  it("leaves both open when the daemon cannot say, and a close finds the leader and stops it", async () => {
+  it("leaves both open when the daemon cannot say; a close then waits for it, and stops the leader once it can", async () => {
     let reachable = false;
     const h = harness({
       open: () => Effect.fail(transportLost()),
@@ -315,8 +315,16 @@ describe("opening a session's leader", () => {
     expect(h.recorded.settled).toEqual([]);
     expect(h.recorded.row).toMatchObject({ status: "starting", daemonSessionId: null });
 
+    // A close the daemon cannot answer changes nothing and says so: the leader may run.
+    const sessionId = h.recorded.row?.id ?? "";
+    const unanswered = await close(sessionId, h);
+    expect(JSON.stringify(unanswered)).toContain("whether its program runs is unknown");
+    expect(h.recorded.settled).toEqual([]);
+    expect(h.recorded.closed).toEqual([]);
+    expect(h.recorded.row).toMatchObject({ status: "starting", daemonSessionId: null });
+
     reachable = true;
-    const closed = await close(h.recorded.row?.id ?? "", h);
+    const closed = await close(sessionId, h);
 
     expect(Exit.isSuccess(closed)).toBe(true);
     expect(h.recorded.closed).toEqual([LEADER.sessionId]);

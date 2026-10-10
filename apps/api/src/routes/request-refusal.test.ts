@@ -36,8 +36,12 @@ const session = (payload: CreateSessionRequest): SessionWire => ({
   createdAt: new Date(0).toISOString(),
 });
 
+/** The program that makes the handler fail as the server's fault: parsing its own data. */
+const HANDLER_SYNTAX_ERROR = "handler-syntax-error";
+
 const createSession = ({ payload }: { readonly payload: CreateSessionRequest }) =>
   Effect.sync(() => {
+    if (payload.argv[0] === HANDLER_SYNTAX_ERROR) JSON.parse("{ server data");
     opened.push(payload);
     return session(payload);
   });
@@ -317,6 +321,22 @@ describe("a request a control plane route cannot decode", () => {
     expect(response.status).toBe(400);
     expect(response.text).toBe("");
     expect(server.observed.join("\n")).toContain(MARKER);
+  });
+});
+
+describe("a valid request whose handler fails", () => {
+  it("stays the server's failure (500, reported), even when the failure is a SyntaxError", async () => {
+    const server = serve(RequestRefusalLive);
+    disposers.push(server.dispose);
+    const response = await server.send(
+      "POST",
+      "/v1/sessions",
+      JSON.stringify({ ...ids, argv: [HANDLER_SYNTAX_ERROR] }),
+    );
+    expect(response.status).toBe(500);
+    expect(response.text).not.toContain("RequestRefusedError");
+    const reported = server.observed.filter((line) => line.startsWith("report "));
+    expect(reported.join("\n")).toContain("SyntaxError");
   });
 });
 

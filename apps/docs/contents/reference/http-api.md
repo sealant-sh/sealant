@@ -140,13 +140,20 @@ the wrong type, a refused `argv`) answers `400` `RequestRefusedError` whose `mes
 the request is wrong and what was expected (`argv[1] must be a string`,
 `commands[0].args[1] must be a string`, `argv[1] contains a NUL byte`), never a value it held; a key
 the caller chose, such as an `env` name, reads `[…]`. The server's request log, its error reporters
-and the request's tracing span carry the refusal, not the request. A request's URL, query included,
-is still recorded on its tracing span, so nothing secret belongs in a query string.
+and the request's tracing span carry the refusal, not the request. A handler's own failure on a
+request that decoded stays a `500`.
+
+Request spans record each request's URL. The terminal attach, the output stream and the port forward
+take their bearer as `?token=`, because browser WebSocket and EventSource clients cannot set
+headers. Every credential query parameter (`token`, `access_token`, `ticket`, `key`, `signature` and
+the like) and any `user:password@` reads `REDACTED` in a span's URL attributes, and the request log
+records the path without its query.
 
 If the connection to `sealantd` drops before it answers an open, Sealant asks it again whether the
 session's program started. A program it reports is the session's leader. If it reports none, the
 session and its run are marked failed. If it cannot be asked, both stay open, and closing the
-session finds the program and stops it.
+session finds the program and stops it. A close that cannot reach `sealantd` either changes nothing
+and answers `502`, saying whether the program runs is unknown, so it can be retried.
 
 Upgrade the control plane before the SDK. A control plane from before this rule refuses an empty or
 untrimmed argument with an empty `400` and logs the argument; the SDK says so when it gets that

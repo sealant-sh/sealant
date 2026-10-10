@@ -956,6 +956,13 @@ export const closeSession = (input: {
     let current = session;
     if (target !== undefined && current.daemonSessionId === null) {
       const found = yield* findOpenedLeader(target, current.runId);
+      // The daemon cannot say whether a leader runs: nothing is settled, so the session keeps
+      // recording and a later close can still find and stop it.
+      if (found.kind === "unknown") {
+        return yield* new SessionBadGatewayError({
+          message: `Could not close session ${current.id}: whether its program runs is unknown (${found.reason}). Nothing was changed; close it again.`,
+        });
+      }
       if (found.kind === "found") {
         const sessions = yield* WorkspaceSessionRepo;
         const recorded = yield* withInternalError(

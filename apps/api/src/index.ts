@@ -26,6 +26,7 @@ import {
   servicePrincipalMiddleware,
   servicePrincipals,
 } from "./services/service-principals.js";
+import { UrlCredentialRedactionLive } from "./services/url-credential-redaction.js";
 
 /**
  * Parse `CORS_ALLOWED_ORIGINS` from env into a normalized set.
@@ -286,9 +287,14 @@ const authGate = servicePrincipalMiddleware(
   },
 );
 
+// Request spans record URLs, and the browser routes take their bearer as `?token=`: every span's URL
+// attributes are redacted (services/url-credential-redaction.ts).
 const serverLayer = HttpRouter.serve(appLayer, {
   middleware: (app) => corsMiddleware(authGate(app)),
-}).pipe(Layer.provide(NodeHttpServer.layer(createServer, { port: env.PORT })));
+}).pipe(
+  Layer.provide(NodeHttpServer.layer(createServer, { port: env.PORT })),
+  Layer.provide(UrlCredentialRedactionLive),
+);
 
 /**
  * Startup diagnostics for operational visibility.

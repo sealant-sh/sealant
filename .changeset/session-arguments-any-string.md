@@ -23,14 +23,21 @@ it sends.
   `RequestRefusal` middleware is applied to the whole `ControlPlaneAPI`, so every route has it.
   `describeRequestIssue` words the reason. Before this, such a request got an empty `400`, and the
   server's request log, error reporters and tracing span quoted the rejected input: a session's
-  arguments, an exec's command, a run's command.
+  arguments, an exec's command, a run's command. A handler's own failure on a request that decoded
+  stays a `500`.
+- A credential in a request's URL never reaches a tracing span. The terminal attach, the output
+  stream and the port forward take their bearer as `?token=`, and every request span recorded it in
+  `url.full` and `url.query`. Every credential query parameter (`token`, `access_token`, `ticket`,
+  `key`, `signature` and the like) and any `user:password@` now reads `REDACTED` in a span's URL
+  attributes, for incoming and outgoing requests. `?token=` is still accepted.
 - In the SDK, `sessions.open(argv)` throws `SealantError` `invalid_argv` with the same reason before
   it sends a refused argv, surfaces a control plane's `RequestRefusedError` with its reason, and
   explains an older control plane's empty `400`.
 - If `sealantd` refuses to start the program, the session and its run are now marked failed. Before
   this, both were left running. If the answer to an open is lost instead, Sealant asks `sealantd`
   again: a program it reports becomes the session's leader, and one it cannot report about leaves
-  the session open for a close to find and stop.
+  the session open for a close to find and stop. A close that cannot reach `sealantd` changes
+  nothing and answers `502`, so it can be retried.
 - Upgrade the control plane before the SDK. An older control plane refuses an empty or untrimmed
   argument with an empty `400` and logs the argument. An older SDK refuses such an argument itself.
 - The arguments still reach `sealantd` as an argv array, never a shell string, and Sealant still
