@@ -607,9 +607,12 @@ export const workerRuntimeEnvSchema = z.object({
   // How long a planned Docker stop waits after SIGTERM (`docker stop -t`) before the kill, so
   // sealantd's final capture flush can ship.
   SEALANT_DOCKER_STOP_GRACE_SECONDS: z.coerce.number().int().min(1).default(120),
-  // The same for a capture-sourced workspace container, set as its StopTimeout at create so a
-  // plain `docker stop` (operator, host restart) also waits: its final flush ships until complete.
+  // The same for a capture-sourced workspace container: its final flush ships until complete.
   SEALANT_DOCKER_CAPTURE_STOP_GRACE_SECONDS: z.coerce.number().int().min(1).default(3600),
+  // A workspace container's own StopTimeout: what a stop Sealant did not plan gives it (a plain
+  // `docker stop`, dockerd's shutdown and restore). Kept inside systemd's 90 s stop of
+  // docker.service; a killed capture workspace keeps its staging and is recovered.
+  SEALANT_DOCKER_CONTAINER_STOP_TIMEOUT_SECONDS: z.coerce.number().int().min(1).default(60),
   // Image retention: how often the worker deletes workspace images no live workspace launched from
   // and no retained plan still needs (plus stale build scratch under the OS temp dir). `false`
   // leaves the store alone for operators who manage images themselves.

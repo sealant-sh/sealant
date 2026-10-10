@@ -104,10 +104,16 @@ the resulting exit as the planned stop, not a failure; a stop that fails after i
 recorded (who, when) and every stop path honours it: the runtime is terminated without a drain and
 the drain reads `discarded`.
 
-Docker workspace containers carry their own stop timeout (`--stop-timeout`:
-`SEALANT_DOCKER_STOP_GRACE_SECONDS`, or `SEALANT_DOCKER_CAPTURE_STOP_GRACE_SECONDS` for a capture
-workspace), so any `docker stop` waits for sealantd's final flush; raise the Docker daemon's
-`shutdown-timeout` on hosts that run capture workspaces, or a daemon shutdown still cuts it off.
+A planned stop of a Docker workspace waits `SEALANT_DOCKER_STOP_GRACE_SECONDS`, or
+`SEALANT_DOCKER_CAPTURE_STOP_GRACE_SECONDS` for a capture workspace, for sealantd's final flush
+(`docker stop -t`, from the container's `sealant.stop-grace` label). The container's own stop
+timeout (`--stop-timeout`, `SEALANT_DOCKER_CONTAINER_STOP_TIMEOUT_SECONDS`, 60 s) is what any other
+stop gives it: a plain `docker stop`, and dockerd's own shutdown and restore, which honor each
+container's stop timeout over the daemon's `shutdown-timeout`. It stays inside systemd's 90 s stop
+of `docker.service`: an hour-long one made `systemctl stop docker` time out, SIGKILL dockerd and
+leave the workspace running, and the next start waited in "Restoring containers" for the rest of the
+hour before it started anything. A capture workspace killed at the bound keeps its staging on its
+disk; the container is kept and recovered.
 
 Runtime launch defaults to Docker via `DEFAULT_RUNTIME_ADAPTER=docker` when the normalized workspace
 spec leaves `target.runtime.family` as `auto`.

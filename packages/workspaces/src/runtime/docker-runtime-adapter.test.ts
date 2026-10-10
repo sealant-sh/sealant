@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { DockerRuntimeAdapter } from "./docker-runtime-adapter.js";
+import { DockerRuntimeAdapter, STOP_GRACE_LABEL } from "./docker-runtime-adapter.js";
 import { LaunchRetainedError } from "./launch-retention.js";
 import {
   isRemovalRefusal,
@@ -414,15 +414,17 @@ describe("DockerRuntimeAdapter", () => {
     const args = firstCall?.[1];
     expect(command).toBe("docker");
     expect(args).toBeDefined();
-    expect(args?.slice(0, 12)).toEqual([
+    expect(args?.slice(0, 14)).toEqual([
       "run",
       "-d",
       "--runtime",
       "runc",
       "--name",
       expect.any(String),
+      "--label",
+      "sealant.stop-grace=120",
       "--stop-timeout",
-      "120",
+      "60",
       "--add-host",
       "host.docker.internal:host-gateway",
       "-w",
@@ -2382,12 +2384,18 @@ describe("DockerRuntimeAdapter", () => {
     expect(calls.some((args) => args[0] === "stop")).toBe(false);
   });
 
-  it("creates every container with its own stop timeout, far longer for a capture workspace", async () => {
-    // A plain `docker stop` (operator, host restart, Docker Desktop quitting) otherwise gives the
-    // container Docker's 10 s: SIGKILL mid-flush lost a 300 MB node_modules file end to end.
+  it("creates every container with a bounded stop timeout and its planned grace as a label", async () => {
+    // dockerd's own shutdown and restore give a container its StopTimeout, not their
+    // `shutdown-timeout`: an hour of it outlasted systemd's 90 s stop of docker.service, which
+    // SIGKILLed dockerd, and the next start waited for the orphaned workspace in "Restoring
+    // containers". The planned stop's long grace rides the label instead.
     const runArgs = async (
       overrides: Record<string, unknown>,
-      options: { stopGraceSeconds?: number; captureStopGraceSeconds?: number } = {},
+      options: {
+        stopGraceSeconds?: number;
+        captureStopGraceSeconds?: number;
+        containerStopTimeoutSeconds?: number;
+      } = {},
     ) => {
       const commandRunner = vi.fn(async (_command: string, args: Array<string>) =>
         args[0] === "run"
@@ -2400,7 +2408,10 @@ describe("DockerRuntimeAdapter", () => {
         ...options,
       }).launch(createLaunchInput(overrides));
       const run = commandRunner.mock.calls.find((call) => call[1][0] === "run")?.[1] ?? [];
-      return run[run.indexOf("--stop-timeout") + 1];
+      return {
+        stopTimeout: run[run.indexOf("--stop-timeout") + 1],
+        label: run.find((arg) => arg.startsWith(`${STOP_GRACE_LABEL}=`)),
+      };
     };
     const capture = {
       sources: {
@@ -2412,31 +2423,51 @@ describe("DockerRuntimeAdapter", () => {
       },
     };
 
-    expect(await runArgs({})).toBe("120");
-    expect(await runArgs(capture)).toBe("3600");
-    expect(await runArgs(capture, { captureStopGraceSeconds: 7200 })).toBe("7200");
-    expect(await runArgs({}, { stopGraceSeconds: 300 })).toBe("300");
+    expect(await runArgs({})).toEqual({ stopTimeout: "60", label: "sealant.stop-grace=120" });
+    expect(await runArgs(capture)).toEqual({ stopTimeout: "60", label: "sealant.stop-grace=3600" });
+    expect(await runArgs(capture, { captureStopGraceSeconds: 7200 })).toEqual({
+      stopTimeout: "60",
+      label: "sealant.stop-grace=7200",
+    });
+    expect(await runArgs({}, { stopGraceSeconds: 300 })).toEqual({
+      stopTimeout: "60",
+      label: "sealant.stop-grace=300",
+    });
+    expect(await runArgs(capture, { containerStopTimeoutSeconds: 80 })).toEqual({
+      stopTimeout: "80",
+      label: "sealant.stop-grace=3600",
+    });
+    // Never above the planned grace.
+    expect(await runArgs({}, { stopGraceSeconds: 30 })).toEqual({
+      stopTimeout: "30",
+      label: "sealant.stop-grace=30",
+    });
   });
 
-  it("gives a planned stop the container's own stop timeout when it is longer", async () => {
-    const calls: Array<readonly string[]> = [];
-    const commandRunner = vi.fn(async (_command: string, args: Array<string>) => {
-      calls.push(args);
-      if (args[0] === "inspect" && args.includes("{{.Config.StopTimeout}}")) {
-        return { stdout: "3600\n", stderr: "" };
-      }
-      return { stdout: "", stderr: "" };
-    });
-    await new DockerRuntimeAdapter({
-      commandRunner,
-      runtimeCatalogLoader: createRuntimeCatalogLoader(),
-    }).stop({ resourceId: "container-id-capture" });
-    expect(calls.find((args) => args[0] === "stop")).toEqual([
-      "stop",
-      "-t",
-      "3600",
-      "container-id-capture",
-    ]);
+  it("gives a planned stop the grace its label names, else its own stop timeout when longer", async () => {
+    const plannedStop = async (inspected: string) => {
+      const calls: Array<readonly string[]> = [];
+      const commandRunner = vi.fn(async (_command: string, args: Array<string>) => {
+        calls.push(args);
+        if (args[0] === "inspect" && args.some((arg) => arg.includes(STOP_GRACE_LABEL))) {
+          return { stdout: `${inspected}\n`, stderr: "" };
+        }
+        return { stdout: "", stderr: "" };
+      });
+      await new DockerRuntimeAdapter({
+        commandRunner,
+        runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      }).stop({ resourceId: "container-id-capture" });
+      return calls.find((args) => args[0] === "stop");
+    };
+
+    // A capture workspace created with the label: its StopTimeout is bounded, its grace is not.
+    expect(await plannedStop("3600|60")).toEqual(["stop", "-t", "3600", "container-id-capture"]);
+    // One created before the label: its StopTimeout was its grace.
+    expect(await plannedStop("|3600")).toEqual(["stop", "-t", "3600", "container-id-capture"]);
+    // Never below the configured grace; nothing readable leaves the configured grace.
+    expect(await plannedStop("30|30")).toEqual(["stop", "-t", "120", "container-id-capture"]);
+    expect(await plannedStop("|<nil>")).toEqual(["stop", "-t", "120", "container-id-capture"]);
   });
 
   it("treats an already-removed container as a successful (not-found) stop", async () => {
