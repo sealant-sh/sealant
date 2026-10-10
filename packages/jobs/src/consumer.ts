@@ -43,8 +43,13 @@ export const consumeJobQueueJson = async <TMessage>(
     {
       batchSize: 1,
       localConcurrency: options.concurrency ?? 1,
-      // NOTIFY wakes the worker immediately; this is the backstop when the listener is down.
+      // NOTIFY wakes the worker immediately; polling is the backstop. pg-boss uses
+      // `notifyPollingIntervalSeconds` (default 30 s) instead of `pollingIntervalSeconds` while the
+      // listener is up, and it folds NOTIFYs that land before its next fetch into one wake-up. A
+      // fetch takes one delivery, so the second of two deliveries sent together would wait out
+      // that backstop. Both are 1 s, so a folded wake-up costs at most a second.
       pollingIntervalSeconds: 1,
+      notifyPollingIntervalSeconds: 1,
     },
     async (jobs) => {
       for (const job of jobs) {

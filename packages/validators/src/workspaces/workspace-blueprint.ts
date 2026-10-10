@@ -353,6 +353,14 @@ export const workspaceLifecycleSchema = z
 export const workspaceSpecNetworkSchema = z
   .strictObject({
     outbound: z.boolean().default(true),
+    /**
+     * Whether the workspace may reach the cloud instance metadata address (169.254.169.254, and
+     * fd00:ec2::254 over IPv6). Off by default: on a cloud host it hands out the instance's
+     * credentials, so the Docker runtime refuses a connection to it at once, from the workspace
+     * and from its Docker service, and drops the workspace's `NET_RAW`. True only for a workspace
+     * that genuinely needs it.
+     */
+    cloudMetadata: z.boolean().default(false),
   })
   .prefault({});
 

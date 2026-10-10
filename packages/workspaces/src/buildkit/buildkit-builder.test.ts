@@ -78,6 +78,7 @@ const createWorkspaceBuildSpec = (overrides: Partial<NewWorkspace> = {}): NewWor
       ociRuntime: "runc",
       network: {
         outbound: true,
+        cloudMetadata: false,
       },
     },
     target: {
@@ -563,7 +564,7 @@ describe("compileWorkspaceBuildSpec", () => {
         envFrom: [],
         kubernetes: {},
         ociRuntime: "runc",
-        network: { outbound: true },
+        network: { outbound: true, cloudMetadata: false },
       },
     });
 
@@ -589,7 +590,7 @@ describe("compileWorkspaceBuildSpec", () => {
         envFrom: [],
         kubernetes: {},
         ociRuntime: "runc",
-        network: { outbound: true },
+        network: { outbound: true, cloudMetadata: false },
       },
     });
 
@@ -614,7 +615,7 @@ describe("compileWorkspaceBuildSpec", () => {
         envFrom: [],
         kubernetes: {},
         ociRuntime: "runc",
-        network: { outbound: true },
+        network: { outbound: true, cloudMetadata: false },
       },
       target: {
         os: {
@@ -1440,7 +1441,7 @@ describe("planWorkspaceImageBuild", () => {
           envFrom: [],
           kubernetes: {},
           ociRuntime: "runc",
-          network: { outbound: true },
+          network: { outbound: true, cloudMetadata: false },
         },
       }),
     });

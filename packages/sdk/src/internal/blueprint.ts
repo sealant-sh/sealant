@@ -202,6 +202,7 @@ export const buildCreateWorkspaceRequest = (
     ...(options.kubernetes?.serviceAccountName === undefined
       ? {}
       : { kubernetes: { serviceAccountName: options.kubernetes.serviceAccountName } }),
+    ...(options.network?.cloudMetadata === true ? { network: { cloudMetadata: true } } : {}),
     ...(options.credentialsHome === undefined
       ? {}
       : {

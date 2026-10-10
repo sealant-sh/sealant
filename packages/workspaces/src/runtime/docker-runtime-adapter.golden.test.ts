@@ -38,6 +38,31 @@ const recordingRunner = () => {
   return { calls, runner };
 };
 
+/** The run that refuses the cloud metadata address inside a container's network namespace. */
+const metadataGuard = (containerId: string): string[] => [
+  "run",
+  "--rm",
+  "--runtime",
+  "runc",
+  "--network",
+  `container:${containerId}`,
+  "--cap-drop",
+  "ALL",
+  "--cap-add",
+  "NET_ADMIN",
+  "--user",
+  "0",
+  "--entrypoint",
+  "sh",
+  "busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e",
+  "-c",
+  [
+    "set -e",
+    "ip -4 route replace prohibit 169.254.169.254/32",
+    "if [ -e /proc/net/if_inet6 ]; then ip -6 route replace prohibit fd00:ec2::254/128; fi",
+  ].join("\n"),
+];
+
 const catalog = async () => ({ defaultRuntime: "runc", runtimes: new Set(["runc", "runsc"]) });
 
 describe("DockerRuntimeAdapter golden argv", () => {
@@ -93,8 +118,11 @@ describe("DockerRuntimeAdapter golden argv", () => {
         "GITHUB_TOKEN=gh_secret",
         "-e",
         "CLAUDE_CODE_OAUTH_TOKEN=cc_secret",
+        "--cap-drop",
+        "NET_RAW",
         "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
       ],
+      metadataGuard("container-id-123"),
       ["inspect", "--format", "{{json .State}}", "container-id-123"],
       ["exec", "container-id-123", "test", "-S", "/run/sealant/control.sock"],
     ]);
@@ -227,8 +255,11 @@ describe("DockerRuntimeAdapter golden argv", () => {
         // one, so no lane and no image ENV can set it (sealantd reads empty as no map).
         "-e",
         "SEALANT_CAPTURE_OWNER_MAP=",
+        "--cap-drop",
+        "NET_RAW",
         "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
       ],
+      metadataGuard("container-id-123"),
       ["inspect", "--format", "{{json .State}}", "container-id-123"],
       ["exec", "container-id-123", "test", "-S", "/run/sealant/control.sock"],
     ]);
@@ -266,6 +297,7 @@ describe("DockerRuntimeAdapter golden argv", () => {
         "--tls=false",
       ],
       ["exec", "container-id-123", "docker", "-H", "tcp://127.0.0.1:2375", "info"],
+      metadataGuard("container-id-123"),
       [
         "run",
         "-d",
@@ -295,8 +327,11 @@ describe("DockerRuntimeAdapter golden argv", () => {
         "SEALANT_HARNESS_BANNER=Starting opencode workspace",
         "-e",
         "SEALANT_HARNESS_LAUNCH_COMMAND=opencode",
+        "--cap-drop",
+        "NET_RAW",
         "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
       ],
+      metadataGuard("container-id-123"),
       ["inspect", "--format", "{{json .State}}", "container-id-123"],
       ["exec", "container-id-123", "test", "-S", "/run/sealant/control.sock"],
     ]);
@@ -340,7 +375,7 @@ describe("DockerRuntimeAdapter golden argv", () => {
 
     await adapter.launch(cases.dind);
 
-    const runs = calls.filter((call) => call[0] === "run");
+    const runs = calls.filter((call) => call[0] === "run" && call[1] === "-d");
     expect(runs[0]?.slice(4, 10)).toEqual([
       "sealant-run-golden-3-docker",
       "--network",

@@ -812,6 +812,20 @@ export interface WorkspaceServicesOptions {
   readonly docker?: boolean;
 }
 
+/** The workspace's network. */
+export interface WorkspaceNetworkOptions {
+  /**
+   * Let the workspace reach the cloud instance metadata address (169.254.169.254, and AWS's IPv6
+   * fd00:ec2::254). Off by default: on a cloud host that address hands out the instance's own
+   * credentials, so the Docker runtime refuses a connection to it at once, from the workspace and
+   * from its Docker service, and gives the workspace no raw sockets to get past that. The refusal
+   * is in place before the workspace is reported ready; steps it runs at boot on its own may start
+   * slightly earlier. Set it only for a workspace that genuinely needs the instance's metadata. A gVisor (`runsc`) workspace cannot be guarded
+   * and launches only with this set. A control plane older than this option rejects it.
+   */
+  readonly cloudMetadata?: boolean;
+}
+
 /** One cluster env source: a Kubernetes object whose keys become workspace environment. */
 export interface WorkspaceEnvFromSource {
   readonly kind: "secret" | "configmap";
@@ -916,6 +930,8 @@ export interface CreateOptions {
   };
   /** Runtime-managed services that need more than installing an OS package. */
   readonly services?: WorkspaceServicesOptions;
+  /** The workspace's network (see `WorkspaceNetworkOptions`). */
+  readonly network?: WorkspaceNetworkOptions;
   /** When true (default), resolve only once the workspace runtime is live. */
   readonly wait?: boolean;
   /**

@@ -143,6 +143,9 @@ services:
       # and the container serving them (see "Registry mirrors for workspace Docker" in the docs).
       SEALANT_DOCKER_REGISTRY_MIRRORS: ${SEALANT_DOCKER_REGISTRY_MIRRORS:-}
       SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER: ${SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER:-}
+      # Optional image that refuses the cloud metadata address in each workspace (see "The cloud
+      # metadata address" in the docs); unset, a pinned busybox.
+      SEALANT_DOCKER_NETWORK_GUARD_IMAGE: ${SEALANT_DOCKER_NETWORK_GUARD_IMAGE:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
