@@ -611,6 +611,13 @@ export const workerRuntimeEnvSchema = z.object({
   // sibling services (a session channel, a bucket) resolve by name from inside a workspace. Name
   // grammar is checked by the Docker adapter; the network is never created here.
   SEALANT_DOCKER_WORKSPACE_NETWORK: z.string().trim().min(1).optional(),
+  // Optional registry mirrors every workspace's Docker service asks first for a Docker Hub image,
+  // comma-separated http(s) origins (Docker and Kubernetes runtimes). The daemon falls back to
+  // Docker Hub when a mirror fails. Grammar is checked by `parseDockerRegistryMirrors`.
+  SEALANT_DOCKER_REGISTRY_MIRRORS: z.string().trim().min(1).optional(),
+  // Optional container on this Docker host serving those mirrors: joined to each workspace's Docker
+  // service network under the mirrors' host names, and disconnected before that network goes.
+  SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER: z.string().trim().min(1).optional(),
 });
 
 /**

@@ -15,6 +15,7 @@ import {
   buildLaunchSecret,
   buildPod,
   buildService,
+  dockerSidecarScriptFor,
   plainEnvEntries,
   secretEnvEntries,
   workspaceLabels,
@@ -469,6 +470,17 @@ describe("Kubernetes manifests", () => {
     expect(pod.spec?.hostAliases).toBeUndefined();
     expect(pod.spec?.initContainers).toBeUndefined();
     expect(JSON.stringify(pod)).not.toContain("DOCKER_HOST");
+  });
+
+  it("hands the sidecar's daemon its registry mirrors, a plain-http one as insecure too", () => {
+    const script = dockerSidecarScriptFor([
+      "http://docker-mirror.mend.svc:5000",
+      "https://mirror.gcr.io",
+    ]);
+    expect(script).toContain(
+      "exec dockerd-entrypoint.sh dockerd --host=unix:///run/docker/docker.sock --data-root=/home/rootless/.local/share/docker --registry-mirror=http://docker-mirror.mend.svc:5000 --insecure-registry=docker-mirror.mend.svc:5000 --registry-mirror=https://mirror.gcr.io'",
+    );
+    expect(dockerSidecarScriptFor([])).toContain("--data-root=/home/rootless/.local/share/docker'");
   });
 
   it("runs the Docker service as a rootless sidecar inside a user-namespaced Pod", () => {

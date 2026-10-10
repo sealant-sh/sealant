@@ -108,6 +108,7 @@ describe("kubernetesRuntimeConfigFromEnv", () => {
         requests: { cpu: "100m", memory: "256Mi" },
         limits: { cpu: "2", memory: "2Gi" },
       },
+      registryMirrors: [],
     });
     expect(
       kubernetesRuntimeConfigFromEnv({
@@ -116,6 +117,7 @@ describe("kubernetesRuntimeConfigFromEnv", () => {
         SEALANT_K8S_DOCKER_IMAGE: "docker:29.7.2-dind-rootless",
         SEALANT_K8S_DOCKER_GRAPH_SIZE: "10Gi",
         SEALANT_K8S_DOCKER_MEMORY_LIMIT: "4Gi",
+        SEALANT_DOCKER_REGISTRY_MIRRORS: "http://docker-mirror.mend.svc:5000",
       })?.docker,
     ).toEqual({
       enabled: true,
@@ -125,9 +127,16 @@ describe("kubernetesRuntimeConfigFromEnv", () => {
         requests: { cpu: "100m", memory: "256Mi" },
         limits: { cpu: "2", memory: "4Gi" },
       },
+      registryMirrors: ["http://docker-mirror.mend.svc:5000"],
     });
     expect(() =>
       kubernetesRuntimeConfigFromEnv({ ...base, SEALANT_K8S_DOCKER_GRAPH_SIZE: "big" }),
     ).toThrow(/quantity/);
+    expect(() =>
+      kubernetesRuntimeConfigFromEnv({
+        ...base,
+        SEALANT_DOCKER_REGISTRY_MIRRORS: "http://user:token@docker-mirror:5000",
+      }),
+    ).toThrow(/SEALANT_DOCKER_REGISTRY_MIRRORS/);
   });
 });

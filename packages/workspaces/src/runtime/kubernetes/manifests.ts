@@ -32,6 +32,7 @@ import {
   captureOwnerMapEnv,
   captureSourceEnv,
 } from "../capture-source.js";
+import { dockerdRegistryMirrorArgs } from "../docker-registry-mirrors.js";
 import { bindableMountsEnv, bindsEnv } from "../mount-intent.js";
 import type { RuntimeAdapterLaunchInput } from "../runtime-adapter.js";
 import {
@@ -112,17 +113,26 @@ const DOCKER_SIDECAR_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/
 /**
  * What the sidecar runs. Passing `dockerd` explicitly as the entrypoint's first argument skips its
  * defaults (`--host=tcp://0.0.0.0:2375` plus a rootlesskit port publish), so the daemon listens on
- * the unix socket only.
+ * the unix socket only. Registry mirrors follow as dockerd flags; `parseDockerRegistryMirrors`
+ * admits only origins, so none can break out of the single quotes.
  */
-export const dockerSidecarScript = [
-  `echo '${DOCKER_ROOTLESS_USER}:${DOCKER_ROOTLESS_SUBID_RANGE}' > /etc/subuid`,
-  `echo '${DOCKER_ROOTLESS_USER}:${DOCKER_ROOTLESS_SUBID_RANGE}' > /etc/subgid`,
-  `mkdir -p ${DOCKER_RUN_PATH} ${DOCKER_GRAPH_PATH}`,
-  `chown ${String(DOCKER_ROOTLESS_UID)}:${String(DOCKER_ROOTLESS_UID)} ${DOCKER_RUN_PATH} ${DOCKER_GRAPH_PATH}`,
-  `exec su ${DOCKER_ROOTLESS_USER} -s /bin/sh -c '` +
-    `export XDG_RUNTIME_DIR=${DOCKER_RUN_PATH} HOME=/home/${DOCKER_ROOTLESS_USER} PATH=${DOCKER_SIDECAR_PATH} DOCKER_TLS_CERTDIR=; ` +
-    `exec dockerd-entrypoint.sh dockerd --host=${DOCKER_HOST_VALUE} --data-root=${DOCKER_GRAPH_PATH}'`,
-].join("\n");
+export const dockerSidecarScriptFor = (registryMirrors: readonly string[]): string =>
+  [
+    `echo '${DOCKER_ROOTLESS_USER}:${DOCKER_ROOTLESS_SUBID_RANGE}' > /etc/subuid`,
+    `echo '${DOCKER_ROOTLESS_USER}:${DOCKER_ROOTLESS_SUBID_RANGE}' > /etc/subgid`,
+    `mkdir -p ${DOCKER_RUN_PATH} ${DOCKER_GRAPH_PATH}`,
+    `chown ${String(DOCKER_ROOTLESS_UID)}:${String(DOCKER_ROOTLESS_UID)} ${DOCKER_RUN_PATH} ${DOCKER_GRAPH_PATH}`,
+    `exec su ${DOCKER_ROOTLESS_USER} -s /bin/sh -c '` +
+      `export XDG_RUNTIME_DIR=${DOCKER_RUN_PATH} HOME=/home/${DOCKER_ROOTLESS_USER} PATH=${DOCKER_SIDECAR_PATH} DOCKER_TLS_CERTDIR=; ` +
+      [
+        `exec dockerd-entrypoint.sh dockerd --host=${DOCKER_HOST_VALUE} --data-root=${DOCKER_GRAPH_PATH}`,
+        ...dockerdRegistryMirrorArgs(registryMirrors),
+      ].join(" ") +
+      "'",
+  ].join("\n");
+
+/** The sidecar's script with no registry mirror. */
+export const dockerSidecarScript = dockerSidecarScriptFor([]);
 
 /** The sidecar container; `config.docker.enabled` must be true for `buildPod` to emit it. */
 export const buildDockerSidecar = (
@@ -134,7 +144,7 @@ export const buildDockerSidecar = (
   // Native sidecar: starts before the workspace container, is held until the startup probe
   // passes, and is killed with the Pod. No second object for stop to delete.
   restartPolicy: "Always",
-  command: ["/bin/sh", "-ec", dockerSidecarScript],
+  command: ["/bin/sh", "-ec", dockerSidecarScriptFor(config.docker.registryMirrors)],
   env: [{ name: "DOCKER_TLS_CERTDIR", value: "" }],
   securityContext: { privileged: true, runAsUser: 0 },
   startupProbe: {

@@ -37,6 +37,7 @@ import {
   loadMicrovmContextFiles,
   createS3MicrovmArtifactStore,
   microvmRuntimeConfigFromEnv,
+  parseDockerRegistryMirrors,
   parseDockerVolumeMappings,
   preserveBeforeDeadline,
   processWorkspaceBuildJob,
@@ -253,6 +254,10 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     env.SEALANT_DOCKER_VOLUME_MAPPINGS === undefined
       ? undefined
       : parseDockerVolumeMappings(env.SEALANT_DOCKER_VOLUME_MAPPINGS);
+  const dockerRegistryMirrors =
+    env.SEALANT_DOCKER_REGISTRY_MIRRORS === undefined
+      ? undefined
+      : parseDockerRegistryMirrors(env.SEALANT_DOCKER_REGISTRY_MIRRORS);
   const dockerAdapters = !env.DOCKER_RUNTIME_ENABLED
     ? []
     : [
@@ -272,6 +277,12 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           ...(env.SEALANT_DOCKER_WORKSPACE_NETWORK === undefined
             ? {}
             : { workspaceNetwork: env.SEALANT_DOCKER_WORKSPACE_NETWORK }),
+          ...(dockerRegistryMirrors === undefined
+            ? {}
+            : { registryMirrors: dockerRegistryMirrors }),
+          ...(env.SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER === undefined
+            ? {}
+            : { registryMirrorContainer: env.SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER }),
           stopGraceSeconds: env.SEALANT_DOCKER_STOP_GRACE_SECONDS,
           captureStopGraceSeconds: env.SEALANT_DOCKER_CAPTURE_STOP_GRACE_SECONDS,
         }),

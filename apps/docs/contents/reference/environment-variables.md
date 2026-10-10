@@ -56,20 +56,22 @@ install command.
 The default `compose.selfhost.yaml` reads these variables when present, but `install.sh` does not
 write them for you.
 
-| Variable                            | Default                                | Meaning                                                                                                                                                                  |
-| ----------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `SEALANT_IMAGE_NS`                  | `ghcr.io/sealant-sh`                   | Image namespace or mirror used by the installer and compose. Add it to `.env` if manual compose runs should use the mirror too.                                          |
-| `SEALANT_SSH_HOST`                  | `localhost`                            | Public SSH host the API and UI render in connection commands.                                                                                                            |
-| `SEALANT_WEB_URL`                   | `http://localhost:${SEALANT_WEB_PORT}` | Better Auth canonical URL.                                                                                                                                               |
-| `SEALANT_WEB_TRUSTED_ORIGINS`       | localhost + 127.0.0.1 web origins      | Better Auth trusted origins (CSV).                                                                                                                                       |
-| `SEALANT_CORS_ALLOWED_ORIGINS`      | `*`                                    | API CORS origins, passed to the API as `CORS_ALLOWED_ORIGINS`.                                                                                                           |
-| `DOCKER_SOCKET_PATH`                | `/var/run/docker.sock`                 | Host Docker socket mounted into the worker.                                                                                                                              |
-| `SEALANT_MOUNT_ALLOWED_STORE_ROOTS` | unset                                  | Colon-delimited absolute deployment roots authorized as workspace mount sources. Passed to both API and worker; mounts stay disabled while unset.                        |
-| `SEALANT_CAPTURE_ALLOWED_ENDPOINTS` | unset                                  | API only. Comma-separated origins (`https://mend.example`) a capture session token may be sent to. Unset, any http(s) origin the transport rules admit; set, only these. |
-| `SEALANT_CAPTURE_REFUSE_PLAINTEXT`  | `false`                                | API only. Refuse plain-HTTP capture channels whatever a launcher states. Set it when executors do not share a private network with the channel.                          |
-| `SEALANT_DOCKER_VOLUME_MAPPINGS`    | unset                                  | Strict JSON array of `{ "logicalRoot": "/path", "volumeName": "actual-volume" }`. When set, every Docker source mount uses a named-volume subpath with no bind fallback. |
-| `SEALANT_DOCKER_WORKSPACE_NETWORK`  | unset                                  | Name of an existing Docker network every workspace container joins, so sibling Compose services resolve by name from inside a workspace. Never created by the worker.    |
-| `SEALANT_CREDENTIALS_KEY`           | unset                                  | Base64-encoded 32-byte key shared by API and worker for connected-account credentials.                                                                                   |
+| Variable                                   | Default                                | Meaning                                                                                                                                                                   |
+| ------------------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SEALANT_IMAGE_NS`                         | `ghcr.io/sealant-sh`                   | Image namespace or mirror used by the installer and compose. Add it to `.env` if manual compose runs should use the mirror too.                                           |
+| `SEALANT_SSH_HOST`                         | `localhost`                            | Public SSH host the API and UI render in connection commands.                                                                                                             |
+| `SEALANT_WEB_URL`                          | `http://localhost:${SEALANT_WEB_PORT}` | Better Auth canonical URL.                                                                                                                                                |
+| `SEALANT_WEB_TRUSTED_ORIGINS`              | localhost + 127.0.0.1 web origins      | Better Auth trusted origins (CSV).                                                                                                                                        |
+| `SEALANT_CORS_ALLOWED_ORIGINS`             | `*`                                    | API CORS origins, passed to the API as `CORS_ALLOWED_ORIGINS`.                                                                                                            |
+| `DOCKER_SOCKET_PATH`                       | `/var/run/docker.sock`                 | Host Docker socket mounted into the worker.                                                                                                                               |
+| `SEALANT_MOUNT_ALLOWED_STORE_ROOTS`        | unset                                  | Colon-delimited absolute deployment roots authorized as workspace mount sources. Passed to both API and worker; mounts stay disabled while unset.                         |
+| `SEALANT_CAPTURE_ALLOWED_ENDPOINTS`        | unset                                  | API only. Comma-separated origins (`https://mend.example`) a capture session token may be sent to. Unset, any http(s) origin the transport rules admit; set, only these.  |
+| `SEALANT_CAPTURE_REFUSE_PLAINTEXT`         | `false`                                | API only. Refuse plain-HTTP capture channels whatever a launcher states. Set it when executors do not share a private network with the channel.                           |
+| `SEALANT_DOCKER_VOLUME_MAPPINGS`           | unset                                  | Strict JSON array of `{ "logicalRoot": "/path", "volumeName": "actual-volume" }`. When set, every Docker source mount uses a named-volume subpath with no bind fallback.  |
+| `SEALANT_DOCKER_WORKSPACE_NETWORK`         | unset                                  | Name of an existing Docker network every workspace container joins, so sibling Compose services resolve by name from inside a workspace. Never created by the worker.     |
+| `SEALANT_DOCKER_REGISTRY_MIRRORS`          | unset                                  | Comma-separated `http(s)://host[:port]` origins every workspace Docker daemon asks first for a Docker Hub image; it falls back to Docker Hub when one fails. Worker only. |
+| `SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER` | unset                                  | Container on this Docker host serving those mirrors: joined to each workspace's Docker service network under the mirrors' host names. Worker only.                        |
+| `SEALANT_CREDENTIALS_KEY`                  | unset                                  | Base64-encoded 32-byte key shared by API and worker for connected-account credentials.                                                                                    |
 
 For example, to let a local workbench mount worktrees stored below `~/.mend/store`, add the expanded
 absolute path to `~/.config/sealant/.env` and reconcile the stack:
@@ -175,6 +177,37 @@ shared network beside its per-workspace sidecar network at creation, which needs
 newer; the sidecar itself stays on its own network. Independently of this setting, every workspace
 container is started with `--add-host host.docker.internal:host-gateway`, so the host is reachable
 by that name on Linux daemons too.
+
+### Registry mirrors for workspace Docker
+
+Each workspace's Docker service is a rootless daemon that starts with an empty image store, so every
+`docker pull` and every `FROM` in a `docker build` goes to Docker Hub, anonymously, and many
+workspaces from one address soon meet its pull rate limit. `SEALANT_DOCKER_REGISTRY_MIRRORS` names
+pull-through mirrors the daemon asks first:
+
+```env
+SEALANT_DOCKER_REGISTRY_MIRRORS=http://docker-mirror:5000
+SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER=mend-docker-mirror
+```
+
+Each entry is an origin (`http://` or `https://`, a host and an optional port, nothing else) and
+becomes a `--registry-mirror` flag; a plain-http one is also passed as `--insecure-registry`, which
+BuildKit needs to reach it over http. Docker uses mirrors for Docker Hub images only, and falls back
+to Docker Hub itself when a mirror does not answer, so a mirror that is down costs one failed
+request per pull and never fails it. Credentials for Docker Hub belong to the mirror, never to the
+variable: an entry with a user or a password is refused at startup.
+
+The Docker service stays on its own per-workspace network, because its daemon answers
+unauthenticated on port 2375 and must not be reachable from another workspace. On the Docker
+runtime, `SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER` names the container that serves the mirrors: the
+worker connects it to each workspace's Docker service network, aliased by each mirror's host name,
+before the daemon starts, and disconnects it before that network is removed. Both steps are best
+effort; a mirror container that is missing or stopped leaves the daemon to pull from Docker Hub.
+Leave it unset when the mirrors are reachable from that network some other way, such as a public
+`https://` mirror.
+
+On Kubernetes the daemon shares the Pod's network, so a cluster Service name works directly, subject
+to the namespace's egress policy. MicroVM workspaces do not read the variable.
 
 ## GitHub App variables
 
