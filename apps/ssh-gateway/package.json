@@ -9,6 +9,7 @@
     "dev": "dotenv -e ../../.env -- tsx watch src/index.ts",
     "lint": "oxlint .",
     "test": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {

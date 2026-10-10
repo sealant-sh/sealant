@@ -33,6 +33,9 @@ typed SDK wrapper yet, so we drive them through the SDK's low-level `request()` 
 /** Login-shell semantics (gateway-spec §3.5): reproduce the inner sshd's `login -l` / `login -lc`. */
 const LOGIN_SHELL = "/bin/bash";
 
+/** The capability a daemon names when it starts executions and sessions as a user. */
+export const EXEC_USER_CAPABILITY = "exec.user";
+
 /** A PTY interactive session bound to a daemon byte channel, ready to bridge to an SSH shell channel. */
 export interface ShellSession {
   /** Daemon session id (for `resizePty` / `closeSession` / input via `writeStdin`). */
@@ -95,6 +98,12 @@ export class ControlClient {
     await this.#client.health();
   }
 
+  /** What the daemon names beyond the schema (`exec.user`, ...): read once per connection. */
+  async supports(): Promise<ReadonlySet<string>> {
+    const capabilities = await this.#client.getCapabilities();
+    return new Set(capabilities.supports);
+  }
+
   /**
    * Open a login interactive PTY session and attach to its output as a byte channel (§3.3 shell,
    * §3.5 login semantics). `openSession{shell:/bin/bash, args:["-l"]}` reproduces `login -l`.
@@ -107,12 +116,15 @@ export class ControlClient {
     readonly cwd?: string | undefined;
     /** Run id threaded as the daemon execution id so this session's events attribute to it. */
     readonly executionId?: string | undefined;
+    /** The Linux user the session runs as (a daemon that names `exec.user`); absent: root. */
+    readonly user?: string | undefined;
   }): Promise<ShellSession> {
     const opened = (await this.#requestResult(
       {
         case: "openSession",
         value: {
           executionId: input.executionId,
+          user: input.user,
           shell: LOGIN_SHELL,
           args: ["-l"],
           cols: input.cols,
@@ -140,12 +152,15 @@ export class ControlClient {
     readonly cwd?: string;
     /** Run id threaded as the daemon execution id so this exec's events attribute to it. */
     readonly executionId?: string | undefined;
+    /** The Linux user the command runs as (a daemon that names `exec.user`); absent: root. */
+    readonly user?: string | undefined;
   }): Promise<ExecSession> {
     const attached = (await this.#requestResult(
       {
         case: "exec",
         value: {
           executionId: input.executionId,
+          user: input.user,
           executable: LOGIN_SHELL,
           args: ["-lc", input.command],
           cwd: input.cwd,
@@ -170,11 +185,14 @@ export class ControlClient {
     readonly command: string;
     readonly cwd?: string;
     readonly timeoutMs?: number;
+    /** The workspace's SSH user, whose repository this reads: the capture runs as them. */
+    readonly user?: string;
   }): Promise<{ readonly exitCode: number | undefined; readonly output: string }> {
     const exec = await this.execLogin({
       command: input.command,
       env: {},
       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+      ...(input.user === undefined ? {} : { user: input.user }),
     });
     const chunks: Buffer[] = [];
     const collect = (async () => {

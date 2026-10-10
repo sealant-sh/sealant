@@ -25,6 +25,7 @@ import {
   createSessionAsUserOp,
   createSessionOp,
   expireWorkspaceOp,
+  clearWorkspaceSshUserOp,
   getSessionOp,
   getWorkspaceOp,
   listSessionsOp,
@@ -1048,6 +1049,12 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
           ownerUserId,
           ...(ttl === undefined ? {} : { ttlSeconds: ttl === null ? null : parseTtlSeconds(ttl) }),
         }),
+      );
+    },
+
+    sshAsRoot: async () => {
+      await ctx.runtime.run(
+        clearWorkspaceSshUserOp(init.id, { ownerUserId: ctx.config.hostLocal.ownerUserId }),
       );
     },
 

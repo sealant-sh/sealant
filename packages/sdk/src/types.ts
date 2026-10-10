@@ -943,6 +943,15 @@ export interface CreateOptions {
    */
   readonly credentialsHome?: WorkspaceCredentialsHomeOptions;
   /**
+   * The SSH gateway runs this workspace's SSH sessions (VS Code Remote-SSH, an `ssh` shell or
+   * command) as its owner's own Linux user: the uid of `credentialsHome`, which this requires
+   * (40001–49999, never root). No caller names the user. It need not exist yet; until it does, a
+   * session is refused, never run as root. `workspace.sshAsRoot()` sets it back to root. Absent:
+   * root. Sent only to a control plane that reports `features().workspaceSshUser`; with another,
+   * `create` rejects (`ssh-user-unsupported`) and nothing is created.
+   */
+  readonly sshAsOwner?: boolean;
+  /**
    * Time-to-live for the workspace, e.g. `"90m"`, `"2h"` (also `"45s"`, `"1d"`). Once it elapses
    * the platform stops the workspace and removes its container. Omitted = the server default TTL
    * (if the install configures one).
@@ -1182,6 +1191,12 @@ export interface Workspace {
    * now (the platform reaper stops it shortly), `expire({ in: null })` clears the TTL.
    */
   expire(options?: { readonly in?: string | null }): Promise<void>;
+  /**
+   * The SSH gateway runs this workspace's SSH sessions as root from the next session channel on,
+   * open connections included (`DELETE /v1/workspaces/:id/ssh-user`). The only change after
+   * create: a workspace's user is its owner's, set by `sshAsOwner`, never named by a caller.
+   */
+  sshAsRoot(): Promise<void>;
   /**
    * Open a raw TCP byte pipe (or a UDP datagram pipe) INSIDE the workspace — the primitive for
    * reaching a dev server or database the workspace runs. Protocol-agnostic:
@@ -1433,6 +1448,10 @@ export interface SealantFeatures {
   readonly credentialsPiOpencode: boolean;
   /** `ownerMap` on a capture source. */
   readonly captureOwnerMap: boolean;
+  /** `sshAsOwner` on a create and `workspace.sshAsRoot()`: SSH sessions as the owner's user. */
+  readonly workspaceSshUser: boolean;
+  /** `users.bindPerson()`: a user's person, bound once. */
+  readonly personBinding: boolean;
 }
 
 /** A published workspace image. */
@@ -2167,9 +2186,29 @@ export interface EnsuredUser extends SealantUser {
  * Identity rows for products that own their own login. `ensure` is idempotent on email: call it on
  * every sign-in and build the per-user client with the returned `userId` as `ownerUserId`.
  */
+/**
+ * The person a user is (Mend ADR 0016): their id in a capture owner map, their uid (40001–49999)
+ * and their home, under the deployment's homes root.
+ */
+export interface UserPerson {
+  readonly id: string;
+  readonly uid: number;
+  readonly home: string;
+}
+
 export interface UsersNamespace {
   ensure(options: EnsureUserOptions): Promise<EnsuredUser>;
   get(userId: string): Promise<SealantUser>;
+  /**
+   * Binds the user to a person, once (what `create({ sshAsOwner })` checks a create against). The
+   * same values again answer `created: false`; another person for the user, or a person id or uid
+   * another user holds, rejects (409, `reason` `person-binding-differs` or `person-taken`) and
+   * changes nothing. Needs a service key and `features().personBinding`.
+   */
+  bindPerson(
+    userId: string,
+    person: UserPerson,
+  ): Promise<{ readonly userId: string; readonly person: UserPerson; readonly created: boolean }>;
 }
 
 // ---------------------------------------------------------------------------------------------

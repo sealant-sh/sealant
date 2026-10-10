@@ -10,6 +10,7 @@ export {
   type NewAuthVerification,
   session,
   user,
+  userPersonBinding,
   verification,
 } from "./auth.js";
 

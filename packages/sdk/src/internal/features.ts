@@ -30,6 +30,8 @@ export const toFeatures = (index: SystemIndexResponse): SealantFeatures => {
     credentialsPartialPut: features?.credentialsPartialPut === true,
     credentialsPiOpencode: features?.credentialsPiOpencode === true,
     captureOwnerMap: features?.captureOwnerMap === true,
+    workspaceSshUser: features?.workspaceSshUser === true,
+    personBinding: features?.personBinding === true,
   };
 };
 

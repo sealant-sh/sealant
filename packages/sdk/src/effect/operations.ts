@@ -15,6 +15,7 @@ import type {
   CreateConnectedAccountRequest,
   CreateSshKeyRequest,
   EnsureUserRequest,
+  PersonBindingWire,
   CreateRunRequest,
   CreateSessionAsUserRequest,
   CreateSessionRequest,
@@ -22,6 +23,7 @@ import type {
   ExecWorkspaceAsUserRequest,
   ExecWorkspaceRequest,
   ExpireWorkspaceRequest,
+  ClearWorkspaceSshUserQuery,
   GetRunScrollbackQuery,
   GetRunTimelineQuery,
   GetSessionOutputQuery,
@@ -180,6 +182,11 @@ export const expireWorkspaceOp = (workspaceId: string, payload: ExpireWorkspaceR
     client.workspaces.expireWorkspace({ params: { workspaceId }, payload }),
   );
 
+export const clearWorkspaceSshUserOp = (workspaceId: string, query: ClearWorkspaceSshUserQuery) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.clearWorkspaceSshUser({ params: { workspaceId }, query }),
+  );
+
 // ---- runs ----
 
 export const createRunOp = (payload: CreateRunRequest) =>
@@ -282,6 +289,11 @@ export const createAccessTokenOp = (payload: CreateAccessTokenRequest) =>
 
 export const ensureUserOp = (payload: EnsureUserRequest) =>
   Effect.flatMap(SealantApiClient, (client) => client.users.ensureUser({ payload }));
+
+export const bindUserPersonOp = (userId: string, payload: PersonBindingWire) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.users.bindUserPerson({ params: { userId }, payload }),
+  );
 
 export const getUserOp = (userId: string) =>
   Effect.flatMap(SealantApiClient, (client) => client.users.getUser({ params: { userId } }));

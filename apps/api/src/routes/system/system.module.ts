@@ -29,6 +29,8 @@ export const getIndex = () => {
       credentialsPartialPut: true,
       credentialsPiOpencode: true,
       captureOwnerMap: true,
+      workspaceSshUser: true,
+      personBinding: true,
     },
   } satisfies SystemIndexResponse);
 };

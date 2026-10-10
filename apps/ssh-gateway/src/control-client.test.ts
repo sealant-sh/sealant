@@ -128,6 +128,12 @@ class FakeDaemon extends Duplex {
         });
         break;
       }
+      case "runtimeGetCapabilities": {
+        this.#okResult(requestId, {
+          result: { case: "capabilities", value: { supports: this.supports } },
+        });
+        break;
+      }
       case "resizePty":
       case "closeSession":
       case "signalProcess":
@@ -143,6 +149,9 @@ class FakeDaemon extends Duplex {
   }
 
   lastChannelId: string | undefined;
+
+  /** What `runtimeGetCapabilities` names under `supports`. */
+  supports: string[] = [];
 
   /** Push a daemon->client data frame on `channelId`. */
   emitData(channelId: string, bytes: number[]): void {
@@ -297,6 +306,41 @@ describe("ControlClient channel->command mapping", () => {
     const { channel } = await client.openSftp();
     expect(lastCommand(daemon)).toMatchObject({ case: "openSftp" });
     expect(channel.channelId).toBe(daemon.lastChannelId);
+
+    client.close();
+  });
+});
+
+describe("ControlClient as a workspace's user", () => {
+  it("openShell and execLogin carry the user, and name none without one", async () => {
+    const daemon = new FakeDaemon();
+    const client = ControlClient.fromStream(daemon);
+
+    await client.openShell({ cols: 80, rows: 24, env: {}, user: "mabcdefgh" });
+    expect(daemon.commands.find((c) => c.case === "openSession")?.value).toMatchObject({
+      user: "mabcdefgh",
+      shell: "/bin/bash",
+      args: ["-l"],
+    });
+    await client.execLogin({ command: "id -un", env: {}, user: "mabcdefgh" });
+    expect(lastCommand(daemon)).toMatchObject({
+      case: "exec",
+      value: { user: "mabcdefgh", executable: "/bin/bash", args: ["-lc", "id -un"] },
+    });
+    await client.execLogin({ command: "id -un", env: {} });
+    expect(lastCommand(daemon)?.value).not.toHaveProperty("user", expect.any(String));
+
+    client.close();
+  });
+
+  it("supports() reads what the daemon names, so the gateway sends a user only to one that honours it", async () => {
+    const daemon = new FakeDaemon();
+    const client = ControlClient.fromStream(daemon);
+
+    expect([...(await client.supports())]).toEqual([]);
+    daemon.supports = ["dotfiles.user", "exec.user"];
+    expect(await client.supports()).toEqual(new Set(["dotfiles.user", "exec.user"]));
+    expect(lastCommand(daemon)?.case).toBe("runtimeGetCapabilities");
 
     client.close();
   });

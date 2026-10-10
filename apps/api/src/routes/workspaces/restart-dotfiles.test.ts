@@ -28,6 +28,8 @@ import {
   type WorkspaceBuildJobRepoService,
   type WorkspaceRepoService,
   WorkspaceCaptureDrainRepo,
+  UserRepo,
+  type PersonBinding,
 } from "@sealant/db";
 import { GitHubSourceIntegrationService } from "@sealant/source-integrations";
 import type { NewWorkspace } from "@sealant/validators";
@@ -107,6 +109,7 @@ const makeLayer = (store: Store) => {
         archivedAt: null,
         binds: [],
         idempotencyKey: input.idempotencyKey ?? null,
+        sshUser: input.sshUser ?? null,
       };
       store.workspace = workspace;
       return Effect.succeed(workspace);
@@ -129,6 +132,7 @@ const makeLayer = (store: Store) => {
     listWorkspaces: () => Effect.succeed([]),
     listWorkspaceAttemptLinks: () => Effect.die("unused"),
     setWorkspaceName: () => Effect.die("unused"),
+    setWorkspaceSshUser: () => Effect.die("unused"),
     setWorkspaceBinds: () => Effect.die("unused"),
     setWorkspaceExpiry: () => Effect.succeed(store.workspace ?? null),
     setWorkspaceStatus: (input) => {
@@ -266,6 +270,13 @@ const makeLayer = (store: Store) => {
     }),
     Layer.mock(ProfileRepo, {}),
     Layer.succeed(WorkspaceRepo, workspaceRepo),
+    Layer.succeed(UserRepo, {
+      hasAnySignInAccounts: () => Effect.die("unused"),
+      ensureUser: () => Effect.die("unused"),
+      getUserById: () => Effect.die("unused"),
+      bindPerson: () => Effect.die("unused"),
+      getPersonBinding: () => Effect.succeed<PersonBinding | undefined>(undefined),
+    }),
     Layer.succeed(WorkspaceAttemptRepo, attemptRepo),
     Layer.succeed(WorkspaceBuildJobRepo, buildJobRepo),
     // No capture drain is recorded: nothing is retained.

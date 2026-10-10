@@ -10,7 +10,12 @@ import {
   type AuthorizedKeyEntry,
   type VerifyFunction,
 } from "./authorized-keys.js";
-import { ControlClient, type ShellSession, type ExecSession } from "./control-client.js";
+import {
+  ControlClient,
+  EXEC_USER_CAPABILITY,
+  type ShellSession,
+  type ExecSession,
+} from "./control-client.js";
 import type { PrincipalLookup } from "./principal-resolver.js";
 import { finalizeInteractiveRun, startInteractiveRun } from "./run-recorder.js";
 import {
@@ -18,6 +23,7 @@ import {
   resolveWorkspaceControlTarget,
   toControlTarget,
   type ControlTargetOptions,
+  type WorkspaceSshTarget,
 } from "./workspace-target.js";
 
 /*
@@ -186,11 +192,29 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
   // A single client connection gets a single control connection. Channels multiplex over it.
   let controlPromise: Promise<ControlClient> | undefined;
   let controlClient: ControlClient | undefined;
+  // The target the control connection was opened for: a later answer naming another executor
+  // means the workspace restarted under this connection, and its channels are refused.
+  let controlTarget: WorkspaceSshTarget | undefined;
+  // Whether the daemon runs processes as a user, read once per connection when first needed.
+  let execUserSupported: Promise<boolean> | undefined;
   // The interactive run recording this connection (one SSH connection = one run). Undefined until
   // the first channel opens, and stays undefined when recording is unavailable (best-effort).
   let recordedRunId: string | undefined;
   let recordedRunOwner: string | undefined;
 
+  const resolveTarget = (): Promise<WorkspaceSshTarget> => {
+    if (workspaceId === undefined || principalId === undefined) {
+      return Promise.reject(
+        new Error("Incoming SSH connection is not mapped to an authorized workspace."),
+      );
+    }
+    return resolveWorkspaceControlTarget({
+      apiBaseUrl: config.coreApiBaseUrl,
+      gatewayToken: config.gatewayToken,
+      principalId,
+      workspaceId,
+    });
+  };
   const ensureControl = async (): Promise<ControlClient> => {
     if (workspaceId === undefined || principalId === undefined) {
       throw new Error("Incoming SSH connection is not mapped to an authorized workspace.");
@@ -202,12 +226,8 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
       const resolvedWorkspaceId = workspaceId;
       const resolvedPrincipalId = principalId;
       controlPromise = (async () => {
-        const target = await resolveWorkspaceControlTarget({
-          apiBaseUrl: config.coreApiBaseUrl,
-          gatewayToken: config.gatewayToken,
-          principalId: resolvedPrincipalId,
-          workspaceId: resolvedWorkspaceId,
-        });
+        const target = await resolveTarget();
+        controlTarget = target;
         // Register the session's run BEFORE any daemon channel opens so its id can be threaded as
         // the execution id on every session/exec — that threading is what attributes the session's
         // telemetry to this run. Undefined (recording unavailable) never blocks access.
@@ -226,6 +246,45 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
     }
 
     return controlPromise;
+  };
+
+  /**
+   * Who a new session channel (shell, exec, sftp) runs as, asked of the API for every channel, so
+   * a change to the workspace's SSH user reaches the next channel of a connection already open (an
+   * OpenSSH ControlMaster, VS Code's reused connection), never only the next connection. A user
+   * goes only to a daemon that reports `exec.user` (an older one ignores `user` and would run the
+   * process as root); sealantd itself refuses root and anyone who is not one of the executor's
+   * people. Null: root, as the API stated it.
+   */
+  const sessionChannel = async (): Promise<{
+    readonly control: ControlClient;
+    readonly user: string | null;
+  }> => {
+    const control = await ensureControl();
+    // Always a fresh answer, the first channel's included: an answer kept from opening the control
+    // connection (a port forward opens it too) could predate a reset, a restart or an API refusal.
+    const target = await resolveTarget();
+    if (
+      controlTarget === undefined ||
+      target.attemptId !== controlTarget.attemptId ||
+      target.runtime.resourceId !== controlTarget.runtime.resourceId
+    ) {
+      throw new Error(
+        `Workspace ${String(workspaceId)} started another executor since this connection opened: reconnect.`,
+      );
+    }
+    const user = target.sessionUser;
+    if (user !== null) {
+      execUserSupported ??= control
+        .supports()
+        .then((supports) => supports.has(EXEC_USER_CAPABILITY));
+      if (!(await execUserSupported)) {
+        throw new Error(
+          `Workspace ${String(workspaceId)} runs its SSH sessions as a user, and its sealantd does not report ${EXEC_USER_CAPABILITY}.`,
+        );
+      }
+    }
+    return { control, user };
   };
 
   // OpenSSH sends every offered key twice (an unsigned probe, then a signed proof), so the API
@@ -402,7 +461,8 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
 
         void (async () => {
           try {
-            const control = await ensureControl();
+            const { control, user } = await sessionChannel();
+            const sessionUser = user ?? undefined;
             if (sessionPty === undefined) {
               // No pty-req before the shell request: the client is a PROGRAM driving a shell
               // over stdin — `ssh -T` (VS Code Remote-SSH's server bootstrap), `ssh host <
@@ -415,6 +475,7 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
                 command: 'exec "${SHELL:-/bin/sh}"',
                 env: sessionEnv,
                 executionId: recordedRunId,
+                user: sessionUser,
               });
               activeExec = exec;
               bridgeChannel({
@@ -439,6 +500,7 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
               term: sessionEnv.TERM,
               env: sessionEnv,
               executionId: recordedRunId,
+              user: sessionUser,
             });
             activeShell = shell;
             bridgeChannel({
@@ -469,12 +531,14 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
 
         void (async () => {
           try {
-            const control = await ensureControl();
+            const { control, user } = await sessionChannel();
+            const sessionUser = user ?? undefined;
             // §3.3 exec + §3.5 login: exec{/bin/bash -lc <cmd>, attach:true}; End.exit_code -> exit.
             const exec = await control.execLogin({
               command: info.command,
               env: sessionEnv,
               executionId: recordedRunId,
+              user: sessionUser,
             });
             activeExec = exec;
             bridgeChannel({
@@ -516,7 +580,17 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
 
         void (async () => {
           try {
-            const control = await ensureControl();
+            const { control, user } = await sessionChannel();
+            if (user !== null) {
+              // The pinned sealantd runs an SFTP bridge only as root (`openSftp` takes no user
+              // before sealantd#155): refused rather than write as root for a person.
+              sshChannel.stderr.write(
+                "SFTP is not available in this workspace yet: it runs its sessions as your user, and its sealantd runs SFTP only as root. Use ssh to copy files (ssh host 'cat > file' < file).\n",
+              );
+              sshChannel.exit(1);
+              sshChannel.end();
+              return;
+            }
             // §3.3 subsystem:sftp -> openSftp; bridge the subsystem channel <-> the byte channel.
             const { channel } = await control.openSftp(
               recordedRunId === undefined ? undefined : { executionId: recordedRunId },
@@ -585,14 +659,28 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
     void controlPromise
       .then(async (control) => {
         if (recordedRunId !== undefined && recordedRunOwner !== undefined) {
+          // The working-tree capture is a login shell in the person's repository: it runs as the
+          // workspace's user now, never root (git's configured helpers and filters run in it). When
+          // who that is cannot be read, nothing is captured.
+          const user = await sessionChannel().then(
+            (channel) => channel.user,
+            () => undefined,
+          );
           await finalizeInteractiveRun({
             config: { apiBaseUrl: config.coreApiBaseUrl, gatewayToken: config.gatewayToken },
             runId: recordedRunId,
             ownerUserId: recordedRunOwner,
-            captureOutput: async (command, cwd) => {
-              const result = await control.execCapture({ command, cwd });
-              return { output: result.output, exitCode: result.exitCode };
-            },
+            captureOutput:
+              user === undefined
+                ? undefined
+                : async (command: string, cwd: string) => {
+                    const result = await control.execCapture({
+                      command,
+                      cwd,
+                      ...(user === null ? {} : { user }),
+                    });
+                    return { output: result.output, exitCode: result.exitCode };
+                  },
           });
         }
         control.close();

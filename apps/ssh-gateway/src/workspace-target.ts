@@ -32,6 +32,10 @@ const workspaceSshTargetSchema = z.object({
     status: z.enum(["pending", "running", "ready", "failed", "stopped"]),
     endpoint: z.string().trim().min(1),
   }),
+  // Who every session of this workspace runs as, always stated: a Linux user, or null for root. An
+  // API that does not state it (one from before SSH users) fails this parse, and the session is
+  // refused: silence is never read as root.
+  sessionUser: z.string().trim().min(1).nullable(),
 });
 
 const messageResponseSchema = z.object({
@@ -39,6 +43,9 @@ const messageResponseSchema = z.object({
 });
 
 export type WorkspaceSshTarget = z.infer<typeof workspaceSshTargetSchema>;
+
+/** How long one target lookup may take before the channel that asked is refused. */
+const TARGET_TIMEOUT_MS = 10_000;
 
 /** What the gateway process has for reaching each runtime family. */
 export type ControlTargetOptions = SealantTargetDerivationOptions;
@@ -83,7 +90,13 @@ export const resolveWorkspaceControlTarget = async (input: {
       "x-sealant-gateway-token": input.gatewayToken,
       // Identifies *who* the client is, so the API can authorize principal x workspace.
       "x-sealant-principal-id": input.principalId,
+      // This gateway runs a workspace's sessions as its user; the API answers a workspace with a
+      // user only to a gateway that says so.
+      "x-sealant-gateway-ssh-user": "1",
     },
+    // Asked for every session channel: an API that does not answer refuses the channel in time,
+    // never holds it open.
+    signal: AbortSignal.timeout(TARGET_TIMEOUT_MS),
   });
   const payload = await response.json().catch(() => null);
 

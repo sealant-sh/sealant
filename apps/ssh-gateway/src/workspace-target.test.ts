@@ -1,8 +1,9 @@
 import { DEFAULT_CONTROL_SOCKET_PATH } from "@sealant/workspaces";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   parseWorkspaceIdFromUsername,
+  resolveWorkspaceControlTarget,
   toControlTarget,
   type WorkspaceSshTarget,
 } from "./workspace-target.js";
@@ -31,6 +32,7 @@ const dockerTarget = (resourceId: string): WorkspaceSshTarget => ({
     status: "running",
     endpoint: "control://docker-exec",
   },
+  sessionUser: null,
 });
 
 describe("toControlTarget", () => {
@@ -113,5 +115,43 @@ describe("toControlTarget", () => {
     expect(toControlTarget(dockerTarget("ctr-abc"), { websocketTls })).toEqual(
       toControlTarget(dockerTarget("ctr-abc")),
     );
+  });
+});
+
+/** An API answering `body`, which checks the gateway said it runs sessions as a user. */
+const answer = (body: unknown) =>
+  vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    expect(new Headers(init?.headers).get("x-sealant-gateway-ssh-user")).toBe("1");
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  });
+
+const resolveAsAlice = () =>
+  resolveWorkspaceControlTarget({
+    apiBaseUrl: "http://api.invalid",
+    gatewayToken: "t",
+    principalId: "usr_alice",
+    workspaceId: "workspace_123",
+  });
+
+describe("resolveWorkspaceControlTarget: who the sessions run as", () => {
+  const { sessionUser: _omitted, ...oldShape } = dockerTarget("container_abc");
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("takes the user, or root, as the API states it", async () => {
+    vi.stubGlobal("fetch", answer({ ...oldShape, sessionUser: "40001" }));
+    expect((await resolveAsAlice()).sessionUser).toBe("40001");
+    vi.stubGlobal("fetch", answer({ ...oldShape, sessionUser: null }));
+    expect((await resolveAsAlice()).sessionUser).toBeNull();
+  });
+
+  it("refuses an answer that does not say (an API from before SSH users), never reading it as root", async () => {
+    vi.stubGlobal("fetch", answer(oldShape));
+    await expect(resolveAsAlice()).rejects.toThrow();
   });
 });

@@ -1,4 +1,4 @@
-import type { CreateWorkspaceRequest } from "@sealant/api-contracts";
+import { WorkspaceSshOwnerRefusedError, type CreateWorkspaceRequest } from "@sealant/api-contracts";
 import { CredentialCipher } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
@@ -22,6 +22,8 @@ import {
   type WorkspaceRepoService,
   type WorkspaceRuntimeInstance,
   WorkspaceCaptureDrainRepo,
+  UserRepo,
+  type PersonBinding,
 } from "@sealant/db";
 import { GitHubSourceIntegrationService } from "@sealant/source-integrations";
 import type { NewWorkspace } from "@sealant/validators";
@@ -82,6 +84,10 @@ interface RecordingState {
   raceOnCreate?: boolean;
   /** Keys the workspace rows were written with. */
   createdKeys?: Array<string | undefined>;
+  /** The owner's person binding (`POST /v1/users/:id/person`); none unless said. */
+  binding?: PersonBinding;
+  /** SSH users the workspace rows were written with. */
+  createdSshUsers?: Array<string | undefined>;
   runtime?: WorkspaceRuntimeInstance;
   /** The launch job of the existing workspace's latest run; absent = none (a half-made create). */
   existingJobStatus?: "queued" | "running" | "succeeded" | "failed";
@@ -172,6 +178,7 @@ const makeRecordingLayer = (
           )
         : Effect.sync(() => {
             (state.createdKeys ??= []).push(input.idempotencyKey);
+            (state.createdSshUsers ??= []).push(input.sshUser);
           }).pipe(
             Effect.andThen(
               Effect.succeed<Workspace>({
@@ -190,6 +197,7 @@ const makeRecordingLayer = (
                 archivedAt: null,
                 binds: [],
                 idempotencyKey: input.idempotencyKey ?? null,
+                sshUser: input.sshUser ?? null,
               }),
             ),
           ),
@@ -218,6 +226,7 @@ const makeRecordingLayer = (
     listWorkspaces: () => Effect.succeed([]),
     listWorkspaceAttemptLinks: () => Effect.die("unused"),
     setWorkspaceName: () => Effect.die("unused"),
+    setWorkspaceSshUser: () => Effect.die("unused"),
     setWorkspaceBinds: () => Effect.die("unused"),
     setWorkspaceExpiry: () => Effect.die("unused"),
     setWorkspaceStatus: (input) =>
@@ -351,6 +360,13 @@ const makeRecordingLayer = (
     }),
     Layer.mock(ProfileRepo, {}),
     Layer.succeed(WorkspaceRepo, workspaceRepo),
+    Layer.succeed(UserRepo, {
+      hasAnySignInAccounts: () => Effect.die("unused"),
+      ensureUser: () => Effect.die("unused"),
+      getUserById: () => Effect.die("unused"),
+      bindPerson: () => Effect.die("unused"),
+      getPersonBinding: () => Effect.succeed<PersonBinding | undefined>(state.binding),
+    }),
     Layer.succeed(WorkspaceAttemptRepo, attemptRepo),
     Layer.succeed(WorkspaceBuildJobRepo, buildJobRepo),
     // No capture drain is recorded: nothing is retained.
@@ -592,6 +608,7 @@ describe("createWorkspace · idempotency key", () => {
     archivedAt: null,
     binds: [],
     idempotencyKey: "mend-exec-7",
+    sshUser: null,
   });
   const runtime = (): WorkspaceRuntimeInstance => ({
     runId: "run_first",
@@ -701,6 +718,7 @@ describe("createWorkspace · a create that never finished (review 3 #19)", () =>
     archivedAt: null,
     binds: [],
     idempotencyKey: "key_partial",
+    sshUser: null,
   });
 
   it("finishes a half-made workspace its repeat finds instead of replaying it forever", async () => {
@@ -849,5 +867,107 @@ describe("createWorkspace · the launch identity (decision 5)", () => {
     );
     expect(answer.launchId).toBe("launch_7");
     expect(state.attempts).toEqual([{ id: answer.runId, launchId: "launch_7" }]);
+  });
+});
+
+describe("createWorkspace · the workspace's SSH user (Mend ADR 0016)", () => {
+  const ALICE = { personId: "acct_alice", uid: 40001, home: "/home/m4lice000" };
+  const BOB = { personId: "acct_bob", uid: 40002, home: "/home/m8ob00000" };
+
+  /** A capture create whose owner map names Alice and Bob, its logins into `home`. */
+  const create = (
+    home: { readonly path: string; readonly uid: number },
+    ownerMap: boolean = true,
+  ): CreateWorkspaceRequest => {
+    const base = capturePayload("/workspace/harness-home");
+    const spec = base.spec as {
+      readonly sources: { readonly workspace: Record<string, unknown> };
+    } & Record<string, unknown>;
+    return {
+      ...base,
+      sshAsOwner: true,
+      spec: {
+        ...spec,
+        sources: {
+          ...spec.sources,
+          workspace: {
+            ...spec.sources.workspace,
+            ...(ownerMap
+              ? {
+                  ownerMap: {
+                    gid: 40000,
+                    worktreeUid: ALICE.uid,
+                    people: [
+                      { id: ALICE.personId, uid: ALICE.uid },
+                      { id: BOB.personId, uid: BOB.uid },
+                    ],
+                  },
+                }
+              : {}),
+          },
+        },
+        runtime: { credentialsHome: { path: home.path, uid: home.uid, gid: 40000 } },
+      },
+    };
+  };
+
+  const run = (state: RecordingState, payload: CreateWorkspaceRequest) =>
+    Effect.runPromise(
+      createWorkspace({ payload, headers: {} }).pipe(
+        Effect.result,
+        Effect.provide(makeRecordingLayer(state)),
+      ),
+    );
+
+  it("runs the sessions as the owner's bound person when the create agrees with the binding", async () => {
+    const state: RecordingState = { binding: ALICE };
+    const result = await run(state, create({ path: ALICE.home, uid: ALICE.uid }));
+    expect(Result.isSuccess(result)).toBe(true);
+    expect(state.createdSshUsers).toEqual(["40001"]);
+  });
+
+  it("refuses Alice asking for Bob's home, or her own path with Bob's uid, naming no path", async () => {
+    for (const home of [
+      { path: BOB.home, uid: BOB.uid },
+      { path: ALICE.home, uid: BOB.uid },
+      { path: BOB.home, uid: ALICE.uid },
+    ]) {
+      const state: RecordingState = { binding: ALICE };
+      const result = await run(state, create(home));
+      const failure = Result.isFailure(result) ? result.failure : undefined;
+      expect(failure).toBeInstanceOf(WorkspaceSshOwnerRefusedError);
+      expect(failure instanceof WorkspaceSshOwnerRefusedError && failure.code).toBe(
+        "ssh-owner-mismatch",
+      );
+      expect(failure instanceof WorkspaceSshOwnerRefusedError && failure.message).not.toContain(
+        "/home/",
+      );
+      expect(state.createdSshUsers).toBeUndefined();
+    }
+  });
+
+  it("refuses a create with no owner map, and an owner bound to no person", async () => {
+    const cases: ReadonlyArray<readonly [RecordingState, CreateWorkspaceRequest, string]> = [
+      [
+        { binding: ALICE },
+        create({ path: ALICE.home, uid: ALICE.uid }, false),
+        "ssh-owner-needs-owner-map",
+      ],
+      [{}, create({ path: ALICE.home, uid: ALICE.uid }), "ssh-owner-unbound"],
+    ];
+    for (const [state, payload, code] of cases) {
+      const result = await run(state, payload);
+      const failure = Result.isFailure(result) ? result.failure : undefined;
+      expect(failure instanceof WorkspaceSshOwnerRefusedError && failure.code).toBe(code);
+      expect(state.createdSshUsers).toBeUndefined();
+    }
+  });
+
+  it("names nobody without sshAsOwner", async () => {
+    const state: RecordingState = { binding: ALICE };
+    const { sshAsOwner: _ask, ...plain } = create({ path: ALICE.home, uid: ALICE.uid });
+    const result = await run(state, plain);
+    expect(Result.isSuccess(result)).toBe(true);
+    expect(state.createdSshUsers).toEqual([undefined]);
   });
 });

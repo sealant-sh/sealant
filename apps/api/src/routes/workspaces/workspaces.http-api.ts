@@ -23,6 +23,7 @@ import {
   listWorkspaceEvents,
   listWorkspaces,
   renameWorkspace,
+  clearWorkspaceSshUser,
   replanWorkspaceCapture,
   recoverWorkspace,
   restartWorkspace,
@@ -133,6 +134,12 @@ export const WorkspacesHandlersLive = HttpApiBuilder.group(
         renameWorkspace({
           workspaceId: params.workspaceId,
           payload,
+        }),
+      )
+      .handle("clearWorkspaceSshUser", ({ params, query }) =>
+        clearWorkspaceSshUser({
+          workspaceId: params.workspaceId,
+          query,
         }),
       )
       .handle("listWorkspaces", ({ query }) => listWorkspaces(query))

@@ -754,6 +754,10 @@ export const workspaces = pgTable(
     // the same owner with the same key returns this workspace instead of making another, and the
     // owner can look it up by the key after losing the create's answer. Unique per owner.
     idempotencyKey: text("idempotency_key"),
+    // The Linux user the SSH gateway runs this workspace's SSH sessions as (a login name or a
+    // decimal uid, never root; Mend's per-person layout names the launcher's). NULL: root, as
+    // before. Set at create (`sshUser`) and changed by its owner (`PUT .../ssh-user`).
+    sshUser: text("ssh_user"),
   },
   (table) => [
     uniqueIndex("workspaces_owner_idempotency_key_idx").on(table.ownerUserId, table.idempotencyKey),

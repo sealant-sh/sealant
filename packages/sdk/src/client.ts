@@ -27,6 +27,7 @@ import {
   getRunOp,
   getSetupStateOp,
   getUserOp,
+  bindUserPersonOp,
   getWorkspaceCreateOp,
   getWorkspaceOp,
   inferenceRespondOp,
@@ -52,6 +53,7 @@ import { parseTtlSeconds } from "./internal/duration.js";
 import { readFeatures } from "./internal/features.js";
 import { imageSpecKey } from "./internal/image-key.js";
 import { buildInferenceRespondRequest, mapInferenceResponse } from "./internal/inference.js";
+import { requireSshUser } from "./internal/process-user.js";
 import { mapSshKey, mapWorkspaceSshInfo } from "./internal/ssh.js";
 import type {
   AccessTokensNamespace,
@@ -130,6 +132,9 @@ export class Sealant {
   /** Workspace lifecycle: create, fetch, and list live environments. */
   readonly workspaces = {
     create: async (options: CreateOptions): Promise<Workspace> => {
+      if (options.sshAsOwner === true) {
+        await requireSshUser(this.#ctx);
+      }
       const { payload } = buildCreateWorkspaceRequest(options, this.#ctx.config);
       const created = await this.#runtime.run(createWorkspaceOp(payload));
       const workspace = makeWorkspace(this.#ctx, {
@@ -324,6 +329,12 @@ export class Sealant {
     get: async (userId) => {
       const wire = await this.#runtime.run(getUserOp(userId));
       return { userId: wire.userId, email: wire.email, name: wire.name, createdAt: wire.createdAt };
+    },
+    bindPerson: async (userId, person) => {
+      const wire = await this.#runtime.run(
+        bindUserPersonOp(userId, { id: person.id, uid: person.uid, home: person.home }),
+      );
+      return { userId: wire.userId, person: wire.person, created: wire.created };
     },
   };
 

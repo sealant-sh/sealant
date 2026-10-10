@@ -37,6 +37,13 @@ export const systemIndexResponseSchema = Schema.Struct({
       credentialsPiOpencode: Schema.optional(Schema.Boolean),
       /** `ownerMap` on a capture source: an executor whose restore gives each person their files. */
       captureOwnerMap: Schema.optional(Schema.Boolean),
+      /**
+       * `sshAsOwner` on a create and `DELETE /v1/workspaces/:id/ssh-user`: the SSH gateway runs a
+       * workspace's SSH sessions as its owner's own Linux user (their `credentialsHome` uid).
+       */
+      workspaceSshUser: Schema.optional(Schema.Boolean),
+      /** `POST /v1/users/:id/person`: a user's person bound once (what `sshAsOwner` checks). */
+      personBinding: Schema.optional(Schema.Boolean),
     }),
   ),
 });

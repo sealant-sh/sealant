@@ -1,4 +1,12 @@
-import { boolean, index, snakeCase, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  index,
+  integer,
+  snakeCase,
+  text,
+  timestamp,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
 
 // Client-level `casing: "snake_case"` no longer exists, so re-apply snake_case at the
 // table level to keep implicit column names mapping to snake_case db columns.
@@ -21,6 +29,32 @@ export const user = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => [uniqueIndex("user_email_idx").on(table.email)],
+);
+
+/**
+ * The person a Sealant user is, bound once by the service principal that provisions them (Mend ADR
+ * 0016: a person's Linux identity, the same in every workspace): their id in an owner map, their
+ * uid and their home. Written once and never changed through the API; a person id and a uid each
+ * belong to at most one user. What `sshAsOwner` on a create checks the create against, so no
+ * create can pick another person's identity.
+ */
+export const userPersonBinding = pgTable(
+  "user_person_binding",
+  {
+    userId: text()
+      .primaryKey()
+      .references(() => user.id, { onDelete: "cascade" }),
+    personId: text().notNull(),
+    personUid: integer().notNull(),
+    personHome: text().notNull(),
+    boundAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex("user_person_binding_person_id_idx").on(table.personId),
+    uniqueIndex("user_person_binding_person_uid_idx").on(table.personUid),
+  ],
 );
 
 export const session = pgTable(

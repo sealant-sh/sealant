@@ -137,6 +137,7 @@ const makeHarness = (input: {
     listWorkspaces: () => Effect.succeed([]),
     listWorkspaceAttemptLinks: () => Effect.succeed([]),
     setWorkspaceName: () => Effect.die("unused"),
+    setWorkspaceSshUser: () => Effect.die("unused"),
     setWorkspaceExpiry: () => Effect.die("unused"),
     setWorkspaceStatus,
   });

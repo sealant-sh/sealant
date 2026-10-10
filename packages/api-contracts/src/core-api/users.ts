@@ -35,6 +35,40 @@ export const ensureUserResponseSchema = Schema.Struct({
 });
 export type EnsureUserResponse = typeof ensureUserResponseSchema.Type;
 
+/**
+ * The person a user is (Mend ADR 0016: a person's Linux identity, the same in every workspace):
+ * their id in a capture owner map, their uid (40001–49999) and their home, an absolute normalised
+ * path under the deployment's homes root (`SEALANT_PERSON_HOMES_ROOT`, default `/home`).
+ */
+export const personBindingSchema = Schema.Struct({
+  id: NonEmptyString,
+  uid: Schema.Int,
+  home: NonEmptyString,
+});
+export type PersonBindingWire = typeof personBindingSchema.Type;
+
+export const bindUserPersonResponseSchema = Schema.Struct({
+  userId: NonEmptyString,
+  person: personBindingSchema,
+  /** True when this call made the binding; false when it was already exactly this. */
+  created: Schema.Boolean,
+});
+export type BindUserPersonResponse = typeof bindUserPersonResponseSchema.Type;
+
+/**
+ * A binding that would change one already made: the user is bound to another person
+ * (`person-binding-differs`), or the person id or uid is another user's (`person-taken`). A
+ * binding is never changed through the API; the answer names no other user's values.
+ */
+export class UserPersonConflictError extends Schema.TaggedErrorClass<UserPersonConflictError>()(
+  "UserPersonConflictError",
+  {
+    message: Schema.String,
+    code: Schema.Literals(["person-binding-differs", "person-taken"]),
+  },
+  { httpApiStatus: 409 },
+) {}
+
 export class UserBadRequestError extends Schema.TaggedErrorClass<UserBadRequestError>()(
   "UserBadRequestError",
   { message: Schema.String },
@@ -61,6 +95,19 @@ export const UsersGroup = HttpApiGroup.make("users")
       payload: ensureUserRequestSchema,
       success: ensureUserResponseSchema,
       error: [UserBadRequestError, UserInternalServerError],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("bindUserPerson", "/:userId/person", {
+      params: userIdParams,
+      payload: personBindingSchema,
+      success: bindUserPersonResponseSchema,
+      error: [
+        UserBadRequestError,
+        UserNotFoundError,
+        UserPersonConflictError,
+        UserInternalServerError,
+      ],
     }),
   )
   .add(

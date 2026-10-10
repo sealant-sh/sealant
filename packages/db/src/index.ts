@@ -248,6 +248,8 @@ export {
   type UserRecord,
   type UserRepoError,
   type UserRepoService,
+  type PersonBinding,
+  type BindPersonResult,
 } from "./repositories/users.js";
 
 export {

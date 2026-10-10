@@ -25,6 +25,8 @@ export interface CreateWorkspaceInput {
   readonly expiresAt?: Date;
   /** The caller's idempotency key for this create; unique per owner. */
   readonly idempotencyKey?: string;
+  /** The Linux user the SSH gateway runs this workspace's sessions as; absent: root. */
+  readonly sshUser?: string;
 }
 
 export interface ListWorkspacesInput {
@@ -47,6 +49,12 @@ export interface SetWorkspaceBindsInput {
 export interface SetWorkspaceNameInput {
   readonly id: string;
   readonly name: string;
+}
+
+export interface SetWorkspaceSshUserInput {
+  readonly id: string;
+  /** `null`: the gateway runs the workspace's sessions as root. */
+  readonly sshUser: string | null;
 }
 
 export interface SetWorkspaceExpiryInput {
@@ -82,6 +90,7 @@ const workspaceRepoOperationSchema = Schema.Literals([
   "setWorkspaceExpiry",
   "setWorkspaceName",
   "setWorkspaceBinds",
+  "setWorkspaceSshUser",
   "setWorkspaceStatus",
 ]);
 
@@ -188,6 +197,11 @@ export interface WorkspaceRepoService {
     input: SetWorkspaceBindsInput,
   ) => Effect.Effect<Workspace | null, WorkspaceRepoError>;
 
+  /** Sets (or clears, with null) the SSH user. Returns the updated row, or null when not found. */
+  readonly setWorkspaceSshUser: (
+    input: SetWorkspaceSshUserInput,
+  ) => Effect.Effect<Workspace | null, WorkspaceRepoError>;
+
   /** Sets (or clears, with null) the workspace TTL. Returns the updated row, or null when not found. */
   readonly setWorkspaceExpiry: (
     input: SetWorkspaceExpiryInput,
@@ -233,6 +247,7 @@ export const WorkspaceRepoLive = Layer.effect(
                 ...(input.idempotencyKey === undefined
                   ? {}
                   : { idempotencyKey: input.idempotencyKey }),
+                ...(input.sshUser === undefined ? {} : { sshUser: input.sshUser }),
               } satisfies NewWorkspace)
               .returning();
 
@@ -375,6 +390,20 @@ export const WorkspaceRepoLive = Layer.effect(
             const [workspace] = yield* db
               .update(workspaces)
               .set({ name: input.name })
+              .where(eq(workspaces.id, input.id))
+              .returning();
+
+            return workspace ?? null;
+          }),
+        ),
+
+      setWorkspaceSshUser: (input) =>
+        withWorkspaceRepoError(
+          "setWorkspaceSshUser",
+          Effect.gen(function* () {
+            const [workspace] = yield* db
+              .update(workspaces)
+              .set({ sshUser: input.sshUser })
               .where(eq(workspaces.id, input.id))
               .returning();
 
