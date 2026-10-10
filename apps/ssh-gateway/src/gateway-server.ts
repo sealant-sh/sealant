@@ -1,3 +1,5 @@
+import { createServer as createNetServer, type Socket } from "node:net";
+
 import type { AuthContext, Connection, PseudoTtyInfo, ServerChannel } from "ssh2";
 import ssh2 from "ssh2";
 const { Server, utils } = ssh2;
@@ -5,6 +7,12 @@ const { Server, utils } = ssh2;
 import type { Channel } from "@sealant/runtime-client";
 import { computeSshPublicKeyFingerprint } from "@sealant/validators/ssh-public-key";
 
+import {
+  createAdmission,
+  DEFAULT_ADMISSION_LIMITS,
+  type AdmissionLimits,
+  type AdmissionTicket,
+} from "./admission.js";
 import {
   findAuthorizedKey,
   type AuthorizedKeyEntry,
@@ -23,6 +31,7 @@ import {
   parseWorkspaceIdFromUsername,
   resolveWorkspaceControlTarget,
   toControlTarget,
+  WorkspaceTargetUnauthorizedError,
   type ControlTargetOptions,
   type WorkspaceSshTarget,
 } from "./workspace-target.js";
@@ -51,12 +60,25 @@ export interface SshGatewayServerConfig {
   readonly lookupPrincipal: PrincipalLookup;
   /** How this gateway reaches each runtime family (client TLS for Kubernetes `wss://`). */
   readonly controlTargetOptions?: ControlTargetOptions;
+  /** What a connection is held to before it logs in (`admission.ts`); sshd-like defaults. */
+  readonly limits?: AdmissionLimits;
+  /**
+   * How often a logged-in connection asks again whether it is still authorized (its key still
+   * registered, the workspace still its principal's), ending it when not. This is what ends a
+   * connection that opens nothing new after its key is removed. 0 turns it off.
+   */
+  readonly keyRecheckIntervalMs?: number;
 }
+
+/** Default for `keyRecheckIntervalMs`. */
+export const DEFAULT_KEY_RECHECK_INTERVAL_MS = 60_000;
 
 /** A key accepted for auth: who it belongs to + how to verify a signature made with it. */
 interface ResolvedClientKey {
   readonly principalId: string;
   readonly verify: VerifyFunction;
+  /** The registered key's fingerprint; undefined for a key from the allowlist file. */
+  readonly keyFingerprint: string | undefined;
 }
 
 /** Build a signature verifier for a DB-resolved key from the raw blob the client offered. */
@@ -185,11 +207,30 @@ const bridgeChannel = (input: {
 
 // One incoming client connection maps to exactly one workspace and one lazily-opened control
 // connection. SSH channels are then mapped onto control commands across that connection.
-const bindClientConnection = (incomingConnection: Connection, config: SshGatewayServerConfig) => {
+const bindClientConnection = (
+  incomingConnection: Connection,
+  config: SshGatewayServerConfig,
+  ticket: AdmissionTicket,
+) => {
   // The workspace routing decision comes from the SSH username (ws-<id>); the real per-workspace gate is
   // the API, keyed by the authenticated principal. Both are set once auth passes.
   let workspaceId: string | undefined;
   let principalId: string | undefined;
+  // The registered key the connection logged in with; every later target answer checks it is
+  // still the principal's. Undefined for a key from the allowlist file, which nothing removes.
+  let keyFingerprint: string | undefined;
+  let ended = false;
+  let recheckTimer: ReturnType<typeof setInterval> | undefined;
+
+  const endConnection = (reason: string) => {
+    if (ended) return;
+    ended = true;
+    // Only a logged-in connection's end is worth a line: before login, anyone can cause one.
+    if (principalId !== undefined) {
+      console.warn("[ssh-gateway] ending a connection", { workspaceId, principalId, reason });
+    }
+    incomingConnection.end();
+  };
   // A single client connection gets a single control connection. Channels multiplex over it.
   let controlPromise: Promise<ControlClient> | undefined;
   let controlClient: ControlClient | undefined;
@@ -203,18 +244,31 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
   let recordedRunId: string | undefined;
   let recordedRunOwner: string | undefined;
 
-  const resolveTarget = (): Promise<WorkspaceSshTarget> => {
+  /**
+   * The workspace's target as the API answers it now. Unless `checkKey` is false (the gateway's own
+   * capture as the connection closes), the answer comes only while the connection's key is still
+   * registered; an outright refusal ends the connection, so nothing more opens on it.
+   */
+  const resolveTarget = async (
+    options: { readonly checkKey: boolean } = { checkKey: true },
+  ): Promise<WorkspaceSshTarget> => {
     if (workspaceId === undefined || principalId === undefined) {
-      return Promise.reject(
-        new Error("Incoming SSH connection is not mapped to an authorized workspace."),
-      );
+      throw new Error("Incoming SSH connection is not mapped to an authorized workspace.");
     }
-    return resolveWorkspaceControlTarget({
-      apiBaseUrl: config.coreApiBaseUrl,
-      gatewayToken: config.gatewayToken,
-      principalId,
-      workspaceId,
-    });
+    try {
+      return await resolveWorkspaceControlTarget({
+        apiBaseUrl: config.coreApiBaseUrl,
+        gatewayToken: config.gatewayToken,
+        principalId,
+        workspaceId,
+        ...(options.checkKey && keyFingerprint !== undefined ? { keyFingerprint } : {}),
+      });
+    } catch (error) {
+      if (options.checkKey && error instanceof WorkspaceTargetUnauthorizedError) {
+        endConnection(error.message);
+      }
+      throw error;
+    }
   };
   const ensureControl = async (): Promise<ControlClient> => {
     if (workspaceId === undefined || principalId === undefined) {
@@ -257,14 +311,16 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
    * process as root); sealantd itself refuses root and anyone who is not one of the executor's
    * people. Null: root, as the API stated it.
    */
-  const sessionChannel = async (): Promise<{
-    readonly control: ControlClient;
-    readonly user: string | null;
-  }> => {
+  /**
+   * The control connection, for a channel the API has just authorized: every channel, a port
+   * forward's included, asks afresh, so an answer kept from opening the control connection never
+   * stands in for a reset, a restart, a removed key or an API refusal.
+   */
+  const authorizedControl = async (
+    options: { readonly checkKey: boolean } = { checkKey: true },
+  ): Promise<{ readonly control: ControlClient; readonly target: WorkspaceSshTarget }> => {
     const control = await ensureControl();
-    // Always a fresh answer, the first channel's included: an answer kept from opening the control
-    // connection (a port forward opens it too) could predate a reset, a restart or an API refusal.
-    const target = await resolveTarget();
+    const target = await resolveTarget(options);
     if (
       controlTarget === undefined ||
       target.attemptId !== controlTarget.attemptId ||
@@ -274,6 +330,16 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
         `Workspace ${String(workspaceId)} started another executor since this connection opened: reconnect.`,
       );
     }
+    return { control, target };
+  };
+
+  const sessionChannel = async (
+    options: { readonly checkKey: boolean } = { checkKey: true },
+  ): Promise<{
+    readonly control: ControlClient;
+    readonly user: string | null;
+  }> => {
+    const { control, target } = await authorizedControl(options);
     const user = target.sessionUser;
     if (user !== null) {
       daemonSupports ??= control.supports();
@@ -287,9 +353,11 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
   };
 
   // OpenSSH sends every offered key twice (an unsigned probe, then a signed proof), so the API
-  // lookup result is cached per connection to avoid a second round-trip. Only "found" results are
-  // cached; revocation takes effect on the next connection.
+  // lookup result is cached per connection to avoid a second round-trip. A key found unknown is
+  // remembered too, so offering it again costs nothing. A removed key is caught after login by the
+  // target check every channel makes.
   let cachedLookup: { readonly cacheKey: string; readonly principalId: string } | undefined;
+  const unknownKeys = new Set<string>();
 
   // Resolution order: static file allowlist first (local, synchronous, works when the API is
   // down — the operator break-glass path), then the API lookup for DB-registered keys. A key in
@@ -301,14 +369,27 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
     const fileEntry = findAuthorizedKey(config.allowedClientKeys, offered);
 
     if (fileEntry !== undefined) {
-      return { principalId: fileEntry.principalId, verify: fileEntry.verify };
+      return {
+        principalId: fileEntry.principalId,
+        verify: fileEntry.verify,
+        keyFingerprint: undefined,
+      };
     }
 
     const cacheKey = `${offered.algo}:${offered.data.toString("base64")}`;
+    if (unknownKeys.has(cacheKey)) {
+      return undefined;
+    }
     let resolvedPrincipalId =
       cachedLookup?.cacheKey === cacheKey ? cachedLookup.principalId : undefined;
 
     if (resolvedPrincipalId === undefined) {
+      // Each lookup is spent from the source's budget before the API is asked: one address cannot
+      // spend what everyone else's logins need.
+      if (!ticket.takeKeyLookup()) {
+        endConnection("its source spent its key lookups");
+        return undefined;
+      }
       const lookup = await config.lookupPrincipal({ algo: offered.algo, data: offered.data });
 
       if (lookup.kind === "error") {
@@ -322,6 +403,7 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
       }
 
       if (lookup.kind === "not-found") {
+        unknownKeys.add(cacheKey);
         return undefined;
       }
 
@@ -337,13 +419,36 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
       return undefined;
     }
 
-    return { principalId: resolvedPrincipalId, verify };
+    return {
+      principalId: resolvedPrincipalId,
+      verify,
+      keyFingerprint: computeSshPublicKeyFingerprint(offered.data),
+    };
+  };
+
+  /** Refuses one attempt; the connection ends once it has made all it may (sshd MaxAuthTries). */
+  const refuse = (ctx: AuthContext, methods?: Array<"publickey">) => {
+    if (methods === undefined) {
+      ctx.reject();
+    } else {
+      ctx.reject(methods);
+    }
+    // OpenSSH opens with method `none` to learn the methods; sshd does not count it either.
+    if (ctx.method !== "none" && ticket.refusedAttempt()) {
+      endConnection("too many authentication attempts");
+    }
   };
 
   const handleAuthentication = async (ctx: AuthContext): Promise<void> => {
+    // An ended connection still reads what the client sent before it learned: none of it is
+    // looked up.
+    if (ended) {
+      return;
+    }
+
     // We only support public-key auth at the gateway boundary.
     if (ctx.method !== "publickey") {
-      ctx.reject(["publickey"]);
+      refuse(ctx, ["publickey"]);
       return;
     }
 
@@ -353,7 +458,7 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
     );
 
     if (resolvedWorkspaceId === undefined) {
-      ctx.reject();
+      refuse(ctx);
       return;
     }
 
@@ -364,8 +469,13 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
       data: ctx.key.data,
     });
 
+    if (ended) {
+      // Its source spent its key lookups: the connection is already gone.
+      return;
+    }
+
     if (key === undefined) {
-      ctx.reject();
+      refuse(ctx);
       return;
     }
 
@@ -377,20 +487,21 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
     }
 
     if (ctx.blob === undefined) {
-      ctx.reject();
+      refuse(ctx);
       return;
     }
 
     const hashAlgo = typeof ctx.hashAlgo === "string" ? ctx.hashAlgo : undefined;
     // Signature verification proves possession of the private key for an allowed pubkey.
     if (!key.verify(ctx.blob, ctx.signature, hashAlgo)) {
-      ctx.reject();
+      refuse(ctx);
       return;
     }
 
     // The username is only a routing hint now; the principal (key owner) is the authorization subject.
     workspaceId = resolvedWorkspaceId;
     principalId = key.principalId;
+    keyFingerprint = key.keyFingerprint;
     ctx.accept();
   };
 
@@ -408,6 +519,17 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
   });
 
   incomingConnection.on("ready", () => {
+    ticket.loggedIn();
+    const recheckMs = config.keyRecheckIntervalMs ?? DEFAULT_KEY_RECHECK_INTERVAL_MS;
+    if (recheckMs > 0) {
+      // A connection that opens nothing new is still asked about: a refusal (a removed key) ends
+      // it. Any other failure (the API down, the workspace stopping) is left to what it ends.
+      recheckTimer = setInterval(() => {
+        void resolveTarget().catch(() => undefined);
+      }, recheckMs);
+      recheckTimer.unref();
+    }
+
     incomingConnection.on("session", (acceptSession) => {
       const session = acceptSession();
       // Request metadata from the client we must replay onto the control session.
@@ -620,7 +742,8 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
     incomingConnection.on("tcpip", (acceptChannel, rejectChannel, info) => {
       void (async () => {
         try {
-          const control = await ensureControl();
+          // A forward is a channel like any other: authorized afresh, never on an earlier answer.
+          const { control } = await authorizedControl();
           // §3.3 direct-tcpip -> openForward. This is the VS Code Remote-SSH server path: the editor
           // connects *through* the workspace to host:port (openForward connects from inside the
           // container), not from the gateway host.
@@ -654,6 +777,10 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
   });
 
   incomingConnection.on("close", () => {
+    ticket.closed();
+    if (recheckTimer !== undefined) {
+      clearInterval(recheckTimer);
+    }
     if (controlPromise === undefined) {
       return;
     }
@@ -665,7 +792,9 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
           // The working-tree capture is a login shell in the person's repository: it runs as the
           // workspace's user now, never root (git's configured helpers and filters run in it). When
           // who that is cannot be read, nothing is captured.
-          const user = await sessionChannel().then(
+          // The gateway's own capture of what was done, not the client's request: it runs even when
+          // the connection ended because its key was removed.
+          const user = await sessionChannel({ checkKey: false }).then(
             (channel) => channel.user,
             () => undefined,
           );
@@ -693,15 +822,33 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
   });
 };
 
-// Start listening for incoming client SSH sessions.
+/** One TCP connection, as both the listener and ssh2's connection report name it. */
+const socketKey = (address: string | undefined, port: number | undefined) =>
+  `${String(address)}|${String(port)}`;
+
+// Start listening for incoming client SSH sessions. The gateway owns the TCP listener and hands
+// ssh2 only the connections it admits (`admission.ts`): a connection over a limit is dropped as it
+// arrives, before any SSH is spoken, and one that has not logged in by its grace time is dropped.
 export const startSshGatewayServer = (config: SshGatewayServerConfig) => {
+  const admission = createAdmission(config.limits ?? DEFAULT_ADMISSION_LIMITS);
+  // Accepted sockets by remote address and port, until ssh2 reports the connection they carry.
+  const pending = new Map<string, { readonly socket: Socket; readonly ticket: AdmissionTicket }>();
+
   const server = new Server(
     {
       hostKeys: [config.hostKey],
       ...(config.banner === undefined ? {} : { banner: config.banner }),
     },
-    (incomingConnection) => {
-      bindClientConnection(incomingConnection, config);
+    (incomingConnection, info) => {
+      const key = socketKey(info.ip, info.port);
+      const admitted = pending.get(key);
+      pending.delete(key);
+      if (admitted === undefined) {
+        // Every socket ssh2 sees came through the listener below; this one did not.
+        incomingConnection.end();
+        return;
+      }
+      bindClientConnection(incomingConnection, config, admitted.ticket);
     },
   );
 
@@ -711,15 +858,41 @@ export const startSshGatewayServer = (config: SshGatewayServerConfig) => {
     });
   });
 
+  const listener = createNetServer((socket) => {
+    const decision = admission.admit(socket.remoteAddress, () => {
+      socket.destroy();
+    });
+    if (decision.kind === "refused") {
+      socket.destroy();
+      return;
+    }
+    const key = socketKey(socket.remoteAddress, socket.remotePort);
+    pending.set(key, { socket, ticket: decision.ticket });
+    socket.once("close", () => {
+      pending.delete(key);
+      decision.ticket.closed();
+    });
+    server.injectSocket(socket);
+  });
+  const sweeper = setInterval(() => {
+    admission.sweep();
+  }, 60_000);
+  sweeper.unref();
+
   return new Promise<{ stop: () => Promise<void> }>((resolve, reject) => {
-    server.once("error", (error: Error) => {
+    listener.once("error", (error: Error) => {
+      clearInterval(sweeper);
       reject(error);
     });
-    server.listen(config.port, config.host, () => {
+    listener.listen(config.port, config.host, () => {
+      listener.on("error", (error: Error) => {
+        console.error("[ssh-gateway] listener error", { error: error.message });
+      });
       resolve({
         stop: async () => {
+          clearInterval(sweeper);
           await new Promise<void>((stopResolve, stopReject) => {
-            server.close((error) => {
+            listener.close((error) => {
               if (error !== undefined) {
                 stopReject(error);
                 return;

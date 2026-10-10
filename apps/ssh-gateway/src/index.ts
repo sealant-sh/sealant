@@ -49,6 +49,14 @@ const main = async () => {
     // bearer token. One shared derivation with the worker and API.
     controlTargetOptions: targetDerivationOptionsFromEnv(env),
     lookupPrincipal,
+    limits: {
+      loginGraceMs: env.SSH_GATEWAY_LOGIN_GRACE_SECONDS * 1000,
+      maxAuthTries: env.SSH_GATEWAY_MAX_AUTH_TRIES,
+      maxStartups: env.SSH_GATEWAY_MAX_STARTUPS,
+      perSourceMaxStartups: env.SSH_GATEWAY_PER_SOURCE_MAX_STARTUPS,
+      perSourceKeyLookupsPerMinute: env.SSH_GATEWAY_PER_SOURCE_KEY_LOOKUPS_PER_MINUTE,
+    },
+    keyRecheckIntervalMs: env.SSH_GATEWAY_KEY_RECHECK_SECONDS * 1000,
   });
 
   const shutdown = async () => {

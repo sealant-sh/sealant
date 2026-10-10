@@ -250,7 +250,13 @@ export const servicePrincipalMiddleware = (
         secretMatches(presented, gatewayToken) &&
         isGatewayRoute(request.method, pathname)
       ) {
-        return yield* as({ kind: "gateway" }, "gateway");
+        // Key lookups are what an SSH client asks for before it has logged in, so anyone who can
+        // reach the gateway's port can cost them. They are budgeted apart: spending that budget
+        // refuses new logins and never the channel and recording checks of connections already in.
+        return yield* as(
+          { kind: "gateway" },
+          pathname === "/v1/ssh-keys/resolve-principal" ? "gateway:keys" : "gateway",
+        );
       }
       if (secret !== undefined && isSessionSurface(pathname)) {
         return yield* as({ kind: "bearer" }, bearerSubject(secret));

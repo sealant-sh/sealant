@@ -804,6 +804,19 @@ export const sshGatewayCoreEnvSchema = z.object({
   SSH_GATEWAY_HOST_KEY_AUTOGENERATE: z.stringbool().default(false),
   SSH_GATEWAY_ALLOWED_KEYS_FILE: z.string().trim().min(1).default("/keys/gateway_allowed_keys"),
   SSH_GATEWAY_WORKSPACE_USERNAME_PREFIX: z.string().trim().min(1).default("ws"),
+  // Limits before login, as sshd's (LoginGraceTime, MaxAuthTries, MaxStartups,
+  // PerSourceMaxStartups, and a key lookup budget per source address in the role of
+  // PerSourcePenalties). The port may be published to the internet, and every key the gateway does
+  // not know costs a lookup in the API's budget.
+  SSH_GATEWAY_LOGIN_GRACE_SECONDS: z.coerce.number().int().min(1).default(30),
+  SSH_GATEWAY_MAX_AUTH_TRIES: z.coerce.number().int().min(1).default(6),
+  SSH_GATEWAY_MAX_STARTUPS: z.coerce.number().int().min(1).default(100),
+  SSH_GATEWAY_PER_SOURCE_MAX_STARTUPS: z.coerce.number().int().min(1).default(10),
+  // 0 turns the per-source budget off.
+  SSH_GATEWAY_PER_SOURCE_KEY_LOOKUPS_PER_MINUTE: z.coerce.number().int().min(0).default(60),
+  // How often a logged-in connection is asked about again; one whose key was removed is ended. 0
+  // turns it off (a removed key then ends a connection at its next channel).
+  SSH_GATEWAY_KEY_RECHECK_SECONDS: z.coerce.number().int().min(0).default(60),
   CORE_API_BASE_URL: z.string().url().default("http://127.0.0.1:4000"),
 });
 

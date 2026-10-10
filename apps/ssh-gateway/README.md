@@ -34,7 +34,13 @@ control target via the API route:
    it reads the daemon's capabilities once per connection and goes on only if it reports
    `exec.user`; every shell and exec names the user, the disconnect-time working-tree capture runs
    as them too, and SFTP runs as them on a sealantd that reports `sftp.user` (refused on one that
-   does not, which would write as root).
+   does not, which would write as root). A port forward (`direct-tcpip`) asks again too. For a key
+   registered in the database, the gateway also names its fingerprint
+   (`x-sealant-ssh-key-fingerprint`), and the API answers only while that key is still the
+   principal's, echoing it back (an answer without the echo, from an older API, is refused). A
+   refusal (401) ends the connection, and a logged-in connection is asked again every
+   `SSH_GATEWAY_KEY_RECHECK_SECONDS` even when it opens nothing, so removing a key ends the
+   connections it opened within that interval.
 5. Gateway opens one sealantd control connection (docker-exec + socat) and maps SSH channels:
    - `shell` -> `openSession{login}` + `attachSession{interactive}` (PTY stream)
    - `exec` -> `exec{/bin/bash -lc …, attach}` (exit status from the channel End)
@@ -43,6 +49,33 @@ control target via the API route:
    - `window-change` -> `resizePty`, `signal` -> `signalProcess`
 
 In short: user connects once to gateway, gateway drives the daemon control protocol on their behalf.
+
+## Limits before login
+
+The port may be published to the internet, and every key the gateway does not know costs a lookup in
+the API. So until a connection has logged in, it is held to limits modelled on sshd's
+(`src/admission.ts`):
+
+- **Login grace time** (`LoginGraceTime`): a connection that has not logged in within
+  `SSH_GATEWAY_LOGIN_GRACE_SECONDS` is dropped, whatever it sent.
+- **Connections not yet logged in** (`MaxStartups`, `PerSourceMaxStartups`): at most
+  `SSH_GATEWAY_MAX_STARTUPS` overall and `SSH_GATEWAY_PER_SOURCE_MAX_STARTUPS` from one source; one
+  more is dropped as it arrives, before any SSH is spoken.
+- **Attempts per connection** (`MaxAuthTries`): after `SSH_GATEWAY_MAX_AUTH_TRIES` refused attempts
+  the connection is dropped.
+- **Key lookups per source** (the role of `PerSourcePenalties`): each lookup the API is asked spends
+  one from the source's `SSH_GATEWAY_PER_SOURCE_KEY_LOOKUPS_PER_MINUTE`, refilled at that rate. A
+  source that has spent them gets no more lookups, and its new connections are dropped, until they
+  refill. A key already looked up on the connection, found or not, costs nothing again.
+
+A source is an IPv4 address or an IPv6 /64. The gateway sees the address the TCP connection comes
+from: behind a proxy or a load balancer that rewrites it (rootless Docker's port forwarding, a
+Kubernetes Service with `externalTrafficPolicy: Cluster`), every client is one source, and the
+per-source limits apply to all of them together. Raise them there, or set the lookup budget to `0`.
+
+The API budgets the gateway's key lookups apart from its other requests (subject `gateway:keys`, the
+other gateway routes `gateway`), so a flood of logins that spends the lookup budget refuses new
+logins and never the channels of connections already in.
 
 ## Environment
 
@@ -58,6 +91,13 @@ In short: user connects once to gateway, gateway drives the daemon control proto
 - `SSH_GATEWAY_ALLOWED_KEYS_FILE` (default: `/keys/gateway_allowed_keys`; optional — a missing or
   empty file is fine, user keys resolve via the API)
 - `SSH_GATEWAY_WORKSPACE_USERNAME_PREFIX` (default: `ws`)
+- `SSH_GATEWAY_LOGIN_GRACE_SECONDS` (default: `30`)
+- `SSH_GATEWAY_MAX_AUTH_TRIES` (default: `6`)
+- `SSH_GATEWAY_MAX_STARTUPS` (default: `100`)
+- `SSH_GATEWAY_PER_SOURCE_MAX_STARTUPS` (default: `10`)
+- `SSH_GATEWAY_PER_SOURCE_KEY_LOOKUPS_PER_MINUTE` (default: `60`; `0` turns it off)
+- `SSH_GATEWAY_KEY_RECHECK_SECONDS` (default: `60`; `0` turns it off, and a removed key then ends a
+  connection only when it opens its next channel)
 - `CORE_API_BASE_URL` (default: `http://127.0.0.1:4000`)
 - `WORKSPACE_SSH_GATEWAY_TOKEN` (required)
 

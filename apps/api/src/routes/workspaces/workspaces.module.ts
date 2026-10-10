@@ -78,6 +78,7 @@ import {
   GitHubInstallationRepositoryCacheRepo,
   ProfileRepo,
   RunRepo,
+  SshKeyRepo,
   WorkspaceAttemptRepo,
   WorkspaceBuildJobRepo,
   WorkspaceCaptureDrainRepo,
@@ -2438,6 +2439,21 @@ export const getWorkspaceSshTarget = (input: {
       });
     }
 
+    // The key the connection logged in with must still be the principal's: once it is removed,
+    // a connection opened with it gets no new channel, and the gateway ends it.
+    const sshKeyFingerprint = input.headers["x-sealant-ssh-key-fingerprint"];
+    if (sshKeyFingerprint !== undefined) {
+      const sshKey = yield* withInternalError(
+        (yield* SshKeyRepo).findActiveSshKeyByFingerprint(sshKeyFingerprint),
+        "Failed to load the connection's SSH key.",
+      );
+      if (sshKey === undefined || sshKey.ownerUserId !== principalId) {
+        return yield* new WorkspaceUnauthorizedError({
+          message: "The SSH key this connection logged in with is no longer registered.",
+        });
+      }
+    }
+
     // A workspace whose sessions run as a user goes only to a gateway that runs them so: an older
     // gateway would drop `user` and run the session as root.
     if (workspace.sshUser !== null && input.headers["x-sealant-gateway-ssh-user"] !== "1") {
@@ -2482,6 +2498,7 @@ export const getWorkspaceSshTarget = (input: {
         endpoint: runtimeInstance.endpoint,
       },
       sessionUser: workspace.sshUser,
+      ...(sshKeyFingerprint === undefined ? {} : { sshKeyFingerprint }),
     } satisfies WorkspaceSshTarget;
   });
 };

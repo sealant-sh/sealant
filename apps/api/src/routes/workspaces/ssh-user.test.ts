@@ -12,8 +12,11 @@ import {
   WorkspaceUnauthorizedError,
 } from "@sealant/api-contracts";
 import {
+  SshKeyRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
+  type SshKey,
+  type SshKeyRepoService,
   type Workspace,
   type WorkspaceRepoService,
   type WorkspaceRuntimeInstance,
@@ -41,12 +44,28 @@ const instance = {
   endpoint: "unix:///run/sealant/control.sock",
 } as unknown as WorkspaceRuntimeInstance;
 
-/** One workspace row, kept in `row` so a test sees what a PUT wrote. */
+const ALICE_KEY = "SHA256:aliceKeyFingerprint";
+
+/**
+ * One workspace row, kept in `row` so a test sees what a PUT wrote, and the registered keys by
+ * fingerprint (`keys`), which a test edits to remove one.
+ */
 const harness = (sshUser: string | null) => {
   const row = {
     current: { id: "wks_1", ownerUserId: OWNER, latestRunId: "run_1", sshUser } as Workspace,
   };
+  const keys = new Map<string, string>([[ALICE_KEY, OWNER]]);
   const layer = Layer.mergeAll(
+    Layer.succeed(SshKeyRepo, {
+      findActiveSshKeyByFingerprint: (fingerprint: string) => {
+        const ownerUserId = keys.get(fingerprint);
+        return Effect.succeed(
+          ownerUserId === undefined
+            ? undefined
+            : ({ id: `key_${fingerprint}`, ownerUserId, fingerprint } as SshKey),
+        );
+      },
+    } as unknown as SshKeyRepoService),
     Layer.succeed(WorkspaceRepo, {
       getWorkspaceById: (id: string) =>
         Effect.succeed(id === row.current.id ? row.current : undefined),
@@ -60,12 +79,16 @@ const harness = (sshUser: string | null) => {
       getRuntimeInstanceByRunId: () => Effect.succeed(instance),
     } as unknown as WorkspaceRuntimeInstanceRepoService),
   );
-  return { row, layer };
+  return { row, keys, layer };
 };
 
 const target = (
   layer: ReturnType<typeof harness>["layer"],
-  input: { readonly principal: string; readonly sshUserGateway: boolean },
+  input: {
+    readonly principal: string;
+    readonly sshUserGateway: boolean;
+    readonly keyFingerprint?: string;
+  },
 ) =>
   Effect.runPromise(
     workspacesModule
@@ -75,6 +98,9 @@ const target = (
           "x-sealant-gateway-token": "gateway-test-token",
           "x-sealant-principal-id": input.principal,
           ...(input.sshUserGateway ? { "x-sealant-gateway-ssh-user": "1" } : {}),
+          ...(input.keyFingerprint === undefined
+            ? {}
+            : { "x-sealant-ssh-key-fingerprint": input.keyFingerprint }),
         },
       })
       .pipe(Effect.result, Effect.provide(layer)),
@@ -106,6 +132,46 @@ describe("the gateway's target for a workspace's SSH sessions", () => {
     const { layer } = harness("40001");
     const result = await target(layer, { principal: "usr_bob", sshUserGateway: true });
     expect(Result.isFailure(result) && result.failure).toBeInstanceOf(WorkspaceUnauthorizedError);
+  });
+});
+
+describe("the gateway's target for a connection's key", () => {
+  it("answers while the key the connection logged in with is registered, and says it checked", async () => {
+    const { layer } = harness(null);
+    const result = await target(layer, {
+      principal: OWNER,
+      sshUserGateway: true,
+      keyFingerprint: ALICE_KEY,
+    });
+    expect(Result.isSuccess(result) && result.success.sshKeyFingerprint).toBe(ALICE_KEY);
+  });
+
+  it("refuses once the key is removed, so an open connection opens nothing new", async () => {
+    const { keys, layer } = harness(null);
+    keys.delete(ALICE_KEY);
+    const result = await target(layer, {
+      principal: OWNER,
+      sshUserGateway: true,
+      keyFingerprint: ALICE_KEY,
+    });
+    expect(Result.isFailure(result) && result.failure).toBeInstanceOf(WorkspaceUnauthorizedError);
+  });
+
+  it("refuses a key now registered to someone else", async () => {
+    const { keys, layer } = harness(null);
+    keys.set(ALICE_KEY, "usr_bob");
+    const result = await target(layer, {
+      principal: OWNER,
+      sshUserGateway: true,
+      keyFingerprint: ALICE_KEY,
+    });
+    expect(Result.isFailure(result) && result.failure).toBeInstanceOf(WorkspaceUnauthorizedError);
+  });
+
+  it("echoes no key when the gateway named none (a key from its own allowlist file)", async () => {
+    const { layer } = harness(null);
+    const result = await target(layer, { principal: OWNER, sshUserGateway: true });
+    expect(Result.isSuccess(result) && result.success.sshKeyFingerprint).toBeUndefined();
   });
 });
 
