@@ -1,16 +1,13 @@
 /**
- * An exec run whose record store refuses appends. The job does not retry or wait: when the process
- * has exited it checks the log for what was refused. Events the other writer stored (the box's
- * duplicate key: the ingester had inserted the same row) are there, and the run completes. Events
- * not in the log are lost output, so the run fails, saying how many and why, with the exit code it
- * observed and the changes the commands made. Driven against a fake daemon session, sink and run
- * repository.
+ * An exec run whose record cannot take one of its events: the log holds a different event at its
+ * id or position, and the append fails with a `TelemetrySinkConflictError`. The run fails, as any
+ * failed append fails it, but saying why, with the changes the commands made, and the commands
+ * after it do not run. Driven against a fake daemon session, sink and run repository.
  */
 import { RunRepo, type RunRepoService } from "@sealant/db";
 import {
   TelemetrySink,
-  TelemetrySinkUnexpectedError,
-  type LossSpanInput,
+  TelemetrySinkConflictError,
   type TelemetrySinkService,
 } from "@sealant/telemetry";
 import {
@@ -46,22 +43,9 @@ const exited = (processId: string, exitCode: number, executionId?: string): Even
     payload: { case: "processExited", value: { exitCode, reason: 1 } },
   }) as unknown as EventEnvelope;
 
-const duplicateKey = () =>
-  new TelemetrySinkUnexpectedError({
-    operation: "appendBatch",
-    message: "Failed query: insert into telemetry_events …",
-    cause: new Error('duplicate key value violates unique constraint "telemetry_events_pkey"'),
-  });
-
-/**
- * `racing`: every append is refused, but the other writer has the events in the log. `down`: every
- * append is refused and nothing reaches the log.
- */
-const world = (store: "racing" | "down") => {
+const world = () => {
   const execs: SealantExecOptions[] = [];
   const outcomes: Array<Record<string, unknown>> = [];
-  const spans: LossSpanInput[] = [];
-  const logged = new Set<bigint>();
   const session = {
     health: Effect.succeed({ runtimeId: "rt_1" }),
     capabilities: Effect.succeed({ supports: ["exec.user"] }),
@@ -82,28 +66,22 @@ const world = (store: "racing" | "down") => {
       );
     }),
   } as unknown as SealantSession;
-  const sink = {
+  const sink: TelemetrySinkService = {
     openEpoch: () => Effect.succeed({ epochId: "tep_1", resumeFromSequence: null }),
-    appendBatch: ({ batch }) =>
-      Effect.suspend(() => {
-        if (store === "racing") for (const event of batch) logged.add(event.sequence);
-        return Effect.fail(duplicateKey());
-      }),
-    countStored: ({ ranges }) =>
-      Effect.sync(() =>
-        ranges.map((range) => {
-          let n = 0;
-          for (let sequence = range.from; sequence <= range.to; sequence += 1n) {
-            if (logged.has(sequence)) n += 1;
-          }
-          return n;
+    appendBatch: () =>
+      Effect.fail(
+        new TelemetrySinkConflictError({
+          operation: "appendBatch",
+          message:
+            "1 event(s) differ from the ones the record holds (evt_proc_1 with other payloadCase, payload); the record keeps its own",
+          eventIds: ["evt_proc_1"],
         }),
       ),
-    insertLossSpan: ({ span }) => Effect.sync(() => void spans.push(span)),
+    insertLossSpan: () => Effect.void,
     closeEpoch: () => Effect.void,
     getMaxSequence: () => Effect.succeed(null),
     streamRawLog: () => Stream.empty,
-  } satisfies TelemetrySinkService;
+  };
   const layer = Layer.mergeAll(
     Layer.succeed(SealantRuntime, { connect: () => Effect.succeed(session) }),
     Layer.succeed(TelemetrySink, sink),
@@ -122,35 +100,28 @@ const world = (store: "racing" | "down") => {
   );
   const run = () =>
     Effect.runPromise(
-      produceExecRun(RUN, TARGET, [{ executable: "make", args: ["check"] }]).pipe(
-        Effect.provide(layer),
-      ),
+      produceExecRun(RUN, TARGET, [
+        { executable: "make", args: ["check"] },
+        { executable: "make", args: ["lint"] },
+      ]).pipe(Effect.provide(layer)),
     );
-  return { run, outcomes, spans };
+  return { run, execs, outcomes };
 };
 
-describe("an exec run whose record store refuses appends", () => {
-  it("completes when the refused events are in the log (the box's duplicate key)", async () => {
-    const w = world("racing");
+describe("an exec run whose record cannot take one of its events", () => {
+  it("fails saying why, with the changes reading, and runs no further command", async () => {
+    const w = world();
     await w.run();
-    expect(w.outcomes).toMatchObject([{ status: "completed", id: RUN, exitCode: 3 }]);
-    expect(w.spans).toEqual([]);
-  });
-
-  it("fails with the observed exit, the changes and what was lost when the events are not in the log", async () => {
-    const w = world("down");
-    await w.run();
+    expect(w.execs.filter((options) => options.executionId === RUN)).toHaveLength(1);
     expect(w.outcomes).toEqual([
       {
         status: "failed",
         id: RUN,
-        exitCode: 3,
         errorMessage:
-          'Command 1/1 (make): The command exited 3, but 1 event(s) of its record (sequences 7–7) are not stored: duplicate key value violates unique constraint "telemetry_events_pkey"; check run aborted.',
+          "Command 1/2 (make): The run's record could not take its events: 1 event(s) differ from the ones the record holds (evt_proc_1 with other payloadCase, payload); the record keeps its own. Check run aborted.",
         // The changes reading ran (here it exits 1: no reading).
         changesReadFailed: true,
       },
     ]);
-    expect(w.spans).toMatchObject([{ kind: "dropped_event", droppedCount: 1n }]);
-  }, 20_000);
+  });
 });

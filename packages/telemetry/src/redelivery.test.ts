@@ -12,7 +12,7 @@ import { EventEnvelopeSchema } from "@sealant/runtime-protocol";
 import { describe, expect, it } from "vitest";
 
 import { eventRow, normalizeEnvelope } from "./normalize.js";
-import { conflictingRedeliveries } from "./redelivery.js";
+import { conflictingRedeliveries, describeConflicts, splitDuplicateIds } from "./redelivery.js";
 
 const forRun = (runId: string) => () => runId;
 
@@ -112,6 +112,7 @@ describe("conflictingRedeliveries", () => {
     expect(conflictingRedeliveries([redelivered], [stored], forRun("run_1"))).toEqual([
       {
         eventId: "evt_3",
+        against: "log",
         runId: "run_1",
         runtimeId: "rt_1",
         sequence: 4n,
@@ -128,6 +129,7 @@ describe("conflictingRedeliveries", () => {
     ).toEqual([
       {
         eventId: "evt_other",
+        against: "log",
         runId: "run_1",
         runtimeId: "rt_1",
         sequence: 5n,
@@ -135,5 +137,37 @@ describe("conflictingRedeliveries", () => {
         differences: ["eventId"],
       },
     ]);
+  });
+});
+
+describe("splitDuplicateIds", () => {
+  it("drops a copy of the same event and keeps one of each id", () => {
+    const { unique, conflicts } = splitDuplicateIds(
+      [event(1n), event(2n), event(1n)],
+      forRun("run_1"),
+    );
+    expect(unique.map((item) => item.eventId)).toEqual(["evt_1", "evt_2"]);
+    expect(conflicts).toEqual([]);
+  });
+
+  it("names a different event reusing an id in the same batch", () => {
+    const heartbeat = event(700n, { payload: { case: "runtimeHeartbeat", value: { state: 2 } } });
+    const output = { ...event(701n), eventId: heartbeat.eventId };
+    const { unique, conflicts } = splitDuplicateIds([heartbeat, output], forRun("run_1"));
+    expect(unique).toEqual([heartbeat]);
+    expect(conflicts).toEqual([
+      {
+        eventId: "evt_700",
+        against: "batch",
+        runId: "run_1",
+        runtimeId: "rt_1",
+        sequence: 701n,
+        storedEventIdAtSequence: undefined,
+        differences: ["sequence", "observedAt", "monotonicTimestamp", "payloadCase", "payload"],
+      },
+    ]);
+    expect(describeConflicts(conflicts)).toBe(
+      "1 event(s) differ from the ones the record holds (evt_700 with other sequence, observedAt, monotonicTimestamp, payloadCase, payload in the same batch); the record keeps its own",
+    );
   });
 });

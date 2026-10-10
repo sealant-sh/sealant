@@ -3,8 +3,9 @@
  * run-exec job records its own run's events on its connection while the full-stream ingester
  * records every event of the runtime on another, and a retried batch re-sends what its first
  * attempt may already have committed. The log keeps the first copy. A re-delivered copy that is the
- * same event, in the right run, is nothing. One that differs is a conflict: the sink records it as
- * a loss span on the run it was for, and returns it, so a writer never takes it as stored.
+ * same event, in the right run, is nothing. One that differs, from the log or from another event
+ * with its id in the same batch, is a conflict: the sink logs it and fails the append with it, so
+ * no writer takes it as recorded.
  */
 import type { TelemetryEvent } from "@sealant/db";
 
@@ -32,16 +33,8 @@ const canonical = (value: unknown): string =>
 const placedRightly = (stored: TelemetryEvent, event: NormalizedEvent, runId: string) =>
   event.executionId === undefined || stored.runId === event.executionId || stored.runId === runId;
 
-/**
- * The fields in which `event`, appended for `runId`, differs from the stored row with its id. When
- * it was ingested is not compared.
- */
-export const redeliveryDifferences = (
-  stored: TelemetryEvent,
-  event: NormalizedEvent,
-  runId: string,
-): readonly string[] => {
-  const kept = eventRowToNormalized(stored);
+/** The fields in which two events with one id differ. */
+export const eventDifferences = (kept: NormalizedEvent, event: NormalizedEvent): string[] => {
   const fields = [
     ["runtimeId", kept.runtimeId, event.runtimeId],
     ["sequence", kept.sequence, event.sequence],
@@ -57,15 +50,29 @@ export const redeliveryDifferences = (
     ["payloadCase", kept.payloadCase, event.payloadCase],
     ["payload", kept.payload, event.payload],
   ] as const;
-  const differences = fields
-    .filter(([, a, b]) => canonical(a) !== canonical(b))
-    .map(([name]) => name);
+  return fields.filter(([, a, b]) => canonical(a) !== canonical(b)).map(([name]) => name);
+};
+
+/**
+ * The fields in which `event`, appended for `runId`, differs from the stored row with its id. When
+ * it was ingested is not compared.
+ */
+export const redeliveryDifferences = (
+  stored: TelemetryEvent,
+  event: NormalizedEvent,
+  runId: string,
+): readonly string[] => {
+  const differences = eventDifferences(eventRowToNormalized(stored), event);
   return placedRightly(stored, event, runId) ? differences : ["runId", ...differences];
 };
 
-/** A re-delivered event the log did not take because a different one holds its id or position. */
+/**
+ * An event an append did not take because a different one holds its id or position: in the log,
+ * or earlier in the same batch.
+ */
 export interface ConflictingRedelivery {
   readonly eventId: string;
+  readonly against: "log" | "batch";
   /** The run the event was appended for. */
   readonly runId: string;
   readonly runtimeId: string;
@@ -100,6 +107,7 @@ export const conflictingRedeliveries = (
     const atPosition = byPosition.get(positionKey(event.runtimeId, event.sequence));
     conflicts.push({
       eventId: event.eventId,
+      against: "log",
       runId,
       runtimeId: event.runtimeId,
       sequence: event.sequence,
@@ -111,4 +119,52 @@ export const conflictingRedeliveries = (
     });
   }
   return conflicts;
+};
+
+/**
+ * `batch` with each id once, and the later events with an id already in it that are not the same
+ * event (a copy that is the same event is dropped). `runIdFor` names the run each is appended for.
+ */
+export const splitDuplicateIds = (
+  batch: readonly NormalizedEvent[],
+  runIdFor: (event: NormalizedEvent) => string,
+): {
+  readonly unique: readonly NormalizedEvent[];
+  readonly conflicts: readonly ConflictingRedelivery[];
+} => {
+  const first = new Map<string, NormalizedEvent>();
+  const conflicts: ConflictingRedelivery[] = [];
+  for (const event of batch) {
+    const earlier = first.get(event.eventId);
+    if (earlier === undefined) {
+      first.set(event.eventId, event);
+      continue;
+    }
+    const differences = eventDifferences(earlier, event);
+    if (runIdFor(earlier) !== runIdFor(event)) differences.unshift("runId");
+    if (differences.length === 0) continue;
+    conflicts.push({
+      eventId: event.eventId,
+      against: "batch",
+      runId: runIdFor(event),
+      runtimeId: event.runtimeId,
+      sequence: event.sequence,
+      storedEventIdAtSequence: undefined,
+      differences,
+    });
+  }
+  return { unique: [...first.values()], conflicts };
+};
+
+/** One line naming the conflicts (at most five), for an error and a run's message. */
+export const describeConflicts = (conflicts: readonly ConflictingRedelivery[]): string => {
+  const named = conflicts
+    .slice(0, 5)
+    .map((conflict) =>
+      conflict.storedEventIdAtSequence !== undefined
+        ? `${conflict.eventId} at the position of ${conflict.storedEventIdAtSequence}`
+        : `${conflict.eventId} with other ${conflict.differences.join(", ")}${conflict.against === "batch" ? " in the same batch" : ""}`,
+    );
+  const more = conflicts.length > 5 ? `, and ${String(conflicts.length - 5)} more` : "";
+  return `${String(conflicts.length)} event(s) differ from the ones the record holds (${named.join("; ")}${more}); the record keeps its own`;
 };

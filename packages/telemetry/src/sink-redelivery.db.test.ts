@@ -8,9 +8,9 @@
  * transaction did not wait the first one out on it and failed on the primary key (`event_id`)
  * instead: `duplicate key value violates unique constraint "telemetry_events_pkey"`.
  *
- * Conflicts (a different event at the same id or position, or a run-tagged event in another run)
- * keep the stored event, are recorded as a `dropped_event` span on the run they were for, and are
- * returned, so a writer never takes them as stored.
+ * Conflicts (a different event at the same id or position, in the log or in the same batch, or a
+ * run-tagged event in another run) keep what the log holds, store the rest of the batch, and fail
+ * the append with a `TelemetrySinkConflictError` naming them, so no writer takes them as recorded.
  */
 import { create } from "@bufbuild/protobuf";
 import type { MessageInitShape } from "@bufbuild/protobuf";
@@ -19,20 +19,18 @@ import {
   runs,
   SealantDB,
   telemetryEvents,
-  telemetryLossSpans,
   user,
   workspaces,
 } from "@sealant/db";
 import { StreamKind } from "@sealant/runtime-client";
 import { EventEnvelopeSchema } from "@sealant/runtime-protocol";
 import { asc, eq } from "drizzle-orm";
-import { Deferred, Effect, Fiber, Layer, Logger, Result, Schedule } from "effect";
+import { Cause, Deferred, Effect, Fiber, Layer, Logger, Result, Schedule } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { InlineByteaArtifactStoreLive } from "./artifact-store.js";
-import { rootCauseMessage } from "./errors.js";
+import { TelemetrySinkConflictError } from "./errors.js";
 import { eventRow, normalizeEnvelope } from "./normalize.js";
-import { makeRunRecordWriter } from "./record-writer.js";
 import { PostgresTelemetrySinkLive, TelemetrySink } from "./sink.js";
 import type { NormalizedEvent } from "./types.js";
 
@@ -72,6 +70,24 @@ const event = (
     }),
   );
 
+/**
+ * The database's own words under the sink's and the driver's errors (the driver's cause is an
+ * Effect `Cause`).
+ */
+const rootCauseMessage = (error: unknown): string => {
+  let innermost = error;
+  for (let depth = 0; depth < 12; depth += 1) {
+    const next = Cause.isCause(innermost)
+      ? Cause.squash(innermost)
+      : innermost instanceof Error
+        ? innermost.cause
+        : undefined;
+    if (next === undefined || next === null || next === innermost) break;
+    innermost = next;
+  }
+  return innermost instanceof Error ? innermost.message : String(innermost);
+};
+
 const events = (from: bigint, count: number) =>
   Array.from({ length: count }, (_, index) => event(from + BigInt(index)));
 
@@ -99,15 +115,6 @@ describe.skipIf(DATABASE_URL === undefined)("appendBatch re-delivery (real Postg
       const sink = yield* TelemetrySink;
       return yield* sink.appendBatch({ runId: forRun, runtimeId: RUNTIME_ID, batch });
     });
-
-  const spans = Effect.gen(function* () {
-    const handle = yield* SealantDB;
-    return yield* handle
-      .select()
-      .from(telemetryLossSpans)
-      .where(eq(telemetryLossSpans.runtimeId, RUNTIME_ID))
-      .orderBy(asc(telemetryLossSpans.fromSequence));
-  });
 
   const stored = Effect.gen(function* () {
     const handle = yield* SealantDB;
@@ -170,8 +177,8 @@ describe.skipIf(DATABASE_URL === undefined)("appendBatch re-delivery (real Postg
     });
     const batch = [started, ...events(2n, 3)];
     const [first, second] = await run(Effect.all([append(batch), append(batch)]));
-    expect(first.appended).toHaveLength(4);
-    expect(second).toEqual({ appended: [], conflicts: [] });
+    expect(first).toHaveLength(4);
+    expect(second).toEqual([]);
     expect((await run(stored)).map((row) => row.sequence)).toEqual([1n, 2n, 3n, 4n]);
     expect(errors).toEqual([]);
   });
@@ -181,8 +188,7 @@ describe.skipIf(DATABASE_URL === undefined)("appendBatch re-delivery (real Postg
     await run(append(events(10n, 3)));
     // The first attempt's commit was not acknowledged; the retry carries it again, and more.
     const retried = await run(append(events(10n, 5)));
-    expect(retried.appended.map((committed) => committed.sequence)).toEqual([13n, 14n]);
-    expect(retried.conflicts).toEqual([]);
+    expect(retried.map((committed) => committed.sequence)).toEqual([13n, 14n]);
     expect(
       (await run(stored)).filter((row) => row.sequence >= 10n).map((row) => row.sequence),
     ).toEqual([10n, 11n, 12n, 13n, 14n]);
@@ -237,14 +243,21 @@ describe.skipIf(DATABASE_URL === undefined)("appendBatch re-delivery (real Postg
       }),
     );
     if (Result.isFailure(outcome)) throw new Error(rootCauseMessage(outcome.failure));
-    expect(outcome.success).toEqual({ appended: [], conflicts: [] });
+    expect(outcome.success).toEqual([]);
     expect(
       (await run(stored)).filter((row) => row.eventId === raced.eventId).map((row) => row.sequence),
     ).toEqual([5000n]);
     expect(errors).toEqual([]);
   });
 
-  it("keeps the stored event, records the conflict and returns it when a different event reuses its id or position", async () => {
+  /** Runs `effect` and returns its failure; fails the test when it succeeds. */
+  const failureOf = async <A, E>(effect: Effect.Effect<A, E, TelemetrySink | SealantDB>) => {
+    const outcome = await run(Effect.result(effect));
+    if (Result.isSuccess(outcome)) throw new Error("expected the append to fail");
+    return outcome.failure;
+  };
+
+  it("keeps the stored events, stores the rest and fails naming the ones that reuse an id or position", async () => {
     errors.length = 0;
     await run(append([event(100n), event(101n)]));
     // Same id, another sequence: the old arbiter let it through to fail on the primary key.
@@ -254,15 +267,16 @@ describe.skipIf(DATABASE_URL === undefined)("appendBatch re-delivery (real Postg
       eventId: "evt_redelivery_other",
       payload: { case: "runtimeHeartbeat", value: { state: 2 } },
     });
-    const result = await run(append([sameId, samePosition, event(103n)]));
+    const failure = await failureOf(append([sameId, samePosition, event(103n)]));
 
-    expect(result.appended.map((row) => row.sequence)).toEqual([103n]);
-    expect(
-      result.conflicts.map((conflict) => [conflict.eventId, conflict.sequence, conflict.runId]),
-    ).toEqual([
-      ["evt_redelivery_64", 102n, runId],
-      ["evt_redelivery_other", 101n, runId],
+    expect(failure).toBeInstanceOf(TelemetrySinkConflictError);
+    expect(failure instanceof TelemetrySinkConflictError && failure.eventIds).toEqual([
+      "evt_redelivery_64",
+      "evt_redelivery_other",
     ]);
+    expect(failure.message).toBe(
+      "2 event(s) differ from the ones the record holds (evt_redelivery_64 with other sequence, observedAt, monotonicTimestamp, payload; evt_redelivery_other at the position of evt_redelivery_65); the record keeps its own",
+    );
     const kept = (await run(stored)).filter((row) => row.sequence >= 100n && row.sequence < 200n);
     expect(kept.map((row) => [row.eventId, row.sequence, row.payloadCase])).toEqual([
       ["evt_redelivery_64", 100n, "ioChunk"],
@@ -270,84 +284,39 @@ describe.skipIf(DATABASE_URL === undefined)("appendBatch re-delivery (real Postg
       ["evt_redelivery_67", 103n, "ioChunk"],
     ]);
     expect(errors).toHaveLength(1);
-    expect(errors[0]).toContain("2 re-delivered event(s)");
-    const recorded = (await run(spans)).filter(
-      (span) => span.fromSequence !== null && span.fromSequence >= 100n && span.fromSequence < 200n,
-    );
-    expect(recorded.map((span) => [span.runId, span.kind, span.fromSequence, span.reason])).toEqual(
-      [
-        [
-          runId,
-          "dropped_event",
-          101n,
-          "event evt_redelivery_other was delivered at the position of evt_redelivery_65; the stored one is kept",
-        ],
-        [
-          runId,
-          "dropped_event",
-          102n,
-          "event evt_redelivery_64 was delivered again with other sequence, observedAt, monotonicTimestamp, payload; the stored one is kept",
-        ],
-      ],
-    );
   });
 
-  it("reports a conflicting output event to the record writer, which does not call the record whole", async () => {
+  it("fails naming a different event that reuses an id inside one batch", async () => {
     errors.length = 0;
-    // The reviewer's case: a heartbeat at 600, then an output event at 601 reusing its id.
-    const heartbeat = event(600n, { payload: { case: "runtimeHeartbeat", value: { state: 2 } } });
-    const output = { ...event(601n), eventId: heartbeat.eventId };
-    const loss = await run(
-      Effect.gen(function* () {
-        yield* append([heartbeat]);
-        const sink = yield* TelemetrySink;
-        const writer = makeRunRecordWriter(sink, { runId, runtimeId: RUNTIME_ID });
-        yield* writer.append([output]);
-        return yield* writer.verify;
-      }),
-    );
-    expect(loss).toMatchObject({ events: 1, fromSequence: 601n, toSequence: 601n });
-    expect((await run(spans)).some((span) => span.fromSequence === 601n)).toBe(true);
+    // The reviewer's case: a heartbeat and an output event with its id, in ONE batch. The old
+    // in-batch dedup dropped the output without a word.
+    const heartbeat = event(650n, { payload: { case: "runtimeHeartbeat", value: { state: 2 } } });
+    const output = { ...event(651n), eventId: heartbeat.eventId };
+    const failure = await failureOf(append([heartbeat, output]));
+
+    expect(failure instanceof TelemetrySinkConflictError && failure.eventIds).toEqual([
+      heartbeat.eventId,
+    ]);
+    expect(
+      (await run(stored))
+        .filter((row) => row.sequence >= 650n && row.sequence < 660n)
+        .map((row) => [row.sequence, row.payloadCase]),
+    ).toEqual([[650n, "runtimeHeartbeat"]]);
+    // A copy of the same event in one batch is no conflict.
+    expect(await run(append([event(652n), event(652n)]))).toHaveLength(1);
   });
 
-  it("takes a run-tagged event stored under another run as a conflict for its own run", async () => {
+  it("fails on a run-tagged event stored under another run, but not the other way round", async () => {
     errors.length = 0;
     // The ingester's attribution fell back to another run; the job appends it for the exec run.
     const output = event(700n, { executionId: runId });
-    const result = await run(
-      Effect.gen(function* () {
-        yield* append([output], otherRunId);
-        return yield* append([output]);
-      }),
-    );
-    expect(result.conflicts).toMatchObject([
-      { eventId: output.eventId, runId, differences: ["runId"] },
+    await run(append([output], otherRunId));
+    const failure = await failureOf(append([output]));
+    expect(failure instanceof TelemetrySinkConflictError && failure.eventIds).toEqual([
+      output.eventId,
     ]);
-    // The other way round (the job stored it rightly, the ingester's fallback re-delivers) is the
-    // same event.
+    // The job stored it rightly, and the ingester's fallback delivers it again: the same event.
     const rightly = event(701n, { executionId: runId });
-    const again = await run(Effect.andThen(append([rightly]), append([rightly], otherRunId)));
-    expect(again).toEqual({ appended: [], conflicts: [] });
-  });
-
-  it("counts the stored events of each range, a tagged one only under the run", async () => {
-    await run(append([event(800n), event(801n)]));
-    await run(append([event(802n, { executionId: runId })], otherRunId));
-    const counts = await run(
-      Effect.gen(function* () {
-        const sink = yield* TelemetrySink;
-        return yield* sink.countStored({
-          runId,
-          runtimeId: RUNTIME_ID,
-          ranges: [
-            { from: 800n, to: 801n, tagged: false },
-            { from: 802n, to: 802n, tagged: true },
-            { from: 802n, to: 802n, tagged: false },
-            { from: 803n, to: 805n, tagged: false },
-          ],
-        });
-      }),
-    );
-    expect(counts).toEqual([2, 0, 1, 0]);
+    expect(await run(Effect.andThen(append([rightly]), append([rightly], otherRunId)))).toEqual([]);
   });
 });

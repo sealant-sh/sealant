@@ -28,11 +28,10 @@ import {
 } from "@sealant/db";
 import {
   InlineByteaArtifactStoreLive,
-  makeRunRecordWriter,
   normalizeEnvelope,
   PostgresTelemetrySinkLive,
-  type RunRecordLoss,
   TelemetrySink,
+  TelemetrySinkConflictError,
 } from "@sealant/telemetry";
 import {
   buildDotfilesCleanupScript,
@@ -146,24 +145,8 @@ export class ProcessUserUnavailableError extends Schema.TaggedErrorClass<Process
 ) {}
 
 /**
- * The command ran, but part of its record is not in the log (the store refused it and no other
- * writer stored it, or a different event holds its place): its output is not all kept, so the run
- * fails, with the exit code and changes it did record.
- */
-export class RunRecordIncompleteError extends Schema.TaggedErrorClass<RunRecordIncompleteError>()(
-  "RunRecordIncompleteError",
-  { message: Schema.String, exitCode: Schema.Number },
-) {}
-
-const describeRecordLoss = (loss: RunRecordLoss, exitCode: number) =>
-  `${exitCode === -1 ? "The command's exit was not observed" : `The command exited ${String(exitCode)}`}, but ${String(loss.events)} event(s) of its record (sequences ${loss.fromSequence.toString()}–${loss.toSequence.toString()}) are not stored: ${loss.reason}`;
-
-/**
  * Execs the harness and records its telemetry, bounded to the harness process. Returns the exit
- * code. A batch the record store refuses does not stop or slow the recording (see
- * `makeRunRecordWriter`): the process is followed to its exit, the log is then checked for what was
- * refused, and only events not in it fail the capture, with a {@link RunRecordIncompleteError}.
- * With `user`, the daemon starts the process as that Linux user (`ExecArgs.user`), and only a
+ * code. With `user`, the daemon starts the process as that Linux user (`ExecArgs.user`), and only a
  * daemon that reports `exec.user` is asked to (one capabilities read on the same connection).
  */
 export const captureRun = (
@@ -210,7 +193,6 @@ export const captureRun = (
       );
 
       yield* sink.openEpoch({ runId, runtimeId, schemaVersion: 0 });
-      const record = makeRunRecordWriter(sink, { runId, runtimeId });
 
       let exitCode = -1;
       const drain = session.events.pipe(
@@ -231,7 +213,9 @@ export const captureRun = (
           }),
         ),
         Stream.groupedWithin(BATCH_SIZE, BATCH_WINDOW),
-        Stream.mapEffect((batch) => record.append(Array.from(batch).map(normalizeEnvelope))),
+        Stream.mapEffect((batch) =>
+          sink.appendBatch({ runId, runtimeId, batch: Array.from(batch).map(normalizeEnvelope) }),
+        ),
         Stream.runDrain,
       );
 
@@ -249,13 +233,6 @@ export const captureRun = (
           ),
         ),
       );
-      const loss = yield* record.verify;
-      if (loss !== undefined) {
-        return yield* new RunRecordIncompleteError({
-          message: describeRecordLoss(loss, exitCode),
-          exitCode,
-        });
-      }
       return exitCode;
     }),
   );
@@ -319,19 +296,25 @@ const captureChanges = (runId: string, target: SealantTarget) =>
     return { diff, changedFiles: parseNameStatus(nameStatus) };
   });
 
+/**
+ * The run's record could not take one of its events: the log holds a different event at its id or
+ * position. Its output is not all recorded, so the run fails, saying why.
+ */
+const recordConflictMessage = (error: TelemetrySinkConflictError) =>
+  `The run's record could not take its events: ${error.message}.`;
+
 /** HARNESS framing: one command; a nonzero exit marks the run failed. */
 const produceHarnessRun = (runId: string, target: SealantTarget, command: RunExecCommand) =>
   Effect.gen(function* () {
     const runs = yield* RunRepo;
     const captured = yield* captureRun(runId, target, command).pipe(
-      Effect.catchTag("RunRecordIncompleteError", Effect.succeed),
+      Effect.catchTag("TelemetrySinkConflictError", Effect.succeed),
     );
     const changes = yield* captureChanges(runId, target);
-    if (captured instanceof RunRecordIncompleteError) {
+    if (typeof captured !== "number") {
       yield* runs.markRunFailed({
         id: runId,
-        exitCode: captured.exitCode,
-        errorMessage: captured.message,
+        errorMessage: recordConflictMessage(captured),
         ...changes,
       });
       return;
@@ -364,13 +347,12 @@ export const produceExecRun = (
           runs.markRunFailed({ id: runId, errorMessage: error.message }).pipe(Effect.as(undefined)),
         ),
         // The commands after it do not run; what the ones before it changed is still the run's.
-        Effect.catchTag("RunRecordIncompleteError", (error) =>
+        Effect.catchTag("TelemetrySinkConflictError", (error) =>
           Effect.gen(function* () {
             const changes = yield* captureChanges(runId, target);
             yield* runs.markRunFailed({
               id: runId,
-              ...(error.exitCode === -1 ? {} : { exitCode: error.exitCode }),
-              errorMessage: `Command ${index + 1}/${commands.length} (${command.executable}): ${error.message}; check run aborted.`,
+              errorMessage: `Command ${index + 1}/${commands.length} (${command.executable}): ${recordConflictMessage(error)} Check run aborted.`,
               ...changes,
             });
             return undefined;
@@ -456,7 +438,6 @@ export const produceDotfilesRun = (
         Effect.retry(BRIDGE_RETRY),
       );
       yield* sink.openEpoch({ runId, runtimeId, schemaVersion: 0 });
-      const record = makeRunRecordWriter(sink, { runId, runtimeId });
 
       // Only the directory the API staged for this run is ever removed.
       const staged =
@@ -526,7 +507,9 @@ export const produceDotfilesRun = (
           }),
         ),
         Stream.groupedWithin(BATCH_SIZE, BATCH_WINDOW),
-        Stream.mapEffect((batch) => record.append(Array.from(batch).map(normalizeEnvelope))),
+        Stream.mapEffect((batch) =>
+          sink.appendBatch({ runId, runtimeId, batch: Array.from(batch).map(normalizeEnvelope) }),
+        ),
         Stream.runDrain,
         Effect.timeout(options.bootstrapTimeout ?? DOTFILES_BOOTSTRAP_TIMEOUT),
         Effect.result,
@@ -544,18 +527,16 @@ export const produceDotfilesRun = (
         return;
       }
       if (exitCode === undefined) {
+        const conflict =
+          Result.isFailure(drained) && drained.failure instanceof TelemetrySinkConflictError
+            ? drained.failure
+            : undefined;
         yield* runs.markRunFailed({
           id: runId,
-          errorMessage: `The dotfiles were applied as ${dotfiles.user}; their bootstrap's exit was not observed (the connection to the workspace closed).`,
-        });
-        return;
-      }
-      const loss = yield* record.verify;
-      if (loss !== undefined) {
-        yield* runs.markRunFailed({
-          id: runId,
-          exitCode,
-          errorMessage: `The dotfiles were applied as ${dotfiles.user}; their bootstrap's record is incomplete. ${describeRecordLoss(loss, exitCode)}`,
+          errorMessage:
+            conflict === undefined
+              ? `The dotfiles were applied as ${dotfiles.user}; their bootstrap's exit was not observed (the connection to the workspace closed).`
+              : `The dotfiles were applied as ${dotfiles.user}; ${recordConflictMessage(conflict)}`,
         });
         return;
       }

@@ -104,7 +104,7 @@ const world = (daemon: {
     appendBatch: (input: { readonly batch: ReadonlyArray<{ readonly processId?: string }> }) =>
       Effect.sync(() => {
         for (const normalized of input.batch) appended.push(normalized.processId);
-        return { appended: input.batch, conflicts: [] };
+        return [];
       }),
     closeEpoch: (input: { readonly closeReason: string }) =>
       Effect.sync(() => epochs.push(`close:${input.closeReason}`)),

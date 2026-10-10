@@ -11,10 +11,9 @@
  * concurrent insert of the same row. With `(runtime_id, sequence)` as the only arbiter, a run-exec
  * job and the full-stream ingester inserting the same event at once failed the second insert on
  * the primary key (2026-10-10, a person's exec run). The events the insert did not take are then
- * read back: the same event, in a run that holds it, is nothing. A different one is a conflict: the
- * stored event is kept, the conflict is recorded as a `dropped_event` loss span on the run it was
- * appended for and logged as an error, and the append returns it, so no writer takes it as stored
- * (see `redelivery.ts`).
+ * read back. The same event, in a run that holds it, is nothing. A different one (or two different
+ * events with one id in the batch) is a conflict: the log keeps what it has, and the append, after
+ * storing the rest, fails with a `TelemetrySinkConflictError` naming them (see `redelivery.ts`).
  */
 import {
   SealantDB,
@@ -31,9 +30,13 @@ import { and, asc, eq, inArray, max, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Stream } from "effect";
 
 import { ArtifactStore, type ArtifactStoreService } from "./artifact-store.js";
-import { type TelemetrySinkError, withTelemetrySinkError } from "./errors.js";
+import {
+  TelemetrySinkConflictError,
+  type TelemetrySinkError,
+  withTelemetrySinkError,
+} from "./errors.js";
 import { deriveScrollbackRow, deriveTimelineRow, eventRow } from "./normalize.js";
-import { type ConflictingRedelivery, conflictingRedeliveries } from "./redelivery.js";
+import { conflictingRedeliveries, describeConflicts, splitDuplicateIds } from "./redelivery.js";
 import type { LossSpanInput, NormalizedEvent } from "./types.js";
 
 export interface OpenEpochInput {
@@ -53,30 +56,6 @@ export interface AppendBatchInput {
   readonly batch: readonly NormalizedEvent[];
 }
 
-export interface AppendBatchResult {
-  /** The events this append stored. */
-  readonly appended: readonly NormalizedEvent[];
-  /**
-   * The events it did not take because a different event holds their id or position (or the same
-   * event is in another run). Each is recorded as a loss span; none is stored as given.
-   */
-  readonly conflicts: readonly ConflictingRedelivery[];
-}
-
-/** Consecutive sequences of one runtime that a writer saw and wants confirmed in the log. */
-export interface SequenceRange {
-  readonly from: bigint;
-  readonly to: bigint;
-  /** Tagged with the run as its execution: stored under the run, not just anywhere. */
-  readonly tagged: boolean;
-}
-
-export interface CountStoredInput {
-  readonly runId: string;
-  readonly runtimeId: string;
-  readonly ranges: readonly SequenceRange[];
-}
-
 export interface InsertLossSpanInput {
   readonly runId: string;
   readonly runtimeId: string;
@@ -93,17 +72,13 @@ export interface CloseEpochInput {
 
 export interface TelemetrySinkService {
   readonly openEpoch: (input: OpenEpochInput) => Effect.Effect<OpenEpochResult, TelemetrySinkError>;
-  /** Append a batch idempotently: what it stored, and what conflicts with the stored log. */
+  /**
+   * Append a batch idempotently; returns ONLY the newly-committed events. Fails with a
+   * `TelemetrySinkConflictError` when an event is not the one the log holds at its id or position.
+   */
   readonly appendBatch: (
     input: AppendBatchInput,
-  ) => Effect.Effect<AppendBatchResult, TelemetrySinkError>;
-  /**
-   * How many events of each range are in the log, a tagged range's only under `runId`. A range
-   * whose count is its length is whole.
-   */
-  readonly countStored: (
-    input: CountStoredInput,
-  ) => Effect.Effect<readonly number[], TelemetrySinkError>;
+  ) => Effect.Effect<readonly NormalizedEvent[], TelemetrySinkError>;
   readonly insertLossSpan: (input: InsertLossSpanInput) => Effect.Effect<void, TelemetrySinkError>;
   readonly closeEpoch: (input: CloseEpochInput) => Effect.Effect<void, TelemetrySinkError>;
   readonly getMaxSequence: (runtimeId: string) => Effect.Effect<bigint | null, TelemetrySinkError>;
@@ -130,79 +105,39 @@ const selectMaxSequence = (db: TSealantDB, runtimeId: string) =>
     );
 
 /**
- * Reads back the events an insert did not take and returns each that is not the event the log
- * holds, in a run that holds it, after recording it as a loss span on the run it was for. A read
- * that fails fails the append: the batch is committed, so a retry stores nothing again and reads
- * back once more, and a writer that does not retry has not seen these events confirmed.
+ * Reads back the events an insert did not take: those that are not the event the log holds, in a
+ * run that holds it. A read that fails fails the append: the batch is committed, so a retry stores
+ * nothing again and reads back once more.
  */
-const recordConflictingRedeliveries = (
+const readBackConflicts = (
   db: TSealantDB,
   skipped: readonly NormalizedEvent[],
   runIdFor: (event: NormalizedEvent) => string,
-) =>
-  Effect.gen(function* () {
-    const sequencesByRuntime = new Map<string, bigint[]>();
-    for (const event of skipped) {
-      const sequences = sequencesByRuntime.get(event.runtimeId) ?? [];
-      sequences.push(event.sequence);
-      sequencesByRuntime.set(event.runtimeId, sequences);
-    }
-    const stored = yield* db
-      .select()
-      .from(telemetryEvents)
-      .where(
-        or(
-          inArray(
-            telemetryEvents.eventId,
-            skipped.map((event) => event.eventId),
-          ),
-          ...[...sequencesByRuntime].map(([runtimeId, sequences]) =>
-            and(
-              eq(telemetryEvents.runtimeId, runtimeId),
-              inArray(telemetryEvents.sequence, sequences),
-            ),
+) => {
+  const sequencesByRuntime = new Map<string, bigint[]>();
+  for (const event of skipped) {
+    const sequences = sequencesByRuntime.get(event.runtimeId) ?? [];
+    sequences.push(event.sequence);
+    sequencesByRuntime.set(event.runtimeId, sequences);
+  }
+  return db
+    .select()
+    .from(telemetryEvents)
+    .where(
+      or(
+        inArray(
+          telemetryEvents.eventId,
+          skipped.map((event) => event.eventId),
+        ),
+        ...[...sequencesByRuntime].map(([runtimeId, sequences]) =>
+          and(
+            eq(telemetryEvents.runtimeId, runtimeId),
+            inArray(telemetryEvents.sequence, sequences),
           ),
         ),
-      );
-    const conflicts = conflictingRedeliveries(skipped, stored, runIdFor);
-    if (conflicts.length === 0) return conflicts;
-
-    yield* db
-      .insert(telemetryLossSpans)
-      .values(
-        conflicts.map((conflict) => {
-          const span: LossSpanInput = {
-            kind: "dropped_event",
-            fromSequence: conflict.sequence,
-            toSequence: conflict.sequence,
-            droppedCount: 1n,
-            reason:
-              conflict.storedEventIdAtSequence === undefined
-                ? `event ${conflict.eventId} was delivered again with other ${conflict.differences.join(", ")}; the stored one is kept`
-                : `event ${conflict.eventId} was delivered at the position of ${conflict.storedEventIdAtSequence}; the stored one is kept`,
-            detectedVia: "marker",
-            atSequence: conflict.sequence,
-            key: "conflict",
-          };
-          return lossSpanRow(conflict.runId, conflict.runtimeId, span);
-        }),
-      )
-      .onConflictDoNothing();
-    yield* Effect.logError(
-      `telemetry: ${String(conflicts.length)} re-delivered event(s) differ from the stored ones; the stored events are kept and the conflicts recorded`,
-      conflicts,
-    );
-    return conflicts;
-  });
-
-const COUNT_STORED_CHUNK = 500;
-
-const chunksOf = <A>(items: readonly A[], size: number): A[][] => {
-  const chunks: A[][] = [];
-  for (let start = 0; start < items.length; start += size) {
-    chunks.push(items.slice(start, start + size));
-  }
-  return chunks;
+      ),
+    )
+    .pipe(Effect.map((stored) => conflictingRedeliveries(skipped, stored, runIdFor)));
 };
 
 /**
@@ -214,26 +149,13 @@ const lossSpanId = (runId: string, runtimeId: string, span: LossSpanInput): stri
     case "sequence_gap":
       return `tls_${runId}_${runtimeId}_gap_${span.fromSequence ?? "x"}_${span.toSequence ?? "x"}`;
     case "dropped_event":
-      return `tls_${runId}_${runtimeId}_drop_${span.atSequence ?? "x"}${span.key === undefined ? "" : `_${span.key}`}`;
+      return `tls_${runId}_${runtimeId}_drop_${span.atSequence ?? "x"}`;
     case "watch_overflow":
       return `tls_${runId}_${runtimeId}_watch_${span.atSequence ?? "x"}`;
     case "early_close":
       return `tls_${runId}_${runtimeId}_early_close`;
   }
 };
-
-const lossSpanRow = (runId: string, runtimeId: string, span: LossSpanInput) => ({
-  id: lossSpanId(runId, runtimeId, span),
-  runId,
-  runtimeId,
-  kind: span.kind,
-  fromSequence: span.fromSequence ?? null,
-  toSequence: span.toSequence ?? null,
-  droppedCount: span.droppedCount ?? null,
-  priority: span.priority ?? null,
-  reason: span.reason ?? null,
-  detectedVia: span.detectedVia,
-});
 
 export const makePostgresTelemetrySink = (
   db: TSealantDB,
@@ -263,22 +185,16 @@ export const makePostgresTelemetrySink = (
     withTelemetrySinkError(
       "appendBatch",
       Effect.gen(function* () {
-        // Defensive intra-batch dedup on the absolute key.
-        const seen = new Set<string>();
-        const batch = input.batch.filter((event) => {
-          if (seen.has(event.eventId)) {
-            return false;
-          }
-          seen.add(event.eventId);
-          return true;
-        });
-        if (batch.length === 0) {
-          return { appended: [], conflicts: [] };
-        }
-
         // Per-event attribution: an event tagged (via `attributeBatch`) with a sibling run's id is
         // stored under THAT run; everything else lands on the connection's default run.
         const runIdFor = (event: NormalizedEvent): string => event.attributedRunId ?? input.runId;
+
+        // Intra-batch dedup on the absolute key: a copy of the same event is dropped, a different
+        // event reusing an id is a conflict, never silently dropped.
+        const { unique: batch, conflicts: inBatch } = splitDuplicateIds(input.batch, runIdFor);
+        if (batch.length === 0) {
+          return [];
+        }
 
         // Offload content BEFORE the transaction so the tx stays short.
         yield* Effect.forEach(
@@ -328,12 +244,10 @@ export const makePostgresTelemetrySink = (
                 maxSeq = event.sequence;
               }
             }
-            // Never lowered (GREATEST skips a NULL): a held-back batch can be appended after later ones.
+            // Never lowered (GREATEST skips a NULL), whichever writer commits last.
             yield* tx
               .update(telemetryRunEpochs)
-              .set({
-                lastSequence: sql`greatest(${telemetryRunEpochs.lastSequence}, ${maxSeq})`,
-              })
+              .set({ lastSequence: sql`greatest(${telemetryRunEpochs.lastSequence}, ${maxSeq})` })
               .where(
                 and(
                   eq(telemetryRunEpochs.runId, input.runId),
@@ -345,16 +259,22 @@ export const makePostgresTelemetrySink = (
           }),
         );
 
-        if (appended.length === batch.length) {
-          return { appended, conflicts: [] };
-        }
         const appendedIds = new Set(appended.map((event) => event.eventId));
-        const conflicts = yield* recordConflictingRedeliveries(
-          db,
-          batch.filter((event) => !appendedIds.has(event.eventId)),
-          runIdFor,
-        );
-        return { appended, conflicts };
+        const skipped = batch.filter((event) => !appendedIds.has(event.eventId));
+        const conflicts = [
+          ...inBatch,
+          ...(skipped.length === 0 ? [] : yield* readBackConflicts(db, skipped, runIdFor)),
+        ];
+        if (conflicts.length > 0) {
+          const message = describeConflicts(conflicts);
+          yield* Effect.logError(`telemetry: ${message}`, conflicts);
+          return yield* new TelemetrySinkConflictError({
+            operation: "appendBatch",
+            message,
+            eventIds: conflicts.map((conflict) => conflict.eventId),
+          });
+        }
+        return appended;
       }),
     ),
 
@@ -363,7 +283,18 @@ export const makePostgresTelemetrySink = (
       "insertLossSpan",
       db
         .insert(telemetryLossSpans)
-        .values(lossSpanRow(input.runId, input.runtimeId, input.span))
+        .values({
+          id: lossSpanId(input.runId, input.runtimeId, input.span),
+          runId: input.runId,
+          runtimeId: input.runtimeId,
+          kind: input.span.kind,
+          fromSequence: input.span.fromSequence ?? null,
+          toSequence: input.span.toSequence ?? null,
+          droppedCount: input.span.droppedCount ?? null,
+          priority: input.span.priority ?? null,
+          reason: input.span.reason ?? null,
+          detectedVia: input.span.detectedVia,
+        })
         .onConflictDoNothing()
         .pipe(Effect.asVoid),
     ),
@@ -408,37 +339,6 @@ export const makePostgresTelemetrySink = (
             .onConflictDoNothing();
         }
       }),
-    ),
-
-  countStored: (input) =>
-    withTelemetrySinkError(
-      "countStored",
-      Effect.forEach(chunksOf(input.ranges, COUNT_STORED_CHUNK), (ranges) =>
-        db
-          .execute<{ idx: number; n: number }>(
-            sql`SELECT r.idx, count(e.event_id)::int AS n
-              FROM jsonb_to_recordset(${JSON.stringify(
-                ranges.map((range, idx) => ({
-                  idx,
-                  from: range.from.toString(),
-                  to: range.to.toString(),
-                  tagged: range.tagged,
-                })),
-              )}::jsonb) AS r(idx int, "from" bigint, "to" bigint, tagged boolean)
-              LEFT JOIN ${telemetryEvents} e
-                ON e.runtime_id = ${input.runtimeId}
-               AND e.sequence BETWEEN r."from" AND r."to"
-               AND (NOT r.tagged OR e.run_id = ${input.runId})
-              GROUP BY r.idx`,
-          )
-          .pipe(
-            Effect.map((rows) => {
-              const counts = ranges.map(() => 0);
-              for (const row of rows) counts[row.idx] = row.n;
-              return counts;
-            }),
-          ),
-      ).pipe(Effect.map((chunks) => chunks.flat())),
     ),
 
   getMaxSequence: (runtimeId) =>

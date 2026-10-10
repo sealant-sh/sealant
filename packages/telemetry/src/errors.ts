@@ -4,7 +4,7 @@
  * `Schema.Literals` operation set + an Invariant/Unexpected `Schema.TaggedErrorClass` pair per
  * service, a `Schema.Union` error type, and a `map*`/`with*` funnel so no raw defect escapes.
  */
-import { Cause, Effect, Schema } from "effect";
+import { Effect, Schema } from "effect";
 
 /**
  * Unwraps Effect's wrapper for a rejected `Effect.tryPromise`/`Effect.promise` (effect 4 tags it
@@ -26,33 +26,12 @@ export const unwrapEffectCause = (cause: unknown): unknown => {
   return cause;
 };
 
-/**
- * The innermost cause's words: the database's ("duplicate key value violates …"), not the failed
- * query with its parameters that the sink's and the driver's errors carry. Follows `Error.cause`
- * and Effect `Cause`s (the driver's error wraps one). Cut to 300 characters for a run's message.
- */
-export const rootCauseMessage = (error: unknown): string => {
-  let innermost = error;
-  for (let depth = 0; depth < 12; depth += 1) {
-    const next = Cause.isCause(innermost)
-      ? Cause.squash(innermost)
-      : innermost instanceof Error
-        ? innermost.cause
-        : undefined;
-    if (next === undefined || next === null || next === innermost) break;
-    innermost = next;
-  }
-  const words = innermost instanceof Error ? innermost.message : String(innermost);
-  return words.length > 300 ? `${words.slice(0, 299)}…` : words;
-};
-
 // ---------------------------------------------------------------------------------------------
 // TelemetrySink
 // ---------------------------------------------------------------------------------------------
 const telemetrySinkOperation = Schema.Literals([
   "openEpoch",
   "appendBatch",
-  "countStored",
   "insertLossSpan",
   "closeEpoch",
   "getMaxSequence",
@@ -70,9 +49,24 @@ export class TelemetrySinkUnexpectedError extends Schema.TaggedErrorClass<Teleme
   { operation: telemetrySinkOperation, message: Schema.String, cause: Schema.Defect() },
 ) {}
 
+/**
+ * An append carried an event that is not the event the log holds at its id or position (other
+ * content, or a run-tagged event stored under another run). The log keeps what it has; the append
+ * fails, so no writer takes the event as recorded.
+ */
+export class TelemetrySinkConflictError extends Schema.TaggedErrorClass<TelemetrySinkConflictError>()(
+  "TelemetrySinkConflictError",
+  {
+    operation: telemetrySinkOperation,
+    message: Schema.String,
+    eventIds: Schema.Array(Schema.String),
+  },
+) {}
+
 export const telemetrySinkErrorSchema = Schema.Union([
   TelemetrySinkInvariantError,
   TelemetrySinkUnexpectedError,
+  TelemetrySinkConflictError,
 ]);
 export type TelemetrySinkError = typeof telemetrySinkErrorSchema.Type;
 
@@ -83,7 +77,8 @@ export const mapTelemetrySinkError = (
   const unwrapped = unwrapEffectCause(cause);
   if (
     unwrapped instanceof TelemetrySinkInvariantError ||
-    unwrapped instanceof TelemetrySinkUnexpectedError
+    unwrapped instanceof TelemetrySinkUnexpectedError ||
+    unwrapped instanceof TelemetrySinkConflictError
   ) {
     return unwrapped;
   }
