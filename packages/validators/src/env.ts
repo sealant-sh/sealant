@@ -342,6 +342,16 @@ export const defaultRuntimeAdapterEnvSchema = z.object({
    */
   SEALANT_WORKSPACE_ACLS: z.enum(["supported", "unsupported"]).optional(),
   /**
+   * Where people's homes are (Mend ADR 0016): a person binding's home must be a normalised path
+   * under it.
+   */
+  SEALANT_PERSON_HOMES_ROOT: z
+    .string()
+    .trim()
+    .regex(/^\/(?:[A-Za-z0-9._-]+\/?)*$/u)
+    .transform((root) => (root.length > 1 ? root.replace(/\/$/u, "") : root))
+    .default("/home"),
+  /**
    * Whether a Kubernetes install serves `tooling.services.docker` (a rootless dind sidecar in a
    * user-namespaced Pod — an operator decision). The worker reads it to build the Pod; the API
    * reads it for the create-time refusal (`workspace-docker-unsupported`), so a Docker-enabled

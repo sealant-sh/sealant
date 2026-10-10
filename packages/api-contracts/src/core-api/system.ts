@@ -42,6 +42,8 @@ export const systemIndexResponseSchema = Schema.Struct({
        * workspace's SSH sessions as its owner's own Linux user (their `credentialsHome` uid).
        */
       workspaceSshUser: Schema.optional(Schema.Boolean),
+      /** `POST /v1/users/:id/person`: a user's person bound once (what `sshAsOwner` checks). */
+      personBinding: Schema.optional(Schema.Boolean),
     }),
   ),
 });

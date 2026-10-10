@@ -420,6 +420,7 @@ describe("features()", () => {
             credentialsPiOpencode: true,
             captureOwnerMap: true,
             workspaceSshUser: true,
+            personBinding: true,
           }),
         ),
       ),
@@ -430,6 +431,7 @@ describe("features()", () => {
       credentialsPiOpencode: true,
       captureOwnerMap: true,
       workspaceSshUser: true,
+      personBinding: true,
     });
     // A control plane from before the as-user routes names only `processUser`, and its `true`
     // is not read as the routes.
@@ -440,9 +442,11 @@ describe("features()", () => {
       credentialsPiOpencode: false,
       captureOwnerMap: false,
       workspaceSshUser: false,
+      personBinding: false,
     });
     // One from before `features`: nothing.
     expect(Object.values(await readFeatures(makeCtx(withIndex(undefined))))).toEqual([
+      false,
       false,
       false,
       false,

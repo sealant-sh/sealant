@@ -15,6 +15,7 @@ import type {
   CreateConnectedAccountRequest,
   CreateSshKeyRequest,
   EnsureUserRequest,
+  PersonBindingWire,
   CreateRunRequest,
   CreateSessionAsUserRequest,
   CreateSessionRequest,
@@ -288,6 +289,11 @@ export const createAccessTokenOp = (payload: CreateAccessTokenRequest) =>
 
 export const ensureUserOp = (payload: EnsureUserRequest) =>
   Effect.flatMap(SealantApiClient, (client) => client.users.ensureUser({ payload }));
+
+export const bindUserPersonOp = (userId: string, payload: PersonBindingWire) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.users.bindUserPerson({ params: { userId }, payload }),
+  );
 
 export const getUserOp = (userId: string) =>
   Effect.flatMap(SealantApiClient, (client) => client.users.getUser({ params: { userId } }));

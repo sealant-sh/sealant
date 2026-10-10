@@ -96,11 +96,13 @@ if (
 - `workspace.processUser()` reads `supported`, `unsupported` or `unknown` from the image's sealantd;
   `launch.processUser` has it after `ready()`. The call itself asks the running daemon, whose answer
   decides.
-- `create({ credentialsHome, sshAsOwner: true })` runs the workspace's SSH sessions, VS Code
-  Remote-SSH included, as its owner's own Linux user (the `credentialsHome` uid, 40001–49999, never
-  root); no caller names the user. `workspace.sshAsRoot()` sets them back to root. A create with it
-  is refused (`ssh-user-unsupported`) with nothing sent when the control plane does not report
-  `workspaceSshUser`.
+- `users.bindPerson(userId, { id, uid, home })` binds a user's person once; a different binding, or
+  a person id or uid another user holds, rejects (`409`).
+  `create({ credentialsHome, sshAsOwner: true })` runs the workspace's SSH sessions, VS Code
+  Remote-SSH included, as the owner's bound person: the create's owner map and `credentialsHome`
+  must agree with the binding (`403` otherwise). No caller names the user. `workspace.sshAsRoot()`
+  sets them back to root. A create with it is refused (`ssh-user-unsupported`) with nothing sent
+  when the control plane does not report `workspaceSshUser`.
 - `sealant.features()` reports what the control plane can do: `processUserRoutes`, `dotfilesApply`,
   `credentialsPartialPut`, `credentialsPiOpencode`, `captureOwnerMap` and `workspaceSshUser`. Detect
   them instead of reading the control plane's version.

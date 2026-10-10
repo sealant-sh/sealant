@@ -182,9 +182,10 @@ export const createWorkspaceRequestSchema = Schema.Struct({
    */
   launchId: Schema.optional(NonEmptyString),
   /**
-   * The SSH gateway runs this workspace's SSH sessions as its owner's own Linux user: the uid of
-   * the spec's `runtime.credentialsHome` (the home Core holds the owner's logins in), required,
-   * and in 40001–49999. The caller names no user: Core takes the owner's. The user need not exist
+   * The SSH gateway runs this workspace's SSH sessions as its owner's own Linux user: the person
+   * the owner is bound to (`POST /v1/users/:id/person`). The create must carry a capture owner map
+   * giving that person their bound uid, and `runtime.credentialsHome` must be their bound uid and
+   * home; otherwise 403 (`WorkspaceSshOwnerRefusedError`). The caller names no user. The user need not exist
    * yet: until it does, an SSH session is refused, never run as root. Absent or false: root. A
    * control plane reports it takes this with `features.workspaceSshUser`; an older one ignores it.
    */
@@ -1331,6 +1332,20 @@ export class WorkspaceUnauthorizedError extends Schema.TaggedErrorClass<Workspac
   { httpApiStatus: 401 },
 ) {}
 
+/**
+ * `sshAsOwner` refused: the owner is bound to no person (`ssh-owner-unbound`), the create carries no
+ * capture owner map (`ssh-owner-needs-owner-map`), or the owner map or `credentialsHome` does not
+ * give the owner's bound person their own uid and home (`ssh-owner-mismatch`). Names no path.
+ */
+export class WorkspaceSshOwnerRefusedError extends Schema.TaggedErrorClass<WorkspaceSshOwnerRefusedError>()(
+  "WorkspaceSshOwnerRefusedError",
+  {
+    message: Schema.String,
+    code: Schema.Literals(["ssh-owner-unbound", "ssh-owner-needs-owner-map", "ssh-owner-mismatch"]),
+  },
+  { httpApiStatus: 403 },
+) {}
+
 export class WorkspaceForbiddenError extends Schema.TaggedErrorClass<WorkspaceForbiddenError>()(
   "WorkspaceForbiddenError",
   {
@@ -1402,6 +1417,7 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         WorkspaceRuntimeEnvReferencesUnsupportedError,
         WorkspaceDockerServiceUnsupportedError,
         WorkspaceForbiddenError,
+        WorkspaceSshOwnerRefusedError,
         WorkspaceNotFoundError,
         // Selected connected account exists but is not usable (status "invalid").
         WorkspaceConflictError,

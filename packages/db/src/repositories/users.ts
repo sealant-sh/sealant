@@ -1,8 +1,8 @@
-import { eq } from "drizzle-orm";
+import { eq, or } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
-import { account, user } from "../schema.js";
+import { account, user, userPersonBinding } from "../schema.js";
 
 /*
 Identity rows (the better-auth `user` table). Two writers exist: better-auth on the web side, and
@@ -17,6 +17,8 @@ const userRepoOperationSchema = Schema.Literals([
   "hasAnySignInAccounts",
   "ensureUser",
   "getUserById",
+  "bindPerson",
+  "getPersonBinding",
 ]);
 
 export class UserRepoUnexpectedError extends Schema.TaggedErrorClass<UserRepoUnexpectedError>()(
@@ -71,6 +73,23 @@ export interface EnsureUserResult {
   readonly created: boolean;
 }
 
+/** The person a user is: their owner-map id, uid and home (Mend ADR 0016). */
+export interface PersonBinding {
+  readonly personId: string;
+  readonly uid: number;
+  readonly home: string;
+}
+
+/**
+ * What a bind did: bound (now, or already with exactly these values), refused because the user
+ * is already bound to another person (never overwritten), or refused because another user holds
+ * this person id or uid.
+ */
+export type BindPersonResult =
+  | { readonly kind: "bound"; readonly created: boolean }
+  | { readonly kind: "differs" }
+  | { readonly kind: "taken"; readonly by: "person-id" | "uid" };
+
 export interface UserRepoService {
   /**
    * True once any sign-in capable account exists (better-auth `account` row). Existence check
@@ -80,6 +99,14 @@ export interface UserRepoService {
   /** Idempotent on email: returns the existing row (name refreshed) or inserts one. */
   readonly ensureUser: (input: EnsureUserInput) => Effect.Effect<EnsureUserResult, UserRepoError>;
   readonly getUserById: (id: string) => Effect.Effect<UserRecord | undefined, UserRepoError>;
+  /** Binds `userId` to a person once; the same values again are a no-op, others are refused. */
+  readonly bindPerson: (
+    userId: string,
+    person: PersonBinding,
+  ) => Effect.Effect<BindPersonResult, UserRepoError>;
+  readonly getPersonBinding: (
+    userId: string,
+  ) => Effect.Effect<PersonBinding | undefined, UserRepoError>;
 }
 
 const toRecord = (row: {
@@ -164,6 +191,63 @@ export const UserRepoLive = Layer.effect(
               .where(eq(user.id, id))
               .limit(1);
             return row === undefined ? undefined : toRecord(row);
+          }),
+        ),
+      getPersonBinding: (userId) =>
+        withUserRepoError(
+          "getPersonBinding",
+          Effect.gen(function* () {
+            const [row] = yield* db
+              .select()
+              .from(userPersonBinding)
+              .where(eq(userPersonBinding.userId, userId))
+              .limit(1);
+            return row === undefined
+              ? undefined
+              : { personId: row.personId, uid: row.personUid, home: row.personHome };
+          }),
+        ),
+      bindPerson: (userId, person) =>
+        withUserRepoError(
+          "bindPerson",
+          Effect.gen(function* () {
+            const same = (row: { personId: string; personUid: number; personHome: string }) =>
+              row.personId === person.personId &&
+              row.personUid === person.uid &&
+              row.personHome === person.home;
+            const inserted = yield* db
+              .insert(userPersonBinding)
+              .values({
+                userId,
+                personId: person.personId,
+                personUid: person.uid,
+                personHome: person.home,
+              })
+              .onConflictDoNothing()
+              .returning({ userId: userPersonBinding.userId });
+            if (inserted.length > 0) return { kind: "bound", created: true } as const;
+            // Nothing written: this user is bound already, or the person id or uid is another's.
+            const rows = yield* db
+              .select()
+              .from(userPersonBinding)
+              .where(
+                or(
+                  eq(userPersonBinding.userId, userId),
+                  eq(userPersonBinding.personId, person.personId),
+                  eq(userPersonBinding.personUid, person.uid),
+                ),
+              );
+            const own = rows.find((row) => row.userId === userId);
+            if (own !== undefined) {
+              return same(own)
+                ? ({ kind: "bound", created: false } as const)
+                : ({ kind: "differs" } as const);
+            }
+            const holder = rows.find((row) => row.userId !== userId);
+            return {
+              kind: "taken",
+              by: holder !== undefined && holder.personId === person.personId ? "person-id" : "uid",
+            } as const;
           }),
         ),
       hasAnySignInAccounts: () =>

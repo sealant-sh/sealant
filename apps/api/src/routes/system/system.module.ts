@@ -30,6 +30,7 @@ export const getIndex = () => {
       credentialsPiOpencode: true,
       captureOwnerMap: true,
       workspaceSshUser: true,
+      personBinding: true,
     },
   } satisfies SystemIndexResponse);
 };

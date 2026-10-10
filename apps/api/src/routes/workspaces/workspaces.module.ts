@@ -18,6 +18,7 @@ import {
   WorkspaceRuntimeEnvReferencesUnsupportedError,
   WorkspaceConflictError,
   WorkspaceForbiddenError,
+  WorkspaceSshOwnerRefusedError,
   WorkspaceInternalServerError,
   WorkspaceNotFoundError,
   WorkspaceServiceUnavailableError,
@@ -83,6 +84,7 @@ import {
   WorkspaceCreateReservationRepo,
   DatabaseTransaction,
   executorOriginFromStored,
+  UserRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
   type ConnectedAccount,
@@ -101,9 +103,7 @@ import {
 } from "@sealant/validators";
 import {
   personLayoutCapability,
-  PROCESS_USER_RANGE_RULE,
   processUserCapability,
-  processUserProblem,
   type ProcessUserChannel,
   planWorkspaceImageBuild,
   type PersonLayoutContext,
@@ -1672,7 +1672,8 @@ export const createWorkspace = (input: {
     const parsedSpec = yield* parseWorkspaceSpec(body.spec);
     // The owner's own Linux user, never one the caller names (Mend ADR 0016, decision 10): the
     // uid of the home Core writes and holds the owner's logins in.
-    const sshUser = body.sshAsOwner === true ? yield* ownerSshUser(parsedSpec) : undefined;
+    const sshUser =
+      body.sshAsOwner === true ? yield* ownerSshUser(parsedSpec, body.ownerUserId) : undefined;
 
     // A managed family installs the catalog's packages only. Refuse an unknown id here, as a 400
     // naming it, rather than minutes later as a failed build. A custom base image takes any
@@ -1985,35 +1986,72 @@ export const createWorkspace = (input: {
 };
 
 /**
- * The Linux user a workspace's SSH sessions run as, for `sshAsOwner`: its owner's own, the uid of
- * the spec's `credentialsHome` (the home Core writes and holds the owner's logins in), never a user
- * the caller names, so an owner cannot pick another person's identity. In range and never root
- * (`processUserProblem`, as for the as-user routes); whether the user exists and is one of the
- * executor's people, the executor's sealantd decides when a session opens, and until then the
- * gateway refuses the session rather than run it as root.
+ * The Linux user a workspace's SSH sessions run as, for `sshAsOwner`: its owner's own person, as
+ * bound once at enrollment (`POST /v1/users/:id/person`), never a user the create names. The
+ * create must agree with that binding: its capture owner map gives the person their bound uid,
+ * and its `credentialsHome` is their bound uid and home. So no create, whatever it sends, can pick
+ * another person's identity. Refusals name no path. Whether the user exists in the executor and
+ * is one of its people, sealantd decides when a session opens; until then the gateway refuses
+ * the session rather than run it as root.
  */
-const ownerSshUser = (spec: {
-  readonly runtime: { readonly credentialsHome?: { readonly uid: number } | undefined };
-}) => {
-  const home = spec.runtime.credentialsHome;
-  if (home === undefined) {
-    return Effect.fail(
-      new WorkspaceBadRequestError({
-        message:
-          "sshAsOwner needs runtime.credentialsHome: SSH sessions run as the owner's user, the uid of the home their logins are written to.",
-      }),
+const refuseSshOwner = (
+  code: "ssh-owner-unbound" | "ssh-owner-needs-owner-map" | "ssh-owner-mismatch",
+  message: string,
+) => new WorkspaceSshOwnerRefusedError({ code, message });
+
+const ownerSshUser = (
+  spec: {
+    readonly sources: {
+      readonly workspace:
+        | {
+            readonly kind: "capture";
+            readonly ownerMap?:
+              | { readonly people: ReadonlyArray<{ readonly id: string; readonly uid: number }> }
+              | undefined;
+          }
+        | { readonly kind: string };
+    };
+    readonly runtime: {
+      readonly credentialsHome?: { readonly path: string; readonly uid: number } | undefined;
+    };
+  },
+  ownerUserId: string,
+) =>
+  Effect.gen(function* () {
+    const binding = yield* withInternalError(
+      (yield* UserRepo).getPersonBinding(ownerUserId),
+      "Failed to read the owner's person binding.",
     );
-  }
-  const user = String(home.uid);
-  const problem = processUserProblem(user);
-  return problem === undefined
-    ? Effect.succeed(user)
-    : Effect.fail(
-        new WorkspaceBadRequestError({
-          message: `sshAsOwner: the owner's uid ${user} is refused: ${problem.detail}; ${PROCESS_USER_RANGE_RULE}.`,
-        }),
+    if (binding === undefined) {
+      return yield* refuseSshOwner(
+        "ssh-owner-unbound",
+        "sshAsOwner: the workspace's owner is bound to no person (POST /v1/users/:id/person).",
       );
-};
+    }
+    const source = spec.sources.workspace;
+    const ownerMap = "ownerMap" in source ? source.ownerMap : undefined;
+    if (source.kind !== "capture" || ownerMap === undefined) {
+      return yield* refuseSshOwner(
+        "ssh-owner-needs-owner-map",
+        "sshAsOwner needs a capture source with an owner map: a workspace with one shared home runs SSH as root.",
+      );
+    }
+    const inMap = ownerMap.people.find((person) => person.id === binding.personId);
+    const home = spec.runtime.credentialsHome;
+    if (
+      inMap === undefined ||
+      inMap.uid !== binding.uid ||
+      home === undefined ||
+      home.uid !== binding.uid ||
+      home.path !== binding.home
+    ) {
+      return yield* refuseSshOwner(
+        "ssh-owner-mismatch",
+        "sshAsOwner: the owner map and credentialsHome must give the owner's bound person their own uid and home.",
+      );
+    }
+    return String(binding.uid);
+  });
 
 /** `DELETE /v1/workspaces/:id/ssh-user`: the owner sets the workspace's SSH sessions to root. */
 export const clearWorkspaceSshUser = (input: {

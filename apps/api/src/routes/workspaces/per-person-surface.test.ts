@@ -532,6 +532,7 @@ describe("the control plane's features", () => {
       credentialsPiOpencode: true,
       captureOwnerMap: true,
       workspaceSshUser: true,
+      personBinding: true,
     });
   });
 });

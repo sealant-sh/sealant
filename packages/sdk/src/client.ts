@@ -27,6 +27,7 @@ import {
   getRunOp,
   getSetupStateOp,
   getUserOp,
+  bindUserPersonOp,
   getWorkspaceCreateOp,
   getWorkspaceOp,
   inferenceRespondOp,
@@ -328,6 +329,12 @@ export class Sealant {
     get: async (userId) => {
       const wire = await this.#runtime.run(getUserOp(userId));
       return { userId: wire.userId, email: wire.email, name: wire.name, createdAt: wire.createdAt };
+    },
+    bindPerson: async (userId, person) => {
+      const wire = await this.#runtime.run(
+        bindUserPersonOp(userId, { id: person.id, uid: person.uid, home: person.home }),
+      );
+      return { userId: wire.userId, person: wire.person, created: wire.created };
     },
   };
 

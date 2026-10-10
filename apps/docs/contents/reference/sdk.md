@@ -182,10 +182,12 @@ These call the live API and work end-to-end:
   anything else is refused (`user-unsupported`, the message saying why) and nothing starts. The
   daemon checks the passwd entry again and runs a process only as one of its owner map's people or a
   person in Mend's reserved range; root and anyone outside the range are refused.
-  `create({ credentialsHome, sshAsOwner: true })` runs the workspace's SSH sessions (VS Code
-  Remote-SSH included) as its owner's own Linux user, the `credentialsHome` uid, never root and
-  never a user the caller names; `workspace.sshAsRoot()` sets them back to root. A create with
-  `sshAsOwner` is refused (`ssh-user-unsupported`) before anything is sent to a control plane
+  `users.bindPerson(userId, { id, uid, home })` binds a user's person once (a different binding or a
+  person another user holds rejects with `409`). `create({ credentialsHome, sshAsOwner: true })`
+  runs the workspace's SSH sessions (VS Code Remote-SSH included) as its owner's bound person, the
+  create's owner map and `credentialsHome` checked against that binding (`403` otherwise), never
+  root and never a user the caller names; `workspace.sshAsRoot()` sets them back to root. A create
+  with `sshAsOwner` is refused (`ssh-user-unsupported`) before anything is sent to a control plane
   without the feature. `sealant.features()` reports what the control plane can do
   (`processUserRoutes`, `dotfilesApply`, `credentialsPartialPut`, `credentialsPiOpencode`,
   `captureOwnerMap`, `workspaceSshUser`), so a client detects them rather than reading a version. A

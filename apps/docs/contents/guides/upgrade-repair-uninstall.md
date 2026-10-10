@@ -141,6 +141,16 @@ That is a safeguard, not a way to run mixed versions: **upgrade the API and the 
 and don't leave an older API or worker serving next to a current one. The installer upgrades both at
 once; a Kubernetes or hand-built deployment should stop the old pods before it starts the new ones.
 
+### A person binding that must change
+
+A user's person (`POST /v1/users/:id/person`, Mend's per-person layout) is bound once and never
+changed through the API: a different binding answers `409 person-binding-differs`, and a person id
+or uid another user holds answers `409 person-taken`. If one is wrong (a person re-provisioned under
+a new account, say), an operator removes the user's row from `user_person_binding` in the control
+plane's database, a change your database audit records, and the provisioning service binds the user
+again. Until then, that user's workspaces run SSH as root (Mend says so on the session). An operator
+rebind route is a follow-up.
+
 ## Pin an exact version
 
 To install or switch to a specific version — for a reproducible deployment, or to roll back — name
