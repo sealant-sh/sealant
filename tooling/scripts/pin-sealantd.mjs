@@ -3,7 +3,7 @@
 //
 // - the image the worker bakes into workspace images (buildkit-builder.ts) and the cf-bridge image,
 //   always written as `tag@sha256:<digest>`: a moved tag cannot change what Core builds;
-// - the two runtime packages in packages/workspaces/package.json, exact.
+// - the two runtime packages, exact, in every manifest that names them (RUNTIME_MANIFESTS).
 //
 // A release lives under the plain names (`ghcr.io/sealant-sh/sealantd:X.Y.Z`, `@sealant/runtime-*`);
 // a next build under the -next names (`ghcr.io/sealant-sh/sealantd-next:X.Y.Z-next.N`, and the
@@ -22,7 +22,12 @@ export const IMAGE_FILES = [
   "packages/workspaces/src/buildkit/buildkit-builder.ts",
   "apps/cf-bridge/Dockerfile",
 ];
-export const RUNTIME_MANIFEST = "packages/workspaces/package.json";
+// Every package that names the runtime packages: telemetry handles the envelopes workspaces decodes,
+// so the two must agree on the protocol's types.
+export const RUNTIME_MANIFESTS = [
+  "packages/workspaces/package.json",
+  "packages/telemetry/package.json",
+];
 const SEMVER = /^\d+\.\d+\.\d+(-next\.\d+)?$/;
 
 export const repositoryFor = (version) =>
@@ -84,10 +89,12 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     const absolute = path.join(root, file);
     await writeFile(absolute, rewriteImages(await readFile(absolute, "utf8"), reference));
   }
-  const manifestPath = path.join(root, RUNTIME_MANIFEST);
-  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-  Object.assign(manifest.dependencies, runtimeSpecs(version));
-  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  for (const file of RUNTIME_MANIFESTS) {
+    const manifestPath = path.join(root, file);
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    Object.assign(manifest.dependencies, runtimeSpecs(version));
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  }
   console.log(`sealantd → ${reference}`);
   if (!flags.includes("--no-install"))
     execFileSync("pnpm", ["install"], { cwd: root, stdio: "inherit" });

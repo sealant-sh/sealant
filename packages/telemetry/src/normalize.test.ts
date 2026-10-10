@@ -181,6 +181,32 @@ describe("a process's arguments are never stored", () => {
     expect(stored).not.toContain("printf");
   });
 
+  it("keeps the count and lengths a daemon that withholds arguments itself sends", () => {
+    // sealantd from 0.20.0-next.155 publishes `args` empty with `argCount` and `argLengths`.
+    const withheld = makeEnvelope({
+      processId: "proc_new",
+      sequence: 6n,
+      payload: {
+        case: "processStarted",
+        value: {
+          pid: 8,
+          pgid: 8,
+          executable: "bash",
+          args: [],
+          cwd: "/workspace",
+          argCount: 3,
+          argLengths: [3, 0, 11],
+        },
+      },
+    });
+    const n = normalizeEnvelope(withheld);
+
+    expect(n.payload.args).toEqual([]);
+    expect(n.payload.argCount).toBe(3);
+    expect(n.payload.argLengths).toEqual([3, 0, 11]);
+    expect(n.summary).toBe("exec bash (3 arguments not recorded)");
+  });
+
   it("rebuilds a row stored before arguments were withheld without them", () => {
     const legacy: TelemetryEvent = {
       ...asStoredRow(normalizeEnvelope(started), "run_1"),
