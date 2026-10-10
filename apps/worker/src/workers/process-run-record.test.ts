@@ -1,8 +1,10 @@
 /**
- * An exec run whose record store refuses appends. A refusal the retries outlast (the store came
- * back, or the other consumer had stored the batch) is nothing: the run completes. Events still not
- * stored when the process has exited are lost output, so the run fails, saying how many and why,
- * with the exit code it observed. Driven against a fake daemon session, sink and run repository.
+ * An exec run whose record store refuses appends. The job does not retry or wait: when the process
+ * has exited it checks the log for what was refused. Events the other writer stored (the box's
+ * duplicate key: the ingester had inserted the same row) are there, and the run completes. Events
+ * not in the log are lost output, so the run fails, saying how many and why, with the exit code it
+ * observed and the changes the commands made. Driven against a fake daemon session, sink and run
+ * repository.
  */
 import { RunRepo, type RunRepoService } from "@sealant/db";
 import {
@@ -51,12 +53,15 @@ const duplicateKey = () =>
     cause: new Error('duplicate key value violates unique constraint "telemetry_events_pkey"'),
   });
 
-/** `refusals` appends are refused before the store takes one (Infinity: never). */
-const world = (refusals: number) => {
+/**
+ * `racing`: every append is refused, but the other writer has the events in the log. `down`: every
+ * append is refused and nothing reaches the log.
+ */
+const world = (store: "racing" | "down") => {
   const execs: SealantExecOptions[] = [];
   const outcomes: Array<Record<string, unknown>> = [];
   const spans: LossSpanInput[] = [];
-  let refused = 0;
+  const logged = new Set<bigint>();
   const session = {
     health: Effect.succeed({ runtimeId: "rt_1" }),
     capabilities: Effect.succeed({ supports: ["exec.user"] }),
@@ -81,12 +86,19 @@ const world = (refusals: number) => {
     openEpoch: () => Effect.succeed({ epochId: "tep_1", resumeFromSequence: null }),
     appendBatch: ({ batch }) =>
       Effect.suspend(() => {
-        if (refused < refusals) {
-          refused += 1;
-          return Effect.fail(duplicateKey());
-        }
-        return Effect.succeed(batch);
+        if (store === "racing") for (const event of batch) logged.add(event.sequence);
+        return Effect.fail(duplicateKey());
       }),
+    countStored: ({ ranges }) =>
+      Effect.sync(() =>
+        ranges.map((range) => {
+          let n = 0;
+          for (let sequence = range.from; sequence <= range.to; sequence += 1n) {
+            if (logged.has(sequence)) n += 1;
+          }
+          return n;
+        }),
+      ),
     insertLossSpan: ({ span }) => Effect.sync(() => void spans.push(span)),
     closeEpoch: () => Effect.void,
     getMaxSequence: () => Effect.succeed(null),
@@ -118,15 +130,15 @@ const world = (refusals: number) => {
 };
 
 describe("an exec run whose record store refuses appends", () => {
-  it("completes when a retry is taken (the box's duplicate key, once)", async () => {
-    const w = world(1);
+  it("completes when the refused events are in the log (the box's duplicate key)", async () => {
+    const w = world("racing");
     await w.run();
     expect(w.outcomes).toMatchObject([{ status: "completed", id: RUN, exitCode: 3 }]);
     expect(w.spans).toEqual([]);
   });
 
-  it("fails with the observed exit and what was lost when the store never takes the events", async () => {
-    const w = world(Infinity);
+  it("fails with the observed exit, the changes and what was lost when the events are not in the log", async () => {
+    const w = world("down");
     await w.run();
     expect(w.outcomes).toEqual([
       {
@@ -134,7 +146,9 @@ describe("an exec run whose record store refuses appends", () => {
         id: RUN,
         exitCode: 3,
         errorMessage:
-          'Command 1/1 (make): The command exited 3, but 1 event(s) of its record (sequences 7–7) were not stored: duplicate key value violates unique constraint "telemetry_events_pkey"; check run aborted.',
+          'Command 1/1 (make): The command exited 3, but 1 event(s) of its record (sequences 7–7) are not stored: duplicate key value violates unique constraint "telemetry_events_pkey"; check run aborted.',
+        // The changes reading ran (here it exits 1: no reading).
+        changesReadFailed: true,
       },
     ]);
     expect(w.spans).toMatchObject([{ kind: "dropped_event", droppedCount: 1n }]);

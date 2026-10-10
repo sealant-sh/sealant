@@ -9,9 +9,10 @@
  * unique key, a second insert that landed inside the first one's window failed on the primary key,
  * the job failed the run ("Run execution failed before completion") while its process went on and
  * exited 0, and the ingester recorded the rest. That window is microseconds wide and the two
- * consumers' work between receiving and appending differs, so this suite does not hit it reliably:
- * `sink-redelivery.db.test.ts` (in @sealant/telemetry) does, against the sink alone. This one
- * proves the whole path: both consumers, one copy of each event, the run's exit observed.
+ * consumers' work between receiving and appending differs, so this suite does not hit it:
+ * `sink-redelivery.db.test.ts` (in @sealant/telemetry) holds it open deterministically, against
+ * the sink alone. This one proves the whole path: both consumers, one copy of each event, the
+ * run's exit observed.
  */
 import { makeSealantDBLayer, runs, SealantDB, user, workspaces } from "@sealant/db";
 import {

@@ -76,7 +76,7 @@ const world = (supports: readonly string[] = ["exec.user"]) => {
     Layer.succeed(SealantRuntime, { connect: () => Effect.succeed(session) }),
     Layer.succeed(TelemetrySink, {
       openEpoch: () => Effect.void,
-      appendBatch: () => Effect.succeed([]),
+      appendBatch: () => Effect.succeed({ appended: [], conflicts: [] }),
       closeEpoch: () => Effect.void,
     } as unknown as TelemetrySinkService),
     Layer.succeed(RunRepo, {

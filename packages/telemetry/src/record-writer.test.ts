@@ -1,7 +1,9 @@
 /**
- * The run-exec job's record writer against a fake store: a batch the store refuses is retried,
- * held back while the process runs and appended once more after it exits, and only what is still
- * not stored is lost (one `dropped_event` span, and the loss returned for the run to fail on).
+ * The run-exec job's record writer against a fake log. It appends each batch once and never waits
+ * on the store; what the store refused is checked when the process has exited, and only what the
+ * log does not hold then (in the run, for a tagged event), or holds a different version of, is
+ * lost: one `dropped_event` span for the missing sequences, and the loss returned for the run to
+ * fail on. Memory holds sequence ranges, not events.
  */
 import { create } from "@bufbuild/protobuf";
 import { EventEnvelopeSchema } from "@sealant/runtime-protocol";
@@ -14,16 +16,23 @@ import { makeRunRecordWriter } from "./record-writer.js";
 import type { TelemetrySinkService } from "./sink.js";
 import type { LossSpanInput, NormalizedEvent } from "./types.js";
 
-const event = (sequence: bigint): NormalizedEvent =>
+const RUN = "run_exec";
+
+/** `null`: an untagged daemon event. */
+const event = (sequence: bigint, executionId: string | null = RUN): NormalizedEvent =>
   normalizeEnvelope(
     create(EventEnvelopeSchema, {
       schemaVersion: 1,
       eventId: `evt_${sequence.toString()}`,
       runtimeId: "rt_1",
       sequence,
+      ...(executionId === null ? {} : { executionId }),
       payload: { case: "runtimeHeartbeat", value: { state: 2 } },
     }),
   );
+
+const events = (from: bigint, count: number) =>
+  Array.from({ length: count }, (_, index) => event(from + BigInt(index)));
 
 const refusal = () =>
   new TelemetrySinkUnexpectedError({
@@ -32,113 +41,178 @@ const refusal = () =>
     cause: new Error("Connection terminated unexpectedly"),
   });
 
-/** A store that refuses every append while `down()` says so. */
-const fakeStore = (down: () => boolean) => {
-  const stored = new Map<string, NormalizedEvent>();
+/** A log of (sequence → run); the store refuses appends while `down()` says so. */
+const fakeLog = (down: () => boolean) => {
+  const stored = new Map<bigint, string>();
   const spans: LossSpanInput[] = [];
-  let attempts = 0;
-  const sink: Pick<TelemetrySinkService, "appendBatch" | "insertLossSpan"> = {
-    appendBatch: ({ batch }) =>
+  let appends = 0;
+  const sink: TelemetrySinkService = {
+    appendBatch: ({ runId, batch }) =>
       Effect.suspend(() => {
-        attempts += 1;
+        appends += 1;
         if (down()) return Effect.fail(refusal());
-        const fresh = batch.filter((item) => !stored.has(item.eventId));
-        for (const item of fresh) stored.set(item.eventId, item);
-        return Effect.succeed(fresh);
+        const appended = batch.filter((item) => !stored.has(item.sequence));
+        for (const item of appended) stored.set(item.sequence, runId);
+        return Effect.succeed({ appended, conflicts: [] });
       }),
+    countStored: ({ runId, ranges }) =>
+      Effect.sync(() =>
+        ranges.map((range) => {
+          let n = 0;
+          for (let sequence = range.from; sequence <= range.to; sequence += 1n) {
+            const run = stored.get(sequence);
+            if (run !== undefined && (!range.tagged || run === runId)) n += 1;
+          }
+          return n;
+        }),
+      ),
     insertLossSpan: ({ span }) => Effect.sync(() => void spans.push(span)),
+    openEpoch: () => Effect.die("unused"),
+    closeEpoch: () => Effect.die("unused"),
+    getMaxSequence: () => Effect.die("unused"),
+    streamRawLog: () => Stream.die("unused"),
   };
-  return {
-    sink,
-    stored,
-    spans,
-    attempts: () => attempts,
-  };
+  return { sink, stored, spans, appends: () => appends };
 };
 
-const writerFor = (store: ReturnType<typeof fakeStore>) =>
-  makeRunRecordWriter(
-    {
-      ...store.sink,
-      openEpoch: () => Effect.die("unused"),
-      closeEpoch: () => Effect.die("unused"),
-      getMaxSequence: () => Effect.die("unused"),
-      streamRawLog: () => Stream.die("unused"),
-    },
-    { runId: "run_1", runtimeId: "rt_1", retry: Schedule.recurs(2) },
-  );
+const writerFor = (log: ReturnType<typeof fakeLog>) =>
+  makeRunRecordWriter(log.sink, {
+    runId: RUN,
+    runtimeId: "rt_1",
+    verifySchedule: Schedule.recurs(2),
+  });
 
 describe("makeRunRecordWriter", () => {
-  it("retries a refused batch and loses nothing when the store comes back", async () => {
-    let refusals = 2;
-    const store = fakeStore(() => refusals-- > 0);
-    const writer = writerFor(store);
+  it("appends each batch once and finds nothing to check when the store took them", async () => {
+    const log = fakeLog(() => false);
+    const writer = writerFor(log);
     const loss = await Effect.runPromise(
-      Effect.andThen(writer.append([event(1n), event(2n)]), writer.flush),
+      Effect.andThen(writer.append(events(1n, 2)), writer.verify),
     );
     expect(loss).toBeUndefined();
-    expect(store.attempts()).toBe(3);
-    expect([...store.stored.keys()]).toEqual(["evt_1", "evt_2"]);
-    expect(store.spans).toEqual([]);
+    expect(log.appends()).toBe(1);
   });
 
-  it("holds a batch back while the store is down and stores it when the process has exited", async () => {
-    let down = true;
-    const store = fakeStore(() => down);
-    const writer = writerFor(store);
+  it("does not retry a refused batch, and finds it stored by the other writer at the exit", async () => {
+    const log = fakeLog(() => true);
+    const writer = writerFor(log);
     const loss = await Effect.runPromise(
       Effect.gen(function* () {
-        yield* writer.append([event(1n), event(2n)]);
-        down = false;
-        yield* writer.append([event(3n)]);
-        return yield* writer.flush;
+        yield* writer.append(events(1n, 3));
+        // The full-stream ingester stored the same events under the run.
+        for (const item of events(1n, 3)) log.stored.set(item.sequence, RUN);
+        return yield* writer.verify;
       }),
     );
+    expect(log.appends()).toBe(1);
     expect(loss).toBeUndefined();
-    expect([...store.stored.keys()].toSorted()).toEqual(["evt_1", "evt_2", "evt_3"]);
+    expect(log.spans).toEqual([]);
   });
 
-  it("takes a held-back batch another consumer already stored as stored", async () => {
-    let down = true;
-    const store = fakeStore(() => down);
-    const writer = writerFor(store);
+  it("waits out an ingester that stores the refused events late", async () => {
+    const log = fakeLog(() => true);
+    const writer = makeRunRecordWriter(log.sink, {
+      runId: RUN,
+      runtimeId: "rt_1",
+      verifySchedule: Schedule.spaced("10 millis").pipe(Schedule.both(Schedule.recurs(20))),
+    });
+    setTimeout(() => {
+      for (const item of events(1n, 2)) log.stored.set(item.sequence, RUN);
+    }, 50);
+    const loss = await Effect.runPromise(
+      Effect.andThen(writer.append(events(1n, 2)), writer.verify),
+    );
+    expect(loss).toBeUndefined();
+  });
+
+  it("keeps sequence ranges, not events: a long outage is one range", async () => {
+    const log = fakeLog(() => true);
+    const writer = writerFor(log);
     const loss = await Effect.runPromise(
       Effect.gen(function* () {
-        yield* writer.append([event(1n)]);
-        // The full-stream ingester stored it meanwhile.
-        store.stored.set("evt_1", event(1n));
-        down = false;
-        return yield* writer.flush;
+        for (let start = 1n; start <= 20_000n; start += 256n) {
+          yield* writer.append(events(start, 256));
+        }
+        return yield* writer.verify;
       }),
     );
-    expect(loss).toBeUndefined();
+    expect(loss).toMatchObject({ events: 20_224, fromSequence: 1n, toSequence: 20_224n });
+    expect(log.spans).toEqual([
+      {
+        kind: "dropped_event",
+        fromSequence: 1n,
+        toSequence: 20_224n,
+        droppedCount: 20_224n,
+        reason: "the record store did not take these events: Connection terminated unexpectedly",
+        detectedVia: "marker",
+        atSequence: 1n,
+        key: "unstored",
+      },
+    ]);
   });
 
-  it("returns what is still not stored after the process exits, with one loss span", async () => {
-    const store = fakeStore(() => true);
-    const writer = writerFor(store);
+  it("returns only the sequences the log does not hold", async () => {
+    const log = fakeLog(() => true);
+    const writer = writerFor(log);
     const loss = await Effect.runPromise(
-      Effect.andThen(
-        Effect.andThen(writer.append([event(5n), event(6n)]), writer.append([event(9n)])),
-        writer.flush,
-      ),
+      Effect.gen(function* () {
+        yield* writer.append(events(5n, 5));
+        for (const sequence of [5n, 6n, 7n]) log.stored.set(sequence, RUN);
+        return yield* writer.verify;
+      }),
     );
     expect(loss).toEqual({
-      events: 3,
+      events: 5,
       fromSequence: 5n,
       toSequence: 9n,
       reason: "Connection terminated unexpectedly",
     });
-    expect(store.spans).toEqual([
-      {
-        kind: "dropped_event",
-        fromSequence: 5n,
-        toSequence: 9n,
-        droppedCount: 3n,
-        reason: "the record store did not take these events: Connection terminated unexpectedly",
-        detectedVia: "marker",
-        atSequence: 5n,
-      },
-    ]);
+  });
+
+  it("does not count a tagged event stored under another run, and does an untagged one", async () => {
+    const log = fakeLog(() => true);
+    const writer = writerFor(log);
+    const loss = await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* writer.append([event(1n), event(2n, null)]);
+        log.stored.set(1n, "run_launch");
+        log.stored.set(2n, "run_launch");
+        return yield* writer.verify;
+      }),
+    );
+    expect(loss).toMatchObject({ events: 1, fromSequence: 1n, toSequence: 1n });
+  });
+
+  it("reports an appended event the log holds a different version of", async () => {
+    const log = fakeLog(() => false);
+    const conflicting: TelemetrySinkService = {
+      ...log.sink,
+      appendBatch: ({ batch }) =>
+        Effect.succeed({
+          appended: batch.slice(1),
+          conflicts: [
+            {
+              eventId: "evt_7",
+              runId: RUN,
+              runtimeId: "rt_1",
+              sequence: 7n,
+              storedEventIdAtSequence: undefined,
+              differences: ["payloadCase", "payload"],
+            },
+          ],
+        }),
+    };
+    const writer = makeRunRecordWriter(conflicting, { runId: RUN, runtimeId: "rt_1" });
+    const loss = await Effect.runPromise(
+      Effect.andThen(writer.append(events(7n, 2)), writer.verify),
+    );
+    expect(loss).toEqual({
+      events: 1,
+      fromSequence: 7n,
+      toSequence: 7n,
+      reason: "1 conflict(s) with a different event already stored at the same id or position",
+    });
+    // The conflict's span is the sink's; the writer adds none for it.
+    expect(log.spans).toEqual([]);
   });
 });

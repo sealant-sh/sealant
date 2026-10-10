@@ -95,6 +95,8 @@ export interface LossSpanInput {
   readonly detectedVia: "marker" | "gap";
   /** The sequence of the triggering event (marker spans) — used to derive a stable, idempotent id. */
   readonly atSequence?: bigint;
+  /** Tells apart marker spans of different causes at one sequence (part of the id). */
+  readonly key?: string;
 }
 
 /** Accumulator threaded through `Stream.mapAccum` for per-runtime sequence-gap detection. */

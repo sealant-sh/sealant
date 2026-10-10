@@ -4,7 +4,7 @@
  * `Schema.Literals` operation set + an Invariant/Unexpected `Schema.TaggedErrorClass` pair per
  * service, a `Schema.Union` error type, and a `map*`/`with*` funnel so no raw defect escapes.
  */
-import { Effect, Schema } from "effect";
+import { Cause, Effect, Schema } from "effect";
 
 /**
  * Unwraps Effect's wrapper for a rejected `Effect.tryPromise`/`Effect.promise` (effect 4 tags it
@@ -26,12 +26,33 @@ export const unwrapEffectCause = (cause: unknown): unknown => {
   return cause;
 };
 
+/**
+ * The innermost cause's words: the database's ("duplicate key value violates …"), not the failed
+ * query with its parameters that the sink's and the driver's errors carry. Follows `Error.cause`
+ * and Effect `Cause`s (the driver's error wraps one). Cut to 300 characters for a run's message.
+ */
+export const rootCauseMessage = (error: unknown): string => {
+  let innermost = error;
+  for (let depth = 0; depth < 12; depth += 1) {
+    const next = Cause.isCause(innermost)
+      ? Cause.squash(innermost)
+      : innermost instanceof Error
+        ? innermost.cause
+        : undefined;
+    if (next === undefined || next === null || next === innermost) break;
+    innermost = next;
+  }
+  const words = innermost instanceof Error ? innermost.message : String(innermost);
+  return words.length > 300 ? `${words.slice(0, 299)}…` : words;
+};
+
 // ---------------------------------------------------------------------------------------------
 // TelemetrySink
 // ---------------------------------------------------------------------------------------------
 const telemetrySinkOperation = Schema.Literals([
   "openEpoch",
   "appendBatch",
+  "countStored",
   "insertLossSpan",
   "closeEpoch",
   "getMaxSequence",

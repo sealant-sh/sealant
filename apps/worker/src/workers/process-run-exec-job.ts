@@ -146,8 +146,9 @@ export class ProcessUserUnavailableError extends Schema.TaggedErrorClass<Process
 ) {}
 
 /**
- * The command ran, but part of its record was not stored (the store refused it past every retry):
- * its output is not all kept, so the run fails, with the exit code and changes it did record.
+ * The command ran, but part of its record is not in the log (the store refused it and no other
+ * writer stored it, or a different event holds its place): its output is not all kept, so the run
+ * fails, with the exit code and changes it did record.
  */
 export class RunRecordIncompleteError extends Schema.TaggedErrorClass<RunRecordIncompleteError>()(
   "RunRecordIncompleteError",
@@ -155,15 +156,15 @@ export class RunRecordIncompleteError extends Schema.TaggedErrorClass<RunRecordI
 ) {}
 
 const describeRecordLoss = (loss: RunRecordLoss, exitCode: number) =>
-  `${exitCode === -1 ? "The command's exit was not observed" : `The command exited ${String(exitCode)}`}, but ${String(loss.events)} event(s) of its record (sequences ${loss.fromSequence.toString()}–${loss.toSequence.toString()}) were not stored: ${loss.reason}`;
+  `${exitCode === -1 ? "The command's exit was not observed" : `The command exited ${String(exitCode)}`}, but ${String(loss.events)} event(s) of its record (sequences ${loss.fromSequence.toString()}–${loss.toSequence.toString()}) are not stored: ${loss.reason}`;
 
 /**
  * Execs the harness and records its telemetry, bounded to the harness process. Returns the exit
- * code. A batch the record store refuses does not stop the recording (see `makeRunRecordWriter`):
- * the process is followed to its exit, and only events still not stored then fail the capture,
- * with a {@link RunRecordIncompleteError}. With `user`, the daemon starts the process as that
- * Linux user (`ExecArgs.user`), and only a daemon that reports `exec.user` is asked to (one
- * capabilities read on the same connection).
+ * code. A batch the record store refuses does not stop or slow the recording (see
+ * `makeRunRecordWriter`): the process is followed to its exit, the log is then checked for what was
+ * refused, and only events not in it fail the capture, with a {@link RunRecordIncompleteError}.
+ * With `user`, the daemon starts the process as that Linux user (`ExecArgs.user`), and only a
+ * daemon that reports `exec.user` is asked to (one capabilities read on the same connection).
  */
 export const captureRun = (
   runId: string,
@@ -212,7 +213,6 @@ export const captureRun = (
       const record = makeRunRecordWriter(sink, { runId, runtimeId });
 
       let exitCode = -1;
-      let loss: RunRecordLoss | undefined;
       const drain = session.events.pipe(
         // Ingest this run's own events plus untagged daemon events (boot, heartbeats — the
         // pre-attribution behavior, and the compatibility path for daemons that ignore
@@ -237,19 +237,19 @@ export const captureRun = (
 
       yield* drain.pipe(
         Effect.ensuring(
-          Effect.gen(function* () {
-            loss = yield* record.flush;
-            yield* sink
+          Effect.suspend(() =>
+            sink
               .closeEpoch({
                 runId,
                 runtimeId,
                 closeReason: exitCode === -1 ? "transport-close" : "stream-end",
                 suspicious: exitCode === -1,
               })
-              .pipe(Effect.ignore);
-          }),
+              .pipe(Effect.ignore),
+          ),
         ),
       );
+      const loss = yield* record.verify;
       if (loss !== undefined) {
         return yield* new RunRecordIncompleteError({
           message: describeRecordLoss(loss, exitCode),
@@ -363,14 +363,18 @@ export const produceExecRun = (
         Effect.catchTag("ProcessUserUnavailableError", (error) =>
           runs.markRunFailed({ id: runId, errorMessage: error.message }).pipe(Effect.as(undefined)),
         ),
+        // The commands after it do not run; what the ones before it changed is still the run's.
         Effect.catchTag("RunRecordIncompleteError", (error) =>
-          runs
-            .markRunFailed({
+          Effect.gen(function* () {
+            const changes = yield* captureChanges(runId, target);
+            yield* runs.markRunFailed({
               id: runId,
               ...(error.exitCode === -1 ? {} : { exitCode: error.exitCode }),
               errorMessage: `Command ${index + 1}/${commands.length} (${command.executable}): ${error.message}; check run aborted.`,
-            })
-            .pipe(Effect.as(undefined)),
+              ...changes,
+            });
+            return undefined;
+          }),
         ),
       );
       if (captured === undefined) return;
@@ -527,7 +531,6 @@ export const produceDotfilesRun = (
         Effect.timeout(options.bootstrapTimeout ?? DOTFILES_BOOTSTRAP_TIMEOUT),
         Effect.result,
       );
-      const loss = yield* record.flush;
       yield* close(
         exitCode === undefined ? "transport-close" : "stream-end",
         exitCode === undefined,
@@ -547,6 +550,7 @@ export const produceDotfilesRun = (
         });
         return;
       }
+      const loss = yield* record.verify;
       if (loss !== undefined) {
         yield* runs.markRunFailed({
           id: runId,
