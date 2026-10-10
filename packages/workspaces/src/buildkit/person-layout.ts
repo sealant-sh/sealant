@@ -314,7 +314,7 @@ const writeLines = (path: string, lines: readonly string[]): string =>
  * keep only current packages: once that layer is older than sudo's or acl's last release, a mirror
  * answers 404. Listed after the mirrors, the archive serves exactly the version that database
  * names, so the install neither fails nor needs `-Sy`, which would be a partial upgrade. The
- * archive is x86_64 only: on aarch64 (Arch Linux ARM, the MicroVM images) the layer runs a full
+ * archive is x86_64 only: on aarch64 (Arch Linux ARM: arm64 hosts and MicroVMs) the layer runs a full
  * `pacman -Syu` first instead, as the package layer would.
  */
 export const ARCH_ARCHIVE_POOL = "https://archive.archlinux.org/packages/.all";

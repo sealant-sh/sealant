@@ -84,6 +84,9 @@ spec:
             - { name: SEALANT_K8S_REGISTRY_INSECURE, value: {{ include "sealant.registryInsecure" . | quote }} }
             - name: SEALANT_MOUNT_ALLOWED_STORE_ROOTS
               value: {{ (include "sealant.allowedRoots" .) | quote }}
+            {{- with include "sealant.workspaceImagePlatform" . }}
+            - { name: SEALANT_WORKSPACE_IMAGE_PLATFORM, value: {{ . | quote }} }
+            {{- end }}
             {{- range .Values.worker.extraEnv }}
             - { name: {{ .name | quote }}, value: {{ .value | quote }} }
             {{- end }}

@@ -6,6 +6,7 @@ import type { NewWorkspace } from "@sealant/validators";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { compileWorkspaceBuildSpec, type BuildkitCommandRunner } from "./buildkit-builder.js";
+import { processImagePlatform } from "./platform.js";
 
 const execFileAsync = promisify(execFile);
 const docker: BuildkitCommandRunner = async (command, args, options) => {
@@ -85,6 +86,7 @@ describe("selected packages in an Arch workspace image", () => {
 
   beforeAll(async () => {
     const result = await compileWorkspaceBuildSpec({
+      platform: processImagePlatform(),
       blueprint,
       options: { commandRunner: docker },
     });
@@ -169,6 +171,7 @@ describe("selected packages in an Ubuntu workspace image", () => {
 
   beforeAll(async () => {
     const result = await compileWorkspaceBuildSpec({
+      platform: processImagePlatform(),
       blueprint: blueprintForOs("ubuntu", ubuntuSelectedPackages),
       options: { commandRunner: docker },
     });

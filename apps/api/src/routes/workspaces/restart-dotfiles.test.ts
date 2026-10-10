@@ -363,9 +363,12 @@ describe("restartWorkspace dotfiles", () => {
         const firstJob = store.jobs.get(firstRunId)?.requestPayload;
         if (firstJob === undefined || job === undefined) throw new Error("no recorded build job");
         const restartPlan = planWorkspaceImageBuild({
+          platform: "linux/amd64",
           blueprint: job.requestPayload,
         }).containerfile;
-        expect(restartPlan).toBe(planWorkspaceImageBuild({ blueprint: firstJob }).containerfile);
+        expect(restartPlan).toBe(
+          planWorkspaceImageBuild({ platform: "linux/amd64", blueprint: firstJob }).containerfile,
+        );
         expect(restartPlan).toMatch(/\bstow\b/);
         expect(restartPlan).toMatch(/\bchezmoi\b/);
         // The restart's own snapshot stays free of the payloads, like the create's.

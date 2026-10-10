@@ -29,6 +29,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { compileWorkspaceBuildSpec } from "./buildkit-builder.js";
 import { imagePersonLayoutSupport } from "./person-layout.js";
+import { processImagePlatform } from "./platform.js";
 
 const families = (process.env["SEALANT_PERSON_LAYOUT_E2E_FAMILIES"] ?? "arch,ubuntu,fedora")
   .split(",")
@@ -189,6 +190,7 @@ for (const family of families) {
 
     beforeAll(async () => {
       const result = await compileWorkspaceBuildSpec({
+        platform: processImagePlatform(),
         blueprint: blueprintFor(family),
         options: { emitTarball: false },
       });

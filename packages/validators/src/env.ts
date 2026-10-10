@@ -4,6 +4,7 @@ import { homedir, hostname } from "node:os";
 import { createEnv } from "@t3-oss/env-core";
 import { z } from "zod";
 
+import { workspaceImagePlatformSchema } from "./workspaces/image-platform.js";
 import { runtimeAdapterIdSchema } from "./workspaces/runtime-adapter-ids.js";
 
 /**
@@ -445,6 +446,18 @@ const addRetiredMicrovmImageIssues = (
   }
 };
 
+/**
+ * The platform workspace images are planned and built for. The API plans an image to answer what a
+ * create would build and the worker plans it to build it, and both must name the same plan: unset,
+ * the worker takes its Docker daemon's architecture (a Kubernetes worker, its own node's) and the
+ * API its own process's, which agree wherever the API, the worker and the daemon share a host.
+ * Set it where they do not, such as a worker driving a remote Docker daemon of another
+ * architecture.
+ */
+export const workspaceImagePlatformEnvSchema = z.object({
+  SEALANT_WORKSPACE_IMAGE_PLATFORM: workspaceImagePlatformSchema.optional(),
+});
+
 export const appServerEnvSchema = databaseEnvSchema
   .merge(jobQueueEnvSchema)
   .merge(appCoreEnvSchema)
@@ -453,7 +466,8 @@ export const appServerEnvSchema = databaseEnvSchema
   .merge(workspaceLifecycleEnvSchema)
   .merge(controlClientTlsEnvSchema)
   .merge(defaultRuntimeAdapterEnvSchema)
-  .merge(microvmRuntimeEnvSchema);
+  .merge(microvmRuntimeEnvSchema)
+  .merge(workspaceImagePlatformEnvSchema);
 
 export const appEnvSchema = appServerEnvSchema.superRefine((input, ctx) => {
   addControlClientTlsIssue(input, ctx);
@@ -714,7 +728,8 @@ export const workerServerEnvSchema = databaseEnvSchema
   .merge(controlClientTlsEnvSchema)
   .merge(kubernetesRuntimeEnvSchema)
   .merge(cloudflareRuntimeEnvSchema)
-  .merge(microvmRuntimeEnvSchema);
+  .merge(microvmRuntimeEnvSchema)
+  .merge(workspaceImagePlatformEnvSchema);
 
 export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) => {
   addControlClientTlsIssue(input, ctx);

@@ -46,7 +46,8 @@ const blueprintFor = (
   });
 
 const containerfileFor = (family: string, options?: Parameters<typeof blueprintFor>[1]) =>
-  planWorkspaceImageBuild({ blueprint: blueprintFor(family, options) }).containerfile;
+  planWorkspaceImageBuild({ platform: "linux/amd64", blueprint: blueprintFor(family, options) })
+    .containerfile;
 
 /** Every `ENV` instruction of a Containerfile, continuation lines joined. */
 const envInstructions = (containerfile: string): string[] =>
@@ -267,7 +268,10 @@ describe("the person layout in the managed images", () => {
   });
 
   it("carries the layout into a MicroVM image of the same base", () => {
-    const planned = planWorkspaceImageBuild({ blueprint: blueprintFor("arch") });
+    const planned = planWorkspaceImageBuild({
+      platform: "linux/arm64",
+      blueprint: blueprintFor("arch"),
+    });
     const recipe = microvmRecipe(planned, {
       agentPort: 8080,
       memoryMiB: 2048,
@@ -302,6 +306,7 @@ describe("reading the image probe back from a built image", () => {
       stderr: "",
     }));
     const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
       blueprint: blueprintFor("ubuntu"),
       options: { commandRunner, emitTarball: false },
     });
@@ -313,6 +318,8 @@ describe("reading the image probe back from a built image", () => {
       "--rm",
       "--pull=never",
       "--network=none",
+      "--platform",
+      "linux/amd64",
       "--entrypoint",
       "/bin/sh",
       result.buildkit.spec.imageReference,
@@ -327,6 +334,7 @@ describe("reading the image probe back from a built image", () => {
       return { stdout: "", stderr: "" };
     });
     const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
       blueprint: blueprintFor("fedora"),
       options: { commandRunner, emitTarball: false },
     });

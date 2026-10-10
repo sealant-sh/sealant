@@ -6,11 +6,17 @@
 import type { V1ConfigMap, V1Job, V1Pod, V1Secret } from "@kubernetes/client-node";
 import { describe, expect, it, vi } from "vitest";
 
+import {
+  ARCHLINUXARM_BUILDER_KEY,
+  ARCHLINUXARM_KEY_FILE,
+  type PlannedWorkspaceImageBuild,
+} from "../../buildkit/index.js";
 import type { RegistryClient } from "../../registry/index.js";
 import { cases } from "../../runtime/docker-runtime-adapter.golden-fixture.js";
 import type { CreateOutcome, DeleteOutcome } from "../../runtime/kubernetes/api.js";
 import type { KubernetesBuildApi } from "./api.js";
 import {
+  buildContextConfigMap,
   buildctlArgs,
   buildJob,
   buildJobName,
@@ -37,6 +43,9 @@ interface Fake extends KubernetesBuildApi {
   readonly log: string[];
   nextStatus: "succeeded" | "failed" | "running";
   podLog: string;
+  pods: V1Pod[];
+  /** Called with the count of pod listings so far, before each answers. */
+  onListPods: ((calls: number) => void) | undefined;
 }
 
 const fake = (): Fake => {
@@ -44,6 +53,7 @@ const fake = (): Fake => {
   const configMaps = new Map<string, V1ConfigMap>();
   const secrets = new Map<string, V1Secret>();
   const log: string[] = [];
+  let podListings = 0;
   const create = <T extends { metadata?: { name?: string | undefined } | undefined }>(
     store: Map<string, T>,
     kind: string,
@@ -69,6 +79,8 @@ const fake = (): Fake => {
     log,
     nextStatus: "succeeded",
     podLog: "",
+    pods: [{ metadata: { name: "build-pod-1" } }],
+    onListPods: undefined,
     createJob: async (job) => create(jobs, "job", job),
     getJob: async (name) => {
       const job = jobs.get(name);
@@ -90,7 +102,11 @@ const fake = (): Fake => {
     deleteConfigMap: async (name) => del(configMaps, "configmap", name),
     createSecret: async (secret) => create(secrets, "secret", secret),
     deleteSecret: async (name) => del(secrets, "secret", name),
-    listPods: async (): Promise<V1Pod[]> => [{ metadata: { name: "build-pod-1" } }],
+    listPods: async (): Promise<V1Pod[]> => {
+      podListings += 1;
+      api.onListPods?.(podListings);
+      return api.pods;
+    },
     readPodLogTail: async () => api.podLog,
   };
   return api;
@@ -117,6 +133,7 @@ const builderFor = (
   overrides: Partial<KubernetesBuildConfig> = {},
 ) =>
   new KubernetesWorkspaceImageBuilder({
+    platform: "linux/amd64",
     config: { ...config, ...overrides },
     api,
     registryClient,
@@ -128,6 +145,7 @@ const spec = cases.gitSource.blueprint;
 
 describe("buildctlArgs / buildJob", () => {
   const planned = new KubernetesWorkspaceImageBuilder({
+    platform: "linux/amd64",
     config,
     api: fake(),
     registryClient: registry("sha256:x"),
@@ -154,7 +172,8 @@ describe("buildctlArgs / buildJob", () => {
       "dockerfile=/workspace",
       "--opt",
       "filename=Containerfile",
-      ...(planned.osFamily === "arch" ? ["--opt", "platform=linux/amd64"] : []),
+      "--opt",
+      "platform=linux/amd64",
       "--secret",
       "id=dotfiles_git_key,src=/run/secrets/build/dotfiles_git_key",
       "--output",
@@ -206,6 +225,68 @@ describe("buildctlArgs / buildJob", () => {
       "/home/user/.config/buildkit",
     );
     expect(JSON.stringify(job)).not.toContain("u:p");
+  });
+
+  it("builds for the plan's platform on a node of that architecture", () => {
+    const manifests = (plannedFor: PlannedWorkspaceImageBuild) => ({
+      name: "build-abc",
+      config,
+      labels: {},
+      planned: plannedFor,
+      imageReference: "r/x:y",
+      secretIds: [],
+      hasDockerConfig: false,
+    });
+    const onArm = (family: "fedora" | "arch") =>
+      new KubernetesWorkspaceImageBuilder({
+        platform: "linux/arm64",
+        config,
+        api: fake(),
+        registryClient: registry("sha256:x"),
+      }).plan({ ...spec, target: { ...spec.target, os: { family, mode: "require" } } });
+
+    expect(buildJob(manifests(planned)).spec?.template.spec?.nodeSelector).toEqual({
+      "kubernetes.io/arch": "amd64",
+    });
+    // In the workspaces' pool, as well.
+    expect(
+      buildJob({ ...manifests(planned), nodeSelector: { "sealant.sh/pool": "workspaces" } }).spec
+        ?.template.spec?.nodeSelector,
+    ).toEqual({ "sealant.sh/pool": "workspaces", "kubernetes.io/arch": "amd64" });
+    const fedora = manifests(onArm("fedora"));
+    expect(buildctlArgs(fedora)).toEqual(expect.arrayContaining(["--opt", "platform=linux/arm64"]));
+    expect(buildJob(fedora).spec?.template.spec?.nodeSelector).toEqual({
+      "kubernetes.io/arch": "arm64",
+    });
+    expect(buildContextConfigMap(fedora).data?.[ARCHLINUXARM_KEY_FILE]).toBeUndefined();
+
+    // A custom base follows the platform its manifest offers; the Job still runs in the pool.
+    const custom = manifests(
+      new KubernetesWorkspaceImageBuilder({
+        platform: "linux/arm64",
+        config,
+        api: fake(),
+        registryClient: registry("sha256:x"),
+      }).plan({
+        ...spec,
+        customization: { ...spec.customization, defaultShell: "bash", applyDotfiles: false },
+        target: {
+          ...spec.target,
+          os: { family: "custom", mode: "require", baseImage: "acme/base:1" },
+        },
+      }),
+    );
+    expect(buildctlArgs(custom).join(" ")).not.toContain("platform=");
+    expect(buildJob(custom).spec?.template.spec?.nodeSelector).toEqual({
+      "kubernetes.io/arch": "arm64",
+    });
+
+    // Arch on arm64 starts from the Arch Linux ARM rootfs; its key rides in the context.
+    const arch = manifests(onArm("arch"));
+    expect(arch.planned.containerfile).toContain("AS archlinuxarm");
+    expect(buildContextConfigMap(arch).data?.[ARCHLINUXARM_KEY_FILE]).toBe(
+      ARCHLINUXARM_BUILDER_KEY,
+    );
   });
 
   it("names Jobs deterministically from plan hash + repository + tag", () => {
@@ -317,6 +398,7 @@ describe("KubernetesWorkspaceImageBuilder", () => {
     api.nextStatus = "running";
     let now = 0;
     const builder = new KubernetesWorkspaceImageBuilder({
+      platform: "linux/amd64",
       config: { ...config, timeoutMs: 60_000 },
       api,
       registryClient: registry("sha256:1"),
@@ -326,6 +408,74 @@ describe("KubernetesWorkspaceImageBuilder", () => {
     await expect(builder.buildAndPublish({ spec, repository: "r", tag: "t" })).rejects.toThrow(
       /exceeded 60000 ms/,
     );
+  });
+
+  it("fails a Job no node can take once it has been unschedulable for the grace, and deletes it", async () => {
+    const api = fake();
+    api.nextStatus = "running";
+    api.pods = [
+      {
+        metadata: { name: "build-pod-1" },
+        status: {
+          phase: "Pending",
+          conditions: [
+            {
+              type: "PodScheduled",
+              status: "False",
+              reason: "Unschedulable",
+              message:
+                "0/3 nodes are available: 3 node(s) didn't match Pod's node affinity/selector.",
+            },
+          ],
+        },
+      },
+    ];
+    let now = 0;
+    const builder = new KubernetesWorkspaceImageBuilder({
+      platform: "linux/arm64",
+      nodeSelector: { "sealant.sh/pool": "workspaces" },
+      config: { ...config, timeoutMs: 3_600_000 },
+      api,
+      registryClient: registry("sha256:1"),
+      pollIntervalMs: 1,
+      unschedulableGraceMs: 300_000,
+      now: () => (now += 60_000),
+    });
+    await expect(builder.buildAndPublish({ spec, repository: "r", tag: "t" })).rejects.toThrow(
+      /could not be scheduled for 5 min: no node it can run on has sealant\.sh\/pool=workspaces, kubernetes\.io\/arch=arm64\. 0\/3 nodes/,
+    );
+    expect(api.jobs.size).toBe(0);
+    expect(api.configMaps.size).toBe(0);
+  });
+
+  it("waits out a Pod that is unschedulable only for a while, as a scaling node pool makes it", async () => {
+    const api = fake();
+    api.nextStatus = "running";
+    api.pods = [
+      {
+        metadata: { name: "build-pod-1" },
+        status: {
+          conditions: [{ type: "PodScheduled", status: "False", reason: "Unschedulable" }],
+        },
+      },
+    ];
+    // Scheduled on the third look, before the grace ran out.
+    api.onListPods = (calls) => {
+      if (calls === 3) api.nextStatus = "succeeded";
+    };
+    let now = 0;
+    const builder = new KubernetesWorkspaceImageBuilder({
+      platform: "linux/amd64",
+      config: { ...config, timeoutMs: 3_600_000 },
+      api,
+      registryClient: registry("sha256:1"),
+      pollIntervalMs: 1,
+      unschedulableGraceMs: 300_000,
+      now: () => (now += 10_000),
+    });
+    await expect(
+      builder.buildAndPublish({ spec, repository: "r", tag: "t" }),
+    ).resolves.toBeDefined();
   });
 
   it("projects build secrets from worker files into a Secret and mounts them", async () => {

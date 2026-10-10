@@ -262,7 +262,10 @@ describe("runtime adapter conformance: a blueprint's image customisation", () =>
   it("the recipe planned for the build starts from the OS family and installs the package", () => {
     // The Docker, Kubernetes and Cloudflare builders build this plan as it is. The MicroVM
     // builder has a recipe of its own on top of it, held to the same two facts.
-    const planned = planWorkspaceImageBuild({ blueprint: customisedBlueprint });
+    const planned = planWorkspaceImageBuild({
+      platform: "linux/amd64",
+      blueprint: customisedBlueprint,
+    });
     expect(planned.osFamily).toBe("fedora");
     expect(planned.containerfile).toMatch(/^FROM fedora:/m);
     expect(planned.containerfile).toContain(PACKAGE);
@@ -557,7 +560,10 @@ describe("runtime adapter conformance: a blueprint's dotfiles", () => {
   });
 
   it("plans the managers the archives need into the image, on every builder", () => {
-    const planned = planWorkspaceImageBuild({ blueprint: dotfilesBlueprint });
+    const planned = planWorkspaceImageBuild({
+      platform: "linux/amd64",
+      blueprint: dotfilesBlueprint,
+    });
     expect(planned.containerfile).toMatch(/\bstow\b/);
     expect(planned.containerfile).toMatch(/\bchezmoi\b/);
     const microvm = microvmBuilder().plan(dotfilesBlueprint);

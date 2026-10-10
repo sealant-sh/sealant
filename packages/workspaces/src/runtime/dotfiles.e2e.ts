@@ -27,6 +27,7 @@ import {
   compileWorkspaceBuildSpec,
   type BuildkitCommandRunner,
 } from "../buildkit/buildkit-builder.js";
+import { processImagePlatform } from "../buildkit/platform.js";
 import { SealantRuntimeControlLive } from "../sealantd/runtime.js";
 import { execInWorkspace, sealantTargetForDockerContainer } from "../sealantd/target.js";
 import { DockerRuntimeAdapter, type DockerCommandRunner } from "./docker-runtime-adapter.js";
@@ -117,6 +118,7 @@ describe.skipIf(!E2E_ENABLED)(
 
       const buildStarted = Date.now();
       const built = await compileWorkspaceBuildSpec({
+        platform: processImagePlatform(),
         blueprint,
         options: { commandRunner: buildkit },
       });

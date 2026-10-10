@@ -194,7 +194,11 @@ describe("compileWorkspaceBuildSpec", () => {
       },
     });
 
-    const result = await compileWorkspaceBuildSpec({ blueprint, options: { commandRunner } });
+    const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
+      blueprint,
+      options: { commandRunner },
+    });
     const containerfile = await readFile(result.buildkit.spec.containerfilePath, "utf8");
 
     expect(containerfile).toContain("FROM archlinux:latest");
@@ -217,7 +221,11 @@ describe("compileWorkspaceBuildSpec", () => {
       },
     });
 
-    const result = await compileWorkspaceBuildSpec({ blueprint, options: { commandRunner } });
+    const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
+      blueprint,
+      options: { commandRunner },
+    });
     const containerfile = await readFile(result.buildkit.spec.containerfilePath, "utf8");
 
     expect(containerfile).toContain(
@@ -274,7 +282,7 @@ describe("compileWorkspaceBuildSpec", () => {
       },
     });
 
-    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora");
+    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora", "linux/amd64");
 
     expect(plan.osFamily).toBe("fedora");
     expect(plan.packageManager).toBe("dnf");
@@ -330,7 +338,7 @@ describe("compileWorkspaceBuildSpec", () => {
       },
     });
 
-    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora");
+    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora", "linux/amd64");
     expect(plan.dotfiles).toMatchObject({
       applyAt: "runtime",
       githubInstallationRepositoryId: "gh_installation_repo_1",
@@ -338,6 +346,7 @@ describe("compileWorkspaceBuildSpec", () => {
     expect(plan.buildSecrets).toEqual([]);
 
     const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
       blueprint,
       options: {
         commandRunner,
@@ -402,7 +411,7 @@ describe("compileWorkspaceBuildSpec", () => {
       },
     });
 
-    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora");
+    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora", "linux/amd64");
     expect(plan.packages).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -448,13 +457,14 @@ describe("compileWorkspaceBuildSpec", () => {
       },
     });
 
-    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "ubuntu");
+    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "ubuntu", "linux/amd64");
     // The `auto` manager requests chezmoi; ubuntu maps that to the download prerequisites
     // instead of an apt package that does not exist in 24.04.
     const chezmoiRequest = plan.packages.find((pkg) => pkg.requestId === "chezmoi");
     expect(chezmoiRequest?.installPackages).toEqual(["curl", "ca-certificates"]);
 
     const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
       blueprint,
       options: { commandRunner },
     });
@@ -504,7 +514,7 @@ describe("compileWorkspaceBuildSpec", () => {
       },
     });
 
-    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "ubuntu");
+    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "ubuntu", "linux/amd64");
     expect(plan.packages.find((pkg) => pkg.requestId === "chezmoi")).toBeUndefined();
   });
 
@@ -533,10 +543,11 @@ describe("compileWorkspaceBuildSpec", () => {
       },
     });
 
-    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora");
+    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora", "linux/amd64");
     expect(plan.dotfiles?.ref).toBeUndefined();
 
     const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
       blueprint,
       options: { commandRunner },
     });
@@ -568,7 +579,7 @@ describe("compileWorkspaceBuildSpec", () => {
       },
     });
 
-    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora");
+    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora", "linux/amd64");
     const requestIds = plan.packages.map((pkg) => pkg.requestId);
     // The second archive defaults to "auto", which can invoke chezmoi or stow; no git — archives
     // are staged by the worker, not cloned.
@@ -594,7 +605,7 @@ describe("compileWorkspaceBuildSpec", () => {
       },
     });
 
-    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora");
+    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora", "linux/amd64");
     const requestIds = plan.packages.map((pkg) => pkg.requestId);
     expect(requestIds).toContain("tar");
     expect(requestIds).not.toContain("chezmoi");
@@ -660,6 +671,7 @@ describe("compileWorkspaceBuildSpec", () => {
     });
 
     const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
       blueprint,
       options: { commandRunner },
     });
@@ -686,6 +698,7 @@ describe("compileWorkspaceBuildSpec", () => {
         },
       }),
       "fedora",
+      "linux/amd64",
     );
     const archPlan = mapBlueprintToBuildkitImagePlan(
       createWorkspaceBuildSpec({
@@ -704,6 +717,7 @@ describe("compileWorkspaceBuildSpec", () => {
         },
       }),
       "arch",
+      "linux/amd64",
     );
 
     expect(fedoraPlan.packages).toEqual(
@@ -764,6 +778,7 @@ describe("compileWorkspaceBuildSpec", () => {
       (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
     >(async () => ({ stdout: "", stderr: "" }));
     const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
       blueprint: createWorkspaceBuildSpec({
         tooling: {
           packages: [{ id: "git" }, { id: "ripgrep" }],
@@ -799,11 +814,14 @@ describe("compileWorkspaceBuildSpec", () => {
     const saveCommandArgs = (commandRunner.mock.calls[1]?.[1] ?? []) as string[];
     const probeCommandArgs = (commandRunner.mock.calls[2]?.[1] ?? []) as string[];
     expect(commandRunner).toHaveBeenCalledTimes(3);
-    expect(buildCommandArgs.slice(0, 7)).toEqual([
+    expect(buildCommandArgs.slice(0, 9)).toEqual([
       "build",
       "--progress=plain",
       "--file",
       expect.any(String),
+      // Always the plan's platform, never the daemon's default.
+      "--platform",
+      "linux/amd64",
       // The full plan hash, which a kept image must carry to be reused for the plan.
       "--label",
       `sh.sealant.plan-hash=${result.metadata?.planHash ?? ""}`,
@@ -813,7 +831,14 @@ describe("compileWorkspaceBuildSpec", () => {
     expect(saveCommandArgs[2]).toMatch(/workspace-image\.tar$/);
     // The image probe is read back from the built image; the stub printed nothing, so the build
     // stands without an answer and says why.
-    expect(probeCommandArgs.slice(0, 4)).toEqual(["run", "--rm", "--pull=never", "--network=none"]);
+    expect(probeCommandArgs.slice(0, 6)).toEqual([
+      "run",
+      "--rm",
+      "--pull=never",
+      "--network=none",
+      "--platform",
+      "linux/amd64",
+    ]);
     expect(result.metadata?.imageProbe).toBeUndefined();
     expect(
       result.metadata?.notes.some((note) => note.startsWith("The image probe could not")),
@@ -895,6 +920,7 @@ describe("compileWorkspaceBuildSpec", () => {
       (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
     >(async () => ({ stdout: "", stderr: "" }));
     const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
       blueprint: createWorkspaceBuildSpec({
         harness: {
           id: "codex",
@@ -946,6 +972,7 @@ describe("compileWorkspaceBuildSpec", () => {
       (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
     >(async () => ({ stdout: "", stderr: "" }));
     const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
       blueprint: createWorkspaceBuildSpec({
         harness: {
           id: "codex",
@@ -1026,6 +1053,7 @@ describe("compileWorkspaceBuildSpec", () => {
       (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
     >(async () => ({ stdout: "", stderr: "" }));
     const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
       blueprint: createWorkspaceBuildSpec({
         // No enableSealantd flag at all: the clean-cut design boots every workspace via `sealantd boot`.
         target: {
@@ -1097,6 +1125,7 @@ describe("compileWorkspaceBuildSpec", () => {
         (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
       >(async () => ({ stdout: "", stderr: "" }));
       const result = await compileWorkspaceBuildSpec({
+        platform: "linux/amd64",
         blueprint: createWorkspaceBuildSpec({
           target: {
             os: { family: osFamily, mode: "prefer" },
@@ -1134,7 +1163,7 @@ describe("compileWorkspaceBuildSpec", () => {
       },
     });
 
-    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "arch");
+    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "arch", "linux/amd64");
 
     expect(plan.packages).toEqual(
       expect.arrayContaining([
@@ -1158,6 +1187,7 @@ describe("ubuntu distro family", () => {
     >(async () => ({ stdout: "", stderr: "" }));
 
     const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
       blueprint: createWorkspaceBuildSpec({
         tooling: { packages: [{ id: "ripgrep" }, { id: "fd-find" }] },
         customization: {
@@ -1233,6 +1263,7 @@ describe("custom base images", () => {
     >(async () => ({ stdout: "", stderr: "" }));
 
     const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
       blueprint: createWorkspaceBuildSpec({
         target: customTarget("node:22-bookworm"),
       }),
@@ -1279,6 +1310,7 @@ describe("custom base images", () => {
     >(async () => ({ stdout: "", stderr: "" }));
 
     const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
       blueprint: createWorkspaceBuildSpec({ target: customTarget("node:26-bookworm") }),
       options: { commandRunner },
     });
@@ -1299,6 +1331,7 @@ describe("custom base images", () => {
     >(async () => ({ stdout: "", stderr: "" }));
 
     const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
       blueprint: createWorkspaceBuildSpec({
         tooling: { packages: [{ id: "ripgrep" }, { id: "jq" }] },
         target: customTarget("node:22-alpine"),
@@ -1321,6 +1354,7 @@ describe("custom base images", () => {
     >(async () => ({ stdout: "", stderr: "" }));
 
     const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
       blueprint: createWorkspaceBuildSpec({ target: customTarget("node:22-bookworm") }),
       options: { commandRunner },
     });
@@ -1362,6 +1396,7 @@ describe("custom base images", () => {
 
     await expect(
       compileWorkspaceBuildSpec({
+        platform: "linux/amd64",
         blueprint: createWorkspaceBuildSpec({ target: customTarget("gcr.io/distroless/static") }),
         options: { commandRunner },
       }),
@@ -1387,6 +1422,7 @@ describe("custom base images", () => {
     };
 
     const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
       blueprint,
       options: { commandRunner },
     });
@@ -1406,8 +1442,8 @@ describe("planWorkspaceImageBuild", () => {
   it("hashes the rendered Containerfile deterministically without running Docker", () => {
     const blueprint = createWorkspaceBuildSpec();
 
-    const first = planWorkspaceImageBuild({ blueprint });
-    const second = planWorkspaceImageBuild({ blueprint });
+    const first = planWorkspaceImageBuild({ platform: "linux/amd64", blueprint });
+    const second = planWorkspaceImageBuild({ platform: "linux/amd64", blueprint });
 
     expect(first.planHash).toMatch(/^[0-9a-f]{64}$/);
     expect(second.planHash).toBe(first.planHash);
@@ -1416,8 +1452,12 @@ describe("planWorkspaceImageBuild", () => {
   });
 
   it("changes the hash when the plan changes the image content", () => {
-    const base = planWorkspaceImageBuild({ blueprint: createWorkspaceBuildSpec() });
+    const base = planWorkspaceImageBuild({
+      platform: "linux/amd64",
+      blueprint: createWorkspaceBuildSpec(),
+    });
     const withPackage = planWorkspaceImageBuild({
+      platform: "linux/amd64",
       blueprint: createWorkspaceBuildSpec({
         tooling: { packages: [{ id: "ripgrep" }] },
       }),
@@ -1427,8 +1467,12 @@ describe("planWorkspaceImageBuild", () => {
   });
 
   it("keeps the hash stable across launch-only differences (runtime env)", () => {
-    const base = planWorkspaceImageBuild({ blueprint: createWorkspaceBuildSpec() });
+    const base = planWorkspaceImageBuild({
+      platform: "linux/amd64",
+      blueprint: createWorkspaceBuildSpec(),
+    });
     const withRuntimeEnv = planWorkspaceImageBuild({
+      platform: "linux/amd64",
       blueprint: createWorkspaceBuildSpec({
         runtime: {
           env: { EXAMPLE: "per-session-value" },
@@ -1457,8 +1501,12 @@ describe("planWorkspaceImageBuild", () => {
       (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
     >(async () => ({ stdout: "", stderr: "" }));
 
-    const planned = planWorkspaceImageBuild({ blueprint });
-    const result = await compileWorkspaceBuildSpec({ blueprint, options: { commandRunner } });
+    const planned = planWorkspaceImageBuild({ platform: "linux/amd64", blueprint });
+    const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
+      blueprint,
+      options: { commandRunner },
+    });
 
     expect(result.metadata?.planHash).toBe(planned.planHash);
     await expect(readFile(result.buildkit.spec.containerfilePath, "utf8")).resolves.toBe(
@@ -1482,6 +1530,7 @@ describe("build context cleanup", () => {
 
     await expect(
       compileWorkspaceBuildSpec({
+        platform: "linux/amd64",
         blueprint: createWorkspaceBuildSpec(),
         options: { commandRunner },
       }),
@@ -1494,6 +1543,7 @@ describe("build context cleanup", () => {
   it("recovers the scratch directory from a compile result's artifact paths", async () => {
     const commandRunner = vi.fn(async () => ({ stdout: "", stderr: "" }));
     const result = await compileWorkspaceBuildSpec({
+      platform: "linux/amd64",
       blueprint: createWorkspaceBuildSpec(),
       options: { commandRunner },
     });

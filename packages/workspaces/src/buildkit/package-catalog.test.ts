@@ -30,6 +30,7 @@ const MEND_DEFAULTS = [
 
 const containerfileFor = (family: "fedora" | "arch" | "ubuntu" | "nix", packages: string[]) =>
   planWorkspaceImageBuild({
+    platform: "linux/amd64",
     blueprint: {
       ...cases.gitSource.blueprint,
       target: { ...cases.gitSource.blueprint.target, os: { family, mode: "require" } },

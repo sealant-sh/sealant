@@ -19,6 +19,7 @@ import {
   type ResolvedImagePackage,
   type ResolvedImagePlan,
   type WorkspaceBlueprint,
+  type WorkspaceImagePlatform,
   type WorkspaceImageProbe,
 } from "@sealant/validators";
 
@@ -28,6 +29,12 @@ import {
   isBakedHarnessId,
   type HarnessIntegration,
 } from "../harness/integrations.js";
+import {
+  ARCHLINUXARM_BUILDER_KEY,
+  ARCHLINUXARM_KEY_FILE,
+  ARCHLINUXARM_ROOTFS,
+  renderArchlinuxArmBase,
+} from "./archlinuxarm.js";
 import {
   createImageBuildProgressTracker,
   describeImageBuildStep,
@@ -375,6 +382,33 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
     sshdPath: "/root/.nix-profile/bin/sshd",
   },
 };
+
+/**
+ * Arch on arm64 starts from the Arch Linux ARM rootfs (archlinuxarm.ts): Docker Hub's `archlinux`
+ * image is x86_64 only. Every other family's base image is multi-arch, so it is native as it is.
+ */
+export const usesArchlinuxArm = (
+  osFamily: BuildkitTargetOsFamily,
+  platform: WorkspaceImagePlatform,
+): boolean => osFamily === "arch" && platform === "linux/arm64";
+
+/**
+ * The platform a build asks BuildKit for: the plan's, but none for a custom base. Asked for none,
+ * BuildKit builds for the platform the base's manifest offers and labels the image with it, so an
+ * amd64-only base stays amd64 (and runs emulated on arm64) instead of being labelled arm64 while
+ * it holds amd64 binaries.
+ */
+export const buildPlatformOf = (planned: {
+  readonly osFamily: BuildkitTargetOsFamily;
+  readonly platform: WorkspaceImagePlatform;
+}): WorkspaceImagePlatform | undefined =>
+  planned.osFamily === "custom" ? undefined : planned.platform;
+
+/** The image's first stages: its base image, or the Arch Linux ARM rootfs. */
+const renderBase = (plan: ResolvedImagePlan, platform: WorkspaceImagePlatform): string =>
+  usesArchlinuxArm(plan.osFamily, platform)
+    ? renderArchlinuxArmBase(distroDefinitions.fedora.baseImage)
+    : `FROM ${plan.baseImage}`;
 
 /**
  * Public GHCR image whose `/usr/local/bin/sealantd` binary is `COPY --from`'d into every workspace.
@@ -734,6 +768,7 @@ const resolvePackages = (
 const mapBlueprintToResolvedImagePlan = (
   blueprint: WorkspaceBlueprint,
   osFamily: BuildkitTargetOsFamily,
+  platform: WorkspaceImagePlatform,
 ): ResolvedImagePlan => {
   const support = getBuildkitSupportForOs(blueprint, osFamily);
   if (!support.supported) {
@@ -775,7 +810,9 @@ const mapBlueprintToResolvedImagePlan = (
     baseImage:
       osFamily === "custom"
         ? (blueprint.target.os.baseImage ?? "")
-        : distroDefinitions[osFamily].baseImage,
+        : usesArchlinuxArm(osFamily, platform)
+          ? ARCHLINUXARM_ROOTFS
+          : distroDefinitions[osFamily].baseImage,
     packageManager: osFamily === "custom" ? "none" : distroDefinitions[osFamily].packageManager,
     packages: resolvePackages(blueprint, osFamily),
     customization: blueprint.customization,
@@ -1373,7 +1410,7 @@ const renderCustomBaseContainerfile = (plan: ResolvedImagePlan): string => {
   ].join("\n");
 };
 
-const renderContainerfile = (plan: ResolvedImagePlan): string => {
+const renderContainerfile = (plan: ResolvedImagePlan, platform: WorkspaceImagePlatform): string => {
   if (plan.osFamily === "custom") {
     return renderCustomBaseContainerfile(plan);
   }
@@ -1388,7 +1425,7 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
 
   return [
     "# syntax=docker/dockerfile:1.7",
-    `FROM ${plan.baseImage}`,
+    renderBase(plan, platform),
     "",
     renderPackageInstallCommand(plan),
     ...renderCatalogExtras(plan),
@@ -1463,7 +1500,11 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
  * generated `entrypoint.sh` is gone: the container's PID 1 is now the baked-in `sealantd boot`
  * binary, configured via the `ENV SEALANT_*` block in the Containerfile.
  */
-const writeBuildContext = async (plan: ResolvedImagePlan, containerfile: string) => {
+const writeBuildContext = async (
+  plan: ResolvedImagePlan,
+  containerfile: string,
+  platform: WorkspaceImagePlatform,
+) => {
   const contextDirectory = await mkdtemp(join(tmpdir(), `sealant-buildkit-${plan.osFamily}-`));
   const containerfilePath = join(contextDirectory, "Containerfile");
   const imagePlanPath = join(contextDirectory, "resolved-image-plan.json");
@@ -1484,6 +1525,13 @@ const writeBuildContext = async (plan: ResolvedImagePlan, containerfile: string)
 
   await mkdir(dirname(containerfilePath), { recursive: true });
   await writeFile(containerfilePath, containerfile, "utf8");
+  if (usesArchlinuxArm(plan.osFamily, platform)) {
+    await writeFile(
+      join(contextDirectory, ARCHLINUXARM_KEY_FILE),
+      ARCHLINUXARM_BUILDER_KEY,
+      "utf8",
+    );
+  }
   await writeFile(imagePlanPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
   await writeFile(buildSpecPath, `${JSON.stringify(spec, null, 2)}\n`, "utf8");
 
@@ -1590,12 +1638,12 @@ const buildImageTarball = async (
   imageTarPath: string | undefined,
   commandRunner: BuildkitCommandRunner,
   plan: ResolvedImagePlan,
+  platform: WorkspaceImagePlatform,
   build: Pick<
     BuildkitCompilerOptions,
     "onProgress" | "stallTimeoutMs" | "cacheDirectory" | "signal"
   > & { readonly planHash?: string } = {},
 ) => {
-  const platformArgs = plan.osFamily === "arch" ? ["--platform", "linux/amd64"] : [];
   // One cache per image name: images of one family share their base and package steps.
   const imageName = spec.imageReference.replace(/:[^:/]*$/, "");
   const cacheArgs =
@@ -1616,7 +1664,7 @@ const buildImageTarball = async (
     spec.containerfilePath,
     ...spec.secrets.flatMap((secret) => ["--secret", `id=${secret.id},src=${secret.sourceRef}`]),
     ...Object.entries(spec.buildArgs).flatMap(([key, value]) => ["--build-arg", `${key}=${value}`]),
-    ...platformArgs,
+    ...platformArgs(buildPlatformOf({ osFamily: plan.osFamily, platform })),
     ...cacheArgs,
     ...(build.planHash === undefined ? [] : ["--label", `${PLAN_HASH_LABEL}=${build.planHash}`]),
     "--tag",
@@ -1680,14 +1728,16 @@ const buildImageTarball = async (
  * The Docker-free planning half of a compile: blueprint → OS family → resolved plan → rendered
  * Containerfile → content hash.
  *
- * `planHash` hashes the rendered Containerfile — the exact build input — so two plans with the
- * same hash produce byte-identical build instructions (and, modulo upstream base image/package
+ * `planHash` hashes the platform and the rendered Containerfile — the exact build input — so two
+ * plans with the same hash produce byte-identical build instructions for one platform (and, modulo upstream base image/package
  * drift that Docker layer caching is equally blind to, identical image content). The worker uses
  * this to skip the BuildKit walk + publish entirely when the hash matches an already-published
  * image.
  */
 export interface PlannedWorkspaceImageBuild {
   readonly osFamily: BuildkitTargetOsFamily;
+  /** What the image is built for: every build of the plan passes it to the builder. */
+  readonly platform: WorkspaceImagePlatform;
   readonly imagePlan: ResolvedImagePlan;
   readonly containerfile: string;
   readonly planHash: string;
@@ -1695,6 +1745,7 @@ export interface PlannedWorkspaceImageBuild {
 
 export const planWorkspaceImageBuild = (input: {
   readonly blueprint: WorkspaceBlueprint;
+  readonly platform: WorkspaceImagePlatform;
   readonly options?: Pick<BuildkitCompilerOptions, "autoOsFamilyOrder">;
 }): PlannedWorkspaceImageBuild => {
   const parsed = parseBuildkitOsBuilderCompileInput({
@@ -1706,24 +1757,31 @@ export const planWorkspaceImageBuild = (input: {
       ? {}
       : { autoOsFamilyOrder: input.options.autoOsFamilyOrder }),
   });
-  const imagePlan = mapBlueprintToResolvedImagePlan(parsed.blueprint, osFamily);
-  const containerfile = renderContainerfile(imagePlan);
+  const imagePlan = mapBlueprintToResolvedImagePlan(parsed.blueprint, osFamily, input.platform);
+  const containerfile = renderContainerfile(imagePlan, input.platform);
 
   return {
     osFamily,
+    platform: input.platform,
     imagePlan,
     containerfile,
-    planHash: createHash("sha256").update(containerfile, "utf8").digest("hex"),
+    // The platform as well: most families render one Containerfile for both, and an image built
+    // for one must never be reused for the other.
+    planHash: createHash("sha256")
+      .update(`${input.platform}\n`, "utf8")
+      .update(containerfile, "utf8")
+      .digest("hex"),
   };
 };
 
 export const compileWorkspaceBuildSpec = async (input: {
   readonly blueprint: WorkspaceBlueprint;
+  readonly platform: WorkspaceImagePlatform;
   readonly options?: BuildkitCompilerOptions;
 }): Promise<BuildkitOsBuilderCompileResult> => {
   const planned = planWorkspaceImageBuild(input);
-  const { osFamily, imagePlan } = planned;
-  const buildContext = await writeBuildContext(imagePlan, planned.containerfile);
+  const { osFamily, imagePlan, platform } = planned;
+  const buildContext = await writeBuildContext(imagePlan, planned.containerfile, platform);
   const commandRunner = input.options?.commandRunner ?? runBuildkitCommand;
   const emitTarball = input.options?.emitTarball ?? true;
 
@@ -1734,6 +1792,7 @@ export const compileWorkspaceBuildSpec = async (input: {
       emitTarball ? buildContext.imageTarPath : undefined,
       commandRunner,
       imagePlan,
+      platform,
       {
         ...(input.options?.onProgress === undefined
           ? {}
@@ -1748,7 +1807,11 @@ export const compileWorkspaceBuildSpec = async (input: {
         planHash: planned.planHash,
       },
     );
-    imageProbe = await readImageProbe(buildContext.spec.imageReference, commandRunner, imagePlan);
+    imageProbe = await readImageProbe(
+      buildContext.spec.imageReference,
+      commandRunner,
+      buildPlatformOf(planned),
+    );
   } catch (error) {
     // A failed build leaves nothing worth keeping; the caller never sees the context path.
     await removeBuildContext(buildContext.contextDirectory);
@@ -1791,7 +1854,7 @@ export const compileWorkspaceBuildSpec = async (input: {
     metadata: {
       defaultArtifactName: defaultImageNameForBlueprint(imagePlan.blueprint, osFamily),
       notes: [
-        `Compiled by the ${osFamily} BuildKit compiler.`,
+        `Compiled by the ${osFamily} BuildKit compiler for ${platform}.`,
         ...(imageProbe.note === undefined ? [] : [imageProbe.note]),
       ],
       planHash: planned.planHash,
@@ -1812,19 +1875,18 @@ export const compileWorkspaceBuildSpec = async (input: {
 const readImageProbe = async (
   imageReference: string,
   commandRunner: BuildkitCommandRunner,
-  plan: ResolvedImagePlan,
+  platform: WorkspaceImagePlatform | undefined,
 ): Promise<{
   readonly probe?: WorkspaceImageProbe;
   readonly note?: string;
 }> => {
-  const platformArgs = plan.osFamily === "arch" ? ["--platform", "linux/amd64"] : [];
   try {
     const { stdout } = await commandRunner("docker", [
       "run",
       "--rm",
       "--pull=never",
       "--network=none",
-      ...platformArgs,
+      ...platformArgs(platform),
       "--entrypoint",
       "/bin/sh",
       imageReference,
@@ -1840,6 +1902,9 @@ const readImageProbe = async (
   }
 };
 
+const platformArgs = (platform: WorkspaceImagePlatform | undefined): string[] =>
+  platform === undefined ? [] : ["--platform", platform];
+
 /** `10 min`, `90 s`. */
 const formatDuration = (ms: number): string =>
   ms >= 60_000 && ms % 60_000 === 0
@@ -1852,9 +1917,9 @@ const formatDuration = (ms: number): string =>
  */
 export const readWorkspaceImageProbe = (
   imageReference: string,
-  plan: ResolvedImagePlan,
+  platform: WorkspaceImagePlatform | undefined,
   commandRunner: BuildkitCommandRunner = runBuildkitCommand,
-) => readImageProbe(imageReference, commandRunner, plan);
+) => readImageProbe(imageReference, commandRunner, platform);
 
 /** The local image name a compile of this plan builds and tags (`<name>:latest`). */
 export const localImageNameOf = (plan: ResolvedImagePlan): string =>
@@ -1864,6 +1929,7 @@ export const localImageNameOf = (plan: ResolvedImagePlan): string =>
 export const mapBlueprintToBuildkitImagePlan = (
   blueprint: WorkspaceBlueprint,
   osFamily: BuildkitTargetOsFamily,
+  platform: WorkspaceImagePlatform,
 ) => {
-  return mapBlueprintToResolvedImagePlan(blueprint, osFamily);
+  return mapBlueprintToResolvedImagePlan(blueprint, osFamily, platform);
 };

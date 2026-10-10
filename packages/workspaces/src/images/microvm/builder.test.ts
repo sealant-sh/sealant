@@ -1,6 +1,7 @@
 import type { NewWorkspace } from "@sealant/validators";
 import { describe, expect, it } from "vitest";
 
+import { ARCHLINUXARM_BUILDER_KEY, ARCHLINUXARM_KEY_FILE } from "../../buildkit/index.js";
 import { cases } from "../../runtime/docker-runtime-adapter.golden-fixture.js";
 import {
   microvmImageReference,
@@ -186,6 +187,38 @@ describe("MicrovmWorkspaceImageBuilder", () => {
     expect(uploaded).toContain('ENTRYPOINT ["node", "/opt/sealant/agent.mjs"]');
     expect(uploaded).toContain("// trusted agent.mjs");
     expect(uploaded).toContain("// trusted docker-service.mjs");
+  });
+
+  it("plans for ARM64 and sends Arch the key its Arch Linux ARM rootfs is verified against", async () => {
+    const aws = fakeAws();
+    let uploaded = "";
+    const artifacts: MicrovmArtifactStore = {
+      ...aws.artifacts,
+      put: async (key, bytes) => {
+        uploaded = Buffer.from(bytes).toString("latin1");
+        return aws.artifacts.put(key, bytes);
+      },
+    };
+    const builder = new MicrovmWorkspaceImageBuilder({
+      api: aws.api,
+      artifacts,
+      config,
+      readContextFile: async (name) => Buffer.from(`// trusted ${name}\n`),
+      contextDigest: "a".repeat(64),
+      sleep: async () => undefined,
+    });
+    const spec = blueprint([]);
+    const arch: NewWorkspace = {
+      ...spec,
+      target: { ...spec.target, os: { family: "arch", mode: "require" } },
+    };
+
+    expect(builder.plan(arch).platform).toBe("linux/arm64");
+    await build(builder, arch);
+
+    expect(uploaded).toContain("FROM public.ecr.aws/docker/library/fedora:41 AS archlinuxarm");
+    expect(uploaded).toContain(ARCHLINUXARM_KEY_FILE);
+    expect(uploaded).toContain(ARCHLINUXARM_BUILDER_KEY);
   });
 
   it("one recipe is one image: a second workspace with the same plan builds and uploads nothing", async () => {

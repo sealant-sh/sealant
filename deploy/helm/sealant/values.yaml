@@ -48,6 +48,8 @@ api:
     annotations: {}
   resources: { requests: { cpu: 250m, memory: 512Mi }, limits: { cpu: "2", memory: 2Gi } }
   corsAllowedOrigins: "*"
+  # Extra plain env for the API.
+  extraEnv: []
   sshGateway:
     host: "" # what the UI renders into `ssh` commands (operator-facing address)
     port: 2222
@@ -126,6 +128,11 @@ workspaces:
   gvisorRuntimeClass: ""
   topologySpread: true
   nodeSelector: {} # e.g. { sealant.sh/pool: workspaces }
+  # What workspace images are built for: linux/amd64 or linux/arm64. Workspace Pods and image
+  # build Jobs select nodes of this architecture (kubernetes.io/arch). Empty: the arch
+  # `nodeSelector` selects, else the worker's own node's. Set it, or select the arch, when the
+  # control plane and the workspaces run on node pools of different architectures.
+  imagePlatform: ""
   readinessTimeoutMs: 300000
   # Workspace-scoped Docker (`services.docker`): a rootless `docker:*-dind-rootless` daemon runs
   # as a sidecar of the workspace Pod, and that Pod is USER-NAMESPACED (`hostUsers: false`) so the
