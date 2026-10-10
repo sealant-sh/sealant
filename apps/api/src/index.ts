@@ -22,6 +22,7 @@ import { env } from "./runtime-env.js";
 import { budgetLimits } from "./services/budget-limits.js";
 import { budgetsOff, makeRateWindow } from "./services/budgets.js";
 import { ControlPlaneCapabilitiesLive } from "./services/control-plane-capabilities.js";
+import { CredentialRedactionLive } from "./services/credential-redaction.js";
 import {
   authPosture,
   servicePrincipalMiddleware,
@@ -287,9 +288,15 @@ const authGate = servicePrincipalMiddleware(
   },
 );
 
+// What the server observes (request spans, logs, error reports) holds credentials: the browser
+// routes take their bearer as `?token=`, headers carry others, HTTP errors quote and hold their
+// request. Observers receive plain, redacted data only (services/credential-redaction.ts).
 const serverLayer = HttpRouter.serve(appLayer, {
   middleware: (app) => corsMiddleware(authGate(app)),
-}).pipe(Layer.provide(NodeHttpServer.layer(createServer, { port: env.PORT })));
+}).pipe(
+  Layer.provide(NodeHttpServer.layer(createServer, { port: env.PORT })),
+  Layer.provide(CredentialRedactionLive),
+);
 
 /**
  * Startup diagnostics for operational visibility.
