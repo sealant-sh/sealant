@@ -537,11 +537,11 @@ importers:
   apps/ssh-gateway:
     dependencies:
       '@sealant/runtime-client':
-        specifier: ^0.6.0
-        version: 0.6.0
+        specifier: npm:@sealant/runtime-client-next@0.20.0-next.155
+        version: '@sealant/runtime-client-next@0.20.0-next.155'
       '@sealant/runtime-protocol':
-        specifier: ^0.6.0
-        version: 0.6.0
+        specifier: npm:@sealant/runtime-protocol-next@0.20.0-next.155
+        version: '@sealant/runtime-protocol-next@0.20.0-next.155'
       '@sealant/validators':
         specifier: workspace:*
         version: link:../../packages/validators
@@ -3528,16 +3528,8 @@ packages:
     resolution: {integrity: sha512-Y1V0THUdv+oKTM8gmktGFETuzhU+Ys2Cl1iW+ieI7hfKarPxrT5YeiqONY6o2uoseVR6DbdlTd8N7jZcdBJuZg==}
     engines: {node: '>=20'}
 
-  '@sealant/runtime-client@0.6.0':
-    resolution: {integrity: sha512-kZIF3Y7UbattTp60n0LjCjSDSut/1ww7B12/n4af6AEAmpbYgbohkEFTvdVES45fWAtF+EMKv4Vq/1jwRm+h5w==}
-    engines: {node: '>=20'}
-
   '@sealant/runtime-protocol-next@0.20.0-next.155':
     resolution: {integrity: sha512-vq891ed1B9AqF0iIseJIkPLznhAdYX/YISopiDwoG+rsV6fPWJS649t4VL8xDSQ7yFOiCV0/JbPvmSSZLFlV5A==}
-    engines: {node: '>=20'}
-
-  '@sealant/runtime-protocol@0.6.0':
-    resolution: {integrity: sha512-qP2v9vbr08l6Rl77opAIV9sNUEiI78+ljIsPmn0IUckv6/aZWvvZ7wsJxA/2kCBDbGjth6PMPq98NeTybLZqhA==}
     engines: {node: '>=20'}
 
   '@sec-ant/readable-stream@0.4.1':
@@ -10170,16 +10162,7 @@ snapshots:
       '@bufbuild/protobuf': 2.12.0
       '@sealant/runtime-protocol': '@sealant/runtime-protocol-next@0.20.0-next.155'
 
-  '@sealant/runtime-client@0.6.0':
-    dependencies:
-      '@bufbuild/protobuf': 2.12.0
-      '@sealant/runtime-protocol': 0.6.0
-
   '@sealant/runtime-protocol-next@0.20.0-next.155':
-    dependencies:
-      '@bufbuild/protobuf': 2.12.0
-
-  '@sealant/runtime-protocol@0.6.0':
     dependencies:
       '@bufbuild/protobuf': 2.12.0
 

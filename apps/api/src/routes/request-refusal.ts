@@ -34,18 +34,37 @@ const isJsonText = (text: string): boolean => {
   }
 };
 
+/** The request's media type as HttpApi reads it to pick a payload decoder (JSON when absent). */
+const mediaTypeOf = (request: HttpServerRequest.HttpServerRequest): string => {
+  const contentType = (request.headers["content-type"] ?? "application/json").toLowerCase().trim();
+  const semicolon = contentType.indexOf(";");
+  return semicolon === -1 ? contentType : contentType.slice(0, semicolon).trim();
+};
+
+/** Whether HttpApi decodes this request's body as JSON for `endpoint` (not text, form or bytes). */
+const decodesJson = (
+  endpoint: HttpApiEndpoint.AnyWithProps,
+  request: HttpServerRequest.HttpServerRequest,
+): boolean => {
+  const entry = endpoint.payload.get(mediaTypeOf(request));
+  if (entry === undefined) return false;
+  const { _tag: decoder } = entry.encoding;
+  return decoder === "Json";
+};
+
 /**
- * Whether a `SyntaxError` defect is HttpApi's parse of this request's body (it parses a JSON payload
- * with `JSON.parse` outside its error channel, so a malformed body is a defect quoting part of
- * it): only for an endpoint that takes a payload, and only when the body, read again from the
- * request's cache, is not JSON. A handler's or an encoder's `SyntaxError` on a valid request stays
- * the server's failure (500, reported). Read only on this failure path, so a request that decodes
- * pays nothing.
+ * Whether a `SyntaxError` defect is HttpApi's own parse of this request's body. HttpApi parses a
+ * JSON payload with `JSON.parse` outside its error channel, before the handler runs, so a malformed
+ * body is a defect quoting part of it. It is that parse only when the endpoint decodes this media
+ * type as JSON and the body, read again from the request's cache, is not JSON: such a request never
+ * reaches its handler. Anything else (a text payload such as GitHub's webhook, a handler's or an
+ * encoder's own `SyntaxError`) stays the server's failure, a reported 500. Read only on this
+ * failure path, so a request that decodes pays nothing.
  */
 const isBodyParseFailure = (endpoint: HttpApiEndpoint.AnyWithProps) =>
   Effect.gen(function* () {
-    if (endpoint.payload.size === 0) return false;
     const request = yield* HttpServerRequest.HttpServerRequest;
+    if (!decodesJson(endpoint, request)) return false;
     const text = yield* request.text.pipe(Effect.orElseSucceed(() => undefined));
     return text !== undefined && text !== "" && !isJsonText(text);
   });

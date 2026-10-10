@@ -16,18 +16,18 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { RUNTIME_DEPENDENTS } from "./check-release-pins.mjs";
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 export const IMAGE_FILES = [
   "packages/workspaces/src/buildkit/buildkit-builder.ts",
   "apps/cf-bridge/Dockerfile",
 ];
-// Every package that names the runtime packages: telemetry handles the envelopes workspaces decodes,
-// so the two must agree on the protocol's types.
-export const RUNTIME_MANIFESTS = [
-  "packages/workspaces/package.json",
-  "packages/telemetry/package.json",
-];
+// Every package that names the runtime packages, from the release guard's list: they handle the
+// same daemon's messages, so they must agree on the protocol's types, and a stable release checks
+// each of them.
+export const RUNTIME_MANIFESTS = RUNTIME_DEPENDENTS;
 const SEMVER = /^\d+\.\d+\.\d+(-next\.\d+)?$/;
 
 export const repositoryFor = (version) =>

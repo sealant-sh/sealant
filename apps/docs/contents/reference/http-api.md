@@ -141,12 +141,16 @@ the request is wrong and what was expected (`argv[1] must be a string`,
 `commands[0].args[1] must be a string`, `argv[1] contains a NUL byte`), never a value it held; a key
 the caller chose, such as an `env` name, reads `[…]`. The server's request log, its error reporters
 and the request's tracing span carry the refusal, not the request. A handler's own failure on a
-request that decoded stays a `500`.
+request that decoded, a text payload's included, stays a `500`.
 
-Request spans record each request's URL. The terminal attach, the output stream and the port forward
-take their bearer as `?token=`, because browser WebSocket and EventSource clients cannot set
-headers. Every credential query parameter (`token`, `access_token`, `ticket`, `key`, `signature` and
-the like) and any `user:password@` reads `REDACTED` in a span's URL attributes, and the request log
+Request spans record each request's URL and headers, and an HTTP error's message quotes its
+request's URL. The terminal attach, the output stream and the port forward take their bearer as
+`?token=`, because browser WebSocket and EventSource clients cannot set headers. What the API
+observes is redacted before it is recorded: in every span's attributes, events and ending failure,
+every log line and every error report, a credential query parameter (`token`, `access_token`,
+`ticket`, `key`, `signature` and the like), a `user:password@` and a `Bearer` or `Basic` credential
+read `REDACTED`, and so does every credential header (`authorization`, `cookie`,
+`x-sealant-gateway-token`, any header naming a token, key, secret or password). The request log
 records the path without its query.
 
 If the connection to `sealantd` drops before it answers an open, Sealant asks it again whether the

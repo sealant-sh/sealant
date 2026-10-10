@@ -24,12 +24,15 @@ it sends.
   `describeRequestIssue` words the reason. Before this, such a request got an empty `400`, and the
   server's request log, error reporters and tracing span quoted the rejected input: a session's
   arguments, an exec's command, a run's command. A handler's own failure on a request that decoded
-  stays a `500`.
-- A credential in a request's URL never reaches a tracing span. The terminal attach, the output
-  stream and the port forward take their bearer as `?token=`, and every request span recorded it in
-  `url.full` and `url.query`. Every credential query parameter (`token`, `access_token`, `ticket`,
-  `key`, `signature` and the like) and any `user:password@` now reads `REDACTED` in a span's URL
-  attributes, for incoming and outgoing requests. `?token=` is still accepted.
+  stays a `500`, a text payload's (GitHub's webhook) included.
+- No credential the API receives or sends reaches a span, a log line or an error report. The
+  terminal attach, the output stream and the port forward take their bearer as `?token=`; request
+  spans recorded it in `url.full` and `url.query`, an HTTP error quoted it in its message (and so in
+  the span's failure, the request log and error reports), and the SSH gateway's
+  `x-sealant-gateway-token` header was recorded as a span attribute. Now a credential query
+  parameter (`token`, `access_token`, `ticket`, `key`, `signature` and the like), a
+  `user:password@`, a `Bearer` or `Basic` credential and every credential header read `REDACTED`
+  wherever the API records them, for incoming and outgoing requests. `?token=` is still accepted.
 - In the SDK, `sessions.open(argv)` throws `SealantError` `invalid_argv` with the same reason before
   it sends a refused argv, surfaces a control plane's `RequestRefusedError` with its reason, and
   explains an older control plane's empty `400`.

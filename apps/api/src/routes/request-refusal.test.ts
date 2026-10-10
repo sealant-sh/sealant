@@ -65,7 +65,10 @@ const stubs = Layer.mergeAll(
               endpoint,
               endpoint === "createSession" || endpoint === "createSessionAsUser"
                 ? createSession
-                : () => Effect.die("not under test"),
+                : endpoint === "handleWebhook"
+                  ? // A text payload's handler failing as the server's fault.
+                    () => Effect.sync(() => JSON.parse("{ server data"))
+                  : () => Effect.die("not under test"),
             ),
           handlers as unknown,
         ) as never,
@@ -333,6 +336,18 @@ describe("a valid request whose handler fails", () => {
       "/v1/sessions",
       JSON.stringify({ ...ids, argv: [HANDLER_SYNTAX_ERROR] }),
     );
+    expect(response.status).toBe(500);
+    expect(response.text).not.toContain("RequestRefusedError");
+    const reported = server.observed.filter((line) => line.startsWith("report "));
+    expect(reported.join("\n")).toContain("SyntaxError");
+  });
+
+  it("stays the server's failure on a text payload whose body is not JSON (GitHub's webhook)", async () => {
+    const server = serve(RequestRefusalLive);
+    disposers.push(server.dispose);
+    // The webhook takes its body as text (its module verifies the signature, then parses it), so
+    // a body that is not JSON decodes, and a SyntaxError after it is the handler's.
+    const response = await server.send("POST", "/v1/github/webhooks", "not json at all");
     expect(response.status).toBe(500);
     expect(response.text).not.toContain("RequestRefusedError");
     const reported = server.observed.filter((line) => line.startsWith("report "));
