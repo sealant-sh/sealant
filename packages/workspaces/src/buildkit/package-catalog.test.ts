@@ -10,9 +10,10 @@ import {
   WORKSPACE_PACKAGE_CATALOG,
 } from "./package-catalog.js";
 
-/** Mend's default workspace package list (packages/domain/src/settings.ts), 2026-09-21. */
+/** Mend's default workspace package list (packages/domain/src/settings.ts), 2026-10-10. */
 const MEND_DEFAULTS = [
   "pnpm",
+  "bun",
   "python",
   "uv",
   "mise",
@@ -20,6 +21,7 @@ const MEND_DEFAULTS = [
   "lazygit",
   "bat",
   "curl",
+  "unzip",
   "jq",
   "ripgrep",
   "fd",
@@ -150,6 +152,39 @@ describe("the workspace package catalog", () => {
     expect(starship).toContain('install -m 0755 "$d/$m" "/usr/local/bin/$(basename "$m")"');
   });
 
+  it("installs bun from its pinned zip where a family's repositories have none", () => {
+    for (const family of ["fedora", "arch", "ubuntu"] as const) {
+      const containerfile = containerfileFor(family, ["bun"]);
+      expect(containerfile, family).toContain("bun 1.4.2");
+      // The zip needs unzip, installed with the release's other tools.
+      expect(containerfile, family).toMatch(
+        /(dnf -y install|pacman -S --noconfirm --needed|apt-get install) .*\bunzip\b/,
+      );
+      expect(containerfile, family).toContain("ln -sf /usr/local/bin/bun /usr/local/bin/bunx");
+    }
+    const nix = containerfileFor("nix", ["bun"]);
+    expect(nix).not.toContain("pinned by checksum");
+    expect(nix).toContain("'nixpkgs#bun'");
+    // A tar.gz release alone needs no unzip.
+    expect(containerfileFor("fedora", ["mise"])).not.toMatch(/\bunzip\b/);
+  });
+
+  it("renders a zip release that checks the checksum before unzipping", () => {
+    const step = renderReleaseInstall(WORKSPACE_PACKAGE_CATALOG.bun!.ubuntu.release!);
+    expect(step).toContain(
+      "x86_64) url='https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-x64-baseline.zip'; sha=c678040f14fe0440eb839d37cbd0ce4c051a32da72806ac97de6a6aab6bf728f; members='bun-linux-x64-baseline/bun';;",
+    );
+    expect(step).toContain(
+      "aarch64) url='https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-aarch64.zip'; sha=54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7; members='bun-linux-aarch64/bun';;",
+    );
+    expect(step).toContain('curl -fsSL --retry 3 -o "$d/archive.zip" "$url"');
+    expect(step).toContain('echo "$sha  $d/archive.zip" | sha256sum -c - >/dev/null');
+    expect(step).toContain('unzip -q "$d/archive.zip" -d "$d"');
+    expect(step).not.toContain("tar -xzf");
+    expect(step.indexOf("sha256sum -c")).toBeLessThan(step.indexOf("unzip -q"));
+    expect(step).toContain('install -m 0755 "$d/$m" "/usr/local/bin/$(basename "$m")"');
+  });
+
   it("renders a release install that checks the checksum before unpacking, per architecture", () => {
     const step = renderReleaseInstall(WORKSPACE_PACKAGE_CATALOG.mise!.fedora.release!);
     expect(step).toContain(
@@ -158,6 +193,9 @@ describe("the workspace package catalog", () => {
     expect(step).toContain(
       "aarch64) url='https://github.com/jdx/mise/releases/download/v2026.9.12/mise-v2026.9.12-linux-arm64.tar.gz'; sha=e4a0921da0a76ce4666832d5b57b6f0eb9f22d149ba92845ebae4c38638c6775",
     );
+    expect(step).toContain('curl -fsSL --retry 3 -o "$d/archive.tar.gz" "$url"');
+    expect(step).toContain('echo "$sha  $d/archive.tar.gz" | sha256sum -c - >/dev/null');
+    expect(step).toContain('tar -xzf "$d/archive.tar.gz" -C "$d"');
     expect(step.indexOf("sha256sum -c")).toBeLessThan(step.indexOf("tar -xzf"));
     expect(step).toContain('*) echo "mise: no release for $(uname -m)" >&2; exit 1;;');
     expect(step).toContain('install -m 0755 "$d/$m" "/usr/local/bin/$(basename "$m")"');
