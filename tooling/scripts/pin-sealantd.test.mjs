@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { prereleaseImages } from "./check-release-pins.mjs";
-import { IMAGE_FILES, repositoryFor, rewriteImages, runtimeSpecs } from "./pin-sealantd.mjs";
+import {
+  IMAGE_FILES,
+  repositoryFor,
+  rewriteImages,
+  RUNTIME_MANIFESTS,
+  runtimeSpecs,
+} from "./pin-sealantd.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const digest = `sha256:${"d".repeat(64)}`;
@@ -48,4 +54,29 @@ test("the checked-in pins are tag@sha256, which only this script writes", async 
     assert.notEqual(references.length, 0, file);
     for (const reference of references) assert.match(reference, PINNED, file);
   }
+});
+
+test("every manifest that names a runtime package is pinned, and all of them alike", async () => {
+  const names = ["@sealant/runtime-client", "@sealant/runtime-protocol"];
+  const found = [];
+  for (const dir of ["apps", "packages"]) {
+    for (const entry of await readdir(path.join(root, dir), { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const file = `${dir}/${entry.name}/package.json`;
+      let manifest;
+      try {
+        manifest = JSON.parse(await readFile(path.join(root, file), "utf8"));
+      } catch {
+        continue;
+      }
+      const deps = { ...manifest.dependencies, ...manifest.devDependencies };
+      if (names.some((name) => name in deps)) found.push([file, names.map((name) => deps[name])]);
+    }
+  }
+  assert.deepEqual(found.map(([file]) => file).sort(), [...RUNTIME_MANIFESTS].sort());
+  assert.equal(
+    new Set(found.map(([, specs]) => JSON.stringify(specs))).size,
+    1,
+    JSON.stringify(found),
+  );
 });

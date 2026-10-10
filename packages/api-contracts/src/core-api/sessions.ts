@@ -61,11 +61,86 @@ export type WorkspaceProcessUser = typeof workspaceProcessUserSchema.Type;
  */
 export const PROCESS_USER_UNSUPPORTED_CODE = "user-unsupported";
 
+/** The most words a session's argv may hold, the program included. */
+export const SESSION_ARGV_MAX_WORDS = 64;
+
+/**
+ * The most UTF-8 bytes one word of a session's argv may hold, its terminating NUL not counted:
+ * Linux's `MAX_ARG_STRLEN` (32 pages, 128 KiB on 4 KiB pages) counts the NUL, so 131,071 bytes of
+ * text is the longest word `execve` takes there; one byte more fails with `E2BIG` whatever the total.
+ */
+export const SESSION_ARGV_MAX_WORD_BYTES = 128 * 1024 - 1;
+
+/**
+ * The most UTF-8 bytes a session's argv may hold in all: half of Linux's usual 2 MiB `ARG_MAX`,
+ * which argv shares with the environment, and far below sealantd's 8 MiB control frame.
+ */
+export const SESSION_ARGV_MAX_TOTAL_BYTES = 1024 * 1024;
+
+const utf8Bytes = (value: string): number => new TextEncoder().encode(value).length;
+
+/**
+ * A UTF-16 surrogate with no partner (with the `u` flag a pair is one code point and never matches):
+ * it has no UTF-8 form, so it would reach the process as U+FFFD.
+ */
+const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
+
+/**
+ * Why `argv` cannot start a session, or `undefined` when it can. `argv[0]`, the program, is
+ * non-empty with no leading or trailing whitespace. Every later word is opaque to Sealant and may be
+ * any string, empty, whitespace-led or multi-line (`bash -lc "\n echo hi"`, `git commit -m ""`),
+ * except one with a NUL byte, which no process argument can carry, or a lone UTF-16 surrogate, which
+ * has no UTF-8 form and would not reach the process as sent. The reason names a word by its position
+ * and size, never its text, which can carry a secret: it reaches the caller in the `400` and the
+ * server's request log.
+ */
+export const sessionArgvIssue = (argv: readonly string[]): string | undefined => {
+  const program = argv[0];
+  if (program === undefined) {
+    return "argv is empty: argv[0] must name the program";
+  }
+  if (argv.length > SESSION_ARGV_MAX_WORDS) {
+    return `argv has ${argv.length} words; the maximum is ${SESSION_ARGV_MAX_WORDS}`;
+  }
+  if (program.length === 0 || program.trim() !== program) {
+    return "argv[0], the program, must be non-empty with no leading or trailing whitespace";
+  }
+  let totalBytes = 0;
+  for (const [index, word] of argv.entries()) {
+    if (word.includes("\u0000")) {
+      return `argv[${index}] contains a NUL byte, which no process argument can carry`;
+    }
+    if (LONE_SURROGATE.test(word)) {
+      return `argv[${index}] is not well-formed Unicode (a lone surrogate)`;
+    }
+    const bytes = utf8Bytes(word);
+    if (bytes > SESSION_ARGV_MAX_WORD_BYTES) {
+      return `argv[${index}] is ${bytes} bytes; the maximum per word is ${SESSION_ARGV_MAX_WORD_BYTES}`;
+    }
+    totalBytes += bytes;
+  }
+  if (totalBytes > SESSION_ARGV_MAX_TOTAL_BYTES) {
+    return `argv totals ${totalBytes} bytes; the maximum is ${SESSION_ARGV_MAX_TOTAL_BYTES}`;
+  }
+  return undefined;
+};
+
+/**
+ * A session's argv: the program, then its arguments, as `sessionArgvIssue` allows. One check over
+ * the whole array, because Effect's own length and whitespace checks quote the offending value.
+ */
+export const sessionArgvSchema = Schema.Array(Schema.String).check(
+  Schema.makeFilter(sessionArgvIssue),
+);
+
 export const createSessionRequestSchema = Schema.Struct({
   workspaceId: NonEmptyString,
   ownerUserId: NonEmptyString,
-  /** argv[0] is the program the session runs; the rest its arguments. */
-  argv: Schema.Array(NonEmptyString).check(Schema.isNonEmpty(), Schema.isMaxLength(64)),
+  /**
+   * argv[0] is the program the session runs; the rest its arguments, passed to it as an argv array,
+   * never through a shell. See `sessionArgvIssue` for what is refused.
+   */
+  argv: sessionArgvSchema,
   /** Working directory inside the workspace (defaults to the workspace working directory). */
   cwd: Schema.optional(NonEmptyString),
   /** Extra environment for the PTY process (values are NOT secrets — use credentials for those). */

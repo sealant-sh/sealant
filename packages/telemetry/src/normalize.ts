@@ -189,9 +189,16 @@ const buildPayload = (env: EventEnvelope): Record<string, unknown> => {
     };
   }
   if (p.case === "processStarted") {
-    // The arguments are dropped before anything is cloned or stored (`withholdProcessArgs`).
-    const { args, ...started } = p.value;
-    return withholdProcessArgs({ ...toJsonSafe(started), args });
+    // The arguments are dropped before anything is cloned or stored (`withholdProcessArgs`). A
+    // daemon that withholds them itself (sealantd 0.20.0-next.155 on) sends their count and lengths
+    // instead, zero and empty for none: kept only when there were some, as `withholdProcessArgs`
+    // records them. A value built without them (an older producer, a test) has neither.
+    const { args, argCount, argLengths, ...started } = p.value;
+    const described =
+      typeof argCount === "number" && argCount > 0
+        ? { argCount, argLengths: Array.isArray(argLengths) ? [...argLengths] : [] }
+        : {};
+    return withholdProcessArgs({ ...toJsonSafe(started), ...described, args });
   }
   return p.case === undefined ? {} : toJsonSafe(p.value);
 };

@@ -1992,7 +1992,15 @@ export interface SessionAttachment {
 
 /** Interactive sessions of one workspace: open new ones, reattach to existing ones. */
 export interface WorkspaceSessions {
-  /** Opens a PTY session running `argv` (argv[0] is the program). */
+  /**
+   * Opens a PTY session running `argv`. argv[0] is the program, non-empty and trimmed; the rest are
+   * its arguments, passed as an argv array (never through a shell) and taken as any string: empty,
+   * whitespace-led or multi-line. At most 64 words, 131,071 bytes each and 1 MiB in all (UTF-8
+   * bytes), no NUL byte and no lone surrogate (`sessionArgvIssue` and `SESSION_ARGV_MAX_*` in
+   * `@sealant/api-contracts`). An argv the rule refuses throws `SealantError` `invalid_argv` before
+   * anything is sent; a control plane's refusal is `SealantApiError` `RequestRefusedError` with
+   * its reason.
+   */
   open(argv: readonly string[], options?: SessionOptions): Promise<InteractiveSession>;
   /** Reattach to a session by id — works from ANY handle, not just the creating one. */
   get(sessionId: string): Promise<InteractiveSession>;

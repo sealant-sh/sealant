@@ -14,6 +14,7 @@ import type {
   WorkspaceCredentialHome as WireWorkspaceCredentialHome,
   WorkspaceDetails as WireWorkspaceDetails,
 } from "@sealant/api-contracts";
+import { sessionArgvIssue } from "@sealant/api-contracts";
 
 import { applyDotfiles } from "../effect/apply-dotfiles.js";
 import { execWorkspace } from "../effect/exec-workspace.js";
@@ -35,7 +36,7 @@ import {
   releaseWorkspaceCredentialsOp,
   stopWorkspaceOp,
 } from "../effect/operations.js";
-import { SealantError, SealantNotImplementedError } from "../errors.js";
+import { SealantApiError, SealantError, SealantNotImplementedError } from "../errors.js";
 import { mapAccountRef } from "../internal/credentials.js";
 import { parseTtlSeconds } from "../internal/duration.js";
 import { requireProcessUser } from "../internal/process-user.js";
@@ -390,11 +391,41 @@ const toCaptureDrain = (drain: WireWorkspaceCaptureDrain): WorkspaceCaptureDrain
       }),
 });
 
+const REASONED_REFUSALS: ReadonlySet<string> = new Set([
+  "RequestRefusedError",
+  "SessionBadRequestError",
+]);
+
+/**
+ * A control plane older than this SDK refuses an argument that is empty or untrimmed with an empty
+ * `400` (and logs the argument). Said here, where the argv is known, so the caller learns why.
+ */
+const olderControlPlaneRefusal = (
+  argv: readonly string[],
+  error: SealantApiError,
+): SealantApiError => {
+  const relaxed = argv.findIndex(
+    (word, index) => index > 0 && (word.length === 0 || word.trim() !== word),
+  );
+  const message =
+    relaxed === -1
+      ? "The control plane refused the session with an empty 400 and gave no reason; a control plane older than this SDK does not say which field it refused."
+      : `The control plane refused the session with an empty 400. argv[${relaxed}] is empty or has leading or trailing whitespace, and a control plane older than this SDK refuses such an argument; upgrade the control plane.`;
+  return new SealantApiError(message, {
+    code: error.code,
+    ...(error.status === undefined ? {} : { status: error.status }),
+    cause: error,
+  });
+};
+
 export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace => {
   const openSession = async (
     argv: readonly string[],
     options?: SessionOptions,
   ): Promise<InteractiveSession> => {
+    // The contract's own rule, checked before anything is asked, with the same value-free reason.
+    const refused = sessionArgvIssue(argv);
+    if (refused !== undefined) throw new SealantError(refused, { code: "invalid_argv" });
     if (options?.user !== undefined) await requireProcessUser(ctx, options.user);
     const request = {
       workspaceId: init.id,
@@ -410,11 +441,25 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     };
     // As a user: its own route, so a control plane that cannot open one answers 404, never opens
     // it as the workspace's own user.
-    const created = await ctx.runtime.run(
-      options?.user === undefined
-        ? createSessionOp(request)
-        : createSessionAsUserOp({ ...request, user: options.user }),
-    );
+    const created = await ctx.runtime
+      .run(
+        options?.user === undefined
+          ? createSessionOp(request)
+          : createSessionAsUserOp({ ...request, user: options.user }),
+      )
+      .catch((error: unknown) => {
+        // A control plane with the rule answers a typed 400 with its reason (`RequestRefusedError`
+        // for a request it cannot decode, `SessionBadRequestError` for one it refuses); an empty
+        // 400 is one from before it.
+        if (
+          error instanceof SealantApiError &&
+          error.status === 400 &&
+          !REASONED_REFUSALS.has(error.code)
+        ) {
+          throw olderControlPlaneRefusal(argv, error);
+        }
+        throw error;
+      });
     return makeInteractiveSession(ctx, created);
   };
 

@@ -9,6 +9,7 @@ export * from "./core-api/budgets.js";
 export * from "./core-api/oci-names.js";
 export * from "./core-api/registries.js";
 export * from "./core-api/runs.js";
+export * from "./core-api/request-refusal.js";
 export * from "./core-api/sessions.js";
 export * from "./core-api/access-tokens.js";
 export * from "./core-api/workspaces.js";
