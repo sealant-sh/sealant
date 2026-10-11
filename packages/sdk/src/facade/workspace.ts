@@ -38,6 +38,7 @@ import {
   stopWorkspaceOp,
 } from "../effect/operations.js";
 import { SealantApiError, SealantError, SealantNotImplementedError } from "../errors.js";
+import { elapsed } from "../internal/clock.js";
 import { mapAccountRef } from "../internal/credentials.js";
 import { parseTtlSeconds } from "../internal/duration.js";
 import { requireProcessUser } from "../internal/process-user.js";
@@ -619,7 +620,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
           });
         }
       }
-      const startedAt = Date.now();
+      const startedAt = elapsed();
       let buildMs = 0;
       let lastPollAt = startedAt;
       let building = false;
@@ -652,7 +653,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         const details: WorkspaceDetails = await ctx.runtime.run(
           getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
         );
-        const now = Date.now();
+        const now = elapsed();
         // The time since the last look was spent building when the last look saw a build.
         if (building) buildMs += now - lastPollAt;
         lastPollAt = now;
@@ -823,7 +824,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         let lastPhase: WorkspacePhase | undefined;
         // The stream ends with the launch; this bounds it on a launch that never settles. It
         // follows a build as long as the build is moving, like ready().
-        let deadline = Date.now() + READY_TIMEOUT_MS;
+        let deadline = elapsed() + READY_TIMEOUT_MS;
         for (;;) {
           const details = await ctxRun.run(
             getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
@@ -849,13 +850,13 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
             phase?.name === "image-build" &&
             phase.imageBuild?.progressAt !== lastPhase?.imageBuild?.progressAt
           ) {
-            deadline = Date.now() + Math.max(READY_TIMEOUT_MS, IMAGE_BUILD_STALL_GUARD_MS);
+            deadline = elapsed() + Math.max(READY_TIMEOUT_MS, IMAGE_BUILD_STALL_GUARD_MS);
           }
           lastPhase = phase;
           if (details.status === "ready" || FAILED_STATUSES.has(details.status)) {
             return;
           }
-          if (Date.now() > deadline) {
+          if (elapsed() > deadline) {
             return;
           }
           await delay(READY_POLL_INTERVAL_MS);
@@ -908,13 +909,18 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
               },
             };
 
-      const deadline = Date.now() + STOP_TIMEOUT_MS;
+      const deadline = elapsed() + STOP_TIMEOUT_MS;
       for (;;) {
         const details: WorkspaceDetails = await ctx.runtime.run(
           getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
         );
-        // `cancelled`: a stop before the image was built cancelled the launch; no runtime ever ran.
-        if (details.status === "stopped" || details.status === "cancelled") {
+        // `cancelled`: a stop before the image was built cancelled the launch; `failed` with no
+        // runtime: the build failed. Either way no runtime ever ran.
+        if (
+          details.status === "stopped" ||
+          details.status === "cancelled" ||
+          (details.status === "failed" && details.runtime === undefined)
+        ) {
           return { state: "stopped", ...completion };
         }
         if (
@@ -933,7 +939,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
             ...completion,
           };
         }
-        if (Date.now() > deadline) {
+        if (elapsed() > deadline) {
           const drain =
             details.captureDrain === undefined ? undefined : toCaptureDrain(details.captureDrain);
           const capture = await readCaptureStatus().catch(() => undefined);

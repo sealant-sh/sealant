@@ -11,6 +11,7 @@ import type { Run as WireRun, RunChangesResponse } from "@sealant/api-contracts"
 
 import { getRunChangesOp, getRunOp } from "../effect/operations.js";
 import { SealantError, SealantNotImplementedError } from "../errors.js";
+import { elapsed } from "../internal/clock.js";
 import type { Run, RunArtifacts, RunChanges, RunFileChange, RunResult } from "../types.js";
 import type { SdkContext } from "./context.js";
 import { makeRunRecord } from "./record.js";
@@ -83,9 +84,9 @@ export const makeRun = (ctx: SdkContext, init: RunInit): Run => {
 
     wait: async () => {
       let current = init.wire;
-      const deadline = Date.now() + WAIT_TIMEOUT_MS;
+      const deadline = elapsed() + WAIT_TIMEOUT_MS;
       while (!TERMINAL_STATUSES.has(current.status)) {
-        if (Date.now() > deadline) {
+        if (elapsed() > deadline) {
           throw new SealantError(`Timed out waiting for run ${runId} to reach a terminal status.`, {
             code: "run_wait_timeout",
           });

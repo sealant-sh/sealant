@@ -19,6 +19,7 @@ import {
   getRunTimelineOp,
 } from "../effect/operations.js";
 import { SealantNotImplementedError } from "../errors.js";
+import { elapsed } from "../internal/clock.js";
 import type {
   IoStream,
   LossReport,
@@ -240,7 +241,7 @@ export const makeRunRecord = (ctx: SdkContext, runId: string): RunRecord => {
       const ctxRun = ctx.runtime;
       async function* iterate(): AsyncGenerator<TimelineEntry> {
         let from = options?.from;
-        const deadline = Date.now() + STREAM_TIMEOUT_MS;
+        const deadline = elapsed() + STREAM_TIMEOUT_MS;
         for (;;) {
           const wire = await ctxRun.run(
             getRunTimelineOp(runId, {
@@ -268,7 +269,7 @@ export const makeRunRecord = (ctx: SdkContext, runId: string): RunRecord => {
             }
             return;
           }
-          if (Date.now() > deadline) {
+          if (elapsed() > deadline) {
             return;
           }
           await delay(STREAM_POLL_INTERVAL_MS);

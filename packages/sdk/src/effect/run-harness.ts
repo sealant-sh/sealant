@@ -14,6 +14,7 @@ import { SealantError } from "../errors.js";
 import type { SdkContext } from "../facade/context.js";
 import { makeRun, toRunChangesData } from "../facade/run.js";
 import type { RunHarnessFn, WorkspaceInit } from "../facade/workspace.js";
+import { elapsed } from "../internal/clock.js";
 import type { Run } from "../types.js";
 import { createRunOp, getRunChangesOp, getRunOp, getWorkspaceOp } from "./operations.js";
 
@@ -83,10 +84,10 @@ const runHarnessEffect = (
     const runId = created.runId;
 
     // Block until the run is terminal, polling the control plane.
-    const deadline = Date.now() + RUN_TIMEOUT_MS;
+    const deadline = elapsed() + RUN_TIMEOUT_MS;
     let wire = created;
     while (!TERMINAL_STATUSES.has(wire.status)) {
-      if (Date.now() > deadline) {
+      if (elapsed() > deadline) {
         return yield* Effect.fail(
           new SealantError(`Timed out waiting for run ${runId} to complete.`, {
             code: "run_timeout",
