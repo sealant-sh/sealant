@@ -9,6 +9,12 @@ import {
 } from "@sealant/validators";
 import { Effect, Schema } from "effect";
 
+import {
+  CATALOG_OS_FAMILIES,
+  WORKSPACE_PACKAGE_CATALOG,
+  type FamilyInstall,
+} from "./buildkit/package-catalog.js";
+
 export { packageResolutionSchema, packageTargetOsSchema };
 export type {
   PackageResolution,
@@ -50,197 +56,47 @@ type CatalogEntry = {
   readonly targets: Partial<Record<PackageTargetOs, CatalogOsMapping>>;
 };
 
+/**
+ * Names people type for a catalog id: the binary, or another distribution's package name. An id
+ * the catalog keeps for an older name (`fd-find`) resolves to the id it means.
+ */
+const catalogAliases: Readonly<Record<string, readonly string[]>> = {
+  bat: ["batcat"],
+  fd: ["fd-find", "fdfind"],
+  "github-cli": ["gh"],
+  neovim: ["nvim"],
+  nodejs: ["node"],
+  python: ["python3"],
+  ripgrep: ["rg"],
+};
+
+/** The name a family's install goes by: its release, its npm package, or its repository package. */
+const installName = (id: string, install: FamilyInstall): string | undefined =>
+  install.release?.name ??
+  install.npmGlobal?.[0] ??
+  install.packages?.find((name) => name === id) ??
+  install.packages?.[0];
+
+/**
+ * What a package id resolves to: the build's own catalog (`WORKSPACE_PACKAGE_CATALOG`), so an id
+ * resolves as supported on a family exactly when an image of that family installs it. A release
+ * install carries an archive for each architecture, and a family's repository packages are
+ * installed on both (Arch Linux ARM on arm64; `arch-native.e2e.ts` builds every id there), so the
+ * answer holds for the platform the server builds on, amd64 or arm64. `docker` is the platform's
+ * own service, never an OS package.
+ */
 const catalogEntries: readonly CatalogEntry[] = [
-  {
-    id: "bash",
-    aliases: ["bash"],
-    targets: {
-      arch: { packageName: "bash" },
-      fedora: { packageName: "bash" },
-      nix: { packageName: "bash" },
-      ubuntu: { packageName: "bash" },
-    },
-  },
-  {
-    id: "bat",
-    aliases: ["bat", "batcat"],
-    targets: {
-      arch: { packageName: "bat" },
-      fedora: { packageName: "bat" },
-      nix: { packageName: "bat" },
-      ubuntu: { packageName: "bat" },
-    },
-  },
-  {
-    id: "curl",
-    aliases: ["curl"],
-    targets: {
-      arch: { packageName: "curl" },
-      fedora: { packageName: "curl" },
-      nix: { packageName: "curl" },
-      ubuntu: { packageName: "curl" },
-    },
-  },
-  {
-    id: "docker",
-    aliases: ["docker"],
-    targets: {},
-  },
-  {
-    id: "fish",
-    aliases: ["fish"],
-    targets: {
-      arch: { packageName: "fish" },
-      fedora: { packageName: "fish" },
-      nix: { packageName: "fish" },
-      ubuntu: { packageName: "fish" },
-    },
-  },
-  {
-    id: "git",
-    aliases: ["git"],
-    targets: {
-      arch: { packageName: "git" },
-      fedora: { packageName: "git" },
-      nix: { packageName: "git" },
-      ubuntu: { packageName: "git" },
-    },
-  },
-  {
-    id: "jq",
-    aliases: ["jq"],
-    targets: {
-      arch: { packageName: "jq" },
-      fedora: { packageName: "jq" },
-      nix: { packageName: "jq" },
-      ubuntu: { packageName: "jq" },
-    },
-  },
-  {
-    id: "neovim",
-    aliases: ["neovim", "nvim"],
-    targets: {
-      arch: { packageName: "neovim" },
-      fedora: { packageName: "neovim" },
-      nix: { packageName: "neovim" },
-      ubuntu: { packageName: "neovim" },
-    },
-  },
-  {
-    id: "nodejs",
-    aliases: ["node", "nodejs"],
-    targets: {
-      arch: { packageName: "nodejs" },
-      fedora: { packageName: "nodejs" },
-      nix: { packageName: "nodejs" },
-      ubuntu: { packageName: "nodejs" },
-    },
-  },
-  {
-    id: "pnpm",
-    aliases: ["pnpm"],
-    targets: {
-      arch: { packageName: "pnpm" },
-      fedora: { packageName: "pnpm" },
-      nix: { packageName: "pnpm" },
-    },
-  },
-  {
-    id: "python",
-    aliases: ["python", "python3"],
-    targets: {
-      arch: { packageName: "python" },
-      fedora: { packageName: "python3" },
-      nix: { packageName: "python3" },
-      ubuntu: { packageName: "python3" },
-    },
-  },
-  {
-    id: "uv",
-    aliases: ["uv"],
-    targets: {
-      arch: { packageName: "uv" },
-      fedora: { packageName: "uv" },
-      nix: { packageName: "uv" },
-    },
-  },
-  {
-    id: "mise",
-    aliases: ["mise"],
-    targets: {
-      arch: { packageName: "mise" },
-      nix: { packageName: "mise" },
-    },
-  },
-  {
-    id: "github-cli",
-    aliases: ["github-cli", "gh"],
-    targets: {
-      arch: { packageName: "github-cli" },
-      fedora: { packageName: "gh" },
-      nix: { packageName: "gh" },
-      ubuntu: { packageName: "gh" },
-    },
-  },
-  {
-    id: "lazygit",
-    aliases: ["lazygit"],
-    targets: {
-      arch: { packageName: "lazygit" },
-      fedora: { packageName: "lazygit" },
-      nix: { packageName: "lazygit" },
-    },
-  },
-  {
-    id: "ripgrep",
-    aliases: ["ripgrep", "rg"],
-    targets: {
-      arch: { packageName: "ripgrep" },
-      fedora: { packageName: "ripgrep" },
-      nix: { packageName: "ripgrep" },
-      ubuntu: { packageName: "ripgrep" },
-    },
-  },
-  {
-    id: "tmux",
-    aliases: ["tmux"],
-    targets: {
-      arch: { packageName: "tmux" },
-      fedora: { packageName: "tmux" },
-      nix: { packageName: "tmux" },
-      ubuntu: { packageName: "tmux" },
-    },
-  },
-  {
-    id: "fd",
-    aliases: ["fd", "fd-find", "fdfind"],
-    targets: {
-      arch: { packageName: "fd" },
-      fedora: { packageName: "fd-find" },
-      nix: { packageName: "fd" },
-      ubuntu: { packageName: "fd-find" },
-    },
-  },
-  {
-    id: "fzf",
-    aliases: ["fzf"],
-    targets: {
-      arch: { packageName: "fzf" },
-      fedora: { packageName: "fzf" },
-      nix: { packageName: "fzf" },
-      ubuntu: { packageName: "fzf" },
-    },
-  },
-  {
-    id: "zsh",
-    aliases: ["zsh"],
-    targets: {
-      arch: { packageName: "zsh" },
-      fedora: { packageName: "zsh" },
-      nix: { packageName: "zsh" },
-      ubuntu: { packageName: "zsh" },
-    },
-  },
+  ...Object.entries(WORKSPACE_PACKAGE_CATALOG)
+    .filter(([id]) => !Object.values(catalogAliases).some((aliases) => aliases.includes(id)))
+    .map(([id, families]): CatalogEntry => {
+      const targets: Partial<Record<PackageTargetOs, CatalogOsMapping>> = {};
+      for (const family of CATALOG_OS_FAMILIES) {
+        const packageName = installName(id, families[family]);
+        if (packageName !== undefined) targets[family] = { packageName };
+      }
+      return { id, aliases: [id, ...(catalogAliases[id] ?? [])], targets };
+    }),
+  { id: "docker", aliases: ["docker"], targets: {} },
 ];
 
 const catalogByAlias = (() => {
@@ -771,6 +627,14 @@ export const createPackageStandardizer = (
         return invalidResolution(requested.length > 0 ? requested : query, normalized, now);
       }
 
+      // The catalog answers first, never a cached answer: a resolution cached before the catalog
+      // knew an id (a Repology answer, with no catalog id) would otherwise stand for 30 days.
+      const catalogEntry = catalogByAlias.get(normalized);
+
+      if (catalogEntry !== undefined) {
+        return buildCatalogResolution({ requested, normalized, entry: catalogEntry, now });
+      }
+
       if (options.cacheStore !== undefined) {
         const cached = yield* options.cacheStore.getByQuery(cacheKey);
 
@@ -782,21 +646,6 @@ export const createPackageStandardizer = (
             return cachedResolution;
           }
         }
-      }
-
-      const catalogEntry = catalogByAlias.get(normalized);
-
-      if (catalogEntry !== undefined) {
-        const resolution = buildCatalogResolution({
-          requested,
-          normalized,
-          entry: catalogEntry,
-          now,
-        });
-
-        yield* writeCache(cacheKey, resolution);
-
-        return resolution;
       }
 
       const directProjectEntries = yield* Effect.tryPromise({
