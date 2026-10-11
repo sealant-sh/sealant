@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 import { vi } from "vitest";
 
+import { knownWorkspacePackageIds, WORKSPACE_PACKAGE_CATALOG } from "./buildkit/package-catalog.js";
 import {
   createPackageStandardizer,
   packageResolutionSchema,
@@ -60,8 +61,8 @@ describe("createPackageStandardizer.resolvePackage", () => {
 
   it.effect("serves a fresh cache hit without calling repology", () => {
     const cached: PackageResolutionCacheValue = {
-      query: "fedora:ripgrep",
-      payload: validResolution("ripgrep"),
+      query: "fedora:libfoobar",
+      payload: validResolution("libfoobar"),
       expiresAt: new Date(Date.now() + 3_600_000),
     };
     const repologyClient = fakeRepologyClient();
@@ -70,28 +71,36 @@ describe("createPackageStandardizer.resolvePackage", () => {
 
     return Effect.gen(function* () {
       const resolution = yield* standardizer.resolvePackage({
-        query: "ripgrep",
+        query: "libfoobar",
         targetOs: "fedora",
       });
 
       expect(resolution.source).toBe("cache");
-      expect(resolution.selectedProject).toBe("ripgrep");
-      expect(cacheStore.getByQuery).toHaveBeenCalledWith("fedora:ripgrep");
+      expect(resolution.selectedProject).toBe("libfoobar");
+      expect(cacheStore.getByQuery).toHaveBeenCalledWith("fedora:libfoobar");
       expect(repologyClient.getProject).not.toHaveBeenCalled();
     });
   });
 
-  it.effect("resolves a catalog entry and writes it to the cache", () => {
+  it.effect("answers a catalog id from the catalog, never from a cached answer", () => {
+    // Cached before the catalog knew the id: a Repology answer with no catalog id, which Mend
+    // refuses to save. It must not stand for its 30 days.
+    const cached: PackageResolutionCacheValue = {
+      query: "arch:bun",
+      payload: validResolution("bun"),
+      expiresAt: new Date(Date.now() + 3_600_000),
+    };
     const repologyClient = fakeRepologyClient();
-    const cacheStore = fakeCacheStore();
+    const cacheStore = fakeCacheStore({ getByQuery: vi.fn(() => Effect.succeed(cached)) });
     const standardizer = createPackageStandardizer({ repologyClient, cacheStore });
 
     return Effect.gen(function* () {
-      const resolution = yield* standardizer.resolvePackage({ query: "git", targetOs: "fedora" });
+      const resolution = yield* standardizer.resolvePackage({ query: "bun", targetOs: "arch" });
 
-      expect(resolution.source).not.toBe("cache");
+      expect(resolution).toMatchObject({ source: "override", canonicalId: "bun" });
+      expect(cacheStore.getByQuery).not.toHaveBeenCalled();
+      expect(cacheStore.setByQuery).not.toHaveBeenCalled();
       expect(repologyClient.getProject).not.toHaveBeenCalled();
-      expect(cacheStore.setByQuery).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -197,7 +206,7 @@ describe("createPackageStandardizer.resolvePackage", () => {
   });
 
   it.effect(
-    "resolves the Ubuntu-supported toolchain from the catalog, unsupported stays closed",
+    "resolves the Ubuntu toolchain from the catalog, whether the archive or a release serves it",
     () => {
       const repologyClient = fakeRepologyClient();
       const standardizer = createPackageStandardizer({
@@ -227,14 +236,94 @@ describe("createPackageStandardizer.resolvePackage", () => {
           );
         }
 
-        // …and does NOT package these: the catalog stays closed instead of guessing.
-        for (const query of ["pnpm", "uv", "mise", "lazygit"]) {
+        // …and lacks these, which the image installs another way: from npm, or the release.
+        for (const [query, packageName] of [
+          ["pnpm", "pnpm"],
+          ["uv", "uv"],
+          ["mise", "mise"],
+          ["lazygit", "lazygit"],
+        ] as const) {
           const resolution = yield* standardizer.resolvePackage({ query, targetOs: "ubuntu" });
-          expect(resolution.osSupport.ubuntu).toEqual({ supported: false });
+          expect(resolution.osSupport.ubuntu).toEqual(
+            expect.objectContaining({ supported: true, packageName }),
+          );
         }
 
         expect(repologyClient.getProject).not.toHaveBeenCalled();
         expect(repologyClient.searchProjects).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  // Mend's `DEFAULT_WORKSPACE_PACKAGES` (packages/domain/src/settings.ts in Mend). On an arm64
+  // server they were refused for Arch (bun, unzip, starship, the zsh plugins, direnv), and more
+  // for Fedora and Ubuntu, so the Setup page could not save its own defaults.
+  const MEND_DEFAULTS = [
+    "pnpm",
+    "bun",
+    "python",
+    "uv",
+    "mise",
+    "github-cli",
+    "lazygit",
+    "bat",
+    "curl",
+    "unzip",
+    "jq",
+    "ripgrep",
+    "fd",
+    "fzf",
+    "starship",
+    "zsh-autosuggestions",
+    "zsh-syntax-highlighting",
+    "zsh-history-substring-search",
+    "direnv",
+  ] as const;
+
+  it.effect("resolves Mend's defaults for Arch on arm64: each one Arch Linux ARM installs", () => {
+    const repologyClient = fakeRepologyClient();
+    const standardizer = createPackageStandardizer({
+      repologyClient,
+      cacheStore: fakeCacheStore(),
+    });
+
+    return Effect.gen(function* () {
+      for (const query of MEND_DEFAULTS) {
+        const resolution = yield* standardizer.resolvePackage({ query, targetOs: "arch" });
+        expect(resolution, query).toMatchObject({ status: "resolved", canonicalId: query });
+        expect(resolution.osSupport.arch.supported, query).toBe(true);
+        // On aarch64 the image installs it from Arch Linux ARM's repositories, or from a release
+        // with an aarch64 archive (bun and mise: Arch Linux ARM packages neither).
+        const install = WORKSPACE_PACKAGE_CATALOG[query]?.arch;
+        expect(
+          (install?.packages?.length ?? 0) > 0 || install?.release?.archives.aarch64 !== undefined,
+          query,
+        ).toBe(true);
+      }
+      expect(WORKSPACE_PACKAGE_CATALOG.bun?.arch.release?.archives.aarch64.url).toContain(
+        "bun-linux-aarch64.zip",
+      );
+      expect(repologyClient.getProject).not.toHaveBeenCalled();
+      expect(repologyClient.searchProjects).not.toHaveBeenCalled();
+    });
+  });
+
+  it.effect(
+    "resolves every catalog id as supported on every family the image installs it on",
+    () => {
+      const standardizer = createPackageStandardizer({
+        repologyClient: fakeRepologyClient(),
+        cacheStore: fakeCacheStore(),
+      });
+
+      return Effect.gen(function* () {
+        for (const query of [...MEND_DEFAULTS, ...knownWorkspacePackageIds()]) {
+          for (const targetOs of ["arch", "fedora", "nix", "ubuntu"] as const) {
+            const resolution = yield* standardizer.resolvePackage({ query, targetOs });
+            expect(resolution.canonicalId, `${query} on ${targetOs}`).not.toBeNull();
+            expect(resolution.osSupport[targetOs].supported, `${query} on ${targetOs}`).toBe(true);
+          }
+        }
       });
     },
   );
