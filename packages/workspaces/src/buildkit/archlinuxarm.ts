@@ -83,21 +83,53 @@ fx6y8+A0kBiaAmcY01U/upYXeHs=
 const ARCHLINUXARM_BOARD_PACKAGES = "^(linux-aarch64|linux-firmware(-.+)?|mkinitcpio(-busybox)?)$";
 
 /**
+ * Arch Linux ARM mirrors measured on 2026-10-11 to serve the aarch64 repositories at several MB/s
+ * (dk 15, de4 18, hu 12, gr 11, fr 7, nj.us 7, ca.us 5, tw 3), Europe first, then North America
+ * and Asia. The port's geo redirector (`mirror.archlinuxarm.org`, `os.archlinuxarm.org`) is
+ * left out of the order: it sends some networks most of the time to fl.us, which serves about
+ * 30 KB/s. `rootfs`: the mirror also carries the rootfs tarball under `/os` (nj.us and tw do not).
+ */
+export const ARCHLINUXARM_MIRRORS = [
+  { url: "http://dk.mirror.archlinuxarm.org", rootfs: true },
+  { url: "http://de4.mirror.archlinuxarm.org", rootfs: true },
+  { url: "http://hu.mirror.archlinuxarm.org", rootfs: true },
+  { url: "http://gr.mirror.archlinuxarm.org", rootfs: true },
+  { url: "http://fr.mirror.archlinuxarm.org", rootfs: true },
+  { url: "http://ca.us.mirror.archlinuxarm.org", rootfs: true },
+  { url: "http://nj.us.mirror.archlinuxarm.org", rootfs: false },
+  { url: "http://tw.mirror.archlinuxarm.org", rootfs: false },
+] as const;
+
+/**
  * Where the rootfs comes from, in order. The redirector picks a mirror by where the request comes
  * from, and does not pick a fast one: from one network it sent 4 requests in 6 to a mirror serving
  * 25 KB/s (an 829 MB tarball takes nine hours there), the rest to one serving 12 MB/s. So a mirror
  * that falls below the speed floor is left for the next source, and after the redirector come
- * mirrors measured to carry the tarball (2026-10-11): a redirector that keeps choosing a slow
- * mirror costs half a minute each time, not the build. Every source is tried twice: first with the
- * floor, then, for a link that is slow itself, only while bytes keep arriving.
+ * the mirrors above that carry the tarball: a redirector that keeps choosing a slow mirror costs
+ * half a minute each time, not the build. Every source is tried twice: first with the floor, then,
+ * for a link that is slow itself, only while bytes keep arriving.
  */
-export const ARCHLINUXARM_SOURCES = [
+export const ARCHLINUXARM_SOURCES: readonly string[] = [
   "http://os.archlinuxarm.org",
   "http://os.archlinuxarm.org",
-  "http://dk.mirror.archlinuxarm.org",
-  "http://de4.mirror.archlinuxarm.org",
-  "http://ca.us.mirror.archlinuxarm.org",
-] as const;
+  ...ARCHLINUXARM_MIRRORS.filter((mirror) => mirror.rootfs).map((mirror) => mirror.url),
+];
+
+/**
+ * pacman's mirrorlist on every arm64 Arch image, for the build's installs and for `pacman -S` in
+ * a workspace, a person's installs included. The rootfs ships one server, the geo redirector, and
+ * pacman leaves a server only when it stalls (less than 1 byte/s for 10 seconds): a slow mirror is
+ * kept for the whole transaction, a stalled one failed every database sync (CI, 2026-10-11:
+ * "failed to synchronize all databases"). pacman tries the servers in order, file by file, and
+ * skips one after repeated errors; the redirector is the last resort. The file is pacman's backup
+ * of `pacman-mirrorlist`, so an upgrade of that package writes `mirrorlist.pacnew` and keeps this.
+ */
+export const ARCHLINUXARM_MIRRORLIST = [
+  "# Written by Sealant: Arch Linux ARM mirrors measured fast, in order; the geo redirector last.",
+  ...ARCHLINUXARM_MIRRORS.map((mirror) => `Server = ${mirror.url}/$arch/$repo`),
+  "Server = http://mirror.archlinuxarm.org/$arch/$repo",
+  "",
+].join("\n");
 
 /**
  * Where the fetch keeps the tarball: a BuildKit cache mount, so one download serves every Arch
@@ -217,6 +249,9 @@ export const renderArchlinuxArmBase = (fetchStageImage: string): string =>
     "ARCHLINUXARM",
     "FROM scratch",
     "COPY --from=archlinuxarm /rootfs /",
+    "COPY <<'MIRRORLIST' /etc/pacman.d/mirrorlist",
+    ARCHLINUXARM_MIRRORLIST.trimEnd(),
+    "MIRRORLIST",
     "RUN set -eu; pacman-key --init; pacman-key --populate archlinuxarm; \\",
     // A tarball that ships none of them (renamed, or dropped) has nothing to remove, and `pacman
     // -R` with no targets fails: the removal runs only with some.

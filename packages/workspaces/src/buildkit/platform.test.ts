@@ -12,7 +12,10 @@ import {
   ARCHLINUXARM_CACHE,
   ARCHLINUXARM_KEY_FILE,
   ARCHLINUXARM_KEY_FINGERPRINT,
+  ARCHLINUXARM_MIRRORLIST,
+  ARCHLINUXARM_MIRRORS,
   ARCHLINUXARM_ROOTFS,
+  ARCHLINUXARM_SOURCES,
   renderArchlinuxArmBase,
   renderArchlinuxArmFetch,
 } from "./archlinuxarm.js";
@@ -191,6 +194,17 @@ describe("the platform a workspace image is built for", () => {
       `--mount=type=cache,id=sealant-archlinuxarm-rootfs,target=${ARCHLINUXARM_CACHE}`,
     );
     expect(base).toMatch(/^FROM scratch$/m);
+    // pacman installs from the measured mirrors, in order, the geo redirector last.
+    expect(base).toContain(
+      `COPY --from=archlinuxarm /rootfs /\nCOPY <<'MIRRORLIST' /etc/pacman.d/mirrorlist\n${ARCHLINUXARM_MIRRORLIST}MIRRORLIST\n`,
+    );
+    const servers = ARCHLINUXARM_MIRRORLIST.split("\n").filter((line) => line.startsWith("Server"));
+    expect(servers[0]).toBe("Server = http://dk.mirror.archlinuxarm.org/$arch/$repo");
+    expect(servers.at(-1)).toBe("Server = http://mirror.archlinuxarm.org/$arch/$repo");
+    expect(servers.filter((line) => line.includes("fl.us"))).toEqual([]);
+    expect(ARCHLINUXARM_SOURCES.slice(2)).toEqual(
+      ARCHLINUXARM_MIRRORS.filter((mirror) => mirror.rootfs).map((mirror) => mirror.url),
+    );
     expect(base).toContain("pacman-key --populate archlinuxarm");
     expect(base).toContain("linux-aarch64|linux-firmware(-.+)?|mkinitcpio(-busybox)?");
     // Neither a tarball without the board packages nor one without `alarm` fails the build.
