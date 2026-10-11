@@ -289,7 +289,7 @@ describe("the control plane's feature answer", () => {
       await expect(workspace.exec(["id"], { user: "m4lice000" })).rejects.toMatchObject({
         code: "user-unsupported",
       });
-      vi.setSystemTime(Date.now() + 20_000);
+      vi.advanceTimersByTime(20_000);
       await expect(workspace.exec(["id"], { user: "m4lice000" })).rejects.toBeDefined();
       expect(reads).toBe(2);
       expect(requests.map((request) => request.op)).toEqual(["exec-as-user"]);

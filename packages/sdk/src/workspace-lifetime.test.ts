@@ -246,6 +246,21 @@ describe("workspace.ready() by phase: an image build does not spend the readines
     expect(outcome).toMatchObject({ code: "workspace_ready_timeout" });
   });
 
+  it("measures a stall on a clock that only moves forward, so a wall clock stepped 72 minutes stops nothing", async () => {
+    // OrbStack resynced a VM's clock 72 minutes forward mid-build after its host slept; the build
+    // had been quiet for 8 real minutes and was given up on as stalled for 80.
+    const quiet = new Date().toISOString();
+    const read = () => building(quiet);
+    const started = readyFor(read, 4 * MINUTE, { created: true });
+    const { stops } = await started;
+    vi.setSystemTime(Date.now() + 72 * MINUTE);
+    await vi.advanceTimersByTimeAsync(4 * MINUTE);
+    expect(stops).toEqual([]);
+    // Past the bound on the forward-only clock, it is given up on as before.
+    await vi.advanceTimersByTimeAsync(13 * MINUTE);
+    expect(stops).toHaveLength(1);
+  });
+
   it("gives up on a build that stopped reporting progress, naming the step, and stops it", async () => {
     const stuck = new Date().toISOString();
     const { outcome, stops } = await readyFor(() => building(stuck), 21 * MINUTE, {
@@ -410,6 +425,11 @@ describe("workspace.stop()", () => {
 
   it("resolves stopped when a stop before the image was built cancelled the launch", async () => {
     const stub = makeStub(() => details({ status: "cancelled" }));
+    await expect(workspaceFor(stub.client).stop()).resolves.toEqual({ state: "stopped" });
+  });
+
+  it("reports stopped for a launch whose build failed: no runtime ever ran", async () => {
+    const stub = makeStub(() => details({ status: "failed" }));
     await expect(workspaceFor(stub.client).stop()).resolves.toEqual({ state: "stopped" });
   });
 

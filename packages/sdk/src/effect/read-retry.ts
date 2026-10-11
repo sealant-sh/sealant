@@ -10,6 +10,7 @@ import { Duration, Effect, Result } from "effect";
 import { HttpClientError } from "effect/unstable/http";
 
 import { SealantApiError } from "../errors.js";
+import { elapsed } from "../internal/clock.js";
 import { toSealantError } from "../internal/map-error.js";
 
 /** The first backoff when the answer names no `Retry-After`; it doubles up to the cap. */
@@ -74,9 +75,9 @@ export const retryRead = <A, E, R>(
       const result = yield* Effect.result(read);
       if (Result.isSuccess(result)) return result.success;
       const error = result.failure;
-      const now = Date.now();
-      const delay = readRetryDelayMs(error, attempt, now);
-      const room = Math.min(READ_RETRY_BUDGET_MS - waited, options.deadline - now);
+      // The Retry-After date is read on the wall clock; the deadline is on elapsed().
+      const delay = readRetryDelayMs(error, attempt);
+      const room = Math.min(READ_RETRY_BUDGET_MS - waited, options.deadline - elapsed());
       if (delay === undefined || delay > room) {
         const mapped = toSealantError(error);
         const status = statusOf(error);

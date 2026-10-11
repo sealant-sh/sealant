@@ -42,6 +42,8 @@ const harness = (
     readonly launchId?: string;
     /** No runtime yet: the launch's build job is in this state. */
     readonly launching?: WorkspaceBuildJob["status"];
+    /** The launch's build job's error code, when it failed. */
+    readonly launchErrorCode?: string;
   } = {},
 ) => {
   const cancelledJobs: string[] = [];
@@ -76,7 +78,11 @@ const harness = (
         Effect.succeed(
           options.launching === undefined
             ? undefined
-            : ({ id: "job_1", status: options.launching } as WorkspaceBuildJob),
+            : ({
+                id: "job_1",
+                status: options.launching,
+                errorCode: options.launchErrorCode ?? null,
+              } as WorkspaceBuildJob),
         ),
       cancelUnbuiltJob: (input: { id: string }) => {
         cancelledJobs.push(input.id);
@@ -190,6 +196,22 @@ describe("stopWorkspace · before the image is built", () => {
         { id: "run_1", cancelReason: "stopped before its image was built" },
       ]);
       // There is no runtime to tear down: no stop is enqueued.
+      expect(h.stops).toEqual([]);
+    }
+  });
+
+  it("answers a stop after the build failed: nothing launched and nothing will, so there is nothing to refuse", async () => {
+    for (const [errorCode, status] of [
+      ["image-build-stalled", "failed"],
+      ["launch-stopped", "cancelled"],
+    ] as const) {
+      const h = harness("failed", { launching: "failed", launchErrorCode: errorCode });
+      await expect(h.stop({ ownerUserId: "user_owner" })).resolves.toEqual({
+        workspaceId: "ws_1",
+        status,
+      });
+      expect(h.cancelledJobs).toEqual([]);
+      expect(h.cancelledAttempts).toEqual([]);
       expect(h.stops).toEqual([]);
     }
   });
