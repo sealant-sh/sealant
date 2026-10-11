@@ -16,6 +16,7 @@ import type { NewWorkspace, WorkspaceImagePlatform } from "@sealant/validators";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { HARNESS_VERSIONS } from "../harness/integrations.js";
+import { ARCHLINUXARM_MIRRORLIST } from "./archlinuxarm.js";
 import { compileWorkspaceBuildSpec, type BuildkitCommandRunner } from "./buildkit-builder.js";
 import { knownWorkspacePackageIds } from "./package-catalog.js";
 import { dockerDaemonImagePlatform } from "./platform.js";
@@ -238,6 +239,14 @@ describe("an Arch workspace image on the Docker daemon's architecture", () => {
       await rm(repo, { recursive: true, force: true });
     }
   }, 180_000);
+
+  it("installs from the measured Arch Linux ARM mirrors in a workspace, the geo redirector last", async () => {
+    if (platform !== "linux/arm64") return;
+    expect(await run("cat /etc/pacman.d/mirrorlist")).toBe(ARCHLINUXARM_MIRRORLIST);
+    // What `pacman -S` in a workspace does: sync every database, then fetch from the first mirror.
+    const url = await run("pacman -Sy --noconfirm >/dev/null && pacman -Sp --noconfirm ripgrep");
+    expect(url.trim()).toMatch(/^http:\/\/dk\.mirror\.archlinuxarm\.org\/aarch64\/extra\/ripgrep-/);
+  }, 120_000);
 
   it("has no login password on root, no default user, and no board kernel", async () => {
     const shadow = await run("grep '^root:' /etc/shadow | cut -d: -f2");

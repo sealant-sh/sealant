@@ -55,12 +55,19 @@ signature against the port's build key, and unpacks it. The tarball comes throug
 redirector, which picks a mirror by location and sometimes picks a slow one. A mirror that delivers
 less than 1 MB/s over 30 seconds is left for the next: the redirector again, then three mirrors
 known to carry it. If every source is that slow, a second pass takes whichever source keeps sending
-bytes. The build prints how far the download has got every 30 seconds. The tarball is kept in a
-BuildKit cache mount, so a host downloads it once: later Arch builds reuse it while it verifies
-against the current signature, and a download stopped midway resumes. The board kernel, modules and
-firmware the tarball carries are removed, the tarball's `alarm` user is deleted, and root's password
-is locked, as Docker Hub's `archlinux` image ships it. Every package in the catalog installs on
-both.
+bytes. The build prints how far the download has got every 30 seconds.
+
+pacman on an arm64 Arch image, in the build and in a workspace, installs from eight Arch Linux ARM
+mirrors measured fast (Denmark, Germany, Hungary, Greece, France, two in North America, Taiwan), in
+that order, with the port's geo redirector last: the tarball's own mirrorlist names only the
+redirector, which sent some networks to a mirror serving 30 KB/s, or to one that stalled every
+database sync. pacman moves to the next mirror when one stalls, and keeps checking every package's
+signature. An upgrade of `pacman-mirrorlist` leaves the list in place (as `mirrorlist.pacnew`). The
+tarball is kept in a BuildKit cache mount, so a host downloads it once: later Arch builds reuse it
+while it verifies against the current signature, and a download stopped midway resumes. The board
+kernel, modules and firmware the tarball carries are removed, the tarball's `alarm` user is deleted,
+and root's password is locked, as Docker Hub's `archlinux` image ships it. Every package in the
+catalog installs on both.
 
 ## The person environment
 
