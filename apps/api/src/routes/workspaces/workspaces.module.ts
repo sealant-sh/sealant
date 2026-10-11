@@ -3420,7 +3420,8 @@ export const stopWorkspace = (input: {
 
     // Stop targets a live runtime. Before its image is built there is none: the launch's build
     // job is cancelled instead (the worker building it stops at its next progress write, and its
-    // fenced success can no longer land), and the run ends `cancelled`. Between the build and the
+    // fenced success can no longer land), and the run ends `cancelled`. After a failed build
+    // there is nothing to stop, and the stop answers so. Between a build that succeeded and the
     // runtime's first row there is still nothing to stop: that is refused, as the launch would
     // race a recorded stop.
     const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
@@ -3458,6 +3459,16 @@ export const stopWorkspace = (input: {
           `Workspace ${workspace.id}: ${input.payload.ownerUserId} stopped run ${latestRunId} before its image was built; its build job ${cancelled.id} was cancelled and nothing launches.`,
         );
         const response: StopWorkspaceResponse = { workspaceId: workspace.id, status: "cancelled" };
+        return response;
+      }
+      // A launch whose build failed (or was cancelled by an earlier stop) ended before any
+      // runtime: nothing runs and nothing will, so the stop has nothing to do. Refusing it as
+      // "still launching" left a caller retrying a stop that could never be accepted.
+      if (latestJob?.status === "failed") {
+        const response: StopWorkspaceResponse = {
+          workspaceId: workspace.id,
+          status: latestJob.errorCode === "launch-stopped" ? "cancelled" : "failed",
+        };
         return response;
       }
       return yield* new WorkspaceConflictError({

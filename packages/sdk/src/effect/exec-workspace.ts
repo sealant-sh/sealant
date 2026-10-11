@@ -18,6 +18,7 @@ import { SealantError } from "../errors.js";
 import type { SdkContext } from "../facade/context.js";
 import { makeRun, toRunChangesData } from "../facade/run.js";
 import type { WorkspaceInit } from "../facade/workspace.js";
+import { elapsed } from "../internal/clock.js";
 import type { WorkspaceExecOptions, WorkspaceExecResult } from "../types.js";
 import {
   execWorkspaceAsUserOp,
@@ -113,19 +114,19 @@ const execWorkspaceEffect = (
     const runId = created.runId;
 
     // Block until the check run is terminal, polling the control plane (same shape as harness.run()).
-    const registeredAt = Date.now();
+    const registeredAt = elapsed();
     const deadline = registeredAt + EXEC_TIMEOUT_MS;
     let wire = created;
     let wait: number | undefined;
     while (!TERMINAL_STATUSES.has(wire.status)) {
-      if (Date.now() > deadline) {
+      if (elapsed() > deadline) {
         return yield* Effect.fail(
           new SealantError(`Timed out waiting for exec run ${runId} to complete.`, {
             code: "exec_timeout",
           }),
         );
       }
-      wait = nextExecPollMs(wait, Date.now() - registeredAt);
+      wait = nextExecPollMs(wait, elapsed() - registeredAt);
       yield* Effect.sleep(Duration.millis(wait));
       // One refused or lost read is read again; the run goes on either way.
       wire = yield* retryRead(getRunOp(runId, ctx.config.hostLocal.ownerUserId), {

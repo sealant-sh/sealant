@@ -9,10 +9,12 @@ import { microvmRecipe } from "../images/microvm/recipe.js";
 import { cases } from "../runtime/docker-runtime-adapter.golden-fixture.js";
 import {
   ARCHLINUXARM_BUILDER_KEY,
+  ARCHLINUXARM_CACHE,
   ARCHLINUXARM_KEY_FILE,
   ARCHLINUXARM_KEY_FINGERPRINT,
   ARCHLINUXARM_ROOTFS,
   renderArchlinuxArmBase,
+  renderArchlinuxArmFetch,
 } from "./archlinuxarm.js";
 import {
   compileWorkspaceBuildSpec,
@@ -183,7 +185,11 @@ describe("the platform a workspace image is built for", () => {
     expect(base).toMatch(/^FROM fedora:41 AS archlinuxarm$/m);
     expect(base).toContain(`COPY ${ARCHLINUXARM_KEY_FILE} /tmp/${ARCHLINUXARM_KEY_FILE}`);
     expect(base).toContain(`grep -q '^fpr:.*:${ARCHLINUXARM_KEY_FINGERPRINT}:'`);
-    expect(base).toContain("gpg --batch --verify /tmp/rootfs.tar.gz.sig /tmp/rootfs.tar.gz");
+    expect(base).toContain(renderArchlinuxArmFetch());
+    expect(base).toContain('gpg --batch --verify "$cache/partial.sig" "$cache/partial"');
+    expect(base).toContain(
+      `--mount=type=cache,id=sealant-archlinuxarm-rootfs,target=${ARCHLINUXARM_CACHE}`,
+    );
     expect(base).toMatch(/^FROM scratch$/m);
     expect(base).toContain("pacman-key --populate archlinuxarm");
     expect(base).toContain("linux-aarch64|linux-firmware(-.+)?|mkinitcpio(-busybox)?");

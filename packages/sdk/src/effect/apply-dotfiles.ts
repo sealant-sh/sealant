@@ -15,6 +15,7 @@ import { SealantError } from "../errors.js";
 import type { SdkContext } from "../facade/context.js";
 import type { WorkspaceInit } from "../facade/workspace.js";
 import { toGitUrl } from "../internal/blueprint.js";
+import { elapsed } from "../internal/clock.js";
 import type {
   WorkspaceDotfilesApplied,
   WorkspaceDotfilesApplyOptions,
@@ -64,7 +65,7 @@ const pollRun = <A, E, R>(
   done: (status: string) => Effect.Effect<A | undefined, E, R>,
 ) =>
   Effect.gen(function* () {
-    const registeredAt = Date.now();
+    const registeredAt = elapsed();
     let wait: number | undefined;
     for (;;) {
       const wire = yield* retryRead(getRunOp(runId, ownerUserId), {
@@ -75,14 +76,14 @@ const pollRun = <A, E, R>(
       const answer = yield* done(wire.status);
       if (answer !== undefined) return { wire, answer };
       if (TERMINAL_STATUSES.has(wire.status)) return { wire, answer: undefined };
-      if (Date.now() > deadline) {
+      if (elapsed() > deadline) {
         return yield* Effect.fail(
           new SealantError(`Timed out waiting for dotfiles run ${runId}.`, {
             code: "dotfiles_timeout",
           }),
         );
       }
-      wait = nextExecPollMs(wait, Date.now() - registeredAt);
+      wait = nextExecPollMs(wait, elapsed() - registeredAt);
       yield* Effect.sleep(Duration.millis(wait));
     }
   });
@@ -90,7 +91,7 @@ const pollRun = <A, E, R>(
 const waitBootstrap = (ctx: SdkContext, runId: string, processId: string) =>
   Effect.gen(function* () {
     const ownerUserId = ctx.config.hostLocal.ownerUserId;
-    const deadline = Date.now() + BOOTSTRAP_TIMEOUT_MS;
+    const deadline = elapsed() + BOOTSTRAP_TIMEOUT_MS;
     const { wire } = yield* pollRun(runId, ownerUserId, deadline, () => Effect.succeed(undefined));
     if (wire.status !== "completed") {
       return yield* Effect.fail(
@@ -158,7 +159,7 @@ const applyDotfilesEffect = (
           }),
     });
     const runId = created.runId;
-    const deadline = Date.now() + APPLY_TIMEOUT_MS;
+    const deadline = elapsed() + APPLY_TIMEOUT_MS;
     // The bootstrap's `processStarted` is looked for while the run is running, and once more when
     // it has ended (a bootstrap that ended between two reads).
     const { wire, answer } = yield* pollRun(runId, ownerUserId, deadline, (status) =>

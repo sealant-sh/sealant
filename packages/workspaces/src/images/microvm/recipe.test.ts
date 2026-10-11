@@ -78,9 +78,7 @@ describe("microvmRecipe", () => {
     );
     expect(containerfile).toContain("COPY archlinuxarm-builder.asc /tmp/archlinuxarm-builder.asc");
     expect(containerfile).toContain(ARCHLINUXARM_KEY_FINGERPRINT);
-    expect(containerfile).toContain(
-      "gpg --batch --verify /tmp/rootfs.tar.gz.sig /tmp/rootfs.tar.gz",
-    );
+    expect(containerfile).toContain('gpg --batch --verify "$cache/partial.sig" "$cache/partial"');
     expect(containerfile).toMatch(/^FROM scratch$/m);
     expect(containerfile).toContain("pacman-key --populate archlinuxarm");
     expect(containerfile).not.toContain("archlinux:latest");

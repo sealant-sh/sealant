@@ -8,6 +8,7 @@ import type { SystemIndexResponse } from "@sealant/api-contracts";
 import { getIndexOp } from "../effect/operations.js";
 import type { SdkContext } from "../facade/context.js";
 import type { SealantFeatures } from "../types.js";
+import { elapsed } from "./clock.js";
 
 /** How long an answer is kept: an upgraded control plane is noticed within this. */
 const ANSWER_TTL_MS = 5 * 60_000;
@@ -41,14 +42,14 @@ export const toFeatures = (index: SystemIndexResponse): SealantFeatures => {
  * index could not be read; the failure is kept briefly, then the index is asked again.
  */
 export const readFeatures = (ctx: SdkContext): Promise<SealantFeatures> => {
-  const now = Date.now();
+  const now = elapsed();
   const cached = answers.get(ctx.runtime);
   if (cached !== undefined && cached.expiresAt > now) return cached.features;
   const fresh = {
     expiresAt: now + ANSWER_TTL_MS,
     features: ctx.runtime.run(getIndexOp()).then(toFeatures, (error: unknown) => {
       // Not known: this read fails, and the index is asked again soon, not for the client's life.
-      fresh.expiresAt = Date.now() + FAILURE_TTL_MS;
+      fresh.expiresAt = elapsed() + FAILURE_TTL_MS;
       throw error;
     }),
   };
