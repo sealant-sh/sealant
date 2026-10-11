@@ -83,23 +83,138 @@ fx6y8+A0kBiaAmcY01U/upYXeHs=
 const ARCHLINUXARM_BOARD_PACKAGES = "^(linux-aarch64|linux-firmware(-.+)?|mkinitcpio(-busybox)?)$";
 
 /**
+ * Where the rootfs comes from, in order. The redirector picks a mirror by where the request comes
+ * from, and does not pick a fast one: from one network it sent 4 requests in 6 to a mirror serving
+ * 25 KB/s (an 829 MB tarball takes nine hours there), the rest to one serving 12 MB/s. So a mirror
+ * that falls below the speed floor is left for the next source, and after the redirector come
+ * mirrors measured to carry the tarball (2026-10-11): a redirector that keeps choosing a slow
+ * mirror costs half a minute each time, not the build. Every source is tried twice: first with the
+ * floor, then, for a link that is slow itself, only while bytes keep arriving.
+ */
+export const ARCHLINUXARM_SOURCES = [
+  "http://os.archlinuxarm.org",
+  "http://os.archlinuxarm.org",
+  "http://dk.mirror.archlinuxarm.org",
+  "http://de4.mirror.archlinuxarm.org",
+  "http://ca.us.mirror.archlinuxarm.org",
+] as const;
+
+/**
+ * Where the fetch keeps the tarball: a BuildKit cache mount, so one download serves every Arch
+ * image the host builds. A build reuses the cached tarball while it verifies against the
+ * signature it fetches, and resumes a partial one while the signature is the same, so a build
+ * stopped midway does not start the next one from nothing.
+ */
+export const ARCHLINUXARM_CACHE = "/var/cache/sealant-archlinuxarm";
+
+export interface ArchlinuxArmFetchOptions {
+  readonly sources: readonly string[];
+  /** The cache directory; the verified tarball is `rootfs.tar.gz` in it. */
+  readonly cache: string;
+  /** Bytes per second a source must keep up over {@link ArchlinuxArmFetchOptions.window} on the first pass. */
+  readonly floor: number;
+  /** The second pass's floor: a source is given up only when bytes stop arriving. */
+  readonly slowFloor: number;
+  /** Seconds a source may stay below the floor. */
+  readonly window: number;
+  /** Seconds between progress lines: a build that prints nothing for ten minutes is stopped. */
+  readonly tick: number;
+}
+
+const DEFAULT_FETCH: ArchlinuxArmFetchOptions = {
+  sources: ARCHLINUXARM_SOURCES,
+  cache: ARCHLINUXARM_CACHE,
+  floor: 1024 * 1024,
+  slowFloor: 16 * 1024,
+  window: 30,
+  tick: 30,
+};
+
+/**
+ * The shell that fetches the rootfs into the cache and verifies it against Arch Linux ARM's
+ * signature, with the build key already in gpg's keyring. For each source it resolves the
+ * redirector once, so the signature and the tarball come from the same mirror; prints how far the
+ * download is every {@link ArchlinuxArmFetchOptions.tick} seconds; and moves on when the source
+ * stops, falls below the floor, or serves a tarball the signature does not match. It exits 1
+ * when no source delivers a verified tarball.
+ */
+export const renderArchlinuxArmFetch = (
+  options: Partial<ArchlinuxArmFetchOptions> = {},
+): string => {
+  const { sources, cache, floor, slowFloor, window, tick } = { ...DEFAULT_FETCH, ...options };
+  return `set -u
+cache=${cache}
+mkdir -p "$cache"
+size() { if [ -f "$1" ]; then wc -c < "$1" | tr -d ' '; else echo 0; fi; }
+mib() { echo "$((\${1:-0} / 1048576)) MiB"; }
+# fetch <url> <floor>: 0 once $cache/rootfs.tar.gz verifies against $cache/rootfs.tar.gz.sig.
+fetch() {
+  found=$(curl -fsSIL --connect-timeout 20 --max-time 60 -o /dev/null \\
+    -w '%{url_effective} %header{content-length}' "$1") || {
+    echo "archlinuxarm: $1 did not answer"; return 1; }
+  url=\${found% *}; total=\${found##* }
+  case " $tried " in *" $url "*) echo "archlinuxarm: $url was already tried on this pass"; return 1;; esac
+  tried="$tried $url"
+  curl -fsSL --connect-timeout 20 --max-time 60 -o "$cache/next.sig" "$url.sig" || {
+    echo "archlinuxarm: no signature from $url.sig"; return 1; }
+  if [ -f "$cache/rootfs.tar.gz" ] && gpg --batch --verify "$cache/next.sig" "$cache/rootfs.tar.gz" 2>/dev/null; then
+    mv "$cache/next.sig" "$cache/rootfs.tar.gz.sig"
+    echo "archlinuxarm: the cached rootfs is the current one"; return 0
+  fi
+  # A partial download resumes only for the tarball this signature is for, and only while it is
+  # shorter than the tarball.
+  if cmp -s "$cache/next.sig" "$cache/partial.sig"; then rm -f "$cache/next.sig"
+  else rm -f "$cache/partial"; mv "$cache/next.sig" "$cache/partial.sig"; fi
+  if [ -n "$total" ] && [ "$(size "$cache/partial")" -gt "$total" ]; then rm -f "$cache/partial"; fi
+  echo "archlinuxarm: downloading $url, $(mib "$total"), from $(mib "$(size "$cache/partial")")"
+  status=0
+  if [ -z "$total" ] || [ "$(size "$cache/partial")" -lt "$total" ]; then
+    ( n=0; while sleep 1; do n=$((n + 1)); if [ $((n % ${tick})) -eq 0 ]; then
+      echo "archlinuxarm: $(mib "$(size "$cache/partial")") of $(mib "$total")"; fi; done ) &
+    ticker=$!
+    curl -fsSL --connect-timeout 20 --speed-limit "$2" --speed-time ${window} -C - -o "$cache/partial" "$url" || status=$?
+    kill "$ticker" 2>/dev/null; wait "$ticker" 2>/dev/null
+  fi
+  if [ "$status" -ne 0 ]; then
+    echo "archlinuxarm: $url stopped at $(mib "$(size "$cache/partial")") (curl exit $status)"; return 1
+  fi
+  if gpg --batch --verify "$cache/partial.sig" "$cache/partial"; then
+    mv "$cache/partial" "$cache/rootfs.tar.gz"; mv "$cache/partial.sig" "$cache/rootfs.tar.gz.sig"; return 0
+  fi
+  echo "archlinuxarm: the tarball from $url does not match its signature"
+  rm -f "$cache/partial" "$cache/partial.sig"; return 1
+}
+fetched=
+for floor in ${floor} ${slowFloor}; do
+  tried=
+  for source in ${sources.join(" ")}; do
+    if fetch "$source/os/ArchLinuxARM-aarch64-latest.tar.gz" "$floor"; then fetched=1; break 2; fi
+  done
+done
+[ -n "$fetched" ] || { echo "archlinuxarm: no source delivered a rootfs that verifies"; exit 1; }
+`;
+};
+
+/**
  * The stages an arm64 Arch image starts with, in place of `FROM archlinux:latest`. A first stage
- * on `fetchStageImage` (a Fedora image: it has `dnf`) fetches the tarball and its signature,
- * verifies the signature against the key in the build context, and unpacks it; the image proper
- * starts from that filesystem. `pacman-key --populate archlinuxarm` then trusts the port's
- * package keys.
+ * on `fetchStageImage` (a Fedora image: it has `dnf`) checks the build key in the build context
+ * carries the fingerprint above, fetches the tarball and its signature into a cache mount (see
+ * {@link renderArchlinuxArmFetch}), and unpacks the verified tarball; the image proper starts from
+ * that filesystem. `pacman-key --populate archlinuxarm` then trusts the port's package keys.
  */
 export const renderArchlinuxArmBase = (fetchStageImage: string): string =>
   [
     `FROM ${fetchStageImage} AS archlinuxarm`,
-    "RUN dnf -y install gnupg2 curl tar && dnf clean all",
+    "RUN dnf -y install gnupg2 curl tar diffutils && dnf clean all",
     `COPY ${ARCHLINUXARM_KEY_FILE} /tmp/${ARCHLINUXARM_KEY_FILE}`,
-    `RUN set -eu; gpg --batch --import /tmp/${ARCHLINUXARM_KEY_FILE}; \\`,
-    `    gpg --batch --list-keys --with-colons | grep -q '^fpr:.*:${ARCHLINUXARM_KEY_FINGERPRINT}:'; \\`,
-    `    curl -fsSL --retry 3 -o /tmp/rootfs.tar.gz ${ARCHLINUXARM_ROOTFS}; \\`,
-    `    curl -fsSL --retry 3 -o /tmp/rootfs.tar.gz.sig ${ARCHLINUXARM_ROOTFS}.sig; \\`,
-    "    gpg --batch --verify /tmp/rootfs.tar.gz.sig /tmp/rootfs.tar.gz; \\",
-    "    mkdir /rootfs && tar -xpf /tmp/rootfs.tar.gz --numeric-owner -C /rootfs && rm /tmp/rootfs.tar.gz*",
+    // `sharing=locked`: two builds at once wait for one download instead of writing one file.
+    `RUN --mount=type=cache,id=sealant-archlinuxarm-rootfs,target=${ARCHLINUXARM_CACHE},sharing=locked <<'ARCHLINUXARM'`,
+    "set -eu",
+    `gpg --batch --import /tmp/${ARCHLINUXARM_KEY_FILE}`,
+    `gpg --batch --list-keys --with-colons | grep -q '^fpr:.*:${ARCHLINUXARM_KEY_FINGERPRINT}:'`,
+    renderArchlinuxArmFetch().trimEnd(),
+    `mkdir /rootfs && tar -xpf ${ARCHLINUXARM_CACHE}/rootfs.tar.gz --numeric-owner -C /rootfs`,
+    "ARCHLINUXARM",
     "FROM scratch",
     "COPY --from=archlinuxarm /rootfs /",
     "RUN set -eu; pacman-key --init; pacman-key --populate archlinuxarm; \\",

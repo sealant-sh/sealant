@@ -182,7 +182,11 @@ itself: a single-user self-host is a supported shape.
     shipped in the build context (fingerprint pinned beside it), unpacks it, and the image starts
     from that filesystem. Since 2026-10-10 the Docker and Kubernetes builders start every arm64 Arch
     image from the same stages (`buildkit/archlinuxarm.ts`), so Arch no longer runs under emulation
-    on arm64 hosts; the plan hash covers the platform.
+    on arm64 hosts; the plan hash covers the platform. The tarball is 829 MB, and the port's
+    redirector sometimes sends a request to a mirror serving 25 KB/s (4 requests in 6 from one
+    network, 2026-10-11): the fetch leaves a mirror below 1 MB/s for the next source, prints its
+    progress so the build's no-output bound does not stop it, and keeps the tarball in a cache
+    mount, so a host downloads it once.
   - **No native harness binary started on the nix image.** It has no `/lib64/ld-linux-*`: every
     binary in it names a loader inside the store. `codex`, `claude` and `opencode` install and then
     fail to execute. The nix package layer now links glibc's loader into `/lib` and `/lib64`. This

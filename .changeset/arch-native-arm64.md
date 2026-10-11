@@ -14,7 +14,12 @@ On Apple silicon and other arm64 hosts, an existing Arch workspace switches from
 native aarch64 at its next launch. Dependencies with native modules that were installed under
 emulation in existing worktrees (`node_modules`, `.venv`, `target/`) are x86_64 builds: reinstall
 them (`pnpm install`, `uv sync`, …). The first Arch build on such a host downloads the Arch Linux
-ARM rootfs from `os.archlinuxarm.org` (about 300 MB), outside any registry mirror.
+ARM rootfs from `os.archlinuxarm.org` (829 MB), outside any registry mirror. A mirror the port's
+redirector picks that delivers less than 1 MB/s over 30 seconds is left for the redirector again and
+then for three mirrors known to carry the tarball; the build prints the download's progress every 30
+seconds, so its no-output bound does not stop a moving download. The tarball is kept in a BuildKit
+cache mount: later Arch builds on the host reuse it while it verifies against the current signature,
+and a download stopped midway resumes.
 
 Every image is planned for the platform it runs on, and the plan hash covers it, so an amd64 image
 is never reused on arm64. Plan hashes change once, and every image is built again on its next launch

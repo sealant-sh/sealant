@@ -50,10 +50,17 @@ manifest offers: an `amd64`-only base stays `amd64`, and runs emulated on an `ar
 
 Fedora, Ubuntu and nix start from multi-architecture images and build natively on both. Docker Hub's
 `archlinux` image is `amd64` only, so on `arm64` an Arch image starts from Arch Linux ARM's rootfs
-instead: the build fetches the tarball and its signature, verifies the signature against the port's
-build key, and unpacks it. The board kernel, modules and firmware the tarball carries are removed,
-the tarball's `alarm` user is deleted, and root's password is locked, as Docker Hub's `archlinux`
-image ships it. Every package in the catalog installs on both.
+instead: the build fetches the tarball (829 MB in October 2026) and its signature, verifies the
+signature against the port's build key, and unpacks it. The tarball comes through the port's
+redirector, which picks a mirror by location and sometimes picks a slow one. A mirror that delivers
+less than 1 MB/s over 30 seconds is left for the next: the redirector again, then three mirrors
+known to carry it. If every source is that slow, a second pass takes whichever source keeps sending
+bytes. The build prints how far the download has got every 30 seconds. The tarball is kept in a
+BuildKit cache mount, so a host downloads it once: later Arch builds reuse it while it verifies
+against the current signature, and a download stopped midway resumes. The board kernel, modules and
+firmware the tarball carries are removed, the tarball's `alarm` user is deleted, and root's password
+is locked, as Docker Hub's `archlinux` image ships it. Every package in the catalog installs on
+both.
 
 ## The person environment
 
