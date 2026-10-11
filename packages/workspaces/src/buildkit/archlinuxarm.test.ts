@@ -84,9 +84,11 @@ const run = (
   new Promise((resolve) => {
     const script = renderArchlinuxArmFetch({
       cache: join(work, "cache"),
-      floor: 100 * 1024,
+      // Twice the slow mirror's 20 KB/s, over 2 s: the slow mirror prints a progress line (every
+      // 1 s) before it is left, and a fast answer held up by a busy runner is not taken for slow.
+      floor: 50 * 1024,
       slowFloor: 1,
-      window: 1,
+      window: 2,
       tick: 1,
       ...options,
     });
