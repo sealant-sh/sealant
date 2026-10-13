@@ -47,7 +47,7 @@ jobs:
   plan:
     name: Resolve the version
     if: github.repository == 'sealant-sh/sealant'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: [self-hosted, box, linux, x64]
     timeout-minutes: 10
     outputs:
       version: ${{ steps.plan.outputs.version }}
@@ -111,8 +111,8 @@ jobs:
       matrix:
         image: [api, worker, ssh-gateway]
         platform:
-          - { arch: amd64, runner: blacksmith-4vcpu-ubuntu-2404 }
-          - { arch: arm64, runner: blacksmith-4vcpu-ubuntu-2404-arm }
+          - { arch: amd64, runner: [self-hosted, box, linux, x64] }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
     runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 60
     permissions:
@@ -173,7 +173,7 @@ jobs:
     name: Unit and integration tests
     needs: plan
     if: needs.plan.outputs.publish == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: [self-hosted, box, linux, x64]
     timeout-minutes: 20
     services:
       postgres:
@@ -221,7 +221,7 @@ jobs:
     name: Workspace runtime e2e (pinned sealantd)
     needs: plan
     if: needs.plan.outputs.publish == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: [self-hosted, box, linux, x64]
     timeout-minutes: 40
     steps:
       - name: Checkout
@@ -286,7 +286,7 @@ jobs:
     strategy:
       matrix:
         image: [api, worker, ssh-gateway]
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: [self-hosted, box, linux, x64]
     timeout-minutes: 10
     permissions:
       contents: read
@@ -327,7 +327,7 @@ jobs:
   pack:
     name: Pack npm prereleases
     needs: [plan, image-tag]
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: [self-hosted, box, linux, x64]
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -393,7 +393,7 @@ jobs:
   publish:
     name: Publish npm prereleases
     needs: [plan, pack]
-    # npm trusted publishing (OIDC) needs a GitHub-hosted runner: this job stays off Blacksmith.
+    # npm trusted publishing (OIDC) needs a GitHub-hosted runner: this job stays off the self-hosted runners.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: next
