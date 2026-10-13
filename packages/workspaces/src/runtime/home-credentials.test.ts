@@ -1128,7 +1128,8 @@ forEachShell("a login is never in any process's argv or environment", () => {
   if (!straceWorks) {
     unavailable(straceTest, "strace is not installed, or ptrace is refused");
   } else {
-    it.skipIf(uid === 0)(straceTest, () => {
+    // Every exec stops for strace: about 7 s on the self-hosted CI VMs, where 5 s timed out.
+    it.skipIf(uid === 0)(straceTest, { timeout: 30_000 }, () => {
       const w = world();
       const home = w.home("bob");
       const trace = join(w.root, "trace");
