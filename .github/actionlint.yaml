@@ -1,7 +1,7 @@
 # Configuration for `actionlint` (no workflow runs it; run it by hand on workflow changes).
 self-hosted-runner:
   labels:
-    - blacksmith-*
+    - box
 paths:
   .github/workflows/next.yml:
     ignore:

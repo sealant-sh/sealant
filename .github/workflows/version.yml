@@ -17,7 +17,7 @@ jobs:
     name: Open version PR
     # Forks must not open version PRs.
     if: github.repository == 'sealant-sh/sealant'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: [self-hosted, box, linux, x64]
     permissions:
       contents: write
       pull-requests: write
