@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with: { node-version: 22, cache: pnpm }
+        with: { node-version: 22 } # the box's persistent pnpm store, not GitHub's cache
       - run: pnpm install --frozen-lockfile
       - name: Build the baked workspace image (pinned sealantd)
         run:
@@ -67,7 +67,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with: { node-version: 22, cache: pnpm }
+        with: { node-version: 22 } # the box's persistent pnpm store, not GitHub's cache
       - run: pnpm install --frozen-lockfile
 
       - name: Build sealantd (with the WSS frontend)
