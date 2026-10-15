@@ -6,6 +6,14 @@ on:
 permissions:
   contents: read
 
+# A pull request keeps only its newest run: a superseded head's result is never what anyone reads,
+# and its jobs would hold the shared box runners.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# Box runners keep a warm pnpm store (npm_config_store_dir=/opt/pnpm-store), so their setup-node
+# steps restore no GitHub cache: downloading and re-uploading ~780 MB cost every job about 80 s.
 jobs:
   lint:
     name: Lint
@@ -21,7 +29,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -61,7 +68,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -102,7 +108,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
-          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -147,7 +152,9 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
-          cache: pnpm
+          # Box runners link installs from their persistent pnpm store (npm_config_store_dir);
+          # GitHub's arm64 runner starts empty, so only it restores GitHub's pnpm cache.
+          cache: ${{ matrix.arch == 'arm64' && 'pnpm' || '' }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
