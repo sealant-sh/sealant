@@ -4,8 +4,10 @@ name: Kubernetes e2e
 # matrix, so a change to the runtime seams is proven against both lowerings.
 #
 # The Kubernetes leg: kind (3 nodes), a generic RWX StorageClass (NFS CSI — deliberately not a
-# vendor driver), cert-manager, an in-cluster registry, and a sealantd built from the ref below
-# (it must carry the WSS frontend, sealant-sh/sealantd#60).
+# vendor driver), cert-manager, an in-cluster registry, and the sealantd Core pins: the image
+# digest pin-sealantd.mjs writes into buildkit-builder.ts, which is what ships. A dispatch that
+# names a sealantd ref builds the daemon from that ref instead (it must carry the WSS frontend,
+# sealant-sh/sealantd#60).
 
 on:
   pull_request:
@@ -14,8 +16,8 @@ on:
   workflow_dispatch:
     inputs:
       sealantd_ref:
-        description: sealant-sh/sealantd git ref to build the daemon from
-        default: main
+        description: sealant-sh/sealantd git ref to build the daemon from (empty runs the pin)
+        default: ""
 
 permissions:
   contents: read
@@ -70,13 +72,30 @@ jobs:
         with: { node-version: 22 } # the box's persistent pnpm store, not GitHub's cache
       - run: pnpm install --frozen-lockfile
 
-      - name: Build sealantd (with the WSS frontend)
+      # The pinned image is sealantd's docker/Dockerfile built by its next workflow, pulled by digest:
+      # the daemon that ships, without rebuilding it from source on every run.
+      - name: The sealantd Core pins
+        if: ${{ !github.event.inputs.sealantd_ref }}
+        run: |
+          image=$(grep -oE 'ghcr\.io/sealant-sh/sealantd(-next)?:[^"]+@sha256:[0-9a-f]{64}' \
+            packages/workspaces/src/buildkit/buildkit-builder.ts | sort -u)
+          if [ -z "$image" ] || [ "$(printf '%s\n' "$image" | wc -l)" -ne 1 ]; then
+            echo "::error::Expected exactly one pinned sealantd image in buildkit-builder.ts, found: ${image:-none}"
+            exit 1
+          fi
+          echo "sealantd: $image"
+          docker pull "$image"
+          docker tag "$image" sealantd:e2e
+      - name: Check out sealantd at the dispatched ref
+        if: ${{ github.event.inputs.sealantd_ref }}
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: sealant-sh/sealantd
-          ref: ${{ github.event.inputs.sealantd_ref || 'main' }}
+          ref: ${{ github.event.inputs.sealantd_ref }}
           path: .sealantd
-      - run: docker build -t sealantd:e2e -f .sealantd/docker/Dockerfile .sealantd
+      - name: Build sealantd from the dispatched ref (with the WSS frontend)
+        if: ${{ github.event.inputs.sealantd_ref }}
+        run: docker build -t sealantd:e2e -f .sealantd/docker/Dockerfile .sealantd
 
       - name: Install kind, kubectl, helm
         uses: helm/kind-action@v1
