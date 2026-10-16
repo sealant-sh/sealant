@@ -95,16 +95,44 @@ authorize you into SDK-created workspaces. Two options:
 Users install with `curl -fsSL …/install.sh | sh` (see README) — prebuilt images, no source build.
 The pieces:
 
-- **Images**: `.github/workflows/release.yml` builds + pushes multi-arch
-  `ghcr.io/sealant-sh/sealant-{api,worker,ssh-gateway,web}` on every `vX.Y.Z` tag, smoke-tests the
-  installer against them, then publishes the GitHub release with `compose.selfhost.yaml` attached.
-  Creating the release is what moves `releases/latest`, i.e. what the installer resolves.
+- **Images**: `.github/workflows/release.yml` releases a `vX.Y.Z` tag. `build` pushes each of
+  `ghcr.io/sealant-sh/sealant-{api,worker,ssh-gateway,web}` for amd64 and arm64, each on a native
+  runner, by digest with no tag. `merge` stages each image's index under this run's own tag,
+  `staging-<run id>-<attempt>`, and `release-manifest` records every index and platform digest in
+  the run's `release-manifest` artifact (kept 90 days). `selfhost-smoke` runs `install.sh` on amd64
+  and on arm64 against those digests: it pulls each image by digest, tags that ID with the name
+  install.sh expects, and fails unless every service runs that ID. `acceptance` passes only when
+  both smoke legs and `workspace-e2e` passed; nothing publishes before it.
+- **Publishing, after acceptance**: `finalize-images` writes each `:<version>` from the accepted
+  index; `npm` publishes the two packages; `github-release` creates the release with
+  `compose.selfhost.yaml` and `install.sh` attached and `--latest=false`; `promote` moves each
+  `:latest` to the accepted index and then GitHub's latest release, which is what `install.sh`
+  installs by default. `finalize-images`, `npm` and `promote` queue on one job-level lock,
+  `sealant-release-channel` (`queue: max`, never cancelled).
 - **Cutting a release**: push a `vX.Y.Z` tag. After the very first release, flip the four GHCR
   packages to public (one-time, per package) or anonymous pulls fail.
-- **Never re-run an old stable release run.** Core's stable pipeline publishes `:<version>`,
-  major.minor and `latest` before acceptance, with no lock or floor (plan (e) step 2 will fix that).
-  Re-running an older run can move `latest` backwards or replace a version's digest. Cut a new
-  version instead.
+- **Every tag is read before it is written.** Only buildx's exact `ERROR: <ref>: not found` counts
+  as absent; any other failed read stops the job before it writes. `finalize-images` reads all four
+  `:<version>` first: a tag already at the accepted index is left alone, a tag at any other digest
+  refuses ("Version X.Y.Z is spent: cut a new one"), and after a create a second read decides. A
+  create that errored but left the accepted index passes with a warning.
+- **The stable floor.** `promote` reads it inside the lock before it moves anything: the highest of
+  npm `latest` for `@sealant/sdk` and `@sealant/api-contracts`, the tag of GitHub's latest release,
+  and the `org.opencontainers.image.version` label on every platform of the four `sealant-*:latest`.
+  Each marker must be a plain `X.Y.Z` (each part at most 9 digits); a marker that cannot be read or
+  is malformed fails the job, and only a missing one adds nothing. Above the floor, `promote` moves
+  every `:latest`; at it (a retry), only the ones not yet at this release's index; below it, it
+  refuses and names the marker. So a backport, say 0.38.2 after 0.39.0, is refused on purpose, and
+  `pins` refuses a tag below the highest stable tag before anything builds.
+- **Frozen tags.** The `:X.Y` tags (`sealant-api:0.38` and the like) are no longer written: each
+  stays at the last release that moved it, and nothing reads them. Read `:latest` or a full
+  `:<version>` instead.
+- **Re-running a stable release run.** Re-run failed jobs, never all jobs: a full re-run builds new
+  images, and `finalize-images` then refuses the spent version. The `npm` job still installs, builds
+  and publishes with `pnpm publish` and reads no floor, so never re-run an old run's `npm` job after
+  a newer release: it would publish an older version as npm `latest`.
+- **Staging tags** (`staging-<run id>-<attempt>`) stay on GHCR; nothing removes them yet, and
+  nothing pulls them.
 - **Local dry-run**: build the images with the same Dockerfiles
   (`docker build -f apps/<app>/Dockerfile -t ghcr.io/sealant-sh/sealant-<name>:0.0.0-dev .`), then
   `SEALANT_VERSION=0.0.0-dev SEALANT_COMPOSE_URL=$PWD/compose.selfhost.yaml sh install.sh`. Offset

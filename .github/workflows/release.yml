@@ -1,10 +1,19 @@
-# Release: on a v*.*.* tag, build + push the multi-arch product images to GHCR, smoke-test the
-# packaged install end-to-end (install.sh against the just-pushed images), publish the GitHub
-# release with the compose file attached — which is what makes `releases/latest` (and therefore the
-# curl|sh installer) resolve to this version — and publish @sealant/sdk + @sealant/api-contracts to
-# npm. Mirrors sealantd's release workflow. The npm job runs in parallel with the image pipeline;
-# if only one side fails, re-run just the failed jobs (`gh run rerun <id> --failed`) — a full re-run
-# would hit npm's "cannot republish an existing version".
+# Release: a vX.Y.Z tag releases Core: the four product images on GHCR, @sealant/sdk and
+# @sealant/api-contracts on npm, and the GitHub release whose assets install.sh downloads. In order:
+#
+# 1. build pushes each image's two platforms by digest, untagged; merge stages each image's index
+#    under this run's own tag, staging-<run>-<attempt>, and release-manifest records every digest.
+# 2. selfhost-smoke runs install.sh on amd64 and on arm64 against those digests, and workspace-e2e
+#    proves the pinned sealantd; acceptance passes only when all three passed.
+# 3. finalize-images writes each :<version>, once, from the accepted index; npm publishes; the
+#    GitHub release is created without becoming latest; promote moves each :latest to the accepted
+#    index under the stable floor, and moves GitHub's latest release last.
+#
+# Only finalize-images writes a :<version>, only promote moves :latest or GitHub's latest release,
+# and :X.Y is never written: those tags stay at the last value the old pipeline gave them.
+# finalize-images, npm and promote queue on one lock, sealant-release-channel. Re-running failed
+# jobs is safe: every write first reads what is there (DEVELOPMENT.md, Releasing).
+# Every job runs on a GitHub-hosted runner, a fresh VM: the box's runner VMs keep state between jobs.
 name: Release
 
 on:
@@ -22,12 +31,15 @@ jobs:
     name: Check what the release pins
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       # Full history: the prerelease check asks whether each next build's commit is an ancestor.
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -45,36 +57,54 @@ jobs:
           node tooling/scripts/next-version.mjs --stray "$GITHUB_REF_NAME" --npm @sealant/sdk-next
           HEAD
 
-  image:
-    name: Image (${{ matrix.name }})
+      # An early exit only, before anything builds: the floor checks in promote, inside the release
+      # channel's lock, are the guard.
+      - name: Refuse a stable tag below the highest stable tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=${GITHUB_REF_NAME#v}
+          stable='^refs/tags/v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$'
+          highest=$(gh api --paginate "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/v" --jq '.[].ref' |
+            sed -nE "s#$stable#\\1#p" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
+          top=$(printf '%s\n' "$highest" "$version" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
+          if [[ -n $highest && $top != "$version" ]]; then
+            echo "::error::v$version is below v$highest, the highest stable tag. A stable release never moves backwards, so a backport is refused on purpose."
+            exit 1
+          fi
+          echo "v$version is not below the highest stable tag (${highest:+v}${highest:-none})."
+
+      - name: Name the version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >>"$GITHUB_OUTPUT"
+
+  # Each image's platform on its own native runner, pushed to the stable repository by digest with
+  # no tag at all: nothing pulls it until acceptance names it by that digest.
+  build:
+    name: Image (${{ matrix.image.name }}, ${{ matrix.platform.arch }})
     needs: pins
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      packages: write
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: sealant-api
-            dockerfile: apps/api/Dockerfile
-          - name: sealant-worker
-            dockerfile: apps/worker/Dockerfile
-          - name: sealant-ssh-gateway
-            dockerfile: apps/ssh-gateway/Dockerfile
-          - name: sealant-web
-            dockerfile: apps/web/Dockerfile
+        image:
+          - { name: sealant-api, dockerfile: apps/api/Dockerfile }
+          - { name: sealant-worker, dockerfile: apps/worker/Dockerfile }
+          - { name: sealant-ssh-gateway, dockerfile: apps/ssh-gateway/Dockerfile }
+          - { name: sealant-web, dockerfile: apps/web/Dockerfile }
+        platform:
+          - { arch: amd64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      # QEMU emulates arm64 on the amd64 runner; native arm64 runners + a per-arch matrix can
-      # replace this later (same follow-up as sealantd).
-      # binfmt at a fixed digest: it runs privileged and emulates every arm64 RUN.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
-          image: tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          persist-credentials: false
 
       # BuildKit at a fixed digest: it runs privileged and performs the push.
       - name: Set up Docker builder
@@ -89,35 +119,192 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
-
       # The web image must never receive VITE_API_URL at build time — the server reads
-      # CORE_API_BASE_URL at runtime, and a baked VITE_ value would shadow it.
-      - name: Build and push
+      # CORE_API_BASE_URL at runtime, and a baked VITE_ value would shadow it. The version label is
+      # one of the stable floor's markers once promote moves :latest to this image.
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64,linux/arm64
-          push: true
+          file: ${{ matrix.image.dockerfile }}
+          platforms: linux/${{ matrix.platform.arch }}
           provenance: false
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.pins.outputs.version }}
+          outputs:
+            type=image,name=ghcr.io/${{ github.repository_owner }}/${{ matrix.image.name
+            }},push-by-digest=true,name-canonical=true,push=true
 
-  # Run the real installer against the images just pushed: stack must come up healthy (API, web,
-  # SSH gateway) from a clean machine with only Docker — the same contract users get.
-  selfhost-smoke:
-    name: Self-host install smoke
-    needs: image
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: digests-${{ matrix.image.name }}--${{ matrix.platform.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Each image's two platforms as one index, under this run's own tag. :<version> is what every
+  # install of the version pulls, so only finalize-images writes it, after acceptance.
+  merge:
+    name: Stage (${{ matrix.image }})
+    needs: [pins, build]
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [sealant-api, sealant-worker, sealant-ssh-gateway, sealant-web]
+    steps:
+      # Only the index check, tooling/scripts/release-manifest.mjs.
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: tooling/scripts/release-manifest.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: /tmp/digests
+          pattern: digests-${{ matrix.image }}--*
+          merge-multiple: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Stage the multi-arch index under this run's tag
+        working-directory: /tmp/digests
+        env:
+          REPOSITORY: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          tag=staging-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT
+          sources=()
+          for digest in *; do
+            if [[ ! $digest =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::\"$digest\" in the digests artifact is not an image digest."
+              exit 1
+            fi
+            sources+=("$REPOSITORY@sha256:$digest")
+          done
+          mkdir -p "$RUNNER_TEMP/index"
+          docker buildx imagetools create --metadata-file "$RUNNER_TEMP/index/create.json" \
+            --tag "$REPOSITORY:$tag" "${sources[@]}"
+          docker buildx imagetools inspect "$REPOSITORY:$tag"
+
+      # The index digest goes in the release manifest: the one create reported, never the tag's,
+      # which another writer can move. That index and each source are read by digest, and the index
+      # must hold exactly the sources, for amd64 and arm64.
+      - name: Check and record the index digest
+        working-directory: ${{ runner.temp }}/index
+        env:
+          REPOSITORY: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          digest=$(jq -r '."containerimage.digest" // ."containerimage.descriptor".digest // ""' create.json)
+          if [[ ! $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::imagetools create reported no index digest."
+            exit 1
+          fi
+          docker buildx imagetools inspect "$REPOSITORY@$digest" --raw >index.json
+          sources=()
+          for file in /tmp/digests/*; do
+            source=${file##*/}
+            docker buildx imagetools inspect "$REPOSITORY@sha256:$source" --raw >"source-$source.json"
+            sources+=("sha256:$source=source-$source.json")
+          done
+          node "$GITHUB_WORKSPACE/tooling/scripts/release-manifest.mjs" check-index create.json \
+            index.json "${sources[@]}" >digest
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: index-${{ matrix.image }}
+          path: ${{ runner.temp }}/index/digest
+          if-no-files-found: error
+          retention-days: 1
+
+  # One record of what this run built: every image by its index and platform digests. Every later
+  # job reads it from this run and nowhere else. Kept 90 days, so failed jobs can be re-run.
+  release-manifest:
+    name: Write the release manifest
+    needs: [pins, merge]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: tooling/scripts/release-manifest.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+
+      # One directory per artifact, named for its image and arch.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/records/digests
+          pattern: digests-*
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/records/indexes
+          pattern: index-*
+
+      - name: Write release-manifest.json
+        env:
+          VERSION: ${{ needs.pins.outputs.version }}
+          COMMIT: ${{ github.sha }}
+          DIGESTS: ${{ runner.temp }}/records/digests
+          INDEXES: ${{ runner.temp }}/records/indexes
+        run: |
+          mkdir -p "$RUNNER_TEMP/manifest"
+          node tooling/scripts/release-manifest.mjs write "$RUNNER_TEMP/manifest/release-manifest.json"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-manifest
+          path: ${{ runner.temp }}/manifest/release-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+
+  # Run the real installer against this run's images on each arch: the stack must come up healthy
+  # (API, web, SSH gateway) from a clean machine with only Docker, the contract users get.
+  selfhost-smoke:
+    name: Self-host install smoke (${{ matrix.platform.arch }})
+    needs: [pins, release-manifest]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { arch: amd64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 30
     # Pull ANONYMOUSLY, exactly like a user: GHCR authorizes GITHUB_TOKEN by package↔repo linkage
     # (not visibility), and logging in with it 403'd even on public packages during the v0.1.0
     # release. Anonymous pulls of public packages always work. Consequence: the first release of any
@@ -128,10 +315,54 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
-      - name: Run installer against the tagged images
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-manifest
+          path: ${{ runner.temp }}/release
+
+      # install.sh runs any local image that carries the version's tag, and a tag can move. Pull
+      # this arch's platform digest of each image from the manifest, record the ID it pulled as,
+      # and tag only that ID with the name install.sh expects. :<version> does not exist on GHCR
+      # yet, so install.sh's own pulls of it fail harmlessly and the local tags stand.
+      - name: Pull this run's images by digest
         env:
-          SEALANT_VERSION: ${{ github.ref_name }}
+          NAMESPACE: ghcr.io/${{ github.repository_owner }}
+          MANIFEST: ${{ runner.temp }}/release/release-manifest.json
+          VERSION: ${{ needs.pins.outputs.version }}
+          ARCH: ${{ matrix.platform.arch }}
+          IDS: ${{ runner.temp }}/image-ids
+        run: |
+          set -euo pipefail
+          case $RUNNER_ARCH in
+            X64) arch=amd64 ;;
+            ARM64) arch=arm64 ;;
+            *) echo "::error::No image is built for $RUNNER_ARCH."; exit 1 ;;
+          esac
+          if [[ $arch != "$ARCH" ]]; then
+            echo "::error::This $arch runner was asked to accept $ARCH."
+            exit 1
+          fi
+          : >"$IDS"
+          for image in sealant-api sealant-worker sealant-ssh-gateway sealant-web; do
+            digest=$(node tooling/scripts/release-manifest.mjs digest "$MANIFEST" "$image" "$arch")
+            docker pull "$NAMESPACE/$image@$digest"
+            id=$(docker image inspect "$NAMESPACE/$image@$digest" --format '{{.Id}}')
+            docker tag "$id" "$NAMESPACE/$image:$VERSION"
+            echo "$image $id" >>"$IDS"
+          done
+
+      - name: Run installer against this run's images
+        env:
+          SEALANT_VERSION: ${{ needs.pins.outputs.version }}
+          SEALANT_IMAGE_NS: ghcr.io/${{ github.repository_owner }}
           SEALANT_COMPOSE_URL: ${{ github.workspace }}/compose.selfhost.yaml
         # compose version first: the runner's compose behaved differently from local ones during the
         # v0.1.x releases — keep it in the logs for debugging.
@@ -141,13 +372,49 @@ jobs:
 
       - name: Assert SSH gateway is listening
         run: |
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if (exec 3<>/dev/tcp/127.0.0.1/2222) 2>/dev/null; then exec 3>&-; echo "gateway up"; exit 0; fi
             sleep 2
           done
           echo "gateway did not come up" >&2
           docker compose --project-directory ~/.config/sealant logs ssh-gateway >&2
           exit 1
+
+      # A healthy stack proves nothing about these images unless it ran them: each product service's
+      # container must run the image ID pulled by digest above, under the name install.sh gave it,
+      # labelled with this version.
+      - name: Assert each service runs the image pulled by digest
+        env:
+          NAMESPACE: ghcr.io/${{ github.repository_owner }}
+          VERSION: ${{ needs.pins.outputs.version }}
+          IDS: ${{ runner.temp }}/image-ids
+        run: |
+          set -euo pipefail
+          declare -A pulled
+          while read -r image id; do pulled[$image]=$id; done <"$IDS"
+          failed=0
+          for entry in api:sealant-api worker:sealant-worker ssh-gateway:sealant-ssh-gateway web:sealant-web; do
+            service=${entry%%:*} image=${entry#*:}
+            if [[ ! ${pulled[$image]:-} =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::No image ID was recorded for $image."
+              exit 1
+            fi
+            containers=$(docker compose --project-directory ~/.config/sealant ps --quiet "$service")
+            if [[ $(wc -w <<<"$containers") -ne 1 ]]; then
+              echo "::error::$service runs $(wc -w <<<"$containers") containers, not one."
+              failed=1
+              continue
+            fi
+            read -r running name <<<"$(docker inspect "$containers" --format '{{.Image}} {{.Config.Image}}')"
+            label=$(docker image inspect "$running" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
+            if [[ $running != "${pulled[$image]}" || $name != "$NAMESPACE/$image:$VERSION" || $label != "$VERSION" ]]; then
+              echo "::error::$service runs $running ($name, version $label), not ${pulled[$image]} ($NAMESPACE/$image:$VERSION, version $VERSION), the image pulled by digest."
+              failed=1
+              continue
+            fi
+            echo "$service runs $running, $image as pulled by digest."
+          done
+          exit "$failed"
 
       - name: Dump logs on failure
         if: failure()
@@ -218,12 +485,158 @@ jobs:
           SEALANT_E2E_REQUIRE_IMAGE: "1"
         run: pnpm --filter @sealant/ssh-gateway test:e2e
 
+  # Everything that publishes waits for this: the smoke on both arches and the workspace e2e.
+  acceptance:
+    name: Check this run's acceptance passed
+    needs: [selfhost-smoke, workspace-e2e]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Refuse unless every acceptance passed
+        env:
+          SMOKE: ${{ needs.selfhost-smoke.result }}
+          WORKSPACE: ${{ needs.workspace-e2e.result }}
+        run: |
+          if [[ $SMOKE != success || $WORKSPACE != success ]]; then
+            echo "::error::The self-host smoke is '$SMOKE' and the workspace e2e '$WORKSPACE'; both must pass. Nothing publishes."
+            exit 1
+          fi
+          echo "The self-host smoke passed on amd64 and arm64, and the workspace e2e passed."
+
+  # Writes each image's :<version>, once, from the index digest this run accepted. A version is
+  # spent once its tag exists: re-running failed jobs finds it at this run's digest and is done,
+  # re-running all jobs builds another index and is refused.
+  finalize-images:
+    name: Publish the accepted images under their version
+    needs: [pins, acceptance]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    # The release channel's lock: this job queues behind any other run's finalize, npm or promote,
+    # never cancelled. Each job is serialized on its own; the lock is not held across a whole
+    # release, so promote re-reads the floor inside it. Job-level `queue: max` holds every pending
+    # job instead of only the newest (proven in sealant-sh/mend runs 38897026470, 38897041709 and
+    # 38897056028). actionlint does not know `queue` yet; .github/actionlint.yaml ignores it here.
+    concurrency:
+      group: sealant-release-channel
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-manifest
+          path: release
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Every tag is read before any is written, and the read after the write decides: a create
+      # that reports an error but left this run's digest is done, any other digest is refused, and
+      # a tag still unreadable fails.
+      # tooling/scripts/release-publication.test.mjs runs this step as written, against a stand-in docker.
+      - name: Publish each accepted index as its version
+        env:
+          MANIFEST: ${{ github.workspace }}/release/release-manifest.json
+          VERSION: ${{ needs.pins.outputs.version }}
+        run: |
+          set -euo pipefail
+          if ! jq -e --arg version "$VERSION" --arg commit "$GITHUB_SHA" \
+            '.version == $version and .commit == $commit' "$MANIFEST" >/dev/null; then
+            echo "::error::The release manifest is not this release's ($VERSION from $GITHUB_SHA)."
+            exit 1
+          fi
+          # The digest <ref> names, `absent` when the registry says it does not exist, and a
+          # failure for anything else: a read that failed is never taken for an absent tag. Absent
+          # is buildx's not-found line and nothing else: all of stderr, its trailing newlines aside,
+          # is exactly `ERROR: <ref>: not found`, and stdout is empty.
+          read_tag() {
+            local out err status=0 digest
+            out=$(docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' \
+              2>"$RUNNER_TEMP/inspect.err") || status=$?
+            if ((status == 0)); then
+              digest=$(jq -r '.digest // ""' <<<"$out")
+              if [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                printf '%s\n' "$digest"
+                return 0
+              fi
+              echo "::error::$1 answered without a digest." >&2
+              return 1
+            fi
+            err=$(<"$RUNNER_TEMP/inspect.err")
+            if [[ -z $out && $err == "ERROR: $1: not found" ]]; then
+              echo absent
+              return 0
+            fi
+            cat "$RUNNER_TEMP/inspect.err" >&2
+            echo "::error::Could not read $1; nothing was written." >&2
+            return 1
+          }
+          images=(sealant-api sealant-worker sealant-ssh-gateway sealant-web)
+          declare -A index create
+          for image in "${images[@]}"; do
+            repository="ghcr.io/$GITHUB_REPOSITORY_OWNER/$image"
+            index[$image]=$(jq -r --arg image "$image" '.images[$image].index // ""' "$MANIFEST")
+            if [[ ! ${index[$image]} =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::The release manifest records no index digest for $image."
+              exit 1
+            fi
+            current=$(read_tag "$repository:$VERSION")
+            if [[ $current == absent ]]; then
+              create[$image]=1
+            elif [[ $current == "${index[$image]}" ]]; then
+              echo "$repository:$VERSION is already this run's ${index[$image]}."
+            else
+              echo "::error::$repository:$VERSION exists at $current, not ${index[$image]}, the index this run accepted. Version $VERSION is spent: cut a new one."
+              exit 1
+            fi
+          done
+          for image in "${images[@]}"; do
+            [[ -n ${create[$image]:-} ]] || continue
+            repository="ghcr.io/$GITHUB_REPOSITORY_OWNER/$image"
+            status=0
+            docker buildx imagetools create --tag "$repository:$VERSION" \
+              "$repository@${index[$image]}" || status=$?
+            if ! after=$(read_tag "$repository:$VERSION"); then
+              echo "::error::$repository:$VERSION is unreadable after the create (exit $status)."
+              exit 1
+            fi
+            if [[ $after == "${index[$image]}" ]]; then
+              if ((status != 0)); then
+                echo "::warning::The create reported exit $status, but $repository:$VERSION resolves to ${index[$image]}, the index this run accepted."
+              fi
+              echo "$repository:$VERSION is ${index[$image]}."
+            elif [[ $after == absent ]]; then
+              echo "::error::$repository:$VERSION does not exist after the create (exit $status)."
+              exit 1
+            else
+              echo "::error::$repository:$VERSION resolves to $after after the create, not ${index[$image]}. Version $VERSION is spent: cut a new one."
+              exit 1
+            fi
+          done
+          {
+            echo "## Sealant $VERSION"
+            echo
+            for image in "${images[@]}"; do
+              echo "- \`ghcr.io/$GITHUB_REPOSITORY_OWNER/$image:$VERSION\` (\`${index[$image]}\`)"
+            done
+          } >>"$GITHUB_STEP_SUMMARY"
+
   npm:
     name: Publish npm packages
-    needs: workspace-e2e
-    # Kept on a github-hosted runner: OIDC Trusted Publishing (tokenless npm auth + provenance)
-    # should mint its id-token on infrastructure GitHub controls, not a third-party runner.
-    # npm trusted publishing (OIDC) needs a GitHub-hosted runner: this job stays off the self-hosted runners.
+    needs: finalize-images
+    # The release channel's lock, as finalize-images holds it.
+    concurrency:
+      group: sealant-release-channel
+      cancel-in-progress: false
+      queue: max
+    # npm trusted publishing (OIDC) needs a GitHub-hosted runner, where GitHub mints the id-token.
     runs-on: ubuntu-latest
     # Protected environment: configure required reviewers on `release` in repo settings, and
     # register both packages' npm Trusted Publishers against this repo + release.yml + this
@@ -271,23 +684,399 @@ jobs:
           pnpm --filter "@sealant/api-contracts" --filter "@sealant/sdk" \
             publish --access public --no-git-checks --provenance
 
-  release:
+  # The attached compose file is what install.sh downloads, and install.sh itself is attached so
+  # `releases/latest/download/install.sh` (the get.sealant.dev redirect target) always serves the
+  # exact script shipped with the release. The release is created without becoming latest:
+  # promote moves `releases/latest`, the installer's default version, last.
+  github-release:
     name: Publish GitHub release
-    needs: [selfhost-smoke, workspace-e2e]
+    needs: finalize-images
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
-      # The attached compose file is what install.sh downloads, and install.sh itself is attached so
-      # `releases/latest/download/install.sh` (the get.sealant.dev redirect target) always serves
-      # the exact script shipped with the release. Creating the release is also what moves
-      # `releases/latest` (the installer's default version) to this tag.
-      - name: Create release with compose + installer assets
+      # A published release is never patched: with immutable releases on, an upload to one is
+      # refused, and gh release create already uploads every asset to a draft before it publishes
+      # (deleting the draft when that fails). So a published release with every asset is a retry,
+      # one missing an asset is broken, fixed only by a new version. A draft for the tag is what a
+      # runner killed mid-upload leaves: deleted, never reused, since its assets may be partial.
+      # gh release view finds such a draft too (cli/cli pkg/cmd/release/shared/fetch.go,
+      # fetchDraftRelease), so the releases are listed and told apart here, every read before any
+      # write.
+      # tooling/scripts/release-publication.test.mjs runs this step as written, against a stand-in gh.
+      - name: Create the release with compose + installer assets
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run:
-          gh release create "$GITHUB_REF_NAME" compose.selfhost.yaml install.sh --generate-notes
-          --verify-tag
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          assets=(compose.selfhost.yaml install.sh)
+          listed=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100")
+          releases=$(jq -cs --arg tag "$GITHUB_REF_NAME" \
+            '[.[][] | select(.tag_name == $tag) | {id, draft, assets: [.assets[].name]}]' <<<"$listed")
+          published=$(jq -c '[.[] | select(.draft == false)]' <<<"$releases")
+          drafts=$(jq -r '.[] | select(.draft == true) | .id' <<<"$releases")
+          case $(jq length <<<"$published") in
+            0) ;;
+            1)
+              missing=()
+              for source in "${assets[@]}"; do
+                if ! jq -e --arg name "${source##*/}" '.[0].assets | index($name) != null' \
+                  <<<"$published" >/dev/null; then
+                  missing+=("${source##*/}")
+                fi
+              done
+              if ((${#missing[@]} > 0)); then
+                echo "::error::published release is missing an asset; cut a new version (missing: ${missing[*]})"
+                exit 1
+              fi
+              echo "$GITHUB_REF_NAME is published with every asset: a retry changes nothing."
+              exit 0
+              ;;
+            *)
+              echo "::error::More than one published release is tagged $GITHUB_REF_NAME."
+              exit 1
+              ;;
+          esac
+          for id in $drafts; do
+            echo "Deleting draft release $id for $GITHUB_REF_NAME, left by an earlier attempt."
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+          done
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" --generate-notes --latest=false \
+            --verify-tag
+
+      - name: Verify anonymous asset downloads
+        run: |
+          set -euo pipefail
+          downloads="$(mktemp -d)"
+          trap 'rm -rf "$downloads"' EXIT
+          for asset in compose.selfhost.yaml install.sh; do
+            curl -q --fail --location --retry 6 --retry-all-errors --retry-delay 5 \
+              --connect-timeout 10 --max-time 60 \
+              "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/$asset" \
+              --output "$downloads/$asset"
+            cmp "$asset" "$downloads/$asset"
+          done
+
+  # :latest moves to the index digest this run accepted, never to whatever :<version> names when
+  # this runs: each must still resolve to the manifest's index, all checked before any moves. Then
+  # GitHub's latest release, install.sh's default version, moves last.
+  promote:
+    name: Promote the stable release
+    needs: [pins, finalize-images, npm, github-release]
+    # The release channel's lock, as finalize-images holds it. The floor is read again here, inside
+    # the lock: it may have moved while this run waited.
+    concurrency:
+      group: sealant-release-channel
+      cancel-in-progress: false
+      queue: max
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-manifest
+          path: release
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Needs npm >= 11 for the registry address the floor reads (`npm config get registry`).
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+
+      # tooling/scripts/release-publication.test.mjs runs this step as written, against a stub npm
+      # registry, a stub GitHub API and a stand-in docker and gh.
+      - name: Move latest to this release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANIFEST: ${{ github.workspace }}/release/release-manifest.json
+          VERSION: ${{ needs.pins.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Retried reads wait 1500 ms × attempt (registry_get, github_latest_release). Only a test sets
+          # RELEASE_TEST_RETRY_MS, never a workflow; the log says which delays this run used.
+          if [[ -z ${RELEASE_TEST_RETRY_MS:-} ]]; then
+            echo "retry backoff: production (1500 ms × attempt)"
+          elif [[ $RELEASE_TEST_RETRY_MS =~ ^(0|[1-9][0-9]{0,5})$ ]]; then
+            echo "retry backoff: overridden to $RELEASE_TEST_RETRY_MS ms × attempt"
+          else
+            echo "::error::RELEASE_TEST_RETRY_MS is not a whole number of milliseconds."
+            exit 1
+          fi
+          # --- floor ---
+          # release-publication.test.mjs runs this block as written, against a stub npm registry, a stub
+          # GitHub API and a stand-in docker. A stable release's floor is the highest of its markers, compared
+          # as numbers X.Y.Z: npm's `latest` for each of FLOOR_PACKAGES, the tag of GitHub's latest release,
+          # and the org.opencontainers.image.version label on every platform of each ghcr :latest in
+          # FLOOR_IMAGES. A marker that does not exist adds nothing; one that cannot be read, or is present
+          # but not a plain X.Y.Z, fails the job: never read as no floor. Each reader validates the whole value
+          # it read before it is compared or joined to its source. A part of X.Y.Z has at most 9 digits, so
+          # Bash's 64-bit arithmetic compares every version this accepts; a longer part fails as not plain.
+          # :X.Y tags are not markers: nothing writes them.
+          shopt -s inherit_errexit
+          PLAIN_VERSION='^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$'
+          FLOOR_PACKAGES=(@sealant/api-contracts @sealant/sdk)
+          FLOOR_IMAGES=(sealant-api sealant-worker sealant-ssh-gateway sealant-web)
+
+          # GET <path> from the registry, retried; a failure or a 404 stops the job: never guessed.
+          registry_get() {
+            # shellcheck disable=SC2016 # JavaScript template literals, not shell expansions
+            node -e '
+              const [where, registry] = process.argv.slice(1);
+              const url = new URL(where, registry.endsWith("/") ? registry : `${registry}/`);
+              const run = async () => {
+                for (let attempt = 1; attempt <= 4; attempt += 1) {
+                  try {
+                    const response = await fetch(url, { headers: { accept: "application/json" } });
+                    if (response.ok) return process.stdout.write(JSON.stringify(await response.json()));
+                    if (attempt === 4) throw new Error(`the registry answered ${response.status} for ${where}`);
+                  } catch (error) {
+                    if (attempt === 4) {
+                      console.error(`::error::${error.message}`);
+                      process.exit(1);
+                    }
+                  }
+                  await new Promise((resolve) => setTimeout(resolve, attempt * Number(process.env.RELEASE_TEST_RETRY_MS || 1500)));
+                }
+              };
+              run();
+            ' -- "$1" "$(npm config get registry)"
+          }
+
+          # <value> is a plain X.Y.Z (each part at most 9 digits), or the job fails naming <marker>.
+          plain_version() {
+            if [[ ! $1 =~ $PLAIN_VERSION ]]; then
+              echo "::error::$2 is '$1', not a plain X.Y.Z release; the floor cannot be read." >&2
+              return 1
+            fi
+          }
+
+          # npm's `latest` for <package>, validated, or nothing when the package has no `latest` dist-tag. The
+          # answer must be a JSON object; a `latest` that is null, empty, not a string or not a plain X.Y.Z fails.
+          npm_latest() {
+            local tags
+            tags=$(registry_get "-/package/${1/\//%2f}/dist-tags")
+            # shellcheck disable=SC2016 # JavaScript template literals, not shell expansions
+            node -e '
+              const [plain, what] = process.argv.slice(1);
+              const fail = (why) => {
+                console.error(`::error::${what} ${why}; the floor cannot be read.`);
+                process.exit(1);
+              };
+              let tags;
+              try {
+                tags = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+              } catch {
+                fail("is not JSON");
+              }
+              if (tags === null || typeof tags !== "object" || Array.isArray(tags)) fail("is not a JSON object");
+              if (!Object.hasOwn(tags, "latest")) process.exit(0);
+              if (typeof tags.latest !== "string" || !new RegExp(plain).test(tags.latest))
+                fail(`latest is ${JSON.stringify(tags.latest)}, not a plain X.Y.Z release`);
+              process.stdout.write(tags.latest);
+            ' "$PLAIN_VERSION" "npm:$1 dist-tags" <<<"$tags"
+          }
+
+          # -1, 0 or 1 as plain X.Y.Z <a> is below, equal to or above <b>.
+          version_order() {
+            local a b i
+            IFS=. read -r -a a <<<"$1"
+            IFS=. read -r -a b <<<"$2"
+            for i in 0 1 2; do
+              if ((10#${a[i]} < 10#${b[i]})); then echo -1 && return; fi
+              if ((10#${a[i]} > 10#${b[i]})); then echo 1 && return; fi
+            done
+            echo 0
+          }
+
+          # The tag of the repository's latest GitHub release, without its v, or nothing when it has none: only
+          # a 404 is none. A tag that is not exactly vX.Y.Z fails; other answers are retried, then fail.
+          github_latest_release() {
+            # shellcheck disable=SC2016 # JavaScript template literals, not shell expansions
+            node -e '
+              const [api, repository, token, plain] = process.argv.slice(1);
+              const url = `${api}/repos/${repository}/releases/latest`;
+              const headers = { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" };
+              if (token) headers.authorization = `Bearer ${token}`;
+              const run = async () => {
+                for (let attempt = 1; attempt <= 4; attempt += 1) {
+                  try {
+                    const response = await fetch(url, { headers });
+                    if (response.status === 404) return;
+                    if (response.ok) {
+                      const tag = (await response.json())?.tag_name;
+                      if (typeof tag !== "string" || !tag.startsWith("v") || !new RegExp(plain).test(tag.slice(1)))
+                        throw new Error(`the latest release is tagged ${JSON.stringify(tag)}, not vX.Y.Z`);
+                      return process.stdout.write(tag.slice(1));
+                    }
+                    if (attempt === 4) throw new Error(`GitHub answered ${response.status} for ${url}`);
+                  } catch (error) {
+                    if (attempt === 4 || error.message.startsWith("the latest release")) {
+                      console.error(`::error::${error.message}`);
+                      process.exit(1);
+                    }
+                  }
+                  await new Promise((resolve) => setTimeout(resolve, attempt * Number(process.env.RELEASE_TEST_RETRY_MS || 1500)));
+                }
+              };
+              run();
+            ' -- "${GITHUB_API_URL:-https://api.github.com}" "$GITHUB_REPOSITORY" "${GH_TOKEN:-}" "$PLAIN_VERSION"
+          }
+
+          # Reads <ref> with `imagetools inspect --format <format>` into stdout, prints nothing for a tag that
+          # does not exist, and fails on anything else. Absent is buildx's not-found line and nothing else:
+          # all of stderr, trailing newlines aside, is exactly `ERROR: <ref>: not found`, and stdout is empty.
+          inspect_ref() {
+            local out err status=0 errors
+            errors=$(mktemp)
+            out=$(docker buildx imagetools inspect "$1" --format "$2" 2>"$errors") || status=$?
+            err=$(<"$errors")
+            rm -f "$errors"
+            if ((status == 0)) && [[ -n $out ]]; then
+              printf '%s\n' "$out"
+              return 0
+            fi
+            if ((status != 0)) && [[ -z $out && $err == "ERROR: $1: not found" ]]; then return 0; fi
+            printf '%s\n' "$err" >&2
+            echo "::error::Could not read $1; nothing was written." >&2
+            return 1
+          }
+
+          # The digest <ref> names, or nothing when it does not exist.
+          tag_digest() {
+            local out digest
+            out=$(inspect_ref "$1" '{{json .Manifest}}')
+            [[ -n $out ]] || return 0
+            digest=$(jq -r '.digest // ""' <<<"$out")
+            if [[ ! $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::$1 answered without a digest." >&2
+              return 1
+            fi
+            printf '%s\n' "$digest"
+          }
+
+          # The org.opencontainers.image.version every platform of <ref> carries, or nothing when <ref> does
+          # not exist. Each platform's label must be the whole string X.Y.Z, and all must be the same.
+          image_version() {
+            local out
+            out=$(inspect_ref "$1" '{{json .Image}}')
+            [[ -n $out ]] || return 0
+            # One platform answers its config; an index answers each platform's config by platform.
+            # shellcheck disable=SC2016 # JavaScript template literals, not shell expansions
+            node -e '
+              const [plain, ref] = process.argv.slice(1);
+              const fail = (why) => {
+                console.error(`::error::${ref} ${why}; the floor cannot be read.`);
+                process.exit(1);
+              };
+              let image;
+              try {
+                image = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+              } catch {
+                fail("answered an image config that is not JSON");
+              }
+              if (image === null || typeof image !== "object" || Array.isArray(image)) fail("answered no image config");
+              const configs = Object.hasOwn(image, "config") ? [image] : Object.values(image);
+              if (configs.length === 0) fail("answered no platform");
+              const labels = configs.map((config) => config?.config?.Labels?.["org.opencontainers.image.version"]);
+              const bad = labels.some((label) => typeof label !== "string" || !new RegExp(plain).test(label));
+              if (bad || labels.some((label) => label !== labels[0]))
+                fail(`carries no single plain X.Y.Z org.opencontainers.image.version (${labels.map((label) => JSON.stringify(label ?? null)).join(", ")})`);
+              process.stdout.write(labels[0]);
+            ' "$PLAIN_VERSION" "$1" <<<"$out"
+          }
+
+          # The floor of a stable release whose images are ghcr.io/<owner>/<FLOOR_IMAGES>: `<version> <marker>`
+          # of the highest marker, or nothing when none exists. Every version here was validated by its reader;
+          # versions and markers are kept apart until the result is printed.
+          stable_floor() {
+            local owner=$1 value package image i best=-1
+            local -a versions=() sources=()
+            for package in "${FLOOR_PACKAGES[@]}"; do
+              value=$(npm_latest "$package")
+              if [[ -n $value ]]; then versions+=("$value") && sources+=("npm:$package@latest"); fi
+            done
+            value=$(github_latest_release)
+            if [[ -n $value ]]; then versions+=("$value") && sources+=("github:$GITHUB_REPOSITORY/releases/latest"); fi
+            for image in "${FLOOR_IMAGES[@]}"; do
+              value=$(image_version "ghcr.io/$owner/$image:latest")
+              if [[ -n $value ]]; then versions+=("$value") && sources+=("ghcr.io/$owner/$image:latest"); fi
+            done
+            for i in "${!versions[@]}"; do
+              plain_version "${versions[i]}" "${sources[i]}"
+              if ((best < 0)) || [[ $(version_order "${versions[i]}" "${versions[best]}") == 1 ]]; then best=$i; fi
+            done
+            if ((best >= 0)); then printf '%s %s\n' "${versions[best]}" "${sources[best]}"; fi
+          }
+
+          # What a stable <version> may do against the floor line `<floor> <marker>` (empty: no floor):
+          # `publish` above it, `retry` at it, and a refusal below it.
+          stable_guard() {
+            local version=$1 floor=${2%% *} marker=${2#* }
+            plain_version "$version" "the release"
+            if [[ -z $2 ]]; then
+              echo publish
+              return
+            fi
+            plain_version "$floor" "$marker"
+            case $(version_order "$version" "$floor") in
+              1) echo publish ;;
+              0) echo retry ;;
+              *)
+                echo "::error::$version is below the stable floor $floor ($marker). A stable release never moves npm latest, ghcr :latest or GitHub's latest release backwards, so a backport such as 0.38.2 after 0.39.0 is refused on purpose: publishing one under its own dist-tag is a decision not yet made. Nothing was published or moved." >&2
+                return 1
+                ;;
+            esac
+          }
+          # --- end floor ---
+
+          if ! jq -e --arg version "$VERSION" --arg commit "$GITHUB_SHA" \
+            '.version == $version and .commit == $commit' "$MANIFEST" >/dev/null; then
+            echo "::error::The release manifest is not this release's ($VERSION from $GITHUB_SHA)."
+            exit 1
+          fi
+          # Every read before any write: the floor, each :<version>, each :latest.
+          floor=$(stable_floor "$GITHUB_REPOSITORY_OWNER")
+          guard=$(stable_guard "$VERSION" "$floor")
+          echo "Stable floor: ${floor:-none}; $VERSION may $guard."
+          declare -A index latest
+          for image in "${FLOOR_IMAGES[@]}"; do
+            repository="ghcr.io/$GITHUB_REPOSITORY_OWNER/$image"
+            index[$image]=$(jq -r --arg image "$image" '.images[$image].index // ""' "$MANIFEST")
+            if [[ ! ${index[$image]} =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::The release manifest records no index digest for $image."
+              exit 1
+            fi
+            current=$(tag_digest "$repository:$VERSION")
+            if [[ $current != "${index[$image]}" ]]; then
+              echo "::error::$repository:$VERSION resolves to ${current:-nothing}, not ${index[$image]}, the index this run accepted. latest stays."
+              exit 1
+            fi
+            latest[$image]=$(tag_digest "$repository:latest")
+          done
+          # At the floor (a same-version retry), only a :latest not yet this run's index moves.
+          for image in "${FLOOR_IMAGES[@]}"; do
+            repository="ghcr.io/$GITHUB_REPOSITORY_OWNER/$image"
+            if [[ $guard == retry && ${latest[$image]} == "${index[$image]}" ]]; then
+              echo "$repository:latest is already ${index[$image]}."
+              continue
+            fi
+            docker buildx imagetools create --tag "$repository:latest" "$repository@${index[$image]}"
+          done
+          # Last: GitHub's latest release is what install.sh installs by default.
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --latest

@@ -60,6 +60,7 @@ catalog:
   vitest: 3.2.7
   ws: ^8.18.3
   wrangler: ^4.78.0
+  yaml: ^2.9.0
   zod: ^4.1.12
 
 # Our own sealantd packages, published only by sealant-sh/sealantd's workflows with provenance, are
