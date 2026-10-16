@@ -127,10 +127,13 @@ The pieces:
   from a `vX.Y.Z` tag.
 - **Next image tags are written once.** `image-tag` computes this run's index digest
   (`imagetools create --dry-run`) and reads `<image>-next:<version>` before writing it. At that
-  digest the tag is left alone, so re-running failed jobs is safe; at any other digest the step
-  refuses and writes nothing, so a re-run of all jobs, which builds a new index, fails there. Only
+  digest the tag is left alone, so re-running failed jobs is safe while the run's artifacts are
+  still kept; at any other digest the step refuses and writes nothing. A re-run of all jobs rebuilds
+  the images and fails there if the rebuilt index differs (identical bytes are a no-op). Only
   buildx's exact `ERROR: <ref>: not found` counts as absent; any other read error fails the step.
-  After a create, a second read decides: this run's digest passes, anything else fails.
+  After a create, a second read decides: this run's digest passes, anything else fails; a create
+  whose metadata names another digest only warns, since the second read decides. The step serializes
+  nothing outside this workflow: a manual or external write to the tag is not covered.
 - **Pinning sealantd**, a release or a prerelease, is one command:
   `node tooling/scripts/pin-sealantd.mjs <version>`. It writes the image as `tag@sha256:<digest>`
   (`ghcr.io/sealant-sh/sealantd:X.Y.Z@…`, or `sealantd-next:X.Y.Z-next.N@…`) into
