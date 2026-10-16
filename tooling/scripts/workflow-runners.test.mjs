@@ -82,3 +82,29 @@ test("the guard refuses every way of naming a box runner", () => {
     "a hosted matrix row",
   );
 });
+
+/** The text of each top-level job in a workflow, by job id. */
+const jobBlocks = (text) =>
+  new Map(
+    text
+      .split(/\n(?=  [a-z0-9-]+:\n)/)
+      .map((part) => [part.match(/^ {2}([a-z0-9-]+):\n/)?.[1], part])
+      .filter(([job]) => job !== undefined),
+  );
+
+const workflowText = (file) =>
+  readFile(new URL(`../../.github/workflows/${file}`, import.meta.url), "utf8");
+const runnerOf = (block) => runnersIn(block).at(0)?.labels.join(", ");
+
+test("pull requests run the unit suite where Next does", async () => {
+  const [ci, next] = await Promise.all([workflowText("ci.yml"), workflowText("next.yml")]);
+  // The jobs that run the full suite, wherever they are: each must use next.yml test's runner.
+  const suite = /\n\s+run: pnpm exec turbo test --force\n/;
+  const nextTest = jobBlocks(next).get("test");
+  assert.match(nextTest ?? "", suite, "next.yml's test job runs the full suite");
+  const prJobs = [...jobBlocks(ci)].filter(([, block]) => suite.test(block));
+  assert.ok(prJobs.length > 0, "ci.yml runs the full suite on pull requests");
+  for (const [job, block] of prJobs) {
+    assert.equal(runnerOf(block), runnerOf(nextTest), `ci.yml ${job} runs the suite elsewhere`);
+  }
+});

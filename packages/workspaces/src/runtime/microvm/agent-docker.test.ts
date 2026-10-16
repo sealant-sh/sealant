@@ -305,7 +305,10 @@ const health = async (agent: Agent) => {
   return { status: response.status, body: parsed, docker: parsed.services.docker };
 };
 
-const waitFor = async (predicate: () => Promise<boolean>, timeoutMs = 3_000): Promise<void> => {
+// A deadline for a condition the fake agent reaches in well under a second when the machine is free.
+// It returns as soon as the condition holds; the deadline only bounds a real failure. 3 s missed on
+// a busy 4-vCPU hosted runner in the middle of the full suite (#374).
+const waitFor = async (predicate: () => Promise<boolean>, timeoutMs = 15_000): Promise<void> => {
   const deadline = Date.now() + timeoutMs;
   while (!(await predicate())) {
     if (Date.now() > deadline) throw new Error("condition not met in time");
