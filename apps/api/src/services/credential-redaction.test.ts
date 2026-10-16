@@ -360,12 +360,66 @@ const shapes = (bytes: number) => [
   `${"a%40".repeat(bytes / 4)}`,
 ];
 
-/** How long one `redactCredentialsInText` call takes, in milliseconds. */
-const time = (text: string) => {
-  const start = performance.now();
-  redaction.redactCredentialsInText(text);
-  return performance.now() - start;
+/**
+ * The work one `redactCredentialsInText` call does, counted instead of timed so the machine's speed
+ * plays no part. A step is a character read: one for each `charAt`, the length of each `slice` and
+ * `toLowerCase`, and for each regular-expression search the characters it moved across, from where
+ * it started (`lastIndex`, for a global or sticky one) to the end of its match or of the input;
+ * `test` and `replace` search through `RegExp.prototype.exec` once it is replaced. The built-ins
+ * are wrapped only for the one synchronous call, so the module under test runs unchanged.
+ *
+ * A search's own backtracking stays out of sight, so `searches` names each expression that searched
+ * more characters at once than a name holds (64), for `LINEAR_SEARCHES` to vouch for.
+ */
+/* oxlint-disable no-extend-native -- each built-in is replaced for one call and then restored. */
+const steps = (text: string) => {
+  const { charAt, slice, toLowerCase } = String.prototype;
+  const { exec } = RegExp.prototype;
+  let count = 0;
+  const searches = new Set<string>();
+  String.prototype.charAt = function (this: string, position: number) {
+    count += 1;
+    return charAt.call(this, position);
+  };
+  String.prototype.slice = function (this: string, start?: number, end?: number) {
+    const part = slice.call(this, start, end);
+    count += Math.max(part.length, 1);
+    return part;
+  };
+  String.prototype.toLowerCase = function (this: string) {
+    count += Math.max(this.length, 1);
+    return toLowerCase.call(this);
+  };
+  RegExp.prototype.exec = function (this: RegExp, input: string) {
+    const from = this.global || this.sticky ? this.lastIndex : 0;
+    const match = exec.call(this, input);
+    const searched = (match === null ? input.length : match.index + match[0].length) - from;
+    count += Math.max(searched, 1);
+    if (searched > 64) searches.add(`/${this.source}/${this.flags}`);
+    return match;
+  };
+  try {
+    redaction.redactCredentialsInText(text);
+  } finally {
+    String.prototype.charAt = charAt;
+    String.prototype.slice = slice;
+    String.prototype.toLowerCase = toLowerCase;
+    RegExp.prototype.exec = exec;
+  }
+  return { count, searches: [...searches] };
 };
+/* oxlint-enable no-extend-native */
+
+/**
+ * The expressions allowed to search the text at length, each linear by construction. A query pair
+ * starts only at a separator, and its name and value exclude the separators, so an attempt reads at
+ * most to the next one. An auth scheme is a literal of at most six characters, then blanks it never
+ * gives back. An expression added or changed here needs the same argument.
+ */
+const LINEAR_SEARCHES = [
+  String.raw`/([?&;])([^=&\s#?;]+)=([^&\s#;"'<>)\\]*)/g`,
+  String.raw`/\b(bearer|basic)[ \t]+/gi`,
+];
 
 describe("observe", () => {
   const SECRET = "review347-r5-secret-marker";
@@ -475,9 +529,16 @@ describe("redactCredentialsInText", () => {
   });
 
   it("costs linear time on adversarial text", () => {
-    // Quadratic matching took 16-97 ms at 8 KiB and would take minutes at 1 MiB.
-    for (const text of shapes(8 * 1024)) expect(time(text)).toBeLessThan(25);
-    for (const text of shapes(1024 * 1024)) expect(time(text)).toBeLessThan(1000);
+    // Quadratic matching took 16-97 ms at 8 KiB and would take minutes at 1 MiB. Counted, a scan
+    // that restarts at each position reads each character more often as the text grows; this one
+    // reads each at most 19 times at every size, so 32 leaves room without hiding growth.
+    for (const bytes of [1024, 8 * 1024, 64 * 1024]) {
+      for (const text of shapes(bytes)) {
+        const work = steps(text);
+        expect(work.count, text.slice(0, 12)).toBeLessThanOrEqual(32 * text.length);
+        for (const search of work.searches) expect(LINEAR_SEARCHES).toContain(search);
+      }
+    }
   });
 });
 
