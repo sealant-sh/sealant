@@ -187,7 +187,7 @@ const world = (options: { readonly pathPrefix?: string } = {}) => {
     mkdirSync(path, { mode: 0o700 });
     return path;
   };
-  return { root, state, env, scriptOf, run, marker, markerPath, home, nextToken };
+  return { root, state, skel: emptySkel, env, scriptOf, run, marker, markerPath, home, nextToken };
 };
 
 const GEN_A = "generation-alice-1";
@@ -714,7 +714,7 @@ forEachShell("buildCredentialFileWriteScript for a launch's credentialsHome", ()
         mode: "600",
         home: { uid, gid, generation: GEN_A, providers: ["claude", "github"] },
       },
-      { stateDir: w.state, parentOwnerUid: uid },
+      { stateDir: w.state, parentOwnerUid: uid, skel: w.skel },
     );
     // The adapters pipe `contentBase64` as it is; a launch delivered again writes again.
     const deliveries = [1, 2].map(() =>
@@ -726,6 +726,8 @@ forEachShell("buildCredentialFileWriteScript for a launch's credentialsHome", ()
     expect(read(join(home, ".config/gh/hosts.yml"))).toBe(hostsYml);
     expect(mode(join(home, ".claude/.credentials.json"))).toBe(0o600);
     expect(w.marker(home)).toBe(GEN_A);
+    // Seeded from the test's empty skeleton, not this machine's /etc/skel.
+    expect(readdirSync(home).sort()).toEqual([".claude", ".config"]);
   });
 
   it("refuses a home that is not one", async () => {
