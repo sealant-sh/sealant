@@ -8,3 +8,7 @@ paths:
       # GitHub supports `concurrency.queue` since 2026-05-07; actionlint 1.7.12 does not know it yet
       # (rhysd/actionlint#657). Drop this once it does.
       - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/release.yml:
+    ignore:
+      # The release channel's lock (finalize-images, npm, promote): as next.yml above.
+      - 'unexpected key "queue" for "concurrency" section'
