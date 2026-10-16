@@ -13,10 +13,15 @@ const createAdapterError = (code: string, message: string): Error & { code: stri
 export const buildCredentialFileWriteScript = (
   file: CredentialFileInjection,
   /**
-   * For tests: where a home's marker and lock live (default `/run/sealant-homes`), and the uid its
-   * parent must belong to (default root).
+   * For tests: where a home's marker and lock live (default `/run/sealant-homes`), the uid its
+   * parent must belong to (default root), and the skeleton a home it makes is seeded from (default
+   * `/etc/skel`).
    */
-  options: { readonly stateDir?: string; readonly parentOwnerUid?: number } = {},
+  options: {
+    readonly stateDir?: string;
+    readonly parentOwnerUid?: number;
+    readonly skel?: string;
+  } = {},
 ): string => {
   if (file.home !== undefined) {
     // A launch's own home, every login in one exec: made for its owner, taken with the launch's
@@ -31,6 +36,7 @@ export const buildCredentialFileWriteScript = (
       removes: [],
       ...(options.stateDir === undefined ? {} : { stateDir: options.stateDir }),
       ...(options.parentOwnerUid === undefined ? {} : { parentOwnerUid: options.parentOwnerUid }),
+      ...(options.skel === undefined ? {} : { skel: options.skel }),
     });
   }
   if (!/^[A-Za-z0-9_$/.-]+$/.test(file.path)) {

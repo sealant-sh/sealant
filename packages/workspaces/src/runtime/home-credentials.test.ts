@@ -13,6 +13,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -151,6 +152,11 @@ const world = (options: { readonly pathPrefix?: string } = {}) => {
     .join("");
   const env = { ...process.env, PATH: `${prefix}${process.env["PATH"] ?? SYSTEM_PATH}` };
   const state = join(root, "state");
+  // A home the script makes is seeded from the skeleton. This machine's /etc/skel is not the test's:
+  // GitHub's runner images keep 816 MB of toolchains there, and a cold copy of it took 23–38 s
+  // (sealant#370). A test seeds from this empty one unless it passes its own.
+  const emptySkel = join(root, "skel-empty");
+  mkdirSync(emptySkel, { mode: 0o755 });
   let issued = 0;
   const nextToken = () => {
     issued += 1;
@@ -160,6 +166,7 @@ const world = (options: { readonly pathPrefix?: string } = {}) => {
     buildHomeCredentialScript({
       ...input,
       token: input.token ?? nextToken(),
+      skel: input.skel ?? emptySkel,
       stateDir: state,
       parentOwnerUid: input.parentOwnerUid ?? uid,
       // Images keep node on the fixed system PATH; this machine's may be elsewhere.
@@ -180,7 +187,7 @@ const world = (options: { readonly pathPrefix?: string } = {}) => {
     mkdirSync(path, { mode: 0o700 });
     return path;
   };
-  return { root, state, env, scriptOf, run, marker, markerPath, home, nextToken };
+  return { root, state, skel: emptySkel, env, scriptOf, run, marker, markerPath, home, nextToken };
 };
 
 const GEN_A = "generation-alice-1";
@@ -554,6 +561,8 @@ forEachShell("buildHomeCredentialScript", () => {
     expect(lstatSync(home).uid).toBe(uid);
     // A parent it had to make stays reachable.
     expect(mode(join(home, ".."))).toBe(0o755);
+    // Seeded from the test's empty skeleton, not this machine's /etc/skel.
+    expect(readdirSync(home)).toEqual([".claude"]);
   });
 
   it("seeds a home it makes from the skeleton, and keeps the home 0700", () => {
@@ -705,7 +714,7 @@ forEachShell("buildCredentialFileWriteScript for a launch's credentialsHome", ()
         mode: "600",
         home: { uid, gid, generation: GEN_A, providers: ["claude", "github"] },
       },
-      { stateDir: w.state, parentOwnerUid: uid },
+      { stateDir: w.state, parentOwnerUid: uid, skel: w.skel },
     );
     // The adapters pipe `contentBase64` as it is; a launch delivered again writes again.
     const deliveries = [1, 2].map(() =>
@@ -717,6 +726,8 @@ forEachShell("buildCredentialFileWriteScript for a launch's credentialsHome", ()
     expect(read(join(home, ".config/gh/hosts.yml"))).toBe(hostsYml);
     expect(mode(join(home, ".claude/.credentials.json"))).toBe(0o600);
     expect(w.marker(home)).toBe(GEN_A);
+    // Seeded from the test's empty skeleton, not this machine's /etc/skel.
+    expect(readdirSync(home).toSorted()).toEqual([".claude", ".config"]);
   });
 
   it("refuses a home that is not one", async () => {
