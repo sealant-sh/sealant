@@ -13,6 +13,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -151,6 +152,11 @@ const world = (options: { readonly pathPrefix?: string } = {}) => {
     .join("");
   const env = { ...process.env, PATH: `${prefix}${process.env["PATH"] ?? SYSTEM_PATH}` };
   const state = join(root, "state");
+  // A home the script makes is seeded from the skeleton. This machine's /etc/skel is not the test's:
+  // GitHub's runner images keep 816 MB of toolchains there, and a cold copy of it took 23–38 s
+  // (sealant#370). A test seeds from this empty one unless it passes its own.
+  const emptySkel = join(root, "skel-empty");
+  mkdirSync(emptySkel, { mode: 0o755 });
   let issued = 0;
   const nextToken = () => {
     issued += 1;
@@ -160,6 +166,7 @@ const world = (options: { readonly pathPrefix?: string } = {}) => {
     buildHomeCredentialScript({
       ...input,
       token: input.token ?? nextToken(),
+      skel: input.skel ?? emptySkel,
       stateDir: state,
       parentOwnerUid: input.parentOwnerUid ?? uid,
       // Images keep node on the fixed system PATH; this machine's may be elsewhere.
@@ -554,6 +561,8 @@ forEachShell("buildHomeCredentialScript", () => {
     expect(lstatSync(home).uid).toBe(uid);
     // A parent it had to make stays reachable.
     expect(mode(join(home, ".."))).toBe(0o755);
+    // Seeded from the test's empty skeleton, not this machine's /etc/skel.
+    expect(readdirSync(home)).toEqual([".claude"]);
   });
 
   it("seeds a home it makes from the skeleton, and keeps the home 0700", () => {
