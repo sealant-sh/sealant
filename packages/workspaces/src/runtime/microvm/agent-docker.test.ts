@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import { WebSocket } from "ws";
 
 import {
@@ -314,6 +314,23 @@ const waitFor = async (predicate: () => Promise<boolean>, timeoutMs = 15_000): P
     if (Date.now() > deadline) throw new Error("condition not met in time");
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+};
+
+/**
+ * The time each phase of a case took, printed only when the case ran over 3 s or failed. The
+ * probe-recovery case takes about 2 s, but on GitHub's 4-vCPU runners it sometimes stalls past
+ * 3 s in the full suite (#374); a stalled run then names the phase it stalled in.
+ */
+const phaseTimes = () => {
+  const started = Date.now();
+  const marks: string[] = [];
+  onTestFinished(({ task }) => {
+    const elapsed = Date.now() - started;
+    if (elapsed > 3_000 || task.result?.state === "fail") {
+      console.error(`[phase times, #374] ${elapsed} ms in all: ${marks.join(" · ")}`);
+    }
+  });
+  return (phase: string) => marks.push(`${phase} ${Date.now() - started} ms`);
 };
 
 const readLines = async (file: string): Promise<ReadonlyArray<string>> => {
@@ -654,10 +671,12 @@ describe("microvm agent guest-local Docker", () => {
   });
 
   it("tolerates one missed runtime probe, resets on recovery, then fails sustained loss", async () => {
+    const phase = phaseTimes();
     const agent = await startAgent({
       SEALANT_MICROVM_DOCKER_PROBE_INTERVAL_MS: "200",
       FAKE_DOCKER_PROBE_DELAY_MS: "80",
     });
+    phase("agent started");
     expect(await runV2(agent)).toMatchObject({ status: 200 });
     await writeFile(agent.readyFile, "ready");
     // A capture-sourced launch: its hooks flush (a VM that boots no capture source has nothing to
@@ -665,15 +684,19 @@ describe("microvm agent guest-local Docker", () => {
     expect(
       await launchV2(agent, { bootEnv: { SEALANT_WORKSPACE_SOURCE: "capture" } }),
     ).toMatchObject({ status: 200 });
+    phase("launched");
     await waitFor(async () => (await health(agent)).status === 200);
+    phase("healthy");
 
     const initialProbeCount = (await readLines(agent.probeRecord)).length;
     await unlink(agent.probeGateFile);
     await writeFile(agent.probeSequenceFile, "F");
     await waitFor(async () => (await readLines(agent.probeRecord)).length > initialProbeCount);
+    phase("missed probe recorded");
     const resumes = [hook(agent, "resume"), hook(agent, "resume")];
     await writeFile(agent.probeGateFile, "open");
     const concurrentResume = await Promise.all(resumes);
+    phase("resumes answered");
     expect(concurrentResume.map(({ status }) => status)).toEqual([503, 503]);
     expect(await readLines(agent.probeRecord)).toHaveLength(initialProbeCount + 1);
     expect(await health(agent)).toMatchObject({
@@ -683,11 +706,13 @@ describe("microvm agent guest-local Docker", () => {
 
     await writeFile(agent.probeSequenceFile, "S");
     await waitFor(async () => (await readLines(agent.probeRecord)).length > initialProbeCount + 1);
+    phase("recovered");
     expect(await hook(agent, "resume")).toMatchObject({ status: 200 });
     expect(await health(agent)).toMatchObject({ status: 200 });
 
     await writeFile(agent.probeSequenceFile, "FFF");
     await waitFor(async () => (await health(agent)).docker.status === "failed");
+    phase("sustained loss failed");
     expect(await health(agent)).toMatchObject({
       status: 503,
       docker: { status: "failed", reason: "probe-failed", code: null, signal: null },
@@ -701,6 +726,7 @@ describe("microvm agent guest-local Docker", () => {
       socket.once("error", (error) => resolve(error.message));
     });
     expect(refusal).toContain("503");
+    phase("control refused");
 
     expect(await hook(agent, "terminate")).toMatchObject({
       status: 200,
