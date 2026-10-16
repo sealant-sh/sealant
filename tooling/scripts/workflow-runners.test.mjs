@@ -83,16 +83,27 @@ test("the guard refuses every way of naming a box runner", () => {
   );
 });
 
-/** The runs-on line of one top-level job in a workflow's text. */
-const jobRunner = (text, job) => {
-  const block = text.split(/\n(?=  [a-z0-9-]+:\n)/).find((part) => part.startsWith(`  ${job}:\n`));
-  assert.ok(block, `the workflow has a ${job} job`);
-  return runnersIn(block).at(0)?.labels.join(", ");
-};
+/** The text of each top-level job in a workflow, by job id. */
+const jobBlocks = (text) =>
+  new Map(
+    text
+      .split(/\n(?=  [a-z0-9-]+:\n)/)
+      .map((part) => [part.match(/^ {2}([a-z0-9-]+):\n/)?.[1], part])
+      .filter(([job]) => job !== undefined),
+  );
 
 test("pull requests run the unit suite where Next does", async () => {
-  const read = (file) => readFile(new URL(`../../.github/workflows/${file}`, import.meta.url), "utf8");
+  const read = (file) =>
+    readFile(new URL(`../../.github/workflows/${file}`, import.meta.url), "utf8");
   const [ci, next] = await Promise.all([read("ci.yml"), read("next.yml")]);
-  assert.match(ci, /run: pnpm exec turbo test --force/);
-  assert.equal(jobRunner(ci, "docker-volume-mounts"), jobRunner(next, "test"));
+  // The jobs that run the full suite, wherever they are: each must use next.yml test's runner.
+  const runnerOf = (block) => runnersIn(block).at(0)?.labels.join(", ");
+  const suite = /\n\s+run: pnpm exec turbo test --force\n/;
+  const nextTest = jobBlocks(next).get("test");
+  assert.match(nextTest ?? "", suite, "next.yml's test job runs the full suite");
+  const prJobs = [...jobBlocks(ci)].filter(([, block]) => suite.test(block));
+  assert.ok(prJobs.length > 0, "ci.yml runs the full suite on pull requests");
+  for (const [job, block] of prJobs) {
+    assert.equal(runnerOf(block), runnerOf(nextTest), `ci.yml ${job} runs the suite elsewhere`);
+  }
 });
