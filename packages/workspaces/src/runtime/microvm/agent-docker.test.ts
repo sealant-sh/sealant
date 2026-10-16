@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 
 import {
@@ -118,7 +118,7 @@ interface Agent {
 
 const runningAgents = new Set<Agent>();
 
-const startAgent = async (extraEnv: Record<string, string> = {}): Promise<Agent> => {
+const startAgent = async (phase: Mark, extraEnv: Record<string, string> = {}): Promise<Agent> => {
   const dir = await mkdtemp(path.join(tmpdir(), "microvm-docker-agent-"));
   const bin = path.join(dir, "bin");
   await mkdir(bin);
@@ -317,43 +317,47 @@ const waitFor = async (predicate: () => Promise<boolean>, timeoutMs = 15_000): P
   }
 };
 
+/** Marks a phase the running case completed (#374). */
+type Mark = (phase: string) => void;
+type OnFinished = (hook: (context: { task: { result?: { state?: string } } }) => void) => void;
+
 /**
- * The phases a case completed and when, printed only when the case ran over 3 s or failed. The
- * probe-recovery case takes about 2 s, but on GitHub's 4-vCPU runners it sometimes stalls past
- * 3 s in the full suite (#374); a stalled run then shows the last phase it completed.
+ * The phases a case completed and when, printed only when the case took over 3 s or failed. The
+ * probe-recovery case takes about 2 s, but on GitHub's 4-vCPU runners cases in this file sometimes
+ * stall past 3 s in the full suite (#374); a stalled case then shows the last phase it completed.
  *
- * On a timeout Vitest aborts the case's signal at the deadline, but the case's promise can run on
- * and onTestFinished only fires after afterEach. So the record freezes at the abort: phases marked
- * later are dropped, and the in-case time stops at the deadline, apart from cleanup.
+ * Each case makes its own recorder from its own context (its signal and its onTestFinished) and
+ * passes it on, so a case that runs on after its timeout can only ever write to its own record. On
+ * a timeout Vitest aborts the signal at the deadline while the case's promise may run on, and
+ * onTestFinished fires only after afterEach: the record freezes at the abort, so later phases are
+ * dropped. The 3 s threshold uses the time the case finished, cleanup included, and says so.
  */
 export const phaseTimes = (
   signal: AbortSignal,
-  onFinished: (
-    hook: (context: { task: { result?: { state?: string } } }) => void,
-  ) => void = onTestFinished,
+  onFinished: OnFinished,
   report: (line: string) => void = (line) => console.error(line),
-) => {
-  const started = Date.now();
+  now: () => number = Date.now,
+): Mark => {
+  const started = now();
   const marks: string[] = [];
   let timedOut: { at: number; marks: readonly string[] } | undefined;
   signal.addEventListener(
     "abort",
     () => {
-      timedOut = { at: Date.now() - started, marks: [...marks] };
+      timedOut = { at: now() - started, marks: [...marks] };
     },
     { once: true },
   );
   onFinished(({ task }) => {
-    const finished = Date.now() - started;
-    const inCase = timedOut?.at ?? Number(marks.at(-1)?.match(/ (\d+) ms$/)?.[1] ?? finished);
-    if (timedOut === undefined && inCase <= 3_000 && task.result?.state !== "fail") return;
+    const finished = now() - started;
+    if (timedOut === undefined && finished <= 3_000 && task.result?.state !== "fail") return;
     report(
-      `[phase times, #374] ${timedOut ? `timed out at ${timedOut.at} ms` : `ran ${inCase} ms`}` +
-        ` (${finished} ms with cleanup); phases completed: ${(timedOut?.marks ?? marks).join(" · ")}`,
+      `[phase times, #374] ${timedOut ? `timed out at ${timedOut.at} ms, ` : ""}` +
+        `finished at ${finished} ms with cleanup; phases completed: ${(timedOut?.marks ?? marks).join(" · ") || "none"}`,
     );
   });
-  return (phase: string) => {
-    if (timedOut === undefined) marks.push(`${phase} ${Date.now() - started} ms`);
+  return (phase) => {
+    if (timedOut === undefined) marks.push(`${phase} ${now() - started} ms`);
   };
 };
 
@@ -371,22 +375,23 @@ const processExists = (pid: number): boolean => {
   }
 };
 
-/** Marks a completed phase of the running case (#374); every case's record starts in beforeEach. */
-let phase: (label: string) => void = () => {};
-
 describe("microvm agent guest-local Docker", () => {
-  beforeEach(({ signal }) => {
-    phase = phaseTimes(signal);
-  });
-
-  it("rejects a v2 run before 200 when the image is not Docker-capable", async () => {
-    const agent = await startAgent({ SEALANT_MICROVM_DOCKER_CAPABLE: "0" });
+  it("rejects a v2 run before 200 when the image is not Docker-capable", async ({
+    signal,
+    onTestFinished,
+  }) => {
+    const phase = phaseTimes(signal, onTestFinished);
+    const agent = await startAgent(phase, { SEALANT_MICROVM_DOCKER_CAPABLE: "0" });
     expect(await runV2(agent)).toMatchObject({ status: 500 });
     expect(await launchV2(agent)).toMatchObject({ status: 503 });
   });
 
-  it("starts Docker only during validation, returns 503 until cleanup, and blocks a run", async () => {
-    const agent = await startAgent();
+  it("starts Docker only during validation, returns 503 until cleanup, and blocks a run", async ({
+    signal,
+    onTestFinished,
+  }) => {
+    const phase = phaseTimes(signal, onTestFinished);
+    const agent = await startAgent(phase);
 
     expect(await hook(agent, "ready")).toMatchObject({ status: 200 });
     expect(await readLines(agent.dockerdRecord)).toEqual([]);
@@ -409,8 +414,12 @@ describe("microvm agent guest-local Docker", () => {
     expect(await readLines(agent.recordFile)).toEqual([]);
   });
 
-  it("rejects invalid and mismatched service requirements and protocol versions", async () => {
-    const agent = await startAgent();
+  it("rejects invalid and mismatched service requirements and protocol versions", async ({
+    signal,
+    onTestFinished,
+  }) => {
+    const phase = phaseTimes(signal, onTestFinished);
+    const agent = await startAgent(phase);
     expect(
       await hook(agent, "run", {
         runHookPayload: JSON.stringify({ version: 2, runId: "docker-run-1", launchSecret }),
@@ -447,8 +456,12 @@ describe("microvm agent guest-local Docker", () => {
     expect(await launchV2(agent, { extra: true })).toMatchObject({ status: 400 });
   });
 
-  it("reports a missing dockerd binary as spawn-failed without starting sealantd", async () => {
-    const agent = await startAgent({
+  it("reports a missing dockerd binary as spawn-failed without starting sealantd", async ({
+    signal,
+    onTestFinished,
+  }) => {
+    const phase = phaseTimes(signal, onTestFinished);
+    const agent = await startAgent(phase, {
       SEALANT_MICROVM_DOCKERD: path.join(tmpdir(), "missing-dockerd"),
     });
     expect(await runV2(agent)).toMatchObject({ status: 200 });
@@ -461,8 +474,12 @@ describe("microvm agent guest-local Docker", () => {
     expect(await readLines(agent.recordFile)).toEqual([]);
   });
 
-  it("reports a nonzero dockerd exit and a probe readiness timeout", async () => {
-    const exited = await startAgent({
+  it("reports a nonzero dockerd exit and a probe readiness timeout", async ({
+    signal,
+    onTestFinished,
+  }) => {
+    const phase = phaseTimes(signal, onTestFinished);
+    const exited = await startAgent(phase, {
       FAKE_DOCKERD_EXIT_AFTER_MS: "40",
       FAKE_DOCKERD_EXIT_CODE: "17",
       FAKE_DOCKERD_STDERR_BYTES: "512",
@@ -481,7 +498,7 @@ describe("microvm agent guest-local Docker", () => {
     expect((await stat(exited.dockerLog)).mode & 0o777).toBe(0o600);
     expect(JSON.stringify(exitedHealth)).not.toContain("dddddddd");
 
-    const timedOut = await startAgent({ FAKE_DOCKER_PROBE_MODE: "never" });
+    const timedOut = await startAgent(phase, { FAKE_DOCKER_PROBE_MODE: "never" });
     expect(await runV2(timedOut)).toMatchObject({ status: 200 });
     expect(await launchV2(timedOut)).toMatchObject({ status: 200 });
     await waitFor(async () => (await health(timedOut)).docker.status === "failed");
@@ -492,12 +509,16 @@ describe("microvm agent guest-local Docker", () => {
     expect(await readLines(timedOut.recordFile)).toEqual([]);
   });
 
-  it("reports a missing validation binary without exposing a spawn error", async () => {
+  it("reports a missing validation binary without exposing a spawn error", async ({
+    signal,
+    onTestFinished,
+  }) => {
+    const phase = phaseTimes(signal, onTestFinished);
     const missingDockerd = path.join(
       tmpdir(),
       `missing-validation-dockerd-${process.pid}-${Date.now()}`,
     );
-    const agent = await startAgent({ SEALANT_MICROVM_DOCKERD: missingDockerd });
+    const agent = await startAgent(phase, { SEALANT_MICROVM_DOCKERD: missingDockerd });
 
     expect(await hook(agent, "validate")).toMatchObject({ status: 503 });
     await waitFor(async () => agent.output().includes("docker-image-validation-failed"));
@@ -508,9 +529,13 @@ describe("microvm agent guest-local Docker", () => {
     expect(agent.output()).not.toContain(missingDockerd);
   });
 
-  it("emits only allowlisted validation failure facts and keeps raw stderr private", async () => {
+  it("emits only allowlisted validation failure facts and keeps raw stderr private", async ({
+    signal,
+    onTestFinished,
+  }) => {
+    const phase = phaseTimes(signal, onTestFinished);
     const privateText = "PRIVATE_TARGET=do-not-print";
-    const agent = await startAgent({
+    const agent = await startAgent(phase, {
       FAKE_DOCKERD_EXIT_AFTER_MS: "40",
       FAKE_DOCKERD_EXIT_CODE: "17",
       FAKE_DOCKERD_STDERR_TEXT: [
@@ -554,10 +579,14 @@ describe("microvm agent guest-local Docker", () => {
     expect(await readLines(agent.recordFile)).toEqual([]);
   });
 
-  it("reports an unidentified probe failure without printing probe output", async () => {
+  it("reports an unidentified probe failure without printing probe output", async ({
+    signal,
+    onTestFinished,
+  }) => {
+    const phase = phaseTimes(signal, onTestFinished);
     // The probe has to start and exit 1 inside its own timeout, or what is reported is the probe's
     // timeout. A node process can take longer than the default 150 ms to start on a loaded runner.
-    const agent = await startAgent({
+    const agent = await startAgent(phase, {
       FAKE_DOCKER_PROBE_MODE: "never",
       SEALANT_MICROVM_DOCKER_READY_TIMEOUT_MS: "1500",
       SEALANT_MICROVM_DOCKER_PROBE_TIMEOUT_MS: "1400",
@@ -571,8 +600,12 @@ describe("microvm agent guest-local Docker", () => {
     expect(await hook(agent, "validate")).toMatchObject({ status: 500 });
   });
 
-  it("fails validation when bounded Docker cleanup needs SIGKILL", async () => {
-    const agent = await startAgent({
+  it("fails validation when bounded Docker cleanup needs SIGKILL", async ({
+    signal,
+    onTestFinished,
+  }) => {
+    const phase = phaseTimes(signal, onTestFinished);
+    const agent = await startAgent(phase, {
       FAKE_DOCKERD_IGNORE_SIGTERM: "1",
       SEALANT_MICROVM_DOCKER_SHUTDOWN_TIMEOUT_MS: "50",
     });
@@ -594,8 +627,12 @@ describe("microvm agent guest-local Docker", () => {
     expect(await readLines(agent.recordFile)).toEqual([]);
   });
 
-  it("waits for docker info, pins the guest socket, and accepts the launch only once", async () => {
-    const agent = await startAgent({
+  it("waits for docker info, pins the guest socket, and accepts the launch only once", async ({
+    signal,
+    onTestFinished,
+  }) => {
+    const phase = phaseTimes(signal, onTestFinished);
+    const agent = await startAgent(phase, {
       DOCKER_HOST: "tcp://process-env.invalid:2375",
       DOCKER_CONTEXT: "remote",
     });
@@ -701,8 +738,12 @@ describe("microvm agent guest-local Docker", () => {
     expect(await health(agent)).toMatchObject({ status: 200 });
   });
 
-  it("tolerates one missed runtime probe, resets on recovery, then fails sustained loss", async () => {
-    const agent = await startAgent({
+  it("tolerates one missed runtime probe, resets on recovery, then fails sustained loss", async ({
+    signal,
+    onTestFinished,
+  }) => {
+    const phase = phaseTimes(signal, onTestFinished);
+    const agent = await startAgent(phase, {
       SEALANT_MICROVM_DOCKER_PROBE_INTERVAL_MS: "200",
       FAKE_DOCKER_PROBE_DELAY_MS: "80",
     });
@@ -768,8 +809,12 @@ describe("microvm agent guest-local Docker", () => {
     expect(await readLines(agent.recordFile)).toHaveLength(1);
   });
 
-  it("keeps a racing resume failed after dockerd exits without killing sealantd", async () => {
-    const agent = await startAgent({
+  it("keeps a racing resume failed after dockerd exits without killing sealantd", async ({
+    signal,
+    onTestFinished,
+  }) => {
+    const phase = phaseTimes(signal, onTestFinished);
+    const agent = await startAgent(phase, {
       FAKE_DOCKER_PROBE_DELAY_MS: "100",
       SEALANT_MICROVM_DOCKER_PROBE_TIMEOUT_MS: "500",
     });
@@ -799,10 +844,14 @@ describe("microvm agent guest-local Docker", () => {
     ).toBe(true);
   });
 
-  it("stops Docker and what it runs before a recovery boot, and passes sealantd what to spare (review 4 #4)", async () => {
+  it("stops Docker and what it runs before a recovery boot, and passes sealantd what to spare (review 4 #4)", async ({
+    signal,
+    onTestFinished,
+  }) => {
+    const phase = phaseTimes(signal, onTestFinished);
     // A recovery boot runs no user code: the workspace's containers are writers like any other
     // left behind, and a dockerd left running would start them again.
-    const agent = await startAgent({ FAKE_SEALANTD_EXIT75: "1" });
+    const agent = await startAgent(phase, { FAKE_SEALANTD_EXIT75: "1" });
     expect(await runV2(agent)).toMatchObject({ status: 200 });
     await writeFile(agent.readyFile, "ready");
     expect(
@@ -839,8 +888,9 @@ describe("microvm agent guest-local Docker", () => {
     }
   });
 
-  it("stops Docker, sealantd and probe work on SIGTERM", async () => {
-    const agent = await startAgent();
+  it("stops Docker, sealantd and probe work on SIGTERM", async ({ signal, onTestFinished }) => {
+    const phase = phaseTimes(signal, onTestFinished);
+    const agent = await startAgent(phase);
     expect(await runV2(agent)).toMatchObject({ status: 200 });
     await writeFile(agent.readyFile, "ready");
     expect(await launchV2(agent)).toMatchObject({ status: 200 });
@@ -864,40 +914,101 @@ describe("microvm agent guest-local Docker", () => {
 });
 
 describe("phaseTimes (#374)", () => {
-  it("freezes at the timeout: later phases and cleanup are left out of the record", async () => {
+  type Finished = Parameters<OnFinished>[0];
+  /** A recorder with its own abort, finish hook, clock and output, as a case would hold one. */
+  const recorder = (clock: { t: number }) => {
     const abort = new AbortController();
-    let finish: ((context: { task: { result?: { state?: string } } }) => void) | undefined;
     const lines: string[] = [];
+    let finish: Finished | undefined;
     const mark = phaseTimes(
       abort.signal,
       (onDone) => (finish = onDone),
       (line) => lines.push(line),
+      () => clock.t,
     );
-    mark("before the deadline");
-    abort.abort();
+    return {
+      mark,
+      lines,
+      abort: () => abort.abort(),
+      finish: (state: string) => finish?.({ task: { result: { state } } }),
+    };
+  };
+
+  it("freezes at the timeout: later phases are left out, and cleanup is reported apart", () => {
+    const clock = { t: 0 };
+    const a = recorder(clock);
+    clock.t = 40;
+    a.mark("before the deadline");
+    clock.t = 100;
+    a.abort();
     // The case's promise runs on after the deadline, and cleanup takes a while.
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    mark("after the deadline");
-    finish?.({ task: { result: { state: "fail" } } });
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatch(
-      /^\[phase times, #374\] timed out at \d+ ms \(\d+ ms with cleanup\); phases completed: before the deadline \d+ ms$/,
-    );
-    expect(lines[0]).not.toContain("after the deadline");
-    const [, at, withCleanup] = lines[0]!.match(/timed out at (\d+) ms \((\d+) ms/)!;
-    expect(Number(at)).toBeLessThan(Number(withCleanup));
+    clock.t = 250;
+    a.mark("after the deadline");
+    clock.t = 350;
+    a.finish("fail");
+    expect(a.lines).toEqual([
+      "[phase times, #374] timed out at 100 ms, finished at 350 ms with cleanup; phases completed: before the deadline 40 ms",
+    ]);
+  });
+
+  it("a timed-out case that runs on into the next case writes only to its own record", () => {
+    const clock = { t: 0 };
+    const a = recorder(clock);
+    clock.t = 100;
+    a.abort();
+    a.finish("fail");
+    const b = recorder(clock);
+    clock.t = 110;
+    b.mark("B started");
+    clock.t = 250;
+    a.mark("A after its deadline");
+    clock.t = 400;
+    b.finish("fail");
+    expect(b.lines).toHaveLength(1);
+    expect(b.lines[0]).toContain("B started 10 ms");
+    expect(b.lines[0]).not.toContain("A after its deadline");
+  });
+
+  it("a case that passes after 3 s reports, even when its last phase came early", () => {
+    const clock = { t: 0 };
+    const a = recorder(clock);
+    clock.t = 30;
+    a.mark("agent listening");
+    clock.t = 3_104;
+    a.finish("pass");
+    expect(a.lines).toEqual([
+      "[phase times, #374] finished at 3104 ms with cleanup; phases completed: agent listening 30 ms",
+    ]);
+  });
+
+  it("every agent case records into its own recorder, made from its own context", async () => {
+    // A module-level recorder let a case that ran on after its timeout write into the next case's
+    // record (#376 round 2). Each case must make its own from its own signal and onTestFinished,
+    // and hand that one to startAgent.
+    const source = await readFile(fileURLToPath(import.meta.url), "utf8");
+    const agentCases = source
+      .slice(
+        source.indexOf('describe("microvm agent guest-local Docker"'),
+        source.indexOf('describe("phaseTimes (#374)"'),
+      )
+      .split(/\n {2}it\(/)
+      .slice(1);
+    expect(agentCases.length).toBeGreaterThan(10);
+    for (const body of agentCases) {
+      expect(body).toMatch(
+        /^\s*"[^"]+",\s*async \(\{\s*signal,\s*onTestFinished,?\s*\}\) => \{\s*const phase = phaseTimes\(signal, onTestFinished\);/,
+      );
+      expect(body).not.toMatch(/startAgent\((?!phase\b)/);
+    }
+    expect(source).not.toMatch(/^let phase\b/m);
   });
 
   it("stays quiet when the case passed within 3 s", () => {
-    let finish: ((context: { task: { result?: { state?: string } } }) => void) | undefined;
-    const lines: string[] = [];
-    const mark = phaseTimes(
-      new AbortController().signal,
-      (onDone) => (finish = onDone),
-      (line) => lines.push(line),
-    );
-    mark("done");
-    finish?.({ task: { result: { state: "pass" } } });
-    expect(lines).toEqual([]);
+    const clock = { t: 0 };
+    const a = recorder(clock);
+    a.mark("done");
+    clock.t = 2_000;
+    a.finish("pass");
+    expect(a.lines).toEqual([]);
   });
 });
