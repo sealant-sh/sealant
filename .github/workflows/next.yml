@@ -12,7 +12,9 @@
 # @sealant/sdk or move its `latest`. Images have no such boundary: the token the image jobs hold
 # (`packages: write`) can push the stable images too, GHCR cannot scope it per image, and any
 # writer can run a branch workflow that requests it, code-owner review or not. Every action and
-# BuildKit image in those jobs is pinned and no cache other jobs write is restored; Mend's bundle
+# BuildKit image in those jobs is pinned and no cache other jobs write is restored. Every job runs on a
+# GitHub-hosted runner, a fresh VM: the box's runner VMs keep state between jobs, so code from an
+# earlier pull request could change what a job there builds, tests or pushes. Mend's bundle
 # image pins the Core images by digest, which keeps out a tag moved after the pin (ADR 0015, Known
 # gaps).
 #
@@ -47,7 +49,7 @@ jobs:
   plan:
     name: Resolve the version
     if: github.repository == 'sealant-sh/sealant'
-    runs-on: [self-hosted, box, linux, x64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       version: ${{ steps.plan.outputs.version }}
@@ -111,7 +113,7 @@ jobs:
       matrix:
         image: [api, worker, ssh-gateway]
         platform:
-          - { arch: amd64, runner: [self-hosted, box, linux, x64] }
+          - { arch: amd64, runner: ubuntu-24.04 }
           - { arch: arm64, runner: ubuntu-24.04-arm }
     runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 60
@@ -119,6 +121,11 @@ jobs:
       contents: read
       packages: write
     steps:
+      # Disk use on / and /mnt every 5 s, so the step summary shows this job's peak on a hosted runner.
+      - name: Start the disk sampler
+        run: >-
+          nohup bash -c 'while :; do df -B1 --output=used / /mnt 2>/dev/null | tail -n +2 | paste -sd" ";
+          sleep 5; done' >"$RUNNER_TEMP/disk-used.log" 2>&1 &
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -166,6 +173,25 @@ jobs:
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
+      # Telemetry only: it never turns the job's result red, and says so when it has nothing.
+      - name: Report peak disk use
+        if: always()
+        continue-on-error: true
+        run: |
+          df -h / /mnt 2>/dev/null || df -h / || true
+          log=$RUNNER_TEMP/disk-used.log
+          if [ -s "$log" ]; then
+            report=$(awk '$1 ~ /^[0-9]+$/ { n++; if ($1 > r) r = $1; if ($2 ~ /^[0-9]+$/) { two = 1; if ($2 > m) m = $2 } }
+              END { if (!n) { print "Disk use unavailable: no samples"; exit }
+                printf "Sampled peak disk used (every 5 s, %d samples): / %d MiB", n, r / 1048576
+                if (two) printf ", /mnt %d MiB\n", m / 1048576; else print ", /mnt not present" }' \
+              "$log") || report="Disk use unavailable: the samples could not be read"
+          else
+            report="Disk use unavailable: the sampler wrote no samples"
+          fi
+          echo "$report"
+          echo "$report" >>"$GITHUB_STEP_SUMMARY" ||
+            echo "::warning::Could not write the disk report to the step summary"
 
   # What CI runs on a pull request beyond lint and typecheck, which main requires: the unit and
   # integration suites against a migrated Postgres. A next build never publishes over a failing one.
@@ -173,7 +199,7 @@ jobs:
     name: Unit and integration tests
     needs: plan
     if: needs.plan.outputs.publish == 'true'
-    runs-on: [self-hosted, box, linux, x64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
       postgres:
@@ -190,6 +216,11 @@ jobs:
       SEALANT_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sealant_test
       SEALANT_JOBS_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sealant_test
     steps:
+      # Disk use on / and /mnt every 5 s, so the step summary shows this job's peak on a hosted runner.
+      - name: Start the disk sampler
+        run: >-
+          nohup bash -c 'while :; do df -B1 --output=used / /mnt 2>/dev/null | tail -n +2 | paste -sd" ";
+          sleep 5; done' >"$RUNNER_TEMP/disk-used.log" 2>&1 &
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -202,7 +233,7 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
-          cache: pnpm
+          # No pnpm store cache: other jobs, running unowned code, write that cache.
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -214,6 +245,25 @@ jobs:
 
       - name: Unit and integration tests
         run: pnpm exec turbo test --force
+      # Telemetry only: it never turns the job's result red, and says so when it has nothing.
+      - name: Report peak disk use
+        if: always()
+        continue-on-error: true
+        run: |
+          df -h / /mnt 2>/dev/null || df -h / || true
+          log=$RUNNER_TEMP/disk-used.log
+          if [ -s "$log" ]; then
+            report=$(awk '$1 ~ /^[0-9]+$/ { n++; if ($1 > r) r = $1; if ($2 ~ /^[0-9]+$/) { two = 1; if ($2 > m) m = $2 } }
+              END { if (!n) { print "Disk use unavailable: no samples"; exit }
+                printf "Sampled peak disk used (every 5 s, %d samples): / %d MiB", n, r / 1048576
+                if (two) printf ", /mnt %d MiB\n", m / 1048576; else print ", /mnt not present" }' \
+              "$log") || report="Disk use unavailable: the samples could not be read"
+          else
+            report="Disk use unavailable: the sampler wrote no samples"
+          fi
+          echo "$report"
+          echo "$report" >>"$GITHUB_STEP_SUMMARY" ||
+            echo "::warning::Could not write the disk report to the step summary"
 
   # The same proof the release runs before it publishes the SDK: the baked workspace image with the
   # pinned sealantd, and the sealantd e2e suite in required mode.
@@ -221,9 +271,14 @@ jobs:
     name: Workspace runtime e2e (pinned sealantd)
     needs: plan
     if: needs.plan.outputs.publish == 'true'
-    runs-on: [self-hosted, box, linux, x64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
+      # Disk use on / and /mnt every 5 s, so the step summary shows this job's peak on a hosted runner.
+      - name: Start the disk sampler
+        run: >-
+          nohup bash -c 'while :; do df -B1 --output=used / /mnt 2>/dev/null | tail -n +2 | paste -sd" ";
+          sleep 5; done' >"$RUNNER_TEMP/disk-used.log" 2>&1 &
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -236,7 +291,7 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          cache: pnpm
+          # No pnpm store cache: other jobs, running unowned code, write that cache.
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -277,6 +332,25 @@ jobs:
         env:
           SEALANT_E2E_REQUIRE_IMAGE: "1"
         run: pnpm --filter @sealant/ssh-gateway test:e2e
+      # Telemetry only: it never turns the job's result red, and says so when it has nothing.
+      - name: Report peak disk use
+        if: always()
+        continue-on-error: true
+        run: |
+          df -h / /mnt 2>/dev/null || df -h / || true
+          log=$RUNNER_TEMP/disk-used.log
+          if [ -s "$log" ]; then
+            report=$(awk '$1 ~ /^[0-9]+$/ { n++; if ($1 > r) r = $1; if ($2 ~ /^[0-9]+$/) { two = 1; if ($2 > m) m = $2 } }
+              END { if (!n) { print "Disk use unavailable: no samples"; exit }
+                printf "Sampled peak disk used (every 5 s, %d samples): / %d MiB", n, r / 1048576
+                if (two) printf ", /mnt %d MiB\n", m / 1048576; else print ", /mnt not present" }' \
+              "$log") || report="Disk use unavailable: the samples could not be read"
+          else
+            report="Disk use unavailable: the sampler wrote no samples"
+          fi
+          echo "$report"
+          echo "$report" >>"$GITHUB_STEP_SUMMARY" ||
+            echo "::warning::Could not write the disk report to the step summary"
 
   # Tagged only after the tests and the e2e passed, so no version exists without its npm packages
   # being about to follow.
@@ -286,7 +360,7 @@ jobs:
     strategy:
       matrix:
         image: [api, worker, ssh-gateway]
-    runs-on: [self-hosted, box, linux, x64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -327,7 +401,7 @@ jobs:
   pack:
     name: Pack npm prereleases
     needs: [plan, image-tag]
-    runs-on: [self-hosted, box, linux, x64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
