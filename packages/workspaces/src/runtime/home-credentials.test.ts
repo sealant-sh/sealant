@@ -727,7 +727,7 @@ forEachShell("buildCredentialFileWriteScript for a launch's credentialsHome", ()
     expect(mode(join(home, ".claude/.credentials.json"))).toBe(0o600);
     expect(w.marker(home)).toBe(GEN_A);
     // Seeded from the test's empty skeleton, not this machine's /etc/skel.
-    expect(readdirSync(home).sort()).toEqual([".claude", ".config"]);
+    expect(readdirSync(home).toSorted()).toEqual([".claude", ".config"]);
   });
 
   it("refuses a home that is not one", async () => {
