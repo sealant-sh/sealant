@@ -23,7 +23,11 @@ const directories = Object.fromEntries(required.map((entry) => {
     return [entry, { directory: false, mode: null }];
   }
 }));
-fs.writeFileSync(process.env.FAKE_DOCKERD_RECORD, JSON.stringify({ argv: process.argv.slice(2), directories }));
+// Published whole, by rename: the fake docker answers once the record exists, so an existing
+// record must already be complete (a write in place could be seen open and empty).
+const record = process.env.FAKE_DOCKERD_RECORD;
+fs.writeFileSync(\`\${record}.\${process.pid}.tmp\`, JSON.stringify({ argv: process.argv.slice(2), directories }));
+fs.renameSync(\`\${record}.\${process.pid}.tmp\`, record);
 if (Object.values(directories).some((entry) => !entry.directory || entry.mode !== 0o700)) {
   process.stderr.write("can't create unix socket: no such file or directory");
   process.exit(17);
