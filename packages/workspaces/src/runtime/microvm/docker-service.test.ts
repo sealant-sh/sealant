@@ -35,11 +35,46 @@ process.on("SIGTERM", () => process.exit(0));
 // \`docker info\` answers only once the daemon is up, as the real one does. A fake that always
 // answered let the service report ready, and stop, before the fake daemon had started and written
 // its record: on a loaded runner a node process takes longer to start than one probe interval.
-const FAKE_DOCKER = `#!/usr/bin/env node
-const fs = require("node:fs");
-if (!fs.existsSync(process.env.FAKE_DOCKERD_RECORD)) process.exit(1);
-fs.writeFileSync(process.env.FAKE_DOCKER_RECORD, JSON.stringify(process.argv.slice(2)));
-process.exit(0);
+// The fake is POSIX sh (dash, busybox) because each probe must also start and exit inside its own
+// 100 ms timeout, and a Node fake spent much of that starting up on a loaded runner (#374). It
+// writes the argv exactly as JSON.stringify does.
+const FAKE_DOCKER = `#!/bin/sh
+[ -e "$FAKE_DOCKERD_RECORD" ] || exit 1
+quote() {
+  case $1 in
+    *[\\"\\\\[:cntrl:]]*) ;;
+    *) q="\\"$1\\""; return ;;
+  esac
+  s=$1 q=
+  while [ -n "$s" ]; do
+    c=\${s%"\${s#?}"}
+    s=\${s#?}
+    case $c in
+      \\" | \\\\) q="$q\\\\$c" ;;
+      [[:cntrl:]])
+        n=$(printf '%d' "'$c")
+        case $n in
+          8) q="$q\\\\b" ;;
+          9) q="$q\\\\t" ;;
+          10) q="$q\\\\n" ;;
+          12) q="$q\\\\f" ;;
+          13) q="$q\\\\r" ;;
+          *) if [ "$n" -lt 32 ]; then q="$q$(printf '\\\\u%04x' "$n")"; else q="$q$c"; fi ;;
+        esac
+        ;;
+      *) q="$q$c" ;;
+    esac
+  done
+  q="\\"$q\\""
+}
+line= sep=
+for arg; do
+  quote "$arg"
+  line="$line$sep$q"
+  sep=,
+done
+printf '%s' "[$line]" > "$FAKE_DOCKER_RECORD" || exit 1
+exit 0
 `;
 
 const SERVICE_RUNNER = `
