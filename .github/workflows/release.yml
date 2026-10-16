@@ -16,6 +16,10 @@
 # and :X.Y is never written: those tags stay at the last value the old pipeline gave them.
 # finalize-images, npm and promote queue on one lock, sealant-release-channel. Re-running failed
 # jobs is safe: every write first reads what is there (DEVELOPMENT.md, Releasing).
+# A dispatch with dry_run is a dry run: version <packages/sdk version>-dryrun.<run id>.<attempt>,
+# images built to archives and accepted from them (target archive), nothing pushed to any registry,
+# and no job that publishes runs: none holds packages: write or an id-token. Only a tag push
+# publishes, and every job that publishes refuses any version but its tag's plain X.Y.Z.
 # Every job runs on a GitHub-hosted runner, a fresh VM: the box's runner VMs keep state between jobs.
 name: Release
 
@@ -23,19 +27,98 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build, accept and check a release without publishing anything"
+        required: true
+        type: boolean
 
 permissions:
   contents: read
 
 jobs:
+  # The run's one version and where its images go. A tag push releases its tag to GHCR; a dispatch
+  # is refused unless it is a dry run, whose version is derived here, never given: no input or
+  # branch can name a real version's build. A dry run's target is archive: its images are built and
+  # accepted from files, nothing is pushed to any registry, and no job that publishes runs.
+  release:
+    name: Choose what this run releases
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      target: ${{ steps.resolve.outputs.target }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: packages/sdk/package.json
+          sparse-checkout-cone-mode: false
+
+      # tooling/scripts/release-publication.test.mjs runs this step as written.
+      - name: Refuse anything but a tag push or a dry run, and choose the version
+        id: resolve
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          plain='^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$'
+          case $GITHUB_EVENT_NAME in
+            push)
+              if [[ $GITHUB_REF != refs/tags/v* ]]; then
+                echo "::error::A release publishes from a vX.Y.Z tag push, not $GITHUB_REF."
+                exit 1
+              fi
+              version=${GITHUB_REF_NAME#v}
+              # The dry-run version is a dispatch's alone: as a tag it would build and push to GHCR.
+              if [[ $version == *dryrun* ]]; then
+                echo "::error::$GITHUB_REF_NAME is a dry-run version; a dry run is a dispatch, never a tag."
+                exit 1
+              fi
+              target=ghcr
+              ;;
+            workflow_dispatch)
+              if [[ $DRY_RUN != true ]]; then
+                echo "::error::A dispatch only dry-runs a release: set dry_run. A release publishes from a tag push."
+                exit 1
+              fi
+              # The SDK's committed version, which the next release takes once the Version Packages
+              # pull request has merged, stamped with this run. Derived here, never an input.
+              base=$(jq -r '.version // ""' packages/sdk/package.json)
+              if [[ ! $base =~ $plain ]]; then
+                echo "::error::packages/sdk/package.json gives '$base', not X.Y.Z; a dry run has no version."
+                exit 1
+              fi
+              version=$base-dryrun.$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT
+              target=archive
+              ;;
+            *)
+              echo "::error::$GITHUB_EVENT_NAME does not run a release."
+              exit 1
+              ;;
+          esac
+          case $GITHUB_EVENT_NAME/$target in
+            push/ghcr | workflow_dispatch/archive) ;;
+            *)
+              echo "::error::A $GITHUB_EVENT_NAME never builds for $target."
+              exit 1
+              ;;
+          esac
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "target=$target" >>"$GITHUB_OUTPUT"
+          echo "Release $version, images to $target."
+
   # Before anything builds or publishes: the tag is a stable vX.Y.Z (prereleases publish from main,
   # in next.yml), and no sealantd prerelease is pinned anywhere (ADR 0015 in sealant-sh/mend).
   pins:
     name: Check what the release pins
+    needs: release
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    outputs:
-      version: ${{ steps.version.outputs.version }}
     steps:
       # Full history: the prerelease check asks whether each next build's commit is an ancestor.
       - name: Checkout
@@ -49,25 +132,45 @@ jobs:
         with:
           node-version: 24
 
+      # Only a dispatched dry run, building to archives, checks a dry-run version; the sealantd pin
+      # checks are the same.
       - name: Refuse a prerelease tag or a prerelease sealantd
-        run: node tooling/scripts/check-release-pins.mjs "$GITHUB_REF_NAME"
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          TARGET: ${{ needs.release.outputs.target }}
+        run: |
+          set -euo pipefail
+          flags=()
+          if [[ $GITHUB_EVENT_NAME == workflow_dispatch ]]; then
+            if [[ $TARGET != archive ]]; then
+              echo "::error::A dispatch builds to archives only, not $TARGET."
+              exit 1
+            fi
+            flags+=(--dry-run)
+          fi
+          node tooling/scripts/check-release-pins.mjs "${flags[@]}" "v$VERSION"
 
       # One built from a commit this tag leaves out sorts below X.Y.Z but holds more: refuse. Main
       # is frozen from the Version Packages merge to this tag (sealant-sh/mend
       # docs/operations/next-channel.md); a merge during the freeze is what produces one.
+      # A dry run checks the X.Y.Z it stamps, as that release would be checked.
       - name: Refuse a release that leaves out one of its next builds
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
         run: >-
-          node tooling/scripts/next-version.mjs --stray "$GITHUB_REF_NAME" --npm @sealant/sdk-next
+          node tooling/scripts/next-version.mjs --stray "v${VERSION%%-*}" --npm @sealant/sdk-next
           HEAD
 
       # An early exit only, before anything builds: the floor checks in promote, inside the release
       # channel's lock, are the guard.
       - name: Refuse a stable tag below the highest stable tag
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.release.outputs.version }}
         run: |
           set -euo pipefail
-          version=${GITHUB_REF_NAME#v}
+          version=$VERSION
           stable='^refs/tags/v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$'
           highest=$(gh api --paginate "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/v" --jq '.[].ref' |
             sed -nE "s#$stable#\\1#p" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
@@ -78,15 +181,12 @@ jobs:
           fi
           echo "v$version is not below the highest stable tag (${highest:+v}${highest:-none})."
 
-      - name: Name the version
-        id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >>"$GITHUB_OUTPUT"
-
   # Each image's platform on its own native runner, pushed to the stable repository by digest with
   # no tag at all: nothing pulls it until acceptance names it by that digest.
   build:
     name: Image (${{ matrix.image.name }}, ${{ matrix.platform.arch }})
-    needs: pins
+    needs: [release, pins]
+    if: needs.release.outputs.target == 'ghcr'
     strategy:
       fail-fast: false
       matrix:
@@ -104,6 +204,19 @@ jobs:
       contents: read
       packages: write
     steps:
+      # This job publishes, so it refuses anything but a plain X.Y.Z that is its own tag's, however
+      # the version arrived: a dry run never publishes (sealant-sh/mend #1028: check the resolved
+      # version, not the input). tooling/scripts/release-publication.test.mjs runs this step.
+      - name: Refuse a version that is not this tag's release
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          plain='^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$'
+          if [[ $GITHUB_EVENT_NAME != push || ! $VERSION =~ $plain || $GITHUB_REF_NAME != "v$VERSION" ]]; then
+            echo "::error::'$VERSION' on a $GITHUB_EVENT_NAME of $GITHUB_REF_NAME is not a plain X.Y.Z release of its own tag. This job publishes; a dry run never does."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -136,7 +249,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ needs.pins.outputs.version }}
+            org.opencontainers.image.version=${{ needs.release.outputs.version }}
           outputs:
             type=image,name=ghcr.io/${{ github.repository_owner }}/${{ matrix.image.name
             }},push-by-digest=true,name-canonical=true,push=true
@@ -155,11 +268,101 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # A dry run's images, built as build builds them but exported to a file, never pushed. The docker
+  # exporter, not oci: it writes the same OCI index.json and blobs and adds the manifest.json that
+  # Docker's classic image store needs to load an archive. No attestations, so index.json names the
+  # platform manifest itself, the digest acceptance checks.
+  archive-build:
+    name: Image archive (${{ matrix.image.name }}, ${{ matrix.platform.arch }})
+    needs: [release, pins]
+    if: needs.release.outputs.target == 'archive'
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - { name: sealant-api, dockerfile: apps/api/Dockerfile }
+          - { name: sealant-worker, dockerfile: apps/worker/Dockerfile }
+          - { name: sealant-ssh-gateway, dockerfile: apps/ssh-gateway/Dockerfile }
+          - { name: sealant-web, dockerfile: apps/web/Dockerfile }
+        platform:
+          - { arch: amd64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+
+      # BuildKit at a fixed digest: it runs privileged.
+      - name: Set up Docker builder
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+
+      - run: mkdir -p "$RUNNER_TEMP/archive"
+
+      - name: Build to an archive
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: ${{ matrix.image.dockerfile }}
+          platforms: linux/${{ matrix.platform.arch }}
+          provenance: false
+          sbom: false
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.release.outputs.version }}
+          outputs: type=docker,dest=${{ runner.temp }}/archive/${{ matrix.image.name }}.tar
+
+      # The digest is computed from the archive itself and must be the one BuildKit reports, so the
+      # manifest records what the file holds.
+      - name: Record the platform digest from the archive
+        env:
+          ARCHIVE: ${{ runner.temp }}/archive/${{ matrix.image.name }}.tar
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          platform=$(node tooling/scripts/release-manifest.mjs archive-digest "$ARCHIVE")
+          if [[ $platform != "$DIGEST" ]]; then
+            echo "::error::The archive holds $platform; BuildKit reported '$DIGEST'."
+            exit 1
+          fi
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${platform#sha256:}"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: digests-${{ matrix.image.name }}--${{ matrix.platform.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+      # Layers are compressed already. They expire after a day.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: archive-${{ matrix.image.name }}--${{ matrix.platform.arch }}
+          path: ${{ runner.temp }}/archive/${{ matrix.image.name }}.tar
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
   # Each image's two platforms as one index, under this run's own tag. :<version> is what every
   # install of the version pulls, so only finalize-images writes it, after acceptance.
   merge:
     name: Stage (${{ matrix.image }})
-    needs: [pins, build]
+    needs: [release, build]
+    if: needs.release.outputs.target == 'ghcr'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -170,6 +373,19 @@ jobs:
       matrix:
         image: [sealant-api, sealant-worker, sealant-ssh-gateway, sealant-web]
     steps:
+      # This job publishes, so it refuses anything but a plain X.Y.Z that is its own tag's, however
+      # the version arrived: a dry run never publishes (sealant-sh/mend #1028: check the resolved
+      # version, not the input). tooling/scripts/release-publication.test.mjs runs this step.
+      - name: Refuse a version that is not this tag's release
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          plain='^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$'
+          if [[ $GITHUB_EVENT_NAME != push || ! $VERSION =~ $plain || $GITHUB_REF_NAME != "v$VERSION" ]]; then
+            echo "::error::'$VERSION' on a $GITHUB_EVENT_NAME of $GITHUB_REF_NAME is not a plain X.Y.Z release of its own tag. This job publishes; a dry run never does."
+            exit 1
+          fi
+
       # Only the index check, tooling/scripts/release-manifest.mjs.
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -247,13 +463,129 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # The index merge makes, assembled in a registry that lives and dies with this job on loopback:
+  # it proves both arches' archives make one index, and gives the manifest that index's digest.
+  # Nothing leaves the runner.
+  archive-merge:
+    name: Assemble (${{ matrix.image }})
+    needs: [release, archive-build]
+    if: needs.release.outputs.target == 'archive'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [sealant-api, sealant-worker, sealant-ssh-gateway, sealant-web]
+    steps:
+      # Only the index check, tooling/scripts/release-manifest.mjs.
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: tooling/scripts/release-manifest.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: /tmp/archives
+          pattern: archive-${{ matrix.image }}--*
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: /tmp/digests
+          pattern: digests-${{ matrix.image }}--*
+
+      - name: Start a registry on loopback inside this job
+        run: docker run --detach --name registry --publish 127.0.0.1:5000:5000 registry:2
+
+      # The registry speaks plain HTTP on loopback; imagetools reads the builder's registry config.
+      - name: Set up Docker builder
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+          buildkitd-config-inline: |
+            [registry."127.0.0.1:5000"]
+              http = true
+
+      # skopeo keeps each manifest's bytes (--preserve-digests), so the registry holds the digest the
+      # archive was recorded under; the inspect proves it.
+      - name: Push both arches' archives to it
+        env:
+          IMAGE: ${{ matrix.image }}
+          REPOSITORY: 127.0.0.1:5000/${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          command -v skopeo >/dev/null || {
+            echo "::error::skopeo is missing from this runner image."
+            exit 1
+          }
+          for arch in amd64 arm64; do
+            digest=$(cd "/tmp/digests/digests-$IMAGE--$arch" && ls)
+            skopeo copy --preserve-digests --dest-tls-verify=false \
+              "oci-archive:/tmp/archives/archive-$IMAGE--$arch/$IMAGE.tar" "docker://$REPOSITORY:$arch"
+            docker buildx imagetools inspect "$REPOSITORY@sha256:$digest" >/dev/null
+          done
+
+      - name: Create and inspect the multi-arch index in the job's registry
+        env:
+          IMAGE: ${{ matrix.image }}
+          REPOSITORY: 127.0.0.1:5000/${{ matrix.image }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          sources=()
+          for arch in amd64 arm64; do
+            sources+=("$REPOSITORY@sha256:$(cd "/tmp/digests/digests-$IMAGE--$arch" && ls)")
+          done
+          mkdir -p "$RUNNER_TEMP/index"
+          docker buildx imagetools create --metadata-file "$RUNNER_TEMP/index/create.json" \
+            --tag "$REPOSITORY:$VERSION" "${sources[@]}"
+          docker buildx imagetools inspect "$REPOSITORY:$VERSION"
+
+      # As merge records it: the digest create reported, checked against the sources by digest.
+      - name: Check and record the index digest
+        working-directory: ${{ runner.temp }}/index
+        env:
+          IMAGE: ${{ matrix.image }}
+          REPOSITORY: 127.0.0.1:5000/${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          digest=$(jq -r '."containerimage.digest" // ."containerimage.descriptor".digest // ""' create.json)
+          if [[ ! $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::imagetools create reported no index digest."
+            exit 1
+          fi
+          docker buildx imagetools inspect "$REPOSITORY@$digest" --raw >index.json
+          sources=()
+          for arch in amd64 arm64; do
+            source=$(cd "/tmp/digests/digests-$IMAGE--$arch" && ls)
+            docker buildx imagetools inspect "$REPOSITORY@sha256:$source" --raw >"source-$source.json"
+            sources+=("sha256:$source=source-$source.json")
+          done
+          node "$GITHUB_WORKSPACE/tooling/scripts/release-manifest.mjs" check-index create.json \
+            index.json "${sources[@]}" >digest
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: index-${{ matrix.image }}
+          path: ${{ runner.temp }}/index/digest
+          if-no-files-found: error
+          retention-days: 1
+
   # Builds and packs the two packages with no credential: nothing this job runs, the dependencies'
   # build tools included, can reach the npm token. Each tarball is normalized once, checked as the
   # publisher will check it, and recorded in the release manifest by sha512; npm publishes exactly
   # these bytes. Kept 90 days, as the manifest is.
   pack:
     name: Pack the npm packages
-    needs: pins
+    needs: [release, pins]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -284,7 +616,7 @@ jobs:
       # the commit goes in as gitHead, which npm records and the publisher compares on a re-run.
       - name: Set the version and commit
         env:
-          VERSION: ${{ needs.pins.outputs.version }}
+          VERSION: ${{ needs.release.outputs.version }}
         run: |
           set -euo pipefail
           for package in packages/api-contracts packages/sdk; do
@@ -299,10 +631,12 @@ jobs:
       # pnpm pack turns the SDK's workspace:* dependency into this exact version and applies
       # publishConfig. The normalized tarball is checked again as the publisher checks it: already
       # normalized, never repacked.
+      # A dry run's version is no release's: its tarballs are checked without the channel's shape.
       - name: Pack, normalize and record the tarballs
         id: pack
         env:
-          VERSION: ${{ needs.pins.outputs.version }}
+          VERSION: ${{ needs.release.outputs.version }}
+          TARGET: ${{ needs.release.outputs.target }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/packed" "$RUNNER_TEMP/npm"
@@ -315,7 +649,8 @@ jobs:
           for name in @sealant/api-contracts @sealant/sdk; do
             file=${name#@}
             file="${file//\//-}-$VERSION.tgz"
-            expected=(--name "$name" --version "$VERSION" --commit "$GITHUB_SHA" --channel latest)
+            expected=(--name "$name" --version "$VERSION" --commit "$GITHUB_SHA")
+            if [[ $TARGET == ghcr ]]; then expected+=(--channel latest); fi
             record=$(node tooling/scripts/normalize-npm-tarball.mjs "$RUNNER_TEMP/packed/$file" \
               --out "$RUNNER_TEMP/npm" "${expected[@]}")
             if [[ $(jq -r .file <<<"$record") != "$file" ]]; then
@@ -345,7 +680,13 @@ jobs:
   # failed jobs can be re-run.
   release-manifest:
     name: Write the release manifest
-    needs: [pins, merge, pack]
+    needs: [release, pins, merge, archive-merge, pack]
+    # merge or archive-merge, by target; the other one is skipped.
+    if: >-
+      ${{ !cancelled() && needs.release.result == 'success' && needs.pins.result == 'success' &&
+      needs.pack.result == 'success' && ((needs.release.outputs.target == 'ghcr' &&
+      needs.merge.result == 'success') || (needs.release.outputs.target == 'archive' &&
+      needs.archive-merge.result == 'success')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -374,7 +715,7 @@ jobs:
 
       - name: Write release-manifest.json
         env:
-          VERSION: ${{ needs.pins.outputs.version }}
+          VERSION: ${{ needs.release.outputs.version }}
           COMMIT: ${{ github.sha }}
           DIGESTS: ${{ runner.temp }}/records/digests
           INDEXES: ${{ runner.temp }}/records/indexes
@@ -394,7 +735,12 @@ jobs:
   # (API, web, SSH gateway) from a clean machine with only Docker, the contract users get.
   selfhost-smoke:
     name: Self-host install smoke (${{ matrix.platform.arch }})
-    needs: [pins, release-manifest]
+    needs: [release, release-manifest]
+    # A job whose if names no status function also needs every job above it to have succeeded, and
+    # the other target's jobs above release-manifest are skipped: so the needs are checked by hand.
+    if: >-
+      ${{ !cancelled() && needs.release.result == 'success' && needs.release-manifest.result ==
+      'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -431,10 +777,11 @@ jobs:
       # and tag only that ID with the name install.sh expects. :<version> does not exist on GHCR
       # yet, so install.sh's own pulls of it fail harmlessly and the local tags stand.
       - name: Pull this run's images by digest
+        if: needs.release.outputs.target == 'ghcr'
         env:
           NAMESPACE: ghcr.io/${{ github.repository_owner }}
           MANIFEST: ${{ runner.temp }}/release/release-manifest.json
-          VERSION: ${{ needs.pins.outputs.version }}
+          VERSION: ${{ needs.release.outputs.version }}
           ARCH: ${{ matrix.platform.arch }}
           IDS: ${{ runner.temp }}/image-ids
         run: |
@@ -457,9 +804,49 @@ jobs:
             echo "$image $id" >>"$IDS"
           done
 
+      # A dry run's archives of this arch, each checked against the manifest before Docker sees it.
+      # The image ID is then the config digest of that manifest (the manifest digest itself on
+      # Docker's containerd image store); the loaded image must be one of them, and only that ID is
+      # tagged with the name install.sh expects.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: needs.release.outputs.target == 'archive'
+        with:
+          path: ${{ runner.temp }}/archives
+          pattern: archive-*--${{ matrix.platform.arch }}
+
+      - name: Load this run's images from their archives
+        if: needs.release.outputs.target == 'archive'
+        env:
+          NAMESPACE: ghcr.io/${{ github.repository_owner }}
+          MANIFEST: ${{ runner.temp }}/release/release-manifest.json
+          VERSION: ${{ needs.release.outputs.version }}
+          ARCH: ${{ matrix.platform.arch }}
+          IDS: ${{ runner.temp }}/image-ids
+        run: |
+          set -euo pipefail
+          : >"$IDS"
+          for image in sealant-api sealant-worker sealant-ssh-gateway sealant-web; do
+            archive=$RUNNER_TEMP/archives/archive-$image--$ARCH/$image.tar
+            ids=$(node tooling/scripts/release-manifest.mjs check-archive "$MANIFEST" "$image" "$ARCH" "$archive")
+            docker load --input "$archive"
+            id=
+            for candidate in $ids; do
+              if [[ $(docker image inspect "$candidate" --format '{{.Id}}' 2>/dev/null) == "$candidate" ]]; then
+                id=$candidate
+                break
+              fi
+            done
+            if [[ -z $id ]]; then
+              echo "::error::$image did not load as its config digest or its manifest digest ($ids)."
+              exit 1
+            fi
+            docker tag "$id" "$NAMESPACE/$image:$VERSION"
+            echo "$image $id" >>"$IDS"
+          done
+
       - name: Run installer against this run's images
         env:
-          SEALANT_VERSION: ${{ needs.pins.outputs.version }}
+          SEALANT_VERSION: ${{ needs.release.outputs.version }}
           SEALANT_IMAGE_NS: ghcr.io/${{ github.repository_owner }}
           SEALANT_COMPOSE_URL: ${{ github.workspace }}/compose.selfhost.yaml
         # compose version first: the runner's compose behaved differently from local ones during the
@@ -484,7 +871,7 @@ jobs:
       - name: Assert each service runs the image pulled by digest
         env:
           NAMESPACE: ghcr.io/${{ github.repository_owner }}
-          VERSION: ${{ needs.pins.outputs.version }}
+          VERSION: ${{ needs.release.outputs.version }}
           IDS: ${{ runner.temp }}/image-ids
         run: |
           set -euo pipefail
@@ -586,7 +973,9 @@ jobs:
   # Everything that publishes waits for this: the smoke on both arches and the workspace e2e.
   acceptance:
     name: Check this run's acceptance passed
-    needs: [selfhost-smoke, workspace-e2e]
+    needs: [release, selfhost-smoke, workspace-e2e]
+    # Runs whatever the smoke and the e2e did, so a skipped smoke fails here instead of skipping.
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
@@ -607,7 +996,10 @@ jobs:
   # re-running all jobs builds another index and is refused.
   finalize-images:
     name: Publish the accepted images under their version
-    needs: [pins, acceptance]
+    needs: [release, acceptance]
+    if: >-
+      ${{ !cancelled() && github.event_name == 'push' && needs.release.result == 'success' &&
+      needs.acceptance.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -623,6 +1015,19 @@ jobs:
       cancel-in-progress: false
       queue: max
     steps:
+      # This job publishes, so it refuses anything but a plain X.Y.Z that is its own tag's, however
+      # the version arrived: a dry run never publishes (sealant-sh/mend #1028: check the resolved
+      # version, not the input). tooling/scripts/release-publication.test.mjs runs this step.
+      - name: Refuse a version that is not this tag's release
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          plain='^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$'
+          if [[ $GITHUB_EVENT_NAME != push || ! $VERSION =~ $plain || $GITHUB_REF_NAME != "v$VERSION" ]]; then
+            echo "::error::'$VERSION' on a $GITHUB_EVENT_NAME of $GITHUB_REF_NAME is not a plain X.Y.Z release of its own tag. This job publishes; a dry run never does."
+            exit 1
+          fi
+
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-manifest
@@ -642,7 +1047,7 @@ jobs:
       - name: Publish each accepted index as its version
         env:
           MANIFEST: ${{ github.workspace }}/release/release-manifest.json
-          VERSION: ${{ needs.pins.outputs.version }}
+          VERSION: ${{ needs.release.outputs.version }}
         run: |
           set -euo pipefail
           if ! jq -e --arg version "$VERSION" --arg commit "$GITHUB_SHA" \
@@ -732,7 +1137,11 @@ jobs:
   # without its four images.
   npm:
     name: Publish npm packages
-    needs: [pins, acceptance, finalize-images]
+    needs: [release, acceptance, finalize-images]
+    # A tag push only: on a dry run this job is skipped, so it asks for no environment and no id-token.
+    if: >-
+      ${{ !cancelled() && github.event_name == 'push' && needs.release.result == 'success' &&
+      needs.acceptance.result == 'success' && needs.finalize-images.result == 'success' }}
     # The release channel's lock, as finalize-images holds it. The floor is read inside it.
     concurrency:
       group: sealant-release-channel
@@ -749,6 +1158,19 @@ jobs:
     permissions:
       id-token: write
     steps:
+      # This job publishes, so it refuses anything but a plain X.Y.Z that is its own tag's, however
+      # the version arrived: a dry run never publishes (sealant-sh/mend #1028: check the resolved
+      # version, not the input). tooling/scripts/release-publication.test.mjs runs this step.
+      - name: Refuse a version that is not this tag's release
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          plain='^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$'
+          if [[ $GITHUB_EVENT_NAME != push || ! $VERSION =~ $plain || $GITHUB_REF_NAME != "v$VERSION" ]]; then
+            echo "::error::'$VERSION' on a $GITHUB_EVENT_NAME of $GITHUB_REF_NAME is not a plain X.Y.Z release of its own tag. This job publishes; a dry run never does."
+            exit 1
+          fi
+
       # Node 24, NOT 22: trusted publishing needs the bundled npm >= 11.5 (node 22 ships npm 10,
       # which silently skips the OIDC exchange and the registry 404s the anonymous publish). Its
       # pacote is what the inline check uses.
@@ -777,7 +1199,7 @@ jobs:
       - name: Publish to npm
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.pins.outputs.version }}
+          VERSION: ${{ needs.release.outputs.version }}
         run: |
           set -euo pipefail
           # Retried reads wait 1500 ms × attempt (registry_get, github_latest_release). Only a test sets
@@ -1283,12 +1705,28 @@ jobs:
   # promote moves `releases/latest`, the installer's default version, last.
   github-release:
     name: Publish GitHub release
-    needs: npm
+    needs: [release, npm]
+    if: >-
+      ${{ !cancelled() && github.event_name == 'push' && needs.release.result == 'success' &&
+      needs.npm.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write
     steps:
+      # This job publishes, so it refuses anything but a plain X.Y.Z that is its own tag's, however
+      # the version arrived: a dry run never publishes (sealant-sh/mend #1028: check the resolved
+      # version, not the input). tooling/scripts/release-publication.test.mjs runs this step.
+      - name: Refuse a version that is not this tag's release
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          plain='^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$'
+          if [[ $GITHUB_EVENT_NAME != push || ! $VERSION =~ $plain || $GITHUB_REF_NAME != "v$VERSION" ]]; then
+            echo "::error::'$VERSION' on a $GITHUB_EVENT_NAME of $GITHUB_REF_NAME is not a plain X.Y.Z release of its own tag. This job publishes; a dry run never does."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -1361,7 +1799,11 @@ jobs:
   # GitHub's latest release, install.sh's default version, moves last.
   promote:
     name: Promote the stable release
-    needs: [pins, finalize-images, npm, github-release]
+    needs: [release, finalize-images, npm, github-release]
+    if: >-
+      ${{ !cancelled() && github.event_name == 'push' && needs.release.result == 'success' &&
+      needs.finalize-images.result == 'success' && needs.npm.result == 'success' &&
+      needs.github-release.result == 'success' }}
     # The release channel's lock, as finalize-images holds it. The floor is read again here, inside
     # the lock: it may have moved while this run waited.
     concurrency:
@@ -1374,6 +1816,19 @@ jobs:
       contents: write
       packages: write
     steps:
+      # This job publishes, so it refuses anything but a plain X.Y.Z that is its own tag's, however
+      # the version arrived: a dry run never publishes (sealant-sh/mend #1028: check the resolved
+      # version, not the input). tooling/scripts/release-publication.test.mjs runs this step.
+      - name: Refuse a version that is not this tag's release
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          plain='^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$'
+          if [[ $GITHUB_EVENT_NAME != push || ! $VERSION =~ $plain || $GITHUB_REF_NAME != "v$VERSION" ]]; then
+            echo "::error::'$VERSION' on a $GITHUB_EVENT_NAME of $GITHUB_REF_NAME is not a plain X.Y.Z release of its own tag. This job publishes; a dry run never does."
+            exit 1
+          fi
+
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-manifest
@@ -1398,7 +1853,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MANIFEST: ${{ github.workspace }}/release/release-manifest.json
-          VERSION: ${{ needs.pins.outputs.version }}
+          VERSION: ${{ needs.release.outputs.version }}
         run: |
           set -euo pipefail
           # Retried reads wait 1500 ms × attempt (registry_get, github_latest_release). Only a test sets

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
@@ -6,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   aliasDependencies,
+  isDryRunVersion,
   RUNTIME_DEPENDENTS,
   SEALANTD_IMAGE_FILES,
   prereleaseImages,
@@ -129,4 +131,31 @@ test("the published packages may depend on no npm alias", async () => {
     })[0],
     /packages\/sdk\/package\.json depends on x@npm:y@1\.0\.0/,
   );
+});
+
+test("only --dry-run takes a dry-run version, and it takes nothing else", () => {
+  const script = fileURLToPath(new URL("./check-release-pins.mjs", import.meta.url));
+  const run = (...args) => spawnSync(process.execPath, [script, ...args], { encoding: "utf8" });
+  for (const version of ["0.38.1-dryrun.38700000001.1", "1.0.0-dryrun.9.2"])
+    assert.ok(isDryRunVersion(version), version);
+  for (const version of [
+    "0.38.1",
+    "0.38.1-next.4",
+    "0.38.1-dryrun.0.1",
+    "0.38.1-dryrun.1",
+    "v0.38.1-dryrun.1.1",
+    "0.38.1-dryrun.1.1.x",
+  ])
+    assert.ok(!isDryRunVersion(version), version);
+  // A dry-run-shaped tag without the flag is a prerelease, refused before any pin is read.
+  const pushed = run("v0.38.1-dryrun.38700000001.1");
+  assert.equal(pushed.status, 1);
+  assert.match(pushed.stderr, /is a prerelease/);
+  // The flag with a release's version, or with a next build's, is refused too.
+  for (const tag of ["v0.38.1", "v0.39.0-next.4"]) {
+    const refused = run("--dry-run", tag);
+    assert.equal(refused.status, 1, tag);
+    assert.match(refused.stderr, /--dry-run checks a dry-run version/, tag);
+  }
+  assert.equal(run("--dry-run").status, 2);
 });

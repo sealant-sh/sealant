@@ -1023,7 +1023,7 @@ test("each smoke leg pulls its own arch's digests from the manifest and tags onl
   const install = releaseJobs["selfhost-smoke"].steps.find(
     (entry) => entry.name === "Run installer against this run's images",
   );
-  assert.equal(install.env.SEALANT_VERSION, "${{ needs.pins.outputs.version }}");
+  assert.equal(install.env.SEALANT_VERSION, "${{ needs.release.outputs.version }}");
 });
 
 test("the smoke fails unless every service runs the image ID it pulled by digest", (t) => {
@@ -1167,7 +1167,7 @@ test("the smoke fails, naming the service, when one service runs another image o
 
 test("acceptance passes only when the smoke on both arches and the workspace e2e passed", () => {
   const gate = releaseJobs.acceptance;
-  assert.deepEqual(gate.needs, ["selfhost-smoke", "workspace-e2e"]);
+  assert.deepEqual(gate.needs, ["release", "selfhost-smoke", "workspace-e2e"]);
   assert.deepEqual(gate.permissions, {});
   const [step] = gate.steps;
   assert.equal(step.env.SMOKE, "${{ needs.selfhost-smoke.result }}");
@@ -1208,7 +1208,7 @@ test("pins refuses, early, a stable tag below the highest stable tag", (t) => {
       encoding: "utf8",
       env: {
         PATH: `${directory}:/usr/bin:/bin`,
-        GITHUB_REF_NAME: `v${version}`,
+        VERSION: version,
         GITHUB_REPOSITORY: "sealant-sh/sealant",
       },
     });
@@ -1252,13 +1252,30 @@ test("only finalize writes :<version>, only promote writes :latest, and nothing 
   for (const [name, definition] of Object.entries(releaseJobs))
     for (const entry of definition.steps ?? []) {
       for (const line of (entry.run ?? "").replace(/\\\n\s*/g, " ").split("\n"))
-        if (/imagetools create|docker push/.test(line) && !/^\s*echo /.test(line))
-          registryWrites.push({ at: name, line: line.trim() });
+        if (/imagetools create|docker push|skopeo copy/.test(line) && !/^\s*echo /.test(line))
+          registryWrites.push({ at: name, line: line.trim(), entry });
       if (/push=true/.test(entry.with?.outputs ?? ""))
         registryWrites.push({ at: name, line: entry.with.outputs });
       // No metadata-action, which tagged :<version>, :X.Y and :latest together before acceptance.
       assert.doesNotMatch(entry.uses ?? "", /metadata-action/, name);
     }
+  // archive-merge writes only to the registry it starts on loopback, inside the job.
+  const loopback = registryWrites.filter(({ at }) => at === "archive-merge");
+  assert.ok(loopback.length >= 2);
+  for (const { entry } of loopback)
+    assert.equal(entry.env.REPOSITORY, "127.0.0.1:5000/${{ matrix.image }}");
+  for (const name of ["archive-build", "archive-merge"]) {
+    assert.deepEqual(releaseJobs[name].permissions, { contents: "read" }, name);
+    for (const step of releaseJobs[name].steps)
+      assert.doesNotMatch(step.uses ?? "", /login-action/, name);
+  }
+  assert.match(
+    releaseJobs["archive-build"].steps.find((step) => step.id === "build").with.outputs,
+    /^type=docker,dest=/,
+  );
+  const ghcr = registryWrites.filter(({ at }) => at !== "archive-merge");
+  registryWrites.length = 0;
+  registryWrites.push(...ghcr);
   const tagged = (pattern) =>
     registryWrites.filter(({ line }) => pattern.test(line)).map(({ at }) => at);
   assert.deepEqual(tagged(/:\$VERSION"/), ["finalize-images"]);
@@ -1445,12 +1462,27 @@ const simulateRun = ({ graph = releaseJobs, event = "push", fail = [] } = {}) =>
         .replace(/!=/g, "!==")
         .replace(/(?<![!=])==/g, "===");
       const runs = Function(`"use strict"; return (${script});`)();
-      result[name] = !runs ? "skipped" : fail.includes(name) ? "failure" : "success";
+      if (!runs) result[name] = "skipped";
+      else if (fail.includes(name)) result[name] = "failure";
+      else if (name === "acceptance" && graph === releaseJobs)
+        result[name] = acceptanceOutcome(result);
+      else result[name] = "success";
       pending.delete(name);
     }
   }
   return result;
 };
+/** The acceptance job's step as written, given what the smoke and the e2e did. */
+const acceptanceOutcome = (result) =>
+  spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", releaseJobs.acceptance.steps[0].run], {
+    env: {
+      PATH: "/usr/bin:/bin",
+      SMOKE: result["selfhost-smoke"],
+      WORKSPACE: result["workspace-e2e"],
+    },
+  }).status === 0
+    ? "success"
+    : "failure";
 /** What a job that ran reports, for the outputs job conditions read. */
 const simulatedOutput = (job, output, event) => {
   if (output === "target") return event === "push" ? "ghcr" : "archive";
@@ -1460,13 +1492,16 @@ const PUBLISHERS = ["finalize-images", "npm", "github-release", "promote"];
 
 test("a tag push runs every publisher after acceptance; a failed acceptance runs none of them", () => {
   const push = simulateRun();
-  for (const name of Object.keys(releaseJobs)) assert.equal(push[name], "success", name);
+  for (const name of Object.keys(releaseJobs))
+    assert.equal(push[name], name.startsWith("archive-") ? "skipped" : "success", name);
   for (const failed of [
     "selfhost-smoke",
     "workspace-e2e",
     "release-manifest",
     "merge",
     "build",
+    "pins",
+    "pack",
     "acceptance",
   ]) {
     const run = simulateRun({ fail: [failed] });
@@ -1483,4 +1518,285 @@ test("a tag push runs every publisher after acceptance; a failed acceptance runs
   assert.equal(simulateRun({ fail: ["pack"] }).npm, "skipped");
   for (const failed of ["npm", "github-release"])
     assert.equal(simulateRun({ fail: [failed] }).promote, "skipped", failed);
+});
+
+test("a dry-run dispatch builds to archives and accepts them, and runs nothing that publishes", () => {
+  const dispatch = simulateRun({ event: "workflow_dispatch" });
+  for (const name of [
+    "archive-build",
+    "archive-merge",
+    "pack",
+    "release-manifest",
+    "selfhost-smoke",
+    "workspace-e2e",
+    "acceptance",
+  ])
+    assert.equal(dispatch[name], "success", name);
+  for (const name of ["build", "merge", ...PUBLISHERS])
+    assert.equal(dispatch[name], "skipped", name);
+  // A failed archive leg fails acceptance there too.
+  const failed = simulateRun({ event: "workflow_dispatch", fail: ["archive-merge"] });
+  assert.equal(failed["selfhost-smoke"], "skipped");
+  assert.equal(failed.acceptance, "failure");
+  // Every job that writes, holds an environment or could mint an id-token is skipped on a dispatch.
+  const writers = Object.entries(releaseJobs).filter(([, definition]) => writes(definition));
+  assert.deepEqual(writers.map(([name]) => name).toSorted(), [
+    "build",
+    "finalize-images",
+    "github-release",
+    "merge",
+    "npm",
+    "promote",
+  ]);
+  for (const [name] of writers) assert.equal(dispatch[name], "skipped", name);
+  // And on a push the archive jobs, which hold nothing, never run.
+  const push = simulateRun();
+  for (const name of ["archive-build", "archive-merge"]) assert.equal(push[name], "skipped", name);
+  // Nothing in this workflow can delete or rewrite artifacts or runs.
+  for (const [name, definition] of Object.entries(releaseJobs))
+    assert.notEqual(definition.permissions?.actions, "write", name);
+});
+
+test("every job that publishes runs only on a tag push, building only to GHCR", () => {
+  for (const name of ["build", "merge"])
+    assert.equal(releaseJobs[name].if, "needs.release.outputs.target == 'ghcr'", name);
+  for (const name of PUBLISHERS)
+    assert.match(
+      releaseJobs[name].if,
+      /^\$\{\{ !cancelled\(\) && github\.event_name == 'push' && /,
+      name,
+    );
+});
+
+// The same rule across every workflow. A job whose `if` names no status function is skipped when
+// any job above it was. Each such job below a job that can be skipped is listed here with why that
+// skip is also this job's; a new one fails until someone has looked.
+const SKIPPED_TOGETHER = new Map([
+  ["release.yml merge", "same target as build above it"],
+  ["release.yml archive-merge", "same target as archive-build above it"],
+  // next.yml: plan skips only outside sealant-sh/sealant, and the rest only when it decides not to publish.
+  ["next.yml image", "plan skips only on a fork; publish is plan's decision"],
+  ["next.yml test", "plan skips only on a fork; publish is plan's decision"],
+  ["next.yml workspace-e2e", "plan skips only on a fork; publish is plan's decision"],
+  ["next.yml image-tag", "skipped exactly when plan decided not to publish"],
+  ["next.yml pack", "skipped exactly when plan decided not to publish"],
+  ["next.yml publish", "skipped exactly when plan decided not to publish"],
+]);
+
+test("no workflow job is skipped behind a job its own path expected to skip, unless reviewed", () => {
+  const exposed = [];
+  for (const file of readdirSync(workflows).filter((name) => /\.ya?ml$/.test(name))) {
+    const { jobs: all = {} } = parse(readFileSync(new URL(file, workflows), "utf8")) ?? {};
+    const needsOf = (name) => [all[name]?.needs ?? []].flat();
+    const ancestors = (name, seen = new Set()) => {
+      for (const need of needsOf(name)) if (!seen.has(need)) ancestors(need, seen.add(need));
+      return seen;
+    };
+    for (const [name, job] of Object.entries(all)) {
+      if (callsStatusFunction(job.if)) continue;
+      if ([...ancestors(name)].some((above) => all[above]?.if !== undefined))
+        exposed.push(`${file} ${name}`);
+    }
+  }
+  assert.deepEqual(exposed.toSorted(), [...SKIPPED_TOGETHER.keys()].toSorted());
+  assert.equal(callsStatusFunction("inputs.dry_run && 'always()' != ''"), false);
+  assert.equal(callsStatusFunction("${{ !cancelled() && github.event_name == 'push' }}"), true);
+  assert.equal(callsStatusFunction(undefined), false);
+});
+
+// --- the dry run ---
+
+const resolveStep = releaseJobs.release.steps.find((step) => step.id === "resolve");
+/** The release job's resolve step as written, in a checkout whose packages/sdk is at `sdk`. */
+const resolve = (t, environment, sdk = "0.38.1") => {
+  const directory = scratch(t, "core-release-resolve-");
+  mkdirSync(path.join(directory, "packages/sdk"), { recursive: true });
+  writeFileSync(
+    path.join(directory, "packages/sdk/package.json"),
+    JSON.stringify({ name: "@sealant/sdk", version: sdk }),
+  );
+  const output = path.join(directory, "output");
+  writeFileSync(output, "");
+  const result = spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", resolveStep.run], {
+    cwd: directory,
+    encoding: "utf8",
+    env: {
+      PATH: `${jqDirectory}:/usr/bin:/bin`,
+      GITHUB_RUN_ID: "38700000001",
+      GITHUB_RUN_ATTEMPT: "2",
+      GITHUB_OUTPUT: output,
+      ...environment,
+    },
+  });
+  const values = Object.fromEntries(
+    readFileSync(output, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => line.split("=")),
+  );
+  return { status: result.status, output: result.stdout + result.stderr, ...values };
+};
+
+test("a dispatch is a dry run or nothing, and its version is always derived from the run", (t) => {
+  assert.deepEqual(releaseDocument.on.workflow_dispatch.inputs, {
+    dry_run: {
+      description: "Build, accept and check a release without publishing anything",
+      required: true,
+      type: "boolean",
+    },
+  });
+  assert.equal(resolveStep.env.DRY_RUN, "${{ inputs.dry_run }}");
+  const dispatch = {
+    GITHUB_EVENT_NAME: "workflow_dispatch",
+    GITHUB_REF: "refs/heads/feature",
+    GITHUB_REF_NAME: "feature",
+  };
+  const dry = resolve(t, { ...dispatch, DRY_RUN: "true" });
+  assert.equal(dry.status, 0, dry.output);
+  assert.equal(dry.version, "0.38.1-dryrun.38700000001.2");
+  assert.equal(dry.target, "archive");
+  // Nothing the dispatcher controls names the version: not the ref, not a tag-shaped ref name.
+  assert.equal(
+    resolve(t, {
+      ...dispatch,
+      DRY_RUN: "true",
+      GITHUB_REF: "refs/tags/v0.39.0",
+      GITHUB_REF_NAME: "v0.39.0",
+      VERSION: "0.39.0",
+    }).version,
+    "0.38.1-dryrun.38700000001.2",
+  );
+  // An SDK version that is not X.Y.Z gives no version at all.
+  for (const sdk of ["0.39.0-next.4", "", "0.39"]) {
+    const refused = resolve(t, { ...dispatch, DRY_RUN: "true" }, sdk);
+    assert.equal(refused.status, 1, sdk);
+    assert.equal(refused.version, undefined, sdk);
+  }
+  for (const value of ["false", "", "1"]) {
+    const refused = resolve(t, { ...dispatch, DRY_RUN: value });
+    assert.equal(refused.status, 1, value);
+    assert.match(refused.output, /only dry-runs a release/);
+    assert.equal(refused.version, undefined);
+  }
+  const tag = resolve(t, {
+    GITHUB_EVENT_NAME: "push",
+    GITHUB_REF: "refs/tags/v0.39.0",
+    GITHUB_REF_NAME: "v0.39.0",
+  });
+  assert.deepEqual([tag.status, tag.version, tag.target], [0, "0.39.0", "ghcr"]);
+  assert.equal(
+    resolve(t, {
+      GITHUB_EVENT_NAME: "push",
+      GITHUB_REF: "refs/heads/main",
+      GITHUB_REF_NAME: "main",
+    }).status,
+    1,
+  );
+  assert.equal(resolve(t, { GITHUB_EVENT_NAME: "schedule" }).status, 1);
+});
+
+test("a dry-run-shaped tag is refused before anything builds; a push only ever builds to GHCR", (t) => {
+  for (const name of [
+    "v0.38.1-dryrun.38700000001.1",
+    "v0.0.0-dryrun.9.1",
+    "v0.39.0-next.4.dryrun.1.1",
+  ]) {
+    const pushed = resolve(t, {
+      GITHUB_EVENT_NAME: "push",
+      GITHUB_REF: `refs/tags/${name}`,
+      GITHUB_REF_NAME: name,
+    });
+    assert.equal(pushed.status, 1, name);
+    assert.match(pushed.output, /is a dry-run version; a dry run is a dispatch, never a tag/);
+    assert.equal(pushed.version, undefined);
+    assert.equal(pushed.target, undefined);
+  }
+  assert.match(resolveStep.run, /push\/ghcr \| workflow_dispatch\/archive\) ;;/);
+  // Every job below takes the version and target from this job, and nowhere else.
+  assert.doesNotMatch(releaseText, /needs\.pins\.outputs|inputs\.version/);
+});
+
+const REFUSE = "Refuse a version that is not this tag's release";
+
+test("every job that publishes first refuses a dry-run version, from the input or from the tag", () => {
+  const writers = Object.entries(releaseJobs).filter(([, definition]) => writes(definition));
+  for (const [name, definition] of writers) {
+    assert.equal(definition.steps[0].name, REFUSE, name);
+    assert.deepEqual(
+      definition.steps[0].env,
+      { VERSION: "${{ needs.release.outputs.version }}" },
+      name,
+    );
+    assert.ok(definition.needs.includes("release"), name);
+  }
+  const run = (GITHUB_EVENT_NAME, GITHUB_REF_NAME, VERSION) =>
+    spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", releaseJobs.npm.steps[0].run], {
+      encoding: "utf8",
+      env: { PATH: "/usr/bin:/bin", GITHUB_EVENT_NAME, GITHUB_REF_NAME, VERSION },
+    });
+  assert.equal(run("push", "v0.39.0", "0.39.0").status, 0);
+  for (const [event, ref, version] of [
+    // A dry run's version, however it arrived: derived on a dispatch, or from a pushed tag.
+    ["workflow_dispatch", "main", "0.38.1-dryrun.38700000001.1"],
+    ["push", "v0.38.1-dryrun.38700000001.1", "0.38.1-dryrun.38700000001.1"],
+    // A plain version that is not this run's tag, or a release version on a dispatch.
+    ["push", "v0.39.0", "0.38.1-dryrun.38700000001.1"],
+    ["workflow_dispatch", "v0.39.0", "0.39.0"],
+    ["push", "v0.39.1", "0.39.0"],
+    ["push", "v0.39.0-next.4", "0.39.0-next.4"],
+    ["push", "v", ""],
+  ]) {
+    const refused = run(event, ref, version);
+    assert.equal(refused.status, 1, `${event} ${ref} ${version}`);
+    assert.match(refused.stdout, /not a plain X\.Y\.Z release of its own tag/);
+  }
+  // Every copy of the step is the same.
+  for (const [name, definition] of writers)
+    assert.equal(definition.steps[0].run, releaseJobs.npm.steps[0].run, name);
+});
+
+test("pins checks a dry-run version only on a dispatch building to archives", (t) => {
+  const step = releaseJobs.pins.steps.find(
+    (entry) => entry.name === "Refuse a prerelease tag or a prerelease sealantd",
+  );
+  const directory = scratch(t, "core-release-pins-step-");
+  const calls = path.join(directory, "calls");
+  // A stand-in node: the step's argv is what matters; the script has its own tests.
+  writeFileSync(
+    path.join(directory, "node"),
+    `#!/bin/sh\nprintf '%s\\n' "$*" >>${JSON.stringify(calls)}\n`,
+    { mode: 0o755 },
+  );
+  const run = (GITHUB_EVENT_NAME, TARGET, VERSION) => {
+    writeFileSync(calls, "");
+    const status = spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", step.run], {
+      env: { PATH: `${directory}:/usr/bin:/bin`, GITHUB_EVENT_NAME, TARGET, VERSION },
+    }).status;
+    return { status, argv: readFileSync(calls, "utf8").trim() };
+  };
+  assert.deepEqual(run("push", "ghcr", "0.39.0"), {
+    status: 0,
+    argv: "tooling/scripts/check-release-pins.mjs v0.39.0",
+  });
+  assert.deepEqual(run("workflow_dispatch", "archive", "0.38.1-dryrun.1.1"), {
+    status: 0,
+    argv: "tooling/scripts/check-release-pins.mjs --dry-run v0.38.1-dryrun.1.1",
+  });
+  assert.deepEqual(run("workflow_dispatch", "ghcr", "0.38.1-dryrun.1.1"), { status: 1, argv: "" });
+  // A push never relaxes the pins, whatever the target says.
+  assert.equal(
+    run("push", "archive", "0.39.0").argv,
+    "tooling/scripts/check-release-pins.mjs v0.39.0",
+  );
+  // The stray check reads the X.Y.Z a dry run stamps; the backport check runs on a tag push only.
+  assert.match(
+    stepRun("pins", "Refuse a release that leaves out one of its next builds"),
+    /--stray "v\$\{VERSION%%-\*\}"/,
+  );
+  assert.equal(
+    releaseJobs.pins.steps.find(
+      (entry) => entry.name === "Refuse a stable tag below the highest stable tag",
+    ).if,
+    "github.event_name == 'push'",
+  );
 });

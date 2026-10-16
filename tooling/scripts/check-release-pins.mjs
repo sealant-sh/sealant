@@ -8,7 +8,12 @@
 // - the @sealant/runtime-* ranges in package.json files;
 // - the @sealant/runtime-* versions pnpm-lock.yaml resolves.
 //
+// A dry run (release.yml dispatched with dry_run) passes --dry-run and its own version,
+// v<X.Y.Z>-dryrun.<run id>.<attempt>: the sealantd pin checks run as for a release, and only the tag's
+// shape is a dry run's. Without the flag a dry-run-shaped tag is a prerelease, and refused.
+//
 //   node tooling/scripts/check-release-pins.mjs v0.39.0
+//   node tooling/scripts/check-release-pins.mjs --dry-run v0.39.0-dryrun.38700000001.1
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -27,6 +32,10 @@ export const RUNTIME_DEPENDENTS = [
   "packages/telemetry/package.json",
   "packages/workspaces/package.json",
 ];
+
+/** The version a dispatched dry run of release.yml carries: never a real release's. */
+export const isDryRunVersion = (version) =>
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-dryrun\.[1-9]\d*\.[1-9]\d*$/.test(version);
 
 const RELEASED_IMAGE = /^ghcr\.io\/sealant-sh\/sealantd:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}$/;
 
@@ -90,12 +99,19 @@ export const releasePinProblems = ({ imageFiles, manifests, lockfile, published 
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  const tag = process.argv[2] ?? "";
-  if (!/^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(tag)) {
-    console.error("usage: node tooling/scripts/check-release-pins.mjs <vX.Y.Z tag>");
+  const dryRun = process.argv[2] === "--dry-run";
+  const [tag = "", ...extra] = process.argv.slice(dryRun ? 3 : 2);
+  if (extra.length > 0 || !/^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(tag)) {
+    console.error("usage: node tooling/scripts/check-release-pins.mjs [--dry-run] <vX.Y.Z tag>");
     process.exit(2);
   }
-  if (tag.includes("-")) {
+  if (dryRun && !isDryRunVersion(tag.slice(1))) {
+    console.error(
+      `::error::--dry-run checks a dry-run version (vX.Y.Z-dryrun.<run>.<attempt>), not ${tag}.`,
+    );
+    process.exit(1);
+  }
+  if (!dryRun && tag.includes("-")) {
     // A prerelease tag here would publish to npm `latest` and tag the images `latest`.
     console.error(
       `::error::${tag} is a prerelease. Prereleases publish from main (next.yml), never from a tag.`,
