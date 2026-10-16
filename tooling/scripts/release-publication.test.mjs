@@ -5,15 +5,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -840,19 +832,8 @@ const runPreamble = (run, environment) =>
     env: { PATH: process.env.PATH, ...environment },
   });
 
-test("no workflow sets a test delay, and every retry waits the production delay by default", () => {
-  for (const file of readdirSync(workflows).filter((name) => /\.ya?ml$/.test(name))) {
-    const text = readFileSync(new URL(file, workflows), "utf8");
-    const workflow = parse(text) ?? {};
-    const envs = [workflow.env];
-    for (const job of Object.values(workflow.jobs ?? {})) {
-      envs.push(job.env, job.with);
-      for (const step of job.steps ?? []) envs.push(step.env, step.with);
-    }
-    for (const env of envs)
-      assert.ok(!Object.hasOwn(env ?? {}, "RELEASE_TEST_RETRY_MS"), `${file} sets the test delay`);
-    assert.doesNotMatch(text, /(export\s+RELEASE_TEST_RETRY_MS\b|\bRELEASE_TEST_RETRY_MS=)/, file);
-  }
+// release-overrides.test.mjs keeps every workflow from setting the override.
+test("every retry waits the production delay by default", () => {
   // Every retry wait in release.yml reads the override with the production delay as its default.
   const retry = `setTimeout(resolve, attempt * Number(process.env.RELEASE_TEST_RETRY_MS || ${RETRY_MS}))`;
   assert.equal(

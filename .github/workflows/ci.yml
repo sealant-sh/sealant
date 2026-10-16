@@ -52,6 +52,7 @@ jobs:
           tooling/scripts/republish.test.mjs tooling/scripts/pin-sealantd.test.mjs
           tooling/scripts/workflow-runners.test.mjs tooling/scripts/next-image-tag.test.mjs
           tooling/scripts/release-manifest.test.mjs tooling/scripts/release-publication.test.mjs
+          tooling/scripts/release-overrides.test.mjs
 
       - name: Run lint
         run: pnpm lint
