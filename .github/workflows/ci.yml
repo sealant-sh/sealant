@@ -124,6 +124,14 @@ jobs:
       - name: Unit and integration tests
         run: pnpm exec turbo test --force
 
+      # A workspace's Docker service is rootless dind, which needs unprivileged user namespaces.
+      # GitHub's Ubuntu 24.04 image keeps Ubuntu's AppArmor default that refuses them, so the
+      # service exits at start ("fork/exec /proc/self/exe: operation not permitted"; #373). Allow
+      # them the way an operator of a stock Ubuntu 24.04 Docker host must.
+      - name: Allow unprivileged user namespaces, as a Docker host must
+        if: runner.environment == 'github-hosted'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Containerized launcher and real workspace volume test
         run: >-
           pnpm --filter @sealant/workspaces test:e2e src/runtime/docker-volume-mounts.e2e.ts
