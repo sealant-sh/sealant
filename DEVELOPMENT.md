@@ -101,6 +101,10 @@ The pieces:
   Creating the release is what moves `releases/latest`, i.e. what the installer resolves.
 - **Cutting a release**: push a `vX.Y.Z` tag. After the very first release, flip the four GHCR
   packages to public (one-time, per package) or anonymous pulls fail.
+- **Never re-run an old stable release run.** Core's stable pipeline publishes `:<version>`,
+  major.minor and `latest` before acceptance, with no lock or floor (plan (e) step 2 will fix that).
+  Re-running an older run can move `latest` backwards or replace a version's digest. Cut a new
+  version instead.
 - **Local dry-run**: build the images with the same Dockerfiles
   (`docker build -f apps/<app>/Dockerfile -t ghcr.io/sealant-sh/sealant-<name>:0.0.0-dev .`), then
   `SEALANT_VERSION=0.0.0-dev SEALANT_COMPOSE_URL=$PWD/compose.selfhost.yaml sh install.sh`. Offset
@@ -121,6 +125,12 @@ The pieces:
   the pin. Mend pins a prerelease through an exact alias
   (`"@sealant/sdk": npm:@sealant/sdk-next@<version>`). `latest` on the stable packages moves only
   from a `vX.Y.Z` tag.
+- **Next image tags are written once.** `image-tag` computes this run's index digest
+  (`imagetools create --dry-run`) and reads `<image>-next:<version>` before writing it. At that
+  digest the tag is left alone, so re-running failed jobs is safe; at any other digest the step
+  refuses and writes nothing, so a re-run of all jobs, which builds a new index, fails there. Only
+  buildx's exact `ERROR: <ref>: not found` counts as absent; any other read error fails the step.
+  After a create, a second read decides: this run's digest passes, anything else fails.
 - **Pinning sealantd**, a release or a prerelease, is one command:
   `node tooling/scripts/pin-sealantd.mjs <version>`. It writes the image as `tag@sha256:<digest>`
   (`ghcr.io/sealant-sh/sealantd:X.Y.Z@…`, or `sealantd-next:X.Y.Z-next.N@…`) into
