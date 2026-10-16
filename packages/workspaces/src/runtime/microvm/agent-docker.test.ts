@@ -69,29 +69,58 @@ if (process.env.FAKE_DOCKERD_IGNORE_SIGTERM === "1") {
 fs.writeFileSync(process.env.FAKE_DOCKERD_STARTED_FILE, "started");
 `;
 
-const FAKE_DOCKER = `#!/usr/bin/env node
-const fs = require("node:fs");
-fs.appendFileSync(process.env.FAKE_DOCKER_PROBE_RECORD, JSON.stringify({ argv: process.argv.slice(2), dockerHost: process.env.DOCKER_HOST || null, dockerContext: process.env.DOCKER_CONTEXT || null, pid: process.pid }) + "\\n");
-const finish = () => {
-  const gateFile = process.env.FAKE_DOCKER_PROBE_GATE_FILE;
-  if (gateFile && !fs.existsSync(gateFile)) {
-    setTimeout(finish, 5);
-    return;
-  }
-  const sequenceFile = process.env.FAKE_DOCKER_PROBE_SEQUENCE_FILE;
-  if (sequenceFile && fs.existsSync(sequenceFile)) {
-    const sequence = fs.readFileSync(sequenceFile, "utf8");
-    if (sequence.length > 0) {
-      fs.writeFileSync(sequenceFile, sequence.slice(1));
-      process.exit(sequence[0] === "S" ? 0 : 1);
-    }
-  }
-  const mode = process.env.FAKE_DOCKER_PROBE_MODE || "ready";
-  if (mode === "ready") process.exit(0);
-  if (mode === "marker" && fs.existsSync(process.env.FAKE_DOCKER_READY_FILE)) process.exit(0);
-  process.exit(1);
-};
-setTimeout(finish, Number(process.env.FAKE_DOCKER_PROBE_DELAY_MS || 0));
+// The docker client every probe spawns, in POSIX sh (dash, busybox): each probe has to start and
+// exit inside its 150 ms timeout, and a Node fake spent much of that starting up on a loaded
+// 4-vCPU runner (#374). Probes of one agent never overlap (readiness waits for each, runtime probes
+// are single-flight, a timed-out probe is killed before the next), so consuming the sequence needs
+// no lock; the rename keeps the file whole for the test's reads and writes.
+const FAKE_DOCKER = `#!/bin/sh
+quote() {
+  case $1 in
+    *[\\"\\\\[:cntrl:]]*) ;;
+    *) q="\\"$1\\""; return ;;
+  esac
+  s=$1 q=
+  while [ -n "$s" ]; do
+    c=\${s%"\${s#?}"}
+    s=\${s#?}
+    case $c in
+      \\" | \\\\) q="$q\\\\$c" ;;
+      [[:cntrl:]]) q="$q$(printf '\\\\u%04x' "'$c")" ;;
+      *) q="$q$c" ;;
+    esac
+  done
+  q="\\"$q\\""
+}
+line= sep=
+for arg; do
+  quote "$arg"
+  line="$line$sep$q"
+  sep=,
+done
+host=null context=null
+if [ -n "$DOCKER_HOST" ]; then quote "$DOCKER_HOST"; host=$q; fi
+if [ -n "$DOCKER_CONTEXT" ]; then quote "$DOCKER_CONTEXT"; context=$q; fi
+printf '%s\\n' "{\\"argv\\":[$line],\\"dockerHost\\":$host,\\"dockerContext\\":$context,\\"pid\\":$$}" >> "$FAKE_DOCKER_PROBE_RECORD"
+delay=\${FAKE_DOCKER_PROBE_DELAY_MS:-0}
+if [ "$delay" -gt 0 ]; then
+  ms=$((delay % 1000 + 1000))
+  sleep "$((delay / 1000)).\${ms#1}"
+fi
+gate=$FAKE_DOCKER_PROBE_GATE_FILE
+while [ -n "$gate" ] && [ ! -e "$gate" ]; do sleep 0.005; done
+sequence=$FAKE_DOCKER_PROBE_SEQUENCE_FILE
+if [ -n "$sequence" ] && [ -s "$sequence" ]; then
+  first=$(dd if="$sequence" bs=1 count=1 2>/dev/null)
+  tail -c +2 "$sequence" > "$sequence.$$" && mv -f "$sequence.$$" "$sequence"
+  [ "$first" = S ] && exit 0
+  exit 1
+fi
+case \${FAKE_DOCKER_PROBE_MODE:-ready} in
+  ready) exit 0 ;;
+  marker) [ -e "$FAKE_DOCKER_READY_FILE" ] && exit 0 ;;
+esac
+exit 1
 `;
 
 interface Agent {
@@ -375,6 +404,19 @@ const processExists = (pid: number): boolean => {
   }
 };
 
+/**
+ * Waits until the fake dockerd has written its record and pid files: it writes this file last. The
+ * fake docker answers probes without asking dockerd, so Docker can report ready (in a few ms, now
+ * the probe is sh) before the fake dockerd has written anything.
+ */
+const dockerdStarted = (agent: Agent): Promise<void> =>
+  waitFor(async () =>
+    stat(agent.dockerdStartedFile).then(
+      () => true,
+      () => false,
+    ),
+  );
+
 describe("microvm agent guest-local Docker", () => {
   it("rejects a v2 run before 200 when the image is not Docker-capable", async ({
     signal,
@@ -585,7 +627,8 @@ describe("microvm agent guest-local Docker", () => {
   }) => {
     const phase = phaseTimes(signal, onTestFinished);
     // The probe has to start and exit 1 inside its own timeout, or what is reported is the probe's
-    // timeout. A node process can take longer than the default 150 ms to start on a loaded runner.
+    // timeout. This wider timeout dates from the Node fake, which could take longer than the default
+    // 150 ms to start on a loaded runner.
     const agent = await startAgent(phase, {
       FAKE_DOCKER_PROBE_MODE: "never",
       SEALANT_MICROVM_DOCKER_READY_TIMEOUT_MS: "1500",
@@ -611,12 +654,7 @@ describe("microvm agent guest-local Docker", () => {
     });
 
     expect(await hook(agent, "validate")).toMatchObject({ status: 503 });
-    await waitFor(async () =>
-      stat(agent.dockerdStartedFile).then(
-        () => true,
-        () => false,
-      ),
-    );
+    await dockerdStarted(agent);
     await writeFile(agent.readyFile, "ready");
     await waitFor(async () => agent.output().includes("docker-image-validation-failed"));
     expect(await hook(agent, "validate")).toMatchObject({ status: 500 });
@@ -707,6 +745,7 @@ describe("microvm agent guest-local Docker", () => {
     });
     expect(await hook(agent, "resume")).toMatchObject({ status: 200 });
 
+    await dockerdStarted(agent);
     const daemonRecords = await readLines(agent.recordFile);
     const dockerdRecords = await readLines(agent.dockerdRecord);
     expect(daemonRecords).toHaveLength(1);
@@ -822,6 +861,7 @@ describe("microvm agent guest-local Docker", () => {
     await writeFile(agent.readyFile, "ready");
     expect(await launchV2(agent)).toMatchObject({ status: 200 });
     await waitFor(async () => (await health(agent)).status === 200);
+    await dockerdStarted(agent);
     const dockerPid = Number(await readFile(agent.dockerdPid, "utf8"));
     await unlink(agent.probeGateFile);
     const probesBefore = (await readLines(agent.probeRecord)).length;
@@ -861,6 +901,7 @@ describe("microvm agent guest-local Docker", () => {
       }),
     ).toMatchObject({ status: 200 });
     await waitFor(async () => (await health(agent)).body.daemonExit?.code === 75);
+    await dockerdStarted(agent);
     const dockerPid = Number(await readFile(agent.dockerdPid, "utf8"));
     const descendantPid = Number(await readFile(agent.dockerdDescendantPid, "utf8"));
     expect(processExists(dockerPid)).toBe(true);
@@ -895,6 +936,7 @@ describe("microvm agent guest-local Docker", () => {
     await writeFile(agent.readyFile, "ready");
     expect(await launchV2(agent)).toMatchObject({ status: 200 });
     await waitFor(async () => (await health(agent)).status === 200);
+    await dockerdStarted(agent);
 
     const dockerPid = Number(await readFile(agent.dockerdPid, "utf8"));
     const descendantPid = Number(await readFile(agent.dockerdDescendantPid, "utf8"));
