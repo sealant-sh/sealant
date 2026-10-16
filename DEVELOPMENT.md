@@ -103,11 +103,20 @@ The pieces:
   and on arm64 against those digests: it pulls each image by digest, tags that ID with the name
   install.sh expects, and fails unless every service runs that ID. `acceptance` passes only when
   both smoke legs and `workspace-e2e` passed; nothing publishes before it.
+- **npm, from a job with no credential**: `pack` builds both packages, packs them with `pnpm pack`
+  (the SDK's `workspace:*` dependency becomes the exact version), and normalizes each tarball once
+  with `tooling/scripts/normalize-npm-tarball.mjs`: only allowlisted manifest fields, no scripts, no
+  `.npmrc`, `gitHead` set to the commit. The release manifest records each tarball's sha512 and
+  integrity. `pack` holds no `id-token`; nothing it runs can reach the npm credential.
 - **Publishing, after acceptance**: `finalize-images` writes each `:<version>` from the accepted
-  index; `npm` publishes the two packages; `github-release` creates the release with
-  `compose.selfhost.yaml` and `install.sh` attached and `--latest=false`; `promote` moves each
-  `:latest` to the accepted index and then GitHub's latest release, which is what `install.sh`
-  installs by default. `finalize-images`, `npm` and `promote` queue on one job-level lock,
+  index. `npm` (environment `release`, `id-token: write` only) checks out nothing, installs nothing
+  and runs no build tool: it checks that the artifact holds exactly the two tarballs, that each
+  one's sha512 is the manifest's and that it is already normalized, publishes
+  `@sealant/api-contracts` then `@sealant/sdk` from those bytes under `latest`, and reads each
+  `dist.integrity` back. `github-release` waits for npm, and creates the release with
+  `compose.selfhost.yaml` and `install.sh` attached and `--latest=false`. `promote` moves each
+  `:latest` to the accepted index, then GitHub's latest release, which is what `install.sh` installs
+  by default. `finalize-images`, `npm` and `promote` queue on one job-level lock,
   `sealant-release-channel` (`queue: max`, never cancelled).
 - **Cutting a release**: push a `vX.Y.Z` tag. After the very first release, flip the four GHCR
   packages to public (one-time, per package) or anonymous pulls fail.
@@ -116,21 +125,45 @@ The pieces:
   `:<version>` first: a tag already at the accepted index is left alone, a tag at any other digest
   refuses ("Version X.Y.Z is spent: cut a new one"), and after a create a second read decides. A
   create that errored but left the accepted index passes with a warning.
-- **The stable floor.** `promote` reads it inside the lock before it moves anything: the highest of
-  npm `latest` for `@sealant/sdk` and `@sealant/api-contracts`, the tag of GitHub's latest release,
-  and the `org.opencontainers.image.version` label on every platform of the four `sealant-*:latest`.
-  Each marker must be a plain `X.Y.Z` (each part at most 9 digits); a marker that cannot be read or
-  is malformed fails the job, and only a missing one adds nothing. Above the floor, `promote` moves
-  every `:latest`; at it (a retry), only the ones not yet at this release's index; below it, it
-  refuses and names the marker. So a backport, say 0.38.2 after 0.39.0, is refused on purpose, and
-  `pins` refuses a tag below the highest stable tag before anything builds.
+- **The stable floor.** `npm` and `promote` each read it inside the lock before they write: the
+  highest of npm `latest` for `@sealant/sdk` and `@sealant/api-contracts`, the tag of GitHub's
+  latest release, and the `org.opencontainers.image.version` label on every platform of the four
+  `sealant-*:latest`. Each marker must be a plain `X.Y.Z` (each part at most 9 digits); a marker
+  that cannot be read or is malformed fails the job, and only a missing one adds nothing. Above the
+  floor, `npm` publishes and `promote` moves every `:latest`. At the floor (a retry), `npm`
+  republishes nothing and moves no dist-tag: each package npm holds must hold exactly this run's
+  tarball, and a package it does not hold yet publishes only after the one before it verified as
+  this run's (an attempt that stopped between the two packages); `promote` moves only the `:latest`
+  not yet at this release's index. Below the floor both refuse and name the marker. So a backport,
+  say 0.38.2 after 0.39.0, is refused on purpose, and `pins` refuses a tag below the highest stable
+  tag before anything builds.
 - **Frozen tags.** The `:X.Y` tags (`sealant-api:0.38` and the like) are no longer written: each
   stays at the last release that moved it, and nothing reads them. Read `:latest` or a full
   `:<version>` instead.
-- **Re-running a stable release run.** Re-run failed jobs, never all jobs: a full re-run builds new
-  images, and `finalize-images` then refuses the spent version. The `npm` job still installs, builds
-  and publishes with `pnpm publish` and reads no floor, so never re-run an old run's `npm` job after
-  a newer release: it would publish an older version as npm `latest`.
+- **Re-running a stable release run.** Re-run failed jobs (`gh run rerun <id> --failed`); the run's
+  manifest and tarballs are kept 90 days, its per-arch digests one day. What each job then does:
+  - `build`, `merge`, the smoke or the workspace e2e failed: nothing final was written. A re-run
+    stages under a new `staging-<run>-<attempt>` tag.
+  - `finalize-images` wrote some `:<version>` tags: matching ones are left alone, absent ones are
+    created, and a tag at another digest refuses before anything else is written.
+  - `npm` published `@sealant/api-contracts` but not the SDK: the contracts are verified, not
+    republished, and the SDK publishes.
+  - `github-release` failed: only it re-runs (were `npm` re-run too, at the floor it only verifies
+    and moves nothing). A published release with both assets is left alone; one missing an asset
+    refuses (cut a new version); a draft for the tag is deleted and the release created again.
+  - `promote` moved some `:latest` tags: the rest move, then GitHub's latest release.
+  - A newer release published while this run waited: `npm` and `promote` refuse below the newer
+    floor. This run's `:<version>` tags and its release (not latest) can still exist; no channel
+    moves backwards.
+
+  Never re-run all jobs once anything final was written: it builds new images and new tarballs, and
+  `finalize-images` refuses the spent version, as `npm` fails on a version npm holds with other
+  bytes. The way out is a new version.
+
+- **An npm integrity mismatch** after a publish fails the job with `INCIDENT`: npm serves other
+  bytes than this run packed, and `latest` already names that version. Do not republish or
+  unpublish: deprecate the version, move `latest` back by hand only if the incident version still
+  holds it, and cut a new version. Nothing after `npm` runs.
 - **Staging tags** (`staging-<run id>-<attempt>`) stay on GHCR; nothing removes them yet, and
   nothing pulls them.
 - **Local dry-run**: build the images with the same Dockerfiles

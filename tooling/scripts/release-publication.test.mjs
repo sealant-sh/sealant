@@ -5,7 +5,15 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -823,7 +831,10 @@ test("a :<version> that moved since acceptance, or another release's manifest, m
 // --- the retry delays (sealant-sh/mend #1033) ---
 
 const RETRY_MS = 1500;
-const delaySteps = () => ({ promote: stepRun("promote", "Move latest to this release") });
+const delaySteps = () => ({
+  npm: stepRun("npm", "Publish to npm"),
+  promote: stepRun("promote", "Move latest to this release"),
+});
 const occurrences = (text, pattern) => text.match(new RegExp(pattern, "g"))?.length ?? 0;
 const preambleOf = (run) => run.slice(0, run.indexOf("# --- floor ---"));
 const runPreamble = (run, environment) =>
@@ -934,6 +945,19 @@ test("each smoke leg pulls its own arch's digests from the manifest and tags onl
       commit: COMMIT,
       images: Object.fromEntries(
         IMAGES.map((image) => [image, { index: indexOf(image), platforms: platforms[image] }]),
+      ),
+      packages: Object.fromEntries(
+        ["@sealant/api-contracts", "@sealant/sdk"].map((name) => {
+          const digest = createHash("sha512").update(name).digest();
+          return [
+            name,
+            {
+              file: `${name.slice(1).replace("/", "-")}-1.2.3.tgz`,
+              sha512: digest.toString("hex"),
+              integrity: `sha512-${digest.toString("base64")}`,
+            },
+          ];
+        }),
       ),
     }),
   );
@@ -1291,6 +1315,94 @@ test("every publisher waits for acceptance, and promote for npm and the GitHub r
     ["npm", "github-release", "finalize-images"].every((name) => above("promote").has(name)),
   );
   for (const name of ["npm", "github-release"]) assert.ok(above(name).has("finalize-images"), name);
+  // npm waits for acceptance itself, and the GitHub release for npm.
+  assert.ok(releaseJobs.npm.needs.includes("acceptance"));
+  assert.ok(above("github-release").has("npm"));
+  assert.ok(above("release-manifest").has("pack"));
+});
+
+/** The `# --- floor ---` block a step carries. */
+const floorOf = (run) =>
+  run.slice(run.indexOf("# --- floor ---"), run.indexOf("# --- end floor ---"));
+
+test("npm and promote carry one floor, byte for byte, and read it before they write", () => {
+  const npm = stepRun("npm", "Publish to npm");
+  const promoteRun = stepRun("promote", "Move latest to this release");
+  assert.ok(floorOf(npm).length > 1000);
+  assert.equal(floorOf(npm), floorOf(promoteRun));
+  const body = npm.slice(npm.indexOf("# --- end republish ---"));
+  const floor = body.indexOf('floor=$(stable_floor "$GITHUB_REPOSITORY_OWNER")');
+  const guard = body.indexOf('guard=$(stable_guard "$VERSION" "$floor")');
+  assert.ok(floor > 0 && guard > floor);
+  assert.ok(body.indexOf("publish_release ") > guard);
+  assert.match(body, /if \[\[ \$guard == retry \]\]; then flags\+=\(--verify-only\); fi/);
+});
+
+/** Actions a job holding an id-token may use: none checks out or runs repository code. */
+const CREDENTIAL_ACTIONS = /^actions\/(setup-node|download-artifact)@[0-9a-f]{40}$/;
+/** Commands that install dependencies, run a build tool or run a repository file. */
+const BUILDS =
+  /\b(pnpm|npx|yarn|tsgo|tsc|tsx|turbo|esbuild|vite|make|cargo)\b|\bnpm (install|ci|i|run|exec|rebuild|test|start|pack)\b|\bnode (?!-e\b)\S|\bdocker (build|buildx build)\b/;
+
+test("no job holding an id-token checks out, installs dependencies or runs a build tool", () => {
+  let holders = 0;
+  for (const file of readdirSync(workflows).filter((name) => /\.ya?ml$/.test(name))) {
+    const { jobs = {}, permissions = {} } =
+      parse(readFileSync(new URL(file, workflows), "utf8")) ?? {};
+    assert.notEqual(permissions["id-token"], "write", `${file} grants an id-token to every job`);
+    for (const [name, definition] of Object.entries(jobs)) {
+      if (definition.permissions?.["id-token"] !== "write") continue;
+      holders += 1;
+      for (const step of definition.steps ?? []) {
+        if (step.uses !== undefined) assert.match(step.uses, CREDENTIAL_ACTIONS, `${file} ${name}`);
+        // Comments aside, which name what the job does not do.
+        const code = (step.run ?? "").replace(/^\s*(#|echo ).*$/gm, "");
+        // next.yml's republish block repacks with `npm pack --ignore-scripts`, which runs no package
+        // code; release.yml's never repacks.
+        const allowed = file === "next.yml" ? code.replace(/npm pack --ignore-scripts/g, "") : code;
+        assert.doesNotMatch(allowed, BUILDS, `${file} ${name} ${step.name ?? step.uses}`);
+      }
+    }
+  }
+  assert.equal(holders, 2, "next.yml's publish and release.yml's npm hold the only id-tokens");
+  // The guard itself catches what the old stable npm job did.
+  for (const line of [
+    "pnpm install --frozen-lockfile --ignore-scripts",
+    'pnpm --filter "@sealant/sdk" run build',
+    "npm ci",
+    "node tooling/scripts/release-manifest.mjs digest",
+    "npx tsc",
+    "docker build -f apps/api/Dockerfile .",
+  ])
+    assert.match(line, BUILDS, line);
+  for (const line of [
+    "npm publish x.tgz --tag latest",
+    "npm view a dist.integrity",
+    "node -e 'x'",
+    "npm config get registry",
+    'docker buildx imagetools inspect "$1"',
+  ])
+    assert.doesNotMatch(line, BUILDS, line);
+  const npm = stepRun("npm", "Publish to npm");
+  assert.match(npm, /npm publish "\$tarball" --tag latest --access public --ignore-scripts "\$@"/);
+  assert.doesNotMatch(npm, /npm pack|writeFileSync|rebuild_tarball|publish_rebuilt/);
+  assert.deepEqual(
+    releaseJobs.npm.steps
+      .filter((step) => step.uses?.startsWith("actions/download-artifact@"))
+      .map((step) => step.with),
+    [
+      { name: "npm-tarballs", path: "npm" },
+      { name: "release-manifest", path: "release" },
+    ],
+  );
+  assert.deepEqual(releaseJobs.npm.permissions, { "id-token": "write" });
+  assert.equal(releaseJobs.npm.environment, "release");
+  // pack builds with no credential at all.
+  assert.deepEqual(releaseJobs.pack.permissions, { contents: "read" });
+  assert.equal(
+    releaseJobs.pack.steps.find((step) => step.name === "Checkout").with["persist-credentials"],
+    false,
+  );
 });
 
 // GitHub's rule: a job whose `if` names no status function runs only if every job above it, however
@@ -1365,6 +1477,10 @@ test("a tag push runs every publisher after acceptance; a failed acceptance runs
   const finalizeFailed = simulateRun({ fail: ["finalize-images"] });
   for (const name of ["npm", "github-release", "promote"])
     assert.equal(finalizeFailed[name], "skipped", name);
+  // The GitHub release waits for npm.
+  const npmFailed = simulateRun({ fail: ["npm"] });
+  assert.equal(npmFailed["github-release"], "skipped");
+  assert.equal(simulateRun({ fail: ["pack"] }).npm, "skipped");
   for (const failed of ["npm", "github-release"])
     assert.equal(simulateRun({ fail: [failed] }).promote, "skipped", failed);
 });

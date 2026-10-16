@@ -50,12 +50,28 @@ const OVERRIDE_LINES = new Map([
     "await new Promise((resolve) => setTimeout(resolve, attempt * Number(process.env.RELEASE_TEST_RETRY_MS || 1500)));",
     "a retry wait, a read with the production default",
   ],
+  ["# REPUBLISH_TEST_WAIT, never a workflow.", "the comment over the integrity wait preamble"],
+  ["if [[ -z ${REPUBLISH_TEST_WAIT:-} ]]; then", "the preamble's unset test, a read"],
+  [
+    "elif [[ $REPUBLISH_TEST_WAIT =~ ^(0|[1-9][0-9]{0,3})$ ]]; then",
+    "the preamble's validation, a read",
+  ],
+  [
+    'echo "integrity read-back wait: overridden to $REPUBLISH_TEST_WAIT s × attempt"',
+    "the log line, reached only with a validated value",
+  ],
+  [
+    'echo "::error::REPUBLISH_TEST_WAIT is not a whole number of seconds."',
+    "the refusal, which names the variable and not its value",
+  ],
+  ["sleep $((attempt * ${REPUBLISH_TEST_WAIT:-5}))", "the integrity wait, a read with the default"],
 ]);
 
 // Rule 4. The tracked files that may name an override: the release workflow and its tests. A
 // script a release job runs could otherwise write $GITHUB_ENV itself.
 const NAMING_FILES = [
   ".github/workflows/release.yml",
+  "tooling/scripts/release-npm.test.mjs",
   "tooling/scripts/release-overrides.test.mjs",
   "tooling/scripts/release-publication.test.mjs",
 ];

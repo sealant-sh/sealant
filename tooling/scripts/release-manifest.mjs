@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * The release manifest: what one stable release run (.github/workflows/release.yml) built, by
- * digest. Every job after the build reads it from its own run's `release-manifest` artifact, never
- * from a tag, which another writer can move.
+ * digest, and the two npm tarballs its pack job made, by sha512. Every job after the build reads it
+ * from its own run's `release-manifest` artifact, never from a tag, which another writer can move.
  *
  *   write <out>                    from the run's digests-* and index-* records (env below)
  *   digest <manifest> <image> <arch>
@@ -14,7 +14,8 @@
  *                                  prints its digest
  *
  * `write` reads VERSION, COMMIT, DIGESTS (a directory of digests-<image>--<arch>/<hex>, as
- * download-artifact lays them out) and INDEXES (index-<image>/digest).
+ * download-artifact lays them out), INDEXES (index-<image>/digest) and PACKAGES (the pack job's
+ * {<name>: {file, sha512, integrity}}).
  *
  * The rules are sealant-sh/mend's scripts/release-manifest.mjs; the images are Core's.
  */
@@ -25,6 +26,8 @@ import { fileURLToPath } from "node:url";
 
 export const IMAGES = ["sealant-api", "sealant-worker", "sealant-ssh-gateway", "sealant-web"];
 export const ARCHES = ["amd64", "arm64"];
+/** The npm packages a release publishes, in the order it publishes them. */
+export const PACKAGES = ["@sealant/api-contracts", "@sealant/sdk"];
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const PLAIN_VERSION = /^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
 const MANIFEST_TYPES = new Set([
@@ -61,8 +64,26 @@ export function validateManifest(manifest) {
         `The release manifest has no ${arch} digest for ${image}`,
       );
   }
+  ensure(
+    manifest.packages !== null &&
+      typeof manifest.packages === "object" &&
+      JSON.stringify(Object.keys(manifest.packages)) === JSON.stringify(PACKAGES),
+    `The release manifest must record exactly ${PACKAGES.join(" and ")}`,
+  );
+  for (const name of PACKAGES) {
+    const entry = manifest.packages[name];
+    ensure(
+      entry?.file === tarballName(name, manifest.version) &&
+        /^[0-9a-f]{128}$/.test(entry.sha512 ?? "") &&
+        entry.integrity === `sha512-${Buffer.from(entry.sha512, "hex").toString("base64")}`,
+      `The release manifest's ${name} entry needs ${tarballName(name, manifest.version)}, its sha512 and the matching integrity`,
+    );
+  }
   return manifest;
 }
+
+/** The file npm pack names <name>@<version>: @sealant/sdk 1.2.3 is sealant-sdk-1.2.3.tgz. */
+export const tarballName = (name, version) => `${name.slice(1).replace("/", "-")}-${version}.tgz`;
 
 export const readManifest = (file) => validateManifest(JSON.parse(readFileSync(file, "utf8")));
 
@@ -77,7 +98,7 @@ function onlyFile(dir, what) {
 }
 
 /** The manifest from one run's records. */
-export function buildManifest({ version, commit, digests, indexes }) {
+export function buildManifest({ version, commit, digests, indexes, packages }) {
   const images = Object.fromEntries(
     IMAGES.map((image) => {
       const platforms = Object.fromEntries(
@@ -93,7 +114,7 @@ export function buildManifest({ version, commit, digests, indexes }) {
       return [image, { index, platforms }];
     }),
   );
-  return validateManifest({ version, commit, images });
+  return validateManifest({ version, commit, images, packages });
 }
 
 const sha256 = (buffer) => `sha256:${createHash("sha256").update(buffer).digest("hex")}`;
@@ -178,6 +199,7 @@ function main([command, ...args]) {
         commit: env.COMMIT,
         digests: env.DIGESTS,
         indexes: env.INDEXES,
+        packages: JSON.parse(env.PACKAGES ?? "null"),
       });
       writeFileSync(args[0], `${JSON.stringify(manifest, null, 2)}\n`);
       return JSON.stringify(manifest);

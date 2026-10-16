@@ -15,6 +15,7 @@ import { parse } from "yaml";
 import {
   ARCHES,
   IMAGES,
+  PACKAGES,
   buildManifest,
   checkIndex,
   validateManifest,
@@ -51,8 +52,24 @@ const records = (directory) => {
     mkdirSync(path.join(indexes, `index-${name}`), { recursive: true });
     writeFileSync(path.join(indexes, `index-${name}`, "digest"), `sha256:${hex(name)}\n`);
   }
-  return { digests, indexes };
+  return { digests, indexes, packages: packageRecords("1.2.3") };
 };
+
+/** What the pack job records for each tarball: its file name, sha512 and integrity. */
+const packageRecords = (version) =>
+  Object.fromEntries(
+    PACKAGES.map((name) => {
+      const digest = createHash("sha512").update(`${name} tarball`).digest();
+      return [
+        name,
+        {
+          file: `${name.slice(1).replace("/", "-")}-${version}.tgz`,
+          sha512: digest.toString("hex"),
+          integrity: `sha512-${digest.toString("base64")}`,
+        },
+      ];
+    }),
+  );
 
 test("the manifest holds every image's index and platform digests, and the run's identity", (t) => {
   const manifest = buildManifest({ version: "1.2.3", commit: COMMIT, ...records(scratch(t)) });
@@ -65,12 +82,14 @@ test("the manifest holds every image's index and platform digests, and the run's
     },
   });
   assert.deepEqual([manifest.version, manifest.commit], ["1.2.3", COMMIT]);
+  assert.deepEqual(manifest.packages, packageRecords("1.2.3"));
+  assert.deepEqual(Object.keys(manifest.packages), ["@sealant/api-contracts", "@sealant/sdk"]);
 });
 
 test("a run missing a record, or holding a stray one, writes no manifest", (t) => {
   const directory = scratch(t);
-  const { digests, indexes } = records(directory);
-  const base = { version: "1.2.3", commit: COMMIT, digests, indexes };
+  const { digests, indexes, packages } = records(directory);
+  const base = { version: "1.2.3", commit: COMMIT, digests, indexes, packages };
   writeFileSync(path.join(digests, "digests-sealant-api--arm64", hex("second")), "");
   assert.throws(() => buildManifest(base), /exactly one file/);
   rmSync(path.join(digests, "digests-sealant-api--arm64"), { recursive: true });
@@ -95,6 +114,23 @@ test("a run missing a record, or holding a stray one, writes no manifest", (t) =
           ...valid.images["sealant-worker"],
           platforms: { amd64: valid.images["sealant-worker"].platforms.amd64 },
         },
+      },
+    },
+    { ...valid, packages: undefined },
+    { ...valid, packages: { "@sealant/sdk": valid.packages["@sealant/sdk"] } },
+    { ...valid, packages: { ...valid.packages, "@sealant/extra": valid.packages["@sealant/sdk"] } },
+    {
+      ...valid,
+      packages: {
+        ...valid.packages,
+        "@sealant/sdk": { ...valid.packages["@sealant/sdk"], integrity: "sha512-forged" },
+      },
+    },
+    {
+      ...valid,
+      packages: {
+        ...valid.packages,
+        "@sealant/sdk": { ...valid.packages["@sealant/sdk"], file: "sealant-sdk-1.2.2.tgz" },
       },
     },
   ])
@@ -127,7 +163,9 @@ test("the manifest job writes from this run's records, and keeps them 90 days", 
   const write = step("release-manifest", "Write release-manifest.json");
   assert.equal(write.env.COMMIT, "${{ github.sha }}");
   const directory = scratch(t);
-  const { digests, indexes } = records(directory);
+  const { digests, indexes, packages } = records(directory);
+  assert.equal(write.env.PACKAGES, "${{ needs.pack.outputs.records }}");
+  assert.ok(job.needs.includes("pack"));
   const run = spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", write.run], {
     cwd: root,
     encoding: "utf8",
@@ -138,6 +176,7 @@ test("the manifest job writes from this run's records, and keeps them 90 days", 
       COMMIT,
       DIGESTS: digests,
       INDEXES: indexes,
+      PACKAGES: JSON.stringify(packages),
     },
   });
   assert.equal(run.status, 0, run.stderr);
@@ -145,6 +184,7 @@ test("the manifest job writes from this run's records, and keeps them 90 days", 
     readFileSync(path.join(directory, "manifest/release-manifest.json"), "utf8"),
   );
   assert.equal(written.images["sealant-api"].index, `sha256:${hex("sealant-api")}`);
+  assert.deepEqual(written.packages, packages);
   const upload = job.steps.find((entry) => entry.with?.name === "release-manifest");
   assert.equal(upload.with["retention-days"], 90);
 });
