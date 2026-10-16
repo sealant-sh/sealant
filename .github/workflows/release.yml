@@ -20,7 +20,7 @@ jobs:
   # in next.yml), and no sealantd prerelease is pinned anywhere (ADR 0015 in sealant-sh/mend).
   pins:
     name: Check what the release pins
-    runs-on: [self-hosted, box, linux, x64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       # Full history: the prerelease check asks whether each next build's commit is an ancestor.
@@ -48,7 +48,7 @@ jobs:
   image:
     name: Image (${{ matrix.name }})
     needs: pins
-    runs-on: [self-hosted, box, linux, x64]
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -117,7 +117,7 @@ jobs:
   selfhost-smoke:
     name: Self-host install smoke
     needs: image
-    runs-on: [self-hosted, box, linux, x64]
+    runs-on: ubuntu-24.04
     # Pull ANONYMOUSLY, exactly like a user: GHCR authorizes GITHUB_TOKEN by package↔repo linkage
     # (not visibility), and logging in with it 403'd even on public packages during the v0.1.0
     # release. Anonymous pulls of public packages always work. Consequence: the first release of any
@@ -162,7 +162,7 @@ jobs:
   workspace-e2e:
     name: Workspace runtime e2e (pinned sealantd)
     needs: pins
-    runs-on: [self-hosted, box, linux, x64]
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -176,7 +176,7 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          cache: pnpm
+          # No pnpm store cache: other jobs, running unowned code, write that cache.
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -274,7 +274,7 @@ jobs:
   release:
     name: Publish GitHub release
     needs: [selfhost-smoke, workspace-e2e]
-    runs-on: [self-hosted, box, linux, x64]
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:

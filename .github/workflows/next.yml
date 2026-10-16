@@ -12,7 +12,9 @@
 # @sealant/sdk or move its `latest`. Images have no such boundary: the token the image jobs hold
 # (`packages: write`) can push the stable images too, GHCR cannot scope it per image, and any
 # writer can run a branch workflow that requests it, code-owner review or not. Every action and
-# BuildKit image in those jobs is pinned and no cache other jobs write is restored; Mend's bundle
+# BuildKit image in those jobs is pinned and no cache other jobs write is restored. Every job runs on a
+# GitHub-hosted runner, a fresh VM: the box's runner VMs keep state between jobs, so code from an
+# earlier pull request could change what a job there builds, tests or pushes. Mend's bundle
 # image pins the Core images by digest, which keeps out a tag moved after the pin (ADR 0015, Known
 # gaps).
 #
@@ -47,7 +49,7 @@ jobs:
   plan:
     name: Resolve the version
     if: github.repository == 'sealant-sh/sealant'
-    runs-on: [self-hosted, box, linux, x64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       version: ${{ steps.plan.outputs.version }}
@@ -111,7 +113,7 @@ jobs:
       matrix:
         image: [api, worker, ssh-gateway]
         platform:
-          - { arch: amd64, runner: [self-hosted, box, linux, x64] }
+          - { arch: amd64, runner: ubuntu-24.04 }
           - { arch: arm64, runner: ubuntu-24.04-arm }
     runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 60
@@ -173,7 +175,7 @@ jobs:
     name: Unit and integration tests
     needs: plan
     if: needs.plan.outputs.publish == 'true'
-    runs-on: [self-hosted, box, linux, x64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
       postgres:
@@ -202,7 +204,7 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
-          cache: pnpm
+          # No pnpm store cache: other jobs, running unowned code, write that cache.
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -221,7 +223,7 @@ jobs:
     name: Workspace runtime e2e (pinned sealantd)
     needs: plan
     if: needs.plan.outputs.publish == 'true'
-    runs-on: [self-hosted, box, linux, x64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - name: Checkout
@@ -236,7 +238,7 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          cache: pnpm
+          # No pnpm store cache: other jobs, running unowned code, write that cache.
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -286,7 +288,7 @@ jobs:
     strategy:
       matrix:
         image: [api, worker, ssh-gateway]
-    runs-on: [self-hosted, box, linux, x64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -327,7 +329,7 @@ jobs:
   pack:
     name: Pack npm prereleases
     needs: [plan, image-tag]
-    runs-on: [self-hosted, box, linux, x64]
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
