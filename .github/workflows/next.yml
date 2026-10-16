@@ -173,13 +173,25 @@ jobs:
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
+      # Telemetry only: it never turns the job's result red, and says so when it has nothing.
       - name: Report peak disk use
         if: always()
+        continue-on-error: true
         run: |
-          df -h / /mnt 2>/dev/null || df -h /
-          awk '{ if ($1 > r) r = $1; if ($2 > m) m = $2 } END {
-            printf "Peak disk used: / %d MiB, /mnt %d MiB\n", r / 1048576, m / 1048576 }' \
-            "$RUNNER_TEMP/disk-used.log" | tee -a "$GITHUB_STEP_SUMMARY"
+          df -h / /mnt 2>/dev/null || df -h / || true
+          log=$RUNNER_TEMP/disk-used.log
+          if [ -s "$log" ]; then
+            report=$(awk '$1 ~ /^[0-9]+$/ { n++; if ($1 > r) r = $1; if ($2 ~ /^[0-9]+$/) { two = 1; if ($2 > m) m = $2 } }
+              END { if (!n) { print "Disk use unavailable: no samples"; exit }
+                printf "Sampled peak disk used (every 5 s, %d samples): / %d MiB", n, r / 1048576
+                if (two) printf ", /mnt %d MiB\n", m / 1048576; else print ", /mnt not present" }' \
+              "$log") || report="Disk use unavailable: the samples could not be read"
+          else
+            report="Disk use unavailable: the sampler wrote no samples"
+          fi
+          echo "$report"
+          echo "$report" >>"$GITHUB_STEP_SUMMARY" ||
+            echo "::warning::Could not write the disk report to the step summary"
 
   # What CI runs on a pull request beyond lint and typecheck, which main requires: the unit and
   # integration suites against a migrated Postgres. A next build never publishes over a failing one.
@@ -233,13 +245,25 @@ jobs:
 
       - name: Unit and integration tests
         run: pnpm exec turbo test --force
+      # Telemetry only: it never turns the job's result red, and says so when it has nothing.
       - name: Report peak disk use
         if: always()
+        continue-on-error: true
         run: |
-          df -h / /mnt 2>/dev/null || df -h /
-          awk '{ if ($1 > r) r = $1; if ($2 > m) m = $2 } END {
-            printf "Peak disk used: / %d MiB, /mnt %d MiB\n", r / 1048576, m / 1048576 }' \
-            "$RUNNER_TEMP/disk-used.log" | tee -a "$GITHUB_STEP_SUMMARY"
+          df -h / /mnt 2>/dev/null || df -h / || true
+          log=$RUNNER_TEMP/disk-used.log
+          if [ -s "$log" ]; then
+            report=$(awk '$1 ~ /^[0-9]+$/ { n++; if ($1 > r) r = $1; if ($2 ~ /^[0-9]+$/) { two = 1; if ($2 > m) m = $2 } }
+              END { if (!n) { print "Disk use unavailable: no samples"; exit }
+                printf "Sampled peak disk used (every 5 s, %d samples): / %d MiB", n, r / 1048576
+                if (two) printf ", /mnt %d MiB\n", m / 1048576; else print ", /mnt not present" }' \
+              "$log") || report="Disk use unavailable: the samples could not be read"
+          else
+            report="Disk use unavailable: the sampler wrote no samples"
+          fi
+          echo "$report"
+          echo "$report" >>"$GITHUB_STEP_SUMMARY" ||
+            echo "::warning::Could not write the disk report to the step summary"
 
   # The same proof the release runs before it publishes the SDK: the baked workspace image with the
   # pinned sealantd, and the sealantd e2e suite in required mode.
@@ -308,13 +332,25 @@ jobs:
         env:
           SEALANT_E2E_REQUIRE_IMAGE: "1"
         run: pnpm --filter @sealant/ssh-gateway test:e2e
+      # Telemetry only: it never turns the job's result red, and says so when it has nothing.
       - name: Report peak disk use
         if: always()
+        continue-on-error: true
         run: |
-          df -h / /mnt 2>/dev/null || df -h /
-          awk '{ if ($1 > r) r = $1; if ($2 > m) m = $2 } END {
-            printf "Peak disk used: / %d MiB, /mnt %d MiB\n", r / 1048576, m / 1048576 }' \
-            "$RUNNER_TEMP/disk-used.log" | tee -a "$GITHUB_STEP_SUMMARY"
+          df -h / /mnt 2>/dev/null || df -h / || true
+          log=$RUNNER_TEMP/disk-used.log
+          if [ -s "$log" ]; then
+            report=$(awk '$1 ~ /^[0-9]+$/ { n++; if ($1 > r) r = $1; if ($2 ~ /^[0-9]+$/) { two = 1; if ($2 > m) m = $2 } }
+              END { if (!n) { print "Disk use unavailable: no samples"; exit }
+                printf "Sampled peak disk used (every 5 s, %d samples): / %d MiB", n, r / 1048576
+                if (two) printf ", /mnt %d MiB\n", m / 1048576; else print ", /mnt not present" }' \
+              "$log") || report="Disk use unavailable: the samples could not be read"
+          else
+            report="Disk use unavailable: the sampler wrote no samples"
+          fi
+          echo "$report"
+          echo "$report" >>"$GITHUB_STEP_SUMMARY" ||
+            echo "::warning::Could not write the disk report to the step summary"
 
   # Tagged only after the tests and the e2e passed, so no version exists without its npm packages
   # being about to follow.
