@@ -92,12 +92,13 @@ const jobBlocks = (text) =>
       .filter(([job]) => job !== undefined),
   );
 
+const workflowText = (file) =>
+  readFile(new URL(`../../.github/workflows/${file}`, import.meta.url), "utf8");
+const runnerOf = (block) => runnersIn(block).at(0)?.labels.join(", ");
+
 test("pull requests run the unit suite where Next does", async () => {
-  const read = (file) =>
-    readFile(new URL(`../../.github/workflows/${file}`, import.meta.url), "utf8");
-  const [ci, next] = await Promise.all([read("ci.yml"), read("next.yml")]);
+  const [ci, next] = await Promise.all([workflowText("ci.yml"), workflowText("next.yml")]);
   // The jobs that run the full suite, wherever they are: each must use next.yml test's runner.
-  const runnerOf = (block) => runnersIn(block).at(0)?.labels.join(", ");
   const suite = /\n\s+run: pnpm exec turbo test --force\n/;
   const nextTest = jobBlocks(next).get("test");
   assert.match(nextTest ?? "", suite, "next.yml's test job runs the full suite");
