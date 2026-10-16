@@ -1092,6 +1092,74 @@ test("the smoke fails unless every service runs the image ID it pulled by digest
   }
 });
 
+// The running-image check is a shell step, not a script with its own tests: break it for one
+// service at a time and the smoke must fail, naming that service and no other.
+test("the smoke fails, naming the service, when one service runs another image or version", (t) => {
+  const assertion = stepRun(
+    "selfhost-smoke",
+    "Assert each service runs the image pulled by digest",
+  );
+  const services = {
+    "sealant-api": "api",
+    "sealant-worker": "worker",
+    "sealant-ssh-gateway": "ssh-gateway",
+    "sealant-web": "web",
+  };
+  // The IDs the pull (or, on a dry run, the load) step recorded.
+  const recorded = Object.fromEntries(IMAGES.map((image) => [image, indexOf(`recorded ${image}`)]));
+  const running = Object.fromEntries(
+    IMAGES.map((image) => [services[image], { id: recorded[image], name: `${repo(image)}:1.2.3` }]),
+  );
+  const labels = Object.fromEntries(IMAGES.map((image) => [recorded[image], "1.2.3"]));
+  const run = (state) => {
+    const directory = scratch(t, "core-smoke-mutation-");
+    smokeDocker(directory, state);
+    const ids = path.join(directory, "ids");
+    writeFileSync(ids, IMAGES.map((image) => `${image} ${recorded[image]}\n`).join(""));
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", assertion], {
+      encoding: "utf8",
+      env: {
+        PATH: `${path.join(directory, "bin")}:/usr/bin:/bin`,
+        HOME: directory,
+        NAMESPACE: `ghcr.io/${OWNER}`,
+        VERSION: "1.2.3",
+        IDS: ids,
+      },
+    });
+    return {
+      ...result,
+      errors: result.stdout.split("\n").filter((line) => line.startsWith("::error::")),
+    };
+  };
+  const intact = run({ running, labels });
+  assert.equal(intact.status, 0, intact.stdout + intact.stderr);
+  assert.deepEqual(intact.errors, []);
+  for (const image of IMAGES) {
+    const service = services[image];
+    // A container running another image ID than the one recorded, under the expected name and label.
+    const other = indexOf(`other ${image}`);
+    const swapped = run({
+      running: { ...running, [service]: { id: other, name: `${repo(image)}:1.2.3` } },
+      labels: { ...labels, [other]: "1.2.3" },
+    });
+    assert.equal(swapped.status, 1, `${service}: another image ID`);
+    assert.equal(swapped.errors.length, 1, `${service}: ${swapped.errors.join(" | ")}`);
+    assert.ok(
+      swapped.errors[0].startsWith(`::error::${service} runs ${other} `),
+      swapped.errors[0],
+    );
+    assert.ok(swapped.errors[0].includes(`not ${recorded[image]}`), swapped.errors[0]);
+    // The recorded image, carrying another version's label.
+    const relabelled = run({ running, labels: { ...labels, [recorded[image]]: "1.2.2" } });
+    assert.equal(relabelled.status, 1, `${service}: another version label`);
+    assert.equal(relabelled.errors.length, 1, `${service}: ${relabelled.errors.join(" | ")}`);
+    assert.ok(relabelled.errors[0].startsWith(`::error::${service} runs `), relabelled.errors[0]);
+    assert.ok(relabelled.errors[0].includes("version 1.2.2"), relabelled.errors[0]);
+    // The other three services are still checked, and pass.
+    assert.equal(occurrences(relabelled.stdout, "as pulled by digest"), 3, service);
+  }
+});
+
 test("acceptance passes only when the smoke on both arches and the workspace e2e passed", () => {
   const gate = releaseJobs.acceptance;
   assert.deepEqual(gate.needs, ["selfhost-smoke", "workspace-e2e"]);
