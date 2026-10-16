@@ -78,7 +78,10 @@ jobs:
 
   docker-volume-mounts:
     name: Docker volume mounts
-    runs-on: [self-hosted, box, linux, x64]
+    # Where next.yml's `test` runs (tooling/scripts/workflow-runners.test.mjs): a pull request is
+    # tested in the environment its merge's Next tests in. On the box, a test that depended on the
+    # host's /etc/skel passed every pull request and failed the first hosted Next (#370).
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     # The `*.db.test.ts` suites (drain leases, retention with its exit write, launch preemption,
     # attestation freshness, idempotent creates) run against a real, migrated Postgres. They skip

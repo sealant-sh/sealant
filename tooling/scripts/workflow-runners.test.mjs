@@ -82,3 +82,17 @@ test("the guard refuses every way of naming a box runner", () => {
     "a hosted matrix row",
   );
 });
+
+/** The runs-on line of one top-level job in a workflow's text. */
+const jobRunner = (text, job) => {
+  const block = text.split(/\n(?=  [a-z0-9-]+:\n)/).find((part) => part.startsWith(`  ${job}:\n`));
+  assert.ok(block, `the workflow has a ${job} job`);
+  return runnersIn(block).at(0)?.labels.join(", ");
+};
+
+test("pull requests run the unit suite where Next does", async () => {
+  const read = (file) => readFile(new URL(`../../.github/workflows/${file}`, import.meta.url), "utf8");
+  const [ci, next] = await Promise.all([read("ci.yml"), read("next.yml")]);
+  assert.match(ci, /run: pnpm exec turbo test --force/);
+  assert.equal(jobRunner(ci, "docker-volume-mounts"), jobRunner(next, "test"));
+});
