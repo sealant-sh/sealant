@@ -166,6 +166,21 @@ The pieces:
   holds it, and cut a new version. Nothing after `npm` runs.
 - **Staging tags** (`staging-<run id>-<attempt>`) stay on GHCR; nothing removes them yet, and
   nothing pulls them.
+- **Dry run**: `gh workflow run release.yml --ref <branch> -f dry_run=true`. Its version is derived,
+  never given: `<packages/sdk version>-dryrun.<run id>.<attempt>`. It builds every image to an
+  archive (`archive-build`), assembles each index in a registry that lives on loopback inside
+  `archive-merge`, packs the npm tarballs, writes the release manifest, runs the self-host smoke on
+  amd64 and arm64 from the archives and the workspace e2e, and checks acceptance. It writes to no
+  registry, npm included, and no job in it holds `packages: write` or an `id-token`: `build`,
+  `merge`, `finalize-images`, `npm`, `github-release` and `promote` run on a tag push only. A pushed
+  tag carrying `dryrun` is refused before anything builds, and every job that publishes first
+  refuses any version that is not its own tag's plain `X.Y.Z`, however the version arrived.
+- **Still unproven until a watched stable release**: the first OIDC publish of a downloaded tarball
+  (npm has only ever published stable Core with `pnpm publish`), the npm job reading GitHub's latest
+  release with a token that holds only `id-token: write`, `finalize-images` and `promote` writing to
+  GHCR, the GitHub release created with `--latest=false` and then moved by `promote`, the lock
+  queueing across real runs, and the smoke pulling staged digests (a dry run accepts archives, not
+  pulls). A dry run proves the builds, both arches' smoke, the manifest and the tarballs.
 - **Local dry-run**: build the images with the same Dockerfiles
   (`docker build -f apps/<app>/Dockerfile -t ghcr.io/sealant-sh/sealant-<name>:0.0.0-dev .`), then
   `SEALANT_VERSION=0.0.0-dev SEALANT_COMPOSE_URL=$PWD/compose.selfhost.yaml sh install.sh`. Offset
