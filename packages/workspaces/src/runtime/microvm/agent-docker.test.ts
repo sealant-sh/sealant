@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, describe, expect, it, onTestFinished } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
 import { WebSocket } from "ws";
 
 import {
@@ -205,6 +205,7 @@ const startAgent = async (extraEnv: Record<string, string> = {}): Promise<Agent>
     });
     child.once("exit", (code) => reject(new Error(`agent exited early (${code}): ${output}`)));
   });
+  phase("agent listening");
   const agent = {
     child,
     port,
@@ -317,20 +318,43 @@ const waitFor = async (predicate: () => Promise<boolean>, timeoutMs = 15_000): P
 };
 
 /**
- * The time each phase of a case took, printed only when the case ran over 3 s or failed. The
+ * The phases a case completed and when, printed only when the case ran over 3 s or failed. The
  * probe-recovery case takes about 2 s, but on GitHub's 4-vCPU runners it sometimes stalls past
- * 3 s in the full suite (#374); a stalled run then names the phase it stalled in.
+ * 3 s in the full suite (#374); a stalled run then shows the last phase it completed.
+ *
+ * On a timeout Vitest aborts the case's signal at the deadline, but the case's promise can run on
+ * and onTestFinished only fires after afterEach. So the record freezes at the abort: phases marked
+ * later are dropped, and the in-case time stops at the deadline, apart from cleanup.
  */
-const phaseTimes = () => {
+export const phaseTimes = (
+  signal: AbortSignal,
+  onFinished: (
+    hook: (context: { task: { result?: { state?: string } } }) => void,
+  ) => void = onTestFinished,
+  report: (line: string) => void = (line) => console.error(line),
+) => {
   const started = Date.now();
   const marks: string[] = [];
-  onTestFinished(({ task }) => {
-    const elapsed = Date.now() - started;
-    if (elapsed > 3_000 || task.result?.state === "fail") {
-      console.error(`[phase times, #374] ${elapsed} ms in all: ${marks.join(" · ")}`);
-    }
+  let timedOut: { at: number; marks: readonly string[] } | undefined;
+  signal.addEventListener(
+    "abort",
+    () => {
+      timedOut = { at: Date.now() - started, marks: [...marks] };
+    },
+    { once: true },
+  );
+  onFinished(({ task }) => {
+    const finished = Date.now() - started;
+    const inCase = timedOut?.at ?? Number(marks.at(-1)?.match(/ (\d+) ms$/)?.[1] ?? finished);
+    if (timedOut === undefined && inCase <= 3_000 && task.result?.state !== "fail") return;
+    report(
+      `[phase times, #374] ${timedOut ? `timed out at ${timedOut.at} ms` : `ran ${inCase} ms`}` +
+        ` (${finished} ms with cleanup); phases completed: ${(timedOut?.marks ?? marks).join(" · ")}`,
+    );
   });
-  return (phase: string) => marks.push(`${phase} ${Date.now() - started} ms`);
+  return (phase: string) => {
+    if (timedOut === undefined) marks.push(`${phase} ${Date.now() - started} ms`);
+  };
 };
 
 const readLines = async (file: string): Promise<ReadonlyArray<string>> => {
@@ -347,7 +371,14 @@ const processExists = (pid: number): boolean => {
   }
 };
 
+/** Marks a completed phase of the running case (#374); every case's record starts in beforeEach. */
+let phase: (label: string) => void = () => {};
+
 describe("microvm agent guest-local Docker", () => {
+  beforeEach(({ signal }) => {
+    phase = phaseTimes(signal);
+  });
+
   it("rejects a v2 run before 200 when the image is not Docker-capable", async () => {
     const agent = await startAgent({ SEALANT_MICROVM_DOCKER_CAPABLE: "0" });
     expect(await runV2(agent)).toMatchObject({ status: 500 });
@@ -671,12 +702,10 @@ describe("microvm agent guest-local Docker", () => {
   });
 
   it("tolerates one missed runtime probe, resets on recovery, then fails sustained loss", async () => {
-    const phase = phaseTimes();
     const agent = await startAgent({
       SEALANT_MICROVM_DOCKER_PROBE_INTERVAL_MS: "200",
       FAKE_DOCKER_PROBE_DELAY_MS: "80",
     });
-    phase("agent started");
     expect(await runV2(agent)).toMatchObject({ status: 200 });
     await writeFile(agent.readyFile, "ready");
     // A capture-sourced launch: its hooks flush (a VM that boots no capture source has nothing to
@@ -706,9 +735,10 @@ describe("microvm agent guest-local Docker", () => {
 
     await writeFile(agent.probeSequenceFile, "S");
     await waitFor(async () => (await readLines(agent.probeRecord)).length > initialProbeCount + 1);
-    phase("recovered");
+    phase("succeeding probe recorded");
     expect(await hook(agent, "resume")).toMatchObject({ status: 200 });
     expect(await health(agent)).toMatchObject({ status: 200 });
+    phase("recovered");
 
     await writeFile(agent.probeSequenceFile, "FFF");
     await waitFor(async () => (await health(agent)).docker.status === "failed");
@@ -830,5 +860,44 @@ describe("microvm agent guest-local Docker", () => {
     expect(processExists(daemonPid)).toBe(false);
     expect(await readLines(agent.probeRecord)).toHaveLength(probesAtExit);
     await rm(agent.dir, { recursive: true, force: true });
+  });
+});
+
+describe("phaseTimes (#374)", () => {
+  it("freezes at the timeout: later phases and cleanup are left out of the record", async () => {
+    const abort = new AbortController();
+    let finish: ((context: { task: { result?: { state?: string } } }) => void) | undefined;
+    const lines: string[] = [];
+    const mark = phaseTimes(
+      abort.signal,
+      (onDone) => (finish = onDone),
+      (line) => lines.push(line),
+    );
+    mark("before the deadline");
+    abort.abort();
+    // The case's promise runs on after the deadline, and cleanup takes a while.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    mark("after the deadline");
+    finish?.({ task: { result: { state: "fail" } } });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(
+      /^\[phase times, #374\] timed out at \d+ ms \(\d+ ms with cleanup\); phases completed: before the deadline \d+ ms$/,
+    );
+    expect(lines[0]).not.toContain("after the deadline");
+    const [, at, withCleanup] = lines[0]!.match(/timed out at (\d+) ms \((\d+) ms/)!;
+    expect(Number(at)).toBeLessThan(Number(withCleanup));
+  });
+
+  it("stays quiet when the case passed within 3 s", () => {
+    let finish: ((context: { task: { result?: { state?: string } } }) => void) | undefined;
+    const lines: string[] = [];
+    const mark = phaseTimes(
+      new AbortController().signal,
+      (onDone) => (finish = onDone),
+      (line) => lines.push(line),
+    );
+    mark("done");
+    finish?.({ task: { result: { state: "pass" } } });
+    expect(lines).toEqual([]);
   });
 });
