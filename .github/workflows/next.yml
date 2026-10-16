@@ -379,6 +379,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The version's tag is read before it is written, and the read after the write decides. This
+      # run's index digest is known before anything is written: `imagetools create --dry-run`
+      # prints the exact bytes the create pushes, and the digest is their sha256. A tag at that
+      # digest is done (a re-run of failed jobs); a tag at any other digest is refused, so a version
+      # Mend may already have pinned by digest is never replaced. Absent is buildx's sole not-found
+      # line; any other failed read fails the step and writes nothing.
+      # tooling/scripts/next-image-tag.test.mjs runs this step as written, against a stand-in docker.
       - name: Tag the multi-arch image
         working-directory: /tmp/digests
         env:
@@ -386,15 +393,82 @@ jobs:
           VERSION: ${{ needs.plan.outputs.version }}
         run: |
           set -euo pipefail
-          # A version is tagged once: a re-run after a failed npm job keeps the image Mend may
-          # already have pinned by digest.
-          if ! docker buildx imagetools inspect "$REPOSITORY:$VERSION" >/dev/null 2>&1; then
-            sources=()
-            for digest in *; do sources+=("$REPOSITORY@sha256:$digest"); done
-            docker buildx imagetools create --tag "$REPOSITORY:$VERSION" "${sources[@]}"
+          ref="$REPOSITORY:$VERSION"
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          # The digest <ref> names, `absent` when the registry says it does not exist, and a
+          # failure for anything else: a read that failed is never taken for an absent tag. Absent
+          # is buildx's not-found line and nothing else: all of stderr, its trailing newlines aside,
+          # is exactly `ERROR: <ref>: not found`, and stdout is empty.
+          read_tag() {
+            local out err status=0 digest
+            out=$(docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' \
+              2>"$work/inspect.err") || status=$?
+            if ((status == 0)); then
+              digest=$(jq -r '.digest // ""' <<<"$out")
+              if [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                printf '%s\n' "$digest"
+                return 0
+              fi
+              echo "::error::$1 answered without a digest." >&2
+              return 1
+            fi
+            err=$(<"$work/inspect.err")
+            if [[ -z $out && $err == "ERROR: $1: not found" ]]; then
+              echo absent
+              return 0
+            fi
+            cat "$work/inspect.err" >&2
+            echo "::error::Could not read $1; nothing was written." >&2
+            return 1
+          }
+          sources=() platforms=()
+          for digest in *; do
+            if [[ ! $digest =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::\"$digest\" in the digests artifact is not an image digest."
+              exit 1
+            fi
+            sources+=("$REPOSITORY@sha256:$digest")
+            platforms+=("sha256:$digest")
+          done
+          current=$(read_tag "$ref")
+          # This run's index as the create would push it: the dry run prints its bytes and one newline.
+          docker buildx imagetools create --dry-run "${sources[@]}" >"$work/index.json"
+          if [[ $(tail -c 1 "$work/index.json" | od -An -tx1 | tr -d ' \n') != 0a ]] ||
+            ! head -c -1 "$work/index.json" | jq -e --args '[.manifests[].digest] | sort == ($ARGS.positional | sort)' \
+              "${platforms[@]}" >/dev/null; then
+            echo "::error::The dry run did not print an index of this run's images; nothing was written."
+            exit 1
           fi
-          digest=$(docker buildx imagetools inspect "$REPOSITORY:$VERSION" --format '{{json .Manifest}}' | jq -r .digest)
-          echo "- \`$REPOSITORY:$VERSION\` (\`$digest\`)" >> "$GITHUB_STEP_SUMMARY"
+          ours="sha256:$(head -c -1 "$work/index.json" | sha256sum | cut -d ' ' -f 1)"
+          if [[ $current == "$ours" ]]; then
+            echo "$ref is already this run's $ours."
+          elif [[ $current != absent ]]; then
+            echo "::error::$ref exists at $current, not $ours, the index this run built. Version $VERSION is spent: a new commit on main publishes a new one."
+            exit 1
+          else
+            status=0
+            docker buildx imagetools create --metadata-file "$work/create.json" --tag "$ref" \
+              "${sources[@]}" || status=$?
+            if ! after=$(read_tag "$ref"); then
+              echo "::error::$ref is unreadable after the create (exit $status)."
+              exit 1
+            fi
+            if [[ $after == absent ]]; then
+              echo "::error::$ref does not exist after the create (exit $status)."
+              exit 1
+            elif [[ $after != "$ours" ]]; then
+              echo "::error::$ref resolves to $after after the create, not $ours, the index this run built. Version $VERSION is spent: a new commit on main publishes a new one."
+              exit 1
+            fi
+            if ((status != 0)); then
+              echo "::warning::The create reported exit $status, but $ref resolves to $ours, the index this run built."
+            elif [[ $(jq -r '."containerimage.descriptor".digest // ""' "$work/create.json" 2>/dev/null) != "$ours" ]]; then
+              echo "::warning::The create's metadata does not name $ours, but $ref resolves to it."
+            fi
+            echo "$ref is $ours."
+          fi
+          echo "- \`$ref\` (\`$ours\`)" >> "$GITHUB_STEP_SUMMARY"
 
   # Builds and packs the two packages. No id-token here: nothing this job runs, the dependencies'
   # build tools included, can reach the npm credential.

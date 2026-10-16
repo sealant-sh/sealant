@@ -50,7 +50,7 @@ jobs:
           node --test tooling/scripts/next-version.test.mjs
           tooling/scripts/check-release-pins.test.mjs tooling/scripts/check-tarball.test.mjs
           tooling/scripts/republish.test.mjs tooling/scripts/pin-sealantd.test.mjs
-          tooling/scripts/workflow-runners.test.mjs
+          tooling/scripts/workflow-runners.test.mjs tooling/scripts/next-image-tag.test.mjs
 
       - name: Run lint
         run: pnpm lint
