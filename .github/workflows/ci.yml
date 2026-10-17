@@ -68,6 +68,7 @@ jobs:
           tooling/scripts/workflow-runners.test.mjs tooling/scripts/next-image-tag.test.mjs
           tooling/scripts/release-manifest.test.mjs tooling/scripts/release-publication.test.mjs
           tooling/scripts/release-overrides.test.mjs tooling/scripts/release-npm.test.mjs
+          tooling/scripts/workflow-concurrency.test.mjs
 
       - name: Run lint
         run: pnpm lint

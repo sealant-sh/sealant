@@ -39,6 +39,7 @@
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@actions/expressions": "^0.3.61",
     "@changesets/cli": "^2.29.5",
     "@effect/language-service": "^0.86.2",
     "@playwright/test": "^1.56.1",
