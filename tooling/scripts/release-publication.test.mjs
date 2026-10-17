@@ -1312,92 +1312,102 @@ const DOCKER_IMAGE_COMMANDS = [
 /**
  * <script>'s commands as a shell splits them: each a list of words, `{ text, dynamic }`. Single
  * quotes, double quotes and backslash escapes keep a word whole, and a backslash-newline joins two
- * lines; commands end at an unquoted newline, `;`, `&`, `|`, `(` or `)`. A word is dynamic when it
- * holds an expansion outside single quotes: `$NAME`, `${…}`, `$(…)` or backquotes. Comments are
- * dropped. Not a shell: no aliases, functions, brace or glob expansion, and the contents of `$(…)`
- * are not read as commands.
+ * lines; commands end at an unquoted newline, `;`, `&`, `|`, `(`, `)`, `<` or `>`. A word is
+ * dynamic when it holds an expansion outside single quotes: `$NAME`, `${…}`, `$(…)` or backquotes.
+ * The body of each command substitution, `$(…)` or backquoted, inside double quotes or not, is
+ * split too, as commands of its own, so `cid=$(docker run --detach alpine:3.22)` is read.
+ * Comments are dropped. Not a shell: no aliases, functions, brace or glob expansion. Ported from
+ * sealant-sh/sealantd's scripts/release-publication.test.mjs (lexShell), for one check in both.
  */
 const shellCommands = (script) => {
   const commands = [[]];
+  const nested = [];
   let word;
-  let dynamic = false;
-  const end = () => {
-    if (word !== undefined) commands.at(-1).push({ text: word, dynamic });
+  const add = (text, dynamic = false) => {
+    word ??= { text: "", dynamic: false };
+    word.text += text;
+    word.dynamic ||= dynamic;
+  };
+  const endWord = () => {
+    if (word !== undefined) commands.at(-1).push(word);
     word = undefined;
-    dynamic = false;
   };
-  const add = (text) => (word = (word ?? "") + text);
-  /** The index just past the `)` closing the `$(` at <at>, counting nested parentheses. */
-  const closing = (at) => {
-    let depth = 0;
-    for (let index = at; index < script.length; index += 1) {
-      if (script[index] === "(") depth += 1;
-      if (script[index] === ")" && (depth -= 1) === 0) return index + 1;
+  const endCommand = () => {
+    endWord();
+    if (commands.at(-1).length > 0) commands.push([]);
+  };
+  /** The body of the `$(` whose body starts at <from>, and the index past its `)`. */
+  const substitution = (from) => {
+    let depth = 1;
+    let quote;
+    for (let at = from; at < script.length; at += 1) {
+      const char = script[at];
+      if (quote === "'") {
+        if (char === "'") quote = undefined;
+      } else if (char === "\\") at += 1;
+      else if (quote === '"') {
+        if (char === '"') quote = undefined;
+      } else if (char === "'" || char === '"') quote = char;
+      else if (char === "(") depth += 1;
+      else if (char === ")" && (depth -= 1) === 0) return [script.slice(from, at), at + 1];
     }
-    return script.length;
+    throw new Error(`an unclosed $( in: ${script.slice(from - 2, from + 60)}`);
   };
-  for (let at = 0; at < script.length; ) {
+  /** Reads the expansion at <at> (`$(…)`, a backquoted command or `$`) into the word; past it. */
+  const expansion = (at) => {
+    if (script.startsWith("$(", at)) {
+      const [body, next] = substitution(at + 2);
+      nested.push(body);
+      add("$(…)", true);
+      return next;
+    }
+    if (script[at] === "`") {
+      const close = script.indexOf("`", at + 1);
+      if (close < 0) throw new Error("an unclosed backquote");
+      nested.push(script.slice(at + 1, close));
+      add("`…`", true);
+      return close + 1;
+    }
+    add("$", true);
+    return at + 1;
+  };
+  let at = 0;
+  while (at < script.length) {
     const char = script[at];
     if (char === "\\") {
       if (script[at + 1] !== "\n") add(script[at + 1] ?? "");
       at += 2;
     } else if (char === "'") {
       const close = script.indexOf("'", at + 1);
-      add(script.slice(at + 1, close < 0 ? script.length : close));
-      at = close < 0 ? script.length : close + 1;
+      if (close < 0) throw new Error(`an unclosed ' in: ${script.slice(at, at + 60)}`);
+      add(script.slice(at + 1, close));
+      at = close + 1;
     } else if (char === '"') {
       add("");
-      for (at += 1; at < script.length && script[at] !== '"'; ) {
-        if (script[at] === "\\" && '$`"\\\n'.includes(script[at + 1] ?? "")) {
+      at += 1;
+      while (script[at] !== '"') {
+        if (at >= script.length) throw new Error('an unclosed "');
+        if (script[at] === "\\" && '$`"\\\n'.includes(script[at + 1])) {
           if (script[at + 1] !== "\n") add(script[at + 1]);
           at += 2;
-        } else if (script[at] === "$" && script[at + 1] === "(") {
-          const next = closing(at + 1);
-          add(script.slice(at, next));
-          dynamic = true;
-          at = next;
-        } else if (script[at] === "`") {
-          const close = script.indexOf("`", at + 1);
-          const next = close < 0 ? script.length : close + 1;
-          add(script.slice(at, next));
-          dynamic = true;
-          at = next;
-        } else {
-          if (script[at] === "$") dynamic = true;
-          add(script[at]);
-          at += 1;
-        }
+        } else if (script[at] === "$" || script[at] === "`") at = expansion(at);
+        else add(script[at++]);
       }
       at += 1;
-    } else if (char === "$" && script[at + 1] === "(") {
-      const next = closing(at + 1);
-      add(script.slice(at, next));
-      dynamic = true;
-      at = next;
-    } else if (char === "`") {
-      const close = script.indexOf("`", at + 1);
-      const next = close < 0 ? script.length : close + 1;
-      add(script.slice(at, next));
-      dynamic = true;
-      at = next;
-    } else if (char === "#" && word === undefined) {
-      const close = script.indexOf("\n", at);
-      at = close < 0 ? script.length : close;
-    } else if (char === " " || char === "\t") {
-      end();
+    } else if (char === "$" || char === "`") at = expansion(at);
+    else if (char === "#" && word === undefined) {
+      const newline = script.indexOf("\n", at);
+      at = newline < 0 ? script.length : newline;
+    } else if ("\n;&|()<>".includes(char)) {
+      endCommand();
       at += 1;
-    } else if ("\n;&|()".includes(char)) {
-      end();
-      if (commands.at(-1).length > 0) commands.push([]);
+    } else if (/\s/.test(char)) {
+      endWord();
       at += 1;
-    } else {
-      if (char === "$") dynamic = true;
-      add(char);
-      at += 1;
-    }
+    } else add(script[at++]);
   }
-  end();
-  return commands.filter((command) => command.length > 0);
+  endCommand();
+  return [...commands.filter((command) => command.length > 0), ...nested.flatMap(shellCommands)];
 };
 
 /** Whether <word> is one option of <table>, and how many words it takes: undefined when unknown. */
@@ -1587,6 +1597,11 @@ test("the dry run's loopback registry, and every image a step runs, is pinned by
       injectRun("docker --frobnicate x run alpine:3.22"),
       /docker's option --frobnicate is unknown/,
     ],
+    // Astra's round 3: a command substitution's body was never read.
+    ["a captured container ID", injectRun("cid=$(docker run --detach alpine:3.22)")],
+    ["a substitution in double quotes", injectRun('echo "$(docker create alpine:3.22)"')],
+    ["a backquoted substitution", injectRun("cid=`docker run -d alpine:3.22`")],
+    ["a nested substitution", injectRun("echo $(echo $(docker pull alpine:3.22))")],
     ["a container image", (job) => (job.container = { image: "node:24" })],
     ["a container string", (job) => (job.container = "node:24")],
     ["a services image", (job) => (job.services = { cache: { image: "redis:7" } })],
@@ -1603,6 +1618,9 @@ test("the dry run's loopback registry, and every image a step runs, is pinned by
     `docker run --rm --stop-timeout "$STOP_TIMEOUT" --env "BANNER=hello $BUILD_LABEL" ${pin} true`,
     `docker run -e FOO="a b" --label 'x=y z' -it ${pin} sh -c 'echo "a;b"'`,
     'docker pull "$NAMESPACE/$image@$digest"',
+    `cid=$(docker run --detach ${pin})`,
+    `echo "$(docker create ${pin})" \`docker run -d ${pin}\``,
+    `echo $(echo $(docker pull ${pin}))`,
     'docker run --rm "$IMAGE" true',
   ])
     assert.deepEqual(mutated(injectRun(run)), [], run);
@@ -1630,8 +1648,30 @@ test("commands split into words the way a shell splits them", () => {
       ["f g", false],
       ["$H i", true],
       ["$J", false],
-      ["k$(l m)n", true],
-      ["`o`", true],
+      ["k$(…)n", true],
+      ["`…`", true],
+    ],
+    // Each substitution's body is a command of its own.
+    [
+      ["l", false],
+      ["m", false],
+    ],
+    [["o", false]],
+  ]);
+  // Nested substitutions, and quotes and parentheses inside them, are read in turn.
+  assert.deepEqual(words(`x "$(echo "a)b" $(y 'c)d'))"`), [
+    [
+      ["x", false],
+      ["$(…)", true],
+    ],
+    [
+      ["echo", false],
+      ["a)b", false],
+      ["$(…)", true],
+    ],
+    [
+      ["y", false],
+      ["c)d", false],
     ],
   ]);
   // Commands end at unquoted separators, never inside quotes; comments and continuations go.
