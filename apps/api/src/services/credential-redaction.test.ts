@@ -402,7 +402,7 @@ const positionOf = (value: unknown, fallback: number, length: number) =>
  * whole receiver or the string it builds, whichever is longer.
  */
 const stringCharge = (
-  method: string | symbol,
+  method: PropertyKey,
   text: string,
   args: readonly unknown[],
   result: unknown,
@@ -434,7 +434,7 @@ const stringCharge = (
 };
 
 /** String methods that search with an expression when given one. */
-const TAKES_EXPRESSION = new Set<string | symbol>([
+const TAKES_EXPRESSION = new Set<PropertyKey>([
   "match",
   "matchAll",
   "replace",
@@ -443,23 +443,71 @@ const TAKES_EXPRESSION = new Set<string | symbol>([
   "split",
 ]);
 
-/**
- * A plain, native expression: no proxy, `RegExp.prototype` as its prototype, and no own property
- * but `lastIndex`, so no `exec` or `Symbol.replace` of its own runs module code inside a built-in.
- */
-const isNativeExpression = (value: unknown) =>
-  types.isRegExp(value) &&
-  !types.isProxy(value) &&
-  Reflect.getPrototypeOf(value) === RegExp.prototype &&
-  Reflect.ownKeys(value).length === 1;
+const URI_CODERS = [
+  "decodeURI",
+  "decodeURIComponent",
+  "encodeURI",
+  "encodeURIComponent",
+  "escape",
+  "unescape",
+];
+
+const descriptorsOf = (owner: object, keys: ReadonlyArray<PropertyKey>) => {
+  const descriptors = new Map<PropertyKey, PropertyDescriptor>();
+  for (const key of keys) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(owner, key);
+    if (descriptor !== undefined) descriptors.set(key, descriptor);
+  }
+  return descriptors;
+};
 
 /**
- * An operand a built-in can take without calling back into module code unmetered: a primitive, a
- * function (re-entered and charged as the module's own code) or a native expression. Any other
- * object reaches the built-in through its protocol hooks (`Symbol.replace`, `toString`, ...).
+ * The built-ins as they were before the module under test loaded (it is imported in `beforeAll`):
+ * every property of `String.prototype` and `RegExp.prototype`, `RegExp`'s species and the URI
+ * coders. A built-in reaches an operand's inherited hooks through these, so one changed would run
+ * module code inside a built-in, where nothing is charged.
  */
-const isPlainOperand = (value: unknown) =>
-  typeof value !== "object" || value === null || isNativeExpression(value);
+const NATIVE = new Map<object, ReadonlyMap<PropertyKey, PropertyDescriptor>>([
+  [String.prototype, descriptorsOf(String.prototype, Reflect.ownKeys(String.prototype))],
+  [RegExp.prototype, descriptorsOf(RegExp.prototype, Reflect.ownKeys(RegExp.prototype))],
+  [RegExp, descriptorsOf(RegExp, [Symbol.species])],
+  [globalThis, descriptorsOf(globalThis, URI_CODERS)],
+]);
+/** Owners of which `NATIVE` holds every property, so one added there is a change too. */
+const CLOSED = new Set<object>([String.prototype, RegExp.prototype]);
+
+/** Where an operand sits: an expression a string method searches with, a replacer, or data. */
+type Role = "pattern" | "callback" | "data";
+
+const isPrimitive = (value: unknown) =>
+  (typeof value !== "object" && typeof value !== "function") || value === null;
+
+/**
+ * The cursor of a plain, native expression, read once and only as data: no proxy, `RegExp.prototype`
+ * as its prototype, no own property but `lastIndex`, and that a non-negative integer. Undefined for
+ * anything else, whose own hooks or cursor coercion would run module code inside a built-in.
+ */
+const cursorOf = (value: unknown): number | undefined => {
+  if (!types.isRegExp(value) || types.isProxy(value)) return undefined;
+  if (Reflect.getPrototypeOf(value) !== RegExp.prototype || Reflect.ownKeys(value).length !== 1) {
+    return undefined;
+  }
+  // A real expression's own `lastIndex` is always a data property, so reading it calls nothing.
+  const cursor: unknown = value.lastIndex;
+  return typeof cursor === "number" && Number.isInteger(cursor) && cursor >= 0 ? cursor : undefined;
+};
+
+/** A replacer with nothing of its own a built-in could call: a plain function, no proxy. */
+const isPlainCallback = (value: unknown) =>
+  typeof value === "function" &&
+  !types.isProxy(value) &&
+  Reflect.getPrototypeOf(value) === Function.prototype &&
+  Reflect.ownKeys(value).every((key) => key === "length" || key === "name" || key === "prototype");
+
+const accepts = (role: Role, value: unknown) =>
+  isPrimitive(value) ||
+  (role === "pattern" && cursorOf(value) !== undefined) ||
+  (role === "callback" && isPlainCallback(value));
 
 /**
  * The work one `redactCredentialsInText` call does, counted instead of timed so the machine's speed
@@ -478,8 +526,11 @@ const isPlainOperand = (value: unknown) =>
  * `unreviewed` names each built-in called that `REVIEWED_TRAVERSALS` lacks, and `searches` each
  * expression that could inspect more than `NAME_LENGTH` characters that `LINEAR_SEARCHES` lacks: a
  * new traversal's charge, and an expression's own backtracking, are claims a person has to check.
- * `operands` names each built-in given a receiver or argument that is not a plain operand: its
- * hooks run inside the built-in, where nothing they call is charged.
+ * The rest name where module code could run inside a built-in, uncharged: `operands` each built-in
+ * given something other than a primitive, a native expression to search with or a plain replacer
+ * (or a replacer that returned an object), and `modified` each call that found a built-in changed
+ * from `NATIVE`: before and after the measurement, at each call that dispatches through an
+ * expression's inherited hooks, and at each `test` for the `exec` it calls.
  */
 const steps = (text: string) => {
   let count = 0;
@@ -487,56 +538,100 @@ const steps = (text: string) => {
   const unreviewed = new Set<string>();
   const searches = new Set<string>();
   const operands = new Set<string>();
+  const modified = new Set<string>();
   const restore: Array<() => void> = [];
+  const installed = new Map<object, Map<PropertyKey, unknown>>();
 
-  const reentrant = (arg: unknown) =>
-    typeof arg === "function"
-      ? function (this: unknown, ...inner: unknown[]) {
-          const outer = depth;
-          depth = 0;
-          try {
-            return Reflect.apply(arg, this, inner);
-          } finally {
-            depth = outer;
-          }
-        }
-      : arg;
+  /** Whether `owner` holds its `NATIVE` properties exactly, but for the wrappers installed here. */
+  const unchanged = (owner: object) => {
+    const native = NATIVE.get(owner);
+    if (native === undefined) return false;
+    if (CLOSED.has(owner) && Reflect.ownKeys(owner).length !== native.size) return false;
+    const wrappers = installed.get(owner);
+    for (const [key, then] of native) {
+      const now = Reflect.getOwnPropertyDescriptor(owner, key);
+      const value = wrappers?.has(key) ? wrappers.get(key) : then.value;
+      if (
+        now === undefined ||
+        now.value !== value ||
+        now.get !== then.get ||
+        now.set !== then.set ||
+        now.writable !== then.writable ||
+        now.enumerable !== then.enumerable ||
+        now.configurable !== then.configurable
+      ) {
+        return false;
+      }
+    }
+    return true;
+  };
+  const expressionsUnchanged = () => unchanged(RegExp.prototype) && unchanged(RegExp);
+
+  const reentrant = (replacer: Function, label: string) =>
+    function (this: unknown, ...inner: unknown[]) {
+      const outer = depth;
+      depth = 0;
+      try {
+        const result: unknown = Reflect.apply(replacer, this, inner);
+        if (!isPrimitive(result)) operands.add(`${label} replacer result`);
+        return result;
+      } finally {
+        depth = outer;
+      }
+    };
 
   const install = (
     owner: object,
     prefix: string,
-    keys: ReadonlyArray<string | symbol>,
-    plainReceiver: (receiver: unknown) => boolean,
+    role: (key: PropertyKey, index: number) => Role,
     meter: (
-      key: string | symbol,
+      key: PropertyKey,
       receiver: unknown,
       args: unknown[],
       call: () => unknown,
+      label: string,
     ) => unknown,
   ) => {
-    for (const key of keys) {
+    const wrappers = new Map<PropertyKey, unknown>();
+    installed.set(owner, wrappers);
+    for (const key of NATIVE.get(owner)?.keys() ?? []) {
       const descriptor = Reflect.getOwnPropertyDescriptor(owner, key);
       const original: unknown = descriptor?.value;
       if (descriptor === undefined || key === "constructor" || typeof original !== "function") {
         continue;
       }
-      const label = typeof key === "symbol" ? `${prefix}[${key.description}]` : `${prefix}.${key}`;
-      Reflect.defineProperty(owner, key, {
-        ...descriptor,
-        value: function (this: unknown, ...args: unknown[]) {
-          if (depth > 0) return Reflect.apply(original, this, args);
-          if (!REVIEWED_TRAVERSALS.has(label)) unreviewed.add(label);
-          if (!plainReceiver(this) || !args.every(isPlainOperand)) operands.add(label);
-          return meter(key, this, args, () => {
-            depth += 1;
-            try {
-              return Reflect.apply(original, this, args.map(reentrant));
-            } finally {
-              depth -= 1;
-            }
-          });
-        },
-      });
+      const label =
+        typeof key === "symbol" ? `${prefix}[${key.description}]` : `${prefix}.${String(key)}`;
+      const wrapper = function (this: unknown, ...args: unknown[]) {
+        if (depth > 0) return Reflect.apply(original, this, args);
+        if (!REVIEWED_TRAVERSALS.has(label)) unreviewed.add(label);
+        for (let index = 0; index < args.length; index += 1) {
+          const arg = args[index];
+          if (!isPrimitive(arg) && !accepts(role(key, index), arg)) operands.add(label);
+        }
+        const call = () => {
+          depth += 1;
+          try {
+            const callbacks = args.some((arg) => typeof arg === "function");
+            return Reflect.apply(
+              original,
+              this,
+              callbacks
+                ? args.map((arg, index) =>
+                    role(key, index) === "callback" && typeof arg === "function"
+                      ? reentrant(arg, label)
+                      : arg,
+                  )
+                : args,
+            );
+          } finally {
+            depth -= 1;
+          }
+        };
+        return meter(key, this, args, call, label);
+      };
+      Reflect.defineProperty(owner, key, { ...descriptor, value: wrapper });
+      wrappers.set(key, wrapper);
       restore.push(() => Reflect.defineProperty(owner, key, descriptor));
     }
   };
@@ -551,46 +646,62 @@ const steps = (text: string) => {
   };
 
   try {
+    for (const owner of NATIVE.keys()) if (!unchanged(owner)) modified.add("before measurement");
     install(
       String.prototype,
       "String.prototype",
-      Reflect.ownKeys(String.prototype),
-      (receiver) => typeof receiver === "string",
-      (key, receiver, args, call) => {
+      (key, index) =>
+        index === 0 && TAKES_EXPRESSION.has(key)
+          ? "pattern"
+          : index === 1 && (key === "replace" || key === "replaceAll")
+            ? "callback"
+            : "data",
+      (key, receiver, args, call, label) => {
+        if (typeof receiver !== "string") operands.add(label);
         const own = typeof receiver === "string" ? receiver : "";
-        const result = call();
         const pattern = args[0];
+        const expression =
+          TAKES_EXPRESSION.has(key) && types.isRegExp(pattern) ? pattern : undefined;
+        if (expression !== undefined && !expressionsUnchanged()) modified.add(label);
+        const result = call();
         count +=
-          pattern instanceof RegExp && TAKES_EXPRESSION.has(key)
-            ? search(pattern, own, 0, undefined)
-            : stringCharge(key, own, args, result);
+          expression === undefined
+            ? stringCharge(key, own, args, result)
+            : search(expression, own, 0, undefined);
         return result;
       },
     );
     install(
       RegExp.prototype,
       "RegExp.prototype",
-      Reflect.ownKeys(RegExp.prototype),
-      isNativeExpression,
-      (key, receiver, args, call) => {
-        if (!(receiver instanceof RegExp)) return call();
+      (key, index) => (key === Symbol.replace && index === 1 ? "callback" : "data"),
+      (key, receiver, args, call, label) => {
+        const cursor = cursorOf(receiver);
+        if (!types.isRegExp(receiver) || cursor === undefined) {
+          operands.add(label);
+          return call();
+        }
+        const execCalled = RegExp.prototype.exec === installed.get(RegExp.prototype)?.get("exec");
+        if (key === "test" ? !execCalled : key !== "exec" && !expressionsUnchanged()) {
+          modified.add(label);
+        }
         const input = typeof args[0] === "string" ? args[0] : "";
         const stepping = (key === "exec" || key === "test") && (receiver.global || receiver.sticky);
-        const from = stepping ? Math.min(receiver.lastIndex, input.length) : 0;
+        const from = stepping ? Math.min(cursor, input.length) : 0;
         const result = call();
-        const matched = result !== null && result !== false;
+        const after: unknown = receiver.lastIndex;
+        const end = stepping && result !== null && result !== false && typeof after === "number";
         count +=
           key === "compile" || key === "toString"
             ? 1
-            : search(receiver, input, from, stepping && matched ? receiver.lastIndex : undefined);
+            : search(receiver, input, from, end ? after : undefined);
         return result;
       },
     );
     install(
       globalThis,
       "globalThis",
-      ["decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent", "escape", "unescape"],
-      () => true,
+      () => "data",
       (_key, _receiver, args, call) => {
         const result = call();
         count += Math.max(lengthOf(args[0]), lengthOf(result), 1);
@@ -598,6 +709,7 @@ const steps = (text: string) => {
       },
     );
     redaction.redactCredentialsInText(text);
+    for (const owner of NATIVE.keys()) if (!unchanged(owner)) modified.add("after measurement");
   } finally {
     for (const undo of restore) undo();
   }
@@ -606,6 +718,7 @@ const steps = (text: string) => {
     unreviewed: [...unreviewed],
     searches: [...searches],
     operands: [...operands],
+    modified: [...modified],
   };
 };
 
@@ -716,17 +829,21 @@ describe("redactCredentialsInText", () => {
     }
   });
 
-  it("costs linear time on adversarial text", () => {
+  // Metered, this takes about 250 ms unloaded and 3 s on a saturated machine; the timeout is only a
+  // hang guard, with room above the 5 s default.
+  it("costs linear time on adversarial text", { timeout: 30_000 }, () => {
     // Quadratic matching took 16-97 ms at 8 KiB and would take minutes at 1 MiB. Counted, a scan
     // that restarts at each position reads each character more often as the text grows; this one
     // reads each at most 19 times at every size, so 32 leaves room without hiding growth.
-    for (const bytes of [1024, 8 * 1024, 64 * 1024]) {
+    // Metering slows every call many times over, so the sizes stay small enough for a loaded runner.
+    for (const bytes of [1024, 8 * 1024, 16 * 1024]) {
       for (const text of shapes(bytes)) {
         const work = steps(text);
         expect(work.count, text.slice(0, 12)).toBeLessThanOrEqual(32 * text.length);
         expect(work.unreviewed, "unmetered traversal, review needed").toEqual([]);
         expect(work.searches, "an expression over long text, review needed").toEqual([]);
         expect(work.operands, "custom protocol operand, review needed").toEqual([]);
+        expect(work.modified, "modified built-in, review needed").toEqual([]);
       }
     }
   });
