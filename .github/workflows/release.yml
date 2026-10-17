@@ -506,8 +506,12 @@ jobs:
           path: /tmp/digests
           pattern: digests-${{ matrix.image }}--*
 
+      # The registry image at a fixed index digest (registry:2 was 2.8.3 when pinned): it holds both
+      # arches' archives and serves the index the manifest records.
       - name: Start a registry on loopback inside this job
-        run: docker run --detach --name registry --publish 127.0.0.1:5000:5000 registry:2
+        run: >-
+          docker run --detach --name registry --publish 127.0.0.1:5000:5000
+          registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
 
       # The registry speaks plain HTTP on loopback; imagetools reads the builder's registry config.
       - name: Set up Docker builder

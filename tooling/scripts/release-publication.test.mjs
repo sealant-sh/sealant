@@ -1251,6 +1251,42 @@ test("finalize, npm and promote queue on one release channel lock; nothing else 
   assert.deepEqual(releaseDocument.permissions, { contents: "read" });
 });
 
+// A tag can be moved after review; a digest names the same bytes every run.
+const DIGEST_PINNED = /^[a-z0-9./_-]+(:[\w.-]+)?@sha256:[0-9a-f]{64}$/;
+
+test("the dry run's loopback registry, and every image a step runs, is pinned by digest", () => {
+  const start = releaseJobs["archive-merge"].steps.find(
+    (step) => step.name === "Start a registry on loopback inside this job",
+  );
+  const image = start.run.trim().split(/\s+/).at(-1);
+  assert.match(image, DIGEST_PINNED);
+  assert.ok(image.startsWith("registry:"), image);
+  // Every `docker run` in release.yml names its image by digest, and so does every BuildKit image.
+  const runs = Object.entries(releaseJobs).flatMap(([name, job]) =>
+    (job.steps ?? []).flatMap((step) =>
+      (step.run ?? "")
+        .replace(/\\\n\s*/g, " ")
+        .split("\n")
+        .filter((line) => /\bdocker run\b/.test(line))
+        .map((line) => [name, line.trim()]),
+    ),
+  );
+  assert.ok(runs.length > 0);
+  for (const [name, line] of runs)
+    assert.match(line.split(/\s+/).at(-1), DIGEST_PINNED, `${name}: ${line}`);
+  for (const [name, job] of Object.entries(releaseJobs))
+    for (const step of job.steps ?? [])
+      if (step.uses?.startsWith("docker/setup-buildx-action@"))
+        assert.match(step.with["driver-opts"], /^image=\S+@sha256:[0-9a-f]{64}$/, name);
+  // The guard itself: the tag alone, or a digest that is not one, is refused.
+  for (const unpinned of [
+    "registry:2",
+    "registry:2@sha256:abc",
+    "registry@sha256:" + "A".repeat(64),
+  ])
+    assert.doesNotMatch(unpinned, DIGEST_PINNED, unpinned);
+});
+
 test("only finalize writes :<version>, only promote writes :latest, and nothing writes :X.Y", () => {
   const registryWrites = [];
   for (const [name, definition] of Object.entries(releaseJobs))
