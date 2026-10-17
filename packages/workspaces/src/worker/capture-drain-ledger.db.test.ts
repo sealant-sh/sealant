@@ -123,11 +123,20 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
       captureStatus({ pending: 2, uploadedBytes: 10 }),
       { gated: savedStatus(), reached, open },
     ]);
-    await Effect.runPromise(Deferred.await(reached));
-    const second = await drain(runId, b, [savedStatus()]);
-    expect(second.outcome.kind).toBe("busy");
-    expect(second.daemon.connect).not.toHaveBeenCalled();
-    await Effect.runPromise(Deferred.succeed(open, undefined));
+    try {
+      // A finishing without reaching the gate fails here, not at Vitest's deadline.
+      const first = await Promise.race([
+        Effect.runPromise(Deferred.await(reached)).then((): "reached" => "reached"),
+        inFlight.then((): "finished" => "finished"),
+      ]);
+      expect(first).toBe("reached");
+      const second = await drain(runId, b, [savedStatus()]);
+      expect(second.outcome.kind).toBe("busy");
+      expect(second.daemon.connect).not.toHaveBeenCalled();
+    } finally {
+      // Never leave A held on the gate, even when an assertion above failed.
+      await Effect.runPromise(Deferred.succeed(open, undefined));
+    }
     expect((await inFlight).outcome.kind).toBe("drained");
 
     // Released: worker B claims now and loads what worker A recorded.
