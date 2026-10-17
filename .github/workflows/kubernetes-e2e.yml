@@ -18,15 +18,14 @@ on:
       sealantd_ref:
         description: sealant-sh/sealantd git ref to build the daemon from (empty runs the pin)
         default: ""
+      # Both jobs run on GitHub's ubuntu-24.04; `box` sends a dispatch back to the box's runners.
       runner:
-        description: Runner for the box's x86 jobs (a measurement; pull requests always use the box)
+        description: Runner for both jobs (box is the fallback; other events use ubuntu-24.04)
         type: choice
-        default: box
+        default: ubuntu-24.04
         options:
+          - ubuntu-24.04
           - box
-          - blacksmith-2vcpu-ubuntu-2404
-          - blacksmith-4vcpu-ubuntu-2404
-          - ubuntu-latest
 
 permissions:
   contents: read
@@ -43,19 +42,15 @@ jobs:
   docker:
     name: Docker runtime e2e
     runs-on:
-      ${{ inputs.runner && inputs.runner != 'box' && inputs.runner ||
-      fromJSON('["self-hosted","box","linux","x64"]') }}
+      ${{ inputs.runner == 'box' && fromJSON('["self-hosted","box","linux","x64"]') ||
+      'ubuntu-24.04' }}
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        # The box's persistent pnpm store, not GitHub's cache; other runners start empty.
-        with:
-          {
-            node-version: 22,
-            cache: "${{ inputs.runner && inputs.runner != 'box' && 'pnpm' || '' }}",
-          }
+        # GitHub's pnpm cache, except on the box, which links from its persistent pnpm store.
+        with: { node-version: 22, cache: "${{ inputs.runner != 'box' && 'pnpm' || '' }}" }
       - run: pnpm install --frozen-lockfile
       - name: Build the baked workspace image (pinned sealantd)
         run:
@@ -84,19 +79,15 @@ jobs:
   kubernetes:
     name: Kubernetes cross-node e2e (kind, generic RWX)
     runs-on:
-      ${{ inputs.runner && inputs.runner != 'box' && inputs.runner ||
-      fromJSON('["self-hosted","box","linux","x64"]') }}
+      ${{ inputs.runner == 'box' && fromJSON('["self-hosted","box","linux","x64"]') ||
+      'ubuntu-24.04' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        # The box's persistent pnpm store, not GitHub's cache; other runners start empty.
-        with:
-          {
-            node-version: 22,
-            cache: "${{ inputs.runner && inputs.runner != 'box' && 'pnpm' || '' }}",
-          }
+        # GitHub's pnpm cache, except on the box, which links from its persistent pnpm store.
+        with: { node-version: 22, cache: "${{ inputs.runner != 'box' && 'pnpm' || '' }}" }
       - run: pnpm install --frozen-lockfile
 
       # The pinned image is sealantd's docker/Dockerfile built by its next workflow, pulled by digest:
