@@ -361,65 +361,222 @@ const shapes = (bytes: number) => [
 ];
 
 /**
- * The work one `redactCredentialsInText` call does, counted instead of timed so the machine's speed
- * plays no part. A step is a character read: one for each `charAt`, the length of each `slice` and
- * `toLowerCase`, and for each regular-expression search the characters it moved across, from where
- * it started (`lastIndex`, for a global or sticky one) to the end of its match or of the input;
- * `test` and `replace` search through `RegExp.prototype.exec` once it is replaced. The built-ins
- * are wrapped only for the one synchronous call, so the module under test runs unchanged.
- *
- * A search's own backtracking stays out of sight, so `searches` names each expression that searched
- * more characters at once than a name holds (64), for `LINEAR_SEARCHES` to vouch for.
+ * The expressions allowed to inspect more than a name's length of text (64 characters), each linear
+ * by construction. A query pair starts only at a separator, and its name excludes the separators,
+ * so a failed attempt reads at most to the next one; its value never fails. An auth scheme is a
+ * literal of at most six characters, then blanks it never gives back. An expression added or changed
+ * here needs the same argument.
  */
-/* oxlint-disable no-extend-native -- each built-in is replaced for one call and then restored. */
-const steps = (text: string) => {
-  const { charAt, slice, toLowerCase } = String.prototype;
-  const { exec } = RegExp.prototype;
-  let count = 0;
-  const searches = new Set<string>();
-  String.prototype.charAt = function (this: string, position: number) {
-    count += 1;
-    return charAt.call(this, position);
-  };
-  String.prototype.slice = function (this: string, start?: number, end?: number) {
-    const part = slice.call(this, start, end);
-    count += Math.max(part.length, 1);
-    return part;
-  };
-  String.prototype.toLowerCase = function (this: string) {
-    count += Math.max(this.length, 1);
-    return toLowerCase.call(this);
-  };
-  RegExp.prototype.exec = function (this: RegExp, input: string) {
-    const from = this.global || this.sticky ? this.lastIndex : 0;
-    const match = exec.call(this, input);
-    const searched = (match === null ? input.length : match.index + match[0].length) - from;
-    count += Math.max(searched, 1);
-    if (searched > 64) searches.add(`/${this.source}/${this.flags}`);
-    return match;
-  };
-  try {
-    redaction.redactCredentialsInText(text);
-  } finally {
-    String.prototype.charAt = charAt;
-    String.prototype.slice = slice;
-    String.prototype.toLowerCase = toLowerCase;
-    RegExp.prototype.exec = exec;
-  }
-  return { count, searches: [...searches] };
-};
-/* oxlint-enable no-extend-native */
-
-/**
- * The expressions allowed to search the text at length, each linear by construction. A query pair
- * starts only at a separator, and its name and value exclude the separators, so an attempt reads at
- * most to the next one. An auth scheme is a literal of at most six characters, then blanks it never
- * gives back. An expression added or changed here needs the same argument.
- */
-const LINEAR_SEARCHES = [
+const LINEAR_SEARCHES = new Set([
   String.raw`/([?&;])([^=&\s#?;]+)=([^&\s#;"'<>)\\]*)/g`,
   String.raw`/\b(bearer|basic)[ \t]+/gi`,
-];
+]);
+
+/** The built-ins redaction calls today, each charged below. Calling any other needs review first. */
+const REVIEWED_TRAVERSALS = new Set([
+  "String.prototype.charAt",
+  "String.prototype.slice",
+  "String.prototype.toLowerCase",
+  "String.prototype.replace",
+  "String.prototype.replaceAll",
+  "RegExp.prototype.exec",
+  "RegExp.prototype.test",
+  "globalThis.decodeURIComponent",
+]);
+
+/** The longest text a name is read from; an expression may inspect this much without review. */
+const NAME_LENGTH = 64;
+
+const lengthOf = (value: unknown) => (typeof value === "string" ? value.length : 0);
+
+/** A position argument as a string method reads it, within `[0, length]`. */
+const positionOf = (value: unknown, fallback: number, length: number) =>
+  typeof value === "number" && !Number.isNaN(value)
+    ? Math.min(Math.max(Math.trunc(value), 0), length)
+    : fallback;
+
+/**
+ * The characters one `String.prototype` call reads or writes: one for a single position; the part
+ * a slice copies; from the start position to the end for a forward search, back to the start for
+ * `lastIndexOf`; the prefix or suffix `startsWith` and `endsWith` compare; and for anything else the
+ * whole receiver or the string it builds, whichever is longer.
+ */
+const stringCharge = (
+  method: string | symbol,
+  text: string,
+  args: readonly unknown[],
+  result: unknown,
+): number => {
+  const length = text.length;
+  switch (method) {
+    case "charAt":
+    case "charCodeAt":
+    case "codePointAt":
+    case "at":
+    case "toString":
+    case "valueOf":
+      return 1;
+    case "slice":
+    case "substring":
+    case "substr":
+      return Math.max(lengthOf(result), 1);
+    case "indexOf":
+    case "includes":
+      return Math.max(length - positionOf(args[1], 0, length), 1);
+    case "lastIndexOf":
+      return Math.max(Math.min(positionOf(args[1], length, length) + 1, length), 1);
+    case "startsWith":
+    case "endsWith":
+      return Math.max(Math.min(lengthOf(args[0]), length), 1);
+    default:
+      return Math.max(length, lengthOf(result), 1);
+  }
+};
+
+/** String methods that search with an expression when given one. */
+const TAKES_EXPRESSION = new Set<string | symbol>([
+  "match",
+  "matchAll",
+  "replace",
+  "replaceAll",
+  "search",
+  "split",
+]);
+
+/**
+ * The work one `redactCredentialsInText` call does, counted instead of timed so the machine's speed
+ * plays no part. Every function on `String.prototype` and `RegExp.prototype`, and the URI coders, is
+ * wrapped for the one synchronous call and restored after it, so the module under test runs
+ * unchanged. Only calls the module makes are charged: a built-in's calls into another built-in pass
+ * through, and a replacer callback is charged again as the module's own code.
+ *
+ * A string method is charged by `stringCharge`; a URI coder its input or output, whichever is
+ * longer. An expression is charged what it could inspect, from where it starts (`lastIndex` for a
+ * global or sticky `exec` or `test`, otherwise 0) to the end of the input. One in `LINEAR_SEARCHES`
+ * stepping through the text with `exec` or `test` is charged instead from its start to the end of
+ * its match, the reviewed argument being that it reads no further; charged to the end of the input,
+ * the scanner's loop over auth schemes would count every remaining character again at each match.
+ *
+ * `unreviewed` names each built-in called that `REVIEWED_TRAVERSALS` lacks, and `searches` each
+ * expression that could inspect more than `NAME_LENGTH` characters that `LINEAR_SEARCHES` lacks: a
+ * new traversal's charge, and an expression's own backtracking, are claims a person has to check.
+ */
+const steps = (text: string) => {
+  let count = 0;
+  let depth = 0;
+  const unreviewed = new Set<string>();
+  const searches = new Set<string>();
+  const restore: Array<() => void> = [];
+
+  const reentrant = (arg: unknown) =>
+    typeof arg === "function"
+      ? function (this: unknown, ...inner: unknown[]) {
+          const outer = depth;
+          depth = 0;
+          try {
+            return Reflect.apply(arg, this, inner);
+          } finally {
+            depth = outer;
+          }
+        }
+      : arg;
+
+  const install = (
+    owner: object,
+    prefix: string,
+    keys: ReadonlyArray<string | symbol>,
+    meter: (
+      key: string | symbol,
+      receiver: unknown,
+      args: unknown[],
+      call: () => unknown,
+    ) => unknown,
+  ) => {
+    for (const key of keys) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(owner, key);
+      const original: unknown = descriptor?.value;
+      if (descriptor === undefined || key === "constructor" || typeof original !== "function") {
+        continue;
+      }
+      const label = typeof key === "symbol" ? `${prefix}[${key.description}]` : `${prefix}.${key}`;
+      Reflect.defineProperty(owner, key, {
+        ...descriptor,
+        value: function (this: unknown, ...args: unknown[]) {
+          if (depth > 0) return Reflect.apply(original, this, args);
+          if (!REVIEWED_TRAVERSALS.has(label)) unreviewed.add(label);
+          return meter(key, this, args, () => {
+            depth += 1;
+            try {
+              return Reflect.apply(original, this, args.map(reentrant));
+            } finally {
+              depth -= 1;
+            }
+          });
+        },
+      });
+      restore.push(() => Reflect.defineProperty(owner, key, descriptor));
+    }
+  };
+
+  /** What an expression could inspect of `input` from `from`, or its reviewed stride to `end`. */
+  const search = (pattern: RegExp, input: string, from: number, end: number | undefined) => {
+    const id = `/${pattern.source}/${pattern.flags}`;
+    const reviewed = LINEAR_SEARCHES.has(id);
+    const potential = input.length - from;
+    if (!reviewed && potential > NAME_LENGTH) searches.add(id);
+    return Math.max(reviewed && end !== undefined ? end - from : potential, 1);
+  };
+
+  try {
+    install(
+      String.prototype,
+      "String.prototype",
+      Reflect.ownKeys(String.prototype),
+      (key, receiver, args, call) => {
+        const own = typeof receiver === "string" ? receiver : "";
+        const result = call();
+        const pattern = args[0];
+        count +=
+          pattern instanceof RegExp && TAKES_EXPRESSION.has(key)
+            ? search(pattern, own, 0, undefined)
+            : stringCharge(key, own, args, result);
+        return result;
+      },
+    );
+    install(
+      RegExp.prototype,
+      "RegExp.prototype",
+      Reflect.ownKeys(RegExp.prototype),
+      (key, receiver, args, call) => {
+        if (!(receiver instanceof RegExp)) return call();
+        const input = typeof args[0] === "string" ? args[0] : "";
+        const stepping = (key === "exec" || key === "test") && (receiver.global || receiver.sticky);
+        const from = stepping ? Math.min(receiver.lastIndex, input.length) : 0;
+        const result = call();
+        const matched = result !== null && result !== false;
+        count +=
+          key === "compile" || key === "toString"
+            ? 1
+            : search(receiver, input, from, stepping && matched ? receiver.lastIndex : undefined);
+        return result;
+      },
+    );
+    install(
+      globalThis,
+      "globalThis",
+      ["decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent", "escape", "unescape"],
+      (_key, _receiver, args, call) => {
+        const result = call();
+        count += Math.max(lengthOf(args[0]), lengthOf(result), 1);
+        return result;
+      },
+    );
+    redaction.redactCredentialsInText(text);
+  } finally {
+    for (const undo of restore) undo();
+  }
+  return { count, unreviewed: [...unreviewed], searches: [...searches] };
+};
 
 describe("observe", () => {
   const SECRET = "review347-r5-secret-marker";
@@ -536,7 +693,8 @@ describe("redactCredentialsInText", () => {
       for (const text of shapes(bytes)) {
         const work = steps(text);
         expect(work.count, text.slice(0, 12)).toBeLessThanOrEqual(32 * text.length);
-        for (const search of work.searches) expect(LINEAR_SEARCHES).toContain(search);
+        expect(work.unreviewed, "unmetered traversal, review needed").toEqual([]);
+        expect(work.searches, "an expression over long text, review needed").toEqual([]);
       }
     }
   });
