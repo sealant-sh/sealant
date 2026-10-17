@@ -51,10 +51,12 @@ const PINNED_PRERELEASE_IMAGE =
 /**
  * Every sealantd image reference in `text` that is not a release pinned by digest: a prerelease, a
  * bare digest (which could be any build), a tag alone (which can be moved), or anything else that
- * is not `sealantd:X.Y.Z@sha256:…` (the form tooling/scripts/pin-sealantd.mjs writes).
+ * is not `sealantd:X.Y.Z@sha256:…` (the form tooling/scripts/pin-sealantd.mjs writes). A reference
+ * runs to whitespace, a quote or a backtick, whichever ends it in a Dockerfile, YAML or TypeScript,
+ * so the shape checks judge all of it: `…@sha256:<digest>_x` is not `…@sha256:<digest>`.
  */
 export const prereleaseImages = (text) =>
-  [...text.matchAll(/ghcr\.io\/sealant-sh\/sealantd(?:-next)?(?:[:@][0-9A-Za-z.:@-]+)?/g)]
+  [...text.matchAll(/ghcr\.io\/sealant-sh\/sealantd[^\s"'`]*/g)]
     .map((match) => match[0])
     .filter((reference) => !RELEASED_IMAGE.test(reference));
 
@@ -117,8 +119,11 @@ export const releasePinProblems = ({ imageFiles, manifests, lockfile, published 
   return problems;
 };
 
-/** The run-summary section a dry run writes: what a release from this commit would refuse. */
-export const wouldRefuseSummary = (tag, refusals) =>
+/**
+ * The run-summary section a dry run writes: what a release from this commit would refuse, and what
+ * failed the dry run itself, if anything did.
+ */
+export const wouldRefuseSummary = (refusals, failures = []) =>
   [
     "### Release pins (dry run)",
     "",
@@ -126,8 +131,18 @@ export const wouldRefuseSummary = (tag, refusals) =>
     "",
     ...refusals.map((refusal) => `- ${refusal}`),
     "",
-    "The dry run reported these and went on; a vX.Y.Z tag refuses them.",
+    "A dry run reports these as warnings; a vX.Y.Z tag refuses them.",
     "",
+    ...(failures.length > 0
+      ? [
+          "This dry run also failed on:",
+          "",
+          ...failures.map((failure) => `- ${failure}`),
+          "",
+          "A dry run fails on these as a release does.",
+          "",
+        ]
+      : []),
   ].join("\n");
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
@@ -183,7 +198,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       if (process.env.GITHUB_STEP_SUMMARY)
         await appendFile(
           process.env.GITHUB_STEP_SUMMARY,
-          wouldRefuseSummary(tag, [...relaxed, refusal]),
+          wouldRefuseSummary([...relaxed, refusal], fatal),
         );
     }
     if (fatal.length > 0) {

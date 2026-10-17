@@ -210,10 +210,18 @@ test("a dry run warns on each sealantd prerelease pin, lists them in the summary
   assert.equal(result.status, 0, result.output);
   assert.deepEqual(result.errors, []);
   assert.deepEqual(result.warnings, [...PRERELEASE_PROBLEMS, dryRefusal]);
-  assert.match(result.summary, /^A release would refuse:$/m);
-  assert.deepEqual(
-    result.summary.split("\n").filter((line) => line.startsWith("- ")),
-    [...PRERELEASE_PROBLEMS, dryRefusal].map((problem) => `- ${problem}`),
+  assert.equal(
+    result.summary,
+    [
+      "### Release pins (dry run)",
+      "",
+      "A release would refuse:",
+      "",
+      ...[...PRERELEASE_PROBLEMS, dryRefusal].map((problem) => `- ${problem}`),
+      "",
+      "A dry run reports these as warnings; a vX.Y.Z tag refuses them.",
+      "",
+    ].join("\n"),
   );
   assert.match(result.output, /every other pin check passed; a release would refuse the 10 /);
 });
@@ -229,23 +237,22 @@ test("a vX.Y.Z tag with the same prerelease pins refuses, as it always has", (t)
   assert.equal(result.summary, undefined);
 });
 
+const RELEASED_IMAGE = `ghcr.io/sealant-sh/sealantd:0.20.0@sha256:${"a".repeat(64)}`;
+const releasedRuntime = {
+  dependencies: { "@sealant/runtime-client": "0.20.0", "@sealant/runtime-protocol": "0.20.0" },
+};
+/** Files that make the fixture checkout pin a sealantd release everywhere. */
+const releasedFiles = {
+  "packages/workspaces/src/buildkit/buildkit-builder.ts": `"${RELEASED_IMAGE}";\n`,
+  "apps/cf-bridge/Dockerfile": `COPY --from=${RELEASED_IMAGE} /a /a\n`,
+  "apps/ssh-gateway/package.json": releasedRuntime,
+  "packages/telemetry/package.json": releasedRuntime,
+  "packages/workspaces/package.json": releasedRuntime,
+  "pnpm-lock.yaml": "  '@sealant/runtime-client@0.20.0':\n",
+};
+
 test("a dry run with every sealantd pin a release writes no summary and passes", (t) => {
-  const released = `ghcr.io/sealant-sh/sealantd:0.20.0@sha256:${"a".repeat(64)}`;
-  const runtime = {
-    dependencies: { "@sealant/runtime-client": "0.20.0", "@sealant/runtime-protocol": "0.20.0" },
-  };
-  const result = runPins(
-    prereleaseCheckout(t, {
-      "packages/workspaces/src/buildkit/buildkit-builder.ts": `"${released}";\n`,
-      "apps/cf-bridge/Dockerfile": `COPY --from=${released} /a /a\n`,
-      "apps/ssh-gateway/package.json": runtime,
-      "packages/telemetry/package.json": runtime,
-      "packages/workspaces/package.json": runtime,
-      "pnpm-lock.yaml": "  '@sealant/runtime-client@0.20.0':\n",
-    }),
-    "--dry-run",
-    DRY_TAG,
-  );
+  const result = runPins(prereleaseCheckout(t, releasedFiles), "--dry-run", DRY_TAG);
   assert.equal(result.status, 0, result.output);
   assert.deepEqual([result.errors, result.warnings, result.summary], [[], [], undefined]);
   assert.match(result.output, /every sealantd pin is a release/);
@@ -308,11 +315,16 @@ test("a dry run still fails on every problem that is not a sealantd prerelease",
       ],
       what,
     );
-    // The prerelease pins beside it are still reported, as warnings and in the summary.
+    // The prerelease pins beside it are still reported, as warnings and in the summary, and the
+    // summary says this dry run failed, naming the problem, rather than that it went on.
     assert.ok(result.warnings.includes(dryRefusal), what);
     assert.ok(!result.warnings.includes(problem), what);
-    assert.match(result.summary, /^A release would refuse:$/m, what);
-    assert.ok(!result.summary.includes(`- ${problem}`), what);
+    const [refused, failed] = result.summary.split("This dry run also failed on:\n");
+    assert.match(refused, /^A release would refuse:$/m, what);
+    assert.ok(refused.includes(`- ${dryRefusal}`), what);
+    assert.ok(!refused.includes(`- ${problem}`), what);
+    assert.equal(failed, `\n- ${problem}\n\nA dry run fails on these as a release does.\n`, what);
+    assert.doesNotMatch(result.summary, /went on/, what);
   }
   // The prerelease image the fixture pins is pin-sealantd.mjs's shape, the one a dry run reports.
   assert.deepEqual(prereleaseImages(`"${NEXT_IMAGE}"`), [NEXT_IMAGE]);
@@ -325,4 +337,61 @@ test("a dry run still fails on every problem that is not a sealantd prerelease",
     ["--dry-run", DRY_TAG, "x"],
   ])
     assert.equal(runPins(checkout, ...args).status, 2, args.join(" "));
+});
+
+test("a reference is judged whole, to its delimiter, never by a prefix that looks pinned", (t) => {
+  // Whitespace, a quote, a backtick or the end of the text ends a reference, as in a Dockerfile,
+  // YAML or TypeScript; the pinned shapes main writes are read exactly.
+  for (const [text, reference] of [
+    [`"${NEXT_IMAGE}";`, NEXT_IMAGE],
+    [`'${NEXT_IMAGE}'`, NEXT_IMAGE],
+    [`\`${NEXT_IMAGE}\``, NEXT_IMAGE],
+    [`COPY --from=${NEXT_IMAGE} /a /a`, NEXT_IMAGE],
+    [`image: ${NEXT_IMAGE}\nnext: 1`, NEXT_IMAGE],
+    [`FROM ${NEXT_IMAGE}`, NEXT_IMAGE],
+  ])
+    assert.deepEqual(prereleaseImages(text), [reference], text);
+  assert.deepEqual(
+    prereleaseImages(`"${RELEASED_IMAGE}";\nCOPY --from=${RELEASED_IMAGE} /a /a`),
+    [],
+  );
+
+  const builder = "packages/workspaces/src/buildkit/buildkit-builder.ts";
+  const dockerfile = "apps/cf-bridge/Dockerfile";
+  for (const suffix of ["_wrong", "/wrong", ".", "-", ":", "b", "@sha256:x"]) {
+    // A next build's reference with something after its digest: not pin-sealantd.mjs's shape, so a
+    // dry run fails on it, in a Dockerfile or in TypeScript, naming the whole reference.
+    for (const [file, content] of [
+      [dockerfile, `COPY --from=${NEXT_IMAGE}${suffix} /a /a\n`],
+      [builder, `"${NEXT_IMAGE}${suffix}";\n`],
+    ]) {
+      const result = runPins(prereleaseCheckout(t, { [file]: content }), "--dry-run", DRY_TAG);
+      const problem = `${file} pins ${NEXT_IMAGE}${suffix}, not a release by digest.`;
+      assert.equal(result.status, 1, `${file} ${suffix}`);
+      assert.ok(result.errors.includes(problem), `${file} ${suffix}: ${result.output}`);
+      assert.ok(
+        !result.warnings.some((line) => line.includes(`${NEXT_IMAGE}${suffix}`)),
+        `${file} ${suffix}`,
+      );
+    }
+    // A release's reference with the same suffix is no release: a tag refuses it, a dry run too.
+    const released = prereleaseCheckout(t, {
+      ...releasedFiles,
+      [dockerfile]: `COPY --from=${RELEASED_IMAGE}${suffix} /a /a\n`,
+    });
+    const problem = `${dockerfile} pins ${RELEASED_IMAGE}${suffix}, not a release by digest.`;
+    const tagged = runPins(released, "v0.38.1");
+    assert.equal(tagged.status, 1, `release ${suffix}`);
+    assert.deepEqual(
+      tagged.errors,
+      [
+        problem,
+        "v0.38.1 cannot release with a sealantd prerelease. Release sealantd, pin it, then tag.",
+      ],
+      `release ${suffix}`,
+    );
+    const dry = runPins(released, "--dry-run", DRY_TAG);
+    assert.equal(dry.status, 1, `dry run of a release ${suffix}`);
+    assert.equal(dry.errors[0], problem, `dry run of a release ${suffix}`);
+  }
 });
