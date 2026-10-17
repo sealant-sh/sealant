@@ -2,6 +2,18 @@ name: CI
 
 on:
   pull_request:
+  # A runner-size measurement. Every pull request run stays on the box.
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Runner for the box's x86 jobs (a measurement; pull requests always use the box)
+        type: choice
+        default: box
+        options:
+          - box
+          - blacksmith-2vcpu-ubuntu-2404
+          - blacksmith-4vcpu-ubuntu-2404
+          - ubuntu-latest
 
 permissions:
   contents: read
@@ -9,7 +21,7 @@ permissions:
 # A pull request keeps only its newest run: a superseded head's result is never what anyone reads,
 # and its jobs would hold the shared box runners.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 # Box runners keep a warm pnpm store (npm_config_store_dir=/opt/pnpm-store), so their setup-node
@@ -17,7 +29,9 @@ concurrency:
 jobs:
   lint:
     name: Lint
-    runs-on: [self-hosted, box, linux, x64]
+    runs-on:
+      ${{ inputs.runner && inputs.runner != 'box' && inputs.runner ||
+      fromJSON('["self-hosted","box","linux","x64"]') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -29,6 +43,7 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
+          cache: ${{ inputs.runner && inputs.runner != 'box' && 'pnpm' || '' }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -59,7 +74,9 @@ jobs:
 
   typecheck:
     name: Typecheck
-    runs-on: [self-hosted, box, linux, x64]
+    runs-on:
+      ${{ inputs.runner && inputs.runner != 'box' && inputs.runner ||
+      fromJSON('["self-hosted","box","linux","x64"]') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -71,6 +88,7 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
+          cache: ${{ inputs.runner && inputs.runner != 'box' && 'pnpm' || '' }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -153,7 +171,9 @@ jobs:
         include:
           - { arch: amd64, runner: [self-hosted, box, linux, x64] }
           - { arch: arm64, runner: ubuntu-24.04-arm }
-    runs-on: ${{ matrix.runner }}
+    runs-on:
+      ${{ matrix.arch == 'amd64' && inputs.runner && inputs.runner != 'box' && inputs.runner ||
+      matrix.runner }}
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -167,8 +187,10 @@ jobs:
         with:
           node-version: 24
           # Box runners link installs from their persistent pnpm store (npm_config_store_dir);
-          # GitHub's arm64 runner starts empty, so only it restores GitHub's pnpm cache.
-          cache: ${{ matrix.arch == 'arm64' && 'pnpm' || '' }}
+          # every other runner starts empty, so only those restore GitHub's pnpm cache.
+          cache:
+            ${{ (matrix.arch == 'arm64' || (inputs.runner && inputs.runner != 'box')) && 'pnpm' ||
+            '' }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
