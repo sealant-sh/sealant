@@ -1254,30 +1254,155 @@ test("finalize, npm and promote queue on one release channel lock; nothing else 
 // A tag can be moved after review; a digest names the same bytes every run.
 const DIGEST_PINNED = /^[a-z0-9./_-]+(:[\w.-]+)?@sha256:[0-9a-f]{64}$/;
 
+// Docker's global options that take a value (`docker --context x run …`); the rest take none.
+const DOCKER_GLOBAL_VALUES = new Set([
+  "-c",
+  "--context",
+  "--config",
+  "-H",
+  "--host",
+  "-l",
+  "--log-level",
+  "--tlscacert",
+  "--tlscert",
+  "--tlskey",
+]);
+// Options of run, create and pull that take a value as the next word; any other option takes none,
+// and `--name=x` carries its own. An option missing here makes its value read as the image, which
+// fails: the table can only err towards refusing.
+const DOCKER_COMMAND_VALUES = new Set(
+  (
+    "-a --attach --add-host --cap-add --cap-drop --cidfile --cpus --device --entrypoint -e --env " +
+    "--env-file --gpus -h --hostname --health-cmd --ipc -l --label --log-driver --log-opt -m " +
+    "--memory --mount --name --network --pid -p --publish --platform --pull --restart " +
+    "--security-opt --shm-size --stop-signal --tmpfs -u --user --ulimit -v --volume " +
+    "--volumes-from -w --workdir"
+  ).split(" "),
+);
+// The subcommands that start or fetch an image, as the words after docker's global options.
+const DOCKER_IMAGE_COMMANDS = [
+  "run",
+  "create",
+  "pull",
+  "container run",
+  "container create",
+  "image pull",
+];
+
+/**
+ * The image each docker command in <script> starts or fetches: `{ command, image }`, image undefined
+ * when it is assembled at run time. Backslash-newline continuations are joined and whitespace
+ * collapsed first; commands split at newlines, `;`, `&&`, `||`, `|`, `(`, `)` and backquotes.
+ * After `docker`, its global options (with their values) are skipped, then the subcommand, then
+ * that command's own options; the image is the first operand left.
+ *
+ * Limits, for the accidental and ordinary forms this guards against: an image named through a
+ * variable or a command substitution (`docker run "$IMAGE"`) is assembled at run time and only
+ * reported, never judged; a docker found through an alias, a function or `command -v` is not seen;
+ * `docker buildx imagetools create` is not read, since every source it is given in release.yml is
+ * a `$repository@$digest` assembled at run time and pinned to the manifest by the registry-write
+ * tests above.
+ */
+const dockerImages = (script) =>
+  script
+    .replace(/\\\n/g, " ")
+    .split(/\n|;|&&|\|\||\||\(|\)|`/)
+    .map((command) => command.replace(/\s+/g, " ").trim())
+    .flatMap((command) => {
+      const words = command.split(" ").map((word) => word.replace(/^["']|["']$/g, ""));
+      const at = words.findIndex((word) => /(^|\/)docker$/.test(word));
+      if (at < 0) return [];
+      let next = at + 1;
+      while (words[next]?.startsWith("-"))
+        next += DOCKER_GLOBAL_VALUES.has(words[next]) && !words[next].includes("=") ? 2 : 1;
+      const sub = DOCKER_IMAGE_COMMANDS.find((name) =>
+        name.split(" ").every((part, offset) => words[next + offset] === part),
+      );
+      if (sub === undefined) return [];
+      next += sub.split(" ").length;
+      while (words[next]?.startsWith("-")) next += DOCKER_COMMAND_VALUES.has(words[next]) ? 2 : 1;
+      const image = words[next] ?? "";
+      return [{ command, image: image.includes("$") ? undefined : image }];
+    });
+
+/** The unpinned images in <jobs>: from docker commands in run steps, and from the YAML image keys. */
+const imageProblems = (jobs) => {
+  const problems = [];
+  const pinned = (where, image) => {
+    if (!DIGEST_PINNED.test(image))
+      problems.push(`${where}: ${image || "(no image)"} is not pinned by digest`);
+  };
+  for (const [name, job] of Object.entries(jobs)) {
+    const container = typeof job.container === "string" ? job.container : job.container?.image;
+    if (job.container !== undefined) pinned(`${name} container`, container ?? "");
+    for (const [service, definition] of Object.entries(job.services ?? {}))
+      pinned(`${name} services.${service}`, definition?.image ?? "");
+    for (const step of job.steps ?? []) {
+      if (step.uses?.startsWith("docker://"))
+        pinned(`${name} uses`, step.uses.slice("docker://".length));
+      if (step.uses?.startsWith("docker/setup-buildx-action@"))
+        pinned(
+          `${name} BuildKit`,
+          /^image=(\S+)$/.exec(step.with?.["driver-opts"] ?? "")?.[1] ?? "",
+        );
+      for (const { command, image } of dockerImages(step.run ?? ""))
+        if (image !== undefined) pinned(`${name} \`${command}\``, image);
+    }
+  }
+  return problems;
+};
+
+/** A change to a job that adds a step running <run>. */
+const injectRun = (run) => (job) => job.steps.push({ name: "Injected", run });
+
 test("the dry run's loopback registry, and every image a step runs, is pinned by digest", () => {
   const start = releaseJobs["archive-merge"].steps.find(
     (step) => step.name === "Start a registry on loopback inside this job",
   );
-  const image = start.run.trim().split(/\s+/).at(-1);
-  assert.match(image, DIGEST_PINNED);
-  assert.ok(image.startsWith("registry:"), image);
-  // Every `docker run` in release.yml names its image by digest, and so does every BuildKit image.
-  const runs = Object.entries(releaseJobs).flatMap(([name, job]) =>
-    (job.steps ?? []).flatMap((step) =>
-      (step.run ?? "")
-        .replace(/\\\n\s*/g, " ")
-        .split("\n")
-        .filter((line) => /\bdocker run\b/.test(line))
-        .map((line) => [name, line.trim()]),
-    ),
+  const [registry] = dockerImages(start.run);
+  assert.match(registry.image, DIGEST_PINNED);
+  assert.ok(registry.image.startsWith("registry:"), registry.image);
+  assert.deepEqual(imageProblems(releaseJobs), []);
+  // Each mutation adds one ordinary form to archive-merge, or one YAML image key; each must fail.
+  const mutated = (change) => {
+    const jobs = structuredClone(releaseJobs);
+    change(jobs["archive-merge"]);
+    return imageProblems(jobs);
+  };
+  for (const [form, change] of [
+    ["plain docker run", injectRun("docker run --rm alpine:3.22 true")],
+    ["a global option before run", injectRun("docker --context default run --rm alpine:3.22 true")],
+    ["a global option with =", injectRun("docker --config=/tmp/x -D run alpine:3.22")],
+    [
+      "a line continuation between docker and run",
+      injectRun("docker \\\n  run --rm alpine:3.22 true"),
+    ],
+    [
+      "docker container run",
+      injectRun("docker container run --rm --name x -p 1:1 alpine:3.22 true"),
+    ],
+    ["docker create", injectRun("set -e; docker create --name probe -v /a:/b alpine:3.22")],
+    ["docker pull", injectRun("sudo docker pull ghcr.io/sealant-sh/sealant-api:0.39.0")],
+    ["an implicit latest", injectRun("docker run --rm alpine true")],
+    ["a container image", (job) => (job.container = { image: "node:24" })],
+    ["a container string", (job) => (job.container = "node:24")],
+    ["a services image", (job) => (job.services = { cache: { image: "redis:7" } })],
+    ["a docker:// action", (job) => job.steps.push({ uses: "docker://alpine:3.22" })],
+  ]) {
+    const problems = mutated(change);
+    assert.equal(problems.length, 1, `${form}: ${problems.join("; ") || "none"}`);
+    assert.match(problems[0], /is not pinned by digest/, form);
+  }
+  // The same forms, pinned, pass; and an image assembled at run time is only reported.
+  const pin = `alpine:3.22@sha256:${"a".repeat(64)}`;
+  assert.deepEqual(mutated(injectRun(`docker --context default \\\n  run --rm ${pin} true`)), []);
+  assert.deepEqual(
+    mutated((job) => (job.services = { cache: { image: pin } })),
+    [],
   );
-  assert.ok(runs.length > 0);
-  for (const [name, line] of runs)
-    assert.match(line.split(/\s+/).at(-1), DIGEST_PINNED, `${name}: ${line}`);
-  for (const [name, job] of Object.entries(releaseJobs))
-    for (const step of job.steps ?? [])
-      if (step.uses?.startsWith("docker/setup-buildx-action@"))
-        assert.match(step.with["driver-opts"], /^image=\S+@sha256:[0-9a-f]{64}$/, name);
+  assert.deepEqual(dockerImages('docker run --rm "$IMAGE" true'), [
+    { command: 'docker run --rm "$IMAGE" true', image: undefined },
+  ]);
   // The guard itself: the tag alone, or a digest that is not one, is refused.
   for (const unpinned of [
     "registry:2",
