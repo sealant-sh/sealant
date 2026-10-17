@@ -1,4 +1,4 @@
-import { inspect } from "node:util";
+import { inspect, types } from "node:util";
 
 /**
  * No credential the API receives or sends reaches a span, a log line or an error report. Each case
@@ -360,11 +360,373 @@ const shapes = (bytes: number) => [
   `${"a%40".repeat(bytes / 4)}`,
 ];
 
-/** How long one `redactCredentialsInText` call takes, in milliseconds. */
-const time = (text: string) => {
-  const start = performance.now();
-  redaction.redactCredentialsInText(text);
-  return performance.now() - start;
+/**
+ * The expressions allowed to inspect more than a name's length of text (64 characters), each linear
+ * by construction. A query pair starts only at a separator, and its name excludes the separators,
+ * so a failed attempt reads at most to the next one; its value never fails. An auth scheme is a
+ * literal of at most six characters, then blanks it never gives back. An expression added or changed
+ * here needs the same argument.
+ */
+const LINEAR_SEARCHES = new Set([
+  String.raw`/([?&;])([^=&\s#?;]+)=([^&\s#;"'<>)\\]*)/g`,
+  String.raw`/\b(bearer|basic)[ \t]+/gi`,
+]);
+
+/** The built-ins redaction calls today, each charged below. Calling any other needs review first. */
+const REVIEWED_TRAVERSALS = new Set([
+  "String.prototype.charAt",
+  "String.prototype.slice",
+  "String.prototype.toLowerCase",
+  "String.prototype.replace",
+  "String.prototype.replaceAll",
+  "RegExp.prototype.exec",
+  "RegExp.prototype.test",
+  "globalThis.decodeURIComponent",
+]);
+
+/** The longest text a name is read from; an expression may inspect this much without review. */
+const NAME_LENGTH = 64;
+
+const lengthOf = (value: unknown) => (typeof value === "string" ? value.length : 0);
+
+/** A position argument as a string method reads it, within `[0, length]`. */
+const positionOf = (value: unknown, fallback: number, length: number) =>
+  typeof value === "number" && !Number.isNaN(value)
+    ? Math.min(Math.max(Math.trunc(value), 0), length)
+    : fallback;
+
+/**
+ * The characters one `String.prototype` call reads or writes: one for a single position; the part
+ * a slice copies; from the start position to the end for a forward search, back to the start for
+ * `lastIndexOf`; the prefix or suffix `startsWith` and `endsWith` compare; and for anything else the
+ * whole receiver or the string it builds, whichever is longer.
+ */
+const stringCharge = (
+  method: PropertyKey,
+  text: string,
+  args: readonly unknown[],
+  result: unknown,
+): number => {
+  const length = text.length;
+  switch (method) {
+    case "charAt":
+    case "charCodeAt":
+    case "codePointAt":
+    case "at":
+    case "toString":
+    case "valueOf":
+      return 1;
+    case "slice":
+    case "substring":
+    case "substr":
+      return Math.max(lengthOf(result), 1);
+    case "indexOf":
+    case "includes":
+      return Math.max(length - positionOf(args[1], 0, length), 1);
+    case "lastIndexOf":
+      return Math.max(Math.min(positionOf(args[1], length, length) + 1, length), 1);
+    case "startsWith":
+    case "endsWith":
+      return Math.max(Math.min(lengthOf(args[0]), length), 1);
+    default:
+      return Math.max(length, lengthOf(result), 1);
+  }
+};
+
+/** String methods that search with an expression when given one. */
+const TAKES_EXPRESSION = new Set<PropertyKey>([
+  "match",
+  "matchAll",
+  "replace",
+  "replaceAll",
+  "search",
+  "split",
+]);
+
+const URI_CODERS = [
+  "decodeURI",
+  "decodeURIComponent",
+  "encodeURI",
+  "encodeURIComponent",
+  "escape",
+  "unescape",
+];
+
+const descriptorsOf = (owner: object, keys: ReadonlyArray<PropertyKey>) => {
+  const descriptors = new Map<PropertyKey, PropertyDescriptor>();
+  for (const key of keys) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(owner, key);
+    if (descriptor !== undefined) descriptors.set(key, descriptor);
+  }
+  return descriptors;
+};
+
+/**
+ * The built-ins as they were before the module under test loaded (it is imported in `beforeAll`):
+ * every property of `String.prototype` and `RegExp.prototype`, `RegExp`'s species and the URI
+ * coders. A built-in reaches an operand's inherited hooks through these, so one changed would run
+ * module code inside a built-in, where nothing is charged.
+ */
+const NATIVE = new Map<object, ReadonlyMap<PropertyKey, PropertyDescriptor>>([
+  [String.prototype, descriptorsOf(String.prototype, Reflect.ownKeys(String.prototype))],
+  [RegExp.prototype, descriptorsOf(RegExp.prototype, Reflect.ownKeys(RegExp.prototype))],
+  [RegExp, descriptorsOf(RegExp, [Symbol.species])],
+  [globalThis, descriptorsOf(globalThis, URI_CODERS)],
+]);
+/** Owners of which `NATIVE` holds every property, so one added there is a change too. */
+const CLOSED = new Set<object>([String.prototype, RegExp.prototype]);
+
+/** Where an operand sits: an expression a string method searches with, a replacer, or data. */
+type Role = "pattern" | "callback" | "data";
+
+const isPrimitive = (value: unknown) =>
+  (typeof value !== "object" && typeof value !== "function") || value === null;
+
+/**
+ * The cursor of a plain, native expression, read once and only as data: no proxy, `RegExp.prototype`
+ * as its prototype, no own property but `lastIndex`, and that a non-negative integer. Undefined for
+ * anything else, whose own hooks or cursor coercion would run module code inside a built-in.
+ */
+const cursorOf = (value: unknown): number | undefined => {
+  if (!types.isRegExp(value) || types.isProxy(value)) return undefined;
+  if (Reflect.getPrototypeOf(value) !== RegExp.prototype || Reflect.ownKeys(value).length !== 1) {
+    return undefined;
+  }
+  // A real expression's own `lastIndex` is always a data property, so reading it calls nothing.
+  const cursor: unknown = value.lastIndex;
+  return typeof cursor === "number" && Number.isInteger(cursor) && cursor >= 0 ? cursor : undefined;
+};
+
+/** A replacer with nothing of its own a built-in could call: a plain function, no proxy. */
+const isPlainCallback = (value: unknown) =>
+  typeof value === "function" &&
+  !types.isProxy(value) &&
+  Reflect.getPrototypeOf(value) === Function.prototype &&
+  Reflect.ownKeys(value).every((key) => key === "length" || key === "name" || key === "prototype");
+
+const accepts = (role: Role, value: unknown) =>
+  isPrimitive(value) ||
+  (role === "pattern" && cursorOf(value) !== undefined) ||
+  (role === "callback" && isPlainCallback(value));
+
+/**
+ * The work one `redactCredentialsInText` call does, counted instead of timed so the machine's speed
+ * plays no part. Every function on `String.prototype` and `RegExp.prototype`, and the URI coders, is
+ * wrapped for the one synchronous call and restored after it, so the module under test runs
+ * unchanged. Only calls the module makes are charged: a built-in's calls into another built-in pass
+ * through, and a replacer callback is charged again as the module's own code.
+ *
+ * A string method is charged by `stringCharge`; a URI coder its input or output, whichever is
+ * longer. An expression is charged what it could inspect, from where it starts (`lastIndex` for a
+ * global or sticky `exec` or `test`, otherwise 0) to the end of the input. One in `LINEAR_SEARCHES`
+ * stepping through the text with `exec` or `test` is charged instead from its start to the end of
+ * its match, the reviewed argument being that it reads no further; charged to the end of the input,
+ * the scanner's loop over auth schemes would count every remaining character again at each match.
+ *
+ * `unreviewed` names each built-in called that `REVIEWED_TRAVERSALS` lacks, and `searches` each
+ * expression that could inspect more than `NAME_LENGTH` characters that `LINEAR_SEARCHES` lacks: a
+ * new traversal's charge, and an expression's own backtracking, are claims a person has to check.
+ * The rest name where module code could run inside a built-in, uncharged: `operands` each built-in
+ * given something other than a primitive, a native expression to search with or a plain replacer
+ * (or a replacer that returned an object), and `modified` each call that found a built-in changed
+ * from `NATIVE`: before and after the measurement, at each call that dispatches through an
+ * expression's inherited hooks, and at each `test` for the `exec` it calls.
+ *
+ * This is a regression check for accidental repeated scans and unreviewed regex searches, not a
+ * complexity proof or a defense against code written to bypass the meter. Indexed reads, operators,
+ * JSON serialization, Array operations and hashing are not fully metered. The sampled sizes (1, 8
+ * and 16 KiB) do not cover every future length-dependent path: add boundary cases when introducing
+ * one. Deliberately bypassing the wrappers, or changing a built-in and restoring it between two
+ * observation points, is outside this test's threat model.
+ */
+const steps = (text: string) => {
+  let count = 0;
+  let depth = 0;
+  const unreviewed = new Set<string>();
+  const searches = new Set<string>();
+  const operands = new Set<string>();
+  const modified = new Set<string>();
+  const restore: Array<() => void> = [];
+  const installed = new Map<object, Map<PropertyKey, unknown>>();
+
+  /** Whether `owner` holds its `NATIVE` properties exactly, but for the wrappers installed here. */
+  const unchanged = (owner: object) => {
+    const native = NATIVE.get(owner);
+    if (native === undefined) return false;
+    if (CLOSED.has(owner) && Reflect.ownKeys(owner).length !== native.size) return false;
+    const wrappers = installed.get(owner);
+    for (const [key, then] of native) {
+      const now = Reflect.getOwnPropertyDescriptor(owner, key);
+      const value = wrappers?.has(key) ? wrappers.get(key) : then.value;
+      if (
+        now === undefined ||
+        now.value !== value ||
+        now.get !== then.get ||
+        now.set !== then.set ||
+        now.writable !== then.writable ||
+        now.enumerable !== then.enumerable ||
+        now.configurable !== then.configurable
+      ) {
+        return false;
+      }
+    }
+    return true;
+  };
+  const expressionsUnchanged = () => unchanged(RegExp.prototype) && unchanged(RegExp);
+
+  const reentrant = (replacer: Function, label: string) =>
+    function (this: unknown, ...inner: unknown[]) {
+      const outer = depth;
+      depth = 0;
+      try {
+        const result: unknown = Reflect.apply(replacer, this, inner);
+        if (!isPrimitive(result)) operands.add(`${label} replacer result`);
+        return result;
+      } finally {
+        depth = outer;
+      }
+    };
+
+  const install = (
+    owner: object,
+    prefix: string,
+    role: (key: PropertyKey, index: number) => Role,
+    meter: (
+      key: PropertyKey,
+      receiver: unknown,
+      args: unknown[],
+      call: () => unknown,
+      label: string,
+    ) => unknown,
+  ) => {
+    const wrappers = new Map<PropertyKey, unknown>();
+    installed.set(owner, wrappers);
+    for (const key of NATIVE.get(owner)?.keys() ?? []) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(owner, key);
+      const original: unknown = descriptor?.value;
+      if (descriptor === undefined || key === "constructor" || typeof original !== "function") {
+        continue;
+      }
+      const label =
+        typeof key === "symbol" ? `${prefix}[${key.description}]` : `${prefix}.${String(key)}`;
+      const wrapper = function (this: unknown, ...args: unknown[]) {
+        if (depth > 0) return Reflect.apply(original, this, args);
+        if (!REVIEWED_TRAVERSALS.has(label)) unreviewed.add(label);
+        for (let index = 0; index < args.length; index += 1) {
+          const arg = args[index];
+          if (!isPrimitive(arg) && !accepts(role(key, index), arg)) operands.add(label);
+        }
+        const call = () => {
+          depth += 1;
+          try {
+            const callbacks = args.some((arg) => typeof arg === "function");
+            return Reflect.apply(
+              original,
+              this,
+              callbacks
+                ? args.map((arg, index) =>
+                    role(key, index) === "callback" && typeof arg === "function"
+                      ? reentrant(arg, label)
+                      : arg,
+                  )
+                : args,
+            );
+          } finally {
+            depth -= 1;
+          }
+        };
+        return meter(key, this, args, call, label);
+      };
+      Reflect.defineProperty(owner, key, { ...descriptor, value: wrapper });
+      wrappers.set(key, wrapper);
+      restore.push(() => Reflect.defineProperty(owner, key, descriptor));
+    }
+  };
+
+  /** What an expression could inspect of `input` from `from`, or its reviewed stride to `end`. */
+  const search = (pattern: RegExp, input: string, from: number, end: number | undefined) => {
+    const id = `/${pattern.source}/${pattern.flags}`;
+    const reviewed = LINEAR_SEARCHES.has(id);
+    const potential = input.length - from;
+    if (!reviewed && potential > NAME_LENGTH) searches.add(id);
+    return Math.max(reviewed && end !== undefined ? end - from : potential, 1);
+  };
+
+  try {
+    for (const owner of NATIVE.keys()) if (!unchanged(owner)) modified.add("before measurement");
+    install(
+      String.prototype,
+      "String.prototype",
+      (key, index) =>
+        index === 0 && TAKES_EXPRESSION.has(key)
+          ? "pattern"
+          : index === 1 && (key === "replace" || key === "replaceAll")
+            ? "callback"
+            : "data",
+      (key, receiver, args, call, label) => {
+        if (typeof receiver !== "string") operands.add(label);
+        const own = typeof receiver === "string" ? receiver : "";
+        const pattern = args[0];
+        const expression =
+          TAKES_EXPRESSION.has(key) && types.isRegExp(pattern) ? pattern : undefined;
+        if (expression !== undefined && !expressionsUnchanged()) modified.add(label);
+        const result = call();
+        count +=
+          expression === undefined
+            ? stringCharge(key, own, args, result)
+            : search(expression, own, 0, undefined);
+        return result;
+      },
+    );
+    install(
+      RegExp.prototype,
+      "RegExp.prototype",
+      (key, index) => (key === Symbol.replace && index === 1 ? "callback" : "data"),
+      (key, receiver, args, call, label) => {
+        const cursor = cursorOf(receiver);
+        if (!types.isRegExp(receiver) || cursor === undefined) {
+          operands.add(label);
+          return call();
+        }
+        const execCalled = RegExp.prototype.exec === installed.get(RegExp.prototype)?.get("exec");
+        if (key === "test" ? !execCalled : key !== "exec" && !expressionsUnchanged()) {
+          modified.add(label);
+        }
+        const input = typeof args[0] === "string" ? args[0] : "";
+        const stepping = (key === "exec" || key === "test") && (receiver.global || receiver.sticky);
+        const from = stepping ? Math.min(cursor, input.length) : 0;
+        const result = call();
+        const after: unknown = receiver.lastIndex;
+        const end = stepping && result !== null && result !== false && typeof after === "number";
+        count +=
+          key === "compile" || key === "toString"
+            ? 1
+            : search(receiver, input, from, end ? after : undefined);
+        return result;
+      },
+    );
+    install(
+      globalThis,
+      "globalThis",
+      () => "data",
+      (_key, _receiver, args, call) => {
+        const result = call();
+        count += Math.max(lengthOf(args[0]), lengthOf(result), 1);
+        return result;
+      },
+    );
+    redaction.redactCredentialsInText(text);
+    for (const owner of NATIVE.keys()) if (!unchanged(owner)) modified.add("after measurement");
+  } finally {
+    for (const undo of restore) undo();
+  }
+  return {
+    count,
+    unreviewed: [...unreviewed],
+    searches: [...searches],
+    operands: [...operands],
+    modified: [...modified],
+  };
 };
 
 describe("observe", () => {
@@ -474,10 +836,23 @@ describe("redactCredentialsInText", () => {
     }
   });
 
-  it("costs linear time on adversarial text", () => {
-    // Quadratic matching took 16-97 ms at 8 KiB and would take minutes at 1 MiB.
-    for (const text of shapes(8 * 1024)) expect(time(text)).toBeLessThan(25);
-    for (const text of shapes(1024 * 1024)) expect(time(text)).toBeLessThan(1000);
+  // Metered, this takes about 250 ms unloaded and 3 s on a saturated machine; the timeout is only a
+  // hang guard, with room above the 5 s default.
+  it("costs linear time on adversarial text", { timeout: 30_000 }, () => {
+    // Quadratic matching took 16-97 ms at 8 KiB and would take minutes at 1 MiB. Counted, a scan
+    // that restarts at each position reads each character more often as the text grows; this one
+    // reads each at most 19 times at every size, so 32 leaves room without hiding growth.
+    // Metering slows every call many times over, so the sizes stay small enough for a loaded runner.
+    for (const bytes of [1024, 8 * 1024, 16 * 1024]) {
+      for (const text of shapes(bytes)) {
+        const work = steps(text);
+        expect(work.count, text.slice(0, 12)).toBeLessThanOrEqual(32 * text.length);
+        expect(work.unreviewed, "unmetered traversal, review needed").toEqual([]);
+        expect(work.searches, "an expression over long text, review needed").toEqual([]);
+        expect(work.operands, "custom protocol operand, review needed").toEqual([]);
+        expect(work.modified, "modified built-in, review needed").toEqual([]);
+      }
+    }
   });
 });
 
