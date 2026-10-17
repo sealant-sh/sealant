@@ -24,7 +24,7 @@ import {
 import * as ledgerWrites from "@sealant/db/testing/capture-ledger-writes";
 import * as review9 from "@sealant/db/testing/review9-capture-drains";
 import * as review11 from "@sealant/db/testing/review11-capture-drains";
-import { Effect, Exit, Layer } from "effect";
+import { Deferred, Effect, Exit, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { removalRefused } from "../runtime/runtime-adapter.js";
@@ -79,9 +79,11 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
           pollIntervalMs: 5,
           stallWindowMs: 60_000,
           unreachableWindowMs: 60_000,
-          requestTimeoutMs: 1_000,
+          requestTimeoutMs: 60_000,
         },
-        budgetMs: 2_000,
+        // Nothing here tests the budget or the request bound: every poll costs real Postgres
+        // round trips, so a tight one turns a slow runner into `pending` (#392).
+        budgetMs: 60_000,
         label: "db test",
         runtimeState: Effect.succeed("running"),
       }).pipe(Effect.provide(daemon.layer)),
@@ -113,16 +115,19 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     const a = worker(dbA, "worker-a");
     const b = worker(dbB, "worker-b");
 
-    let uploaded = 0;
-    const moving = Array.from({ length: 40 }, () => {
-      uploaded += 10;
-      return captureStatus({ pending: 2, uploadedBytes: uploaded });
-    });
-    const inFlight = drain(runId, a, [...moving, savedStatus()]);
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    // Worker A's daemon answers one moving status, then holds its final answer until the test
+    // opens it: A is mid-drain, its claim held, for exactly as long as B's attempt takes.
+    const reached = await Effect.runPromise(Deferred.make<void>());
+    const open = await Effect.runPromise(Deferred.make<void>());
+    const inFlight = drain(runId, a, [
+      captureStatus({ pending: 2, uploadedBytes: 10 }),
+      { gated: savedStatus(), reached, open },
+    ]);
+    await Effect.runPromise(Deferred.await(reached));
     const second = await drain(runId, b, [savedStatus()]);
     expect(second.outcome.kind).toBe("busy");
     expect(second.daemon.connect).not.toHaveBeenCalled();
+    await Effect.runPromise(Deferred.succeed(open, undefined));
     expect((await inFlight).outcome.kind).toBe("drained");
 
     // Released: worker B claims now and loads what worker A recorded.
