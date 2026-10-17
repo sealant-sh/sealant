@@ -31,8 +31,12 @@ on:
 permissions:
   contents: read
 
+# A ref's newer run cancels its older one. A dispatch is its own group: on main it would share the
+# push run's group, so it could cancel that commit's e2e, or a later push could cancel it.
 concurrency:
-  group: k8s-e2e-${{ github.ref }}
+  group:
+    k8s-e2e-${{ github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.run_id) ||
+    github.ref }}
   cancel-in-progress: true
 
 jobs:
