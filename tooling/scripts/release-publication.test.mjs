@@ -31,6 +31,7 @@ const workflows = new URL("../../.github/workflows/", import.meta.url);
 const releaseText = readFileSync(new URL("release.yml", workflows), "utf8");
 const releaseDocument = parse(releaseText);
 const releaseJobs = releaseDocument.jobs;
+const root = fileURLToPath(new URL("../../", import.meta.url));
 
 /** The `run:` of the named step in the named job, as GitHub hands it to bash. */
 const stepRun = (job, name) => {
@@ -54,6 +55,7 @@ const readCalls = (file) =>
     .map((line) => JSON.parse(line));
 
 const IMAGES = ["sealant-api", "sealant-worker", "sealant-ssh-gateway", "sealant-web"];
+const ARCHES = ["amd64", "arm64"];
 const OWNER = "sealant-ci";
 const COMMIT = "f".repeat(40);
 const indexOf = (image) => `sha256:${createHash("sha256").update(image).digest("hex")}`;
@@ -63,6 +65,168 @@ const manifestJson = (version, extra = {}) =>
     version,
     commit: COMMIT,
     images: Object.fromEntries(IMAGES.map((image) => [image, { index: indexOf(image) }])),
+    ...extra,
+  });
+
+// --- the staged indexes ---
+
+/** Each image's build digest for each arch, as its build job recorded it. */
+const PLATFORMS = Object.fromEntries(
+  IMAGES.map((image) => [
+    image,
+    { amd64: indexOf(`${image}/amd64`), arm64: indexOf(`${image}/arm64`) },
+  ]),
+);
+/** A digest no build of this run made. */
+const FOREIGN = `sha256:${"9".repeat(64)}`;
+/** An index's descriptor of `digest` for linux/<architecture>[/<variant>]. */
+const child = (digest, architecture, variant) => ({
+  mediaType: "application/vnd.oci.image.manifest.v1+json",
+  digest,
+  size: 1,
+  platform: { os: "linux", architecture, ...(variant === undefined ? {} : { variant }) },
+});
+/** An index of `children`, as the registry serves it: its bytes and the digest it is read by. */
+const indexDocument = (children) => {
+  const bytes = Buffer.from(
+    JSON.stringify({
+      schemaVersion: 2,
+      mediaType: "application/vnd.oci.image.index.v1+json",
+      manifests: children,
+    }),
+  );
+  return { bytes, digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}` };
+};
+/** `descriptor` annotated as BuildKit annotates an attestation, whatever its platform says. */
+const annotated = (descriptor) => ({
+  ...descriptor,
+  annotations: {
+    "vnd.docker.reference.digest": descriptor.digest,
+    "vnd.docker.reference.type": "attestation-manifest",
+  },
+});
+/** A real BuildKit attestation of `digest`, as registry:2 serves it: annotated, unknown/unknown. */
+const attestation = (digest) =>
+  annotated({
+    ...child(indexOf(`attestation of ${digest}`), "unknown"),
+    platform: { os: "unknown", architecture: "unknown" },
+  });
+/** The index merge staged for `image`: each arch's platform names that arch's build. */
+const stagedIndex = (image) =>
+  indexDocument([child(PLATFORMS[image].amd64, "amd64"), child(PLATFORMS[image].arm64, "arm64")]);
+const STAGED = Object.fromEntries(IMAGES.map((image) => [image, stagedIndex(image)]));
+const INDEX = Object.fromEntries(IMAGES.map((image) => [image, STAGED[image].digest]));
+/**
+ * Each way an index for `image` can resolve a runnable platform to another build, as if checkIndex
+ * had been stubbed to pass: its label, the index, what the binding says, and the arches whose
+ * smoke leg refuses it (a leg binds only its own arch's platform; finalize binds both). Astra's round 1 (the
+ * labels swapped) and round 2 (an attestation annotation on a runnable platform, first, last and
+ * on arm64's v8) among them.
+ */
+const misbound = (image) => {
+  const { amd64, arm64 } = PLATFORMS[image];
+  const plain = [child(amd64, "amd64"), child(arm64, "arm64")];
+  const astra = annotated(child(arm64, "amd64"));
+  return [
+    [
+      "the labels swapped",
+      indexDocument([child(amd64, "arm64"), child(arm64, "amd64")]),
+      new RegExp(`maps linux/amd64 to ${arm64}|maps linux/arm64 to ${amd64}`),
+      ARCHES,
+    ],
+    [
+      "a duplicated platform",
+      indexDocument([...plain, child(FOREIGN, "amd64")]),
+      /has 2 linux\/amd64 entries, not one/,
+      ["amd64"],
+    ],
+    [
+      "a descriptor of the wrong variant",
+      indexDocument([child(amd64, "amd64"), child(arm64, "arm64", "v7")]),
+      /holds linux\/arm64\/v7/,
+      ARCHES,
+    ],
+    [
+      "another build under amd64 alone",
+      indexDocument([child(FOREIGN, "amd64"), child(arm64, "arm64")]),
+      new RegExp(`maps linux/amd64 to ${FOREIGN}`),
+      ["amd64"],
+    ],
+    [
+      "another build under arm64 alone",
+      indexDocument([child(amd64, "amd64"), child(FOREIGN, "arm64")]),
+      new RegExp(`maps linux/arm64 to ${FOREIGN}`),
+      ["arm64"],
+    ],
+    [
+      "Astra's annotated amd64 descriptor first",
+      indexDocument([astra, ...plain]),
+      /annotated as an attestation for linux\/amd64/,
+      ARCHES,
+    ],
+    [
+      "the same descriptor last",
+      indexDocument([...plain, astra]),
+      /annotated as an attestation for linux\/amd64/,
+      ARCHES,
+    ],
+    [
+      "an annotated descriptor of arm64 v8",
+      indexDocument([...plain, annotated(child(FOREIGN, "arm64", "v8"))]),
+      /annotated as an attestation for linux\/arm64\/v8/,
+      ARCHES,
+    ],
+  ];
+};
+/** Indexes the binding accepts: real BuildKit attestations beside the builds, and arm64's v8. */
+const wellBound = (image) => {
+  const { amd64, arm64 } = PLATFORMS[image];
+  return [
+    [
+      "a real BuildKit index with unknown/unknown attestations",
+      indexDocument([
+        child(amd64, "amd64"),
+        attestation(amd64),
+        child(arm64, "arm64"),
+        attestation(arm64),
+      ]),
+    ],
+    [
+      "an arm64 build BuildKit labelled v8",
+      indexDocument([child(amd64, "amd64"), child(arm64, "arm64", "v8")]),
+    ],
+  ];
+};
+/** Both packages' records, as the pack job writes them for `version`. */
+const packageRecords = (version) =>
+  Object.fromEntries(
+    ["@sealant/api-contracts", "@sealant/sdk"].map((name) => {
+      const digest = createHash("sha512").update(name).digest();
+      return [
+        name,
+        {
+          file: `${name.slice(1).replace("/", "-")}-${version}.tgz`,
+          sha512: digest.toString("hex"),
+          integrity: `sha512-${digest.toString("base64")}`,
+        },
+      ];
+    }),
+  );
+/**
+ * A release manifest the reader accepts: each image's index (the staged one unless `indexes` names
+ * another) and its builds, and both packages. `extra` replaces any field outright.
+ */
+const releaseManifest = (version, { indexes = {}, ...extra } = {}) =>
+  JSON.stringify({
+    version,
+    commit: COMMIT,
+    images: Object.fromEntries(
+      IMAGES.map((image) => [
+        image,
+        { index: (indexes[image] ?? STAGED[image]).digest, platforms: PLATFORMS[image] },
+      ]),
+    ),
+    packages: packageRecords(version),
     ...extra,
   });
 
@@ -219,11 +383,33 @@ test("the assets are downloaded anonymously and compared byte for byte", () => {
 // --- merge ---
 
 test("merge stages each index under this run's own tag, never :<version>", (t) => {
+  // Each build's digest arrives in a directory named for its arch, never merged into one, so the
+  // index can be bound to the build each arch's job made; the smoke reads its own arch's the same way.
+  const downloads = releaseJobs.merge.steps.filter((entry) =>
+    entry.uses?.startsWith("actions/download-artifact@"),
+  );
+  assert.deepEqual(
+    downloads.map((entry) => entry.with),
+    [{ path: "/tmp/digests", pattern: "digests-${{ matrix.image }}--*" }],
+  );
+  assert.ok(
+    releaseJobs["selfhost-smoke"].steps.some(
+      (entry) =>
+        entry.uses?.startsWith("actions/download-artifact@") &&
+        entry.if === "needs.release.outputs.target == 'ghcr'" &&
+        entry.with?.pattern === "digests-*--${{ matrix.platform.arch }}" &&
+        entry.with?.["merge-multiple"] === undefined,
+    ),
+  );
   const directory = scratch(t, "core-merge-");
   const digests = path.join(directory, "digests");
   for (const name of ["bin", "digests", "tmp"]) mkdirSync(path.join(directory, name));
   const platforms = ["a1".repeat(32), "b2".repeat(32)];
-  for (const digest of platforms) writeFileSync(path.join(digests, digest), "");
+  // One directory per build, named for its image and arch, as download-artifact lays them out.
+  for (const [at, arch] of ["amd64", "arm64"].entries()) {
+    mkdirSync(path.join(digests, `digests-sealant-api--${arch}`));
+    writeFileSync(path.join(digests, `digests-sealant-api--${arch}`, platforms[at]), "");
+  }
   const calls = path.join(directory, "calls.jsonl");
   writeFileSync(calls, "");
   writeFileSync(
@@ -249,14 +435,17 @@ process.exit(args[2] === "inspect" && process.env.FAIL_INSPECT ? 74 : 0);
         "--norc",
         "-e",
         "-c",
-        stepRun("merge", "Stage the multi-arch index under this run's tag"),
+        stepRun("merge", "Stage the multi-arch index under this run's tag").replaceAll(
+          "/tmp/digests",
+          digests,
+        ),
       ],
       {
-        cwd: digests,
         encoding: "utf8",
         env: {
           PATH: `${path.join(directory, "bin")}:/usr/bin:/bin`,
           RUNNER_TEMP: path.join(directory, "tmp"),
+          IMAGE: "sealant-api",
           REPOSITORY: repo("sealant-api"),
           GITHUB_RUN_ID: "38923041738",
           GITHUB_RUN_ATTEMPT: "2",
@@ -283,12 +472,24 @@ process.exit(args[2] === "inspect" && process.env.FAIL_INSPECT ? 74 : 0);
   ]);
   for (const failure of [{ FAIL_CREATE: "1" }, { FAIL_INSPECT: "1" }])
     assert.notEqual(run(failure).status, 0, JSON.stringify(failure));
-  // A stray file in the digests artifact is refused before anything is pushed.
-  writeFileSync(path.join(digests, "latest"), "");
+  // The sources go to create amd64 first, each from the artifact named for its arch; a stray or
+  // missing file in either is refused before anything is pushed.
+  writeFileSync(path.join(digests, "digests-sealant-api--arm64", "latest"), "");
   const stray = run();
   assert.equal(stray.status, 1);
-  assert.match(stray.stdout, /"latest" in the digests artifact is not an image digest/);
+  assert.match(
+    stray.stdout,
+    /The sealant-api arm64 digests artifact holds '.*latest.*', not one image digest/,
+  );
   assert.deepEqual(stray.calls, []);
+  rmSync(path.join(digests, "digests-sealant-api--arm64"), { recursive: true });
+  const missing = run();
+  assert.equal(missing.status, 1);
+  assert.match(
+    missing.stdout,
+    /The sealant-api arm64 digests artifact holds '\*', not one image digest/,
+  );
+  assert.deepEqual(missing.calls, []);
 });
 
 // --- finalize-images ---
@@ -299,15 +500,33 @@ process.exit(args[2] === "inspect" && process.env.FAIL_INSPECT ? 74 : 0);
  * reason other than not found, and `onCreate` says what a create does: `land` (the tag gets the
  * source's digest), `other` (another digest lands), `vanish` (the tag becomes unreadable), with an
  * optional exit code. `answers` replaces a reference's read with exact stdout, stderr and exit
- * (only its first read, with `once`).
+ * (only its first read, with `once`). The registry serves each image's index (the staged one, or
+ * the one `indexes` names) by its digest, which the manifest records as the run's index, unless
+ * `unserved` lists the image.
  */
 const finalize = (
   t,
-  { tags = {}, unreadable = [], onCreate = {}, manifest = {}, answers = {} } = {},
+  {
+    tags = {},
+    unreadable = [],
+    onCreate = {},
+    manifest = {},
+    answers = {},
+    indexes = {},
+    unserved = [],
+  } = {},
 ) => {
   const directory = scratch(t, "core-finalize-");
   const bin = path.join(directory, "bin");
   mkdirSync(bin);
+  const served = {};
+  for (const image of IMAGES) {
+    if (unserved.includes(image)) continue;
+    const document = indexes[image] ?? STAGED[image];
+    const file = path.join(directory, `served-${image}`);
+    writeFileSync(file, document.bytes);
+    served[`${repo(image)}@${document.digest}`] = file;
+  }
   const calls = path.join(directory, "calls.jsonl");
   const state = path.join(directory, "registry.json");
   writeFileSync(calls, "");
@@ -320,6 +539,12 @@ const args = process.argv.slice(2);
 appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
 const registry = JSON.parse(readFileSync(${JSON.stringify(state)}, "utf8"));
 const save = () => writeFileSync(${JSON.stringify(state)}, JSON.stringify(registry));
+const served = ${JSON.stringify(served)};
+if (args.slice(0, 3).join(" ") === "buildx imagetools inspect" && args[4] === "--raw" && args.length === 5) {
+  if (!(args[3] in served)) { console.error("ERROR: " + args[3] + ": not found"); process.exit(1); }
+  process.stdout.write(readFileSync(served[args[3]]));
+  process.exit(0);
+}
 if (args.slice(0, 3).join(" ") === "buildx imagetools inspect" && args[4] === "--format") {
   const ref = args[3];
   const answer = registry.answers[ref];
@@ -354,7 +579,7 @@ process.exit(79);
   );
   chmodSync(path.join(bin, "docker"), 0o755);
   const file = path.join(directory, "release-manifest.json");
-  writeFileSync(file, manifestJson("1.2.3", manifest));
+  writeFileSync(file, releaseManifest("1.2.3", { indexes, ...manifest }));
   const result = spawnSync(
     "bash",
     [
@@ -367,7 +592,8 @@ process.exit(79);
     {
       encoding: "utf8",
       env: {
-        PATH: `${bin}:${jqDirectory}:/usr/bin:/bin`,
+        PATH: `${bin}:${jqDirectory}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+        GITHUB_WORKSPACE: root,
         RUNNER_TEMP: directory,
         GITHUB_SHA: COMMIT,
         GITHUB_REPOSITORY_OWNER: OWNER,
@@ -385,8 +611,16 @@ process.exit(79);
   };
 };
 const finalRef = (image) => `${repo(image)}:1.2.3`;
-const ours = Object.fromEntries(IMAGES.map((image) => [finalRef(image), indexOf(image)]));
+const ours = Object.fromEntries(IMAGES.map((image) => [finalRef(image), INDEX[image]]));
 const creates = (result) => result.calls.filter((args) => args[2] === "create");
+const rawRead = (image, digest = INDEX[image]) => [
+  "buildx",
+  "imagetools",
+  "inspect",
+  `${repo(image)}@${digest}`,
+  "--raw",
+];
+const tagReads = (result) => result.calls.filter((args) => args[4] === "--format");
 
 test("finalize creates each absent :<version> from the accepted index, after reading every one", (t) => {
   const result = finalize(t);
@@ -399,12 +633,101 @@ test("finalize creates each absent :<version> from the accepted index, after rea
       "create",
       "--tag",
       finalRef(image),
-      `${repo(image)}@${indexOf(image)}`,
+      `${repo(image)}@${INDEX[image]}`,
     ]),
   );
-  for (const image of IMAGES) assert.equal(result.registry.tags[finalRef(image)], indexOf(image));
+  for (const image of IMAGES) assert.equal(result.registry.tags[finalRef(image)], INDEX[image]);
+  // Every index is read by its digest and bound before any tag is read, and every tag is read
+  // before any is written.
+  assert.deepEqual(
+    result.calls.slice(0, IMAGES.length),
+    IMAGES.map((image) => rawRead(image)),
+  );
+  assert.deepEqual(
+    result.calls.slice(IMAGES.length, 2 * IMAGES.length),
+    IMAGES.map((image) => [
+      "buildx",
+      "imagetools",
+      "inspect",
+      finalRef(image),
+      "--format",
+      "{{json .Manifest}}",
+    ]),
+  );
   const firstCreate = result.calls.findIndex((args) => args[2] === "create");
-  assert.equal(firstCreate, IMAGES.length, "every tag is read before any is written");
+  assert.equal(firstCreate, 2 * IMAGES.length, "every tag is read before any is written");
+});
+
+test("finalize binds each index's platforms again, and writes nothing when one maps a platform to another build", (t) => {
+  // Each reaches finalize as if checkIndex and the smoke had been stubbed to pass: the manifest
+  // records the bad index, and nothing before this step looked at it.
+  // Every way, on the last image, so the three images bound before it show no tag is read; and
+  // the swapped labels on every image.
+  const cases = [
+    ...misbound("sealant-web").map((entry) => ["sealant-web", ...entry]),
+    ...IMAGES.slice(0, -1).map((image) => [image, ...misbound(image)[0]]),
+  ];
+  for (const [image, label, index, problem] of cases) {
+    const result = finalize(t, { indexes: { [image]: index } });
+    assert.equal(result.status, 1, `${image}, ${label}: ${result.output}`);
+    assert.match(result.output, problem, `${image}, ${label}`);
+    // Read, never written: not even one :<version> is read before every binding passes.
+    const at = IMAGES.indexOf(image);
+    assert.deepEqual(
+      result.calls,
+      IMAGES.slice(0, at + 1).map((name) =>
+        rawRead(name, name === image ? index.digest : undefined),
+      ),
+      `${image}, ${label}`,
+    );
+    assert.deepEqual(tagReads(result), [], `${image}, ${label}`);
+    assert.deepEqual(creates(result), [], `${image}, ${label}`);
+    assert.deepEqual(result.registry.tags, {}, `${image}, ${label}`);
+  }
+  // An index the registry cannot serve by the recorded digest writes nothing either.
+  const unserved = finalize(t, { unserved: ["sealant-web"] });
+  assert.equal(unserved.status, 1);
+  assert.match(unserved.output, /sealant-web@sha256:[0-9a-f]{64}: not found/);
+  assert.deepEqual(tagReads(unserved), []);
+  assert.deepEqual(creates(unserved), []);
+  // A manifest whose recorded build differs from what the index maps writes nothing.
+  const builds = finalize(t, {
+    manifest: {
+      images: Object.fromEntries(
+        IMAGES.map((image) => [
+          image,
+          {
+            index: INDEX[image],
+            platforms:
+              image === "sealant-ssh-gateway"
+                ? { ...PLATFORMS[image], arm64: FOREIGN }
+                : PLATFORMS[image],
+          },
+        ]),
+      ),
+    },
+  });
+  assert.equal(builds.status, 1);
+  assert.match(
+    builds.output,
+    new RegExp(
+      `The sealant-ssh-gateway index ${INDEX["sealant-ssh-gateway"]} maps linux/arm64 to ${PLATFORMS["sealant-ssh-gateway"].arm64}, not ${FOREIGN}, the arm64 build\\. Nothing was written\\.`,
+    ),
+  );
+  assert.deepEqual(tagReads(builds), []);
+  // Real BuildKit indexes, with unknown/unknown attestations or arm64's v8, are bound and tagged.
+  for (const [label] of wellBound(IMAGES[0])) {
+    const indexes = Object.fromEntries(
+      IMAGES.map((image) => [image, wellBound(image).find(([name]) => name === label)[1]]),
+    );
+    const result = finalize(t, { indexes });
+    assert.equal(result.status, 0, `${label}: ${result.output}`);
+    assert.deepEqual(
+      result.registry.tags,
+      Object.fromEntries(IMAGES.map((image) => [finalRef(image), indexes[image].digest])),
+      label,
+    );
+  }
 });
 
 test("finalize is done when :<version> already names this run's index: a rerun of failed jobs", (t) => {
@@ -417,8 +740,8 @@ test("finalize is done when :<version> already names this run's index: a rerun o
 test("finalize completes a partial finalize: matching tags stay, absent ones are created", (t) => {
   const result = finalize(t, {
     tags: {
-      [finalRef("sealant-api")]: indexOf("sealant-api"),
-      [finalRef("sealant-worker")]: indexOf("sealant-worker"),
+      [finalRef("sealant-api")]: INDEX["sealant-api"],
+      [finalRef("sealant-worker")]: INDEX["sealant-worker"],
     },
   });
   assert.equal(result.status, 0, result.output);
@@ -478,7 +801,7 @@ test("finalize reads absent only from buildx's sole not-found line, and fails on
   assert.equal(creates(result).length, IMAGES.length);
   assert.deepEqual(creates(result)[0].slice(4), [
     ref,
-    `${repo("sealant-api")}@${indexOf("sealant-api")}`,
+    `${repo("sealant-api")}@${INDEX["sealant-api"]}`,
   ]);
 });
 
@@ -896,9 +1219,10 @@ test("the promote step, run whole, logs the production delay when no test overri
 /**
  * A stand-in docker for the smoke: pulls by digest record the pull and answer `id` from the image
  * IDs in `ids` (by reference); `docker compose ps` and `docker inspect` answer from `running`
- * (service → {image ID, name}); image labels come from `labels` (image ID → version).
+ * (service → {image ID, name}); image labels come from `labels` (image ID → version); raw reads
+ * answer from `served` (reference → file).
  */
-const smokeDocker = (directory, { ids = {}, running = {}, labels = {} }) => {
+const smokeDocker = (directory, { ids = {}, running = {}, labels = {}, served = {} }) => {
   const calls = path.join(directory, "calls.jsonl");
   writeFileSync(calls, "");
   mkdirSync(path.join(directory, "bin"), { recursive: true });
@@ -909,6 +1233,12 @@ const { appendFileSync } = require("node:fs");
 const args = process.argv.slice(2);
 appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
 const ids = ${JSON.stringify(ids)}, running = ${JSON.stringify(running)}, labels = ${JSON.stringify(labels)};
+const served = ${JSON.stringify(served)};
+if (args.slice(0, 3).join(" ") === "buildx imagetools inspect" && args[4] === "--raw" && args.length === 5) {
+  if (!(args[3] in served)) { console.error("ERROR: " + args[3] + ": not found"); process.exit(1); }
+  process.stdout.write(require("node:fs").readFileSync(served[args[3]]));
+  process.exit(0);
+}
 if (args[0] === "pull" || args[0] === "tag") process.exit(0);
 if (args[0] === "image" && args[1] === "inspect" && args[3] === "--format" && args[4] === "{{.Id}}") {
   console.log(ids[args[2]]); process.exit(0);
@@ -933,101 +1263,176 @@ process.exit(79);
   return calls;
 };
 
-test("each smoke leg pulls its own arch's digests from the manifest and tags only the IDs it pulled", (t) => {
+/**
+ * The smoke's pull step as written, on `arch`'s runner, against a stand-in docker. The registry
+ * serves each image's index (the staged one, or the one `indexes` names) by its digest, which the
+ * manifest records, unless `unserved` lists the image; this arch's build job of each image recorded
+ * `builds[image]` (the manifest's platform digest by default).
+ */
+const smokePull = (t, arch, { indexes = {}, unserved = [], builds = {} } = {}) => {
   const directory = scratch(t, "core-smoke-pull-");
-  const platforms = Object.fromEntries(
+  const served = {};
+  const built = path.join(directory, "built");
+  for (const image of IMAGES) {
+    const document = indexes[image] ?? STAGED[image];
+    if (!unserved.includes(image)) {
+      served[`${repo(image)}@${document.digest}`] = path.join(directory, `served-${image}`);
+      writeFileSync(served[`${repo(image)}@${document.digest}`], document.bytes);
+    }
+    const dir = path.join(built, `digests-${image}--${arch}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, (builds[image] ?? PLATFORMS[image][arch]).slice(7)), "");
+  }
+  const ids = Object.fromEntries(
     IMAGES.map((image) => [
-      image,
-      { amd64: indexOf(`${image}/amd64`), arm64: indexOf(`${image}/arm64`) },
+      `${repo(image)}@${PLATFORMS[image][arch]}`,
+      indexOf(`id ${image} ${arch}`),
     ]),
   );
+  const calls = smokeDocker(directory, { ids, served });
   const file = path.join(directory, "release-manifest.json");
-  writeFileSync(
-    file,
-    JSON.stringify({
-      version: "1.2.3",
-      commit: COMMIT,
-      images: Object.fromEntries(
-        IMAGES.map((image) => [image, { index: indexOf(image), platforms: platforms[image] }]),
-      ),
-      packages: Object.fromEntries(
-        ["@sealant/api-contracts", "@sealant/sdk"].map((name) => {
-          const digest = createHash("sha512").update(name).digest();
-          return [
-            name,
-            {
-              file: `${name.slice(1).replace("/", "-")}-1.2.3.tgz`,
-              sha512: digest.toString("hex"),
-              integrity: `sha512-${digest.toString("base64")}`,
-            },
-          ];
-        }),
-      ),
-    }),
-  );
-  const pull = stepRun("selfhost-smoke", "Pull this run's images by digest");
-  for (const [arch, runner] of [
-    ["amd64", "X64"],
-    ["arm64", "ARM64"],
-  ]) {
-    const ids = Object.fromEntries(
-      IMAGES.map((image) => [
-        `${repo(image)}@${platforms[image][arch]}`,
-        indexOf(`id ${image} ${arch}`),
-      ]),
-    );
-    const calls = smokeDocker(directory, { ids });
-    const idsFile = path.join(directory, `ids-${arch}`);
-    const run = spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", pull], {
-      cwd: fileURLToPath(new URL("../../", import.meta.url)),
+  writeFileSync(file, releaseManifest("1.2.3", { indexes }));
+  const idsFile = path.join(directory, "ids");
+  const run = spawnSync(
+    "bash",
+    [
+      "--noprofile",
+      "--norc",
+      "-e",
+      "-c",
+      stepRun("selfhost-smoke", "Pull this run's images by digest"),
+    ],
+    {
+      cwd: root,
       encoding: "utf8",
       env: {
-        PATH: `${path.join(directory, "bin")}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
-        RUNNER_ARCH: runner,
+        PATH: `${path.join(directory, "bin")}:${jqDirectory}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+        RUNNER_ARCH: arch === "amd64" ? "X64" : "ARM64",
+        RUNNER_TEMP: directory,
         ARCH: arch,
         NAMESPACE: `ghcr.io/${OWNER}`,
         MANIFEST: file,
+        BUILT: built,
         VERSION: "1.2.3",
         IDS: idsFile,
       },
-    });
-    assert.equal(run.status, 0, run.stderr);
-    assert.deepEqual(
-      readCalls(calls),
-      IMAGES.flatMap((image) => {
-        const source = `${repo(image)}@${platforms[image][arch]}`;
+    },
+  );
+  return { ...run, output: run.stdout + run.stderr, calls: readCalls(calls), ids, idsFile };
+};
+const pulls = (result) => result.calls.filter(([command]) => command === "pull");
+
+test("each smoke leg resolves its own arch through each index, then pulls and tags only the IDs it pulled", (t) => {
+  for (const arch of ARCHES) {
+    const result = smokePull(t, arch);
+    assert.equal(result.status, 0, result.output);
+    assert.deepEqual(result.calls, [
+      // Every image is resolved through its index before any is pulled.
+      ...IMAGES.map((image) => [
+        "buildx",
+        "imagetools",
+        "inspect",
+        `${repo(image)}@${INDEX[image]}`,
+        "--raw",
+      ]),
+      ...IMAGES.flatMap((image) => {
+        const source = `${repo(image)}@${PLATFORMS[image][arch]}`;
         return [
           ["pull", source],
           ["image", "inspect", source, "--format", "{{.Id}}"],
-          ["tag", ids[source], `${repo(image)}:1.2.3`],
+          ["tag", result.ids[source], `${repo(image)}:1.2.3`],
         ];
       }),
-    );
+    ]);
     assert.equal(
-      readFileSync(idsFile, "utf8"),
+      readFileSync(result.idsFile, "utf8"),
       IMAGES.map((image) => `${image} ${indexOf(`id ${image} ${arch}`)}\n`).join(""),
     );
     // A leg on the other arch's runner refuses before it pulls anything.
-    const crossed = spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", pull], {
-      encoding: "utf8",
-      env: {
-        PATH: `${path.join(directory, "bin")}:/usr/bin:/bin`,
-        RUNNER_ARCH: runner === "X64" ? "ARM64" : "X64",
-        ARCH: arch,
-        IDS: idsFile,
+    const directory = scratch(t, "core-smoke-crossed-");
+    smokeDocker(directory, {});
+    const crossed = spawnSync(
+      "bash",
+      [
+        "--noprofile",
+        "--norc",
+        "-e",
+        "-c",
+        stepRun("selfhost-smoke", "Pull this run's images by digest"),
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          PATH: `${path.join(directory, "bin")}:/usr/bin:/bin`,
+          RUNNER_ARCH: arch === "amd64" ? "ARM64" : "X64",
+          ARCH: arch,
+          IDS: path.join(directory, "ids"),
+        },
       },
-    });
+    );
     assert.equal(crossed.status, 1);
     assert.match(crossed.stdout, /was asked to accept/);
   }
   assert.deepEqual(
     releaseJobs["selfhost-smoke"].strategy.matrix.platform.map((entry) => entry.arch),
-    ["amd64", "arm64"],
+    ARCHES,
   );
   const install = releaseJobs["selfhost-smoke"].steps.find(
     (entry) => entry.name === "Run installer against this run's images",
   );
   assert.equal(install.env.SEALANT_VERSION, "${{ needs.release.outputs.version }}");
+});
+
+test("a smoke leg pulls nothing when an index maps its platform to another build", (t) => {
+  // Each reaches the smoke as if checkIndex had been stubbed to pass. Every way, on the last image,
+  // so the three resolved before it show nothing is pulled; and the swapped labels on every image.
+  const cases = [
+    ...misbound("sealant-web").map((entry) => ["sealant-web", ...entry]),
+    ...IMAGES.slice(0, -1).map((image) => [image, ...misbound(image)[0]]),
+  ];
+  for (const [image, label, index, problem, arches] of cases)
+    for (const arch of arches) {
+      const result = smokePull(t, arch, { indexes: { [image]: index } });
+      assert.equal(result.status, 1, `${image} ${arch}, ${label}: ${result.output}`);
+      assert.match(result.output, problem, `${image} ${arch}, ${label}`);
+      assert.deepEqual(pulls(result), [], `${image} ${arch}, ${label} pulls nothing`);
+    }
+  // The swapped labels name both builds.
+  const { amd64, arm64 } = PLATFORMS["sealant-api"];
+  const swapped = misbound("sealant-api")[0][1];
+  const exchanged = smokePull(t, "arm64", { indexes: { "sealant-api": swapped } });
+  assert.match(
+    exchanged.output,
+    new RegExp(
+      `The sealant-api index ${swapped.digest} maps linux/arm64 to ${amd64}; this arch's build is ${arm64} and the manifest records ${arm64}\\. Nothing was pulled\\.`,
+    ),
+  );
+  for (const [label, options, problem] of [
+    [
+      "a build job that recorded another digest",
+      { builds: { "sealant-worker": FOREIGN } },
+      new RegExp(
+        `maps linux/amd64 to ${PLATFORMS["sealant-worker"].amd64}; this arch's build is ${FOREIGN}`,
+      ),
+    ],
+    ["an index the registry does not serve", { unserved: ["sealant-ssh-gateway"] }, /not found/],
+  ]) {
+    const result = smokePull(t, "amd64", options);
+    assert.equal(result.status, 1, `${label}: ${result.output}`);
+    assert.match(result.output, problem, label);
+    assert.deepEqual(pulls(result), [], `${label} pulls nothing`);
+  }
+  // Real BuildKit indexes, with unknown/unknown attestations or arm64's v8, resolve on both legs.
+  for (const [label] of wellBound(IMAGES[0])) {
+    const indexes = Object.fromEntries(
+      IMAGES.map((image) => [image, wellBound(image).find(([name]) => name === label)[1]]),
+    );
+    for (const arch of ARCHES) {
+      const result = smokePull(t, arch, { indexes });
+      assert.equal(result.status, 0, `${label} ${arch}: ${result.output}`);
+      assert.equal(pulls(result).length, IMAGES.length, `${label} ${arch}`);
+    }
+  }
 });
 
 test("the smoke fails unless every service runs the image ID it pulled by digest", (t) => {

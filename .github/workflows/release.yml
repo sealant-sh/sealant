@@ -2,15 +2,17 @@
 # @sealant/api-contracts on npm, and the GitHub release whose assets install.sh downloads. In order:
 #
 # 1. build pushes each image's two platforms by digest, untagged; merge stages each image's index
-#    under this run's own tag, staging-<run>-<attempt>, and release-manifest records every digest.
-# 2. selfhost-smoke runs install.sh on amd64 and on arm64 against those digests, and workspace-e2e
+#    under this run's own tag, staging-<run>-<attempt>, binding each arch's platform to that arch's
+#    build, and release-manifest records every digest.
+# 2. selfhost-smoke resolves each image's platform through its staged index on amd64 and on arm64,
+#    requires it to be that arch's build, and runs install.sh against those digests; workspace-e2e
 #    proves the pinned sealantd; acceptance passes only when all three passed.
 #    pack builds and packs the two npm packages with no credential, and the manifest records each
 #    tarball's sha512.
-# 3. finalize-images writes each :<version>, once, from the accepted index; npm publishes exactly
-#    the packed tarballs under the stable floor; then the GitHub release is created without
-#    becoming latest; promote moves each :latest to the accepted index under the floor, and moves
-#    GitHub's latest release last.
+# 3. finalize-images binds each accepted index's platforms again, then writes each :<version>,
+#    once, from it; npm publishes exactly the packed tarballs under the stable floor; then the
+#    GitHub release is created without becoming latest; promote moves each :latest to the accepted
+#    index under the floor, and moves GitHub's latest release last.
 #
 # Only finalize-images writes a :<version>, only promote moves :latest or GitHub's latest release,
 # and :X.Y is never written: those tags stay at the last value the old pipeline gave them.
@@ -403,11 +405,11 @@ jobs:
         with:
           node-version: 24
 
+      # One directory per build, named for its arch: which digest is which arch's build is kept.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: /tmp/digests
           pattern: digests-${{ matrix.image }}--*
-          merge-multiple: true
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -416,17 +418,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # tooling/scripts/release-publication.test.mjs runs this step as written, against a stand-in docker.
       - name: Stage the multi-arch index under this run's tag
-        working-directory: /tmp/digests
         env:
+          IMAGE: ${{ matrix.image }}
           REPOSITORY: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
         run: |
           set -euo pipefail
           tag=staging-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT
           sources=()
-          for digest in *; do
-            if [[ ! $digest =~ ^[0-9a-f]{64}$ ]]; then
-              echo "::error::\"$digest\" in the digests artifact is not an image digest."
+          for arch in amd64 arm64; do
+            built=(/tmp/digests/digests-"$IMAGE"--"$arch"/*)
+            digest=${built[0]##*/}
+            if [[ ${#built[@]} -ne 1 || ! $digest =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::The $IMAGE $arch digests artifact holds '${built[*]##*/}', not one image digest."
               exit 1
             fi
             sources+=("$REPOSITORY@sha256:$digest")
@@ -438,10 +443,12 @@ jobs:
 
       # The index digest goes in the release manifest: the one create reported, never the tag's,
       # which another writer can move. That index and each source are read by digest, and the index
-      # must hold exactly the sources, for amd64 and arm64.
+      # must hold exactly the sources, each arch's build under that arch's platform.
+      # tooling/scripts/release-manifest.test.mjs runs this step as written, against a stand-in docker.
       - name: Check and record the index digest
         working-directory: ${{ runner.temp }}/index
         env:
+          IMAGE: ${{ matrix.image }}
           REPOSITORY: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
         run: |
           set -euo pipefail
@@ -452,10 +459,10 @@ jobs:
           fi
           docker buildx imagetools inspect "$REPOSITORY@$digest" --raw >index.json
           sources=()
-          for file in /tmp/digests/*; do
-            source=${file##*/}
+          for arch in amd64 arm64; do
+            source=$(cd "/tmp/digests/digests-$IMAGE--$arch" && ls)
             docker buildx imagetools inspect "$REPOSITORY@sha256:$source" --raw >"source-$source.json"
-            sources+=("sha256:$source=source-$source.json")
+            sources+=("$arch=sha256:$source=source-$source.json")
           done
           node "$GITHUB_WORKSPACE/tooling/scripts/release-manifest.mjs" check-index create.json \
             index.json "${sources[@]}" >digest
@@ -575,7 +582,7 @@ jobs:
           for arch in amd64 arm64; do
             source=$(cd "/tmp/digests/digests-$IMAGE--$arch" && ls)
             docker buildx imagetools inspect "$REPOSITORY@sha256:$source" --raw >"source-$source.json"
-            sources+=("sha256:$source=source-$source.json")
+            sources+=("$arch=sha256:$source=source-$source.json")
           done
           node "$GITHUB_WORKSPACE/tooling/scripts/release-manifest.mjs" check-index create.json \
             index.json "${sources[@]}" >digest
@@ -780,15 +787,27 @@ jobs:
           name: release-manifest
           path: ${{ runner.temp }}/release
 
-      # install.sh runs any local image that carries the version's tag, and a tag can move. Pull
-      # this arch's platform digest of each image from the manifest, record the ID it pulled as,
-      # and tag only that ID with the name install.sh expects. :<version> does not exist on GHCR
-      # yet, so install.sh's own pulls of it fail harmlessly and the local tags stand.
+      # This arch's build digest of each image, as its build job recorded it.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: needs.release.outputs.target == 'ghcr'
+        with:
+          path: ${{ runner.temp }}/built
+          pattern: digests-*--${{ matrix.platform.arch }}
+
+      # install.sh runs any local image that carries the version's tag, and a tag can move. Each
+      # image's platform is resolved through its staged index, as a consumer of :<version> resolves
+      # it: the index is read by the digest the manifest records, and the digest it maps this arch's
+      # platform to must be this arch's build, as its build job and the manifest both record it.
+      # Every image is resolved before any is pulled. Then each digest is pulled, the ID it pulled as
+      # recorded, and only that ID tagged with the name install.sh expects. :<version> does not exist
+      # on GHCR yet, so install.sh's own pulls of it fail harmlessly and the local tags stand.
+      # tooling/scripts/release-publication.test.mjs runs this step as written, against a stand-in docker.
       - name: Pull this run's images by digest
         if: needs.release.outputs.target == 'ghcr'
         env:
           NAMESPACE: ghcr.io/${{ github.repository_owner }}
           MANIFEST: ${{ runner.temp }}/release/release-manifest.json
+          BUILT: ${{ runner.temp }}/built
           VERSION: ${{ needs.release.outputs.version }}
           ARCH: ${{ matrix.platform.arch }}
           IDS: ${{ runner.temp }}/image-ids
@@ -803,9 +822,28 @@ jobs:
             echo "::error::This $arch runner was asked to accept $ARCH."
             exit 1
           fi
+          images=(sealant-api sealant-worker sealant-ssh-gateway sealant-web)
+          declare -A resolved
+          for image in "${images[@]}"; do
+            receipt=$(node tooling/scripts/release-manifest.mjs digest "$MANIFEST" "$image" "$arch")
+            index=$(jq -r --arg image "$image" '.images[$image].index' "$MANIFEST")
+            built=("$BUILT/digests-$image--$arch"/*)
+            build=sha256:${built[0]##*/}
+            if [[ ${#built[@]} -ne 1 || ! $build =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::The $image $arch digests artifact holds '${built[*]##*/}', not one image digest."
+              exit 1
+            fi
+            docker buildx imagetools inspect "$NAMESPACE/$image@$index" --raw >"$RUNNER_TEMP/index-$image.json"
+            digest=$(node tooling/scripts/release-manifest.mjs select "$RUNNER_TEMP/index-$image.json" "$index" "$arch")
+            if ! [[ $digest == "$build" && $digest == "$receipt" ]]; then
+              echo "::error::The $image index $index maps linux/$arch to $digest; this arch's build is $build and the manifest records $receipt. Nothing was pulled."
+              exit 1
+            fi
+            resolved[$image]=$digest
+          done
           : >"$IDS"
-          for image in sealant-api sealant-worker sealant-ssh-gateway sealant-web; do
-            digest=$(node tooling/scripts/release-manifest.mjs digest "$MANIFEST" "$image" "$arch")
+          for image in "${images[@]}"; do
+            digest=${resolved[$image]}
             docker pull "$NAMESPACE/$image@$digest"
             id=$(docker image inspect "$NAMESPACE/$image@$digest" --format '{{.Id}}')
             docker tag "$id" "$NAMESPACE/$image:$VERSION"
@@ -1036,6 +1074,19 @@ jobs:
             exit 1
           fi
 
+      # Only the manifest reader, which binds each index's platforms (tooling/scripts/release-manifest.mjs).
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: tooling/scripts/release-manifest.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-manifest
@@ -1048,9 +1099,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Every tag is read before any is written, and the read after the write decides: a create
-      # that reports an error but left this run's digest is done, any other digest is refused, and
-      # a tag still unreadable fails.
+      # Each index's platforms are bound again on the exact index this job tags, before any tag is
+      # read. Every tag is read before any is written, and the read after the write decides: a
+      # create that reports an error but left this run's digest is done, any other digest is
+      # refused, and a tag still unreadable fails.
       # tooling/scripts/release-publication.test.mjs runs this step as written, against a stand-in docker.
       - name: Publish each accepted index as its version
         env:
@@ -1091,6 +1143,11 @@ jobs:
           }
           images=(sealant-api sealant-worker sealant-ssh-gateway sealant-web)
           declare -A index create
+          # Each index, read by the digest the manifest records, must map each arch's platform, once
+          # and in a variant that arch's build has, to the build digest the manifest records for it:
+          # the digest the smoke required each arch's build artifact to be. The manifest outlives
+          # the one-day artifacts, so a re-run of this job can still check. Every image is bound
+          # before any :<version> is read.
           for image in "${images[@]}"; do
             repository="ghcr.io/$GITHUB_REPOSITORY_OWNER/$image"
             index[$image]=$(jq -r --arg image "$image" '.images[$image].index // ""' "$MANIFEST")
@@ -1098,6 +1155,18 @@ jobs:
               echo "::error::The release manifest records no index digest for $image."
               exit 1
             fi
+            docker buildx imagetools inspect "$repository@${index[$image]}" --raw >"$RUNNER_TEMP/index-$image.json"
+            for arch in amd64 arm64; do
+              build=$(node "$GITHUB_WORKSPACE/tooling/scripts/release-manifest.mjs" digest "$MANIFEST" "$image" "$arch")
+              mapped=$(node "$GITHUB_WORKSPACE/tooling/scripts/release-manifest.mjs" select "$RUNNER_TEMP/index-$image.json" "${index[$image]}" "$arch")
+              if [[ $mapped != "$build" ]]; then
+                echo "::error::The $image index ${index[$image]} maps linux/$arch to $mapped, not $build, the $arch build. Nothing was written."
+                exit 1
+              fi
+            done
+          done
+          for image in "${images[@]}"; do
+            repository="ghcr.io/$GITHUB_REPOSITORY_OWNER/$image"
             current=$(read_tag "$repository:$VERSION")
             if [[ $current == absent ]]; then
               create[$image]=1

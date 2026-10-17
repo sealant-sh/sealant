@@ -98,33 +98,47 @@ The pieces:
 - **Images**: `.github/workflows/release.yml` releases a `vX.Y.Z` tag. `build` pushes each of
   `ghcr.io/sealant-sh/sealant-{api,worker,ssh-gateway,web}` for amd64 and arm64, each on a native
   runner, by digest with no tag. `merge` stages each image's index under this run's own tag,
-  `staging-<run id>-<attempt>`, and `release-manifest` records every index and platform digest in
-  the run's `release-manifest` artifact (kept 90 days). `selfhost-smoke` runs `install.sh` on amd64
-  and on arm64 against those digests: it pulls each image by digest, tags that ID with the name
-  install.sh expects, and fails unless every service runs that ID. `acceptance` passes only when
-  both smoke legs and `workspace-e2e` passed; nothing publishes before it.
+  `staging-<run id>-<attempt>`, and checks that the index maps `linux/amd64` to the amd64 build and
+  `linux/arm64` to the arm64 build, once each, and holds nothing else. `release-manifest` records
+  every index and platform digest in the run's `release-manifest` artifact (kept 90 days).
+  `selfhost-smoke` runs `install.sh` on amd64 and on arm64 against those digests: it reads each
+  image's staged index by the digest the manifest records, requires the digest it maps this arch's
+  platform to (what a consumer of `:<version>` would pull) to be this arch's build as its build job
+  and the manifest record it, and only then pulls each image by that digest, tags that ID with the
+  name install.sh expects, and fails unless every service runs that ID. `acceptance` passes only
+  when both smoke legs and `workspace-e2e` passed; nothing publishes before it.
+- **Index platforms are bound to their builds** (`tooling/scripts/release-manifest.mjs`). An arch's
+  platform is `linux/amd64`, or `linux/arm64` with no variant or `v8`; any other platform is
+  refused. A descriptor is an attestation only when it is annotated
+  `vnd.docker.reference.type=attestation-manifest` and its platform is `unknown/unknown`, as
+  BuildKit writes it; an attestation annotation on a runnable platform is refused, since containerd
+  ignores the annotation and pulls the first platform match. A digest listed twice is refused too,
+  so each platform has exactly one descriptor, the one a consumer selects.
 - **npm, from a job with no credential**: `pack` builds both packages, packs them with `pnpm pack`
   (the SDK's `workspace:*` dependency becomes the exact version), and normalizes each tarball once
   with `tooling/scripts/normalize-npm-tarball.mjs`: only allowlisted manifest fields, no scripts, no
   `.npmrc`, `gitHead` set to the commit. The release manifest records each tarball's sha512 and
   integrity. `pack` holds no `id-token`; nothing it runs can reach the npm credential.
 - **Publishing, after acceptance**: `finalize-images` writes each `:<version>` from the accepted
-  index. `npm` (environment `release`, `id-token: write` only) checks out nothing, installs nothing
-  and runs no build tool: it checks that the artifact holds exactly the two tarballs, that each
-  one's sha512 is the manifest's and that it is already normalized, publishes
-  `@sealant/api-contracts` then `@sealant/sdk` from those bytes under `latest`, and reads each
-  `dist.integrity` back. `github-release` waits for npm, and creates the release with
-  `compose.selfhost.yaml` and `install.sh` attached and `--latest=false`. `promote` moves each
-  `:latest` to the accepted index, then GitHub's latest release, which is what `install.sh` installs
-  by default. `finalize-images`, `npm` and `promote` queue on one job-level lock,
-  `sealant-release-channel` (`queue: max`, never cancelled).
+  index, after it reads every index by the digest the manifest records and binds its platforms again
+  to the build digests the manifest records; a mismatch on any image writes nothing. `npm`
+  (environment `release`, `id-token: write` only) checks out nothing, installs nothing and runs no
+  build tool: it checks that the artifact holds exactly the two tarballs, that each one's sha512 is
+  the manifest's and that it is already normalized, publishes `@sealant/api-contracts` then
+  `@sealant/sdk` from those bytes under `latest`, and reads each `dist.integrity` back.
+  `github-release` waits for npm, and creates the release with `compose.selfhost.yaml` and
+  `install.sh` attached and `--latest=false`. `promote` moves each `:latest` to the accepted index,
+  then GitHub's latest release, which is what `install.sh` installs by default. `finalize-images`,
+  `npm` and `promote` queue on one job-level lock, `sealant-release-channel` (`queue: max`, never
+  cancelled).
 - **Cutting a release**: push a `vX.Y.Z` tag. After the very first release, flip the four GHCR
   packages to public (one-time, per package) or anonymous pulls fail.
 - **Every tag is read before it is written.** Only buildx's exact `ERROR: <ref>: not found` counts
-  as absent; any other failed read stops the job before it writes. `finalize-images` reads all four
-  `:<version>` first: a tag already at the accepted index is left alone, a tag at any other digest
-  refuses ("Version X.Y.Z is spent: cut a new one"), and after a create a second read decides. A
-  create that errored but left the accepted index passes with a warning.
+  as absent; any other failed read stops the job before it writes. `finalize-images` binds all four
+  indexes, then reads all four `:<version>`, before it writes any: a tag already at the accepted
+  index is left alone, a tag at any other digest refuses ("Version X.Y.Z is spent: cut a new one"),
+  and after a create a second read decides. A create that errored but left the accepted index passes
+  with a warning.
 - **The stable floor.** `npm` and `promote` each read it inside the lock before they write: the
   highest of npm `latest` for `@sealant/sdk` and `@sealant/api-contracts`, the tag of GitHub's
   latest release, and the `org.opencontainers.image.version` label on every platform of the four
@@ -142,8 +156,13 @@ The pieces:
   `:<version>` instead.
 - **Re-running a stable release run.** Re-run failed jobs (`gh run rerun <id> --failed`); the run's
   manifest and tarballs are kept 90 days, its per-arch digests one day. What each job then does:
-  - `build`, `merge`, the smoke or the workspace e2e failed: nothing final was written. A re-run
-    stages under a new `staging-<run>-<attempt>` tag.
+  - `build` or `merge` failed: nothing final was written. A re-run stages under a new
+    `staging-<run>-<attempt>` tag.
+  - The smoke or the workspace e2e failed: nothing final was written. A re-run checks the indexes
+    this run already staged; the smoke reads each arch's build digests, so re-run it within the day
+    they are kept.
+  - `finalize-images` failed before it wrote: a re-run binds the indexes again from the manifest
+    alone, which outlives the per-arch digests.
   - `finalize-images` wrote some `:<version>` tags: matching ones are left alone, absent ones are
     created, and a tag at another digest refuses before anything else is written.
   - `npm` published `@sealant/api-contracts` but not the SDK: the contracts are verified, not
@@ -189,8 +208,9 @@ The pieces:
   (npm has only ever published stable Core with `pnpm publish`), the npm job reading GitHub's latest
   release with a token that holds only `id-token: write`, `finalize-images` and `promote` writing to
   GHCR, the GitHub release created with `--latest=false` and then moved by `promote`, the lock
-  queueing across real runs, and the smoke pulling staged digests (a dry run accepts archives, not
-  pulls). A dry run proves the builds, both arches' smoke, the manifest and the tarballs.
+  queueing across real runs, and the smoke reading the staged indexes and pulling staged digests (a
+  dry run accepts archives, not pulls). A dry run proves the builds, both arches' smoke, the
+  manifest and the tarballs.
 - **Local dry-run**: build the images with the same Dockerfiles
   (`docker build -f apps/<app>/Dockerfile -t ghcr.io/sealant-sh/sealant-<name>:0.0.0-dev .`), then
   `SEALANT_VERSION=0.0.0-dev SEALANT_COMPOSE_URL=$PWD/compose.selfhost.yaml sh install.sh`. Offset
