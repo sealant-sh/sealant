@@ -531,6 +531,13 @@ const accepts = (role: Role, value: unknown) =>
  * (or a replacer that returned an object), and `modified` each call that found a built-in changed
  * from `NATIVE`: before and after the measurement, at each call that dispatches through an
  * expression's inherited hooks, and at each `test` for the `exec` it calls.
+ *
+ * This is a regression check for accidental repeated scans and unreviewed regex searches, not a
+ * complexity proof or a defense against code written to bypass the meter. Indexed reads, operators,
+ * JSON serialization, Array operations and hashing are not fully metered. The sampled sizes (1, 8
+ * and 16 KiB) do not cover every future length-dependent path: add boundary cases when introducing
+ * one. Deliberately bypassing the wrappers, or changing a built-in and restoring it between two
+ * observation points, is outside this test's threat model.
  */
 const steps = (text: string) => {
   let count = 0;
