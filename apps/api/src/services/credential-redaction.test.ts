@@ -1,4 +1,4 @@
-import { inspect } from "node:util";
+import { inspect, types } from "node:util";
 
 /**
  * No credential the API receives or sends reaches a span, a log line or an error report. Each case
@@ -444,6 +444,24 @@ const TAKES_EXPRESSION = new Set<string | symbol>([
 ]);
 
 /**
+ * A plain, native expression: no proxy, `RegExp.prototype` as its prototype, and no own property
+ * but `lastIndex`, so no `exec` or `Symbol.replace` of its own runs module code inside a built-in.
+ */
+const isNativeExpression = (value: unknown) =>
+  types.isRegExp(value) &&
+  !types.isProxy(value) &&
+  Reflect.getPrototypeOf(value) === RegExp.prototype &&
+  Reflect.ownKeys(value).length === 1;
+
+/**
+ * An operand a built-in can take without calling back into module code unmetered: a primitive, a
+ * function (re-entered and charged as the module's own code) or a native expression. Any other
+ * object reaches the built-in through its protocol hooks (`Symbol.replace`, `toString`, ...).
+ */
+const isPlainOperand = (value: unknown) =>
+  typeof value !== "object" || value === null || isNativeExpression(value);
+
+/**
  * The work one `redactCredentialsInText` call does, counted instead of timed so the machine's speed
  * plays no part. Every function on `String.prototype` and `RegExp.prototype`, and the URI coders, is
  * wrapped for the one synchronous call and restored after it, so the module under test runs
@@ -460,12 +478,15 @@ const TAKES_EXPRESSION = new Set<string | symbol>([
  * `unreviewed` names each built-in called that `REVIEWED_TRAVERSALS` lacks, and `searches` each
  * expression that could inspect more than `NAME_LENGTH` characters that `LINEAR_SEARCHES` lacks: a
  * new traversal's charge, and an expression's own backtracking, are claims a person has to check.
+ * `operands` names each built-in given a receiver or argument that is not a plain operand: its
+ * hooks run inside the built-in, where nothing they call is charged.
  */
 const steps = (text: string) => {
   let count = 0;
   let depth = 0;
   const unreviewed = new Set<string>();
   const searches = new Set<string>();
+  const operands = new Set<string>();
   const restore: Array<() => void> = [];
 
   const reentrant = (arg: unknown) =>
@@ -485,6 +506,7 @@ const steps = (text: string) => {
     owner: object,
     prefix: string,
     keys: ReadonlyArray<string | symbol>,
+    plainReceiver: (receiver: unknown) => boolean,
     meter: (
       key: string | symbol,
       receiver: unknown,
@@ -504,6 +526,7 @@ const steps = (text: string) => {
         value: function (this: unknown, ...args: unknown[]) {
           if (depth > 0) return Reflect.apply(original, this, args);
           if (!REVIEWED_TRAVERSALS.has(label)) unreviewed.add(label);
+          if (!plainReceiver(this) || !args.every(isPlainOperand)) operands.add(label);
           return meter(key, this, args, () => {
             depth += 1;
             try {
@@ -532,6 +555,7 @@ const steps = (text: string) => {
       String.prototype,
       "String.prototype",
       Reflect.ownKeys(String.prototype),
+      (receiver) => typeof receiver === "string",
       (key, receiver, args, call) => {
         const own = typeof receiver === "string" ? receiver : "";
         const result = call();
@@ -547,6 +571,7 @@ const steps = (text: string) => {
       RegExp.prototype,
       "RegExp.prototype",
       Reflect.ownKeys(RegExp.prototype),
+      isNativeExpression,
       (key, receiver, args, call) => {
         if (!(receiver instanceof RegExp)) return call();
         const input = typeof args[0] === "string" ? args[0] : "";
@@ -565,6 +590,7 @@ const steps = (text: string) => {
       globalThis,
       "globalThis",
       ["decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent", "escape", "unescape"],
+      () => true,
       (_key, _receiver, args, call) => {
         const result = call();
         count += Math.max(lengthOf(args[0]), lengthOf(result), 1);
@@ -575,7 +601,12 @@ const steps = (text: string) => {
   } finally {
     for (const undo of restore) undo();
   }
-  return { count, unreviewed: [...unreviewed], searches: [...searches] };
+  return {
+    count,
+    unreviewed: [...unreviewed],
+    searches: [...searches],
+    operands: [...operands],
+  };
 };
 
 describe("observe", () => {
@@ -695,6 +726,7 @@ describe("redactCredentialsInText", () => {
         expect(work.count, text.slice(0, 12)).toBeLessThanOrEqual(32 * text.length);
         expect(work.unreviewed, "unmetered traversal, review needed").toEqual([]);
         expect(work.searches, "an expression over long text, review needed").toEqual([]);
+        expect(work.operands, "custom protocol operand, review needed").toEqual([]);
       }
     }
   });
