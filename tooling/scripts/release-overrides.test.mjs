@@ -1,6 +1,9 @@
-// The test-only delay overrides stay out of the workflows (sealant-sh/mend #1034, merged as #1036).
-// RELEASE_TEST_RETRY_MS shortens the retried reads in release.yml's publishing steps, and
-// REPUBLISH_TEST_WAIT the npm integrity read-back; only the tests may set them. The guard is a
+// The test-only overrides stay out of the workflows (sealant-sh/mend #1034, merged as #1036).
+// RELEASE_TEST_RETRY_MS shortens the retried reads in release.yml's publishing steps,
+// REPUBLISH_TEST_WAIT the npm integrity read-back, and REPUBLISH_TEST_PACOTE names the pacote the
+// tarball check loads: release.yml's npm job (check_tarball) and next.yml's publish job
+// (rebuild_tarball) both read it, beside the npm id-token, so set there it would load any code.
+// Only the tests may set them. The guard is a
 // plain text scan of the workflow files with no shell parser: it refuses text, so it never has to
 // work out what Bash would make of a script, and it cannot hang.
 import assert from "node:assert/strict";
@@ -14,18 +17,21 @@ import { parse } from "yaml";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const RELEASE = "release.yml";
-const OVERRIDES = ["RELEASE_TEST_RETRY_MS", "REPUBLISH_TEST_WAIT"];
+// The workflows that publish with an npm id-token, where the graph starts.
+const PUBLISHING = [RELEASE, "next.yml"];
+const OVERRIDES = ["RELEASE_TEST_RETRY_MS", "REPUBLISH_TEST_WAIT", "REPUBLISH_TEST_PACOTE"];
 const NAMED = new RegExp(OVERRIDES.join("|"), "i");
 
-// Rule 1. Text no workflow in the release graph may contain anywhere, comments included: none needs it.
+// Rule 1. Text no workflow in the release graph (release.yml, next.yml and what they call) may
+// contain anywhere, comments included: none needs it.
 const REFUSED_IN_RELEASE = [
   [/github_en/i, "GITHUB_ENV (in any case, or with its V assembled after GITHUB_EN)"],
   [/runner_file_commands|set_env_/i, "the file GITHUB_ENV points at, by its path"],
   [/allow_unsecure_commands/i, "the switch that brings back the retired ::set-env command"],
 ];
 
-// Rule 2. The only lines, trimmed and whole, that may name an override, all in release.yml: the
-// reads and each publishing step's preamble as they stand. Any other line naming one fails, so
+// Rule 2. The only lines, trimmed and whole, that may name an override, by workflow: the reads and
+// each publishing step's preamble as they stand. Any other line naming one fails, so
 // `: "${NAME:=0}"`, `export NAME=0`, `NAME=0 cmd`, `read NAME`, `printf -v NAME`, `declare NAME`
 // and a `NAME<<EOF` record all do.
 const OVERRIDE_LINES = new Map([
@@ -65,15 +71,30 @@ const OVERRIDE_LINES = new Map([
     "the refusal, which names the variable and not its value",
   ],
   ["sleep $((attempt * ${REPUBLISH_TEST_WAIT:-5}))", "the integrity wait, a read with the default"],
+  [
+    "pacote=${REPUBLISH_TEST_PACOTE:-$(npm root -g)/npm/node_modules/pacote}",
+    "check_tarball's pacote, a read with npm's own bundled copy as the default",
+  ],
 ]);
+const APPROVED = {
+  [RELEASE]: OVERRIDE_LINES,
+  "next.yml": new Map([
+    [
+      "pacote=${REPUBLISH_TEST_PACOTE:-$(npm root -g)/npm/node_modules/pacote}",
+      "rebuild_tarball's pacote, a read with npm's own bundled copy as the default",
+    ],
+  ]),
+};
 
-// Rule 4. The tracked files that may name an override: the release workflow and its tests. A
-// script a release job runs could otherwise write $GITHUB_ENV itself.
+// Rule 4. The tracked files that may name an override: the two publishing workflows and their
+// tests. A script a release job runs could otherwise write $GITHUB_ENV itself.
 const NAMING_FILES = [
+  ".github/workflows/next.yml",
   ".github/workflows/release.yml",
   "tooling/scripts/release-npm.test.mjs",
   "tooling/scripts/release-overrides.test.mjs",
   "tooling/scripts/release-publication.test.mjs",
+  "tooling/scripts/republish.test.mjs",
 ];
 
 const workflowTexts = () => {
@@ -113,22 +134,22 @@ const RULE = {
 };
 
 /**
- * The problems in <workflows> (file name → text), and the release graph it read: release.yml and
- * every workflow it calls through `uses: ./.github/workflows/…`, transitively.
+ * The problems in <workflows> (file name → text), and the release graph it read: release.yml,
+ * next.yml and every workflow they call through `uses: ./.github/workflows/…`, transitively.
  *
  * Rules 1 and 2 read each line of a workflow twice: as written, comments included, and in every
  * string value YAML decodes from it, which is what the runner hands Bash or sets in the environment
  * (`run: "… \"$GITHUB_\x45NV\""` is written without GITHUB_ENV and decodes to it). A problem found
  * only in a decoded value says so.
  * 1. No file in the release graph contains any text of REFUSED_IN_RELEASE.
- * 2. A line naming an override is one of OVERRIDE_LINES in release.yml (and does not continue the
- *    line before it); in any other workflow, no line names one.
+ * 2. A line naming an override is one of APPROVED's lines for its workflow (and does not continue
+ *    the line before it); in any other workflow, no line names one.
  * 3. No workflow has an override as a key: env or with at workflow, job or step level, a matrix
  *    entry, or a key YAML unescapes into one (`"RELEASE_TEST_\x52ETRY_MS": 0`), which rule 2 does
  *    not see.
  *
  * Writes to $GITHUB_ENV outside the release graph are allowed: kubernetes-e2e.yml writes KUBECONFIG
- * there. A job's $GITHUB_ENV reaches only that job's later steps, never another job, so it cannot
+ * there. next.yml is in the graph because its publish job reads REPUBLISH_TEST_PACOTE. A job's $GITHUB_ENV reaches only that job's later steps, never another job, so it cannot
  * reach a release job, nor can a workflow's env reach a workflow it does not call.
  *
  * What a text scan of the workflows cannot see:
@@ -140,9 +161,10 @@ const RULE = {
  * - the runner or its host supplying either variable;
  * - a workflow the graph does not follow: a remote reusable workflow (`owner/repo/…@ref`) or a local
  *   composite action (`./.github/actions/…`); none is in the release graph today.
- * The backstop is at run time: each publishing step logs, before anything else, the delays it read
- * ("retry backoff: production (1500 ms × attempt)" or "overridden to …"), so every release run's
- * log shows what its environment held when the step started.
+ * The backstop for the delays is at run time: each publishing step logs, before anything else, the
+ * delays it read ("retry backoff: production (1500 ms × attempt)" or "overridden to …"), so every
+ * release run's log shows what its environment held when the step started. REPUBLISH_TEST_PACOTE
+ * has no such log line: for it the scan is the only guard.
  */
 function overrideProblems(workflows, { skip = new Set() } = {}) {
   const problems = [];
@@ -150,7 +172,7 @@ function overrideProblems(workflows, { skip = new Set() } = {}) {
     Object.entries(workflows).map(([file, text]) => [file, parse(text) ?? {}]),
   );
   const graph = new Set();
-  for (const pending = [RELEASE]; pending.length > 0; ) {
+  for (const pending = [...PUBLISHING]; pending.length > 0; ) {
     const file = pending.pop();
     if (graph.has(file)) continue;
     graph.add(file);
@@ -175,8 +197,7 @@ function overrideProblems(workflows, { skip = new Set() } = {}) {
               problems.push(`${RULE.text}${decoded}: ${where} names ${what}: ${line.trim()}`);
         if (skip.has("lines") || !NAMED.test(line)) continue;
         const allowed =
-          file === RELEASE &&
-          OVERRIDE_LINES.has(line.trim()) &&
+          APPROVED[file]?.has(line.trim()) === true &&
           !(lines[index - 1] ?? "").trimEnd().endsWith("\\");
         if (!allowed) problems.push(`${RULE.lines}${decoded}: ${where}: ${line.trim()}`);
       }
@@ -197,11 +218,16 @@ test("no workflow sets a test delay, and only the release workflow and its tests
   const { graph, problems } = overrideProblems(workflows);
   t.diagnostic(`release graph: ${[...graph].toSorted().join(", ")}`);
   assert.deepEqual(problems, []);
-  assert.deepEqual([...graph], [RELEASE]);
+  assert.deepEqual([...graph].toSorted(), [...PUBLISHING].toSorted());
   // Every approved line is still there: an approval outlives nothing it was given for.
-  const lines = new Set(workflows[RELEASE].split("\n").map((line) => line.trim()));
-  for (const line of OVERRIDE_LINES.keys())
-    assert.ok(lines.has(line), `approved but gone: ${line}`);
+  for (const [file, approved] of Object.entries(APPROVED)) {
+    const lines = new Set(workflows[file].split("\n").map((line) => line.trim()));
+    for (const line of approved.keys())
+      assert.ok(lines.has(line), `${file}: approved but gone: ${line}`);
+  }
+  // The pacote override is read exactly where it is approved, once in each workflow.
+  for (const file of PUBLISHING)
+    assert.equal(workflows[file].match(/REPUBLISH_TEST_PACOTE/g)?.length, 1, file);
   const named = execFileSync("git", ["grep", "-l", "-i", "-E", OVERRIDES.join("|")], {
     cwd: root,
     encoding: "utf8",
@@ -337,7 +363,42 @@ const mutations = () => {
       LINE,
       KEY,
     ],
-    // The names belong to release.yml alone: even an approved read fails anywhere else.
+    // The pacote override, through a step env and through a GITHUB_ENV heredoc, beside the token.
+    [
+      "the pacote override in a step env",
+      withStep(workflows, RELEASE, "npm", [
+        "  env:",
+        "    REPUBLISH_TEST_PACOTE: /tmp/evil/pacote",
+        "  run: true",
+      ]),
+      LINE,
+      KEY,
+    ],
+    [
+      "the pacote override in a GITHUB_ENV heredoc",
+      withStep(
+        workflows,
+        RELEASE,
+        "npm",
+        runStep(`printf '%s\\n' 'REPUBLISH_TEST_PACOTE<<EOF' /tmp/evil/pacote EOF >>"$GITHUB_ENV"`),
+      ),
+      TEXT,
+      LINE,
+    ],
+    [
+      "the pacote override in a GITHUB_ENV heredoc in next.yml",
+      withStep(
+        workflows,
+        "next.yml",
+        "publish",
+        runStep(
+          '{ echo "REPUBLISH_TEST_PACOTE<<EOF"; echo /tmp/evil/pacote; echo EOF; } >> "$GITHUB_ENV"',
+        ),
+      ),
+      TEXT,
+      LINE,
+    ],
+    // The names belong to the approved lines alone: even an approved read fails anywhere else.
     [
       "an approved read in another workflow",
       withStep(

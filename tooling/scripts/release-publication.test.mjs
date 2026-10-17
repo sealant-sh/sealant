@@ -1251,6 +1251,475 @@ test("finalize, npm and promote queue on one release channel lock; nothing else 
   assert.deepEqual(releaseDocument.permissions, { contents: "read" });
 });
 
+// A tag can be moved after review; a digest names the same bytes every run.
+const DIGEST_PINNED = /^[a-z0-9./_-]+(:[\w.-]+)?@sha256:[0-9a-f]{64}$/;
+
+// Docker's own options, from Docker CLI 29.8.1 (`docker --help`, `docker run --help`,
+// `docker create --help`, `docker pull --help`; `container run`, `container create` and
+// `image pull` print the same tables as their aliases). An option followed by a type word takes a
+// value; the others take none. Regenerate them from a pinned CLI when Docker adds options: an
+// option missing here makes the command unclassifiable, which fails when its image is dynamic.
+const DOCKER_GLOBAL = {
+  values: new Set(
+    "-c --context --config -H --host -l --log-level --tlscacert --tlscert --tlskey".split(" "),
+  ),
+  flags: new Set("-D --debug --tls --tlsverify".split(" ")),
+};
+const RUN_VALUES = (
+  "--add-host --annotation -a --attach --blkio-weight --blkio-weight-device --cap-add " +
+  "--cap-drop --cgroup-parent --cgroupns --cidfile --cpu-period --cpu-quota " +
+  "--cpu-rt-period --cpu-rt-runtime -c --cpu-shares --cpus --cpuset-cpus --cpuset-mems " +
+  "--detach-keys --device --device-cgroup-rule --device-read-bps --device-read-iops " +
+  "--device-write-bps --device-write-iops --dns --dns-option --dns-search --domainname " +
+  "--entrypoint -e --env --env-file --expose --group-add --health-cmd --health-interval " +
+  "--health-retries --health-start-interval --health-start-period --health-timeout -h " +
+  "--hostname --ip --ip6 --ipc --isolation -l --label --label-file --link " +
+  "--link-local-ip --log-driver --log-opt --mac-address -m --memory --memory-reservation " +
+  "--memory-swap --memory-swappiness --mount --name --network --network-alias " +
+  "--oom-score-adj --pid --pids-limit --platform -p --publish --pull --restart --runtime " +
+  "--security-opt --shm-size --stop-signal --stop-timeout --storage-opt --sysctl --tmpfs " +
+  "--ulimit --umask -u --user --userns --uts -v --volume --volume-driver --volumes-from " +
+  "-w --workdir "
+)
+  .trim()
+  .split(" ");
+const RUN_FLAGS = (
+  "-d --detach --help --init -i --interactive --no-healthcheck --oom-kill-disable " +
+  "--privileged -P --publish-all -q --quiet --read-only --rm --sig-proxy -t --tty " +
+  "--use-api-socket "
+)
+  .trim()
+  .split(" ");
+const CREATE = {
+  values: new Set(RUN_VALUES.filter((option) => option !== "--detach-keys")),
+  flags: new Set(RUN_FLAGS.filter((option) => !["-d", "--detach", "--sig-proxy"].includes(option))),
+};
+const RUN = { values: new Set(RUN_VALUES), flags: new Set(RUN_FLAGS) };
+const PULL = {
+  values: new Set(["--platform"]),
+  flags: new Set(["-a", "--all-tags", "-q", "--quiet"]),
+};
+// The subcommands that start or fetch an image, as the words after docker's global options.
+const DOCKER_IMAGE_COMMANDS = [
+  ["container run", RUN],
+  ["container create", CREATE],
+  ["image pull", PULL],
+  ["run", RUN],
+  ["create", CREATE],
+  ["pull", PULL],
+];
+
+/**
+ * <script>'s commands as a shell splits them: each a list of words, `{ text, dynamic }`. Single
+ * quotes, double quotes and backslash escapes keep a word whole, and a backslash-newline joins two
+ * lines; commands end at an unquoted newline, `;`, `&`, `|`, `(`, `)`, `<` or `>`. A word is
+ * dynamic when it holds an expansion outside single quotes: `$NAME`, `${…}`, `$(…)` or backquotes.
+ * The body of each command substitution, `$(…)` or backquoted, inside double quotes or not, is
+ * split too, as commands of its own, so `cid=$(docker run --detach alpine:3.22)` is read.
+ * Comments are dropped. Not a shell: no aliases, functions, brace or glob expansion. Ported from
+ * sealant-sh/sealantd's scripts/release-publication.test.mjs (lexShell), for one check in both.
+ */
+const shellCommands = (script) => {
+  const commands = [[]];
+  const nested = [];
+  let word;
+  const add = (text, dynamic = false) => {
+    word ??= { text: "", dynamic: false };
+    word.text += text;
+    word.dynamic ||= dynamic;
+  };
+  const endWord = () => {
+    if (word !== undefined) commands.at(-1).push(word);
+    word = undefined;
+  };
+  const endCommand = () => {
+    endWord();
+    if (commands.at(-1).length > 0) commands.push([]);
+  };
+  /** The body of the `$(` whose body starts at <from>, and the index past its `)`. */
+  const substitution = (from) => {
+    let depth = 1;
+    let quote;
+    for (let at = from; at < script.length; at += 1) {
+      const char = script[at];
+      if (quote === "'") {
+        if (char === "'") quote = undefined;
+      } else if (char === "\\") at += 1;
+      else if (quote === '"') {
+        if (char === '"') quote = undefined;
+      } else if (char === "'" || char === '"') quote = char;
+      else if (char === "(") depth += 1;
+      else if (char === ")" && (depth -= 1) === 0) return [script.slice(from, at), at + 1];
+    }
+    throw new Error(`an unclosed $( in: ${script.slice(from - 2, from + 60)}`);
+  };
+  /** Reads the expansion at <at> (`$(…)`, a backquoted command or `$`) into the word; past it. */
+  const expansion = (at) => {
+    if (script.startsWith("$(", at)) {
+      const [body, next] = substitution(at + 2);
+      nested.push(body);
+      add("$(…)", true);
+      return next;
+    }
+    if (script[at] === "`") {
+      const close = script.indexOf("`", at + 1);
+      if (close < 0) throw new Error("an unclosed backquote");
+      nested.push(script.slice(at + 1, close));
+      add("`…`", true);
+      return close + 1;
+    }
+    add("$", true);
+    return at + 1;
+  };
+  let at = 0;
+  while (at < script.length) {
+    const char = script[at];
+    if (char === "\\") {
+      if (script[at + 1] !== "\n") add(script[at + 1] ?? "");
+      at += 2;
+    } else if (char === "'") {
+      const close = script.indexOf("'", at + 1);
+      if (close < 0) throw new Error(`an unclosed ' in: ${script.slice(at, at + 60)}`);
+      add(script.slice(at + 1, close));
+      at = close + 1;
+    } else if (char === '"') {
+      add("");
+      at += 1;
+      while (script[at] !== '"') {
+        if (at >= script.length) throw new Error('an unclosed "');
+        if (script[at] === "\\" && '$`"\\\n'.includes(script[at + 1])) {
+          if (script[at + 1] !== "\n") add(script[at + 1]);
+          at += 2;
+        } else if (script[at] === "$" || script[at] === "`") at = expansion(at);
+        else add(script[at++]);
+      }
+      at += 1;
+    } else if (char === "$" || char === "`") at = expansion(at);
+    else if (char === "#" && word === undefined) {
+      const newline = script.indexOf("\n", at);
+      at = newline < 0 ? script.length : newline;
+    } else if ("\n;&|()<>".includes(char)) {
+      endCommand();
+      at += 1;
+    } else if (/\s/.test(char)) {
+      endWord();
+      at += 1;
+    } else add(script[at++]);
+  }
+  endCommand();
+  return [...commands.filter((command) => command.length > 0), ...nested.flatMap(shellCommands)];
+};
+
+/** Whether <word> is one option of <table>, and how many words it takes: undefined when unknown. */
+const optionWidth = (word, table) => {
+  const [flag] = word.split("=", 1);
+  if (word.includes("=") && word.startsWith("--"))
+    return table.values.has(flag) || table.flags.has(flag) ? 1 : undefined;
+  if (table.values.has(word)) return 2;
+  if (table.flags.has(word)) return 1;
+  // A short cluster: flags (`-it`), or one value option with its value attached (`-p8080:80`).
+  if (
+    /^-[a-zA-Z]{2,}$/.test(word) &&
+    Array.from(word.slice(1)).every((letter) => table.flags.has(`-${letter}`))
+  )
+    return 1;
+  if (/^-[a-zA-Z]./.test(word) && table.values.has(word.slice(0, 2))) return 1;
+  return undefined;
+};
+/** A word that reads as a literal image reference: a registry path or a tag, not an option. */
+const looksLikeImage = (word) =>
+  !word.dynamic && !word.text.startsWith("-") && /[:/]/.test(word.text);
+
+/**
+ * The image each docker command in <script> starts or fetches: `{ command, image, problem }`.
+ * After `docker`, its global options are skipped, then the subcommand, then that command's own
+ * options, from the tables above; the image is the first operand left.
+ * - A literal image is returned to be judged against DIGEST_PINNED.
+ * - A dynamic image is accepted only when every option before it is in the tables and no later
+ *   word is a literal image-like word with no digest: an option value read as the image, or a
+ *   misread option, cannot exempt a literal image after it.
+ *
+ * Limits, for the accidental and ordinary forms this guards against: an image genuinely named
+ * through a variable or a command substitution (`docker pull "$NAMESPACE/$image@$digest"`) is
+ * accepted and logged as a test diagnostic, never judged; a docker found through an alias, a function or
+ * `command -v` is not seen; `docker buildx imagetools create` is not read, since every source it
+ * is given in release.yml is a `$repository@$digest` assembled at run time and pinned to the
+ * manifest by the registry-write tests above.
+ */
+const dockerImages = (script) =>
+  shellCommands(script).flatMap((words) => {
+    const command = words.map((word) => word.text).join(" ");
+    const at = words.findIndex((word) => !word.dynamic && /(^|\/)docker$/.test(word.text));
+    if (at < 0) return [];
+    let next = at + 1;
+    while (words[next]?.text.startsWith("-")) {
+      const width = optionWidth(words[next].text, DOCKER_GLOBAL);
+      if (width === undefined)
+        return [{ command, problem: `docker's option ${words[next].text} is unknown` }];
+      next += width;
+    }
+    const found = DOCKER_IMAGE_COMMANDS.find(([name]) =>
+      name.split(" ").every((part, offset) => words[next + offset]?.text === part),
+    );
+    if (found === undefined) return [];
+    const [name, table] = found;
+    next += name.split(" ").length;
+    let known = true;
+    while (words[next]?.text.startsWith("-") && words[next].text !== "-") {
+      if (words[next].text === "--") {
+        next += 1;
+        break;
+      }
+      const width = optionWidth(words[next].text, table);
+      if (width === undefined) known = false;
+      next += width ?? 1;
+    }
+    const image = words[next];
+    if (image === undefined) return [{ command, problem: "names no image" }];
+    if (!image.dynamic) return [{ command, image: image.text }];
+    if (!known)
+      return [
+        {
+          command,
+          problem: `an option the tables do not know comes before the dynamic ${image.text}`,
+        },
+      ];
+    const literal = words
+      .slice(next + 1)
+      .find((word) => looksLikeImage(word) && !word.text.includes("@sha256:"));
+    if (literal !== undefined)
+      return [
+        {
+          command,
+          problem: `${literal.text} after the dynamic ${image.text} reads as an unpinned image`,
+        },
+      ];
+    return [{ command, dynamic: image.text }];
+  });
+
+/**
+ * The unpinned images in <jobs>: from docker commands in run steps, and from the YAML image keys.
+ * Each docker command whose image is genuinely dynamic is added to <dynamic>, for the log.
+ */
+const imageProblems = (jobs, dynamic = []) => {
+  const problems = [];
+  const pinned = (where, image) => {
+    if (!DIGEST_PINNED.test(image))
+      problems.push(`${where}: ${image || "(no image)"} is not pinned by digest`);
+  };
+  for (const [name, job] of Object.entries(jobs)) {
+    const container = typeof job.container === "string" ? job.container : job.container?.image;
+    if (job.container !== undefined) pinned(`${name} container`, container ?? "");
+    for (const [service, definition] of Object.entries(job.services ?? {}))
+      pinned(`${name} services.${service}`, definition?.image ?? "");
+    for (const step of job.steps ?? []) {
+      if (step.uses?.startsWith("docker://"))
+        pinned(`${name} uses`, step.uses.slice("docker://".length));
+      if (step.uses?.startsWith("docker/setup-buildx-action@"))
+        pinned(
+          `${name} BuildKit`,
+          /^image=(\S+)$/.exec(step.with?.["driver-opts"] ?? "")?.[1] ?? "",
+        );
+      for (const found of dockerImages(step.run ?? "")) {
+        const where = `${name} \`${found.command}\``;
+        if (found.problem !== undefined) problems.push(`${where}: ${found.problem}`);
+        else if (found.image !== undefined) pinned(where, found.image);
+        else dynamic.push(`${where}: ${found.dynamic}`);
+      }
+    }
+  }
+  return problems;
+};
+
+/** A change to a job that adds a step running <run>. */
+const injectRun = (run) => (job) => job.steps.push({ name: "Injected", run });
+
+test("the dry run's loopback registry, and every image a step runs, is pinned by digest", (t) => {
+  const start = releaseJobs["archive-merge"].steps.find(
+    (step) => step.name === "Start a registry on loopback inside this job",
+  );
+  const [registry] = dockerImages(start.run);
+  assert.match(registry.image, DIGEST_PINNED);
+  assert.ok(registry.image.startsWith("registry:"), registry.image);
+  const dynamic = [];
+  assert.deepEqual(imageProblems(releaseJobs, dynamic), []);
+  // The one image release.yml names at run time: the smoke pulls this run's digest.
+  for (const entry of dynamic) t.diagnostic(`dynamic image, not judged: ${entry}`);
+  assert.deepEqual(dynamic, [
+    "selfhost-smoke `docker pull $NAMESPACE/$image@$digest`: $NAMESPACE/$image@$digest",
+  ]);
+  // Each mutation adds one ordinary form to archive-merge, or one YAML image key; each must fail.
+  const mutated = (change) => {
+    const jobs = structuredClone(releaseJobs);
+    change(jobs["archive-merge"]);
+    return imageProblems(jobs);
+  };
+  const UNPINNED = /is not pinned by digest/;
+  for (const [form, change, expected = UNPINNED] of [
+    ["plain docker run", injectRun("docker run --rm alpine:3.22 true")],
+    ["a global option before run", injectRun("docker --context default run --rm alpine:3.22 true")],
+    ["a global option with =", injectRun("docker --config=/tmp/x -D run alpine:3.22")],
+    [
+      "a line continuation between docker and run",
+      injectRun("docker \\\n  run --rm alpine:3.22 true"),
+    ],
+    [
+      "docker container run",
+      injectRun("docker container run --rm --name x -p 1:1 alpine:3.22 true"),
+    ],
+    ["docker create", injectRun("set -e; docker create --name probe -v /a:/b alpine:3.22")],
+    ["docker pull", injectRun("sudo docker pull ghcr.io/sealant-sh/sealant-api:0.39.0")],
+    ["an implicit latest", injectRun("docker run --rm alpine true")],
+    // Astra's round 2: an option value read as a dynamic image exempted the literal one after it.
+    [
+      "a variable value of an option the old table lacked",
+      injectRun('docker run --rm --stop-timeout "$STOP_TIMEOUT" alpine:3.22 true'),
+    ],
+    [
+      "a quoted value holding a variable",
+      injectRun('docker run --rm --env "BANNER=hello $BUILD_LABEL" alpine:3.22 true'),
+    ],
+    ["a quoted value holding a space", injectRun('docker run -e FOO="a b" alpine:3.22 true')],
+    ["a single-quoted value holding a space", injectRun("docker run --label 'x=y z' alpine")],
+    ["an attached short value", injectRun("docker run -p8080:80 -it alpine:3.22 sh")],
+    [
+      "an unknown option before a dynamic word",
+      injectRun("docker run --frobnicate $X alpine:3.22 true"),
+      /an option the tables do not know comes before the dynamic \$X/,
+    ],
+    [
+      "a literal image after a dynamic one",
+      injectRun('docker run --rm "$BASE" alpine:3.22 true'),
+      /alpine:3\.22 after the dynamic \$BASE reads as an unpinned image/,
+    ],
+    [
+      "an unknown global option",
+      injectRun("docker --frobnicate x run alpine:3.22"),
+      /docker's option --frobnicate is unknown/,
+    ],
+    // Astra's round 3: a command substitution's body was never read.
+    ["a captured container ID", injectRun("cid=$(docker run --detach alpine:3.22)")],
+    ["a substitution in double quotes", injectRun('echo "$(docker create alpine:3.22)"')],
+    ["a backquoted substitution", injectRun("cid=`docker run -d alpine:3.22`")],
+    ["a nested substitution", injectRun("echo $(echo $(docker pull alpine:3.22))")],
+    ["a container image", (job) => (job.container = { image: "node:24" })],
+    ["a container string", (job) => (job.container = "node:24")],
+    ["a services image", (job) => (job.services = { cache: { image: "redis:7" } })],
+    ["a docker:// action", (job) => job.steps.push({ uses: "docker://alpine:3.22" })],
+  ]) {
+    const problems = mutated(change);
+    assert.equal(problems.length, 1, `${form}: ${problems.join("; ") || "none"}`);
+    assert.match(problems[0], expected, form);
+  }
+  // The same forms, pinned, pass; and an image genuinely assembled at run time is accepted.
+  const pin = `alpine:3.22@sha256:${"a".repeat(64)}`;
+  for (const run of [
+    `docker --context default \\\n  run --rm ${pin} true`,
+    `docker run --rm --stop-timeout "$STOP_TIMEOUT" --env "BANNER=hello $BUILD_LABEL" ${pin} true`,
+    `docker run -e FOO="a b" --label 'x=y z' -it ${pin} sh -c 'echo "a;b"'`,
+    'docker pull "$NAMESPACE/$image@$digest"',
+    `cid=$(docker run --detach ${pin})`,
+    `echo "$(docker create ${pin})" \`docker run -d ${pin}\``,
+    `echo $(echo $(docker pull ${pin}))`,
+    'docker run --rm "$IMAGE" true',
+  ])
+    assert.deepEqual(mutated(injectRun(run)), [], run);
+  assert.deepEqual(
+    mutated((job) => (job.services = { cache: { image: pin } })),
+    [],
+  );
+  // The guard itself: the tag alone, or a digest that is not one, is refused.
+  for (const unpinned of [
+    "registry:2",
+    "registry:2@sha256:abc",
+    "registry@sha256:" + "A".repeat(64),
+  ])
+    assert.doesNotMatch(unpinned, DIGEST_PINNED, unpinned);
+});
+
+test("commands split into words the way a shell splits them", () => {
+  const words = (script) =>
+    shellCommands(script).map((command) => command.map(({ text, dynamic }) => [text, dynamic]));
+  assert.deepEqual(words(`a "b c" 'd e' f\\ g "$H i" '$J' k$(l m)n \`o\``), [
+    [
+      ["a", false],
+      ["b c", false],
+      ["d e", false],
+      ["f g", false],
+      ["$H i", true],
+      ["$J", false],
+      ["k$(…)n", true],
+      ["`…`", true],
+    ],
+    // Each substitution's body is a command of its own.
+    [
+      ["l", false],
+      ["m", false],
+    ],
+    [["o", false]],
+  ]);
+  // Nested substitutions, and quotes and parentheses inside them, are read in turn.
+  assert.deepEqual(words(`x "$(echo "a)b" $(y 'c)d'))"`), [
+    [
+      ["x", false],
+      ["$(…)", true],
+    ],
+    [
+      ["echo", false],
+      ["a)b", false],
+      ["$(…)", true],
+    ],
+    [
+      ["y", false],
+      ["c)d", false],
+    ],
+  ]);
+  // Commands end at unquoted separators, never inside quotes; comments and continuations go.
+  assert.deepEqual(words("x \"a;b\" | y 'c|d'; z && w # gone\nv \\\n u"), [
+    [
+      ["x", false],
+      ["a;b", false],
+    ],
+    [
+      ["y", false],
+      ["c|d", false],
+    ],
+    [["z", false]],
+    [["w", false]],
+    [
+      ["v", false],
+      ["u", false],
+    ],
+  ]);
+  // The tables are Docker CLI 29.8.1's, the old one's gap among them.
+  for (const option of [
+    "--stop-timeout",
+    "--env",
+    "-e",
+    "--label",
+    "-l",
+    "--name",
+    "--network",
+    "--platform",
+    "--entrypoint",
+    "-v",
+    "--volume",
+    "--mount",
+    "-p",
+    "-w",
+    "-u",
+    "--add-host",
+    "--ulimit",
+    "--cpus",
+    "--memory",
+    "-m",
+  ])
+    assert.ok(RUN.values.has(option) && CREATE.values.has(option), option);
+  assert.equal(RUN.values.size, 94);
+  assert.equal(CREATE.values.size, 93);
+  assert.ok(RUN.flags.has("--rm") && RUN.flags.has("-d") && !CREATE.flags.has("-d"));
+});
+
 test("only finalize writes :<version>, only promote writes :latest, and nothing writes :X.Y", () => {
   const registryWrites = [];
   for (const [name, definition] of Object.entries(releaseJobs))
