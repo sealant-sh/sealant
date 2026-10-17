@@ -113,7 +113,8 @@ jobs:
           echo "Release $version, images to $target."
 
   # Before anything builds or publishes: the tag is a stable vX.Y.Z (prereleases publish from main,
-  # in next.yml), and no sealantd prerelease is pinned anywhere (ADR 0015 in sealant-sh/mend).
+  # in next.yml), and no sealantd prerelease is pinned anywhere (ADR 0015 in sealant-sh/mend). A
+  # dry run reports a sealantd prerelease instead, and every other check here still fails it.
   pins:
     name: Check what the release pins
     needs: release
@@ -132,8 +133,10 @@ jobs:
         with:
           node-version: 24
 
-      # Only a dispatched dry run, building to archives, checks a dry-run version; the sealantd pin
-      # checks are the same.
+      # --dry-run only for what the release job decided is a dry run: a dispatch, building to
+      # archives, with the version it derived. The script then reports a sealantd prerelease as a
+      # warning and in the run summary, and fails on everything else; a tag push never passes it,
+      # so a vX.Y.Z tag refuses a sealantd prerelease. release-publication.test.mjs runs this step.
       - name: Refuse a prerelease tag or a prerelease sealantd
         env:
           VERSION: ${{ needs.release.outputs.version }}
@@ -142,8 +145,9 @@ jobs:
           set -euo pipefail
           flags=()
           if [[ $GITHUB_EVENT_NAME == workflow_dispatch ]]; then
-            if [[ $TARGET != archive ]]; then
-              echo "::error::A dispatch builds to archives only, not $TARGET."
+            dryrun='^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})-dryrun\.[1-9][0-9]*\.[1-9][0-9]*$'
+            if [[ $TARGET != archive || ! $VERSION =~ $dryrun ]]; then
+              echo "::error::A dispatch is a dry run: it builds to archives with a derived vX.Y.Z-dryrun.<run>.<attempt>, not '$VERSION' to $TARGET."
               exit 1
             fi
             flags+=(--dry-run)

@@ -8,13 +8,19 @@
 // - the @sealant/runtime-* ranges in package.json files;
 // - the @sealant/runtime-* versions pnpm-lock.yaml resolves.
 //
-// A dry run (release.yml dispatched with dry_run) passes --dry-run and its own version,
-// v<X.Y.Z>-dryrun.<run id>.<attempt>: the sealantd pin checks run as for a release, and only the tag's
-// shape is a dry run's. Without the flag a dry-run-shaped tag is a prerelease, and refused.
+// A dry run (release.yml dispatched with dry_run, building to archives) passes --dry-run and its
+// own version, v<X.Y.Z>-dryrun.<run id>.<attempt>. Every check runs as for a release, so a dry run
+// proves the rest of the graph from any main. Only the refusals that say sealantd is a prerelease
+// relax: a -next image pinned as pin-sealantd.mjs writes it, a prerelease @sealant/runtime-* range,
+// a prerelease the lockfile resolves, and the closing "cannot release with a sealantd prerelease".
+// A dry run prints each as a ::warning::, lists them under "A release would refuse:" in the run
+// summary, and passes. Everything else still fails a dry run: an image not pinned as tag@sha256, a
+// published package's npm: alias, a tag of the wrong shape. Without the flag a dry-run-shaped tag
+// is a prerelease, and refused; a vX.Y.Z tag refuses every problem, as before.
 //
 //   node tooling/scripts/check-release-pins.mjs v0.39.0
 //   node tooling/scripts/check-release-pins.mjs --dry-run v0.39.0-dryrun.38700000001.1
-import { readFile } from "node:fs/promises";
+import { appendFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -38,6 +44,9 @@ export const isDryRunVersion = (version) =>
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-dryrun\.[1-9]\d*\.[1-9]\d*$/.test(version);
 
 const RELEASED_IMAGE = /^ghcr\.io\/sealant-sh\/sealantd:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}$/;
+/** A next build pinned as tooling/scripts/pin-sealantd.mjs writes one: a prerelease, but pinned. */
+const PINNED_PRERELEASE_IMAGE =
+  /^ghcr\.io\/sealant-sh\/sealantd-next:\d+\.\d+\.\d+-next\.\d+@sha256:[0-9a-f]{64}$/;
 
 /**
  * Every sealantd image reference in `text` that is not a release pinned by digest: a prerelease, a
@@ -80,23 +89,46 @@ export const prereleaseLocks = (lockfile) => [
   ),
 ];
 
+/**
+ * Every problem, in the order a release reports them. `prerelease` marks the ones that only say
+ * sealantd is a prerelease, the refusals a dry run reports instead of failing on; every other
+ * problem fails a dry run too.
+ */
 export const releasePinProblems = ({ imageFiles, manifests, lockfile, published = {} }) => {
   const problems = [];
   for (const [file, manifest] of Object.entries(published)) {
-    for (const alias of aliasDependencies(manifest)) problems.push(`${file} depends on ${alias}.`);
+    for (const alias of aliasDependencies(manifest))
+      problems.push({ text: `${file} depends on ${alias}.`, prerelease: false });
   }
   for (const [file, text] of Object.entries(imageFiles)) {
     for (const image of prereleaseImages(text))
-      problems.push(`${file} pins ${image}, not a release by digest.`);
+      problems.push({
+        text: `${file} pins ${image}, not a release by digest.`,
+        prerelease: PINNED_PRERELEASE_IMAGE.test(image),
+      });
   }
   for (const [file, manifest] of Object.entries(manifests)) {
-    for (const range of prereleaseRanges(manifest)) problems.push(`${file} depends on ${range}.`);
+    for (const range of prereleaseRanges(manifest))
+      problems.push({ text: `${file} depends on ${range}.`, prerelease: true });
   }
   for (const locked of prereleaseLocks(lockfile)) {
-    problems.push(`pnpm-lock.yaml resolves ${locked}.`);
+    problems.push({ text: `pnpm-lock.yaml resolves ${locked}.`, prerelease: true });
   }
   return problems;
 };
+
+/** The run-summary section a dry run writes: what a release from this commit would refuse. */
+export const wouldRefuseSummary = (tag, refusals) =>
+  [
+    "### Release pins (dry run)",
+    "",
+    "A release would refuse:",
+    "",
+    ...refusals.map((refusal) => `- ${refusal}`),
+    "",
+    "The dry run reported these and went on; a vX.Y.Z tag refuses them.",
+    "",
+  ].join("\n");
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const dryRun = process.argv[2] === "--dry-run";
@@ -135,12 +167,36 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       ),
     ),
   });
-  if (problems.length > 0) {
-    for (const problem of problems) console.error(`::error::${problem}`);
-    console.error(
-      `::error::${tag} cannot release with a sealantd prerelease. Release sealantd, pin it, then tag.`,
+  const refusal = `${tag} cannot release with a sealantd prerelease. Release sealantd, pin it, then tag.`;
+  if (!dryRun) {
+    if (problems.length > 0) {
+      for (const problem of problems) console.error(`::error::${problem.text}`);
+      console.error(`::error::${refusal}`);
+      process.exit(1);
+    }
+    console.log(`${tag}: every sealantd pin is a release.`);
+  } else {
+    const relaxed = problems.filter((problem) => problem.prerelease).map(({ text }) => text);
+    const fatal = problems.filter((problem) => !problem.prerelease).map(({ text }) => text);
+    if (relaxed.length > 0) {
+      for (const text of [...relaxed, refusal]) console.log(`::warning::${text}`);
+      if (process.env.GITHUB_STEP_SUMMARY)
+        await appendFile(
+          process.env.GITHUB_STEP_SUMMARY,
+          wouldRefuseSummary(tag, [...relaxed, refusal]),
+        );
+    }
+    if (fatal.length > 0) {
+      for (const text of fatal) console.error(`::error::${text}`);
+      console.error(
+        `::error::${tag} fails: a dry run reports only a sealantd prerelease, and these are not one.`,
+      );
+      process.exit(1);
+    }
+    console.log(
+      relaxed.length > 0
+        ? `${tag}: every other pin check passed; a release would refuse the ${relaxed.length} sealantd prerelease pin(s) above.`
+        : `${tag}: every sealantd pin is a release.`,
     );
-    process.exit(1);
   }
-  console.log(`${tag}: every sealantd pin is a release.`);
 }

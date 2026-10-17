@@ -175,6 +175,16 @@ The pieces:
   `merge`, `finalize-images`, `npm`, `github-release` and `promote` run on a tag push only. A pushed
   tag carrying `dryrun` is refused before anything builds, and every job that publishes first
   refuses any version that is not its own tag's plain `X.Y.Z`, however the version arrived.
+- **A dry run proves the graph from any main**, including one that pins a sealantd prerelease.
+  `pins` passes `--dry-run` to `tooling/scripts/check-release-pins.mjs` only for what the `release`
+  job decided is a dry run: a dispatch, target `archive`, with the derived `-dryrun.` version. The
+  script then reports the refusals that only say sealantd is a prerelease (a `sealantd-next` image
+  pinned as `pin-sealantd.mjs` writes it, a prerelease `@sealant/runtime-*` range or lockfile
+  resolution, and "cannot release with a sealantd prerelease") as warnings and lists them in the run
+  summary under "A release would refuse:", and goes on. Every other check still fails a dry run: an
+  image not pinned as `tag@sha256:<digest>`, a published package's `npm:` alias, a tag of the wrong
+  shape, and a next build of the version on a commit the release leaves out. A `vX.Y.Z` tag refuses
+  all of them, a sealantd prerelease included.
 - **Still unproven until a watched stable release**: the first OIDC publish of a downloaded tarball
   (npm has only ever published stable Core with `pnpm publish`), the npm job reading GitHub's latest
   release with a token that holds only `id-token: write`, `finalize-images` and `promote` writing to
@@ -216,7 +226,8 @@ The pieces:
   `packages/workspaces/src/buildkit/buildkit-builder.ts` and `apps/cf-bridge/Dockerfile`, sets the
   runtime packages in `packages/workspaces/package.json` exactly (aliases of the `-next` packages
   for a prerelease), and runs `pnpm install`. A stable release refuses to start while any sealantd
-  reference lacks its digest or is a prerelease (`tooling/scripts/check-release-pins.mjs`).
+  reference lacks its digest or is a prerelease (`tooling/scripts/check-release-pins.mjs`); a dry
+  run reports a prerelease and refuses a missing digest.
 - **Releasing** follows one order across the three repositories (sealant-sh/mend
   `docs/operations/next-channel.md`). For Core: pin sealantd's release, merge, merge the Version
   Packages pull request, and **freeze main until the tag**; Mend proves that commit's next build;

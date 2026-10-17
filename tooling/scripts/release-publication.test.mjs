@@ -22,6 +22,10 @@ import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 
 import { githubApi, npmDistTags, registryStandIn, writesIn } from "./fixtures/release-markers.mjs";
+import {
+  PRERELEASE_PROBLEMS,
+  prereleaseCheckout,
+} from "./fixtures/sealantd-prerelease-checkout.mjs";
 
 const workflows = new URL("../../.github/workflows/", import.meta.url);
 const releaseText = readFileSync(new URL("release.yml", workflows), "utf8");
@@ -1714,6 +1718,15 @@ test("a dry-run-shaped tag is refused before anything builds; a push only ever b
   assert.match(resolveStep.run, /push\/ghcr \| workflow_dispatch\/archive\) ;;/);
   // Every job below takes the version and target from this job, and nowhere else.
   assert.doesNotMatch(releaseText, /needs\.pins\.outputs|inputs\.version/);
+  // So a refused tag never reaches pins, where a dry run's flag would be decided: pins needs the
+  // release job and has no condition that would run it after that job failed.
+  assert.ok([releaseJobs.pins.needs].flat().includes("release"));
+  assert.equal(callsStatusFunction(releaseJobs.pins.if), false);
+  assert.deepEqual(
+    simulateRun({ fail: ["release"] }).pins,
+    "skipped",
+    "a failed release job skips pins",
+  );
 });
 
 const REFUSE = "Refuse a version that is not this tag's release";
@@ -1783,11 +1796,41 @@ test("pins checks a dry-run version only on a dispatch building to archives", (t
     argv: "tooling/scripts/check-release-pins.mjs --dry-run v0.38.1-dryrun.1.1",
   });
   assert.deepEqual(run("workflow_dispatch", "ghcr", "0.38.1-dryrun.1.1"), { status: 1, argv: "" });
-  // A push never relaxes the pins, whatever the target says.
+  // A dispatch passes the flag only with the version the release job derives for a dry run.
+  for (const version of ["0.38.1", "0.39.0-next.4", "0.38.1-dryrun.0.1", "0.38.1-dryrun.1", ""])
+    assert.deepEqual(
+      run("workflow_dispatch", "archive", version),
+      { status: 1, argv: "" },
+      version,
+    );
+  // A push never relaxes the pins, whatever the target or the version says.
   assert.equal(
     run("push", "archive", "0.39.0").argv,
     "tooling/scripts/check-release-pins.mjs v0.39.0",
   );
+  assert.equal(
+    run("push", "archive", "0.38.1-dryrun.1.1").argv,
+    "tooling/scripts/check-release-pins.mjs v0.38.1-dryrun.1.1",
+  );
+  // The step is the flag's only route: one --dry-run in all of release.yml's steps, in the dispatch branch, fed
+  // by the release job's outputs alone.
+  const runs = Object.values(releaseJobs)
+    .flatMap((job) => job.steps ?? [])
+    .map((entry) => entry.run ?? "")
+    .join("\n");
+  assert.equal(runs.match(/--dry-run/g).length, 1);
+  assert.match(
+    step.run,
+    /if \[\[ \$GITHUB_EVENT_NAME == workflow_dispatch \]\]; then\n(?:.*\n)*? {2}flags\+=\(--dry-run\)\nfi\n/,
+  );
+  assert.deepEqual(step.env, {
+    VERSION: "${{ needs.release.outputs.version }}",
+    TARGET: "${{ needs.release.outputs.target }}",
+  });
+  // Nothing in pins carries on past a failure: the script's own warnings are the only relaxing.
+  for (const entry of releaseJobs.pins.steps)
+    assert.equal(entry["continue-on-error"], undefined, entry.name);
+  assert.equal(releaseJobs.pins["continue-on-error"], undefined);
   // The stray check reads the X.Y.Z a dry run stamps; the backport check runs on a tag push only.
   assert.match(
     stepRun("pins", "Refuse a release that leaves out one of its next builds"),
@@ -1799,4 +1842,72 @@ test("pins checks a dry-run version only on a dispatch building to archives", (t
     ).if,
     "github.event_name == 'push'",
   );
+});
+
+test("pins, run as written: a dry run reports a sealantd prerelease, a tag push refuses it", (t) => {
+  const step = releaseJobs.pins.steps.find(
+    (entry) => entry.name === "Refuse a prerelease tag or a prerelease sealantd",
+  );
+  const nodeDirectory = path.dirname(process.execPath);
+  const run = (GITHUB_EVENT_NAME, TARGET, VERSION) => {
+    const checkout = prereleaseCheckout(t);
+    const summary = path.join(checkout, "step-summary.md");
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", step.run], {
+      cwd: checkout,
+      encoding: "utf8",
+      env: {
+        PATH: `${nodeDirectory}:/usr/bin:/bin`,
+        GITHUB_EVENT_NAME,
+        GITHUB_STEP_SUMMARY: summary,
+        TARGET,
+        VERSION,
+      },
+    });
+    const output = result.stdout + result.stderr;
+    const lines = (prefix) =>
+      output
+        .split("\n")
+        .filter((line) => line.startsWith(prefix))
+        .map((line) => line.slice(prefix.length));
+    return {
+      status: result.status,
+      errors: lines("::error::"),
+      warnings: lines("::warning::"),
+      summary: readdirSync(checkout).includes("step-summary.md")
+        ? readFileSync(summary, "utf8")
+        : "",
+      output,
+    };
+  };
+  const dry = run("workflow_dispatch", "archive", "0.38.1-dryrun.38983261452.1");
+  assert.equal(dry.status, 0, dry.output);
+  assert.deepEqual(dry.errors, []);
+  assert.deepEqual(dry.warnings, [
+    ...PRERELEASE_PROBLEMS,
+    "v0.38.1-dryrun.38983261452.1 cannot release with a sealantd prerelease. Release sealantd, pin it, then tag.",
+  ]);
+  assert.match(dry.summary, /^A release would refuse:$/m);
+
+  // A tag push: the release refuses, as before, and reports nothing as a warning.
+  const tag = run("push", "ghcr", "0.38.1");
+  assert.equal(tag.status, 1);
+  assert.deepEqual(tag.errors, [
+    ...PRERELEASE_PROBLEMS,
+    "v0.38.1 cannot release with a sealantd prerelease. Release sealantd, pin it, then tag.",
+  ]);
+  assert.deepEqual([tag.warnings, tag.summary], [[], ""]);
+  // A dry-run version on a push (which the release job refuses first) gets no flag either: the
+  // script refuses it as a prerelease tag before reading a pin.
+  for (const target of ["ghcr", "archive"]) {
+    const pushed = run("push", target, "0.38.1-dryrun.38983261452.1");
+    assert.equal(pushed.status, 1, target);
+    assert.deepEqual(
+      pushed.errors,
+      [
+        "v0.38.1-dryrun.38983261452.1 is a prerelease. Prereleases publish from main (next.yml), never from a tag.",
+      ],
+      target,
+    );
+    assert.deepEqual(pushed.warnings, [], target);
+  }
 });
