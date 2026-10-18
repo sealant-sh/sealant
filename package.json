@@ -8,7 +8,6 @@
     "changeset": "changeset",
     "clean": "pnpm run clean:workspaces && rm -rf node_modules .turbo",
     "clean:runtime-workspaces": "node tooling/scripts/clean-workspaces.mjs",
-    "clean:turbo": "turbo clean",
     "clean:workspaces": "pnpm -r --parallel exec rm -rf node_modules .turbo",
     "db:migrate": "pnpm --filter @sealant/db db:migrate",
     "db:push": "pnpm --filter @sealant/db db:push",
@@ -51,7 +50,7 @@
     "oxlint": "1.70.0",
     "oxlint-tsgolint": "^0.17.0",
     "tsx": "^4.20.6",
-    "turbo": "^2.5.0",
+    "turbo": "2.11.9",
     "typescript": "^5.9.3",
     "vitest": "catalog:",
     "yaml": "catalog:"
