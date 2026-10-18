@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
 
 import {
   isOciReference,
@@ -79,7 +79,7 @@ export const registryManifestResponseSchema = Schema.Struct({
 });
 export type RegistryManifestResponse = typeof registryManifestResponseSchema.Type;
 
-export class RegistriesNotFoundError extends Schema.TaggedErrorClass<RegistriesNotFoundError>()(
+export class RegistriesNotFoundError extends Schema.TaggedError<RegistriesNotFoundError>()(
   "RegistriesNotFoundError",
   {
     message: Schema.String,
@@ -87,7 +87,7 @@ export class RegistriesNotFoundError extends Schema.TaggedErrorClass<RegistriesN
   { httpApiStatus: 404 },
 ) {}
 
-export class RegistriesBadGatewayError extends Schema.TaggedErrorClass<RegistriesBadGatewayError>()(
+export class RegistriesBadGatewayError extends Schema.TaggedError<RegistriesBadGatewayError>()(
   "RegistriesBadGatewayError",
   {
     message: Schema.String,

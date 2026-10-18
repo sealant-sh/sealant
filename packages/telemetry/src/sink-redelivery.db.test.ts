@@ -230,12 +230,13 @@ describe.skipIf(DATABASE_URL === undefined)("appendBatch re-delivery (real Postg
             `SELECT count(*)::int AS n FROM pg_stat_activity
               WHERE datname = current_database() AND wait_event_type = 'Lock'
                 AND query LIKE 'insert into "telemetry_events"%'`,
+            "objects",
           )
           .pipe(
             Effect.flatMap(([row]) =>
               (row?.n ?? 0) > 0 ? Effect.void : Effect.fail("not blocked yet"),
             ),
-            Effect.retry(Schedule.spaced("10 millis").pipe(Schedule.both(Schedule.recurs(500)))),
+            Effect.retry(Schedule.max([Schedule.spaced("10 millis"), Schedule.recurs(500)])),
           );
         yield* Deferred.succeed(blocked, undefined);
         yield* Fiber.join(other);

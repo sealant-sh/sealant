@@ -6,7 +6,7 @@ import { workspaceCreateReservations, type WorkspaceCreateReservation } from "..
 
 const operationSchema = Schema.Literals(["reserve", "markCreated", "cancel", "get"]);
 
-export class WorkspaceCreateReservationRepoUnexpectedError extends Schema.TaggedErrorClass<WorkspaceCreateReservationRepoUnexpectedError>()(
+export class WorkspaceCreateReservationRepoUnexpectedError extends Schema.TaggedError<WorkspaceCreateReservationRepoUnexpectedError>()(
   "WorkspaceCreateReservationRepoUnexpectedError",
   {
     operation: operationSchema,

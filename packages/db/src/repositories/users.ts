@@ -21,7 +21,7 @@ const userRepoOperationSchema = Schema.Literals([
   "getPersonBinding",
 ]);
 
-export class UserRepoUnexpectedError extends Schema.TaggedErrorClass<UserRepoUnexpectedError>()(
+export class UserRepoUnexpectedError extends Schema.TaggedError<UserRepoUnexpectedError>()(
   "UserRepoUnexpectedError",
   {
     operation: userRepoOperationSchema,

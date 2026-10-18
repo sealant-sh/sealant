@@ -20,7 +20,7 @@
  * turn, and sending `tools` with a codex account is a 400.
  */
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
 import { BudgetExceededError } from "./budgets.js";
 
@@ -132,33 +132,33 @@ export type InferenceRespondResponse = typeof inferenceRespondResponseSchema.Typ
 // Errors
 // ---------------------------------------------------------------------------------------------
 
-export class InferenceBadRequestError extends Schema.TaggedErrorClass<InferenceBadRequestError>()(
+export class InferenceBadRequestError extends Schema.TaggedError<InferenceBadRequestError>()(
   "InferenceBadRequestError",
   { message: Schema.String },
   { httpApiStatus: 400 },
 ) {}
 
 /** Unknown account/profile (uniform for foreign owners) or an expired/unknown inference session. */
-export class InferenceNotFoundError extends Schema.TaggedErrorClass<InferenceNotFoundError>()(
+export class InferenceNotFoundError extends Schema.TaggedError<InferenceNotFoundError>()(
   "InferenceNotFoundError",
   { message: Schema.String },
   { httpApiStatus: 404 },
 ) {}
 
 /** The selected account exists but is not usable (status "invalid") — reconnect it. */
-export class InferenceConflictError extends Schema.TaggedErrorClass<InferenceConflictError>()(
+export class InferenceConflictError extends Schema.TaggedError<InferenceConflictError>()(
   "InferenceConflictError",
   { message: Schema.String },
   { httpApiStatus: 409 },
 ) {}
 
-export class InferenceUnavailableError extends Schema.TaggedErrorClass<InferenceUnavailableError>()(
+export class InferenceUnavailableError extends Schema.TaggedError<InferenceUnavailableError>()(
   "InferenceUnavailableError",
   { message: Schema.String },
   { httpApiStatus: 503 },
 ) {}
 
-export class InferenceInternalServerError extends Schema.TaggedErrorClass<InferenceInternalServerError>()(
+export class InferenceInternalServerError extends Schema.TaggedError<InferenceInternalServerError>()(
   "InferenceInternalServerError",
   { message: Schema.String },
   { httpApiStatus: 500 },

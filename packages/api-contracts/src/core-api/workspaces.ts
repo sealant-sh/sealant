@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
 import { BudgetExceededError } from "./budgets.js";
 import { connectedAccountProviderSchema } from "./connected-accounts.js";
@@ -1298,7 +1298,7 @@ export const workspaceGatewayHeadersSchema = Schema.Struct({
 });
 export type WorkspaceGatewayHeaders = typeof workspaceGatewayHeadersSchema.Type;
 
-export class WorkspaceBadRequestError extends Schema.TaggedErrorClass<WorkspaceBadRequestError>()(
+export class WorkspaceBadRequestError extends Schema.TaggedError<WorkspaceBadRequestError>()(
   "WorkspaceBadRequestError",
   {
     message: Schema.String,
@@ -1314,7 +1314,7 @@ export class WorkspaceBadRequestError extends Schema.TaggedErrorClass<WorkspaceB
  * code is how a caller learns the install cannot resolve cluster bindings, instead of trusting a
  * config flag that can lie.
  */
-export class WorkspaceRuntimeEnvReferencesUnsupportedError extends Schema.TaggedErrorClass<WorkspaceRuntimeEnvReferencesUnsupportedError>()(
+export class WorkspaceRuntimeEnvReferencesUnsupportedError extends Schema.TaggedError<WorkspaceRuntimeEnvReferencesUnsupportedError>()(
   "WorkspaceRuntimeEnvReferencesUnsupportedError",
   {
     message: Schema.String,
@@ -1329,7 +1329,7 @@ export class WorkspaceRuntimeEnvReferencesUnsupportedError extends Schema.Tagged
  * image, leaving the default image at its restricted Linux capability set. Refused synchronously
  * at POST /v1/workspaces; the stable `code` is the consumer's capability probe.
  */
-export class WorkspaceDockerServiceUnsupportedError extends Schema.TaggedErrorClass<WorkspaceDockerServiceUnsupportedError>()(
+export class WorkspaceDockerServiceUnsupportedError extends Schema.TaggedError<WorkspaceDockerServiceUnsupportedError>()(
   "WorkspaceDockerServiceUnsupportedError",
   {
     message: Schema.String,
@@ -1338,7 +1338,7 @@ export class WorkspaceDockerServiceUnsupportedError extends Schema.TaggedErrorCl
   { httpApiStatus: 422 },
 ) {}
 
-export class WorkspaceUnauthorizedError extends Schema.TaggedErrorClass<WorkspaceUnauthorizedError>()(
+export class WorkspaceUnauthorizedError extends Schema.TaggedError<WorkspaceUnauthorizedError>()(
   "WorkspaceUnauthorizedError",
   {
     message: Schema.String,
@@ -1352,7 +1352,7 @@ export class WorkspaceUnauthorizedError extends Schema.TaggedErrorClass<Workspac
  * connections opened with the key on this refusal alone, never on another 401 (a gateway token
  * mismatch while the API and the gateway roll).
  */
-export class WorkspaceSshKeyNoLongerRegisteredError extends Schema.TaggedErrorClass<WorkspaceSshKeyNoLongerRegisteredError>()(
+export class WorkspaceSshKeyNoLongerRegisteredError extends Schema.TaggedError<WorkspaceSshKeyNoLongerRegisteredError>()(
   "WorkspaceSshKeyNoLongerRegisteredError",
   {
     message: Schema.String,
@@ -1365,7 +1365,7 @@ export class WorkspaceSshKeyNoLongerRegisteredError extends Schema.TaggedErrorCl
  * capture owner map (`ssh-owner-needs-owner-map`), or the owner map or `credentialsHome` does not
  * give the owner's bound person their own uid and home (`ssh-owner-mismatch`). Names no path.
  */
-export class WorkspaceSshOwnerRefusedError extends Schema.TaggedErrorClass<WorkspaceSshOwnerRefusedError>()(
+export class WorkspaceSshOwnerRefusedError extends Schema.TaggedError<WorkspaceSshOwnerRefusedError>()(
   "WorkspaceSshOwnerRefusedError",
   {
     message: Schema.String,
@@ -1374,7 +1374,7 @@ export class WorkspaceSshOwnerRefusedError extends Schema.TaggedErrorClass<Works
   { httpApiStatus: 403 },
 ) {}
 
-export class WorkspaceForbiddenError extends Schema.TaggedErrorClass<WorkspaceForbiddenError>()(
+export class WorkspaceForbiddenError extends Schema.TaggedError<WorkspaceForbiddenError>()(
   "WorkspaceForbiddenError",
   {
     message: Schema.String,
@@ -1382,7 +1382,7 @@ export class WorkspaceForbiddenError extends Schema.TaggedErrorClass<WorkspaceFo
   { httpApiStatus: 403 },
 ) {}
 
-export class WorkspaceNotFoundError extends Schema.TaggedErrorClass<WorkspaceNotFoundError>()(
+export class WorkspaceNotFoundError extends Schema.TaggedError<WorkspaceNotFoundError>()(
   "WorkspaceNotFoundError",
   {
     message: Schema.String,
@@ -1394,7 +1394,7 @@ export class WorkspaceNotFoundError extends Schema.TaggedErrorClass<WorkspaceNot
   { httpApiStatus: 404 },
 ) {}
 
-export class WorkspaceConflictError extends Schema.TaggedErrorClass<WorkspaceConflictError>()(
+export class WorkspaceConflictError extends Schema.TaggedError<WorkspaceConflictError>()(
   "WorkspaceConflictError",
   {
     message: Schema.String,
@@ -1406,7 +1406,7 @@ export class WorkspaceConflictError extends Schema.TaggedErrorClass<WorkspaceCon
   { httpApiStatus: 409 },
 ) {}
 
-export class WorkspaceBadGatewayError extends Schema.TaggedErrorClass<WorkspaceBadGatewayError>()(
+export class WorkspaceBadGatewayError extends Schema.TaggedError<WorkspaceBadGatewayError>()(
   "WorkspaceBadGatewayError",
   {
     message: Schema.String,
@@ -1414,7 +1414,7 @@ export class WorkspaceBadGatewayError extends Schema.TaggedErrorClass<WorkspaceB
   { httpApiStatus: 502 },
 ) {}
 
-export class WorkspaceServiceUnavailableError extends Schema.TaggedErrorClass<WorkspaceServiceUnavailableError>()(
+export class WorkspaceServiceUnavailableError extends Schema.TaggedError<WorkspaceServiceUnavailableError>()(
   "WorkspaceServiceUnavailableError",
   {
     message: Schema.String,
@@ -1422,7 +1422,7 @@ export class WorkspaceServiceUnavailableError extends Schema.TaggedErrorClass<Wo
   { httpApiStatus: 503 },
 ) {}
 
-export class WorkspaceInternalServerError extends Schema.TaggedErrorClass<WorkspaceInternalServerError>()(
+export class WorkspaceInternalServerError extends Schema.TaggedError<WorkspaceInternalServerError>()(
   "WorkspaceInternalServerError",
   {
     message: Schema.String,

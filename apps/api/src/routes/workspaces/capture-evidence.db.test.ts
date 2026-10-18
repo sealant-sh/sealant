@@ -439,9 +439,16 @@ describe.skipIf(DATABASE_URL === undefined)(
       expect(await seedSaved(drains, runId, Date.now() - 5_000)).toBe(true);
       expect(await deletionAfterExit(runId)).toMatchObject({ delete: true });
       const name = `refuse_incomplete_${randomUUID().replaceAll("-", "")}`;
+      // One statement per query: the driver prepares every query, and Postgres prepares a single
+      // command.
       await Effect.runPromise(
-        db.execute(
-          `CREATE FUNCTION ${name}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.run_id = '${runId}' AND NEW.last_status->>'complete' = 'false' THEN RAISE EXCEPTION 'injected observation write failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER ${name} BEFORE INSERT OR UPDATE ON workspace_capture_drains FOR EACH ROW EXECUTE FUNCTION ${name}();`,
+        Effect.andThen(
+          db.execute(
+            `CREATE FUNCTION ${name}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.run_id = '${runId}' AND NEW.last_status->>'complete' = 'false' THEN RAISE EXCEPTION 'injected observation write failure'; END IF; RETURN NEW; END $$`,
+          ),
+          db.execute(
+            `CREATE TRIGGER ${name} BEFORE INSERT OR UPDATE ON workspace_capture_drains FOR EACH ROW EXECUTE FUNCTION ${name}()`,
+          ),
         ),
       );
       let answer: CaptureFlushReport;
@@ -451,7 +458,10 @@ describe.skipIf(DATABASE_URL === undefined)(
         );
       } finally {
         await Effect.runPromise(
-          db.execute(`DROP TRIGGER ${name} ON workspace_capture_drains; DROP FUNCTION ${name}();`),
+          Effect.andThen(
+            db.execute(`DROP TRIGGER ${name} ON workspace_capture_drains`),
+            db.execute(`DROP FUNCTION ${name}()`),
+          ),
         );
       }
       // The caller received the answer; the record could not take it.

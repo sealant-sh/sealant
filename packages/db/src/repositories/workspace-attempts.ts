@@ -83,7 +83,7 @@ const workspaceAttemptRepoOperationSchema = Schema.Literals([
   "setAttemptSnapshot",
 ]);
 
-export class WorkspaceAttemptRepoInvariantError extends Schema.TaggedErrorClass<WorkspaceAttemptRepoInvariantError>()(
+export class WorkspaceAttemptRepoInvariantError extends Schema.TaggedError<WorkspaceAttemptRepoInvariantError>()(
   "WorkspaceAttemptRepoInvariantError",
   {
     operation: workspaceAttemptRepoOperationSchema,
@@ -91,7 +91,7 @@ export class WorkspaceAttemptRepoInvariantError extends Schema.TaggedErrorClass<
   },
 ) {}
 
-export class WorkspaceAttemptRepoUnexpectedError extends Schema.TaggedErrorClass<WorkspaceAttemptRepoUnexpectedError>()(
+export class WorkspaceAttemptRepoUnexpectedError extends Schema.TaggedError<WorkspaceAttemptRepoUnexpectedError>()(
   "WorkspaceAttemptRepoUnexpectedError",
   {
     operation: workspaceAttemptRepoOperationSchema,

@@ -1,19 +1,20 @@
 /**
  * Requests the contract cannot decode, on every route of the control plane API.
  *
- * Effect answers such a request with an empty `400`, and the failure it reports (to the request
- * log, every `ErrorReporter` and the request's tracing span) quotes the rejected input: `Expected
- * array, got "<argv>"`, a whole body that arrived wrapped in an array, `JSON.parse`'s excerpt of a
- * malformed body. A request body can carry a process's arguments, a script or a credential, so
- * `RequestRefusal`, applied to the whole API, answers `400` `RequestRefusedError` instead, with a
- * reason that names where the request is wrong and never what it held. `describeRequestIssue` words
+ * Effect answers such a request with an empty `400`. Before Effect 4.0.0, the failure it reports (to
+ * the request log, every `ErrorReporter` and the request's tracing span) quoted the rejected input:
+ * `Expected array, got "<argv>"`, a whole body that arrived wrapped in an array, `JSON.parse`'s
+ * excerpt of a malformed body; Effect 4 reports input only to a parse that asks for it. A request
+ * body can carry a process's arguments, a script or a credential, so `RequestRefusal`, applied to
+ * the whole API, answers `400` `RequestRefusedError` instead, with a reason that names where the
+ * request is wrong and never what it held, and Effect's failure goes no further. `describeRequestIssue` words
  * that reason from the decode issue alone: field names the contract declares, array positions, and
  * what was expected; a key the caller chose (an `env` or `metadata` name) reads `[…]`.
  */
-import { Option, Schema, SchemaAST, SchemaIssue } from "effect";
-import { HttpApiMiddleware } from "effect/unstable/httpapi";
+import { Schema, SchemaAST, SchemaIssue } from "effect";
+import { HttpApiMiddleware } from "effect/http-api";
 
-export class RequestRefusedError extends Schema.TaggedErrorClass<RequestRefusedError>()(
+export class RequestRefusedError extends Schema.TaggedError<RequestRefusedError>()(
   "RequestRefusedError",
   {
     /** Where the request is wrong and what was expected; never a value it held. */
@@ -117,7 +118,7 @@ const reasonsOf = (
         : undefined;
     const message = authoredMessage(
       inner ?? stringAnnotation(issue.filter.annotations, "message"),
-      issue.actual,
+      issue.input,
     );
     if (message !== undefined) return leaf(path, message);
     const expected = stringAnnotation(issue.filter.annotations, "expected");
@@ -131,10 +132,9 @@ const reasonsOf = (
   }
   if (issue instanceof SchemaIssue.MissingKey) return leaf(path, "is required");
   if (issue instanceof SchemaIssue.InvalidValue) {
-    const actual = Option.getOrUndefined(issue.actual);
     return leaf(
       path,
-      authoredMessage(stringAnnotation(issue.annotations, "message"), actual) ?? "is invalid",
+      authoredMessage(stringAnnotation(issue.annotations, "message"), issue.input) ?? "is invalid",
     );
   }
   if (issue instanceof SchemaIssue.OneOf) return leaf(path, "matches more than one allowed shape");

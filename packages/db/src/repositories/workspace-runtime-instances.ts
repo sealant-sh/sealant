@@ -92,7 +92,7 @@ const workspaceRuntimeInstanceRepoOperationSchema = Schema.Literals([
   "upsertRuntimeInstance",
 ]);
 
-export class WorkspaceRuntimeInstanceRepoInvariantError extends Schema.TaggedErrorClass<WorkspaceRuntimeInstanceRepoInvariantError>()(
+export class WorkspaceRuntimeInstanceRepoInvariantError extends Schema.TaggedError<WorkspaceRuntimeInstanceRepoInvariantError>()(
   "WorkspaceRuntimeInstanceRepoInvariantError",
   {
     operation: workspaceRuntimeInstanceRepoOperationSchema,
@@ -100,7 +100,7 @@ export class WorkspaceRuntimeInstanceRepoInvariantError extends Schema.TaggedErr
   },
 ) {}
 
-export class WorkspaceRuntimeInstanceRepoUnexpectedError extends Schema.TaggedErrorClass<WorkspaceRuntimeInstanceRepoUnexpectedError>()(
+export class WorkspaceRuntimeInstanceRepoUnexpectedError extends Schema.TaggedError<WorkspaceRuntimeInstanceRepoUnexpectedError>()(
   "WorkspaceRuntimeInstanceRepoUnexpectedError",
   {
     operation: workspaceRuntimeInstanceRepoOperationSchema,

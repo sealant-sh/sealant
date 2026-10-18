@@ -37,7 +37,7 @@ const asNonEmptyString = (value: unknown): string | undefined => {
 export const CLAUDE_TOKEN_PREFIX = "sk-ant-oat01-";
 
 export const claudeTokenCredentialPayloadSchema = Schema.Struct({
-  token: Schema.String.check(Schema.isStartsWith(CLAUDE_TOKEN_PREFIX)),
+  token: Schema.String.check(Schema.isStartingWith(CLAUDE_TOKEN_PREFIX)),
 });
 export type ClaudeTokenCredentialPayload = typeof claudeTokenCredentialPayloadSchema.Type;
 

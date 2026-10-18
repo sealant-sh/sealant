@@ -23,7 +23,7 @@ import {
   HttpServerRequest,
   HttpServerResponse,
   type HttpServerResponse as HttpServerResponseType,
-} from "effect/unstable/http";
+} from "effect/http";
 
 import { env } from "../runtime-env.js";
 import { bearerSubject, budgetMessage, rateDecision, type RateWindow } from "./budgets.js";

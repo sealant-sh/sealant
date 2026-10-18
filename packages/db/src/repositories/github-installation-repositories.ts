@@ -64,7 +64,7 @@ const gitHubInstallationRepositoryCacheRepoOperationSchema = Schema.Literals([
   "upsertInstallationRepository",
 ]);
 
-export class GitHubInstallationRepositoryCacheRepoInvariantError extends Schema.TaggedErrorClass<GitHubInstallationRepositoryCacheRepoInvariantError>()(
+export class GitHubInstallationRepositoryCacheRepoInvariantError extends Schema.TaggedError<GitHubInstallationRepositoryCacheRepoInvariantError>()(
   "GitHubInstallationRepositoryCacheRepoInvariantError",
   {
     operation: gitHubInstallationRepositoryCacheRepoOperationSchema,
@@ -72,7 +72,7 @@ export class GitHubInstallationRepositoryCacheRepoInvariantError extends Schema.
   },
 ) {}
 
-export class GitHubInstallationRepositoryCacheRepoUnexpectedError extends Schema.TaggedErrorClass<GitHubInstallationRepositoryCacheRepoUnexpectedError>()(
+export class GitHubInstallationRepositoryCacheRepoUnexpectedError extends Schema.TaggedError<GitHubInstallationRepositoryCacheRepoUnexpectedError>()(
   "GitHubInstallationRepositoryCacheRepoUnexpectedError",
   {
     operation: gitHubInstallationRepositoryCacheRepoOperationSchema,

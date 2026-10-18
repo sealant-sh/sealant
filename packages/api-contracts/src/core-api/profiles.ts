@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
 
 import {
   connectedAccountProviderSchema,
@@ -65,7 +65,7 @@ export const setProfileCredentialBindingRequestSchema = Schema.Struct({
 export type SetProfileCredentialBindingRequest =
   typeof setProfileCredentialBindingRequestSchema.Type;
 
-export class ProfileBadRequestError extends Schema.TaggedErrorClass<ProfileBadRequestError>()(
+export class ProfileBadRequestError extends Schema.TaggedError<ProfileBadRequestError>()(
   "ProfileBadRequestError",
   {
     message: Schema.String,
@@ -73,7 +73,7 @@ export class ProfileBadRequestError extends Schema.TaggedErrorClass<ProfileBadRe
   { httpApiStatus: 400 },
 ) {}
 
-export class ProfileNotFoundError extends Schema.TaggedErrorClass<ProfileNotFoundError>()(
+export class ProfileNotFoundError extends Schema.TaggedError<ProfileNotFoundError>()(
   "ProfileNotFoundError",
   {
     message: Schema.String,
@@ -81,7 +81,7 @@ export class ProfileNotFoundError extends Schema.TaggedErrorClass<ProfileNotFoun
   { httpApiStatus: 404 },
 ) {}
 
-export class ProfileConflictError extends Schema.TaggedErrorClass<ProfileConflictError>()(
+export class ProfileConflictError extends Schema.TaggedError<ProfileConflictError>()(
   "ProfileConflictError",
   {
     message: Schema.String,
@@ -89,7 +89,7 @@ export class ProfileConflictError extends Schema.TaggedErrorClass<ProfileConflic
   { httpApiStatus: 409 },
 ) {}
 
-export class ProfileInternalServerError extends Schema.TaggedErrorClass<ProfileInternalServerError>()(
+export class ProfileInternalServerError extends Schema.TaggedError<ProfileInternalServerError>()(
   "ProfileInternalServerError",
   {
     message: Schema.String,

@@ -19,7 +19,7 @@ const sshKeyRepoOperationSchema = Schema.Literals([
   "restoreSshKey",
 ]);
 
-export class SshKeyRepoInvariantError extends Schema.TaggedErrorClass<SshKeyRepoInvariantError>()(
+export class SshKeyRepoInvariantError extends Schema.TaggedError<SshKeyRepoInvariantError>()(
   "SshKeyRepoInvariantError",
   {
     operation: sshKeyRepoOperationSchema,
@@ -27,7 +27,7 @@ export class SshKeyRepoInvariantError extends Schema.TaggedErrorClass<SshKeyRepo
   },
 ) {}
 
-export class SshKeyRepoUnexpectedError extends Schema.TaggedErrorClass<SshKeyRepoUnexpectedError>()(
+export class SshKeyRepoUnexpectedError extends Schema.TaggedError<SshKeyRepoUnexpectedError>()(
   "SshKeyRepoUnexpectedError",
   {
     operation: sshKeyRepoOperationSchema,

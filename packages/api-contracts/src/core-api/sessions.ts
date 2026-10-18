@@ -14,7 +14,7 @@
  * (create/close). Without a bearer token the pre-auth owner model applies unchanged.
  */
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
@@ -276,31 +276,31 @@ export const sessionOutputResponseSchema = Schema.Struct({
 });
 export type SessionOutputResponse = typeof sessionOutputResponseSchema.Type;
 
-export class SessionBadRequestError extends Schema.TaggedErrorClass<SessionBadRequestError>()(
+export class SessionBadRequestError extends Schema.TaggedError<SessionBadRequestError>()(
   "SessionBadRequestError",
   { message: Schema.String },
   { httpApiStatus: 400 },
 ) {}
 
-export class SessionUnauthorizedError extends Schema.TaggedErrorClass<SessionUnauthorizedError>()(
+export class SessionUnauthorizedError extends Schema.TaggedError<SessionUnauthorizedError>()(
   "SessionUnauthorizedError",
   { message: Schema.String },
   { httpApiStatus: 401 },
 ) {}
 
-export class SessionForbiddenError extends Schema.TaggedErrorClass<SessionForbiddenError>()(
+export class SessionForbiddenError extends Schema.TaggedError<SessionForbiddenError>()(
   "SessionForbiddenError",
   { message: Schema.String },
   { httpApiStatus: 403 },
 ) {}
 
-export class SessionNotFoundError extends Schema.TaggedErrorClass<SessionNotFoundError>()(
+export class SessionNotFoundError extends Schema.TaggedError<SessionNotFoundError>()(
   "SessionNotFoundError",
   { message: Schema.String },
   { httpApiStatus: 404 },
 ) {}
 
-export class SessionConflictError extends Schema.TaggedErrorClass<SessionConflictError>()(
+export class SessionConflictError extends Schema.TaggedError<SessionConflictError>()(
   "SessionConflictError",
   {
     message: Schema.String,
@@ -310,13 +310,13 @@ export class SessionConflictError extends Schema.TaggedErrorClass<SessionConflic
   { httpApiStatus: 409 },
 ) {}
 
-export class SessionBadGatewayError extends Schema.TaggedErrorClass<SessionBadGatewayError>()(
+export class SessionBadGatewayError extends Schema.TaggedError<SessionBadGatewayError>()(
   "SessionBadGatewayError",
   { message: Schema.String },
   { httpApiStatus: 502 },
 ) {}
 
-export class SessionInternalServerError extends Schema.TaggedErrorClass<SessionInternalServerError>()(
+export class SessionInternalServerError extends Schema.TaggedError<SessionInternalServerError>()(
   "SessionInternalServerError",
   { message: Schema.String },
   { httpApiStatus: 500 },

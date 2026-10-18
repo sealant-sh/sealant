@@ -95,7 +95,7 @@ const runRepoOperationSchema = Schema.Literals([
   "markRunFailed",
 ]);
 
-export class RunRepoInvariantError extends Schema.TaggedErrorClass<RunRepoInvariantError>()(
+export class RunRepoInvariantError extends Schema.TaggedError<RunRepoInvariantError>()(
   "RunRepoInvariantError",
   {
     operation: runRepoOperationSchema,
@@ -103,7 +103,7 @@ export class RunRepoInvariantError extends Schema.TaggedErrorClass<RunRepoInvari
   },
 ) {}
 
-export class RunRepoUnexpectedError extends Schema.TaggedErrorClass<RunRepoUnexpectedError>()(
+export class RunRepoUnexpectedError extends Schema.TaggedError<RunRepoUnexpectedError>()(
   "RunRepoUnexpectedError",
   {
     operation: runRepoOperationSchema,

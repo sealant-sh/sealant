@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { Context, Effect, Layer, Option } from "effect";
-import { Flag, GlobalFlag } from "effect/unstable/cli";
+import { Flag, GlobalFlag } from "effect/cli";
 
 import { CliFailure, describeUnknown } from "./errors.js";
 
@@ -187,8 +187,8 @@ export const CliConfigStoreLive: Layer.Layer<CliConfigStoreService> = Layer.sync
  * Global flags (--api-url / --owner) + per-invocation settings resolution
  * ---------------------------------------------------------------------------------------------- */
 
-export const ApiUrlFlag = GlobalFlag.setting("api-url")({
-  flag: Flag.string("api-url").pipe(
+export const ApiUrlFlag = GlobalFlag.Setting("api-url")({
+  flag: Flag.String("api-url").pipe(
     Flag.optional,
     Flag.withDescription(
       `Control-plane API URL (env ${API_URL_ENV_VAR}; default ${DEFAULT_API_URL})`,
@@ -196,8 +196,8 @@ export const ApiUrlFlag = GlobalFlag.setting("api-url")({
   ),
 });
 
-export const OwnerFlag = GlobalFlag.setting("owner")({
-  flag: Flag.string("owner").pipe(
+export const OwnerFlag = GlobalFlag.Setting("owner")({
+  flag: Flag.String("owner").pipe(
     Flag.optional,
     Flag.withDescription(
       `Owner user id (env ${OWNER_USER_ID_ENV_VAR}; default ${DEFAULT_OWNER_USER_ID})`,

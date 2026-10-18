@@ -10,8 +10,8 @@
  */
 import { ControlPlaneAPI } from "@sealant/api-contracts";
 import { Context, Effect, Layer } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { HttpApiClient } from "effect/unstable/httpapi";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
+import { HttpApiClient } from "effect/http-api";
 
 import type { SealantInternalConfig } from "../internal/config.js";
 

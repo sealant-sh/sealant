@@ -232,16 +232,26 @@ describe.skipIf(DATABASE_URL === undefined)(
         body: () => Promise<A>,
       ): Promise<A> => {
         const name = `refuse_${randomUUID().replaceAll("-", "")}`;
+        // One statement per query: the driver prepares every query, and Postgres prepares a
+        // single command.
         await Effect.runPromise(
-          db.execute(
-            `CREATE FUNCTION ${name}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.run_id = '${runId}' AND ${when} THEN RAISE EXCEPTION 'injected write failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER ${name} BEFORE INSERT OR UPDATE ON ${table} FOR EACH ROW EXECUTE FUNCTION ${name}();`,
+          Effect.andThen(
+            db.execute(
+              `CREATE FUNCTION ${name}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.run_id = '${runId}' AND ${when} THEN RAISE EXCEPTION 'injected write failure'; END IF; RETURN NEW; END $$`,
+            ),
+            db.execute(
+              `CREATE TRIGGER ${name} BEFORE INSERT OR UPDATE ON ${table} FOR EACH ROW EXECUTE FUNCTION ${name}()`,
+            ),
           ),
         );
         try {
           return await body();
         } finally {
           await Effect.runPromise(
-            db.execute(`DROP TRIGGER ${name} ON ${table}; DROP FUNCTION ${name}();`),
+            Effect.andThen(
+              db.execute(`DROP TRIGGER ${name} ON ${table}`),
+              db.execute(`DROP FUNCTION ${name}()`),
+            ),
           );
         }
       };

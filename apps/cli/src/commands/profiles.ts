@@ -1,5 +1,5 @@
 import { Console, Effect, Option } from "effect";
-import { Argument, Command, Flag } from "effect/unstable/cli";
+import { Argument, Command, Flag } from "effect/cli";
 
 import {
   ControlPlaneClientService,
@@ -124,7 +124,7 @@ const profilesListCommand = Command.make("list", {}, () =>
 ).pipe(Command.withDescription("List profiles and their credential bindings"));
 
 const accountNameFlag = (provider: ConnectedAccountProvider) =>
-  Flag.string(provider).pipe(
+  Flag.String(provider).pipe(
     Flag.optional,
     Flag.withDescription(`Name of the ${provider} account to bind`),
   );
@@ -168,13 +168,13 @@ const bindProvider = (
 const profilesBindCommand = Command.make(
   "bind",
   {
-    profile: Argument.string("profile").pipe(
+    profile: Argument.String("profile").pipe(
       Argument.withDescription("Profile slug or id (prof_…)"),
     ),
     claude: accountNameFlag("claude"),
     codex: accountNameFlag("codex"),
     github: accountNameFlag("github"),
-    clear: Flag.string("clear").pipe(
+    clear: Flag.String("clear").pipe(
       Flag.optional,
       Flag.withDescription("Comma-separated providers to unbind (e.g. --clear claude,codex)"),
     ),

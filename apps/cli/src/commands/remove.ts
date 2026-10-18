@@ -1,5 +1,5 @@
 import { Console, Effect } from "effect";
-import { Argument, Command, Flag } from "effect/unstable/cli";
+import { Argument, Command, Flag } from "effect/cli";
 
 import { ControlPlaneClientService, toApiSettings } from "../api-client.js";
 import { currentSettings } from "../config.js";
@@ -11,12 +11,12 @@ import { CONNECTED_ACCOUNT_PROVIDERS } from "../schemas.js";
 export const authRemoveCommand = Command.make(
   "remove",
   {
-    provider: Argument.choice("provider", CONNECTED_ACCOUNT_PROVIDERS),
-    name: Flag.string("name").pipe(
+    provider: Argument.Literals("provider", CONNECTED_ACCOUNT_PROVIDERS),
+    name: Flag.String("name").pipe(
       Flag.withDefault("default"),
       Flag.withDescription("Account name to remove"),
     ),
-    yes: Flag.boolean("yes").pipe(
+    yes: Flag.Boolean("yes").pipe(
       Flag.withAlias("y"),
       Flag.withDescription("Skip the confirmation prompt"),
     ),

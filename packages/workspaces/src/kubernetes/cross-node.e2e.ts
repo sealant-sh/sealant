@@ -254,7 +254,10 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes cross-node workspace", () => {
           const channel = yield* second.attachSession(opened.sessionId, { fromSequence: 0n });
           const seen = yield* Stream.fromAsyncIterable(channel, (e) => e).pipe(
             Stream.map((chunk) => Buffer.from(chunk).toString()),
-            Stream.scan("", (acc, chunk) => acc + chunk),
+            Stream.scan(
+              () => "",
+              (acc, chunk) => acc + chunk,
+            ),
             Stream.takeUntil((acc) => acc.includes("reattach-marker-42")),
             Stream.runLast,
           );

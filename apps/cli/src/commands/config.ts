@@ -1,5 +1,5 @@
 import { Console, Effect } from "effect";
-import { Argument, Command } from "effect/unstable/cli";
+import { Argument, Command } from "effect/cli";
 
 import { CliConfigStoreService, CONFIG_KEYS, currentSettings } from "../config.js";
 import { CliFailure } from "../errors.js";
@@ -17,8 +17,8 @@ const isHttpUrl = (value: string): boolean => {
 const configSetCommand = Command.make(
   "set",
   {
-    key: Argument.choice("key", CONFIG_KEYS),
-    value: Argument.string("value"),
+    key: Argument.Literals("key", CONFIG_KEYS),
+    value: Argument.String("value"),
   },
   ({ key, value }) =>
     Effect.gen(function* () {

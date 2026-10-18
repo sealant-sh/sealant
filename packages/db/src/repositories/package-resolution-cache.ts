@@ -26,7 +26,7 @@ export type PackageResolutionCacheRepository = PackageResolutionCacheRepoService
 
 const packageResolutionCacheRepoOperationSchema = Schema.Literals(["getByQuery", "upsertByQuery"]);
 
-export class PackageResolutionCacheRepoInvariantError extends Schema.TaggedErrorClass<PackageResolutionCacheRepoInvariantError>()(
+export class PackageResolutionCacheRepoInvariantError extends Schema.TaggedError<PackageResolutionCacheRepoInvariantError>()(
   "PackageResolutionCacheRepoInvariantError",
   {
     operation: packageResolutionCacheRepoOperationSchema,
@@ -34,7 +34,7 @@ export class PackageResolutionCacheRepoInvariantError extends Schema.TaggedError
   },
 ) {}
 
-export class PackageResolutionCacheRepoUnexpectedError extends Schema.TaggedErrorClass<PackageResolutionCacheRepoUnexpectedError>()(
+export class PackageResolutionCacheRepoUnexpectedError extends Schema.TaggedError<PackageResolutionCacheRepoUnexpectedError>()(
   "PackageResolutionCacheRepoUnexpectedError",
   {
     operation: packageResolutionCacheRepoOperationSchema,

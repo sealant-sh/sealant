@@ -40,7 +40,7 @@ const connectedAccountRepoOperationSchema = Schema.Literals([
   "getBindingsForProfileWithAccounts",
 ]);
 
-export class ConnectedAccountRepoInvariantError extends Schema.TaggedErrorClass<ConnectedAccountRepoInvariantError>()(
+export class ConnectedAccountRepoInvariantError extends Schema.TaggedError<ConnectedAccountRepoInvariantError>()(
   "ConnectedAccountRepoInvariantError",
   {
     operation: connectedAccountRepoOperationSchema,
@@ -48,7 +48,7 @@ export class ConnectedAccountRepoInvariantError extends Schema.TaggedErrorClass<
   },
 ) {}
 
-export class ConnectedAccountRepoUnexpectedError extends Schema.TaggedErrorClass<ConnectedAccountRepoUnexpectedError>()(
+export class ConnectedAccountRepoUnexpectedError extends Schema.TaggedError<ConnectedAccountRepoUnexpectedError>()(
   "ConnectedAccountRepoUnexpectedError",
   {
     operation: connectedAccountRepoOperationSchema,

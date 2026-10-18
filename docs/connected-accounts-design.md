@@ -739,8 +739,8 @@ unchanged. The SDK carries a typed error's body code as `SealantApiError.reason`
 
 ## 7. The `sealant` CLI — `apps/cli`
 
-New workspace app `@sealant/cli`, bin `sealant`, built on `effect/unstable/cli` (Command/Flag/Prompt
-— already in the pinned `effect` catalog version; no new deps beyond `@effect/platform-node`). Local
+New workspace app `@sealant/cli`, bin `sealant`, built on `effect/cli` (Command/Flag/Prompt —
+already in the pinned `effect` catalog version; no new deps beyond `@effect/platform-node`). Local
 state in `~/.config/sealant/config.json` (api url, owner user id — defaults `http://localhost:4000`
 / `usr_local` matching the self-host seed). The CLI talks to the control-plane API directly, same
 trust model as the web server. When control-plane API auth lands (API keys/sessions), the CLI grows

@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
@@ -57,7 +57,7 @@ export type ResolvePackageQuery = typeof resolvePackageQuerySchema.Type;
 export const resolvePackageResponseSchema = packageResolutionSchema;
 export type ResolvePackageResponse = typeof resolvePackageResponseSchema.Type;
 
-export class PackagesBadGatewayError extends Schema.TaggedErrorClass<PackagesBadGatewayError>()(
+export class PackagesBadGatewayError extends Schema.TaggedError<PackagesBadGatewayError>()(
   "PackagesBadGatewayError",
   {
     message: Schema.String,
@@ -65,7 +65,7 @@ export class PackagesBadGatewayError extends Schema.TaggedErrorClass<PackagesBad
   { httpApiStatus: 502 },
 ) {}
 
-export class PackagesInternalServerError extends Schema.TaggedErrorClass<PackagesInternalServerError>()(
+export class PackagesInternalServerError extends Schema.TaggedError<PackagesInternalServerError>()(
   "PackagesInternalServerError",
   {
     message: Schema.String,

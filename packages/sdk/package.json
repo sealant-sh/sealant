@@ -42,10 +42,11 @@
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@sealant/typescript": "workspace:*",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "vitest": "catalog:"
   },
   "peerDependencies": {
-    "effect": ">=4.0.0-beta.85 <5"
+    "effect": "^4.0.5"
   },
   "engines": {
     "node": ">=20"

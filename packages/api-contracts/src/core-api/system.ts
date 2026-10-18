@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
@@ -77,7 +77,7 @@ export const setupStateResponseSchema = Schema.Struct({
 });
 export type SetupStateResponse = typeof setupStateResponseSchema.Type;
 
-export class SystemInternalServerError extends Schema.TaggedErrorClass<SystemInternalServerError>()(
+export class SystemInternalServerError extends Schema.TaggedError<SystemInternalServerError>()(
   "SystemInternalServerError",
   {
     message: Schema.String,

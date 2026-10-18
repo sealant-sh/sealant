@@ -26,13 +26,13 @@
   "dependencies": {
     "@effect/sql-pg": "catalog:",
     "@sealant/validators": "workspace:*",
-    "drizzle-orm": "1.0.0-rc.3",
+    "drizzle-orm": "catalog:",
     "effect": "catalog:",
-    "pg": "^8.20.0"
+    "pg": "^8.23.0"
   },
   "devDependencies": {
     "@sealant/typescript": "workspace:*",
     "@types/pg": "^8.20.0",
-    "drizzle-kit": "1.0.0-rc.3"
+    "drizzle-kit": "catalog:"
   }
 }

@@ -1,5 +1,5 @@
 import { Console, Effect, Option } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
+import { Command, Flag } from "effect/cli";
 
 import { ControlPlaneClientService, toApiSettings } from "../api-client.js";
 import { currentSettings } from "../config.js";
@@ -71,15 +71,15 @@ const preflightGitHubToken = (token: string): Effect.Effect<GitHubPreflight, Cli
 export const authGithubCommand = Command.make(
   "github",
   {
-    name: Flag.string("name").pipe(
+    name: Flag.String("name").pipe(
       Flag.withDefault("default"),
       Flag.withDescription("Account name (you can connect multiple GitHub accounts)"),
     ),
-    yes: Flag.boolean("yes").pipe(
+    yes: Flag.Boolean("yes").pipe(
       Flag.withAlias("y"),
       Flag.withDescription("Skip confirmation prompts"),
     ),
-    token: Flag.string("token").pipe(
+    token: Flag.String("token").pipe(
       Flag.optional,
       Flag.withDescription("GitHub token to upload (skips capturing it from `gh auth token`)"),
     ),

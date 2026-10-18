@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
@@ -61,7 +61,7 @@ export const resolveSshPrincipalResponseSchema = Schema.Struct({
 });
 export type ResolveSshPrincipalResponse = typeof resolveSshPrincipalResponseSchema.Type;
 
-export class SshKeyBadRequestError extends Schema.TaggedErrorClass<SshKeyBadRequestError>()(
+export class SshKeyBadRequestError extends Schema.TaggedError<SshKeyBadRequestError>()(
   "SshKeyBadRequestError",
   {
     message: Schema.String,
@@ -69,7 +69,7 @@ export class SshKeyBadRequestError extends Schema.TaggedErrorClass<SshKeyBadRequ
   { httpApiStatus: 400 },
 ) {}
 
-export class SshKeyUnauthorizedError extends Schema.TaggedErrorClass<SshKeyUnauthorizedError>()(
+export class SshKeyUnauthorizedError extends Schema.TaggedError<SshKeyUnauthorizedError>()(
   "SshKeyUnauthorizedError",
   {
     message: Schema.String,
@@ -77,7 +77,7 @@ export class SshKeyUnauthorizedError extends Schema.TaggedErrorClass<SshKeyUnaut
   { httpApiStatus: 401 },
 ) {}
 
-export class SshKeyNotFoundError extends Schema.TaggedErrorClass<SshKeyNotFoundError>()(
+export class SshKeyNotFoundError extends Schema.TaggedError<SshKeyNotFoundError>()(
   "SshKeyNotFoundError",
   {
     message: Schema.String,
@@ -85,7 +85,7 @@ export class SshKeyNotFoundError extends Schema.TaggedErrorClass<SshKeyNotFoundE
   { httpApiStatus: 404 },
 ) {}
 
-export class SshKeyConflictError extends Schema.TaggedErrorClass<SshKeyConflictError>()(
+export class SshKeyConflictError extends Schema.TaggedError<SshKeyConflictError>()(
   "SshKeyConflictError",
   {
     message: Schema.String,
@@ -93,7 +93,7 @@ export class SshKeyConflictError extends Schema.TaggedErrorClass<SshKeyConflictE
   { httpApiStatus: 409 },
 ) {}
 
-export class SshKeyServiceUnavailableError extends Schema.TaggedErrorClass<SshKeyServiceUnavailableError>()(
+export class SshKeyServiceUnavailableError extends Schema.TaggedError<SshKeyServiceUnavailableError>()(
   "SshKeyServiceUnavailableError",
   {
     message: Schema.String,
@@ -101,7 +101,7 @@ export class SshKeyServiceUnavailableError extends Schema.TaggedErrorClass<SshKe
   { httpApiStatus: 503 },
 ) {}
 
-export class SshKeyInternalServerError extends Schema.TaggedErrorClass<SshKeyInternalServerError>()(
+export class SshKeyInternalServerError extends Schema.TaggedError<SshKeyInternalServerError>()(
   "SshKeyInternalServerError",
   {
     message: Schema.String,

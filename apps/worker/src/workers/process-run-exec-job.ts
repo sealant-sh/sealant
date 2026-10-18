@@ -139,7 +139,7 @@ const shellExec = (target: SealantTarget, script: string) =>
  * would start the process as root, so nothing is started. The API checked the executor it saw; this
  * holds when the run reaches another one (a restart in between).
  */
-export class ProcessUserUnavailableError extends Schema.TaggedErrorClass<ProcessUserUnavailableError>()(
+export class ProcessUserUnavailableError extends Schema.TaggedError<ProcessUserUnavailableError>()(
   "ProcessUserUnavailableError",
   { message: Schema.String },
 ) {}

@@ -26,12 +26,13 @@ import {
   HttpClient,
   HttpClientRequest,
   HttpClientResponse,
+  HttpMiddleware,
   HttpRouter,
   HttpServer,
   HttpServerError,
   HttpServerRequest,
-} from "effect/unstable/http";
-import { type HttpApi, HttpApiBuilder, type HttpApiGroup } from "effect/unstable/httpapi";
+} from "effect/http";
+import { type HttpApi, HttpApiBuilder, type HttpApiGroup } from "effect/http-api";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { RequestRefusalLive } from "../routes/request-refusal.js";
@@ -199,9 +200,23 @@ afterEach(async () => {
   disposers = [];
 });
 
-const serve = (app: Layer.Layer<never, never, HttpRouter.HttpRouter>, redacted: boolean) => {
+/**
+ * The request tracer records no headers by default; `headers` turns on recording every request and
+ * response header, as an operator could, so a case shows the redaction holds there too.
+ */
+const serve = (
+  app: Layer.Layer<never, never, HttpRouter.HttpRouter>,
+  redacted: boolean,
+  options?: { readonly headers?: boolean },
+) => {
   const observed = observers(redacted);
-  const { handler, dispose } = HttpRouter.toWebHandler(Layer.mergeAll(app, observed.layer));
+  const headers =
+    options?.headers === true
+      ? Layer.succeed(HttpMiddleware.TracerHeaderFilter, () => true)
+      : Layer.empty;
+  const { handler, dispose } = HttpRouter.toWebHandler(
+    Layer.mergeAll(app, observed.layer, headers),
+  );
   disposers.push(dispose);
   const send = async (path: string, init?: RequestInit) => {
     const response = await handler(new Request(`http://localhost${path}`, init));
@@ -256,7 +271,8 @@ describe("a credential in a request's URL", () => {
     const server = serve(browserRoutes, true);
     expect(await server.send(path)).toBeGreaterThanOrEqual(400);
     const observed = server.lines.join("\n");
-    expect(observed).toContain("span failure");
+    // A 4xx response does not fail the request's span; the error reporter receives the failure.
+    expect(observed).toContain("report ");
     expect(observed).toContain("token=REDACTED");
     expect(observed).not.toContain(MARKER);
 
@@ -280,14 +296,14 @@ describe("a credential in a request header", () => {
       headers: { "content-type": "application/json", "x-sealant-gateway-token": GATEWAY_MARKER },
       body: JSON.stringify(payload),
     });
-    const server = serve(sshApi(), true);
+    const server = serve(sshApi(), true, { headers: true });
     // Authenticated, then no such key.
     expect(await server.send("/v1/ssh-keys/resolve-principal", request())).toBe(404);
     const observed = server.lines.join("\n");
     expect(observed).toContain("http.request.header.x-sealant-gateway-token=REDACTED");
     expect(observed).not.toContain(GATEWAY_MARKER);
 
-    const control = serve(sshApi(), false);
+    const control = serve(sshApi(), false, { headers: true });
     await control.send("/v1/ssh-keys/resolve-principal", request());
     expect(control.lines.join("\n")).toContain(GATEWAY_MARKER);
   });

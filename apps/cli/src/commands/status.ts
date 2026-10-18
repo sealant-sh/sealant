@@ -1,5 +1,5 @@
 import { Console, Effect } from "effect";
-import { Command } from "effect/unstable/cli";
+import { Command } from "effect/cli";
 
 import { ControlPlaneClientService, toApiSettings } from "../api-client.js";
 import { currentSettings } from "../config.js";

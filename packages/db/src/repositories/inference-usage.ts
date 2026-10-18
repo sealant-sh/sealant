@@ -8,7 +8,7 @@ import { Context, Effect, Layer, Schema } from "effect";
 import { SealantDB } from "../client.js";
 import { inferenceUsage } from "../schema/control-plane.js";
 
-export class InferenceUsageRepoError extends Schema.TaggedErrorClass<InferenceUsageRepoError>()(
+export class InferenceUsageRepoError extends Schema.TaggedError<InferenceUsageRepoError>()(
   "InferenceUsageRepoError",
   {
     operation: Schema.String,

@@ -5,7 +5,7 @@ import { Schema } from "effect";
  * limit, `retryAfterSeconds` when there is room again: the rest of a rate window, or an estimate
  * for a concurrency ceiling that only frees when the owner's own work settles.
  */
-export class BudgetExceededError extends Schema.TaggedErrorClass<BudgetExceededError>()(
+export class BudgetExceededError extends Schema.TaggedError<BudgetExceededError>()(
   "BudgetExceededError",
   {
     message: Schema.String,

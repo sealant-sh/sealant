@@ -1,11 +1,5 @@
 import { Schema } from "effect";
-import {
-  HttpApi,
-  HttpApiEndpoint,
-  HttpApiGroup,
-  HttpApiSchema,
-  OpenApi,
-} from "effect/unstable/httpapi";
+import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
 // These literal sets mirror the control-plane DB enums (packages/db `control-plane.ts`). They are
 // INLINED here so the public contract package carries NO @sealant/db dependency — which keeps
@@ -114,7 +108,7 @@ export const githubWebhookResponseSchema = Schema.Struct({
 });
 export type GitHubWebhookResponse = typeof githubWebhookResponseSchema.Type;
 
-export class GitHubBadRequestError extends Schema.TaggedErrorClass<GitHubBadRequestError>()(
+export class GitHubBadRequestError extends Schema.TaggedError<GitHubBadRequestError>()(
   "GitHubBadRequestError",
   {
     message: Schema.String,
@@ -122,7 +116,7 @@ export class GitHubBadRequestError extends Schema.TaggedErrorClass<GitHubBadRequ
   { httpApiStatus: 400 },
 ) {}
 
-export class GitHubUnauthorizedError extends Schema.TaggedErrorClass<GitHubUnauthorizedError>()(
+export class GitHubUnauthorizedError extends Schema.TaggedError<GitHubUnauthorizedError>()(
   "GitHubUnauthorizedError",
   {
     message: Schema.String,
@@ -130,7 +124,7 @@ export class GitHubUnauthorizedError extends Schema.TaggedErrorClass<GitHubUnaut
   { httpApiStatus: 401 },
 ) {}
 
-export class GitHubForbiddenError extends Schema.TaggedErrorClass<GitHubForbiddenError>()(
+export class GitHubForbiddenError extends Schema.TaggedError<GitHubForbiddenError>()(
   "GitHubForbiddenError",
   {
     message: Schema.String,
@@ -138,7 +132,7 @@ export class GitHubForbiddenError extends Schema.TaggedErrorClass<GitHubForbidde
   { httpApiStatus: 403 },
 ) {}
 
-export class GitHubNotFoundError extends Schema.TaggedErrorClass<GitHubNotFoundError>()(
+export class GitHubNotFoundError extends Schema.TaggedError<GitHubNotFoundError>()(
   "GitHubNotFoundError",
   {
     message: Schema.String,
@@ -146,7 +140,7 @@ export class GitHubNotFoundError extends Schema.TaggedErrorClass<GitHubNotFoundE
   { httpApiStatus: 404 },
 ) {}
 
-export class GitHubServiceUnavailableError extends Schema.TaggedErrorClass<GitHubServiceUnavailableError>()(
+export class GitHubServiceUnavailableError extends Schema.TaggedError<GitHubServiceUnavailableError>()(
   "GitHubServiceUnavailableError",
   {
     message: Schema.String,
@@ -154,7 +148,7 @@ export class GitHubServiceUnavailableError extends Schema.TaggedErrorClass<GitHu
   { httpApiStatus: 503 },
 ) {}
 
-export class GitHubInternalServerError extends Schema.TaggedErrorClass<GitHubInternalServerError>()(
+export class GitHubInternalServerError extends Schema.TaggedError<GitHubInternalServerError>()(
   "GitHubInternalServerError",
   {
     message: Schema.String,

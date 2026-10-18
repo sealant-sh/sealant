@@ -1,5 +1,5 @@
 import { Effect, Redacted, type Terminal } from "effect";
-import { Prompt } from "effect/unstable/cli";
+import { Prompt } from "effect/cli";
 
 import { CliFailure } from "./errors.js";
 
@@ -28,7 +28,7 @@ export const confirmStep = (options: {
       }),
     );
   }
-  return Prompt.confirm({ message: options.message });
+  return Prompt.Confirm({ message: options.message });
 };
 
 /** Hidden-input prompt for secrets; the value never echoes to the terminal. */
@@ -43,7 +43,7 @@ export const hiddenInput = (
       }),
     );
   }
-  return Effect.map(Prompt.hidden({ message }), (secret) => Redacted.value(secret).trim());
+  return Effect.map(Prompt.Hidden({ message }), (secret) => Redacted.value(secret).trim());
 };
 
 /** Uniform failure for a declined consent prompt. */
