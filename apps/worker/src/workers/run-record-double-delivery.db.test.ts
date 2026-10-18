@@ -215,6 +215,7 @@ describe.skipIf(DATABASE_URL === undefined)(
           const handle = yield* SealantDB;
           const [stored] = yield* handle.execute<{ n: number }>(
             `SELECT count(*)::int AS n FROM "telemetry_events" WHERE "runtime_id" = '${runtimeId}' AND "run_id" = '${execRunId}'`,
+            "objects",
           );
           return { exitCode, stored: stored?.n ?? 0 };
         }).pipe(Effect.provide(layerFor(daemon.runtime)), Effect.provide(Logger.layer([recorder]))),

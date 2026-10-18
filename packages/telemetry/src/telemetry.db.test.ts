@@ -371,14 +371,18 @@ describe.skipIf(DATABASE_URL === undefined)(
           const exitedEvent = yield* query.getEvent(runId, 4n);
 
           // (g) The secret argument is in no row of any table, in any schema.
-          const tables = yield* handle.execute<{ schema: string; name: string }>(sql`
+          const tables = yield* handle.execute<{ schema: string; name: string }>(
+            sql`
             SELECT table_schema AS schema, table_name AS name FROM information_schema.tables
             WHERE table_type = 'BASE TABLE'
-              AND table_schema NOT IN ('pg_catalog', 'information_schema')`);
+              AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
+            "objects",
+          );
           const tablesHoldingSecret: string[] = [];
           for (const table of tables) {
             const found = yield* handle.execute<{ hit: boolean }>(
               sql`SELECT EXISTS (SELECT 1 FROM ${sql.identifier(table.schema)}.${sql.identifier(table.name)} AS t WHERE t::text LIKE ${`%${SECRET_ARG}%`}) AS hit`,
+              "objects",
             );
             if (found[0]?.hit === true) {
               tablesHoldingSecret.push(`${table.schema}.${table.name}`);

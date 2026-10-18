@@ -48,6 +48,11 @@ catalog:
   clsx: ^2.1.1
   framer-motion: ^12.23.24
   dotenv-cli: ^11.0.0
+  # drizzle-orm and drizzle-kit pinned exactly and together: the 1.0.0-rc.5 preview build (dist-tag
+  # rc5), the first whose Effect driver (drizzle-orm/effect-postgres, behind SealantDB) loads on
+  # Effect 4.0.x; rc.3 and rc.4 use Schema.TaggedErrorClass, which Effect 4.0.0 removed.
+  drizzle-kit: 1.0.0-rc.5-5935859
+  drizzle-orm: 1.0.0-rc.5-5935859
   effect: 4.0.5
   jsdom: ^28.1.0
   lucide-react: ^0.545.0
@@ -91,11 +96,3 @@ onlyBuiltDependencies:
 # re-resolves at build time; the override keeps a lockfile regenerated from scratch on the same line.
 overrides:
   "@effect/platform-node-shared": "catalog:"
-
-# drizzle-orm 1.0.0-rc.3's Effect driver (drizzle-orm/effect-postgres, behind SealantDB) declares its
-# errors with Schema.TaggedErrorClass and its effect-schema checks with Schema.isLengthBetween; Effect
-# 4.0.0 renamed them to Schema.TaggedError and Schema.isBetweenLength, so the unpatched driver throws
-# on import. The patch renames the six call sites in the built JS and nothing else. drizzle-orm's
-# rc.5 builds (dist-tag rc5) carry the same renames; drop the patch with the move to one of them.
-patchedDependencies:
-  drizzle-orm@1.0.0-rc.3: patches/drizzle-orm@1.0.0-rc.3.patch

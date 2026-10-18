@@ -61,13 +61,17 @@ const runMigration = (statements: readonly string[]) =>
 const tablesHolding = (needle: string) =>
   Effect.gen(function* () {
     const handle = yield* SealantDB;
-    const tables = yield* handle.execute<{ schema: string; name: string }>(sql`
+    const tables = yield* handle.execute<{ schema: string; name: string }>(
+      sql`
       SELECT table_schema AS schema, table_name AS name FROM information_schema.tables
-      WHERE table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')`);
+      WHERE table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
+      "objects",
+    );
     const holding: string[] = [];
     for (const table of tables) {
       const found = yield* handle.execute<{ hit: boolean }>(
         sql`SELECT EXISTS (SELECT 1 FROM ${sql.identifier(table.schema)}.${sql.identifier(table.name)} AS t WHERE t::text LIKE ${`%${needle}%`}) AS hit`,
+        "objects",
       );
       if (found[0]?.hit === true) holding.push(`${table.schema}.${table.name}`);
     }
@@ -324,6 +328,7 @@ describe.skipIf(DATABASE_URL === undefined)("the process-arguments purge (Postgr
         const handle = yield* SealantDB;
         return yield* handle.execute<{ target: string; rows: string }>(
           sql`SELECT * FROM sealant_purge_stored_arguments()`,
+          "objects",
         );
       }),
     );

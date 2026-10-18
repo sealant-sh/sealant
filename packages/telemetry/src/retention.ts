@@ -82,7 +82,8 @@ export const deleteExpiredRunRecords = (db: TSealantDB, options: DeleteExpiredRu
             break;
           }
           const limit = Math.min(chunkRows, maxRows - deletedRows);
-          const [result] = yield* db.execute<{ deleted: number }>(sql`
+          const [result] = yield* db.execute<{ deleted: number }>(
+            sql`
             WITH "doomed" AS (
               SELECT ctid FROM ${sql.identifier(table)}
               WHERE "run_id" = ${expired.id}
@@ -92,7 +93,9 @@ export const deleteExpiredRunRecords = (db: TSealantDB, options: DeleteExpiredRu
               WHERE ctid IN (SELECT ctid FROM "doomed")
               RETURNING 1
             )
-            SELECT count(*)::int AS "deleted" FROM "deleted"`);
+            SELECT count(*)::int AS "deleted" FROM "deleted"`,
+            "objects",
+          );
           const deleted = result?.deleted ?? 0;
           deletedRows += deleted;
           if (deleted < limit) {

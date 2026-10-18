@@ -178,6 +178,7 @@ export const makeWorkspaceCredentialHomeRepoLayer = (options: {
                 "nextFence",
                 tx.execute<{ readonly fence: string }>(
                   sql`select nextval(${"workspace_credential_home_fences"}::regclass)::text as fence`,
+                  "objects",
                 ),
               ).pipe(
                 Effect.flatMap(([row]) =>

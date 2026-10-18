@@ -230,6 +230,7 @@ describe.skipIf(DATABASE_URL === undefined)("appendBatch re-delivery (real Postg
             `SELECT count(*)::int AS n FROM pg_stat_activity
               WHERE datname = current_database() AND wait_event_type = 'Lock'
                 AND query LIKE 'insert into "telemetry_events"%'`,
+            "objects",
           )
           .pipe(
             Effect.flatMap(([row]) =>
