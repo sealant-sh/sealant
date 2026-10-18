@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
@@ -87,7 +87,7 @@ export const markConnectedAccountInvalidRequestSchema = Schema.Struct({
 export type MarkConnectedAccountInvalidRequest =
   typeof markConnectedAccountInvalidRequestSchema.Type;
 
-export class ConnectedAccountBadRequestError extends Schema.TaggedErrorClass<ConnectedAccountBadRequestError>()(
+export class ConnectedAccountBadRequestError extends Schema.TaggedError<ConnectedAccountBadRequestError>()(
   "ConnectedAccountBadRequestError",
   {
     message: Schema.String,
@@ -95,7 +95,7 @@ export class ConnectedAccountBadRequestError extends Schema.TaggedErrorClass<Con
   { httpApiStatus: 400 },
 ) {}
 
-export class ConnectedAccountNotFoundError extends Schema.TaggedErrorClass<ConnectedAccountNotFoundError>()(
+export class ConnectedAccountNotFoundError extends Schema.TaggedError<ConnectedAccountNotFoundError>()(
   "ConnectedAccountNotFoundError",
   {
     message: Schema.String,
@@ -103,7 +103,7 @@ export class ConnectedAccountNotFoundError extends Schema.TaggedErrorClass<Conne
   { httpApiStatus: 404 },
 ) {}
 
-export class ConnectedAccountConflictError extends Schema.TaggedErrorClass<ConnectedAccountConflictError>()(
+export class ConnectedAccountConflictError extends Schema.TaggedError<ConnectedAccountConflictError>()(
   "ConnectedAccountConflictError",
   {
     message: Schema.String,
@@ -111,7 +111,7 @@ export class ConnectedAccountConflictError extends Schema.TaggedErrorClass<Conne
   { httpApiStatus: 409 },
 ) {}
 
-export class ConnectedAccountServiceUnavailableError extends Schema.TaggedErrorClass<ConnectedAccountServiceUnavailableError>()(
+export class ConnectedAccountServiceUnavailableError extends Schema.TaggedError<ConnectedAccountServiceUnavailableError>()(
   "ConnectedAccountServiceUnavailableError",
   {
     message: Schema.String,
@@ -119,7 +119,7 @@ export class ConnectedAccountServiceUnavailableError extends Schema.TaggedErrorC
   { httpApiStatus: 503 },
 ) {}
 
-export class ConnectedAccountInternalServerError extends Schema.TaggedErrorClass<ConnectedAccountInternalServerError>()(
+export class ConnectedAccountInternalServerError extends Schema.TaggedError<ConnectedAccountInternalServerError>()(
   "ConnectedAccountInternalServerError",
   {
     message: Schema.String,

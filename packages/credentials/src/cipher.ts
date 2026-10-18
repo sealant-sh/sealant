@@ -15,7 +15,7 @@ const credentialCipherOperationSchema = Schema.Literals(["configure", "encrypt",
 
 export type CredentialCipherOperation = typeof credentialCipherOperationSchema.Type;
 
-export class CredentialCipherError extends Schema.TaggedErrorClass<CredentialCipherError>()(
+export class CredentialCipherError extends Schema.TaggedError<CredentialCipherError>()(
   "CredentialCipherError",
   {
     operation: credentialCipherOperationSchema,

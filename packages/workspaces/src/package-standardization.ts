@@ -550,7 +550,7 @@ export const createRepologyClient = (options: RepologyClientOptions): RepologyCl
 };
 
 /** Failure raised when an upstream (Repology) lookup cannot be completed. */
-export class PackageResolutionError extends Schema.TaggedErrorClass<PackageResolutionError>()(
+export class PackageResolutionError extends Schema.TaggedError<PackageResolutionError>()(
   "PackageResolutionError",
   {
     message: Schema.String,

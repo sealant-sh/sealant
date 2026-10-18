@@ -33,7 +33,7 @@ const accessTokenRepoOperationSchema = Schema.Literals([
 
 type AccessTokenRepoOperation = typeof accessTokenRepoOperationSchema.Type;
 
-export class AccessTokenRepoInvariantError extends Schema.TaggedErrorClass<AccessTokenRepoInvariantError>()(
+export class AccessTokenRepoInvariantError extends Schema.TaggedError<AccessTokenRepoInvariantError>()(
   "AccessTokenRepoInvariantError",
   {
     operation: accessTokenRepoOperationSchema,
@@ -41,7 +41,7 @@ export class AccessTokenRepoInvariantError extends Schema.TaggedErrorClass<Acces
   },
 ) {}
 
-export class AccessTokenRepoUnexpectedError extends Schema.TaggedErrorClass<AccessTokenRepoUnexpectedError>()(
+export class AccessTokenRepoUnexpectedError extends Schema.TaggedError<AccessTokenRepoUnexpectedError>()(
   "AccessTokenRepoUnexpectedError",
   {
     operation: accessTokenRepoOperationSchema,

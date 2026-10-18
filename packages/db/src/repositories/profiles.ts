@@ -112,7 +112,7 @@ const profileRepoOperationSchema = Schema.Literals([
   "setActiveProfileRevision",
 ]);
 
-export class ProfileRepoInvariantError extends Schema.TaggedErrorClass<ProfileRepoInvariantError>()(
+export class ProfileRepoInvariantError extends Schema.TaggedError<ProfileRepoInvariantError>()(
   "ProfileRepoInvariantError",
   {
     operation: profileRepoOperationSchema,
@@ -120,7 +120,7 @@ export class ProfileRepoInvariantError extends Schema.TaggedErrorClass<ProfileRe
   },
 ) {}
 
-export class ProfileRepoUnexpectedError extends Schema.TaggedErrorClass<ProfileRepoUnexpectedError>()(
+export class ProfileRepoUnexpectedError extends Schema.TaggedError<ProfileRepoUnexpectedError>()(
   "ProfileRepoUnexpectedError",
   {
     operation: profileRepoOperationSchema,

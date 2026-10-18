@@ -10,7 +10,7 @@
  * so values past 2^53 survive; the SDK and API layer convert to/from `bigint`.
  */
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
 import { BudgetExceededError } from "./budgets.js";
 
@@ -289,19 +289,19 @@ export type RunChangesResponse = typeof runChangesResponseSchema.Type;
 // Errors
 // ---------------------------------------------------------------------------------------------
 
-export class RunBadRequestError extends Schema.TaggedErrorClass<RunBadRequestError>()(
+export class RunBadRequestError extends Schema.TaggedError<RunBadRequestError>()(
   "RunBadRequestError",
   { message: Schema.String },
   { httpApiStatus: 400 },
 ) {}
 
-export class RunNotFoundError extends Schema.TaggedErrorClass<RunNotFoundError>()(
+export class RunNotFoundError extends Schema.TaggedError<RunNotFoundError>()(
   "RunNotFoundError",
   { message: Schema.String },
   { httpApiStatus: 404 },
 ) {}
 
-export class RunInternalServerError extends Schema.TaggedErrorClass<RunInternalServerError>()(
+export class RunInternalServerError extends Schema.TaggedError<RunInternalServerError>()(
   "RunInternalServerError",
   { message: Schema.String },
   { httpApiStatus: 500 },

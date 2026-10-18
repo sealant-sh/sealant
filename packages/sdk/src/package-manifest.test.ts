@@ -15,7 +15,7 @@ describe("published Effect dependency contract", () => {
 
     for (const manifest of [sdkManifest, contractsManifest]) {
       expect(manifest).toMatchObject({
-        peerDependencies: { effect: ">=4.0.0-beta.85 <5" },
+        peerDependencies: { effect: "^4.0.5" },
         devDependencies: { effect: "catalog:" },
       });
       expect(manifest).not.toMatchObject({

@@ -1,6 +1,6 @@
 import { ControlPlaneAPI } from "@sealant/api-contracts";
 import { Layer } from "effect";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpApiBuilder } from "effect/http-api";
 
 import { RequestRefusalLive } from "../request-refusal.js";
 import {

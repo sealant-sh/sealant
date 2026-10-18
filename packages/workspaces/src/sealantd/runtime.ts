@@ -156,14 +156,14 @@ export type SealantForwardHost = "127.0.0.1" | "localhost" | "docker";
 export type SealantForwardProtocol = "tcp" | "udp";
 
 /** Failure opening/holding the underlying transport (spawn failure, child exit, stream error). */
-export class TransportError extends Schema.TaggedErrorClass<TransportError>()("TransportError", {
+export class TransportError extends Schema.TaggedError<TransportError>()("TransportError", {
   operation: sealantOperationSchema,
   message: Schema.String,
   cause: Schema.Defect(),
 }) {}
 
 /** A typed control error returned by the daemon (wraps the SDK's `SealantError`). */
-export class SealantControlError extends Schema.TaggedErrorClass<SealantControlError>()(
+export class SealantControlError extends Schema.TaggedError<SealantControlError>()(
   "SealantControlError",
   {
     operation: sealantOperationSchema,
@@ -175,7 +175,7 @@ export class SealantControlError extends Schema.TaggedErrorClass<SealantControlE
 ) {}
 
 /** Any other unexpected defect crossing the SDK boundary, kept on the typed channel. */
-export class SealantUnexpectedError extends Schema.TaggedErrorClass<SealantUnexpectedError>()(
+export class SealantUnexpectedError extends Schema.TaggedError<SealantUnexpectedError>()(
   "SealantUnexpectedError",
   {
     operation: sealantOperationSchema,

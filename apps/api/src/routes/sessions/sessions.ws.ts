@@ -28,9 +28,9 @@ import {
   SessionUnauthorizedError,
 } from "@sealant/api-contracts";
 import { SealantRuntime } from "@sealant/workspaces";
-import { Effect, Fiber } from "effect";
-import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
-import { Socket } from "effect/unstable/socket";
+import { Effect, Fiber, FiberSet } from "effect";
+import { HttpRouter, HttpServerResponse } from "effect/http";
+import { Socket } from "effect/socket";
 
 import { authorize, requireSession, resolveDaemonTarget } from "./sessions.module.js";
 
@@ -122,11 +122,11 @@ export const SessionAttachRoute = HttpRouter.add(
           const socket = yield* request.upgrade;
           const daemon = yield* runtime.connect(target);
           const channel = yield* daemon.attachSession(daemonSessionId, { fromSequence: from });
-          const write = yield* socket.writer;
+          const { write } = yield* socket.writer;
 
           // Daemon → client: drain the reliable channel into binary WS frames.
           // On channel end (session settled or daemon gone) send the terminal
-          // text frame and close the socket, which completes `runRaw` below.
+          // text frame and close the socket, which ends the read loop below.
           const iterator = channel[Symbol.asyncIterator]();
           const pumpOutput = Effect.gen(function* () {
             for (;;) {
@@ -143,29 +143,38 @@ export const SessionAttachRoute = HttpRouter.add(
 
           // Client → server: binary = PTY input on the HELD connection; text =
           // control JSON. Completes when either side closes the socket.
-          yield* socket
-            .runRaw((data) => {
-              if (typeof data !== "string") {
-                return daemon.writeSessionInput(daemonSessionId, data).pipe(Effect.ignore);
-              }
-              let frame: ControlFrame;
-              try {
-                frame = JSON.parse(data) as ControlFrame;
-              } catch {
-                return Effect.void;
-              }
-              if (
-                frame.t === "resize" &&
-                typeof frame.cols === "number" &&
-                typeof frame.rows === "number"
-              ) {
-                return daemon
-                  .resizePty(daemonSessionId, frame.cols, frame.rows)
-                  .pipe(Effect.ignore);
-              }
+          const { pull } = yield* socket.reader;
+          const onFrame = (data: string | Uint8Array): Effect.Effect<void> => {
+            if (typeof data !== "string") {
+              return daemon.writeSessionInput(daemonSessionId, data).pipe(Effect.ignore);
+            }
+            let frame: ControlFrame;
+            try {
+              frame = JSON.parse(data) as ControlFrame;
+            } catch {
               return Effect.void;
-            })
-            .pipe(Effect.ignore);
+            }
+            if (
+              frame.t === "resize" &&
+              typeof frame.cols === "number" &&
+              typeof frame.rows === "number"
+            ) {
+              return daemon.resizePty(daemonSessionId, frame.cols, frame.rows).pipe(Effect.ignore);
+            }
+            return Effect.void;
+          };
+          // A frame's daemon call runs on its own fiber, started in frame order, so a slow
+          // round trip never holds back the frames behind it. Every close, clean or not, fails
+          // the pull, which ends the loop.
+          const inFlight = yield* FiberSet.make();
+          const runFrame = FiberSet.run(inFlight, { startImmediately: true });
+          yield* pull.pipe(
+            Effect.flatMap((frames) =>
+              Effect.forEach(frames, (data) => runFrame(onFrame(data)), { discard: true }),
+            ),
+            Effect.forever,
+            Effect.ignore,
+          );
           yield* Fiber.interrupt(outputFiber);
         }),
       );

@@ -212,13 +212,14 @@ describe.skipIf(DATABASE_URL === undefined)("the process-arguments purge (Postgr
         yield* handle
           .insert(workspaces)
           .values({ id: workspaceId, ownerUserId: userId, createdAt: now, updatedAt: now });
-        // The database as it was before the migration: no triggers.
-        yield* handle.execute(
-          sql.raw(`DROP TRIGGER IF EXISTS "telemetry_events_withhold_process_args" ON "telemetry_events";
-            DROP TRIGGER IF EXISTS "telemetry_timeline_withhold_process_args" ON "telemetry_timeline";
-            DROP TRIGGER IF EXISTS "runs_withhold_command_args" ON "runs";
-            DROP TRIGGER IF EXISTS "workspace_sessions_withhold_args" ON "workspace_sessions"`),
-        );
+        // The database as it was before the migration: no triggers. One statement per query: the
+        // driver prepares every query, and Postgres prepares a single command.
+        yield* runMigration([
+          `DROP TRIGGER IF EXISTS "telemetry_events_withhold_process_args" ON "telemetry_events"`,
+          `DROP TRIGGER IF EXISTS "telemetry_timeline_withhold_process_args" ON "telemetry_timeline"`,
+          `DROP TRIGGER IF EXISTS "runs_withhold_command_args" ON "runs"`,
+          `DROP TRIGGER IF EXISTS "workspace_sessions_withhold_args" ON "workspace_sessions"`,
+        ]);
         yield* handle.insert(runs).values([
           {
             id: runId,

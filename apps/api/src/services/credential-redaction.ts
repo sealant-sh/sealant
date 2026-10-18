@@ -5,8 +5,8 @@
  * Credentials travel where Effect's HTTP layer records them. Browser WebSocket and EventSource
  * clients cannot set headers, so the terminal attach, the output stream and the port forward take
  * their bearer as `?token=`. The request tracer records every request's URL (`url.full`,
- * `url.query`) and headers (`http.request.header.*`), and the HTTP client does the same for every
- * outgoing request. An HTTP error quotes its request's URL in its message and holds the live request
+ * `url.query`), and its headers (`http.request.header.*`) once a `TracerHeaderFilter` opts them in;
+ * the HTTP client does the same for every outgoing request. An HTTP error quotes its request's URL in its message and holds the live request
  * (`reason.request`), whose URL and headers carry the credential. The SSH gateway's
  * `x-sealant-gateway-token` header is outside Effect's default redacted names.
  *
@@ -46,7 +46,7 @@ import {
   HttpServerRequest,
   HttpServerResponse,
   UrlParams,
-} from "effect/unstable/http";
+} from "effect/http";
 
 const REDACTED = "REDACTED";
 const REDACTION_FAILED = "[redacted: the redaction itself failed]";

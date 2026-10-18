@@ -9,7 +9,7 @@ import { InlineByteaArtifactStoreLive, TelemetryQueryLive } from "@sealant/telem
 import { urlForDisplay } from "@sealant/validators/url-for-display";
 import { SealantRuntimeControlLive } from "@sealant/workspaces";
 import { Effect, Layer, Redacted } from "effect";
-import { HttpMiddleware, HttpRouter, HttpServerResponse } from "effect/unstable/http";
+import { HttpMiddleware, HttpRouter, HttpServerResponse } from "effect/http";
 
 import { makeControlPlaneHttpApiLayer } from "./routes/control-plane.http-api.js";
 import { InferenceEngineLive } from "./routes/inference/claude-engine.js";
@@ -171,7 +171,7 @@ const apiLayer = makeControlPlaneHttpApiLayer().pipe(
  * Serves a Scalar API reference at `/docs` for the same `/openapi.json` the contract already
  * publishes. Deliberately not `HttpApiScalar.layer`: that module carries the 6 MiB Scalar
  * browser bundle as a string constant, and because it is reached through the
- * `effect/unstable/httpapi` namespace it survives tree-shaking even when only the CDN variant is
+ * `effect/http-api` namespace it survives tree-shaking even when only the CDN variant is
  * used, so every API process would keep it resident for a page almost nobody opens. The viewer
  * loads from jsDelivr instead.
  */

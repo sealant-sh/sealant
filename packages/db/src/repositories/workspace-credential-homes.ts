@@ -8,7 +8,7 @@
  */
 import { and, eq, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
-import { SqlError } from "effect/unstable/sql/SqlError";
+import { SqlError } from "effect/sql/SqlError";
 
 import { SealantDB } from "../client.js";
 import {
@@ -19,7 +19,7 @@ import {
   type WorkspaceRuntimeInstance,
 } from "../schema/workspace-build-jobs.js";
 
-export class WorkspaceCredentialHomeRepoError extends Schema.TaggedErrorClass<WorkspaceCredentialHomeRepoError>()(
+export class WorkspaceCredentialHomeRepoError extends Schema.TaggedError<WorkspaceCredentialHomeRepoError>()(
   "WorkspaceCredentialHomeRepoError",
   {
     operation: Schema.String,
@@ -32,7 +32,7 @@ export class WorkspaceCredentialHomeRepoError extends Schema.TaggedErrorClass<Wo
  * Another write into the same home held it past the wait (`lock_timeout`): nothing was done, and
  * trying again is safe.
  */
-export class WorkspaceCredentialHomeBusyError extends Schema.TaggedErrorClass<WorkspaceCredentialHomeBusyError>()(
+export class WorkspaceCredentialHomeBusyError extends Schema.TaggedError<WorkspaceCredentialHomeBusyError>()(
   "WorkspaceCredentialHomeBusyError",
   {
     message: Schema.String,

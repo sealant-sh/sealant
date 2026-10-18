@@ -47,7 +47,7 @@ const workspaceCaptureDrainRepoOperationSchema = Schema.Literals([
 
 type WorkspaceCaptureDrainRepoOperation = typeof workspaceCaptureDrainRepoOperationSchema.Type;
 
-export class WorkspaceCaptureDrainRepoUnexpectedError extends Schema.TaggedErrorClass<WorkspaceCaptureDrainRepoUnexpectedError>()(
+export class WorkspaceCaptureDrainRepoUnexpectedError extends Schema.TaggedError<WorkspaceCaptureDrainRepoUnexpectedError>()(
   "WorkspaceCaptureDrainRepoUnexpectedError",
   {
     operation: workspaceCaptureDrainRepoOperationSchema,

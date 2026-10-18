@@ -1,8 +1,8 @@
 /**
  * `RequestRefusal` (see its contract, `@sealant/api-contracts` `request-refusal.ts`), applied to every
  * control plane route: a request the contract cannot decode answers `400` `RequestRefusedError` with
- * a value-free reason, and Effect's decode failure, which quotes the rejected input, goes no further.
- * The request log, every `ErrorReporter` and the request's tracing span see only the refusal.
+ * a value-free reason, and Effect's decode failure goes no further. The request log, every
+ * `ErrorReporter` and the request's tracing span see only the refusal.
  */
 import {
   describeRequestIssue,
@@ -11,9 +11,9 @@ import {
   RequestRefusedError,
 } from "@sealant/api-contracts";
 import { Cause, Effect, Layer } from "effect";
+import { HttpServerRequest } from "effect/http";
+import { HttpApiError, type HttpApiEndpoint } from "effect/http-api";
 import type { unhandled } from "effect/Types";
-import { HttpServerRequest } from "effect/unstable/http";
-import { HttpApiError, type HttpApiEndpoint } from "effect/unstable/httpapi";
 
 const { HttpApiSchemaError } = HttpApiError;
 
@@ -23,6 +23,7 @@ const PART: Record<HttpApiError.HttpApiSchemaError["kind"], string> = {
   Query: "query",
   Headers: "headers",
   Body: "response",
+  ResponseHeaders: "response headers",
 };
 
 const isJsonText = (text: string): boolean => {
@@ -43,7 +44,7 @@ const mediaTypeOf = (request: HttpServerRequest.HttpServerRequest): string => {
 
 /** Whether HttpApi decodes this request's body as JSON for `endpoint` (not text, form or bytes). */
 const decodesJson = (
-  endpoint: HttpApiEndpoint.AnyWithProps,
+  endpoint: HttpApiEndpoint.Top,
   request: HttpServerRequest.HttpServerRequest,
 ): boolean => {
   const entry = endpoint.payload.get(mediaTypeOf(request));
@@ -53,15 +54,13 @@ const decodesJson = (
 };
 
 /**
- * Whether a `SyntaxError` defect is HttpApi's own parse of this request's body. HttpApi parses a
- * JSON payload with `JSON.parse` outside its error channel, before the handler runs, so a malformed
- * body is a defect quoting part of it. It is that parse only when the endpoint decodes this media
- * type as JSON and the body, read again from the request's cache, is not JSON: such a request never
- * reaches its handler. Anything else (a text payload such as GitHub's webhook, a handler's or an
- * encoder's own `SyntaxError`) stays the server's failure, a reported 500. Read only on this
- * failure path, so a request that decodes pays nothing.
+ * Whether a `Payload` decode failure is a body that is not JSON at all. HttpApi parses a JSON
+ * payload itself and reports a body that does not parse as a schema issue in its own words
+ * ("Expected a valid JSON body"). It is that parse only when the endpoint decodes this media type as
+ * JSON and the body, read again from the request's cache, is not JSON. Read only on this failure
+ * path, so a request that decodes pays nothing.
  */
-const isBodyParseFailure = (endpoint: HttpApiEndpoint.AnyWithProps) =>
+const isBodyParseFailure = (endpoint: HttpApiEndpoint.Top) =>
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
     if (!decodesJson(endpoint, request)) return false;
@@ -70,21 +69,18 @@ const isBodyParseFailure = (endpoint: HttpApiEndpoint.AnyWithProps) =>
   });
 
 /** A value-free reason for a decode failure in `cause`, or `undefined` for any other failure. */
-const refusalOf = (cause: Cause.Cause<unknown>, endpoint: HttpApiEndpoint.AnyWithProps) =>
+const refusalOf = (cause: Cause.Cause<unknown>, endpoint: HttpApiEndpoint.Top) =>
   Effect.gen(function* () {
     for (const reason of cause.reasons) {
       if (Cause.isFailReason(reason) && HttpApiSchemaError.is(reason.error)) {
         const { kind, cause: schemaError } = reason.error;
-        // `Body` is the response failing to encode: the server's fault, not the request's.
-        if (kind === "Body") return undefined;
+        // `Body` and `ResponseHeaders` are the response failing to encode: the server's fault, not
+        // the request's.
+        if (kind === "Body" || kind === "ResponseHeaders") return undefined;
+        if (kind === "Payload" && (yield* isBodyParseFailure(endpoint))) {
+          return REQUEST_BODY_NOT_JSON;
+        }
         return describeRequestIssue(PART[kind], schemaError.issue);
-      }
-      if (
-        Cause.isDieReason(reason) &&
-        reason.defect instanceof SyntaxError &&
-        (yield* isBodyParseFailure(endpoint))
-      ) {
-        return REQUEST_BODY_NOT_JSON;
       }
     }
     return undefined;

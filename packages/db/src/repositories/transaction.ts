@@ -1,9 +1,9 @@
 import { Context, Effect, Layer, Schema } from "effect";
-import { SqlError } from "effect/unstable/sql/SqlError";
+import { SqlError } from "effect/sql/SqlError";
 
 import { SealantDB } from "../client.js";
 
-export class DatabaseTransactionError extends Schema.TaggedErrorClass<DatabaseTransactionError>()(
+export class DatabaseTransactionError extends Schema.TaggedError<DatabaseTransactionError>()(
   "DatabaseTransactionError",
   {
     message: Schema.String,

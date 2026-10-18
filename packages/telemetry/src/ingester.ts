@@ -145,9 +145,10 @@ export const makeTelemetryIngester = (
                 .appendBatch({ runId, runtimeId, batch: attributeBatch(normalized, resolutions) })
                 .pipe(
                   Effect.retry({
-                    schedule: Schedule.exponential("100 millis").pipe(
-                      Schedule.both(Schedule.recurs(5)),
-                    ),
+                    schedule: Schedule.max([
+                      Schedule.exponential("100 millis"),
+                      Schedule.recurs(5),
+                    ]),
                     while: (error) => !(error instanceof TelemetrySinkConflictError),
                   }),
                   Effect.catchTag("TelemetrySinkConflictError", () => Effect.succeed([])),
@@ -182,7 +183,7 @@ export const TelemetryIngesterLive = Layer.effect(
     const runtime = yield* SealantRuntime;
     const sink = yield* TelemetrySink;
     const resolver = yield* ExecutionRunResolver;
-    const runOutputBudgetBytes = yield* Config.int("SEALANT_BUDGET_RUN_OUTPUT_BYTES").pipe(
+    const runOutputBudgetBytes = yield* Config.Int("SEALANT_BUDGET_RUN_OUTPUT_BYTES").pipe(
       Config.withDefault(DEFAULT_RUN_OUTPUT_BUDGET_BYTES),
       Effect.orDie,
     );

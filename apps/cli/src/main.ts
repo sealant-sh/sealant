@@ -1,6 +1,6 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Effect, Layer } from "effect";
-import { CliError, Command } from "effect/unstable/cli";
+import { CliError, Command } from "effect/cli";
 
 import packageJson from "../package.json" with { type: "json" };
 import { ControlPlaneClientLive } from "./api-client.js";

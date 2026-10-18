@@ -7,7 +7,7 @@
  * then on. Sign-in credentials are never part of this surface — better-auth (web) owns those.
  */
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
@@ -60,7 +60,7 @@ export type BindUserPersonResponse = typeof bindUserPersonResponseSchema.Type;
  * (`person-binding-differs`), or the person id or uid is another user's (`person-taken`). A
  * binding is never changed through the API; the answer names no other user's values.
  */
-export class UserPersonConflictError extends Schema.TaggedErrorClass<UserPersonConflictError>()(
+export class UserPersonConflictError extends Schema.TaggedError<UserPersonConflictError>()(
   "UserPersonConflictError",
   {
     message: Schema.String,
@@ -69,19 +69,19 @@ export class UserPersonConflictError extends Schema.TaggedErrorClass<UserPersonC
   { httpApiStatus: 409 },
 ) {}
 
-export class UserBadRequestError extends Schema.TaggedErrorClass<UserBadRequestError>()(
+export class UserBadRequestError extends Schema.TaggedError<UserBadRequestError>()(
   "UserBadRequestError",
   { message: Schema.String },
   { httpApiStatus: 400 },
 ) {}
 
-export class UserNotFoundError extends Schema.TaggedErrorClass<UserNotFoundError>()(
+export class UserNotFoundError extends Schema.TaggedError<UserNotFoundError>()(
   "UserNotFoundError",
   { message: Schema.String },
   { httpApiStatus: 404 },
 ) {}
 
-export class UserInternalServerError extends Schema.TaggedErrorClass<UserInternalServerError>()(
+export class UserInternalServerError extends Schema.TaggedError<UserInternalServerError>()(
   "UserInternalServerError",
   { message: Schema.String },
   { httpApiStatus: 500 },

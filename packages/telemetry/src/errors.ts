@@ -1,7 +1,7 @@
 /**
  * Typed error channel for @sealant/telemetry. Mirrors the repo idiom exactly
  * (packages/workspaces/src/sealantd/runtime.ts, packages/db/src/repositories/*): one
- * `Schema.Literals` operation set + an Invariant/Unexpected `Schema.TaggedErrorClass` pair per
+ * `Schema.Literals` operation set + an Invariant/Unexpected `Schema.TaggedError` pair per
  * service, a `Schema.Union` error type, and a `map*`/`with*` funnel so no raw defect escapes.
  */
 import { Effect, Schema } from "effect";
@@ -39,12 +39,12 @@ const telemetrySinkOperation = Schema.Literals([
 ]);
 export type TelemetrySinkOperation = typeof telemetrySinkOperation.Type;
 
-export class TelemetrySinkInvariantError extends Schema.TaggedErrorClass<TelemetrySinkInvariantError>()(
+export class TelemetrySinkInvariantError extends Schema.TaggedError<TelemetrySinkInvariantError>()(
   "TelemetrySinkInvariantError",
   { operation: telemetrySinkOperation, message: Schema.String },
 ) {}
 
-export class TelemetrySinkUnexpectedError extends Schema.TaggedErrorClass<TelemetrySinkUnexpectedError>()(
+export class TelemetrySinkUnexpectedError extends Schema.TaggedError<TelemetrySinkUnexpectedError>()(
   "TelemetrySinkUnexpectedError",
   { operation: telemetrySinkOperation, message: Schema.String, cause: Schema.Defect() },
 ) {}
@@ -54,7 +54,7 @@ export class TelemetrySinkUnexpectedError extends Schema.TaggedErrorClass<Teleme
  * content, or a run-tagged event stored under another run). The log keeps what it has; the append
  * fails, so no writer takes the event as recorded.
  */
-export class TelemetrySinkConflictError extends Schema.TaggedErrorClass<TelemetrySinkConflictError>()(
+export class TelemetrySinkConflictError extends Schema.TaggedError<TelemetrySinkConflictError>()(
   "TelemetrySinkConflictError",
   {
     operation: telemetrySinkOperation,
@@ -101,12 +101,12 @@ export const withTelemetrySinkError = <A, R>(
 const artifactStoreOperation = Schema.Literals(["put", "get"]);
 export type ArtifactStoreOperation = typeof artifactStoreOperation.Type;
 
-export class ArtifactStoreInvariantError extends Schema.TaggedErrorClass<ArtifactStoreInvariantError>()(
+export class ArtifactStoreInvariantError extends Schema.TaggedError<ArtifactStoreInvariantError>()(
   "ArtifactStoreInvariantError",
   { operation: artifactStoreOperation, message: Schema.String },
 ) {}
 
-export class ArtifactStoreUnexpectedError extends Schema.TaggedErrorClass<ArtifactStoreUnexpectedError>()(
+export class ArtifactStoreUnexpectedError extends Schema.TaggedError<ArtifactStoreUnexpectedError>()(
   "ArtifactStoreUnexpectedError",
   { operation: artifactStoreOperation, message: Schema.String, cause: Schema.Defect() },
 ) {}
@@ -147,7 +147,7 @@ export const withArtifactStoreError = <A, R>(
 const telemetryProjectorOperation = Schema.Literals(["rebuild"]);
 export type TelemetryProjectorOperation = typeof telemetryProjectorOperation.Type;
 
-export class TelemetryProjectorUnexpectedError extends Schema.TaggedErrorClass<TelemetryProjectorUnexpectedError>()(
+export class TelemetryProjectorUnexpectedError extends Schema.TaggedError<TelemetryProjectorUnexpectedError>()(
   "TelemetryProjectorUnexpectedError",
   { operation: telemetryProjectorOperation, message: Schema.String, cause: Schema.Defect() },
 ) {}
@@ -189,17 +189,17 @@ const telemetryQueryOperation = Schema.Literals([
 ]);
 export type TelemetryQueryOperation = typeof telemetryQueryOperation.Type;
 
-export class TelemetryQueryInvariantError extends Schema.TaggedErrorClass<TelemetryQueryInvariantError>()(
+export class TelemetryQueryInvariantError extends Schema.TaggedError<TelemetryQueryInvariantError>()(
   "TelemetryQueryInvariantError",
   { operation: telemetryQueryOperation, message: Schema.String },
 ) {}
 
-export class TelemetryQueryUnexpectedError extends Schema.TaggedErrorClass<TelemetryQueryUnexpectedError>()(
+export class TelemetryQueryUnexpectedError extends Schema.TaggedError<TelemetryQueryUnexpectedError>()(
   "TelemetryQueryUnexpectedError",
   { operation: telemetryQueryOperation, message: Schema.String, cause: Schema.Defect() },
 ) {}
 
-export class TelemetryQueryUnimplementedError extends Schema.TaggedErrorClass<TelemetryQueryUnimplementedError>()(
+export class TelemetryQueryUnimplementedError extends Schema.TaggedError<TelemetryQueryUnimplementedError>()(
   "TelemetryQueryUnimplementedError",
   { operation: telemetryQueryOperation, message: Schema.String },
 ) {}
@@ -242,7 +242,7 @@ export const withTelemetryQueryError = <A, R>(
 const telemetryIngesterOperation = Schema.Literals(["run"]);
 export type TelemetryIngesterOperation = typeof telemetryIngesterOperation.Type;
 
-export class TelemetryIngesterUnexpectedError extends Schema.TaggedErrorClass<TelemetryIngesterUnexpectedError>()(
+export class TelemetryIngesterUnexpectedError extends Schema.TaggedError<TelemetryIngesterUnexpectedError>()(
   "TelemetryIngesterUnexpectedError",
   { operation: telemetryIngesterOperation, message: Schema.String, cause: Schema.Defect() },
 ) {}

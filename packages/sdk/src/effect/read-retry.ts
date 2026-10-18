@@ -7,7 +7,7 @@
  */
 import { BudgetExceededError, RunInternalServerError } from "@sealant/api-contracts";
 import { Duration, Effect, Result } from "effect";
-import { HttpClientError } from "effect/unstable/http";
+import { HttpClientError } from "effect/http";
 
 import { SealantApiError } from "../errors.js";
 import { elapsed } from "../internal/clock.js";

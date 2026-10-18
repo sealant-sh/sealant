@@ -70,7 +70,7 @@ const workspaceSessionRepoOperationSchema = Schema.Literals([
 
 type WorkspaceSessionRepoOperation = typeof workspaceSessionRepoOperationSchema.Type;
 
-export class WorkspaceSessionRepoInvariantError extends Schema.TaggedErrorClass<WorkspaceSessionRepoInvariantError>()(
+export class WorkspaceSessionRepoInvariantError extends Schema.TaggedError<WorkspaceSessionRepoInvariantError>()(
   "WorkspaceSessionRepoInvariantError",
   {
     operation: workspaceSessionRepoOperationSchema,
@@ -78,7 +78,7 @@ export class WorkspaceSessionRepoInvariantError extends Schema.TaggedErrorClass<
   },
 ) {}
 
-export class WorkspaceSessionRepoUnexpectedError extends Schema.TaggedErrorClass<WorkspaceSessionRepoUnexpectedError>()(
+export class WorkspaceSessionRepoUnexpectedError extends Schema.TaggedError<WorkspaceSessionRepoUnexpectedError>()(
   "WorkspaceSessionRepoUnexpectedError",
   {
     operation: workspaceSessionRepoOperationSchema,

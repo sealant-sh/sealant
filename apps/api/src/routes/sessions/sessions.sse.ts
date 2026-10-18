@@ -27,7 +27,7 @@ import {
 } from "@sealant/db";
 import { TelemetryQuery } from "@sealant/telemetry";
 import { Effect, Option, Stream } from "effect";
-import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
+import { HttpRouter, HttpServerResponse } from "effect/http";
 
 import {
   authorize,

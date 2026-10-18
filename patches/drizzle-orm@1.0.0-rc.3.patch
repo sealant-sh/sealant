@@ -1,0 +1,168 @@
+diff --git a/cache/core/cache-effect.cjs b/cache/core/cache-effect.cjs
+index 5b5d391dd08db7e83c8c99119da35adbd6cf476a..8218fa797e1977607d234c30787d6a72f5141c3b 100644
+--- a/cache/core/cache-effect.cjs
++++ b/cache/core/cache-effect.cjs
+@@ -100,7 +100,7 @@ function make(cache) {
+ * This error is thrown when any cache operation (get, put, onMutate) fails.
+ * The original error is available in the `cause` property.
+ */
+-var EffectCacheError = class extends effect_Schema.TaggedErrorClass()("EffectCacheError", { cause: effect_Schema.Unknown }) {
++var EffectCacheError = class extends effect_Schema.TaggedError()("EffectCacheError", { cause: effect_Schema.Unknown }) {
+ 	static [__entity_ts.entityKind] = "EffectCacheError";
+ };
+ 
+diff --git a/cache/core/cache-effect.js b/cache/core/cache-effect.js
+index 27e1cedd9b1966499723d2f7552561be9f206ae5..05002450d764f7d26e69af089482769ccc7676bc 100644
+--- a/cache/core/cache-effect.js
++++ b/cache/core/cache-effect.js
+@@ -94,7 +94,7 @@ function make(cache) {
+ * This error is thrown when any cache operation (get, put, onMutate) fails.
+ * The original error is available in the `cause` property.
+ */
+-var EffectCacheError = class extends Schema.TaggedErrorClass()("EffectCacheError", { cause: Schema.Unknown }) {
++var EffectCacheError = class extends Schema.TaggedError()("EffectCacheError", { cause: Schema.Unknown }) {
+ 	static [entityKind] = "EffectCacheError";
+ };
+ 
+diff --git a/effect-core/errors.cjs b/effect-core/errors.cjs
+index 9ec5bab6a265fbdb694e4fffa639ebea7be3a6cc..657ff333dbd8453ae8219d6e5c3d6af65587f93b 100644
+--- a/effect-core/errors.cjs
++++ b/effect-core/errors.cjs
+@@ -5,13 +5,13 @@ let effect_Schema = require("effect/Schema");
+ effect_Schema = require_runtime.__toESM(effect_Schema);
+ 
+ //#region src/effect-core/errors.ts
+-var EffectDrizzleError = class extends effect_Schema.TaggedErrorClass()("EffectDrizzleError", {
++var EffectDrizzleError = class extends effect_Schema.TaggedError()("EffectDrizzleError", {
+ 	message: effect_Schema.String,
+ 	cause: effect_Schema.Unknown
+ }) {
+ 	static [__entity_ts.entityKind] = "EffectDrizzleError";
+ };
+-var EffectDrizzleQueryError = class EffectDrizzleQueryError extends effect_Schema.TaggedErrorClass()("EffectDrizzleQueryError", {
++var EffectDrizzleQueryError = class EffectDrizzleQueryError extends effect_Schema.TaggedError()("EffectDrizzleQueryError", {
+ 	query: effect_Schema.String,
+ 	params: effect_Schema.Array(effect_Schema.Any).pipe(effect_Schema.mutable),
+ 	cause: effect_Schema.Unknown
+@@ -25,11 +25,11 @@ var EffectDrizzleQueryError = class EffectDrizzleQueryError extends effect_Schem
+ 		Error.captureStackTrace(this, EffectDrizzleQueryError);
+ 	}
+ };
+-var EffectTransactionRollbackError = class extends effect_Schema.TaggedErrorClass()("EffectTransactionRollbackError", {}) {
++var EffectTransactionRollbackError = class extends effect_Schema.TaggedError()("EffectTransactionRollbackError", {}) {
+ 	static [__entity_ts.entityKind] = "EffectTransactionRollbackError";
+ 	message = "Rollback";
+ };
+-var MigratorInitError = class extends effect_Schema.TaggedErrorClass()("MigratorInitError", { exitCode: effect_Schema.Literals(["databaseMigrations", "localMigrations"]) }) {
++var MigratorInitError = class extends effect_Schema.TaggedError()("MigratorInitError", { exitCode: effect_Schema.Literals(["databaseMigrations", "localMigrations"]) }) {
+ 	static [__entity_ts.entityKind] = "MigratorInitError";
+ };
+ 
+diff --git a/effect-core/errors.js b/effect-core/errors.js
+index 513d200e790abe54ca151c34ea6c061125054ba1..83dfd73c63ce46c3c1ed4205a0f2bf195c599df3 100644
+--- a/effect-core/errors.js
++++ b/effect-core/errors.js
+@@ -2,13 +2,13 @@ import { entityKind } from "../entity.js";
+ import * as Schema from "effect/Schema";
+ 
+ //#region src/effect-core/errors.ts
+-var EffectDrizzleError = class extends Schema.TaggedErrorClass()("EffectDrizzleError", {
++var EffectDrizzleError = class extends Schema.TaggedError()("EffectDrizzleError", {
+ 	message: Schema.String,
+ 	cause: Schema.Unknown
+ }) {
+ 	static [entityKind] = "EffectDrizzleError";
+ };
+-var EffectDrizzleQueryError = class EffectDrizzleQueryError extends Schema.TaggedErrorClass()("EffectDrizzleQueryError", {
++var EffectDrizzleQueryError = class EffectDrizzleQueryError extends Schema.TaggedError()("EffectDrizzleQueryError", {
+ 	query: Schema.String,
+ 	params: Schema.Array(Schema.Any).pipe(Schema.mutable),
+ 	cause: Schema.Unknown
+@@ -22,11 +22,11 @@ var EffectDrizzleQueryError = class EffectDrizzleQueryError extends Schema.Tagge
+ 		Error.captureStackTrace(this, EffectDrizzleQueryError);
+ 	}
+ };
+-var EffectTransactionRollbackError = class extends Schema.TaggedErrorClass()("EffectTransactionRollbackError", {}) {
++var EffectTransactionRollbackError = class extends Schema.TaggedError()("EffectTransactionRollbackError", {}) {
+ 	static [entityKind] = "EffectTransactionRollbackError";
+ 	message = "Rollback";
+ };
+-var MigratorInitError = class extends Schema.TaggedErrorClass()("MigratorInitError", { exitCode: Schema.Literals(["databaseMigrations", "localMigrations"]) }) {
++var MigratorInitError = class extends Schema.TaggedError()("MigratorInitError", { exitCode: Schema.Literals(["databaseMigrations", "localMigrations"]) }) {
+ 	static [entityKind] = "MigratorInitError";
+ };
+ 
+diff --git a/effect-schema/column.cjs b/effect-schema/column.cjs
+index 08dbca5488666671e2f88b20539fa4ddcd8d13b6..7955211a8e6f4f466cd3e331df3c65c8fc7aa990 100644
+--- a/effect-schema/column.cjs
++++ b/effect-schema/column.cjs
+@@ -200,12 +200,12 @@ function arrayColumnToSchema(column, constraint) {
+ 		case "halfvector": {
+ 			const length = column.length;
+ 			const schema = effect.Schema.Array(effect.Schema.Number);
+-			return length ? schema.check(effect.Schema.isLengthBetween(length, length)) : schema;
++			return length ? schema.check(effect.Schema.isBetweenLength(length, length)) : schema;
+ 		}
+ 		case "int64vector": {
+ 			const length = column.length;
+ 			const schema = effect.Schema.Array(effect.Schema.BigInt.check(effect.Schema.isGreaterThanOrEqualToBigInt(require_utils.CONSTANTS.INT64_MIN), effect.Schema.isLessThanOrEqualToBigInt(require_utils.CONSTANTS.INT64_MAX)));
+-			return length ? schema.check(effect.Schema.isLengthBetween(length, length)) : schema;
++			return length ? schema.check(effect.Schema.isBetweenLength(length, length)) : schema;
+ 		}
+ 		case "basecolumn": {
+ 			const baseColumn = column.baseColumn;
+@@ -213,7 +213,7 @@ function arrayColumnToSchema(column, constraint) {
+ 				const baseSchema = columnToSchema(baseColumn);
+ 				const length = column.length;
+ 				const schema = effect.Schema.Array(baseSchema);
+-				if (length) return schema.check(effect.Schema.isLengthBetween(length, length));
++				if (length) return schema.check(effect.Schema.isBetweenLength(length, length));
+ 				return schema;
+ 			}
+ 			return effect.Schema.Array(effect.Schema.Any);
+@@ -253,7 +253,7 @@ function stringColumnToSchema(column, constraint) {
+ 	if (constraint === "uint64") return unsignedBigintStringModeSchema;
+ 	let schema = effect.Schema.String;
+ 	schema = regex ? schema.check(effect.Schema.isPattern(regex)) : schema;
+-	return length && isLengthExact ? schema.check(effect.Schema.isLengthBetween(length, length)) : length ? schema.check(effect.Schema.isMaxLength(length)) : schema;
++	return length && isLengthExact ? schema.check(effect.Schema.isBetweenLength(length, length)) : length ? schema.check(effect.Schema.isMaxLength(length)) : schema;
+ }
+ 
+ //#endregion
+diff --git a/effect-schema/column.js b/effect-schema/column.js
+index 2574944e1b089187dbf4e3acb42fa99e52674dfd..a8b5dfff75347865d1b46552930d708c0b86e367 100644
+--- a/effect-schema/column.js
++++ b/effect-schema/column.js
+@@ -198,12 +198,12 @@ function arrayColumnToSchema(column, constraint) {
+ 		case "halfvector": {
+ 			const length = column.length;
+ 			const schema = Schema.Array(Schema.Number);
+-			return length ? schema.check(Schema.isLengthBetween(length, length)) : schema;
++			return length ? schema.check(Schema.isBetweenLength(length, length)) : schema;
+ 		}
+ 		case "int64vector": {
+ 			const length = column.length;
+ 			const schema = Schema.Array(Schema.BigInt.check(Schema.isGreaterThanOrEqualToBigInt(CONSTANTS.INT64_MIN), Schema.isLessThanOrEqualToBigInt(CONSTANTS.INT64_MAX)));
+-			return length ? schema.check(Schema.isLengthBetween(length, length)) : schema;
++			return length ? schema.check(Schema.isBetweenLength(length, length)) : schema;
+ 		}
+ 		case "basecolumn": {
+ 			const baseColumn = column.baseColumn;
+@@ -211,7 +211,7 @@ function arrayColumnToSchema(column, constraint) {
+ 				const baseSchema = columnToSchema(baseColumn);
+ 				const length = column.length;
+ 				const schema = Schema.Array(baseSchema);
+-				if (length) return schema.check(Schema.isLengthBetween(length, length));
++				if (length) return schema.check(Schema.isBetweenLength(length, length));
+ 				return schema;
+ 			}
+ 			return Schema.Array(Schema.Any);
+@@ -251,7 +251,7 @@ function stringColumnToSchema(column, constraint) {
+ 	if (constraint === "uint64") return unsignedBigintStringModeSchema;
+ 	let schema = Schema.String;
+ 	schema = regex ? schema.check(Schema.isPattern(regex)) : schema;
+-	return length && isLengthExact ? schema.check(Schema.isLengthBetween(length, length)) : length ? schema.check(Schema.isMaxLength(length)) : schema;
++	return length && isLengthExact ? schema.check(Schema.isBetweenLength(length, length)) : length ? schema.check(Schema.isMaxLength(length)) : schema;
+ }
+ 
+ //#endregion

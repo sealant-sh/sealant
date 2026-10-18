@@ -96,7 +96,7 @@ const workspaceRepoOperationSchema = Schema.Literals([
 
 // Invariant errors represent expected domain/consistency violations
 // (for example, an insert/update path that should return a row but did not).
-export class WorkspaceRepoInvariantError extends Schema.TaggedErrorClass<WorkspaceRepoInvariantError>()(
+export class WorkspaceRepoInvariantError extends Schema.TaggedError<WorkspaceRepoInvariantError>()(
   "WorkspaceRepoInvariantError",
   {
     operation: workspaceRepoOperationSchema,
@@ -106,7 +106,7 @@ export class WorkspaceRepoInvariantError extends Schema.TaggedErrorClass<Workspa
 
 // Unexpected errors wrap unknown defects from infra/driver boundaries
 // so callers can still pattern-match on a typed repo error channel.
-export class WorkspaceRepoUnexpectedError extends Schema.TaggedErrorClass<WorkspaceRepoUnexpectedError>()(
+export class WorkspaceRepoUnexpectedError extends Schema.TaggedError<WorkspaceRepoUnexpectedError>()(
   "WorkspaceRepoUnexpectedError",
   {
     operation: workspaceRepoOperationSchema,

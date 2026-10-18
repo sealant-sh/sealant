@@ -145,7 +145,7 @@ const workspaceBuildJobRepoOperationSchema = Schema.Literals([
   "cancelUnbuiltJob",
 ]);
 
-export class WorkspaceBuildJobRepoInvariantError extends Schema.TaggedErrorClass<WorkspaceBuildJobRepoInvariantError>()(
+export class WorkspaceBuildJobRepoInvariantError extends Schema.TaggedError<WorkspaceBuildJobRepoInvariantError>()(
   "WorkspaceBuildJobRepoInvariantError",
   {
     operation: workspaceBuildJobRepoOperationSchema,
@@ -153,7 +153,7 @@ export class WorkspaceBuildJobRepoInvariantError extends Schema.TaggedErrorClass
   },
 ) {}
 
-export class WorkspaceBuildJobRepoUnexpectedError extends Schema.TaggedErrorClass<WorkspaceBuildJobRepoUnexpectedError>()(
+export class WorkspaceBuildJobRepoUnexpectedError extends Schema.TaggedError<WorkspaceBuildJobRepoUnexpectedError>()(
   "WorkspaceBuildJobRepoUnexpectedError",
   {
     operation: workspaceBuildJobRepoOperationSchema,

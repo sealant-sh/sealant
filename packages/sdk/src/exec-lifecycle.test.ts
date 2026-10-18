@@ -16,7 +16,7 @@ import {
   RunNotFoundError,
 } from "@sealant/api-contracts";
 import { Effect } from "effect";
-import { HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import { HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type ControlPlaneClient, SealantApiClient } from "./effect/api-client.js";

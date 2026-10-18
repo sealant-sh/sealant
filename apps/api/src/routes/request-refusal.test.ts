@@ -13,8 +13,8 @@ import {
   type SessionWire,
 } from "@sealant/api-contracts";
 import { Cause, Effect, ErrorReporter, Exit, Layer, Logger, Tracer } from "effect";
-import { HttpRouter, HttpServer } from "effect/unstable/http";
-import { type HttpApi, HttpApiBuilder, type HttpApiGroup } from "effect/unstable/httpapi";
+import { HttpRouter, HttpServer } from "effect/http";
+import { type HttpApi, HttpApiBuilder, type HttpApiGroup } from "effect/http-api";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { RequestRefusalLive } from "./request-refusal.js";
@@ -313,7 +313,9 @@ describe("a request a control plane route cannot decode", () => {
     expect(server.observed.join("\n")).not.toContain(MARKER);
   });
 
-  it("is what keeps the input out: without it, Effect's refusal reaches the observers", async () => {
+  // Before Effect 4.0.0 this refusal quoted the input to every observer (`got [{…}]`). Effect 4
+  // reports input only to a parse that asks for it; the refusal keeps it out either way.
+  it("without it, Effect's own refusal is an empty 400 that names no input", async () => {
     const server = serve(Layer.succeed(RequestRefusal, (httpEffect) => httpEffect));
     disposers.push(server.dispose);
     const response = await server.send(
@@ -323,7 +325,8 @@ describe("a request a control plane route cannot decode", () => {
     );
     expect(response.status).toBe(400);
     expect(response.text).toBe("");
-    expect(server.observed.join("\n")).toContain(MARKER);
+    expect(server.observed.some((line) => line.startsWith("log "))).toBe(true);
+    expect(server.observed.join("\n")).not.toContain(MARKER);
   });
 });
 

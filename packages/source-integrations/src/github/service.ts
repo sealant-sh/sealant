@@ -46,7 +46,7 @@ export const gitHubSourceIntegrationOperationSchema = Schema.Literals([
 
 export type GitHubSourceIntegrationOperation = typeof gitHubSourceIntegrationOperationSchema.Type;
 
-export class GitHubSourceIntegrationInvariantError extends Schema.TaggedErrorClass<GitHubSourceIntegrationInvariantError>()(
+export class GitHubSourceIntegrationInvariantError extends Schema.TaggedError<GitHubSourceIntegrationInvariantError>()(
   "GitHubSourceIntegrationInvariantError",
   {
     operation: gitHubSourceIntegrationOperationSchema,
@@ -54,7 +54,7 @@ export class GitHubSourceIntegrationInvariantError extends Schema.TaggedErrorCla
   },
 ) {}
 
-export class GitHubSourceIntegrationHttpError extends Schema.TaggedErrorClass<GitHubSourceIntegrationHttpError>()(
+export class GitHubSourceIntegrationHttpError extends Schema.TaggedError<GitHubSourceIntegrationHttpError>()(
   "GitHubSourceIntegrationHttpError",
   {
     operation: gitHubSourceIntegrationOperationSchema,
@@ -63,7 +63,7 @@ export class GitHubSourceIntegrationHttpError extends Schema.TaggedErrorClass<Gi
   },
 ) {}
 
-export class GitHubSourceIntegrationUnexpectedError extends Schema.TaggedErrorClass<GitHubSourceIntegrationUnexpectedError>()(
+export class GitHubSourceIntegrationUnexpectedError extends Schema.TaggedError<GitHubSourceIntegrationUnexpectedError>()(
   "GitHubSourceIntegrationUnexpectedError",
   {
     operation: gitHubSourceIntegrationOperationSchema,

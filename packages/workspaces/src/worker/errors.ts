@@ -9,7 +9,7 @@ import { Effect, Schema } from "effect";
  * surfaced to operators, an optional machine `errorCode`, and the original `cause` (as a
  * `Schema.Defect`) for diagnostics.
  */
-export class WorkspaceBuildJobProcessingError extends Schema.TaggedErrorClass<WorkspaceBuildJobProcessingError>()(
+export class WorkspaceBuildJobProcessingError extends Schema.TaggedError<WorkspaceBuildJobProcessingError>()(
   "WorkspaceBuildJobProcessingError",
   {
     message: Schema.String,

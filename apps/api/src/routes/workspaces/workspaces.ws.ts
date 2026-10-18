@@ -38,8 +38,8 @@ import {
 import { WorkspaceRepo } from "@sealant/db";
 import { SealantRuntime } from "@sealant/workspaces";
 import { Effect, Fiber } from "effect";
-import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
-import { Socket } from "effect/unstable/socket";
+import { HttpRouter, HttpServerResponse } from "effect/http";
+import { Socket } from "effect/socket";
 
 import {
   authorize,
@@ -176,7 +176,7 @@ export const WorkspaceForwardRoute = HttpRouter.add(
           }
 
           const socket = yield* request.upgrade;
-          const write = yield* socket.writer;
+          const { write } = yield* socket.writer;
 
           // Workspace → client: drain the channel into binary WS frames.
           // Drain-before-close is load-bearing: `channel.closed` can resolve
@@ -198,23 +198,28 @@ export const WorkspaceForwardRoute = HttpRouter.add(
 
           // Client → workspace: binary = bytes to the port; text = control
           // JSON ({"t":"eof"} half-closes outbound, inbound keeps flowing).
-          yield* socket
-            .runRaw((data) => {
-              if (typeof data !== "string") {
-                forward.channel.write(data);
-                return Effect.void;
-              }
-              try {
-                const frame = JSON.parse(data) as { readonly t?: string };
-                if (frame.t === "eof") {
-                  forward.channel.end();
-                }
-              } catch {
-                // Unknown text frame — ignored, not fatal.
-              }
+          const { pull } = yield* socket.reader;
+          const onFrame = (data: string | Uint8Array): Effect.Effect<void> => {
+            if (typeof data !== "string") {
+              forward.channel.write(data);
               return Effect.void;
-            })
-            .pipe(Effect.ignore);
+            }
+            try {
+              const frame = JSON.parse(data) as { readonly t?: string };
+              if (frame.t === "eof") {
+                forward.channel.end();
+              }
+            } catch {
+              // Unknown text frame — ignored, not fatal.
+            }
+            return Effect.void;
+          };
+          // Every close, clean or not, fails the pull, which ends the loop.
+          yield* pull.pipe(
+            Effect.flatMap((frames) => Effect.forEach(frames, onFrame, { discard: true })),
+            Effect.forever,
+            Effect.ignore,
+          );
           yield* Fiber.interrupt(outputFiber);
           // Clean client close: reap the forward now instead of waiting for
           // the connection teardown to do it.

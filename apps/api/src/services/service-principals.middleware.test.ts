@@ -1,6 +1,6 @@
 import { BudgetExceededError } from "@sealant/api-contracts";
 import { Effect, Schema } from "effect";
-import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { HttpServerRequest, HttpServerResponse } from "effect/http";
 import { describe, expect, it } from "vitest";
 
 import { makeRateWindow } from "./budgets.js";

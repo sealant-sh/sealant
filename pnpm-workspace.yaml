@@ -14,11 +14,13 @@ allowBuilds:
 catalog:
   "@anthropic-ai/claude-agent-sdk": ^0.3.201
   "@openai/codex": 0.148.0
-  "@effect/platform-node": 4.0.0-beta.85
+  # The Effect family pinned exactly, all on one version: Effect releases every package together and
+  # a program runs one effect with one set of @effect/* beside it.
+  "@effect/platform-node": 4.0.5
   # Not a direct dependency: pinned here only so the override below shares this version line.
-  "@effect/platform-node-shared": 4.0.0-beta.85
-  "@effect/sql-pg": 4.0.0-beta.85
-  "@effect/vitest": 4.0.0-beta.85
+  "@effect/platform-node-shared": 4.0.5
+  "@effect/sql-pg": 4.0.5
+  "@effect/vitest": 4.0.5
   "@cloudflare/vite-plugin": ^1.30.2
   "@fontsource/plus-jakarta-sans": ^5.2.8
   "@kubernetes/client-node": ^2.0.0
@@ -46,7 +48,7 @@ catalog:
   clsx: ^2.1.1
   framer-motion: ^12.23.24
   dotenv-cli: ^11.0.0
-  effect: 4.0.0-beta.85
+  effect: 4.0.5
   jsdom: ^28.1.0
   lucide-react: ^0.545.0
   pg-boss: ^12.30.0
@@ -58,7 +60,8 @@ catalog:
   # TanStack Start 1.0 (@tanstack/react-start 1.169) requires Vite 8.
   vite: ^8.3.4
   vite-tsconfig-paths: ^5.1.4
-  vitest: 3.2.7
+  # @effect/vitest 4 asks for Vitest 5.
+  vitest: 5.0.5
   ws: ^8.18.3
   wrangler: ^4.78.0
   yaml: ^2.9.0
@@ -81,13 +84,18 @@ onlyBuiltDependencies:
   - esbuild
   - msw
 
-# @effect/platform-node depends on @effect/platform-node-shared with a caret range, and the caret
-# on a prerelease (^4.0.0-beta.85) also matches every later 4.0.0-rc.N. Image builds and CI install
-# with --lockfile=false, so they re-resolve that range on every run: rc.114 shipped 2026-09-11 and
-# the sealant-api image build broke with esbuild "Could not resolve effect/ByteSize" against the
-# beta.85 effect the workspace pins. Every other Effect package is either pinned exactly through the
-# catalog above or resolved as a peer of one of those pins; this is the only floating edge. Image
-# builds and CI now install with --frozen-lockfile, so nothing re-resolves at build time; the
-# override stays so a lockfile regenerated from scratch picks the same line.
+# @effect/platform-node depends on @effect/platform-node-shared with a caret range (^4.0.5), which a
+# fresh resolve would move to the newest 4.0.x and its own effect peer. In 2026-09 a floating edge
+# like this one (^4.0.0-beta.85 matching rc.114) broke the sealant-api image build against the
+# effect the workspace pins. Image builds and CI install with --frozen-lockfile, so nothing
+# re-resolves at build time; the override keeps a lockfile regenerated from scratch on the same line.
 overrides:
   "@effect/platform-node-shared": "catalog:"
+
+# drizzle-orm 1.0.0-rc.3's Effect driver (drizzle-orm/effect-postgres, behind SealantDB) declares its
+# errors with Schema.TaggedErrorClass and its effect-schema checks with Schema.isLengthBetween; Effect
+# 4.0.0 renamed them to Schema.TaggedError and Schema.isBetweenLength, so the unpatched driver throws
+# on import. The patch renames the six call sites in the built JS and nothing else. drizzle-orm's
+# rc.5 builds (dist-tag rc5) carry the same renames; drop the patch with the move to one of them.
+patchedDependencies:
+  drizzle-orm@1.0.0-rc.3: patches/drizzle-orm@1.0.0-rc.3.patch

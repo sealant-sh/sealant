@@ -515,7 +515,7 @@ const removeStoppedRemains = (
   );
 
 /** The retention a terminal write depends on could not be recorded; nothing was written. */
-export class RetentionNotRecordedError extends Schema.TaggedErrorClass<RetentionNotRecordedError>()(
+export class RetentionNotRecordedError extends Schema.TaggedError<RetentionNotRecordedError>()(
   "RetentionNotRecordedError",
   { runId: Schema.String },
 ) {}

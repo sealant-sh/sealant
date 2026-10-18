@@ -1,4 +1,4 @@
-import { HttpApi, OpenApi } from "effect/unstable/httpapi";
+import { HttpApi, OpenApi } from "effect/http-api";
 
 import { AccessTokensGroup } from "./access-tokens.js";
 import { ConnectedAccountsGroup } from "./connected-accounts.js";

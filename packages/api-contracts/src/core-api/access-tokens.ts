@@ -8,7 +8,7 @@
  * the scopes is DOWNSTREAM enforcement (a leaked read-stream token cannot send input or exec).
  */
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
@@ -59,19 +59,19 @@ export const listAccessTokensResponseSchema = Schema.Struct({
 });
 export type ListAccessTokensResponse = typeof listAccessTokensResponseSchema.Type;
 
-export class AccessTokenBadRequestError extends Schema.TaggedErrorClass<AccessTokenBadRequestError>()(
+export class AccessTokenBadRequestError extends Schema.TaggedError<AccessTokenBadRequestError>()(
   "AccessTokenBadRequestError",
   { message: Schema.String },
   { httpApiStatus: 400 },
 ) {}
 
-export class AccessTokenNotFoundError extends Schema.TaggedErrorClass<AccessTokenNotFoundError>()(
+export class AccessTokenNotFoundError extends Schema.TaggedError<AccessTokenNotFoundError>()(
   "AccessTokenNotFoundError",
   { message: Schema.String },
   { httpApiStatus: 404 },
 ) {}
 
-export class AccessTokenInternalServerError extends Schema.TaggedErrorClass<AccessTokenInternalServerError>()(
+export class AccessTokenInternalServerError extends Schema.TaggedError<AccessTokenInternalServerError>()(
   "AccessTokenInternalServerError",
   { message: Schema.String },
   { httpApiStatus: 500 },

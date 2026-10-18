@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { Console, Effect, Option } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
+import { Command, Flag } from "effect/cli";
 
 import { ControlPlaneClientService, toApiSettings } from "../api-client.js";
 import { currentSettings } from "../config.js";
@@ -79,15 +79,15 @@ const fileExists = (filePath: string): Effect.Effect<boolean> =>
 export const authCodexCommand = Command.make(
   "codex",
   {
-    name: Flag.string("name").pipe(
+    name: Flag.String("name").pipe(
       Flag.withDefault("default"),
       Flag.withDescription("Account name (you can connect multiple Codex accounts)"),
     ),
-    yes: Flag.boolean("yes").pipe(
+    yes: Flag.Boolean("yes").pipe(
       Flag.withAlias("y"),
       Flag.withDescription("Skip confirmation prompts"),
     ),
-    file: Flag.string("file").pipe(
+    file: Flag.String("file").pipe(
       Flag.optional,
       Flag.withDescription(
         "Path to auth.json (default: $CODEX_HOME/auth.json or ~/.codex/auth.json)",

@@ -235,7 +235,7 @@ describe.skipIf(DATABASE_URL === undefined)("appendBatch re-delivery (real Postg
             Effect.flatMap(([row]) =>
               (row?.n ?? 0) > 0 ? Effect.void : Effect.fail("not blocked yet"),
             ),
-            Effect.retry(Schedule.spaced("10 millis").pipe(Schedule.both(Schedule.recurs(500)))),
+            Effect.retry(Schedule.max([Schedule.spaced("10 millis"), Schedule.recurs(500)])),
           );
         yield* Deferred.succeed(blocked, undefined);
         yield* Fiber.join(other);
