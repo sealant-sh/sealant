@@ -790,6 +790,9 @@ importers:
       '@sealant/typescript':
         specifier: workspace:*
         version: link:../../tooling/typescript
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.5(@types/node@26.2.0)(jsdom@28.1.0(@noble/hashes@2.2.0))(vite@8.3.4(@types/node@26.2.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/db:
     dependencies:
@@ -850,6 +853,9 @@ importers:
       effect:
         specifier: 'catalog:'
         version: 4.0.5
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.5(@types/node@26.2.0)(jsdom@28.1.0(@noble/hashes@2.2.0))(vite@8.3.4(@types/node@26.2.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/source-integrations:
     dependencies:
@@ -897,6 +903,9 @@ importers:
       '@sealant/typescript':
         specifier: workspace:*
         version: link:../../tooling/typescript
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.5(@types/node@26.2.0)(jsdom@28.1.0(@noble/hashes@2.2.0))(vite@8.3.4(@types/node@26.2.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/ui:
     dependencies:
@@ -1047,6 +1056,9 @@ importers:
       '@types/ws':
         specifier: 'catalog:'
         version: 8.18.1
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.5(@types/node@26.2.0)(jsdom@28.1.0(@noble/hashes@2.2.0))(vite@8.3.4(@types/node@26.2.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
 
   tooling/typescript: {}
 
@@ -5485,10 +5497,6 @@ packages:
     resolution: {integrity: sha512-9Be3ZoN4LmYR90tUoVu2te2BsbzHfhJyfEiAVfz7N5/zv+jduIfLrV2xdQXOHbaD6KgpGdO9PRPM1Y4Q9QkPkA==}
     engines: {node: ^18.19.0 || >=20.5.0}
 
-  expect-type@1.3.0:
-    resolution: {integrity: sha512-knvyeauYhqjOYvQ66MznSMs83wmHrCycNEN6Ao+2AeYEfxUIkuiVxdEa1qlGEPK+We3n0THiDciYSsCcgW/DoA==}
-    engines: {node: '>=12.0.0'}
-
   expect-type@1.4.0:
     resolution: {integrity: sha512-KfYbmpRm0VbLjEvVa9yGwCi9GI34xvi7A/HXYWQO65CSD2u3MczUJSuwXKFIxlGsgBQizV9q5J9NHj4VG0n+pA==}
     engines: {node: '>=12.0.0'}
@@ -9515,7 +9523,7 @@ snapshots:
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
-      '@jridgewell/sourcemap-codec': 1.5.5
+      '@jridgewell/sourcemap-codec': 1.6.0
       '@jridgewell/trace-mapping': 0.3.31
 
   '@jridgewell/remapping@2.3.5':
@@ -9538,7 +9546,7 @@ snapshots:
   '@jridgewell/trace-mapping@0.3.31':
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
-      '@jridgewell/sourcemap-codec': 1.5.5
+      '@jridgewell/sourcemap-codec': 1.6.0
 
   '@jridgewell/trace-mapping@0.3.9':
     dependencies:
@@ -12576,9 +12584,6 @@ snapshots:
       strip-final-newline: 4.0.0
       yoctocolors: 2.1.2
 
-  expect-type@1.3.0:
-    optional: true
-
   expect-type@1.4.0: {}
 
   express-rate-limit@8.5.2(express@5.2.1):
@@ -13447,7 +13452,7 @@ snapshots:
 
   magic-string@0.30.21:
     dependencies:
-      '@jridgewell/sourcemap-codec': 1.5.5
+      '@jridgewell/sourcemap-codec': 1.6.0
 
   magic-string@1.4.3:
     dependencies:
@@ -15579,7 +15584,7 @@ snapshots:
       '@vitest/utils': 3.2.7
       chai: 5.3.3
       debug: 4.4.3
-      expect-type: 1.3.0
+      expect-type: 1.4.0
       magic-string: 0.30.21
       pathe: 2.0.3
       picomatch: 4.0.7
