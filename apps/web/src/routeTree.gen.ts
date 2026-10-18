@@ -9,60 +9,80 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as SetupRouteImport } from './routes/setup'
-import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as AuthRouteImport } from './routes/_auth'
+import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
+import { Route as SetupRouteImport } from './routes/setup'
+import { Route as AuthForgotPasswordRouteImport } from './routes/_auth/forgot-password'
+import { Route as AuthLoginRouteImport } from './routes/_auth/login'
+import { Route as AuthRegisterRouteImport } from './routes/_auth/register'
+import { Route as AuthResetPasswordRouteImport } from './routes/_auth/reset-password'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
 import { Route as AuthenticatedAboutRouteImport } from './routes/_authenticated/about'
-import { Route as AuthResetPasswordRouteImport } from './routes/_auth/reset-password'
-import { Route as AuthRegisterRouteImport } from './routes/_auth/register'
-import { Route as AuthLoginRouteImport } from './routes/_auth/login'
-import { Route as AuthForgotPasswordRouteImport } from './routes/_auth/forgot-password'
-import { Route as AuthenticatedWorkspacesIndexRouteImport } from './routes/_authenticated/workspaces/index'
-import { Route as AuthenticatedRepositoriesIndexRouteImport } from './routes/_authenticated/repositories/index'
-import { Route as AuthenticatedRegistryIndexRouteImport } from './routes/_authenticated/registry/index'
-import { Route as AuthenticatedProfilesIndexRouteImport } from './routes/_authenticated/profiles/index'
-import { Route as ApiTrpcSplatRouteImport } from './routes/api/trpc/$'
-import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
-import { Route as AuthenticatedWorkspacesNewRouteImport } from './routes/_authenticated/workspaces/new'
-import { Route as AuthenticatedWorkspacesFailedRouteImport } from './routes/_authenticated/workspaces/failed'
-import { Route as AuthenticatedWorkspacesActiveRouteImport } from './routes/_authenticated/workspaces/active'
-import { Route as AuthenticatedSettingsSshKeysRouteImport } from './routes/_authenticated/settings/ssh-keys'
-import { Route as AuthenticatedSettingsConnectedAccountsRouteImport } from './routes/_authenticated/settings/connected-accounts'
-import { Route as AuthenticatedProfilesCreateRouteImport } from './routes/_authenticated/profiles/create'
 import { Route as AuthenticatedGithubSetupRouteImport } from './routes/_authenticated/github/setup'
-import { Route as AuthenticatedWorkspacesWorkspaceIdIndexRouteImport } from './routes/_authenticated/workspaces/$workspaceId/index'
-import { Route as AuthenticatedRepositoriesRepoIdIndexRouteImport } from './routes/_authenticated/repositories/$repoId/index'
-import { Route as AuthenticatedRegistryRegistryIdIndexRouteImport } from './routes/_authenticated/registry/$registryId/index'
+import { Route as AuthenticatedProfilesIndexRouteImport } from './routes/_authenticated/profiles/index'
+import { Route as AuthenticatedProfilesCreateRouteImport } from './routes/_authenticated/profiles/create'
+import { Route as AuthenticatedRegistryIndexRouteImport } from './routes/_authenticated/registry/index'
+import { Route as AuthenticatedRepositoriesIndexRouteImport } from './routes/_authenticated/repositories/index'
+import { Route as AuthenticatedSettingsConnectedAccountsRouteImport } from './routes/_authenticated/settings/connected-accounts'
+import { Route as AuthenticatedSettingsSshKeysRouteImport } from './routes/_authenticated/settings/ssh-keys'
+import { Route as AuthenticatedWorkspacesIndexRouteImport } from './routes/_authenticated/workspaces/index'
+import { Route as AuthenticatedWorkspacesActiveRouteImport } from './routes/_authenticated/workspaces/active'
+import { Route as AuthenticatedWorkspacesFailedRouteImport } from './routes/_authenticated/workspaces/failed'
+import { Route as AuthenticatedWorkspacesNewRouteImport } from './routes/_authenticated/workspaces/new'
+import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiTrpcSplatRouteImport } from './routes/api/trpc/$'
 import { Route as AuthenticatedProfilesProfileIdIndexRouteImport } from './routes/_authenticated/profiles/$profileId/index'
-import { Route as AuthenticatedWorkspacesWorkspaceIdValidationRouteImport } from './routes/_authenticated/workspaces/$workspaceId/validation'
-import { Route as AuthenticatedWorkspacesWorkspaceIdTraceRouteImport } from './routes/_authenticated/workspaces/$workspaceId/trace'
-import { Route as AuthenticatedWorkspacesWorkspaceIdSpecRouteImport } from './routes/_authenticated/workspaces/$workspaceId/spec'
-import { Route as AuthenticatedWorkspacesWorkspaceIdDiffRouteImport } from './routes/_authenticated/workspaces/$workspaceId/diff'
-import { Route as AuthenticatedRepositoriesRepoIdWorkspacesRouteImport } from './routes/_authenticated/repositories/$repoId/workspaces'
-import { Route as AuthenticatedRepositoriesRepoIdSetupRouteImport } from './routes/_authenticated/repositories/$repoId/setup'
-import { Route as AuthenticatedRepositoriesRepoIdSettingsRouteImport } from './routes/_authenticated/repositories/$repoId/settings'
-import { Route as AuthenticatedProfilesProfileIdSetupRouteImport } from './routes/_authenticated/profiles/$profileId/setup'
-import { Route as AuthenticatedProfilesProfileIdSecretsRouteImport } from './routes/_authenticated/profiles/$profileId/secrets'
-import { Route as AuthenticatedProfilesProfileIdPackagesRouteImport } from './routes/_authenticated/profiles/$profileId/packages'
-import { Route as AuthenticatedProfilesProfileIdEnvVariablesRouteImport } from './routes/_authenticated/profiles/$profileId/env-variables'
-import { Route as AuthenticatedProfilesProfileIdAgentsRouteImport } from './routes/_authenticated/profiles/$profileId/agents'
 import { Route as AuthenticatedProfilesProfileIdAccessRouteImport } from './routes/_authenticated/profiles/$profileId/access'
-import { Route as AuthenticatedWorkspacesWorkspaceIdRunsRunIdRouteImport } from './routes/_authenticated/workspaces/$workspaceId/runs/$runId'
+import { Route as AuthenticatedProfilesProfileIdAgentsRouteImport } from './routes/_authenticated/profiles/$profileId/agents'
+import { Route as AuthenticatedProfilesProfileIdEnvVariablesRouteImport } from './routes/_authenticated/profiles/$profileId/env-variables'
+import { Route as AuthenticatedProfilesProfileIdPackagesRouteImport } from './routes/_authenticated/profiles/$profileId/packages'
+import { Route as AuthenticatedProfilesProfileIdSecretsRouteImport } from './routes/_authenticated/profiles/$profileId/secrets'
+import { Route as AuthenticatedProfilesProfileIdSetupRouteImport } from './routes/_authenticated/profiles/$profileId/setup'
+import { Route as AuthenticatedRegistryRegistryIdIndexRouteImport } from './routes/_authenticated/registry/$registryId/index'
+import { Route as AuthenticatedRepositoriesRepoIdIndexRouteImport } from './routes/_authenticated/repositories/$repoId/index'
+import { Route as AuthenticatedRepositoriesRepoIdSettingsRouteImport } from './routes/_authenticated/repositories/$repoId/settings'
+import { Route as AuthenticatedRepositoriesRepoIdSetupRouteImport } from './routes/_authenticated/repositories/$repoId/setup'
+import { Route as AuthenticatedRepositoriesRepoIdWorkspacesRouteImport } from './routes/_authenticated/repositories/$repoId/workspaces'
+import { Route as AuthenticatedWorkspacesWorkspaceIdIndexRouteImport } from './routes/_authenticated/workspaces/$workspaceId/index'
+import { Route as AuthenticatedWorkspacesWorkspaceIdDiffRouteImport } from './routes/_authenticated/workspaces/$workspaceId/diff'
+import { Route as AuthenticatedWorkspacesWorkspaceIdSpecRouteImport } from './routes/_authenticated/workspaces/$workspaceId/spec'
+import { Route as AuthenticatedWorkspacesWorkspaceIdTraceRouteImport } from './routes/_authenticated/workspaces/$workspaceId/trace'
+import { Route as AuthenticatedWorkspacesWorkspaceIdValidationRouteImport } from './routes/_authenticated/workspaces/$workspaceId/validation'
 import { Route as AuthenticatedRegistryRegistryIdRepoTagRouteImport } from './routes/_authenticated/registry/$registryId/$repo/$tag'
+import { Route as AuthenticatedWorkspacesWorkspaceIdRunsRunIdRouteImport } from './routes/_authenticated/workspaces/$workspaceId/runs/$runId'
 
-const SetupRoute = SetupRouteImport.update({
-  id: '/setup',
-  path: '/setup',
+const AuthRoute = AuthRouteImport.update({
+  id: '/_auth',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthenticatedRoute = AuthenticatedRouteImport.update({
   id: '/_authenticated',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthRoute = AuthRouteImport.update({
-  id: '/_auth',
+const SetupRoute = SetupRouteImport.update({
+  id: '/setup',
+  path: '/setup',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AuthForgotPasswordRoute = AuthForgotPasswordRouteImport.update({
+  id: '/forgot-password',
+  path: '/forgot-password',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthLoginRoute = AuthLoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthRegisterRoute = AuthRegisterRouteImport.update({
+  id: '/register',
+  path: '/register',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthResetPasswordRoute = AuthResetPasswordRouteImport.update({
+  id: '/reset-password',
+  path: '/reset-password',
+  getParentRoute: () => AuthRoute,
 } as any)
 const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
   id: '/',
@@ -74,42 +94,10 @@ const AuthenticatedAboutRoute = AuthenticatedAboutRouteImport.update({
   path: '/about',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
-const AuthResetPasswordRoute = AuthResetPasswordRouteImport.update({
-  id: '/reset-password',
-  path: '/reset-password',
-  getParentRoute: () => AuthRoute,
-} as any)
-const AuthRegisterRoute = AuthRegisterRouteImport.update({
-  id: '/register',
-  path: '/register',
-  getParentRoute: () => AuthRoute,
-} as any)
-const AuthLoginRoute = AuthLoginRouteImport.update({
-  id: '/login',
-  path: '/login',
-  getParentRoute: () => AuthRoute,
-} as any)
-const AuthForgotPasswordRoute = AuthForgotPasswordRouteImport.update({
-  id: '/forgot-password',
-  path: '/forgot-password',
-  getParentRoute: () => AuthRoute,
-} as any)
-const AuthenticatedWorkspacesIndexRoute =
-  AuthenticatedWorkspacesIndexRouteImport.update({
-    id: '/workspaces/',
-    path: '/workspaces/',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedRepositoriesIndexRoute =
-  AuthenticatedRepositoriesIndexRouteImport.update({
-    id: '/repositories/',
-    path: '/repositories/',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedRegistryIndexRoute =
-  AuthenticatedRegistryIndexRouteImport.update({
-    id: '/registry/',
-    path: '/registry/',
+const AuthenticatedGithubSetupRoute =
+  AuthenticatedGithubSetupRouteImport.update({
+    id: '/github/setup',
+    path: '/github/setup',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedProfilesIndexRoute =
@@ -118,38 +106,22 @@ const AuthenticatedProfilesIndexRoute =
     path: '/profiles/',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const ApiTrpcSplatRoute = ApiTrpcSplatRouteImport.update({
-  id: '/api/trpc/$',
-  path: '/api/trpc/$',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
-  id: '/api/auth/$',
-  path: '/api/auth/$',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AuthenticatedWorkspacesNewRoute =
-  AuthenticatedWorkspacesNewRouteImport.update({
-    id: '/workspaces/new',
-    path: '/workspaces/new',
+const AuthenticatedProfilesCreateRoute =
+  AuthenticatedProfilesCreateRouteImport.update({
+    id: '/profiles/create',
+    path: '/profiles/create',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedWorkspacesFailedRoute =
-  AuthenticatedWorkspacesFailedRouteImport.update({
-    id: '/workspaces/failed',
-    path: '/workspaces/failed',
+const AuthenticatedRegistryIndexRoute =
+  AuthenticatedRegistryIndexRouteImport.update({
+    id: '/registry/',
+    path: '/registry/',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedWorkspacesActiveRoute =
-  AuthenticatedWorkspacesActiveRouteImport.update({
-    id: '/workspaces/active',
-    path: '/workspaces/active',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedSettingsSshKeysRoute =
-  AuthenticatedSettingsSshKeysRouteImport.update({
-    id: '/settings/ssh-keys',
-    path: '/settings/ssh-keys',
+const AuthenticatedRepositoriesIndexRoute =
+  AuthenticatedRepositoriesIndexRouteImport.update({
+    id: '/repositories/',
+    path: '/repositories/',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedSettingsConnectedAccountsRoute =
@@ -158,112 +130,50 @@ const AuthenticatedSettingsConnectedAccountsRoute =
     path: '/settings/connected-accounts',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedProfilesCreateRoute =
-  AuthenticatedProfilesCreateRouteImport.update({
-    id: '/profiles/create',
-    path: '/profiles/create',
+const AuthenticatedSettingsSshKeysRoute =
+  AuthenticatedSettingsSshKeysRouteImport.update({
+    id: '/settings/ssh-keys',
+    path: '/settings/ssh-keys',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedGithubSetupRoute =
-  AuthenticatedGithubSetupRouteImport.update({
-    id: '/github/setup',
-    path: '/github/setup',
+const AuthenticatedWorkspacesIndexRoute =
+  AuthenticatedWorkspacesIndexRouteImport.update({
+    id: '/workspaces/',
+    path: '/workspaces/',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedWorkspacesWorkspaceIdIndexRoute =
-  AuthenticatedWorkspacesWorkspaceIdIndexRouteImport.update({
-    id: '/workspaces/$workspaceId/',
-    path: '/workspaces/$workspaceId/',
+const AuthenticatedWorkspacesActiveRoute =
+  AuthenticatedWorkspacesActiveRouteImport.update({
+    id: '/workspaces/active',
+    path: '/workspaces/active',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedRepositoriesRepoIdIndexRoute =
-  AuthenticatedRepositoriesRepoIdIndexRouteImport.update({
-    id: '/repositories/$repoId/',
-    path: '/repositories/$repoId/',
+const AuthenticatedWorkspacesFailedRoute =
+  AuthenticatedWorkspacesFailedRouteImport.update({
+    id: '/workspaces/failed',
+    path: '/workspaces/failed',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedRegistryRegistryIdIndexRoute =
-  AuthenticatedRegistryRegistryIdIndexRouteImport.update({
-    id: '/registry/$registryId/',
-    path: '/registry/$registryId/',
+const AuthenticatedWorkspacesNewRoute =
+  AuthenticatedWorkspacesNewRouteImport.update({
+    id: '/workspaces/new',
+    path: '/workspaces/new',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
+const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
+  id: '/api/auth/$',
+  path: '/api/auth/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiTrpcSplatRoute = ApiTrpcSplatRouteImport.update({
+  id: '/api/trpc/$',
+  path: '/api/trpc/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthenticatedProfilesProfileIdIndexRoute =
   AuthenticatedProfilesProfileIdIndexRouteImport.update({
     id: '/profiles/$profileId/',
     path: '/profiles/$profileId/',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedWorkspacesWorkspaceIdValidationRoute =
-  AuthenticatedWorkspacesWorkspaceIdValidationRouteImport.update({
-    id: '/workspaces/$workspaceId/validation',
-    path: '/workspaces/$workspaceId/validation',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedWorkspacesWorkspaceIdTraceRoute =
-  AuthenticatedWorkspacesWorkspaceIdTraceRouteImport.update({
-    id: '/workspaces/$workspaceId/trace',
-    path: '/workspaces/$workspaceId/trace',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedWorkspacesWorkspaceIdSpecRoute =
-  AuthenticatedWorkspacesWorkspaceIdSpecRouteImport.update({
-    id: '/workspaces/$workspaceId/spec',
-    path: '/workspaces/$workspaceId/spec',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedWorkspacesWorkspaceIdDiffRoute =
-  AuthenticatedWorkspacesWorkspaceIdDiffRouteImport.update({
-    id: '/workspaces/$workspaceId/diff',
-    path: '/workspaces/$workspaceId/diff',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedRepositoriesRepoIdWorkspacesRoute =
-  AuthenticatedRepositoriesRepoIdWorkspacesRouteImport.update({
-    id: '/repositories/$repoId/workspaces',
-    path: '/repositories/$repoId/workspaces',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedRepositoriesRepoIdSetupRoute =
-  AuthenticatedRepositoriesRepoIdSetupRouteImport.update({
-    id: '/repositories/$repoId/setup',
-    path: '/repositories/$repoId/setup',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedRepositoriesRepoIdSettingsRoute =
-  AuthenticatedRepositoriesRepoIdSettingsRouteImport.update({
-    id: '/repositories/$repoId/settings',
-    path: '/repositories/$repoId/settings',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedProfilesProfileIdSetupRoute =
-  AuthenticatedProfilesProfileIdSetupRouteImport.update({
-    id: '/profiles/$profileId/setup',
-    path: '/profiles/$profileId/setup',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedProfilesProfileIdSecretsRoute =
-  AuthenticatedProfilesProfileIdSecretsRouteImport.update({
-    id: '/profiles/$profileId/secrets',
-    path: '/profiles/$profileId/secrets',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedProfilesProfileIdPackagesRoute =
-  AuthenticatedProfilesProfileIdPackagesRouteImport.update({
-    id: '/profiles/$profileId/packages',
-    path: '/profiles/$profileId/packages',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedProfilesProfileIdEnvVariablesRoute =
-  AuthenticatedProfilesProfileIdEnvVariablesRouteImport.update({
-    id: '/profiles/$profileId/env-variables',
-    path: '/profiles/$profileId/env-variables',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedProfilesProfileIdAgentsRoute =
-  AuthenticatedProfilesProfileIdAgentsRouteImport.update({
-    id: '/profiles/$profileId/agents',
-    path: '/profiles/$profileId/agents',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedProfilesProfileIdAccessRoute =
@@ -272,16 +182,106 @@ const AuthenticatedProfilesProfileIdAccessRoute =
     path: '/profiles/$profileId/access',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedWorkspacesWorkspaceIdRunsRunIdRoute =
-  AuthenticatedWorkspacesWorkspaceIdRunsRunIdRouteImport.update({
-    id: '/workspaces/$workspaceId/runs/$runId',
-    path: '/workspaces/$workspaceId/runs/$runId',
+const AuthenticatedProfilesProfileIdAgentsRoute =
+  AuthenticatedProfilesProfileIdAgentsRouteImport.update({
+    id: '/profiles/$profileId/agents',
+    path: '/profiles/$profileId/agents',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedProfilesProfileIdEnvVariablesRoute =
+  AuthenticatedProfilesProfileIdEnvVariablesRouteImport.update({
+    id: '/profiles/$profileId/env-variables',
+    path: '/profiles/$profileId/env-variables',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedProfilesProfileIdPackagesRoute =
+  AuthenticatedProfilesProfileIdPackagesRouteImport.update({
+    id: '/profiles/$profileId/packages',
+    path: '/profiles/$profileId/packages',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedProfilesProfileIdSecretsRoute =
+  AuthenticatedProfilesProfileIdSecretsRouteImport.update({
+    id: '/profiles/$profileId/secrets',
+    path: '/profiles/$profileId/secrets',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedProfilesProfileIdSetupRoute =
+  AuthenticatedProfilesProfileIdSetupRouteImport.update({
+    id: '/profiles/$profileId/setup',
+    path: '/profiles/$profileId/setup',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedRegistryRegistryIdIndexRoute =
+  AuthenticatedRegistryRegistryIdIndexRouteImport.update({
+    id: '/registry/$registryId/',
+    path: '/registry/$registryId/',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedRepositoriesRepoIdIndexRoute =
+  AuthenticatedRepositoriesRepoIdIndexRouteImport.update({
+    id: '/repositories/$repoId/',
+    path: '/repositories/$repoId/',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedRepositoriesRepoIdSettingsRoute =
+  AuthenticatedRepositoriesRepoIdSettingsRouteImport.update({
+    id: '/repositories/$repoId/settings',
+    path: '/repositories/$repoId/settings',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedRepositoriesRepoIdSetupRoute =
+  AuthenticatedRepositoriesRepoIdSetupRouteImport.update({
+    id: '/repositories/$repoId/setup',
+    path: '/repositories/$repoId/setup',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedRepositoriesRepoIdWorkspacesRoute =
+  AuthenticatedRepositoriesRepoIdWorkspacesRouteImport.update({
+    id: '/repositories/$repoId/workspaces',
+    path: '/repositories/$repoId/workspaces',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedWorkspacesWorkspaceIdIndexRoute =
+  AuthenticatedWorkspacesWorkspaceIdIndexRouteImport.update({
+    id: '/workspaces/$workspaceId/',
+    path: '/workspaces/$workspaceId/',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedWorkspacesWorkspaceIdDiffRoute =
+  AuthenticatedWorkspacesWorkspaceIdDiffRouteImport.update({
+    id: '/workspaces/$workspaceId/diff',
+    path: '/workspaces/$workspaceId/diff',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedWorkspacesWorkspaceIdSpecRoute =
+  AuthenticatedWorkspacesWorkspaceIdSpecRouteImport.update({
+    id: '/workspaces/$workspaceId/spec',
+    path: '/workspaces/$workspaceId/spec',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedWorkspacesWorkspaceIdTraceRoute =
+  AuthenticatedWorkspacesWorkspaceIdTraceRouteImport.update({
+    id: '/workspaces/$workspaceId/trace',
+    path: '/workspaces/$workspaceId/trace',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedWorkspacesWorkspaceIdValidationRoute =
+  AuthenticatedWorkspacesWorkspaceIdValidationRouteImport.update({
+    id: '/workspaces/$workspaceId/validation',
+    path: '/workspaces/$workspaceId/validation',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedRegistryRegistryIdRepoTagRoute =
   AuthenticatedRegistryRegistryIdRepoTagRouteImport.update({
     id: '/registry/$registryId/$repo/$tag',
     path: '/registry/$registryId/$repo/$tag',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedWorkspacesWorkspaceIdRunsRunIdRoute =
+  AuthenticatedWorkspacesWorkspaceIdRunsRunIdRouteImport.update({
+    id: '/workspaces/$workspaceId/runs/$runId',
+    path: '/workspaces/$workspaceId/runs/$runId',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 
@@ -549,11 +549,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/setup': {
-      id: '/setup'
-      path: '/setup'
-      fullPath: '/setup'
-      preLoaderRoute: typeof SetupRouteImport
+    '/_auth': {
+      id: '/_auth'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AuthRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authenticated': {
@@ -563,12 +563,40 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_auth': {
-      id: '/_auth'
-      path: ''
-      fullPath: '/'
-      preLoaderRoute: typeof AuthRouteImport
+    '/setup': {
+      id: '/setup'
+      path: '/setup'
+      fullPath: '/setup'
+      preLoaderRoute: typeof SetupRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_auth/forgot-password': {
+      id: '/_auth/forgot-password'
+      path: '/forgot-password'
+      fullPath: '/forgot-password'
+      preLoaderRoute: typeof AuthForgotPasswordRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/_auth/login': {
+      id: '/_auth/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof AuthLoginRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/_auth/register': {
+      id: '/_auth/register'
+      path: '/register'
+      fullPath: '/register'
+      preLoaderRoute: typeof AuthRegisterRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/_auth/reset-password': {
+      id: '/_auth/reset-password'
+      path: '/reset-password'
+      fullPath: '/reset-password'
+      preLoaderRoute: typeof AuthResetPasswordRouteImport
+      parentRoute: typeof AuthRoute
     }
     '/_authenticated/': {
       id: '/_authenticated/'
@@ -584,53 +612,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAboutRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_auth/reset-password': {
-      id: '/_auth/reset-password'
-      path: '/reset-password'
-      fullPath: '/reset-password'
-      preLoaderRoute: typeof AuthResetPasswordRouteImport
-      parentRoute: typeof AuthRoute
-    }
-    '/_auth/register': {
-      id: '/_auth/register'
-      path: '/register'
-      fullPath: '/register'
-      preLoaderRoute: typeof AuthRegisterRouteImport
-      parentRoute: typeof AuthRoute
-    }
-    '/_auth/login': {
-      id: '/_auth/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof AuthLoginRouteImport
-      parentRoute: typeof AuthRoute
-    }
-    '/_auth/forgot-password': {
-      id: '/_auth/forgot-password'
-      path: '/forgot-password'
-      fullPath: '/forgot-password'
-      preLoaderRoute: typeof AuthForgotPasswordRouteImport
-      parentRoute: typeof AuthRoute
-    }
-    '/_authenticated/workspaces/': {
-      id: '/_authenticated/workspaces/'
-      path: '/workspaces'
-      fullPath: '/workspaces/'
-      preLoaderRoute: typeof AuthenticatedWorkspacesIndexRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/repositories/': {
-      id: '/_authenticated/repositories/'
-      path: '/repositories'
-      fullPath: '/repositories/'
-      preLoaderRoute: typeof AuthenticatedRepositoriesIndexRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/registry/': {
-      id: '/_authenticated/registry/'
-      path: '/registry'
-      fullPath: '/registry/'
-      preLoaderRoute: typeof AuthenticatedRegistryIndexRouteImport
+    '/_authenticated/github/setup': {
+      id: '/_authenticated/github/setup'
+      path: '/github/setup'
+      fullPath: '/github/setup'
+      preLoaderRoute: typeof AuthenticatedGithubSetupRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/profiles/': {
@@ -640,46 +626,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedProfilesIndexRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/api/trpc/$': {
-      id: '/api/trpc/$'
-      path: '/api/trpc/$'
-      fullPath: '/api/trpc/$'
-      preLoaderRoute: typeof ApiTrpcSplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/auth/$': {
-      id: '/api/auth/$'
-      path: '/api/auth/$'
-      fullPath: '/api/auth/$'
-      preLoaderRoute: typeof ApiAuthSplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/_authenticated/workspaces/new': {
-      id: '/_authenticated/workspaces/new'
-      path: '/workspaces/new'
-      fullPath: '/workspaces/new'
-      preLoaderRoute: typeof AuthenticatedWorkspacesNewRouteImport
+    '/_authenticated/profiles/create': {
+      id: '/_authenticated/profiles/create'
+      path: '/profiles/create'
+      fullPath: '/profiles/create'
+      preLoaderRoute: typeof AuthenticatedProfilesCreateRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/workspaces/failed': {
-      id: '/_authenticated/workspaces/failed'
-      path: '/workspaces/failed'
-      fullPath: '/workspaces/failed'
-      preLoaderRoute: typeof AuthenticatedWorkspacesFailedRouteImport
+    '/_authenticated/registry/': {
+      id: '/_authenticated/registry/'
+      path: '/registry'
+      fullPath: '/registry/'
+      preLoaderRoute: typeof AuthenticatedRegistryIndexRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/workspaces/active': {
-      id: '/_authenticated/workspaces/active'
-      path: '/workspaces/active'
-      fullPath: '/workspaces/active'
-      preLoaderRoute: typeof AuthenticatedWorkspacesActiveRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/settings/ssh-keys': {
-      id: '/_authenticated/settings/ssh-keys'
-      path: '/settings/ssh-keys'
-      fullPath: '/settings/ssh-keys'
-      preLoaderRoute: typeof AuthenticatedSettingsSshKeysRouteImport
+    '/_authenticated/repositories/': {
+      id: '/_authenticated/repositories/'
+      path: '/repositories'
+      fullPath: '/repositories/'
+      preLoaderRoute: typeof AuthenticatedRepositoriesIndexRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/settings/connected-accounts': {
@@ -689,130 +654,60 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSettingsConnectedAccountsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/profiles/create': {
-      id: '/_authenticated/profiles/create'
-      path: '/profiles/create'
-      fullPath: '/profiles/create'
-      preLoaderRoute: typeof AuthenticatedProfilesCreateRouteImport
+    '/_authenticated/settings/ssh-keys': {
+      id: '/_authenticated/settings/ssh-keys'
+      path: '/settings/ssh-keys'
+      fullPath: '/settings/ssh-keys'
+      preLoaderRoute: typeof AuthenticatedSettingsSshKeysRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/github/setup': {
-      id: '/_authenticated/github/setup'
-      path: '/github/setup'
-      fullPath: '/github/setup'
-      preLoaderRoute: typeof AuthenticatedGithubSetupRouteImport
+    '/_authenticated/workspaces/': {
+      id: '/_authenticated/workspaces/'
+      path: '/workspaces'
+      fullPath: '/workspaces/'
+      preLoaderRoute: typeof AuthenticatedWorkspacesIndexRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/workspaces/$workspaceId/': {
-      id: '/_authenticated/workspaces/$workspaceId/'
-      path: '/workspaces/$workspaceId'
-      fullPath: '/workspaces/$workspaceId/'
-      preLoaderRoute: typeof AuthenticatedWorkspacesWorkspaceIdIndexRouteImport
+    '/_authenticated/workspaces/active': {
+      id: '/_authenticated/workspaces/active'
+      path: '/workspaces/active'
+      fullPath: '/workspaces/active'
+      preLoaderRoute: typeof AuthenticatedWorkspacesActiveRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/repositories/$repoId/': {
-      id: '/_authenticated/repositories/$repoId/'
-      path: '/repositories/$repoId'
-      fullPath: '/repositories/$repoId/'
-      preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdIndexRouteImport
+    '/_authenticated/workspaces/failed': {
+      id: '/_authenticated/workspaces/failed'
+      path: '/workspaces/failed'
+      fullPath: '/workspaces/failed'
+      preLoaderRoute: typeof AuthenticatedWorkspacesFailedRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/registry/$registryId/': {
-      id: '/_authenticated/registry/$registryId/'
-      path: '/registry/$registryId'
-      fullPath: '/registry/$registryId/'
-      preLoaderRoute: typeof AuthenticatedRegistryRegistryIdIndexRouteImport
+    '/_authenticated/workspaces/new': {
+      id: '/_authenticated/workspaces/new'
+      path: '/workspaces/new'
+      fullPath: '/workspaces/new'
+      preLoaderRoute: typeof AuthenticatedWorkspacesNewRouteImport
       parentRoute: typeof AuthenticatedRoute
+    }
+    '/api/auth/$': {
+      id: '/api/auth/$'
+      path: '/api/auth/$'
+      fullPath: '/api/auth/$'
+      preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/trpc/$': {
+      id: '/api/trpc/$'
+      path: '/api/trpc/$'
+      fullPath: '/api/trpc/$'
+      preLoaderRoute: typeof ApiTrpcSplatRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_authenticated/profiles/$profileId/': {
       id: '/_authenticated/profiles/$profileId/'
       path: '/profiles/$profileId'
       fullPath: '/profiles/$profileId/'
       preLoaderRoute: typeof AuthenticatedProfilesProfileIdIndexRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/workspaces/$workspaceId/validation': {
-      id: '/_authenticated/workspaces/$workspaceId/validation'
-      path: '/workspaces/$workspaceId/validation'
-      fullPath: '/workspaces/$workspaceId/validation'
-      preLoaderRoute: typeof AuthenticatedWorkspacesWorkspaceIdValidationRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/workspaces/$workspaceId/trace': {
-      id: '/_authenticated/workspaces/$workspaceId/trace'
-      path: '/workspaces/$workspaceId/trace'
-      fullPath: '/workspaces/$workspaceId/trace'
-      preLoaderRoute: typeof AuthenticatedWorkspacesWorkspaceIdTraceRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/workspaces/$workspaceId/spec': {
-      id: '/_authenticated/workspaces/$workspaceId/spec'
-      path: '/workspaces/$workspaceId/spec'
-      fullPath: '/workspaces/$workspaceId/spec'
-      preLoaderRoute: typeof AuthenticatedWorkspacesWorkspaceIdSpecRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/workspaces/$workspaceId/diff': {
-      id: '/_authenticated/workspaces/$workspaceId/diff'
-      path: '/workspaces/$workspaceId/diff'
-      fullPath: '/workspaces/$workspaceId/diff'
-      preLoaderRoute: typeof AuthenticatedWorkspacesWorkspaceIdDiffRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/repositories/$repoId/workspaces': {
-      id: '/_authenticated/repositories/$repoId/workspaces'
-      path: '/repositories/$repoId/workspaces'
-      fullPath: '/repositories/$repoId/workspaces'
-      preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdWorkspacesRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/repositories/$repoId/setup': {
-      id: '/_authenticated/repositories/$repoId/setup'
-      path: '/repositories/$repoId/setup'
-      fullPath: '/repositories/$repoId/setup'
-      preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdSetupRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/repositories/$repoId/settings': {
-      id: '/_authenticated/repositories/$repoId/settings'
-      path: '/repositories/$repoId/settings'
-      fullPath: '/repositories/$repoId/settings'
-      preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdSettingsRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/profiles/$profileId/setup': {
-      id: '/_authenticated/profiles/$profileId/setup'
-      path: '/profiles/$profileId/setup'
-      fullPath: '/profiles/$profileId/setup'
-      preLoaderRoute: typeof AuthenticatedProfilesProfileIdSetupRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/profiles/$profileId/secrets': {
-      id: '/_authenticated/profiles/$profileId/secrets'
-      path: '/profiles/$profileId/secrets'
-      fullPath: '/profiles/$profileId/secrets'
-      preLoaderRoute: typeof AuthenticatedProfilesProfileIdSecretsRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/profiles/$profileId/packages': {
-      id: '/_authenticated/profiles/$profileId/packages'
-      path: '/profiles/$profileId/packages'
-      fullPath: '/profiles/$profileId/packages'
-      preLoaderRoute: typeof AuthenticatedProfilesProfileIdPackagesRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/profiles/$profileId/env-variables': {
-      id: '/_authenticated/profiles/$profileId/env-variables'
-      path: '/profiles/$profileId/env-variables'
-      fullPath: '/profiles/$profileId/env-variables'
-      preLoaderRoute: typeof AuthenticatedProfilesProfileIdEnvVariablesRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/profiles/$profileId/agents': {
-      id: '/_authenticated/profiles/$profileId/agents'
-      path: '/profiles/$profileId/agents'
-      fullPath: '/profiles/$profileId/agents'
-      preLoaderRoute: typeof AuthenticatedProfilesProfileIdAgentsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/profiles/$profileId/access': {
@@ -822,11 +717,109 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedProfilesProfileIdAccessRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/workspaces/$workspaceId/runs/$runId': {
-      id: '/_authenticated/workspaces/$workspaceId/runs/$runId'
-      path: '/workspaces/$workspaceId/runs/$runId'
-      fullPath: '/workspaces/$workspaceId/runs/$runId'
-      preLoaderRoute: typeof AuthenticatedWorkspacesWorkspaceIdRunsRunIdRouteImport
+    '/_authenticated/profiles/$profileId/agents': {
+      id: '/_authenticated/profiles/$profileId/agents'
+      path: '/profiles/$profileId/agents'
+      fullPath: '/profiles/$profileId/agents'
+      preLoaderRoute: typeof AuthenticatedProfilesProfileIdAgentsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/profiles/$profileId/env-variables': {
+      id: '/_authenticated/profiles/$profileId/env-variables'
+      path: '/profiles/$profileId/env-variables'
+      fullPath: '/profiles/$profileId/env-variables'
+      preLoaderRoute: typeof AuthenticatedProfilesProfileIdEnvVariablesRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/profiles/$profileId/packages': {
+      id: '/_authenticated/profiles/$profileId/packages'
+      path: '/profiles/$profileId/packages'
+      fullPath: '/profiles/$profileId/packages'
+      preLoaderRoute: typeof AuthenticatedProfilesProfileIdPackagesRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/profiles/$profileId/secrets': {
+      id: '/_authenticated/profiles/$profileId/secrets'
+      path: '/profiles/$profileId/secrets'
+      fullPath: '/profiles/$profileId/secrets'
+      preLoaderRoute: typeof AuthenticatedProfilesProfileIdSecretsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/profiles/$profileId/setup': {
+      id: '/_authenticated/profiles/$profileId/setup'
+      path: '/profiles/$profileId/setup'
+      fullPath: '/profiles/$profileId/setup'
+      preLoaderRoute: typeof AuthenticatedProfilesProfileIdSetupRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/registry/$registryId/': {
+      id: '/_authenticated/registry/$registryId/'
+      path: '/registry/$registryId'
+      fullPath: '/registry/$registryId/'
+      preLoaderRoute: typeof AuthenticatedRegistryRegistryIdIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/repositories/$repoId/': {
+      id: '/_authenticated/repositories/$repoId/'
+      path: '/repositories/$repoId'
+      fullPath: '/repositories/$repoId/'
+      preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/repositories/$repoId/settings': {
+      id: '/_authenticated/repositories/$repoId/settings'
+      path: '/repositories/$repoId/settings'
+      fullPath: '/repositories/$repoId/settings'
+      preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdSettingsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/repositories/$repoId/setup': {
+      id: '/_authenticated/repositories/$repoId/setup'
+      path: '/repositories/$repoId/setup'
+      fullPath: '/repositories/$repoId/setup'
+      preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdSetupRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/repositories/$repoId/workspaces': {
+      id: '/_authenticated/repositories/$repoId/workspaces'
+      path: '/repositories/$repoId/workspaces'
+      fullPath: '/repositories/$repoId/workspaces'
+      preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdWorkspacesRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/workspaces/$workspaceId/': {
+      id: '/_authenticated/workspaces/$workspaceId/'
+      path: '/workspaces/$workspaceId'
+      fullPath: '/workspaces/$workspaceId/'
+      preLoaderRoute: typeof AuthenticatedWorkspacesWorkspaceIdIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/workspaces/$workspaceId/diff': {
+      id: '/_authenticated/workspaces/$workspaceId/diff'
+      path: '/workspaces/$workspaceId/diff'
+      fullPath: '/workspaces/$workspaceId/diff'
+      preLoaderRoute: typeof AuthenticatedWorkspacesWorkspaceIdDiffRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/workspaces/$workspaceId/spec': {
+      id: '/_authenticated/workspaces/$workspaceId/spec'
+      path: '/workspaces/$workspaceId/spec'
+      fullPath: '/workspaces/$workspaceId/spec'
+      preLoaderRoute: typeof AuthenticatedWorkspacesWorkspaceIdSpecRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/workspaces/$workspaceId/trace': {
+      id: '/_authenticated/workspaces/$workspaceId/trace'
+      path: '/workspaces/$workspaceId/trace'
+      fullPath: '/workspaces/$workspaceId/trace'
+      preLoaderRoute: typeof AuthenticatedWorkspacesWorkspaceIdTraceRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/workspaces/$workspaceId/validation': {
+      id: '/_authenticated/workspaces/$workspaceId/validation'
+      path: '/workspaces/$workspaceId/validation'
+      fullPath: '/workspaces/$workspaceId/validation'
+      preLoaderRoute: typeof AuthenticatedWorkspacesWorkspaceIdValidationRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/registry/$registryId/$repo/$tag': {
@@ -834,6 +827,13 @@ declare module '@tanstack/react-router' {
       path: '/registry/$registryId/$repo/$tag'
       fullPath: '/registry/$registryId/$repo/$tag'
       preLoaderRoute: typeof AuthenticatedRegistryRegistryIdRepoTagRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/workspaces/$workspaceId/runs/$runId': {
+      id: '/_authenticated/workspaces/$workspaceId/runs/$runId'
+      path: '/workspaces/$workspaceId/runs/$runId'
+      fullPath: '/workspaces/$workspaceId/runs/$runId'
+      preLoaderRoute: typeof AuthenticatedWorkspacesWorkspaceIdRunsRunIdRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
   }
