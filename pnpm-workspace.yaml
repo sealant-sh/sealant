@@ -26,15 +26,15 @@ catalog:
   "@tailwindcss/typography": ^0.5.16
   "@tailwindcss/vite": ^4.1.18
   "@t3-oss/env-core": ^0.13.11
-  "@tanstack/devtools-vite": 0.8.0
+  "@tanstack/devtools-vite": 0.8.5
   "@tanstack/react-devtools": 0.10.7
   "@tanstack/react-form": 1.33.0
-  "@tanstack/react-query": ^5.101.0
-  "@tanstack/react-router": 1.170.16
+  "@tanstack/react-query": ^5.104.4
+  "@tanstack/react-router": 1.170.45
   "@tanstack/react-router-devtools": 1.167.0
-  "@tanstack/react-router-ssr-query": 1.167.1
-  "@tanstack/react-start": 1.168.26
-  "@tanstack/router-plugin": ^1.132.0
+  "@tanstack/react-router-ssr-query": 1.167.3
+  "@tanstack/react-start": 1.169.3
+  "@tanstack/router-plugin": 1.168.47
   "@testing-library/dom": ^10.4.1
   "@testing-library/react": ^16.3.0
   "@types/node": ^22.10.2
@@ -55,7 +55,8 @@ catalog:
   tailwind-merge: ^3.5.0
   tailwindcss: ^4.1.18
   typescript: ^5.7.2
-  vite: ^7.3.1
+  # TanStack Start 1.0 (@tanstack/react-start 1.169) requires Vite 8.
+  vite: ^8.3.4
   vite-tsconfig-paths: ^5.1.4
   vitest: 3.2.7
   ws: ^8.18.3
@@ -72,6 +73,8 @@ minimumReleaseAgeExclude:
   - "@sealant/runtime-protocol"
   - "@sealant/runtime-client-next"
   - "@sealant/runtime-protocol-next"
+  - "@tanstack/query-core@5.104.4"
+  - "@tanstack/react-query@5.104.4"
 
 onlyBuiltDependencies:
   - better-sqlite3
