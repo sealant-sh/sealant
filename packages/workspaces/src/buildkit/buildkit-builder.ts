@@ -50,6 +50,9 @@ import {
 import {
   GIT_SAFE_DIRECTORY_ANY,
   IMAGE_PROBE_PATH,
+  NIX_BOOT_PATH,
+  NIX_BOOT_SCRIPT,
+  NIX_PROFILE,
   isPersonLayoutFamily,
   renderImageProbeStep,
   renderPersonLayoutSteps,
@@ -376,11 +379,11 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
     internalPackages: ["bash", "cacert", "coreutils", "gawk", "gitMinimal", "openssh", "shadow"],
     sealantdPackages: ["socat"],
     shellPaths: {
-      bash: "/root/.nix-profile/bin/bash",
-      zsh: "/root/.nix-profile/bin/zsh",
-      fish: "/root/.nix-profile/bin/fish",
+      bash: `${NIX_PROFILE}/bin/bash`,
+      zsh: `${NIX_PROFILE}/bin/zsh`,
+      fish: `${NIX_PROFILE}/bin/fish`,
     },
-    sshdPath: "/root/.nix-profile/bin/sshd",
+    sshdPath: `${NIX_PROFILE}/bin/sshd`,
   },
 };
 
@@ -1016,7 +1019,7 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
 
   const nixPackageList = packageList.map((pkg) => shellQuote(`nixpkgs#${pkg}`));
   return [
-    "RUN nix profile add --priority 6 --accept-flake-config --extra-experimental-features 'nix-command flakes' \\",
+    `RUN nix profile add --profile ${NIX_PROFILE} --priority 6 --accept-flake-config --extra-experimental-features 'nix-command flakes' \\`,
     `    ${nixPackageList.join(" ")} && \\`,
     "    nix --extra-experimental-features 'nix-command flakes' profile list > /dev/null",
     // The nix image has no /lib64/ld-linux-*: every binary in it names a loader inside the store.
@@ -1438,7 +1441,6 @@ const renderContainerfile = (plan: ResolvedImagePlan, platform: WorkspaceImagePl
     harnessInstallStep,
     // The person layout comes right after the harnesses: a change to its packages reruns neither
     // the OS upgrade nor a harness install, and a sealantd pin bump (below) does not rerun it.
-    // Nix images take one person and get none of this (person-layout.ts says why).
     ...(personLayoutFamily === undefined
       ? []
       : [
@@ -1449,9 +1451,7 @@ const renderContainerfile = (plan: ResolvedImagePlan, platform: WorkspaceImagePl
           }),
         ]),
     "",
-    plan.osFamily === "nix"
-      ? `ENV SHELL=${shellQuote(shellPath)}`
-      : `RUN usermod -s ${shellQuote(shellPath)} root`,
+    `RUN usermod -s ${shellQuote(shellPath)} root`,
     "",
     // The sealantd binary is the mandatory PID-1 entrypoint. We bake it in from the public GHCR
     // image via a multi-stage `COPY --from` so we inherit its multi-arch (amd64+arm64) binary
@@ -1484,6 +1484,9 @@ const renderContainerfile = (plan: ResolvedImagePlan, platform: WorkspaceImagePl
         ]
       : []),
     ...(dotfilesStep === undefined ? [] : ["", dotfilesStep]),
+    ...(plan.osFamily === "nix"
+      ? ["", `COPY --chmod=755 <<'SEALANT_NIX_BOOT' ${NIX_BOOT_PATH}`, ...NIX_BOOT_SCRIPT, "SEALANT_NIX_BOOT"]
+      : []),
     "",
     // A managed family's image fails its build here rather than ship without the person layout.
     renderImageProbeStep({ require: personLayoutFamily !== undefined }),
@@ -1491,7 +1494,9 @@ const renderContainerfile = (plan: ResolvedImagePlan, platform: WorkspaceImagePl
     renderBootEnv(plan),
     "",
     "WORKDIR /workspace",
-    'ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]',
+    plan.osFamily === "nix"
+      ? `ENTRYPOINT ["${NIX_BOOT_PATH}"]`
+      : 'ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]',
     "",
   ].join("\n");
 };

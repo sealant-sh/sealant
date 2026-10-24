@@ -1009,7 +1009,9 @@ describe("compileWorkspaceBuildSpec", () => {
     });
     expect(result.buildkit.imagePlan.packageManager).toBe("nix");
     expect(containerfile).toContain("FROM nixos/nix:latest");
-    expect(containerfile).toContain("nix profile add --priority 6 --accept-flake-config");
+    expect(containerfile).toContain(
+      "nix profile add --profile /nix/var/nix/profiles/default --priority 6 --accept-flake-config",
+    );
     expect(containerfile).toContain(
       "nix --extra-experimental-features 'nix-command flakes' profile list > /dev/null",
     );
@@ -1026,9 +1028,15 @@ describe("compileWorkspaceBuildSpec", () => {
     expect(containerfile).toContain(
       `RUN npm install -g --prefix /usr/local --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@${HARNESS_VERSIONS["claude-code"]}`,
     );
-    expect(containerfile).toContain("ENV SHELL='/root/.nix-profile/bin/zsh'");
-    expect(containerfile).not.toContain("RUN usermod -s");
-    expect(containerfile).toContain('ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]');
+    // Root's passwd shell, which Mend gives each person, in a profile a person can reach.
+    expect(containerfile).toContain("RUN usermod -s '/nix/var/nix/profiles/default/bin/zsh' root");
+    expect(containerfile).not.toContain("ENV SHELL=");
+    // The nix daemon a person's nix goes through starts before sealantd.
+    expect(containerfile).toContain(
+      "COPY --chmod=755 <<'SEALANT_NIX_BOOT' /usr/local/bin/sealant-nix-boot\n#!/bin/sh\n",
+    );
+    expect(containerfile).toContain('ENTRYPOINT ["/usr/local/bin/sealant-nix-boot"]');
+    expect(containerfile).not.toContain('ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]');
     // nixos/nix's PATH is only its profile dirs; without this prepend the container dies at
     // init with `exec: "sealantd": executable file not found in $PATH`.
     expect(containerfile).toContain("ENV PATH=/usr/local/bin:$PATH");
@@ -1036,9 +1044,13 @@ describe("compileWorkspaceBuildSpec", () => {
     // Nix-specific shell paths flow to `boot` via the build-static ENV contract so the supervisor
     // (E3 glibc shim, ssh bring-up, harness launch) resolves the right binaries per distro.
     expect(containerfile).toContain("SEALANT_OS_FAMILY='nix'");
-    expect(containerfile).toContain("SEALANT_BASH_SHELL_PATH='/root/.nix-profile/bin/bash'");
-    expect(containerfile).toContain("SEALANT_LOGIN_SHELL_PATH='/root/.nix-profile/bin/zsh'");
-    expect(containerfile).toContain("SEALANT_SSHD_PATH='/root/.nix-profile/bin/sshd'");
+    expect(containerfile).toContain(
+      "SEALANT_BASH_SHELL_PATH='/nix/var/nix/profiles/default/bin/bash'",
+    );
+    expect(containerfile).toContain(
+      "SEALANT_LOGIN_SHELL_PATH='/nix/var/nix/profiles/default/bin/zsh'",
+    );
+    expect(containerfile).toContain("SEALANT_SSHD_PATH='/nix/var/nix/profiles/default/bin/sshd'");
     expect(containerfile).not.toContain("SEALANT_HARNESS_LAUNCH_COMMAND");
 
     // The deleted bash entrypoint (glibc shim, shadow rewrite, sshd config, harness exec) is gone.
@@ -1142,7 +1154,11 @@ describe("compileWorkspaceBuildSpec", () => {
       expect(containerfile).toContain(
         `COPY --from=${sealantdImageReference} /usr/local/bin/sealantd /usr/local/bin/sealantd`,
       );
-      expect(containerfile).toContain('ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]');
+      expect(containerfile).toContain(
+        osFamily === "nix"
+          ? 'ENTRYPOINT ["/usr/local/bin/sealant-nix-boot"]'
+          : 'ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]',
+      );
     }
   });
 
