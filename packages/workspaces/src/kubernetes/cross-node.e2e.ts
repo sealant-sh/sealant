@@ -116,12 +116,12 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes cross-node workspace", () => {
     registryForward = await startRegistryForward();
 
     // 0. Build + push the workspace image with a rootless BuildKit Job (no Docker socket anywhere).
-    publishedImage = await buildWorkspaceImage({
+    ({ publishedImage } = await buildWorkspaceImage({
       blueprint,
       registryPort: registryForward.port,
       tag: "fedora",
       kubeconfigPath,
-    });
+    }));
     expect(publishedImage.digest).toMatch(/^sha256:/);
 
     // 1. The store Pod (node A) creates the bare repo + linked worktree on the claim.
