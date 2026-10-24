@@ -233,7 +233,9 @@ const refreshOneAccount = Effect.fn("refreshClaudeSessionAccount")(function* (in
         observedCredentialsJson: observed,
         credentialCipher,
         source: "keep-fresh sweeper",
+        sourceRevision: account.credentialRevision,
       });
+      if (persisted === "skipped-superseded") return "skipped" as const;
       if (persisted !== "synced") return "failed" as const;
 
       // The previous access token is revoked now: running workspaces get the new copy at once.

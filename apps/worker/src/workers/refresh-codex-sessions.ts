@@ -254,6 +254,7 @@ const refreshOneAccount = Effect.fn("refreshCodexSessionAccount")(function* (inp
         observedAuthJson: observed,
         credentialCipher,
         source: "keep-fresh sweeper",
+        sourceRevision: account.credentialRevision,
       });
 
       if (persisted === "synced") {
@@ -270,6 +271,7 @@ const refreshOneAccount = Effect.fn("refreshCodexSessionAccount")(function* (inp
         );
         return "refreshed" as const;
       }
+      if (persisted === "skipped-superseded") return "skipped" as const;
 
       if (result?.refusedForGood === true) {
         yield* accounts.markInvalid({ id: account.id, revision: account.credentialRevision });

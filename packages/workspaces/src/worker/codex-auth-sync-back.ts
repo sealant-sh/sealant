@@ -67,6 +67,7 @@ export type CodexAuthPersistOutcome =
   | "skipped-copy"
   | "skipped-account-unavailable"
   | "skipped-not-newer"
+  | "skipped-superseded"
   | "failed";
 
 export interface PersistCodexAuthJsonIfNewerInput {
@@ -76,6 +77,11 @@ export interface PersistCodexAuthJsonIfNewerInput {
   readonly credentialCipher: CredentialCipherService;
   /** Names the observation path in the outcome log line (e.g. "workspace sync-back"). */
   readonly source: string;
+  /**
+   * The `credentialRevision` the observed file was refreshed from. Once the stored credential has
+   * moved on (a reconnect), the observation belongs to a credential that is gone: nothing is stored.
+   */
+  readonly sourceRevision?: number;
 }
 
 /**
@@ -120,6 +126,13 @@ export const persistCodexAuthJsonIfNewer = Effect.fn("persistCodexAuthJsonIfNewe
       return "skipped-account-unavailable" as const;
     }
 
+    if (input.sourceRevision !== undefined && account.credentialRevision !== input.sourceRevision) {
+      yield* Effect.logInfo(
+        `${describe} skipped-superseded: the observed file came from credential revision ${input.sourceRevision}; the account now holds revision ${account.credentialRevision}.`,
+      );
+      return "skipped-superseded" as const;
+    }
+
     const storedLastRefresh = readStoredCodexLastRefresh(account.metadata);
     const observedLastRefresh = parsed.metadata.lastRefresh;
 
@@ -134,8 +147,9 @@ export const persistCodexAuthJsonIfNewer = Effect.fn("persistCodexAuthJsonIfNewe
     const plaintextPayload = JSON.stringify({ authJson: input.observedAuthJson });
     const sealed = yield* input.credentialCipher.encrypt(plaintextPayload);
 
-    yield* accounts.replacePayload({
+    const replaced = yield* accounts.replacePayload({
       id: account.id,
+      expectedRevision: account.credentialRevision,
       encryptedPayload: sealed.sealed,
       encryptionKeyId: sealed.keyId,
       payloadSha256: sha256Hex(plaintextPayload),
@@ -151,6 +165,13 @@ export const persistCodexAuthJsonIfNewer = Effect.fn("persistCodexAuthJsonIfNewe
         ...(parsed.metadata.email === undefined ? {} : { email: parsed.metadata.email }),
       },
     });
+
+    if (replaced === undefined) {
+      yield* Effect.logInfo(
+        `${describe} skipped-superseded: the stored credential changed while this one was being decided on.`,
+      );
+      return "skipped-superseded" as const;
+    }
 
     yield* accounts.updateSyncState({ id: account.id, lastSyncedAt: new Date() });
 
