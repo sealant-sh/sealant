@@ -126,7 +126,7 @@ const profilesListCommand = Command.make("list", {}, () =>
 const accountNameFlag = (provider: ConnectedAccountProvider) =>
   Flag.String(provider).pipe(
     Flag.optional,
-    Flag.withDescription(`Name of the ${provider} account to bind`),
+    Flag.withDescription(`Name of the ${provider} account to bind (default: your chosen default)`),
   );
 
 const bindProvider = (
@@ -144,6 +144,14 @@ const bindProvider = (
     }>;
   },
 ): Effect.Effect<unknown, CliFailure> => {
+  // The control plane resolves `default` to the chosen default, which need not be named default.
+  if (input.accountName === "default") {
+    return client.setProfileCredentialBinding(api, {
+      profileId: input.profileId,
+      provider: input.provider,
+      connectedAccountId: "default",
+    });
+  }
   const account = input.accounts.find(
     (candidate) =>
       candidate.provider === input.provider &&

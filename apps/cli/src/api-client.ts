@@ -29,7 +29,7 @@ export interface ControlPlaneClient {
     settings: ApiSettings,
     input: {
       readonly provider: ConnectedAccountProvider;
-      readonly name: string;
+      readonly name: string | undefined;
       readonly secret: string;
     },
   ) => Effect.Effect<ConnectedAccountSummary, CliFailure>;
@@ -165,7 +165,7 @@ const makeControlPlaneClient = (): ControlPlaneClient => ({
       body: {
         ownerUserId: settings.ownerUserId,
         provider: input.provider,
-        name: input.name,
+        ...(input.name === undefined ? {} : { name: input.name }),
         secret: input.secret,
       },
     }),
