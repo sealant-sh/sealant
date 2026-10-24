@@ -14,7 +14,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./effect": "./src/effect/index.ts"
+    "./effect": "./src/effect/index.ts",
+    "./internal/forward": "./src/facade/forward.ts"
   },
   "publishConfig": {
     "access": "public",

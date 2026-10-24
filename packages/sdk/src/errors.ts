@@ -1,3 +1,5 @@
+import type { ForwardRefusalReason } from "@sealant/api-contracts";
+
 /**
  * Public SDK errors. The Effect core fails on a typed `Schema.TaggedError` channel; the facade maps
  * every tagged failure onto one of these PLAIN `Error` subclasses (a single `_tag` switch) so the
@@ -29,7 +31,7 @@ export class SealantRuntimeError extends SealantError {
 
 /** A control-plane API request failed (HTTP-level or typed API error). */
 export class SealantApiError extends SealantError {
-  override readonly name = "SealantApiError";
+  override readonly name: string = "SealantApiError";
   /** HTTP status, when the failure came from a response. */
   readonly status?: number;
   /**
@@ -71,6 +73,54 @@ export class SealantApiError extends SealantError {
     }
     if (options?.candidateAccountIds !== undefined) {
       this.candidateAccountIds = options.candidateAccountIds;
+    }
+  }
+}
+
+/**
+ * Why a workspace forward did not open. Core names every refusal it sends. The SDK adds
+ * `unrecognized-refusal` (Core sent a reason newer than this SDK; it is kept in `wireReason`),
+ * `protocol-unsupported` (the control plane predates typed refusals, or answered with something
+ * unreadable) and `transport-unavailable` (no answer could be read at all).
+ */
+export type ForwardDialReason =
+  | ForwardRefusalReason
+  | "unrecognized-refusal"
+  | "protocol-unsupported"
+  | "transport-unavailable";
+
+export type ForwardDialFailure =
+  | {
+      readonly reason: ForwardRefusalReason;
+      readonly status: number;
+      readonly message: string;
+    }
+  | {
+      readonly reason: "unrecognized-refusal";
+      readonly wireReason: string;
+      readonly status: number;
+      readonly message: string;
+    }
+  | {
+      readonly reason: "protocol-unsupported" | "transport-unavailable";
+      readonly message: string;
+    };
+
+/** A workspace forward was refused before it opened. Branch on `reason`. */
+export class ForwardDialError extends SealantApiError {
+  override readonly name: string = "ForwardDialError";
+  override readonly reason: ForwardDialReason;
+  /** The reason Core sent, when this SDK does not know it (`unrecognized-refusal`). */
+  readonly wireReason?: string;
+  constructor(failure: ForwardDialFailure) {
+    super(failure.message, {
+      code: "ForwardDialError",
+      reason: failure.reason,
+      ...("status" in failure ? { status: failure.status } : {}),
+    });
+    this.reason = failure.reason;
+    if ("wireReason" in failure) {
+      this.wireReason = failure.wireReason;
     }
   }
 }
