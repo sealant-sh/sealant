@@ -28,6 +28,7 @@ import type {
   V1VolumeMount,
 } from "@kubernetes/client-node";
 
+import { DOCKER_GID } from "../../buildkit/person-layout.js";
 import { imagePlatformArchitecture } from "../../buildkit/platform.js";
 import { getHarnessIntegration } from "../../harness/integrations.js";
 import {
@@ -129,7 +130,13 @@ const DOCKER_ROOTLESS_UID = 1000;
  * overflow id for unmapped owners) unclaimed. Fewer than 65536 subordinate ids means an image
  * whose files are owned by a uid above ~64500 fails to extract — rare, documented.
  */
-const DOCKER_ROOTLESS_SUBID_RANGE = "1001:64533";
+const DOCKER_ROOTLESS_SUBID_START = 1001;
+const DOCKER_ROOTLESS_SUBID_RANGE = `${String(DOCKER_ROOTLESS_SUBID_START)}:64533`;
+/**
+ * dockerd resolves `--group` inside rootlesskit's user namespace, where gid n >= 1 is the Pod's
+ * gid `DOCKER_ROOTLESS_SUBID_START + n - 1`. This inner gid lands on `DOCKER_GID` in the Pod.
+ */
+const DOCKER_SOCKET_INNER_GID = DOCKER_GID - DOCKER_ROOTLESS_SUBID_START + 1;
 const DOCKER_SIDECAR_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 /**
@@ -147,7 +154,7 @@ export const dockerSidecarScriptFor = (registryMirrors: readonly string[]): stri
     `exec su ${DOCKER_ROOTLESS_USER} -s /bin/sh -c '` +
       `export XDG_RUNTIME_DIR=${DOCKER_RUN_PATH} HOME=/home/${DOCKER_ROOTLESS_USER} PATH=${DOCKER_SIDECAR_PATH} DOCKER_TLS_CERTDIR=; ` +
       [
-        `exec dockerd-entrypoint.sh dockerd --host=${DOCKER_HOST_VALUE} --data-root=${DOCKER_GRAPH_PATH}`,
+        `exec dockerd-entrypoint.sh dockerd --host=${DOCKER_HOST_VALUE} --group=${String(DOCKER_SOCKET_INNER_GID)} --data-root=${DOCKER_GRAPH_PATH}`,
         ...dockerdRegistryMirrorArgs(registryMirrors),
       ].join(" ") +
       "'",
