@@ -11,6 +11,11 @@
  *    under the daemon works, the worktree root is the change owner's and the group's (setgid), its
  *    files group-writable, the person's saved directory theirs (0710), their own transcript 0600
  *    and their shared conversation group-writable.
+ * 3. **Sudo with only the workspace capabilities, unconfined by AppArmor.** A plain `docker run` of
+ *    the image with only `WORKSPACE_CAPABILITIES`, `apparmor=unconfined` and no no-new-privileges:
+ *    `/etc/shadow` has its owner-read bit, and a person made at prepare runs `sudo`. On an AppArmor
+ *    host (GitHub's ubuntu-24.04) the host's unix-chkpwd profile then confines PAM's helper, so the
+ *    case logs that profile's mode. It is here because CI's Docker job runs this file.
  *
  * The image must be a managed per-person image whose sealantd reports `restore.owner_map` (the
  * pinned 0.20.0-next.150 or later): `SEALANT_OWNER_MAP_E2E_IMAGE`, default
@@ -43,6 +48,7 @@ import {
   parseRuntimeAdapterLaunchInput,
   type RuntimeAdapterLaunchInput,
 } from "./index.js";
+import { WORKSPACE_CAPABILITIES } from "./kubernetes/manifests.js";
 
 const IMAGE_REF = process.env["SEALANT_OWNER_MAP_E2E_IMAGE"] ?? "sealant-workspace-fedora:latest";
 const CAPTURE_TOKEN = "capture-owner-map-e2e-token";
@@ -407,5 +413,53 @@ describe.skipIf(!imageTakesOwnerMap)(
         await docker(["rmi", "-f", tag]).catch(() => undefined);
       }
     }, 240_000);
+  },
+);
+
+// The AppArmor profiles file is readable only by root, so a root container reads it.
+const hostUnixChkpwdProfile = (): Promise<string> =>
+  docker([
+    "run",
+    "--rm",
+    "--security-opt",
+    "apparmor=unconfined",
+    "-v",
+    "/sys/kernel/security:/host-security:ro",
+    "--entrypoint",
+    "sh",
+    IMAGE_REF,
+    "-c",
+    `profiles=$(cat /host-security/apparmor/profiles 2>&1) || { echo "unreadable: $profiles"; exit 0; }; echo "$profiles" | grep '^unix-chkpwd ' || echo 'no unix-chkpwd profile'`,
+  ]).catch((error: unknown) => `unknown: ${String(error)}`);
+
+describe.skipIf(!imageTakesOwnerMap)(
+  "a person's sudo with only the workspace capabilities, unconfined by AppArmor",
+  () => {
+    it("keeps /etc/shadow owner-readable and lets a person made at prepare run sudo", async () => {
+      console.log(`[capture-owner-map e2e] host unix-chkpwd: ${await hostUnixChkpwdProfile()}`);
+      const [shadowMode, uid] = (
+        await docker([
+          "run",
+          "--rm",
+          "--cap-drop",
+          "ALL",
+          ...WORKSPACE_CAPABILITIES.flatMap((capability) => ["--cap-add", capability]),
+          "--security-opt",
+          "apparmor=unconfined",
+          "--entrypoint",
+          "sh",
+          IMAGE_REF,
+          "-c",
+          [
+            "stat -c %a /etc/shadow",
+            `useradd -u ${OWNER_UID} -g mend -m -k /etc/skel -d /home/mowner -s /bin/sh mowner`,
+            `setpriv --reuid=${OWNER_UID} --regid=${MEND_GID} --init-groups -- sudo -n id -u`,
+          ].join(" && "),
+        ])
+      ).split("\n");
+      console.log(`[capture-owner-map e2e] /etc/shadow mode ${shadowMode ?? "?"}`);
+      expect(Number.parseInt(shadowMode ?? "", 8) & 0o400).toBe(0o400);
+      expect(uid).toBe("0");
+    }, 120_000);
   },
 );
