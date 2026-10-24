@@ -227,10 +227,13 @@ A managed image that lacks any of them fails its build. Both builders read the a
 record it on the build. The Docker builder runs the image with `cat`; the Kubernetes builder runs a
 short Job on the pushed digest that only prints the file. When the answer cannot be read, the build
 records a note and no answer, and still succeeds. A later build that reuses the image keeps its
-answer. A per-person launch does not reuse a build that recorded no answer: the image is built
-again, from cache, so its answer is read. A client can therefore learn before it creates a workspace
-whether the image can serve more than one person. The script stays in the image at
-`/usr/local/lib/sealant/image-probe`, so a running workspace can be asked the same question.
+answer. When a per-person launch reuses a build that recorded no answer, the Kubernetes builder
+reads the answer from the reused image with the same Job. If that read fails too, the launch reuses
+the image without an answer, records the note, and fails with `owner-map-unverified`. The Docker
+builder builds the image again, from its layer cache, so its answer is read. A client can therefore
+learn before it creates a workspace whether the image can serve more than one person. The script
+stays in the image at `/usr/local/lib/sealant/image-probe`, so a running workspace can be asked the
+same question.
 
 The image is not the whole answer. Under `no_new_privs`, `sudo` cannot raise a person's privileges;
 a probe run there reports it. Shared Kubernetes Pods run with `allowPrivilegeEscalation: false`,

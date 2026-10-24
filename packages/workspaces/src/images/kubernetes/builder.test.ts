@@ -781,5 +781,30 @@ describe("KubernetesWorkspaceImageBuilder", () => {
       expect(result.build.metadata).not.toHaveProperty("imageProbe");
       expect(api.log.filter((line) => line.includes("-probe-"))).toEqual([]);
     });
+
+    it("reads the probe of a published image back from its digest", async () => {
+      const api = fake();
+      api.probeLog = JSON.stringify(probe);
+      const builder = builderFor(api, registry("sha256:1"));
+      const planned = builder.plan(spec);
+
+      const readback = await builder.readProbe({
+        planned,
+        image: {
+          repository: "r",
+          tag: "t",
+          reference: "zot.sealant.svc:5000/r:t",
+          digestReference,
+          digest: "sha256:1",
+        },
+      });
+
+      expect(readback).toEqual({ kind: "read", probe });
+      const [reader] = readers(api);
+      expect(reader?.metadata?.name).toMatch(
+        new RegExp(`^${buildJobName(planned.planHash, "r", "t")}-probe-`),
+      );
+      expect(reader?.spec?.template.spec?.containers[0]?.image).toBe(digestReference);
+    });
   });
 });

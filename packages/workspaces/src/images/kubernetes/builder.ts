@@ -27,7 +27,6 @@ import {
   type NewWorkspace,
   type WorkspaceBuild,
   type WorkspaceImagePlatform,
-  type WorkspaceImageProbe,
 } from "@sealant/validators";
 
 import {
@@ -50,6 +49,8 @@ import type { PublishedImage } from "../../runtime/runtime-adapter.js";
 import type {
   BuildAndPublishInput,
   BuildAndPublishResult,
+  ImageProbeReadback,
+  ReadProbeInput,
   WorkspaceImageBuilder,
 } from "../image-builder.js";
 import type { KubernetesBuildApi } from "./api.js";
@@ -378,10 +379,6 @@ export const probeJob = (input: ProbeJobInput): V1Job => {
   };
 };
 
-type ImageProbeReadback =
-  | { readonly kind: "read"; readonly probe: WorkspaceImageProbe }
-  | { readonly kind: "unread"; readonly note: string };
-
 const b64 = (value: string | Buffer): string => Buffer.from(value).toString("base64");
 
 /** The workspace Pods' node selector, with the image's architecture. */
@@ -590,6 +587,13 @@ export class KubernetesWorkspaceImageBuilder implements WorkspaceImageBuilder {
     };
     return { publishedImage, build };
   }
+
+  readonly readProbe = (input: ReadProbeInput): Promise<ImageProbeReadback> =>
+    this.#readImageProbe(
+      buildJobName(input.planned.planHash, input.image.repository, input.image.tag),
+      input.image,
+      input.planned.platform,
+    );
 
   /** Every build Job this worker owns (for reconciliation / cleanup policy). */
   async listManagedJobs(): Promise<readonly V1Job[]> {
