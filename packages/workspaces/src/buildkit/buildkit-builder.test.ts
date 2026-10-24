@@ -1033,7 +1033,7 @@ describe("compileWorkspaceBuildSpec", () => {
     expect(containerfile).not.toContain("ENV SHELL=");
     // The nix daemon a person's nix goes through starts before sealantd.
     expect(containerfile).toContain(
-      "COPY --chmod=755 <<'SEALANT_NIX_BOOT' /usr/local/bin/sealant-nix-boot\n#!/bin/sh\n",
+      "COPY --chmod=755 <<'SEALANT_BOOT' /usr/local/bin/sealant-nix-boot\n#!/bin/sh\n",
     );
     expect(containerfile).toContain('ENTRYPOINT ["/usr/local/bin/sealant-nix-boot"]');
     expect(containerfile).not.toContain('ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]');

@@ -168,6 +168,8 @@ interface DistroDefinition {
   readonly sealantdPackages: readonly string[];
   readonly shellPaths: Record<"bash" | "zsh" | "fish", string>;
   readonly sshdPath: string;
+  /** An entrypoint script of the family's own, in place of `sealantd boot`, which it must exec. */
+  readonly boot?: { readonly path: string; readonly script: readonly string[] };
 }
 
 /**
@@ -384,6 +386,7 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
       fish: `${NIX_PROFILE}/bin/fish`,
     },
     sshdPath: `${NIX_PROFILE}/bin/sshd`,
+    boot: { path: NIX_BOOT_PATH, script: NIX_BOOT_SCRIPT },
   },
 };
 
@@ -1458,10 +1461,10 @@ const renderContainerfile = (plan: ResolvedImagePlan, platform: WorkspaceImagePl
     // without bundling a local build context.
     `COPY --from=${sealantdImageReference} /usr/local/bin/sealantd /usr/local/bin/sealantd`,
     "RUN chmod 755 /usr/local/bin/sealantd",
-    // nixos/nix's PATH is only its profile dirs — /usr/local/bin (sealantd, the docker CLI
-    // below) must be reachable by name on every family. Redundant where the base already has
-    // it; load-bearing on nix. The ENTRYPOINT is absolute for the same reason: exec-form bare
-    // names resolve against the image PATH at container init.
+    // /usr/local/bin (sealantd, the docker CLI below) must be reachable by name on every family.
+    // Redundant where the base already has it, and on nix, whose package step prepends it for the
+    // harness installs. The ENTRYPOINT is absolute for the same reason: exec-form bare names
+    // resolve against the image PATH at container init.
     "ENV PATH=/usr/local/bin:$PATH",
     ...(plan.blueprint.tooling.services?.docker?.enabled === true
       ? [
@@ -1484,14 +1487,14 @@ const renderContainerfile = (plan: ResolvedImagePlan, platform: WorkspaceImagePl
         ]
       : []),
     ...(dotfilesStep === undefined ? [] : ["", dotfilesStep]),
-    ...(plan.osFamily === "nix"
-      ? [
+    ...(distro.boot === undefined
+      ? []
+      : [
           "",
-          `COPY --chmod=755 <<'SEALANT_NIX_BOOT' ${NIX_BOOT_PATH}`,
-          ...NIX_BOOT_SCRIPT,
-          "SEALANT_NIX_BOOT",
-        ]
-      : []),
+          `COPY --chmod=755 <<'SEALANT_BOOT' ${distro.boot.path}`,
+          ...distro.boot.script,
+          "SEALANT_BOOT",
+        ]),
     "",
     // A managed family's image fails its build here rather than ship without the person layout.
     renderImageProbeStep({ require: personLayoutFamily !== undefined }),
@@ -1499,9 +1502,9 @@ const renderContainerfile = (plan: ResolvedImagePlan, platform: WorkspaceImagePl
     renderBootEnv(plan),
     "",
     "WORKDIR /workspace",
-    plan.osFamily === "nix"
-      ? `ENTRYPOINT ["${NIX_BOOT_PATH}"]`
-      : 'ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]',
+    distro.boot === undefined
+      ? 'ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]'
+      : `ENTRYPOINT ["${distro.boot.path}"]`,
     "",
   ].join("\n");
 };
