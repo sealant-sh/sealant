@@ -13,6 +13,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { EventEnvelope } from "@sealant/runtime-protocol";
 import { Effect, Option, Stream } from "effect";
 
+import { NIX_PROFILE } from "../buildkit/person-layout.js";
 import {
   SealantRuntime,
   SealantRuntimeControlLive,
@@ -258,8 +259,8 @@ const MERGED_EXITS: Readonly<
 
 const quote = (value: string): string => `'${value}'`;
 
-/** The owner's half's whole PATH. */
-const SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+/** The owner's half's whole PATH: the FHS directories, then nix's profile. */
+const SAFE_PATH = `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${NIX_PROFILE}/bin`;
 
 /** The base64 payload lines a script reads, one per write, in order. */
 export const homeScriptStdin = (contents: readonly string[]): string =>

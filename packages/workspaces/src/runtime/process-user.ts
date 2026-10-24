@@ -25,6 +25,7 @@ import {
 import type { EventEnvelope } from "@sealant/runtime-protocol";
 import { Effect, Option, Stream } from "effect";
 
+import { NIX_PROFILE } from "../buildkit/person-layout.js";
 import {
   SealantRuntime,
   SealantRuntimeControlLive,
@@ -102,8 +103,8 @@ export const processUserProblem = (user: string): ProcessUserRefusal | undefined
   return undefined;
 };
 
-/** Where the check looks for `getent` and `cut`. */
-const SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+/** Where the check looks for `getent` and `cut`: the FHS directories, then nix's profile. */
+const SYSTEM_PATH = `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${NIX_PROFILE}/bin`;
 
 const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 
