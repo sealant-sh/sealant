@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -10,6 +11,7 @@ import {
   snakeCase,
   text,
   timestamp,
+  unique,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
@@ -498,6 +500,7 @@ export const connectedAccounts = pgTable(
     encryptedPayload: text("encrypted_payload").notNull(),
     encryptionKeyId: text("encryption_key_id").notNull(),
     payloadSha256: text("payload_sha256").notNull(),
+    credentialRevision: integer("credential_revision").notNull().default(1),
     metadata: jsonb()
       .$type<Record<string, unknown>>()
       .notNull()
@@ -527,6 +530,39 @@ export const connectedAccounts = pgTable(
       table.provider,
       table.status,
     ),
+    // The target of connected_account_defaults' foreign key, which names all three.
+    unique("connected_accounts_id_owner_provider_key").on(
+      table.id,
+      table.ownerUserId,
+      table.provider,
+    ),
+  ],
+);
+
+export const connectedAccountDefaults = pgTable(
+  "connected_account_defaults",
+  {
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    provider: text({ enum: connectedAccountProviderValues }).notNull(),
+    connectedAccountId: text("connected_account_id").notNull(),
+    updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerUserId, table.provider] }),
+    foreignKey({
+      name: "connected_account_defaults_account_fkey",
+      columns: [table.connectedAccountId, table.ownerUserId, table.provider],
+      foreignColumns: [
+        connectedAccounts.id,
+        connectedAccounts.ownerUserId,
+        connectedAccounts.provider,
+      ],
+    }).onDelete("cascade"),
   ],
 );
 
@@ -1112,6 +1148,8 @@ export type NewProfileSshKeyBinding = typeof profileSshKeyBindings.$inferInsert;
 
 export type ConnectedAccount = typeof connectedAccounts.$inferSelect;
 export type NewConnectedAccount = typeof connectedAccounts.$inferInsert;
+
+export type ConnectedAccountDefault = typeof connectedAccountDefaults.$inferSelect;
 
 export type ProfileConnectedAccount = typeof profileConnectedAccounts.$inferSelect;
 export type NewProfileConnectedAccount = typeof profileConnectedAccounts.$inferInsert;

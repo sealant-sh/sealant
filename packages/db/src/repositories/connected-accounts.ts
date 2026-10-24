@@ -1,8 +1,10 @@
-import { and, desc, eq, isNull, lt, or } from "drizzle-orm";
+import { and, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
+import { SqlError } from "effect/sql/SqlError";
 
 import { SealantDB } from "../client.js";
 import {
+  connectedAccountDefaults,
   connectedAccounts,
   profileConnectedAccounts,
   type ConnectedAccount,
@@ -25,7 +27,12 @@ const connectedAccountRepoOperationSchema = Schema.Literals([
   "getById",
   "getByOwnerProviderName",
   "listByOwner",
+  "listByOwnerProvider",
   "listActiveByProviderKind",
+  "withOwnerLock",
+  "getDefault",
+  "listDefaultAccountIds",
+  "setDefault",
   "replacePayload",
   "updateSyncState",
   "markInvalid",
@@ -84,6 +91,10 @@ const mapConnectedAccountRepoError = (
   });
 };
 
+/** The credential revision once `payloadSha256` is stored: the same bytes keep it, new bytes move it on. */
+const revisionAfterStoring = (payloadSha256: string) =>
+  sql`case when ${connectedAccounts.payloadSha256} = ${payloadSha256} then ${connectedAccounts.credentialRevision} else ${connectedAccounts.credentialRevision} + 1 end`;
+
 const withConnectedAccountRepoError = <A>(
   operation: ConnectedAccountRepoOperation,
   effect: Effect.Effect<A, unknown>,
@@ -121,6 +132,11 @@ export interface ReplaceConnectedAccountPayloadInput {
   readonly encryptionKeyId: string;
   readonly payloadSha256: string;
   readonly metadata: Record<string, unknown>;
+}
+
+export interface ConnectedAccountDefaultInput {
+  readonly ownerUserId: string;
+  readonly provider: ConnectedAccountProvider;
 }
 
 export interface UpdateConnectedAccountSyncStateInput {
@@ -172,6 +188,23 @@ export interface ConnectedAccountRepoService {
   readonly listByOwner: (
     ownerUserId: string,
   ) => Effect.Effect<readonly ConnectedAccount[], ConnectedAccountRepoError>;
+  readonly listByOwnerProvider: (
+    input: ConnectedAccountDefaultInput,
+  ) => Effect.Effect<readonly ConnectedAccount[], ConnectedAccountRepoError>;
+  /** Run `use` in one transaction that holds this owner's lock, so their account writes take turns. */
+  readonly withOwnerLock: <A, E, R>(
+    ownerUserId: string,
+    use: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | ConnectedAccountRepoError, R>;
+  readonly getDefault: (
+    input: ConnectedAccountDefaultInput,
+  ) => Effect.Effect<ConnectedAccount | undefined, ConnectedAccountRepoError>;
+  readonly listDefaultAccountIds: (
+    ownerUserId: string,
+  ) => Effect.Effect<ReadonlySet<string>, ConnectedAccountRepoError>;
+  readonly setDefault: (
+    input: ConnectedAccountDefaultInput & { readonly connectedAccountId: string },
+  ) => Effect.Effect<void, ConnectedAccountRepoError>;
   /**
    * ACTIVE (non-archived, non-invalid) accounts across all owners for one (provider, kind) pair —
    * the keep-fresh sweeper's candidate set. `kind` is a cheap prefilter only; consumers still
@@ -192,6 +225,7 @@ export interface ConnectedAccountRepoService {
   /** 401 feedback: mark the credential invalid so surfaces prompt a re-auth. */
   readonly markInvalid: (input: {
     readonly id: string;
+    readonly revision?: number;
   }) => Effect.Effect<ConnectedAccount | undefined, ConnectedAccountRepoError>;
   /**
    * One refresh per login at a time, across every worker (docs/connected-accounts-design.md §6a).
@@ -207,7 +241,10 @@ export interface ConnectedAccountRepoService {
   readonly releaseRefresh: (input: {
     readonly id: string;
   }) => Effect.Effect<void, ConnectedAccountRepoError>;
-  /** Soft delete; returns undefined when no active account matched (wrong id or wrong owner). */
+  /**
+   * Soft delete, with the default that names the account; returns undefined when no active account
+   * matched (wrong id or wrong owner). Atomic inside {@link withOwnerLock}.
+   */
   readonly archive: (
     input: ArchiveConnectedAccountInput,
   ) => Effect.Effect<ConnectedAccount | undefined, ConnectedAccountRepoError>;
@@ -328,6 +365,94 @@ export const ConnectedAccountRepoLive = Layer.effect(
             .orderBy(desc(connectedAccounts.createdAt)),
         ),
 
+      listByOwnerProvider: (input) =>
+        withConnectedAccountRepoError(
+          "listByOwnerProvider",
+          db
+            .select()
+            .from(connectedAccounts)
+            .where(
+              and(
+                eq(connectedAccounts.ownerUserId, input.ownerUserId),
+                eq(connectedAccounts.provider, input.provider),
+                isNull(connectedAccounts.archivedAt),
+              ),
+            )
+            .orderBy(desc(connectedAccounts.createdAt)),
+        ),
+
+      withOwnerLock: (ownerUserId, use) =>
+        db
+          .transaction(() =>
+            Effect.gen(function* () {
+              yield* withConnectedAccountRepoError(
+                "withOwnerLock",
+                db.execute(
+                  sql`select pg_advisory_xact_lock(hashtextextended(${`connected-accounts ${ownerUserId}`}, 0))`,
+                ),
+              );
+              return yield* use;
+            }),
+          )
+          .pipe(
+            Effect.mapError((error) =>
+              error instanceof SqlError
+                ? mapConnectedAccountRepoError("withOwnerLock", error)
+                : error,
+            ),
+          ),
+
+      getDefault: (input) =>
+        withConnectedAccountRepoError(
+          "getDefault",
+          Effect.gen(function* () {
+            const [row] = yield* db
+              .select({ account: connectedAccounts })
+              .from(connectedAccountDefaults)
+              .innerJoin(
+                connectedAccounts,
+                eq(connectedAccountDefaults.connectedAccountId, connectedAccounts.id),
+              )
+              .where(
+                and(
+                  eq(connectedAccountDefaults.ownerUserId, input.ownerUserId),
+                  eq(connectedAccountDefaults.provider, input.provider),
+                ),
+              )
+              .limit(1);
+
+            return row?.account;
+          }),
+        ),
+
+      listDefaultAccountIds: (ownerUserId) =>
+        withConnectedAccountRepoError(
+          "listDefaultAccountIds",
+          db
+            .select({ connectedAccountId: connectedAccountDefaults.connectedAccountId })
+            .from(connectedAccountDefaults)
+            .where(eq(connectedAccountDefaults.ownerUserId, ownerUserId))
+            .pipe(Effect.map((rows) => new Set(rows.map((row) => row.connectedAccountId)))),
+        ),
+
+      setDefault: (input) =>
+        withConnectedAccountRepoError(
+          "setDefault",
+          db
+            .insert(connectedAccountDefaults)
+            .values({
+              ownerUserId: input.ownerUserId,
+              provider: input.provider,
+              connectedAccountId: input.connectedAccountId,
+            })
+            .onConflictDoUpdate({
+              target: [connectedAccountDefaults.ownerUserId, connectedAccountDefaults.provider],
+              set: { connectedAccountId: input.connectedAccountId, updatedAt: new Date() },
+              setWhere: sql`${connectedAccountDefaults.connectedAccountId} is distinct from ${input.connectedAccountId}`,
+            })
+            .pipe(Effect.asVoid),
+        ),
+
       listActiveByProviderKind: (input) =>
         withConnectedAccountRepoError(
           "listActiveByProviderKind",
@@ -356,6 +481,7 @@ export const ConnectedAccountRepoLive = Layer.effect(
                 encryptedPayload: input.encryptedPayload,
                 encryptionKeyId: input.encryptionKeyId,
                 payloadSha256: input.payloadSha256,
+                credentialRevision: revisionAfterStoring(input.payloadSha256),
                 metadata: input.metadata,
                 status: "active",
                 invalidAt: null,
@@ -404,7 +530,15 @@ export const ConnectedAccountRepoLive = Layer.effect(
             const [connectedAccount] = yield* db
               .update(connectedAccounts)
               .set({ status: "invalid", invalidAt: new Date() })
-              .where(and(eq(connectedAccounts.id, input.id), isNull(connectedAccounts.archivedAt)))
+              .where(
+                and(
+                  eq(connectedAccounts.id, input.id),
+                  isNull(connectedAccounts.archivedAt),
+                  input.revision === undefined
+                    ? undefined
+                    : eq(connectedAccounts.credentialRevision, input.revision),
+                ),
+              )
               .returning();
 
             return connectedAccount;
@@ -459,6 +593,12 @@ export const ConnectedAccountRepoLive = Layer.effect(
                 ),
               )
               .returning();
+
+            if (connectedAccount !== undefined) {
+              yield* db
+                .delete(connectedAccountDefaults)
+                .where(eq(connectedAccountDefaults.connectedAccountId, connectedAccount.id));
+            }
 
             return connectedAccount;
           }),
