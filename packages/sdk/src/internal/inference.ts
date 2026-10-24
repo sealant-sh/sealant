@@ -3,7 +3,7 @@
  * maps the wire response back onto the public types. Pure and side-effect free — unit-testable on
  * its own; the client calls these around `inferenceRespondOp`.
  *
- * SECURITY: only account **references** cross here (`true` → the literal account name `"default"`);
+ * SECURITY: only account **references** cross here;
  * token material never appears on either side of this mapping.
  */
 import type { InferenceRespondRequest, InferenceRespondResponse } from "@sealant/api-contracts";

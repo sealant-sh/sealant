@@ -43,6 +43,8 @@ export class SealantApiError extends SealantError {
    * reason is about (`claude`, `codex`, `github`).
    */
   readonly provider?: string;
+  /** The accounts a `connected-account-ambiguous` connect could have meant. */
+  readonly candidateAccountIds?: readonly string[];
   constructor(
     message: string,
     options?: {
@@ -50,6 +52,7 @@ export class SealantApiError extends SealantError {
       readonly status?: number;
       readonly reason?: string;
       readonly provider?: string;
+      readonly candidateAccountIds?: readonly string[];
       readonly cause?: unknown;
     },
   ) {
@@ -65,6 +68,9 @@ export class SealantApiError extends SealantError {
     }
     if (options?.provider !== undefined) {
       this.provider = options.provider;
+    }
+    if (options?.candidateAccountIds !== undefined) {
+      this.candidateAccountIds = options.candidateAccountIds;
     }
   }
 }

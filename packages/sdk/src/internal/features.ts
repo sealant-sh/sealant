@@ -34,6 +34,7 @@ export const toFeatures = (index: SystemIndexResponse): SealantFeatures => {
     workspaceSshUser: features?.workspaceSshUser === true,
     personBinding: features?.personBinding === true,
     sshKeyRemovalEndsConnections: features?.sshKeyRemovalEndsConnections === true,
+    connectedAccountDefaults: features?.connectedAccountDefaults === true,
   };
 };
 

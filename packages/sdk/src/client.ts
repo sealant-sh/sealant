@@ -35,6 +35,8 @@ import {
   listConnectedAccountsOp,
   listSshKeysOp,
   listWorkspacesOp,
+  markConnectedAccountInvalidOp,
+  setConnectedAccountDefaultOp,
 } from "./effect/operations.js";
 import { runHarness, startHarness } from "./effect/run-harness.js";
 import { makeSdkRuntime, type SdkRuntime } from "./effect/runtime.js";
@@ -95,6 +97,8 @@ const mapConnectedAccount = (wire: ConnectedAccountSummary): ConnectedAccount =>
   lastUsedAt: wire.lastUsedAt,
   lastSyncedAt: wire.lastSyncedAt,
   credential: wire.credential,
+  isDefault: wire.isDefault ?? wire.name === "default",
+  ...(wire.credentialRevision === undefined ? {} : { credentialRevision: wire.credentialRevision }),
 });
 
 // Wire the run-execution implementations into the Workspace facade (the injection point exists to
@@ -353,6 +357,8 @@ export class Sealant {
           provider: options.provider,
           secret: options.secret,
           ...(options.name === undefined ? {} : { name: options.name }),
+          ...(options.accountId === undefined ? {} : { accountId: options.accountId }),
+          ...(options.makeDefault === undefined ? {} : { makeDefault: options.makeDefault }),
         }),
       );
       return mapConnectedAccount(wire);
@@ -362,6 +368,24 @@ export class Sealant {
         archiveConnectedAccountOp(connectedAccountId, this.#ctx.config.hostLocal.ownerUserId),
       );
       return mapConnectedAccount(wire);
+    },
+    setDefault: async (options) => {
+      const wire = await this.#runtime.run(
+        setConnectedAccountDefaultOp(options.provider, {
+          ownerUserId: this.#ctx.config.hostLocal.ownerUserId,
+          connectedAccountId: options.accountId,
+        }),
+      );
+      return mapConnectedAccount(wire);
+    },
+    markInvalid: async (connectedAccountId, options) => {
+      const wire = await this.#runtime.run(
+        markConnectedAccountInvalidOp(connectedAccountId, {
+          ownerUserId: this.#ctx.config.hostLocal.ownerUserId,
+          ...(options?.revision === undefined ? {} : { revision: options.revision }),
+        }),
+      );
+      return { outcome: wire.outcome ?? "marked", account: mapConnectedAccount(wire) };
     },
   };
 

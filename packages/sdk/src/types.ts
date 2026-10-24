@@ -181,8 +181,8 @@ export type WorkspaceOs = "fedora" | "arch" | "nix" | "ubuntu";
  * harness inside the workspace authenticates as the caller's own Claude / Codex / GitHub identity
  * instead of running unauthenticated.
  *
- * For each provider: `true` means "my default account" (the one named `"default"`), and a `string`
- * names a specific connected account. `profile` names a profile slug/id whose bundled per-provider
+ * For each provider: `true` means "my default account" (the one I chose; see
+ * {@link ConnectedAccountsNamespace.setDefault}), and a `string` names a specific connected account. `profile` names a profile slug/id whose bundled per-provider
  * bindings apply first; any explicit `claude`/`codex`/`github` field wins over the profile's binding
  * for that provider.
  *
@@ -1476,6 +1476,12 @@ export interface SealantFeatures {
    * a minute; from an older control plane they stay open until the workspace stops.
    */
   readonly sshKeyRemovalEndsConnections: boolean;
+  /**
+   * A default account per provider is a choice: `connectedAccounts.setDefault()`, `accountId` and
+   * `makeDefault` on `connect()`. On an older control plane the default is the account named
+   * `default`.
+   */
+  readonly connectedAccountDefaults: boolean;
 }
 
 /** A published workspace image. */
@@ -2271,6 +2277,16 @@ export interface ConnectedAccount {
   readonly lastUsedAt: string | null;
   readonly lastSyncedAt: string | null;
   readonly credential: ConnectedAccountCredential;
+  /**
+   * Whether this is the owner's default for its provider, the one `true` selects. From a control
+   * plane without `connectedAccountDefaults`: whether it is named `default`.
+   */
+  readonly isDefault: boolean;
+  /**
+   * Which credential the account holds; it moves on whenever different bytes are stored. Absent
+   * from a control plane without `connectedAccountDefaults`.
+   */
+  readonly credentialRevision?: number;
 }
 
 export interface ConnectConnectedAccountOptions {
@@ -2280,19 +2296,65 @@ export interface ConnectConnectedAccountOptions {
    * verbatim `.credentials.json`, verbatim Codex `auth.json`, or a GitHub token. Never logged.
    */
   readonly secret: string;
-  /** Account name under the provider; defaults to `default` (the one `credentials: { x: true }` picks). */
+  /**
+   * Account name under the provider: an existing account of that name is replaced, a new name is a
+   * new account. With neither `name` nor `accountId`, a first account is named `default`, an only
+   * account is replaced, and with several the call fails with `reason`
+   * `connected-account-ambiguous` and the candidates in `candidateAccountIds`.
+   */
   readonly name?: string;
+  /** Replace this account. Not with `name`. */
+  readonly accountId?: string;
+  /**
+   * Make the connected account the owner's default for the provider. A first account is the default
+   * without it.
+   */
+  readonly makeDefault?: boolean;
+}
+
+export interface SetDefaultConnectedAccountOptions {
+  readonly provider: ConnectedAccountProvider;
+  /** One of the owner's active accounts of `provider`. */
+  readonly accountId: string;
+}
+
+export interface MarkConnectedAccountInvalidOptions {
+  /**
+   * The `credentialRevision` the refusal was seen on. Once the account holds a newer credential,
+   * nothing is marked and the outcome is `superseded`.
+   */
+  readonly revision?: number;
+}
+
+export interface MarkConnectedAccountInvalidResult {
+  /** `marked`: the account is now invalid. `superseded`: a newer credential, left as it was. */
+  readonly outcome: "marked" | "superseded";
+  readonly account: ConnectedAccount;
 }
 
 /**
- * The owner's connected provider accounts. `connect` upserts on (provider, name), so reconnecting
- * swaps the sealed credential in place. Secrets flow one way — in; no call returns them.
+ * The owner's connected provider accounts. Reconnecting swaps the sealed credential in place.
+ * Secrets flow one way — in; no call returns them.
  */
 export interface ConnectedAccountsNamespace {
   list(): Promise<readonly ConnectedAccount[]>;
   connect(options: ConnectConnectedAccountOptions): Promise<ConnectedAccount>;
-  /** Soft-archives the account; uniform not-found for "does not exist" and "not yours". */
+  /**
+   * Soft-archives the account; uniform not-found for "does not exist" and "not yours". Archiving
+   * the default leaves the owner without one for that provider: no other account is chosen.
+   */
   disconnect(connectedAccountId: string): Promise<ConnectedAccount>;
+  /**
+   * Make the account the owner's default for its provider, the one `true` selects. An invalid
+   * account is refused (`reason` `connected-account-invalid`). Choosing the default again changes
+   * nothing. Needs `features().connectedAccountDefaults`.
+   */
+  setDefault(options: SetDefaultConnectedAccountOptions): Promise<ConnectedAccount>;
+  /** Report that the provider refused the account's credential, so surfaces ask to reconnect it. */
+  markInvalid(
+    connectedAccountId: string,
+    options?: MarkConnectedAccountInvalidOptions,
+  ): Promise<MarkConnectedAccountInvalidResult>;
 }
 
 // ---------------------------------------------------------------------------------------------
