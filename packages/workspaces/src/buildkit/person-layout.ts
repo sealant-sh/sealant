@@ -287,6 +287,9 @@ export const PERSON_SUDOERS = personSudoers(PERSON_ENV, FHS_PATH);
  */
 export const NIX_PROFILE = "/nix/var/nix/profiles/default";
 
+/** The fixed PATH of the scripts Core runs as root. A nix image has its tools only in its profile. */
+export const FIXED_SYSTEM_PATH = [...FHS_PATH, `${NIX_PROFILE}/bin`].join(":");
+
 /**
  * Repository packages each managed family adds for the person layout. nixos/nix also lacks sed and
  * getent, which this layout, Mend's prepare and Core's user check run (its awk comes with the

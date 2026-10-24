@@ -28,7 +28,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { compileWorkspaceBuildSpec } from "./buildkit-builder.js";
-import { NIX_DAEMON_START, imagePersonLayoutSupport } from "./person-layout.js";
+import { NIX_DAEMON_START, NIX_PROFILE, imagePersonLayoutSupport } from "./person-layout.js";
 import { processImagePlatform } from "./platform.js";
 
 const families = (process.env["SEALANT_PERSON_LAYOUT_E2E_FAMILIES"] ?? "arch,ubuntu,fedora,nix")
@@ -57,7 +57,7 @@ const INSTALL_CC: Readonly<Record<string, string>> = {
   ubuntu:
     "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gcc libc6-dev",
   fedora: "dnf -y -q install gcc",
-  nix: "nix --extra-experimental-features 'nix-command flakes' profile add --profile /nix/var/nix/profiles/default --priority 8 nixpkgs#gcc",
+  nix: `nix --extra-experimental-features 'nix-command flakes' profile add --profile ${NIX_PROFILE} --priority 8 nixpkgs#gcc`,
 };
 
 /**
@@ -87,7 +87,7 @@ const SKIPPED: Readonly<Record<string, readonly string[]>> = {
 };
 
 /** nixos/nix has no /bin/bash. */
-const BASH: Readonly<Record<string, string>> = { nix: "/nix/var/nix/profiles/default/bin/bash" };
+const BASH: Readonly<Record<string, string>> = { nix: `${NIX_PROFILE}/bin/bash` };
 
 const runScript = (image: string, family: string, script: string) =>
   docker(

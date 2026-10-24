@@ -598,6 +598,19 @@ forEachShell("buildHomeCredentialScript", () => {
     );
   });
 
+  it("gives the owner's half the system directories and a nix image's profile as its PATH", () => {
+    const script = buildHomeCredentialScript({
+      home: "/home/m1",
+      fence: { kind: "take", generation: GEN_A },
+      token: "1",
+      writes: ["claude"],
+      removes: [],
+    });
+    expect(script).toContain(
+      "env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/nix/var/nix/profiles/default/bin setpriv",
+    );
+  });
+
   it("refuses to build a script for a path that is not a home", () => {
     expect(() =>
       buildHomeCredentialScript({
