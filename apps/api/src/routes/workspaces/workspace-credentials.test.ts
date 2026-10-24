@@ -201,6 +201,16 @@ const newWorld = (instance: WorkspaceRuntimeInstance = instanceRow()) => {
               candidate.archivedAt === null,
           ),
         ),
+      getDefault: (input: { ownerUserId: string; provider: string }) =>
+        Effect.succeed(
+          accounts.find(
+            (candidate) =>
+              candidate.ownerUserId === input.ownerUserId &&
+              candidate.provider === input.provider &&
+              candidate.name === "default" &&
+              candidate.archivedAt === null,
+          ),
+        ),
     } as unknown as ConnectedAccountRepoService),
     Layer.succeed(WorkspaceRuntimeInstanceRepo, {
       getRuntimeInstanceByRunId: (runId: string) =>

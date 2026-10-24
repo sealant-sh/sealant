@@ -99,6 +99,9 @@ const accountsStub = (options: AccountsStubOptions = {}) => ({
   getByOwnerProviderName: vi.fn((input: { provider: string; name: string }) =>
     Effect.succeed(options.byName?.[`${input.provider}:${input.name}`]),
   ),
+  getDefault: vi.fn((input: { provider: string }) =>
+    Effect.succeed(options.byName?.[`${input.provider}:default`]),
+  ),
   getBindingsForProfileWithAccounts: vi.fn(() => Effect.succeed(options.bindings ?? [])),
   updateSyncState: vi.fn(() => Effect.succeed(undefined)),
   markInvalid: vi.fn(() => Effect.succeed(undefined)),
