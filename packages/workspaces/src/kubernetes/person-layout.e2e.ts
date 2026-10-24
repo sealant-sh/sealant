@@ -391,6 +391,8 @@ const defaultProfile = async (target: SealantTarget): Promise<string> =>
     )
   ).output;
 
+const NIX_DAEMON_LOG = "/nix/var/log/nix/nix-daemon.log";
+
 const NIX_DAEMON_PIDS =
   'for p in /proc/[0-9]*; do [ "$(cat "$p/comm" 2>/dev/null)" = nix-daemon ] && echo "${p#/proc/}"; done';
 
@@ -763,11 +765,13 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
           `for pid in $(${NIX_DAEMON_PIDS}); do`,
           `  echo "nix-daemon pid=$pid $(grep -E '^(PPid|Uid):' /proc/$pid/status | tr -s '\\t\\n' '  ')"`,
           "done",
+          `stat -c "daemon-log=%n" ${NIX_DAEMON_LOG} || echo "daemon-log=missing"`,
         ].join("\n"),
       );
       evidence("step 4n process tree", tree.output.trim());
       expect(tree.output).toMatch(/^pid1=\/usr\/local\/bin\/sealantd boot/m);
       expect(tree.output).toMatch(/^nix-daemon pid=\d+ PPid: 1 Uid: 0 /m);
+      expect(tree.output).toContain(`daemon-log=${NIX_DAEMON_LOG}`);
 
       const rootBefore = await defaultProfile(target);
       const builds = await buildConcurrently(target, "step 4n");
