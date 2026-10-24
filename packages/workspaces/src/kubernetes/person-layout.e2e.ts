@@ -284,13 +284,17 @@ const checkDocker = async (target: SealantTarget, phase: string): Promise<void> 
   ].join("\n");
   const root = await exec(target, script);
   evidence(`${phase} docker as root`, root.output.trim());
+  const people = [];
   for (const person of PEOPLE) {
     const seen = await exec(target, script, person.name);
     evidence(`${phase} docker as ${person.name}`, seen.output.trim());
+    people.push(seen.output);
   }
   // The image's `docker info --format` exited 0 on a refused socket; an empty version is the tell.
-  expect(root.output).toMatch(/^server=\S+$/m);
-  expect(root.output).toContain("nested-ok");
+  for (const output of [root.output, ...people]) {
+    expect(output).toMatch(/^server=\S+$/m);
+    expect(output).toMatch(/^nested-ok$/m);
+  }
 };
 
 const workspaceContainer = (pod: V1Pod | undefined) =>
@@ -593,6 +597,26 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
   it("5. Docker as each person (recorded), root's through the sidecar", async (ctx) => {
     requireUserNamespaces(ctx);
     await checkDocker(first!.target, "step 5");
+  }, 300_000);
+
+  it("5b. Docker as each person again after the sidecar's daemon dies and restarts", async (ctx) => {
+    requireUserNamespaces(ctx);
+    const sidecar = async () =>
+      (await api.getPod(first!.podName))?.status?.initContainerStatuses?.find(
+        (status) => status.name === "docker",
+      );
+    const before = (await sidecar())?.restartCount ?? 0;
+    await kubectl("exec", first!.podName, "-c", "docker", "--", "pkill", "-x", "dockerd");
+    const deadline = Date.now() + 180_000;
+    let after = await sidecar();
+    while (!((after?.restartCount ?? 0) > before && after?.started === true)) {
+      if (Date.now() > deadline)
+        throw new Error(`sidecar did not restart: ${JSON.stringify(after)}`);
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      after = await sidecar();
+    }
+    evidence("step 5b sidecar restarts", { before, after: after.restartCount });
+    await checkDocker(first!.target, "step 5b");
   }, 300_000);
 
   it(
