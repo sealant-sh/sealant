@@ -398,6 +398,9 @@ export const renderPersonLayoutSteps = (input: {
     ...PERSON_SKEL_LINKS.map(([link, target]) => `ln -sfn ${target} /etc/skel/${link}`),
     ...PERSON_SKEL_FILES.map(([path, lines]) => writeLines(`/etc/skel/${path}`, lines)),
     GIT_SAFE_DIRECTORY_ANY,
+    // In a container AppArmor leaves unconfined, the host's unix-chkpwd profile denies PAM's helper
+    // dac_override and dac_read_search, so root needs /etc/shadow's owner bit. Fedora ships 0000.
+    "chmod u+r /etc/shadow",
     // useradd -m makes homes with HOME_MODE: Ubuntu's is 0750, and every person's group is mend.
     "if grep -q '^HOME_MODE' /etc/login.defs; then sed -i 's/^HOME_MODE.*/HOME_MODE\\t0700/' /etc/login.defs; else printf 'HOME_MODE\\t0700\\n' >> /etc/login.defs; fi",
   ];

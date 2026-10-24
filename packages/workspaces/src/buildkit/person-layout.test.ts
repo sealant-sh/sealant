@@ -207,6 +207,10 @@ describe("the person layout in the managed images", () => {
     }
   });
 
+  it("makes /etc/shadow readable by its owner", () => {
+    expect(containerfileFor("fedora")).toContain("chmod u+r /etc/shadow");
+  });
+
   it("binds every sudo default to the mend group, so root's sudo is unchanged", () => {
     const defaults = PERSON_SUDOERS.filter((line) => line.startsWith("Defaults"));
 
