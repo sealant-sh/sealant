@@ -272,6 +272,9 @@ describe("the person layout in the managed images", () => {
     at(
       's=$(readlink -f /nix/var/nix/profiles/default/bin/sudo); install -o root -g root -m 4755 "$s" /usr/local/bin/sudo; ln -sfn "${s%/bin/sudo}" /nix/var/nix/gcroots/sealant-sudo',
     );
+    at(
+      `for f in profile bashrc zshenv; do printf '%s\\n' 'case ":$PATH:" in *":$HOME/.nix-profile/bin:"*) ;; *) PATH="$HOME/.nix-profile/bin:$PATH" ;; esac' >> /etc/$f; done`,
+    );
     at("printf '%s\\n' 'root ALL=(ALL:ALL) ALL' '@includedir /etc/sudoers.d' > '/etc/sudoers'");
     at("chmod 0440 /etc/sudoers");
     at(

@@ -215,6 +215,12 @@ the person.
 - **One profile for everyone.** Packages go into `/nix/var/nix/profiles/default`, the profile that
   root's `~/.nix-profile` links to. It is owned by root and outside `/root`, so a person's login
   shell and tools resolve there. The group's `sudo` uses its `bin` and `sbin` on `secure_path`.
+- **A person's own profile.** `nix profile add` run as a person installs into their
+  `~/.nix-profile`. `/etc/profile`, `/etc/bashrc` and `/etc/zshenv` put its `bin` first on `PATH`,
+  so a login shell (`bash -l`, `sh -l` or `zsh -l`, including `bash -lc` and `sh -lc`), an
+  interactive `bash` or `zsh`, and any `zsh` find what a person installed by name. A non-interactive
+  `bash -c` or `sh -c`, and a program `sealantd` starts directly, do not, unless a shell that has it
+  on `PATH` started them. Root's `PATH` already names its profile and is unchanged.
 - **The nix daemon.** Only root can write the store, so the person environment sets
   `NIX_REMOTE=daemon`, and `sudo` keeps it. The image's entrypoint,
   `/usr/local/bin/sealant-nix-boot`, starts `nix-daemon`, waits up to 10 seconds for it to answer

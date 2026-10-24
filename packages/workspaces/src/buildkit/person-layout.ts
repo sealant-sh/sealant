@@ -400,6 +400,9 @@ const LAYOUT_INSTALL: Readonly<
         "account required pam_permit.so",
         "session required pam_permit.so",
       ]),
+      // A person's `nix profile add` lands in ~/.nix-profile, which no PATH names. Login shells,
+      // interactive bash and every zsh put it first; root's PATH has it already.
+      `for f in profile bashrc zshenv; do printf '%s\\n' 'case ":$PATH:" in *":$HOME/.nix-profile/bin:"*) ;; *) PATH="$HOME/.nix-profile/bin:$PATH" ;; esac' >> /etc/$f; done`,
     ],
     checks: ["visudo -cq", "/usr/local/bin/sudo -n true"],
     systemPath: ["/usr/local/sbin", "/usr/local/bin", `${NIX_PROFILE}/bin`, `${NIX_PROFILE}/sbin`],

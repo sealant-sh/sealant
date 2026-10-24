@@ -300,6 +300,37 @@ setpriv --reuid=alice --regid=mend --init-groups -- env HOME=/home/alice $(grep 
     );
 
     it.runIf(family === "nix")(
+      "runs what a person adds to their own profile by name in their login and interactive shells",
+      async () => {
+        const outcome = await runScript(
+          imageReference ?? "missing",
+          family,
+          String.raw`
+useradd -u 40001 -g mend -m alice
+cat > /tmp/as-alice.sh <<'AS_ALICE'
+mkdir -p ~/pkg/bin; printf '#!/bin/sh\necho ran\n' > ~/pkg/bin/pl-alice; chmod +x ~/pkg/bin/pl-alice
+nix --extra-experimental-features 'nix-command flakes' profile add "$(nix --extra-experimental-features nix-command store add-path ~/pkg)"
+for shell in "bash -lc" "bash -ic" "sh -lc" "bash -c" "sh -c"; do echo "$shell: $($shell pl-alice 2>/dev/null || echo not-found)"; done
+AS_ALICE
+setpriv --reuid=alice --regid=mend --init-groups -- env HOME=/home/alice $(grep '^NIX_REMOTE=' /etc/sealant/person-env) bash /tmp/as-alice.sh
+[ "$(bash -lc 'echo "$PATH"')" = "$PATH" ] && echo "root-path=unchanged"
+`,
+        );
+        expect(outcome.stdout).toContain(
+          [
+            "bash -lc: ran",
+            "bash -ic: ran",
+            "sh -lc: ran",
+            "bash -c: not-found",
+            "sh -c: not-found",
+          ].join("\n"),
+        );
+        expect(outcome.stdout).toContain("root-path=unchanged");
+      },
+      600_000,
+    );
+
+    it.runIf(family === "nix")(
       "keeps the store output the setuid sudo was copied from",
       async () => {
         const outcome = await runScript(

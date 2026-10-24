@@ -779,7 +779,7 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
             `${NIX} profile add ${builds[person.name]!.path}`,
             'echo "add-exit=$?"',
             'echo "link=$(readlink "$HOME/.nix-profile")"',
-            `"$HOME/.nix-profile/bin/pl-${person.name}"`,
+            `echo "ran=$(bash -lc pl-${person.name})"`,
             `${NIX} profile list`,
           ].join("\n"),
           person.name,
@@ -787,7 +787,7 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
         evidence(`step 4n nix profile as ${person.name}`, installed.output.trim());
         expect(installed.output).toContain("add-exit=0");
         expect(installed.output).toContain(`link=/home/${person.name}/`);
-        expect(installed.output).toContain(builds[person.name]!.seed);
+        expect(installed.output).toContain(`ran=${builds[person.name]!.seed}`);
         profiles[person.name] = installed.output;
       }
       const aliceAfterBob = await exec(target, `${NIX} profile list`, ALICE.name);
