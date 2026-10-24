@@ -258,6 +258,39 @@ describe("the person layout in the managed images", () => {
     expect(containerfile).not.toContain("image-probe --require");
   });
 
+  it("renders Fedora, Arch and Ubuntu byte for byte as before nix ran per person", () => {
+    // A changed Containerfile changes the plan hash, and every image of the family rebuilds.
+    const hashes = Object.fromEntries(
+      ["fedora", "arch", "ubuntu"].flatMap((family) =>
+        (
+          [
+            ["linux/amd64", false],
+            ["linux/amd64", true],
+            ["linux/arm64", false],
+          ] as const
+        ).map(([platform, docker]) => [
+          `${family} ${platform}${docker ? " docker" : ""}`,
+          planWorkspaceImageBuild({ platform, blueprint: blueprintFor(family, { docker }) })
+            .planHash,
+        ]),
+      ),
+    );
+
+    expect(hashes).toMatchInlineSnapshot(`
+      {
+        "arch linux/amd64": "e7dfb326e6781ec9bed3d548d3ace9cb6fcff6a9302e92983394cbd642b389b4",
+        "arch linux/amd64 docker": "10e6f7c41f8fe16cf5695306bfd909d10d74d6c216bf32b34f59d7625c94fa23",
+        "arch linux/arm64": "30683600a9a65973ac502746ff1d8d974855455dbd8a8ce0a1d9646ae8d323f9",
+        "fedora linux/amd64": "7e31cc456bc9c4b0b2ac22633598f3c1f0d3844b49de6bb5e98707a39c4af2d9",
+        "fedora linux/amd64 docker": "47d7cb7a6f0949a99d3ff61c052f49dd4633aa9bc6658a2c97829d24d00e3211",
+        "fedora linux/arm64": "fcd6675b9ffe4064481c279752f802530691feb174335672695e8f8d4de1db52",
+        "ubuntu linux/amd64": "e0a230c443077cceeed20a28ec4310b02df903cd9c3bb8608bb3b62bb9565fec",
+        "ubuntu linux/amd64 docker": "d5c3c57ebd22453cb99b7e49121ad3920a5187772f07aa8104bb37925278ee43",
+        "ubuntu linux/arm64": "f3cab3932dc1fe88fc97658f7ab10f7262f0cb5d9a154df992c86fc04dcb1dd2",
+      }
+    `);
+  });
+
   it("probes a custom base without changing it, and never fails its build", () => {
     const containerfile = containerfileFor("custom", { baseImage: "node:24-bookworm" });
 
