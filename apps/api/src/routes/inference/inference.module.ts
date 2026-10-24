@@ -493,7 +493,9 @@ const respondAs = (payload: InferenceRespondRequest) =>
         // — marking it invalid here would needlessly block every workspace launch on the account.
         Effect.tapError((error) =>
           error.reason === "auth" && oauthCredentials.shape === "token"
-            ? accounts.markInvalid({ id: account.id }).pipe(Effect.ignore)
+            ? accounts
+                .markInvalid({ id: account.id, revision: account.credentialRevision })
+                .pipe(Effect.ignore)
             : Effect.void,
         ),
         Effect.mapError((error) =>

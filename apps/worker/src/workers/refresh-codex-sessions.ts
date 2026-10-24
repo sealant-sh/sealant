@@ -272,7 +272,7 @@ const refreshOneAccount = Effect.fn("refreshCodexSessionAccount")(function* (inp
       }
 
       if (result?.refusedForGood === true) {
-        yield* accounts.markInvalid({ id: account.id });
+        yield* accounts.markInvalid({ id: account.id, revision: account.credentialRevision });
         yield* Effect.logWarning(
           `${describe} refused: the provider refused the refresh for good — reconnect needed.`,
         );

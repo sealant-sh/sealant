@@ -221,7 +221,7 @@ const refreshOneAccount = Effect.fn("refreshClaudeSessionAccount")(function* (in
       // A refused refresh clears the grant from the file (tested: "OAuth session expired and could
       // not be refreshed" leaves no access or refresh token). The login is over: say so.
       if (!claudeCredentialsCanRefresh(observed)) {
-        yield* accounts.markInvalid({ id: account.id });
+        yield* accounts.markInvalid({ id: account.id, revision: account.credentialRevision });
         yield* Effect.logWarning(
           `${describe} refused: the provider refused the refresh and the CLI cleared the login — reconnect needed.`,
         );
