@@ -26,17 +26,40 @@ const summary = (overrides: Record<string, unknown> = {}) => ({
 
 let answer: { readonly status: number; readonly body: unknown } = { status: 500, body: {} };
 let seen: Array<{ readonly method: string; readonly url: string; readonly body: unknown }> = [];
+let features: Record<string, boolean> = {};
 
-const answering = (status: number, body: unknown) => {
+const currentControlPlane = { processUser: false, connectedAccountDefaults: true };
+const olderControlPlane = { processUser: false };
+
+const answering = (
+  status: number,
+  body: unknown,
+  reported: Record<string, boolean> = currentControlPlane,
+) => {
   answer = { status, body };
+  features = reported;
   seen = [];
 };
+
+const index = () => ({
+  name: "Sealant Control Plane API",
+  version: "0.0.0",
+  docsPath: "/docs",
+  openApiPath: "/openapi.json",
+  features,
+});
 
 beforeAll(() => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = input instanceof Request ? input : new Request(input, init);
+      if (new URL(request.url).pathname === "/") {
+        return new Response(JSON.stringify(index()), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
       const text = await request.text();
       seen.push({
         method: request.method,
@@ -138,6 +161,56 @@ describe("connectedAccounts", () => {
       reason: "connected-account-ambiguous",
       candidateAccountIds: ["cacc_default", "cacc_work"],
     });
+    await sealant.close();
+  });
+});
+
+describe("connectedAccounts against a control plane from before chosen defaults", () => {
+  const refusal = { code: "connected-account-defaults-unsupported" };
+
+  it("sends no connect that targets an account or a default, which it would drop", async () => {
+    answering(201, summary(), olderControlPlane);
+    const sealant = client();
+    await expect(
+      sealant.connectedAccounts.connect({
+        provider: "claude",
+        secret: "sk-ant-oat01-fake",
+        accountId: "cacc_work",
+      }),
+    ).rejects.toMatchObject(refusal);
+    await expect(
+      sealant.connectedAccounts.connect({
+        provider: "claude",
+        secret: "sk-ant-oat01-fake",
+        name: "work",
+        makeDefault: true,
+      }),
+    ).rejects.toMatchObject(refusal);
+    expect(seen).toEqual([]);
+
+    await sealant.connectedAccounts.connect({
+      provider: "claude",
+      secret: "sk-ant-oat01-fake",
+      name: "work",
+    });
+    expect(seen.map((call) => call.method)).toEqual(["POST"]);
+    await sealant.close();
+  });
+
+  it("sends no setDefault and no mark-invalid that names a revision", async () => {
+    answering(200, summary(), olderControlPlane);
+    const sealant = client();
+    await expect(
+      sealant.connectedAccounts.setDefault({ provider: "claude", accountId: "cacc_work" }),
+    ).rejects.toMatchObject(refusal);
+    await expect(
+      sealant.connectedAccounts.markInvalid("cacc_work", { revision: 1 }),
+    ).rejects.toMatchObject(refusal);
+    expect(seen).toEqual([]);
+
+    const marked = await sealant.connectedAccounts.markInvalid("cacc_work");
+    expect(marked.outcome).toBe("marked");
+    expect(seen.map((call) => call.method)).toEqual(["POST"]);
     await sealant.close();
   });
 });

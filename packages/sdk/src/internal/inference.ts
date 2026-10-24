@@ -14,15 +14,7 @@ import type {
   InferenceResponse,
   InferenceTurn,
 } from "../types.js";
-
-const DEFAULT_ACCOUNT_NAME = "default";
-
-const mapAccountRef = (value: boolean | string | undefined): string | undefined => {
-  if (value === undefined || value === false) {
-    return undefined;
-  }
-  return value === true ? DEFAULT_ACCOUNT_NAME : value;
-};
+import { mapAccountRef } from "./credentials.js";
 
 export const buildInferenceRespondRequest = (
   options: InferenceRespondOptions | InferenceContinueOptions,

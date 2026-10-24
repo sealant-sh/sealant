@@ -6,6 +6,7 @@
 import type { SystemIndexResponse } from "@sealant/api-contracts";
 
 import { getIndexOp } from "../effect/operations.js";
+import { SealantError } from "../errors.js";
 import type { SdkContext } from "../facade/context.js";
 import type { SealantFeatures } from "../types.js";
 import { elapsed } from "./clock.js";
@@ -56,4 +57,23 @@ export const readFeatures = (ctx: SdkContext): Promise<SealantFeatures> => {
   };
   answers.set(ctx.runtime, fresh);
   return fresh.features;
+};
+
+/**
+ * A chosen default, `accountId` and `makeDefault` on a connect, and `revision` on `markInvalid` are
+ * sent only to a control plane that reports `connectedAccountDefaults`: an older one drops those
+ * fields and does something else (a connect replaces the account named `default`, a mark-invalid
+ * marks whatever credential is stored).
+ */
+export const requireConnectedAccountDefaults = async (ctx: SdkContext): Promise<void> => {
+  const supported = await readFeatures(ctx).then(
+    (features) => features.connectedAccountDefaults,
+    () => false,
+  );
+  if (!supported) {
+    throw new SealantError(
+      "This control plane cannot choose a default connected account or target one by id (it does not report the feature, or could not be asked); nothing was sent.",
+      { code: "connected-account-defaults-unsupported" },
+    );
+  }
 };

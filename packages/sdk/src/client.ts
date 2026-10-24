@@ -52,7 +52,7 @@ import {
 import { buildCreateWorkspaceRequest } from "./internal/blueprint.js";
 import { resolveInternalConfig } from "./internal/config.js";
 import { parseTtlSeconds } from "./internal/duration.js";
-import { readFeatures } from "./internal/features.js";
+import { readFeatures, requireConnectedAccountDefaults } from "./internal/features.js";
 import { imageSpecKey } from "./internal/image-key.js";
 import { buildInferenceRespondRequest, mapInferenceResponse } from "./internal/inference.js";
 import { requireSshUser } from "./internal/process-user.js";
@@ -351,6 +351,9 @@ export class Sealant {
       return wire.items.map(mapConnectedAccount);
     },
     connect: async (options) => {
+      if (options.accountId !== undefined || options.makeDefault !== undefined) {
+        await requireConnectedAccountDefaults(this.#ctx);
+      }
       const wire = await this.#runtime.run(
         createConnectedAccountOp({
           ownerUserId: this.#ctx.config.hostLocal.ownerUserId,
@@ -370,6 +373,7 @@ export class Sealant {
       return mapConnectedAccount(wire);
     },
     setDefault: async (options) => {
+      await requireConnectedAccountDefaults(this.#ctx);
       const wire = await this.#runtime.run(
         setConnectedAccountDefaultOp(options.provider, {
           ownerUserId: this.#ctx.config.hostLocal.ownerUserId,
@@ -379,6 +383,9 @@ export class Sealant {
       return mapConnectedAccount(wire);
     },
     markInvalid: async (connectedAccountId, options) => {
+      if (options?.revision !== undefined) {
+        await requireConnectedAccountDefaults(this.#ctx);
+      }
       const wire = await this.#runtime.run(
         markConnectedAccountInvalidOp(connectedAccountId, {
           ownerUserId: this.#ctx.config.hostLocal.ownerUserId,

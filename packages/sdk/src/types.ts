@@ -2289,7 +2289,7 @@ export interface ConnectedAccount {
   readonly credentialRevision?: number;
 }
 
-export interface ConnectConnectedAccountOptions {
+interface ConnectConnectedAccountBase {
   readonly provider: ConnectedAccountProvider;
   /**
    * Provider-shaped plaintext, passed through and sealed server-side: a Claude setup token or
@@ -2297,20 +2297,28 @@ export interface ConnectConnectedAccountOptions {
    */
   readonly secret: string;
   /**
-   * Account name under the provider: an existing account of that name is replaced, a new name is a
-   * new account. With neither `name` nor `accountId`, a first account is named `default`, an only
-   * account is replaced, and with several the call fails with `reason`
-   * `connected-account-ambiguous` and the candidates in `candidateAccountIds`.
-   */
-  readonly name?: string;
-  /** Replace this account. Not with `name`. */
-  readonly accountId?: string;
-  /**
    * Make the connected account the owner's default for the provider. A first account is the default
-   * without it.
+   * without it. Needs `features().connectedAccountDefaults`.
    */
   readonly makeDefault?: boolean;
 }
+
+/**
+ * Which account a connect writes. A person's first account for a provider is named `default`
+ * whatever `name` says. After that, `name` replaces the account of that name or makes a new one,
+ * and `name: "default"` replaces the chosen default. With neither `name` nor `accountId` (or
+ * `default` while none is chosen), an only account is replaced, and with several the call fails
+ * with `reason` `connected-account-ambiguous` and the candidates in `candidateAccountIds`.
+ */
+export type ConnectConnectedAccountOptions = ConnectConnectedAccountBase &
+  (
+    | { readonly name?: string; readonly accountId?: never }
+    | {
+        /** Replace this account. Needs `features().connectedAccountDefaults`. */
+        readonly accountId: string;
+        readonly name?: never;
+      }
+  );
 
 export interface SetDefaultConnectedAccountOptions {
   readonly provider: ConnectedAccountProvider;
@@ -2321,7 +2329,7 @@ export interface SetDefaultConnectedAccountOptions {
 export interface MarkConnectedAccountInvalidOptions {
   /**
    * The `credentialRevision` the refusal was seen on. Once the account holds a newer credential,
-   * nothing is marked and the outcome is `superseded`.
+   * nothing is marked and the outcome is `superseded`. Needs `features().connectedAccountDefaults`.
    */
   readonly revision?: number;
 }
