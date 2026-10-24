@@ -84,6 +84,15 @@ const credentialBindingsResponse = (profileId: string) => {
       connectedAccountRepo.getBindingsForProfileWithAccounts(profileId),
       "Failed to list profile credential bindings.",
     );
+    const owners = new Set(bindings.map(({ account }) => account.ownerUserId));
+    const defaults = new Set<string>();
+    for (const owner of owners) {
+      const ids = yield* withInternalError(
+        connectedAccountRepo.listDefaultAccountIds(owner),
+        "Failed to list default connected accounts.",
+      );
+      for (const id of ids) defaults.add(id);
+    }
 
     return {
       items: bindings.map(({ binding, account }) => {
@@ -91,7 +100,7 @@ const credentialBindingsResponse = (profileId: string) => {
           profileId: binding.profileId,
           provider: binding.provider,
           connectedAccountId: binding.connectedAccountId,
-          account: toConnectedAccountSummary(account),
+          account: toConnectedAccountSummary(account, defaults.has(account.id)),
         };
       }),
     } satisfies ListProfileCredentialBindingsResponse;

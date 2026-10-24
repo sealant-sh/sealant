@@ -14,6 +14,11 @@ provider-shaped plaintext INTO the API, where it is validated, encrypted (AES-25
 expose only non-secret metadata (token suffix, codex account id/email, github login+scopes).
 `markConnectedAccountInvalid` is the internal 401-feedback hook (worker/sync-back observed the
 provider rejecting the credential).
+
+Each person has at most one default account per provider, the one the selector `default` (the
+SDK's `true`) means. Connecting a person's first account for a provider makes it the default;
+after that only `makeDefault` on a connect, or `setConnectedAccountDefault`, changes it.
+Disconnecting the default leaves the person without one: no other account is chosen for them.
 */
 
 export const connectedAccountProviderSchema = Schema.Literals(["claude", "codex", "github"]);
@@ -56,14 +61,30 @@ export const connectedAccountSummarySchema = Schema.Struct({
   lastSyncedAt: Schema.NullOr(Schema.String),
   /** Freshness as the control plane observed it; see the schema above for what null means. */
   credential: connectedAccountCredentialSchema,
+  /** Whether this is the owner's default for its provider. Absent from older control planes. */
+  isDefault: Schema.optional(Schema.Boolean),
+  /**
+   * Which credential the account holds: starts at 1 and moves on whenever a reconnect or refresh
+   * stores different bytes. Absent from older control planes.
+   */
+  credentialRevision: Schema.optional(Schema.Int),
 });
 export type ConnectedAccountSummary = typeof connectedAccountSummarySchema.Type;
 
 export const createConnectedAccountRequestSchema = Schema.Struct({
   ownerUserId: NonEmptyString,
   provider: connectedAccountProviderSchema,
-  // Multiple accounts per provider are allowed; defaults to "default".
+  /**
+   * The account to connect or replace by name; a new name is a new account. With neither `name`
+   * nor `accountId`, the owner's first account for the provider is named `default`, their only
+   * one is replaced, and with several the connect is refused (`409`,
+   * `connected-account-ambiguous`, with `candidateAccountIds`).
+   */
   name: Schema.optional(NonEmptyString),
+  /** Replace this account (the owner's, of `provider`). Not with `name`. */
+  accountId: Schema.optional(NonEmptyString),
+  /** Make the connected account the owner's default for the provider, in the same write. */
+  makeDefault: Schema.optional(Schema.Boolean),
   // Provider-shaped plaintext: claude setup-token or verbatim .credentials.json contents /
   // verbatim codex auth.json contents / github token. Encrypted server-side; never stored or
   // echoed back as-is. Not trimmed here — pasted credential files are stored verbatim.
@@ -83,9 +104,28 @@ export type ListConnectedAccountsResponse = typeof listConnectedAccountsResponse
 
 export const markConnectedAccountInvalidRequestSchema = Schema.Struct({
   ownerUserId: NonEmptyString,
+  /**
+   * The `credentialRevision` the refusal was observed on. When the stored credential has moved on
+   * since, nothing is marked and the answer's `outcome` is `superseded`.
+   */
+  revision: Schema.optional(Schema.Int),
 });
 export type MarkConnectedAccountInvalidRequest =
   typeof markConnectedAccountInvalidRequestSchema.Type;
+
+export const markConnectedAccountInvalidResponseSchema = Schema.Struct({
+  ...connectedAccountSummarySchema.fields,
+  /** `marked`: the account is now invalid. `superseded`: a newer credential, left as it was. */
+  outcome: Schema.optional(Schema.Literals(["marked", "superseded"])),
+});
+export type MarkConnectedAccountInvalidResponse =
+  typeof markConnectedAccountInvalidResponseSchema.Type;
+
+export const setConnectedAccountDefaultRequestSchema = Schema.Struct({
+  ownerUserId: NonEmptyString,
+  connectedAccountId: NonEmptyString,
+});
+export type SetConnectedAccountDefaultRequest = typeof setConnectedAccountDefaultRequestSchema.Type;
 
 export class ConnectedAccountBadRequestError extends Schema.TaggedError<ConnectedAccountBadRequestError>()(
   "ConnectedAccountBadRequestError",
@@ -107,6 +147,13 @@ export class ConnectedAccountConflictError extends Schema.TaggedError<ConnectedA
   "ConnectedAccountConflictError",
   {
     message: Schema.String,
+    /**
+     * A stable reason, where one applies: `connected-account-ambiguous` (a connect without a target
+     * while the owner has several accounts for the provider), `connected-account-invalid`.
+     */
+    code: Schema.optional(NonEmptyString),
+    /** The accounts a `connected-account-ambiguous` connect could have meant. */
+    candidateAccountIds: Schema.optional(Schema.Array(NonEmptyString)),
   },
   { httpApiStatus: 409 },
 ) {}
@@ -128,11 +175,10 @@ export class ConnectedAccountInternalServerError extends Schema.TaggedError<Conn
 ) {}
 
 const connectedAccountIdParams = Schema.Struct({ connectedAccountId: NonEmptyString });
+const connectedAccountProviderParams = Schema.Struct({ provider: connectedAccountProviderSchema });
 
 export const ConnectedAccountsGroup = HttpApiGroup.make("connectedAccounts")
   .add(
-    // Connect/replace: upserts on (owner, provider, name), so reconnecting swaps the sealed
-    // payload in place instead of erroring.
     HttpApiEndpoint.post("createConnectedAccount", "/", {
       payload: createConnectedAccountRequestSchema,
       success: connectedAccountSummarySchema.pipe(HttpApiSchema.status(201)),
@@ -167,8 +213,20 @@ export const ConnectedAccountsGroup = HttpApiGroup.make("connectedAccounts")
     HttpApiEndpoint.post("markConnectedAccountInvalid", "/:connectedAccountId/mark-invalid", {
       params: connectedAccountIdParams,
       payload: markConnectedAccountInvalidRequestSchema,
-      success: connectedAccountSummarySchema,
+      success: markConnectedAccountInvalidResponseSchema,
       error: [ConnectedAccountNotFoundError, ConnectedAccountInternalServerError],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.put("setConnectedAccountDefault", "/defaults/:provider", {
+      params: connectedAccountProviderParams,
+      payload: setConnectedAccountDefaultRequestSchema,
+      success: connectedAccountSummarySchema,
+      error: [
+        ConnectedAccountNotFoundError,
+        ConnectedAccountConflictError,
+        ConnectedAccountInternalServerError,
+      ],
     }),
   )
   .annotate(

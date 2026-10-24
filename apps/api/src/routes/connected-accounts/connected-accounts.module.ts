@@ -6,10 +6,11 @@ import {
   ConnectedAccountInternalServerError,
   ConnectedAccountNotFoundError,
   ConnectedAccountServiceUnavailableError,
+  type ConnectedAccountCredential,
   type ConnectedAccountSummary,
   type CreateConnectedAccountRequest,
   type ListConnectedAccountsResponse,
-  type ConnectedAccountCredential,
+  type MarkConnectedAccountInvalidResponse,
 } from "@sealant/api-contracts";
 import {
   CLAUDE_TOKEN_PREFIX,
@@ -20,10 +21,16 @@ import {
   sha256Hex,
   type ConnectedAccountProvider,
 } from "@sealant/credentials";
-import { ConnectedAccountRepo, type ConnectedAccount } from "@sealant/db";
+import {
+  ConnectedAccountRepo,
+  ConnectedAccountRepoInvariantError,
+  ConnectedAccountRepoUnexpectedError,
+  type ConnectedAccount,
+} from "@sealant/db";
 import { Effect } from "effect";
 
 import { env } from "../../runtime-env.js";
+import { DEFAULT_ACCOUNT_SELECTOR } from "../../services/connected-account-lookup.js";
 
 /*
 Connected provider accounts. Same trust model as ssh-keys: the internal API trusts the
@@ -87,7 +94,10 @@ const toCredentialFreshness = (account: ConnectedAccount): ConnectedAccountCrede
   };
 };
 
-export const toConnectedAccountSummary = (account: ConnectedAccount): ConnectedAccountSummary => {
+export const toConnectedAccountSummary = (
+  account: ConnectedAccount,
+  isDefault: boolean,
+): ConnectedAccountSummary => {
   return {
     connectedAccountId: account.id,
     ownerUserId: account.ownerUserId,
@@ -103,6 +113,8 @@ export const toConnectedAccountSummary = (account: ConnectedAccount): ConnectedA
     lastUsedAt: account.lastUsedAt?.toISOString() ?? null,
     lastSyncedAt: account.lastSyncedAt?.toISOString() ?? null,
     credential: toCredentialFreshness(account),
+    isDefault,
+    credentialRevision: account.credentialRevision,
   };
 };
 
@@ -271,13 +283,88 @@ export const normalizeSecret = (
   });
 };
 
+type ConnectTarget =
+  | { readonly kind: "replace"; readonly account: ConnectedAccount }
+  | { readonly kind: "create"; readonly name: string };
+
+const connectTarget = (
+  request: CreateConnectedAccountRequest,
+  existing: readonly ConnectedAccount[],
+): Effect.Effect<ConnectTarget, ConnectedAccountNotFoundError | ConnectedAccountConflictError> => {
+  if (request.accountId !== undefined) {
+    const account = existing.find((candidate) => candidate.id === request.accountId);
+    return account === undefined
+      ? Effect.fail(
+          new ConnectedAccountNotFoundError({
+            message: `No ${request.provider} connected account ${request.accountId} to replace.`,
+          }),
+        )
+      : Effect.succeed({ kind: "replace", account });
+  }
+  if (request.name !== undefined) {
+    const account = existing.find((candidate) => candidate.name === request.name);
+    return Effect.succeed(
+      account === undefined ? { kind: "create", name: request.name } : { kind: "replace", account },
+    );
+  }
+  const [only, ...others] = existing;
+  if (only === undefined) {
+    return Effect.succeed({ kind: "create", name: DEFAULT_ACCOUNT_SELECTOR });
+  }
+  if (others.length === 0) {
+    return Effect.succeed({ kind: "replace", account: only });
+  }
+  return Effect.fail(
+    new ConnectedAccountConflictError({
+      message: `Several ${request.provider} accounts are connected; say which one to replace with accountId, or name a new one.`,
+      code: "connected-account-ambiguous",
+      candidateAccountIds: existing.map((account) => account.id),
+    }),
+  );
+};
+
+const withOwnerLock = <A, E, R>(ownerUserId: string, write: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const connectedAccountRepo = yield* ConnectedAccountRepo;
+    return yield* connectedAccountRepo
+      .withOwnerLock(ownerUserId, write)
+      .pipe(
+        Effect.mapError((error) =>
+          error instanceof ConnectedAccountRepoInvariantError ||
+          error instanceof ConnectedAccountRepoUnexpectedError
+            ? new ConnectedAccountInternalServerError({ message: error.message })
+            : error,
+        ),
+      );
+  });
+
+const isDefaultAccount = (account: ConnectedAccount) =>
+  Effect.gen(function* () {
+    const connectedAccountRepo = yield* ConnectedAccountRepo;
+    const chosen = yield* withInternalError(
+      connectedAccountRepo.getDefault({
+        ownerUserId: account.ownerUserId,
+        provider: account.provider,
+      }),
+      "Failed to load the default connected account.",
+    );
+    return chosen?.id === account.id;
+  });
+
 export const createConnectedAccount = (input: {
   readonly payload: CreateConnectedAccountRequest;
 }) => {
   return Effect.gen(function* () {
     yield* requireCredentialsKey;
+    const request = input.payload;
 
-    const normalized = yield* normalizeSecret(input.payload.provider, input.payload.secret);
+    if (request.name !== undefined && request.accountId !== undefined) {
+      return yield* new ConnectedAccountBadRequestError({
+        message: "Name the account to connect or give its accountId, not both.",
+      });
+    }
+
+    const normalized = yield* normalizeSecret(request.provider, request.secret);
 
     const credentialCipher = yield* CredentialCipher;
     const sealed = yield* credentialCipher.encrypt(normalized.payloadJson).pipe(
@@ -291,80 +378,81 @@ export const createConnectedAccount = (input: {
     const payloadSha256 = sha256Hex(normalized.payloadJson);
 
     const connectedAccountRepo = yield* ConnectedAccountRepo;
-    const name = input.payload.name ?? "default";
 
-    // Upsert on (owner, provider, name): reconnecting swaps the sealed payload on the active row
-    // in place (also resets status to "active" and clears invalid_at).
-    const existing = yield* withInternalError(
-      connectedAccountRepo.getByOwnerProviderName({
-        ownerUserId: input.payload.ownerUserId,
-        provider: input.payload.provider,
-        name,
-      }),
-      "Failed to look up connected account.",
-    );
+    return yield* withOwnerLock(
+      request.ownerUserId,
+      Effect.gen(function* () {
+        const existing = yield* withInternalError(
+          connectedAccountRepo.listByOwnerProvider({
+            ownerUserId: request.ownerUserId,
+            provider: request.provider,
+          }),
+          "Failed to look up connected accounts.",
+        );
+        const target = yield* connectTarget(request, existing);
 
-    if (existing !== undefined) {
-      const replaced = yield* withInternalError(
-        connectedAccountRepo.replacePayload({
-          id: existing.id,
-          // Reconnecting may switch payload shapes (claude setup-token <-> session file).
-          kind: normalized.kind,
-          encryptedPayload: sealed.sealed,
-          encryptionKeyId: sealed.keyId,
-          payloadSha256,
-          metadata: normalized.metadata,
-        }),
-        "Failed to replace connected account credential.",
-      );
+        const account =
+          target.kind === "replace"
+            ? yield* withInternalError(
+                connectedAccountRepo.replacePayload({
+                  id: target.account.id,
+                  // Reconnecting may switch payload shapes (claude setup-token <-> session file).
+                  kind: normalized.kind,
+                  encryptedPayload: sealed.sealed,
+                  encryptionKeyId: sealed.keyId,
+                  payloadSha256,
+                  metadata: normalized.metadata,
+                }),
+                "Failed to replace connected account credential.",
+              )
+            : yield* connectedAccountRepo
+                .createConnectedAccount({
+                  id: `cacc_${randomUUID()}`,
+                  ownerUserId: request.ownerUserId,
+                  provider: request.provider,
+                  name: target.name,
+                  kind: normalized.kind,
+                  encryptedPayload: sealed.sealed,
+                  encryptionKeyId: sealed.keyId,
+                  payloadSha256,
+                  metadata: normalized.metadata,
+                })
+                .pipe(
+                  Effect.mapError((error) => {
+                    // Owner FK failure means the user id does not exist.
+                    if (error.message.includes("violates foreign key constraint")) {
+                      return new ConnectedAccountNotFoundError({
+                        message: `Owner user not found: ${request.ownerUserId}`,
+                      });
+                    }
 
-      if (replaced === undefined) {
-        return yield* new ConnectedAccountInternalServerError({
-          message: "Failed to replace connected account credential.",
-        });
-      }
+                    return new ConnectedAccountInternalServerError({
+                      message: toErrorMessage(error, "Failed to create connected account."),
+                    });
+                  }),
+                );
 
-      return toConnectedAccountSummary(replaced);
-    }
-
-    // No active row: insert fresh. Archived rows never block this — the (owner, provider, name)
-    // unique index is partial on `archived_at IS NULL` — so reconnecting after an archive just
-    // creates a new account row.
-    const created = yield* connectedAccountRepo
-      .createConnectedAccount({
-        id: `cacc_${randomUUID()}`,
-        ownerUserId: input.payload.ownerUserId,
-        provider: input.payload.provider,
-        name,
-        kind: normalized.kind,
-        encryptedPayload: sealed.sealed,
-        encryptionKeyId: sealed.keyId,
-        payloadSha256,
-        metadata: normalized.metadata,
-      })
-      .pipe(
-        Effect.mapError((error) => {
-          // Owner FK failure means the user id does not exist.
-          if (error.message.includes("violates foreign key constraint")) {
-            return new ConnectedAccountNotFoundError({
-              message: `Owner user not found: ${input.payload.ownerUserId}`,
-            });
-          }
-
-          // Concurrent connect for the same (owner, provider, name) won the race.
-          if (error.message.includes("duplicate key value")) {
-            return new ConnectedAccountConflictError({
-              message: `A ${input.payload.provider} account named "${name}" is already connected.`,
-            });
-          }
-
-          return new ConnectedAccountInternalServerError({
-            message: toErrorMessage(error, "Failed to create connected account."),
+        if (account === undefined) {
+          return yield* new ConnectedAccountInternalServerError({
+            message: "Failed to replace connected account credential.",
           });
-        }),
-      );
+        }
 
-    return toConnectedAccountSummary(created);
+        if (request.makeDefault === true || existing.length === 0) {
+          yield* withInternalError(
+            connectedAccountRepo.setDefault({
+              ownerUserId: account.ownerUserId,
+              provider: account.provider,
+              connectedAccountId: account.id,
+            }),
+            "Failed to set the default connected account.",
+          );
+          return toConnectedAccountSummary(account, true);
+        }
+
+        return toConnectedAccountSummary(account, yield* isDefaultAccount(account));
+      }),
+    );
   });
 };
 
@@ -376,10 +464,63 @@ export const listConnectedAccounts = (input: { readonly ownerUserId: string }) =
       connectedAccountRepo.listByOwner(input.ownerUserId),
       "Failed to list connected accounts.",
     );
+    const defaults = yield* withInternalError(
+      connectedAccountRepo.listDefaultAccountIds(input.ownerUserId),
+      "Failed to list default connected accounts.",
+    );
 
     return {
-      items: items.map(toConnectedAccountSummary),
+      items: items.map((account) => toConnectedAccountSummary(account, defaults.has(account.id))),
     } satisfies ListConnectedAccountsResponse;
+  });
+};
+
+export const setConnectedAccountDefault = (input: {
+  readonly ownerUserId: string;
+  readonly provider: ConnectedAccountProvider;
+  readonly connectedAccountId: string;
+}) => {
+  return Effect.gen(function* () {
+    const connectedAccountRepo = yield* ConnectedAccountRepo;
+
+    return yield* withOwnerLock(
+      input.ownerUserId,
+      Effect.gen(function* () {
+        const account = yield* withInternalError(
+          connectedAccountRepo.getById(input.connectedAccountId),
+          "Failed to load connected account.",
+        );
+
+        if (
+          account === undefined ||
+          account.ownerUserId !== input.ownerUserId ||
+          account.provider !== input.provider ||
+          account.archivedAt !== null
+        ) {
+          return yield* new ConnectedAccountNotFoundError({
+            message: `No ${input.provider} connected account ${input.connectedAccountId}.`,
+          });
+        }
+
+        if (account.status !== "active") {
+          return yield* new ConnectedAccountConflictError({
+            message: `Connected ${input.provider} account "${account.name}" is invalid. Reconnect it before choosing it as the default.`,
+            code: "connected-account-invalid",
+          });
+        }
+
+        yield* withInternalError(
+          connectedAccountRepo.setDefault({
+            ownerUserId: account.ownerUserId,
+            provider: account.provider,
+            connectedAccountId: account.id,
+          }),
+          "Failed to set the default connected account.",
+        );
+
+        return toConnectedAccountSummary(account, true);
+      }),
+    );
   });
 };
 
@@ -390,58 +531,82 @@ export const archiveConnectedAccount = (input: {
   return Effect.gen(function* () {
     const connectedAccountRepo = yield* ConnectedAccountRepo;
 
-    const archived = yield* withInternalError(
-      connectedAccountRepo.archive({
-        id: input.connectedAccountId,
-        ownerUserId: input.ownerUserId,
+    return yield* withOwnerLock(
+      input.ownerUserId,
+      Effect.gen(function* () {
+        const archived = yield* withInternalError(
+          connectedAccountRepo.archive({
+            id: input.connectedAccountId,
+            ownerUserId: input.ownerUserId,
+          }),
+          "Failed to disconnect account.",
+        );
+
+        // Uniform 404: unknown id, someone else's account, and already-archived all look identical.
+        if (archived === undefined) {
+          return yield* new ConnectedAccountNotFoundError({
+            message: `Connected account not found: ${input.connectedAccountId}`,
+          });
+        }
+
+        return toConnectedAccountSummary(archived, false);
       }),
-      "Failed to disconnect account.",
     );
-
-    // Uniform 404: unknown id, someone else's account, and already-archived all look identical.
-    if (archived === undefined) {
-      return yield* new ConnectedAccountNotFoundError({
-        message: `Connected account not found: ${input.connectedAccountId}`,
-      });
-    }
-
-    return toConnectedAccountSummary(archived);
   });
 };
 
 export const markConnectedAccountInvalid = (input: {
   readonly connectedAccountId: string;
   readonly ownerUserId: string;
+  readonly revision?: number;
 }) => {
   return Effect.gen(function* () {
     const connectedAccountRepo = yield* ConnectedAccountRepo;
+
+    const notFound = new ConnectedAccountNotFoundError({
+      message: `Connected account not found: ${input.connectedAccountId}`,
+    });
+    const usable = (account: ConnectedAccount | undefined): account is ConnectedAccount =>
+      account !== undefined &&
+      account.ownerUserId === input.ownerUserId &&
+      account.archivedAt === null;
 
     const account = yield* withInternalError(
       connectedAccountRepo.getById(input.connectedAccountId),
       "Failed to load connected account.",
     );
 
-    if (
-      account === undefined ||
-      account.ownerUserId !== input.ownerUserId ||
-      account.archivedAt !== null
-    ) {
-      return yield* new ConnectedAccountNotFoundError({
-        message: `Connected account not found: ${input.connectedAccountId}`,
-      });
+    if (!usable(account)) {
+      return yield* notFound;
     }
 
     const marked = yield* withInternalError(
-      connectedAccountRepo.markInvalid({ id: account.id }),
+      connectedAccountRepo.markInvalid({
+        id: account.id,
+        ...(input.revision === undefined ? {} : { revision: input.revision }),
+      }),
       "Failed to mark connected account invalid.",
     );
 
-    if (marked === undefined) {
-      return yield* new ConnectedAccountNotFoundError({
-        message: `Connected account not found: ${input.connectedAccountId}`,
-      });
+    if (marked !== undefined) {
+      return {
+        ...toConnectedAccountSummary(marked, yield* isDefaultAccount(marked)),
+        outcome: "marked",
+      } satisfies MarkConnectedAccountInvalidResponse;
     }
 
-    return toConnectedAccountSummary(marked);
+    const current = yield* withInternalError(
+      connectedAccountRepo.getById(account.id),
+      "Failed to load connected account.",
+    );
+
+    if (!usable(current)) {
+      return yield* notFound;
+    }
+
+    return {
+      ...toConnectedAccountSummary(current, yield* isDefaultAccount(current)),
+      outcome: "superseded",
+    } satisfies MarkConnectedAccountInvalidResponse;
   });
 };

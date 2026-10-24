@@ -50,6 +50,12 @@ export const systemIndexResponseSchema = Schema.Struct({
        * From an older control plane they stay open until the workspace stops.
        */
       sshKeyRemovalEndsConnections: Schema.optional(Schema.Boolean),
+      /**
+       * Each person's default connected account per provider is a choice, not a name: `default`
+       * (the SDK's `true`) resolves to it, `PUT /v1/connected-accounts/defaults/:provider` sets
+       * it, a connect takes `accountId` and `makeDefault`, and summaries carry `isDefault`.
+       */
+      connectedAccountDefaults: Schema.optional(Schema.Boolean),
     }),
   ),
 });

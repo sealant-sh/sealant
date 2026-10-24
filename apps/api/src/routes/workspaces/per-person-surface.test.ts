@@ -535,6 +535,7 @@ describe("the control plane's features", () => {
       workspaceSshUser: true,
       personBinding: true,
       sshKeyRemovalEndsConnections: true,
+      connectedAccountDefaults: true,
     });
   });
 });

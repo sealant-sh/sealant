@@ -32,6 +32,7 @@ export const getIndex = () => {
       workspaceSshUser: true,
       personBinding: true,
       sshKeyRemovalEndsConnections: true,
+      connectedAccountDefaults: true,
     },
   } satisfies SystemIndexResponse);
 };
