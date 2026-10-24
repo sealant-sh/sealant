@@ -103,7 +103,7 @@ export const processUserProblem = (user: string): ProcessUserRefusal | undefined
   return undefined;
 };
 
-/** Where the check looks for `getent` and `cut`: the FHS directories, then nix's profile. */
+/** Where the check looks for `getent` and `cut`; a nix image has them only in its profile. */
 const SYSTEM_PATH = `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${NIX_PROFILE}/bin`;
 
 const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;

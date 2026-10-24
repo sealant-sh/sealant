@@ -1485,7 +1485,12 @@ const renderContainerfile = (plan: ResolvedImagePlan, platform: WorkspaceImagePl
       : []),
     ...(dotfilesStep === undefined ? [] : ["", dotfilesStep]),
     ...(plan.osFamily === "nix"
-      ? ["", `COPY --chmod=755 <<'SEALANT_NIX_BOOT' ${NIX_BOOT_PATH}`, ...NIX_BOOT_SCRIPT, "SEALANT_NIX_BOOT"]
+      ? [
+          "",
+          `COPY --chmod=755 <<'SEALANT_NIX_BOOT' ${NIX_BOOT_PATH}`,
+          ...NIX_BOOT_SCRIPT,
+          "SEALANT_NIX_BOOT",
+        ]
       : []),
     "",
     // A managed family's image fails its build here rather than ship without the person layout.

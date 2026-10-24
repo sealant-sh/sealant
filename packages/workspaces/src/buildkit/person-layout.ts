@@ -289,7 +289,8 @@ export const NIX_PROFILE = "/nix/var/nix/profiles/default";
 
 /**
  * Repository packages each managed family adds for the person layout. nixos/nix also lacks sed and
- * getent, which Mend's prepare and Core's user check run (its awk comes with the package layer).
+ * getent, which this layout, Mend's prepare and Core's user check run (its awk comes with the
+ * package layer).
  */
 export const PERSON_LAYOUT_PACKAGES = {
   fedora: ["sudo", "acl", "util-linux"],
@@ -344,7 +345,7 @@ const LAYOUT_INSTALL: Readonly<
     {
       readonly mounts?: string;
       readonly commands: readonly string[];
-      /** Run last, so the build fails rather than ship a `sudo` that does not work. */
+      /** Run after every command, so the build fails rather than ship a layout that does not work. */
       readonly checks?: readonly string[];
       /** After the shared bin directories on sudo's `secure_path`; the FHS directories if absent. */
       readonly systemPath?: readonly string[];
@@ -383,17 +384,21 @@ const LAYOUT_INSTALL: Readonly<
     commands: [
       // Not shadow's priority 6: util-linux also ships su and login, and shadow's stay.
       `nix profile add --profile ${NIX_PROFILE} --priority 7 --accept-flake-config --extra-experimental-features 'nix-command flakes' ${PERSON_LAYOUT_PACKAGES.nix.map((pkg) => `nixpkgs#${pkg}`).join(" ")}`,
-      // Links into the read-only store, which useradd and groupadd cannot write. Every entry stays:
-      // the daemon builds as the nixbld users.
+      // Links into the read-only store, which useradd, groupadd and the HOME_MODE edit cannot
+      // write. Every entry stays: the daemon builds as the nixbld users.
       'for f in passwd:0644 group:0644 login.defs:0644 shadow:0600 gshadow:0600; do p=/etc/${f%:*}; if [ -L "$p" ]; then cp "$p" "$p.new"; chmod "${f#*:}" "$p.new"; mv -f "$p.new" "$p"; fi; done',
       "mkdir -p /home /usr/local/bin /etc/pam.d",
       // The store holds no setuid file. The package stays in the profile, which keeps its closure.
       `install -o root -g root -m 4755 ${NIX_PROFILE}/bin/sudo /usr/local/bin/sudo`,
       writeLines("/etc/sudoers", ["root ALL=(ALL:ALL) ALL", "@includedir /etc/sudoers.d"]),
       "chmod 0440 /etc/sudoers",
-      // PAM finds no module by bare name here: each is named in the linux-pam sudo links.
-      `pam=$(nix-store -q --references ${NIX_PROFILE}/bin/sudo | grep -- '-linux-pam-[0-9]')`,
-      'printf "%s %s $pam/lib/security/%s\\n" auth sufficient pam_rootok.so auth required pam_deny.so account required pam_permit.so session required pam_permit.so > /etc/pam.d/sudo',
+      // A NOPASSWD rule still runs PAM's account and session stacks.
+      writeLines("/etc/pam.d/sudo", [
+        "auth sufficient pam_rootok.so",
+        "auth required pam_deny.so",
+        "account required pam_permit.so",
+        "session required pam_permit.so",
+      ]),
     ],
     checks: ["visudo -cq", "/usr/local/bin/sudo -n true"],
     systemPath: ["/usr/local/sbin", "/usr/local/bin", `${NIX_PROFILE}/bin`, `${NIX_PROFILE}/sbin`],
@@ -461,11 +466,10 @@ export const renderPersonLayoutSteps = (input: {
 export const NIX_BOOT_PATH = "/usr/local/bin/sealant-nix-boot";
 
 /**
- * {@link NIX_BOOT_PATH}. A daemon that never answers is reported and boot goes on: it fails only a
- * person's nix, while root's nix and everything else work without it.
+ * How {@link NIX_BOOT_PATH} starts the daemon. A daemon that never answers is reported and boot goes
+ * on: it fails only a person's nix, while root's nix and everything else work without it.
  */
-export const NIX_BOOT_SCRIPT: readonly string[] = [
-  "#!/bin/sh",
+export const NIX_DAEMON_START: readonly string[] = [
   'rm -f "${NIX_STATE_DIR:-/nix/var/nix}/daemon-socket/socket"',
   "nix-daemon >/dev/null 2>&1 &",
   "tries=0",
@@ -474,6 +478,11 @@ export const NIX_BOOT_SCRIPT: readonly string[] = [
   '  if [ "$tries" -ge 50 ]; then echo "sealant: nix-daemon did not answer in 10 s; nix works only for root" >&2; break; fi',
   "  sleep 0.2",
   "done",
+];
+
+export const NIX_BOOT_SCRIPT: readonly string[] = [
+  "#!/bin/sh",
+  ...NIX_DAEMON_START,
   // The image's sealantd, or a stand-in a test names.
   'exec "${SEALANT_BOOT_SEALANTD:-/usr/local/bin/sealantd}" boot "$@"',
 ];

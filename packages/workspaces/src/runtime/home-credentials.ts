@@ -259,7 +259,7 @@ const MERGED_EXITS: Readonly<
 
 const quote = (value: string): string => `'${value}'`;
 
-/** The owner's half's whole PATH: the FHS directories, then nix's profile. */
+/** The owner's half's whole PATH. A nix image has its tools only in its profile. */
 const SAFE_PATH = `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${NIX_PROFILE}/bin`;
 
 /** The base64 payload lines a script reads, one per write, in order. */

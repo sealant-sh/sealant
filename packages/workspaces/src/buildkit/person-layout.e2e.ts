@@ -28,7 +28,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { compileWorkspaceBuildSpec } from "./buildkit-builder.js";
-import { imagePersonLayoutSupport } from "./person-layout.js";
+import { NIX_DAEMON_START, imagePersonLayoutSupport } from "./person-layout.js";
 import { processImagePlatform } from "./platform.js";
 
 const families = (process.env["SEALANT_PERSON_LAYOUT_E2E_FAMILIES"] ?? "arch,ubuntu,fedora,nix")
@@ -72,7 +72,7 @@ const PLAYWRIGHT: Readonly<Record<string, string>> = {
 };
 
 /**
- * Checks a family cannot pass for reasons outside the person layout, as root too: on nix, a binary
+ * Checks that fail on a family for reasons outside the person layout, root's included: on nix, a binary
  * downloaded for FHS systems finds no libz or libstdc++ (rustc, nvm's node), and root's `npm i -g`
  * targets the read-only store.
  */
@@ -88,14 +88,6 @@ const SKIPPED: Readonly<Record<string, readonly string[]>> = {
 
 /** nixos/nix has no /bin/bash. */
 const BASH: Readonly<Record<string, string>> = { nix: "/nix/var/nix/profiles/default/bin/bash" };
-
-/**
- * The nix daemon, which a person's nix needs, started as the image's entrypoint starts it: its
- * wrapper up to the line that execs sealantd.
- */
-const START_NIX_DAEMON = String.raw`
-head -n -1 /usr/local/bin/sealant-nix-boot > /tmp/nix-boot && . /tmp/nix-boot
-`;
 
 const runScript = (image: string, family: string, script: string) =>
   docker(
@@ -114,7 +106,8 @@ const runScript = (image: string, family: string, script: string) =>
       image,
       "-s",
     ],
-    (family === "nix" ? START_NIX_DAEMON : "") + script,
+    // A person's nix needs the daemon, which the image's entrypoint starts.
+    (family === "nix" ? `${NIX_DAEMON_START.join("\n")}\n` : "") + script,
   );
 
 /** Prints `OK <name>` or `FAIL <name>` per check; the test asserts the whole list. */

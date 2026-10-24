@@ -269,12 +269,13 @@ describe("the person layout in the managed images", () => {
     expect(files).toBeLessThan(at("groupadd -g 40000 mend"));
     expect(files).toBeLessThan(at("groupadd -g 2375 docker"));
     at("mkdir -p /home /usr/local/bin /etc/pam.d");
-    at("install -o root -g root -m 4755 /nix/var/nix/profiles/default/bin/sudo /usr/local/bin/sudo");
+    at(
+      "install -o root -g root -m 4755 /nix/var/nix/profiles/default/bin/sudo /usr/local/bin/sudo",
+    );
     at("printf '%s\\n' 'root ALL=(ALL:ALL) ALL' '@includedir /etc/sudoers.d' > '/etc/sudoers'");
     at("chmod 0440 /etc/sudoers");
-    at("> /etc/pam.d/sudo");
-    expect(containerfile).toMatch(
-      /"%s %s \$pam\/lib\/security\/%s\\n" auth sufficient pam_rootok\.so auth required pam_deny\.so account required pam_permit\.so session required pam_permit\.so/u,
+    at(
+      "printf '%s\\n' 'auth sufficient pam_rootok.so' 'auth required pam_deny.so' 'account required pam_permit.so' 'session required pam_permit.so' > '/etc/pam.d/sudo'",
     );
     // A person's nix goes through the daemon, under sudo too, and sudo finds the profile's tools.
     at("'NIX_REMOTE=daemon'");
@@ -288,9 +289,9 @@ describe("the person layout in the managed images", () => {
     const sudoers = at("visudo -cqf /etc/sudoers.d/mend");
     expect(at("visudo -cq; \\")).toBeGreaterThan(sudoers);
     expect(at("/usr/local/bin/sudo -n true")).toBeGreaterThan(sudoers);
-    expect(at(`/usr/local/lib/sealant/image-probe --require > ${IMAGE_PROBE_PATH}`)).toBeGreaterThan(
-      at("/usr/local/bin/sudo -n true"),
-    );
+    expect(
+      at(`/usr/local/lib/sealant/image-probe --require > ${IMAGE_PROBE_PATH}`),
+    ).toBeGreaterThan(at("/usr/local/bin/sudo -n true"));
   });
 
   it("renders Fedora, Arch and Ubuntu byte for byte as before nix ran per person", () => {
