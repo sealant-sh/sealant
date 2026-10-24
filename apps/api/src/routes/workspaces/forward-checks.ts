@@ -96,5 +96,5 @@ export const checkForward = (input: {
       ),
     );
     yield* requireOwnedWorkspace(input.workspaceId, principal);
-    return target;
+    return { target, principal };
   });

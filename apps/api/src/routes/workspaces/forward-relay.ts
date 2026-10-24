@@ -6,7 +6,7 @@ import {
   type ForwardReadyFrame,
   type ForwardResetReason,
 } from "@sealant/api-contracts";
-import type { SealantForwardChannel } from "@sealant/workspaces";
+import type { ForwardBindingRefusal, SealantForwardChannel } from "@sealant/workspaces";
 import { Effect } from "effect";
 import { WebSocket } from "ws";
 
@@ -22,6 +22,8 @@ export interface ForwardSocket {
   on(event: "message", listener: (data: Buffer, isBinary: boolean) => void): unknown;
   once(event: "close", listener: () => void): unknown;
 }
+
+const OWNER_EXITED = "owner-exited" satisfies ForwardBindingRefusal & ForwardResetReason;
 
 const SOCKET_HIGH_WATER_BYTES = FORWARD_V2_MAX_FRAME_BYTES;
 
@@ -116,9 +118,8 @@ export const relayBoundedForward = (
 
     const resetAheadOfUnreadData = (cause: Awaited<SealantForwardChannel["closed"]>) => {
       if (cause.kind === "error") return reset("runtime-lost");
-      if (cause.kind === "remote" && cause.end.error !== undefined && cause.end.error !== "") {
-        return reset("target-error");
-      }
+      if (cause.kind !== "remote" || (cause.end.error ?? "") === "") return;
+      reset(cause.end.error === OWNER_EXITED ? OWNER_EXITED : "target-error");
     };
     void channel.closed.then(resetAheadOfUnreadData);
 

@@ -71,7 +71,7 @@ export const WorkspaceForwardRoute = HttpRouter.add(
         workspaceId,
       }).pipe(Effect.catch((failure) => Effect.succeed(refusal(failure, workspaceId))));
       if (HttpServerResponse.isHttpServerResponse(checked)) return checked;
-      const { port, host, protocol } = checked;
+      const { port, host, protocol } = checked.target;
 
       const target = yield* resolveDaemonTarget(workspaceId).pipe(
         Effect.catch(() => Effect.succeed(undefined)),

@@ -3,15 +3,18 @@ import { connect, type Socket } from "node:net";
 import { Duplex, getDefaultHighWaterMark } from "node:stream";
 
 import { FORWARD_V2_WINDOW } from "@sealant/api-contracts";
+import { ForwardDialError } from "@sealant/sdk";
 import { openForwardV2 } from "@sealant/sdk/internal/forward";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
+  daemonSessions,
   hasSealantd,
   heldArrayBuffers,
   LIVE_OWNER,
   LIVE_WORKSPACE,
   liveDaemonServices,
+  type LiveSession,
   type LocalDaemon,
   startSealantd,
   startTarget,
@@ -60,12 +63,13 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let daemon: LocalDaemon;
 let core: ServedCore;
+const sessions = new Map<string, LiveSession>();
 
 beforeAll(async () => {
   if (!hasSealantd) return;
   daemon = await startSealantd();
   core = await serveForwardRoutes({
-    services: liveDaemonServices(daemon),
+    services: liveDaemonServices(daemon, sessions),
     release: "current",
     requestsPerMinute: 10_000,
   });
@@ -78,8 +82,39 @@ afterAll(async () => {
 
 const corePort = () => Number(new URL(core.baseUrl).port);
 
-const open = (port: number) =>
-  openForwardV2(asForwardService(core.baseUrl, LIVE_OWNER), LIVE_WORKSPACE, port);
+const open = (port: number, session?: string) =>
+  openForwardV2(
+    asForwardService(core.baseUrl, LIVE_OWNER),
+    LIVE_WORKSPACE,
+    port,
+    session === undefined ? {} : { session },
+  );
+
+const refusalOf = (opening: Promise<unknown>) =>
+  opening.then(
+    () => {
+      throw new Error("expected the forward to be refused");
+    },
+    (error: unknown) => {
+      if (error instanceof ForwardDialError) return error.reason;
+      throw error;
+    },
+  );
+
+const echoes = async (forward: Awaited<ReturnType<typeof open>>, text: string) => {
+  const writer = forward.writable.getWriter();
+  await writer.write(new TextEncoder().encode(text));
+  const reader = forward.readable.getReader();
+  let echoed = "";
+  while (echoed.length < text.length) {
+    const next = await reader.read();
+    if (next.done) break;
+    echoed += new TextDecoder().decode(next.value);
+  }
+  reader.releaseLock();
+  writer.releaseLock();
+  return echoed;
+};
 
 describe.skipIf(!hasSealantd)("/forward/v2 against a real sealantd", () => {
   it(
@@ -268,6 +303,98 @@ describe.skipIf(!hasSealantd)("/forward/v2 against a real sealantd", () => {
     },
   );
 });
+
+describe.skipIf(!hasSealantd || process.platform !== "linux")(
+  "/forward/v2 bound to a session, against a real sealantd",
+  () => {
+    let control: Awaited<ReturnType<typeof daemonSessions>>;
+    beforeAll(async () => {
+      control = await daemonSessions(daemon);
+    });
+    afterAll(() => control?.close());
+
+    const register = (session: string, daemonSessionId: string) =>
+      sessions.set(session, { status: "running", daemonSessionId });
+
+    it("opens a forward bound to the session that serves the port, and says so", async () => {
+      const a = await control.serve();
+      try {
+        register("ses_a", a.sessionId);
+        const forward = await open(a.port, "ses_a");
+        expect(forward.binding).toEqual({ kind: "session", session: "ses_a" });
+        await expect(echoes(forward, "bound")).resolves.toBe("bound");
+        forward.close();
+      } finally {
+        await a.exit();
+      }
+    });
+
+    it("refuses owner-exited once the session exited, though another now serves its port", async () => {
+      const a = await control.serve();
+      register("ses_a", a.sessionId);
+      await a.exit();
+      const b = await control.serve({ port: a.port });
+      try {
+        register("ses_b", b.sessionId);
+        await expect(refusalOf(open(a.port, "ses_a"))).resolves.toBe("owner-exited");
+        const forward = await open(a.port, "ses_b");
+        await expect(echoes(forward, "b")).resolves.toBe("b");
+        forward.close();
+      } finally {
+        await b.exit();
+      }
+    });
+
+    it("refuses peer-mismatch when a process outside the session holds the port, which an unbound forward still reaches", async () => {
+      const a = await control.serve();
+      const foreign = await startTarget({ mode: "echo" });
+      try {
+        register("ses_a", a.sessionId);
+        await expect(refusalOf(open(foreign.port, "ses_a"))).resolves.toBe("peer-mismatch");
+        const unbound = await open(foreign.port);
+        expect(unbound.binding).toEqual({ kind: "port" });
+        await expect(echoes(unbound, "unbound")).resolves.toBe("unbound");
+        unbound.close();
+      } finally {
+        foreign.stop();
+        await a.exit();
+      }
+    });
+
+    it("resets a bound forward with owner-exited when the session's leader exits", async () => {
+      const a = await control.serve({ detached: true });
+      try {
+        register("ses_a", a.sessionId);
+        const forward = await open(a.port, "ses_a");
+        await expect(echoes(forward, "before")).resolves.toBe("before");
+        await a.exit();
+        await expect(forward.closed).resolves.toEqual({ kind: "reset", reason: "owner-exited" });
+      } finally {
+        a.stopServer();
+      }
+    });
+
+    it("resets with owner-exited at once, ahead of what Core holds that the client has not read", async () => {
+      const a = await control.serve({ mode: "burst", bytes: (3 * SDK_WINDOW) / 2, detached: true });
+      try {
+        register("ses_a", a.sessionId);
+        const forward = await open(a.port, "ses_a");
+        await sleep(500);
+
+        const exitedAt = Date.now();
+        await a.exit();
+
+        await expect(forward.closed).resolves.toEqual({ kind: "reset", reason: "owner-exited" });
+        expect(Date.now() - exitedAt).toBeLessThan(1_000);
+        await expect(forward.readable.getReader().read()).rejects.toMatchObject({
+          reason: "owner-exited",
+        });
+      } finally {
+        a.stopServer();
+      }
+    });
+  },
+);
 
 /**
  * A listener whose accept queue is full, so a further connect waits in `SYN_SENT` until it

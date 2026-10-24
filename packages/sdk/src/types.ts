@@ -1542,6 +1542,8 @@ export interface WorkspaceCredentialsHomeOptions {
 export interface WorkspaceForwardOptions {
   /** Only a bounded forward has a `flow`. */
   readonly flow?: never;
+  /** Only a bounded forward can be bound to a session. */
+  readonly session?: never;
   /** Target inside the workspace: its loopback (default) or the Docker sidecar. */
   readonly host?: "127.0.0.1" | "localhost" | "docker";
   /**
@@ -1571,16 +1573,23 @@ export interface WorkspaceForward {
   close(): void;
 }
 
+/**
+ * Where a bounded forward goes: the port on the workspace's loopback (default) or on the Docker
+ * sidecar, whatever holds it; or, with `session`, the port on the loopback only when a process of
+ * that session holds it. A bound forward resets with `owner-exited` once the session's leader exits.
+ */
+export type BoundedForwardTarget =
+  | { readonly host?: "127.0.0.1" | "localhost" | "docker"; readonly session?: never }
+  | { readonly host?: "127.0.0.1" | "localhost"; readonly session: string };
+
 /** Options for a bounded {@link Workspace.forward}. TCP only. */
-export interface BoundedWorkspaceForwardOptions {
+export type BoundedWorkspaceForwardOptions = BoundedForwardTarget & {
   readonly flow: "bounded";
-  /** Target inside the workspace: its loopback (default) or the Docker sidecar. */
-  readonly host?: "127.0.0.1" | "localhost" | "docker";
   /** Gives up opening the forward; an open forward ignores it. */
   readonly signal?: AbortSignal;
   /** How long opening may take before it rejects, in milliseconds. 30 000 by default. */
   readonly deadlineMs?: number;
-}
+};
 
 /**
  * Why a bounded forward was reset: a reason either side sent, `connection-lost` when the socket
