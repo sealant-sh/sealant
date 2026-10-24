@@ -372,7 +372,8 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
   nix: {
     baseImage: "nixos/nix:latest",
     packageManager: "nix",
-    internalPackages: ["bash", "cacert", "coreutils", "gitMinimal", "openssh", "shadow"],
+    // gawk: nixos/nix has no awk, and pi's install checks its download with it.
+    internalPackages: ["bash", "cacert", "coreutils", "gawk", "gitMinimal", "openssh", "shadow"],
     sealantdPackages: ["socat"],
     shellPaths: {
       bash: "/root/.nix-profile/bin/bash",
@@ -1030,6 +1031,9 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
     "    mkdir -p /lib /lib64; \\",
     '    ln -sf "$loader" "/lib/$(basename "$loader")"; \\',
     '    ln -sf "$loader" "/lib64/$(basename "$loader")"',
+    // The harness installs below run what they put in /usr/local/bin (`pi --version`), which
+    // nixos/nix's PATH lacks until the later prepend every family gets.
+    "ENV PATH=/usr/local/bin:$PATH",
   ].join("\n");
 };
 
