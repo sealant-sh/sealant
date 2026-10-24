@@ -1,21 +1,8 @@
 /**
  * The per-person layout on Kubernetes under runc, end to end on the kind cluster (Mend's ADR 0016,
- * decision 1; the owner map on Kubernetes):
+ * decision 1; the owner map on Kubernetes).
  *
- *   1. the image, built in the cluster by the Kubernetes image builder, carries a probe the
- *      builder reads back, and that probe says the image can run the layout;
- *   2. ONE capture workspace launched with an owner map naming two people, with the Docker service,
- *      is a Pod that may escalate, adds FSETID, and is user-namespaced (Docker's requirement);
- *   3. the two people are made as Mend's prepare makes them (`personHomeFunction`), as root;
- *   4. as each person: their own passwd home, no-new-privileges unset, passwordless `sudo`, files
- *      the group shares through the worktree's default ACL; root's `chmod 2775` keeps setgid;
- *   5. as each person, the workspace's Docker daemon (recorded, not required: what a person gets
- *      decides the socket handoff);
- *   6. capture, stop, restore into a fresh Pod with the same map, and 4-5 again;
- *   7. negative controls: a map naming nobody keeps no-new-privileges; a map with gVisor is refused.
- *
- * Gated on SEALANT_K8S_E2E=1 with a cluster from `deploy/e2e/kind/up.sh`, and on the cluster
- * running a user-namespaced Pod (the Docker service needs one; see `docker-service.e2e.ts`).
+ * Gated on SEALANT_K8S_E2E=1 with a cluster from `deploy/e2e/kind/up.sh`.
  * `SEALANT_PERSON_LAYOUT_E2E_FAMILY` picks the image family (default `fedora`).
  * `SEALANT_PERSON_LAYOUT_E2E_EVIDENCE_DIR`, when set, receives `evidence.log` and each workspace
  * Pod's YAML. The capture channel (`capture-channel.fixture.ts`) runs in a Node container on the
@@ -373,6 +360,7 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
   let registryForward: RegistryForward | undefined;
   let publishedImage: PublishedImage;
   let perPerson: WorkspaceBlueprint;
+  let perPersonDocker: WorkspaceBlueprint;
   let userNamespaces: UserNamespaceSupport = { supported: false, reason: "not probed" };
   const running = new Set<string>();
 
@@ -416,7 +404,26 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
     }
   };
 
-  const expectPerPersonPod = async (podName: string, phase: string): Promise<void> => {
+  const flushAndStop = async (
+    workspace: { podName: string; target: SealantTarget },
+    runId: string,
+    phase: string,
+  ): Promise<void> => {
+    const flushed = await withDaemon(workspace.target, (session) => session.captureFlush());
+    const channelLog = await channel!.logs();
+    evidence(`${phase} flush`, { fenced: flushed.fenced, pending: flushed.pending });
+    evidence(`${phase} channel heads`, channelLog.match(/^head=\S+$/gm) ?? []);
+    expect(flushed.fenced).toBe(false);
+    expect(flushed.pending).toBe(0);
+    expect(channelLog).toMatch(/^head=\d+$/m);
+    await stopAndWait(workspace.podName, runId);
+  };
+
+  const expectPerPersonPod = async (
+    podName: string,
+    phase: string,
+    userNamespaced: boolean,
+  ): Promise<void> => {
     const pod = await api.getPod(podName);
     const security = workspaceContainer(pod)?.securityContext;
     evidence(`${phase} Pod spec`, {
@@ -424,21 +431,48 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
       allowPrivilegeEscalation: security?.allowPrivilegeEscalation,
       capabilities: security?.capabilities,
     });
-    expect(pod?.spec?.hostUsers).toBe(false);
+    expect(pod?.spec?.hostUsers).toBe(userNamespaced ? false : undefined);
     expect(security?.allowPrivilegeEscalation).toBe(true);
     expect(security?.capabilities?.add).toContain("FSETID");
+  };
+
+  const expectOwnerMapDaemon = async (target: SealantTarget, phase: string): Promise<void> => {
+    const daemon = await withDaemon(target, (session) =>
+      Effect.all({ capabilities: session.capabilities, status: session.captureStatus() }),
+    );
+    evidence(`${phase} daemon`, {
+      noNewPrivileges: daemon.capabilities.noNewPrivileges,
+      ownerMap: daemon.status.ownerMap,
+    });
+    expect(daemon.capabilities.noNewPrivileges).toBe(false);
+    expect(daemon.status.ownerMap).toBe(true);
+  };
+
+  const expectRestoredFiles = async (
+    target: SealantTarget,
+    phase: string,
+    contents: string,
+  ): Promise<void> => {
+    const files = await exec(
+      target,
+      `stat -c "%n %u:%g:%a" ${REPO} a.txt b.txt; getfacl -p ${REPO} a.txt b.txt; cat a.txt; echo ---; cat b.txt`,
+    );
+    evidence(`${phase} restored files`, files.output.trim());
+    expect(files.output).toContain(`${REPO} ${String(ALICE.uid)}:${String(MEND_GID)}:2775`);
+    expect(files.output).toMatch(new RegExp(`^a\\.txt \\d+:${String(MEND_GID)}:66\\d$`, "m"));
+    expect(files.output).toMatch(new RegExp(`^b\\.txt \\d+:${String(MEND_GID)}:66\\d$`, "m"));
+    expect(files.output).toContain(contents);
   };
 
   beforeAll(async () => {
     const kubeconfigPath = process.env["KUBECONFIG"];
     userNamespaces = await probeUserNamespaces();
+    evidence("user namespaces", userNamespaces);
     if (!userNamespaces.supported) {
       console.warn(
-        `[person-layout e2e] SKIPPING: this cluster cannot run user-namespaced Pods (${userNamespaces.reason}); the per-person Pod with the Docker service needs one.`,
+        `[person-layout e2e] this cluster cannot run user-namespaced Pods (${userNamespaces.reason}); step 6, the per-person Pod with the Docker service, will skip.`,
       );
-      return;
     }
-    evidence("user namespaces", userNamespaces.reason);
     channel = await startChannelContainer();
     // From the workspace node: a refused or filtered port here would otherwise surface as a
     // launch that never becomes ready.
@@ -470,7 +504,12 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
     evidence(`capture channel ${channel.endpoint} from node ${node}`, `HTTP ${reach}`);
     expect(reach).toBe("401");
 
-    perPerson = blueprintFor({ endpoint: channel.endpoint, ownerMap: OWNER_MAP, docker: true });
+    perPerson = blueprintFor({ endpoint: channel.endpoint, ownerMap: OWNER_MAP, docker: false });
+    perPersonDocker = blueprintFor({
+      endpoint: channel.endpoint,
+      ownerMap: OWNER_MAP,
+      docker: true,
+    });
     registryForward = await startRegistryForward();
     api = createLiveKubernetesApi({ namespace: NAMESPACE, kubeconfigPath });
     adapter = new KubernetesRuntimeAdapter({
@@ -510,10 +549,9 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
 
   it(
     "1. builds the image in the cluster and reads back a probe that supports the layout",
-    async (ctx) => {
-      requireUserNamespaces(ctx);
+    async () => {
       const built = await buildWorkspaceImage({
-        blueprint: perPerson,
+        blueprint: perPersonDocker,
         registryPort: registryForward!.port,
         tag: `${FAMILY}-person-layout`,
         kubeconfigPath: process.env["KUBECONFIG"],
@@ -537,27 +575,17 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
   const firstRun = `run-e2e-person-a-${SUFFIX}`;
 
   it(
-    "2. launches one capture workspace for two people with Docker: escalation, FSETID, user namespace",
-    async (ctx) => {
-      requireUserNamespaces(ctx);
+    "2. launches one capture workspace for two people without Docker: escalation, FSETID, the node's user namespace",
+    async () => {
       first = await launch(perPerson, firstRun);
       await savePodYaml(first.podName, "step2-per-person");
-      await expectPerPersonPod(first.podName, "step 2");
-      const daemon = await withDaemon(first.target, (session) =>
-        Effect.all({ capabilities: session.capabilities, status: session.captureStatus() }),
-      );
-      evidence("step 2 daemon", {
-        noNewPrivileges: daemon.capabilities.noNewPrivileges,
-        ownerMap: daemon.status.ownerMap,
-      });
-      expect(daemon.capabilities.noNewPrivileges).toBe(false);
-      expect(daemon.status.ownerMap).toBe(true);
+      await expectPerPersonPod(first.podName, "step 2", false);
+      await expectOwnerMapDaemon(first.target, "step 2");
     },
     15 * 60_000,
   );
 
-  it("3. makes the two people as Mend's prepare does, beside the daemon's worktree ACL", async (ctx) => {
-    requireUserNamespaces(ctx);
+  it("3. makes the two people as Mend's prepare does, beside the daemon's worktree ACL", async () => {
     await preparePeople(first!.target, "step 3");
     const worktree = await exec(first!.target, `stat -c "%u:%g:%a" ${REPO}; getfacl -p ${REPO}`);
     evidence("step 3 worktree root", worktree.output.trim());
@@ -565,8 +593,7 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
     expect(worktree.output).toMatch(/^default:group::rwx/m);
   }, 120_000);
 
-  it("4. as each person: own home, NoNewPrivs 0, sudo, shared edits; root keeps setgid", async (ctx) => {
-    requireUserNamespaces(ctx);
+  it("4. as each person: own home, NoNewPrivs 0, sudo, shared edits; root keeps setgid", async () => {
     const target = first!.target;
     await checkPeople(target, "step 4");
     const made = await exec(
@@ -594,19 +621,71 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
     expect(contents.output).toBe("from-a\nb-edit\n---\nfrom-b\na-edit\n");
   }, 180_000);
 
-  it("5. Docker as each person (recorded), root's through the sidecar", async (ctx) => {
+  it(
+    "5. captures, stops, restores into a fresh Pod with the same map, and repeats 4",
+    async () => {
+      await flushAndStop(first!, firstRun, "step 5");
+
+      const restoredRun = `run-e2e-person-b-${SUFFIX}`;
+      const restored = await launch(perPerson, restoredRun);
+      await savePodYaml(restored.podName, "step5-restored");
+      await expectPerPersonPod(restored.podName, "step 5", false);
+      await preparePeople(restored.target, "step 5");
+      await expectRestoredFiles(restored.target, "step 5", "from-a\nb-edit\n---\nfrom-b\na-edit\n");
+
+      await checkPeople(restored.target, "step 5");
+      const byBob = await exec(restored.target, "echo b-after-restore >> a.txt", BOB.name);
+      const byAlice = await exec(restored.target, "echo a-after-restore >> b.txt", ALICE.name);
+      evidence("step 5 edits after restore", {
+        [BOB.name]: { exit: byBob.exitCode, output: byBob.output.trim() },
+        [ALICE.name]: { exit: byAlice.exitCode, output: byAlice.output.trim() },
+      });
+      expect(byBob.exitCode).toBe(0);
+      expect(byAlice.exitCode).toBe(0);
+      expect((await channel!.logs()).match(/^error=.*$/gm) ?? []).toEqual([]);
+      await flushAndStop(restored, restoredRun, "step 5 restored");
+    },
+    20 * 60_000,
+  );
+
+  let docker: { podName: string; target: SealantTarget } | undefined;
+  const dockerRun = `run-e2e-person-docker-${SUFFIX}`;
+
+  it(
+    "6. restores the work into a per-person Pod with Docker: user namespace, people, shared edits",
+    async (ctx) => {
+      requireUserNamespaces(ctx);
+      docker = await launch(perPersonDocker, dockerRun);
+      await savePodYaml(docker.podName, "step6-per-person-docker");
+      await expectPerPersonPod(docker.podName, "step 6", true);
+      await expectOwnerMapDaemon(docker.target, "step 6");
+      await preparePeople(docker.target, "step 6");
+      await expectRestoredFiles(
+        docker.target,
+        "step 6",
+        "from-a\nb-edit\nb-after-restore\n---\nfrom-b\na-edit\na-after-restore\n",
+      );
+      await checkPeople(docker.target, "step 6");
+      const byBob = await exec(docker.target, "echo b-in-docker-pod >> a.txt", BOB.name);
+      evidence("step 6 edit", { exit: byBob.exitCode, output: byBob.output.trim() });
+      expect(byBob.exitCode).toBe(0);
+    },
+    20 * 60_000,
+  );
+
+  it("6a. Docker as root and as each person, through the sidecar", async (ctx) => {
     requireUserNamespaces(ctx);
-    await checkDocker(first!.target, "step 5");
+    await checkDocker(docker!.target, "step 6a");
   }, 300_000);
 
-  it("5b. Docker as each person again after the sidecar's daemon dies and restarts", async (ctx) => {
+  it("6b. Docker as each person again after the sidecar's daemon dies and restarts", async (ctx) => {
     requireUserNamespaces(ctx);
     const sidecar = async () =>
-      (await api.getPod(first!.podName))?.status?.initContainerStatuses?.find(
+      (await api.getPod(docker!.podName))?.status?.initContainerStatuses?.find(
         (status) => status.name === "docker",
       );
     const before = (await sidecar())?.restartCount ?? 0;
-    await kubectl("exec", first!.podName, "-c", "docker", "--", "pkill", "-x", "dockerd");
+    await kubectl("exec", docker!.podName, "-c", "docker", "--", "pkill", "-x", "dockerd");
     const deadline = Date.now() + 180_000;
     let after = await sidecar();
     while (!((after?.restartCount ?? 0) > before && after?.started === true)) {
@@ -615,58 +694,15 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
       await new Promise((resolve) => setTimeout(resolve, 2000));
       after = await sidecar();
     }
-    evidence("step 5b sidecar restarts", { before, after: after.restartCount });
-    await checkDocker(first!.target, "step 5b");
-  }, 300_000);
-
-  it(
-    "6. captures, stops, restores into a fresh Pod with the same map, and repeats 4-5",
-    async (ctx) => {
-      requireUserNamespaces(ctx);
-      const flushed = await withDaemon(first!.target, (session) => session.captureFlush());
-      const channelLog = await channel!.logs();
-      evidence("step 6 flush", { fenced: flushed.fenced, pending: flushed.pending });
-      evidence("step 6 channel heads", channelLog.match(/^head=\S+$/gm) ?? []);
-      expect(flushed.fenced).toBe(false);
-      expect(flushed.pending).toBe(0);
-      expect(channelLog).toMatch(/^head=\d+$/m);
-      await stopAndWait(first!.podName, firstRun);
-
-      const restoredRun = `run-e2e-person-b-${SUFFIX}`;
-      const restored = await launch(perPerson, restoredRun);
-      await savePodYaml(restored.podName, "step6-restored");
-      await expectPerPersonPod(restored.podName, "step 6");
-      await preparePeople(restored.target, "step 6");
-      const files = await exec(
-        restored.target,
-        `stat -c "%n %u:%g:%a" ${REPO} a.txt b.txt; getfacl -p ${REPO} a.txt b.txt; cat a.txt; echo ---; cat b.txt`,
-      );
-      evidence("step 6 restored files", files.output.trim());
-      expect(files.output).toContain(`${REPO} ${String(ALICE.uid)}:${String(MEND_GID)}:2775`);
-      expect(files.output).toMatch(new RegExp(`^a\\.txt \\d+:${String(MEND_GID)}:66\\d$`, "m"));
-      expect(files.output).toMatch(new RegExp(`^b\\.txt \\d+:${String(MEND_GID)}:66\\d$`, "m"));
-      expect(files.output).toContain("from-a\nb-edit\n---\nfrom-b\na-edit\n");
-
-      await checkPeople(restored.target, "step 6");
-      const byBob = await exec(restored.target, "echo b-after-restore >> a.txt", BOB.name);
-      const byAlice = await exec(restored.target, "echo a-after-restore >> b.txt", ALICE.name);
-      evidence("step 6 edits after restore", {
-        [BOB.name]: { exit: byBob.exitCode, output: byBob.output.trim() },
-        [ALICE.name]: { exit: byAlice.exitCode, output: byAlice.output.trim() },
-      });
-      expect(byBob.exitCode).toBe(0);
-      expect(byAlice.exitCode).toBe(0);
-      await checkDocker(restored.target, "step 6");
-      expect((await channel!.logs()).match(/^error=.*$/gm) ?? []).toEqual([]);
-      await stopAndWait(restored.podName, restoredRun);
-    },
-    20 * 60_000,
-  );
+    evidence("step 6b sidecar restarts", { before, after: after.restartCount });
+    await checkDocker(docker!.target, "step 6b");
+    expect((await channel!.logs()).match(/^error=.*$/gm) ?? []).toEqual([]);
+    await stopAndWait(docker!.podName, dockerRun);
+  }, 600_000);
 
   it(
     "7a. a map that names nobody keeps no-new-privileges",
-    async (ctx) => {
-      requireUserNamespaces(ctx);
+    async () => {
       const runId = `run-e2e-person-none-${SUFFIX}`;
       const nobody = await launch(
         blueprintFor({
@@ -695,8 +731,7 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
     15 * 60_000,
   );
 
-  it("7b. an owner map under gVisor is refused at the adapter", async (ctx) => {
-    requireUserNamespaces(ctx);
+  it("7b. an owner map under gVisor is refused at the adapter", async () => {
     const gvisor = (ownerMap: boolean) =>
       adapter.supports({
         blueprint: blueprintFor({
