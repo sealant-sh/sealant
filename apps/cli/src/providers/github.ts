@@ -72,8 +72,10 @@ export const authGithubCommand = Command.make(
   "github",
   {
     name: Flag.String("name").pipe(
-      Flag.withDefault("default"),
-      Flag.withDescription("Account name (you can connect multiple GitHub accounts)"),
+      Flag.optional,
+      Flag.withDescription(
+        "Account name: replaces the account of that name or connects a new one (default: your only GitHub account, or a first one named default)",
+      ),
     ),
     yes: Flag.Boolean("yes").pipe(
       Flag.withAlias("y"),
@@ -150,7 +152,7 @@ export const authGithubCommand = Command.make(
 
       const account = yield* client.createConnectedAccount(toApiSettings(settings), {
         provider: "github",
-        name,
+        name: Option.getOrUndefined(name),
         secret: rawToken,
       });
 

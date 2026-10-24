@@ -12,6 +12,7 @@ import type {
   GetWorkspaceCaptureStatusQuery,
   CloseSessionRequest,
   CreateAccessTokenRequest,
+  ConnectedAccountProvider,
   CreateConnectedAccountRequest,
   CreateSshKeyRequest,
   EnsureUserRequest,
@@ -31,6 +32,7 @@ import type {
   ListRunsQuery,
   ListSessionsQuery,
   ListWorkspacesQuery,
+  MarkConnectedAccountInvalidRequest,
   ReplanWorkspaceCaptureRequest,
   RecoverWorkspaceRequest,
   RestartWorkspaceRequest,
@@ -41,6 +43,7 @@ import type {
   ListWorkspaceCredentialsQuery,
   SessionResizeRequest,
   SessionSignalRequest,
+  SetConnectedAccountDefaultRequest,
   StopWorkspaceRequest,
   UpdateRunRequest,
 } from "@sealant/api-contracts";
@@ -315,6 +318,25 @@ export const archiveConnectedAccountOp = (connectedAccountId: string, ownerUserI
     client.connectedAccounts.archiveConnectedAccount({
       params: { connectedAccountId },
       query: { ownerUserId },
+    }),
+  );
+
+export const setConnectedAccountDefaultOp = (
+  provider: ConnectedAccountProvider,
+  payload: SetConnectedAccountDefaultRequest,
+) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.connectedAccounts.setConnectedAccountDefault({ params: { provider }, payload }),
+  );
+
+export const markConnectedAccountInvalidOp = (
+  connectedAccountId: string,
+  payload: MarkConnectedAccountInvalidRequest,
+) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.connectedAccounts.markConnectedAccountInvalid({
+      params: { connectedAccountId },
+      payload,
     }),
   );
 

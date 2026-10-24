@@ -46,11 +46,16 @@ export const toSealantError = (cause: unknown): SealantError => {
     const status = extractStatus(record);
     const reason = nonEmptyString(record?.["code"]);
     const provider = nonEmptyString(record?.["provider"]);
+    const candidates = record?.["candidateAccountIds"];
+    const candidateAccountIds = Array.isArray(candidates)
+      ? candidates.filter((id): id is string => typeof id === "string")
+      : undefined;
     return new SealantApiError(message, {
       code: tag,
       ...(status === undefined ? {} : { status }),
       ...(reason === undefined ? {} : { reason }),
       ...(provider === undefined ? {} : { provider }),
+      ...(candidateAccountIds === undefined ? {} : { candidateAccountIds }),
       cause,
     });
   }

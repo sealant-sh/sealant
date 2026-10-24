@@ -6,6 +6,7 @@ import {
   createConnectedAccount,
   listConnectedAccounts,
   markConnectedAccountInvalid,
+  setConnectedAccountDefault,
 } from "./connected-accounts.module.js";
 
 export const ConnectedAccountsHandlersLive = HttpApiBuilder.group(
@@ -27,6 +28,14 @@ export const ConnectedAccountsHandlersLive = HttpApiBuilder.group(
         markConnectedAccountInvalid({
           connectedAccountId: params.connectedAccountId,
           ownerUserId: payload.ownerUserId,
+          ...(payload.revision === undefined ? {} : { revision: payload.revision }),
+        }),
+      )
+      .handle("setConnectedAccountDefault", ({ params, payload }) =>
+        setConnectedAccountDefault({
+          ownerUserId: payload.ownerUserId,
+          provider: params.provider,
+          connectedAccountId: payload.connectedAccountId,
         }),
       );
   },

@@ -4,8 +4,7 @@
  * calls it and folds the result into the request it builds.
  *
  * SECURITY: this only ever moves account **references** (booleans/names/ids) — never token values or
- * other secret material. `true` resolves to the literal account name `"default"`; a string passes
- * through as the named account; `profile` becomes `profileId`.
+ * other secret material.
  */
 import type { WorkspaceCredentialsOptions } from "../types.js";
 
@@ -19,7 +18,6 @@ export interface WorkspaceCredentialsPayload {
   readonly github?: string;
 }
 
-/** `true` → the account named `default`; a string passes through; `false`/absent → none. */
 export const mapAccountRef = (value: boolean | string | undefined): string | undefined => {
   if (value === undefined || value === false) {
     return undefined;

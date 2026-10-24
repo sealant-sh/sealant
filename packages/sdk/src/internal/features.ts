@@ -6,6 +6,7 @@
 import type { SystemIndexResponse } from "@sealant/api-contracts";
 
 import { getIndexOp } from "../effect/operations.js";
+import { SealantError } from "../errors.js";
 import type { SdkContext } from "../facade/context.js";
 import type { SealantFeatures } from "../types.js";
 import { elapsed } from "./clock.js";
@@ -34,6 +35,7 @@ export const toFeatures = (index: SystemIndexResponse): SealantFeatures => {
     workspaceSshUser: features?.workspaceSshUser === true,
     personBinding: features?.personBinding === true,
     sshKeyRemovalEndsConnections: features?.sshKeyRemovalEndsConnections === true,
+    connectedAccountDefaults: features?.connectedAccountDefaults === true,
   };
 };
 
@@ -55,4 +57,17 @@ export const readFeatures = (ctx: SdkContext): Promise<SealantFeatures> => {
   };
   answers.set(ctx.runtime, fresh);
   return fresh.features;
+};
+
+export const requireConnectedAccountDefaults = async (ctx: SdkContext): Promise<void> => {
+  const supported = await readFeatures(ctx).then(
+    (features) => features.connectedAccountDefaults,
+    () => false,
+  );
+  if (!supported) {
+    throw new SealantError(
+      "This control plane cannot choose a default connected account or target one by id (it does not report the feature, or could not be asked); nothing was sent.",
+      { code: "connected-account-defaults-unsupported" },
+    );
+  }
 };

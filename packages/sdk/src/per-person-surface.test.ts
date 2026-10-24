@@ -422,6 +422,7 @@ describe("features()", () => {
             workspaceSshUser: true,
             personBinding: true,
             sshKeyRemovalEndsConnections: true,
+            connectedAccountDefaults: true,
           }),
         ),
       ),
@@ -434,6 +435,7 @@ describe("features()", () => {
       workspaceSshUser: true,
       personBinding: true,
       sshKeyRemovalEndsConnections: true,
+      connectedAccountDefaults: true,
     });
     // A control plane from before the as-user routes names only `processUser`, and its `true`
     // is not read as the routes.
@@ -446,9 +448,11 @@ describe("features()", () => {
       workspaceSshUser: false,
       personBinding: false,
       sshKeyRemovalEndsConnections: false,
+      connectedAccountDefaults: false,
     });
     // One from before `features`: nothing.
     expect(Object.values(await readFeatures(makeCtx(withIndex(undefined))))).toEqual([
+      false,
       false,
       false,
       false,

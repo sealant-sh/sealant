@@ -329,6 +329,9 @@ importers:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.5(effect@4.0.5)(redis@6.3.0)
+      '@sealant/api-contracts':
+        specifier: workspace:*
+        version: link:../../packages/api-contracts
       effect:
         specifier: 'catalog:'
         version: 4.0.5
@@ -724,6 +727,9 @@ importers:
       '@openai/codex':
         specifier: 'catalog:'
         version: 0.148.0
+      '@sealant/api-contracts':
+        specifier: workspace:*
+        version: link:../../packages/api-contracts
       '@sealant/credentials':
         specifier: workspace:*
         version: link:../../packages/credentials

@@ -1,5 +1,4 @@
 import {
-  ProfileBadRequestError,
   ProfileConflictError,
   ProfileInternalServerError,
   ProfileNotFoundError,
@@ -11,6 +10,10 @@ import {
 import { ConnectedAccountRepo, ProfileRepo } from "@sealant/db";
 import { Context, Effect } from "effect";
 
+import {
+  lookupConnectedAccount,
+  missingAccountMessage,
+} from "../../services/connected-account-lookup.js";
 import { toConnectedAccountSummary } from "../connected-accounts/connected-accounts.module.js";
 
 /*
@@ -147,25 +150,23 @@ export const setProfileCredentialBinding = (input: {
       return yield* credentialBindingsResponse(profile.id);
     }
 
-    const account = yield* withInternalError(
-      connectedAccountRepo.getById(input.payload.connectedAccountId),
+    const lookup = yield* withInternalError(
+      lookupConnectedAccount({
+        ownerUserId: input.payload.ownerUserId,
+        provider: input.payload.provider,
+        selection: input.payload.connectedAccountId,
+      }),
       "Failed to load connected account.",
     );
 
-    // Uniform 404: unknown account and someone else's account look identical.
-    if (account === undefined || account.ownerUserId !== input.payload.ownerUserId) {
+    if (lookup.kind === "missing") {
       return yield* new ProfileNotFoundError({
-        message: `Connected account not found: ${input.payload.connectedAccountId}`,
+        message: missingAccountMessage(input.payload.provider, input.payload.connectedAccountId),
       });
     }
 
-    if (account.provider !== input.payload.provider) {
-      return yield* new ProfileBadRequestError({
-        message: `Connected account ${account.id} is a ${account.provider} account and cannot be bound as ${input.payload.provider}.`,
-      });
-    }
-
-    if (account.status !== "active" || account.archivedAt !== null) {
+    const account = lookup.account;
+    if (lookup.kind === "invalid") {
       return yield* new ProfileConflictError({
         message: `Connected ${account.provider} account "${account.name}" is ${account.status} — reconnect it before binding.`,
       });

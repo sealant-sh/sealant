@@ -248,7 +248,11 @@ function ProviderCard({
 
     setValidationError(null);
     setStatusMessage(null);
-    await connectMutation.mutateAsync({ provider: copy.provider, secret: normalized });
+    await connectMutation.mutateAsync({
+      provider: copy.provider,
+      secret: normalized,
+      ...(account === null ? {} : { accountId: account.connectedAccountId }),
+    });
   };
 
   const openForm = () => {

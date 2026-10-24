@@ -92,6 +92,7 @@ describe("persistClaudeCredentialsIfNewer", () => {
         observedCredentialsJson: input.observed,
         credentialCipher: fakeCipher,
         source: "test",
+        sourceRevision: "unknown",
       }).pipe(Effect.provide(provideAccounts(input.accounts))),
     );
 

@@ -48,8 +48,10 @@ export const authClaudeCommand = Command.make(
   "claude",
   {
     name: Flag.String("name").pipe(
-      Flag.withDefault("default"),
-      Flag.withDescription("Account name (you can connect multiple Claude accounts)"),
+      Flag.optional,
+      Flag.withDescription(
+        "Account name: replaces the account of that name or connects a new one (default: your only Claude account, or a first one named default)",
+      ),
     ),
     yes: Flag.Boolean("yes").pipe(
       Flag.withAlias("y"),
@@ -120,7 +122,7 @@ export const authClaudeCommand = Command.make(
 
       const account = yield* client.createConnectedAccount(toApiSettings(settings), {
         provider: "claude",
-        name,
+        name: Option.getOrUndefined(name),
         secret: validated.token,
       });
 

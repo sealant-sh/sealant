@@ -83,6 +83,13 @@ const mine = new Sealant({ baseUrl, apiKey: serviceKey, ownerUserId: userId });
 await mine.connectedAccounts.connect({ provider: "codex", secret: authJson });
 ```
 
+A person's first account for a provider is their default, the one `true` selects.
+`connectedAccounts.setDefault({ provider, accountId })` chooses another, `connect()` takes
+`accountId` (replace that account) and `makeDefault`, and each `ConnectedAccount` says `isDefault`.
+Disconnecting the default leaves none chosen. Against a control plane without
+`features().connectedAccountDefaults`, `setDefault`, `accountId`, `makeDefault` and a `markInvalid`
+`revision` throw `connected-account-defaults-unsupported` and send nothing.
+
 `apiKey` is a service key (`SEALANT_SERVICE_KEYS` on the API) or a scoped user access token; see the
 [HTTP API auth section](/docs/reference/http-api).
 
@@ -160,7 +167,7 @@ These call the live API and work end-to-end:
   plus `create({ ..., ttl: "2h" })` for a create-time TTL
 - **Logins per home:**
   `workspace.credentials.put({ home, onBehalfOf, claude?, codex?, github?, pi?, opencode? })` writes
-  a person's accounts into one home of the running workspace (`true` is their `default` account,
+  a person's accounts into one home of the running workspace (`true` is their default account,
   `null` removes the provider), owned by the home's owner, and keeps them refreshed (`pi` and
   `opencode` are the person's ChatGPT login from a Codex account, merged into each tool's own
   `auth.json` beside the logins already there; `partial: true` writes what is connected and reports

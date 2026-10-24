@@ -48,6 +48,10 @@ import { Effect } from "effect";
 import { env } from "../../runtime-env.js";
 import { budgetLimits } from "../../services/budget-limits.js";
 import { budgetMessage, ceilingDecision, secondsUntilUtcMidnight } from "../../services/budgets.js";
+import {
+  lookupConnectedAccount,
+  missingAccountMessage,
+} from "../../services/connected-account-lookup.js";
 import { spendOwnerLaunch } from "../../services/owner-budgets.js";
 import {
   InferenceEngine,
@@ -97,35 +101,18 @@ const resolveAccount = (input: {
       });
     }
 
-    const accounts = yield* ConnectedAccountRepo;
-
-    const resolveExplicit = (provider: "claude" | "codex", explicit: string) =>
+    const resolveExplicit = (provider: "claude" | "codex", selection: string) =>
       Effect.gen(function* () {
-        const account = explicit.startsWith("cacc_")
-          ? yield* withInternalError(
-              accounts.getById(explicit),
-              "Failed to load connected account.",
-            )
-          : yield* withInternalError(
-              accounts.getByOwnerProviderName({
-                ownerUserId: input.ownerUserId,
-                provider,
-                name: explicit,
-              }),
-              "Failed to load connected account.",
-            );
-        // Uniform 404: unknown, someone else's, wrong-provider, and archived all look identical.
-        if (
-          account === undefined ||
-          account.ownerUserId !== input.ownerUserId ||
-          account.provider !== provider ||
-          account.archivedAt !== null
-        ) {
+        const lookup = yield* withInternalError(
+          lookupConnectedAccount({ ownerUserId: input.ownerUserId, provider, selection }),
+          "Failed to load connected account.",
+        );
+        if (lookup.kind === "missing") {
           return yield* new InferenceNotFoundError({
-            message: `No ${provider} connected account matches "${explicit}".`,
+            message: missingAccountMessage(provider, selection),
           });
         }
-        return account;
+        return lookup.account;
       });
 
     let account: ConnectedAccount | undefined;
@@ -135,6 +122,7 @@ const resolveAccount = (input: {
     } else if (credentials.codex !== undefined) {
       account = yield* resolveExplicit("codex", credentials.codex);
     } else if (credentials.profileId !== undefined) {
+      const accounts = yield* ConnectedAccountRepo;
       const profiles = yield* ProfileRepo;
       const profile = yield* withInternalError(
         profiles.getProfileById(credentials.profileId),
@@ -493,7 +481,9 @@ const respondAs = (payload: InferenceRespondRequest) =>
         // — marking it invalid here would needlessly block every workspace launch on the account.
         Effect.tapError((error) =>
           error.reason === "auth" && oauthCredentials.shape === "token"
-            ? accounts.markInvalid({ id: account.id }).pipe(Effect.ignore)
+            ? accounts
+                .markInvalid({ id: account.id, revision: account.credentialRevision })
+                .pipe(Effect.ignore)
             : Effect.void,
         ),
         Effect.mapError((error) =>

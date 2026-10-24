@@ -18,6 +18,7 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { createInterface } from "node:readline";
 
+import { providerLoginEnvNames } from "@sealant/api-contracts";
 import {
   codexAuthJsonCanRefresh,
   codexAuthJsonCopy,
@@ -99,9 +100,8 @@ const codexCommand = (): readonly string[] => {
 /** Subprocess env: ambient OpenAI identities stripped, the provisioned home injected. */
 const buildEnv = (codexHome: string): Record<string, string | undefined> => {
   const env: Record<string, string | undefined> = { ...process.env };
-  delete env["OPENAI_API_KEY"];
+  for (const name of providerLoginEnvNames.codex) delete env[name];
   delete env["OPENAI_BASE_URL"];
-  delete env["CODEX_API_KEY"];
   env["CODEX_HOME"] = codexHome;
   return env;
 };
@@ -254,6 +254,7 @@ const refreshOneAccount = Effect.fn("refreshCodexSessionAccount")(function* (inp
         observedAuthJson: observed,
         credentialCipher,
         source: "keep-fresh sweeper",
+        sourceRevision: account.credentialRevision,
       });
 
       if (persisted === "synced") {
@@ -270,9 +271,10 @@ const refreshOneAccount = Effect.fn("refreshCodexSessionAccount")(function* (inp
         );
         return "refreshed" as const;
       }
+      if (persisted === "skipped-superseded") return "skipped" as const;
 
       if (result?.refusedForGood === true) {
-        yield* accounts.markInvalid({ id: account.id });
+        yield* accounts.markInvalid({ id: account.id, revision: account.credentialRevision });
         yield* Effect.logWarning(
           `${describe} refused: the provider refused the refresh for good — reconnect needed.`,
         );

@@ -1,7 +1,7 @@
 import {
   connectedAccountIdParamsSchema,
   connectedAccountSummarySchema,
-  createConnectedAccountRequestSchema,
+  connectAccountRequestSchema,
   createWorkspaceRequestSchema,
   createSshKeyRequestSchema,
   githubInstallationIdParamsSchema,
@@ -116,10 +116,6 @@ const requireOwnedRun = async (coreApi: CoreApiClient, userId: string, runId: st
   }
   return run;
 };
-
-const connectAccountForSessionSchema = createConnectedAccountRequestSchema.omit({
-  ownerUserId: true,
-});
 
 const setProfileCredentialBindingForSessionSchema = setProfileCredentialBindingRequestSchema.omit({
   ownerUserId: true,
@@ -335,7 +331,7 @@ export const appRouter = router({
       return ctx.coreApi.connectedAccounts.list({ ownerUserId: ctx.session.user.id });
     }),
     connect: protectedProcedure
-      .input(connectAccountForSessionSchema)
+      .input(connectAccountRequestSchema)
       .output(connectedAccountSummarySchema)
       .mutation(async ({ ctx, input }) => {
         return ctx.coreApi.connectedAccounts.create({

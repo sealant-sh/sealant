@@ -73,6 +73,8 @@ const account = (overrides: Record<string, unknown> = {}) =>
     lastSyncedAt: null,
     invalidAt: null,
     archivedAt: null,
+    credentialRevision: 1,
+    isDefault: false,
     ...overrides,
   }) as Parameters<typeof toConnectedAccountSummary>[0];
 

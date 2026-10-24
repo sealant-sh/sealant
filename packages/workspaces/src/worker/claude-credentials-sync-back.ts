@@ -60,6 +60,7 @@ export type ClaudeCredentialsPersistOutcome =
   | "skipped-account-unavailable"
   | "skipped-not-session-file"
   | "skipped-not-newer"
+  | "skipped-superseded"
   | "failed";
 
 export interface PersistClaudeCredentialsIfNewerInput {
@@ -69,6 +70,11 @@ export interface PersistClaudeCredentialsIfNewerInput {
   readonly credentialCipher: CredentialCipherService;
   /** Names the observation path in the outcome log line (e.g. "run-exec sync-back"). */
   readonly source: string;
+  /**
+   * The credential revision the observed file was written from. `"unknown"` for a workspace
+   * sync-back, which records no revision at launch and relies on newest-wins alone.
+   */
+  readonly sourceRevision: number | "unknown";
 }
 
 /**
@@ -126,6 +132,16 @@ export const persistClaudeCredentialsIfNewer = Effect.fn("persistClaudeCredentia
         return "skipped-account-unavailable" as const;
       }
 
+      if (
+        input.sourceRevision !== "unknown" &&
+        account.credentialRevision !== input.sourceRevision
+      ) {
+        yield* Effect.logInfo(
+          `${describe} skipped-superseded: the observed file came from credential revision ${input.sourceRevision}; the account now holds revision ${account.credentialRevision}.`,
+        );
+        return "skipped-superseded" as const;
+      }
+
       // Shape check on the decrypted STORED payload: only session-file accounts own the file.
       const storedPlaintext = yield* input.credentialCipher.decrypt(account.encryptedPayload);
       const storedPayload = parseClaudeCredentialPayload(JSON.parse(storedPlaintext));
@@ -171,14 +187,22 @@ export const persistClaudeCredentialsIfNewer = Effect.fn("persistClaudeCredentia
       });
       const sealed = yield* input.credentialCipher.encrypt(plaintextPayload);
 
-      yield* accounts.replacePayload({
+      const replaced = yield* accounts.replacePayload({
         id: account.id,
+        expectedRevision: account.credentialRevision,
         kind: "credentials-json",
         encryptedPayload: sealed.sealed,
         encryptionKeyId: sealed.keyId,
         payloadSha256: sha256Hex(plaintextPayload),
         metadata: { ...account.metadata, ...parsed.metadata },
       });
+
+      if (replaced === undefined) {
+        yield* Effect.logInfo(
+          `${describe} skipped-superseded: the stored credential changed while this one was being decided on.`,
+        );
+        return "skipped-superseded" as const;
+      }
 
       yield* accounts.updateSyncState({ id: account.id, lastSyncedAt: new Date() });
 
@@ -312,6 +336,7 @@ export const syncBackClaudeCredentials = Effect.fn("syncBackClaudeCredentials")(
       observedCredentialsJson: rawCredentialsJson,
       credentialCipher: cipher,
       source: "workspace sync-back",
+      sourceRevision: "unknown",
     });
   }
 });

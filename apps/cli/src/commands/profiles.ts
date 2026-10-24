@@ -1,3 +1,4 @@
+import { DEFAULT_ACCOUNT_SELECTOR } from "@sealant/api-contracts/connected-account-selector";
 import { Console, Effect, Option } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 
@@ -126,7 +127,7 @@ const profilesListCommand = Command.make("list", {}, () =>
 const accountNameFlag = (provider: ConnectedAccountProvider) =>
   Flag.String(provider).pipe(
     Flag.optional,
-    Flag.withDescription(`Name of the ${provider} account to bind`),
+    Flag.withDescription(`Name of the ${provider} account to bind (default: your chosen default)`),
   );
 
 const bindProvider = (
@@ -144,6 +145,13 @@ const bindProvider = (
     }>;
   },
 ): Effect.Effect<unknown, CliFailure> => {
+  if (input.accountName === DEFAULT_ACCOUNT_SELECTOR) {
+    return client.setProfileCredentialBinding(api, {
+      profileId: input.profileId,
+      provider: input.provider,
+      connectedAccountId: DEFAULT_ACCOUNT_SELECTOR,
+    });
+  }
   const account = input.accounts.find(
     (candidate) =>
       candidate.provider === input.provider &&

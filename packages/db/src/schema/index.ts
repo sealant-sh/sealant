@@ -49,6 +49,7 @@ export {
 } from "./workspace-build-jobs.js";
 
 export {
+  connectedAccountDefaults,
   connectedAccountProviderValues,
   connectedAccounts,
   connectedAccountStatusValues,
@@ -105,6 +106,7 @@ export {
   sourceProviderValues,
   sshKeys,
   type ConnectedAccount,
+  type ConnectedAccountDefault,
   type ConnectedAccountProvider,
   type ConnectedAccountStatus,
   type PackageResolutionCacheEntry,

@@ -80,8 +80,10 @@ export const authCodexCommand = Command.make(
   "codex",
   {
     name: Flag.String("name").pipe(
-      Flag.withDefault("default"),
-      Flag.withDescription("Account name (you can connect multiple Codex accounts)"),
+      Flag.optional,
+      Flag.withDescription(
+        "Account name: replaces the account of that name or connects a new one (default: your only Codex account, or a first one named default)",
+      ),
     ),
     yes: Flag.Boolean("yes").pipe(
       Flag.withAlias("y"),
@@ -177,7 +179,7 @@ export const authCodexCommand = Command.make(
       // Secret is the verbatim file contents so the control plane can re-materialize the file.
       const account = yield* client.createConnectedAccount(toApiSettings(settings), {
         provider: "codex",
-        name,
+        name: Option.getOrUndefined(name),
         secret: contents,
       });
 
