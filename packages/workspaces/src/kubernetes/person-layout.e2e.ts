@@ -301,6 +301,8 @@ const CHANNEL_FIXTURE = fileURLToPath(
 );
 const REPO_ROOT = resolvePath(CHANNEL_FIXTURE, "../../../../..");
 const CHANNEL_IMAGE = "node:24-alpine";
+/** How often the channel container prints its head and errors to its log. */
+const CHANNEL_SAMPLE_MS = 250;
 
 interface ChannelContainer {
   readonly name: string;
@@ -321,7 +323,7 @@ const startChannelContainer = async (): Promise<ChannelContainer> => {
     "setInterval(() => {",
     "  if (channel.state.head?.n !== head) { head = channel.state.head?.n; console.log(`head=${head}`); }",
     "  for (const e of channel.state.errors.splice(0)) console.log(`error=${e instanceof Error ? e.message : String(e)}`);",
-    "}, 250);",
+    `}, ${String(CHANNEL_SAMPLE_MS)});`,
   ].join("\n");
   await execFileAsync("docker", [
     "run",
@@ -404,18 +406,35 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
     }
   };
 
+  /** The container prints errors only on its sampler tick, so this reads after one has passed. */
+  const expectNoChannelErrors = async (): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, 2 * CHANNEL_SAMPLE_MS));
+    expect((await channel!.logs()).match(/^error=.*$/gm) ?? []).toEqual([]);
+  };
+
   const flushAndStop = async (
     workspace: { podName: string; target: SealantTarget },
     runId: string,
     phase: string,
   ): Promise<void> => {
     const flushed = await withDaemon(workspace.target, (session) => session.captureFlush());
-    const channelLog = await channel!.logs();
-    evidence(`${phase} flush`, { fenced: flushed.fenced, pending: flushed.pending });
-    evidence(`${phase} channel heads`, channelLog.match(/^head=\S+$/gm) ?? []);
+    evidence(`${phase} flush`, {
+      fenced: flushed.fenced,
+      pending: flushed.pending,
+      headN: flushed.headN,
+    });
     expect(flushed.fenced).toBe(false);
     expect(flushed.pending).toBe(0);
-    expect(channelLog).toMatch(/^head=\d+$/m);
+    expect(flushed.headN).toBeDefined();
+    const registered = new RegExp(`^head=${String(flushed.headN)}$`, "m");
+    const deadline = Date.now() + 10_000;
+    let channelLog = await channel!.logs();
+    while (!registered.test(channelLog) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, CHANNEL_SAMPLE_MS));
+      channelLog = await channel!.logs();
+    }
+    evidence(`${phase} channel heads`, channelLog.match(/^head=\S+$/gm) ?? []);
+    expect(channelLog).toMatch(registered);
     await stopAndWait(workspace.podName, runId);
   };
 
@@ -642,7 +661,7 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
       });
       expect(byBob.exitCode).toBe(0);
       expect(byAlice.exitCode).toBe(0);
-      expect((await channel!.logs()).match(/^error=.*$/gm) ?? []).toEqual([]);
+      await expectNoChannelErrors();
       await flushAndStop(restored, restoredRun, "step 5 restored");
     },
     20 * 60_000,
@@ -696,7 +715,7 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
     }
     evidence("step 6b sidecar restarts", { before, after: after.restartCount });
     await checkDocker(docker!.target, "step 6b");
-    expect((await channel!.logs()).match(/^error=.*$/gm) ?? []).toEqual([]);
+    await expectNoChannelErrors();
     await stopAndWait(docker!.podName, dockerRun);
   }, 600_000);
 
