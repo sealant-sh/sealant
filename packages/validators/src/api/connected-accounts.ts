@@ -32,6 +32,8 @@ export const createConnectedAccountRequestSchema = z.object({
   ownerUserId: z.string().trim().min(1),
   provider: connectedAccountProviderSchema,
   name: z.string().trim().min(1).max(120).optional(),
+  // Replace this account (a reconnect); not with `name`.
+  accountId: z.string().trim().min(1).optional(),
   // Provider-shaped plaintext: claude setup-token or verbatim .credentials.json contents /
   // verbatim codex auth.json contents / github token. Encrypted server-side; never stored or
   // echoed back as-is.
