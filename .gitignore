@@ -21,3 +21,6 @@ yarn-error.log*
 .env
 .env.local
 .env.production
+
+# Core dumps a crashed test process leaves in its working directory.
+core.[0-9]*
