@@ -1437,7 +1437,7 @@ const makeSession = (client: SealantClient): SealantSession => ({
   openForward: (port, host, protocol) =>
     withSealantError(
       "openForward",
-      Effect.tryPromise(() => client.openForward(host ?? "127.0.0.1", port, undefined, protocol)),
+      Effect.tryPromise(() => client.openForward({ host: host ?? "127.0.0.1", port, protocol: protocol ?? "tcp" })),
     ).pipe(Effect.map(({ result, channel }) => ({ channelId: result.channelId, channel }))),
 
   closeForward: (channelId) =>

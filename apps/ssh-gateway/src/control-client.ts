@@ -270,7 +270,12 @@ export class ControlClient {
     port: number,
     executionId?: string,
   ): Promise<{ result: ForwardOpened; channel: Channel }> {
-    return this.#client.openForward(host, port, executionId);
+    return this.#client.openForward({
+      host,
+      port,
+      protocol: "tcp",
+      ...(executionId === undefined ? {} : { executionId }),
+    });
   }
 
   /** Open an SFTP subsystem byte channel (§3.3 subsystem:sftp -> openSftp). */
