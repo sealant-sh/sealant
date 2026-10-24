@@ -159,7 +159,6 @@ export const setProfileCredentialBinding = (input: {
       "Failed to load connected account.",
     );
 
-    // Uniform 404: unknown, someone else's, wrong-provider and archived accounts look identical.
     if (lookup.kind === "missing") {
       return yield* new ProfileNotFoundError({
         message: missingAccountMessage(input.payload.provider, input.payload.connectedAccountId),

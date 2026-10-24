@@ -78,10 +78,10 @@ export interface PersistCodexAuthJsonIfNewerInput {
   /** Names the observation path in the outcome log line (e.g. "workspace sync-back"). */
   readonly source: string;
   /**
-   * The `credentialRevision` the observed file was refreshed from. Once the stored credential has
-   * moved on (a reconnect), the observation belongs to a credential that is gone: nothing is stored.
+   * The credential revision the observed file was written from. `"unknown"` for a workspace
+   * sync-back, which records no revision at launch and relies on newest-wins alone.
    */
-  readonly sourceRevision?: number;
+  readonly sourceRevision: number | "unknown";
 }
 
 /**
@@ -126,7 +126,7 @@ export const persistCodexAuthJsonIfNewer = Effect.fn("persistCodexAuthJsonIfNewe
       return "skipped-account-unavailable" as const;
     }
 
-    if (input.sourceRevision !== undefined && account.credentialRevision !== input.sourceRevision) {
+    if (input.sourceRevision !== "unknown" && account.credentialRevision !== input.sourceRevision) {
       yield* Effect.logInfo(
         `${describe} skipped-superseded: the observed file came from credential revision ${input.sourceRevision}; the account now holds revision ${account.credentialRevision}.`,
       );
@@ -266,6 +266,7 @@ export const syncBackCodexAuthJson = Effect.fn("syncBackCodexAuthJson")(function
       observedAuthJson: rawAuthJson,
       credentialCipher: cipher,
       source: "workspace sync-back",
+      sourceRevision: "unknown",
     });
   }
 });

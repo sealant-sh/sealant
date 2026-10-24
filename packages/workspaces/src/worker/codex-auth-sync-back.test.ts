@@ -277,6 +277,7 @@ describe("persistCodexAuthJsonIfNewer", () => {
         observedAuthJson: rotated,
         credentialCipher: fakeCipher,
         source: "test",
+        sourceRevision: "unknown",
       });
 
       expect(outcome).toBe("synced");
@@ -294,6 +295,7 @@ describe("persistCodexAuthJsonIfNewer", () => {
         observedAuthJson: authJsonWithRefresh("2026-07-01T00:00:00.000Z"),
         credentialCipher: fakeCipher,
         source: "test",
+        sourceRevision: "unknown",
       });
 
       expect(outcome).toBe("skipped-not-newer");
@@ -313,6 +315,7 @@ describe("persistCodexAuthJsonIfNewer", () => {
         }),
         credentialCipher: fakeCipher,
         source: "test",
+        sourceRevision: "unknown",
       });
 
       expect(outcome).toBe("skipped-copy");
@@ -329,6 +332,7 @@ describe("persistCodexAuthJsonIfNewer", () => {
         observedAuthJson: "{ not json",
         credentialCipher: fakeCipher,
         source: "test",
+        sourceRevision: "unknown",
       });
 
       expect(outcome).toBe("skipped-invalid-file");
@@ -345,6 +349,7 @@ describe("persistCodexAuthJsonIfNewer", () => {
         observedAuthJson: authJsonWithRefresh("2026-07-04T00:00:00.000Z"),
         credentialCipher: fakeCipher,
         source: "test",
+        sourceRevision: "unknown",
       });
 
       expect(outcome).toBe("skipped-account-unavailable");
@@ -364,6 +369,7 @@ describe("persistCodexAuthJsonIfNewer", () => {
         observedAuthJson: authJsonWithRefresh("2026-07-04T00:00:00.000Z"),
         credentialCipher: fakeCipher,
         source: "test",
+        sourceRevision: "unknown",
       });
 
       expect(outcome).toBe("failed");

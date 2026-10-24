@@ -59,12 +59,6 @@ export const readFeatures = (ctx: SdkContext): Promise<SealantFeatures> => {
   return fresh.features;
 };
 
-/**
- * A chosen default, `accountId` and `makeDefault` on a connect, and `revision` on `markInvalid` are
- * sent only to a control plane that reports `connectedAccountDefaults`: an older one drops those
- * fields and does something else (a connect replaces the account named `default`, a mark-invalid
- * marks whatever credential is stored).
- */
 export const requireConnectedAccountDefaults = async (ctx: SdkContext): Promise<void> => {
   const supported = await readFeatures(ctx).then(
     (features) => features.connectedAccountDefaults,

@@ -1,11 +1,3 @@
-/**
- * A refresh that started before a reconnect must not overwrite it, against a REAL Postgres: the
- * sweeper read the login at credential revision 1, the person reconnected (revision 2), and the
- * refreshed revision-1 file, however much newer, is not stored. Gated on SEALANT_TEST_DATABASE_URL
- * (a disposable database with the migrations applied; it writes rows under fresh ids and leaves them).
- *
- *   SEALANT_TEST_DATABASE_URL=postgresql://… pnpm exec vitest run src/worker/credential-refresh-race.db.test.ts
- */
 import { randomUUID } from "node:crypto";
 
 import { sha256Hex, type CredentialCipherService } from "@sealant/credentials";

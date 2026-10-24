@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",
+    "@sealant/api-contracts": "workspace:*",
     "effect": "catalog:",
     "zod": "catalog:"
   },

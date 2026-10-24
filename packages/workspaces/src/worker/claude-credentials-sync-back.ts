@@ -71,10 +71,10 @@ export interface PersistClaudeCredentialsIfNewerInput {
   /** Names the observation path in the outcome log line (e.g. "run-exec sync-back"). */
   readonly source: string;
   /**
-   * The `credentialRevision` the observed file was refreshed from. Once the stored credential has
-   * moved on (a reconnect), the observation belongs to a credential that is gone: nothing is stored.
+   * The credential revision the observed file was written from. `"unknown"` for a workspace
+   * sync-back, which records no revision at launch and relies on newest-wins alone.
    */
-  readonly sourceRevision?: number;
+  readonly sourceRevision: number | "unknown";
 }
 
 /**
@@ -133,7 +133,7 @@ export const persistClaudeCredentialsIfNewer = Effect.fn("persistClaudeCredentia
       }
 
       if (
-        input.sourceRevision !== undefined &&
+        input.sourceRevision !== "unknown" &&
         account.credentialRevision !== input.sourceRevision
       ) {
         yield* Effect.logInfo(
@@ -336,6 +336,7 @@ export const syncBackClaudeCredentials = Effect.fn("syncBackClaudeCredentials")(
       observedCredentialsJson: rawCredentialsJson,
       credentialCipher: cipher,
       source: "workspace sync-back",
+      sourceRevision: "unknown",
     });
   }
 });

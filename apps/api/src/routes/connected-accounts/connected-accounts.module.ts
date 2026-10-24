@@ -6,6 +6,7 @@ import {
   ConnectedAccountInternalServerError,
   ConnectedAccountNotFoundError,
   ConnectedAccountServiceUnavailableError,
+  DEFAULT_ACCOUNT_SELECTOR,
   type ConnectedAccountCredential,
   type ConnectedAccountSummary,
   type CreateConnectedAccountRequest,
@@ -31,7 +32,6 @@ import {
 import { Effect } from "effect";
 
 import { env } from "../../runtime-env.js";
-import { DEFAULT_ACCOUNT_SELECTOR } from "../../services/connected-account-lookup.js";
 
 /*
 Connected provider accounts. Same trust model as ssh-keys: the internal API trusts the
@@ -309,11 +309,6 @@ type ConnectTarget =
   | { readonly kind: "replace"; readonly account: ConnectedAccountWithDefault }
   | { readonly kind: "create"; readonly name: string };
 
-/**
- * A first account is named `default` whatever the connect named, so readers that still find the
- * default by name find it. `default` names the chosen default, as it does everywhere else, and
- * with none chosen it names nothing.
- */
 const connectTarget = (
   provider: ConnectedAccountProvider,
   requested: ConnectRequestTarget,
@@ -559,7 +554,7 @@ export const archiveConnectedAccount = (input: {
       input.ownerUserId,
       Effect.gen(function* () {
         const archived = yield* withInternalError(
-          connectedAccountRepo.archive({
+          connectedAccountRepo.archiveAndClearDefault({
             id: input.connectedAccountId,
             ownerUserId: input.ownerUserId,
           }),

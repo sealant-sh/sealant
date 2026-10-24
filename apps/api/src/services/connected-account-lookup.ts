@@ -1,3 +1,4 @@
+import { DEFAULT_ACCOUNT_SELECTOR } from "@sealant/api-contracts";
 import {
   ConnectedAccountRepo,
   type ConnectedAccount,
@@ -5,8 +6,6 @@ import {
   type ConnectedAccountRepoError,
 } from "@sealant/db";
 import { Effect } from "effect";
-
-export const DEFAULT_ACCOUNT_SELECTOR = "default";
 
 export const missingAccountMessage = (provider: ConnectedAccountProvider, selection: string) =>
   selection === DEFAULT_ACCOUNT_SELECTOR

@@ -15,7 +15,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./workspace-environment": "./src/workspace-environment.ts",
-    "./capture-owner-map": "./src/capture-owner-map.ts"
+    "./capture-owner-map": "./src/capture-owner-map.ts",
+    "./connected-account-selector": "./src/connected-account-selector.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -31,6 +32,10 @@
       "./capture-owner-map": {
         "types": "./dist/capture-owner-map.d.ts",
         "import": "./dist/capture-owner-map.js"
+      },
+      "./connected-account-selector": {
+        "types": "./dist/connected-account-selector.d.ts",
+        "import": "./dist/connected-account-selector.js"
       }
     }
   },

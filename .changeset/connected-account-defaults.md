@@ -19,4 +19,5 @@ credential has moved on (`outcome: "superseded"`). The SDK sends `accountId`, `m
 `features().connectedAccountDefaults`, and otherwise throws `connected-account-defaults-unsupported`
 before sending anything. `@sealant/api-contracts` exports `providerLoginEnvNames`, the environment
 names each provider's CLI reads as a login (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
-`CLAUDE_CODE_OAUTH_TOKEN`; `OPENAI_API_KEY`, `CODEX_API_KEY`).
+`CLAUDE_CODE_OAUTH_TOKEN`; `OPENAI_API_KEY`, `CODEX_API_KEY`), and `DEFAULT_ACCOUNT_SELECTOR`
+(`"default"`), also from the dependency-free `@sealant/api-contracts/connected-account-selector`.

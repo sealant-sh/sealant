@@ -19,10 +19,6 @@ Each person has at most one default account per provider, the one the selector `
 SDK's `true`) means. Connecting a person's first account for a provider makes it the default;
 after that only `makeDefault` on a connect, or `setConnectedAccountDefault`, changes it.
 Disconnecting the default leaves the person without one: no other account is chosen for them.
-At start the control plane points a person with no default row at their account named `default`
-(an older control plane serving through a rolling upgrade connects first accounts without one); a
-person who disconnected their default keeps a row that names no account, so this never picks one
-for them.
 */
 
 export const connectedAccountProviderSchema = Schema.Literals(["claude", "codex", "github"]);

@@ -31,7 +31,6 @@ const migrationsFolder = join(
 
 const silent = () => {};
 
-/** A migrations folder holding only the migrations `keep` admits, so later ones never apply here. */
 const migrationsWhere = (keep: (name: string) => boolean) => {
   const folder = mkdtempSync(join(tmpdir(), "sealant-migrations-"));
   for (const entry of readdirSync(migrationsFolder).filter(keep)) {
@@ -224,7 +223,7 @@ describe.skipIf(DATABASE_URL === undefined)("the default-pointer migration (Post
     const backfill = Effect.flatMap(ConnectedAccountRepo, (accounts) => accounts.backfillDefaults);
     await run(
       Effect.flatMap(ConnectedAccountRepo, (accounts) =>
-        accounts.archive({ id: "cacc_hal_work", ownerUserId: "hal" }),
+        accounts.archiveAndClearDefault({ id: "cacc_hal_work", ownerUserId: "hal" }),
       ),
     );
 

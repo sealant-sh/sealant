@@ -38,7 +38,7 @@ const connectedAccountRepoOperationSchema = Schema.Literals([
   "markInvalid",
   "claimRefresh",
   "releaseRefresh",
-  "archive",
+  "archiveAndClearDefault",
   "restore",
   "setProfileBinding",
   "clearProfileBinding",
@@ -144,7 +144,6 @@ export interface ReplaceConnectedAccountPayloadInput {
   readonly encryptionKeyId: string;
   readonly payloadSha256: string;
   readonly metadata: Record<string, unknown>;
-  /** Replace only while the stored credential is still this revision; otherwise nothing is written. */
   readonly expectedRevision?: number;
 }
 
@@ -218,12 +217,6 @@ export interface ConnectedAccountRepoService {
       readonly connectedAccountId: string;
     },
   ) => Effect.Effect<void, ConnectedAccountRepoError>;
-  /**
-   * Point every person who has no default row at their active account named `default`, and repair
-   * a default that names an archived account the same way; returns how many defaults it wrote. A
-   * person who disconnected their default keeps none: that row names no account and is left alone.
-   * Safe to run at any time and any number of times.
-   */
   readonly backfillDefaults: Effect.Effect<number, ConnectedAccountRepoError>;
   /**
    * ACTIVE (non-archived, non-invalid) accounts across all owners for one (provider, kind) pair —
@@ -234,10 +227,6 @@ export interface ConnectedAccountRepoService {
     readonly provider: ConnectedAccountProvider;
     readonly kind: string;
   }) => Effect.Effect<readonly ConnectedAccount[], ConnectedAccountRepoError>;
-  /**
-   * Reconnect: swap the sealed payload, reset status to "active", clear invalid_at. Undefined when
-   * no row matched, including an `expectedRevision` the credential has moved on from.
-   */
   readonly replacePayload: (
     input: ReplaceConnectedAccountPayloadInput,
   ) => Effect.Effect<ConnectedAccount | undefined, ConnectedAccountRepoError>;
@@ -264,11 +253,7 @@ export interface ConnectedAccountRepoService {
   readonly releaseRefresh: (input: {
     readonly id: string;
   }) => Effect.Effect<void, ConnectedAccountRepoError>;
-  /**
-   * Soft delete in one transaction, which also leaves the owner with no default when this account
-   * was it; returns undefined when no active account matched (wrong id or wrong owner).
-   */
-  readonly archive: (
+  readonly archiveAndClearDefault: (
     input: ArchiveConnectedAccountInput,
   ) => Effect.Effect<ConnectedAccount | undefined, ConnectedAccountRepoError>;
   /** Un-archive (same owner reconnecting the same account row). */
@@ -625,9 +610,9 @@ export const ConnectedAccountRepoLive = Layer.effect(
             .pipe(Effect.asVoid),
         ),
 
-      archive: (input) =>
+      archiveAndClearDefault: (input) =>
         withConnectedAccountRepoError(
-          "archive",
+          "archiveAndClearDefault",
           db.transaction(() =>
             Effect.gen(function* () {
               const [connectedAccount] = yield* db

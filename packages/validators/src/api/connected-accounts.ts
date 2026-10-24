@@ -26,18 +26,25 @@ export const connectedAccountSummarySchema = z.object({
   lastSyncedAt: z.string().nullable(),
 });
 
-export const createConnectedAccountRequestSchema = z.object({
+export const connectAccountRequestSchema = z
+  .object({
+    provider: connectedAccountProviderSchema,
+    name: z.string().trim().min(1).max(120).optional(),
+    accountId: z.string().trim().min(1).optional(),
+    // Provider-shaped plaintext: claude setup-token or verbatim .credentials.json contents /
+    // verbatim codex auth.json contents / github token. Encrypted server-side; never stored or
+    // echoed back as-is.
+    secret: z.string().min(1),
+  })
+  .refine((request) => request.name === undefined || request.accountId === undefined, {
+    message: "Name the account to connect or give its accountId, not both.",
+    path: ["accountId"],
+  });
+
+export const createConnectedAccountRequestSchema = connectAccountRequestSchema.safeExtend({
   // Same trust model as ssh-keys: the internal API trusts the caller-supplied owner; the web
   // server injects the session user id.
   ownerUserId: z.string().trim().min(1),
-  provider: connectedAccountProviderSchema,
-  name: z.string().trim().min(1).max(120).optional(),
-  // Replace this account (a reconnect); not with `name`.
-  accountId: z.string().trim().min(1).optional(),
-  // Provider-shaped plaintext: claude setup-token or verbatim .credentials.json contents /
-  // verbatim codex auth.json contents / github token. Encrypted server-side; never stored or
-  // echoed back as-is.
-  secret: z.string().min(1),
 });
 
 export const connectedAccountIdParamsSchema = z.object({
