@@ -18,7 +18,7 @@
  *      can still be read, then Kubernetes reaps it.
  *   7. Read the image probe back from the pushed digest (`probeJob`); a failed read is a note.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import type { V1ConfigMap, V1Job, V1Pod, V1Secret } from "@kubernetes/client-node";
@@ -74,8 +74,8 @@ const POLL_INTERVAL_MS = 2000;
 const UNSCHEDULABLE_GRACE_MS = 5 * 60_000;
 const LOG_TAIL_LINES = 60;
 const PROBE_CONTAINER_NAME = "probe";
-/** Scheduling, pulling the workspace image (the bulk of it) and one `cat`. */
-const PROBE_DEADLINE_SECONDS = 180;
+/** Long enough for a cold image pull, inside the build job's lease (15 min by default). */
+const PROBE_DEADLINE_MS = 10 * 60_000;
 const PROBE_MAX_BYTES = 64 * 1024;
 
 export interface KubernetesWorkspaceImageBuilderOptions {
@@ -303,9 +303,24 @@ export const buildJob = (input: BuildManifestsInput): V1Job => ({
   },
 });
 
-/** One per build and digest: a redelivered build adopts the Job, whose answer is the same. */
-export const probeJobName = (buildName: string, digest: string): string =>
-  `${buildName}-probe-${createHash("sha256").update(digest).digest("hex").slice(0, 8)}`;
+const freshProbeJobName = (buildName: string): string =>
+  `${buildName}-probe-${randomBytes(4).toString("hex")}`;
+
+const probeDeadlineMs = (config: KubernetesBuildConfig): number =>
+  Math.min(PROBE_DEADLINE_MS, config.timeoutMs);
+
+// A namespace under a ResourceQuota admits no Pod without requests.
+const PROBE_CONTAINER_RESOURCES = {
+  requests: { cpu: "10m", memory: "16Mi" },
+  limits: { cpu: "100m", memory: "64Mi" },
+};
+
+const said = (
+  status: { readonly reason?: string; readonly message?: string } | undefined,
+): string | undefined =>
+  status === undefined
+    ? undefined
+    : [status.reason, status.message].filter((part) => part !== undefined).join(": ");
 
 export interface ProbeJobInput {
   readonly name: string;
@@ -327,13 +342,12 @@ export const probeJob = (input: ProbeJobInput): V1Job => {
     spec: {
       backoffLimit: 0,
       ttlSecondsAfterFinished: input.config.ttlSecondsAfterFinished,
-      activeDeadlineSeconds: PROBE_DEADLINE_SECONDS,
+      activeDeadlineSeconds: Math.ceil(probeDeadlineMs(input.config) / 1000),
       template: {
         metadata: { labels },
         spec: {
           restartPolicy: "Never",
           nodeSelector: buildJobNodeSelector(input.nodeSelector ?? {}, input.platform),
-          serviceAccountName: input.config.serviceAccount,
           automountServiceAccountToken: false,
           enableServiceLinks: false,
           ...(input.config.imagePullSecret === undefined
@@ -350,6 +364,7 @@ export const probeJob = (input: ProbeJobInput): V1Job => {
               name: PROBE_CONTAINER_NAME,
               image: input.image.digestReference,
               command: ["/bin/sh", "-c", `cat ${IMAGE_PROBE_PATH}`],
+              resources: PROBE_CONTAINER_RESOURCES,
               securityContext: {
                 allowPrivilegeEscalation: false,
                 readOnlyRootFilesystem: true,
@@ -635,17 +650,24 @@ export class KubernetesWorkspaceImageBuilder implements WorkspaceImageBuilder {
     image: PublishedImage,
     platform: WorkspaceImagePlatform,
   ): Promise<ImageProbeReadback> {
-    const name = probeJobName(buildName, image.digest);
+    const name = freshProbeJobName(buildName);
+    let created = false;
     try {
-      await this.#api.createJob(
+      const outcome = await this.#api.createJob(
         probeJob({ name, config: this.#config, image, platform, nodeSelector: this.#nodeSelector }),
       );
-      const deadline = this.#now() + (PROBE_DEADLINE_SECONDS + 30) * 1000;
+      if (outcome.outcome === "conflict") throw new Error(`Job ${name} already exists`);
+      created = true;
+      const deadline = this.#now() + probeDeadlineMs(this.#config) + 30_000;
       for (;;) {
-        const status = jobStatus(await this.#api.getJob(name));
+        const job = await this.#api.getJob(name);
+        const status = jobStatus(job);
         if (status === "succeeded") break;
-        if (status !== "running") throw new Error(`Job ${name} ${status}`);
-        if (this.#now() > deadline) throw new Error(`Job ${name} did not finish in time`);
+        if (status === "missing") throw new Error(`Job ${name} missing`);
+        if (status === "failed" || this.#now() > deadline) {
+          const ended = status === "failed" ? "failed" : "did not finish in time";
+          throw new Error(`Job ${name} ${ended}: ${await this.#probeFailure(job, name)}`);
+        }
         await sleep(this.#pollIntervalMs);
       }
       const output = await this.#logTail(name, PROBE_CONTAINER_NAME, PROBE_MAX_BYTES);
@@ -657,8 +679,22 @@ export class KubernetesWorkspaceImageBuilder implements WorkspaceImageBuilder {
         note: `The image probe could not be read back from ${image.digestReference}: ${reason}`,
       };
     } finally {
-      await this.#api.deleteJob(name).catch(() => undefined);
+      if (created) await this.#api.deleteJob(name).catch(() => undefined);
     }
+  }
+
+  async #probeFailure(job: V1Job | undefined, name: string): Promise<string> {
+    const pods = await this.#api.listPods(`job-name=${name}`);
+    const waiting = pods
+      .flatMap((pod) => pod.status?.containerStatuses ?? [])
+      .find((status) => status.state?.waiting?.reason !== undefined)?.state?.waiting;
+    const failed = job?.status?.conditions?.find((c) => c.type === "Failed" && c.status === "True");
+    const reason = unschedulableCondition(pods) ?? said(waiting) ?? said(failed);
+    if (reason !== undefined) return reason;
+    const logLine = (await this.#logTail(name, PROBE_CONTAINER_NAME, PROBE_MAX_BYTES))
+      .split("\n")
+      .pop();
+    return logLine === undefined || logLine === "" ? "no reason reported" : logLine;
   }
 
   async #logTail(

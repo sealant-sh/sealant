@@ -4,7 +4,7 @@
  * carrying the log tail, a registry that never reports the manifest, and the image probe read back
  * from the pushed digest.
  */
-import type { V1ConfigMap, V1Job, V1Pod, V1Secret } from "@kubernetes/client-node";
+import type { V1ConfigMap, V1Job, V1JobStatus, V1Pod, V1Secret } from "@kubernetes/client-node";
 import type { WorkspaceImageProbe } from "@sealant/validators";
 import { describe, expect, it, vi } from "vitest";
 
@@ -16,18 +16,19 @@ import {
 import type { RegistryClient } from "../../registry/index.js";
 import { cases } from "../../runtime/docker-runtime-adapter.golden-fixture.js";
 import type { CreateOutcome, DeleteOutcome } from "../../runtime/kubernetes/api.js";
+import { LABEL_COMPONENT } from "../../runtime/kubernetes/config.js";
 import type { KubernetesBuildApi } from "./api.js";
 import {
   buildContextConfigMap,
   buildctlArgs,
   buildJob,
   buildJobName,
+  COMPONENT_IMAGE_PROBE,
   dockerConfigJson,
   KubernetesImageBuildError,
   KubernetesWorkspaceImageBuilder,
   LABEL_PLAN_HASH,
   probeJob,
-  probeJobName,
 } from "./builder.js";
 import { kubernetesBuildConfigSchema, type KubernetesBuildConfig } from "./config.js";
 
@@ -48,6 +49,7 @@ interface Fake extends KubernetesBuildApi {
   nextStatus: "succeeded" | "failed" | "running";
   podLog: string;
   probeLog: string;
+  probeStatus: V1JobStatus;
   readonly created: V1Job[];
   pods: V1Pod[];
   /** Called with the count of pod listings so far, before each answers. */
@@ -60,6 +62,7 @@ const fake = (): Fake => {
   const secrets = new Map<string, V1Secret>();
   const log: string[] = [];
   let podListings = 0;
+  const probeJobPolls = new Map<string, number>();
   const create = <T extends { metadata?: { name?: string | undefined } | undefined }>(
     store: Map<string, T>,
     kind: string,
@@ -86,25 +89,40 @@ const fake = (): Fake => {
     nextStatus: "succeeded",
     podLog: "",
     probeLog: "",
+    probeStatus: { succeeded: 1 },
     created: [],
     pods: [{ metadata: { name: "build-pod-1" } }],
     onListPods: undefined,
     createJob: async (job) => {
       api.created.push(job);
-      return create(jobs, "job", job);
+      const outcome = create(jobs, "job", job);
+      if (
+        outcome.outcome === "created" &&
+        job.metadata?.labels?.[LABEL_COMPONENT] === COMPONENT_IMAGE_PROBE
+      ) {
+        probeJobPolls.set(job.metadata.name ?? "", 0);
+      }
+      return outcome;
     },
     getJob: async (name) => {
       const job = jobs.get(name);
       if (job === undefined) {
         return undefined;
       }
+      // A reader Job is still running at its first poll, as a real one is.
+      const probePolls = probeJobPolls.get(name);
+      if (probePolls !== undefined) probeJobPolls.set(name, probePolls + 1);
       const status =
         job.status ??
-        (api.nextStatus === "succeeded"
-          ? { succeeded: 1 }
-          : api.nextStatus === "failed"
-            ? { failed: 1 }
-            : { active: 1 });
+        (probePolls === 0
+          ? { active: 1 }
+          : probePolls !== undefined
+            ? api.probeStatus
+            : api.nextStatus === "succeeded"
+              ? { succeeded: 1 }
+              : api.nextStatus === "failed"
+                ? { failed: 1 }
+                : { active: 1 });
       return { ...job, status };
     },
     deleteJob: async (name) => del(jobs, "job", name),
@@ -122,6 +140,9 @@ const fake = (): Fake => {
   };
   return api;
 };
+
+const readers = (api: Fake): V1Job[] =>
+  api.created.filter((job) => job.metadata?.labels?.[LABEL_COMPONENT] === COMPONENT_IMAGE_PROBE);
 
 const registry = (
   digest: string | null,
@@ -554,8 +575,11 @@ describe("KubernetesWorkspaceImageBuilder", () => {
       const result = await builder.buildAndPublish({ spec, repository: "r", tag: "t" });
 
       expect(result.build.metadata?.imageProbe).toEqual(probe);
-      const name = probeJobName(buildJobName(builder.plan(spec).planHash, "r", "t"), "sha256:1");
-      const reader = api.created.find((job) => job.metadata?.name === name);
+      const [reader] = readers(api);
+      const name = reader?.metadata?.name ?? "";
+      expect(name).toMatch(
+        new RegExp(`^${buildJobName(builder.plan(spec).planHash, "r", "t")}-probe-[0-9a-f]{8}$`),
+      );
       expect(reader).toEqual(
         probeJob({
           name,
@@ -571,7 +595,7 @@ describe("KubernetesWorkspaceImageBuilder", () => {
     it("runs only cat on the digest, never the entrypoint, under a restricted posture", () => {
       const job = probeJob({
         name: "build-abc-probe-01234567",
-        config: { ...config, imagePullSecret: "zot-pull" },
+        config: { ...config, imagePullSecret: "zot-pull", timeoutMs: 30 * 60_000 },
         image: {
           repository: "r",
           tag: "t",
@@ -591,9 +615,10 @@ describe("KubernetesWorkspaceImageBuilder", () => {
         },
       });
       expect(job.spec?.backoffLimit).toBe(0);
-      expect(job.spec?.activeDeadlineSeconds).toBe(180);
+      expect(job.spec?.activeDeadlineSeconds).toBe(600);
       const pod = job.spec?.template.spec;
       expect(pod?.restartPolicy).toBe("Never");
+      expect(pod?.serviceAccountName).toBeUndefined();
       expect(pod?.automountServiceAccountToken).toBe(false);
       expect(pod?.enableServiceLinks).toBe(false);
       expect(pod?.imagePullSecrets).toEqual([{ name: "zot-pull" }]);
@@ -609,6 +634,10 @@ describe("KubernetesWorkspaceImageBuilder", () => {
           name: "probe",
           image: digestReference,
           command: ["/bin/sh", "-c", "cat /etc/sealant/image-probe.json"],
+          resources: {
+            requests: { cpu: "10m", memory: "16Mi" },
+            limits: { cpu: "100m", memory: "64Mi" },
+          },
           securityContext: {
             allowPrivilegeEscalation: false,
             readOnlyRootFilesystem: true,
@@ -617,6 +646,36 @@ describe("KubernetesWorkspaceImageBuilder", () => {
         },
       ]);
       expect(pod?.volumes).toBeUndefined();
+    });
+
+    it("gives the reader no longer than the build's own timeout", () => {
+      const job = probeJob({
+        name: "build-abc-probe-01234567",
+        config: { ...config, timeoutMs: 120_000 },
+        image: {
+          repository: "r",
+          tag: "t",
+          reference: "zot.sealant.svc:5000/r:t",
+          digestReference,
+          digest: "sha256:1",
+        },
+        platform: "linux/amd64",
+      });
+      expect(job.spec?.activeDeadlineSeconds).toBe(120);
+    });
+
+    it("records the probe on two concurrent builds of one plan", async () => {
+      const api = fake();
+      api.probeLog = JSON.stringify(probe);
+      const builder = builderFor(api, registry("sha256:1"));
+
+      const results = await Promise.all([
+        builder.buildAndPublish({ spec, repository: "r", tag: "t" }),
+        builder.buildAndPublish({ spec, repository: "r", tag: "t" }),
+      ]);
+
+      expect(results.map((result) => result.build.metadata?.imageProbe)).toEqual([probe, probe]);
+      expect(new Set(readers(api).map((job) => job.metadata?.name)).size).toBe(2);
     });
 
     it("leaves the build without a probe, and says why, when the answer is unreadable", async () => {
@@ -636,20 +695,91 @@ describe("KubernetesWorkspaceImageBuilder", () => {
       );
     });
 
-    it("leaves the build without a probe when the reader Job fails, and deletes it", async () => {
-      const api = fake();
-      api.probeLog = JSON.stringify(probe);
-      const builder = builderFor(api, registry("sha256:1"));
-      const name = probeJobName(buildJobName(builder.plan(spec).planHash, "r", "t"), "sha256:1");
-      api.jobs.set(name, { metadata: { name }, status: { failed: 1 } });
+    for (const [why, setup, reason] of [
+      [
+        "a container that cannot start",
+        (api: Fake) => {
+          api.pods = [
+            {
+              metadata: { name: "probe-pod" },
+              status: {
+                containerStatuses: [
+                  {
+                    name: "probe",
+                    image: digestReference,
+                    imageID: "",
+                    ready: false,
+                    restartCount: 0,
+                    state: { waiting: { reason: "ErrImagePull", message: "pull access denied" } },
+                  },
+                ],
+              },
+            },
+          ];
+        },
+        "ErrImagePull: pull access denied",
+      ],
+      [
+        "the Job's deadline",
+        (api: Fake) => {
+          api.pods = [];
+          api.probeStatus = {
+            failed: 1,
+            conditions: [
+              {
+                type: "Failed",
+                status: "True",
+                reason: "DeadlineExceeded",
+                message: "Job was active longer than specified deadline",
+              },
+            ],
+          };
+        },
+        "DeadlineExceeded: Job was active longer than specified deadline",
+      ],
+      [
+        "what the reader printed",
+        (api: Fake) => {
+          api.probeLog = "cat: can't open '/etc/sealant/image-probe.json': No such file";
+        },
+        "cat: can't open '/etc/sealant/image-probe.json': No such file",
+      ],
+    ] as const) {
+      it(`names ${why} when the reader Job fails, and deletes the Job`, async () => {
+        const api = fake();
+        api.probeStatus = { failed: 1 };
+        setup(api);
+        const builder = builderFor(api, registry("sha256:1"));
 
-      const result = await builder.buildAndPublish({ spec, repository: "r", tag: "t" });
+        const result = await builder.buildAndPublish({ spec, repository: "r", tag: "t" });
+
+        const name = readers(api)[0]?.metadata?.name ?? "";
+        expect(result.build.metadata).not.toHaveProperty("imageProbe");
+        expect(result.build.metadata?.notes).toContain(
+          `The image probe could not be read back from ${digestReference}: Job ${name} failed: ${reason}`,
+        );
+        expect(api.jobs.has(name)).toBe(false);
+      });
+    }
+
+    it("leaves a reader Job it did not create alone", async () => {
+      const api = fake();
+      const taken: Fake = {
+        ...api,
+        createJob: async (job) =>
+          job.metadata?.labels?.[LABEL_COMPONENT] === COMPONENT_IMAGE_PROBE
+            ? { outcome: "conflict" }
+            : api.createJob(job),
+      };
+
+      const result = await builderFor(taken, registry("sha256:1")).buildAndPublish({
+        spec,
+        repository: "r",
+        tag: "t",
+      });
 
       expect(result.build.metadata).not.toHaveProperty("imageProbe");
-      expect(result.build.metadata?.notes).toContain(
-        `The image probe could not be read back from ${digestReference}: Job ${name} failed`,
-      );
-      expect(api.jobs.has(name)).toBe(false);
+      expect(api.log.filter((line) => line.includes("-probe-"))).toEqual([]);
     });
   });
 });
