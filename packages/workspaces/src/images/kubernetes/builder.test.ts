@@ -1,9 +1,11 @@
 /**
  * BuildKit-Job builder against an in-memory API: pinned manifests, the exact buildctl argv, the
  * lifecycle (create → wait → digest → cleanup), adoption/retry of a previous Job, readable failures
- * carrying the log tail, and a registry that never reports the manifest.
+ * carrying the log tail, a registry that never reports the manifest, and the image probe read back
+ * from the pushed digest.
  */
 import type { V1ConfigMap, V1Job, V1Pod, V1Secret } from "@kubernetes/client-node";
+import type { WorkspaceImageProbe } from "@sealant/validators";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -24,6 +26,8 @@ import {
   KubernetesImageBuildError,
   KubernetesWorkspaceImageBuilder,
   LABEL_PLAN_HASH,
+  probeJob,
+  probeJobName,
 } from "./builder.js";
 import { kubernetesBuildConfigSchema, type KubernetesBuildConfig } from "./config.js";
 
@@ -43,6 +47,8 @@ interface Fake extends KubernetesBuildApi {
   readonly log: string[];
   nextStatus: "succeeded" | "failed" | "running";
   podLog: string;
+  probeLog: string;
+  readonly created: V1Job[];
   pods: V1Pod[];
   /** Called with the count of pod listings so far, before each answers. */
   onListPods: ((calls: number) => void) | undefined;
@@ -79,9 +85,14 @@ const fake = (): Fake => {
     log,
     nextStatus: "succeeded",
     podLog: "",
+    probeLog: "",
+    created: [],
     pods: [{ metadata: { name: "build-pod-1" } }],
     onListPods: undefined,
-    createJob: async (job) => create(jobs, "job", job),
+    createJob: async (job) => {
+      api.created.push(job);
+      return create(jobs, "job", job);
+    },
     getJob: async (name) => {
       const job = jobs.get(name);
       if (job === undefined) {
@@ -107,7 +118,7 @@ const fake = (): Fake => {
       api.onListPods?.(podListings);
       return api.pods;
     },
-    readPodLogTail: async () => api.podLog,
+    readPodLogTail: async (_pod, container) => (container === "probe" ? api.probeLog : api.podLog),
   };
   return api;
 };
@@ -346,14 +357,14 @@ describe("KubernetesWorkspaceImageBuilder", () => {
   it("adopts a running Job for the same plan on redelivery", async () => {
     const api = fake();
     const builder = builderFor(api, registry("sha256:1"));
-    await builder.buildAndPublish({ spec, repository: "r", tag: "t" });
-    const creates = api.log.filter((l) => l.startsWith("create job")).length;
-
+    const name = buildJobName(builder.plan(spec).planHash, "r", "t");
     await builder.buildAndPublish({ spec, repository: "r", tag: "t" });
 
-    expect(api.log.filter((l) => l.startsWith("create job")).length).toBe(creates + 1);
-    expect(api.log.filter((l) => l.startsWith("delete job")).length).toBe(0);
-    expect(api.jobs.size).toBe(1);
+    await builder.buildAndPublish({ spec, repository: "r", tag: "t" });
+
+    expect(api.log.filter((l) => l === `create job ${name}`)).toHaveLength(2);
+    expect(api.log).not.toContain(`delete job ${name}`);
+    expect([...api.jobs.keys()]).toEqual([name]);
   });
 
   it("replaces a failed Job for the same plan and refuses one with foreign labels", async () => {
@@ -507,5 +518,138 @@ describe("KubernetesWorkspaceImageBuilder", () => {
       "id=dotfiles_git_key,src=/run/secrets/build/dotfiles_git_key",
     );
     expect(api.secrets.size).toBe(0);
+  });
+
+  describe("the image probe, read back from the pushed digest", () => {
+    const probe: WorkspaceImageProbe = {
+      version: 1,
+      tools: {
+        sudo: true,
+        sudoSetuid: true,
+        useradd: true,
+        groupadd: true,
+        setfacl: true,
+        getfacl: true,
+        setpriv: true,
+        flock: true,
+      },
+      sudoersMend: true,
+      sudoersIncludesDir: true,
+      noNewPrivileges: false,
+      passwdWritable: true,
+      mendGroup: "present",
+      reservedIdsInUse: [],
+      personEnv: true,
+      sharedDirs: [],
+      gitTrustsWorktree: true,
+      sealantd: { schemaVersion: 1, supports: ["dotfiles.user", "exec.user", "restore.owner_map"] },
+    };
+    const digestReference = "zot.sealant.svc:5000/r@sha256:1";
+
+    it("records what a reader Job on the digest prints, then deletes the Job", async () => {
+      const api = fake();
+      api.probeLog = `${JSON.stringify(probe)}\n`;
+      const builder = builderFor(api, registry("sha256:1"), { imagePullSecret: "zot-pull" });
+
+      const result = await builder.buildAndPublish({ spec, repository: "r", tag: "t" });
+
+      expect(result.build.metadata?.imageProbe).toEqual(probe);
+      const name = probeJobName(buildJobName(builder.plan(spec).planHash, "r", "t"), "sha256:1");
+      const reader = api.created.find((job) => job.metadata?.name === name);
+      expect(reader).toEqual(
+        probeJob({
+          name,
+          config: { ...config, imagePullSecret: "zot-pull" },
+          image: result.publishedImage,
+          platform: "linux/amd64",
+        }),
+      );
+      expect(reader?.spec?.template.spec?.containers[0]?.image).toBe(digestReference);
+      expect(api.log).toContain(`delete job ${name}`);
+    });
+
+    it("runs only cat on the digest, never the entrypoint, under a restricted posture", () => {
+      const job = probeJob({
+        name: "build-abc-probe-01234567",
+        config: { ...config, imagePullSecret: "zot-pull" },
+        image: {
+          repository: "r",
+          tag: "t",
+          reference: "zot.sealant.svc:5000/r:t",
+          digestReference,
+          digest: "sha256:1",
+        },
+        platform: "linux/arm64",
+        nodeSelector: { pool: "workspaces" },
+      });
+      expect(job.metadata).toEqual({
+        name: "build-abc-probe-01234567",
+        namespace: "sealant-builds",
+        labels: {
+          "app.kubernetes.io/managed-by": "sealant",
+          "app.kubernetes.io/component": "image-probe",
+        },
+      });
+      expect(job.spec?.backoffLimit).toBe(0);
+      expect(job.spec?.activeDeadlineSeconds).toBe(180);
+      const pod = job.spec?.template.spec;
+      expect(pod?.restartPolicy).toBe("Never");
+      expect(pod?.automountServiceAccountToken).toBe(false);
+      expect(pod?.enableServiceLinks).toBe(false);
+      expect(pod?.imagePullSecrets).toEqual([{ name: "zot-pull" }]);
+      expect(pod?.nodeSelector).toEqual({ pool: "workspaces", "kubernetes.io/arch": "arm64" });
+      expect(pod?.securityContext).toEqual({
+        runAsNonRoot: true,
+        runAsUser: 65534,
+        runAsGroup: 65534,
+        seccompProfile: { type: "RuntimeDefault" },
+      });
+      expect(pod?.containers).toEqual([
+        {
+          name: "probe",
+          image: digestReference,
+          command: ["/bin/sh", "-c", "cat /etc/sealant/image-probe.json"],
+          securityContext: {
+            allowPrivilegeEscalation: false,
+            readOnlyRootFilesystem: true,
+            capabilities: { drop: ["ALL"] },
+          },
+        },
+      ]);
+      expect(pod?.volumes).toBeUndefined();
+    });
+
+    it("leaves the build without a probe, and says why, when the answer is unreadable", async () => {
+      const api = fake();
+      api.probeLog = '{"version":1,"tools":{"sudo":tr';
+      const result = await builderFor(api, registry("sha256:1")).buildAndPublish({
+        spec,
+        repository: "r",
+        tag: "t",
+      });
+      expect(result.publishedImage.digestReference).toBe(digestReference);
+      expect(result.build.metadata).not.toHaveProperty("imageProbe");
+      expect(result.build.metadata?.notes).toContainEqual(
+        expect.stringMatching(
+          /^The image probe could not be read back from zot\.sealant\.svc:5000\/r@sha256:1: /,
+        ),
+      );
+    });
+
+    it("leaves the build without a probe when the reader Job fails, and deletes it", async () => {
+      const api = fake();
+      api.probeLog = JSON.stringify(probe);
+      const builder = builderFor(api, registry("sha256:1"));
+      const name = probeJobName(buildJobName(builder.plan(spec).planHash, "r", "t"), "sha256:1");
+      api.jobs.set(name, { metadata: { name }, status: { failed: 1 } });
+
+      const result = await builder.buildAndPublish({ spec, repository: "r", tag: "t" });
+
+      expect(result.build.metadata).not.toHaveProperty("imageProbe");
+      expect(result.build.metadata?.notes).toContain(
+        `The image probe could not be read back from ${digestReference}: Job ${name} failed`,
+      );
+      expect(api.jobs.has(name)).toBe(false);
+    });
   });
 });
