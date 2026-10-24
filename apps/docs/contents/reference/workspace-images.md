@@ -7,13 +7,13 @@ description:
 
 A workspace can be used by more than one person at a time. Mend runs each person's processes as a
 Linux user of their own, with their own home, logins and credentials. The managed images (`fedora`,
-`arch`, `ubuntu`, `nix`) carry what that needs. Users themselves are not made in the image: whoever starts
-the workspace makes them when it starts.
+`arch`, `ubuntu`, `nix`) carry what that needs. Users themselves are not made in the image: whoever
+starts the workspace makes them when it starts.
 
 None of it changes the environment of a workspace run by one person as root. The image sets no new
 environment variable and no `PATH` entry, and root's tools keep their usual locations. (Beyond the
-environment, root sees `safe.directory = *` in `/etc/gitconfig`, and Arch, Ubuntu and nix images
-now carry `sudo`.) What points a person's tools at shared locations is a file `sealantd` applies to
+environment, root sees `safe.directory = *` in `/etc/gitconfig`, and Arch, Ubuntu and nix images now
+carry `sudo`.) What points a person's tools at shared locations is a file `sealantd` applies to
 every process it runs as a user.
 
 ## What a managed image carries
@@ -208,8 +208,8 @@ the person.
   `/home` is created.
 - **A setuid `sudo`.** The store cannot hold a setuid file, so `/usr/local/bin/sudo` is a root-owned
   copy of the profile's `sudo`, mode 4755. The image writes `/etc/sudoers`, which includes
-  `/etc/sudoers.d`, and `/etc/pam.d/sudo`. The build runs `visudo -c` and `sudo -n true` and fails if
-  either fails.
+  `/etc/sudoers.d`, and `/etc/pam.d/sudo`. The build runs `visudo -c` and `sudo -n true` and fails
+  if either fails.
 - **One profile for everyone.** Packages go into `/nix/var/nix/profiles/default`, the profile that
   root's `~/.nix-profile` links to. It is owned by root and outside `/root`, so a person's login
   shell and tools resolve there. The group's `sudo` uses its `bin` and `sbin` on `secure_path`.
@@ -217,8 +217,8 @@ the person.
   `NIX_REMOTE=daemon`, and `sudo` keeps it. The image's entrypoint,
   `/usr/local/bin/sealant-nix-boot`, starts `nix-daemon`, waits up to 10 seconds for it to answer,
   then runs `sealantd boot`. If the daemon does not answer, the entrypoint prints a warning and the
-  workspace starts anyway: root's nix still works, and a person's nix commands fail until the
-  daemon runs.
+  workspace starts anyway: root's nix still works, and a person's nix commands fail until the daemon
+  runs.
 
 ## Custom base images
 
