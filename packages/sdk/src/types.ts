@@ -1131,11 +1131,14 @@ export interface Workspace {
    * Rejects with `workspace_ready_timeout` past the readiness bound, `workspace_image_build_timeout`
    * past the image-build bound (the caller's, or the control plane's own), `workspace_image_build_stalled` when the build stopped making
    * progress (with the step it stopped on), and `workspace_not_ready` when the launch ended
-   * otherwise (with the control plane's reason). When the handle came from
-   * `workspaces.create()` and `ready()` gives up on a bound, a stop is requested before the error
-   * is thrown, so an abandoned launch does not keep running to its cap; the error says whether the
-   * request was accepted (not that the workspace stopped). Options given here win over the ones
-   * given to `create()`.
+   * otherwise (with the control plane's reason; a runtime's `unsupported-runtime-requirement`
+   * refusal is one). A per-person launch the worker refused for its owner map rejects with the
+   * refusal's own code: `owner-map-unsupported` when the image cannot apply the owner map,
+   * `owner-map-unverified` when Core cannot tell whether it does.
+   * When the handle came from `workspaces.create()` and `ready()` gives up on a bound, a stop is
+   * requested before the error is thrown, so an abandoned launch does not keep running to its cap;
+   * the error says whether the request was accepted (not that the workspace stopped). Options given
+   * here win over the ones given to `create()`.
    */
   ready(options?: WorkspaceReadyOptions): Promise<this>;
   /**

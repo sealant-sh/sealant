@@ -143,7 +143,10 @@ phase. When `ready()` gives up on a bound for a workspace this handle created, i
 first and says whether the request was accepted. A stop while the image is still being built cancels
 the launch: the build job fails (`launch-stopped`), the worker building it stops, nothing boots, and
 the workspace reads `cancelled`. A launch that fails on the control plane rejects with
-`workspace_not_ready` and the control plane's reason. A control plane that predates launch phases
+`workspace_not_ready` and the control plane's reason, a runtime's `unsupported-runtime-requirement`
+refusal included. A launch the worker refused because its image cannot apply the owner map, or
+because Core cannot tell whether it does, rejects with the refusal's own code,
+`owner-map-unsupported` or `owner-map-unverified`. A control plane that predates launch phases
 reports none; `readyTimeoutMs` then bounds the whole wait, image build included.
 
 An image is built once per plan (the rendered Containerfile): a later launch of the same plan reuses

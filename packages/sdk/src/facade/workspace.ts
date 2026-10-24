@@ -103,6 +103,15 @@ export const toRuntimeInfo = (runtime: WireWorkspaceRuntime): WorkspaceRuntimeIn
 // concurrent stop while ready() polls must surface immediately, not as a 10-minute timeout.
 // "retained" too: the executor ended and is kept for recovery; it never becomes ready.
 const FAILED_STATUSES = new Set<WorkspaceStatus>(["failed", "cancelled", "stopped", "retained"]);
+const OWNER_MAP_REFUSAL_CODES = new Set(["owner-map-unsupported", "owner-map-unverified"]);
+
+const readyFailureCode = (code: string | undefined): string => {
+  if (code === "image-build-stalled") return "workspace_image_build_stalled";
+  if (code === "image-build-timeout") return "workspace_image_build_timeout";
+  if (code !== undefined && OWNER_MAP_REFUSAL_CODES.has(code)) return code;
+  return "workspace_not_ready";
+};
+
 const READY_POLL_INTERVAL_MS = 2_000;
 /**
  * `ready()` looks again soon, then less often: a Docker launch is ready in about four seconds, and
@@ -676,14 +685,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
           const reason = details.error === undefined ? "" : `: ${details.error.message}`;
           throw new SealantError(
             `Workspace ${init.id} reached terminal status "${details.status}" before becoming ready${reason}`,
-            {
-              code:
-                details.error?.code === "image-build-stalled"
-                  ? "workspace_image_build_stalled"
-                  : details.error?.code === "image-build-timeout"
-                    ? "workspace_image_build_timeout"
-                    : "workspace_not_ready",
-            },
+            { code: readyFailureCode(details.error?.code) },
           );
         }
 

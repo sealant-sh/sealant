@@ -164,6 +164,27 @@ describe("workspace.ready() timeout", () => {
   });
 });
 
+describe("workspace.ready() failure codes", () => {
+  it.each([
+    [
+      "owner-map-unsupported",
+      "owner-map-unsupported",
+      "The image's sealantd does not restore files per person.",
+    ],
+    ["owner-map-unverified", "owner-map-unverified", "Core could not read the image's probe."],
+    ["executor-launch-failed", "workspace_not_ready", "boom"],
+  ])(
+    "rejects a launch the control plane failed with %s as %s, with its reason",
+    async (code, expected, message) => {
+      const stub = makeStub(() => details({ status: "failed", error: { code, message } }));
+      await expect(workspaceFor(stub.client).ready()).rejects.toMatchObject({
+        code: expected,
+        message: expect.stringContaining(message),
+      });
+    },
+  );
+});
+
 describe("workspace.ready() by phase: an image build does not spend the readiness bound", () => {
   afterEach(() => {
     vi.useRealTimers();
