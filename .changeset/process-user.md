@@ -6,7 +6,7 @@
 A process runs as a person's Linux user (Mend ADR 0016):
 
 - `exec(argv, { user })` and `sessions.open(argv, { user })` now start the process as that user,
-  through the workspace's sealantd (`exec.user`, 0.20.0-next.150 and later): their uid, groups,
+  through the workspace's sealantd (`exec.user`, 0.20.0 and later): their uid, groups,
   `HOME`, umask 0002, a private `TMPDIR` and `XDG_RUNTIME_DIR`, the image's person environment, and
   none of the daemon's logins. Only a person in Mend's range (a uid in 40001–49999 whose primary
   group is `mend`, never root), on a workspace whose sealantd reports `exec.user`. Anything else is
