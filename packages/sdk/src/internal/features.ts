@@ -36,6 +36,7 @@ export const toFeatures = (index: SystemIndexResponse): SealantFeatures => {
     personBinding: features?.personBinding === true,
     sshKeyRemovalEndsConnections: features?.sshKeyRemovalEndsConnections === true,
     connectedAccountDefaults: features?.connectedAccountDefaults === true,
+    kubernetesPersonLayout: features?.kubernetesPersonLayout === true,
   };
 };
 

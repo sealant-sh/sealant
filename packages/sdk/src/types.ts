@@ -1485,6 +1485,12 @@ export interface SealantFeatures {
    * `default`.
    */
   readonly connectedAccountDefaults: boolean;
+  /**
+   * `ownerMap` is taken on Kubernetes (runc): each person's `sudo` works in the Pod, and images the
+   * cluster builds record the probe a per-person launch checks. From an older control plane a
+   * create with `ownerMap` on Kubernetes is refused.
+   */
+  readonly kubernetesPersonLayout: boolean;
 }
 
 /** A published workspace image. */

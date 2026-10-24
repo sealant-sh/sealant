@@ -533,6 +533,7 @@ describe("the control plane's features", () => {
       personBinding: true,
       sshKeyRemovalEndsConnections: true,
       connectedAccountDefaults: true,
+      kubernetesPersonLayout: true,
     });
   });
 });
