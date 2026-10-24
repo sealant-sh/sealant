@@ -215,6 +215,7 @@ the person.
 - **One profile for everyone.** Packages go into `/nix/var/nix/profiles/default`, the profile that
   root's `~/.nix-profile` links to. It is owned by root and outside `/root`, so a person's login
   shell and tools resolve there. The group's `sudo` uses its `bin` and `sbin` on `secure_path`.
+  Root's shell is set in `/etc/passwd`, as on the other families; the image no longer sets `SHELL`.
 - **A person's own profile.** `nix profile add` run as a person installs into their
   `~/.nix-profile`. `/etc/profile`, `/etc/bashrc` and `/etc/zshenv` put its `bin` first on `PATH`,
   so a login shell (`bash -l`, `sh -l` or `zsh -l`, including `bash -lc` and `sh -lc`), an
@@ -229,6 +230,9 @@ the person.
   warning and the workspace starts anyway: root's nix still works, and a person's nix commands fail
   until the daemon runs. Nothing restarts a daemon that stops later. A MicroVM workspace starts
   `sealantd boot` itself, not the image's entrypoint, so there the daemon does not run.
+- **No downloaded toolchain binaries.** A binary built for other Linux systems, such as the `rustc`
+  that `rustup` installs or the `node` that `nvm` installs, does not run on nix: it finds no `libz`
+  or `libstdc++`. Install such tools with nix.
 
 ## Custom base images
 
