@@ -180,6 +180,15 @@ and `sealantd boot` applies dotfiles/chowns), `seccompProfile: RuntimeDefault`. 
 restricted-PSS compliant (root user); the workspace namespace needs
 `pod-security.kubernetes.io/enforce: baseline` (or privileged when Docker is enabled).
 
+A per-person Pod (a capture source whose owner map names at least one person, sealantd's own rule)
+differs in two fields: `allowPrivilegeEscalation: true`, so the kubelet does not set
+no-new-privileges and each person's setuid `sudo` works, and `FSETID` added to the capabilities, so
+root's `chmod 2775` on the `mend` group's directories keeps the setgid bit. Both are allowed at
+baseline. `hostUsers` stays tied to the Docker service. The adapter refuses an owner map under
+gVisor (`ociRuntime: "runsc"`). The image builder reads each image's probe back with a one-container
+Job on the pushed digest (`cat /etc/sealant/image-probe.json`, non-root, no escalation, drop `ALL`,
+read-only root), labelled `app.kubernetes.io/component=image-probe` and deleted once read.
+
 Workspace-scoped Docker (`tooling.services.docker`, operator-gated by `SEALANT_K8S_DOCKER_ENABLED`):
 the same rootless `docker:*-dind-rootless` daemon the Docker adapter runs, as a native sidecar (init
 container, `restartPolicy: Always`, held by a `docker info` startup probe) inside a

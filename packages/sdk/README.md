@@ -359,10 +359,13 @@ const workspace = await sealant.workspaces.create({
   are one directory name (letters, digits, `.`, `_`, `-`, at most 128, not starting with `.` or
   `-`), no id and no uid twice, at most 256 people.
 - Launched only on an image whose probe reports `restore.owner_map` from its sealantd
-  (`personLayout`); on any other image, or one with no probe, the launch fails with
-  `owner-map-unsupported` before anything starts. Refused at create on Cloudflare, and on
-  Kubernetes, whose Pods run with `allowPrivilegeEscalation: false`, so no person's `sudo` could
-  work there.
+  (`personLayout`). On an image whose sealantd does not report it, the launch fails with
+  `owner-map-unsupported` before anything starts; on one with no probe, or a probe Core cannot read,
+  it fails with `owner-map-unverified`. Refused at create on Cloudflare. On Kubernetes it runs under
+  runc: a per-person Pod may escalate, so each person's `sudo` works, and the cluster's image
+  builder reads the probe back from the pushed image. Under gVisor (`ociRuntime: "runsc"`) it is
+  refused. `features().kubernetesPersonLayout` says whether the control plane takes it on
+  Kubernetes.
 - The map is the executor's for its life: the daemon reads it at boot. A standby's claim
   (`capture.replan()`) and a recovery restore under the map it booted with. Pass
   `capture.replan({ expectedOwnerMap })` (or `null` for none) to have the claim refused
