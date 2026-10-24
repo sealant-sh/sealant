@@ -26,6 +26,7 @@ import { Duplex } from "node:stream";
 
 import type { ExecutorOrigin } from "@sealant/db";
 import {
+  openForwardConnection,
   SealantClient,
   SealantError as SdkSealantError,
   type Channel,
@@ -45,6 +46,13 @@ import {
 import { Context, Effect, Layer, Schema, Stream } from "effect";
 import type * as Scope from "effect/Scope";
 import { WebSocket, createWebSocketStream } from "ws";
+
+export {
+  FORWARD_BINDING_REFUSALS,
+  FORWARD_CONNECT_REASONS,
+  type ForwardBindingRefusal,
+  type ForwardConnectReason,
+} from "@sealant/runtime-protocol";
 
 // ---------------------------------------------------------------------------------------------
 // Targets
@@ -1247,6 +1255,35 @@ export interface SealantRuntimeService {
   readonly connect: (
     target: SealantTarget,
   ) => Effect.Effect<SealantSession, SealantError, Scope.Scope>;
+  readonly openForwardConnection: (
+    target: SealantTarget,
+    options: SealantForwardConnectionOptions,
+  ) => Effect.Effect<SealantForwardConnection, SealantError, Scope.Scope>;
+}
+
+export interface SealantForwardConnectionOptions {
+  readonly host: SealantForwardHost;
+  readonly port: number;
+  readonly highWaterMarkBytes: number;
+}
+
+export type SealantForwardClose =
+  | { readonly kind: "remote"; readonly end: { readonly error?: string | undefined } }
+  | { readonly kind: "local" }
+  | { readonly kind: "error"; readonly error: Error };
+
+export interface SealantForwardChannel extends AsyncIterable<Uint8Array> {
+  /** False once the connection's outbound buffer is full; the bytes are queued all the same. */
+  write(data: Uint8Array): boolean;
+  readonly isOutboundClosed: boolean;
+  drained(): Promise<void>;
+  end(): void;
+  destroy(): void;
+  readonly closed: Promise<SealantForwardClose>;
+}
+
+export interface SealantForwardConnection {
+  readonly channel: SealantForwardChannel;
 }
 
 export class SealantRuntime extends Context.Service<SealantRuntime, SealantRuntimeService>()(
@@ -1485,7 +1522,9 @@ const makeSession = (client: SealantClient, connection: ControlConnection): Seal
     withSealantError(
       connection,
       "openForward",
-      Effect.tryPromise(() => client.openForward({ host: host ?? "127.0.0.1", port, protocol: protocol ?? "tcp" })),
+      Effect.tryPromise(() =>
+        client.openForward({ host: host ?? "127.0.0.1", port, protocol: protocol ?? "tcp" }),
+      ),
     ).pipe(Effect.map(({ result, channel }) => ({ channelId: result.channelId, channel }))),
 
   closeForward: (channelId) =>
@@ -1640,6 +1679,21 @@ const makeSealantRuntime = (transport: SealantTransportService): SealantRuntimeS
       );
 
       return makeSession(client, connection);
+    }),
+
+  openForwardConnection: (target, options) =>
+    Effect.gen(function* () {
+      const duplex = yield* transport.open(target);
+      const { channel } = yield* Effect.acquireRelease(
+        withSealantError(
+          watchConnection(duplex),
+          "openForward",
+          Effect.tryPromise(() => openForwardConnection(duplex, { ...options, protocol: "tcp" })),
+        ),
+        (opened) => Effect.sync(() => opened.channel.destroy()),
+        { interruptible: true },
+      );
+      return { channel };
     }),
 });
 

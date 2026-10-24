@@ -1644,6 +1644,7 @@ describe("an observation cut off at the deadline (e2e 8 F9)", () => {
     const pending = Layer.succeed(SealantRuntime, {
       connect: () =>
         Effect.succeed({ captureStatus: () => Effect.never } as unknown as SealantSession),
+      openForwardConnection: () => Effect.die("forwards are unused in drain tests"),
     });
     const fiber = Effect.runFork(
       captureStatusAnswer(TARGET, recorder, API_ROUND_TRIP_MS).pipe(Effect.provide(pending)),

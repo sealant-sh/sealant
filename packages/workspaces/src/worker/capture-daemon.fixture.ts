@@ -149,6 +149,9 @@ export const fakeCaptureDaemon = (script: readonly CaptureDaemonScriptEntry[]) =
     calls,
     flushRequests,
     connect,
-    layer: Layer.succeed(SealantRuntime, { connect }),
+    layer: Layer.succeed(SealantRuntime, {
+      connect,
+      openForwardConnection: () => Effect.die("forwards are unused in capture tests"),
+    }),
   };
 };

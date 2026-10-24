@@ -83,7 +83,10 @@ const world = () => {
     streamRawLog: () => Stream.empty,
   };
   const layer = Layer.mergeAll(
-    Layer.succeed(SealantRuntime, { connect: () => Effect.succeed(session) }),
+    Layer.succeed(SealantRuntime, {
+      connect: () => Effect.succeed(session),
+      openForwardConnection: () => Effect.die("forwards are unused here"),
+    }),
     Layer.succeed(TelemetrySink, sink),
     Layer.succeed(RunRepo, {
       markRunCompleted: (input: Record<string, unknown>) =>

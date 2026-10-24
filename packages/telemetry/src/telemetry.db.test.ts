@@ -156,7 +156,10 @@ const stubSession: SealantSession = {
   events: Stream.fromIterable(EVENTS),
 };
 
-const stubRuntime: SealantRuntimeService = { connect: () => Effect.succeed(stubSession) };
+const stubRuntime: SealantRuntimeService = {
+  connect: () => Effect.succeed(stubSession),
+  openForwardConnection: () => Effect.die("unused in test"),
+};
 
 // --- Attribution scenario: a second runtime whose stream carries execution-tagged events -------
 
@@ -186,7 +189,10 @@ const makeStubRuntime = (events: readonly EventEnvelope[], runtimeId: string) =>
     health: Effect.succeed(create(HealthReportSchema, { runtimeId, state: 2 })),
     events: Stream.fromIterable(events),
   };
-  const runtime: SealantRuntimeService = { connect: () => Effect.succeed(session) };
+  const runtime: SealantRuntimeService = {
+    connect: () => Effect.succeed(session),
+    openForwardConnection: () => Effect.die("unused in test"),
+  };
   return runtime;
 };
 
