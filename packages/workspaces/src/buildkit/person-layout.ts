@@ -536,12 +536,11 @@ export type PersonLayoutSupport = {
 };
 
 /**
- * Whether an image can run the person layout, from its probe and what the runtime adds.
- * `missing` holds stable codes: `setuid-sudo`, `sudo-no-new-privileges` (the probe ran under
- * `no_new_privs`, or the runtime sets it: Kubernetes pods run with `allowPrivilegeEscalation:
- * false`), `useradd`, `groupadd` (no `mend` group and nothing to add it with), `sudoers` (no rule
- * and no `includedir` to add one in), `setfacl`, `passwd-writable`, `mend-group` (its name or gid
- * taken), `reserved-ids`, `setpriv` and `flock` (every write into a person's home needs them;
+ * Whether an image can run the person layout, from its probe. `missing` holds stable codes:
+ * `setuid-sudo`, `sudo-no-new-privileges` (the probe ran under `no_new_privs`), `useradd`,
+ * `groupadd` (no `mend` group and nothing to add it with), `sudoers` (no rule and no `includedir`
+ * to add one in), `setfacl`, `passwd-writable`, `mend-group` (its name or gid taken),
+ * `reserved-ids`, `setpriv` and `flock` (every write into a person's home needs them;
  * `flock` is unknown on images probed before it was recorded), `git-safe-directory` (git does not
  * trust `/workspace/repo` whoever owns it, so under an owner map sealantd's restore fails; unknown on
  * images probed before it was recorded), and `sealantd:<capability>` for each capability a sealantd that answers
@@ -549,16 +548,11 @@ export type PersonLayoutSupport = {
  * answered with something this reader cannot read. ACL support on `/workspace` is the runtime's to
  * report.
  */
-export const imagePersonLayoutSupport = (
-  probe: WorkspaceImageProbe,
-  runtime: { readonly noNewPrivileges?: boolean } = {},
-): PersonLayoutSupport => {
+export const imagePersonLayoutSupport = (probe: WorkspaceImageProbe): PersonLayoutSupport => {
   const missing: string[] = [];
   const unknown: string[] = [];
   if (!probe.tools.sudo || !probe.tools.sudoSetuid) missing.push("setuid-sudo");
-  if (probe.noNewPrivileges || runtime.noNewPrivileges === true) {
-    missing.push("sudo-no-new-privileges");
-  }
+  if (probe.noNewPrivileges) missing.push("sudo-no-new-privileges");
   if (!probe.tools.useradd) missing.push("useradd");
   if (probe.mendGroup === "absent" && !probe.tools.groupadd) missing.push("groupadd");
   if (!probe.sudoersMend && !probe.sudoersIncludesDir) missing.push("sudoers");
