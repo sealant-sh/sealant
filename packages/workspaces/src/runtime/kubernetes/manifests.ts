@@ -6,6 +6,9 @@
  *   - the workspace container is NOT privileged, cannot escalate, drops every capability and adds
  *     back only what `sealantd boot` needs to chown/apply dotfiles and signal its children, and
  *     runs under the runtime default seccomp profile;
+ *   - a per-person executor (`capturePerPerson`) may escalate, so each person's setuid `sudo` works
+ *     (the kubelet would otherwise set no-new-privileges), and adds `FSETID`, without which root's
+ *     `chmod 2775` on the `mend` group's directories silently drops the setgid bit;
  *   - it still runs as root (the images do), so this is baseline, not restricted, Pod Security;
  *   - no ServiceAccount token is mounted; no secret value ever appears in the Pod spec — secret
  *     env arrives through `valueFrom.secretKeyRef`, the boot secret file through a projected
@@ -31,6 +34,7 @@ import {
   CAPTURE_HARNESS_HOME_ENV,
   CAPTURE_SOURCE_ONLY_ENV,
   captureOwnerMapEnv,
+  capturePerPerson,
   captureSourceEnv,
 } from "../capture-source.js";
 import { dockerdRegistryMirrorArgs } from "../docker-registry-mirrors.js";
@@ -586,6 +590,7 @@ export const buildPod = (build: BuildPodInput): V1Pod => {
     volumeMounts.push({ name: "launch", mountPath: LAUNCH_MOUNT_PATH, readOnly: true });
   }
   const dockerService = wantsDockerService(input.blueprint);
+  const perPerson = capturePerPerson(input.blueprint.sources.workspace);
   if (dockerService) {
     volumes.push({ name: "docker-run", emptyDir: {} });
     volumes.push({ name: "docker-graph", emptyDir: { sizeLimit: config.docker.graphSize } });
@@ -606,9 +611,12 @@ export const buildPod = (build: BuildPodInput): V1Pod => {
     },
     securityContext: {
       privileged: false,
-      allowPrivilegeEscalation: false,
+      allowPrivilegeEscalation: perPerson,
       readOnlyRootFilesystem: false,
-      capabilities: { drop: ["ALL"], add: [...WORKSPACE_CAPABILITIES] },
+      capabilities: {
+        drop: ["ALL"],
+        add: [...WORKSPACE_CAPABILITIES, ...(perPerson ? ["FSETID"] : [])],
+      },
     },
   };
 

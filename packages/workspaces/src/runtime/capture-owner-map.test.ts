@@ -325,18 +325,33 @@ describe("the owner map in the boot env", () => {
     ).toBe("");
   });
 
-  it("is refused on Cloudflare and on Kubernetes, where no person's sudo could work", () => {
+  it("is refused on Cloudflare and under gVisor on Kubernetes, and taken under runc", () => {
     const blueprint = captureLaunch({ ownerMap: OWNER_MAP }).blueprint;
     expect(supportForCloudflare({ blueprint })).toMatchObject({
       supported: false,
       reason: "unsupported-runtime-requirement",
     });
+    const gvisor = { ...k8sConfig, gvisorRuntimeClass: "gvisor" };
+    const underRunsc = {
+      ...blueprint,
+      runtime: { ...blueprint.runtime, ociRuntime: "runsc" as const },
+    };
     for (const id of ["k8s", "k3s"] as const) {
-      expect(supportForKubernetes(id, k8sConfig, { blueprint })).toMatchObject({
+      expect(supportForKubernetes(id, gvisor, { blueprint })).toEqual({ supported: true });
+      const refused = supportForKubernetes(id, gvisor, { blueprint: underRunsc });
+      expect(refused).toMatchObject({
         supported: false,
         reason: "unsupported-runtime-requirement",
-        message: expect.stringContaining("allowPrivilegeEscalation: false"),
+        message: expect.stringContaining("ociRuntime 'runc'"),
       });
+      // Mend 0.36 reads these words as a permanent "no" for the image; a runsc refusal is not one.
+      const message = refused.supported ? "" : refused.message;
+      expect(message).not.toMatch(/is not available on Kubernetes|names an owner map/);
+      expect(
+        supportForKubernetes(id, gvisor, {
+          blueprint: { ...captureLaunch().blueprint, runtime: underRunsc.runtime },
+        }),
+      ).toEqual({ supported: true });
     }
   });
 });

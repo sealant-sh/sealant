@@ -195,14 +195,6 @@ export const liveControlChannel: ControlChannel = {
 void StreamKind;
 
 /** The support decision, pure. */
-/**
- * Why a per-person executor (an owner map) is refused on Kubernetes: its Pods run with
- * `allowPrivilegeEscalation: false`, which the kubelet enforces as no-new-privileges, so no
- * person's `sudo` could work there whatever the daemon decides.
- */
-export const KUBERNETES_OWNER_MAP_REFUSAL =
-  "An owner map (a per-person executor) is not available on Kubernetes: workspace Pods run with allowPrivilegeEscalation: false, so the kubelet sets no-new-privileges and no person's sudo could work.";
-
 export const supportForKubernetes = (
   id: KubernetesAdapterId,
   config: Pick<
@@ -227,11 +219,16 @@ export const supportForKubernetes = (
     };
   }
   const source = input.blueprint.sources.workspace;
-  if (source.kind === "capture" && source.ownerMap !== undefined) {
+  if (
+    source.kind === "capture" &&
+    source.ownerMap !== undefined &&
+    input.blueprint.runtime.ociRuntime === "runsc"
+  ) {
     return {
       supported: false,
       reason: "unsupported-runtime-requirement",
-      message: KUBERNETES_OWNER_MAP_REFUSAL,
+      message:
+        "A per-person executor (source.ownerMap) runs under runc on Kubernetes, not gVisor: launch it with ociRuntime 'runc', or without an owner map.",
     };
   }
   if (!input.blueprint.runtime.network.outbound) {

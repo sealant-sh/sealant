@@ -319,25 +319,13 @@ export const parseWorkspaceSpec = (spec: unknown) => {
     );
   }
   // An owner map makes the executor a per-person one; only the capture source states it, and only
-  // where its people's sudo can work and an image can report that its daemon applies it: not
-  // Cloudflare's sandboxes, not Kubernetes Pods (no-new-privileges enforced by the kubelet).
+  // where an image can report that its daemon applies it: not Cloudflare's sandboxes.
   const source = parsed.data.sources.workspace;
   if (source.kind === "capture" && source.ownerMap !== undefined && family === "cloudflare") {
     return Effect.fail(
       new WorkspaceBadRequestError({
         message:
           "source.ownerMap is not available on the Cloudflare runtime: its sandboxes record no per-person capability.",
-      }),
-    );
-  }
-  if (
-    source.kind === "capture" &&
-    source.ownerMap !== undefined &&
-    (family === "k8s" || family === "k3s")
-  ) {
-    return Effect.fail(
-      new WorkspaceBadRequestError({
-        message: `source.ownerMap is not available on the ${family} runtime: workspace Pods run with allowPrivilegeEscalation: false, so the kubelet sets no-new-privileges and no person's sudo could work.`,
       }),
     );
   }

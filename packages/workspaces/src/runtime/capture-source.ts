@@ -145,3 +145,8 @@ export const captureOwnerMapEnv = (
           source.ownerMap === undefined ? "" : encodeCaptureOwnerMap(source.ownerMap),
         ],
       ];
+
+/** sealantd's `privilege_posture`: a map that names someone leaves no-new-privileges unset. */
+export const capturePerPerson = (
+  source: RuntimeAdapterLaunchInput["blueprint"]["sources"]["workspace"],
+): boolean => source.kind === "capture" && (source.ownerMap?.people.length ?? 0) > 0;
