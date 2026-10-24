@@ -7,13 +7,13 @@ description:
 
 A workspace can be used by more than one person at a time. Mend runs each person's processes as a
 Linux user of their own, with their own home, logins and credentials. The managed images (`fedora`,
-`arch`, `ubuntu`) carry what that needs. Users themselves are not made in the image: whoever starts
+`arch`, `ubuntu`, `nix`) carry what that needs. Users themselves are not made in the image: whoever starts
 the workspace makes them when it starts.
 
 None of it changes the environment of a workspace run by one person as root. The image sets no new
 environment variable and no `PATH` entry, and root's tools keep their usual locations. (Beyond the
-environment, root sees `safe.directory = *` in `/etc/gitconfig`, and Arch and Ubuntu images now
-carry `sudo`.) What points a person's tools at shared locations is a file `sealantd` applies to
+environment, root sees `safe.directory = *` in `/etc/gitconfig`, and Arch, Ubuntu and nix images
+now carry `sudo`.) What points a person's tools at shared locations is a file `sealantd` applies to
 every process it runs as a user.
 
 ## What a managed image carries
@@ -24,7 +24,8 @@ every process it runs as a user.
   `secure_path`, so `sudo npm i -g` lands where a person's own `npm i -g` would. This is not
   isolation: anyone in the group, and their agents, can read and change anyone's files.
 - **`useradd` and the ACL tools** (`setfacl`, `getfacl`) on every family: Sealant adds `sudo` on
-  Arch and Ubuntu, `acl` on Ubuntu and Fedora, and `util-linux` on Fedora.
+  Arch and Ubuntu, `acl` on Ubuntu and Fedora, `util-linux` on Fedora, and all three on nix, with
+  `gnused` and `getent`.
 - **Shared toolchain and cache directories** under `/opt` and `/var/cache`, empty, owned by root and
   `mend`, mode 2775, listed one per line in `/etc/sealant/person-shared-dirs`. `sealantd` gives them
   the group's default ACL when the workspace starts (an ACL set while the image builds does not
@@ -197,11 +198,27 @@ the person.
 - **Nothing kept.** Archives are staged root-only under `/run/sealant-dotfiles` for the apply and
   removed once it answers; a repository is cloned with no credential.
 
-## Nix images take one person
+## Nix images
 
-`nix` images get only the probe step, and run every process as root, as before. Their `/etc/passwd`
-links into the read-only store, so no user can be added; the store cannot hold a setuid `sudo`; and
-nix as a non-root user needs the nix daemon. A workspace on a `nix` image serves one person.
+`nix` images carry the same layout, plus what the `nixos/nix` base lacks:
+
+- **Writable account files.** The base links `/etc/passwd`, `/etc/group` and `/etc/shadow` into the
+  read-only store. The image replaces each link with a regular file owned by root (0644, and 0600
+  for `shadow`) that keeps every entry, including the `nixbld` users the nix daemon builds as.
+  `/home` is created.
+- **A setuid `sudo`.** The store cannot hold a setuid file, so `/usr/local/bin/sudo` is a root-owned
+  copy of the profile's `sudo`, mode 4755. The image writes `/etc/sudoers`, which includes
+  `/etc/sudoers.d`, and `/etc/pam.d/sudo`. The build runs `visudo -c` and `sudo -n true` and fails if
+  either fails.
+- **One profile for everyone.** Packages go into `/nix/var/nix/profiles/default`, the profile that
+  root's `~/.nix-profile` links to. It is owned by root and outside `/root`, so a person's login
+  shell and tools resolve there. The group's `sudo` uses its `bin` and `sbin` on `secure_path`.
+- **The nix daemon.** Only root can write the store, so the person environment sets
+  `NIX_REMOTE=daemon`, and `sudo` keeps it. The image's entrypoint,
+  `/usr/local/bin/sealant-nix-boot`, starts `nix-daemon`, waits up to 10 seconds for it to answer,
+  then runs `sealantd boot`. If the daemon does not answer, the entrypoint prints a warning and the
+  workspace starts anyway: root's nix still works, and a person's nix commands fail until the
+  daemon runs.
 
 ## Custom base images
 
