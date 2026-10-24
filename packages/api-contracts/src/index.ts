@@ -13,6 +13,7 @@ export * from "./core-api/request-refusal.js";
 export * from "./core-api/sessions.js";
 export * from "./core-api/access-tokens.js";
 export * from "./core-api/workspaces.js";
+export * from "./core-api/workspace-forward.js";
 export * from "./core-api/ssh-keys.js";
 export * from "./core-api/system.js";
 export * from "./core-api/users.js";
