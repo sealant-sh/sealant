@@ -71,21 +71,26 @@ kubectl config use-context "kind-$cluster" >/dev/null
 # nested container inside that sidecar's daemon.
 step "removing kind's dmi overmounts and read-only /sys so user-namespaced Pods can start"
 for node in $(kind get nodes --name "$cluster"); do
-  docker exec "$node" sh -ec '
+  docker exec "$node" sh -c '
+    warn() { echo "warning: $(hostname): $*" >&2; }
     for f in product_uuid product_name; do
       while grep -q " /sys/devices/virtual/dmi/id/$f " /proc/self/mountinfo; do
-        umount "/sys/devices/virtual/dmi/id/$f"
+        umount "/sys/devices/virtual/dmi/id/$f" || { warn "could not unmount dmi $f"; break; }
       done
     done
-    mount -o remount,rw /sys
-    if jq -e ".hooks.createContainer" /etc/containerd/cri-base.json >/dev/null; then
-      jq "del(.hooks.createContainer)" /etc/containerd/cri-base.json > /tmp/cri-base.json
-      mv /tmp/cri-base.json /etc/containerd/cri-base.json
-      systemctl restart containerd
+    mount -o remount,rw /sys || warn "could not remount /sys read-write"
+    cri=/etc/containerd/cri-base.json
+    if ! command -v jq >/dev/null; then
+      warn "no jq, so the createContainer hook in $cri stays"
+    elif jq -e ".hooks.createContainer" "$cri" >/dev/null 2>&1; then
+      { jq "del(.hooks.createContainer)" "$cri" > /tmp/cri-base.json \
+        && mv /tmp/cri-base.json "$cri" && systemctl restart containerd; } \
+        || warn "could not remove the createContainer hook from $cri"
     fi
-  '
+  ' || echo "warning: the user-namespace fixes did not run on $node" >&2
 done
-kubectl wait --for=condition=Ready node --all --timeout=180s
+kubectl wait --for=condition=Ready node --all --timeout=180s \
+  || echo "warning: not every node is Ready after the user-namespace fixes" >&2
 
 step "rolling out cert-manager (images from quay.io)"
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.17.2/cert-manager.yaml
