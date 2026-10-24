@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -680,16 +680,19 @@ describe("the nix boot wrapper", () => {
     const root = await mkdtemp(join(dir ?? tmpdir(), "run-"));
     const bin = join(root, "bin");
     const state = join(root, "state");
+    const log = join(root, "log");
     await mkdir(bin);
+    await mkdir(log);
     await mkdir(join(state, "daemon-socket"), { recursive: true });
     await writeFile(join(state, "daemon-socket", "socket"), "");
     const write = async (name: string, body: string) => {
       await writeFile(join(bin, name), `#!/bin/sh\n${body}\n`);
       await chmod(join(bin, name), 0o755);
     };
-    await write("nix-daemon", stubs.daemon);
+    await write("nix-daemon", `echo "$$" > "$NIX_STATE_DIR/daemon.pid"\n${stubs.daemon}`);
     await write("nix", stubs.nix);
     await write("sealantd", `printf '%s\\n' "$@"`);
+    const started = Date.now();
     const outcome = await execFileAsync(
       "/bin/sh",
       ["-c", NIX_BOOT_SCRIPT.join("\n"), "sealant-nix-boot", "--flag", "two words"],
@@ -697,32 +700,51 @@ describe("the nix boot wrapper", () => {
         env: {
           PATH: `${bin}:${process.env["PATH"] ?? "/usr/bin:/bin"}`,
           NIX_STATE_DIR: state,
+          NIX_LOG_DIR: log,
           SEALANT_BOOT_SEALANTD: join(bin, "sealantd"),
         },
       },
     );
+    const seconds = (Date.now() - started) / 1000;
+    const daemonPid = Number(await readFile(join(state, "daemon.pid"), "utf8"));
+    try {
+      process.kill(daemonPid);
+    } catch {}
     const socketLeft = await stat(join(state, "daemon-socket", "socket")).then(
       () => true,
       () => false,
     );
-    return { ...outcome, socketLeft };
+    const daemonLog = await readFile(join(log, "nix-daemon.log"), "utf8");
+    return { ...outcome, seconds, socketLeft, daemonLog };
   };
 
   it("removes a stale socket, waits for the daemon to answer, then runs sealantd boot", async () => {
     const outcome = await boot({
-      daemon: 'sleep 0.5; touch "$NIX_STATE_DIR/ready"',
+      daemon: 'echo daemon-started; sleep 0.5; touch "$NIX_STATE_DIR/ready"; exec sleep 60',
       nix: '[ "$NIX_REMOTE" = daemon ] && [ -e "$NIX_STATE_DIR/ready" ]',
     });
 
     expect(outcome.socketLeft).toBe(false);
     expect(outcome.stdout).toBe("boot\n--flag\ntwo words\n");
     expect(outcome.stderr).toBe("");
+    expect(outcome.daemonLog).toBe("daemon-started\n");
   });
 
-  it("still runs sealantd boot, and says so, when the daemon never answers", async () => {
-    const outcome = await boot({ daemon: "exit 1", nix: "exit 1" });
+  it("runs sealantd boot at once, and says so, when the daemon dies at once", async () => {
+    const outcome = await boot({ daemon: "echo no-store >&2; exit 1", nix: "exit 1" });
 
     expect(outcome.stdout).toBe("boot\n--flag\ntwo words\n");
-    expect(outcome.stderr).toContain("nix-daemon did not answer");
+    expect(outcome.stderr).toContain("nix-daemon exited");
+    expect(outcome.daemonLog).toBe("no-store\n");
+    expect(outcome.seconds).toBeLessThan(3);
+  });
+
+  it("runs sealantd boot within the bound when the daemon is up but never answers", async () => {
+    const outcome = await boot({ daemon: "exec sleep 60", nix: "exec sleep 60" });
+
+    expect(outcome.stdout).toBe("boot\n--flag\ntwo words\n");
+    expect(outcome.stderr).toContain("nix-daemon did not answer in 10 s");
+    expect(outcome.seconds).toBeGreaterThanOrEqual(9);
+    expect(outcome.seconds).toBeLessThan(14);
   }, 30_000);
 });

@@ -215,10 +215,12 @@ the person.
   shell and tools resolve there. The group's `sudo` uses its `bin` and `sbin` on `secure_path`.
 - **The nix daemon.** Only root can write the store, so the person environment sets
   `NIX_REMOTE=daemon`, and `sudo` keeps it. The image's entrypoint,
-  `/usr/local/bin/sealant-nix-boot`, starts `nix-daemon`, waits up to 10 seconds for it to answer,
-  then runs `sealantd boot`. If the daemon does not answer, the entrypoint prints a warning and the
-  workspace starts anyway: root's nix still works, and a person's nix commands fail until the daemon
-  runs.
+  `/usr/local/bin/sealant-nix-boot`, starts `nix-daemon`, waits up to 10 seconds for it to answer
+  (each check is cut off after 2), then runs `sealantd boot`. The daemon's output goes to
+  `/nix/var/log/nix/nix-daemon.log`. If the daemon exits or does not answer, the entrypoint prints a
+  warning and the workspace starts anyway: root's nix still works, and a person's nix commands fail
+  until the daemon runs. Nothing restarts a daemon that stops later. A MicroVM workspace starts
+  `sealantd boot` itself, not the image's entrypoint, so there the daemon does not run.
 
 ## Custom base images
 

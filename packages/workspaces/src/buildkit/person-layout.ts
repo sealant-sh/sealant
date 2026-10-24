@@ -466,16 +466,18 @@ export const renderPersonLayoutSteps = (input: {
 export const NIX_BOOT_PATH = "/usr/local/bin/sealant-nix-boot";
 
 /**
- * How {@link NIX_BOOT_PATH} starts the daemon. A daemon that never answers is reported and boot goes
- * on: it fails only a person's nix, while root's nix and everything else work without it.
+ * How {@link NIX_BOOT_PATH} starts the daemon. A daemon that dies or does not answer is reported and
+ * boot goes on: it fails only a person's nix, while root's nix and everything else work without it.
  */
 export const NIX_DAEMON_START: readonly string[] = [
   'rm -f "${NIX_STATE_DIR:-/nix/var/nix}/daemon-socket/socket"',
-  "nix-daemon >/dev/null 2>&1 &",
-  "tries=0",
-  "until NIX_REMOTE=daemon nix --extra-experimental-features nix-command store info >/dev/null 2>&1; do",
-  "  tries=$((tries + 1))",
-  '  if [ "$tries" -ge 50 ]; then echo "sealant: nix-daemon did not answer in 10 s; nix works only for root" >&2; break; fi',
+  'log="${NIX_LOG_DIR:-/nix/var/log/nix}/nix-daemon.log"',
+  'nix-daemon >>"$log" 2>&1 &',
+  "daemon=$!",
+  "deadline=$(($(date +%s) + 10))",
+  "until NIX_REMOTE=daemon timeout -k 1 2 nix --extra-experimental-features nix-command store info >/dev/null 2>&1; do",
+  '  if ! kill -0 "$daemon" 2>/dev/null; then echo "sealant: nix-daemon exited (see $log); nix works only for root" >&2; break; fi',
+  '  if [ "$(date +%s)" -ge "$deadline" ]; then echo "sealant: nix-daemon did not answer in 10 s (see $log); nix works only for root" >&2; break; fi',
   "  sleep 0.2",
   "done",
 ];
