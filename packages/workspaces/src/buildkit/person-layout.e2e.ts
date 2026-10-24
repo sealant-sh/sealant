@@ -299,6 +299,26 @@ setpriv --reuid=alice --regid=mend --init-groups -- env HOME=/home/alice $(grep 
       600_000,
     );
 
+    it.runIf(family === "nix")(
+      "keeps the store output the setuid sudo was copied from",
+      async () => {
+        const outcome = await runScript(
+          imageReference ?? "missing",
+          family,
+          String.raw`
+out=$(readlink /nix/var/nix/gcroots/sealant-sudo)
+echo "root=$out"
+[ "$(sha256sum < /usr/local/bin/sudo)" = "$(sha256sum < "$out/bin/sudo")" ] && echo "copy=same"
+nix-store -q --roots "$out"
+`,
+        );
+        const output = /^root=(\/nix\/store\/[a-z0-9]{32}-sudo-\S+)$/m.exec(outcome.stdout)?.[1];
+        expect(output, outcome.stdout).toBeDefined();
+        expect(outcome.stdout).toContain("copy=same");
+        expect(outcome.stdout).toContain(`/nix/var/nix/gcroots/sealant-sudo -> ${output ?? ""}`);
+      },
+    );
+
     it("still serves one person as root, as today", async () => {
       const outcome = await runScript(
         imageReference ?? "missing",

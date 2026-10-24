@@ -388,8 +388,9 @@ const LAYOUT_INSTALL: Readonly<
       // write. Every entry stays: the daemon builds as the nixbld users.
       'for f in passwd:0644 group:0644 login.defs:0644 shadow:0600 gshadow:0600; do p=/etc/${f%:*}; if [ -L "$p" ]; then cp "$p" "$p.new"; chmod "${f#*:}" "$p.new"; mv -f "$p.new" "$p"; fi; done',
       "mkdir -p /home /usr/local/bin /etc/pam.d",
-      // The store holds no setuid file. The package stays in the profile, which keeps its closure.
-      `install -o root -g root -m 4755 ${NIX_PROFILE}/bin/sudo /usr/local/bin/sudo`,
+      // The store holds no setuid file. The GC root keeps the copied binary's own output, whose
+      // libraries it loads, whatever the profile later drops.
+      `s=$(readlink -f ${NIX_PROFILE}/bin/sudo); install -o root -g root -m 4755 "$s" /usr/local/bin/sudo; ln -sfn "\${s%/bin/sudo}" /nix/var/nix/gcroots/sealant-sudo`,
       writeLines("/etc/sudoers", ["root ALL=(ALL:ALL) ALL", "@includedir /etc/sudoers.d"]),
       "chmod 0440 /etc/sudoers",
       // A NOPASSWD rule still runs PAM's account and session stacks.

@@ -270,7 +270,7 @@ describe("the person layout in the managed images", () => {
     expect(files).toBeLessThan(at("groupadd -g 2375 docker"));
     at("mkdir -p /home /usr/local/bin /etc/pam.d");
     at(
-      "install -o root -g root -m 4755 /nix/var/nix/profiles/default/bin/sudo /usr/local/bin/sudo",
+      's=$(readlink -f /nix/var/nix/profiles/default/bin/sudo); install -o root -g root -m 4755 "$s" /usr/local/bin/sudo; ln -sfn "${s%/bin/sudo}" /nix/var/nix/gcroots/sealant-sudo',
     );
     at("printf '%s\\n' 'root ALL=(ALL:ALL) ALL' '@includedir /etc/sudoers.d' > '/etc/sudoers'");
     at("chmod 0440 /etc/sudoers");

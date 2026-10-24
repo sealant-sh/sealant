@@ -207,9 +207,11 @@ the person.
   for `shadow`) that keeps every entry, including the `nixbld` users the nix daemon builds as.
   `/home` is created.
 - **A setuid `sudo`.** The store cannot hold a setuid file, so `/usr/local/bin/sudo` is a root-owned
-  copy of the profile's `sudo`, mode 4755. The image writes `/etc/sudoers`, which includes
-  `/etc/sudoers.d`, and `/etc/pam.d/sudo`. The build runs `visudo -c` and `sudo -n true` and fails
-  if either fails.
+  copy of the profile's `sudo`, mode 4755. A garbage-collector root,
+  `/nix/var/nix/gcroots/sealant-sudo`, keeps the store output it was copied from, whose libraries it
+  loads, even after the profile drops or upgrades `sudo`. The image writes `/etc/sudoers`, which
+  includes `/etc/sudoers.d`, and `/etc/pam.d/sudo`. The build runs `visudo -c` and `sudo -n true`
+  and fails if either fails.
 - **One profile for everyone.** Packages go into `/nix/var/nix/profiles/default`, the profile that
   root's `~/.nix-profile` links to. It is owned by root and outside `/root`, so a person's login
   shell and tools resolve there. The group's `sudo` uses its `bin` and `sbin` on `secure_path`.
