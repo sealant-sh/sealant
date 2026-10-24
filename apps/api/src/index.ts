@@ -17,6 +17,8 @@ import { CodexInferenceEngineLive } from "./routes/inference/codex-engine.js";
 import { SessionOutputStreamRoute } from "./routes/sessions/sessions.sse.js";
 import { SessionAttachRoute } from "./routes/sessions/sessions.ws.js";
 import { parseAllowedCaptureOrigins } from "./routes/workspaces/credential-destinations.js";
+import { captureUpgradeHeads } from "./routes/workspaces/forward-upgrade.js";
+import { WorkspaceForwardV2Route } from "./routes/workspaces/workspaces.forward-v2.js";
 import { WorkspaceForwardRoute } from "./routes/workspaces/workspaces.ws.js";
 import { env } from "./runtime-env.js";
 import { budgetLimits } from "./services/budget-limits.js";
@@ -248,7 +250,7 @@ const sseLayer = SessionOutputStreamRoute.pipe(HttpRouter.provideRequest(request
 const wsLayer = SessionAttachRoute.pipe(HttpRouter.provideRequest(requestDependenciesLayer));
 
 /** The WS port-forward data plane (workspaces.ws.ts): raw bytes to an in-workspace port. */
-const forwardLayer = WorkspaceForwardRoute.pipe(
+const forwardLayer = Layer.mergeAll(WorkspaceForwardRoute, WorkspaceForwardV2Route).pipe(
   HttpRouter.provideRequest(requestDependenciesLayer),
 );
 
@@ -295,7 +297,9 @@ const authGate = servicePrincipalMiddleware(
 const serverLayer = HttpRouter.serve(appLayer, {
   middleware: (app) => corsMiddleware(authGate(app)),
 }).pipe(
-  Layer.provide(NodeHttpServer.layer(createServer, { port: env.PORT })),
+  Layer.provide(
+    NodeHttpServer.layer(() => captureUpgradeHeads(createServer()), { port: env.PORT }),
+  ),
   Layer.provide(CredentialRedactionLive),
   Layer.provide(ConnectedAccountDefaultsBackfillLive.pipe(Layer.provide(databaseLayer))),
 );

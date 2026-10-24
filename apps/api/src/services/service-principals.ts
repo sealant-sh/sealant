@@ -159,6 +159,24 @@ const isSignedWebhook = (method: string, pathname: string): boolean =>
 const isSessionSurface = (pathname: string): boolean =>
   pathname.startsWith("/v1/sessions") || /^\/v1\/workspaces\/[^/]+\/forward$/.test(pathname);
 
+const refusesAfterUpgrade = (pathname: string): boolean =>
+  /^\/v1\/workspaces\/[^/]+\/forward\/v2$/.test(pathname);
+
+export type Admission =
+  | { readonly kind: "admitted"; readonly principal: RequestPrincipal }
+  | { readonly kind: "unauthorized"; readonly message: string }
+  | { readonly kind: "budget-exceeded"; readonly message: string };
+
+export const ForwardAdmission = Context.Reference<(secret: string | undefined) => Admission>(
+  "@sealant/api/ForwardAdmission",
+  {
+    defaultValue: () => () => ({
+      kind: "unauthorized",
+      message: "This route is served only behind the authentication gate.",
+    }),
+  },
+);
+
 /**
  * What the SSH gateway's shared secret reaches: key and target resolution (whose handlers check
  * the secret again), and the run recorder, `POST /v1/runs` and `PATCH /v1/runs/:runId`, where the
@@ -197,38 +215,64 @@ export const servicePrincipalMiddleware = (
 ) =>
   HttpMiddleware.make((app) =>
     Effect.gen(function* () {
+      const refusedBudget = (subject: string) => {
+        if (rateLimit === undefined) return undefined;
+        const decision = rateDecision(
+          rateLimit.window,
+          "principalRequestsPerMinute",
+          subject,
+          rateLimit.requestsPerMinute,
+          (rateLimit.now ?? Date.now)(),
+        );
+        return decision.allowed ? undefined : decision;
+      };
       const as = (principal: RequestPrincipal, subject: string) => {
-        if (rateLimit !== undefined) {
-          const decision = rateDecision(
-            rateLimit.window,
-            "principalRequestsPerMinute",
-            subject,
-            rateLimit.requestsPerMinute,
-            (rateLimit.now ?? Date.now)(),
+        const refused = refusedBudget(subject);
+        if (refused !== undefined) {
+          const limited: HttpServerResponseType.HttpServerResponse = HttpServerResponse.jsonUnsafe(
+            {
+              _tag: "BudgetExceededError",
+              message: budgetMessage(refused),
+              budget: refused.budget,
+              limit: refused.limit,
+              retryAfterSeconds: refused.retryAfterSeconds,
+            },
+            { status: 429, headers: { "retry-after": String(refused.retryAfterSeconds) } },
           );
-          if (!decision.allowed) {
-            const limited: HttpServerResponseType.HttpServerResponse =
-              HttpServerResponse.jsonUnsafe(
-                {
-                  _tag: "BudgetExceededError",
-                  message: budgetMessage(decision),
-                  budget: decision.budget,
-                  limit: decision.limit,
-                  retryAfterSeconds: decision.retryAfterSeconds,
-                },
-                { status: 429, headers: { "retry-after": String(decision.retryAfterSeconds) } },
-              );
-            return Effect.succeed(limited);
-          }
+          return Effect.succeed(limited);
         }
         return app.pipe(Effect.provideService(CurrentPrincipal, principal));
       };
-      if (!principals.enabled) return yield* as({ kind: "open" }, "open");
+      const admit = (principal: RequestPrincipal, subject: string): Admission => {
+        const refused = refusedBudget(subject);
+        return refused === undefined
+          ? { kind: "admitted", principal }
+          : { kind: "budget-exceeded", message: budgetMessage(refused) };
+      };
       const request = yield* HttpServerRequest.HttpServerRequest;
-      // CORS preflight carries no credential by design; the cors middleware answers it.
-      if (request.method === "OPTIONS") return yield* app;
       const url = new URL(request.url, "http://localhost");
       const pathname = url.pathname;
+      if (refusesAfterUpgrade(pathname)) {
+        return yield* app.pipe(
+          Effect.provideService(ForwardAdmission, (secret) => {
+            if (!principals.enabled) return admit({ kind: "open" }, "open");
+            if (secret === undefined) {
+              return {
+                kind: "unauthorized",
+                message:
+                  "This control plane requires authentication: present a service key or a user access token.",
+              };
+            }
+            const keyIndex = principals.indexOf(secret);
+            return keyIndex === undefined
+              ? admit({ kind: "bearer" }, bearerSubject(secret))
+              : admit({ kind: "service" }, `service:${keyIndex}`);
+          }),
+        );
+      }
+      if (!principals.enabled) return yield* as({ kind: "open" }, "open");
+      // CORS preflight carries no credential by design; the cors middleware answers it.
+      if (request.method === "OPTIONS") return yield* app;
       if (isPublicPath(pathname)) return yield* app;
       if (isSignedWebhook(request.method, pathname)) return yield* app;
       const secret = bearerSecretOf({

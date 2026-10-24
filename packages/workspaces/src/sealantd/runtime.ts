@@ -688,8 +688,31 @@ const unwrapEffectCause = (cause: unknown): unknown => {
   return cause;
 };
 
+/**
+ * Whether a session's control connection has gone. The client fails every request still waiting on
+ * a lost connection with a plain `Error`, so this is what tells that failure apart from a defect.
+ */
+interface ControlConnection {
+  readonly lost: () => boolean;
+}
+
+const watchConnection = (duplex: Duplex): ControlConnection => {
+  let lost = false;
+  const onLost = () => {
+    lost = true;
+  };
+  duplex.once("close", onLost);
+  duplex.once("end", onLost);
+  duplex.once("error", onLost);
+  return { lost: () => lost || duplex.destroyed };
+};
+
 /** Maps an unknown defect from the SDK boundary onto the typed `SealantError` channel. */
-const mapSealantError = (operation: SealantOperation, rawCause: unknown): SealantError => {
+const mapSealantError = (
+  connection: ControlConnection,
+  operation: SealantOperation,
+  rawCause: unknown,
+): SealantError => {
   const cause = unwrapEffectCause(rawCause);
 
   if (
@@ -709,6 +732,14 @@ const mapSealantError = (operation: SealantOperation, rawCause: unknown): Sealan
     });
   }
 
+  if (connection.lost()) {
+    return new TransportError({
+      operation,
+      message: "The control connection closed before the daemon answered.",
+      cause,
+    });
+  }
+
   return new SealantUnexpectedError({
     operation,
     message: cause instanceof Error ? cause.message : `${operation} failed.`,
@@ -718,10 +749,11 @@ const mapSealantError = (operation: SealantOperation, rawCause: unknown): Sealan
 
 /** Wraps an Effect so any defect is remapped onto the typed `SealantError` channel. */
 const withSealantError = <A, R>(
+  connection: ControlConnection,
   operation: SealantOperation,
   effect: Effect.Effect<A, unknown, R>,
 ): Effect.Effect<A, SealantError, R> => {
-  return effect.pipe(Effect.mapError((cause) => mapSealantError(operation, cause)));
+  return effect.pipe(Effect.mapError((cause) => mapSealantError(connection, operation, cause)));
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -1229,11 +1261,13 @@ export class SealantRuntime extends Context.Service<SealantRuntime, SealantRunti
  */
 const requestResult = (
   client: SealantClient,
+  connection: ControlConnection,
   operation: SealantOperation,
   command: Parameters<SealantClient["request"]>[0],
   expect: string | undefined,
 ): Effect.Effect<unknown, SealantError> =>
   withSealantError(
+    connection,
     operation,
     Effect.tryPromise(async () => {
       const response = await client.request(command);
@@ -1267,17 +1301,19 @@ const toEnvVars = (env: Readonly<Record<string, string>> | undefined) =>
   Object.entries(env ?? {}).map(([key, value]) => ({ key, value }));
 
 /** Builds the per-connection session handle around a connected `SealantClient`. */
-const makeSession = (client: SealantClient): SealantSession => ({
+const makeSession = (client: SealantClient, connection: ControlConnection): SealantSession => ({
   // `health`/`capabilities` are round-trip control requests that REJECT when the connection drops
   // (e.g. a flaky docker-exec bridge). Use `tryPromise` so the rejection lands on the typed
   // `SealantError` channel (retryable) — `Effect.promise` would turn it into a defect that escapes
   // `withSealantError` and bypasses `Effect.retry`.
   health: withSealantError(
+    connection,
     "health",
     Effect.tryPromise(() => client.health()),
   ),
 
   capabilities: withSealantError(
+    connection,
     "capabilities",
     Effect.tryPromise(() => client.getCapabilities()),
   ),
@@ -1285,6 +1321,7 @@ const makeSession = (client: SealantClient): SealantSession => ({
   exec: (options) =>
     options.user === undefined
       ? withSealantError(
+          connection,
           "exec",
           Effect.tryPromise(() =>
             client.exec({
@@ -1304,6 +1341,7 @@ const makeSession = (client: SealantClient): SealantSession => ({
       : // The client's typed `exec` has no `user`: the same command, through the raw request.
         requestResult(
           client,
+          connection,
           "exec",
           {
             case: "exec",
@@ -1326,6 +1364,7 @@ const makeSession = (client: SealantClient): SealantSession => ({
 
   writeStdin: (processId, data) =>
     withSealantError(
+      connection,
       "writeStdin",
       Effect.tryPromise(() => client.writeStdin(processId, data)),
     ),
@@ -1333,6 +1372,7 @@ const makeSession = (client: SealantClient): SealantSession => ({
   closeStdin: (processId) =>
     requestResult(
       client,
+      connection,
       "closeStdin",
       { case: "closeStdin", value: { processId } },
       undefined,
@@ -1340,6 +1380,7 @@ const makeSession = (client: SealantClient): SealantSession => ({
 
   signalProcess: (processId, signal) =>
     withSealantError(
+      connection,
       "signalProcess",
       Effect.tryPromise(() => client.signalProcess(processId, signal)),
     ),
@@ -1347,6 +1388,7 @@ const makeSession = (client: SealantClient): SealantSession => ({
   openSession: (options) =>
     requestResult(
       client,
+      connection,
       "openSession",
       {
         case: "openSession",
@@ -1374,6 +1416,7 @@ const makeSession = (client: SealantClient): SealantSession => ({
   closeSession: (sessionId) =>
     requestResult(
       client,
+      connection,
       "closeSession",
       { case: "closeSession", value: { sessionId } },
       undefined,
@@ -1382,6 +1425,7 @@ const makeSession = (client: SealantClient): SealantSession => ({
   resizePty: (sessionId, cols, rows) =>
     requestResult(
       client,
+      connection,
       "resizePty",
       { case: "resizePty", value: { sessionId, cols, rows } },
       undefined,
@@ -1389,6 +1433,7 @@ const makeSession = (client: SealantClient): SealantSession => ({
 
   listSessions: requestResult(
     client,
+    connection,
     "listSessions",
     { case: "listSessions", value: {} },
     "sessionList",
@@ -1419,12 +1464,14 @@ const makeSession = (client: SealantClient): SealantSession => ({
 
   writeSessionInput: (sessionId, data) =>
     withSealantError(
+      connection,
       "writeSessionInput",
       Effect.tryPromise(() => client.writeSessionInput(sessionId, data)),
     ),
 
   attachSession: (sessionId, options) =>
     withSealantError(
+      connection,
       "attachSession",
       Effect.tryPromise(() =>
         client.attachSession(
@@ -1436,22 +1483,26 @@ const makeSession = (client: SealantClient): SealantSession => ({
 
   openForward: (port, host, protocol) =>
     withSealantError(
+      connection,
       "openForward",
       Effect.tryPromise(() => client.openForward({ host: host ?? "127.0.0.1", port, protocol: protocol ?? "tcp" })),
     ).pipe(Effect.map(({ result, channel }) => ({ channelId: result.channelId, channel }))),
 
   closeForward: (channelId) =>
     withSealantError(
+      connection,
       "closeForward",
       Effect.tryPromise(() => client.closeForward(channelId)),
     ),
   bindMount: (mountPath, subpath) =>
     withSealantError(
+      connection,
       "bindMount",
       Effect.tryPromise(() => client.bindMount(mountPath, subpath)),
     ),
   captureFlush: (request) =>
     withSealantError(
+      connection,
       "captureFlush",
       Effect.tryPromise(async () => {
         // The typed client has no wrapper for this command yet; `request` is its generic seam.
@@ -1476,12 +1527,14 @@ const makeSession = (client: SealantClient): SealantSession => ({
   captureStatus: () =>
     requestResult(
       client,
+      connection,
       "captureStatus",
       { case: "captureStatus", value: {} },
       "captureStatus",
     ).pipe(Effect.map((value) => captureFlushReportFromWire(value as CaptureStatusReport))),
   captureReplan: () =>
     withSealantError(
+      connection,
       "captureReplan",
       Effect.tryPromise(async () => {
         // Same generic seam as captureFlush: the typed client has no wrapper for this command.
@@ -1504,6 +1557,7 @@ const makeSession = (client: SealantClient): SealantSession => ({
   dotfilesApply: (args) =>
     requestResult(
       client,
+      connection,
       "dotfilesApply",
       {
         case: "dotfilesApply",
@@ -1554,6 +1608,7 @@ const makeSession = (client: SealantClient): SealantSession => ({
 
   shutdown: (graceMillis) =>
     withSealantError(
+      connection,
       "shutdown",
       Effect.tryPromise(() => client.shutdown(graceMillis)),
     ),
@@ -1561,7 +1616,9 @@ const makeSession = (client: SealantClient): SealantSession => ({
   // `Stream.fromAsyncIterable` pulls one event per `next()` (the SDK iterator is the backpressure
   // boundary). Iterator exhaustion (after `client.close()`) is normal completion; any throw is
   // remapped to the typed channel.
-  events: Stream.fromAsyncIterable(client.events(), (cause) => mapSealantError("events", cause)),
+  events: Stream.fromAsyncIterable(client.events(), (cause) =>
+    mapSealantError(connection, "events", cause),
+  ),
 });
 
 /** Builds the runtime service around a resolved transport (captured once at layer construction). */
@@ -1569,18 +1626,20 @@ const makeSealantRuntime = (transport: SealantTransportService): SealantRuntimeS
   connect: (target) =>
     Effect.gen(function* () {
       const duplex = yield* transport.open(target);
+      const connection = watchConnection(duplex);
 
       // Acquire the SDK client over the transport; release closes it (and lets the transport
       // finalizer kill the child). Resource-safe regardless of how the scope unwinds.
       const client = yield* Effect.acquireRelease(
         withSealantError(
+          connection,
           "connect",
           Effect.sync(() => SealantClient.fromStream(duplex)),
         ),
         (c) => Effect.sync(() => c.close()),
       );
 
-      return makeSession(client);
+      return makeSession(client, connection);
     }),
 });
 

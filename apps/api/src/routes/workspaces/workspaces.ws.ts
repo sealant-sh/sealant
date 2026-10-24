@@ -29,46 +29,31 @@
  * in-container SSRF primitive reaching anything the workspace can route to.
  * Registered as a RAW route (HttpApi cannot express an upgrade).
  */
-import {
-  SessionBadRequestError,
-  SessionForbiddenError,
-  SessionUnauthorizedError,
-  WorkspaceNotFoundError,
-} from "@sealant/api-contracts";
-import { WorkspaceRepo } from "@sealant/db";
 import { SealantRuntime } from "@sealant/workspaces";
 import { Effect, Fiber } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 import { Socket } from "effect/socket";
 
-import {
-  authorize,
-  resolveDaemonTarget,
-  type SessionPrincipal,
-} from "../sessions/sessions.module.js";
+import { resolveDaemonTarget } from "../sessions/sessions.module.js";
+import { checkForward, type ForwardCheck, type ForwardCheckFailed } from "./forward-checks.js";
 
-/** Uniform 404 on owner or token-workspace mismatch — existence is not leaked. */
-const requireWorkspace = (workspaceId: string, principal: SessionPrincipal) =>
-  Effect.gen(function* () {
-    const workspaces = yield* WorkspaceRepo;
-    const workspace = yield* workspaces
-      .getWorkspaceById(workspaceId)
-      .pipe(
-        Effect.mapError(
-          () => new WorkspaceNotFoundError({ message: `Workspace not found: ${workspaceId}` }),
-        ),
-      );
-    if (
-      workspace === undefined ||
-      workspace.ownerUserId !== principal.ownerUserId ||
-      (principal.workspaceId !== undefined && workspace.id !== principal.workspaceId)
-    ) {
-      return yield* new WorkspaceNotFoundError({
-        message: `Workspace not found: ${workspaceId}`,
-      });
-    }
-    return workspace;
-  });
+const STATUS: Record<ForwardCheck, number> = {
+  "invalid-target": 400,
+  unauthorized: 401,
+  forbidden: 403,
+  "owner-required": 400,
+  "not-found": 404,
+  "workspace-unreadable": 404,
+  internal: 500,
+};
+
+const refusal = (failure: ForwardCheckFailed, workspaceId: string) =>
+  HttpServerResponse.text(
+    failure.check === "workspace-unreadable"
+      ? `Workspace not found: ${workspaceId}`
+      : failure.message,
+    { status: STATUS[failure.check] },
+  );
 
 export const WorkspaceForwardRoute = HttpRouter.add(
   "GET",
@@ -80,61 +65,13 @@ export const WorkspaceForwardRoute = HttpRouter.add(
       if (workspaceId === undefined) {
         return HttpServerResponse.text("missing workspaceId", { status: 400 });
       }
-      const url = new URL(request.url, "http://localhost");
-      const portRaw = url.searchParams.get("port");
-      const port = portRaw === null ? Number.NaN : Number(portRaw);
-      if (!Number.isInteger(port) || port < 1 || port > 65535) {
-        return HttpServerResponse.text("port must be an integer in 1..65535", { status: 400 });
-      }
-      const hostRaw = url.searchParams.get("host") ?? "127.0.0.1";
-      const host =
-        hostRaw === "127.0.0.1" || hostRaw === "localhost" || hostRaw === "docker"
-          ? hostRaw
-          : undefined;
-      if (host === undefined) {
-        return HttpServerResponse.text("host must be one of: 127.0.0.1, localhost, docker", {
-          status: 400,
-        });
-      }
-      const protocolRaw = url.searchParams.get("protocol") ?? "tcp";
-      const protocol = protocolRaw === "tcp" || protocolRaw === "udp" ? protocolRaw : undefined;
-      if (protocol === undefined) {
-        return HttpServerResponse.text("protocol must be one of: tcp, udp", { status: 400 });
-      }
-      const ownerUserId = url.searchParams.get("ownerUserId") ?? undefined;
-
-      // Browser WebSocket clients cannot set headers; accept the bearer via query.
-      const headerAuth = request.headers["authorization"];
-      const queryToken = url.searchParams.get("token");
-      const authorization =
-        headerAuth ?? (queryToken === null ? undefined : `Bearer ${queryToken}`);
-      const outcome = yield* authorize({
-        headers: authorization === undefined ? {} : { authorization },
-        requiredScope: "workspace:exec",
-        assertedOwnerUserId: ownerUserId,
-      }).pipe(
-        Effect.flatMap((principal) => requireWorkspace(workspaceId, principal)),
-        Effect.map(() => ({ ok: true as const })),
-        Effect.catch((error) =>
-          Effect.succeed({
-            ok: false as const,
-            status:
-              error instanceof SessionUnauthorizedError
-                ? 401
-                : error instanceof SessionForbiddenError
-                  ? 403
-                  : error instanceof WorkspaceNotFoundError
-                    ? 404
-                    : error instanceof SessionBadRequestError
-                      ? 400
-                      : 500,
-            message: error.message,
-          }),
-        ),
-      );
-      if (!outcome.ok) {
-        return HttpServerResponse.text(outcome.message, { status: outcome.status });
-      }
+      const checked = yield* checkForward({
+        authorization: request.headers["authorization"],
+        url: new URL(request.url, "http://localhost"),
+        workspaceId,
+      }).pipe(Effect.catch((failure) => Effect.succeed(refusal(failure, workspaceId))));
+      if (HttpServerResponse.isHttpServerResponse(checked)) return checked;
+      const { port, host, protocol } = checked;
 
       const target = yield* resolveDaemonTarget(workspaceId).pipe(
         Effect.catch(() => Effect.succeed(undefined)),

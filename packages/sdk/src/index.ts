@@ -17,6 +17,9 @@
 export { Sealant } from "./client.js";
 export { claudeCode, codex, customHarness, opencode, pi } from "./harness.js";
 export {
+  ForwardDialError,
+  type ForwardDialFailure,
+  type ForwardDialReason,
   SealantApiError,
   SealantError,
   SealantNotImplementedError,
