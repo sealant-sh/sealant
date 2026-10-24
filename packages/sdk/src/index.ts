@@ -20,6 +20,7 @@ export {
   ForwardDialError,
   type ForwardDialFailure,
   type ForwardDialReason,
+  ForwardResetError,
   SealantApiError,
   SealantError,
   SealantNotImplementedError,

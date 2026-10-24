@@ -1,22 +1,25 @@
 import { NodeHttpServerRequest } from "@effect/platform-node";
 import { FORWARD_V2_SUBPROTOCOL, type ForwardRefusalReason } from "@sealant/api-contracts";
 import {
+  FORWARD_BINDING_REFUSALS,
+  FORWARD_CONNECT_REASONS,
   type SealantError,
   SealantRuntime,
   SealantUnexpectedError,
   TransportError,
 } from "@sealant/workspaces";
-import { Data, Duration, Effect, Option, Schema } from "effect";
+import { Data, Effect, Option, Schema } from "effect";
 import { HttpRouter, type HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import { bearerSecretOf, ForwardAdmission } from "../../services/service-principals.js";
 import { resolveDaemonInstance } from "../sessions/sessions.module.js";
 import { checkForward, type ForwardCheck, type ForwardTarget } from "./forward-checks.js";
+import { relayBoundedForward } from "./forward-relay.js";
 import {
   acceptForwardSocket,
   offersForwardV2,
+  refuseDataBeforeReady,
   refuseForward,
-  relayForward,
   socketClosed,
   upgradeHeadOf,
 } from "./forward-upgrade.js";
@@ -40,13 +43,8 @@ const CHECK_REFUSAL = {
 } as const satisfies Record<ForwardCheck, ForwardRefusalReason>;
 
 const sealantdForwardFailureSchema = Schema.Literals([
-  "connection-refused",
-  "name-unresolved",
-  "network-unreachable",
-  "dial-timeout",
-  "owner-exited",
-  "peer-mismatch",
-  "binding-unverifiable",
+  ...FORWARD_CONNECT_REASONS,
+  ...FORWARD_BINDING_REFUSALS,
 ]);
 type SealantdForwardFailure = typeof sealantdForwardFailureSchema.Type;
 
@@ -72,7 +70,8 @@ const OPEN_FAILURE_MESSAGE: Record<
     `Which process accepted ${host}:${port} could not be established.`,
   "dial-failed": ({ host, port }) =>
     `The workspace runtime could not connect to ${host}:${port}; it reported no cause.`,
-  "runtime-unreachable": () => "The connection to the workspace runtime was lost.",
+  "runtime-unreachable": () =>
+    "The workspace runtime could not be reached, or the connection to it was lost.",
 };
 
 const openFailureReason = (
@@ -86,7 +85,7 @@ const openFailureReason = (
   });
 };
 
-const CLOSE_FORWARD_REPLY_BOUND = Duration.seconds(2);
+export const DAEMON_HIGH_WATER_BYTES = 256 * 1024;
 
 const openForward = (request: HttpServerRequest.HttpServerRequest, workspaceId: string) =>
   Effect.gen(function* () {
@@ -123,25 +122,19 @@ const openForward = (request: HttpServerRequest.HttpServerRequest, workspaceId: 
     }
 
     const runtime = yield* SealantRuntime;
-    const daemon = yield* runtime
-      .connect(resolved.target)
+    const { channel } = yield* runtime
+      .openForwardConnection(resolved.target, {
+        host: target.host,
+        port: target.port,
+        highWaterMarkBytes: DAEMON_HIGH_WATER_BYTES,
+      })
       .pipe(
-        Effect.mapError(() =>
-          refused("runtime-unreachable", "The workspace runtime did not accept a connection."),
-        ),
+        Effect.mapError((error) => {
+          const reason = openFailureReason(error);
+          return refused(reason, OPEN_FAILURE_MESSAGE[reason](target));
+        }),
       );
-    const forward = yield* daemon.openForward(target.port, target.host, "tcp").pipe(
-      Effect.mapError((error) => {
-        const reason = openFailureReason(error);
-        return refused(reason, OPEN_FAILURE_MESSAGE[reason](target));
-      }),
-    );
-    yield* Effect.addFinalizer(() =>
-      daemon
-        .closeForward(forward.channelId)
-        .pipe(Effect.timeoutOption(CLOSE_FORWARD_REPLY_BOUND), Effect.ignore),
-    );
-    return forward.channel;
+    return channel;
   });
 
 export const WorkspaceForwardV2Route = HttpRouter.add(
@@ -179,7 +172,10 @@ export const WorkspaceForwardV2Route = HttpRouter.add(
               ),
               Effect.matchEffect({
                 onFailure: (refusal) => refuseForward(socket, refusal),
-                onSuccess: (channel) => relayForward(socket, { kind: "port" }, channel),
+                onSuccess: (channel) => {
+                  socket.off("message", refuseDataBeforeReady);
+                  return relayBoundedForward(socket, { kind: "port" }, channel);
+                },
               }),
             ),
             socketClosed(socket),

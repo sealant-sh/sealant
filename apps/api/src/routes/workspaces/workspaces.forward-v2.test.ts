@@ -1,30 +1,44 @@
 import { createHash } from "node:crypto";
-import { createServer, request as httpRequest, type Server } from "node:http";
+import { request as httpRequest } from "node:http";
 import { connect, type Socket } from "node:net";
 import { Duplex } from "node:stream";
 
-import { NodeHttpServer } from "@effect/platform-node";
 import { AccessTokenRepo, WorkspaceRepo, WorkspaceRuntimeInstanceRepo } from "@sealant/db";
 import { ForwardDialError, SealantApiError } from "@sealant/sdk";
-import { openForwardV2, type ForwardEndpoint } from "@sealant/sdk/internal/forward";
+import { openForwardV2 } from "@sealant/sdk/internal/forward";
 import {
   SealantControlError,
+  type SealantForwardChannel,
+  type SealantForwardConnectionOptions,
   SealantRuntime,
   SealantRuntimeLive,
   type SealantTarget,
   SealantTransport,
+  TransportError,
 } from "@sealant/workspaces";
-import { Effect, Exit, Layer, Scope } from "effect";
-import { HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
+import { Effect, Layer } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-const SERVICE_KEY = "slt_forward_v2_service_key";
-process.env["SEALANT_SERVICE_KEYS"] = SERVICE_KEY;
+import {
+  asForwardService,
+  eventually,
+  FORWARD_SERVICE_KEY,
+  serveForwardRoutes,
+  type ServedCore,
+} from "./forward-v2.fixture.js";
+
+const SERVICE_KEY = FORWARD_SERVICE_KEY;
 
 const OWNER = "usr_forward";
 const TOKEN_WITHOUT_EXEC = "slt_token_without_workspace_exec";
 const ECHO_PORT = 7000;
 const SLOW_DIAL_PORT = 7010;
+const STALLED_PORT = 7020;
+const FLOOD_PORT = 7021;
+const FAILING_PORT = 7022;
+const BROKEN_PUMP_PORT = 7023;
+const ENDS_AFTER_UPLOAD_PORT = 7024;
+const FLOOD_BYTES = 1024 * 1024;
 
 const DAEMON_FAILURES: Record<number, () => SealantControlError> = {
   7001: () => controlError({ reason: "connection-refused" }),
@@ -44,27 +58,122 @@ function controlError(detail: object | undefined) {
   });
 }
 
-const echoChannel = () => {
+const echoChannel = (): SealantForwardChannel => {
   const queued: Uint8Array[] = [];
   let ended = false;
   let wake: (() => void) | undefined;
+  const closed = Promise.withResolvers<Awaited<SealantForwardChannel["closed"]>>();
   return {
-    write: (data: Uint8Array) => {
+    write: (data) => {
       queued.push(new Uint8Array(data));
       wake?.();
+      return true;
+    },
+    drained: () => Promise.resolve(),
+    get isOutboundClosed() {
+      return ended;
     },
     end: () => {
       ended = true;
       wake?.();
     },
+    destroy: () => closed.resolve({ kind: "local" }),
+    closed: closed.promise,
     async *[Symbol.asyncIterator]() {
       for (;;) {
         const next = queued.shift();
         if (next !== undefined) yield next;
-        else if (ended) return;
+        else if (ended) return closed.resolve({ kind: "remote", end: {} });
         else await new Promise<void>((resolve) => (wake = resolve));
       }
     },
+  };
+};
+
+const stalledChannel = (): SealantForwardChannel => {
+  const closed = Promise.withResolvers<Awaited<SealantForwardChannel["closed"]>>();
+  return {
+    write: () => false,
+    isOutboundClosed: false,
+    drained: () => new Promise(() => {}),
+    end: () => {},
+    destroy: () => closed.resolve({ kind: "local" }),
+    closed: closed.promise,
+    [Symbol.asyncIterator]: () => ({
+      next: () => closed.promise.then(() => ({ done: true, value: undefined })),
+    }),
+  };
+};
+
+const floodChannel = (): SealantForwardChannel => {
+  const closed = Promise.withResolvers<Awaited<SealantForwardChannel["closed"]>>();
+  return {
+    write: () => true,
+    isOutboundClosed: false,
+    drained: () => Promise.resolve(),
+    end: () => {},
+    destroy: () => closed.resolve({ kind: "local" }),
+    closed: closed.promise,
+    async *[Symbol.asyncIterator]() {
+      yield new Uint8Array(FLOOD_BYTES);
+      await closed.promise;
+    },
+  };
+};
+
+let failFloodedChannel: (() => void) | undefined;
+
+const floodThenFailChannel = (): SealantForwardChannel => {
+  const closed = Promise.withResolvers<Awaited<SealantForwardChannel["closed"]>>();
+  failFloodedChannel = () => closed.resolve({ kind: "error", error: new Error("daemon gone") });
+  return {
+    write: () => true,
+    isOutboundClosed: false,
+    drained: () => Promise.resolve(),
+    end: () => {},
+    destroy: () => closed.resolve({ kind: "local" }),
+    closed: closed.promise,
+    async *[Symbol.asyncIterator]() {
+      yield new Uint8Array(FLOOD_BYTES);
+      await closed.promise;
+    },
+  };
+};
+
+const brokenPumpChannel = (): SealantForwardChannel => {
+  const closed = Promise.withResolvers<Awaited<SealantForwardChannel["closed"]>>();
+  return {
+    write: () => true,
+    isOutboundClosed: false,
+    drained: () => Promise.resolve(),
+    end: () => {},
+    destroy: () => closed.resolve({ kind: "local" }),
+    closed: closed.promise,
+    [Symbol.asyncIterator]: () => ({
+      next: () => Promise.reject(new Error("the channel broke")),
+    }),
+  };
+};
+
+const endsAfterUploadChannel = (): SealantForwardChannel => {
+  const closed = Promise.withResolvers<Awaited<SealantForwardChannel["closed"]>>();
+  let ended = false;
+  return {
+    write: () => {
+      ended = true;
+      setTimeout(() => closed.resolve({ kind: "remote", end: {} }), 10);
+      return true;
+    },
+    get isOutboundClosed() {
+      return ended;
+    },
+    drained: () => Promise.resolve(),
+    end: () => {},
+    destroy: () => closed.resolve({ kind: "local" }),
+    closed: closed.promise,
+    [Symbol.asyncIterator]: () => ({
+      next: () => closed.promise.then(() => ({ done: true, value: undefined })),
+    }),
   };
 };
 
@@ -156,111 +265,63 @@ const fakes = Layer.mergeAll(
       ),
   } as never),
   Layer.succeed(SealantRuntime, {
-    connect: (target: SealantTarget) => {
+    connect: () =>
+      Effect.succeed({
+        openForward: (port: number) =>
+          Effect.fail(DAEMON_FAILURES[port]?.() ?? controlError(undefined)),
+      }),
+    openForwardConnection: (target: SealantTarget, options: SealantForwardConnectionOptions) => {
       const containerId = target.kind === "docker-exec" ? target.containerId : undefined;
-      if (containerId === "ctr_lost") return runtimeLosingItsConnection.connect(target);
+      if (containerId === "ctr_lost") {
+        return runtimeLosingItsConnection.openForwardConnection(target, options);
+      }
       if (containerId === "ctr_down") {
         return Effect.fail(
-          new SealantControlError({ operation: "connect", code: 14, message: "no such container" }),
+          new TransportError({ operation: "open", message: "no such container", cause: null }),
         );
       }
       return Effect.acquireRelease(
-        Effect.sync(() => {
-          daemonConnects += 1;
-          return {
-            openForward: (port: number) => {
-              if (port === SLOW_DIAL_PORT) {
-                dialsStarted += 1;
-                return Effect.never;
-              }
-              const failure = DAEMON_FAILURES[port];
-              return failure === undefined
-                ? Effect.succeed({ channelId: "chan_1", channel: echoChannel() })
-                : Effect.fail(failure());
-            },
-            closeForward: () => Effect.void,
-          };
-        }),
+        Effect.sync(() => (daemonConnects += 1)),
         () => Effect.sync(() => (daemonReleases += 1)),
+      ).pipe(
+        Effect.andThen(() => {
+          if (options.port === SLOW_DIAL_PORT) {
+            dialsStarted += 1;
+            return Effect.never;
+          }
+          if (options.port === STALLED_PORT) return Effect.succeed({ channel: stalledChannel() });
+          if (options.port === FLOOD_PORT) return Effect.succeed({ channel: floodChannel() });
+          if (options.port === FAILING_PORT) {
+            return Effect.succeed({ channel: floodThenFailChannel() });
+          }
+          if (options.port === BROKEN_PUMP_PORT) {
+            return Effect.succeed({ channel: brokenPumpChannel() });
+          }
+          if (options.port === ENDS_AFTER_UPLOAD_PORT) {
+            return Effect.succeed({ channel: endsAfterUploadChannel() });
+          }
+          const failure = DAEMON_FAILURES[options.port];
+          return failure === undefined
+            ? Effect.succeed({ channel: echoChannel() })
+            : Effect.fail(failure());
+        }),
       );
     },
   } as never),
 );
 
-interface Served {
-  readonly baseUrl: string;
-  readonly close: () => Promise<void>;
-}
-
-const previousReleaseGate = HttpMiddleware.make((app) =>
-  Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    if (!new URL(request.url, "http://localhost").pathname.endsWith("/forward/v2")) {
-      return yield* app;
-    }
-    return HttpServerResponse.jsonUnsafe(
-      {
-        _tag: "UnauthorizedError",
-        message:
-          "This control plane requires authentication: present a service key as a bearer token.",
-      },
-      { status: 401 },
-    );
-  }),
-);
-
-const serve = async (options: {
+const serve = (options: {
   readonly release: "current" | "previous";
   readonly requestsPerMinute: number;
-}): Promise<Served> => {
-  const [{ servicePrincipalMiddleware, makeServicePrincipals }, budgets, upgrade, v2, legacy] =
-    await Promise.all([
-      import("../../services/service-principals.js"),
-      import("../../services/budgets.js"),
-      import("./forward-upgrade.js"),
-      import("./workspaces.forward-v2.js"),
-      import("./workspaces.ws.js"),
-    ]);
-  const routes = (
-    options.release === "current"
-      ? Layer.mergeAll(legacy.WorkspaceForwardRoute, v2.WorkspaceForwardV2Route)
-      : legacy.WorkspaceForwardRoute
-  ).pipe(HttpRouter.provideRequest(fakes));
-  const gate = servicePrincipalMiddleware(makeServicePrincipals(SERVICE_KEY), undefined, {
-    window: budgets.makeRateWindow(),
-    requestsPerMinute: options.requestsPerMinute,
-  });
-  let server: Server | undefined;
-  const layer = HttpRouter.serve(routes as Layer.Layer<never, never, HttpRouter.HttpRouter>, {
-    middleware: options.release === "current" ? gate : (app) => previousReleaseGate(gate(app)),
-  }).pipe(
-    Layer.provideMerge(
-      NodeHttpServer.layer(() => (server = upgrade.captureUpgradeHeads(createServer())), {
-        port: 0,
-      }),
-    ),
-  );
-  const scope = Effect.runSync(Scope.make());
-  await Effect.runPromise(Layer.buildWithScope(layer, scope));
-  const address = server?.address();
-  if (typeof address !== "object" || address === null) throw new Error("expected a TCP address");
-  return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    close: () => Effect.runPromise(Scope.close(scope, Exit.void)),
-  };
-};
+}) => serveForwardRoutes({ services: fakes, ...options });
 
-let core: Served;
+let core: ServedCore;
 beforeAll(async () => {
   core = await serve({ release: "current", requestsPerMinute: 10_000 });
 });
 afterAll(() => core.close());
 
-const asService = (baseUrl: string): ForwardEndpoint => ({
-  baseUrl,
-  apiKey: SERVICE_KEY,
-  ownerUserId: OWNER,
-});
+const asService = (baseUrl: string) => asForwardService(baseUrl, OWNER);
 
 const forwardV2Url = (workspaceId: string, query: string) =>
   new URL(
@@ -277,14 +338,6 @@ const refusalOf = async (opening: Promise<unknown>): Promise<ForwardDialError> =
     throw new Error(`expected a ForwardDialError, got ${String(error)}`);
   }
   return error;
-};
-
-const eventually = async (condition: () => boolean, withinMs = 3_000) => {
-  const deadline = Date.now() + withinMs;
-  while (!condition()) {
-    if (Date.now() > deadline) throw new Error(`condition not met within ${withinMs} ms`);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
 };
 
 const rawExchange = async (lines: ReadonlyArray<string>, after?: (socket: Socket) => void) => {
@@ -313,19 +366,16 @@ const upgradeLines = (path: string, connection = "Upgrade") => [
 
 describe("/forward/v2", () => {
   it("sends ready with a port binding, then relays bytes both ways until the workspace ends", async () => {
-    const { binding, forward } = await openForwardV2(
-      asService(core.baseUrl),
-      "wks_ready",
-      ECHO_PORT,
-    );
-    expect(binding).toEqual({ kind: "port" });
+    const forward = await openForwardV2(asService(core.baseUrl), "wks_ready", ECHO_PORT);
+    expect(forward.binding).toEqual({ kind: "port" });
 
-    forward.send(new TextEncoder().encode("ping"));
-    forward.eof();
+    const writer = forward.writable.getWriter();
+    await writer.write(new TextEncoder().encode("ping"));
+    await writer.close();
     const received: string[] = [];
-    for await (const chunk of forward.output) received.push(new TextDecoder().decode(chunk));
+    for await (const chunk of forward.readable) received.push(new TextDecoder().decode(chunk));
     expect(received.join("")).toBe("ping");
-    await expect(forward.closed).resolves.toBe("end");
+    await expect(forward.closed).resolves.toEqual({ kind: "end" });
   });
 
   const cases: ReadonlyArray<{
@@ -393,7 +443,7 @@ describe("/forward/v2", () => {
     const tight = await serve({ release: "current", requestsPerMinute: 1 });
     try {
       const first = await openForwardV2(asService(tight.baseUrl), "wks_ready", ECHO_PORT);
-      first.forward.close();
+      first.close();
       const error = await refusalOf(
         openForwardV2(asService(tight.baseUrl), "wks_ready", ECHO_PORT),
       );
@@ -418,7 +468,7 @@ describe("/forward/v2", () => {
     socket.send(new Uint8Array(64 * 1024 + 1));
     await expect(closed).resolves.toBe(1009);
 
-    const { forward } = await openForwardV2(asService(core.baseUrl), "wks_ready", ECHO_PORT);
+    const forward = await openForwardV2(asService(core.baseUrl), "wks_ready", ECHO_PORT);
     forward.close();
   });
 
@@ -518,6 +568,136 @@ describe("/forward/v2", () => {
       at += 2 + ((bytes[at + 1] ?? 0) & 0x7f);
     }
     expect(opcodes).toContain(0x8);
+  });
+});
+
+const progress = (bytes: number, frames: number) =>
+  JSON.stringify({ t: "progress", bytes: String(bytes), frames: String(frames) });
+
+describe("/forward/v2 windows", () => {
+  const WINDOW_BYTES = 256 * 1024;
+  const FRAME = 64 * 1024;
+
+  const openRaw = async (port: number) => {
+    const socket = new WebSocket(
+      forwardV2Url("wks_ready", `port=${port}&ownerUserId=${OWNER}&token=${SERVICE_KEY}`),
+      "sealant.forward.v2",
+    );
+    socket.binaryType = "arraybuffer";
+    const texts: unknown[] = [];
+    const received = { bytes: 0, frames: 0 };
+    socket.addEventListener("message", (event) => {
+      if (typeof event.data === "string") texts.push(JSON.parse(event.data));
+      else if (event.data instanceof ArrayBuffer) {
+        received.bytes += event.data.byteLength;
+        received.frames += 1;
+      }
+    });
+    const closed = new Promise<void>((resolve) =>
+      socket.addEventListener("close", () => resolve()),
+    );
+    await eventually(() => texts.length >= 2);
+    return { socket, texts, received, closed };
+  };
+
+  it("opens the client's window with a progress of zero right after ready", async () => {
+    const { socket, texts } = await openRaw(ECHO_PORT);
+    expect(texts).toEqual([
+      { t: "ready", version: 2, binding: { kind: "port" } },
+      { t: "progress", bytes: "0", frames: "0" },
+    ]);
+    socket.close();
+  });
+
+  it("sends a client no more than its window until it says it has read", async () => {
+    const { socket, received } = await openRaw(FLOOD_PORT);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(received).toEqual({ bytes: 0, frames: 0 });
+
+    socket.send(progress(0, 0));
+    await eventually(() => received.bytes === WINDOW_BYTES);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(received).toEqual({ bytes: WINDOW_BYTES, frames: WINDOW_BYTES / FRAME });
+
+    socket.send(progress(WINDOW_BYTES, WINDOW_BYTES / FRAME));
+    await eventually(() => received.bytes === 2 * WINDOW_BYTES);
+    socket.close();
+  });
+
+  const violations: ReadonlyArray<{
+    readonly name: string;
+    readonly reason: string;
+    readonly send: (socket: WebSocket) => void;
+  }> = [
+    {
+      name: "sends more bytes than its window",
+      reason: "window-exceeded",
+      send: (socket) => {
+        for (let frame = 0; frame <= WINDOW_BYTES / FRAME; frame++) {
+          socket.send(new Uint8Array(FRAME));
+        }
+      },
+    },
+    {
+      name: "sends more frames than its window",
+      reason: "window-exceeded",
+      send: (socket) => {
+        for (let frame = 0; frame <= 32; frame++) socket.send(new Uint8Array(1));
+      },
+    },
+    {
+      name: "claims to have read more than it was sent",
+      reason: "protocol-violation",
+      send: (socket) => socket.send(progress(1, 1)),
+    },
+    {
+      name: "ends with totals other than what arrived",
+      reason: "protocol-violation",
+      send: (socket) => {
+        socket.send(new Uint8Array(1));
+        socket.send(JSON.stringify({ t: "fin", bytes: "2", frames: "1" }));
+      },
+    },
+    {
+      name: "sends a text frame this Core cannot read",
+      reason: "protocol-violation",
+      send: (socket) => socket.send(JSON.stringify({ t: "credit", bytes: 1 })),
+    },
+  ];
+
+  it("resets a client at once when the daemon fails while the client is not reading", async () => {
+    const { socket, texts, received, closed } = await openRaw(FAILING_PORT);
+    socket.send(progress(0, 0));
+    await eventually(() => received.bytes === WINDOW_BYTES);
+
+    failFloodedChannel?.();
+
+    await closed;
+    expect(texts.at(-1)).toEqual({ t: "reset", reason: "runtime-lost" });
+  });
+
+  it("resets a client when the relay can no longer read the daemon", async () => {
+    const { texts, closed } = await openRaw(BROKEN_PUMP_PORT);
+    await closed;
+    expect(texts.at(-1)).toEqual({ t: "reset", reason: "runtime-lost" });
+  });
+
+  it("tells a client exactly what reached the workspace before it ends", async () => {
+    const { socket, texts, closed } = await openRaw(ENDS_AFTER_UPLOAD_PORT);
+    socket.send(new Uint8Array(3));
+    await closed;
+    expect(texts.slice(1)).toEqual([
+      { t: "progress", bytes: "0", frames: "0" },
+      { t: "progress", bytes: "3", frames: "1" },
+      { t: "fin", bytes: "0", frames: "0" },
+    ]);
+  });
+
+  it.each(violations)("resets a client that $name: $reason", async ({ reason, send }) => {
+    const { socket, texts, closed } = await openRaw(STALLED_PORT);
+    send(socket);
+    await closed;
+    expect(texts.at(-1)).toEqual({ t: "reset", reason });
   });
 });
 

@@ -159,3 +159,137 @@ describe("openForwardV2", () => {
     );
   });
 });
+
+const progress = (bytes: number, frames: number) =>
+  JSON.stringify({ t: "progress", bytes: String(bytes), frames: String(frames) });
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 100));
+
+describe("a bounded forward", () => {
+  const FRAME = 64 * 1024;
+  const WINDOW_BYTES = 256 * 1024;
+  const READY = JSON.stringify({ t: "ready", version: 2, binding: { kind: "port" } });
+
+  const recordingCoreOpening = async (grantUpload: boolean) => {
+    const texts: unknown[] = [];
+    const binary: number[] = [];
+    const socket = Promise.withResolvers<WebSocket>();
+    const baseUrl = await fakeCore({
+      onSocket: (ws) => {
+        ws.on("message", (data: Buffer, isBinary: boolean) => {
+          if (isBinary) binary.push(data.byteLength);
+          else texts.push(JSON.parse(data.toString()));
+        });
+        ws.send(READY);
+        if (grantUpload) ws.send(progress(0, 0));
+        servers.unshift(async () => ws.terminate());
+        socket.resolve(ws);
+      },
+    });
+    const opening = open(baseUrl);
+    return { opening, core: await socket.promise, texts, binary };
+  };
+  const recordingCore = async (grantUpload: boolean) => {
+    const { opening, ...recorded } = await recordingCoreOpening(grantUpload);
+    return { forward: await opening, ...recorded };
+  };
+
+  it("opens Core's window with a progress of zero, and resolves only once Core opens its own", async () => {
+    const { opening, core, texts, binary } = await recordingCoreOpening(false);
+    let resolved = false;
+    void opening.then(() => (resolved = true));
+    await settle();
+    expect(texts).toEqual([{ t: "progress", bytes: "0", frames: "0" }]);
+    expect(resolved).toBe(false);
+
+    core.send(progress(0, 0));
+    const forward = await opening;
+    await forward.writable.getWriter().write(new Uint8Array(10));
+    await settle();
+    expect(binary).toEqual([10]);
+  });
+
+  it("splits a large write into frames and sends no more than Core granted", async () => {
+    const { forward, core, binary } = await recordingCore(true);
+    const writer = forward.writable.getWriter();
+    void writer.write(new Uint8Array(WINDOW_BYTES + FRAME + 1));
+    await settle();
+    expect(binary).toEqual([FRAME, FRAME, FRAME, FRAME]);
+    expect(writer.desiredSize).toBeLessThanOrEqual(0);
+
+    core.send(progress(2 * FRAME, 2));
+    await settle();
+    expect(binary).toEqual([FRAME, FRAME, FRAME, FRAME, FRAME, 1]);
+  });
+
+  it("says it has read only what the caller read", async () => {
+    const { forward, core, texts } = await recordingCore(true);
+    for (let frame = 0; frame < 4; frame++) core.send(new Uint8Array(FRAME));
+    await settle();
+    expect(texts).toEqual([{ t: "progress", bytes: "0", frames: "0" }]);
+
+    const reader = forward.readable.getReader();
+    await reader.read();
+    await reader.read();
+    await settle();
+    expect(texts.at(-1)).toEqual({ t: "progress", bytes: String(2 * FRAME), frames: "2" });
+  });
+
+  it("ends the readable after Core's fin, once the caller has read what came before it", async () => {
+    const { forward, core } = await recordingCore(true);
+    core.send(new Uint8Array([1, 2, 3]));
+    core.send(JSON.stringify({ t: "fin", bytes: "3", frames: "1" }));
+    core.close(1000);
+    await expect(forward.closed).resolves.toEqual({ kind: "end" });
+    const chunks: number[] = [];
+    for await (const chunk of forward.readable) chunks.push(...chunk);
+    expect(chunks).toEqual([1, 2, 3]);
+  });
+
+  const resets: ReadonlyArray<{
+    readonly name: string;
+    readonly core: (core: WebSocket) => void;
+    readonly reset: { readonly reason: string; readonly wireReason?: string };
+    readonly sent?: object;
+  }> = [
+    {
+      name: "Core sends past the window",
+      core: (core) => {
+        for (let frame = 0; frame <= WINDOW_BYTES / FRAME; frame++)
+          core.send(new Uint8Array(FRAME));
+      },
+      reset: { reason: "window-exceeded" },
+      sent: { t: "reset", reason: "window-exceeded" },
+    },
+    {
+      name: "Core's fin does not match what arrived",
+      core: (core) => core.send(JSON.stringify({ t: "fin", bytes: "1", frames: "1" })),
+      reset: { reason: "protocol-violation" },
+      sent: { t: "reset", reason: "protocol-violation" },
+    },
+    {
+      name: "Core resets with a reason this SDK does not know",
+      core: (core) => core.send(JSON.stringify({ t: "reset", reason: "quota-frozen" })),
+      reset: { reason: "unrecognized-reset", wireReason: "quota-frozen" },
+    },
+    {
+      name: "the connection closes with neither a fin nor a reset",
+      core: (core) => core.terminate(),
+      reset: { reason: "connection-lost" },
+    },
+  ];
+
+  it.each(resets)("resets when $name", async ({ core: act, reset, sent }) => {
+    const { forward, core, texts } = await recordingCore(true);
+    act(core);
+    await expect(forward.closed).resolves.toEqual({ kind: "reset", ...reset });
+    await expect(forward.readable.getReader().read()).rejects.toMatchObject({
+      name: "ForwardResetError",
+      ...reset,
+    });
+    if (sent !== undefined) {
+      await settle();
+      expect(texts.at(-1)).toEqual(sent);
+    }
+  });
+});

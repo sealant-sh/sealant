@@ -4,8 +4,6 @@ import {
   FORWARD_REFUSED_CLOSE_CODE,
   FORWARD_V2_MAX_FRAME_BYTES,
   FORWARD_V2_SUBPROTOCOL,
-  type ForwardBinding,
-  type ForwardReadyFrame,
   type ForwardRefusalReason,
   forwardRefusedFrame,
 } from "@sealant/api-contracts";
@@ -74,7 +72,7 @@ const closeWithinGrace = (socket: WebSocket, code: number, reason: string) =>
     );
   });
 
-function refuseDataBeforeReady(this: WebSocket) {
+export function refuseDataBeforeReady(this: WebSocket) {
   this.close(1002, "data before ready");
 }
 
@@ -105,48 +103,4 @@ export const refuseForward = (
   Effect.suspend(() => {
     socket.send(JSON.stringify(forwardRefusedFrame(refusal.reason, refusal.message)));
     return closeWithinGrace(socket, FORWARD_REFUSED_CLOSE_CODE, "refused");
-  });
-
-export interface ForwardChannel extends AsyncIterable<Uint8Array> {
-  write(data: Uint8Array): void;
-  end(): void;
-}
-
-const isEof = (text: string): boolean => {
-  try {
-    const frame: unknown = JSON.parse(text);
-    return typeof frame === "object" && frame !== null && Reflect.get(frame, "t") === "eof";
-  } catch {
-    return false;
-  }
-};
-
-export const relayForward = (socket: WebSocket, binding: ForwardBinding, channel: ForwardChannel) =>
-  Effect.gen(function* () {
-    socket.off("message", refuseDataBeforeReady);
-    // `ws` delivers binary frames as a Buffer: the socket's binaryType is "nodebuffer".
-    socket.on("message", (data: Buffer, isBinary: boolean) => {
-      try {
-        if (isBinary) channel.write(data);
-        else if (isEof(data.toString())) channel.end();
-      } catch {
-        socket.close(1011, "forward ended");
-      }
-    });
-    const ready: ForwardReadyFrame = { t: "ready", version: 2, binding };
-    socket.send(JSON.stringify(ready));
-
-    const iterator = channel[Symbol.asyncIterator]();
-    yield* Effect.forkScoped(
-      Effect.gen(function* () {
-        for (;;) {
-          const next = yield* Effect.tryPromise(() => iterator.next());
-          if (next.done === true) break;
-          socket.send(next.value);
-        }
-        socket.send(JSON.stringify({ t: "end" }));
-        socket.close(1000, "remote closed");
-      }).pipe(Effect.catch(() => Effect.sync(() => socket.close(1011, "forward ended")))),
-    );
-    yield* socketClosed(socket);
   });

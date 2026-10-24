@@ -1,5 +1,7 @@
 import type { ForwardRefusalReason } from "@sealant/api-contracts";
 
+import type { ForwardResetCause } from "./types.js";
+
 /**
  * Public SDK errors. The Effect core fails on a typed `Schema.TaggedError` channel; the facade maps
  * every tagged failure onto one of these PLAIN `Error` subclasses (a single `_tag` switch) so the
@@ -133,5 +135,18 @@ export class SealantNotImplementedError extends SealantError {
       `${operation} is part of the Sealant SDK surface but is not implemented in this build yet.`,
       { code: "not_implemented" },
     );
+  }
+}
+
+/** A bounded forward was reset after it opened. Its streams error with this. */
+export class ForwardResetError extends SealantError {
+  override readonly name: string = "ForwardResetError";
+  readonly reason: ForwardResetCause;
+  /** The reason Core sent, when this SDK does not know it (`unrecognized-reset`). */
+  readonly wireReason?: string;
+  constructor(reason: ForwardResetCause, wireReason?: string) {
+    super(`The forward was reset: ${wireReason ?? reason}.`, { code: "ForwardResetError" });
+    this.reason = reason;
+    if (wireReason !== undefined) this.wireReason = wireReason;
   }
 }

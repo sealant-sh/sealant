@@ -1,7 +1,5 @@
 import {
-  FORWARD_V2_MAX_FRAME_BYTES,
   FORWARD_V2_SUBPROTOCOL,
-  type ForwardBinding,
   forwardOpenFrameSchema,
   forwardRefusalReasonSchema,
   type ForwardRefusedFrame,
@@ -9,7 +7,13 @@ import {
 import { Option, Schema } from "effect";
 
 import { ForwardDialError } from "../errors.js";
-import type { WorkspaceForward, WorkspaceForwardOptions } from "../types.js";
+import type {
+  BoundedWorkspaceForward,
+  BoundedWorkspaceForwardOptions,
+  WorkspaceForward,
+  WorkspaceForwardOptions,
+} from "../types.js";
+import { boundedForward } from "./bounded-forward.js";
 
 export interface ForwardEndpoint {
   readonly baseUrl: string;
@@ -36,10 +40,7 @@ const forwardUrl = (
   return url;
 };
 
-const bridgeForward = (
-  ws: WebSocket,
-  maxFrameBytes = Number.POSITIVE_INFINITY,
-): { readonly forward: WorkspaceForward; readonly receive: (event: MessageEvent) => void } => {
+const bridgeForward = (ws: WebSocket): WorkspaceForward => {
   const pending: Uint8Array[] = [];
   let wake: (() => void) | undefined;
   let finished = false;
@@ -54,7 +55,7 @@ const bridgeForward = (
   };
   ws.addEventListener("close", () => finish("closed"));
 
-  const receive = (event: MessageEvent) => {
+  ws.addEventListener("message", (event) => {
     if (typeof event.data === "string") {
       try {
         const frame = JSON.parse(event.data) as { t?: string };
@@ -66,7 +67,7 @@ const bridgeForward = (
     }
     pending.push(new Uint8Array(event.data as ArrayBuffer));
     wake?.();
-  };
+  });
 
   const output: AsyncIterable<Uint8Array> = {
     [Symbol.asyncIterator]: () => ({
@@ -88,14 +89,10 @@ const bridgeForward = (
     }),
   };
 
-  const forward: WorkspaceForward = {
+  return {
     send: (input) => {
-      let offset = 0;
-      do {
-        // Copy into a plain ArrayBuffer-backed view (WebSocket.send rejects SharedArrayBuffer views).
-        ws.send(new Uint8Array(input.subarray(offset, offset + maxFrameBytes)).buffer);
-        offset += maxFrameBytes;
-      } while (offset < input.byteLength);
+      // Copy into a plain ArrayBuffer-backed view (WebSocket.send rejects SharedArrayBuffer views).
+      ws.send(new Uint8Array(input).buffer);
     },
     eof: () => {
       ws.send(JSON.stringify({ t: "eof" }));
@@ -107,7 +104,6 @@ const bridgeForward = (
       ws.close();
     },
   };
-  return { forward, receive };
 };
 
 export const openForward = (
@@ -125,8 +121,7 @@ export const openForward = (
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
-    const { forward, receive } = bridgeForward(ws);
-    ws.addEventListener("message", receive);
+    const forward = bridgeForward(ws);
     ws.addEventListener("open", () => resolve(forward), { once: true });
     ws.addEventListener(
       "error",
@@ -141,18 +136,9 @@ export const openForward = (
   });
 };
 
-export interface ForwardV2Options {
-  readonly host?: "127.0.0.1" | "localhost" | "docker";
-  readonly signal?: AbortSignal;
-  readonly deadlineMs?: number;
-}
+export type ForwardV2Options = Omit<BoundedWorkspaceForwardOptions, "flow">;
 
 const FORWARD_V2_OPEN_DEADLINE_MS = 30_000;
-
-export interface OpenedForwardV2 {
-  readonly binding: ForwardBinding;
-  readonly forward: WorkspaceForward;
-}
 
 const decodeOpenFrame = Schema.decodeUnknownOption(Schema.fromJsonString(forwardOpenFrameSchema));
 const isKnownRefusal = Schema.is(forwardRefusalReasonSchema);
@@ -204,7 +190,7 @@ export const openForwardV2 = (
   workspaceId: string,
   port: number,
   options?: ForwardV2Options,
-): Promise<OpenedForwardV2> => {
+): Promise<BoundedWorkspaceForward> => {
   const host = options?.host ?? "127.0.0.1";
   const signal = options?.signal;
   const deadlineMs = options?.deadlineMs ?? FORWARD_V2_OPEN_DEADLINE_MS;
@@ -218,9 +204,9 @@ export const openForwardV2 = (
     if (signal?.aborted === true) return reject(signal.reason);
     const ws = new WebSocket(url, FORWARD_V2_SUBPROTOCOL);
     ws.binaryType = "arraybuffer";
-    const { forward, receive } = bridgeForward(ws, FORWARD_V2_MAX_FRAME_BYTES);
     const probing = new AbortController();
-    let phase: "handshake" | "awaiting-answer" | "probing" | "open" | "failed" = "handshake";
+    let phase: "handshake" | "awaiting-answer" | "awaiting-window" | "probing" | "open" | "failed" =
+      "handshake";
 
     const settle = (next: "open" | "failed") => {
       phase = next;
@@ -258,18 +244,20 @@ export const openForwardV2 = (
       }
     });
     ws.addEventListener("message", (event) => {
-      if (phase === "open") return receive(event);
       if (phase !== "awaiting-answer") return;
       const frame = typeof event.data === "string" ? decodeOpenFrame(event.data) : Option.none();
       if (Option.isNone(frame)) {
         return unreadable(`${origin} answered the forward with a frame this SDK cannot read.`);
       }
       if (frame.value.t === "refused") return fail(refusalError(frame.value));
-      settle("open");
-      resolve({ binding: frame.value.binding, forward });
+      phase = "awaiting-window";
+      const forward = boundedForward(ws, frame.value.binding, () => {
+        settle("open");
+        resolve(forward);
+      });
     });
     ws.addEventListener("close", () => {
-      if (phase === "awaiting-answer") {
+      if (phase === "awaiting-answer" || phase === "awaiting-window") {
         return fail(
           new ForwardDialError({
             reason: "transport-unavailable",
