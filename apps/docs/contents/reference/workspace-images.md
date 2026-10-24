@@ -224,12 +224,13 @@ the person.
   on `PATH` started them. Root's `PATH` already names its profile and is unchanged.
 - **The nix daemon.** Only root can write the store, so the person environment sets
   `NIX_REMOTE=daemon`, and `sudo` keeps it. The image's entrypoint,
-  `/usr/local/bin/sealant-nix-boot`, starts `nix-daemon`, waits up to 10 seconds for it to answer
-  (each check is cut off after 2), then runs `sealantd boot`. The daemon's output goes to
-  `/nix/var/log/nix/nix-daemon.log`. If the daemon exits or does not answer, the entrypoint prints a
-  warning and the workspace starts anyway: root's nix still works, and a person's nix commands fail
-  until the daemon runs. Nothing restarts a daemon that stops later. A MicroVM workspace starts
-  `sealantd boot` itself, not the image's entrypoint, so there the daemon does not run.
+  `/usr/local/bin/sealant-nix-boot`, starts `nix-daemon`, gives it 10 seconds to answer (a check
+  that hangs is cut off, so the wait ends within about 13), then runs `sealantd boot`. The daemon's
+  output goes to `/nix/var/log/nix/nix-daemon.log`. If the daemon exits or does not answer, the
+  entrypoint prints a warning and the workspace starts anyway: root's nix still works, and a
+  person's nix commands fail until the daemon runs. Nothing restarts a daemon that stops later. A
+  MicroVM workspace starts `sealantd boot` itself, not the image's entrypoint, so there the daemon
+  does not run.
 - **No downloaded toolchain binaries.** A binary built for other Linux systems, such as the `rustc`
   that `rustup` installs or the `node` that `nvm` installs, does not run on nix: it finds no `libz`
   or `libstdc++`. Install such tools with nix.
