@@ -471,9 +471,14 @@ const recordLaunchHome = (input: {
   );
 
 /** A per-person launch refused because its image's daemon may not apply the owner map. */
-export class OwnerMapUnsupportedError extends Error {
-  override readonly name = "OwnerMapUnsupportedError";
-  readonly code = "owner-map-unsupported";
+export class OwnerMapRefusedError extends Error {
+  override readonly name = "OwnerMapRefusedError";
+  readonly code: "owner-map-unsupported" | "owner-map-unverified";
+
+  constructor(message: string, code: OwnerMapRefusedError["code"]) {
+    super(message);
+    this.code = code;
+  }
 }
 
 /**
@@ -484,7 +489,7 @@ export class OwnerMapUnsupportedError extends Error {
 export const ownerMapLaunchRefusal = (
   spec: NewWorkspace,
   probe: WorkspaceImageProbe | undefined,
-): OwnerMapUnsupportedError | undefined => {
+): OwnerMapRefusedError | undefined => {
   const source = spec.sources.workspace;
   if (source.kind !== "capture" || source.ownerMap === undefined) return undefined;
   const applies = imageAppliesOwnerMap(probe);
@@ -495,8 +500,9 @@ export const ownerMapLaunchRefusal = (
       : applies === "unknown"
         ? "its image's sealantd answered the probe with something Core cannot read"
         : "its image's sealantd does not report restore.owner_map";
-  return new OwnerMapUnsupportedError(
+  return new OwnerMapRefusedError(
     `The workspace was not launched: its capture source names an owner map, and ${why}. A daemon without it would restore every file as root's and keep no-new-privileges, so nobody could edit them or use sudo. Nothing ran; launch it on an image whose personLayout reports the sealantd capabilities, or without an owner map.`,
+    applies === "no" ? "owner-map-unsupported" : "owner-map-unverified",
   );
 };
 
@@ -527,6 +533,7 @@ const attemptPlanHashReuse = (input: {
   readonly job: {
     readonly registryId: string;
   };
+  readonly spec: NewWorkspace;
   readonly planned: PlannedWorkspaceImageBuild;
   readonly registryClient: RegistryClient;
 }): Effect.Effect<PlanHashReuse | null, never, WorkspaceBuildJobRepo> =>
@@ -584,6 +591,11 @@ const attemptPlanHashReuse = (input: {
     const priorProbe = workspaceImageProbeSchema.safeParse(
       priorJob.resultPayload?.metadata?.imageProbe,
     );
+    // A per-person launch is refused on an image with no probe; the build reads it back instead.
+    const source = input.spec.sources.workspace;
+    if (!priorProbe.success && source.kind === "capture" && source.ownerMap !== undefined) {
+      return null;
+    }
 
     return {
       publishedImage,
@@ -842,6 +854,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
         ? null
         : yield* attemptPlanHashReuse({
             job,
+            spec,
             planned,
             registryClient: options.registryClient,
           });

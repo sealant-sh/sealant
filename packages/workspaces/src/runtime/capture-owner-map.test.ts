@@ -374,13 +374,21 @@ describe("the launch's image check", () => {
   it("lets a map through only on an image that reports it, and never stops a launch without one", () => {
     const withMap = captureLaunch({ ownerMap: OWNER_MAP }).blueprint;
     expect(ownerMapLaunchRefusal(withMap, supported)).toBeUndefined();
-    for (const [image, why] of [
-      [probe({ schemaVersion: 1, supports: ["exec.user"] }), /does not report restore.owner_map/],
-      [probe("unreadable"), /answered the probe with something Core cannot read/],
-      [undefined, /records no probe/],
+    for (const [image, code, why] of [
+      [
+        probe({ schemaVersion: 1, supports: ["exec.user"] }),
+        "owner-map-unsupported",
+        /does not report restore.owner_map/,
+      ],
+      [
+        probe("unreadable"),
+        "owner-map-unverified",
+        /answered the probe with something Core cannot read/,
+      ],
+      [undefined, "owner-map-unverified", /records no probe/],
     ] as const) {
       const refusal = ownerMapLaunchRefusal(withMap, image);
-      expect(refusal?.code).toBe("owner-map-unsupported");
+      expect(refusal?.code).toBe(code);
       expect(refusal?.message).toMatch(why);
       expect(refusal?.message).toMatch(/Nothing ran/);
     }
