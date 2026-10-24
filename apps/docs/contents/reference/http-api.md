@@ -92,10 +92,11 @@ credential `409` `connected-account-invalid`; both carry the account's `provider
 nothing is written. A create's explicitly named account is refused the same way.
 
 The account name `default` selects the person's chosen default for the provider, not an account of
-that name: a person's first account for a provider becomes their default, and
-`PUT /v1/connected-accounts/defaults/:provider` chooses another. A person without one (their default
-was disconnected) gets `connected-account-missing` until they choose again. A connect without `name`
-or `accountId` replaces the person's only account for the provider; with several it answers `409`
+that name, here, on a connect and in a profile binding: a person's first account for a provider is
+named `default` and becomes their default, and `PUT /v1/connected-accounts/defaults/:provider`
+chooses another. A person without one (their default was disconnected) gets
+`connected-account-missing` until they choose again. A connect without `name` or `accountId`
+replaces the person's only account for the provider; with several it answers `409`
 `connected-account-ambiguous` with `candidateAccountIds`.
 
 A create's `spec.runtime.credentialsHome` (`{ path, uid, gid }`) writes the launch's logins into

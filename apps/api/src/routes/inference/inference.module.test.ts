@@ -87,6 +87,7 @@ const claudeAccount = account({
 
 interface AccountsStubOptions {
   readonly byName?: Record<string, ConnectedAccount | undefined>;
+  readonly defaults?: Record<string, ConnectedAccount | undefined>;
   readonly bindings?: readonly { binding: { provider: string }; account: ConnectedAccount }[];
 }
 
@@ -100,7 +101,7 @@ const accountsStub = (options: AccountsStubOptions = {}) => ({
     Effect.succeed(options.byName?.[`${input.provider}:${input.name}`]),
   ),
   getDefault: vi.fn((input: { provider: string }) =>
-    Effect.succeed(options.byName?.[`${input.provider}:default`]),
+    Effect.succeed(options.defaults?.[input.provider]),
   ),
   getBindingsForProfileWithAccounts: vi.fn(() => Effect.succeed(options.bindings ?? [])),
   updateSyncState: vi.fn(() => Effect.succeed(undefined)),
@@ -283,6 +284,38 @@ describe("inference.module provider routing", () => {
 
     expect(error).toBeInstanceOf(InferenceNotFoundError);
     expect(error).toEqual(expect.objectContaining({ message: expect.stringContaining("codex") }));
+  });
+
+  it("spends the chosen default for `default`, not the account named default", async () => {
+    const chosen = { ...codexAccount, name: "work" };
+    const named = account({ provider: "codex", id: "cacc_named_default" });
+    const accounts = accountsStub({
+      byName: { "codex:default": named },
+      defaults: { codex: chosen },
+    });
+    const { layer } = makeLayers({ accounts });
+
+    await run(
+      respond(newExchange({ credentials: { codex: "default" } })).pipe(Effect.provide(layer)),
+    );
+
+    expect(accounts.updateSyncState).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "cacc_codex" }),
+    );
+    expect(accounts.updateSyncState).not.toHaveBeenCalledWith(
+      expect.objectContaining({ id: "cacc_named_default" }),
+    );
+  });
+
+  it("refuses `default` while none is chosen, though an account is named default", async () => {
+    const accounts = accountsStub({ byName: { "codex:default": codexAccount } });
+    const { layer } = makeLayers({ accounts });
+
+    const error = await runFlipped(
+      respond(newExchange({ credentials: { codex: "default" } })).pipe(Effect.provide(layer)),
+    );
+
+    expect(error).toBeInstanceOf(InferenceNotFoundError);
   });
 
   it("prefers the profile's claude binding and falls back to codex", async () => {

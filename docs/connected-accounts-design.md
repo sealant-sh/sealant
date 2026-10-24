@@ -143,7 +143,7 @@ connected_accounts
 connected_account_defaults        -- each person's chosen login per provider
   owner_user_id        text -> user.id (cascade)
   provider             enum^
-  connected_account_id text
+  connected_account_id text        -- null: the person disconnected their default and has none
   updated_at
   pk (owner_user_id, provider)   -- at most one default per person and provider
   fk (connected_account_id, owner_user_id, provider) -> connected_accounts (cascade)
@@ -157,32 +157,45 @@ profile_connected_accounts        -- the "bundle" piece
 
 **The default is a choice, not a name** (Oct 2026). The selector `default` (the SDK's `true`) is the
 account `connected_account_defaults` names for the person and provider, wherever an account is
-resolved: workspace create, a credentials put, inference. With no row the person has no default, and
-a `default` selection is `404 connected-account-missing`; a default that is invalid is
-`409 connected-account-invalid`. Nothing falls back to another account. An account id (`cacc_…`) or
-another name keeps its meaning. The foreign key names the account with its owner and provider, so a
-default can only be the person's own account of that provider. The migration that added the table
-made every non-archived account named `default` its owner's default, invalid ones included, so the
-selector answers what the name answered before.
+resolved: workspace create, a credentials put, inference, a profile binding. With no account named
+there the person has no default, and a `default` selection is `404 connected-account-missing`; a
+default that is invalid is `409 connected-account-invalid`. Nothing falls back to another account.
+An account id (`cacc_…`) or another name keeps its meaning. The foreign key names the account with
+its owner and provider, so a default can only be the person's own account of that provider. The
+migration that added the table made every non-archived account named `default` its owner's default,
+invalid ones included, so the selector answers what the name answered before.
+
+A control plane from before the table, still serving during a rolling upgrade, connects a first
+account named `default` with no row, and archives a default without touching its row. So every API
+start runs the migration's backfill again: a person with no row gets one naming their active account
+named `default`, and a row naming an archived account is pointed the same way. A disconnect by this
+control plane keeps the person's row with no account in it, so the backfill never chooses one for a
+person who disconnected their default.
 
 Each rule has one writer, and every write of one person's accounts holds that person's lock (an
 advisory lock in the transaction):
 
-- **Connect.** A person's first account for a provider is named `default` and becomes their default
-  in the same transaction. A connect without a target replaces their only account for the provider;
-  with several, it is refused (`409 connected-account-ambiguous`, with `candidateAccountIds`).
-  `accountId` replaces that account. `name` replaces the account of that name, or makes a new one,
-  which is not the default unless it is the first or the connect says `makeDefault`.
+- **Connect.** A person's first account for a provider is named `default`, whatever the connect
+  named, and becomes their default in the same transaction. A connect without a target replaces
+  their only account for the provider; with several, it is refused
+  (`409 connected-account-ambiguous`, with `candidateAccountIds`). `accountId` replaces that
+  account. `name: "default"` replaces the chosen default, and with none chosen is a connect without
+  a target. Another `name` replaces the account of that name, or makes a new one, which is not the
+  default unless the connect says `makeDefault`.
 - **Set default.** `PUT /v1/connected-accounts/defaults/:provider` names an active account of the
   person's; an invalid one is refused. Naming the current default again changes nothing.
-- **Disconnect.** Archiving an account deletes the default that names it, in the same transaction.
-  No other account is chosen: the person chooses again.
+- **Disconnect.** Archiving an account empties the default row that names it, in the same
+  transaction. No other account is chosen: the person chooses again.
 
 `credential_revision` says which credential the row holds. A reconnect or a refresh that stores
 different bytes (by `payload_sha256`) moves it on; storing the same bytes, and metadata-only writes,
 leave it. `mark-invalid` takes the revision the refusal was observed on and marks nothing once the
 row has moved on (`outcome: superseded`), so a refusal of a replaced credential cannot invalidate
-its replacement. The refreshers and inference pass the revision they read.
+its replacement. The refreshers and inference pass the revision they read. A refresh stores its
+result only while the row still holds the revision the refresher read, so a reconnect during a
+refresh is never overwritten by the old login's rotation, and that rotation is not pushed to
+workspaces; every replacement by an observer (sweeper or sync-back) is conditional on the revision
+it decided against.
 
 **Why profile-level, not revision-level bindings** (unlike `profile_secret_bindings`): revisions are
 content-addressed environment _configuration_; a connected account is a live _identity pointer_.
@@ -248,8 +261,8 @@ inside the deployment's trust boundary):
   material.**
 - `PUT /v1/connected-accounts/defaults/:provider` — `{ ownerUserId, connectedAccountId }`: the
   owner's default for the provider.
-- `DELETE /v1/connected-accounts/:id` — archive (also clears profile links and the default that
-  names it).
+- `DELETE /v1/connected-accounts/:id` — archive (also clears profile links and empties the default
+  that names it).
 - `POST /v1/connected-accounts/:id/mark-invalid` — internal, for 401 feedback from the worker.
   `revision?` guards it (§3).
 - Profiles: minimal `/v1/profiles` group (list by owner; set/clear per-provider account binding) so

@@ -19,6 +19,10 @@ Each person has at most one default account per provider, the one the selector `
 SDK's `true`) means. Connecting a person's first account for a provider makes it the default;
 after that only `makeDefault` on a connect, or `setConnectedAccountDefault`, changes it.
 Disconnecting the default leaves the person without one: no other account is chosen for them.
+At start the control plane points a person with no default row at their account named `default`
+(an older control plane serving through a rolling upgrade connects first accounts without one); a
+person who disconnected their default keeps a row that names no account, so this never picks one
+for them.
 */
 
 export const connectedAccountProviderSchema = Schema.Literals(["claude", "codex", "github"]);
@@ -75,9 +79,10 @@ export const createConnectedAccountRequestSchema = Schema.Struct({
   ownerUserId: NonEmptyString,
   provider: connectedAccountProviderSchema,
   /**
-   * The account to connect or replace by name; a new name is a new account. With neither `name`
-   * nor `accountId`, the owner's first account for the provider is named `default`, their only
-   * one is replaced, and with several the connect is refused (`409`,
+   * The account to connect or replace by name; a new name is a new account, and `default` names
+   * the owner's chosen default. The owner's first account for the provider is named `default`
+   * whatever this says. With neither `name` nor `accountId` (or `default` while none is chosen),
+   * the owner's only account is replaced, and with several the connect is refused (`409`,
    * `connected-account-ambiguous`, with `candidateAccountIds`).
    */
   name: Schema.optional(NonEmptyString),
@@ -149,9 +154,12 @@ export class ConnectedAccountConflictError extends Schema.TaggedError<ConnectedA
     message: Schema.String,
     /**
      * A stable reason, where one applies: `connected-account-ambiguous` (a connect without a target
-     * while the owner has several accounts for the provider), `connected-account-invalid`.
+     * while the owner has several accounts for the provider), `connected-account-invalid` (a default
+     * chosen while its credential is invalid).
      */
-    code: Schema.optional(NonEmptyString),
+    code: Schema.optional(
+      Schema.Literals(["connected-account-ambiguous", "connected-account-invalid"]),
+    ),
     /** The accounts a `connected-account-ambiguous` connect could have meant. */
     candidateAccountIds: Schema.optional(Schema.Array(NonEmptyString)),
   },

@@ -59,7 +59,11 @@ export type ListProfileCredentialBindingsResponse =
 export const setProfileCredentialBindingRequestSchema = Schema.Struct({
   ownerUserId: NonEmptyString,
   provider: connectedAccountProviderSchema,
-  // null clears the binding for that provider; the profile id travels in the URL.
+  /**
+   * The account to bind: its id, or `default` for the owner's chosen default for `provider` (an
+   * account name is accepted too). null clears the binding for that provider; the profile id
+   * travels in the URL.
+   */
   connectedAccountId: Schema.NullOr(NonEmptyString),
 });
 export type SetProfileCredentialBindingRequest =

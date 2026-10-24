@@ -139,6 +139,13 @@ const accounts: ConnectedAccount[] = [
   bobClaude,
 ];
 
+const chosenDefaults: ReadonlyMap<string, string> = new Map([
+  [`${ALICE} claude`, aliceClaude.id],
+  [`${ALICE} codex`, aliceCodex.id],
+  [`${ALICE} github`, aliceGitHub.id],
+  [`${BOB} claude`, bobClaude.id],
+]);
+
 const instanceRow = (
   status: WorkspaceRuntimeInstance["status"] = "ready",
   injections: readonly WorkspaceLaunchCredentialInjection[] | null = [],
@@ -163,7 +170,10 @@ interface Ran {
 
 const homeOf = (entry: Ran) => entry.script.match(/home='([^']+)'/)?.[1];
 
-const newWorld = (instance: WorkspaceRuntimeInstance = instanceRow()) => {
+const newWorld = (
+  instance: WorkspaceRuntimeInstance = instanceRow(),
+  defaults: ReadonlyMap<string, string> = chosenDefaults,
+) => {
   const state = { instance };
   const homes = makeInMemoryCredentialHomes(() => [state.instance]);
   const ran: Ran[] = [];
@@ -204,11 +214,7 @@ const newWorld = (instance: WorkspaceRuntimeInstance = instanceRow()) => {
       getDefault: (input: { ownerUserId: string; provider: string }) =>
         Effect.succeed(
           accounts.find(
-            (candidate) =>
-              candidate.ownerUserId === input.ownerUserId &&
-              candidate.provider === input.provider &&
-              candidate.name === "default" &&
-              candidate.archivedAt === null,
+            (candidate) => candidate.id === defaults.get(`${input.ownerUserId} ${input.provider}`),
           ),
         ),
     } as unknown as ConnectedAccountRepoService),
@@ -316,6 +322,22 @@ describe("putWorkspaceCredentials", () => {
     );
     expect(world.ran[0]?.script).toContain(".config/gh/hosts.yml");
     expect(world.homes.rows.get(`run_1 ${HOME}`)?.onBehalfOfUserId).toBe(ALICE);
+  });
+
+  it("writes the chosen default for `default`, though another account is named default", async () => {
+    const world = newWorld(instanceRow(), new Map([[`${ALICE} claude`, aliceWork.id]]));
+    const answer = succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default" }));
+    expect(answer.home.accounts.claude).toEqual({
+      connectedAccountId: aliceWork.id,
+      name: "work",
+    });
+    expect(world.ran[0]?.payloads[0]).toContain("at-alice-work");
+
+    const none = newWorld(instanceRow(), new Map());
+    expect(failed(await none.put({ onBehalfOfUserId: ALICE, claude: "default" }))).toMatchObject({
+      code: "connected-account-missing",
+      provider: "claude",
+    });
   });
 
   it("writes a setup token as a credentials file", async () => {

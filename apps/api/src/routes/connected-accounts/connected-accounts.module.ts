@@ -26,6 +26,7 @@ import {
   ConnectedAccountRepoInvariantError,
   ConnectedAccountRepoUnexpectedError,
   type ConnectedAccount,
+  type ConnectedAccountWithDefault,
 } from "@sealant/db";
 import { Effect } from "effect";
 
@@ -95,8 +96,7 @@ const toCredentialFreshness = (account: ConnectedAccount): ConnectedAccountCrede
 };
 
 export const toConnectedAccountSummary = (
-  account: ConnectedAccount,
-  isDefault: boolean,
+  account: ConnectedAccountWithDefault,
 ): ConnectedAccountSummary => {
   return {
     connectedAccountId: account.id,
@@ -113,7 +113,7 @@ export const toConnectedAccountSummary = (
     lastUsedAt: account.lastUsedAt?.toISOString() ?? null,
     lastSyncedAt: account.lastSyncedAt?.toISOString() ?? null,
     credential: toCredentialFreshness(account),
-    isDefault,
+    isDefault: account.isDefault,
     credentialRevision: account.credentialRevision,
   };
 };
@@ -283,40 +283,74 @@ export const normalizeSecret = (
   });
 };
 
+type ConnectRequestTarget =
+  | { readonly kind: "account"; readonly accountId: string }
+  | { readonly kind: "name"; readonly name: string }
+  | { readonly kind: "none" };
+
+const parseConnectRequestTarget = (
+  request: CreateConnectedAccountRequest,
+): Effect.Effect<ConnectRequestTarget, ConnectedAccountBadRequestError> => {
+  if (request.accountId !== undefined) {
+    return request.name === undefined
+      ? Effect.succeed({ kind: "account", accountId: request.accountId })
+      : Effect.fail(
+          new ConnectedAccountBadRequestError({
+            message: "Name the account to connect or give its accountId, not both.",
+          }),
+        );
+  }
+  return Effect.succeed(
+    request.name === undefined ? { kind: "none" } : { kind: "name", name: request.name },
+  );
+};
+
 type ConnectTarget =
-  | { readonly kind: "replace"; readonly account: ConnectedAccount }
+  | { readonly kind: "replace"; readonly account: ConnectedAccountWithDefault }
   | { readonly kind: "create"; readonly name: string };
 
+/**
+ * A first account is named `default` whatever the connect named, so readers that still find the
+ * default by name find it. `default` names the chosen default, as it does everywhere else, and
+ * with none chosen it names nothing.
+ */
 const connectTarget = (
-  request: CreateConnectedAccountRequest,
-  existing: readonly ConnectedAccount[],
+  provider: ConnectedAccountProvider,
+  requested: ConnectRequestTarget,
+  existing: readonly ConnectedAccountWithDefault[],
 ): Effect.Effect<ConnectTarget, ConnectedAccountNotFoundError | ConnectedAccountConflictError> => {
-  if (request.accountId !== undefined) {
-    const account = existing.find((candidate) => candidate.id === request.accountId);
+  if (requested.kind === "account") {
+    const account = existing.find((candidate) => candidate.id === requested.accountId);
     return account === undefined
       ? Effect.fail(
           new ConnectedAccountNotFoundError({
-            message: `No ${request.provider} connected account ${request.accountId} to replace.`,
+            message: `No ${provider} connected account ${requested.accountId} to replace.`,
           }),
         )
       : Effect.succeed({ kind: "replace", account });
   }
-  if (request.name !== undefined) {
-    const account = existing.find((candidate) => candidate.name === request.name);
-    return Effect.succeed(
-      account === undefined ? { kind: "create", name: request.name } : { kind: "replace", account },
-    );
-  }
-  const [only, ...others] = existing;
-  if (only === undefined) {
+  if (existing.length === 0) {
     return Effect.succeed({ kind: "create", name: DEFAULT_ACCOUNT_SELECTOR });
   }
-  if (others.length === 0) {
+  if (requested.kind === "name") {
+    const named =
+      requested.name === DEFAULT_ACCOUNT_SELECTOR
+        ? existing.find((candidate) => candidate.isDefault)
+        : existing.find((candidate) => candidate.name === requested.name);
+    if (named !== undefined) {
+      return Effect.succeed({ kind: "replace", account: named });
+    }
+    if (requested.name !== DEFAULT_ACCOUNT_SELECTOR) {
+      return Effect.succeed({ kind: "create", name: requested.name });
+    }
+  }
+  const [only, ...others] = existing;
+  if (only !== undefined && others.length === 0) {
     return Effect.succeed({ kind: "replace", account: only });
   }
   return Effect.fail(
     new ConnectedAccountConflictError({
-      message: `Several ${request.provider} accounts are connected; say which one to replace with accountId, or name a new one.`,
+      message: `Several ${provider} accounts are connected; say which one to replace with accountId, or name a new one.`,
       code: "connected-account-ambiguous",
       candidateAccountIds: existing.map((account) => account.id),
     }),
@@ -338,17 +372,19 @@ const withOwnerLock = <A, E, R>(ownerUserId: string, write: Effect.Effect<A, E, 
       );
   });
 
-const isDefaultAccount = (account: ConnectedAccount) =>
+const reloadAccount = (id: string) =>
   Effect.gen(function* () {
     const connectedAccountRepo = yield* ConnectedAccountRepo;
-    const chosen = yield* withInternalError(
-      connectedAccountRepo.getDefault({
-        ownerUserId: account.ownerUserId,
-        provider: account.provider,
-      }),
-      "Failed to load the default connected account.",
+    const account = yield* withInternalError(
+      connectedAccountRepo.getById(id),
+      "Failed to load connected account.",
     );
-    return chosen?.id === account.id;
+    if (account === undefined) {
+      return yield* new ConnectedAccountInternalServerError({
+        message: `Connected account ${id} disappeared while it was written.`,
+      });
+    }
+    return account;
   });
 
 export const createConnectedAccount = (input: {
@@ -357,12 +393,7 @@ export const createConnectedAccount = (input: {
   return Effect.gen(function* () {
     yield* requireCredentialsKey;
     const request = input.payload;
-
-    if (request.name !== undefined && request.accountId !== undefined) {
-      return yield* new ConnectedAccountBadRequestError({
-        message: "Name the account to connect or give its accountId, not both.",
-      });
-    }
+    const requested = yield* parseConnectRequestTarget(request);
 
     const normalized = yield* normalizeSecret(request.provider, request.secret);
 
@@ -389,7 +420,7 @@ export const createConnectedAccount = (input: {
           }),
           "Failed to look up connected accounts.",
         );
-        const target = yield* connectTarget(request, existing);
+        const target = yield* connectTarget(request.provider, requested, existing);
 
         const account =
           target.kind === "replace"
@@ -447,10 +478,9 @@ export const createConnectedAccount = (input: {
             }),
             "Failed to set the default connected account.",
           );
-          return toConnectedAccountSummary(account, true);
         }
 
-        return toConnectedAccountSummary(account, yield* isDefaultAccount(account));
+        return toConnectedAccountSummary(yield* reloadAccount(account.id));
       }),
     );
   });
@@ -464,14 +494,8 @@ export const listConnectedAccounts = (input: { readonly ownerUserId: string }) =
       connectedAccountRepo.listByOwner(input.ownerUserId),
       "Failed to list connected accounts.",
     );
-    const defaults = yield* withInternalError(
-      connectedAccountRepo.listDefaultAccountIds(input.ownerUserId),
-      "Failed to list default connected accounts.",
-    );
 
-    return {
-      items: items.map((account) => toConnectedAccountSummary(account, defaults.has(account.id))),
-    } satisfies ListConnectedAccountsResponse;
+    return { items: items.map(toConnectedAccountSummary) } satisfies ListConnectedAccountsResponse;
   });
 };
 
@@ -518,7 +542,7 @@ export const setConnectedAccountDefault = (input: {
           "Failed to set the default connected account.",
         );
 
-        return toConnectedAccountSummary(account, true);
+        return toConnectedAccountSummary({ ...account, isDefault: true });
       }),
     );
   });
@@ -549,7 +573,7 @@ export const archiveConnectedAccount = (input: {
           });
         }
 
-        return toConnectedAccountSummary(archived, false);
+        return toConnectedAccountSummary({ ...archived, isDefault: false });
       }),
     );
   });
@@ -588,13 +612,6 @@ export const markConnectedAccountInvalid = (input: {
       "Failed to mark connected account invalid.",
     );
 
-    if (marked !== undefined) {
-      return {
-        ...toConnectedAccountSummary(marked, yield* isDefaultAccount(marked)),
-        outcome: "marked",
-      } satisfies MarkConnectedAccountInvalidResponse;
-    }
-
     const current = yield* withInternalError(
       connectedAccountRepo.getById(account.id),
       "Failed to load connected account.",
@@ -605,8 +622,8 @@ export const markConnectedAccountInvalid = (input: {
     }
 
     return {
-      ...toConnectedAccountSummary(current, yield* isDefaultAccount(current)),
-      outcome: "superseded",
+      ...toConnectedAccountSummary(current),
+      outcome: marked === undefined ? "superseded" : "marked",
     } satisfies MarkConnectedAccountInvalidResponse;
   });
 };

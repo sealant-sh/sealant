@@ -5,6 +5,8 @@ import {
   ConnectedAccountRepoLive,
   createSealantDB,
   DatabaseTransactionLive,
+  ProfileRepoLive,
+  schema,
   SealantDB,
   user,
   type DB,
@@ -19,6 +21,7 @@ process.env["SEALANT_CREDENTIALS_KEY"] = Buffer.alloc(32, 7).toString("base64");
 const DATABASE_URL = process.env.SEALANT_TEST_DATABASE_URL;
 
 let accounts: typeof import("./connected-accounts.module.js");
+let profileModule: typeof import("../profiles/profiles.module.js");
 
 const fakeCipher: CredentialCipherService = {
   encrypt: (plaintext) => Effect.succeed({ sealed: `sealed:${plaintext}`, keyId: "k-test" }),
@@ -35,6 +38,7 @@ describe.skipIf(DATABASE_URL === undefined)("a person's default login (Postgres)
 
   beforeAll(async () => {
     accounts = await import("./connected-accounts.module.js");
+    profileModule = await import("../profiles/profiles.module.js");
     db = await createSealantDB(DATABASE_URL ?? "");
   });
 
@@ -47,7 +51,7 @@ describe.skipIf(DATABASE_URL === undefined)("a person's default login (Postgres)
   };
 
   const layer = () =>
-    Layer.mergeAll(ConnectedAccountRepoLive, DatabaseTransactionLive).pipe(
+    Layer.mergeAll(ConnectedAccountRepoLive, ProfileRepoLive, DatabaseTransactionLive).pipe(
       Layer.provideMerge(Layer.succeed(SealantDB, db)),
       Layer.provideMerge(Layer.succeed(CredentialCipher, fakeCipher)),
     );
@@ -79,6 +83,67 @@ describe.skipIf(DATABASE_URL === undefined)("a person's default login (Postgres)
     const first = await run(connect(owner, token("one")));
     expect(first).toMatchObject({ name: "default", isDefault: true, credentialRevision: 1 });
     expect((await run(resolveDefault(owner))).id).toBe(first.connectedAccountId);
+  });
+
+  it("names a first account default even when the connect named it", async () => {
+    const owner = await person();
+    const first = await run(connect(owner, token("one"), { name: "work" }));
+    expect(first).toMatchObject({ name: "default", isDefault: true });
+    expect((await run(resolveDefault(owner))).id).toBe(first.connectedAccountId);
+  });
+
+  it("means the chosen default by `default`, not the account named default", async () => {
+    const owner = await person();
+    const named = await run(connect(owner, token("one")));
+    const chosen = await run(connect(owner, token("work"), { name: "work", makeDefault: true }));
+
+    const replaced = await run(connect(owner, token("work-2"), { name: "default" }));
+    expect(replaced).toMatchObject({
+      connectedAccountId: chosen.connectedAccountId,
+      name: "work",
+      credentialRevision: 2,
+    });
+    const untouched = (
+      await run(accounts.listConnectedAccounts({ ownerUserId: owner }))
+    ).items.find((account) => account.connectedAccountId === named.connectedAccountId);
+    expect(untouched).toMatchObject({ name: "default", isDefault: false, credentialRevision: 1 });
+
+    const profileId = `prof_${randomUUID()}`;
+    await Effect.runPromise(
+      db
+        .insert(schema.profiles)
+        .values({ id: profileId, ownerUserId: owner, slug: profileId, name: "p" }),
+    );
+    const bindings = await run(
+      profileModule.setProfileCredentialBinding({
+        profileId,
+        payload: { ownerUserId: owner, provider: "claude", connectedAccountId: "default" },
+      }),
+    );
+    expect(bindings.items).toEqual([
+      expect.objectContaining({
+        connectedAccountId: chosen.connectedAccountId,
+        account: expect.objectContaining({ isDefault: true }),
+      }),
+    ]);
+  });
+
+  it("with no default chosen, `default` names no account", async () => {
+    const owner = await person();
+    await run(connect(owner, token("one")));
+    const work = await run(connect(owner, token("work"), { name: "work", makeDefault: true }));
+    await run(
+      accounts.archiveConnectedAccount({
+        connectedAccountId: work.connectedAccountId,
+        ownerUserId: owner,
+      }),
+    );
+    await run(connect(owner, token("other"), { name: "other" }));
+
+    expect(await refusal(connect(owner, token("two"), { name: "default" }))).toMatchObject({
+      code: "connected-account-ambiguous",
+    });
+    expect(await defaults(owner)).toEqual([]);
   });
 
   it("replaces the only account on a connect without a target, and counts new bytes only", async () => {
@@ -144,12 +209,12 @@ describe.skipIf(DATABASE_URL === undefined)("a person's default login (Postgres)
     );
     expect(await defaults(owner)).toEqual([]);
     const pointers = await Effect.runPromise(
-      db.execute(
-        `select 1 from connected_account_defaults where owner_user_id = '${owner}'`,
+      db.execute<{ readonly connected_account_id: string | null }>(
+        `select connected_account_id from connected_account_defaults where owner_user_id = '${owner}'`,
         "objects",
       ),
     );
-    expect(pointers, "no default row names the archived account").toEqual([]);
+    expect(pointers, "the default row names no account").toEqual([{ connected_account_id: null }]);
     expect(await refusal(resolveDefault(owner))).toMatchObject({
       code: "connected-account-missing",
       provider: "claude",

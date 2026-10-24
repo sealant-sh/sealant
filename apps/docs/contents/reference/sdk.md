@@ -86,7 +86,9 @@ await mine.connectedAccounts.connect({ provider: "codex", secret: authJson });
 A person's first account for a provider is their default, the one `true` selects.
 `connectedAccounts.setDefault({ provider, accountId })` chooses another, `connect()` takes
 `accountId` (replace that account) and `makeDefault`, and each `ConnectedAccount` says `isDefault`.
-Disconnecting the default leaves none chosen. Detect it with `features().connectedAccountDefaults`.
+Disconnecting the default leaves none chosen. Against a control plane without
+`features().connectedAccountDefaults`, `setDefault`, `accountId`, `makeDefault` and a `markInvalid`
+`revision` throw `connected-account-defaults-unsupported` and send nothing.
 
 `apiKey` is a service key (`SEALANT_SERVICE_KEYS` on the API) or a scoped user access token; see the
 [HTTP API auth section](/docs/reference/http-api).

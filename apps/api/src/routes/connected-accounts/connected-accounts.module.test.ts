@@ -73,6 +73,8 @@ const account = (overrides: Record<string, unknown> = {}) =>
     lastSyncedAt: null,
     invalidAt: null,
     archivedAt: null,
+    credentialRevision: 1,
+    isDefault: false,
     ...overrides,
   }) as Parameters<typeof toConnectedAccountSummary>[0];
 
@@ -91,7 +93,6 @@ describe("toConnectedAccountSummary, credential freshness", () => {
         },
         lastSyncedAt: new Date("2026-09-18T12:00:00.000Z"),
       }),
-      true,
     );
     expect(summary.credential).toEqual({
       accessExpiresAt: "2026-09-18T18:20:18.245Z",
@@ -104,7 +105,7 @@ describe("toConnectedAccountSummary, credential freshness", () => {
 
   /** A setup token, or a row connected before this shipped, simply has nothing to report. */
   it("answers null for everything it did not observe", () => {
-    expect(toConnectedAccountSummary(account(), false).credential).toEqual({
+    expect(toConnectedAccountSummary(account()).credential).toEqual({
       accessExpiresAt: null,
       refreshExpiresAt: null,
       lastRefreshAt: null,
@@ -115,7 +116,6 @@ describe("toConnectedAccountSummary, credential freshness", () => {
   it("ignores a stored outcome it does not recognise, and a nonsense expiry", () => {
     const summary = toConnectedAccountSummary(
       account({ metadata: { lastRefreshOutcome: "something-else", expiresAt: 0 } }),
-      false,
     );
     expect(summary.credential.lastRefreshOutcome).toBeNull();
     expect(summary.credential.accessExpiresAt).toBeNull();

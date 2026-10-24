@@ -1,7 +1,7 @@
 CREATE TABLE "connected_account_defaults" (
 	"owner_user_id" text,
 	"provider" text,
-	"connected_account_id" text NOT NULL,
+	"connected_account_id" text,
 	"updated_at" timestamp with time zone NOT NULL,
 	CONSTRAINT "connected_account_defaults_pkey" PRIMARY KEY("owner_user_id","provider")
 );

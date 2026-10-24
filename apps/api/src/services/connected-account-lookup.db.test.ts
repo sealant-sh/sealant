@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import {
+  ConnectedAccountRepo,
   ConnectedAccountRepoLive,
   createSealantDB,
   SealantDB,
@@ -29,6 +30,15 @@ const migrationsFolder = join(
 );
 
 const silent = () => {};
+
+/** A migrations folder holding only the migrations `keep` admits, so later ones never apply here. */
+const migrationsWhere = (keep: (name: string) => boolean) => {
+  const folder = mkdtempSync(join(tmpdir(), "sealant-migrations-"));
+  for (const entry of readdirSync(migrationsFolder).filter(keep)) {
+    cpSync(join(migrationsFolder, entry), join(folder, entry), { recursive: true });
+  }
+  return folder;
+};
 
 const insertAccount = (
   id: string,
@@ -73,12 +83,7 @@ describe.skipIf(DATABASE_URL === undefined)("the default-pointer migration (Post
     adminDb = await createSealantDB(admin.toString());
     await Effect.runPromise(adminDb.execute(`CREATE DATABASE "${databaseName}"`));
 
-    const earlier = mkdtempSync(join(tmpdir(), "sealant-migrations-"));
-    for (const entry of readdirSync(migrationsFolder)) {
-      if (entry !== POINTER_MIGRATION) {
-        cpSync(join(migrationsFolder, entry), join(earlier, entry), { recursive: true });
-      }
-    }
+    const earlier = migrationsWhere((entry) => entry < POINTER_MIGRATION);
     await runMigrations({ databaseUrl: fresh.toString(), migrationsFolder: earlier, log: silent });
     rmSync(earlier, { recursive: true, force: true });
 
@@ -112,11 +117,13 @@ describe.skipIf(DATABASE_URL === undefined)("the default-pointer migration (Post
       before.set(`${owner} ${provider}`, rows[0]?.id);
     }
 
+    const throughPointer = migrationsWhere((entry) => entry <= POINTER_MIGRATION);
     const { applied } = await runMigrations({
       databaseUrl: fresh.toString(),
-      migrationsFolder,
+      migrationsFolder: throughPointer,
       log: silent,
     });
+    rmSync(throughPointer, { recursive: true, force: true });
     expect(applied).toEqual([POINTER_MIGRATION]);
   }, 120_000);
 
@@ -191,5 +198,51 @@ describe.skipIf(DATABASE_URL === undefined)("the default-pointer migration (Post
       ),
     );
     expect(rows).toEqual([{ revision: 1 }]);
+  });
+
+  it("at start, gives a default to the first accounts an older control plane connected, and to no one who disconnected theirs", async () => {
+    for (const id of ["erin", "frank", "gina", "hal"]) {
+      await Effect.runPromise(
+        db.insert(user).values({ id, name: id, email: `${id}@example.test` }),
+      );
+    }
+    for (const statement of [
+      insertAccount("cacc_erin_claude", "erin", "claude", "default", "active"),
+      insertAccount("cacc_frank_old", "frank", "claude", "default", "active"),
+      `insert into connected_account_defaults values ('frank', 'claude', 'cacc_frank_old', now())`,
+      `update connected_accounts set status = 'archived', archived_at = now() where id = 'cacc_frank_old'`,
+      insertAccount("cacc_frank_claude", "frank", "claude", "default", "active"),
+      insertAccount("cacc_gina_claude", "gina", "claude", "default", "active"),
+      insertAccount("cacc_gina_work", "gina", "claude", "work", "active"),
+      `insert into connected_account_defaults values ('gina', 'claude', 'cacc_gina_work', now())`,
+      insertAccount("cacc_hal_claude", "hal", "claude", "default", "active"),
+      insertAccount("cacc_hal_work", "hal", "claude", "work", "active"),
+      `insert into connected_account_defaults values ('hal', 'claude', 'cacc_hal_work', now())`,
+    ]) {
+      await Effect.runPromise(db.execute(statement));
+    }
+    const backfill = Effect.flatMap(ConnectedAccountRepo, (accounts) => accounts.backfillDefaults);
+    await run(
+      Effect.flatMap(ConnectedAccountRepo, (accounts) =>
+        accounts.archive({ id: "cacc_hal_work", ownerUserId: "hal" }),
+      ),
+    );
+
+    const written = await run(backfill);
+    expect(written, "erin's new default and frank's repaired one").toBe(2);
+
+    const chosen = async (owner: string) => {
+      const lookup = await run(
+        lookupConnectedAccount({ ownerUserId: owner, provider: "claude", selection: "default" }),
+      );
+      return lookup.kind === "missing" ? undefined : lookup.account.id;
+    };
+    expect(await chosen("erin")).toBe("cacc_erin_claude");
+    expect(await chosen("frank")).toBe("cacc_frank_claude");
+    expect(await chosen("gina"), "a chosen default stays").toBe("cacc_gina_work");
+    expect(await chosen("hal"), "a disconnected default stays disconnected").toBeUndefined();
+    expect(await chosen("alice")).toBe(seeded.aliceClaude);
+
+    expect(await run(backfill)).toBe(0);
   });
 });

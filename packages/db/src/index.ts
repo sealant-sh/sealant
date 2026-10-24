@@ -262,6 +262,7 @@ export {
   type ClearProfileConnectedAccountBindingInput,
   type ConnectedAccountRepoError,
   type ConnectedAccountRepoService,
+  type ConnectedAccountWithDefault,
   type CreateConnectedAccountInput,
   type GetConnectedAccountByOwnerProviderNameInput,
   type ProfileConnectedAccountBindingWithAccount,

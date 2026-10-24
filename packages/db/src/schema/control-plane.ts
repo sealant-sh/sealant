@@ -546,7 +546,8 @@ export const connectedAccountDefaults = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     provider: text({ enum: connectedAccountProviderValues }).notNull(),
-    connectedAccountId: text("connected_account_id").notNull(),
+    /** Null once the person disconnected their default: they have none, by their own act. */
+    connectedAccountId: text("connected_account_id"),
     updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date())
