@@ -18,6 +18,7 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { createInterface } from "node:readline";
 
+import { providerLoginEnvNames } from "@sealant/api-contracts";
 import {
   codexAuthJsonCanRefresh,
   codexAuthJsonCopy,
@@ -99,9 +100,8 @@ const codexCommand = (): readonly string[] => {
 /** Subprocess env: ambient OpenAI identities stripped, the provisioned home injected. */
 const buildEnv = (codexHome: string): Record<string, string | undefined> => {
   const env: Record<string, string | undefined> = { ...process.env };
-  delete env["OPENAI_API_KEY"];
+  for (const name of providerLoginEnvNames.codex) delete env[name];
   delete env["OPENAI_BASE_URL"];
-  delete env["CODEX_API_KEY"];
   env["CODEX_HOME"] = codexHome;
   return env;
 };

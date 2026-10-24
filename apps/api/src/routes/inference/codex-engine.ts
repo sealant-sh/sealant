@@ -27,6 +27,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { providerLoginEnvNames } from "@sealant/api-contracts";
 import { Context, Effect, Layer } from "effect";
 
 import { InferenceEngineError, type InferenceEngineTurn } from "./claude-engine.js";
@@ -89,7 +90,7 @@ const buildEnv = (codexHome: string): Record<string, string | undefined> => {
   const env: Record<string, string | undefined> = { ...process.env };
   // An ambient key would shadow the auth.json and bill a different identity; an ambient base URL
   // would point the official runtime somewhere other than OpenAI. Both are stripped.
-  delete env["OPENAI_API_KEY"];
+  for (const name of providerLoginEnvNames.codex) delete env[name];
   delete env["OPENAI_BASE_URL"];
   env["CODEX_HOME"] = codexHome;
   return env;

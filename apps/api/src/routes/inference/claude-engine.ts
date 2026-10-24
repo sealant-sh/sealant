@@ -29,6 +29,7 @@ import { tmpdir } from "node:os";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { providerLoginEnvNames } from "@sealant/api-contracts";
 import { Context, Effect, Layer } from "effect";
 
 import {
@@ -230,17 +231,15 @@ const buildCallerToolServer = (
 /** Subprocess env: ambient Anthropic identities stripped, the resolved account's auth injected. */
 const buildEnv = (auth: InferenceAuth): Record<string, string | undefined> => {
   const env: Record<string, string | undefined> = { ...process.env };
-  delete env["ANTHROPIC_API_KEY"];
-  delete env["ANTHROPIC_AUTH_TOKEN"];
+  for (const name of providerLoginEnvNames.claude) delete env[name];
   delete env["ANTHROPIC_PROFILE"];
   if (auth.kind === "oauth-token") {
     env["CLAUDE_CODE_OAUTH_TOKEN"] = auth.oauthToken;
     delete env["CLAUDE_CONFIG_DIR"];
   } else {
     // Session file: the CLI must authenticate from the provisioned config dir's .credentials.json
-    // (and rotate it there with the refresh token). An ambient CLAUDE_CODE_OAUTH_TOKEN would
-    // shadow the file and disable the refresh, so it is stripped.
-    delete env["CLAUDE_CODE_OAUTH_TOKEN"];
+    // (and rotate it there with the refresh token); an ambient CLAUDE_CODE_OAUTH_TOKEN, stripped
+    // above, would shadow the file and disable the refresh.
     env["CLAUDE_CONFIG_DIR"] = auth.configDir;
   }
   env["CLAUDE_AGENT_SDK_CLIENT_APP"] = "sealant-control-plane";

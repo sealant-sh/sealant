@@ -724,6 +724,9 @@ importers:
       '@openai/codex':
         specifier: 'catalog:'
         version: 0.148.0
+      '@sealant/api-contracts':
+        specifier: workspace:*
+        version: link:../../packages/api-contracts
       '@sealant/credentials':
         specifier: workspace:*
         version: link:../../packages/credentials

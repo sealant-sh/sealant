@@ -350,3 +350,9 @@ export const splitPlatformSecretEnv = (input: Readonly<Record<string, string>>):
   }
   return { callerEnv, platformEnv };
 };
+
+/** Names a process strips before it authenticates as one connected account of that provider. */
+export const providerLoginEnvNames = {
+  claude: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
+  codex: ["OPENAI_API_KEY", "CODEX_API_KEY"],
+} as const satisfies Readonly<Record<"claude" | "codex", readonly string[]>>;

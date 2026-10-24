@@ -15,6 +15,7 @@
 import { tmpdir } from "node:os";
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { providerLoginEnvNames } from "@sealant/api-contracts";
 import {
   claudeCredentialsCanRefresh,
   claudeCredentialsCopy,
@@ -82,10 +83,8 @@ export const needsClaudeSessionRefresh = (
  */
 const buildPingEnv = (configDir: string): Record<string, string | undefined> => {
   const env: Record<string, string | undefined> = { ...process.env };
-  delete env["ANTHROPIC_API_KEY"];
-  delete env["ANTHROPIC_AUTH_TOKEN"];
+  for (const name of providerLoginEnvNames.claude) delete env[name];
   delete env["ANTHROPIC_PROFILE"];
-  delete env["CLAUDE_CODE_OAUTH_TOKEN"];
   env["CLAUDE_CONFIG_DIR"] = configDir;
   env["CLAUDE_AGENT_SDK_CLIENT_APP"] = "sealant-worker";
   return env;
