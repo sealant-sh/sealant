@@ -35,13 +35,14 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { providerLoginEnvNames } from "@sealant/api-contracts";
 import { Context, Effect, Layer } from "effect";
 
+import type { Exchange } from "./exchange.js";
 import {
   InferenceSessionState,
   SessionTurnTimeoutError,
   type SessionTurn,
   type ToolResultInput,
 } from "./session-state.js";
-import { extractJson, soundsLikeAuthFailure, redactSecret } from "./support.js";
+import { extractJson, soundsLikeAuthFailure, redactSecrets } from "./support.js";
 
 const CALLER_SERVER_NAME = "caller";
 const DEFAULT_MAX_TURNS = 16;
@@ -64,9 +65,9 @@ export interface InferenceToolDefinition {
 
 /**
  * How the exchange authenticates the official Claude Code runtime. Secrets are used ONLY for the
- * subprocess env (or the config dir the caller provisioned); never stored, never logged. Every
- * variant carries the caller's private `configDir`, which the CLI also gets as `HOME`: without it
- * a refused login falls back to the API host's own `~/.claude` login.
+ * subprocess env (or the config dir the caller provisioned); never logged. Every variant carries
+ * the caller's private `configDir`, which the CLI also gets as `HOME`: without it a refused login
+ * falls back to the API host's own `~/.claude` login.
  */
 export type InferenceAuth =
   | {
@@ -79,20 +80,20 @@ export type InferenceAuth =
       /**
        * Session-file accounts: a caller-provisioned private config dir holding the decrypted
        * .credentials.json; the CLI reads it via `CLAUDE_CONFIG_DIR` and can rotate the session
-       * in place. `accessToken` is carried ONLY so engine error text can be redacted.
+       * in place.
        */
       readonly kind: "config-dir";
       readonly configDir: string;
-      readonly accessToken: string;
     }
   | {
       readonly kind: "api-key";
       readonly configDir: string;
       readonly keyPath: string;
-      readonly apiKey: string;
     };
 
 export interface InferenceStartInput {
+  /** Held by the live session until it ends; its secrets are redacted from engine errors. */
+  readonly exchange: Exchange;
   readonly auth: InferenceAuth;
   readonly prompt: string;
   readonly system?: string;
@@ -143,6 +144,8 @@ export class InferenceEngineError extends Error {
 }
 
 export interface InferenceEngineService {
+  /** The exchange a live session runs, until the session ends. */
+  readonly exchange: (sessionId: string) => Exchange | undefined;
   readonly start: (
     input: InferenceStartInput,
   ) => Effect.Effect<InferenceEngineTurn, InferenceEngineError>;
@@ -208,21 +211,6 @@ const buildEnv = (auth: InferenceAuth): Record<string, string | undefined> => {
   return env;
 };
 
-/** The secret to redact from engine error text, per auth mode. */
-const authSecret = (auth: InferenceAuth): string => {
-  switch (auth.kind) {
-    case "oauth-token": {
-      return auth.oauthToken;
-    }
-    case "config-dir": {
-      return auth.accessToken;
-    }
-    case "api-key": {
-      return auth.apiKey;
-    }
-  }
-};
-
 const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
 
 const authSettings = (auth: InferenceAuth) =>
@@ -236,7 +224,7 @@ const turnFailure = (
   status: number | null | undefined,
   assistantError: SDKAssistantMessageError | undefined,
   detail: string,
-  secret: string,
+  secrets: readonly string[],
 ): InferenceEngineError => {
   if (status === 401) {
     return new InferenceEngineError("auth-401", "Inference failed: the provider answered 401.");
@@ -245,11 +233,11 @@ const turnFailure = (
     return new InferenceEngineError("auth-words", "Inference failed: authentication_failed");
   }
   return assistantError === undefined
-    ? toEngineError(new Error(detail), secret)
+    ? toEngineError(new Error(detail), secrets)
     : new InferenceEngineError("engine", `Inference failed: ${assistantError}`);
 };
 
-const toEngineError = (error: unknown, secret: string): InferenceEngineError => {
+const toEngineError = (error: unknown, secrets: readonly string[]): InferenceEngineError => {
   if (error instanceof InferenceEngineError) {
     return error;
   }
@@ -257,13 +245,14 @@ const toEngineError = (error: unknown, secret: string): InferenceEngineError => 
     return new InferenceEngineError("timeout", error.message);
   }
   const raw = error instanceof Error ? error.message : String(error);
-  const message = redactSecret(raw, secret);
+  const message = redactSecrets(raw, secrets);
   return soundsLikeAuthFailure(message)
     ? new InferenceEngineError("auth-words", message, { cause: error })
     : new InferenceEngineError("engine", message, { cause: error });
 };
 
 interface LiveSession {
+  readonly exchange: Exchange;
   readonly state: InferenceSessionState;
   readonly close: () => void;
   readonly exited: () => Promise<void>;
@@ -391,10 +380,11 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
       });
     } catch (error) {
       runSessionEnd(input.onSessionEnd);
-      throw toEngineError(error, authSecret(input.auth));
+      throw toEngineError(error, input.exchange.secrets);
     }
 
     sessions.set(sessionId, {
+      exchange: input.exchange,
       state,
       close: () => exchange.close(),
       exited: () => exited,
@@ -413,7 +403,7 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
             message.subtype === "api_retry" &&
             message.error_status === 401
           ) {
-            state.fail(turnFailure(401, assistantError, "", authSecret(input.auth)));
+            state.fail(turnFailure(401, assistantError, "", input.exchange.secrets));
           }
           if (message.type === "assistant" && message.error !== undefined) {
             assistantError = message.error;
@@ -441,12 +431,12 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
                 message.api_error_status,
                 assistantError,
                 message.result,
-                authSecret(input.auth),
+                input.exchange.secrets,
               ),
             );
           } else {
             const detail = message.errors.length > 0 ? message.errors.join("; ") : message.subtype;
-            state.fail(turnFailure(undefined, assistantError, detail, authSecret(input.auth)));
+            state.fail(turnFailure(undefined, assistantError, detail, input.exchange.secrets));
           }
         }
         if (!state.isSettled) {
@@ -455,17 +445,17 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
           );
         }
       } catch (error) {
-        state.fail(toEngineError(error, authSecret(input.auth)));
+        state.fail(toEngineError(error, input.exchange.secrets));
       }
     })();
 
-    return awaitTurn(sessionId, state, authSecret(input.auth));
+    return awaitTurn(sessionId, state, input.exchange.secrets);
   };
 
   const awaitTurn = async (
     sessionId: string,
     state: InferenceSessionState,
-    secret: string,
+    secrets: readonly string[],
   ): Promise<InferenceEngineTurn> => {
     try {
       const turn = await state.nextTurn(turnTimeoutMs);
@@ -476,7 +466,7 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
     } catch (error) {
       state.expire("Inference exchange failed.");
       dropSession(sessionId);
-      throw toEngineError(error, secret);
+      throw toEngineError(error, secrets);
     }
   };
 
@@ -488,31 +478,32 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
         `Inference session not found (or expired): ${input.sessionId}. Start the exchange over.`,
       );
     }
-    for (const result of input.toolResults) {
-      const resolved = session.state.resolveToolResult(result.toolCallId, {
-        content: result.content,
-        isError: result.isError === true,
-      });
-      if (!resolved) {
-        throw new InferenceEngineError(
-          "bad-tool-result",
-          `Unknown or already-settled toolCallId: ${result.toolCallId}.`,
-        );
-      }
+    const refused = session.state.resolveToolResults(
+      input.toolResults.map((result) => ({
+        toolCallId: result.toolCallId,
+        result: { content: result.content, isError: result.isError === true },
+      })),
+    );
+    if (refused.length > 0) {
+      throw new InferenceEngineError(
+        "bad-tool-result",
+        `Unknown, repeated or already-settled toolCallId: ${refused.join(", ")}. No result was delivered.`,
+      );
     }
-    return awaitTurn(input.sessionId, session.state, "");
+    return awaitTurn(input.sessionId, session.state, session.exchange.secrets);
   };
 
   return {
+    exchange: (sessionId) => sessions.get(sessionId)?.exchange,
     start: (input) =>
       Effect.tryPromise({
         try: () => startExchange(input),
-        catch: (error) => toEngineError(error, authSecret(input.auth)),
+        catch: (error) => toEngineError(error, input.exchange.secrets),
       }),
     continueSession: (input) =>
       Effect.tryPromise({
         try: () => continueExchange(input),
-        catch: (error) => toEngineError(error, ""),
+        catch: (error) => toEngineError(error, []),
       }),
   };
 };
