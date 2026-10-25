@@ -5,11 +5,10 @@
  * as workspace creation), decrypt the stored credential, hand it to the provider's engine —
  * {@link InferenceEngine} (the official Claude Agent SDK) for claude accounts,
  * {@link CodexInferenceEngine} (the official Codex CLI) for codex accounts — and stamp
- * `last_used_at`, the same per-account attribution workspace injection does. A live auth failure
- * on a setup-token claude account marks it invalid (the in-process equivalent of the
- * `mark-invalid` 401-feedback endpoint); self-refreshing credentials (claude session files, codex
- * auth.json) get a 409 "reconnect" instead. No handler ever returns or logs secret material;
- * engine errors pass through `redactSecret` before leaving this module.
+ * `last_used_at`, the same per-account attribution workspace injection does. The exchange keeps
+ * one receipt (account, revision, login class) from its start: every continuation runs on it, and
+ * start and continuation share one success and one failure handler. No handler ever returns or
+ * logs secret material; engine errors are redacted before leaving this module.
  */
 import {
   BudgetExceededError,
@@ -18,6 +17,7 @@ import {
   InferenceInternalServerError,
   InferenceNotFoundError,
   InferenceUnavailableError,
+  type InferenceReceipt,
   type InferenceRespondRequest,
   type InferenceRespondResponse,
   type InferenceTurn,
@@ -35,14 +35,12 @@ import {
   provisionCodexHome,
   removeClaudeConfigDir,
   removeCodexHome,
-  type ClaudeOauthCredentials,
 } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
   InferenceUsageRepo,
   ProfileRepo,
   type ConnectedAccount,
-  type ConnectedAccountRepoService,
 } from "@sealant/db";
 import { Effect } from "effect";
 
@@ -165,7 +163,219 @@ const resolveAccount = (input: {
     return account;
   });
 
-const mapEngineTurn = (engineTurn: InferenceEngineTurn): InferenceRespondResponse => {
+/** The login one exchange runs on, read from the resolved account's stored payload. */
+type ExchangeLogin =
+  | { readonly shape: "claude-key"; readonly apiKey: string }
+  | { readonly shape: "claude-setup-token"; readonly token: string }
+  | {
+      readonly shape: "claude-session";
+      readonly credentialsJson: string;
+      readonly accessToken: string;
+      readonly refreshToken: string | undefined;
+    }
+  | { readonly shape: "codex-key"; readonly apiKey: string }
+  | { readonly shape: "codex-chatgpt"; readonly authJson: string };
+
+type LoginShape = ExchangeLogin["shape"];
+
+/**
+ * What every turn of one exchange is answered and judged by, fixed when it starts. A continuation
+ * never resolves the account again, so a reconnect between turns changes nothing here.
+ */
+interface Exchange {
+  readonly ownerUserId: string;
+  readonly receipt: InferenceReceipt;
+  readonly shape: LoginShape;
+  /** Every secret the login holds, kept ONLY to redact what leaves this module. */
+  readonly secrets: readonly (string | undefined)[];
+}
+
+const loginClassOfShape = (shape: LoginShape): InferenceReceipt["login"] =>
+  shape === "claude-key" || shape === "codex-key" ? "api-key" : "subscription";
+
+const secretsOf = (login: ExchangeLogin): readonly (string | undefined)[] => {
+  switch (login.shape) {
+    case "claude-key":
+    case "codex-key": {
+      return [login.apiKey];
+    }
+    case "claude-setup-token": {
+      return [login.token];
+    }
+    case "claude-session": {
+      return [login.accessToken, login.refreshToken];
+    }
+    case "codex-chatgpt": {
+      return extractCodexSecrets(login.authJson);
+    }
+  }
+};
+
+const readLogin = (account: ConnectedAccount, payloadJson: string) =>
+  Effect.try({
+    try: (): ExchangeLogin => {
+      const payload: unknown = JSON.parse(payloadJson);
+      if (account.provider === "codex") {
+        const codex = parseCodexCredentialPayload(payload);
+        return "apiKey" in codex
+          ? { shape: "codex-key", apiKey: codex.apiKey }
+          : { shape: "codex-chatgpt", authJson: codex.authJson };
+      }
+      const claude = parseClaudeCredentialPayload(payload);
+      if ("apiKey" in claude) {
+        return { shape: "claude-key", apiKey: claude.apiKey };
+      }
+      if ("token" in claude) {
+        return { shape: "claude-setup-token", token: claude.token };
+      }
+      const extracted = extractClaudeOauthCredentials(claude.credentialsJson);
+      if (extracted === undefined) {
+        throw new Error("credentials.json payload is unusable");
+      }
+      return { shape: "claude-session", credentialsJson: claude.credentialsJson, ...extracted };
+    },
+    catch: () =>
+      new InferenceInternalServerError({
+        message: `Stored ${account.provider} credential payload is malformed.`,
+      }),
+  });
+
+const provisionError = (what: string) => (cause: unknown) =>
+  new InferenceEngineError("engine", toErrorMessage(cause, `Failed to provision the ${what}.`));
+
+/**
+ * Starts the exchange on the provider's engine. Each login is materialized privately for this one
+ * exchange (0700 dirs, 0600 files) and removed when it ends; a subscription's copy cannot refresh,
+ * so only the keep-fresh worker rotates it (docs/connected-accounts-design.md §6a), and nothing is
+ * read back.
+ */
+const startEngine = (login: ExchangeLogin, payload: InferenceRespondRequest) =>
+  Effect.gen(function* () {
+    const common = {
+      prompt: payload.prompt ?? "",
+      ...(payload.system === undefined ? {} : { system: payload.system }),
+      ...(payload.model === undefined ? {} : { model: payload.model }),
+      ...(payload.responseFormat === undefined ? {} : { responseFormat: payload.responseFormat }),
+    };
+
+    if (login.shape === "codex-key" || login.shape === "codex-chatgpt") {
+      const engine = yield* CodexInferenceEngine;
+      const provisioned = yield* Effect.try({
+        try: () =>
+          provisionCodexHome({
+            authJson: codexLoginFile(
+              login.shape === "codex-key" ? { apiKey: login.apiKey } : { authJson: login.authJson },
+            ),
+          }),
+        catch: provisionError("codex home dir"),
+      });
+      return yield* engine.start({
+        ...common,
+        codexHome: provisioned.codexHome,
+        secrets: secretsOf(login).filter((secret) => secret !== undefined),
+        onSessionEnd: () => Promise.resolve(removeCodexHome(provisioned.codexHome)),
+      });
+    }
+
+    const engine = yield* InferenceEngine;
+    const claudeCommon = {
+      ...common,
+      ...(payload.maxTurns === undefined ? {} : { maxTurns: payload.maxTurns }),
+      tools: payload.tools ?? [],
+    };
+    switch (login.shape) {
+      case "claude-setup-token": {
+        return yield* engine.start({
+          ...claudeCommon,
+          auth: { kind: "oauth-token", oauthToken: login.token },
+        });
+      }
+      case "claude-session": {
+        const provisioned = yield* Effect.try({
+          try: () =>
+            provisionClaudeConfigDir({
+              credentialsJson: claudeCredentialsCopy(login.credentialsJson),
+            }),
+          catch: provisionError("claude session config dir"),
+        });
+        return yield* engine.start({
+          ...claudeCommon,
+          auth: {
+            kind: "config-dir",
+            configDir: provisioned.configDir,
+            accessToken: login.accessToken,
+          },
+          onSessionEnd: () => Promise.resolve(removeClaudeConfigDir(provisioned.configDir)),
+        });
+      }
+      case "claude-key": {
+        const provisioned = yield* Effect.try({
+          try: () => provisionClaudeKeyDir({ apiKey: login.apiKey }),
+          catch: provisionError("claude key dir"),
+        });
+        return yield* engine.start({
+          ...claudeCommon,
+          auth: {
+            kind: "api-key",
+            configDir: provisioned.configDir,
+            keyPath: provisioned.keyPath,
+            apiKey: login.apiKey,
+          },
+          onSessionEnd: () => Promise.resolve(removeClaudeConfigDir(provisioned.configDir)),
+        });
+      }
+    }
+  });
+
+/**
+ * The words for a provider's auth rejection, per login. A subscription copy cannot refresh, so a
+ * rejected one means the login itself ended; the platform's keep-fresh worker owns its state.
+ */
+const authFailureMessage = (exchange: Exchange, detail: string): string => {
+  switch (exchange.shape) {
+    case "claude-session": {
+      return "The Claude login did not authenticate. The platform refreshes it on a schedule, so this usually means the login itself was ended (signed out elsewhere, or revoked) — reconnect Claude.";
+    }
+    case "codex-chatgpt": {
+      return "The Codex login did not authenticate. The platform refreshes it on a schedule, so this usually means the login itself was ended (signed out elsewhere, or revoked) — reconnect Codex.";
+    }
+    case "codex-key": {
+      return "The Codex API key did not authenticate: OpenAI refused it — connect a working key.";
+    }
+    case "claude-setup-token":
+    case "claude-key": {
+      return `The connected account was rejected by the provider — reconnect it. (${detail})`;
+    }
+  }
+};
+
+/**
+ * Which owner opened each parked exchange (CORE-03), and the exchange it holds. A continuation is
+ * addressed by session id and is served only to that owner, on the login the exchange started on.
+ * The engines keep their sessions in this process's memory, so this map lives beside them; it is
+ * bounded, oldest first, and an entry ends with its exchange.
+ */
+const EXCHANGES_MAX = 10_000;
+const parkedExchanges = new Map<string, Exchange>();
+
+const parkExchange = (sessionId: string, exchange: Exchange): void => {
+  if (!parkedExchanges.has(sessionId) && parkedExchanges.size >= EXCHANGES_MAX) {
+    const oldest = parkedExchanges.keys().next();
+    if (oldest.done !== true) parkedExchanges.delete(oldest.value);
+  }
+  parkedExchanges.set(sessionId, exchange);
+};
+
+/** A turn that parked keeps its exchange for the continuation; any other turn ends it. */
+const answerTurn = (
+  exchange: Exchange,
+  engineTurn: InferenceEngineTurn,
+): InferenceRespondResponse => {
+  if (engineTurn.turn.type === "toolCalls") {
+    parkExchange(engineTurn.sessionId, exchange);
+  } else {
+    parkedExchanges.delete(engineTurn.sessionId);
+  }
   const turn: InferenceTurn =
     engineTurn.turn.type === "done"
       ? {
@@ -180,238 +390,80 @@ const mapEngineTurn = (engineTurn: InferenceEngineTurn): InferenceRespondRespons
     ...(engineTurn.turn.type === "done" && engineTurn.turn.usage !== undefined
       ? { usage: engineTurn.turn.usage }
       : {}),
+    receipt: exchange.receipt,
   };
 };
 
-/** Maps engine failures to contract errors; `accountId` enables 401-feedback on auth failures. */
-const mapEngineError = (error: InferenceEngineError) => {
-  switch (error.reason) {
-    case "session-not-found": {
-      return new InferenceNotFoundError({ message: error.message });
-    }
-    case "bad-tool-result": {
-      return new InferenceBadRequestError({ message: error.message });
-    }
-    case "auth": {
-      return new InferenceConflictError({
-        message: `The connected account was rejected by the provider — reconnect it. (${error.message})`,
-      });
-    }
-    case "timeout":
-    case "engine": {
-      return new InferenceInternalServerError({ message: error.message });
-    }
-  }
-};
-
 /**
- * The codex arm of a new exchange. Tool-less v1: codex has no in-process MCP transport, so
- * caller-defined tools are a 400 until a parked-tool transport ships (`maxTurns` is likewise
- * claude-only and ignored here — a codex exchange settles in one turn). Auth failures are a 409
- * ("reconnect") WITHOUT markInvalid — auth.json self-refreshes at point of use exactly like a
- * claude session file, so marking it invalid would needlessly block workspace launches on a
- * credential that may still rotate itself back to health.
+ * A failed turn ends its exchange. A live auth rejection of a setup token marks the account invalid
+ * (the in-process equivalent of the `mark-invalid` 401-feedback endpoint, at the receipt's revision;
+ * best-effort, the caller's error wins). Session files and Codex ChatGPT logins are never marked:
+ * the keep-fresh worker owns their state.
  */
-const respondWithCodex = (input: {
-  readonly account: ConnectedAccount;
-  readonly payload: InferenceRespondRequest;
-  readonly payloadJson: string;
-  readonly accounts: ConnectedAccountRepoService;
-}) =>
+const failTurn = (exchange: Exchange, sessionId: string | undefined, raw: InferenceEngineError) =>
   Effect.gen(function* () {
-    const { account, payload, accounts } = input;
-
-    if ((payload.tools ?? []).length > 0) {
-      return yield* new InferenceBadRequestError({
-        message:
-          "Codex inference does not support caller-defined tools yet — run tool exchanges on a claude connected account.",
-      });
-    }
-
-    const engine = yield* CodexInferenceEngine;
-
-    const login = yield* Effect.try({
-      try: () => parseCodexCredentialPayload(JSON.parse(input.payloadJson)),
-      catch: () =>
-        new InferenceInternalServerError({
-          message: "Stored codex credential payload is malformed.",
-        }),
-    });
-    // Every token-like value the login carries, kept ONLY for redacting engine error text.
-    const secrets = "apiKey" in login ? [login.apiKey] : extractCodexSecrets(login.authJson);
-
-    // Attribute the use exactly like workspace injection does — best-effort, never fails the call.
-    yield* accounts.updateSyncState({ id: account.id, lastUsedAt: new Date() }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning(
-          `Failed to stamp last_used_at for connected account ${account.id}; continuing.`,
-          cause,
-        ),
-      ),
-      Effect.asVoid,
-    );
-
-    // Materialize the login into a private per-invocation CODEX_HOME (0700/0600) the engine points
-    // the official CLI at: a key as Codex's key file, a ChatGPT login as a COPY whose refresh token
-    // is the copy placeholder, so the exchange cannot rotate the login — only the keep-fresh worker
-    // refreshes (docs/connected-accounts-design.md §6a). Nothing is read back; the dir is removed
-    // at the end.
-    const provisioned = yield* Effect.try({
-      try: () => provisionCodexHome({ authJson: codexLoginFile(login) }),
-      catch: (cause) =>
-        new InferenceInternalServerError({
-          message: toErrorMessage(cause, "Failed to provision the codex home dir."),
-        }),
-    });
-
-    const engineTurn = yield* engine
-      .start({
-        codexHome: provisioned.codexHome,
-        secrets,
-        prompt: payload.prompt ?? "",
-        ...(payload.system === undefined ? {} : { system: payload.system }),
-        ...(payload.model === undefined ? {} : { model: payload.model }),
-        ...(payload.responseFormat === undefined ? {} : { responseFormat: payload.responseFormat }),
-        onSessionEnd: () => Promise.resolve(removeCodexHome(provisioned.codexHome)),
-      })
-      .pipe(
-        Effect.mapError(
-          (error) => new InferenceEngineError(error.reason, redactSecrets(error.message, secrets)),
-        ),
-        Effect.mapError((error) =>
-          error.reason === "auth"
-            ? new InferenceConflictError({
-                message:
-                  "apiKey" in login
-                    ? "The Codex API key did not authenticate: OpenAI refused it — connect a working key."
-                    : "The Codex login did not authenticate. The platform refreshes it on a schedule, so this usually means the login itself was ended (signed out elsewhere, or revoked) — reconnect Codex.",
-              })
-            : mapEngineError(error),
-        ),
-      );
-
-    return mapEngineTurn(engineTurn);
-  });
-
-/**
- * The claude arm on an API key: the key sits in a private 0700 dir as a 0600 file the official CLI
- * reads through an `apiKeyHelper`; the dir is removed when the exchange ends.
- */
-const respondWithClaudeKey = (input: {
-  readonly account: ConnectedAccount;
-  readonly payload: InferenceRespondRequest;
-  readonly apiKey: string;
-  readonly accounts: ConnectedAccountRepoService;
-}) =>
-  Effect.gen(function* () {
-    const { account, payload, apiKey, accounts } = input;
-    const engine = yield* InferenceEngine;
-
-    yield* accounts.updateSyncState({ id: account.id, lastUsedAt: new Date() }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning(
-          `Failed to stamp last_used_at for connected account ${account.id}; continuing.`,
-          cause,
-        ),
-      ),
-      Effect.asVoid,
-    );
-
-    const provisioned = yield* Effect.try({
-      try: () => provisionClaudeKeyDir({ apiKey }),
-      catch: (cause) =>
-        new InferenceInternalServerError({
-          message: toErrorMessage(cause, "Failed to provision the claude key dir."),
-        }),
-    });
-
-    const engineTurn = yield* engine
-      .start({
-        auth: {
-          kind: "api-key",
-          configDir: provisioned.configDir,
-          keyPath: provisioned.keyPath,
-          apiKey,
-        },
-        onSessionEnd: () => Promise.resolve(removeClaudeConfigDir(provisioned.configDir)),
-        prompt: payload.prompt ?? "",
-        ...(payload.system === undefined ? {} : { system: payload.system }),
-        ...(payload.model === undefined ? {} : { model: payload.model }),
-        ...(payload.maxTurns === undefined ? {} : { maxTurns: payload.maxTurns }),
-        tools: payload.tools ?? [],
-        ...(payload.responseFormat === undefined ? {} : { responseFormat: payload.responseFormat }),
-      })
-      .pipe(
-        Effect.mapError((error) =>
-          mapEngineError(
-            new InferenceEngineError(error.reason, redactSecrets(error.message, [apiKey])),
-          ),
-        ),
-      );
-
-    return mapEngineTurn(engineTurn);
-  });
-
-/**
- * Which owner opened each parked exchange (CORE-03). A continuation is addressed by session id, and
- * the session holds the opening owner's credentials, so it is served only to that owner. The
- * engines keep their sessions in this process's memory, so this map lives beside them; it is
- * bounded, oldest first, and an entry ends with its exchange.
- */
-const SESSION_OWNERS_MAX = 10_000;
-const sessionOwners = new Map<string, string>();
-
-const rememberSessionOwner = (response: InferenceRespondResponse, ownerUserId: string): void => {
-  if (response.turn.type !== "toolCalls") {
-    sessionOwners.delete(response.sessionId);
-    return;
-  }
-  if (!sessionOwners.has(response.sessionId) && sessionOwners.size >= SESSION_OWNERS_MAX) {
-    const oldest = sessionOwners.keys().next();
-    if (oldest.done !== true) sessionOwners.delete(oldest.value);
-  }
-  sessionOwners.set(response.sessionId, ownerUserId);
-};
-
-const respondUnmetered = (payload: InferenceRespondRequest) =>
-  Effect.gen(function* () {
-    const response = yield* respondAs(payload);
-    rememberSessionOwner(response, payload.ownerUserId);
-    return response;
-  });
-
-const respondAs = (payload: InferenceRespondRequest) =>
-  Effect.gen(function* () {
-    const isNew = payload.prompt !== undefined;
-    const isContinuation = payload.sessionId !== undefined || payload.toolResults !== undefined;
-    if (isNew === isContinuation) {
-      return yield* new InferenceBadRequestError({
-        message:
-          "Send either a new exchange (credentials + prompt) or a continuation (sessionId + toolResults), not both or neither.",
-      });
-    }
-
-    const engine = yield* InferenceEngine;
-
-    if (isContinuation) {
-      if (payload.sessionId === undefined || payload.toolResults === undefined) {
-        return yield* new InferenceBadRequestError({
-          message: "A continuation requires both sessionId and toolResults.",
+    if (sessionId !== undefined) parkedExchanges.delete(sessionId);
+    const { receipt } = exchange;
+    const message = redactSecrets(raw.message, exchange.secrets);
+    switch (raw.reason) {
+      case "session-not-found": {
+        return yield* new InferenceNotFoundError({ message, receipt });
+      }
+      case "bad-tool-result": {
+        return yield* new InferenceBadRequestError({ message, receipt });
+      }
+      case "timeout":
+      case "engine": {
+        return yield* new InferenceInternalServerError({ message, receipt });
+      }
+      case "auth": {
+        if (exchange.shape === "claude-setup-token") {
+          const accounts = yield* ConnectedAccountRepo;
+          yield* accounts
+            .markInvalid({ id: receipt.accountId, revision: receipt.revision })
+            .pipe(Effect.ignore);
+        }
+        return yield* new InferenceConflictError({
+          message: authFailureMessage(exchange, message),
+          receipt,
         });
       }
-      // Another owner's session answers exactly like one that does not exist.
-      const openedBy = sessionOwners.get(payload.sessionId);
-      if (openedBy !== undefined && openedBy !== payload.ownerUserId) {
-        return yield* new InferenceNotFoundError({
-          message: `Inference session not found (or expired): ${payload.sessionId}. Start the exchange over.`,
-        });
-      }
-      const engineTurn = yield* engine
-        .continueSession({ sessionId: payload.sessionId, toolResults: payload.toolResults })
-        .pipe(Effect.mapError(mapEngineError));
-      return mapEngineTurn(engineTurn);
     }
+  });
 
+/** Start and continuation both end here: one success handler, one failure handler. */
+const settleTurn = <R>(
+  exchange: Exchange,
+  sessionId: string | undefined,
+  turn: Effect.Effect<InferenceEngineTurn, InferenceEngineError, R>,
+) =>
+  turn.pipe(
+    Effect.catch((error) => failTurn(exchange, sessionId, error)),
+    Effect.map((engineTurn) => answerTurn(exchange, engineTurn)),
+  );
+
+const continueExchange = (
+  payload: InferenceRespondRequest & { readonly sessionId: string },
+  toolResults: NonNullable<InferenceRespondRequest["toolResults"]>,
+) =>
+  Effect.gen(function* () {
+    const exchange = parkedExchanges.get(payload.sessionId);
+    // Another owner's session answers exactly like one that does not exist.
+    if (exchange === undefined || exchange.ownerUserId !== payload.ownerUserId) {
+      return yield* new InferenceNotFoundError({
+        message: `Inference session not found (or expired): ${payload.sessionId}. Start the exchange over.`,
+      });
+    }
+    const engine = yield* InferenceEngine;
+    return yield* settleTurn(
+      exchange,
+      payload.sessionId,
+      engine.continueSession({ sessionId: payload.sessionId, toolResults }),
+    );
+  });
+
+const startExchange = (payload: InferenceRespondRequest) =>
+  Effect.gen(function* () {
     yield* requireCredentialsKey;
     if (payload.credentials === undefined) {
       return yield* new InferenceBadRequestError({
@@ -430,50 +482,27 @@ const respondAs = (payload: InferenceRespondRequest) =>
       cipher.decrypt(account.encryptedPayload),
       "Failed to decrypt the connected account credential.",
     );
-
-    if (account.provider === "codex") {
-      return yield* respondWithCodex({ account, payload, payloadJson, accounts });
-    }
-    const malformed = new InferenceInternalServerError({
-      message: "Stored claude credential payload is malformed.",
-    });
-    const parsed = yield* Effect.try({
-      try: () => parseClaudeCredentialPayload(JSON.parse(payloadJson)),
-      catch: () => malformed,
-    });
-    if ("apiKey" in parsed) {
-      return yield* respondWithClaudeKey({ account, payload, apiKey: parsed.apiKey, accounts });
-    }
-    // Either claude subscription shape works here. A setup-token rides the documented
-    // CLAUDE_CODE_OAUTH_TOKEN env path. A session credentials file is materialized into a private
-    // per-invocation CLAUDE_CONFIG_DIR instead, so the official CLI authenticates from the FILE —
-    // and can rotate the session with its refresh token right at the point of use (the control
-    // plane never calls Anthropic's token endpoint). The shape drives the 401-feedback policy
-    // below; the access and refresh tokens are kept ONLY for redacting engine error text.
-    const oauthCredentials = yield* Effect.try({
-      try: (): ClaudeOauthCredentials & {
-        readonly shape: "token" | "credentials-json";
-        readonly credentialsJson: string | undefined;
-      } => {
-        if ("token" in parsed) {
-          return {
-            shape: "token",
-            accessToken: parsed.token,
-            refreshToken: undefined,
-            credentialsJson: undefined,
-          };
-        }
-
-        const extracted = extractClaudeOauthCredentials(parsed.credentialsJson);
-
-        if (extracted === undefined) {
-          throw new Error("credentials.json payload is unusable");
-        }
-
-        return { shape: "credentials-json", credentialsJson: parsed.credentialsJson, ...extracted };
+    const login = yield* readLogin(account, payloadJson);
+    const exchange: Exchange = {
+      ownerUserId: payload.ownerUserId,
+      receipt: {
+        accountId: account.id,
+        revision: account.credentialRevision,
+        login: loginClassOfShape(login.shape),
       },
-      catch: () => malformed,
-    });
+      shape: login.shape,
+      secrets: secretsOf(login),
+    };
+
+    // Tool-less v1: codex has no in-process MCP transport, so caller-defined tools are a 400 until
+    // a parked-tool transport ships (`maxTurns` is likewise claude-only and ignored there).
+    if (account.provider === "codex" && (payload.tools ?? []).length > 0) {
+      return yield* new InferenceBadRequestError({
+        message:
+          "Codex inference does not support caller-defined tools yet — run tool exchanges on a claude connected account.",
+        receipt: exchange.receipt,
+      });
+    }
 
     // Attribute the use exactly like workspace injection does — best-effort, never fails the call.
     yield* accounts.updateSyncState({ id: account.id, lastUsedAt: new Date() }).pipe(
@@ -486,85 +515,29 @@ const respondAs = (payload: InferenceRespondRequest) =>
       Effect.asVoid,
     );
 
-    // Session-file accounts: materialize a COPY of the decrypted file (no refresh token) into a
-    // private per-invocation config dir (0700/0600) the engine points the official CLI at. The
-    // exchange cannot rotate the login — only the keep-fresh worker refreshes
-    // (docs/connected-accounts-design.md §6a). Nothing is read back; the dir is removed at the end.
-    const sessionAuth = yield* Effect.try({
-      try: () => {
-        if (oauthCredentials.shape === "token" || oauthCredentials.credentialsJson === undefined) {
-          return {
-            auth: { kind: "oauth-token", oauthToken: oauthCredentials.accessToken },
-            onSessionEnd: undefined,
-          } as const;
-        }
+    return yield* settleTurn(exchange, undefined, startEngine(login, payload));
+  });
 
-        const provisioned = provisionClaudeConfigDir({
-          credentialsJson: claudeCredentialsCopy(oauthCredentials.credentialsJson),
-        });
-
-        return {
-          auth: {
-            kind: "config-dir",
-            configDir: provisioned.configDir,
-            accessToken: oauthCredentials.accessToken,
-          },
-          onSessionEnd: () => Promise.resolve(removeClaudeConfigDir(provisioned.configDir)),
-        } as const;
-      },
-      catch: (cause) =>
-        new InferenceInternalServerError({
-          message: toErrorMessage(cause, "Failed to provision the claude session config dir."),
-        }),
-    });
-
-    const engineTurn = yield* engine
-      .start({
-        auth: sessionAuth.auth,
-        ...(sessionAuth.onSessionEnd === undefined
-          ? {}
-          : { onSessionEnd: sessionAuth.onSessionEnd }),
-        prompt: payload.prompt ?? "",
-        ...(payload.system === undefined ? {} : { system: payload.system }),
-        ...(payload.model === undefined ? {} : { model: payload.model }),
-        ...(payload.maxTurns === undefined ? {} : { maxTurns: payload.maxTurns }),
-        tools: payload.tools ?? [],
-        ...(payload.responseFormat === undefined ? {} : { responseFormat: payload.responseFormat }),
-      })
-      .pipe(
-        Effect.mapError((error) => {
-          const redacted = new InferenceEngineError(
-            error.reason,
-            redactSecrets(error.message, [
-              oauthCredentials.accessToken,
-              oauthCredentials.refreshToken,
-            ]),
-          );
-          return redacted;
-        }),
-        // 401 feedback: a live auth rejection marks the account invalid (design doc §2), the same
-        // signal the worker's mark-invalid endpoint carries — best-effort, the caller's error
-        // wins. Setup tokens ONLY: a session file runs through the config-dir path where the
-        // official CLI refreshes the session itself, and the stored credential stays refreshable
-        // — marking it invalid here would needlessly block every workspace launch on the account.
-        Effect.tapError((error) =>
-          error.reason === "auth" && oauthCredentials.shape === "token"
-            ? accounts
-                .markInvalid({ id: account.id, revision: account.credentialRevision })
-                .pipe(Effect.ignore)
-            : Effect.void,
-        ),
-        Effect.mapError((error) =>
-          error.reason === "auth" && oauthCredentials.shape === "credentials-json"
-            ? new InferenceConflictError({
-                message:
-                  "The Claude login did not authenticate. The platform refreshes it on a schedule, so this usually means the login itself was ended (signed out elsewhere, or revoked) — reconnect Claude.",
-              })
-            : mapEngineError(error),
-        ),
-      );
-
-    return mapEngineTurn(engineTurn);
+const respondUnmetered = (payload: InferenceRespondRequest) =>
+  Effect.gen(function* () {
+    const isNew = payload.prompt !== undefined;
+    const isContinuation = payload.sessionId !== undefined || payload.toolResults !== undefined;
+    if (isNew === isContinuation) {
+      return yield* new InferenceBadRequestError({
+        message:
+          "Send either a new exchange (credentials + prompt) or a continuation (sessionId + toolResults), not both or neither.",
+      });
+    }
+    if (!isContinuation) {
+      return yield* startExchange(payload);
+    }
+    const { sessionId, toolResults } = payload;
+    if (sessionId === undefined || toolResults === undefined) {
+      return yield* new InferenceBadRequestError({
+        message: "A continuation requires both sessionId and toolResults.",
+      });
+    }
+    return yield* continueExchange({ ...payload, sessionId }, toolResults);
   });
 
 const utcDay = (now: Date): string => now.toISOString().slice(0, 10);
