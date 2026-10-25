@@ -6,9 +6,9 @@
  * Codex runtime, pointed at a control-plane-provisioned private CODEX_HOME holding the decrypted
  * auth.json (0700 dir / 0600 file). The CLI reads the file itself AND can rotate the session with
  * its refresh token — the control plane never calls OpenAI's token endpoint. This module NEVER
- * calls a model API directly, never logs token material, and strips any ambient OPENAI_API_KEY
- * from the subprocess env so the exchange cannot silently bill a different identity than the
- * resolved connected account.
+ * calls a model API directly, never logs token material, and builds the subprocess env from an
+ * allowlist ({@link providerCliEnv}), so no ambient key or base URL can make the exchange bill a
+ * different identity than the resolved connected account.
  *
  * `codex exec --json` reports a failed turn in words only (`turn.failed` carries `error.message`,
  * no status), so an auth failure here is at most `auth-words`: it never marks a key invalid.
@@ -30,11 +30,10 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { providerLoginEnvNames } from "@sealant/api-contracts";
 import { Context, Effect, Layer } from "effect";
 
 import { InferenceEngineError, type InferenceEngineTurn } from "./claude-engine.js";
-import { extractJson, soundsLikeAuthFailure, redactSecrets } from "./support.js";
+import { extractJson, providerCliEnv, redactSecrets, soundsLikeAuthFailure } from "./support.js";
 
 /** How long one exchange waits for the CLI to settle before the subprocess is killed. */
 const EXCHANGE_TIMEOUT_MS = 5 * 60 * 1_000;
@@ -88,16 +87,7 @@ const defaultCommand = (): readonly string[] => {
   return [process.execPath, require.resolve("@openai/codex/bin/codex.js")];
 };
 
-/** Subprocess env: ambient OpenAI identities stripped, the provisioned home injected. */
-const buildEnv = (codexHome: string): Record<string, string | undefined> => {
-  const env: Record<string, string | undefined> = { ...process.env };
-  // An ambient key would shadow the auth.json and bill a different identity; an ambient base URL
-  // would point the official runtime somewhere other than OpenAI. Both are stripped.
-  for (const name of providerLoginEnvNames.codex) delete env[name];
-  delete env["OPENAI_BASE_URL"];
-  env["CODEX_HOME"] = codexHome;
-  return env;
-};
+const buildEnv = (codexHome: string) => providerCliEnv({ CODEX_HOME: codexHome, HOME: codexHome });
 
 interface ParsedExchange {
   text: string | undefined;

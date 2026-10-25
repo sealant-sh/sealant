@@ -966,22 +966,22 @@ describe("inference.module 401 feedback", () => {
 
 describe("inference.module on a Claude key, against the real CLI", () => {
   let fake: FakeAnthropic;
-  const realEngine = Effect.runSync(Effect.provide(InferenceEngine, claudeEngineLayer()));
+  let engineLayer: Layer.Layer<InferenceEngine>;
   const configDirs: string[] = [];
-  const engineLayer = Layer.succeed(InferenceEngine, {
-    exchange: realEngine.exchange,
-    start: (start) => {
-      configDirs.push(start.auth.configDir);
-      return realEngine.start(start);
-    },
-    continueSession: realEngine.continueSession,
-  });
 
   beforeEach(async () => {
     fake = await startFakeAnthropic();
-    process.env["ANTHROPIC_BASE_URL"] = fake.baseUrl;
-    process.env["DISABLE_AUTOUPDATER"] = "1";
-    process.env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1";
+    const realEngine = Effect.runSync(
+      Effect.provide(InferenceEngine, claudeEngineLayer({ anthropicBaseUrl: fake.baseUrl })),
+    );
+    engineLayer = Layer.succeed(InferenceEngine, {
+      exchange: realEngine.exchange,
+      start: (start) => {
+        configDirs.push(start.auth.configDir);
+        return realEngine.start(start);
+      },
+      continueSession: realEngine.continueSession,
+    });
   });
 
   afterEach(async () => {
