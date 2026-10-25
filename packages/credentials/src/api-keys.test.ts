@@ -93,6 +93,7 @@ describe("a stored Codex payload", () => {
         expect(codexAuthJsonLogin(authJson)).toEqual({
           login: "api-key",
           key: { valid: false, reason: expect.stringContaining(reason) },
+          ...(key.trim() === "" ? {} : { suffix: key.trim().slice(-4) }),
         });
         expect(parseCodexCredentialPayload({ authJson })).toEqual({ authJson });
         expect(loginClassOf("codex", { authJson })).toBe("api-key");

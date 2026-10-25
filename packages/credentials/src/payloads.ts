@@ -308,7 +308,17 @@ const AMBIGUOUS_CODEX_LOGIN =
  */
 export type CodexAuthJsonLogin =
   | { readonly login: "subscription" }
-  | { readonly login: "api-key"; readonly key: ParseApiKeyResult };
+  | {
+      readonly login: "api-key";
+      readonly key: ParseApiKeyResult;
+      /** The last four characters of the key the file holds, taken or not; absent when it holds none. */
+      readonly suffix?: string;
+    };
+
+const suffixOf = (rawKey: unknown): { readonly suffix?: string } => {
+  const key = typeof rawKey === "string" ? rawKey.trim() : "";
+  return key === "" ? {} : { suffix: key.slice(-4) };
+};
 
 export const codexAuthJsonLogin = (authJson: string): CodexAuthJsonLogin | undefined => {
   let root: Record<string, unknown> | undefined;
@@ -329,14 +339,19 @@ export const codexAuthJsonLogin = (authJson: string): CodexAuthJsonLogin | undef
           typeof rawKey === "string"
             ? parseApiKey("codex", rawKey)
             : { valid: false, reason: "This auth.json says auth_mode apikey but holds no key." },
+        ...suffixOf(rawKey),
       };
   }
   if (typeof rawKey !== "string" || rawKey.length === 0) return { login: "subscription" };
   const tokens = asRecord(root.tokens);
   if (tokens !== undefined && asNonEmptyString(tokens.refresh_token) !== undefined) {
-    return { login: "api-key", key: { valid: false, reason: AMBIGUOUS_CODEX_LOGIN } };
+    return {
+      login: "api-key",
+      key: { valid: false, reason: AMBIGUOUS_CODEX_LOGIN },
+      ...suffixOf(rawKey),
+    };
   }
-  return { login: "api-key", key: parseApiKey("codex", rawKey) };
+  return { login: "api-key", key: parseApiKey("codex", rawKey), ...suffixOf(rawKey) };
 };
 
 const decodeCodexCredentialPayload = Schema.decodeUnknownSync(codexCredentialPayloadSchema);
@@ -576,13 +591,13 @@ export const placedLoginOf = (...credential: ProviderCredentialPayload): Connect
   const [provider, payload] = credential;
   if (provider === "github") return { kind: "subscription" };
   if ("apiKey" in payload) return { kind: "api-key", suffix: apiKeyMetadata(payload).tokenSuffix };
-  if (provider === "claude" || loginClassOf("codex", payload) === "subscription") {
-    return { kind: "subscription" };
+  if (provider === "claude") return { kind: "subscription" };
+  const login = codexAuthJsonLogin(payload.authJson);
+  if (login?.login !== "api-key") return { kind: "subscription" };
+  if (login.suffix === undefined) {
+    throw new Error("This Codex auth.json names an API key and holds none.");
   }
-  const raw: unknown = asRecord(JSON.parse(payload.authJson))?.["OPENAI_API_KEY"];
-  const key = typeof raw === "string" ? raw.trim() : "";
-  if (key === "") throw new Error("This Codex auth.json names an API key and holds none.");
-  return { kind: "api-key", suffix: key.slice(-4) };
+  return { kind: "api-key", suffix: login.suffix };
 };
 
 const loginClassOfKinds = {

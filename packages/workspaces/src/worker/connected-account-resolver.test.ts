@@ -487,7 +487,7 @@ describe("resolveCredentialInjections with an API key", () => {
       for (const credentialsHome of [undefined, home]) {
         const error = yield* launch(claudeKey, "claude", credentialsHome).pipe(Effect.flip);
         expect(error.errorCode).toBe("connected-account-unsupported");
-        expect(error.message).toContain("Claude API keys are not supported by this Sealant yet");
+        expect(error.message).toContain("only through a credentials put into a person's home");
       }
     }),
   );

@@ -107,7 +107,7 @@ describe.skipIf(DATABASE_URL === undefined)("a workspace's logins at create (Pos
       _tag: "WorkspaceConflictError",
       code: "connected-account-unsupported",
       provider: "claude",
-      message: expect.stringContaining("Claude API keys are not supported by this Sealant yet"),
+      message: expect.stringContaining("only through a credentials put into a person's home"),
     });
 
     const codexOwner = await personWith("codex", "api-key", {

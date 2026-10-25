@@ -757,6 +757,12 @@ export const liveHomeCredentialChannel: HomeCredentialChannel = {
     ).pipe(Effect.provide(SealantRuntimeControlLive)),
 };
 
+/**
+ * The provider whose login file a refusal is about (`82` to `88`: the file is unusable, has another
+ * hard link, or really is outside the home; `89`: a Claude key's directory or name is unusable), or
+ * `undefined` for any other exit. A caller can leave that provider out and write the rest (a
+ * partial put, a refresh push).
+ */
 export const homeLoginOfRefusal = (
   exitCode: number | undefined,
 ): HomeCredentialProvider | undefined => {
