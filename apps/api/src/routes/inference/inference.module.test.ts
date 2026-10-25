@@ -285,7 +285,7 @@ describe("inference.module provider routing", () => {
     const accounts = accountsStub();
     const { layer } = makeLayers({
       accounts,
-      codexStart: () => Promise.reject(new InferenceEngineError("auth", "401 Unauthorized")),
+      codexStart: () => Promise.reject(new InferenceEngineError("auth-401", "401 Unauthorized")),
     });
 
     const error = await runFlipped(respond(newExchange({})).pipe(Effect.provide(layer)));
@@ -495,7 +495,6 @@ const parkedTurn: InferenceEngineTurn = {
   turn: { type: "toolCalls", calls: [{ toolCallId: "call_1", name: "search", input: {} }] },
 };
 
-/** A Claude engine whose start parks on a tool call and whose continuation does `continued`. */
 const parkingLayers = (
   accounts: ReturnType<typeof accountsStub>,
   continued: () => Effect.Effect<InferenceEngineTurn, InferenceEngineError>,
@@ -572,7 +571,7 @@ describe("inference.module receipts", () => {
     const accounts = accountsStub();
     accounts.getById.mockImplementation(() => Effect.succeed(setupTokenAccount));
     const layer = parkingLayers(accounts, () =>
-      Effect.fail(new InferenceEngineError("auth", "authentication_failed")),
+      Effect.fail(new InferenceEngineError("auth-401", "authentication_failed")),
     );
 
     await run(
@@ -588,7 +587,6 @@ describe("inference.module receipts", () => {
   });
 });
 
-/** `markInvalid` as the repository does it: only while the account is still at that revision. */
 const guardMarkInvalid = (
   accounts: ReturnType<typeof accountsStub>,
   current: () => ConnectedAccount,
@@ -602,6 +600,39 @@ const guardMarkInvalid = (
     ),
   );
 };
+
+describe("inference.module redaction", () => {
+  const leak = "token at-codex beside sk-proj-FAKEsomeoneelseskey00000000";
+
+  it("redacts the login's secrets and provider keys from an answer", async () => {
+    const { layer } = makeLayers({
+      accounts: accountsStub(),
+      codexStart: () =>
+        Promise.resolve({
+          sessionId: "inf_stub",
+          turn: { type: "done", text: leak, json: { nested: [leak] } },
+        }),
+    });
+
+    const response = await run(respond(newExchange({})).pipe(Effect.provide(layer)));
+
+    const text = JSON.stringify(response.turn);
+    expect(text).not.toContain("at-codex");
+    expect(text).not.toContain("sk-proj-FAKE");
+  });
+
+  it("redacts them from an engine's error", async () => {
+    const { layer } = makeLayers({
+      accounts: accountsStub(),
+      codexStart: () => Promise.reject(new InferenceEngineError("engine", leak)),
+    });
+
+    const error = await runFlipped(respond(newExchange({})).pipe(Effect.provide(layer)));
+
+    expect(error).toMatchObject({ message: expect.stringContaining("token [redacted] beside") });
+    expect(JSON.stringify(error)).not.toContain("sk-proj-FAKE");
+  });
+});
 
 describe("inference.module allowedLogin", () => {
   it("runs a subscription when the request allows only a subscription", async () => {
@@ -639,7 +670,7 @@ describe("inference.module 401 feedback", () => {
     const accounts = accountsStub();
     const { layer } = makeLayers({
       accounts,
-      codexStart: () => Promise.reject(new InferenceEngineError("auth", "401")),
+      codexStart: () => Promise.reject(new InferenceEngineError("auth-401", "401")),
     });
 
     const error = await runFlipped(
@@ -660,13 +691,12 @@ describe("inference.module 401 feedback", () => {
     const accounts = accountsStub();
     const { layer } = makeLayers({
       accounts,
-      codexStart: () =>
-        Promise.reject(new InferenceEngineError("auth-suspected", "401 Unauthorized")),
+      codexStart: () => Promise.reject(new InferenceEngineError("auth-words", "401 Unauthorized")),
     });
     const claudeLayer = Layer.mergeAll(
       layer,
       Layer.succeed(InferenceEngine, {
-        start: () => Effect.fail(new InferenceEngineError("auth-suspected", "Invalid API key")),
+        start: () => Effect.fail(new InferenceEngineError("auth-words", "Invalid API key")),
         continueSession: () => Effect.fail(new InferenceEngineError("session-not-found", "none")),
       }),
     );
@@ -696,7 +726,6 @@ describe("inference.module on a Claude key, against the real CLI", () => {
   let fake: FakeAnthropic;
   const engineLayer = claudeEngineLayer();
 
-  // A fresh fake per test: a CLI still shutting down from the last test talks to its own.
   beforeEach(async () => {
     fake = await startFakeAnthropic();
     process.env["ANTHROPIC_BASE_URL"] = fake.baseUrl;

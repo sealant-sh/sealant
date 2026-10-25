@@ -1,8 +1,3 @@
-/**
- * A local stand-in for the Anthropic Messages API, for tests that drive the real Claude Code CLI
- * through the Agent SDK. Each `POST /v1/messages` takes the next queued reply (a text answer when
- * the queue is empty) and records the `x-api-key` it carried.
- */
 import { createServer, type ServerResponse } from "node:http";
 
 export type FakeAnthropicReply =

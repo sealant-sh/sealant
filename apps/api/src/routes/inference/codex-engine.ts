@@ -11,7 +11,7 @@
  * resolved connected account.
  *
  * `codex exec --json` reports a failed turn in words only (`turn.failed` carries `error.message`,
- * no status), so an auth failure here is at most `auth-suspected`: it never marks a key invalid.
+ * no status), so an auth failure here is at most `auth-words`: it never marks a key invalid.
  *
  * Differences from the claude engine, both deliberate:
  * - Tool-less v1: codex has no in-process MCP transport, so caller-defined tools are rejected at
@@ -34,7 +34,7 @@ import { providerLoginEnvNames } from "@sealant/api-contracts";
 import { Context, Effect, Layer } from "effect";
 
 import { InferenceEngineError, type InferenceEngineTurn } from "./claude-engine.js";
-import { extractJson, isAuthFailureMessage, redactSecrets } from "./support.js";
+import { extractJson, soundsLikeAuthFailure, redactSecrets } from "./support.js";
 
 /** How long one exchange waits for the CLI to settle before the subprocess is killed. */
 const EXCHANGE_TIMEOUT_MS = 5 * 60 * 1_000;
@@ -307,7 +307,7 @@ const startExchange = async (
         const message = redactSecrets(`Codex inference failed: ${detail}`, input.secrets);
         reject(
           new InferenceEngineError(
-            isAuthFailureMessage(message) ? "auth-suspected" : "engine",
+            soundsLikeAuthFailure(message) ? "auth-words" : "engine",
             message,
           ),
         );
@@ -342,8 +342,8 @@ const toEngineError = (error: unknown, secrets: readonly string[]): InferenceEng
   }
   const raw = error instanceof Error ? error.message : String(error);
   const message = redactSecrets(raw, secrets);
-  return isAuthFailureMessage(message)
-    ? new InferenceEngineError("auth-suspected", message, { cause: error })
+  return soundsLikeAuthFailure(message)
+    ? new InferenceEngineError("auth-words", message, { cause: error })
     : new InferenceEngineError("engine", message, { cause: error });
 };
 

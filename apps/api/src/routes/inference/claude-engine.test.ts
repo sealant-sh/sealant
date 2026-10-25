@@ -1,7 +1,3 @@
-/**
- * The Claude engine against the real Claude Code CLI the pinned Agent SDK ships, talking to a local
- * fake Anthropic API (never a real endpoint, never a real key).
- */
 import { existsSync } from "node:fs";
 
 import { provisionClaudeKeyDir, removeClaudeConfigDir } from "@sealant/credentials";
@@ -22,7 +18,6 @@ const ambientKey = "sk-ant-api03-FAKEambientkeythatmustnotbeused0000zzzz";
 
 let fake: FakeAnthropic;
 
-// A fresh fake per test: a CLI still shutting down from the last test talks to its own.
 beforeEach(async () => {
   fake = await startFakeAnthropic();
   process.env["ANTHROPIC_BASE_URL"] = fake.baseUrl;

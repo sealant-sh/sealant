@@ -361,7 +361,7 @@ const redactNamedValues = (text: string): string => {
 const PROVIDER_KEY =
   /(?<![A-Za-z0-9])sk-(?:(?:ant-(?:api|oat|ort|admin)\d*|proj|svcacct|admin)-[A-Za-z0-9_-]{8,}|[A-Za-z0-9_-]{32,})/g;
 
-const redactProviderKeys = (text: string): string => text.replace(PROVIDER_KEY, REDACTED);
+export const redactProviderKeys = (text: string): string => text.replace(PROVIDER_KEY, REDACTED);
 
 /**
  * Free text (an error message, a stack, a log line, an inspected value) with every credential it

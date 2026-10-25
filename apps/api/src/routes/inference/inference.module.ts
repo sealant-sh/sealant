@@ -5,10 +5,7 @@
  * as workspace creation), decrypt the stored credential, hand it to the provider's engine —
  * {@link InferenceEngine} (the official Claude Agent SDK) for claude accounts,
  * {@link CodexInferenceEngine} (the official Codex CLI) for codex accounts — and stamp
- * `last_used_at`, the same per-account attribution workspace injection does. The exchange keeps
- * one receipt (account, revision, login class) from its start: every continuation runs on it, and
- * start and continuation share one success and one failure handler. No handler ever returns or
- * logs secret material; engine errors are redacted before leaving this module.
+ * `last_used_at`, the same per-account attribution workspace injection does.
  */
 import {
   BudgetExceededError,
@@ -51,6 +48,7 @@ import {
   lookupConnectedAccount,
   missingAccountMessage,
 } from "../../services/connected-account-lookup.js";
+import { redactProviderKeys } from "../../services/credential-redaction.js";
 import { spendOwnerLaunch } from "../../services/owner-budgets.js";
 import {
   InferenceEngine,
@@ -58,7 +56,7 @@ import {
   type InferenceEngineTurn,
 } from "./claude-engine.js";
 import { CodexInferenceEngine } from "./codex-engine.js";
-import { redactSecrets } from "./support.js";
+import { redactSecrets, redactStrings } from "./support.js";
 
 const toErrorMessage = (error: unknown, fallback: string): string =>
   error instanceof Error ? error.message : fallback;
@@ -163,7 +161,6 @@ const resolveAccount = (input: {
     return account;
   });
 
-/** The login one exchange runs on, read from the resolved account's stored payload. */
 type ExchangeLogin =
   | { readonly shape: "claude-key"; readonly apiKey: string }
   | { readonly shape: "claude-setup-token"; readonly token: string }
@@ -178,14 +175,9 @@ type ExchangeLogin =
 
 type LoginShape = ExchangeLogin["shape"];
 
-/**
- * What every turn of one exchange is answered and judged by, fixed when it starts. A continuation
- * never resolves the account again, so a reconnect between turns changes nothing here.
- */
 interface Exchange {
   readonly ownerUserId: string;
   readonly receipt: InferenceReceipt;
-  /** The login as it was read at the start; its secrets serve only to redact what leaves here. */
   readonly login: ExchangeLogin;
 }
 
@@ -242,12 +234,6 @@ const readLogin = (account: ConnectedAccount, payloadJson: string) =>
 const provisionError = (what: string) => (cause: unknown) =>
   new InferenceEngineError("engine", toErrorMessage(cause, `Failed to provision the ${what}.`));
 
-/**
- * Starts the exchange on the provider's engine. Each login is materialized privately for this one
- * exchange (0700 dirs, 0600 files) and removed when it ends; a subscription's copy cannot refresh,
- * so only the keep-fresh worker rotates it (docs/connected-accounts-design.md §6a), and nothing is
- * read back.
- */
 const startEngine = (login: ExchangeLogin, payload: InferenceRespondRequest) =>
   Effect.gen(function* () {
     const common = {
@@ -326,30 +312,19 @@ const startEngine = (login: ExchangeLogin, payload: InferenceRespondRequest) =>
     }
   });
 
-type AuthReason = "auth" | "auth-suspected";
+type AuthReason = "auth-401" | "auth-words";
 type KeyLogin = Extract<ExchangeLogin, { readonly shape: "claude-key" | "codex-key" }>;
 
-/**
- * Which auth failures mark the account invalid, per login. A key only on a structured 401, never on
- * words. A setup token as before. A session file or a Codex ChatGPT login never: the keep-fresh
- * worker owns its state.
- */
 const marksInvalidOn: Record<LoginShape, readonly AuthReason[]> = {
-  "claude-key": ["auth"],
-  "codex-key": ["auth"],
-  "claude-setup-token": ["auth", "auth-suspected"],
+  "claude-key": ["auth-401"],
+  "codex-key": ["auth-401"],
+  "claude-setup-token": ["auth-401", "auth-words"],
   "claude-session": [],
   "codex-chatgpt": [],
 };
 
-/** `superseded`: the account changed after the exchange started, so nothing was marked. */
 type Invalidation = "marked" | "superseded" | "unmarked";
 
-/**
- * 401 feedback (the in-process equivalent of the `mark-invalid` endpoint) at the receipt's
- * revision, so a late refusal of an old credential never marks the one that replaced it. A failed
- * write leaves the account as it was; the caller's error wins.
- */
 const invalidate = (exchange: Exchange, reason: AuthReason) =>
   marksInvalidOn[exchange.login.shape].includes(reason)
     ? Effect.flatMap(ConnectedAccountRepo, (accounts) =>
@@ -386,10 +361,6 @@ const keyRefusal = (login: KeyLogin, invalidation: Invalidation) => {
   }
 };
 
-/**
- * The answer to a provider's auth rejection. A subscription copy cannot refresh, so a rejected one
- * means the login itself ended.
- */
 const authFailure = (exchange: Exchange, reason: AuthReason, detail: string) =>
   Effect.gen(function* () {
     const invalidation = yield* invalidate(exchange, reason);
@@ -422,12 +393,6 @@ const authFailure = (exchange: Exchange, reason: AuthReason, detail: string) =>
     }
   });
 
-/**
- * Which owner opened each parked exchange (CORE-03), and the exchange it holds. A continuation is
- * addressed by session id and is served only to that owner, on the login the exchange started on.
- * The engines keep their sessions in this process's memory, so this map lives beside them; it is
- * bounded, oldest first, and an entry ends with its exchange.
- */
 const EXCHANGES_MAX = 10_000;
 const parkedExchanges = new Map<string, Exchange>();
 
@@ -439,7 +404,11 @@ const parkExchange = (sessionId: string, exchange: Exchange): void => {
   parkedExchanges.set(sessionId, exchange);
 };
 
-/** A turn that parked keeps its exchange for the continuation; any other turn ends it. */
+const redacting =
+  (exchange: Exchange) =>
+  (text: string): string =>
+    redactProviderKeys(redactSecrets(text, secretsOf(exchange.login)));
+
 const answerTurn = (
   exchange: Exchange,
   engineTurn: InferenceEngineTurn,
@@ -449,14 +418,23 @@ const answerTurn = (
   } else {
     parkedExchanges.delete(engineTurn.sessionId);
   }
+  const redact = redacting(exchange);
   const turn: InferenceTurn =
     engineTurn.turn.type === "done"
       ? {
           type: "text",
-          text: engineTurn.turn.text,
-          ...(engineTurn.turn.json === undefined ? {} : { json: engineTurn.turn.json }),
+          text: redact(engineTurn.turn.text),
+          ...(engineTurn.turn.json === undefined
+            ? {}
+            : { json: redactStrings(engineTurn.turn.json, redact) }),
         }
-      : { type: "toolCalls", calls: engineTurn.turn.calls };
+      : {
+          type: "toolCalls",
+          calls: engineTurn.turn.calls.map((call) => ({
+            ...call,
+            input: redactStrings(call.input, redact),
+          })),
+        };
   return {
     sessionId: engineTurn.sessionId,
     turn,
@@ -467,12 +445,11 @@ const answerTurn = (
   };
 };
 
-/** A failed turn ends its exchange. */
 const failTurn = (exchange: Exchange, sessionId: string | undefined, raw: InferenceEngineError) =>
   Effect.gen(function* () {
     if (sessionId !== undefined) parkedExchanges.delete(sessionId);
     const { receipt } = exchange;
-    const message = redactSecrets(raw.message, secretsOf(exchange.login));
+    const message = redacting(exchange)(raw.message);
     switch (raw.reason) {
       case "session-not-found": {
         return yield* new InferenceNotFoundError({ message, receipt });
@@ -484,15 +461,14 @@ const failTurn = (exchange: Exchange, sessionId: string | undefined, raw: Infere
       case "engine": {
         return yield* new InferenceInternalServerError({ message, receipt });
       }
-      case "auth":
-      case "auth-suspected": {
+      case "auth-401":
+      case "auth-words": {
         const refusal = yield* authFailure(exchange, raw.reason, message);
         return yield* refusal;
       }
     }
   });
 
-/** Start and continuation both end here: one success handler, one failure handler. */
 const settleTurn = <R>(
   exchange: Exchange,
   sessionId: string | undefined,
@@ -562,8 +538,6 @@ const startExchange = (payload: InferenceRespondRequest) =>
       });
     }
 
-    // Tool-less v1: codex has no in-process MCP transport, so caller-defined tools are a 400 until
-    // a parked-tool transport ships (`maxTurns` is likewise claude-only and ignored there).
     if (account.provider === "codex" && (payload.tools ?? []).length > 0) {
       return yield* new InferenceBadRequestError({
         message:

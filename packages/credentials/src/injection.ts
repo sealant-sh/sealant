@@ -26,10 +26,6 @@ export const CLAUDE_CREDENTIALS_JSON_PATH = "$HOME/.claude/.credentials.json";
 export const CODEX_AUTH_JSON_PATH = "$HOME/.codex/auth.json";
 export const GITHUB_TOKEN_ENV_KEYS = ["GITHUB_TOKEN", "GH_TOKEN"] as const;
 
-/**
- * The words a create and a launch refuse a Claude API key with: a key is placed only by a
- * credentials put into a person's home, never at `$HOME` or in a launch.
- */
 export const claudeApiKeyUnsupported = (accountName: string): string =>
   `Connected claude account "${accountName}" holds an API key. Sealant places a Claude API key only through a credentials put into a person's home, never at $HOME or in a launch: choose a Claude subscription login here. Nothing was written.`;
 

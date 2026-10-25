@@ -17,12 +17,18 @@ export const redactSecrets = (text: string, secrets: readonly (string | undefine
     text,
   );
 
-/**
- * Engine failure text that reads like an auth failure. Words only: it picks the answer's words and
- * marks a setup token invalid as before, but never an API key, which turns invalid only on a
- * structured 401.
- */
-export const isAuthFailureMessage = (message: string): boolean =>
+export const redactStrings = (value: unknown, redact: (text: string) => string): unknown => {
+  if (typeof value === "string") return redact(value);
+  if (Array.isArray(value)) return value.map((item) => redactStrings(item, redact));
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, redactStrings(item, redact)]),
+    );
+  }
+  return value;
+};
+
+export const soundsLikeAuthFailure = (message: string): boolean =>
   /authentication_failed|invalid api key|oauth token|401|unauthorized|token.*(expired|revoked)/i.test(
     message,
   );
