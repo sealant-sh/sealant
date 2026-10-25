@@ -88,7 +88,6 @@ export const requireConnectedAccountLoginClass = async (ctx: SdkContext): Promis
   }
 };
 
-/** Refuse before sending live receipts to a server that would silently ignore them. */
 export const requireCredentialPlacements = async (ctx: SdkContext): Promise<void> => {
   const supported = await readFeatures(ctx).then(
     (features) => features.credentialPlacements,

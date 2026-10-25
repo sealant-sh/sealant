@@ -1,8 +1,13 @@
-import { and, eq, inArray, notInArray, or, sql } from "drizzle-orm";
+import { and, eq, inArray, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
-import type { HomeChange, HomeState, PlacementAccount } from "../credential-placements.js";
+import {
+  placementAccountStatus,
+  type HomeChange,
+  type HomeState,
+  type PlacementAccount,
+} from "../credential-placements.js";
 import {
   connectedAccountDefaults,
   connectedAccounts,
@@ -13,7 +18,6 @@ import {
   type WorkspaceRuntimeInstance,
 } from "../schema.js";
 
-/** Placement persistence failures never include credential payloads. */
 export class CredentialPlacementRepoError extends Schema.TaggedError<CredentialPlacementRepoError>()(
   "CredentialPlacementRepoError",
   { message: Schema.String },
@@ -24,23 +28,16 @@ export interface CredentialPlacementHome {
   readonly home: string;
 }
 
-/** A home and the instance it is in. */
 export interface CredentialPlacementTarget {
   readonly home: WorkspaceCredentialHome;
   readonly instance: WorkspaceRuntimeInstance;
 }
 
 export interface CredentialPlacementRepoService {
-  /** The home as stored now, with the accounts its placements and `accountIds` name. */
   readonly state: (
     home: CredentialPlacementHome,
     accountIds?: readonly string[],
   ) => Effect.Effect<HomeState, CredentialPlacementRepoError>;
-  /**
-   * Stores what `decide` makes of the home, in one transaction that holds the accounts it names
-   * `FOR SHARE`: archive, which marks an account's placements removing, runs wholly before or after.
-   * Callers hold the home's lock, so nothing else changes the home's placements meanwhile.
-   */
   readonly transact: <A>(
     home: CredentialPlacementHome,
     accountIds: readonly string[],
@@ -49,13 +46,13 @@ export interface CredentialPlacementRepoService {
     { readonly result: A; readonly state: HomeState },
     CredentialPlacementRepoError
   >;
-  /**
-   * With an account: the homes of ready instances holding it ready or being written. Without: the
-   * homes with removal work, in instances not launching.
-   */
-  readonly targets: (
-    accountId?: string,
+  readonly homesHoldingAccount: (
+    accountId: string,
   ) => Effect.Effect<readonly CredentialPlacementTarget[], CredentialPlacementRepoError>;
+  readonly homesWithRemovalWork: () => Effect.Effect<
+    readonly CredentialPlacementTarget[],
+    CredentialPlacementRepoError
+  >;
 }
 
 export class CredentialPlacementRepo extends Context.Service<
@@ -67,6 +64,12 @@ const key = (home: CredentialPlacementHome) =>
   and(eq(placements.runId, home.runId), eq(placements.home, home.home));
 const homeKey = (home: CredentialPlacementHome) =>
   and(eq(workspaceCredentialHomes.runId, home.runId), eq(workspaceCredentialHomes.home, home.home));
+const orderedForReadySlotIndex = <Row extends { readonly state: string }>(
+  rows: readonly Row[],
+): readonly Row[] => [
+  ...rows.filter((row) => row.state !== "ready"),
+  ...rows.filter((row) => row.state === "ready"),
+];
 const safe = <A>(effect: Effect.Effect<A, unknown>) =>
   effect.pipe(
     Effect.mapError(
@@ -83,6 +86,16 @@ export const CredentialPlacementRepoLive = Layer.effect(
     const rowsOf = (home: CredentialPlacementHome) =>
       db.select().from(placements).where(key(home)).orderBy(placements.createdAt, placements.id);
 
+    const homesWhere = (where: SQL | undefined) =>
+      db
+        .select({ home: workspaceCredentialHomes, instance: workspaceRuntimeInstances })
+        .from(workspaceCredentialHomes)
+        .innerJoin(
+          workspaceRuntimeInstances,
+          eq(workspaceRuntimeInstances.runId, workspaceCredentialHomes.runId),
+        )
+        .where(where);
+
     const load = (home: CredentialPlacementHome, accountIds: readonly string[], lock: boolean) =>
       Effect.gen(function* () {
         const ids = [
@@ -94,6 +107,7 @@ export const CredentialPlacementRepoLive = Layer.effect(
           .where(inArray(connectedAccounts.id, ids))
           .orderBy(connectedAccounts.id);
         const accounts = ids.length === 0 ? [] : yield* lock ? query.for("share") : query;
+        const placementsOnceAccountsHeld = yield* rowsOf(home);
         const [held] = yield* db.select().from(workspaceCredentialHomes).where(homeKey(home));
         const defaults =
           held === undefined
@@ -104,8 +118,7 @@ export const CredentialPlacementRepoLive = Layer.effect(
                 .where(eq(connectedAccountDefaults.ownerUserId, held.onBehalfOfUserId));
         return {
           held,
-          // Read again once the accounts are held: archive may have committed in between.
-          placements: yield* rowsOf(home),
+          placements: placementsOnceAccountsHeld,
           accounts: new Map(
             accounts.map((account): [string, PlacementAccount] => [
               account.id,
@@ -115,8 +128,7 @@ export const CredentialPlacementRepoLive = Layer.effect(
                 ownerUserId: account.ownerUserId,
                 provider: account.provider,
                 revision: account.credentialRevision,
-                active: account.status === "active" && account.archivedAt === null,
-                archived: account.status === "archived" || account.archivedAt !== null,
+                status: placementAccountStatus(account),
               },
             ]),
           ),
@@ -158,12 +170,7 @@ export const CredentialPlacementRepoLive = Layer.effect(
                   was !== undefined && (was.state !== row.state || was.revision !== row.revision)
                 );
               });
-              // A slot's ready placement is retired before another takes it (one ready per slot).
-              const ordered = [
-                ...changed.filter((row) => row.state !== "ready"),
-                ...changed.filter((row) => row.state === "ready"),
-              ];
-              for (const row of ordered) {
+              for (const row of orderedForReadySlotIndex(changed)) {
                 yield* db
                   .update(placements)
                   .set({ state: row.state, revision: row.revision })
@@ -179,29 +186,26 @@ export const CredentialPlacementRepoLive = Layer.effect(
             }),
           ),
         ),
-      targets: (accountId) =>
+      homesHoldingAccount: (accountId) =>
         safe(
-          db
-            .select({ home: workspaceCredentialHomes, instance: workspaceRuntimeInstances })
-            .from(workspaceCredentialHomes)
-            .innerJoin(
-              workspaceRuntimeInstances,
-              eq(workspaceRuntimeInstances.runId, workspaceCredentialHomes.runId),
-            )
-            .where(
-              accountId === undefined
-                ? and(
-                    notInArray(workspaceRuntimeInstances.status, ["pending", "running"]),
-                    or(
-                      workspaceCredentialHomes.releasing,
-                      sql`exists (select 1 from ${placements} where ${placements.runId} = ${workspaceCredentialHomes.runId} and ${placements.home} = ${workspaceCredentialHomes.home} and ${placements.state} in ('pending', 'removing'))`,
-                    ),
-                  )
-                : and(
-                    eq(workspaceRuntimeInstances.status, "ready"),
-                    sql`exists (select 1 from ${placements} where ${placements.runId} = ${workspaceCredentialHomes.runId} and ${placements.home} = ${workspaceCredentialHomes.home} and ${placements.accountId} = ${accountId} and ${placements.state} in ('pending', 'ready'))`,
-                  ),
+          homesWhere(
+            and(
+              eq(workspaceRuntimeInstances.status, "ready"),
+              sql`exists (select 1 from ${placements} where ${placements.runId} = ${workspaceCredentialHomes.runId} and ${placements.home} = ${workspaceCredentialHomes.home} and ${placements.accountId} = ${accountId} and ${placements.state} in ('pending', 'ready'))`,
             ),
+          ),
+        ),
+      homesWithRemovalWork: () =>
+        safe(
+          homesWhere(
+            and(
+              notInArray(workspaceRuntimeInstances.status, ["pending", "running"]),
+              or(
+                workspaceCredentialHomes.releasing,
+                sql`exists (select 1 from ${placements} where ${placements.runId} = ${workspaceCredentialHomes.runId} and ${placements.home} = ${workspaceCredentialHomes.home} and ${placements.state} in ('pending', 'removing'))`,
+              ),
+            ),
+          ),
         ),
     } satisfies CredentialPlacementRepoService;
   }),

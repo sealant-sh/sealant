@@ -214,7 +214,6 @@ const newWorld = (
   });
   const ran: Ran[] = [];
   const exits: Array<number | "throw"> = [];
-  /** Run after each script, in order: lets a test act between a write and what follows it. */
   const afterRun: Array<() => void> = [];
   let slowRead = false;
   const channel: HomeCredentialChannel = {
@@ -233,7 +232,6 @@ const newWorld = (
         return Effect.succeed({ exitCode: next });
       }),
   };
-  /** The next read of a home's placements waits a while first. */
   const slowNextRead = () => {
     slowRead = true;
   };
@@ -366,7 +364,6 @@ const failed = <A, E>(result: Result.Result<A, E>): E => {
   return result.failure;
 };
 
-/** What a home holds, as its account view reads it: the ready placements, oldest first. */
 const heldLogins = (world: { readonly homes: InMemoryCredentialHomes }) =>
   [...world.homes.placementRows.values()]
     .filter((row) => row.state === "ready")
@@ -891,7 +888,6 @@ describe("putWorkspaceCredentials", () => {
       [aliceClaude.id, "ready"],
       [aliceWork.id, "pending"],
     ]);
-    // Either login may be in the file now: the sweep removes it, and both placements with it.
     succeeded(await world.sweep());
     expect(world.ran.at(-1)?.script).toContain('rm -f "$home/.claude/.credentials.json"');
     expect(world.homes.placementRows.size).toBe(0);
@@ -1090,7 +1086,6 @@ describe("placement receipts", () => {
     const first = succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default" })).home
       .placements?.[0];
     expect(first).toMatchObject({ accountId: aliceClaude.id, revision: 1, pinned: false });
-    // The same login is written again over its own placement: a file that went missing is back.
     expect(
       succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default" })).home
         .placements?.[0],
@@ -1110,7 +1105,6 @@ describe("placement receipts", () => {
         .placements?.[0],
     ).toEqual({ ...first, pinned: true });
     expect(world.ran).toHaveLength(2);
-    // List names the revision placed, even though the account now has revision 2.
     expect(succeeded(await world.list()).homes[0]?.placements?.[0]?.revision).toBe(1);
     expect(
       succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default", live: [] })).home
@@ -1179,7 +1173,6 @@ describe("placement receipts", () => {
   it("answers each of two puts racing for one home with the receipt of its own selection", async () => {
     const world = newWorld();
     succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default" }));
-    // The first put's answer is read only after a pause; the second put is waiting by then.
     world.afterRun.push(world.slowNextRead);
     const first = world.put({ onBehalfOfUserId: ALICE, claude: "work", live: [] });
     await new Promise((resolve) => setTimeout(resolve, 10));

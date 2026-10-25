@@ -36,8 +36,7 @@ const account = (id: string, overrides: Partial<PlacementAccount> = {}): Placeme
   ownerUserId: "alice",
   provider: "claude",
   revision: 1,
-  active: true,
-  archived: false,
+  status: "active",
   ...overrides,
 });
 
@@ -80,7 +79,7 @@ const begin = (state: HomeState, accountId: string, revision = 1, reuse?: string
     removes: [],
     newId,
   });
-  if (began === undefined) throw new Error("the write did not begin");
+  if (began.kind !== "begun") throw new Error("the write did not begin");
   return began;
 };
 
@@ -160,7 +159,7 @@ describe("a write's placements", () => {
   it("do not begin for an account that moved, was archived, or is someone else's", () => {
     for (const changed of [
       account("cacc_b", { revision: 2 }),
-      account("cacc_b", { active: false, archived: true }),
+      account("cacc_b", { status: "archived" }),
       account("cacc_b", { ownerUserId: "bob" }),
       account("cacc_b", { provider: "codex" }),
     ]) {
@@ -180,7 +179,7 @@ describe("a write's placements", () => {
           removes: [],
           newId,
         }),
-      ).toBeUndefined();
+      ).toEqual({ kind: "accounts-moved" });
     }
   });
 
@@ -219,7 +218,7 @@ describe("a write's placements", () => {
       removes: ["claude"],
       newId,
     });
-    if (began === undefined) throw new Error("the write did not begin");
+    if (began.kind !== "begun") throw new Error("the write did not begin");
     expect(began.placements.map((row) => row.state)).toEqual(["removing"]);
     const outcome: HomeWriteOutcome = { kind: "refused", written: [] };
     expect(
@@ -259,7 +258,7 @@ describe("a write's placements", () => {
         newId,
       },
     );
-    if (began === undefined) throw new Error("the write did not begin");
+    if (began.kind !== "begun") throw new Error("the write did not begin");
     const settled = settleHomeWrite({ ...before, placements: began.placements }, began.intent, {
       kind: "done",
       written: [],
@@ -276,7 +275,7 @@ describe("a write's placements", () => {
     const archived = settleHomeWrite(
       {
         ...before,
-        accounts: new Map([["cacc_b", account("cacc_b", { active: false, archived: true })]]),
+        accounts: new Map([["cacc_b", account("cacc_b", { status: "archived" })]]),
         placements: began.placements.map((row) => ({ ...row, state: "removing" })),
       },
       began.intent,

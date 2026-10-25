@@ -37,6 +37,7 @@ import {
   buildHomeCredentialScript,
   HOME_SCRIPT_EXIT,
   homeLoginsKept,
+  KEPT_LOGINS_EXIT,
   homePathProblem,
   homeScriptStdin,
   homeStateKey,
@@ -335,7 +336,9 @@ forEachShell("buildHomeCredentialScript", () => {
     const lateTake = { token: w.nextToken() };
     const lateRelease = { token: w.nextToken() };
     // The release Mend retried runs, and Bob takes the home.
-    expect(w.run({ home, fence: { kind: "release" }, writes: [], removes: [] }).status).toBe(0);
+    expect(
+      w.run({ home, fence: { kind: "release-unfenced" }, writes: [], removes: [] }).status,
+    ).toBe(0);
     expect(
       w.run({
         home,
@@ -346,7 +349,8 @@ forEachShell("buildHomeCredentialScript", () => {
     ).toBe(0);
     // Now the two stalled execs run, release first.
     expect(
-      w.run({ home, fence: { kind: "release" }, writes: [], removes: [], ...lateRelease }).status,
+      w.run({ home, fence: { kind: "release-unfenced" }, writes: [], removes: [], ...lateRelease })
+        .status,
     ).toBe(HOME_SCRIPT_EXIT.fenced);
     expect(
       w.run({
@@ -472,7 +476,9 @@ forEachShell("buildHomeCredentialScript", () => {
     expect(existsSync(join(home, ".claude/.credentials.json"))).toBe(false);
     expect(w.marker(home)).toBeUndefined();
     expect(take(GEN_A, "alice")).toBe(0);
-    expect(w.run({ home, fence: { kind: "release" }, writes: [], removes: [] }).status).toBe(0);
+    expect(
+      w.run({ home, fence: { kind: "release-unfenced" }, writes: [], removes: [] }).status,
+    ).toBe(0);
     expect(w.marker(home)).toBeUndefined();
   });
 
@@ -639,7 +645,7 @@ forEachShell("buildHomeCredentialScript", () => {
     expect(() =>
       buildHomeCredentialScript({
         home: "/workspace/repo",
-        fence: { kind: "release" },
+        fence: { kind: "release-unfenced" },
         token: "1",
         writes: [],
         removes: [],
@@ -830,7 +836,7 @@ forEachShell("pi's and opencode's ChatGPT logins", () => {
       ],
       removes: [],
     });
-    expect(put.status).toBe(HOME_SCRIPT_EXIT.keptPersonalLogin + 2);
+    expect(put.status).toBe(KEPT_LOGINS_EXIT.encode(["opencode"]));
     expect(homeLoginsKept(put.status ?? undefined)).toEqual(["opencode"]);
     expect(json(join(home, ".pi/agent/auth.json"))).toEqual({
       "openai-codex": JSON.parse(entry("at-pi")),
@@ -1450,7 +1456,12 @@ forEachShell(
 
     it("are removed by the next release, recorded or not", () => {
       const { w, home } = leftBehind();
-      const released = w.run({ home, fence: { kind: "release" }, writes: [], removes: [] });
+      const released = w.run({
+        home,
+        fence: { kind: "release-unfenced" },
+        writes: [],
+        removes: [],
+      });
       expect(released.status, released.stderr).toBe(0);
       expect(read(join(home, ".pi/agent/auth.json"))).not.toContain("at-alice-pi");
       expect(read(join(home, ".local/share/opencode/auth.json"))).not.toContain("at-alice-oc");

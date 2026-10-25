@@ -59,7 +59,6 @@ const replace = (id: string, value: string) =>
     }),
   );
 
-/** A faithful executor boundary for whole-file slots; only fake credential bytes are recorded. */
 const executor = () => {
   const files = new Map<string, string>();
   const writes: string[] = [];
@@ -221,7 +220,6 @@ describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", 
       .placements?.[0];
     expect(next?.accountId).toBe(f.second.id);
     expect(next?.placementId).not.toBe(placed?.placementId);
-    // Retiring the old receipt must not delete the newer file in the same provider slot.
     await run(sweepCredentialPlacements({ homeChannel: ex.channel }));
     expect(ex.files.get(`${f.home}/.claude/.credentials.json`)).toContain("fake-work");
     expect(await rows(f)).toHaveLength(1);
@@ -253,7 +251,6 @@ describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", 
           ownerUserId: f.owner,
         });
         expect(yield* list).toEqual([expect.objectContaining({ state: "removing" })]);
-        // A sweep can start before the put resumes. Its home lock must keep it behind the write.
         const sweep = yield* sweepCredentialPlacements({ homeChannel: ex.channel }).pipe(
           Effect.forkChild,
         );
@@ -510,7 +507,6 @@ const PLACEMENTS_MIGRATION = readdirSync(migrationsFolder).find((entry) =>
   entry.endsWith("_credential_placements"),
 );
 
-/** One placement row as the migration test selects it. */
 const placement = (
   runId: string,
   home: string,

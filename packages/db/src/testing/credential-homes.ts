@@ -1,13 +1,12 @@
-/**
- * In-memory homes and placements for tests, with the live repositories' locking (one write per
- * (instance, home) at a time, a failed write changing nothing) and the live placement rules: a
- * transaction applies what the same `decide` makes of the same state.
- */
 import { randomUUID } from "node:crypto";
 
 import { Effect, Semaphore } from "effect";
 
-import type { HomeState, PlacementAccount } from "../credential-placements.js";
+import {
+  placementAccountStatus,
+  type HomeState,
+  type PlacementAccount,
+} from "../credential-placements.js";
 import type { WorkspaceCredentialHomeRepoService } from "../repositories/workspace-credential-homes.js";
 import type {
   CredentialPlacementHome,
@@ -25,9 +24,7 @@ export interface InMemoryCredentialHomes {
   readonly placements: CredentialPlacementRepoService;
   /** The rows, by `${runId} ${home}`. */
   readonly rows: Map<string, WorkspaceCredentialHome>;
-  /** The placements, by id. */
   readonly placementRows: Map<string, WorkspaceCredentialPlacement>;
-  /** Records a ready placement, as a confirmed put leaves it. */
   readonly place: (input: {
     readonly runId: string;
     readonly home: string;
@@ -45,11 +42,10 @@ const LOGIN_FILES = {
   opencode: ".local/share/opencode/auth.json",
 } as const;
 
-/** What the placement rules read of an account. */
 type AccountRow = Pick<
   ConnectedAccount,
-  "id" | "name" | "ownerUserId" | "credentialRevision" | "archivedAt"
-> & { readonly provider: string; readonly status: string };
+  "id" | "name" | "ownerUserId" | "credentialRevision" | "archivedAt" | "status"
+> & { readonly provider: string };
 
 const keyOf = (input: CredentialPlacementHome) => `${input.runId} ${input.home}`;
 
@@ -125,14 +121,21 @@ export const makeInMemoryCredentialHomes = (
               ownerUserId: account.ownerUserId,
               provider: account.provider,
               revision: account.credentialRevision,
-              active: account.status === "active" && account.archivedAt === null,
-              archived: account.status === "archived" || account.archivedAt !== null,
+              status: placementAccountStatus(account),
             },
           ]),
       ),
       defaults: new Set(held === undefined ? [] : (options.defaults?.() ?? [])),
     };
   };
+
+  const targetsWhere = (
+    match: (home: WorkspaceCredentialHome, instance: WorkspaceRuntimeInstance) => boolean,
+  ) =>
+    [...rows.values()].flatMap((home) => {
+      const instance = instances().find((row) => row.runId === home.runId);
+      return instance !== undefined && match(home, instance) ? [{ home, instance }] : [];
+    });
 
   const placements: CredentialPlacementRepoService = {
     state: (home, accountIds = []) => Effect.sync(() => state(home, accountIds)),
@@ -157,20 +160,22 @@ export const makeInMemoryCredentialHomes = (
         for (const row of change.placements) placementRows.set(row.id, row);
         return { result: change.result, state: state(home, accountIds) };
       }),
-    targets: (accountId) =>
+    homesHoldingAccount: (accountId) =>
       Effect.sync(() =>
-        [...rows.values()].flatMap((home) => {
-          const instance = instances().find((row) => row.runId === home.runId);
-          if (instance === undefined) return [];
-          const match =
-            accountId === undefined
-              ? instance.status !== "pending" &&
-                instance.status !== "running" &&
-                (home.releasing || of(home).some((row) => row.state !== "ready"))
-              : instance.status === "ready" &&
-                of(home).some((row) => row.accountId === accountId && row.state !== "removing");
-          return match ? [{ home, instance }] : [];
-        }),
+        targetsWhere(
+          (home, instance) =>
+            instance.status === "ready" &&
+            of(home).some((row) => row.accountId === accountId && row.state !== "removing"),
+        ),
+      ),
+    homesWithRemovalWork: () =>
+      Effect.sync(() =>
+        targetsWhere(
+          (home, instance) =>
+            instance.status !== "pending" &&
+            instance.status !== "running" &&
+            (home.releasing || of(home).some((row) => row.state !== "ready")),
+        ),
       ),
   };
 

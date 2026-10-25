@@ -24,6 +24,7 @@ import {
   WorkspaceCredentialHomeRepo,
   WorkspaceRuntimeInstanceRepo,
   type ConnectedAccountRepoService,
+  type ConnectedAccountStatus,
   type GitHubInstallationRepoService,
   type GitHubInstallationRepositoryCacheRepoService,
   type WorkspaceAttemptRepoService,
@@ -434,7 +435,7 @@ const connectedAccountStub = (input: {
   readonly id: string;
   readonly provider: "claude" | "codex" | "github";
   readonly payload: Record<string, unknown>;
-  readonly status?: string;
+  readonly status?: ConnectedAccountStatus;
 }) => ({
   id: input.id,
   ownerUserId: "usr_1",

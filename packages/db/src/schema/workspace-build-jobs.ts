@@ -265,14 +265,6 @@ export const workspaceCredentialHomeProviderValues = [
 export type WorkspaceCredentialHomeProvider =
   (typeof workspaceCredentialHomeProviderValues)[number];
 
-/**
- * One home of a running instance that Core writes logins into (docs/connected-accounts-design.md
- * §6c): one person per home while it is held, so a home never holds two people's logins and a
- * refresh push reaches only homes whose person owns the account. What it holds is its placements.
- * Every write into the home (a put, a release, a refresh push, the sweep) holds its lock across its
- * control-channel write, so no write lands over another's. Released (deleted) with the files, and
- * with the instance.
- */
 export const workspaceCredentialHomes = pgTable(
   "workspace_credential_homes",
   {
@@ -288,10 +280,6 @@ export const workspaceCredentialHomes = pgTable(
      * checks the marker in the executor, so a late write from an earlier hold never lands.
      */
     generation: text().notNull(),
-    /**
-     * The hold is not (or no longer) confirmed: a first write has not answered yet, or a release
-     * did not. Nothing is written into the home; the sweep removes its files and the row.
-     */
     releasing: boolean().notNull().default(false),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
@@ -304,22 +292,14 @@ export const workspaceCredentialHomes = pgTable(
   (table) => [primaryKey({ columns: [table.runId, table.home] })],
 );
 
-/**
- * One login written into one home (docs/connected-accounts-design.md §6c): `pending` while its
- * write has not answered, `ready` once it did, `removing` until its file is removed. At most one
- * placement holds a provider's file slot `ready`.
- */
 export const workspaceCredentialPlacements = pgTable(
   "workspace_credential_placements",
   {
-    /** Stable for the life of the placement: a refresh moves its revision, never its id. */
     id: text().primaryKey(),
     runId: text("run_id").notNull(),
     home: text().notNull(),
     provider: text({ enum: workspaceCredentialHomeProviderValues }).notNull(),
-    /** No foreign key: a placement outlives its account's row until its file is removed. */
     accountId: text("account_id").notNull(),
-    /** The account's credential revision whose bytes the file holds. */
     revision: integer().notNull(),
     path: text().notNull(),
     login: jsonb().$type<{ readonly kind: "subscription" }>().notNull(),

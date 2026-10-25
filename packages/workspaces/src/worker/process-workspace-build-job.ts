@@ -420,20 +420,13 @@ const splitCredentialInjections = (
   return { credentialEnv, credentialFiles };
 };
 
-/**
- * A launch that wrote its logins into a `credentialsHome` records that home as its owner's, and
- * its logins as placements (docs/connected-accounts-design.md §6d), as a put would: refreshes reach
- * them through the record, and nobody else's logins are put there while it is held. A failure is
- * logged, never the launch's: the executor is up and its logins are written; only refresh pushes
- * into the home wait for a put.
- */
-const recordLaunchLogins = (input: {
+const recordLaunchLoginsOrWarn = (input: {
   readonly runId: string;
   readonly home: string;
   readonly generation: string;
   readonly ownerUserId: string | undefined;
   readonly injections: readonly WorkspaceLaunchCredentialInjection[];
-}) =>
+}): Effect.Effect<void> =>
   Effect.gen(function* () {
     const homes = yield* Effect.serviceOption(WorkspaceCredentialHomeRepo);
     const placements = yield* Effect.serviceOption(CredentialPlacementRepo);
@@ -1384,7 +1377,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       credentialFiles.some((file) => file.home !== undefined) &&
       runtimeLaunchResult.status === "ready"
     ) {
-      yield* recordLaunchLogins({
+      yield* recordLaunchLoginsOrWarn({
         runId: job.runId,
         home: credentialsHome.path,
         generation: homeGeneration,
@@ -1518,7 +1511,6 @@ export const processWorkspaceBuildJob = (
     GitHubInstallationRepoLive,
     GitHubInstallationRepositoryCacheRepoLive,
     ConnectedAccountRepoLive,
-    // A launch's credentialsHome is recorded as its owner's home, with its logins.
     WorkspaceCredentialHomeRepoLive,
     CredentialPlacementRepoLive,
     // A build failure's job, attempt and runtime writes land together or not at all.

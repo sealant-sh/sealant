@@ -10,14 +10,6 @@
  * (`home-held`), never written over. `DELETE` releases the home (its files are removed and its
  * record deleted), after which the home can be taken again. `GET` lists the homes, and `prune`
  * removes the logins no running process holds.
- *
- * Each login written is a placement, answered as a receipt. A put names the placements running
- * processes hold (`live`): a provider whose file one of them holds is not written over.
- *
- * Every write into a home runs under that home's lock (`WorkspaceCredentialHomeRepo
- * .withLockedHome`), as the refresh push and the sweep do: the decision (who holds it, what it
- * holds) is made on the home as it is under the lock, and no other write into the home lands in
- * between.
  */
 import {
   WorkspaceBadGatewayError,
@@ -324,7 +316,6 @@ const accountRefusalOf = (failure: unknown): ConnectedAccountRefusalCode | undef
   return connectedAccountRefusalCodes.find((code) => code === failure.code);
 };
 
-/** A home as the API shows it: a receipt for each login written there, and each account by name. */
 const toHomeView = (
   held: { readonly home: string; readonly onBehalfOfUserId: string },
   state: HomeState,
@@ -335,7 +326,6 @@ const toHomeView = (
   for (const row of state.placements) {
     if (row.state !== "ready") continue;
     const account = state.accounts.get(row.accountId);
-    // An account that no longer exists (its owner was deleted) cannot be named; it is left out.
     if (account !== undefined) {
       accounts[row.provider] = { connectedAccountId: account.id, name: account.name };
     }
@@ -443,8 +433,6 @@ export const putWorkspaceCredentials = (input: {
       instance.runId,
       payload.home,
       homes.withLockedHome(homeKey, (held, nextFence) => {
-        // A first take that fails leaves nothing of its own in the home: its row goes with it.
-        let releaseTake = false;
         const releaseMarker = (generation: string) =>
           Effect.gen(function* () {
             const ran = yield* runHomeScript({
@@ -478,12 +466,8 @@ export const putWorkspaceCredentials = (input: {
           }
           const generation = held?.generation ?? newHomeGeneration();
           let taking = held === undefined;
-          // A login file the home refused (unusable, another hard link, really outside it) is left
-          // out of a partial put from then on, and its stale login removed with the rest.
           const unusable: WorkspaceCredentialSkip[] = [];
-          for (let moves = 0; ; ) {
-            // Under the lock: each account resolved and decrypted as it is stored now, so a
-            // refresh that persisted while this put waited is what is written.
+          for (let revisionMoves = 0; ; ) {
             const selected: Array<{
               readonly provider: WorkspaceCredentialHomeProvider;
               readonly account: ConnectedAccount;
@@ -493,7 +477,6 @@ export const putWorkspaceCredentials = (input: {
             for (const { provider, selection } of toWrite) {
               if (unusable.some((skip) => skip.provider === provider)) continue;
               const resolved = yield* Effect.gen(function* () {
-                // pi's and opencode's logins are made from the person's Codex account.
                 const account = yield* resolveSelectedConnectedAccount({
                   ownerUserId: person,
                   provider: workspaceCredentialHomeAccountProvider[provider],
@@ -535,24 +518,22 @@ export const putWorkspaceCredentials = (input: {
               removes: plan.removes,
             });
             if (ran.kind === "moved") {
-              moves += 1;
-              if (moves < PUT_ROUNDS) continue;
-              releaseTake = taking;
-              return yield* accountsMoved(payload.home);
+              revisionMoves += 1;
+              if (revisionMoves < MAX_PUT_RESOLUTIONS_WHILE_REVISIONS_MOVE) continue;
+              return putFailed(accountsMoved(payload.home), taking ? "release" : "keep");
             }
             if (ran.kind === "unconfirmed") {
-              // An unconfirmed write may still land. A first take releases its hold at once; a
-              // later write's slots are left for removal by whoever holds the lock next.
-              if (taking) releaseTake = yield* releaseMarker(generation);
-              return yield* new WorkspaceBadGatewayError({
-                message: `The workspace's executor did not confirm the write into ${payload.home}: ${ran.message}. Core removes whatever of it landed; put again${taking ? "" : ", or release the home"}.`,
-              });
+              const markerReleased = taking && (yield* releaseMarker(generation));
+              return putFailed(
+                new WorkspaceBadGatewayError({
+                  message: `The workspace's executor did not confirm the write into ${payload.home}: ${ran.message}. Core removes whatever of it landed; put again${taking ? "" : ", or release the home"}.`,
+                }),
+                markerReleased ? "release" : "keep",
+              );
             }
             if (ran.kind === "refused") {
-              // The owner's half refuses after a first take made its marker: that marker is
-              // released, so the home can be taken again once it is fixed, never as `home-held`.
-              const marked = taking && OWNER_HALF_REFUSALS.has(ran.exitCode);
-              const cleared = marked ? yield* releaseMarker(generation) : !marked;
+              const takeMadeMarker = taking && OWNER_HALF_REFUSALS.has(ran.exitCode);
+              const noMarkerLeft = takeMadeMarker ? yield* releaseMarker(generation) : true;
               const refusedLogin = homeLoginOfRefusal(ran.exitCode);
               if (
                 payload.partial === true &&
@@ -566,15 +547,15 @@ export const putWorkspaceCredentials = (input: {
                 });
                 continue;
               }
-              releaseTake = taking && cleared;
-              return yield* new WorkspaceConflictError({
-                message: `${ran.message} Nothing was written.`,
-                code: refusedCode(ran.exitCode),
-              });
+              return putFailed(
+                new WorkspaceConflictError({
+                  message: `${ran.message} Nothing was written.`,
+                  code: refusedCode(ran.exitCode),
+                }),
+                taking && noMarkerLeft ? "release" : "keep",
+              );
             }
             taking = false;
-            // A login archive cancelled while it was written, or one this write took the slot
-            // from, is removed now; failing that, the sweep removes it.
             yield* removeLeftovers({
               key: homeKey,
               fence: { generation, releasing: false },
@@ -583,10 +564,10 @@ export const putWorkspaceCredentials = (input: {
               nextFence,
             }).pipe(Effect.ignore);
             if (ran.stale) {
-              moves += 1;
-              if (moves < PUT_ROUNDS) continue;
+              revisionMoves += 1;
+              if (revisionMoves < MAX_PUT_RESOLUTIONS_WHILE_REVISIONS_MOVE) continue;
             }
-            return {
+            return putWritten({
               generation,
               skipped,
               home: toHomeView(
@@ -594,21 +575,25 @@ export const putWorkspaceCredentials = (input: {
                 yield* placements.state(homeKey),
                 plan.pinned,
               ),
-            };
+            });
           }
         }).pipe(
           Effect.result,
-          Effect.map((result) => ({
-            result,
-            outcome: Result.isSuccess(result)
-              ? {
-                  kind: "hold" as const,
-                  onBehalfOfUserId: person,
-                  generation: result.success.generation,
-                }
-              : releaseTake
-                ? { kind: "release" as const }
-                : { kind: "keep" as const },
+          Effect.map((ended) => ({
+            result: Result.flatMap(
+              ended,
+              (end): Result.Result<PutAnswer, PutFailure> =>
+                end.kind === "written" ? Result.succeed(end.answer) : Result.fail(end.error),
+            ),
+            outcome: Result.isFailure(ended)
+              ? { kind: "keep" as const }
+              : ended.success.kind === "written"
+                ? {
+                    kind: "hold" as const,
+                    onBehalfOfUserId: person,
+                    generation: ended.success.answer.generation,
+                  }
+                : { kind: ended.success.home },
           })),
         );
       }),
@@ -634,11 +619,27 @@ export const putWorkspaceCredentials = (input: {
     } satisfies PutWorkspaceCredentialsResponse;
   });
 
-/**
- * A put writes again when an account's stored bytes move while its copy is written (a refresh or a
- * reconnect). One whose accounts keep moving before anything is written is answered busy.
- */
-const PUT_ROUNDS = 3;
+const MAX_PUT_RESOLUTIONS_WHILE_REVISIONS_MOVE = 3;
+
+interface PutAnswer {
+  readonly generation: string;
+  readonly skipped: readonly WorkspaceCredentialSkip[];
+  readonly home: WorkspaceCredentialHome;
+}
+
+type PutFailure = WorkspaceConflictError | WorkspaceBadGatewayError;
+
+type PutEnd =
+  | { readonly kind: "written"; readonly answer: PutAnswer }
+  | { readonly kind: "failed"; readonly error: PutFailure; readonly home: "release" | "keep" };
+
+const putWritten = (answer: PutAnswer): PutEnd => ({ kind: "written", answer });
+
+const putFailed = (error: PutFailure, home: "release" | "keep"): PutEnd => ({
+  kind: "failed",
+  error,
+  home,
+});
 
 const accountsMoved = (home: string) =>
   new WorkspaceConflictError({
@@ -678,10 +679,6 @@ export const releaseWorkspaceCredentials = (input: {
       homes.withLockedHome(key, (held: WorkspaceCredentialHomeRow | undefined, nextFence) =>
         Effect.gen(function* () {
           if (target !== undefined) {
-            // Every login file Core names is removed, recorded or not (an unconfirmed write may
-            // have landed), fenced by the hold's generation: a release that runs late, after the
-            // home was taken again, removes nothing of the new holder's. A home Core holds no
-            // record of is released whatever its marker says.
             const ran = yield* runHomeScript({
               channel,
               target,
@@ -690,24 +687,21 @@ export const releaseWorkspaceCredentials = (input: {
                 home,
                 fence:
                   held === undefined
-                    ? { kind: "release" }
+                    ? { kind: "release-unfenced" }
                     : { kind: "release", generation: held.generation },
-                // A release of a home Core has no record of is unfenced by marker, never by
-                // token: a late one finds the mark of every later write and removes nothing.
                 token: yield* nextFence,
                 writes: [],
                 removes: [],
               }),
             });
-            const gone = ran.kind === "refused" && ran.exitCode === HOME_SCRIPT_EXIT.missing;
-            if (ran.kind === "refused" && !gone) {
+            const homeMissing = ran.kind === "refused" && ran.exitCode === HOME_SCRIPT_EXIT.missing;
+            if (ran.kind === "refused" && !homeMissing) {
               return yield* new WorkspaceConflictError({
                 message: `${ran.message} Nothing was removed; the home stays held.`,
                 code: refusedCode(ran.exitCode),
               });
             }
             if (ran.kind === "unconfirmed") {
-              // It may have landed: the release is committed, and the sweep finishes it.
               if (held !== undefined) {
                 yield* placements.transact(key, [], (state) => ({
                   result: undefined,
@@ -775,10 +769,6 @@ export const listWorkspaceCredentials = (input: {
     } satisfies ListWorkspaceCredentialsResponse;
   });
 
-/**
- * Removes every login of one home that is neither live nor the ready one of the person's default
- * (Mend calls it when a process stops). Running it again changes nothing.
- */
 export const pruneWorkspaceCredentials = (input: {
   readonly workspaceId: string;
   readonly payload: PruneWorkspaceCredentialsRequest;
@@ -807,7 +797,7 @@ export const pruneWorkspaceCredentials = (input: {
             result: undefined,
             placements: pruneHome({ ...state, placements: settleInDoubt(state.placements) }, live),
           }));
-          const released = yield* removeLeftovers({
+          const removal = yield* removeLeftovers({
             key,
             fence: { generation: held.generation, releasing: held.releasing },
             target,
@@ -822,7 +812,7 @@ export const pruneWorkspaceCredentials = (input: {
               ),
             ),
           );
-          return released
+          return removal.kind === "home-emptied"
             ? { result: undefined, outcome: { kind: "release" as const } }
             : {
                 result: toHomeView(held, yield* placements.state(key)),

@@ -100,7 +100,6 @@ const account = (
   kindUnchecked: false,
 });
 
-/** Homes, their placements and the accounts they name, all in memory. */
 const homesOf = (
   instances: readonly WorkspaceRuntimeInstance[],
   accounts: readonly ConnectedAccount[],
@@ -117,7 +116,6 @@ const homesOf = (
   return { homes, layer };
 };
 
-/** Holds `home` for `person` with a ready placement of each login, as a confirmed put leaves it. */
 const hold = (
   homes: InMemoryCredentialHomes,
   home: string,
@@ -337,7 +335,7 @@ describe("pushCredentialCopy into homes", () => {
         ["claude", "cacc_alice"],
       ]);
       // The listing still names Alice's home; under its lock, Bob holds it now.
-      const listed = yield* homes.placements.targets("cacc_alice");
+      const listed = yield* homes.placements.homesHoldingAccount("cacc_alice");
       yield* homes.service.withLockedHome({ runId: "h", home: "/run/mend/conv/ses_1" }, () =>
         Effect.succeed({ result: undefined, outcome: { kind: "release" as const } }),
       );
@@ -354,7 +352,7 @@ describe("pushCredentialCopy into homes", () => {
       }).pipe(
         Effect.provideService(CredentialPlacementRepo, {
           ...homes.placements,
-          targets: () => Effect.succeed(listed),
+          homesHoldingAccount: () => Effect.succeed(listed),
         }),
       );
 
@@ -436,8 +434,7 @@ describe("pushCredentialCopy into homes", () => {
       });
       expect(summary).toMatchObject({ written: 0, failed: 1 });
       expect([...homes.placementRows.values()].map((row) => row.state)).toEqual(["pending"]);
-      // The next holder of the lock (the sweep) leaves the slot for removal, never ready.
-      expect(yield* homes.placements.targets()).toHaveLength(1);
+      expect(yield* homes.placements.homesWithRemovalWork()).toHaveLength(1);
     }).pipe(Effect.provide(layer));
   });
 });

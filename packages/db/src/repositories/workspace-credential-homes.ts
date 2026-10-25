@@ -1,12 +1,3 @@
-/**
- * The logins Core wrote into each home of a running instance (docs/connected-accounts-design.md
- * §6c). One row per (instance, home), naming the one person the home holds. Every write into a home
- * (a put, a release, a refresh push, the sweep) runs inside
- * {@link WorkspaceCredentialHomeRepoService.withLockedHome}, which holds the home's lock across the
- * caller's control-channel write, so writes into one home never interleave and each one decides on
- * what the row says at that moment. No transaction stays open across that write: what the caller
- * records before it is committed before the executor runs it.
- */
 import { and, eq, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 import { SqlError } from "effect/sql/SqlError";
@@ -53,7 +44,6 @@ const isLockTimeout = (cause: unknown, depth = 0): boolean => {
 export type WorkspaceCredentialHomeOutcome =
   /** Nothing changes (a refusal, or a push that wrote over what is recorded). */
   | { readonly kind: "keep" }
-  /** The home is `onBehalfOfUserId`'s, its hold confirmed (inserted when the home held nothing). */
   | {
       readonly kind: "hold";
       readonly onBehalfOfUserId: string;
@@ -64,17 +54,10 @@ export type WorkspaceCredentialHomeOutcome =
   | { readonly kind: "release" };
 
 export interface WorkspaceCredentialHomeRepoService {
-  /**
-   * Run `use` while holding the (instance, home) lock, then apply the outcome it returns. `use`
-   * sees the row as it is under the lock (`undefined` when the home holds nothing), and may take as
-   * long as its write takes: a concurrent put, release or push for the same home waits for it. A
-   * failure of `use` applies no outcome and is returned as it is.
-   */
   readonly withLockedHome: <A, E, R>(
     input: { readonly runId: string; readonly home: string },
     use: (
       held: WorkspaceCredentialHome | undefined,
-      /** A fresh fencing token, issued under the lock: every exec into the home presents one. */
       nextFence: Effect.Effect<string, WorkspaceCredentialHomeRepoError>,
     ) => Effect.Effect<
       { readonly result: A; readonly outcome: WorkspaceCredentialHomeOutcome },
@@ -139,16 +122,12 @@ export const makeWorkspaceCredentialHomeRepoLayer = (options: {
         const lockKey = `${input.runId} ${input.home}`;
         return Effect.scoped(
           Effect.gen(function* () {
-            // One pooled connection holds the home's session lock across the caller's executor
-            // write, while the caller's placement transactions commit on it before and after.
             const connection = yield* db.$client.reserve;
             const execute = (statement: string, params: readonly unknown[] = []) =>
               withRepoError("withLockedHome", connection.execute(statement, params, undefined));
             // The connection goes back to the pool without the wait, even when the lock timed out.
             yield* Effect.addFinalizer(() => execute("set lock_timeout = 0").pipe(Effect.orDie));
             yield* Effect.acquireRelease(
-              // A writer waits at most this long for another's write into the home (each is
-              // bounded by its own exec timeout), never indefinitely while holding a connection.
               execute(
                 `set lock_timeout = '${Math.max(1, Math.round(options.lockTimeoutMs))}ms'`,
               ).pipe(
@@ -215,8 +194,6 @@ export const makeWorkspaceCredentialHomeRepoLayer = (options: {
             }).pipe(Effect.provideService(db.$client.transactionService, [connection, -1]));
           }),
         ).pipe(
-          // Only the database's failures are translated (a lock timeout as busy); the caller's
-          // errors pass through as they are.
           Effect.mapError((error) =>
             (error instanceof SqlError || error instanceof WorkspaceCredentialHomeRepoError) &&
             isLockTimeout(error)

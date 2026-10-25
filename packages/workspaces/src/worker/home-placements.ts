@@ -1,11 +1,5 @@
 import { randomUUID } from "node:crypto";
 
-/**
- * The one way logins are written into and removed from a home (docs/connected-accounts-design.md
- * §6c), for a put, a refresh push, a prune and the sweep. Every call runs under the home's lock. A
- * write records its intent before the executor runs it, and what the executor answered after:
- * placements describe the files whether the write lands, is refused, or never answers.
- */
 import {
   beginHomeWrite,
   CredentialPlacementRepo,
@@ -48,14 +42,10 @@ const messageOf = (error: unknown, fallback: string): string =>
   error instanceof Error ? error.message : fallback;
 
 export type HomeScriptRun =
-  /** Ran to the end; `kept` are the merged logins it left as the person's own. */
   | { readonly kind: "done"; readonly kept: readonly HomeCredentialProvider[] }
-  /** The script refused, in words. */
   | { readonly kind: "refused"; readonly exitCode: number; readonly message: string }
-  /** No answer, or an exit nobody can read: what it did is not known. */
   | { readonly kind: "unconfirmed"; readonly message: string };
 
-/** Runs one home script with the write timeout, in this fiber: the timeout interrupts the exec. */
 export const runHomeScript = (input: {
   readonly channel: HomeCredentialChannel;
   readonly target: SealantTarget;
@@ -80,10 +70,6 @@ export const runHomeScript = (input: {
     }),
   );
 
-/**
- * What a refused script wrote before refusing: the whole-file logins are written before any merged
- * one, so a refused pi or opencode login leaves them written; any other refusal wrote nothing.
- */
 const landedBeforeRefusal = (
   writes: readonly HomeCredentialProvider[],
   exitCode: number,
@@ -97,9 +83,7 @@ const landedBeforeRefusal = (
 };
 
 export type HomeWriteResult =
-  /** An account left the revision read (or the person) before anything was written. */
   | { readonly kind: "moved" }
-  /** `stale`: an account moved past the revision written while it was written. */
   | { readonly kind: "done"; readonly stale: boolean; readonly state: HomeState }
   | {
       readonly kind: "refused";
@@ -109,11 +93,6 @@ export type HomeWriteResult =
     }
   | { readonly kind: "unconfirmed"; readonly message: string };
 
-/**
- * Writes logins into a home and removes others, in one exec: placements are recorded `pending`
- * first, then settled on what the executor answered. A first write (`take`) records the home
- * `releasing` until a caller confirms the hold, and removes every login file it does not write.
- */
 export const writeIntoHome = (input: {
   readonly key: CredentialPlacementHome;
   readonly onBehalfOfUserId: string;
@@ -147,8 +126,8 @@ export const writeIntoHome = (input: {
           },
         );
         return {
-          result: began?.intent,
-          placements: began?.placements ?? placements,
+          result: began,
+          placements: began.kind === "begun" ? began.placements : placements,
           ...(input.fence.kind === "take"
             ? {
                 insertHome: {
@@ -161,8 +140,8 @@ export const writeIntoHome = (input: {
         };
       },
     );
-    const intent = begun.result;
-    if (intent === undefined) return { kind: "moved" } satisfies HomeWriteResult;
+    if (begun.result.kind === "accounts-moved") return { kind: "moved" } satisfies HomeWriteResult;
+    const intent = begun.result.intent;
     if (input.fence.kind === "held" && writes.length === 0 && input.removes.length === 0) {
       return { kind: "done", stale: false, state: begun.state } satisfies HomeWriteResult;
     }
@@ -210,17 +189,15 @@ export const writeIntoHome = (input: {
     ) satisfies HomeWriteResult;
   });
 
-/** The executor did not confirm a removal: the placements stay removing, for the sweep. */
 export class HomeRemovalUnconfirmedError extends Schema.TaggedError<HomeRemovalUnconfirmedError>()(
   "HomeRemovalUnconfirmedError",
   { message: Schema.String },
 ) {}
 
-/**
- * Removes the files a home's removing placements leave, and forgets those placements once the
- * executor answers. A releasing home loses every login file and its marker; the caller deletes its
- * row when this answers `true`. Without a target (the executor is gone) there is nothing to remove.
- */
+export type LeftoverRemoval =
+  | { readonly kind: "home-emptied" }
+  | { readonly kind: "leftovers-removed" };
+
 export const removeLeftovers = (input: {
   readonly key: CredentialPlacementHome;
   readonly fence: { readonly generation: string; readonly releasing: boolean };
@@ -251,40 +228,32 @@ export const removeLeftovers = (input: {
           removes: work.removes,
         }),
       });
-      // A missing home has nothing left, and a fenced one is another hold's now: neither has ours.
-      const gone =
-        ran.kind === "refused" &&
-        (ran.exitCode === HOME_SCRIPT_EXIT.missing || ran.exitCode === HOME_SCRIPT_EXIT.fenced);
-      if (ran.kind !== "done" && !gone) {
+      const homeMissing = ran.kind === "refused" && ran.exitCode === HOME_SCRIPT_EXIT.missing;
+      const takenByAnotherHold = ran.kind === "refused" && ran.exitCode === HOME_SCRIPT_EXIT.fenced;
+      if (ran.kind !== "done" && !homeMissing && !takenByAnotherHold) {
         return yield* new HomeRemovalUnconfirmedError({
           message: `The removal from ${input.key.home} was not confirmed: ${ran.message}`,
         });
       }
     }
-    if (releasing) return true;
+    if (releasing) return { kind: "home-emptied" } satisfies LeftoverRemoval;
     yield* repo.transact(input.key, [], (state) => ({
       result: undefined,
       placements: state.placements.filter(
         (row) => !(work.forget.includes(row.id) && row.state === "removing"),
       ),
     }));
-    return false;
+    return { kind: "leftovers-removed" } satisfies LeftoverRemoval;
   });
 
-/** Failed homes are tried again after this, doubling per failure up to `MAX_BACKOFF`. */
 const FIRST_BACKOFF_MS = 30_000;
 const MAX_BACKOFF_MS = 30 * 60_000;
 
-/** When each home whose removal failed is tried next, by `${runId} ${home}`. */
 export type PlacementSweepBackoff = Map<
   string,
   { readonly failures: number; readonly next: number }
 >;
 
-/**
- * One pass over the homes with removal work, in instances the sweep can reach or that are gone.
- * A failed home keeps its work and is tried again after a backoff; each attempt logs once.
- */
 export const sweepCredentialPlacements = (
   input: {
     readonly targetOptions?: SealantTargetDerivationOptions;
@@ -298,7 +267,7 @@ export const sweepCredentialPlacements = (
     const homes = yield* WorkspaceCredentialHomeRepo;
     const now = input.now?.() ?? Date.now();
     const backoff = input.backoff ?? new Map();
-    const due = (yield* placements.targets()).flatMap(({ home, instance }) => {
+    const due = (yield* placements.homesWithRemovalWork()).flatMap(({ home, instance }) => {
       const key = `${home.runId} ${home.home}`;
       if ((backoff.get(key)?.next ?? 0) > now) return [];
       const gone =
@@ -317,7 +286,7 @@ export const sweepCredentialPlacements = (
             Effect.gen(function* () {
               if (held === undefined)
                 return { result: undefined, outcome: { kind: "keep" as const } };
-              const released = yield* removeLeftovers({
+              const removal = yield* removeLeftovers({
                 key: home,
                 fence: { generation: held.generation, releasing: held.releasing },
                 target,
@@ -326,7 +295,10 @@ export const sweepCredentialPlacements = (
               });
               return {
                 result: undefined,
-                outcome: released ? { kind: "release" as const } : { kind: "keep" as const },
+                outcome:
+                  removal.kind === "home-emptied"
+                    ? { kind: "release" as const }
+                    : { kind: "keep" as const },
               };
             }),
           )

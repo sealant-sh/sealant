@@ -17,8 +17,6 @@ ALTER TABLE "workspace_credential_homes" ADD COLUMN "releasing" boolean DEFAULT 
 CREATE INDEX "credential_placements_account_state_idx" ON "workspace_credential_placements" ("account_id","state");--> statement-breakpoint
 CREATE UNIQUE INDEX "credential_placements_ready_slot_idx" ON "workspace_credential_placements" ("run_id","home","provider") WHERE "state" = 'ready';--> statement-breakpoint
 ALTER TABLE "workspace_credential_placements" ADD CONSTRAINT "workspace_credential_placements_xuFtZjPIdlix_fkey" FOREIGN KEY ("run_id","home") REFERENCES "workspace_credential_homes"("run_id","home") ON DELETE CASCADE;--> statement-breakpoint
--- Every login an existing home holds becomes a placement. Homes recorded no revision, so the
--- account's current one is seeded. An archived or deleted account's file is left for the sweep.
 INSERT INTO "workspace_credential_placements" ("id", "run_id", "home", "provider", "account_id", "revision", "path", "login", "state", "created_at")
 SELECT 'cpl_' || md5(h."run_id" || chr(31) || h."home" || chr(31) || (entry->>'provider')),
        h."run_id", h."home", entry->>'provider', entry->>'connectedAccountId', COALESCE(a."credential_revision", 1),

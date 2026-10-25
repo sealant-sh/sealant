@@ -128,7 +128,9 @@ export const pushCredentialCopy = Effect.fn("pushCredentialCopy")(function* (
     yield* runtimeInstances.listRunningInstances(),
     input.connectedAccountId,
   );
-  const homes = yield* (yield* CredentialPlacementRepo).targets(input.connectedAccountId);
+  const homes = yield* (yield* CredentialPlacementRepo).homesHoldingAccount(
+    input.connectedAccountId,
+  );
   if (holding.length === 0 && homes.length === 0) {
     return { written: 0, failed: 0, unreachable: 0, released: 0 } satisfies CredentialPushSummary;
   }
@@ -197,10 +199,6 @@ export const pushCredentialCopy = Effect.fn("pushCredentialCopy")(function* (
   return summary;
 });
 
-/**
- * One home's write, under its lock: the home's ready placements of this account are written again
- * at the account's revision as stored now, under their ids, so a running process keeps its receipt.
- */
 const pushIntoHome = (
   input: PushCredentialCopyInput & {
     readonly describe: string;
@@ -220,8 +218,6 @@ const pushIntoHome = (
         const keep = { kind: "keep" as const };
         if (held === undefined || held.releasing)
           return { result: "released" as const, outcome: keep };
-        // A login file the home refuses (pi's or opencode's unusable, any with another hard link)
-        // is left out and the rest written once more, as a partial put does.
         const refused: HomeCredentialProvider[] = [];
         for (let round = 1; ; round += 1) {
           // The home's logins made from this account: its own provider's, and for a Codex login
@@ -268,7 +264,7 @@ const pushIntoHome = (
             removes: [],
           });
           if (ran.kind === "done") return { result: "written" as const, outcome: keep };
-          if (ran.kind === "moved" && round < PUSH_ROUNDS) continue;
+          if (ran.kind === "moved" && round < MAX_PUSH_RESOLUTIONS_WHILE_REVISIONS_MOVE) continue;
           if (ran.kind === "refused") {
             if (ran.exitCode === HOME_SCRIPT_EXIT.fenced) {
               return { result: "released" as const, outcome: keep };
@@ -299,13 +295,9 @@ const pushIntoHome = (
     ),
   );
 
-/** A push writes again when the account moves before its write begins, at most this often. */
-const PUSH_ROUNDS = 3;
+const MAX_PUSH_RESOLUTIONS_WHILE_REVISIONS_MOVE = 3;
 
-/**
- * The account's copy and revision as stored now; `undefined` when it is gone, archived, or a key.
- * Without a cipher the copy is the one the push was handed.
- */
+/** The account's copy and revision as stored now; `undefined` when it is gone, archived, or a key. */
 const currentCopy = (input: PushCredentialCopyInput) =>
   Effect.gen(function* () {
     const account = yield* (yield* ConnectedAccountRepo).getById(input.connectedAccountId);
