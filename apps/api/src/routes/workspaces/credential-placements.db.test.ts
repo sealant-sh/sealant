@@ -575,6 +575,33 @@ describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", 
     );
   });
 
+  it("prune removes a rotated default key's older file", async () => {
+    const f = await fixture();
+    const ex = executor();
+    const key = await keyAccount(f, "claude", "key", CLAUDE_KEY);
+    await run(
+      Effect.flatMap(ConnectedAccountRepo, (repo) =>
+        repo.setDefault({ ownerUserId: f.owner, provider: "claude", connectedAccountId: key.id }),
+      ),
+    );
+    const older = (await run(put(f, ex.channel, { claude: key.id }))).home.placements?.[0];
+    await run(replace(key.id, JSON.stringify({ apiKey: CLAUDE_KEY_2 })));
+    const newer = (await run(put(f, ex.channel, { claude: key.id }))).home.placements?.find(
+      (row) => row.revision === 2,
+    );
+    expect(keyFiles(ex, f.home).toSorted()).toEqual([pathOf(older), pathOf(newer)].toSorted());
+    await run(
+      routes.pruneWorkspaceCredentials({
+        workspaceId: f.workspaceId,
+        payload: { ownerUserId: f.owner, home: f.home, live: [] },
+        homeChannel: ex.channel,
+      }),
+    );
+    expect(keyFiles(ex, f.home)).toEqual([pathOf(newer)]);
+    expect(ex.files.get(pathOf(newer))).toBe(CLAUDE_KEY_2);
+    expect((await rows(f)).map((row) => [row.id, row.revision])).toEqual([[newer?.placementId, 2]]);
+  });
+
   it("a repeat put of a live key left in doubt never removes that key", async () => {
     const f = await fixture();
     const ex = executor();

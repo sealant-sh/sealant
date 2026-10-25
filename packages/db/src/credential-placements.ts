@@ -319,7 +319,10 @@ export const releaseHome = (placements: Placements): Placements => placements.ma
 
 export const pruneHome = (state: HomeState, live: readonly string[]): Placements =>
   state.placements.map((row) =>
-    live.includes(row.id) || (row.state === "ready" && state.defaults.has(row.accountId))
+    live.includes(row.id) ||
+    (row.state === "ready" &&
+      state.defaults.has(row.accountId) &&
+      state.accounts.get(row.accountId)?.revision === row.revision)
       ? row
       : removing(row),
   );

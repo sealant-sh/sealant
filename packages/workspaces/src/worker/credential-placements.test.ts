@@ -341,7 +341,7 @@ describe("pruneHome and removalWork", () => {
       }),
       placement("cpl_old", { accountId: "cacc_b", state: "removing" }),
     ];
-    const pruned = pruneHome(stateOf(rows, [], ["cacc_a"]), ["cpl_live"]);
+    const pruned = pruneHome(stateOf(rows, [account("cacc_a")], ["cacc_a"]), ["cpl_live"]);
     expect(pruned.map((row) => [row.id, row.state])).toEqual([
       ["cpl_live", "ready"],
       ["cpl_default", "ready"],
@@ -353,6 +353,25 @@ describe("pruneHome and removalWork", () => {
       removedKeys: [],
       forget: ["cpl_other", "cpl_old"],
     });
+  });
+});
+
+describe("pruneHome and a rotated default", () => {
+  it("keeps only the placement at the default's current revision", () => {
+    const keyAt = (id: string, revision: number) =>
+      placement(id, { revision, login: KEY, path: `${key.home}/.sealant/keys/${id}` });
+    const pruned = pruneHome(
+      stateOf(
+        [keyAt("cpl_rev1", 1), keyAt("cpl_rev2", 2)],
+        [account("cacc_a", { revision: 2 })],
+        ["cacc_a"],
+      ),
+      [],
+    );
+    expect(pruned.map((row) => [row.id, row.state])).toEqual([
+      ["cpl_rev1", "removing"],
+      ["cpl_rev2", "ready"],
+    ]);
   });
 });
 
