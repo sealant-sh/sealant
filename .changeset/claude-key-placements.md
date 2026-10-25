@@ -4,11 +4,11 @@
 ---
 
 A credentials put places a Claude API key into a home. The key is written alone, mode 0600 and owned
-by the home's owner, at `<home>/.claude/.sealant-keys/<placementId>`, never into
-`.credentials.json`. Any number of key files sit beside a subscription's file, so a later put never
-changes the file a running Claude reads, and a key file is never pinned. Prune, release, archive and
-the removal sweep remove a key file with its placement. A Claude key is still refused at `$HOME` and
-in a launch.
+by the home's owner, at `<home>/.sealant/keys/<placementId>`, a directory reached through no
+symbolic link, never into `.credentials.json` or anywhere under `.claude`. Any number of key files
+sit beside a subscription's file, so a later put never changes the file a running Claude reads, and
+a key file is never pinned. Prune, release, archive and the removal sweep remove a key file with its
+placement. A Claude key is still refused at `$HOME` and in a launch.
 
 A placement receipt's `login` says what it spends: `{ kind: "subscription" }`, or
 `{ kind: "api-key", suffix, keyPath? }`. `keyPath` is the absolute path of a Claude key's file, for

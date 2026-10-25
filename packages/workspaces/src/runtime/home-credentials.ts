@@ -10,6 +10,7 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 
+import { CLAUDE_KEY_DIR } from "@sealant/db";
 import type { EventEnvelope } from "@sealant/runtime-protocol";
 import { Effect, Option, Stream } from "effect";
 
@@ -33,8 +34,6 @@ export const HOME_CREDENTIAL_FILES: Readonly<Record<HomeCredentialProvider, stri
   pi: ".pi/agent/auth.json",
   opencode: ".local/share/opencode/auth.json",
 };
-
-export const CLAUDE_KEY_DIR = ".claude/.sealant-keys";
 
 const PLACEMENT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -253,6 +252,10 @@ export const HOME_SCRIPT_EXIT = {
   codexLoginUnusable: 87,
   /** GitHub's `hosts.yml` likewise. */
   githubLoginUnusable: 88,
+  /**
+   * The key directory (`CLAUDE_KEY_DIR`), or a component of it, is a link or not a directory, or a
+   * key's name there is a directory: no key is written.
+   */
   claudeKeyUnusable: 89,
 } as const;
 
@@ -343,7 +346,8 @@ export const homeScriptStdin = (contents: readonly string[]): string =>
  * person owns the home and can swap any entry in it for a link at any moment, so nothing in it is
  * touched with root's rights: the kernel refuses whatever they could not do themselves.
  * 6. A login directory that is a link must lead inside the home (a dotfiles checkout's `.claude`),
- *    never out of it; in root's own home (the shared layout links `~/.claude`) links are kept.
+ *    never out of it; in root's own home (the shared layout links `~/.claude`) links are kept. The
+ *    key directory (`CLAUDE_KEY_DIR`) is reached through no link at all, in any home.
  * 7. The writes and removals; files are 0600 and the person's, as is every directory made for them.
  */
 export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): string => {
@@ -521,16 +525,12 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
     `if [ -n "$seed" ] && [ -d ${quote(skel)} ]; then cp -a ${quote(skel)}/. "$home"/; chmod 700 "$home"; fi`,
   );
   const clearsKeys = input.fence.kind === "take" || isRelease(input.fence);
-  const keyFiles = keyWrites.map((id) => `${CLAUDE_KEY_DIR}/${id}`);
   const touchesKeys = clearsKeys || keyWrites.length > 0 || keyRemoves.length > 0;
   const directories = new Set<string>();
   // A merged login is followed through its links and checked where it really is (the program).
-  for (const directory of [
-    ...[...input.writes, ...removes]
-      .filter((p) => !isMergedLogin(p))
-      .flatMap((provider) => parentsOf(HOME_CREDENTIAL_FILES[provider])),
-    ...(touchesKeys ? parentsOf(`${CLAUDE_KEY_DIR}/`) : []),
-  ]) {
+  for (const directory of [...input.writes, ...removes]
+    .filter((p) => !isMergedLogin(p))
+    .flatMap((provider) => parentsOf(HOME_CREDENTIAL_FILES[provider]))) {
     directories.add(directory);
   }
   for (const directory of [...directories].toSorted()) {
@@ -538,43 +538,48 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
       `d="$home/${directory}"; if [ -L "$d" ] && [ "$uid" != 0 ]; then t=$(readlink -f "$d" || true); case "$t" in "$home"/*) [ -d "$t" ] || exit ${HOME_SCRIPT_EXIT.linkOnTheWay} ;; *) exit ${HOME_SCRIPT_EXIT.linkOnTheWay} ;; esac; fi`,
     );
   }
-  if (clearsKeys) inner.push(`rm -rf "$home/${CLAUDE_KEY_DIR}"`);
-  const toMake = new Set([
-    ...input.writes.flatMap((provider) => parentsOf(HOME_CREDENTIAL_FILES[provider])),
-    ...keyFiles.flatMap(parentsOf),
-  ]);
-  for (const directory of toMake) {
+  // The key directory is reached through no link at all, in any home, checked before anything is
+  // made or removed in it: a key never lands in a linked dotfiles checkout or in saved state, and a
+  // removal never reaches through a link.
+  const keyParent = parentsOf(`${CLAUDE_KEY_DIR}/`);
+  if (touchesKeys) {
+    inner.push(
+      "kl=0",
+      ...keyParent.map(
+        (directory) =>
+          `if [ -L "$home/${directory}" ] || { [ -e "$home/${directory}" ] && [ ! -d "$home/${directory}" ]; }; then kl=1; fi`,
+      ),
+    );
+  }
+  if (keyWrites.length > 0)
+    inner.push(`[ "$kl" = 0 ] || exit ${HOME_SCRIPT_EXIT.claudeKeyUnusable}`);
+  if (clearsKeys) inner.push(`if [ "$kl" = 0 ]; then rm -rf "$home/${CLAUDE_KEY_DIR}"; fi`);
+  for (const directory of new Set(
+    input.writes.flatMap((provider) => parentsOf(HOME_CREDENTIAL_FILES[provider])),
+  )) {
     inner.push(
       `if [ ! -e "$home/${directory}" ] && [ ! -L "$home/${directory}" ]; then mkdir -m 700 "$home/${directory}"; fi`,
     );
   }
   if (keyWrites.length > 0) {
-    inner.push(
-      `kd=$(readlink -f "$home/${CLAUDE_KEY_DIR}" || true); case "$kd" in "$home"/*) [ -d "$kd" ] || exit ${HOME_SCRIPT_EXIT.claudeKeyUnusable} ;; *) exit ${HOME_SCRIPT_EXIT.claudeKeyUnusable} ;; esac`,
-    );
+    for (const directory of keyParent) {
+      inner.push(`if [ ! -e "$home/${directory}" ]; then mkdir -m 700 "$home/${directory}"; fi`);
+    }
+    inner.push(`chmod 700 "$home/${CLAUDE_KEY_DIR}"`);
   }
   // Every whole-file login is opened (made if missing, never truncated yet) and checked through its
   // descriptor before any of them is written: a regular file with one link, so an in-place write
   // never lands in a file that has another name (in saved state, or someone else's). A link at the
   // file's name is removed first, never followed. A refusal removes the files this check made, so
   // a refused write leaves no empty login file behind.
-  const files = [
-    ...input.writes.flatMap((provider, index) => {
-      const file = homeCredentialProviderOf(HOME_CREDENTIAL_FILES[provider]);
-      return file === undefined
-        ? []
-        : [{ path: HOME_CREDENTIAL_FILES[file], exit: FILE_EXITS[file], index }];
-    }),
-    ...keyFiles.map((path, k) => ({
-      path,
-      exit: HOME_SCRIPT_EXIT.claudeKeyUnusable,
-      index: input.writes.length + k,
-    })),
-  ];
-  if (FIRST_LOGIN_FD + files.length > 9) {
-    throw new Error("A home script writes at most six whole-file logins at once.");
-  }
-  if (files.length > 0) {
+  const files = input.writes.flatMap((provider, index) => {
+    const file = homeCredentialProviderOf(HOME_CREDENTIAL_FILES[provider]);
+    return file === undefined
+      ? []
+      : [{ path: HOME_CREDENTIAL_FILES[file], exit: FILE_EXITS[file], index }];
+  });
+  const keys = keyWrites.map((id, k) => ({ id, index: input.writes.length + k }));
+  if (files.length > 0 || keys.length > 0) {
     inner.push(`made=`, `refuse() { for f in $made; do rm -f "$f"; done; exit "$1"; }`);
   }
   files.forEach(({ path, exit }, slot) => {
@@ -587,6 +592,11 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
       `[ -f "/proc/$$/fd/${fd}" ] && [ "$(stat -L -c %h "/proc/$$/fd/${fd}")" = 1 ] || refuse ${exit}`,
     );
   });
+  for (const { id } of keys) {
+    inner.push(
+      `if [ -d "$home/${CLAUDE_KEY_DIR}/${id}" ] && [ ! -L "$home/${CLAUDE_KEY_DIR}/${id}" ]; then refuse ${HOME_SCRIPT_EXIT.claudeKeyUnusable}; fi`,
+    );
+  }
   // Then written, before any merge: a pi or opencode file refused below never keeps the
   // whole-file logins of the same write (a Codex refresh's copy) from landing. In place, through
   // the descriptor checked above, as a launch writes it: a temporary file beside it could be saved
@@ -601,6 +611,18 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
       `exec ${fd}>&-`,
     );
   });
+  // A key is written beside its name and renamed over it, in its own directory, which no link
+  // reaches: a reader never sees a part of it, and the name never keeps another link.
+  for (const { id, index } of keys) {
+    inner.push(
+      `f="$home/${CLAUDE_KEY_DIR}/${id}"; t="$home/${CLAUDE_KEY_DIR}/.${id}.tmp"`,
+      `rm -f "$t"; made="$made $t"`,
+      `(set -C; base64 -d >"$t") <<SEALANT_LOGIN || refuse ${HOME_SCRIPT_EXIT.claudeKeyUnusable}`,
+      `$p${index}`,
+      "SEALANT_LOGIN",
+      `chmod 600 "$t"; mv -f "$t" "$f"`,
+    );
+  }
   inner.push(KEPT_LOGINS_EXIT.shellInit);
   input.writes.forEach((provider, index) => {
     if (!isMergedLogin(provider)) return;
@@ -620,7 +642,9 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
         : `rm -f "$home/${HOME_CREDENTIAL_FILES[provider]}"`,
     );
   }
-  for (const id of keyRemoves) inner.push(`rm -f "$home/${CLAUDE_KEY_DIR}/${id}"`);
+  for (const id of keyRemoves) {
+    inner.push(`if [ "$kl" = 0 ]; then rm -f "$home/${CLAUDE_KEY_DIR}/${id}"; fi`);
+  }
   inner.push(KEPT_LOGINS_EXIT.shellExit);
 
   // The owner's half starts from a clean environment: only a fixed PATH and its flags, never the
@@ -793,7 +817,7 @@ export const homeScriptRefusal = (
       return `${home}/${file} is not a regular file its owner can write, or has another hard link (a name elsewhere, which could be saved state); Core writes a login only into a file of its own, and wrote none.`;
     }
     case HOME_SCRIPT_EXIT.claudeKeyUnusable:
-      return `${home}/${CLAUDE_KEY_DIR} really is outside ${home}, or a key file there is not a regular file of its own its owner can write; Core writes a Claude key only into the home, never into saved state, and wrote none.`;
+      return `${home}/${CLAUDE_KEY_DIR} is reached through a symbolic link or is not a directory, or a key's name there is a directory; Core writes a Claude key only into a directory of its own in the home, reached without a link, and wrote none.`;
     case HOME_SCRIPT_EXIT.missing:
       return `${home} does not exist in the workspace, or is not a directory. Make the home (its user) first.`;
     case HOME_SCRIPT_EXIT.fenced:

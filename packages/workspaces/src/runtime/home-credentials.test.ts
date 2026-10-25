@@ -23,6 +23,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
+import { CLAUDE_KEY_DIR } from "@sealant/db";
 import {
   create,
   EventEnvelopeSchema,
@@ -1314,7 +1315,7 @@ forEachShell("a login is never in any process's argv or environment", () => {
   });
 });
 
-const keyFile = (home: string, id: string) => join(home, ".claude/.sealant-keys", id);
+const keyFile = (home: string, id: string) => join(home, CLAUDE_KEY_DIR, id);
 
 forEachShell("Claude keys, each a file of its own", () => {
   const KEY_A = "sk-ant-api03-FAKE-key-a";
@@ -1334,7 +1335,8 @@ forEachShell("Claude keys, each a file of its own", () => {
     expect(read(keyFile(home, "cpl_key_a"))).toBe(KEY_A);
     expect(mode(keyFile(home, "cpl_key_a"))).toBe(0o600);
     expect(lstatSync(keyFile(home, "cpl_key_a")).uid).toBe(uid);
-    expect(mode(join(home, ".claude/.sealant-keys"))).toBe(0o700);
+    expect(mode(join(home, CLAUDE_KEY_DIR))).toBe(0o700);
+    expect(mode(join(home, ".sealant"))).toBe(0o700);
     expect(existsSync(join(home, ".claude/.credentials.json"))).toBe(false);
     const subscription = w.run({
       home,
@@ -1385,8 +1387,8 @@ forEachShell("Claude keys, each a file of its own", () => {
       removes: [],
     });
     expect(released.status, released.stderr).toBe(0);
-    expect(existsSync(join(home, ".claude/.sealant-keys"))).toBe(false);
-    mkdirSync(join(home, ".claude/.sealant-keys"));
+    expect(existsSync(join(home, CLAUDE_KEY_DIR))).toBe(false);
+    mkdirSync(join(home, CLAUDE_KEY_DIR), { recursive: true });
     writeFileSync(keyFile(home, "cpl_left"), KEY_A);
     const retaken = w.run({
       home,
@@ -1396,10 +1398,10 @@ forEachShell("Claude keys, each a file of its own", () => {
       removes: [],
     });
     expect(retaken.status, retaken.stderr).toBe(0);
-    expect(readdirSync(join(home, ".claude/.sealant-keys"))).toEqual(["cpl_key_c"]);
+    expect(readdirSync(join(home, CLAUDE_KEY_DIR))).toEqual(["cpl_key_c"]);
   });
 
-  it("refuses a key file that is not a file of its own, writing nothing", () => {
+  it("refuses a directory at a key's name, writing nothing, and replaces a name with another link", () => {
     const w = world();
     const home = w.home("alice");
     expect(
@@ -1416,38 +1418,68 @@ forEachShell("Claude keys, each a file of its own", () => {
       }).status,
     ).toBe(HOME_SCRIPT_EXIT.claudeKeyUnusable);
     expect(existsSync(join(home, ".config/gh/hosts.yml"))).toBe(false);
+    expect(readdirSync(keyFile(home, "cpl_dir"))).toEqual([]);
     const saved = join(w.root, "saved-key");
     writeFileSync(saved, "saved state");
     linkSync(saved, keyFile(home, "cpl_linked"));
-    expect(
-      w.run({
-        home,
-        fence: { kind: "held", generation: GEN_A },
-        writes: [],
-        keys: [{ id: "cpl_linked", content: KEY_A }],
-        removes: [],
-      }).status,
-    ).toBe(HOME_SCRIPT_EXIT.claudeKeyUnusable);
+    const replaced = w.run({
+      home,
+      fence: { kind: "held", generation: GEN_A },
+      writes: [],
+      keys: [{ id: "cpl_linked", content: KEY_A }],
+      removes: [],
+    });
+    expect(replaced.status, replaced.stderr).toBe(0);
     expect(read(saved)).toBe("saved state");
+    expect(read(keyFile(home, "cpl_linked"))).toBe(KEY_A);
+    expect(lstatSync(keyFile(home, "cpl_linked")).nlink).toBe(1);
+    expect(readdirSync(join(home, CLAUDE_KEY_DIR)).toSorted()).toEqual(["cpl_dir", "cpl_linked"]);
   });
 
-  it("refuses a key directory that links out of the home", () => {
+  it("never puts a key under a linked .claude (a dotfiles checkout), and refuses a linked key directory", () => {
     const w = world();
     const home = w.home("alice");
-    const outside = join(w.root, "outside");
-    mkdirSync(outside);
-    mkdirSync(join(home, ".claude"));
-    symlinkSync(outside, join(home, ".claude/.sealant-keys"));
-    expect(
-      w.run({
-        home,
-        fence: { kind: "take", generation: GEN_A },
+    const dotfiles = join(home, "dotfiles/claude");
+    mkdirSync(dotfiles, { recursive: true });
+    symlinkSync(dotfiles, join(home, ".claude"));
+    const placed = w.run({
+      home,
+      fence: { kind: "take", generation: GEN_A },
+      writes: [],
+      keys: [{ id: "cpl_key_a", content: KEY_A }],
+      removes: [],
+    });
+    expect(placed.status, placed.stderr).toBe(0);
+    expect(read(keyFile(home, "cpl_key_a"))).toBe(KEY_A);
+    expect(readdirSync(dotfiles)).toEqual([]);
+    for (const linked of [".sealant", CLAUDE_KEY_DIR]) {
+      const v = world();
+      const other = v.home("bob");
+      const inside = join(other, "dotfiles/sealant");
+      mkdirSync(inside, { recursive: true });
+      mkdirSync(dirname(join(other, linked)), { recursive: true });
+      symlinkSync(inside, join(other, linked));
+      expect(
+        v.run({
+          home: other,
+          fence: { kind: "take", generation: GEN_A },
+          writes: [],
+          keys: [{ id: "cpl_key_a", content: KEY_A }],
+          removes: [],
+        }).status,
+        linked,
+      ).toBe(HOME_SCRIPT_EXIT.claudeKeyUnusable);
+      expect(readdirSync(inside), linked).toEqual([]);
+      writeFileSync(join(inside, "cpl_key_a"), "theirs");
+      const released = v.run({
+        home: other,
+        fence: { kind: "release-unfenced" },
         writes: [],
-        keys: [{ id: "cpl_key_a", content: KEY_A }],
         removes: [],
-      }).status,
-    ).not.toBe(0);
-    expect(readdirSync(outside)).toEqual([]);
+      });
+      expect(released.status, released.stderr).toBe(0);
+      expect(read(join(inside, "cpl_key_a")), linked).toBe("theirs");
+    }
   });
 
   it("refuses a placement id that is not one", () => {

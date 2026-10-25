@@ -112,7 +112,7 @@ const executor = () => {
 };
 
 const keyFiles = (ex: ReturnType<typeof executor>, home: string) =>
-  [...ex.files.keys()].filter((path) => path.startsWith(`${home}/.claude/.sealant-keys/`));
+  [...ex.files.keys()].filter((path) => path.startsWith(`${home}/.sealant/keys/`));
 const pathOf = (receipt: WorkspaceCredentialPlacementReceipt | undefined) =>
   receipt?.login.kind === "api-key" ? (receipt.login.keyPath ?? "") : "";
 
@@ -544,12 +544,12 @@ describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", 
         login: {
           kind: "api-key",
           suffix: CLAUDE_KEY.slice(-4),
-          keyPath: `${f.home}/.claude/.sealant-keys/${first[0]?.placementId ?? ""}`,
+          keyPath: `${f.home}/.sealant/keys/${first[0]?.placementId ?? ""}`,
         },
         pinned: false,
       },
     ]);
-    const keyPath = `${f.home}/.claude/.sealant-keys/${first[0]?.placementId ?? ""}`;
+    const keyPath = `${f.home}/.sealant/keys/${first[0]?.placementId ?? ""}`;
     expect(ex.files.get(keyPath)).toBe(CLAUDE_KEY);
     expect(ex.files.has(`${f.home}/.claude/.credentials.json`)).toBe(false);
 

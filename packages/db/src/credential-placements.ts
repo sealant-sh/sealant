@@ -50,6 +50,12 @@ const sourceOf = (provider: Provider): string =>
 
 const removing = (placement: Placement): Placement => ({ ...placement, state: "removing" });
 
+/**
+ * Where a home's Claude keys live, relative to the home: Sealant's own directory, never under a
+ * harness's config directory, which a dotfiles checkout or the shared layout may link elsewhere.
+ */
+export const CLAUDE_KEY_DIR = ".sealant/keys";
+
 export const isClaudeKey = <L extends { readonly provider: Provider; readonly login: Login }>(
   placed: L,
 ): placed is L & {

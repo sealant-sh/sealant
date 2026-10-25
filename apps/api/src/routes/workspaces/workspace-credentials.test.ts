@@ -583,7 +583,7 @@ describe("putWorkspaceCredentials", () => {
     const world = newWorld();
     const answer = succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "key" }));
     const receipt = answer.home.placements?.[0];
-    const keyPath = `${HOME}/.claude/.sealant-keys/${receipt?.placementId ?? "missing"}`;
+    const keyPath = `${HOME}/.sealant/keys/${receipt?.placementId ?? "missing"}`;
     expect(receipt).toMatchObject({
       provider: "claude",
       accountId: aliceClaudeKey.id,
@@ -592,7 +592,7 @@ describe("putWorkspaceCredentials", () => {
     });
     expect(world.ran[0]?.payloads).toEqual(["sk-ant-api03-FAKEclaudekeyforthetests000000wxyz"]);
     expect(world.ran[0]?.script).toContain(
-      `f="$home/.claude/.sealant-keys/${receipt?.placementId ?? ""}"`,
+      `f="$home/.sealant/keys/${receipt?.placementId ?? ""}"`,
     );
     expect(world.ran[0]?.script).not.toContain('f="$home/.claude/.credentials.json"');
   });

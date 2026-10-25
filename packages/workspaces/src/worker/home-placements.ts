@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   beginHomeWrite,
+  CLAUDE_KEY_DIR,
   CredentialPlacementRepo,
   isClaudeKey,
   removalWork,
@@ -19,7 +20,6 @@ import { Duration, Effect, Result, Schema } from "effect";
 
 import {
   buildHomeCredentialScript,
-  CLAUDE_KEY_DIR,
   HOME_CREDENTIAL_FILES,
   HOME_SCRIPT_EXIT,
   homeCredentialProviderOf,

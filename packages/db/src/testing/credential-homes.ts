@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { Effect, Semaphore } from "effect";
 
 import {
+  CLAUDE_KEY_DIR,
   isClaudeKey,
   placementAccountStatus,
   type HomeState,
@@ -210,7 +211,7 @@ export const makeInMemoryCredentialHomes = (
       accountId: input.accountId,
       revision: input.revision ?? 1,
       path: isClaudeKey({ provider: input.provider, login })
-        ? `${input.home}/.claude/.sealant-keys/${id}`
+        ? `${input.home}/${CLAUDE_KEY_DIR}/${id}`
         : `${input.home}/${LOGIN_FILES[input.provider]}`,
       login,
       state: "ready",

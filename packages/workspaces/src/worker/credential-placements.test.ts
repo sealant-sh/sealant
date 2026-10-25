@@ -360,7 +360,7 @@ describe("Claude key placements", () => {
     placement(id, {
       accountId: "cacc_k",
       login: KEY,
-      path: `${key.home}/.claude/.sealant-keys/${id}`,
+      path: `${key.home}/.sealant/keys/${id}`,
       ...overrides,
     });
   const keySelection = {

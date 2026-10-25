@@ -264,7 +264,7 @@ describe("workspace.credentials", () => {
         login: {
           kind: "api-key" as const,
           suffix: "wxyz",
-          keyPath: "/home/m4ria0000/.claude/.sealant-keys/cpl_2",
+          keyPath: "/home/m4ria0000/.sealant/keys/cpl_2",
         },
         pinned: false,
       },
