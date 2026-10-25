@@ -294,18 +294,19 @@ const authGate = servicePrincipalMiddleware(
 
 // What the server observes (request spans, logs, error reports) holds credentials: the browser
 // routes take their bearer as `?token=`, headers carry others, HTTP errors quote and hold their
-// request. Observers receive plain, redacted data only (services/credential-redaction.ts).
+// request. Observers receive plain, redacted data only (services/credential-redaction.ts). The
+// redaction is provided last, so the startup layers (which read sealed credentials) are beneath it.
 const serverLayer = HttpRouter.serve(appLayer, {
   middleware: (app) => corsMiddleware(authGate(app)),
 }).pipe(
   Layer.provide(
     NodeHttpServer.layer(() => captureUpgradeHeads(createServer()), { port: env.PORT }),
   ),
-  Layer.provide(CredentialRedactionLive),
   Layer.provide(ConnectedAccountDefaultsBackfillLive.pipe(Layer.provide(databaseLayer))),
   Layer.provide(
     CodexApiKeyConversionLive.pipe(Layer.provide(Layer.merge(databaseLayer, credentialCipher))),
   ),
+  Layer.provide(CredentialRedactionLive),
 );
 
 /**
