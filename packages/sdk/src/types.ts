@@ -20,7 +20,12 @@ import type {
   WritableStream as NodeWritableStream,
 } from "node:stream/web";
 
-import type { ForwardBinding, ForwardResetReason } from "@sealant/api-contracts";
+import type {
+  ConnectedAccountLogin,
+  ConnectedAccountLoginClass,
+  ForwardBinding,
+  ForwardResetReason,
+} from "@sealant/api-contracts";
 
 // ---------------------------------------------------------------------------------------------
 // Client construction
@@ -1257,7 +1262,7 @@ export interface WorkspaceCredentials {
    * (missing, not a directory, reached through a symbolic link, or a login directory linking out
    * of it), `home-busy` (another write into it is still running: retry), `workspace-not-running`,
    * `connected-account-invalid`, `connected-account-unsupported` (a Codex account named for pi or
-   * opencode that is not a ChatGPT login); with
+   * opencode that is not a ChatGPT login, or a Claude API key, which cannot be placed yet); with
    * `WorkspaceNotFoundError` for an account `onBehalfOf` cannot name; with
    * `WorkspaceBadGatewayError` when the executor did not confirm the write. The body code is
    * `SealantApiError.reason`; a refused account is `reason` `connected-account-missing` (404) or
@@ -1499,6 +1504,12 @@ export interface SealantFeatures {
    * `default`.
    */
   readonly connectedAccountDefaults: boolean;
+  /**
+   * `login` on `connect()` (a secret of the other login class is refused), Claude and Codex API
+   * keys beside a subscription, `ConnectedAccount.login`, and `hasApiKeyHistory` from
+   * `connectedAccounts.listWithHistory()`.
+   */
+  readonly connectedAccountLoginClass: boolean;
   /**
    * `ownerMap` is taken on Kubernetes (runc): each person's `sudo` works in the Pod, and images the
    * cluster builds record the probe a per-person launch checks. From an older control plane a
@@ -2348,12 +2359,17 @@ export interface ConnectedAccountCredential {
   readonly lastRefreshOutcome: "refreshed" | "fresh" | "failed" | null;
 }
 
+export type { ConnectedAccountLogin, ConnectedAccountLoginClass };
+
 export interface ConnectedAccount {
   readonly connectedAccountId: string;
   readonly ownerUserId: string;
   readonly provider: ConnectedAccountProvider;
   readonly name: string;
-  /** Provider-shaped payload kind: oauth-token | credentials-json | auth-json | gh-cli-token. */
+  /**
+   * Provider-shaped payload kind: oauth-token | credentials-json | auth-json | gh-cli-token |
+   * api-key.
+   */
   readonly kind: string;
   readonly status: ConnectedAccountStatus;
   /** Non-secret display data (token suffix, codex account email, github login + scopes). */
@@ -2373,15 +2389,33 @@ export interface ConnectedAccount {
    * from a control plane without `connectedAccountDefaults`.
    */
   readonly credentialRevision?: number;
+  /** Claude and Codex only: the account's login class. Absent from an older control plane. */
+  readonly login?: ConnectedAccountLogin;
+}
+
+/** The owner's accounts, and whether they ever connected an API key. */
+export interface ConnectedAccountList {
+  readonly accounts: readonly ConnectedAccount[];
+  /**
+   * Whether the owner ever connected an API key, archived ones included. Absent from a control
+   * plane that does not report it.
+   */
+  readonly hasApiKeyHistory?: boolean;
 }
 
 interface ConnectConnectedAccountBase {
   readonly provider: ConnectedAccountProvider;
   /**
-   * Provider-shaped plaintext, passed through and sealed server-side: a Claude setup token or
-   * verbatim `.credentials.json`, verbatim Codex `auth.json`, or a GitHub token. Never logged.
+   * Provider-shaped plaintext, passed through and sealed server-side: a Claude setup token, API key
+   * or verbatim `.credentials.json`, a verbatim Codex `auth.json` or an OpenAI API key, or a GitHub
+   * token. Never logged.
    */
   readonly secret: string;
+  /**
+   * Claude and Codex: the login class `secret` must be. A secret of the other class is refused
+   * before anything is stored. Needs `features().connectedAccountLoginClass`.
+   */
+  readonly login?: ConnectedAccountLoginClass;
   /**
    * Make the connected account the owner's default for the provider. A first account is the default
    * without it. Needs `features().connectedAccountDefaults`.
@@ -2393,8 +2427,10 @@ interface ConnectConnectedAccountBase {
  * Which account a connect writes. A person's first account for a provider is named `default`
  * whatever `name` says. After that, `name` replaces the account of that name or makes a new one,
  * and `name: "default"` replaces the chosen default. With neither `name` nor `accountId` (or
- * `default` while none is chosen), an only account is replaced, and with several the call fails
- * with `reason` `connected-account-ambiguous` and the candidates in `candidateAccountIds`.
+ * `default` while none is chosen), the only account of the secret's login class is replaced, so a
+ * key never replaces a subscription; with none of that class a new one is made (named `api-key` or
+ * `subscription`), and with several the call fails with `reason` `connected-account-ambiguous` and
+ * the candidates in `candidateAccountIds`.
  */
 export type ConnectConnectedAccountOptions = ConnectConnectedAccountBase &
   (
@@ -2432,6 +2468,8 @@ export interface MarkConnectedAccountInvalidResult {
  */
 export interface ConnectedAccountsNamespace {
   list(): Promise<readonly ConnectedAccount[]>;
+  /** The same accounts as `list`, with whether the owner ever connected an API key. */
+  listWithHistory(): Promise<ConnectedAccountList>;
   connect(options: ConnectConnectedAccountOptions): Promise<ConnectedAccount>;
   /**
    * Soft-archives the account; uniform not-found for "does not exist" and "not yours". Archiving

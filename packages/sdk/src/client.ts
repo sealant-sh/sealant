@@ -52,7 +52,11 @@ import {
 import { buildCreateWorkspaceRequest } from "./internal/blueprint.js";
 import { resolveInternalConfig } from "./internal/config.js";
 import { parseTtlSeconds } from "./internal/duration.js";
-import { readFeatures, requireConnectedAccountDefaults } from "./internal/features.js";
+import {
+  readFeatures,
+  requireConnectedAccountDefaults,
+  requireConnectedAccountLoginClass,
+} from "./internal/features.js";
 import { imageSpecKey } from "./internal/image-key.js";
 import { buildInferenceRespondRequest, mapInferenceResponse } from "./internal/inference.js";
 import { requireSshUser } from "./internal/process-user.js";
@@ -99,6 +103,7 @@ const mapConnectedAccount = (wire: ConnectedAccountSummary): ConnectedAccount =>
   credential: wire.credential,
   isDefault: wire.isDefault ?? wire.name === "default",
   ...(wire.credentialRevision === undefined ? {} : { credentialRevision: wire.credentialRevision }),
+  ...(wire.login === undefined ? {} : { login: wire.login }),
 });
 
 // Wire the run-execution implementations into the Workspace facade (the injection point exists to
@@ -350,9 +355,21 @@ export class Sealant {
       );
       return wire.items.map(mapConnectedAccount);
     },
+    listWithHistory: async () => {
+      const wire = await this.#runtime.run(
+        listConnectedAccountsOp(this.#ctx.config.hostLocal.ownerUserId),
+      );
+      return {
+        accounts: wire.items.map(mapConnectedAccount),
+        ...(wire.hasApiKeyHistory === undefined ? {} : { hasApiKeyHistory: wire.hasApiKeyHistory }),
+      };
+    },
     connect: async (options) => {
       if (options.accountId !== undefined || options.makeDefault !== undefined) {
         await requireConnectedAccountDefaults(this.#ctx);
+      }
+      if (options.login !== undefined) {
+        await requireConnectedAccountLoginClass(this.#ctx);
       }
       const wire = await this.#runtime.run(
         createConnectedAccountOp({
@@ -362,6 +379,7 @@ export class Sealant {
           ...(options.name === undefined ? {} : { name: options.name }),
           ...(options.accountId === undefined ? {} : { accountId: options.accountId }),
           ...(options.makeDefault === undefined ? {} : { makeDefault: options.makeDefault }),
+          ...(options.login === undefined ? {} : { login: options.login }),
         }),
       );
       return mapConnectedAccount(wire);
