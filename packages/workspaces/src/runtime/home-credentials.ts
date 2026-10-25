@@ -13,6 +13,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { EventEnvelope } from "@sealant/runtime-protocol";
 import { Effect, Option, Stream } from "effect";
 
+import { FIXED_SYSTEM_PATH } from "../buildkit/person-layout.js";
 import {
   SealantRuntime,
   SealantRuntimeControlLive,
@@ -258,9 +259,6 @@ const MERGED_EXITS: Readonly<
 
 const quote = (value: string): string => `'${value}'`;
 
-/** The owner's half's whole PATH. */
-const SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-
 /** The base64 payload lines a script reads, one per write, in order. */
 export const homeScriptStdin = (contents: readonly string[]): string =>
   contents.map((content) => `${Buffer.from(content, "utf8").toString("base64")}\n`).join("");
@@ -314,7 +312,7 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
   if (!HOME_PATTERN.test(skel)) {
     throw new Error(`A skeleton directory is an absolute path of safe characters: '${skel}'.`);
   }
-  const ownerPath = input.ownerPath ?? SAFE_PATH;
+  const ownerPath = input.ownerPath ?? FIXED_SYSTEM_PATH;
   const node = input.nodeCommand ?? "node";
   if (!/^[A-Za-z0-9._-]+$/.test(node)) {
     throw new Error("A node command is a bare command name.");

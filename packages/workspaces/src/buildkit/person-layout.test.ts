@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -14,6 +14,9 @@ import {
   ARCH_ARCHIVE_POOL,
   IMAGE_PROBE_PATH,
   IMAGE_PROBE_SCRIPT,
+  NIX_BOOT_PATH,
+  NIX_BOOT_SCRIPT,
+  NIX_PROFILE,
   PERSON_ENV,
   PERSON_ENV_FILE,
   PERSON_ENV_PATH,
@@ -249,13 +252,63 @@ describe("the person layout in the managed images", () => {
     expect(containerfileFor("arch", { docker: false })).not.toContain("groupadd -g 2375");
   });
 
-  it("leaves nix images one person's, and records what the probe finds there", () => {
-    const containerfile = containerfileFor("nix");
+  it("gives nix images the person layout, with the files and setuid sudo nixos/nix lacks", () => {
+    const containerfile = containerfileFor("nix", { docker: true });
+    const at = (text: string) => {
+      const index = containerfile.indexOf(text);
+      expect(index, text).toBeGreaterThan(-1);
+      return index;
+    };
 
-    expect(containerfile).not.toContain("groupadd -g 40000 mend");
-    expect(containerfile).not.toContain(`> '${PERSON_ENV_PATH}'`);
-    expect(containerfile).toContain(`/usr/local/lib/sealant/image-probe > ${IMAGE_PROBE_PATH}`);
-    expect(containerfile).not.toContain("image-probe --require");
+    const install = at(
+      "nix profile add --profile /nix/var/nix/profiles/default --priority 7 --accept-flake-config --extra-experimental-features 'nix-command flakes' nixpkgs#sudo nixpkgs#acl nixpkgs#util-linux nixpkgs#gnused nixpkgs#getent; \\",
+    );
+    expect(install).toBeGreaterThan(containerfile.lastIndexOf("RUN npm install -g"));
+    // passwd, group and shadow become files before anything adds a group to them.
+    const files = at(
+      'for f in passwd:0644 group:0644 login.defs:0644 shadow:0600 gshadow:0600; do p=/etc/${f%:*}; if [ -L "$p" ]; then cp "$p" "$p.new"; chmod "${f#*:}" "$p.new"; mv -f "$p.new" "$p"; fi; done',
+    );
+    expect(files).toBeLessThan(at("groupadd -g 40000 mend"));
+    expect(files).toBeLessThan(at("groupadd -g 2375 docker"));
+    at("mkdir -p /home /usr/local/bin /etc/pam.d");
+    at(
+      's=$(readlink -f /nix/var/nix/profiles/default/bin/sudo); install -o root -g root -m 4755 "$s" /usr/local/bin/sudo; ln -sfn "${s%/bin/sudo}" /nix/var/nix/gcroots/sealant-sudo',
+    );
+    at(
+      `for f in profile bashrc zshenv; do printf '%s\\n' 'case ":$PATH:" in *":$HOME/.nix-profile/bin:"*) ;; *) PATH="$HOME/.nix-profile/bin:$PATH" ;; esac' >> /etc/$f; done`,
+    );
+    at("printf '%s\\n' 'root ALL=(ALL:ALL) ALL' '@includedir /etc/sudoers.d' > '/etc/sudoers'");
+    at("chmod 0440 /etc/sudoers");
+    at(
+      "printf '%s\\n' 'auth sufficient pam_rootok.so' 'auth required pam_deny.so' 'account required pam_permit.so' 'session required pam_permit.so' > '/etc/pam.d/sudo'",
+    );
+    // A person's nix goes through the daemon, under sudo too, and sudo finds the profile's tools.
+    at("'NIX_REMOTE=daemon'");
+    at(`env_keep += "${PERSON_ENV.map(([name]) => name).join(" ")} NIX_REMOTE"`);
+    at(
+      `secure_path="${PERSON_PATH_PREPEND.join(":")}:/usr/local/sbin:/usr/local/bin:/nix/var/nix/profiles/default/bin:/nix/var/nix/profiles/default/sbin"`,
+    );
+    for (const line of PERSON_ENV_FILE.slice(3)) at(`'${line}'`);
+    expect(envInstructions(containerfile).join("\n")).not.toContain("NIX_REMOTE");
+    // The build fails on a sudo that does not work, after the layout's sudoers is in place.
+    const sudoers = at("visudo -cqf /etc/sudoers.d/mend");
+    expect(at("visudo -cq; \\")).toBeGreaterThan(sudoers);
+    expect(at("/usr/local/bin/sudo -n true")).toBeGreaterThan(sudoers);
+    expect(
+      at(`/usr/local/lib/sealant/image-probe --require > ${IMAGE_PROBE_PATH}`),
+    ).toBeGreaterThan(at("/usr/local/bin/sudo -n true"));
+  });
+
+  it("renders none of nix's layout into Fedora, Arch and Ubuntu", () => {
+    for (const family of ["fedora", "arch", "ubuntu"]) {
+      for (const docker of [false, true]) {
+        const containerfile = containerfileFor(family, { docker });
+        for (const text of [NIX_PROFILE, NIX_BOOT_PATH, "NIX_REMOTE", "nix-daemon", "gcroots"]) {
+          expect(containerfile, `${family} ${text}`).not.toContain(text);
+        }
+        expect(containerfile.split("ENV PATH=").length - 1, family).toBe(1);
+      }
+    }
   });
 
   it("probes a custom base without changing it, and never fails its build", () => {
@@ -595,4 +648,87 @@ describe("the image probe script", () => {
       );
     }
   });
+});
+
+describe("the nix boot wrapper", () => {
+  let dir: string | undefined;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "nix-boot-"));
+  });
+  afterAll(async () => {
+    if (dir !== undefined) await rm(dir, { recursive: true, force: true });
+  });
+
+  /** Runs the wrapper with stand-ins for nix-daemon, nix and sealantd; sealantd prints its args. */
+  const boot = async (stubs: { readonly daemon: string; readonly nix: string }) => {
+    const root = await mkdtemp(join(dir ?? tmpdir(), "run-"));
+    const bin = join(root, "bin");
+    const state = join(root, "state");
+    const log = join(root, "log");
+    await mkdir(bin);
+    await mkdir(log);
+    await mkdir(join(state, "daemon-socket"), { recursive: true });
+    await writeFile(join(state, "daemon-socket", "socket"), "");
+    const write = async (name: string, body: string) => {
+      await writeFile(join(bin, name), `#!/bin/sh\n${body}\n`);
+      await chmod(join(bin, name), 0o755);
+    };
+    await write("nix-daemon", `echo "$$" > "$NIX_STATE_DIR/daemon.pid"\n${stubs.daemon}`);
+    await write("nix", stubs.nix);
+    await write("sealantd", `printf '%s\\n' "$@"`);
+    const started = Date.now();
+    const outcome = await execFileAsync(
+      "/bin/sh",
+      ["-c", NIX_BOOT_SCRIPT.join("\n"), "sealant-nix-boot", "--flag", "two words"],
+      {
+        env: {
+          PATH: `${bin}:${process.env["PATH"] ?? "/usr/bin:/bin"}`,
+          NIX_STATE_DIR: state,
+          NIX_LOG_DIR: log,
+          SEALANT_BOOT_SEALANTD: join(bin, "sealantd"),
+        },
+      },
+    );
+    const seconds = (Date.now() - started) / 1000;
+    const daemonPid = Number(await readFile(join(state, "daemon.pid"), "utf8"));
+    try {
+      process.kill(daemonPid);
+    } catch {}
+    const socketLeft = await stat(join(state, "daemon-socket", "socket")).then(
+      () => true,
+      () => false,
+    );
+    const daemonLog = await readFile(join(log, "nix-daemon.log"), "utf8");
+    return { ...outcome, seconds, socketLeft, daemonLog };
+  };
+
+  it("removes a stale socket, waits for the daemon to answer, then runs sealantd boot", async () => {
+    const outcome = await boot({
+      daemon: 'echo daemon-started; sleep 0.5; touch "$NIX_STATE_DIR/ready"; exec sleep 60',
+      nix: '[ "$NIX_REMOTE" = daemon ] && [ -e "$NIX_STATE_DIR/ready" ]',
+    });
+
+    expect(outcome.socketLeft).toBe(false);
+    expect(outcome.stdout).toBe("boot\n--flag\ntwo words\n");
+    expect(outcome.stderr).toBe("");
+    expect(outcome.daemonLog).toBe("daemon-started\n");
+  });
+
+  it("runs sealantd boot at once, and says so, when the daemon dies at once", async () => {
+    const outcome = await boot({ daemon: "echo no-store >&2; exit 1", nix: "exit 1" });
+
+    expect(outcome.stdout).toBe("boot\n--flag\ntwo words\n");
+    expect(outcome.stderr).toContain("nix-daemon exited");
+    expect(outcome.daemonLog).toBe("no-store\n");
+    expect(outcome.seconds).toBeLessThan(3);
+  });
+
+  it("runs sealantd boot within the bound when the daemon is up but never answers", async () => {
+    const outcome = await boot({ daemon: "exec sleep 60", nix: "exec sleep 60" });
+
+    expect(outcome.stdout).toBe("boot\n--flag\ntwo words\n");
+    expect(outcome.stderr).toContain("nix-daemon did not answer in 10 s");
+    expect(outcome.seconds).toBeGreaterThanOrEqual(9);
+    expect(outcome.seconds).toBeLessThan(14);
+  }, 30_000);
 });

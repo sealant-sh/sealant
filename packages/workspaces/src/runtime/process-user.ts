@@ -25,6 +25,7 @@ import {
 import type { EventEnvelope } from "@sealant/runtime-protocol";
 import { Effect, Option, Stream } from "effect";
 
+import { FIXED_SYSTEM_PATH } from "../buildkit/person-layout.js";
 import {
   SealantRuntime,
   SealantRuntimeControlLive,
@@ -102,9 +103,6 @@ export const processUserProblem = (user: string): ProcessUserRefusal | undefined
   return undefined;
 };
 
-/** Where the check looks for `getent` and `cut`. */
-const SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-
 const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 
 /**
@@ -131,7 +129,7 @@ export const buildProcessUserCheckScript = (
   return [
     "set -eu",
     // A fixed PATH, not whatever root's environment carries: getent and cut from the system.
-    `PATH=${options.prependPath === undefined ? "" : `${options.prependPath}:`}${SYSTEM_PATH}`,
+    `PATH=${options.prependPath === undefined ? "" : `${options.prependPath}:`}${FIXED_SYSTEM_PATH}`,
     `user=${quote(user)}`,
     // Without getent a failed lookup would read as an unknown user: say what is missing instead.
     `command -v getent >/dev/null 2>&1 || exit ${String(E.noGetent)}`,

@@ -110,7 +110,9 @@ describe("the check script", () => {
     const script = buildProcessUserCheckScript("m4lice000");
     // The script looks only in the fixed system PATH: no `getent` where it looks, as in an image
     // without it, is simulated by pointing those directories at an empty one.
-    expect(script).toContain("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+    expect(script).toContain(
+      "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/nix/var/nix/profiles/default/bin",
+    );
     const withoutGetent = script.replace(/^PATH=.*$/m, `PATH=${bin}`);
     const result = spawnSync("/bin/sh", ["-c", withoutGetent], { encoding: "utf8" });
     expect(result.status).toBe(PROCESS_USER_CHECK_EXIT.noGetent);

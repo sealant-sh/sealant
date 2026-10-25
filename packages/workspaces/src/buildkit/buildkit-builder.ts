@@ -50,6 +50,9 @@ import {
 import {
   GIT_SAFE_DIRECTORY_ANY,
   IMAGE_PROBE_PATH,
+  NIX_BOOT_PATH,
+  NIX_BOOT_SCRIPT,
+  NIX_PROFILE,
   isPersonLayoutFamily,
   renderImageProbeStep,
   renderPersonLayoutSteps,
@@ -165,6 +168,8 @@ interface DistroDefinition {
   readonly sealantdPackages: readonly string[];
   readonly shellPaths: Record<"bash" | "zsh" | "fish", string>;
   readonly sshdPath: string;
+  /** An entrypoint script of the family's own, in place of `sealantd boot`, which it must exec. */
+  readonly boot?: { readonly path: string; readonly script: readonly string[] };
 }
 
 /**
@@ -372,14 +377,16 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
   nix: {
     baseImage: "nixos/nix:latest",
     packageManager: "nix",
-    internalPackages: ["bash", "cacert", "coreutils", "gitMinimal", "openssh", "shadow"],
+    // gawk: nixos/nix has no awk, and pi's install checks its download with it.
+    internalPackages: ["bash", "cacert", "coreutils", "gawk", "gitMinimal", "openssh", "shadow"],
     sealantdPackages: ["socat"],
     shellPaths: {
-      bash: "/root/.nix-profile/bin/bash",
-      zsh: "/root/.nix-profile/bin/zsh",
-      fish: "/root/.nix-profile/bin/fish",
+      bash: `${NIX_PROFILE}/bin/bash`,
+      zsh: `${NIX_PROFILE}/bin/zsh`,
+      fish: `${NIX_PROFILE}/bin/fish`,
     },
-    sshdPath: "/root/.nix-profile/bin/sshd",
+    sshdPath: `${NIX_PROFILE}/bin/sshd`,
+    boot: { path: NIX_BOOT_PATH, script: NIX_BOOT_SCRIPT },
   },
 };
 
@@ -1015,7 +1022,7 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
 
   const nixPackageList = packageList.map((pkg) => shellQuote(`nixpkgs#${pkg}`));
   return [
-    "RUN nix profile add --priority 6 --accept-flake-config --extra-experimental-features 'nix-command flakes' \\",
+    `RUN nix profile add --profile ${NIX_PROFILE} --priority 6 --accept-flake-config --extra-experimental-features 'nix-command flakes' \\`,
     `    ${nixPackageList.join(" ")} && \\`,
     "    nix --extra-experimental-features 'nix-command flakes' profile list > /dev/null",
     // The nix image has no /lib64/ld-linux-*: every binary in it names a loader inside the store.
@@ -1030,6 +1037,9 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
     "    mkdir -p /lib /lib64; \\",
     '    ln -sf "$loader" "/lib/$(basename "$loader")"; \\',
     '    ln -sf "$loader" "/lib64/$(basename "$loader")"',
+    // The harness installs below run what they put in /usr/local/bin (`pi --version`), which
+    // nixos/nix's PATH lacks until the later prepend every family gets.
+    "ENV PATH=/usr/local/bin:$PATH",
   ].join("\n");
 };
 
@@ -1434,7 +1444,6 @@ const renderContainerfile = (plan: ResolvedImagePlan, platform: WorkspaceImagePl
     harnessInstallStep,
     // The person layout comes right after the harnesses: a change to its packages reruns neither
     // the OS upgrade nor a harness install, and a sealantd pin bump (below) does not rerun it.
-    // Nix images take one person and get none of this (person-layout.ts says why).
     ...(personLayoutFamily === undefined
       ? []
       : [
@@ -1445,19 +1454,17 @@ const renderContainerfile = (plan: ResolvedImagePlan, platform: WorkspaceImagePl
           }),
         ]),
     "",
-    plan.osFamily === "nix"
-      ? `ENV SHELL=${shellQuote(shellPath)}`
-      : `RUN usermod -s ${shellQuote(shellPath)} root`,
+    `RUN usermod -s ${shellQuote(shellPath)} root`,
     "",
     // The sealantd binary is the mandatory PID-1 entrypoint. We bake it in from the public GHCR
     // image via a multi-stage `COPY --from` so we inherit its multi-arch (amd64+arm64) binary
     // without bundling a local build context.
     `COPY --from=${sealantdImageReference} /usr/local/bin/sealantd /usr/local/bin/sealantd`,
     "RUN chmod 755 /usr/local/bin/sealantd",
-    // nixos/nix's PATH is only its profile dirs — /usr/local/bin (sealantd, the docker CLI
-    // below) must be reachable by name on every family. Redundant where the base already has
-    // it; load-bearing on nix. The ENTRYPOINT is absolute for the same reason: exec-form bare
-    // names resolve against the image PATH at container init.
+    // /usr/local/bin (sealantd, the docker CLI below) must be reachable by name on every family.
+    // Redundant where the base already has it, and on nix, whose package step prepends it for the
+    // harness installs. The ENTRYPOINT is absolute for the same reason: exec-form bare names
+    // resolve against the image PATH at container init.
     "ENV PATH=/usr/local/bin:$PATH",
     ...(plan.blueprint.tooling.services?.docker?.enabled === true
       ? [
@@ -1480,6 +1487,14 @@ const renderContainerfile = (plan: ResolvedImagePlan, platform: WorkspaceImagePl
         ]
       : []),
     ...(dotfilesStep === undefined ? [] : ["", dotfilesStep]),
+    ...(distro.boot === undefined
+      ? []
+      : [
+          "",
+          `COPY --chmod=755 <<'SEALANT_BOOT' ${distro.boot.path}`,
+          ...distro.boot.script,
+          "SEALANT_BOOT",
+        ]),
     "",
     // A managed family's image fails its build here rather than ship without the person layout.
     renderImageProbeStep({ require: personLayoutFamily !== undefined }),
@@ -1487,7 +1502,9 @@ const renderContainerfile = (plan: ResolvedImagePlan, platform: WorkspaceImagePl
     renderBootEnv(plan),
     "",
     "WORKDIR /workspace",
-    'ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]',
+    distro.boot === undefined
+      ? 'ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]'
+      : `ENTRYPOINT ["${distro.boot.path}"]`,
     "",
   ].join("\n");
 };

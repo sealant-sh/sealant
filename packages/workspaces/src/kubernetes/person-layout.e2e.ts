@@ -27,7 +27,7 @@ import {
 import { Effect, Stream } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { imagePersonLayoutSupport } from "../buildkit/person-layout.js";
+import { NIX_PROFILE, imagePersonLayoutSupport } from "../buildkit/person-layout.js";
 import { KubernetesRuntimeAdapter } from "../runtime/kubernetes/adapter.js";
 import { createLiveKubernetesApi, type KubernetesApi } from "../runtime/kubernetes/api.js";
 import { kubernetesRuntimeConfigSchema } from "../runtime/kubernetes/config.js";
@@ -283,6 +283,118 @@ const checkDocker = async (target: SealantTarget, phase: string): Promise<void> 
     expect(output).toMatch(/^nested-ok$/m);
   }
 };
+
+const NIX = "nix --extra-experimental-features nix-command";
+const NIX_BIN = `${NIX_PROFILE}/bin`;
+
+const uncachedDerivation = (who: string, seed: string): string =>
+  [
+    "derivation {",
+    `  name = "pl-${who}-${seed}";`,
+    "  system = builtins.currentSystem;",
+    `  builder = "${NIX_BIN}/bash";`,
+    `  who = "${who}";`,
+    `  seed = "${seed}";`,
+    "  args = [ \"-c\" ''",
+    "    start=$EPOCHREALTIME",
+    `    ${NIX_BIN}/mkdir -p $out/bin`,
+    "    printf '#!/bin/sh\\necho %s\\n' \"$seed\" > $out/bin/pl-$who",
+    `    ${NIX_BIN}/chmod +x $out/bin/pl-$who`,
+    `    ${NIX_BIN}/sleep 3`,
+    '    printf \'seed=%s builder-uid=%s start=%s end=%s\\n\' "$seed" "$UID" "$start" "$EPOCHREALTIME" > $out/build-info',
+    "  '' ];",
+    "}",
+  ].join("\n");
+
+interface NixBuild {
+  readonly output: string;
+  readonly path: string;
+  readonly seed: string;
+  readonly builderUid: number;
+  readonly start: number;
+  readonly end: number;
+}
+
+const buildAs = async (target: SealantTarget, who: string, seed: string): Promise<NixBuild> => {
+  const built = await exec(
+    target,
+    [
+      'echo "NIX_REMOTE=${NIX_REMOTE:-unset}"',
+      `cat > "$HOME/pl-${seed}.nix" <<'PL_NIX'`,
+      uncachedDerivation(who, seed),
+      "PL_NIX",
+      `out=$(nix-build --no-out-link "$HOME/pl-${seed}.nix")`,
+      'echo "build-exit=$?"',
+      'echo "out=$out"',
+      'cat "$out/build-info"',
+      'stat -c "owner=%u:%g" "$out"',
+      `echo "builder=$(getent passwd "$(sed -n 's/.*builder-uid=\\([0-9]*\\).*/\\1/p' "$out/build-info")" | cut -d: -f1,3)"`,
+    ].join("\n"),
+    who,
+  );
+  const info = /^seed=(\S+) builder-uid=(\d+) start=([\d.]+) end=([\d.]+)$/m.exec(built.output);
+  return {
+    output: built.output,
+    path: /^out=(\S*)$/m.exec(built.output)?.[1] ?? "",
+    seed: info?.[1] ?? "",
+    builderUid: Number(info?.[2]),
+    start: Number(info?.[3]),
+    end: Number(info?.[4]),
+  };
+};
+
+const buildConcurrently = async (
+  target: SealantTarget,
+  phase: string,
+): Promise<Record<string, NixBuild>> => {
+  const builds = await Promise.all(
+    PEOPLE.map((person) =>
+      buildAs(target, person.name, `${SUFFIX}${phase.replace(/\W/g, "")}${person.uid}`),
+    ),
+  );
+  const [alice, bob] = builds;
+  for (const [index, person] of PEOPLE.entries()) {
+    evidence(`${phase} nix build as ${person.name}`, builds[index]!.output.trim());
+  }
+  const overlap = alice!.start < bob!.end && bob!.start < alice!.end;
+  evidence(`${phase} nix builds overlap`, {
+    overlap,
+    builderUids: builds.map((build) => build.builderUid),
+  });
+  for (const build of builds) {
+    expect([build.builderUid, build.start, build.end].every(Number.isFinite), build.output).toBe(
+      true,
+    );
+  }
+  expect(overlap).toBe(true);
+  expect(alice!.builderUid).not.toBe(bob!.builderUid);
+  for (const [index, person] of PEOPLE.entries()) {
+    const build = builds[index]!;
+    expect(build.output).toContain("NIX_REMOTE=daemon");
+    expect(build.output).toMatch(/will be built/);
+    expect(build.output).toContain("build-exit=0");
+    expect(build.path).toMatch(new RegExp(`^/nix/store/[a-z0-9]{32}-pl-${person.name}-`));
+    expect(build.output).toContain("owner=0:0");
+    expect(build.output).toMatch(/^builder=nixbld\d+:\d+$/m);
+  }
+  expect(alice!.path).not.toBe(bob!.path);
+  expect(alice!.seed).not.toBe(bob!.seed);
+  return Object.fromEntries(PEOPLE.map((person, index) => [person.name, builds[index]!]));
+};
+
+/** The image installed the default profile from flake references, which `profile list` reads. */
+const defaultProfile = async (target: SealantTarget): Promise<string> =>
+  (
+    await exec(
+      target,
+      `readlink ${NIX_PROFILE}; ${NIX} --extra-experimental-features flakes profile list --profile ${NIX_PROFILE}`,
+    )
+  ).output;
+
+const NIX_DAEMON_LOG = "/nix/var/log/nix/nix-daemon.log";
+
+const NIX_DAEMON_PIDS =
+  'for p in /proc/[0-9]*; do [ "$(cat "$p/comm" 2>/dev/null)" = nix-daemon ] && echo "${p#/proc/}"; done';
 
 const workspaceContainer = (pod: V1Pod | undefined) =>
   pod?.spec?.containers.find((container) => container.name !== "docker");
@@ -592,6 +704,8 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
 
   let first: { podName: string; target: SealantTarget } | undefined;
   const firstRun = `run-e2e-person-a-${SUFFIX}`;
+  let second: { podName: string; target: SealantTarget } | undefined;
+  const restoredRun = `run-e2e-person-b-${SUFFIX}`;
 
   it(
     "2. launches one capture workspace for two people without Docker: escalation, FSETID, the node's user namespace",
@@ -640,13 +754,79 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
     expect(contents.output).toBe("from-a\nb-edit\n---\nfrom-b\na-edit\n");
   }, 180_000);
 
+  it.runIf(FAMILY === "nix")(
+    "4n. nix: the daemon is PID 1's child; both people build at once and keep their own profiles",
+    async () => {
+      const target = first!.target;
+      const tree = await exec(
+        target,
+        [
+          "echo \"pid1=$(tr '\\0' ' ' < /proc/1/cmdline)\"",
+          `for pid in $(${NIX_DAEMON_PIDS}); do`,
+          `  echo "nix-daemon pid=$pid $(grep -E '^(PPid|Uid):' /proc/$pid/status | tr -s '\\t\\n' '  ')"`,
+          "done",
+          `stat -c "daemon-log=%n" ${NIX_DAEMON_LOG} || echo "daemon-log=missing"`,
+        ].join("\n"),
+      );
+      evidence("step 4n process tree", tree.output.trim());
+      expect(tree.output).toMatch(/^pid1=\/usr\/local\/bin\/sealantd boot/m);
+      expect(tree.output).toMatch(/^nix-daemon pid=\d+ PPid: 1 Uid: 0 /m);
+      expect(tree.output).toContain(`daemon-log=${NIX_DAEMON_LOG}`);
+
+      const rootBefore = await defaultProfile(target);
+      const builds = await buildConcurrently(target, "step 4n");
+      const profiles: Record<string, string> = {};
+      for (const person of PEOPLE) {
+        const installed = await exec(
+          target,
+          [
+            `${NIX} profile add ${builds[person.name]!.path}`,
+            'echo "add-exit=$?"',
+            'echo "link=$(readlink "$HOME/.nix-profile")"',
+            `echo "ran=$(bash -lc pl-${person.name})"`,
+            `${NIX} profile list`,
+          ].join("\n"),
+          person.name,
+        );
+        evidence(`step 4n nix profile as ${person.name}`, installed.output.trim());
+        expect(installed.output).toContain("add-exit=0");
+        expect(installed.output).toContain(`link=/home/${person.name}/`);
+        expect(installed.output).toContain(`ran=${builds[person.name]!.seed}`);
+        profiles[person.name] = installed.output;
+      }
+      const aliceAfterBob = await exec(target, `${NIX} profile list`, ALICE.name);
+      const rootAfter = await defaultProfile(target);
+      evidence(
+        `step 4n ${ALICE.name}'s profile after ${BOB.name}'s add`,
+        aliceAfterBob.output.trim(),
+      );
+      evidence("step 4n default profile", {
+        before: rootBefore.trim(),
+        after: rootAfter.trim(),
+      });
+      for (const [own, other] of [
+        [ALICE, BOB],
+        [BOB, ALICE],
+      ] as const) {
+        expect(profiles[own.name]).toContain(builds[own.name]!.path);
+        expect(profiles[own.name]).not.toContain(builds[other.name]!.path);
+      }
+      expect(aliceAfterBob.output).toContain(builds[ALICE.name]!.path);
+      expect(aliceAfterBob.output).not.toContain(builds[BOB.name]!.path);
+      expect(rootBefore).toMatch(/^Store paths: +\/nix\/store\//m);
+      expect(rootAfter).toBe(rootBefore);
+      for (const build of Object.values(builds)) expect(rootAfter).not.toContain(build.path);
+    },
+    10 * 60_000,
+  );
+
   it(
     "5. captures, stops, restores into a fresh Pod with the same map, and repeats 4",
     async () => {
       await flushAndStop(first!, firstRun, "step 5");
 
-      const restoredRun = `run-e2e-person-b-${SUFFIX}`;
       const restored = await launch(perPerson, restoredRun);
+      second = restored;
       await savePodYaml(restored.podName, "step5-restored");
       await expectPerPersonPod(restored.podName, "step 5", false);
       await preparePeople(restored.target, "step 5");
@@ -662,10 +842,62 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
       expect(byBob.exitCode).toBe(0);
       expect(byAlice.exitCode).toBe(0);
       await expectNoChannelErrors();
-      await flushAndStop(restored, restoredRun, "step 5 restored");
     },
     20 * 60_000,
   );
+
+  it.runIf(FAMILY === "nix")(
+    "5n. nix after restore: both people build at once; with the daemon stopped, a person's nix fails",
+    async () => {
+      const target = second!.target;
+      await buildConcurrently(target, "step 5n");
+
+      const stopped = await exec(
+        target,
+        [
+          `for pid in $(${NIX_DAEMON_PIDS}); do kill "$pid"; done`,
+          `for _ in $(seq 50); do [ -z "$(${NIX_DAEMON_PIDS})" ] && break; sleep 0.2; done`,
+          `echo "left=$(${NIX_DAEMON_PIDS} | wc -l)"`,
+        ].join("\n"),
+      );
+      evidence("step 5n nix-daemon stopped", stopped.output.trim());
+      expect(stopped.output).toContain("left=0");
+      const refused = await exec(
+        target,
+        [
+          'echo "NIX_REMOTE=${NIX_REMOTE:-unset}"',
+          `${NIX} store info`,
+          'echo "store-info-exit=$?"',
+          `cat > "$HOME/pl-refused.nix" <<'PL_NIX'`,
+          uncachedDerivation(ALICE.name, `${SUFFIX}refused`),
+          "PL_NIX",
+          'nix-build --no-out-link "$HOME/pl-refused.nix"',
+          'echo "build-exit=$?"',
+          'ls -d "$HOME/.local/share/nix/root" 2>/dev/null || echo "private-store=none"',
+        ].join("\n"),
+        ALICE.name,
+      );
+      evidence(`step 5n nix as ${ALICE.name} with the daemon stopped`, refused.output.trim());
+      expect(refused.output).toContain("NIX_REMOTE=daemon");
+      expect(refused.output).toMatch(/^store-info-exit=[1-9]\d*$/m);
+      expect(refused.output).toMatch(/^build-exit=[1-9]\d*$/m);
+      expect(refused.output).toMatch(/daemon-socket\/socket/);
+      expect(refused.output).toContain("private-store=none");
+
+      await exec(
+        target,
+        `rm -f /nix/var/nix/daemon-socket/socket; setsid -f nix-daemon </dev/null >/dev/null 2>&1; for _ in $(seq 50); do NIX_REMOTE=daemon ${NIX} store info >/dev/null 2>&1 && break; sleep 0.2; done`,
+      );
+      const back = await exec(target, `${NIX} store info; echo "store-info-exit=$?"`, ALICE.name);
+      evidence(`step 5n nix as ${ALICE.name} after the daemon restarts`, back.output.trim());
+      expect(back.output).toContain("store-info-exit=0");
+    },
+    10 * 60_000,
+  );
+
+  it("5c. flushes and stops the restored Pod", async () => {
+    await flushAndStop(second!, restoredRun, "step 5 restored");
+  }, 240_000);
 
   let docker: { podName: string; target: SealantTarget } | undefined;
   const dockerRun = `run-e2e-person-docker-${SUFFIX}`;

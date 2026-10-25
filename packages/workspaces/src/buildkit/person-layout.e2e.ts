@@ -14,7 +14,7 @@
  *   `npm i -g` and `cargo install` (the first three broke under an earlier image-wide `ENV`).
  *
  * Needs Docker and the network (npm, crates.io, GitHub releases, Playwright's CDN). Families come
- * from `SEALANT_PERSON_LAYOUT_E2E_FAMILIES` (default `arch,ubuntu,fedora`). Run with:
+ * from `SEALANT_PERSON_LAYOUT_E2E_FAMILIES` (default `arch,ubuntu,fedora,nix`). Run with:
  *   pnpm --filter @sealant/workspaces test:e2e src/buildkit/person-layout.e2e.ts
  */
 import { spawn } from "node:child_process";
@@ -28,10 +28,10 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { compileWorkspaceBuildSpec } from "./buildkit-builder.js";
-import { imagePersonLayoutSupport } from "./person-layout.js";
+import { NIX_DAEMON_START, NIX_PROFILE, imagePersonLayoutSupport } from "./person-layout.js";
 import { processImagePlatform } from "./platform.js";
 
-const families = (process.env["SEALANT_PERSON_LAYOUT_E2E_FAMILIES"] ?? "arch,ubuntu,fedora")
+const families = (process.env["SEALANT_PERSON_LAYOUT_E2E_FAMILIES"] ?? "arch,ubuntu,fedora,nix")
   .split(",")
   .filter((family) => family.length > 0);
 
@@ -57,6 +57,7 @@ const INSTALL_CC: Readonly<Record<string, string>> = {
   ubuntu:
     "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gcc libc6-dev",
   fedora: "dnf -y -q install gcc",
+  nix: `nix --extra-experimental-features 'nix-command flakes' profile add --profile ${NIX_PROFILE} --priority 8 nixpkgs#gcc`,
 };
 
 /**
@@ -67,7 +68,26 @@ const PLAYWRIGHT: Readonly<Record<string, string>> = {
   arch: "playwright@1.63.0",
   ubuntu: "playwright@1.50.1",
   fedora: "playwright@1.63.0",
+  nix: "playwright@1.63.0",
 };
+
+/**
+ * Checks that fail on a family for reasons outside the person layout, root's included: on nix, a binary
+ * downloaded for FHS systems finds no libz or libstdc++ (rustc, nvm's node), and root's `npm i -g`
+ * targets the read-only store.
+ */
+const SKIPPED: Readonly<Record<string, readonly string[]>> = {
+  nix: [
+    "cargo-build-bob",
+    "cargo-build-alice-reuses-registry",
+    "root-nvm",
+    "root-npm-global",
+    "root-cargo-install",
+  ],
+};
+
+/** nixos/nix has no /bin/bash. */
+const BASH: Readonly<Record<string, string>> = { nix: `${NIX_PROFILE}/bin/bash` };
 
 const runScript = (image: string, family: string, script: string) =>
   docker(
@@ -78,19 +98,22 @@ const runScript = (image: string, family: string, script: string) =>
       "-e",
       `INSTALL_CC=${INSTALL_CC[family] ?? "false"}`,
       "-e",
+      `SKIPPED=${(SKIPPED[family] ?? []).join(" ")}`,
+      "-e",
       `PLAYWRIGHT=${PLAYWRIGHT[family] ?? "playwright@1.63.0"}`,
       "--entrypoint",
-      "/bin/bash",
+      BASH[family] ?? "/bin/bash",
       image,
       "-s",
     ],
-    script,
+    // A person's nix needs the daemon, which the image's entrypoint starts.
+    (family === "nix" ? `${NIX_DAEMON_START.join("\n")}\n` : "") + script,
   );
 
 /** Prints `OK <name>` or `FAIL <name>` per check; the test asserts the whole list. */
 const SCRIPT_PRELUDE = String.raw`
 set -u
-check() { local name=$1; shift; if "$@" >/tmp/check.log 2>&1; then echo "OK $name"; else echo "FAIL $name"; sed 's/^/    /' /tmp/check.log | tail -15; fi; }
+check() { local name=$1; shift; case " $SKIPPED " in *" $name "*) return ;; esac; if "$@" >/tmp/check.log 2>&1; then echo "OK $name"; else echo "FAIL $name"; sed 's/^/    /' /tmp/check.log | tail -15; fi; }
 `;
 
 const TWO_PEOPLE = String.raw`
@@ -220,7 +243,9 @@ for (const family of families) {
       const passed = outcome.stdout.match(/^OK \S+/gm) ?? [];
       expect(outcome.stdout).not.toMatch(/^FAIL /m);
       expect(passed.map((line) => line.slice(3))).toEqual(
-        TWO_PEOPLE_CHECKS.filter((name) => !name?.startsWith("root-")),
+        TWO_PEOPLE_CHECKS.filter(
+          (name) => !name?.startsWith("root-") && !SKIPPED[family]?.includes(name ?? ""),
+        ),
       );
     }, 1_800_000);
 
@@ -247,7 +272,7 @@ for (const family of families) {
           "--security-opt",
           "no-new-privileges",
           "--entrypoint",
-          "/bin/bash",
+          BASH[family] ?? "/bin/bash",
           imageReference ?? "missing",
           "-s",
         ],
@@ -255,6 +280,75 @@ for (const family of families) {
       );
       expect(sudo.stdout).not.toContain("exit=0");
     });
+
+    it.runIf(family === "nix")(
+      "lets a person write the nix store through the daemon, and sudo to root",
+      async () => {
+        const outcome = await runScript(
+          imageReference ?? "missing",
+          family,
+          String.raw`
+useradd -u 40001 -g mend -m alice
+setpriv --reuid=alice --regid=mend --init-groups -- env HOME=/home/alice $(grep '^NIX_REMOTE=' /etc/sealant/person-env) \
+  bash -c 'sudo -n id -u; printf hi > ~/f; nix --extra-experimental-features nix-command store add-file ~/f'
+`,
+        );
+        expect(outcome.stdout).toMatch(/^0$/m);
+        expect(outcome.stdout).toMatch(/^\/nix\/store\/[a-z0-9]{32}-f$/m);
+      },
+      600_000,
+    );
+
+    it.runIf(family === "nix")(
+      "runs what a person adds to their own profile by name in their login and interactive shells",
+      async () => {
+        const outcome = await runScript(
+          imageReference ?? "missing",
+          family,
+          String.raw`
+useradd -u 40001 -g mend -m alice
+cat > /tmp/as-alice.sh <<'AS_ALICE'
+mkdir -p ~/pkg/bin; printf '#!/bin/sh\necho ran\n' > ~/pkg/bin/pl-alice; chmod +x ~/pkg/bin/pl-alice
+nix --extra-experimental-features 'nix-command flakes' profile add "$(nix --extra-experimental-features nix-command store add-path ~/pkg)"
+for shell in "bash -lc" "bash -ic" "sh -lc" "bash -c" "sh -c"; do echo "$shell: $($shell pl-alice 2>/dev/null || echo not-found)"; done
+AS_ALICE
+setpriv --reuid=alice --regid=mend --init-groups -- env HOME=/home/alice $(grep '^NIX_REMOTE=' /etc/sealant/person-env) bash /tmp/as-alice.sh
+[ "$(bash -lc 'echo "$PATH"')" = "$PATH" ] && echo "root-path=unchanged"
+`,
+        );
+        expect(outcome.stdout).toContain(
+          [
+            "bash -lc: ran",
+            "bash -ic: ran",
+            "sh -lc: ran",
+            "bash -c: not-found",
+            "sh -c: not-found",
+          ].join("\n"),
+        );
+        expect(outcome.stdout).toContain("root-path=unchanged");
+      },
+      600_000,
+    );
+
+    it.runIf(family === "nix")(
+      "keeps the store output the setuid sudo was copied from",
+      async () => {
+        const outcome = await runScript(
+          imageReference ?? "missing",
+          family,
+          String.raw`
+out=$(readlink /nix/var/nix/gcroots/sealant-sudo)
+echo "root=$out"
+[ "$(sha256sum < /usr/local/bin/sudo)" = "$(sha256sum < "$out/bin/sudo")" ] && echo "copy=same"
+nix-store -q --roots "$out"
+`,
+        );
+        const output = /^root=(\/nix\/store\/[a-z0-9]{32}-sudo-\S+)$/m.exec(outcome.stdout)?.[1];
+        expect(output, outcome.stdout).toBeDefined();
+        expect(outcome.stdout).toContain("copy=same");
+        expect(outcome.stdout).toContain(`/nix/var/nix/gcroots/sealant-sudo -> ${output ?? ""}`);
+      },
+    );
 
     it("still serves one person as root, as today", async () => {
       const outcome = await runScript(
@@ -264,7 +358,9 @@ for (const family of families) {
       );
       expect(outcome.stdout).not.toMatch(/^FAIL /m);
       expect((outcome.stdout.match(/^OK \S+/gm) ?? []).map((line) => line.slice(3))).toEqual(
-        TWO_PEOPLE_CHECKS.filter((name) => name?.startsWith("root-")),
+        TWO_PEOPLE_CHECKS.filter(
+          (name) => name?.startsWith("root-") && !SKIPPED[family]?.includes(name ?? ""),
+        ),
       );
     }, 900_000);
   });

@@ -33,9 +33,11 @@
  * - **`HOME_MODE 0700`** in `/etc/login.defs`, so `useradd -m` makes a home only its user can enter
  *   (Ubuntu's default is 0750, and every person's primary group is `mend`).
  *
- * Nix images get none of it and take one person: their passwd is in the read-only store, the store
- * cannot hold a setuid `sudo`, and non-root nix needs the daemon. Custom base images get the probe
- * step and {@link GIT_SAFE_DIRECTORY_ANY}, nothing else: whatever else the base carries decides.
+ * Nix images get the same, with what nixos/nix lacks: their passwd, group and shadow become files
+ * (the base links them into the read-only store), `sudo` is a setuid copy in `/usr/local/bin` (the
+ * store cannot hold one) with its own sudoers and PAM file, and a person's nix goes through the
+ * daemon that {@link NIX_BOOT_PATH} starts. Custom base images get the probe step and
+ * {@link GIT_SAFE_DIRECTORY_ANY}, nothing else: whatever else the base carries decides.
  */
 import type { WorkspaceImageProbe } from "@sealant/validators";
 
@@ -253,39 +255,51 @@ export const PERSON_ENV: ReadonlyArray<readonly [string, string]> = [
   ["PIP_CACHE_DIR", "/var/cache/pip"],
 ];
 
-/** {@link PERSON_ENV_PATH}'s lines. */
-export const PERSON_ENV_FILE: readonly string[] = [
+type PersonEnv = ReadonlyArray<readonly [string, string]>;
+
+const personEnvFile = (env: PersonEnv): readonly string[] => [
   `# person-env ${String(PERSON_ENV_VERSION)}`,
   "# The environment sealantd gives every process it runs as a user (Mend ADR 0016). Never root's.",
   "# KEY=VALUE per line, values literal. PATH_PREPEND goes in front of the process's PATH.",
-  ...PERSON_ENV.map(([key, value]) => `${key}=${value}`),
+  ...env.map(([key, value]) => `${key}=${value}`),
   `PATH_PREPEND=${PERSON_PATH_PREPEND.join(":")}`,
 ];
 
-const SUDO_SECURE_PATH = [
-  ...PERSON_PATH_PREPEND,
-  "/usr/local/sbin",
-  "/usr/local/bin",
-  "/usr/sbin",
-  "/usr/bin",
-  "/sbin",
-  "/bin",
-].join(":");
+/** {@link PERSON_ENV_PATH}'s lines. */
+export const PERSON_ENV_FILE = personEnvFile(PERSON_ENV);
 
-/** `/etc/sudoers.d/mend`. Every default is bound to the group, so root's own `sudo` is as before. */
-export const PERSON_SUDOERS: readonly string[] = [
+const FHS_PATH = ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"];
+
+const personSudoers = (env: PersonEnv, systemPath: readonly string[]): readonly string[] => [
   "# Mend's person layout (ADR 0016): everyone in mend has passwordless sudo. Not isolation.",
   `%${MEND_GROUP} ALL=(ALL:ALL) NOPASSWD: ALL`,
   `Defaults:%${MEND_GROUP} umask=0002, umask_override`,
-  `Defaults:%${MEND_GROUP} env_keep += "${PERSON_ENV.map(([name]) => name).join(" ")}"`,
-  `Defaults:%${MEND_GROUP} secure_path="${SUDO_SECURE_PATH}"`,
+  `Defaults:%${MEND_GROUP} env_keep += "${env.map(([name]) => name).join(" ")}"`,
+  `Defaults:%${MEND_GROUP} secure_path="${[...PERSON_PATH_PREPEND, ...systemPath].join(":")}"`,
 ];
 
-/** Repository packages each managed family adds for the person layout. */
+/** `/etc/sudoers.d/mend`. Every default is bound to the group, so root's own `sudo` is as before. */
+export const PERSON_SUDOERS = personSudoers(PERSON_ENV, FHS_PATH);
+
+/**
+ * The nix image's profile: the one `/root/.nix-profile` links to and nixos/nix's `PATH` names.
+ * Root's, outside `/root`, so a person reaches its tools and the login shell it holds.
+ */
+export const NIX_PROFILE = "/nix/var/nix/profiles/default";
+
+/** The fixed PATH of the scripts Core runs as root. A nix image has its tools only in its profile. */
+export const FIXED_SYSTEM_PATH = [...FHS_PATH, `${NIX_PROFILE}/bin`].join(":");
+
+/**
+ * Repository packages each managed family adds for the person layout. nixos/nix also lacks sed and
+ * getent, which this layout, Mend's prepare and Core's user check run (its awk comes with the
+ * package layer).
+ */
 export const PERSON_LAYOUT_PACKAGES = {
   fedora: ["sudo", "acl", "util-linux"],
   arch: ["sudo", "acl"],
   ubuntu: ["sudo", "acl"],
+  nix: ["sudo", "acl", "util-linux", "gnused", "getent"],
 } as const;
 
 export type PersonLayoutFamily = keyof typeof PERSON_LAYOUT_PACKAGES;
@@ -329,7 +343,19 @@ export const ARCH_ARCHIVE_POOL = "https://archive.archlinux.org/packages/.all";
  * leaving them out (measured 2026-10-06). Arch's layout layer weighs 2.5 MB.
  */
 const LAYOUT_INSTALL: Readonly<
-  Record<PersonLayoutFamily, { readonly mounts: string; readonly commands: readonly string[] }>
+  Record<
+    PersonLayoutFamily,
+    {
+      readonly mounts?: string;
+      readonly commands: readonly string[];
+      /** Run after every command, so the build fails rather than ship a layout that does not work. */
+      readonly checks?: readonly string[];
+      /** After the shared bin directories on sudo's `secure_path`; the FHS directories if absent. */
+      readonly systemPath?: readonly string[];
+      /** Added to the person environment, and kept by sudo. */
+      readonly personEnv?: PersonEnv;
+    }
+  >
 > = {
   fedora: {
     mounts: "--mount=type=cache,target=/var/cache/dnf",
@@ -357,6 +383,35 @@ const LAYOUT_INSTALL: Readonly<
       `DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${PERSON_LAYOUT_PACKAGES.ubuntu.join(" ")}`,
     ],
   },
+  nix: {
+    commands: [
+      // Not shadow's priority 6: util-linux also ships su and login, and shadow's stay.
+      `nix profile add --profile ${NIX_PROFILE} --priority 7 --accept-flake-config --extra-experimental-features 'nix-command flakes' ${PERSON_LAYOUT_PACKAGES.nix.map((pkg) => `nixpkgs#${pkg}`).join(" ")}`,
+      // Links into the read-only store, which useradd, groupadd and the HOME_MODE edit cannot
+      // write. Every entry stays: the daemon builds as the nixbld users.
+      'for f in passwd:0644 group:0644 login.defs:0644 shadow:0600 gshadow:0600; do p=/etc/${f%:*}; if [ -L "$p" ]; then cp "$p" "$p.new"; chmod "${f#*:}" "$p.new"; mv -f "$p.new" "$p"; fi; done',
+      "mkdir -p /home /usr/local/bin /etc/pam.d",
+      // The store holds no setuid file. The GC root keeps the copied binary's own output, whose
+      // libraries it loads, whatever the profile later drops.
+      `s=$(readlink -f ${NIX_PROFILE}/bin/sudo); install -o root -g root -m 4755 "$s" /usr/local/bin/sudo; ln -sfn "\${s%/bin/sudo}" /nix/var/nix/gcroots/sealant-sudo`,
+      writeLines("/etc/sudoers", ["root ALL=(ALL:ALL) ALL", "@includedir /etc/sudoers.d"]),
+      "chmod 0440 /etc/sudoers",
+      // A NOPASSWD rule still runs PAM's account and session stacks.
+      writeLines("/etc/pam.d/sudo", [
+        "auth sufficient pam_rootok.so",
+        "auth required pam_deny.so",
+        "account required pam_permit.so",
+        "session required pam_permit.so",
+      ]),
+      // A person's `nix profile add` lands in ~/.nix-profile, which no PATH names. Login shells,
+      // interactive bash and every zsh put it first; root's PATH has it already.
+      `for f in profile bashrc zshenv; do printf '%s\\n' 'case ":$PATH:" in *":$HOME/.nix-profile/bin:"*) ;; *) PATH="$HOME/.nix-profile/bin:$PATH" ;; esac' >> /etc/$f; done`,
+    ],
+    checks: ["visudo -cq", "/usr/local/bin/sudo -n true"],
+    systemPath: ["/usr/local/sbin", "/usr/local/bin", `${NIX_PROFILE}/bin`, `${NIX_PROFILE}/sbin`],
+    // Only root can write the store: a person's nix goes through the daemon NIX_BOOT_PATH starts.
+    personEnv: [["NIX_REMOTE", "daemon"]],
+  },
 };
 
 /**
@@ -369,6 +424,7 @@ export const renderPersonLayoutSteps = (input: {
   readonly dockerService: boolean;
 }): string => {
   const install = LAYOUT_INSTALL[input.family];
+  const env = [...PERSON_ENV, ...(install.personEnv ?? [])];
   const dirs = [...PERSON_SHARED_DIRS, ...PERSON_SHARED_SUBDIRS];
   const skelDirs = [
     ...new Set([
@@ -386,14 +442,14 @@ export const renderPersonLayoutSteps = (input: {
       ? [`getent group docker >/dev/null || groupadd -g ${String(DOCKER_GID)} docker`]
       : []),
     "mkdir -p /etc/sudoers.d /etc/sealant",
-    writeLines("/etc/sudoers.d/mend", PERSON_SUDOERS),
+    writeLines("/etc/sudoers.d/mend", personSudoers(env, install.systemPath ?? FHS_PATH)),
     "chmod 0440 /etc/sudoers.d/mend",
     "visudo -cqf /etc/sudoers.d/mend",
     `mkdir -p ${dirs.join(" ")}`,
     `chown root:${MEND_GROUP} ${dirs.join(" ")}`,
     `chmod 2775 ${dirs.join(" ")}`,
     writeLines(PERSON_SHARED_DIRS_PATH, dirs),
-    writeLines(PERSON_ENV_PATH, PERSON_ENV_FILE),
+    writeLines(PERSON_ENV_PATH, personEnvFile(env)),
     `mkdir -p ${skelDirs.map((dir) => `/etc/skel/${dir}`).join(" ")}`,
     ...PERSON_SKEL_LINKS.map(([link, target]) => `ln -sfn ${target} /etc/skel/${link}`),
     ...PERSON_SKEL_FILES.map(([path, lines]) => writeLines(`/etc/skel/${path}`, lines)),
@@ -403,14 +459,42 @@ export const renderPersonLayoutSteps = (input: {
     "chmod u+r /etc/shadow",
     // useradd -m makes homes with HOME_MODE: Ubuntu's is 0750, and every person's group is mend.
     "if grep -q '^HOME_MODE' /etc/login.defs; then sed -i 's/^HOME_MODE.*/HOME_MODE\\t0700/' /etc/login.defs; else printf 'HOME_MODE\\t0700\\n' >> /etc/login.defs; fi",
+    ...(install.checks ?? []),
   ];
   return [
     "# Mend's person layout (ADR 0016): the mend group, sudo for it, shared toolchain directories",
     `# and ${PERSON_ENV_PATH} for processes run as a person. No ENV: root's environment is as before.`,
-    `RUN ${install.mounts} \\`,
+    `RUN ${install.mounts === undefined ? "" : `${install.mounts} `}\\`,
     `    ${commands.join("; \\\n    ")}`,
   ].join("\n");
 };
+
+/** The nix image's entrypoint, which starts the nix daemon and then `sealantd boot`. */
+export const NIX_BOOT_PATH = "/usr/local/bin/sealant-nix-boot";
+
+/**
+ * How {@link NIX_BOOT_PATH} starts the daemon. A daemon that dies or does not answer is reported and
+ * boot goes on: it fails only a person's nix, while root's nix and everything else work without it.
+ */
+export const NIX_DAEMON_START: readonly string[] = [
+  'rm -f "${NIX_STATE_DIR:-/nix/var/nix}/daemon-socket/socket"',
+  'log="${NIX_LOG_DIR:-/nix/var/log/nix}/nix-daemon.log"',
+  'nix-daemon >>"$log" 2>&1 &',
+  "daemon=$!",
+  "deadline=$(($(date +%s) + 10))",
+  "until NIX_REMOTE=daemon timeout -k 1 2 nix --extra-experimental-features nix-command store info >/dev/null 2>&1; do",
+  '  if ! kill -0 "$daemon" 2>/dev/null; then echo "sealant: nix-daemon exited (see $log); nix works only for root" >&2; break; fi',
+  '  if [ "$(date +%s)" -ge "$deadline" ]; then echo "sealant: nix-daemon did not answer in 10 s (see $log); nix works only for root" >&2; break; fi',
+  "  sleep 0.2",
+  "done",
+];
+
+export const NIX_BOOT_SCRIPT: readonly string[] = [
+  "#!/bin/sh",
+  ...NIX_DAEMON_START,
+  // The image's sealantd, or a stand-in a test names.
+  'exec "${SEALANT_BOOT_SEALANTD:-/usr/local/bin/sealantd}" boot "$@"',
+];
 
 /**
  * The probe, a POSIX `sh` script that runs in any base (custom ones guarantee nothing more). It
