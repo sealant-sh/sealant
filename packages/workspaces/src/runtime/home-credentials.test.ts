@@ -136,8 +136,10 @@ describe("the shells the scripts run under", () => {
 });
 
 type Writes = readonly { readonly provider: HomeCredentialProvider; readonly content: string }[];
-type RunInput = Omit<HomeCredentialScriptInput, "writes" | "stateDir" | "token"> & {
+type RunInput = Omit<HomeCredentialScriptInput, "writes" | "stateDir" | "token" | "claudeKeys"> & {
   readonly writes: Writes;
+  readonly keys?: readonly { readonly id: string; readonly content: string }[];
+  readonly removedKeys?: readonly string[];
   /** Defaults to the next token of this world: every exec issued later than the last. */
   readonly token?: string;
 };
@@ -174,10 +176,16 @@ const world = (options: { readonly pathPrefix?: string } = {}) => {
       // Images keep node on the fixed system PATH; this machine's may be elsewhere.
       ownerPath: `${prefix}${SYSTEM_PATH}:${dirname(process.execPath)}`,
       writes: input.writes.map(({ provider }) => provider),
+      claudeKeys: {
+        writes: (input.keys ?? []).map(({ id }) => id),
+        removes: input.removedKeys ?? [],
+      },
     });
   const run = (input: RunInput) =>
     spawnSync(shell.path, ["-c", scriptOf(input)], {
-      input: homeScriptStdin(input.writes.map(({ content }) => content)),
+      input: homeScriptStdin(
+        [...input.writes, ...(input.keys ?? [])].map(({ content }) => content),
+      ),
       encoding: "utf8",
       env,
     });
@@ -1303,6 +1311,156 @@ forEachShell("a login is never in any process's argv or environment", () => {
       expect(JSON.stringify(execs), needle).not.toContain(needle);
     }
     expect(written.join("")).toBe(stdin);
+  });
+});
+
+const keyFile = (home: string, id: string) => join(home, ".claude/.sealant-keys", id);
+
+forEachShell("Claude keys, each a file of its own", () => {
+  const KEY_A = "sk-ant-api03-FAKE-key-a";
+  const KEY_B = "sk-ant-api03-FAKE-key-b";
+
+  it("writes a key 0600, owned by the home's owner, beside the subscription, and later writes leave it", () => {
+    const w = world();
+    const home = w.home("alice");
+    const taken = w.run({
+      home,
+      fence: { kind: "take", generation: GEN_A },
+      writes: [],
+      keys: [{ id: "cpl_key_a", content: KEY_A }],
+      removes: [],
+    });
+    expect(taken.status, taken.stderr).toBe(0);
+    expect(read(keyFile(home, "cpl_key_a"))).toBe(KEY_A);
+    expect(mode(keyFile(home, "cpl_key_a"))).toBe(0o600);
+    expect(lstatSync(keyFile(home, "cpl_key_a")).uid).toBe(uid);
+    expect(mode(join(home, ".claude/.sealant-keys"))).toBe(0o700);
+    expect(existsSync(join(home, ".claude/.credentials.json"))).toBe(false);
+    const subscription = w.run({
+      home,
+      fence: { kind: "held", generation: GEN_A },
+      writes: [{ provider: "claude", content: "subscription" }],
+      removes: [],
+    });
+    expect(subscription.status, subscription.stderr).toBe(0);
+    const second = w.run({
+      home,
+      fence: { kind: "held", generation: GEN_A },
+      writes: [],
+      keys: [{ id: "cpl_key_b", content: KEY_B }],
+      removes: [],
+    });
+    expect(second.status, second.stderr).toBe(0);
+    expect(read(join(home, ".claude/.credentials.json"))).toBe("subscription");
+    expect(read(keyFile(home, "cpl_key_a"))).toBe(KEY_A);
+    expect(read(keyFile(home, "cpl_key_b"))).toBe(KEY_B);
+  });
+
+  it("removes only the key files it names, and a take or a release every one it does not write", () => {
+    const w = world();
+    const home = w.home("alice");
+    const keys = [
+      { id: "cpl_key_a", content: KEY_A },
+      { id: "cpl_key_b", content: KEY_B },
+    ];
+    expect(
+      w.run({ home, fence: { kind: "take", generation: GEN_A }, writes: [], keys, removes: [] })
+        .status,
+    ).toBe(0);
+    const pruned = w.run({
+      home,
+      fence: { kind: "held", generation: GEN_A },
+      writes: [{ provider: "claude", content: "subscription" }],
+      removes: [],
+      removedKeys: ["cpl_key_a"],
+    });
+    expect(pruned.status, pruned.stderr).toBe(0);
+    expect(existsSync(keyFile(home, "cpl_key_a"))).toBe(false);
+    expect(read(keyFile(home, "cpl_key_b"))).toBe(KEY_B);
+    expect(read(join(home, ".claude/.credentials.json"))).toBe("subscription");
+    const released = w.run({
+      home,
+      fence: { kind: "release", generation: GEN_A },
+      writes: [],
+      removes: [],
+    });
+    expect(released.status, released.stderr).toBe(0);
+    expect(existsSync(join(home, ".claude/.sealant-keys"))).toBe(false);
+    mkdirSync(join(home, ".claude/.sealant-keys"));
+    writeFileSync(keyFile(home, "cpl_left"), KEY_A);
+    const retaken = w.run({
+      home,
+      fence: { kind: "take", generation: GEN_B },
+      writes: [],
+      keys: [{ id: "cpl_key_c", content: KEY_B }],
+      removes: [],
+    });
+    expect(retaken.status, retaken.stderr).toBe(0);
+    expect(readdirSync(join(home, ".claude/.sealant-keys"))).toEqual(["cpl_key_c"]);
+  });
+
+  it("refuses a key file that is not a file of its own, writing nothing", () => {
+    const w = world();
+    const home = w.home("alice");
+    expect(
+      w.run({ home, fence: { kind: "take", generation: GEN_A }, writes: [], removes: [] }).status,
+    ).toBe(0);
+    mkdirSync(keyFile(home, "cpl_dir"), { recursive: true });
+    expect(
+      w.run({
+        home,
+        fence: { kind: "held", generation: GEN_A },
+        writes: [{ provider: "github", content: "gh" }],
+        keys: [{ id: "cpl_dir", content: KEY_A }],
+        removes: [],
+      }).status,
+    ).toBe(HOME_SCRIPT_EXIT.claudeKeyUnusable);
+    expect(existsSync(join(home, ".config/gh/hosts.yml"))).toBe(false);
+    const saved = join(w.root, "saved-key");
+    writeFileSync(saved, "saved state");
+    linkSync(saved, keyFile(home, "cpl_linked"));
+    expect(
+      w.run({
+        home,
+        fence: { kind: "held", generation: GEN_A },
+        writes: [],
+        keys: [{ id: "cpl_linked", content: KEY_A }],
+        removes: [],
+      }).status,
+    ).toBe(HOME_SCRIPT_EXIT.claudeKeyUnusable);
+    expect(read(saved)).toBe("saved state");
+  });
+
+  it("refuses a key directory that links out of the home", () => {
+    const w = world();
+    const home = w.home("alice");
+    const outside = join(w.root, "outside");
+    mkdirSync(outside);
+    mkdirSync(join(home, ".claude"));
+    symlinkSync(outside, join(home, ".claude/.sealant-keys"));
+    expect(
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_A },
+        writes: [],
+        keys: [{ id: "cpl_key_a", content: KEY_A }],
+        removes: [],
+      }).status,
+    ).not.toBe(0);
+    expect(readdirSync(outside)).toEqual([]);
+  });
+
+  it("refuses a placement id that is not one", () => {
+    expect(() =>
+      buildHomeCredentialScript({
+        home: "/home/alice",
+        fence: { kind: "held", generation: GEN_A },
+        token: "1",
+        writes: [],
+        removes: [],
+        claudeKeys: { writes: ["../.credentials.json"], removes: [] },
+      }),
+    ).toThrow(/placement id/);
   });
 });
 

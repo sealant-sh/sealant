@@ -34,6 +34,10 @@ export const HOME_CREDENTIAL_FILES: Readonly<Record<HomeCredentialProvider, stri
   opencode: ".local/share/opencode/auth.json",
 };
 
+export const CLAUDE_KEY_DIR = ".claude/.sealant-keys";
+
+const PLACEMENT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
 /**
  * pi's and opencode's ChatGPT logins (a person's Codex account): ONE entry each in the tool's own
  * `auth.json`, which also holds the person's other logins, so the file is merged, never replaced.
@@ -185,6 +189,10 @@ export interface HomeCredentialScriptInput {
   readonly writes: readonly HomeCredentialProvider[];
   /** Providers whose login file is removed (a release removes them all). */
   readonly removes: readonly HomeCredentialProvider[];
+  readonly claudeKeys?: {
+    readonly writes: readonly string[];
+    readonly removes: readonly string[];
+  };
   /**
    * How long the script waits for another write into the same home (default 10 s): shorter than
    * the 15 s the caller waits for the exec, so contention answers busy, never unconfirmed.
@@ -245,6 +253,7 @@ export const HOME_SCRIPT_EXIT = {
   codexLoginUnusable: 87,
   /** GitHub's `hosts.yml` likewise. */
   githubLoginUnusable: 88,
+  claudeKeyUnusable: 89,
 } as const;
 
 const KEPT_LOGINS_BASE = 90;
@@ -298,6 +307,11 @@ const MERGED_EXITS: Readonly<
 };
 
 const quote = (value: string): string => `'${value}'`;
+
+const parentsOf = (file: string): readonly string[] => {
+  const segments = file.split("/").slice(0, -1);
+  return segments.map((_, index) => segments.slice(0, index + 1).join("/"));
+};
 
 const READ_MARK = `mark=0; if [ -e "$hw" ]; then mark=$(cat "$hw"); case "$mark" in ''|*[!0-9]*) exit ${HOME_SCRIPT_EXIT.fenced} ;; esac; fi`;
 const RAISE_MARK = `printf '%s' "$token" > "$hw.tmp"; mv -f "$hw.tmp" "$hw"`;
@@ -366,15 +380,26 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
   if (!/^\/[A-Za-z0-9._/-]*(:\/[A-Za-z0-9._/-]*)*$/.test(ownerPath)) {
     throw new Error(`An owner PATH is ':'-separated absolute paths of safe characters.`);
   }
+  const keyWrites = input.claudeKeys?.writes ?? [];
+  const keyRemoves = input.claudeKeys?.removes ?? [];
+  for (const id of [...keyWrites, ...keyRemoves]) {
+    if (!PLACEMENT_ID_PATTERN.test(id)) {
+      throw new Error(`A placement id is 1 to 64 letters, digits, '_' or '-': '${id}'.`);
+    }
+  }
+  const payloads = [
+    ...input.writes.map((_, index) => index),
+    ...keyWrites.map((_, k) => input.writes.length + k),
+  ];
   const lines: string[] = ["set -eu", "umask 077", `home=${quote(home)}`, `token=${input.token}`];
 
   // 1. Every payload first, into shell variables (never exported): the owner's half gets them on
   //    its stdin, never through argv or the environment.
-  input.writes.forEach((_, index) => {
+  for (const index of payloads) {
     lines.push(
       `IFS= read -r p${index} || [ -n "$p${index}" ] || exit ${HOME_SCRIPT_EXIT.shortPayload}`,
     );
-  });
+  }
 
   // 2. No link on the way to the home.
   lines.push("p=");
@@ -405,7 +430,7 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
   );
   if (input.createWithOwner === undefined) {
     lines.push(
-      `if [ ! -d "$home" ]; then ${input.writes.length === 0 ? raiseMarkOfMissingHome() : ""}exit ${HOME_SCRIPT_EXIT.missing}; fi`,
+      `if [ ! -d "$home" ]; then ${payloads.length === 0 ? raiseMarkOfMissingHome() : ""}exit ${HOME_SCRIPT_EXIT.missing}; fi`,
     );
   } else {
     const { uid, gid } = input.createWithOwner;
@@ -482,11 +507,11 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
   // 6–7. Inside the home, as its owner. Its payloads arrive on its stdin (a here-document of the
   //      root half's), one base64 line per write, read before anything else.
   const inner: string[] = ["set -eu", "umask 077", `home=${quote(home)}`];
-  input.writes.forEach((_, index) => {
+  for (const index of payloads) {
     inner.push(
       `IFS= read -r p${index} || [ -n "$p${index}" ] || exit ${HOME_SCRIPT_EXIT.shortPayload}`,
     );
-  });
+  }
   inner.push("exec </dev/null");
   const merges = [...input.writes, ...removes].some(isMergedLogin);
   if (merges) {
@@ -495,43 +520,67 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
   inner.push(
     `if [ -n "$seed" ] && [ -d ${quote(skel)} ]; then cp -a ${quote(skel)}/. "$home"/; chmod 700 "$home"; fi`,
   );
+  const clearsKeys = input.fence.kind === "take" || isRelease(input.fence);
+  const keyFiles = keyWrites.map((id) => `${CLAUDE_KEY_DIR}/${id}`);
+  const touchesKeys = clearsKeys || keyWrites.length > 0 || keyRemoves.length > 0;
   const directories = new Set<string>();
   // A merged login is followed through its links and checked where it really is (the program).
-  for (const provider of [...input.writes, ...removes].filter((p) => !isMergedLogin(p))) {
-    const segments = HOME_CREDENTIAL_FILES[provider].split("/").slice(0, -1);
-    segments.forEach((_, index) => directories.add(segments.slice(0, index + 1).join("/")));
+  for (const directory of [
+    ...[...input.writes, ...removes]
+      .filter((p) => !isMergedLogin(p))
+      .flatMap((provider) => parentsOf(HOME_CREDENTIAL_FILES[provider])),
+    ...(touchesKeys ? parentsOf(`${CLAUDE_KEY_DIR}/`) : []),
+  ]) {
+    directories.add(directory);
   }
   for (const directory of [...directories].toSorted()) {
     inner.push(
       `d="$home/${directory}"; if [ -L "$d" ] && [ "$uid" != 0 ]; then t=$(readlink -f "$d" || true); case "$t" in "$home"/*) [ -d "$t" ] || exit ${HOME_SCRIPT_EXIT.linkOnTheWay} ;; *) exit ${HOME_SCRIPT_EXIT.linkOnTheWay} ;; esac; fi`,
     );
   }
-  for (const provider of input.writes) {
-    let directory = "$home";
-    for (const segment of HOME_CREDENTIAL_FILES[provider].split("/").slice(0, -1)) {
-      directory = `${directory}/${segment}`;
-      inner.push(
-        `if [ ! -e "${directory}" ] && [ ! -L "${directory}" ]; then mkdir -m 700 "${directory}"; fi`,
-      );
-    }
+  if (clearsKeys) inner.push(`rm -rf "$home/${CLAUDE_KEY_DIR}"`);
+  const toMake = new Set([
+    ...input.writes.flatMap((provider) => parentsOf(HOME_CREDENTIAL_FILES[provider])),
+    ...keyFiles.flatMap(parentsOf),
+  ]);
+  for (const directory of toMake) {
+    inner.push(
+      `if [ ! -e "$home/${directory}" ] && [ ! -L "$home/${directory}" ]; then mkdir -m 700 "$home/${directory}"; fi`,
+    );
+  }
+  if (keyWrites.length > 0) {
+    inner.push(
+      `kd=$(readlink -f "$home/${CLAUDE_KEY_DIR}" || true); case "$kd" in "$home"/*) [ -d "$kd" ] || exit ${HOME_SCRIPT_EXIT.claudeKeyUnusable} ;; *) exit ${HOME_SCRIPT_EXIT.claudeKeyUnusable} ;; esac`,
+    );
   }
   // Every whole-file login is opened (made if missing, never truncated yet) and checked through its
   // descriptor before any of them is written: a regular file with one link, so an in-place write
   // never lands in a file that has another name (in saved state, or someone else's). A link at the
   // file's name is removed first, never followed. A refusal removes the files this check made, so
   // a refused write leaves no empty login file behind.
-  const files = input.writes.flatMap((provider, index) => {
-    const file = homeCredentialProviderOf(HOME_CREDENTIAL_FILES[provider]);
-    return file === undefined ? [] : [{ provider: file, index }];
-  });
+  const files = [
+    ...input.writes.flatMap((provider, index) => {
+      const file = homeCredentialProviderOf(HOME_CREDENTIAL_FILES[provider]);
+      return file === undefined
+        ? []
+        : [{ path: HOME_CREDENTIAL_FILES[file], exit: FILE_EXITS[file], index }];
+    }),
+    ...keyFiles.map((path, k) => ({
+      path,
+      exit: HOME_SCRIPT_EXIT.claudeKeyUnusable,
+      index: input.writes.length + k,
+    })),
+  ];
+  if (FIRST_LOGIN_FD + files.length > 9) {
+    throw new Error("A home script writes at most six whole-file logins at once.");
+  }
   if (files.length > 0) {
     inner.push(`made=`, `refuse() { for f in $made; do rm -f "$f"; done; exit "$1"; }`);
   }
-  files.forEach(({ provider }, slot) => {
+  files.forEach(({ path, exit }, slot) => {
     const fd = FIRST_LOGIN_FD + slot;
-    const exit = FILE_EXITS[provider];
     inner.push(
-      `f="$home/${HOME_CREDENTIAL_FILES[provider]}"`,
+      `f="$home/${path}"`,
       `if [ -L "$f" ]; then rm -f "$f"; fi`,
       `if [ ! -e "$f" ]; then made="$made $f"; fi`,
       `command exec ${fd}<>"$f" || refuse ${exit}`,
@@ -571,6 +620,7 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
         : `rm -f "$home/${HOME_CREDENTIAL_FILES[provider]}"`,
     );
   }
+  for (const id of keyRemoves) inner.push(`rm -f "$home/${CLAUDE_KEY_DIR}/${id}"`);
   inner.push(KEPT_LOGINS_EXIT.shellExit);
 
   // The owner's half starts from a clean environment: only a fixed PATH and its flags, never the
@@ -595,14 +645,10 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
     `own() { if [ "$uid" = 0 ]; then env -i ${environment} sh -c "$inner"; else env -i ${environment} setpriv --reuid="$uid" --regid="$gid" "$g" sh -c "$inner"; fi; }`,
   );
   lines.push(`TMPDIR="$st"`);
-  if (input.writes.length === 0) {
+  if (payloads.length === 0) {
     lines.push("own </dev/null");
   } else {
-    lines.push(
-      "own <<SEALANT_LOGINS",
-      ...input.writes.map((_, index) => `$p${index}`),
-      "SEALANT_LOGINS",
-    );
+    lines.push("own <<SEALANT_LOGINS", ...payloads.map((index) => `$p${index}`), "SEALANT_LOGINS");
   }
   if (isRelease(input.fence)) {
     lines.push(`rm -f "$m"`);
@@ -686,11 +732,6 @@ export const liveHomeCredentialChannel: HomeCredentialChannel = {
     ).pipe(Effect.provide(SealantRuntimeControlLive)),
 };
 
-/**
- * The provider whose login file a refusal is about (`82` to `88`: the file is unusable, has another
- * hard link, or really is outside the home), or `undefined` for any other exit. A caller can leave
- * that provider out and write the rest (a partial put, a refresh push).
- */
 export const homeLoginOfRefusal = (
   exitCode: number | undefined,
 ): HomeCredentialProvider | undefined => {
@@ -707,6 +748,8 @@ export const homeLoginOfRefusal = (
       return "codex";
     case HOME_SCRIPT_EXIT.githubLoginUnusable:
       return "github";
+    case HOME_SCRIPT_EXIT.claudeKeyUnusable:
+      return "claude";
     default:
       return undefined;
   }
@@ -749,6 +792,8 @@ export const homeScriptRefusal = (
             : HOME_CREDENTIAL_FILES.github;
       return `${home}/${file} is not a regular file its owner can write, or has another hard link (a name elsewhere, which could be saved state); Core writes a login only into a file of its own, and wrote none.`;
     }
+    case HOME_SCRIPT_EXIT.claudeKeyUnusable:
+      return `${home}/${CLAUDE_KEY_DIR} really is outside ${home}, or a key file there is not a regular file of its own its owner can write; Core writes a Claude key only into the home, never into saved state, and wrote none.`;
     case HOME_SCRIPT_EXIT.missing:
       return `${home} does not exist in the workspace, or is not a directory. Make the home (its user) first.`;
     case HOME_SCRIPT_EXIT.fenced:
