@@ -162,6 +162,18 @@ describe("codex engine", () => {
     expect(sessionEnds).toBe(1);
   });
 
+  it("answers a failed turn with its own words, redacted", async () => {
+    process.env["FAKE_CODEX_MODE"] = "turn-failed";
+
+    const error = await startExpectingFailure({ secrets: ["sk-secret-token-value"] });
+
+    expect(error).toMatchObject({
+      reason: "engine",
+      message:
+        "Codex inference failed: stream disconnected before completion: quota for [redacted]",
+    });
+  });
+
   it("classifies a 401-shaped stderr as auth words, with no status", async () => {
     process.env["FAKE_CODEX_MODE"] = "auth";
     const error = await startExpectingFailure({});
