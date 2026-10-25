@@ -94,6 +94,7 @@ const daemonFor = (runtimeId: string) =>
     const events = execEvents(runtimeId);
     const last = events.at(-1)!.sequence;
     const runtime = {
+      openForwardConnection: () => Effect.die("forwards are unused here"),
       connect: () =>
         Effect.succeed({
           health: Effect.succeed({ runtimeId }),

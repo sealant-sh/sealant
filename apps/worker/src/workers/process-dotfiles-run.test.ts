@@ -98,7 +98,10 @@ const world = (daemon: {
       return Effect.void;
     },
   } as unknown as SealantSession;
-  const runtime = Layer.succeed(SealantRuntime, { connect: () => Effect.succeed(session) });
+  const runtime = Layer.succeed(SealantRuntime, {
+    connect: () => Effect.succeed(session),
+    openForwardConnection: () => Effect.die("forwards are unused here"),
+  });
   const sink = Layer.succeed(TelemetrySink, {
     openEpoch: () => Effect.sync(() => epochs.push("open")),
     appendBatch: (input: { readonly batch: ReadonlyArray<{ readonly processId?: string }> }) =>

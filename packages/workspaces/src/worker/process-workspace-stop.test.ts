@@ -189,6 +189,7 @@ const makeHarness = (input: {
     input.daemon ??
     Layer.succeed(SealantRuntime, {
       connect: () => Effect.die("exec bridge unused in stop tests"),
+      openForwardConnection: () => Effect.die("forwards are unused in stop tests"),
     });
 
   return {

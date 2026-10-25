@@ -47,8 +47,12 @@ import type {
   HarnessRunner,
   InteractiveSession,
   SessionOptions,
+  BoundedWorkspaceForward,
+  BoundedWorkspaceForwardOptions,
   Workspace,
   WorkspaceEvent,
+  WorkspaceForward,
+  WorkspaceForwardOptions,
   WorkspaceLaunch,
   WorkspaceRuntimeInfo,
   WorkspaceCredentialHome,
@@ -66,7 +70,7 @@ import type {
   WorkspaceStopResult,
 } from "../types.js";
 import type { SdkContext } from "./context.js";
-import { openForward } from "./forward.js";
+import { type ForwardEndpoint, openForward, openForwardV2 } from "./forward.js";
 import { makeInteractiveSession } from "./session.js";
 
 export interface WorkspaceInit {
@@ -429,6 +433,27 @@ const olderControlPlaneRefusal = (
 };
 
 export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace => {
+  const endpoint: ForwardEndpoint = {
+    baseUrl: ctx.config.baseUrl,
+    apiKey: ctx.config.apiKey,
+    ownerUserId: ctx.config.hostLocal.ownerUserId,
+  };
+  function forward(
+    port: number,
+    options: BoundedWorkspaceForwardOptions,
+  ): Promise<BoundedWorkspaceForward>;
+  function forward(port: number, options?: WorkspaceForwardOptions): Promise<WorkspaceForward>;
+  function forward(
+    port: number,
+    options?: WorkspaceForwardOptions | BoundedWorkspaceForwardOptions,
+  ): Promise<WorkspaceForward | BoundedWorkspaceForward> {
+    if (options?.flow === "bounded") {
+      const { flow: _bounded, ...bounded } = options;
+      return openForwardV2(endpoint, init.id, port, bounded);
+    }
+    return openForward(endpoint, init.id, port, options);
+  }
+
   const openSession = async (
     argv: readonly string[],
     options?: SessionOptions,
@@ -1065,17 +1090,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
       );
     },
 
-    forward: (port, options) =>
-      openForward(
-        {
-          baseUrl: ctx.config.baseUrl,
-          apiKey: ctx.config.apiKey,
-          ownerUserId: ctx.config.hostLocal.ownerUserId,
-        },
-        init.id,
-        port,
-        options,
-      ),
+    forward,
   };
 
   return workspace;

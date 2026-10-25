@@ -73,7 +73,10 @@ const world = (supports: readonly string[] = ["exec.user"]) => {
     }),
   } as unknown as SealantSession;
   const layer = Layer.mergeAll(
-    Layer.succeed(SealantRuntime, { connect: () => Effect.succeed(session) }),
+    Layer.succeed(SealantRuntime, {
+      connect: () => Effect.succeed(session),
+      openForwardConnection: () => Effect.die("forwards are unused here"),
+    }),
     Layer.succeed(TelemetrySink, {
       openEpoch: () => Effect.void,
       appendBatch: () => Effect.succeed([]),

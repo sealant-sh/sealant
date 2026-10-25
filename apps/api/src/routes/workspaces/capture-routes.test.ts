@@ -122,7 +122,10 @@ const flushHarness = (
           resourceId: "container_1",
         } as WorkspaceRuntimeInstance),
     } as unknown as WorkspaceRuntimeInstanceRepoService),
-    Layer.succeed(SealantRuntime, { connect: () => Effect.succeed(daemon) }),
+    Layer.succeed(SealantRuntime, {
+      connect: () => Effect.succeed(daemon),
+      openForwardConnection: () => Effect.die("forwards are unused here"),
+    }),
     // Every relayed answer is recorded against the run's executor (review 5 #3), under an
     // observation fence opened before it was asked for and resolved by the record (review 6 #5).
     Layer.mock(WorkspaceCaptureDrainRepo, {

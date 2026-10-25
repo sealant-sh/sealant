@@ -15,6 +15,13 @@
  * `SealantNotImplementedError` at runtime, see `./errors.js`).
  */
 
+import type {
+  ReadableStream as NodeReadableStream,
+  WritableStream as NodeWritableStream,
+} from "node:stream/web";
+
+import type { ForwardBinding, ForwardResetReason } from "@sealant/api-contracts";
+
 // ---------------------------------------------------------------------------------------------
 // Client construction
 // ---------------------------------------------------------------------------------------------
@@ -1225,7 +1232,13 @@ export interface Workspace {
    * workspace-private set: the container's loopback (default), or `docker` —
    * the workspace-scoped Docker sidecar's alias, where `docker compose`
    * publishes its ports.
+   *
+   * With `flow: "bounded"`, a TCP forward whose two directions are bounded: the workspace's
+   * producer is held back while `readable` is not read, and `writable` holds back its writer while
+   * the workspace does not take the bytes. It resolves once Core and the workspace runtime have
+   * opened it, and rejects with a {@link ForwardDialError} that says why when they did not.
    */
+  forward(port: number, options: BoundedWorkspaceForwardOptions): Promise<BoundedWorkspaceForward>;
   forward(port: number, options?: WorkspaceForwardOptions): Promise<WorkspaceForward>;
 }
 
@@ -1527,6 +1540,8 @@ export interface WorkspaceCredentialsHomeOptions {
 
 /** Options for {@link Workspace.forward}. */
 export interface WorkspaceForwardOptions {
+  /** Only a bounded forward has a `flow`. */
+  readonly flow?: never;
   /** Target inside the workspace: its loopback (default) or the Docker sidecar. */
   readonly host?: "127.0.0.1" | "localhost" | "docker";
   /**
@@ -1553,6 +1568,58 @@ export interface WorkspaceForward {
   /** Resolves when the forward ends: the remote closed (`"end"`) or the socket closed. */
   readonly closed: Promise<"end" | "closed">;
   /** Tear the forward down. */
+  close(): void;
+}
+
+/** Options for a bounded {@link Workspace.forward}. TCP only. */
+export interface BoundedWorkspaceForwardOptions {
+  readonly flow: "bounded";
+  /** Target inside the workspace: its loopback (default) or the Docker sidecar. */
+  readonly host?: "127.0.0.1" | "localhost" | "docker";
+  /** Gives up opening the forward; an open forward ignores it. */
+  readonly signal?: AbortSignal;
+  /** How long opening may take before it rejects, in milliseconds. 30 000 by default. */
+  readonly deadlineMs?: number;
+}
+
+/**
+ * Why a bounded forward was reset: a reason either side sent, `connection-lost` when the socket
+ * closed with neither a `fin` nor a reset, `unrecognized-reset` when Core sent a reason newer than
+ * this SDK (kept in `wireReason`), or `workspace-ended` when the workspace ended the forward before
+ * it took everything written to it. A write after the workspace ended fails with `workspace-ended`
+ * too.
+ */
+export type ForwardResetCause =
+  | ForwardResetReason
+  | "connection-lost"
+  | "unrecognized-reset"
+  | "workspace-ended";
+
+/**
+ * How a bounded forward ended: the workspace closed its side after it took everything written to
+ * it (`end`), or the forward was reset.
+ */
+export type BoundedWorkspaceForwardClose =
+  | { readonly kind: "end" }
+  | { readonly kind: "reset"; readonly reason: ForwardResetCause; readonly wireReason?: string };
+
+/**
+ * A bounded forward. Reading `readable` is what lets the workspace send more; `writer.ready` waits
+ * while the workspace can take no more; `writable.close()` half-closes toward the workspace. Wrap
+ * it as a Node stream with `Duplex.fromWeb(forward)`. The streams are typed as `node:stream/web`'s,
+ * which `Duplex.fromWeb` accepts also where the DOM's stream types are loaded.
+ *
+ * A reset fails both streams with a `ForwardResetError`, at once: data the workspace sent that was
+ * not read yet is dropped. When the workspace ends first, `readable` still yields all it sent, and
+ * the writer fails with `workspace-ended` only if something written did not reach the workspace.
+ */
+export interface BoundedWorkspaceForward {
+  readonly readable: NodeReadableStream<Uint8Array>;
+  readonly writable: NodeWritableStream<Uint8Array>;
+  /** What the forward is bound to. */
+  readonly binding: ForwardBinding;
+  readonly closed: Promise<BoundedWorkspaceForwardClose>;
+  /** Resets both directions. */
   close(): void;
 }
 

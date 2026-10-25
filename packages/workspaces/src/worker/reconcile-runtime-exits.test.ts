@@ -167,7 +167,10 @@ const makeHarness = (input: {
       Layer.succeed(WorkspaceRuntimeInstanceRepo, repo),
       Layer.succeed(WorkspaceAttemptRepo, attempts),
       input.daemon ??
-        Layer.succeed(SealantRuntime, { connect: () => Effect.die("daemon must not be dialled") }),
+        Layer.succeed(SealantRuntime, {
+          connect: () => Effect.die("daemon must not be dialled"),
+          openForwardConnection: () => Effect.die("daemon must not be dialled"),
+        }),
     ),
   };
 };

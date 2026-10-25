@@ -18,7 +18,7 @@
     "test": {
       "dependsOn": ["^test"],
       "outputs": [],
-      "env": ["SEALANT_*", "DATABASE_URL"]
+      "env": ["SEALANT_*", "DATABASE_URL", "SEALANTD_BIN", "REQUIRE_SEALANTD"]
     },
     "typecheck": {
       "dependsOn": ["^typecheck"]
