@@ -22,6 +22,7 @@ import {
   buildHomeCredentialScript,
   HOME_SCRIPT_EXIT,
   homeLoginOfRefusal,
+  homeLoginsKept,
   homeScriptRefusal,
   homeScriptStdin,
   liveHomeCredentialChannel,
@@ -289,7 +290,7 @@ const pushIntoHome = (
               );
               if (writing.length > 0) continue;
             }
-            if (exit.exitCode !== 0) {
+            if (homeLoginsKept(exit.exitCode) === undefined) {
               return yield* Effect.fail(
                 new Error(`The write into ${home.home} exited with ${String(exit.exitCode)}.`),
               );

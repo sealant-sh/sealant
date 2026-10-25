@@ -65,8 +65,8 @@ const COPY_REFRESH_TOKEN = "sealant-copy-cannot-refresh";
  *   (outside the home, unreachable, not a regular file) and exits 0.
  * - A put writes the entry only when there is none or it is a copy (its refresh token is
  *   `sealant-copy-cannot-refresh`): a login the person made inside pi or opencode stays (Mend's
- *   ADR 0016 decision 8a). A scrub removes the entry only when it is a copy. A file that is not a
- *   JSON object is left as it is.
+ *   ADR 0016 decision 8a), and the put exits 5. A scrub removes the entry only when it is a copy. A
+ *   file that is not a JSON object is left as it is (a put exits 5 there too).
  * - Written in place (truncate and write), never through a rename, mode 0600; every other entry
  *   kept.
  */
@@ -79,10 +79,10 @@ const MERGED_LOGIN_PROGRAM = [
   `if(process.env.root!=="1"&&(!real.startsWith(home+"/")||real.startsWith("/workspace/")))process.exit(put?3:0);`,
   `const F=fs.constants;let fd;try{fd=fs.openSync(real,F.O_RDWR|F.O_NOFOLLOW|(put?F.O_CREAT:0),0o600)}catch{process.exit(put?4:0)}`,
   `const st=fs.fstatSync(fd);if(!st.isFile())process.exit(put?4:0);if(put&&st.nlink>1)process.exit(3);`,
-  `let raw=fs.readFileSync(fd,"utf8"),v;if(raw.trim()==="")v={};else{try{v=JSON.parse(raw)}catch{process.exit(0)}}`,
-  `if(v===null||typeof v!=="object"||Array.isArray(v))process.exit(0);`,
+  `let raw=fs.readFileSync(fd,"utf8"),v;if(raw.trim()==="")v={};else{try{v=JSON.parse(raw)}catch{process.exit(put?5:0)}}`,
+  `if(v===null||typeof v!=="object"||Array.isArray(v))process.exit(put?5:0);`,
   `const prior=v[key],copy=prior!==null&&typeof prior==="object"&&prior.refresh===C;`,
-  `if(put){if(prior!==undefined&&!copy)process.exit(0);v[key]=entry}else{if(!copy)process.exit(0);delete v[key]}`,
+  `if(put){if(prior!==undefined&&!copy)process.exit(5);v[key]=entry}else{if(!copy)process.exit(0);delete v[key]}`,
   `const out=Buffer.from(JSON.stringify(v,null,2));fs.ftruncateSync(fd,0);fs.writeSync(fd,out,0,out.length,0);fs.fchmodSync(fd,0o600);fs.closeSync(fd)`,
 ].join("");
 
@@ -237,7 +237,29 @@ export const HOME_SCRIPT_EXIT = {
   codexLoginUnusable: 87,
   /** GitHub's `hosts.yml` likewise. */
   githubLoginUnusable: 88,
+  /**
+   * Everything was done, but a merged login was left as the person's own (a login they made in the
+   * tool, or a file that is not a JSON object): this plus 1 for pi's, plus 2 for opencode's.
+   */
+  keptPersonalLogin: 90,
 } as const;
+
+const KEPT_BITS: Readonly<Partial<Record<HomeCredentialProvider, number>>> = { pi: 1, opencode: 2 };
+
+/**
+ * Which merged logins a script that ran to the end left as the person's own (none for exit 0), or
+ * `undefined` when it did not run to the end.
+ */
+export const homeLoginsKept = (
+  exitCode: number | undefined,
+): readonly HomeCredentialProvider[] | undefined => {
+  if (exitCode === 0) return [];
+  const bits = (exitCode ?? 0) - HOME_SCRIPT_EXIT.keptPersonalLogin;
+  if (bits < 1 || bits > 3) return undefined;
+  return (["pi", "opencode"] as const).filter(
+    (provider) => (bits & (KEPT_BITS[provider] ?? 0)) !== 0,
+  );
+};
 
 /** The exit a whole-file login's write answers when its file is unusable, per provider. */
 const FILE_EXITS: Readonly<Record<HomeFileCredentialProvider, number>> = {
@@ -358,7 +380,13 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
     `trusted_parent() { par=$(dirname "$home"); [ -d "$par" ] && [ ! -L "$par" ] || exit ${HOME_SCRIPT_EXIT.untrusted}; po=$(stat -c %u "$par"); pm=$(stat -c %a "$par"); [ "$po" = ${parentOwner} ] || exit ${HOME_SCRIPT_EXIT.untrusted}; if [ $(( 0$pm & 022 )) -ne 0 ] && [ $(( 0$pm & 01000 )) -eq 0 ]; then exit ${HOME_SCRIPT_EXIT.untrusted}; fi; }`,
   );
   if (input.createWithOwner === undefined) {
-    lines.push(`if [ ! -d "$home" ]; then exit ${HOME_SCRIPT_EXIT.missing}; fi`);
+    // A removal from a missing home raises the mark first: a delayed write that would make the
+    // home again with an earlier token never lands after the removal was answered.
+    const fenceMissing =
+      input.writes.length === 0
+        ? `mark=0; if [ -e "$hw" ]; then mark=$(cat "$hw"); case "$mark" in ''|*[!0-9]*) exit ${HOME_SCRIPT_EXIT.fenced} ;; esac; fi; if [ "$token" -lt "$mark" ]; then exit ${HOME_SCRIPT_EXIT.fenced}; fi; printf '%s' "$token" > "$hw.tmp"; mv -f "$hw.tmp" "$hw"; `
+        : "";
+    lines.push(`if [ ! -d "$home" ]; then ${fenceMissing}exit ${HOME_SCRIPT_EXIT.missing}; fi`);
   } else {
     const { uid, gid } = input.createWithOwner;
     if (!Number.isInteger(uid) || uid < 0 || !Number.isInteger(gid) || gid < 0) {
@@ -505,15 +533,17 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
       `exec ${fd}>&-`,
     );
   });
+  inner.push("kept=0");
   input.writes.forEach((provider, index) => {
     const entryKey = HOME_MERGED_LOGINS[provider];
     const exits = MERGED_EXITS[provider];
-    if (entryKey === undefined || exits === undefined) return;
+    const bit = KEPT_BITS[provider];
+    if (entryKey === undefined || exits === undefined || bit === undefined) return;
     inner.push(
       `c=0; root="$rt" ${node} -e "$m" "$home/${HOME_CREDENTIAL_FILES[provider]}" ${entryKey} "$home" put <<SEALANT_LOGIN || c=$?`,
       `$p${index}`,
       "SEALANT_LOGIN",
-      `case "$c" in 0) ;; 3) exit ${String(exits.outside)} ;; *) exit ${String(exits.unusable)} ;; esac`,
+      `case "$c" in 0) ;; 5) kept=$((kept + ${String(bit)})) ;; 3) exit ${String(exits.outside)} ;; *) exit ${String(exits.unusable)} ;; esac`,
     );
   });
   for (const provider of removes) {
@@ -526,6 +556,9 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
           `if [ "$hn" = 1 ]; then root="$rt" ${node} -e "$m" "$home/${HOME_CREDENTIAL_FILES[provider]}" ${entryKey} "$home" scrub || exit ${String(exits.unusable)}; fi`,
     );
   }
+  inner.push(
+    `if [ "$kept" != 0 ]; then exit $((${String(HOME_SCRIPT_EXIT.keptPersonalLogin)} + kept)); fi`,
+  );
 
   // The owner's half starts from a clean environment: only a fixed PATH and its flags, never the
   // exec's (a token, the secret env), which the person could read through /proc, and never a

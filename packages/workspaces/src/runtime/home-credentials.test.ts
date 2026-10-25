@@ -36,6 +36,7 @@ import type { SealantExecOptions } from "../sealantd/runtime.js";
 import {
   buildHomeCredentialScript,
   HOME_SCRIPT_EXIT,
+  homeLoginsKept,
   homePathProblem,
   homeScriptStdin,
   homeStateKey,
@@ -222,6 +223,29 @@ describe("homePathProblem", () => {
 });
 
 forEachShell("buildHomeCredentialScript", () => {
+  it("fences a delayed put when cleanup finds the home missing", () => {
+    const w = world();
+    const home = join(w.root, "not-created-yet");
+    const removed = w.run({
+      home,
+      token: "2",
+      fence: { kind: "release", generation: GEN_A },
+      writes: [],
+      removes: [],
+    });
+    expect(removed.status).toBe(HOME_SCRIPT_EXIT.missing);
+    const late = w.run({
+      home,
+      token: "1",
+      fence: { kind: "take", generation: GEN_A },
+      createWithOwner: { uid, gid },
+      writes: [{ provider: "claude", content: "fake-late-login" }],
+      removes: [],
+    });
+    expect(late.status).toBe(HOME_SCRIPT_EXIT.fenced);
+    expect(existsSync(join(home, ".claude/.credentials.json"))).toBe(false);
+  });
+
   it("writes each login 0600, owned by the home's owner, and keeps the marker outside the home", () => {
     const w = world();
     const home = w.home("alice");
@@ -797,14 +821,20 @@ forEachShell("pi's and opencode's ChatGPT logins", () => {
     mkdirSync(join(home, ".local/share/opencode"), { recursive: true });
     const own = { type: "oauth", access: "own", refresh: "own-refresh", expires: 2 };
     writeFileSync(join(home, ".local/share/opencode/auth.json"), JSON.stringify({ openai: own }));
-    expect(
-      w.run({
-        home,
-        fence: { kind: "take", generation: GEN_A },
-        writes: [{ provider: "opencode", content: entry("at-copy") }],
-        removes: [],
-      }).status,
-    ).toBe(0);
+    const put = w.run({
+      home,
+      fence: { kind: "take", generation: GEN_A },
+      writes: [
+        { provider: "pi", content: entry("at-pi") },
+        { provider: "opencode", content: entry("at-copy") },
+      ],
+      removes: [],
+    });
+    expect(put.status).toBe(HOME_SCRIPT_EXIT.keptPersonalLogin + 2);
+    expect(homeLoginsKept(put.status ?? undefined)).toEqual(["opencode"]);
+    expect(json(join(home, ".pi/agent/auth.json"))).toEqual({
+      "openai-codex": JSON.parse(entry("at-pi")),
+    });
     expect(json(join(home, ".local/share/opencode/auth.json"))).toEqual({ openai: own });
     // A release removes only Core's copies: the person's own login stays.
     expect(
@@ -1009,14 +1039,13 @@ forEachShell("pi's and opencode's ChatGPT logins", () => {
     const home = w.home("alice");
     mkdirSync(join(home, ".pi/agent"), { recursive: true });
     writeFileSync(join(home, ".pi/agent/auth.json"), "not json");
-    expect(
-      w.run({
-        home,
-        fence: { kind: "take", generation: GEN_A },
-        writes: [{ provider: "pi", content: entry("at-pi") }],
-        removes: [],
-      }).status,
-    ).toBe(0);
+    const put = w.run({
+      home,
+      fence: { kind: "take", generation: GEN_A },
+      writes: [{ provider: "pi", content: entry("at-pi") }],
+      removes: [],
+    });
+    expect(homeLoginsKept(put.status ?? undefined)).toEqual(["pi"]);
     expect(read(join(home, ".pi/agent/auth.json"))).toBe("not json");
   });
 

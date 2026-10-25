@@ -60,6 +60,7 @@ import {
 import {
   buildHomeCredentialScript,
   homeLoginOfRefusal,
+  homeLoginsKept,
   homePathProblem,
   homeScriptRefusal,
   HOME_SCRIPT_EXIT,
@@ -242,7 +243,8 @@ const runHomeScript = (input: {
     if (Result.isFailure(ran)) {
       return { kind: "unconfirmed" as const, message: toErrorMessage(ran.failure, "no answer") };
     }
-    if (ran.success.exitCode === 0) return { kind: "done" as const };
+    // A merged login left as the person's own still finished the write.
+    if (homeLoginsKept(ran.success.exitCode) !== undefined) return { kind: "done" as const };
     const refusal = homeScriptRefusal(input.home, ran.success.exitCode);
     if (refusal !== undefined) {
       return { kind: "refused" as const, exitCode: ran.success.exitCode, message: refusal };
