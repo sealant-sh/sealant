@@ -44,6 +44,17 @@ if (mode === "auth") {
   process.exit(1);
 }
 
+if (mode === "turn-failed") {
+  emit({ type: "thread.started", thread_id: "thread_fixture" });
+  emit({ type: "turn.started" });
+  emit({
+    type: "turn.failed",
+    error: { message: "stream disconnected before completion: quota for sk-secret-token-value" },
+  });
+  process.stderr.write("ERROR codex_exec: turn failed\n");
+  process.exit(1);
+}
+
 if (mode === "hang") {
   emit({ type: "thread.started", thread_id: "thread_fixture" });
   setTimeout(() => process.exit(0), 60_000);

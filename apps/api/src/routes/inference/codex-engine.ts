@@ -142,12 +142,21 @@ const foldEventLine = (state: ParsedExchange, line: string): void => {
     return;
   }
 
-  // Failure-shaped events carry a message; capture the last one for the error text.
-  if (
-    (record.type === "turn.failed" || record.type === "error") &&
-    typeof record.message === "string"
-  ) {
+  if (record.type === "error" && typeof record.message === "string") {
     state.errorDetail = record.message;
+    return;
+  }
+
+  if (record.type === "turn.failed") {
+    const error = record.error;
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "message" in error &&
+      typeof error.message === "string"
+    ) {
+      state.errorDetail = error.message;
+    }
   }
 };
 

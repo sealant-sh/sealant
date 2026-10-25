@@ -32,4 +32,5 @@ the key with the provider.
 
 Every Claude exchange runs with a private home of its own that holds only that exchange's login,
 removed when the CLI exits, so a refused setup token no longer falls back to the login of the user
-running the control plane.
+running the control plane. A failed Codex turn now answers with the CLI's own error words, redacted,
+where it answered with the CLI's log lines.
