@@ -40,6 +40,20 @@ export const rewriteImages = (text, reference) =>
     reference,
   );
 
+/** The one `tag@sha256` sealantd reference pinned in `text`; throws on none or several. */
+export const pinnedImage = (text) => {
+  const found = [
+    ...new Set(
+      text.match(/ghcr\.io\/sealant-sh\/sealantd(?:-next)?:[0-9A-Za-z._-]+@sha256:[0-9a-f]{64}/g) ??
+        [],
+    ),
+  ];
+  if (found.length !== 1) {
+    throw new Error(`expected one pinned sealantd image, found ${found.length}`);
+  }
+  return found[0];
+};
+
 /** The runtime packages' entries for `version`: exact, or exact aliases of the -next packages. */
 export const runtimeSpecs = (version) =>
   Object.fromEntries(
@@ -77,6 +91,10 @@ export const registryDigest = async (repository, tag, fetchImpl = fetch) => {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const [version, ...flags] = process.argv.slice(2);
+  if (version === "--print-image") {
+    console.log(pinnedImage(await readFile(path.join(root, IMAGE_FILES[0]), "utf8")));
+    process.exit(0);
+  }
   if (version === undefined || !SEMVER.test(version)) {
     console.error(
       "usage: node tooling/scripts/pin-sealantd.mjs <X.Y.Z | X.Y.Z-next.N> [--no-install]",

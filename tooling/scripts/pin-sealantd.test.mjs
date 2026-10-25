@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { prereleaseImages } from "./check-release-pins.mjs";
 import {
   IMAGE_FILES,
+  pinnedImage,
   repositoryFor,
   rewriteImages,
   RUNTIME_MANIFESTS,
@@ -79,4 +80,16 @@ test("every manifest that names a runtime package is pinned, and all of them ali
     1,
     JSON.stringify(found),
   );
+});
+
+test("the pinned image is the one tag@sha256 reference, and none or several is an error", async () => {
+  const pinned = `ghcr.io/sealant-sh/sealantd-next:0.21.0-next.177@${digest}`;
+  assert.equal(pinnedImage(`a "${pinned}" b "${pinned}"`), pinned);
+  assert.throws(() => pinnedImage(`"ghcr.io/sealant-sh/sealantd:0.20.0"`), /found 0/);
+  assert.throws(
+    () => pinnedImage(`"${pinned}" "ghcr.io/sealant-sh/sealantd:0.20.0@${digest}"`),
+    /found 2/,
+  );
+  const builder = await readFile(path.join(root, IMAGE_FILES[0]), "utf8");
+  assert.match(pinnedImage(builder), /@sha256:[0-9a-f]{64}$/);
 });
