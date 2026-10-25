@@ -14,6 +14,7 @@ import {
   InferenceInternalServerError,
   InferenceNotFoundError,
   InferenceUnavailableError,
+  type InferenceReceipt,
   type InferenceRespondRequest,
   type InferenceRespondResponse,
   type InferenceTurn,
@@ -365,6 +366,48 @@ const redacting =
   (text: string): string =>
     redactProviderKeys(redactSecrets(text, exchange.secrets));
 
+type RespondFailure =
+  | BudgetExceededError
+  | InferenceBadRequestError
+  | InferenceNotFoundError
+  | InferenceConflictError
+  | InferenceUnavailableError
+  | InferenceInternalServerError;
+
+const receiptField = (receipt: InferenceReceipt | undefined) =>
+  receipt === undefined ? {} : { receipt };
+
+const redactFailure =
+  (redact: (text: string) => string) =>
+  (failure: RespondFailure): RespondFailure => {
+    const message = redact(failure.message);
+    if (failure instanceof InferenceConflictError) {
+      return new InferenceConflictError({
+        message,
+        ...receiptField(failure.receipt),
+        ...(failure.code === undefined ? {} : { code: failure.code }),
+      });
+    }
+    if (failure instanceof InferenceBadRequestError) {
+      return new InferenceBadRequestError({ message, ...receiptField(failure.receipt) });
+    }
+    if (failure instanceof InferenceNotFoundError) {
+      return new InferenceNotFoundError({ message, ...receiptField(failure.receipt) });
+    }
+    if (failure instanceof InferenceInternalServerError) {
+      return new InferenceInternalServerError({ message, ...receiptField(failure.receipt) });
+    }
+    if (failure instanceof InferenceUnavailableError) {
+      return new InferenceUnavailableError({ message });
+    }
+    const budget: BudgetExceededError = failure;
+    return budget;
+  };
+
+/** Everything an exchange answers, success or failure, leaves with its login's secrets redacted. */
+const withinExchange = <A, R>(exchange: Exchange, effect: Effect.Effect<A, RespondFailure, R>) =>
+  effect.pipe(Effect.mapError(redactFailure(redacting(exchange))));
+
 const answerTurn = (
   exchange: Exchange,
   engineTurn: InferenceEngineTurn,
@@ -382,7 +425,8 @@ const answerTurn = (
       : {
           type: "toolCalls",
           calls: engineTurn.turn.calls.map((call) => ({
-            ...call,
+            toolCallId: call.toolCallId,
+            name: redact(call.name),
             input: redactStrings(call.input, redact),
           })),
         };
@@ -399,7 +443,7 @@ const answerTurn = (
 const failTurn = (exchange: Exchange, raw: InferenceEngineError) =>
   Effect.gen(function* () {
     const { receipt } = exchange;
-    const message = redacting(exchange)(raw.message);
+    const { message } = raw;
     switch (raw.reason) {
       case "session-not-found": {
         return yield* new InferenceNotFoundError({ message, receipt });
@@ -441,9 +485,9 @@ const continueExchange = (
         message: `Inference session not found (or expired): ${payload.sessionId}. Start the exchange over.`,
       });
     }
-    return yield* settleTurn(
+    return yield* withinExchange(
       exchange,
-      engine.continueSession({ sessionId: payload.sessionId, toolResults }),
+      settleTurn(exchange, engine.continueSession({ sessionId: payload.sessionId, toolResults })),
     );
   });
 
@@ -462,7 +506,6 @@ const startExchange = (payload: InferenceRespondRequest) =>
     });
 
     const cipher = yield* CredentialCipher;
-    const accounts = yield* ConnectedAccountRepo;
     const payloadJson = yield* withInternalError(
       cipher.decrypt(account.encryptedPayload),
       "Failed to decrypt the connected account credential.",
@@ -473,7 +516,15 @@ const startExchange = (payload: InferenceRespondRequest) =>
       receipt: { accountId: account.id, revision: account.credentialRevision, login: loginClass },
       login,
     });
+    return yield* withinExchange(exchange, runExchange(exchange, account, payload));
+  });
 
+const runExchange = (
+  exchange: Exchange,
+  account: ConnectedAccount,
+  payload: InferenceRespondRequest,
+) =>
+  Effect.gen(function* () {
     if (payload.allowedLogin === "subscription" && exchange.receipt.login === "api-key") {
       return yield* new InferenceConflictError({
         message: `Connected ${account.provider} account "${account.name}" holds an API key, and this request allows only a subscription. Nothing was sent to ${account.provider === "claude" ? "Anthropic" : "OpenAI"}.`,
@@ -491,6 +542,7 @@ const startExchange = (payload: InferenceRespondRequest) =>
     }
 
     // Attribute the use exactly like workspace injection does — best-effort, never fails the call.
+    const accounts = yield* ConnectedAccountRepo;
     yield* accounts.updateSyncState({ id: account.id, lastUsedAt: new Date() }).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning(
@@ -524,7 +576,7 @@ const respondUnmetered = (payload: InferenceRespondRequest) =>
       });
     }
     return yield* continueExchange({ ...payload, sessionId }, toolResults);
-  });
+  }).pipe(Effect.mapError(redactFailure(redactProviderKeys)));
 
 const utcDay = (now: Date): string => now.toISOString().slice(0, 10);
 

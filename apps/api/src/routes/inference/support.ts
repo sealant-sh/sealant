@@ -17,12 +17,13 @@ export const redactSecrets = (text: string, secrets: readonly (string | undefine
     text,
   );
 
+/** Every string in a JSON value redacted, an object's property names included. */
 export const redactStrings = (value: unknown, redact: (text: string) => string): unknown => {
   if (typeof value === "string") return redact(value);
   if (Array.isArray(value)) return value.map((item) => redactStrings(item, redact));
   if (typeof value === "object" && value !== null) {
     return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, redactStrings(item, redact)]),
+      Object.entries(value).map(([key, item]) => [redact(key), redactStrings(item, redact)]),
     );
   }
   return value;
