@@ -36,7 +36,7 @@ import {
   type ConnectedAccountRepoService,
   type ProfileRepoService,
 } from "@sealant/db";
-import { Effect, Fiber, Layer } from "effect";
+import { Cause, Effect, Fiber, Layer, Logger } from "effect";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -52,9 +52,11 @@ import { startFakeAnthropic, type FakeAnthropic } from "./fake-anthropic.fixture
 process.env["SEALANT_CREDENTIALS_KEY"] = Buffer.alloc(32, 7).toString("base64");
 
 let respond: (typeof import("./inference.module.js"))["respond"];
+let ownerLaunchWindow: (typeof import("../../services/budget-limits.js"))["ownerLaunchWindow"];
 
 beforeAll(async () => {
   ({ respond } = await import("./inference.module.js"));
+  ({ ownerLaunchWindow } = await import("../../services/budget-limits.js"));
 });
 
 const fakeCipher: CredentialCipherService = {
@@ -140,8 +142,12 @@ const accountsStub = (options: AccountsStubOptions = {}) => ({
   ),
   getBindingsForProfileWithAccounts: vi.fn(() => Effect.succeed(options.bindings ?? [])),
   updateSyncState: vi.fn(() => Effect.succeed(undefined)),
-  markInvalid: vi.fn((_input: { id: string; revision?: number }) =>
-    Effect.succeed<ConnectedAccount | undefined>({ ...codexAccount, status: "invalid" }),
+  markInvalid: vi.fn(
+    (_input: {
+      id: string;
+      revision?: number;
+    }): Effect.Effect<ConnectedAccount | undefined, Error> =>
+      Effect.succeed({ ...codexAccount, status: "invalid" }),
   ),
   replacePayload: vi.fn(() => Effect.succeed(undefined)),
 });
@@ -870,6 +876,23 @@ describe("inference.module allowedLogin", () => {
     expect(engines.codexStart).not.toHaveBeenCalled();
   });
 
+  it("spends no launch on a refusal, and one on an exchange it runs", async () => {
+    const take = vi.spyOn(ownerLaunchWindow, "take");
+    const { layer } = makeLayers({ accounts: accountsStub() });
+    await runFlipped(
+      respond(
+        newExchange({ credentials: { codex: "cacc_codex_key" }, allowedLogin: "subscription" }),
+      ).pipe(Effect.provide(layer)),
+    );
+    const refused = take.mock.calls.length;
+    await run(respond(newExchange({})).pipe(Effect.provide(layer)));
+    const ran = take.mock.calls.length - refused;
+    take.mockRestore();
+
+    expect(refused).toBe(0);
+    expect(ran).toBe(1);
+  });
+
   it("refuses a Codex auth.json that Codex would spend a key from", async () => {
     const ambiguous = account({
       provider: "codex",
@@ -900,25 +923,38 @@ describe("inference.module allowedLogin", () => {
 });
 
 describe("inference.module 401 feedback", () => {
-  it("marks a Codex key invalid on a structured 401, at the receipt's revision", async () => {
+  it("logs a key it could not mark, and answers that it is not marked", async () => {
     const accounts = accountsStub();
-    const { layer } = makeLayers({
-      accounts,
-      codexStart: () => Promise.reject(new InferenceEngineError("auth-401", "401")),
-    });
+    accounts.markInvalid.mockImplementation(() => Effect.fail(new Error("database unavailable")));
+    const logged: string[] = [];
+    const { layer } = makeLayers({ accounts });
+    const refusing = Layer.mergeAll(
+      layer,
+      Layer.succeed(
+        InferenceEngine,
+        stubEngine({
+          start: (start) =>
+            Effect.promise(async () => start.onSessionEnd?.()).pipe(
+              Effect.andThen(Effect.fail(new InferenceEngineError("auth-401", "401"))),
+            ),
+          continueSession: () => Effect.fail(new InferenceEngineError("session-not-found", "")),
+        }),
+      ),
+      Logger.layer([
+        Logger.make((options) => {
+          logged.push(`${JSON.stringify(options.message)} ${Cause.pretty(options.cause)}`);
+        }),
+      ]),
+    );
 
     const error = await runFlipped(
-      respond(newExchange({ credentials: { codex: "cacc_codex_key" } })).pipe(
-        Effect.provide(layer),
+      respond(newExchange({ credentials: { claude: "cacc_claude_key" } })).pipe(
+        Effect.provide(refusing),
       ),
     );
 
-    expect(error).toMatchObject({
-      code: "connected-account-refused",
-      message:
-        "Your Codex API key ····wxyz was refused by OpenAI. It is marked invalid; connect a new key.",
-    });
-    expect(accounts.markInvalid).toHaveBeenCalledWith({ id: "cacc_codex_key", revision: 1 });
+    expect(error).toMatchObject({ message: expect.stringContaining("It is not marked invalid") });
+    expect(logged.join("\n")).toMatch(/cacc_claude_key[\s\S]*database unavailable/);
   });
 
   it("never marks a key on words that only look like a 401", async () => {
