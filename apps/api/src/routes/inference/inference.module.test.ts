@@ -35,7 +35,7 @@ import {
   type ConnectedAccountRepoService,
   type ProfileRepoService,
 } from "@sealant/db";
-import { Effect, Layer } from "effect";
+import { Effect, Fiber, Layer } from "effect";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -459,6 +459,39 @@ describe("inference.module provider routing", () => {
 
     expect(seen).toEqual({ auth_mode: "apikey", OPENAI_API_KEY: codexKey });
     expect(existsSync(home)).toBe(false);
+  });
+
+  it("removes the private dir of a start interrupted before the engine answers", async () => {
+    const started: string[] = [];
+    const { layer } = makeLayers({ accounts: accountsStub() });
+    const stalled = Layer.mergeAll(
+      layer,
+      Layer.succeed(
+        InferenceEngine,
+        stubEngine({
+          start: (start) =>
+            Effect.sync(() => started.push(start.auth.configDir)).pipe(
+              Effect.andThen(Effect.never),
+            ),
+          continueSession: () => Effect.fail(new InferenceEngineError("session-not-found", "")),
+        }),
+      ),
+    );
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const fiber = yield* Effect.forkChild(
+          respond(newExchange({ credentials: { claude: "cacc_claude_key" } })).pipe(
+            Effect.provide(stalled),
+          ),
+        );
+        while (started.length === 0) yield* Effect.yieldNow;
+        yield* Fiber.interrupt(fiber);
+      }),
+    );
+
+    expect(started).toHaveLength(1);
+    expect(existsSync(started[0] ?? "")).toBe(false);
   });
 
   it("runs Claude on a key from a private key file the engine reads, removed at the end", async () => {
