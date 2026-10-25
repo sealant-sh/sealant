@@ -34,6 +34,7 @@ import {
   restartWorkspaceOp,
   listWorkspaceCredentialsOp,
   putWorkspaceCredentialsOp,
+  pruneWorkspaceCredentialsOp,
   releaseWorkspaceCredentialsOp,
   stopWorkspaceOp,
 } from "../effect/operations.js";
@@ -41,6 +42,7 @@ import { SealantApiError, SealantError, SealantNotImplementedError } from "../er
 import { elapsed } from "../internal/clock.js";
 import { mapAccountRef } from "../internal/credentials.js";
 import { parseTtlSeconds } from "../internal/duration.js";
+import { requireCredentialPlacements } from "../internal/features.js";
 import { requireProcessUser } from "../internal/process-user.js";
 import type {
   Harness,
@@ -326,6 +328,7 @@ export const toWorkspaceImage = (image: WirePublishedImage): WorkspaceImage => (
 
 /** Wire → public credential home. */
 const toCredentialHome = (home: WireWorkspaceCredentialHome): WorkspaceCredentialHome => ({
+  ...(home.placements === undefined ? {} : { placements: home.placements }),
   home: home.home,
   onBehalfOf: home.onBehalfOfUserId,
   accounts: {
@@ -1024,6 +1027,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     // People's logins, one person per home; the workspace stays the client owner's.
     credentials: {
       put: async (options) => {
+        if (options.live !== undefined) await requireCredentialPlacements(ctx);
         const choices = {
           claude: accountChoice(options.claude),
           codex: accountChoice(options.codex),
@@ -1044,6 +1048,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
             ...(choices.pi === undefined ? {} : { pi: choices.pi }),
             ...(choices.opencode === undefined ? {} : { opencode: choices.opencode }),
             ...(options.partial === true ? { partial: true } : {}),
+            ...(options.live === undefined ? {} : { live: options.live }),
           }),
         );
         return {
@@ -1054,6 +1059,17 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
             message: skip.message,
           })),
         };
+      },
+      prune: async (home, live) => {
+        await requireCredentialPlacements(ctx);
+        const answered = await ctx.runtime.run(
+          pruneWorkspaceCredentialsOp(init.id, {
+            ownerUserId: ctx.config.hostLocal.ownerUserId,
+            home,
+            live,
+          }),
+        );
+        return answered.home === undefined ? undefined : toCredentialHome(answered.home);
       },
       release: async (home) => {
         const answered = await ctx.runtime.run(

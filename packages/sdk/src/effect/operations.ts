@@ -39,6 +39,7 @@ import type {
   SessionInputRequest,
   InspectWorkspaceImageRequest,
   PutWorkspaceCredentialsRequest,
+  PruneWorkspaceCredentialsRequest,
   ReleaseWorkspaceCredentialsQuery,
   ListWorkspaceCredentialsQuery,
   SessionResizeRequest,
@@ -162,6 +163,15 @@ export const putWorkspaceCredentialsOp = (
 ) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.workspaces.putWorkspaceCredentials({ params: { workspaceId }, payload }),
+  );
+
+/** Remove unused credential placements in one home. */
+export const pruneWorkspaceCredentialsOp = (
+  workspaceId: string,
+  payload: PruneWorkspaceCredentialsRequest,
+) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.pruneWorkspaceCredentials({ params: { workspaceId }, payload }),
   );
 
 export const releaseWorkspaceCredentialsOp = (

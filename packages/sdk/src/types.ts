@@ -1277,6 +1277,11 @@ export interface WorkspaceCredentials {
   release(home: string): Promise<{ readonly released: boolean }>;
   /** The homes of the running executor and the logins Core keeps in each, oldest first. */
   list(): Promise<readonly WorkspaceCredentialHome[]>;
+  /**
+   * Remove every login of `home` that is neither in `live` (the placements running processes hold)
+   * nor the person's default. Answers the home as it is left, or `undefined` when it holds nothing.
+   */
+  prune(home: string, live: readonly string[]): Promise<WorkspaceCredentialHome | undefined>;
 }
 
 /**
@@ -1394,6 +1399,11 @@ export interface WorkspaceCredentialsPutOptions {
    * which and why, instead of the whole put rejecting. Any other refusal still rejects.
    */
   readonly partial?: boolean;
+  /**
+   * The placements running processes hold in this home: a provider whose file one of them holds is
+   * not written over with another login. Requires `features().credentialPlacements`.
+   */
+  readonly live?: readonly string[];
 }
 
 /** A provider a partial {@link WorkspaceCredentials.put} left out, and why. */
@@ -1415,6 +1425,20 @@ export interface WorkspaceCredentialsPutResult extends WorkspaceCredentialHome {
   readonly skipped: readonly WorkspaceCredentialSkip[];
 }
 
+/** One login written into one home: its id stays the same while a refresh moves its revision. */
+export interface CredentialPlacementReceipt {
+  readonly placementId: string;
+  readonly accountId: string;
+  readonly revision: number;
+  readonly login: { readonly kind: "subscription" };
+  readonly pinned: boolean;
+}
+
+/** A receipt associated with the provider slot it occupies in this home. */
+export interface WorkspaceCredentialPlacementReceipt extends CredentialPlacementReceipt {
+  readonly provider: "claude" | "codex" | "github" | "pi" | "opencode";
+}
+
 /** One account whose copy a home holds. */
 export interface WorkspaceCredentialHomeAccount {
   readonly connectedAccountId: string;
@@ -1424,6 +1448,8 @@ export interface WorkspaceCredentialHomeAccount {
 
 /** One home of a running workspace and the logins Core keeps in it. */
 export interface WorkspaceCredentialHome {
+  /** One receipt per login written there. Absent from a control plane without placements. */
+  readonly placements?: readonly WorkspaceCredentialPlacementReceipt[];
   readonly home: string;
   /** The one person whose logins the home holds. */
   readonly onBehalfOf: string;
@@ -1516,6 +1542,8 @@ export interface SealantFeatures {
    * create with `ownerMap` on Kubernetes is refused.
    */
   readonly kubernetesPersonLayout: boolean;
+  /** Credential homes answer placement receipts; a put takes `live`; `prune` exists. */
+  readonly credentialPlacements: boolean;
 }
 
 /** A published workspace image. */
