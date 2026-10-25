@@ -27,11 +27,12 @@ export const CODEX_AUTH_JSON_PATH = "$HOME/.codex/auth.json";
 export const GITHUB_TOKEN_ENV_KEYS = ["GITHUB_TOKEN", "GH_TOKEN"] as const;
 
 /**
- * The words every place that would put a Claude login somewhere (a create, a launch, a credentials
- * put, inference) refuses a Claude API key with, until a key can be placed.
+ * The words a create, a launch and inference refuse a Claude API key with: a key is placed only by
+ * a credentials put into a person's home, never at `$HOME` or in a launch, and inference does not
+ * run on one yet.
  */
 export const claudeApiKeyUnsupported = (accountName: string): string =>
-  `Connected claude account "${accountName}" holds an API key. Claude API keys are not supported by this Sealant yet: choose a Claude subscription login. Nothing was written.`;
+  `Connected claude account "${accountName}" holds an API key. Sealant places a Claude API key only through a credentials put into a person's home, never at $HOME or in a launch, and runs no inference on one yet: choose a Claude subscription login here. Nothing was written.`;
 
 type PlanCredentialInjectionsArgs =
   | readonly ["claude", ClaudeSubscriptionPayload]

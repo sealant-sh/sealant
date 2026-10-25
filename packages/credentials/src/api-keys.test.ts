@@ -10,6 +10,7 @@ import {
   parseApiKey,
   parseClaudeCredentialPayload,
   parseCodexCredentialPayload,
+  placedLoginOf,
 } from "./payloads.js";
 
 const claudeKey = "sk-ant-api03-FAKEclaudekeyforthetests000000wxyz";
@@ -92,6 +93,7 @@ describe("a stored Codex payload", () => {
         expect(codexAuthJsonLogin(authJson)).toEqual({
           login: "api-key",
           key: { valid: false, reason: expect.stringContaining(reason) },
+          ...(key.trim() === "" ? {} : { suffix: key.trim().slice(-4) }),
         });
         expect(parseCodexCredentialPayload({ authJson })).toEqual({ authJson });
         expect(loginClassOf("codex", { authJson })).toBe("api-key");
@@ -137,5 +139,39 @@ describe("kinds", () => {
   it("decodes a stored Claude key", () => {
     expect(parseClaudeCredentialPayload({ apiKey: claudeKey })).toEqual({ apiKey: claudeKey });
     expect(() => parseClaudeCredentialPayload({ apiKey: codexKey })).toThrow();
+  });
+});
+
+describe("placedLoginOf", () => {
+  it("reads a key with its last four characters, from the payload, and anything else as a subscription", () => {
+    expect(placedLoginOf("claude", { apiKey: claudeKey })).toEqual({
+      kind: "api-key",
+      suffix: "wxyz",
+    });
+    expect(placedLoginOf("codex", { apiKey: codexKey })).toEqual({
+      kind: "api-key",
+      suffix: "wxyz",
+    });
+    expect(
+      placedLoginOf("codex", { authJson: JSON.stringify({ OPENAI_API_KEY: ` ${codexKey}\n` }) }),
+    ).toEqual({ kind: "api-key", suffix: "wxyz" });
+    expect(
+      placedLoginOf("codex", {
+        authJson: JSON.stringify({ OPENAI_API_KEY: "sk-ant-api03-FAKEunderthewrongprovider00" }),
+      }),
+    ).toEqual({ kind: "api-key", suffix: "er00" });
+    expect(placedLoginOf("codex", { authJson: JSON.stringify({ tokens: chatgptTokens }) })).toEqual(
+      { kind: "subscription" },
+    );
+    expect(placedLoginOf("claude", { token: "sk-ant-oat01-FAKE" })).toEqual({
+      kind: "subscription",
+    });
+    expect(placedLoginOf("github", { token: "gho_FAKE" })).toEqual({ kind: "subscription" });
+  });
+
+  it("refuses an auth.json that names a key and holds none", () => {
+    expect(() =>
+      placedLoginOf("codex", { authJson: JSON.stringify({ auth_mode: "apikey" }) }),
+    ).toThrow(/holds none/);
   });
 });

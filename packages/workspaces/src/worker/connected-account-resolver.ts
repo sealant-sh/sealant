@@ -5,6 +5,7 @@ import {
   loginClassOf,
   parseConnectedAccountRef,
   parseStoredCredential,
+  placedLoginOf,
   planCredentialInjections,
   type CredentialCipherService,
   type CredentialInjection,
@@ -213,10 +214,14 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
       .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
 
     const credentialsHome = input.blueprint.runtime.credentialsHome;
-    const { credential, plan } = yield* Effect.try({
+    const { credential, plan, homeLogin } = yield* Effect.try({
       try: () => {
         const stored = parseStoredCredential(credentialRef.provider, plaintext);
-        return { credential: stored, plan: planLogin(stored, account, credentialsHome) };
+        return {
+          credential: stored,
+          plan: planLogin(stored, account, credentialsHome),
+          homeLogin: credentialsHome === undefined ? undefined : placedLoginOf(...stored),
+        };
       },
       catch: (cause) =>
         workspaceBuildJobProcessingError({
@@ -236,18 +241,26 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
     injections.push(...planned);
     const login = loginClassOf(...credential);
     const fileInjected = planned.some((injection) => injection.kind === "file");
-    launchCredentialInjections.push({
+    const entry = {
       provider: credentialRef.provider,
       connectedAccountId: account.id,
-      injection: fileInjected ? "file" : "env",
+      injection: fileInjected ? ("file" as const) : ("env" as const),
       // Every Claude/Codex FILE planCredentialInjections writes is a copy that cannot refresh.
       ...(fileInjected &&
       (credentialRef.provider === "claude" || credentialRef.provider === "codex")
         ? { copy: true }
         : {}),
-      ...(credentialsHome === undefined ? {} : { home: credentialsHome.path }),
       ...(login === undefined ? {} : { login }),
-    });
+    };
+    launchCredentialInjections.push(
+      credentialsHome === undefined || homeLogin === undefined
+        ? entry
+        : {
+            ...entry,
+            home: credentialsHome.path,
+            placed: { login: homeLogin, revision: account.credentialRevision },
+          },
+    );
 
     if (credentialRef.provider === "codex") {
       codexAccounts.push({

@@ -128,7 +128,11 @@ export const ociImageBuildJobs = pgTable(
  * account reconnected token→session-file mid-run must NOT have this env-injected workspace's
  * harness-written credentials file synced back over the fresh paste.
  */
-export interface WorkspaceLaunchCredentialInjection {
+export type WorkspaceCredentialPlacementLogin =
+  | { readonly kind: "subscription" }
+  | { readonly kind: "api-key"; readonly suffix: string };
+
+interface WorkspaceLaunchCredentialInjectionBase {
   readonly provider: string;
   readonly connectedAccountId: string;
   readonly injection: "env" | "file";
@@ -138,12 +142,6 @@ export interface WorkspaceLaunchCredentialInjection {
    */
   readonly copy?: boolean;
   /**
-   * The home the launch wrote the file into (its `credentialsHome`), whose record is a
-   * `workspace_credential_homes` row: refreshes reach it through that row. Absent when the launch
-   * wrote at `$HOME`.
-   */
-  readonly home?: string;
-  /**
    * What the placed Claude or Codex login spends, read from its payload at launch: a refreshed
    * subscription is pushed only into a launch that placed a subscription. Absent on GitHub logins
    * and on rows launched before it was recorded, which placed a subscription or a key in an
@@ -151,6 +149,27 @@ export interface WorkspaceLaunchCredentialInjection {
    */
   readonly login?: "subscription" | "api-key";
 }
+
+export type WorkspaceLaunchCredentialInjection = WorkspaceLaunchCredentialInjectionBase &
+  (
+    | { readonly home?: undefined }
+    | {
+        /**
+         * The home the launch wrote the file into (its `credentialsHome`), whose record is a
+         * `workspace_credential_homes` row: refreshes reach it through that row. Absent when the
+         * launch wrote at `$HOME`.
+         */
+        readonly home: string;
+        /**
+         * The login the launch wrote and the account revision it read it at, recorded as the
+         * home's placement as they are: never joined to the account's later state.
+         */
+        readonly placed: {
+          readonly login: WorkspaceCredentialPlacementLogin;
+          readonly revision: number;
+        };
+      }
+  );
 
 export const workspaceRuntimeInstances = pgTable(
   "workspace_runtime_instances",
@@ -302,7 +321,7 @@ export const workspaceCredentialPlacements = pgTable(
     accountId: text("account_id").notNull(),
     revision: integer().notNull(),
     path: text().notNull(),
-    login: jsonb().$type<{ readonly kind: "subscription" }>().notNull(),
+    login: jsonb().$type<WorkspaceCredentialPlacementLogin>().notNull(),
     state: text({ enum: ["pending", "ready", "removing"] }).notNull(),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
@@ -315,7 +334,7 @@ export const workspaceCredentialPlacements = pgTable(
     }).onDelete("cascade"),
     index("credential_placements_account_state_idx").on(table.accountId, table.state),
     uniqueIndex("credential_placements_ready_slot_idx")
-      .on(table.runId, table.home, table.provider)
+      .on(table.runId, table.home, table.path)
       .where(sql`${table.state} = 'ready'`),
     check("credential_placements_revision_positive", sql`${table.revision} > 0`),
     check("credential_placements_state", sql`${table.state} in ('pending', 'ready', 'removing')`),

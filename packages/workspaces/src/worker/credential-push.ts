@@ -49,11 +49,11 @@ after the refresh and writes every workspace at the same time. Codex reloads aut
 A workspace that cannot be written keeps its copy until its access token expires, then fails with a
 401 and a clear reason. Never fails: every outcome is logged.
 
-Homes (§6c): every placement of the account in a home gets the copy too, at `<home>/<file>`, owned
-by the home's owner, ready or still being written by a put (which this push waits for). Each home is
-written under its lock, its placements read again under it: a home released (or emptied of this
-account) since the listing is left alone, so a refresh never lands in a home another person has
-taken since.
+Homes (§6c): every subscription placement of the account in a home gets the copy too, at
+`<home>/<file>`, owned by the home's owner, ready or still being written by a put (which this push
+waits for). Each home is written under its lock, its placements read again under it: a home
+released (or emptied of this account) since the listing is left alone, so a refresh never lands in
+a home another person has taken since.
 */
 
 /** At most this many homes are written at once: each holds a database connection while it writes. */
@@ -128,7 +128,7 @@ export const pushCredentialCopy = Effect.fn("pushCredentialCopy")(function* (
     yield* runtimeInstances.listRunningInstances(),
     input.connectedAccountId,
   );
-  const homes = yield* (yield* CredentialPlacementRepo).homesHoldingAccount(
+  const homes = yield* (yield* CredentialPlacementRepo).homesHoldingSubscription(
     input.connectedAccountId,
   );
   if (holding.length === 0 && homes.length === 0) {
@@ -220,11 +220,10 @@ const pushIntoHome = (
           return { result: "released" as const, outcome: keep };
         const refused: HomeCredentialProvider[] = [];
         for (let round = 1; ; round += 1) {
-          // The home's logins made from this account: its own provider's, and for a Codex login
-          // pi's and opencode's ChatGPT entries too.
           const ready = settleInDoubt((yield* placements.state(key)).placements).filter(
             (row) =>
               row.state === "ready" &&
+              row.login.kind === "subscription" &&
               row.accountId === input.connectedAccountId &&
               homeLoginSource(row.provider) === input.provider &&
               !refused.includes(row.provider),
@@ -239,6 +238,7 @@ const pushIntoHome = (
               provider: row.provider,
               accountId: input.connectedAccountId,
               revision: current.revision,
+              login: row.login,
               reuse: row.id,
             };
             if (row.provider !== "pi" && row.provider !== "opencode") {
@@ -262,6 +262,7 @@ const pushIntoHome = (
             fence: { kind: "held", generation: held.generation },
             writes,
             removes: [],
+            removedKeys: [],
           });
           if (ran.kind === "done") return { result: "written" as const, outcome: keep };
           if (ran.kind === "moved" && round < MAX_PUSH_RESOLUTIONS_WHILE_REVISIONS_MOVE) continue;

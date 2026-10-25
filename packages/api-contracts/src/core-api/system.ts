@@ -69,6 +69,12 @@ export const systemIndexResponseSchema = Schema.Struct({
       kubernetesPersonLayout: Schema.optional(Schema.Boolean),
       /** Credential homes answer placement receipts; a put takes `live`; prune exists. */
       credentialPlacements: Schema.optional(Schema.Boolean),
+      /**
+       * Claude and Codex API keys are placed: a credentials put writes a Claude key into a home as
+       * a file of its own, whose receipt carries `keyPath` and the key's suffix, and a Codex key as
+       * Codex's own key file. A `$HOME` launch still refuses a Claude key.
+       */
+      connectedAccountApiKeys: Schema.optional(Schema.Boolean),
     }),
   ),
 });

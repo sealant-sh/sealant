@@ -428,7 +428,7 @@ describe("inference.module provider routing", () => {
     expect(error).toBeInstanceOf(InferenceConflictError);
     expect(error).toMatchObject({
       code: "connected-account-unsupported",
-      message: expect.stringContaining("Claude API keys are not supported by this Sealant yet"),
+      message: expect.stringContaining("only through a credentials put into a person's home"),
     });
     expect(engines.claudeStart).not.toHaveBeenCalled();
     expect(accounts.markInvalid).not.toHaveBeenCalled();

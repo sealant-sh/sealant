@@ -1430,9 +1430,17 @@ export interface CredentialPlacementReceipt {
   readonly placementId: string;
   readonly accountId: string;
   readonly revision: number;
-  readonly login: { readonly kind: "subscription" };
+  readonly login: CredentialPlacementLogin;
   readonly pinned: boolean;
 }
+
+/**
+ * What a placed login spends. A key carries its last four characters; a Claude key also the
+ * absolute path of its file in the home, for an `apiKeyHelper` such as `cat <keyPath>`.
+ */
+export type CredentialPlacementLogin =
+  | { readonly kind: "subscription" }
+  | { readonly kind: "api-key"; readonly suffix: string; readonly keyPath?: string };
 
 /** A receipt associated with the provider slot it occupies in this home. */
 export interface WorkspaceCredentialPlacementReceipt extends CredentialPlacementReceipt {
@@ -1453,7 +1461,12 @@ export interface WorkspaceCredentialHome {
   readonly home: string;
   /** The one person whose logins the home holds. */
   readonly onBehalfOf: string;
+  /**
+   * By provider, the account whose login holds the provider's one file. Claude keys are not here:
+   * the receipts in `placements` say which logins a home holds.
+   */
   readonly accounts: {
+    /** The account of Claude's subscription file, never a Claude key's. */
     readonly claude?: WorkspaceCredentialHomeAccount;
     readonly codex?: WorkspaceCredentialHomeAccount;
     readonly github?: WorkspaceCredentialHomeAccount;
@@ -1544,6 +1557,11 @@ export interface SealantFeatures {
   readonly kubernetesPersonLayout: boolean;
   /** Credential homes answer placement receipts; a put takes `live`; `prune` exists. */
   readonly credentialPlacements: boolean;
+  /**
+   * Claude and Codex API keys are placed into homes: a Claude key's receipt carries `keyPath`, the
+   * file an `apiKeyHelper` reads. A launch at `$HOME` still refuses a Claude key.
+   */
+  readonly connectedAccountApiKeys: boolean;
 }
 
 /** A published workspace image. */

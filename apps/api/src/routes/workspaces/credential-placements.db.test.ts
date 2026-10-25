@@ -4,7 +4,10 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import type { PutWorkspaceCredentialsRequest } from "@sealant/api-contracts";
+import type {
+  PutWorkspaceCredentialsRequest,
+  WorkspaceCredentialPlacementReceipt,
+} from "@sealant/api-contracts";
 import { CredentialCipher, sha256Hex, type CredentialCipherService } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
@@ -14,12 +17,14 @@ import {
   SealantDB,
   user,
   workspaceAttempts,
+  workspaceAttemptSnapshots,
   WorkspaceCredentialHomeRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
   type DB,
 } from "@sealant/db";
 import { runMigrations } from "@sealant/db/migrate";
+import { newWorkspaceSchema } from "@sealant/validators";
 import {
   HOME_SCRIPT_EXIT,
   pushCredentialCopy,
@@ -78,6 +83,12 @@ const executor = () => {
                 .trim()
                 .split("\n")
                 .map((value) => Buffer.from(value, "base64").toString());
+        const cleared = [...script.matchAll(/rm -rf "\$home\/([^"\n]+)"/g)].map(
+          (match) => `${home}/${match[1]}/`,
+        );
+        for (const path of files.keys()) {
+          if (cleared.some((dir) => path.startsWith(dir))) files.delete(path);
+        }
         paths.forEach((path, i) => {
           files.set(path, contents[i] ?? "");
           writes.push(path);
@@ -101,6 +112,11 @@ const executor = () => {
     },
   };
 };
+
+const keyFiles = (ex: ReturnType<typeof executor>, home: string) =>
+  [...ex.files.keys()].filter((path) => path.startsWith(`${home}/.sealant/keys/`));
+const pathOf = (receipt: WorkspaceCredentialPlacementReceipt | undefined) =>
+  receipt?.login.kind === "api-key" ? (receipt.login.keyPath ?? "") : "";
 
 describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", () => {
   let db: DB;
@@ -128,6 +144,16 @@ describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", 
           .insert(user)
           .values({ id: owner, name: "fake person", email: `${owner}@example.test` });
         yield* db.insert(workspaceAttempts).values({ id: runId, ownerUserId: owner });
+        const spec = newWorkspaceSchema.parse({
+          sources: { workspace: { url: "https://github.com/example/repo.git" } },
+          harness: { id: "claude-code" },
+        });
+        yield* db.insert(workspaceAttemptSnapshots).values({
+          runId,
+          userSpecPayload: spec,
+          resolvedSpecPayload: spec,
+          blueprintPayload: spec,
+        });
         const workspaces = yield* WorkspaceRepo;
         yield* workspaces.createWorkspace({
           id: workspaceId,
@@ -191,6 +217,25 @@ describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", 
         ...extra,
       },
     });
+  const CLAUDE_KEY = "sk-ant-api03-FAKE-claude-key-for-the-placement-tests-k1";
+  const CLAUDE_KEY_2 = "sk-ant-api03-FAKE-claude-key-for-the-placement-tests-k2";
+  const CODEX_KEY = "sk-proj-FAKE-codex-key-for-the-placement-tests-cx";
+  const keyAccount = (f: Fixture, provider: "claude" | "codex", name: string, apiKey: string) =>
+    run(
+      Effect.flatMap(ConnectedAccountRepo, (repo) =>
+        repo.createConnectedAccount({
+          id: `cacc_${randomUUID()}`,
+          ownerUserId: f.owner,
+          provider,
+          name,
+          kind: "api-key",
+          encryptedPayload: `sealed:${JSON.stringify({ apiKey })}`,
+          encryptionKeyId: "fake",
+          payloadSha256: sha256Hex(apiKey),
+          metadata: { tokenSuffix: apiKey.slice(-4) },
+        }),
+      ),
+    );
   const rows = (f: Fixture) =>
     run(
       Effect.flatMap(CredentialPlacementRepo, (repo) =>
@@ -496,6 +541,217 @@ describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", 
     ]);
     expect(ex.files.get(`${f.home}/.claude/.credentials.json`)).toContain("fake-default");
   });
+
+  it("puts a Claude key into a file of its own; a subscription put adds its own file and another key coexists", async () => {
+    const f = await fixture();
+    const ex = executor();
+    const key = await keyAccount(f, "claude", "key", CLAUDE_KEY);
+    const first = (await run(put(f, ex.channel, { claude: key.id }))).home.placements ?? [];
+    expect(first).toEqual([
+      {
+        provider: "claude",
+        placementId: expect.any(String),
+        accountId: key.id,
+        revision: 1,
+        login: {
+          kind: "api-key",
+          suffix: CLAUDE_KEY.slice(-4),
+          keyPath: `${f.home}/.sealant/keys/${first[0]?.placementId ?? ""}`,
+        },
+        pinned: false,
+      },
+    ]);
+    const keyPath = `${f.home}/.sealant/keys/${first[0]?.placementId ?? ""}`;
+    expect(ex.files.get(keyPath)).toBe(CLAUDE_KEY);
+    expect(ex.files.has(`${f.home}/.claude/.credentials.json`)).toBe(false);
+
+    const live = first.map((row) => row.placementId);
+    await run(put(f, ex.channel, { live }));
+    expect(ex.files.get(`${f.home}/.claude/.credentials.json`)).toContain("fake-default");
+    expect(ex.files.get(keyPath)).toBe(CLAUDE_KEY);
+
+    const second = await keyAccount(f, "claude", "key-2", CLAUDE_KEY_2);
+    const after = (await run(put(f, ex.channel, { claude: second.id, live }))).home.placements;
+    expect(after?.map((row) => [row.accountId, row.login.kind, row.pinned])).toEqual([
+      [key.id, "api-key", false],
+      [f.first.id, "subscription", false],
+      [second.id, "api-key", false],
+    ]);
+    expect(
+      keyFiles(ex, f.home)
+        .map((path) => ex.files.get(path))
+        .toSorted(),
+    ).toEqual([CLAUDE_KEY, CLAUDE_KEY_2].toSorted());
+    expect((await run(put(f, ex.channel, { claude: key.id, live }))).home.placements).toEqual(
+      after,
+    );
+  });
+
+  it("refuses a Claude key whose home lies where the run's recorded spec saves state", async () => {
+    const f = await fixture();
+    const ex = executor();
+    const key = await keyAccount(f, "claude", "key", CLAUDE_KEY);
+    const spec = newWorkspaceSchema.parse({
+      sources: { workspace: { url: "https://github.com/example/repo.git" } },
+      harness: { id: "claude-code" },
+      runtime: { workingDirectory: "/home" },
+    });
+    await run(
+      db.execute(
+        `UPDATE workspace_attempt_snapshots SET resolved_spec_payload = '${JSON.stringify(spec)}'::jsonb WHERE run_id = '${f.runId}'`,
+      ),
+    );
+    const refused = await run(put(f, ex.channel, { claude: key.id }).pipe(Effect.flip));
+    expect(refused).toMatchObject({
+      code: "connected-account-unsupported",
+      message: expect.stringContaining("lies in /home, which the workspace saves"),
+    });
+    expect(ex.writes).toEqual([]);
+    expect(await rows(f)).toEqual([]);
+  });
+
+  it("prune removes a rotated default key's older file", async () => {
+    const f = await fixture();
+    const ex = executor();
+    const key = await keyAccount(f, "claude", "key", CLAUDE_KEY);
+    await run(
+      Effect.flatMap(ConnectedAccountRepo, (repo) =>
+        repo.setDefault({ ownerUserId: f.owner, provider: "claude", connectedAccountId: key.id }),
+      ),
+    );
+    const older = (await run(put(f, ex.channel, { claude: key.id }))).home.placements?.[0];
+    await run(replace(key.id, JSON.stringify({ apiKey: CLAUDE_KEY_2 })));
+    const newer = (await run(put(f, ex.channel, { claude: key.id }))).home.placements?.find(
+      (row) => row.revision === 2,
+    );
+    expect(keyFiles(ex, f.home).toSorted()).toEqual([pathOf(older), pathOf(newer)].toSorted());
+    await run(
+      routes.pruneWorkspaceCredentials({
+        workspaceId: f.workspaceId,
+        payload: { ownerUserId: f.owner, home: f.home, live: [] },
+        homeChannel: ex.channel,
+      }),
+    );
+    expect(keyFiles(ex, f.home)).toEqual([pathOf(newer)]);
+    expect(ex.files.get(pathOf(newer))).toBe(CLAUDE_KEY_2);
+    expect((await rows(f)).map((row) => [row.id, row.revision])).toEqual([[newer?.placementId, 2]]);
+  });
+
+  it("a repeat put of a live key left in doubt never removes that key", async () => {
+    const f = await fixture();
+    const ex = executor();
+    const key = await keyAccount(f, "claude", "key", CLAUDE_KEY);
+    const placed = (await run(put(f, ex.channel, { claude: key.id }))).home.placements?.[0];
+    const live = [placed?.placementId ?? "missing"];
+    ex.fail(true);
+    expect(
+      Result.isFailure(await run(put(f, ex.channel, { claude: key.id, live }).pipe(Effect.result))),
+    ).toBe(true);
+    ex.fail(false);
+    const ready = [expect.objectContaining({ id: placed?.placementId, state: "ready" })];
+    expect(await rows(f)).toEqual(ready);
+    await run(sweepCredentialPlacements({ homeChannel: ex.channel }));
+    expect(ex.files.get(pathOf(placed))).toBe(CLAUDE_KEY);
+    expect((await run(put(f, ex.channel, { claude: key.id, live }))).home.placements).toEqual([
+      placed,
+    ]);
+    expect(await rows(f)).toEqual(ready);
+    expect(keyFiles(ex, f.home)).toEqual([pathOf(placed)]);
+  });
+
+  it("prune removes only a key file nothing live holds; archive leaves a key for the sweep; release removes every one", async () => {
+    const f = await fixture();
+    const ex = executor();
+    const first = await keyAccount(f, "claude", "key", CLAUDE_KEY);
+    const second = await keyAccount(f, "claude", "key-2", CLAUDE_KEY_2);
+    const placed = async (account: { readonly id: string }) =>
+      (await run(put(f, ex.channel, { claude: account.id }))).home.placements?.find(
+        (row) => row.accountId === account.id,
+      );
+    const one = await placed(first);
+    const two = await placed(second);
+    await run(put(f, ex.channel));
+    await run(
+      routes.pruneWorkspaceCredentials({
+        workspaceId: f.workspaceId,
+        payload: { ownerUserId: f.owner, home: f.home, live: [two?.placementId ?? "missing"] },
+        homeChannel: ex.channel,
+      }),
+    );
+    expect(ex.files.has(pathOf(one))).toBe(false);
+    expect(ex.files.get(pathOf(two))).toBe(CLAUDE_KEY_2);
+    expect(ex.files.get(`${f.home}/.claude/.credentials.json`)).toContain("fake-default");
+
+    await run(
+      Effect.flatMap(ConnectedAccountRepo, (repo) =>
+        repo.archiveAndClearDefault({ id: second.id, ownerUserId: f.owner }),
+      ),
+    );
+    expect((await rows(f)).find((row) => row.id === two?.placementId)?.state).toBe("removing");
+    expect(ex.files.get(pathOf(two))).toBe(CLAUDE_KEY_2);
+    await run(sweepCredentialPlacements({ homeChannel: ex.channel }));
+    expect(ex.files.has(pathOf(two))).toBe(false);
+    expect((await rows(f)).map((row) => row.accountId)).toEqual([f.first.id]);
+
+    const again = await placed(first);
+    expect(ex.files.get(pathOf(again))).toBe(CLAUDE_KEY);
+    await run(
+      routes.releaseWorkspaceCredentials({
+        workspaceId: f.workspaceId,
+        query: { ownerUserId: f.owner, home: f.home },
+        homeChannel: ex.channel,
+      }),
+    );
+    expect(ex.files.size).toBe(0);
+    expect(await rows(f)).toEqual([]);
+  });
+
+  it("a Codex key's placement reads api-key, and the refresh push leaves key placements alone", async () => {
+    const f = await fixture();
+    const ex = executor();
+    const codex = await keyAccount(f, "codex", "key", CODEX_KEY);
+    const claude = await keyAccount(f, "claude", "key", CLAUDE_KEY);
+    const placed = (await run(put(f, ex.channel, { claude: claude.id, codex: codex.id }))).home
+      .placements;
+    expect(placed?.map((row) => [row.provider, row.login]).toSorted()).toEqual([
+      ["claude", expect.objectContaining({ kind: "api-key", suffix: CLAUDE_KEY.slice(-4) })],
+      ["codex", { kind: "api-key", suffix: CODEX_KEY.slice(-4) }],
+    ]);
+    const before = new Map(ex.files);
+    await run(replace(claude.id, payload("now-a-subscription")));
+    await run(
+      replace(
+        codex.id,
+        JSON.stringify({
+          authJson: JSON.stringify({
+            tokens: { access_token: "fake-codex", refresh_token: "fake-refresh" },
+          }),
+        }),
+      ),
+    );
+    for (const [provider, account] of [
+      ["claude", claude],
+      ["codex", codex],
+    ] as const) {
+      const summary = await run(
+        pushCredentialCopy({
+          connectedAccountId: account.id,
+          provider,
+          copyJson: "stale",
+          credentialCipher: cipher,
+          homeChannel: ex.channel,
+        }),
+      );
+      expect(summary).toMatchObject({ written: 0, failed: 0 });
+    }
+    expect(ex.files).toEqual(before);
+    expect(
+      (await rows(f)).map((row) => [row.provider, row.revision, row.login.kind]).toSorted(),
+    ).toEqual([
+      ["claude", 1, "api-key"],
+      ["codex", 1, "api-key"],
+    ]);
+  });
 });
 
 const migrationsFolder = join(
@@ -681,3 +937,87 @@ describe.skipIf(DATABASE_URL === undefined)("the placements migration (Postgres)
     expect(columns).toEqual([]);
   });
 });
+
+describe.skipIf(DATABASE_URL === undefined)("the placement logins migration (Postgres)", () => {
+  const databaseName = `sealant_placement_logins_${randomUUID().replaceAll("-", "")}`;
+  const admin = new URL(DATABASE_URL ?? "postgresql://unused");
+  const fresh = new URL(admin);
+  fresh.pathname = `/${databaseName}`;
+  let adminDb: DB;
+  let db: DB;
+
+  beforeAll(async () => {
+    adminDb = await createSealantDB(admin.toString());
+    await Effect.runPromise(adminDb.execute(`CREATE DATABASE "${databaseName}"`));
+    const earlier = migrationsWhere((entry) => entry < (LOGINS_MIGRATION ?? ""));
+    await runMigrations({
+      databaseUrl: fresh.toString(),
+      migrationsFolder: earlier,
+      log: () => {},
+    });
+    rmSync(earlier, { recursive: true, force: true });
+    db = await createSealantDB(fresh.toString());
+  }, 120_000);
+
+  afterAll(async () => {
+    await Effect.runPromise(
+      adminDb.execute(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`),
+    );
+  });
+
+  it("records a Codex placement of a key account at its revision as that key, and nothing else", async () => {
+    const statements = [
+      `insert into "user" (id, name, email, email_verified, created_at, updated_at)
+         values ('alice', 'alice', 'alice@example.test', false, now(), now())`,
+      `insert into connected_accounts (id, owner_user_id, provider, name, kind, status,
+         encrypted_payload, encryption_key_id, payload_sha256, metadata, credential_revision,
+         created_at, updated_at)
+       values ('cacc_key', 'alice', 'codex', 'key', 'api-key', 'active', 'sealed', 'k', 'sha',
+         '{"tokenSuffix":"wxyz"}'::jsonb, 3, now(), now()),
+         ('cacc_sub', 'alice', 'codex', 'default', 'auth-json', 'active', 'sealed', 'k', 'sha',
+         '{}'::jsonb, 1, now(), now())`,
+      `insert into workspace_attempts (id, owner_user_id, queued_at, created_at, updated_at)
+         values ('run_old', 'alice', now(), now(), now())`,
+      `insert into workspace_runtime_instances (run_id, status, created_at, updated_at)
+         values ('run_old', 'ready', now(), now())`,
+      `insert into workspace_credential_homes (run_id, home, on_behalf_of_user_id, generation,
+         created_at, updated_at)
+       values ('run_old', '/home/a', 'alice', 'gen-a', now(), now()),
+         ('run_old', '/home/b', 'alice', 'gen-b', now(), now()),
+         ('run_old', '/home/c', 'alice', 'gen-c', now(), now())`,
+      `insert into workspace_credential_placements (id, run_id, home, provider, account_id,
+         revision, path, login, state, created_at)
+       values ('cpl_key', 'run_old', '/home/a', 'codex', 'cacc_key', 3, '/home/a/.codex/auth.json',
+         '{"kind":"subscription"}'::jsonb, 'ready', now()),
+         ('cpl_older', 'run_old', '/home/b', 'codex', 'cacc_key', 2, '/home/b/.codex/auth.json',
+         '{"kind":"subscription"}'::jsonb, 'ready', now()),
+         ('cpl_sub', 'run_old', '/home/c', 'codex', 'cacc_sub', 1, '/home/c/.codex/auth.json',
+         '{"kind":"subscription"}'::jsonb, 'ready', now())`,
+    ];
+    for (const statement of statements) await Effect.runPromise(db.execute(statement));
+
+    const through = migrationsWhere((entry) => entry <= (LOGINS_MIGRATION ?? ""));
+    const { applied } = await runMigrations({
+      databaseUrl: fresh.toString(),
+      migrationsFolder: through,
+      log: () => {},
+    });
+    rmSync(through, { recursive: true, force: true });
+    expect(applied).toEqual([LOGINS_MIGRATION]);
+    const logins = await Effect.runPromise(
+      db.execute<{ readonly id: string; readonly login: unknown }>(
+        `select id, login from workspace_credential_placements order by id`,
+        "objects",
+      ),
+    );
+    expect(logins.map((row) => ({ ...row }))).toEqual([
+      { id: "cpl_key", login: { kind: "api-key", suffix: "wxyz" } },
+      { id: "cpl_older", login: { kind: "subscription" } },
+      { id: "cpl_sub", login: { kind: "subscription" } },
+    ]);
+  });
+});
+
+const LOGINS_MIGRATION = readdirSync(migrationsFolder).find((entry) =>
+  entry.endsWith("_placement_logins"),
+);

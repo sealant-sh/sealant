@@ -426,6 +426,7 @@ describe("features()", () => {
             connectedAccountLoginClass: true,
             kubernetesPersonLayout: true,
             credentialPlacements: false,
+            connectedAccountApiKeys: true,
           }),
         ),
       ),
@@ -442,6 +443,7 @@ describe("features()", () => {
       connectedAccountLoginClass: true,
       kubernetesPersonLayout: true,
       credentialPlacements: false,
+      connectedAccountApiKeys: true,
     });
     // A control plane from before the as-user routes names only `processUser`, and its `true`
     // is not read as the routes.
@@ -458,9 +460,11 @@ describe("features()", () => {
       connectedAccountLoginClass: false,
       kubernetesPersonLayout: false,
       credentialPlacements: false,
+      connectedAccountApiKeys: false,
     });
     // One from before `features`: nothing.
     expect(Object.values(await readFeatures(makeCtx(withIndex(undefined))))).toEqual([
+      false,
       false,
       false,
       false,

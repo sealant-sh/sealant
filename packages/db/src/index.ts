@@ -351,6 +351,7 @@ export {
   workspaceCredentialHomes,
   workspaceCredentialPlacements,
   type WorkspaceCredentialPlacement,
+  type WorkspaceCredentialPlacementLogin,
   workspaceCredentialHomeFences,
   workspaceCredentialHomeProviderValues,
   workspaceRuntimeInstanceStatusValues,

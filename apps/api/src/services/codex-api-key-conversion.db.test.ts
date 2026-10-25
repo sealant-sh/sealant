@@ -11,6 +11,7 @@ import {
   ConnectedAccountRepo,
   ConnectedAccountRepoLive,
   createSealantDB,
+  CredentialPlacementRepoLive,
   SealantDB,
   user,
   type DB,
@@ -49,7 +50,7 @@ describe.skipIf(DATABASE_URL === undefined)(
     });
 
     const layer = () =>
-      ConnectedAccountRepoLive.pipe(
+      Layer.merge(ConnectedAccountRepoLive, CredentialPlacementRepoLive).pipe(
         Layer.provideMerge(Layer.succeed(SealantDB, db)),
         Layer.provideMerge(Layer.succeed(CredentialCipher, fakeCipher)),
       );
@@ -174,6 +175,50 @@ describe.skipIf(DATABASE_URL === undefined)(
       expect(summary.items).toEqual([
         expect.objectContaining({ kind: "api-key", login: { kind: "api-key", suffix: "wxyz" } }),
       ]);
+    });
+
+    it("records a converted key's placements, and a refused key's, as keys; a ChatGPT login's stay", async () => {
+      const key = await legacy({ OPENAI_API_KEY: codexKey, tokens: null });
+      const refused = await legacy({ OPENAI_API_KEY: "sk-ant-api03-FAKEunderthewrongprovider00" });
+      const chatgpt = await legacy({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "at-fake", refresh_token: "rt-fake" },
+      });
+      const runId = `run_conversion_${randomUUID()}`;
+      const statements = [
+        `insert into workspace_attempts (id, owner_user_id, queued_at, created_at, updated_at)
+           values ('${runId}', '${key.ownerUserId}', now(), now(), now())`,
+        `insert into workspace_runtime_instances (run_id, status, created_at, updated_at)
+           values ('${runId}', 'ready', now(), now())`,
+        ...[key, refused, chatgpt].map(
+          (account, index) =>
+            `insert into workspace_credential_homes (run_id, home, on_behalf_of_user_id, generation, created_at, updated_at)
+               values ('${runId}', '/home/h${String(index)}', '${account.ownerUserId}', 'gen-${String(index)}', now(), now())`,
+        ),
+        ...[key, refused, chatgpt].map(
+          (account, index) =>
+            `insert into workspace_credential_placements (id, run_id, home, provider, account_id, revision, path, login, state, created_at)
+               values ('cpl_${account.id}', '${runId}', '/home/h${String(index)}', 'codex', '${account.id}', 1, '/home/h${String(index)}/.codex/auth.json', '{"kind":"subscription"}'::jsonb, 'ready', now())`,
+        ),
+      ];
+      for (const statement of statements) await Effect.runPromise(db.execute(statement));
+
+      await run(conversion.convertLegacyCodexApiKeys);
+      await run(conversion.convertLegacyCodexApiKeys);
+
+      const logins = await Effect.runPromise(
+        db.execute<{ readonly account_id: string; readonly login: unknown }>(
+          `select account_id, login from workspace_credential_placements where run_id = '${runId}'`,
+          "objects",
+        ),
+      );
+      expect(new Map(logins.map((row) => [row.account_id, row.login]))).toEqual(
+        new Map([
+          [key.id, { kind: "api-key", suffix: "wxyz" }],
+          [refused.id, { kind: "api-key", suffix: "er00" }],
+          [chatgpt.id, { kind: "subscription" }],
+        ]),
+      );
     });
   },
 );

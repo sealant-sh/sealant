@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { Effect, Semaphore } from "effect";
 
 import {
+  CLAUDE_KEY_DIR,
+  isClaudeKey,
   placementAccountStatus,
   type HomeState,
   type PlacementAccount,
@@ -31,6 +33,7 @@ export interface InMemoryCredentialHomes {
     readonly provider: WorkspaceCredentialPlacement["provider"];
     readonly accountId: string;
     readonly revision?: number;
+    readonly login?: WorkspaceCredentialPlacement["login"];
   }) => WorkspaceCredentialPlacement;
 }
 
@@ -160,12 +163,17 @@ export const makeInMemoryCredentialHomes = (
         for (const row of change.placements) placementRows.set(row.id, row);
         return { result: change.result, state: state(home, accountIds) };
       }),
-    homesHoldingAccount: (accountId) =>
+    homesHoldingSubscription: (accountId) =>
       Effect.sync(() =>
         targetsWhere(
           (home, instance) =>
             instance.status === "ready" &&
-            of(home).some((row) => row.accountId === accountId && row.state !== "removing"),
+            of(home).some(
+              (row) =>
+                row.accountId === accountId &&
+                row.state !== "removing" &&
+                row.login.kind === "subscription",
+            ),
         ),
       ),
     homesWithRemovalWork: () =>
@@ -177,18 +185,35 @@ export const makeInMemoryCredentialHomes = (
             (home.releasing || of(home).some((row) => row.state !== "ready")),
         ),
       ),
+    recordLegacyCodexKey: ({ accountId, revision, login }) =>
+      Effect.sync(() => {
+        for (const row of placementRows.values()) {
+          if (
+            row.accountId === accountId &&
+            row.revision === revision &&
+            row.provider === "codex" &&
+            row.login.kind === "subscription"
+          ) {
+            placementRows.set(row.id, { ...row, login });
+          }
+        }
+      }),
   };
 
   const place: InMemoryCredentialHomes["place"] = (input) => {
+    const id = `cpl_${randomUUID()}`;
+    const login = input.login ?? { kind: "subscription" };
     const row: WorkspaceCredentialPlacement = {
-      id: `cpl_${randomUUID()}`,
+      id,
       runId: input.runId,
       home: input.home,
       provider: input.provider,
       accountId: input.accountId,
       revision: input.revision ?? 1,
-      path: `${input.home}/${LOGIN_FILES[input.provider]}`,
-      login: { kind: "subscription" },
+      path: isClaudeKey({ provider: input.provider, login })
+        ? `${input.home}/${CLAUDE_KEY_DIR}/${id}`
+        : `${input.home}/${LOGIN_FILES[input.provider]}`,
+      login,
       state: "ready",
       createdAt: new Date(),
     };

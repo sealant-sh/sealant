@@ -11,6 +11,8 @@ import {
   ConnectedAccountRepo,
   CredentialPlacementRepo,
   type CredentialPlacementRepoService,
+  WorkspaceAttemptRepo,
+  WorkspaceBuildJobRepo,
   WorkspaceCredentialHomeRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
@@ -18,6 +20,8 @@ import {
   type ConnectedAccountRepoService,
   type Workspace,
   type WorkspaceLaunchCredentialInjection,
+  type WorkspaceAttemptRepoService,
+  type WorkspaceBuildJobRepoService,
   type WorkspaceRepoService,
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceRepoService,
@@ -114,6 +118,25 @@ const aliceChatGpt = account({
     }),
   })}`,
 });
+const aliceAmbiguousChatGpt = account({
+  id: "cacc_alice_ambiguous",
+  provider: "codex",
+  kind: "auth-json",
+  name: "ambiguous",
+  encryptedPayload: `sealed:${JSON.stringify({
+    authJson: JSON.stringify({
+      OPENAI_API_KEY: "sk-proj-FAKEleftbesidethetokens0000abcd",
+      tokens: { access_token: chatgptAccess, refresh_token: "rt-ambiguous", account_id: "acct_2" },
+    }),
+  })}`,
+});
+const aliceKeylessCodex = account({
+  id: "cacc_alice_keyless",
+  provider: "codex",
+  kind: "auth-json",
+  name: "keyless",
+  encryptedPayload: `sealed:${JSON.stringify({ authJson: JSON.stringify({ auth_mode: "apikey" }) })}`,
+});
 const aliceCorruptCodex = account({
   id: "cacc_alice_corrupt",
   provider: "codex",
@@ -150,6 +173,13 @@ const aliceClaudeKey = account({
   name: "key",
   encryptedPayload: `sealed:${JSON.stringify({ apiKey: "sk-ant-api03-FAKEclaudekeyforthetests000000wxyz" })}`,
 });
+const ownerClaudeKey = account({
+  id: "cacc_owner_claude_key",
+  ownerUserId: OWNER,
+  kind: "api-key",
+  name: "key",
+  encryptedPayload: `sealed:${JSON.stringify({ apiKey: "sk-ant-api03-FAKEownerkeyforthetests00000000wxyz" })}`,
+});
 const bobClaude = account({
   id: "cacc_bob_claude",
   ownerUserId: BOB,
@@ -164,10 +194,13 @@ const accounts: ConnectedAccount[] = [
   aliceInvalid,
   aliceCorruptCodex,
   aliceChatGpt,
+  aliceAmbiguousChatGpt,
+  aliceKeylessCodex,
   aliceSetupToken,
   aliceCodexKey,
   aliceLegacyCodexKey,
   aliceClaudeKey,
+  ownerClaudeKey,
   bobClaude,
 ];
 
@@ -194,6 +227,21 @@ const instanceRow = (
 
 const workspace = { id: "wks_1", ownerUserId: OWNER, latestRunId: "run_1" } as Workspace;
 
+/** The parts of a recorded spec a Claude key put reads: where the run saves state. */
+interface SavedRoots {
+  readonly workingDirectory: string;
+  readonly harnessHome?: string;
+}
+const recordedSpec = (roots: SavedRoots) => ({
+  runtime: { workingDirectory: roots.workingDirectory },
+  sources: {
+    workspace:
+      roots.harnessHome === undefined
+        ? { kind: "git" }
+        : { kind: "capture", harnessHome: roots.harnessHome },
+  },
+});
+
 interface Ran {
   readonly script: string;
   /** The decoded payloads, in order. */
@@ -206,7 +254,10 @@ const newWorld = (
   instance: WorkspaceRuntimeInstance = instanceRow(),
   defaults: ReadonlyMap<string, string> = chosenDefaults,
 ) => {
-  const state = { instance };
+  const state: { instance: WorkspaceRuntimeInstance; saved: SavedRoots | undefined } = {
+    instance,
+    saved: { workingDirectory: "/workspace/repo" },
+  };
   const currentAccounts = accounts.map((entry) => ({ ...entry }));
   const homes = makeInMemoryCredentialHomes(() => [state.instance], {
     accounts: () => currentAccounts,
@@ -273,6 +324,17 @@ const newWorld = (
           ),
         ),
     } as unknown as ConnectedAccountRepoService),
+    Layer.succeed(WorkspaceAttemptRepo, {
+      getAttemptSnapshotByRunId: (runId: string) =>
+        Effect.succeed(
+          runId === state.instance.runId && state.saved !== undefined
+            ? { resolvedSpecPayload: recordedSpec(state.saved) }
+            : undefined,
+        ),
+    } as unknown as WorkspaceAttemptRepoService),
+    Layer.succeed(WorkspaceBuildJobRepo, {
+      getLatestJobByRunId: () => Effect.succeed(undefined),
+    } as unknown as WorkspaceBuildJobRepoService),
     Layer.succeed(WorkspaceRuntimeInstanceRepo, {
       listRunningInstances: () => Effect.succeed([state.instance]),
       getRuntimeInstanceByRunId: (runId: string) =>
@@ -552,6 +614,28 @@ describe("putWorkspaceCredentials", () => {
     ]);
   });
 
+  it("records pi's and opencode's placements as the ChatGPT login they are, whatever else the file holds", async () => {
+    const world = newWorld();
+    const answer = succeeded(
+      await world.put({ onBehalfOfUserId: ALICE, pi: "ambiguous", opencode: "ambiguous" }),
+    );
+    expect(answer.home.placements?.map((row) => [row.provider, row.login])).toEqual([
+      ["pi", { kind: "subscription" }],
+      ["opencode", { kind: "subscription" }],
+    ]);
+    expect(world.ran[0]?.payloads.join("")).not.toContain("sk-proj-");
+  });
+
+  it("refuses pi's login from a Codex file that names a key and holds none as not a ChatGPT login", async () => {
+    const world = newWorld();
+    expect(failed(await world.put({ onBehalfOfUserId: ALICE, pi: "keyless" }))).toMatchObject({
+      code: "connected-account-unsupported",
+      provider: "codex",
+      message: expect.stringContaining("not a ChatGPT login"),
+    });
+    expect(world.ran).toEqual([]);
+  });
+
   it("refuses pi's login from a Codex account that is not a ChatGPT login, or that is missing", async () => {
     const world = newWorld();
     expect(failed(await world.put({ onBehalfOfUserId: ALICE, pi: "default" }))).toMatchObject({
@@ -570,7 +654,8 @@ describe("putWorkspaceCredentials", () => {
   it("writes a Codex key as Codex's own key file, a key stored as an auth.json too", async () => {
     for (const name of ["key", "legacy-key"]) {
       const world = newWorld();
-      succeeded(await world.put({ onBehalfOfUserId: ALICE, codex: name }));
+      const answer = succeeded(await world.put({ onBehalfOfUserId: ALICE, codex: name }));
+      expect(answer.home.placements?.[0]?.login).toEqual({ kind: "api-key", suffix: "wxyz" });
       expect(world.ran[0]?.payloads).toEqual([
         JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: codexKey }),
       ]);
@@ -578,14 +663,105 @@ describe("putWorkspaceCredentials", () => {
     }
   });
 
-  it("refuses a Claude key, and a Codex key as pi's login, with words and nothing written", async () => {
+  it("writes a Claude key alone into a file of its own, and its receipt names that file", async () => {
     const world = newWorld();
-    expect(failed(await world.put({ onBehalfOfUserId: ALICE, claude: "key" }))).toMatchObject({
-      _tag: "WorkspaceConflictError",
+    const answer = succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "key" }));
+    const receipt = answer.home.placements?.[0];
+    const keyPath = `${HOME}/.sealant/keys/${receipt?.placementId ?? "missing"}`;
+    expect(receipt).toMatchObject({
+      provider: "claude",
+      accountId: aliceClaudeKey.id,
+      login: { kind: "api-key", suffix: "wxyz", keyPath },
+      pinned: false,
+    });
+    expect(world.ran[0]?.payloads).toEqual(["sk-ant-api03-FAKEclaudekeyforthetests000000wxyz"]);
+    expect(world.ran[0]?.script).toContain(`f="$home/.sealant/keys/${receipt?.placementId ?? ""}"`);
+    expect(world.ran[0]?.script).not.toContain('f="$home/.claude/.credentials.json"');
+  });
+
+  it("names the subscription's account under accounts.claude, never a key's", async () => {
+    const world = newWorld();
+    succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "key" }));
+    const keyOnly = succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "key" }));
+    expect(keyOnly.home.accounts).toEqual({});
+    const keyId = keyOnly.home.placements?.[0]?.placementId ?? "missing";
+    const both = succeeded(
+      await world.put({ onBehalfOfUserId: ALICE, claude: "default", live: [keyId] }),
+    );
+    const again = succeeded(
+      await world.put({ onBehalfOfUserId: ALICE, claude: "key", live: [keyId] }),
+    );
+    for (const answer of [both, again]) {
+      expect(answer.home.accounts).toEqual({
+        claude: { connectedAccountId: aliceClaude.id, name: "default" },
+      });
+      expect(answer.home.placements?.map((row) => row.accountId).toSorted()).toEqual(
+        [aliceClaude.id, aliceClaudeKey.id].toSorted(),
+      );
+    }
+  });
+
+  it("refuses a Claude key in the launch home, with words and nothing written", async () => {
+    const world = newWorld();
+    expect(
+      failed(await world.put({ onBehalfOfUserId: OWNER, home: "/root", claude: "key" })),
+    ).toMatchObject({
       code: "connected-account-unsupported",
       provider: "claude",
-      message: expect.stringContaining("Claude API keys are not supported by this Sealant yet"),
+      message: expect.stringContaining("/root is the launch's home"),
     });
+    expect(world.ran).toEqual([]);
+  });
+
+  it("refuses a Claude key where the run saves state, or where Core cannot tell", async () => {
+    const cases: ReadonlyArray<readonly [SavedRoots | undefined, string, string]> = [
+      [
+        { workingDirectory: "/workspace/repo", harnessHome: "/captured" },
+        "/captured/people/alice",
+        "lies in /captured, which the workspace saves",
+      ],
+      [{ workingDirectory: "/srv/work" }, "/srv/work/alice", "lies in /srv/work"],
+      [{ workingDirectory: "/workspace/repo", harnessHome: `${HOME}/.sealant` }, HOME, "lies in"],
+      [undefined, HOME, "no recorded spec"],
+    ];
+    for (const [saved, home, words] of cases) {
+      const world = newWorld();
+      world.state.saved = saved;
+      expect(
+        failed(await world.put({ onBehalfOfUserId: ALICE, home, claude: "key" })),
+      ).toMatchObject({
+        code: "connected-account-unsupported",
+        message: expect.stringContaining(words),
+      });
+      expect(world.ran).toEqual([]);
+      const partial = succeeded(
+        await world.put({
+          onBehalfOfUserId: ALICE,
+          home,
+          claude: "key",
+          github: "default",
+          partial: true,
+        }),
+      );
+      expect(partial.skipped).toEqual([
+        {
+          provider: "claude",
+          code: "connected-account-unsupported",
+          message: expect.stringContaining(words),
+        },
+      ]);
+      expect(world.ran).toHaveLength(1);
+      expect(world.ran[0]?.payloads).toEqual([expect.stringContaining("gho_alice")]);
+    }
+    const beside = newWorld();
+    beside.state.saved = { workingDirectory: "/workspace/repo", harnessHome: "/captured" };
+    expect(
+      succeeded(await beside.put({ onBehalfOfUserId: ALICE, claude: "key" })).home.placements,
+    ).toEqual([expect.objectContaining({ accountId: aliceClaudeKey.id })]);
+  });
+
+  it("refuses a Codex key as pi's login, with words and nothing written", async () => {
+    const world = newWorld();
     expect(failed(await world.put({ onBehalfOfUserId: ALICE, pi: "key" }))).toMatchObject({
       code: "connected-account-unsupported",
       provider: "codex",

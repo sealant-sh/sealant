@@ -23,6 +23,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
+import { CLAUDE_KEY_DIR } from "@sealant/db";
 import {
   create,
   EventEnvelopeSchema,
@@ -136,8 +137,11 @@ describe("the shells the scripts run under", () => {
 });
 
 type Writes = readonly { readonly provider: HomeCredentialProvider; readonly content: string }[];
-type RunInput = Omit<HomeCredentialScriptInput, "writes" | "stateDir" | "token"> & {
+type RunInput = Omit<HomeCredentialScriptInput, "writes" | "stateDir" | "token" | "claudeKeys"> & {
   readonly writes: Writes;
+  readonly keys?: readonly { readonly id: string; readonly content: string }[];
+  readonly keptKeys?: readonly { readonly id: string; readonly content: string }[];
+  readonly removedKeys?: readonly string[];
   /** Defaults to the next token of this world: every exec issued later than the last. */
   readonly token?: string;
 };
@@ -147,12 +151,18 @@ type RunInput = Omit<HomeCredentialScriptInput, "writes" | "stateDir" | "token">
  * on both halves' PATH (the exec's, and the owner's half's fixed one), for commands that record
  * how they were run.
  */
-const world = (options: { readonly pathPrefix?: string } = {}) => {
+const world = (
+  options: { readonly pathPrefix?: string; readonly env?: Readonly<Record<string, string>> } = {},
+) => {
   const root = scratch();
   const prefix = [options.pathPrefix, shell.dir]
     .flatMap((entry) => (entry === undefined ? [] : [`${entry}:`]))
     .join("");
-  const env = { ...process.env, PATH: `${prefix}${process.env["PATH"] ?? SYSTEM_PATH}` };
+  const env = {
+    ...process.env,
+    ...options.env,
+    PATH: `${prefix}${process.env["PATH"] ?? SYSTEM_PATH}`,
+  };
   const state = join(root, "state");
   // A home the script makes is seeded from the skeleton. This machine's /etc/skel is not the test's:
   // GitHub's runner images keep 816 MB of toolchains there, and a cold copy of it took 23–38 s
@@ -174,10 +184,19 @@ const world = (options: { readonly pathPrefix?: string } = {}) => {
       // Images keep node on the fixed system PATH; this machine's may be elsewhere.
       ownerPath: `${prefix}${SYSTEM_PATH}:${dirname(process.execPath)}`,
       writes: input.writes.map(({ provider }) => provider),
+      claudeKeys: {
+        writes: (input.keys ?? []).map(({ id }) => id),
+        restores: (input.keptKeys ?? []).map(({ id }) => id),
+        removes: input.removedKeys ?? [],
+      },
     });
   const run = (input: RunInput) =>
     spawnSync(shell.path, ["-c", scriptOf(input)], {
-      input: homeScriptStdin(input.writes.map(({ content }) => content)),
+      input: homeScriptStdin(
+        [...input.writes, ...(input.keys ?? []), ...(input.keptKeys ?? [])].map(
+          ({ content }) => content,
+        ),
+      ),
       encoding: "utf8",
       env,
     });
@@ -1084,17 +1103,24 @@ forEachShell("a login is never in any process's argv or environment", () => {
     { provider: "pi", content: entry("SECRET-pi-0004") },
     { provider: "opencode", content: entry("SECRET-opencode-0005") },
   ];
+  const KEYS = [{ id: "cpl_key_secret", content: "sk-ant-api03-SECRET-key-0006" }];
   /** What must never appear: each secret, and the start of each payload's base64 line. */
-  const NEEDLES = [
-    ...LOGINS.map(({ content }) => /SECRET-[a-z]+-\d{4}/.exec(content)?.[0] ?? content),
-    ...LOGINS.map(({ content }) => Buffer.from(content, "utf8").toString("base64").slice(0, 24)),
-  ];
+  const NEEDLES = [...LOGINS, ...KEYS].flatMap(({ content }) => [
+    /SECRET-[a-z]+-\d{4}/.exec(content)?.[0] ?? content,
+    Buffer.from(content, "utf8").toString("base64").slice(0, 24),
+  ]);
 
   /** A take, a write under the hold and a release, every login in each; all succeed. */
   const putAndRelease = (w: ReturnType<typeof world>) => {
     const home = w.home("alice");
     const runs = [
-      w.run({ home, fence: { kind: "take", generation: GEN_A }, writes: LOGINS, removes: [] }),
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_A },
+        writes: LOGINS,
+        keys: KEYS,
+        removes: [],
+      }),
       w.run({ home, fence: { kind: "held", generation: GEN_A }, writes: LOGINS, removes: [] }),
     ];
     for (const run of runs) expect(run.status, run.stderr).toBe(0);
@@ -1104,6 +1130,7 @@ forEachShell("a login is never in any process's argv or environment", () => {
     expect(read(join(home, ".config/gh/hosts.yml"))).toContain("SECRET-github-0003");
     expect(read(join(home, ".pi/agent/auth.json"))).toContain("SECRET-pi-0004");
     expect(read(join(home, ".local/share/opencode/auth.json"))).toContain("SECRET-opencode-0005");
+    expect(read(join(home, CLAUDE_KEY_DIR, "cpl_key_secret"))).toContain("SECRET-key-0006");
     const released = w.run({
       home,
       fence: { kind: "release", generation: GEN_A },
@@ -1114,63 +1141,85 @@ forEachShell("a login is never in any process's argv or environment", () => {
     return [...runs, released];
   };
 
+  /** Runs a put and a release under shims that record every command's argv and environment. */
+  const recordEveryCommand = (env?: Readonly<Record<string, string>>) => {
+    const shims = scratch();
+    const log = join(shims, "exec.log");
+    const tr = realPath("tr");
+    // Every external command the script may start: each is a shim that records its argv and
+    // the environment it was started with (its own /proc/<pid>/environ), then runs the real one.
+    const commands = [
+      "env",
+      "setpriv",
+      "sh",
+      "flock",
+      "mkdir",
+      "chmod",
+      "chown",
+      "base64",
+      "node",
+      "stat",
+      "cp",
+      "rm",
+      "mv",
+      "cat",
+      "id",
+      "dirname",
+      "readlink",
+      "ln",
+      "true",
+    ];
+    for (const name of commands) {
+      const real = realPath(name);
+      if (!real.startsWith("/")) continue;
+      const shim = join(shims, name);
+      writeFileSync(
+        shim,
+        [
+          "#!/bin/sh",
+          `{ printf 'exec %s\\n' "$0"; printf 'arg %s\\n' "$@"; ${tr} '\\0' '\\n' < /proc/$$/environ | while IFS= read -r v; do printf 'env %s\\n' "$v"; done; } >> '${log}'`,
+          `exec '${real}' "$@"`,
+        ].join("\n"),
+      );
+      chmodSync(shim, 0o755);
+    }
+    putAndRelease(world({ pathPrefix: shims, ...(env === undefined ? {} : { env }) }));
+    const recorded = read(log);
+    const started = new Set(
+      recorded
+        .split("\n")
+        .filter((line) => line.startsWith("exec "))
+        .map((line) => line.slice(`exec ${shims}/`.length)),
+    );
+    return { recorded, started };
+  };
+
   it.skipIf(uid === 0)(
     "records the argv and environment of every command the script runs, and finds no login in any",
     () => {
-      const shims = scratch();
-      const log = join(shims, "exec.log");
-      const tr = realPath("tr");
-      // Every external command the script may start: each is a shim that records its argv and
-      // the environment it was started with (its own /proc/<pid>/environ), then runs the real one.
-      const commands = [
-        "env",
-        "setpriv",
-        "sh",
-        "flock",
-        "mkdir",
-        "chmod",
-        "chown",
-        "base64",
-        "node",
-        "stat",
-        "cp",
-        "rm",
-        "mv",
-        "cat",
-        "id",
-        "dirname",
-        "readlink",
-        "ln",
-        "true",
-      ];
-      for (const name of commands) {
-        const real = realPath(name);
-        if (!real.startsWith("/")) continue;
-        const shim = join(shims, name);
-        writeFileSync(
-          shim,
-          [
-            "#!/bin/sh",
-            `{ printf 'exec %s\\n' "$0"; printf 'arg %s\\n' "$@"; ${tr} '\\0' '\\n' < /proc/$$/environ | while IFS= read -r v; do printf 'env %s\\n' "$v"; done; } >> '${log}'`,
-            `exec '${real}' "$@"`,
-          ].join("\n"),
-        );
-        chmodSync(shim, 0o755);
-      }
-      putAndRelease(world({ pathPrefix: shims }));
-
-      const recorded = read(log);
-      const started = new Set(
-        recorded
-          .split("\n")
-          .filter((line) => line.startsWith("exec "))
-          .map((line) => line.slice(`exec ${shims}/`.length)),
-      );
+      const { recorded, started } = recordEveryCommand();
       // The commands that once carried a login (env's argv, setpriv's and sh's environment, node's
       // environment) and the ones that write them were all recorded.
-      for (const name of ["env", "setpriv", "sh", "base64", "node", "stat"]) {
+      for (const name of ["env", "setpriv", "sh", "base64", "node", "stat", "mv"]) {
         expect(started, name).toContain(name);
       }
+      for (const needle of NEEDLES) {
+        expect(recorded, needle).not.toContain(needle);
+      }
+    },
+  );
+
+  it.skipIf(uid === 0)(
+    "finds no login in any command's environment when the exec inherits exported variables of the payloads' names",
+    () => {
+      const inherited = Object.fromEntries(
+        Array.from({ length: LOGINS.length + KEYS.length }, (_, index) => [
+          `p${index}`,
+          "inherited",
+        ]),
+      );
+      const { recorded } = recordEveryCommand(inherited);
+      expect(recorded).toContain("env p0=inherited");
       for (const needle of NEEDLES) {
         expect(recorded, needle).not.toContain(needle);
       }
@@ -1303,6 +1352,224 @@ forEachShell("a login is never in any process's argv or environment", () => {
       expect(JSON.stringify(execs), needle).not.toContain(needle);
     }
     expect(written.join("")).toBe(stdin);
+  });
+});
+
+const keyFile = (home: string, id: string) => join(home, CLAUDE_KEY_DIR, id);
+
+forEachShell("Claude keys, each a file of its own", () => {
+  const KEY_A = "sk-ant-api03-FAKE-key-a";
+  const KEY_B = "sk-ant-api03-FAKE-key-b";
+
+  it("writes a key 0600, owned by the home's owner, beside the subscription, and later writes leave it", () => {
+    const w = world();
+    const home = w.home("alice");
+    const taken = w.run({
+      home,
+      fence: { kind: "take", generation: GEN_A },
+      writes: [],
+      keys: [{ id: "cpl_key_a", content: KEY_A }],
+      removes: [],
+    });
+    expect(taken.status, taken.stderr).toBe(0);
+    expect(read(keyFile(home, "cpl_key_a"))).toBe(KEY_A);
+    expect(mode(keyFile(home, "cpl_key_a"))).toBe(0o600);
+    expect(lstatSync(keyFile(home, "cpl_key_a")).uid).toBe(uid);
+    expect(mode(join(home, CLAUDE_KEY_DIR))).toBe(0o700);
+    expect(mode(join(home, ".sealant"))).toBe(0o700);
+    expect(existsSync(join(home, ".claude/.credentials.json"))).toBe(false);
+    const subscription = w.run({
+      home,
+      fence: { kind: "held", generation: GEN_A },
+      writes: [{ provider: "claude", content: "subscription" }],
+      removes: [],
+    });
+    expect(subscription.status, subscription.stderr).toBe(0);
+    const second = w.run({
+      home,
+      fence: { kind: "held", generation: GEN_A },
+      writes: [],
+      keys: [{ id: "cpl_key_b", content: KEY_B }],
+      removes: [],
+    });
+    expect(second.status, second.stderr).toBe(0);
+    expect(read(join(home, ".claude/.credentials.json"))).toBe("subscription");
+    expect(read(keyFile(home, "cpl_key_a"))).toBe(KEY_A);
+    expect(read(keyFile(home, "cpl_key_b"))).toBe(KEY_B);
+  });
+
+  it("removes only the key files it names, and a take or a release every one it does not write", () => {
+    const w = world();
+    const home = w.home("alice");
+    const keys = [
+      { id: "cpl_key_a", content: KEY_A },
+      { id: "cpl_key_b", content: KEY_B },
+    ];
+    expect(
+      w.run({ home, fence: { kind: "take", generation: GEN_A }, writes: [], keys, removes: [] })
+        .status,
+    ).toBe(0);
+    const pruned = w.run({
+      home,
+      fence: { kind: "held", generation: GEN_A },
+      writes: [{ provider: "claude", content: "subscription" }],
+      removes: [],
+      removedKeys: ["cpl_key_a"],
+    });
+    expect(pruned.status, pruned.stderr).toBe(0);
+    expect(existsSync(keyFile(home, "cpl_key_a"))).toBe(false);
+    expect(read(keyFile(home, "cpl_key_b"))).toBe(KEY_B);
+    expect(read(join(home, ".claude/.credentials.json"))).toBe("subscription");
+    const released = w.run({
+      home,
+      fence: { kind: "release", generation: GEN_A },
+      writes: [],
+      removes: [],
+    });
+    expect(released.status, released.stderr).toBe(0);
+    expect(existsSync(join(home, CLAUDE_KEY_DIR))).toBe(false);
+    mkdirSync(join(home, CLAUDE_KEY_DIR), { recursive: true });
+    writeFileSync(keyFile(home, "cpl_left"), KEY_A);
+    const retaken = w.run({
+      home,
+      fence: { kind: "take", generation: GEN_B },
+      writes: [],
+      keys: [{ id: "cpl_key_c", content: KEY_B }],
+      removes: [],
+    });
+    expect(retaken.status, retaken.stderr).toBe(0);
+    expect(readdirSync(join(home, CLAUDE_KEY_DIR))).toEqual(["cpl_key_c"]);
+  });
+
+  it("refuses a directory at a key's name, writing nothing, and replaces a name with another link", () => {
+    const w = world();
+    const home = w.home("alice");
+    expect(
+      w.run({ home, fence: { kind: "take", generation: GEN_A }, writes: [], removes: [] }).status,
+    ).toBe(0);
+    mkdirSync(keyFile(home, "cpl_dir"), { recursive: true });
+    expect(
+      w.run({
+        home,
+        fence: { kind: "held", generation: GEN_A },
+        writes: [{ provider: "github", content: "gh" }],
+        keys: [{ id: "cpl_dir", content: KEY_A }],
+        removes: [],
+      }).status,
+    ).toBe(HOME_SCRIPT_EXIT.claudeKeyUnusable);
+    expect(existsSync(join(home, ".config/gh/hosts.yml"))).toBe(false);
+    expect(readdirSync(keyFile(home, "cpl_dir"))).toEqual([]);
+    const saved = join(w.root, "saved-key");
+    writeFileSync(saved, "saved state");
+    linkSync(saved, keyFile(home, "cpl_linked"));
+    const replaced = w.run({
+      home,
+      fence: { kind: "held", generation: GEN_A },
+      writes: [],
+      keys: [{ id: "cpl_linked", content: KEY_A }],
+      removes: [],
+    });
+    expect(replaced.status, replaced.stderr).toBe(0);
+    expect(read(saved)).toBe("saved state");
+    expect(read(keyFile(home, "cpl_linked"))).toBe(KEY_A);
+    expect(lstatSync(keyFile(home, "cpl_linked")).nlink).toBe(1);
+    expect(readdirSync(join(home, CLAUDE_KEY_DIR)).toSorted()).toEqual(["cpl_dir", "cpl_linked"]);
+  });
+
+  it("never puts a key under a linked .claude (a dotfiles checkout), and refuses a linked key directory", () => {
+    const w = world();
+    const home = w.home("alice");
+    const dotfiles = join(home, "dotfiles/claude");
+    mkdirSync(dotfiles, { recursive: true });
+    symlinkSync(dotfiles, join(home, ".claude"));
+    const placed = w.run({
+      home,
+      fence: { kind: "take", generation: GEN_A },
+      writes: [],
+      keys: [{ id: "cpl_key_a", content: KEY_A }],
+      removes: [],
+    });
+    expect(placed.status, placed.stderr).toBe(0);
+    expect(read(keyFile(home, "cpl_key_a"))).toBe(KEY_A);
+    expect(readdirSync(dotfiles)).toEqual([]);
+    for (const linked of [".sealant", CLAUDE_KEY_DIR]) {
+      const v = world();
+      const other = v.home("bob");
+      const inside = join(other, "dotfiles/sealant");
+      mkdirSync(inside, { recursive: true });
+      mkdirSync(dirname(join(other, linked)), { recursive: true });
+      symlinkSync(inside, join(other, linked));
+      expect(
+        v.run({
+          home: other,
+          fence: { kind: "take", generation: GEN_A },
+          writes: [],
+          keys: [{ id: "cpl_key_a", content: KEY_A }],
+          removes: [],
+        }).status,
+        linked,
+      ).toBe(HOME_SCRIPT_EXIT.claudeKeyUnusable);
+      expect(readdirSync(inside), linked).toEqual([]);
+      writeFileSync(join(inside, "cpl_key_a"), "theirs");
+      const released = v.run({
+        home: other,
+        fence: { kind: "release-unfenced" },
+        writes: [],
+        removes: [],
+      });
+      expect(released.status, released.stderr).toBe(0);
+      expect(read(join(inside, "cpl_key_a")), linked).toBe("theirs");
+    }
+  });
+
+  it("never rewrites a kept key's file, and writes it again only once it is gone", () => {
+    const w = world();
+    const home = w.home("alice");
+    expect(
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_A },
+        writes: [],
+        keys: [{ id: "cpl_key_a", content: KEY_A }],
+        removes: [],
+      }).status,
+    ).toBe(0);
+    const inode = lstatSync(keyFile(home, "cpl_key_a")).ino;
+    const kept = w.run({
+      home,
+      fence: { kind: "held", generation: GEN_A },
+      writes: [],
+      keptKeys: [{ id: "cpl_key_a", content: "a different payload" }],
+      removes: [],
+    });
+    expect(kept.status, kept.stderr).toBe(0);
+    expect(read(keyFile(home, "cpl_key_a"))).toBe(KEY_A);
+    expect(lstatSync(keyFile(home, "cpl_key_a")).ino).toBe(inode);
+    rmSync(keyFile(home, "cpl_key_a"));
+    const restored = w.run({
+      home,
+      fence: { kind: "held", generation: GEN_A },
+      writes: [],
+      keptKeys: [{ id: "cpl_key_a", content: KEY_A }],
+      removes: [],
+    });
+    expect(restored.status, restored.stderr).toBe(0);
+    expect(read(keyFile(home, "cpl_key_a"))).toBe(KEY_A);
+    expect(mode(keyFile(home, "cpl_key_a"))).toBe(0o600);
+    expect(readdirSync(join(home, CLAUDE_KEY_DIR))).toEqual(["cpl_key_a"]);
+  });
+
+  it("refuses a placement id that is not one", () => {
+    expect(() =>
+      buildHomeCredentialScript({
+        home: "/home/alice",
+        fence: { kind: "held", generation: GEN_A },
+        token: "1",
+        writes: [],
+        removes: [],
+        claudeKeys: { writes: ["../.credentials.json"], removes: [] },
+      }),
+    ).toThrow(/placement id/);
   });
 });
 

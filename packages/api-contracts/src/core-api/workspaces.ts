@@ -844,12 +844,26 @@ export const putWorkspaceCredentialsRequestSchema = Schema.Struct({
 });
 export type PutWorkspaceCredentialsRequest = typeof putWorkspaceCredentialsRequestSchema.Type;
 
+/**
+ * What a placed login spends. A key carries its last four characters; a Claude key also its file's
+ * absolute path, which Claude reads through an `apiKeyHelper` such as `cat <keyPath>`.
+ */
+export const credentialPlacementLoginSchema = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("subscription") }),
+  Schema.Struct({
+    kind: Schema.Literal("api-key"),
+    suffix: NonEmptyString,
+    keyPath: Schema.optional(NonEmptyString),
+  }),
+]);
+export type CredentialPlacementLogin = typeof credentialPlacementLoginSchema.Type;
+
 /** One login written into one home: its id stays the same while a refresh moves its revision. */
 export const credentialPlacementReceiptSchema = Schema.Struct({
   placementId: NonEmptyString,
   accountId: NonEmptyString,
   revision: Schema.Int.check(Schema.isGreaterThan(0)),
-  login: Schema.Struct({ kind: Schema.Literal("subscription") }),
+  login: credentialPlacementLoginSchema,
   pinned: Schema.Boolean,
 });
 export type CredentialPlacementReceipt = typeof credentialPlacementReceiptSchema.Type;
@@ -877,8 +891,13 @@ export const workspaceCredentialHomeSchema = Schema.Struct({
   onBehalfOfUserId: NonEmptyString,
   /** The logins written there, one receipt each. Absent from a server without placements. */
   placements: Schema.optional(Schema.Array(workspaceCredentialPlacementReceiptSchema)),
-  /** By provider; a provider the home holds no login for is absent. */
+  /**
+   * By provider, the account whose login holds the provider's one file; a provider the home holds
+   * no such login for is absent. Claude keys are not here: each is a placement of its own, and the
+   * receipts in `placements` say which logins a home holds.
+   */
   accounts: Schema.Struct({
+    /** The account of Claude's subscription file, never a Claude key's. */
     claude: Schema.optional(workspaceHomeAccountSchema),
     codex: Schema.optional(workspaceHomeAccountSchema),
     github: Schema.optional(workspaceHomeAccountSchema),

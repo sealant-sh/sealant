@@ -1,3 +1,5 @@
+import { posix } from "node:path";
+
 /**
  * A person's logins in one home of a running workspace (docs/connected-accounts-design.md §6c).
  *
@@ -39,27 +41,31 @@ import {
 } from "@sealant/api-contracts";
 import {
   chatgptLoginEntry,
-  claudeApiKeyUnsupported,
   claudeCredentialsFile,
   codexLoginFile,
   CredentialCipher,
   githubHostsYml,
-  parseClaudeCredentialPayload,
-  parseCodexCredentialPayload,
-  parseGitHubCredentialPayload,
+  parseStoredCredential,
+  placedLoginOf,
+  type ProviderCredentialPayload,
 } from "@sealant/credentials";
 import {
+  CLAUDE_KEY_DIR,
   CredentialPlacementRepo,
+  isClaudeKey,
   planHomePut,
   pruneHome,
   releaseHome,
   settleInDoubt,
+  WorkspaceAttemptRepo,
+  WorkspaceBuildJobRepo,
   WorkspaceCredentialHomeRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
   type ConnectedAccount,
   type HomeState,
   type WorkspaceCredentialHome as WorkspaceCredentialHomeRow,
+  type WorkspaceCredentialPlacementLogin,
   type WorkspaceRuntimeInstance,
 } from "@sealant/db";
 import {
@@ -229,11 +235,53 @@ const requireNotLaunchHome = (
       )
     : Effect.void;
 
+const pathsOverlap = (a: string, b: string): boolean =>
+  a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+
 /**
- * The file one account's login is, as a launch would write it; for pi and opencode, the ChatGPT
- * entry the home script merges into the tool's own `auth.json`.
+ * Why a Claude key cannot be placed in `home`, or `undefined` when it can: never in the launch
+ * home, whose `.claude` the shared layout links into saved state, and never where the run saves
+ * state (its working directory, a capture's harness home). A run whose spec Core cannot read is
+ * refused: nothing says where it saves.
  */
-const loginFileFor = (provider: WorkspaceCredentialHomeProvider, account: ConnectedAccount) =>
+const claudeKeyHomeProblem = (runId: string, home: string) =>
+  Effect.gen(function* () {
+    if (home === LAUNCH_HOME) {
+      return `${LAUNCH_HOME} is the launch's home, whose .claude the shared layout links into saved state; a Claude API key is placed only in a person's own home.`;
+    }
+    const snapshot = yield* withInternalError(
+      (yield* WorkspaceAttemptRepo).getAttemptSnapshotByRunId(runId),
+      "Failed to load the workspace attempt snapshot.",
+    );
+    const spec =
+      snapshot?.resolvedSpecPayload ??
+      (yield* withInternalError(
+        (yield* WorkspaceBuildJobRepo).getLatestJobByRunId(runId),
+        "Failed to load the latest workspace build job.",
+      ))?.requestPayload;
+    if (spec === undefined) {
+      return `Core has no recorded spec for run ${runId}, so it cannot tell where the run saves state; a Claude API key is placed only where nothing saves it.`;
+    }
+    const source = spec.sources.workspace;
+    const keys = `${home}/${CLAUDE_KEY_DIR}`;
+    const saved = [
+      spec.runtime.workingDirectory,
+      ...(source.kind === "capture" && source.harnessHome !== undefined
+        ? [source.harnessHome]
+        : []),
+    ]
+      .map((root) => posix.normalize(root).replace(/\/+$/, "") || "/")
+      .find((root) => pathsOverlap(keys, root));
+    return saved === undefined
+      ? undefined
+      : `${keys} lies in ${saved}, which the workspace saves; a Claude API key is placed only where nothing saves it.`;
+  });
+
+const homeLoginFor = <E, R>(
+  provider: WorkspaceCredentialHomeProvider,
+  account: ConnectedAccount,
+  keyHomeProblem: Effect.Effect<string | undefined, E, R>,
+) =>
   Effect.gen(function* () {
     const accountProvider = workspaceCredentialHomeAccountProvider[provider];
     const cipher = yield* CredentialCipher;
@@ -250,19 +298,22 @@ const loginFileFor = (provider: WorkspaceCredentialHomeProvider, account: Connec
       code: "connected-account-invalid",
       provider: accountProvider,
     });
-    const parsed = yield* Effect.try({
-      try: (): unknown => JSON.parse(plaintext),
+    const credential = yield* Effect.try({
+      try: () => parseStoredCredential(accountProvider, plaintext),
       catch: () => unusable,
     });
+    const [, payload] = credential;
+    // pi's and opencode's entry is always the file's ChatGPT login, whatever else the file holds.
     if (provider === "pi" || provider === "opencode") {
-      const login = yield* Effect.try({
-        try: () => parseCodexCredentialPayload(parsed),
-        catch: () => unusable,
-      });
       return yield* Effect.try({
         try: () => {
-          if ("apiKey" in login) throw new Error("an API key is not a ChatGPT login");
-          return chatgptLoginEntry(login.authJson);
+          if ("apiKey" in payload || !("authJson" in payload)) {
+            throw new Error("an API key is not a ChatGPT login");
+          }
+          return {
+            content: chatgptLoginEntry(payload.authJson),
+            login: { kind: "subscription" } satisfies WorkspaceCredentialPlacementLogin,
+          };
         },
         catch: () =>
           new WorkspaceConflictError({
@@ -272,38 +323,42 @@ const loginFileFor = (provider: WorkspaceCredentialHomeProvider, account: Connec
           }),
       });
     }
-    if (provider === "github") {
-      return yield* Effect.try({
-        try: () => {
-          const login = account.metadata?.["login"];
-          return githubHostsYml(
-            parseGitHubCredentialPayload(parsed).token,
-            typeof login === "string" ? login : undefined,
-          );
-        },
-        catch: () => unusable,
-      });
-    }
-    if (provider === "codex") {
-      return yield* Effect.try({
-        try: () => codexLoginFile(parseCodexCredentialPayload(parsed)),
-        catch: () => unusable,
-      });
-    }
-    const claude = yield* Effect.try({
-      try: () => parseClaudeCredentialPayload(parsed),
+    const login = yield* Effect.try({
+      try: () => placedLoginOf(...credential),
       catch: () => unusable,
     });
-    if ("apiKey" in claude) {
-      return yield* new WorkspaceConflictError({
-        message: claudeApiKeyUnsupported(account.name),
-        code: "connected-account-unsupported",
-        provider: accountProvider,
-      });
+    if (isClaudeKey({ provider, login })) {
+      const problem = yield* keyHomeProblem;
+      if (problem !== undefined) {
+        return yield* new WorkspaceConflictError({
+          message: `Connected claude account "${account.name}" holds an API key. ${problem} Nothing was written.`,
+          code: "connected-account-unsupported",
+          provider: accountProvider,
+        });
+      }
     }
-    // A setup token too goes in as the file: a home is one person's, a variable is everyone's.
-    return yield* Effect.try({ try: () => claudeCredentialsFile(claude), catch: () => unusable });
+    return yield* Effect.try({
+      try: () => ({ content: homeLoginFile(credential, account), login }),
+      catch: () => unusable,
+    });
   });
+
+const homeLoginFile = (
+  credential: ProviderCredentialPayload,
+  account: ConnectedAccount,
+): string => {
+  const [provider, payload] = credential;
+  switch (provider) {
+    case "github": {
+      const login = account.metadata?.["login"];
+      return githubHostsYml(payload.token, typeof login === "string" ? login : undefined);
+    }
+    case "codex":
+      return codexLoginFile(payload);
+    case "claude":
+      return "apiKey" in payload ? payload.apiKey : claudeCredentialsFile(payload);
+  }
+};
 
 /** The stable code of a refused account (missing, invalid, unsupported), or `undefined`. */
 const accountRefusalOf = (failure: unknown): ConnectedAccountRefusalCode | undefined => {
@@ -326,7 +381,7 @@ const toHomeView = (
   for (const row of state.placements) {
     if (row.state !== "ready") continue;
     const account = state.accounts.get(row.accountId);
-    if (account !== undefined) {
+    if (account !== undefined && !isClaudeKey(row)) {
       accounts[row.provider] = { connectedAccountId: account.id, name: account.name };
     }
     placements.push({
@@ -334,7 +389,7 @@ const toHomeView = (
       placementId: row.id,
       accountId: row.accountId,
       revision: row.revision,
-      login: row.login,
+      login: isClaudeKey(row) ? { ...row.login, keyPath: row.path } : row.login,
       pinned: pinned.includes(row.id),
     });
   }
@@ -354,6 +409,7 @@ const OWNER_HALF_REFUSALS: ReadonlySet<number> = new Set([
   HOME_SCRIPT_EXIT.claudeLoginUnusable,
   HOME_SCRIPT_EXIT.codexLoginUnusable,
   HOME_SCRIPT_EXIT.githubLoginUnusable,
+  HOME_SCRIPT_EXIT.claudeKeyUnusable,
 ]);
 
 /** Why a refused script is answered as it is: fenced → held, busy → busy, else unusable. */
@@ -429,6 +485,7 @@ export const putWorkspaceCredentials = (input: {
     const placements = yield* CredentialPlacementRepo;
     const homeKey = { runId: instance.runId, home: payload.home };
     const person = payload.onBehalfOfUserId;
+    const keyHomeProblem = yield* Effect.cached(claudeKeyHomeProblem(instance.runId, payload.home));
     const answer = yield* withRunPermit(
       instance.runId,
       payload.home,
@@ -472,6 +529,7 @@ export const putWorkspaceCredentials = (input: {
               readonly provider: WorkspaceCredentialHomeProvider;
               readonly account: ConnectedAccount;
               readonly content: string;
+              readonly login: WorkspaceCredentialPlacementLogin;
             }> = [];
             const refused: WorkspaceCredentialSkip[] = [];
             for (const { provider, selection } of toWrite) {
@@ -482,7 +540,11 @@ export const putWorkspaceCredentials = (input: {
                   provider: workspaceCredentialHomeAccountProvider[provider],
                   selection,
                 });
-                return { provider, account, content: yield* loginFileFor(provider, account) };
+                return {
+                  provider,
+                  account,
+                  ...(yield* homeLoginFor(provider, account, keyHomeProblem)),
+                };
               }).pipe(Effect.result);
               if (Result.isSuccess(resolved)) {
                 selected.push(resolved.success);
@@ -498,10 +560,11 @@ export const putWorkspaceCredentials = (input: {
             const plan = planHomePut({
               placements: settleInDoubt((yield* placements.state(homeKey)).placements),
               live: payload.live,
-              selected: selected.map(({ provider, account, content }) => ({
+              selected: selected.map(({ provider, account, content, login }) => ({
                 provider,
                 accountId: account.id,
                 revision: account.credentialRevision,
+                login,
                 content,
               })),
               removed: [...toRemove, ...skipped.map(({ provider }) => provider)],
@@ -515,7 +578,9 @@ export const putWorkspaceCredentials = (input: {
               fence: { kind: taking ? "take" : "held", generation },
               ...(createWithOwner === undefined ? {} : { createWithOwner }),
               writes: plan.writes,
+              keptKeys: plan.keptKeys,
               removes: plan.removes,
+              removedKeys: plan.removedKeys,
             });
             if (ran.kind === "moved") {
               revisionMoves += 1;

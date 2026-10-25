@@ -438,7 +438,7 @@ const recordLaunchLoginsOrWarn = (input: {
     const onBehalfOfUserId = input.ownerUserId;
     const key = { runId: input.runId, home: input.home };
     const logins = input.injections.flatMap((entry) => {
-      if (entry.injection !== "file") return [];
+      if (entry.injection !== "file" || entry.home === undefined) return [];
       const provider = workspaceCredentialHomeProviderValues.find(
         (candidate) => candidate === entry.provider,
       );
@@ -449,6 +449,7 @@ const recordLaunchLoginsOrWarn = (input: {
               provider,
               accountId: entry.connectedAccountId,
               path: `${input.home}/${HOME_CREDENTIAL_FILES[provider]}`,
+              ...entry.placed,
             },
           ];
     });

@@ -45,6 +45,7 @@ import { parseTtlSeconds } from "../internal/duration.js";
 import { requireCredentialPlacements } from "../internal/features.js";
 import { requireProcessUser } from "../internal/process-user.js";
 import type {
+  CredentialPlacementLogin,
   Harness,
   HarnessRunner,
   InteractiveSession,
@@ -326,9 +327,27 @@ export const toWorkspaceImage = (image: WirePublishedImage): WorkspaceImage => (
       }),
 });
 
+const toPlacementLogin = (
+  login: NonNullable<WireWorkspaceCredentialHome["placements"]>[number]["login"],
+): CredentialPlacementLogin =>
+  login.kind === "subscription"
+    ? login
+    : {
+        kind: "api-key",
+        suffix: login.suffix,
+        ...(login.keyPath === undefined ? {} : { keyPath: login.keyPath }),
+      };
+
 /** Wire → public credential home. */
 const toCredentialHome = (home: WireWorkspaceCredentialHome): WorkspaceCredentialHome => ({
-  ...(home.placements === undefined ? {} : { placements: home.placements }),
+  ...(home.placements === undefined
+    ? {}
+    : {
+        placements: home.placements.map((receipt) => ({
+          ...receipt,
+          login: toPlacementLogin(receipt.login),
+        })),
+      }),
   home: home.home,
   onBehalfOf: home.onBehalfOfUserId,
   accounts: {

@@ -256,6 +256,26 @@ describe("workspace.credentials", () => {
         login: { kind: "subscription" as const },
         pinned: true,
       },
+      {
+        provider: "claude" as const,
+        placementId: "cpl_2",
+        accountId: "cacc_maria_key",
+        revision: 1,
+        login: {
+          kind: "api-key" as const,
+          suffix: "wxyz",
+          keyPath: "/home/m4ria0000/.sealant/keys/cpl_2",
+        },
+        pinned: false,
+      },
+      {
+        provider: "codex" as const,
+        placementId: "cpl_3",
+        accountId: "cacc_maria_codex_key",
+        revision: 1,
+        login: { kind: "api-key" as const, suffix: "abcd" },
+        pinned: false,
+      },
     ];
     const { client, requests } = makeStub("enabled", { ...home, placements: receipts });
     const workspace = workspaceOver(client);

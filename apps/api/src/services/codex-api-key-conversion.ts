@@ -3,9 +3,10 @@ import {
   codexAuthJsonLogin,
   CredentialCipher,
   parseCodexCredentialPayload,
+  placedLoginOf,
   sha256Hex,
 } from "@sealant/credentials";
-import { ConnectedAccountRepo, type ConnectedAccount } from "@sealant/db";
+import { ConnectedAccountRepo, CredentialPlacementRepo, type ConnectedAccount } from "@sealant/db";
 import { Effect, Layer } from "effect";
 
 import { env } from "../runtime-env.js";
@@ -17,6 +18,10 @@ Sealant takes is stored again as the key alone, kind `api-key`; a ChatGPT login 
 and loses the mark. A row holding a key Sealant refuses keeps its mark, is placed as it always was,
 and is logged at every start. Every write is guarded by the revision it read, so a connect that
 landed meanwhile wins, and a second run finds nothing left to do.
+
+A login written into a home from such a row was recorded as a subscription; a key's placements at
+the revision read are recorded as the key first, so a crash between the two writes leaves the mark
+for the next start.
 */
 
 const convertOne = (account: ConnectedAccount) =>
@@ -27,6 +32,16 @@ const convertOne = (account: ConnectedAccount) =>
       JSON.parse(yield* cipher.decrypt(account.encryptedPayload)),
     );
     const login = "authJson" in stored ? codexAuthJsonLogin(stored.authJson) : undefined;
+    const placed = yield* Effect.try(() => placedLoginOf("codex", stored)).pipe(
+      Effect.orElseSucceed(() => undefined),
+    );
+    if (placed?.kind === "api-key") {
+      yield* (yield* CredentialPlacementRepo).recordLegacyCodexKey({
+        accountId: account.id,
+        revision: account.credentialRevision,
+        login: placed,
+      });
+    }
     if (login?.login === "api-key" && !login.key.valid) {
       yield* Effect.logWarning(
         `[api] connected accounts: Codex account ${account.id} holds a key in its auth.json that Sealant refuses (${login.key.reason}); it is left as it is.`,
@@ -82,7 +97,7 @@ export const convertLegacyCodexApiKeys = Effect.gen(function* () {
 export const CodexApiKeyConversionLive: Layer.Layer<
   never,
   never,
-  ConnectedAccountRepo | CredentialCipher
+  ConnectedAccountRepo | CredentialPlacementRepo | CredentialCipher
 > = Layer.effectDiscard(
   Effect.gen(function* () {
     if ((env.SEALANT_CREDENTIALS_KEY?.trim() ?? "") === "") return;
