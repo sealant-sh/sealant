@@ -74,6 +74,7 @@ const account = (overrides: Partial<ConnectedAccount>): ConnectedAccount =>
     lastSyncedAt: null,
     invalidAt: null,
     archivedAt: null,
+    credentialRevision: 1,
     ...overrides,
   }) as ConnectedAccount;
 
@@ -476,5 +477,110 @@ describe("inference.module provider routing", () => {
     expect(recorded).toEqual([
       expect.objectContaining({ ownerUserId: "usr_1", inputTokens: 1, outputTokens: 1 }),
     ]);
+  });
+});
+
+const setupTokenAccount = account({
+  provider: "claude",
+  id: "cacc_claude_token",
+  kind: "token",
+  encryptedPayload: `sealed:${JSON.stringify({ token: "sk-ant-oat01-FAKEsetuptokenforthetests0000" })}`,
+});
+
+const parkedTurn: InferenceEngineTurn = {
+  sessionId: "inf_parked",
+  turn: { type: "toolCalls", calls: [{ toolCallId: "call_1", name: "search", input: {} }] },
+};
+
+/** A Claude engine whose start parks on a tool call and whose continuation does `continued`. */
+const parkingLayers = (
+  accounts: ReturnType<typeof accountsStub>,
+  continued: () => Effect.Effect<InferenceEngineTurn, InferenceEngineError>,
+) => {
+  const { layer } = makeLayers({ accounts });
+  return Layer.mergeAll(
+    layer,
+    Layer.succeed(InferenceEngine, {
+      start: vi.fn(() => Effect.succeed(parkedTurn)),
+      continueSession: vi.fn(continued),
+    }),
+  );
+};
+
+describe("inference.module receipts", () => {
+  it("answers with the receipt of the login it ran on", async () => {
+    const { layer } = makeLayers({ accounts: accountsStub() });
+
+    const subscription = await run(
+      respond(newExchange({ credentials: { claude: "cacc_claude" } })).pipe(Effect.provide(layer)),
+    );
+    const key = await run(
+      respond(newExchange({ credentials: { codex: "cacc_codex_key" } })).pipe(
+        Effect.provide(layer),
+      ),
+    );
+
+    expect(subscription.receipt).toEqual({
+      accountId: "cacc_claude",
+      revision: 1,
+      login: "subscription",
+    });
+    expect(key.receipt).toEqual({ accountId: "cacc_codex_key", revision: 1, login: "api-key" });
+  });
+
+  it("carries the receipt on a failure after the account was resolved", async () => {
+    const { layer } = makeLayers({
+      accounts: accountsStub(),
+      codexStart: () => Promise.reject(new InferenceEngineError("engine", "boom")),
+    });
+
+    const error = await runFlipped(respond(newExchange({})).pipe(Effect.provide(layer)));
+
+    expect(error).toMatchObject({
+      receipt: { accountId: "cacc_codex", revision: 1, login: "subscription" },
+    });
+  });
+
+  it("continues on the start's receipt after a reconnect, without resolving again", async () => {
+    let current = setupTokenAccount;
+    const accounts = accountsStub();
+    accounts.getById.mockImplementation(() => Effect.succeed(current));
+    const layer = parkingLayers(accounts, () => Effect.succeed(doneTurn("finished")));
+
+    const started = await run(
+      respond(newExchange({ credentials: { claude: "cacc_claude_token" } })).pipe(
+        Effect.provide(layer),
+      ),
+    );
+    current = { ...setupTokenAccount, credentialRevision: 2 };
+    const lookups = accounts.getById.mock.calls.length;
+    const continued = await run(respond(continuation("usr_1")).pipe(Effect.provide(layer)));
+
+    expect(started.receipt).toEqual({
+      accountId: "cacc_claude_token",
+      revision: 1,
+      login: "subscription",
+    });
+    expect(continued.receipt).toEqual(started.receipt);
+    expect(accounts.getById.mock.calls.length).toBe(lookups);
+  });
+
+  it("judges a continuation's auth failure by the start's receipt", async () => {
+    const accounts = accountsStub();
+    accounts.getById.mockImplementation(() => Effect.succeed(setupTokenAccount));
+    const layer = parkingLayers(accounts, () =>
+      Effect.fail(new InferenceEngineError("auth", "authentication_failed")),
+    );
+
+    await run(
+      respond(newExchange({ credentials: { claude: "cacc_claude_token" } })).pipe(
+        Effect.provide(layer),
+      ),
+    );
+    const error = await runFlipped(respond(continuation("usr_1")).pipe(Effect.provide(layer)));
+
+    expect(error).toBeInstanceOf(InferenceConflictError);
+    expect(error).toMatchObject({ receipt: { accountId: "cacc_claude_token", revision: 1 } });
+    expect(accounts.markInvalid).toHaveBeenCalledWith({ id: "cacc_claude_token", revision: 1 });
   });
 });

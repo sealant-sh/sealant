@@ -23,6 +23,7 @@ import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
 import { BudgetExceededError } from "./budgets.js";
+import { connectedAccountLoginClassSchema } from "./connected-accounts.js";
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
@@ -120,11 +121,25 @@ export const inferenceUsageSchema = Schema.Struct({
 });
 export type InferenceUsage = typeof inferenceUsageSchema.Type;
 
+/**
+ * The login an exchange runs on, fixed when it starts: every continuation runs on it and is judged
+ * by it, even after the account is reconnected. `revision` is the account's credential revision at
+ * the start.
+ */
+export const inferenceReceiptSchema = Schema.Struct({
+  accountId: NonEmptyString,
+  revision: Schema.Number.check(Schema.isInt()),
+  login: connectedAccountLoginClassSchema,
+});
+export type InferenceReceipt = typeof inferenceReceiptSchema.Type;
+
 export const inferenceRespondResponseSchema = Schema.Struct({
   sessionId: NonEmptyString,
   turn: inferenceTurnSchema,
   /** Usage for the exchange so far; present on the final (text) turn. */
   usage: Schema.optional(inferenceUsageSchema),
+  /** The exchange's login. Absent from a control plane that predates receipts. */
+  receipt: Schema.optional(inferenceReceiptSchema),
 });
 export type InferenceRespondResponse = typeof inferenceRespondResponseSchema.Type;
 
@@ -132,16 +147,19 @@ export type InferenceRespondResponse = typeof inferenceRespondResponseSchema.Typ
 // Errors
 // ---------------------------------------------------------------------------------------------
 
+/** On an error after the account was resolved: the exchange's login. */
+const errorReceipt = Schema.optional(inferenceReceiptSchema);
+
 export class InferenceBadRequestError extends Schema.TaggedError<InferenceBadRequestError>()(
   "InferenceBadRequestError",
-  { message: Schema.String },
+  { message: Schema.String, receipt: errorReceipt },
   { httpApiStatus: 400 },
 ) {}
 
 /** Unknown account/profile (uniform for foreign owners) or an expired/unknown inference session. */
 export class InferenceNotFoundError extends Schema.TaggedError<InferenceNotFoundError>()(
   "InferenceNotFoundError",
-  { message: Schema.String },
+  { message: Schema.String, receipt: errorReceipt },
   { httpApiStatus: 404 },
 ) {}
 
@@ -155,6 +173,7 @@ export class InferenceConflictError extends Schema.TaggedError<InferenceConflict
   {
     message: Schema.String,
     code: Schema.optional(Schema.Literals(["connected-account-unsupported"])),
+    receipt: errorReceipt,
   },
   { httpApiStatus: 409 },
 ) {}
@@ -167,7 +186,7 @@ export class InferenceUnavailableError extends Schema.TaggedError<InferenceUnava
 
 export class InferenceInternalServerError extends Schema.TaggedError<InferenceInternalServerError>()(
   "InferenceInternalServerError",
-  { message: Schema.String },
+  { message: Schema.String, receipt: errorReceipt },
   { httpApiStatus: 500 },
 ) {}
 
