@@ -23,6 +23,7 @@ import { WorkspaceForwardRoute } from "./routes/workspaces/workspaces.ws.js";
 import { env } from "./runtime-env.js";
 import { budgetLimits } from "./services/budget-limits.js";
 import { budgetsOff, makeRateWindow } from "./services/budgets.js";
+import { CodexApiKeyConversionLive } from "./services/codex-api-key-conversion.js";
 import { ConnectedAccountDefaultsBackfillLive } from "./services/connected-account-defaults-backfill.js";
 import { ControlPlaneCapabilitiesLive } from "./services/control-plane-capabilities.js";
 import { CredentialRedactionLive, observedMain } from "./services/credential-redaction.js";
@@ -302,6 +303,9 @@ const serverLayer = HttpRouter.serve(appLayer, {
   ),
   Layer.provide(CredentialRedactionLive),
   Layer.provide(ConnectedAccountDefaultsBackfillLive.pipe(Layer.provide(databaseLayer))),
+  Layer.provide(
+    CodexApiKeyConversionLive.pipe(Layer.provide(Layer.merge(databaseLayer, credentialCipher))),
+  ),
 );
 
 /**
