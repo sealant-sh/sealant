@@ -302,18 +302,18 @@ const homeLoginFor = <E, R>(
       try: () => parseStoredCredential(accountProvider, plaintext),
       catch: () => unusable,
     });
-    const login = yield* Effect.try({
-      try: () => placedLoginOf(...credential),
-      catch: () => unusable,
-    });
     const [, payload] = credential;
+    // pi's and opencode's entry is always the file's ChatGPT login, whatever else the file holds.
     if (provider === "pi" || provider === "opencode") {
       return yield* Effect.try({
         try: () => {
           if ("apiKey" in payload || !("authJson" in payload)) {
             throw new Error("an API key is not a ChatGPT login");
           }
-          return { content: chatgptLoginEntry(payload.authJson), login };
+          return {
+            content: chatgptLoginEntry(payload.authJson),
+            login: { kind: "subscription" } satisfies WorkspaceCredentialPlacementLogin,
+          };
         },
         catch: () =>
           new WorkspaceConflictError({
@@ -323,6 +323,10 @@ const homeLoginFor = <E, R>(
           }),
       });
     }
+    const login = yield* Effect.try({
+      try: () => placedLoginOf(...credential),
+      catch: () => unusable,
+    });
     if (isClaudeKey({ provider, login })) {
       const problem = yield* keyHomeProblem;
       if (problem !== undefined) {

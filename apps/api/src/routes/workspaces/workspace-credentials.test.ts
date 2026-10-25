@@ -118,6 +118,25 @@ const aliceChatGpt = account({
     }),
   })}`,
 });
+const aliceAmbiguousChatGpt = account({
+  id: "cacc_alice_ambiguous",
+  provider: "codex",
+  kind: "auth-json",
+  name: "ambiguous",
+  encryptedPayload: `sealed:${JSON.stringify({
+    authJson: JSON.stringify({
+      OPENAI_API_KEY: "sk-proj-FAKEleftbesidethetokens0000abcd",
+      tokens: { access_token: chatgptAccess, refresh_token: "rt-ambiguous", account_id: "acct_2" },
+    }),
+  })}`,
+});
+const aliceKeylessCodex = account({
+  id: "cacc_alice_keyless",
+  provider: "codex",
+  kind: "auth-json",
+  name: "keyless",
+  encryptedPayload: `sealed:${JSON.stringify({ authJson: JSON.stringify({ auth_mode: "apikey" }) })}`,
+});
 const aliceCorruptCodex = account({
   id: "cacc_alice_corrupt",
   provider: "codex",
@@ -175,6 +194,8 @@ const accounts: ConnectedAccount[] = [
   aliceInvalid,
   aliceCorruptCodex,
   aliceChatGpt,
+  aliceAmbiguousChatGpt,
+  aliceKeylessCodex,
   aliceSetupToken,
   aliceCodexKey,
   aliceLegacyCodexKey,
@@ -591,6 +612,28 @@ describe("putWorkspaceCredentials", () => {
       { provider: "pi", connectedAccountId: aliceChatGpt.id },
       { provider: "opencode", connectedAccountId: aliceChatGpt.id },
     ]);
+  });
+
+  it("records pi's and opencode's placements as the ChatGPT login they are, whatever else the file holds", async () => {
+    const world = newWorld();
+    const answer = succeeded(
+      await world.put({ onBehalfOfUserId: ALICE, pi: "ambiguous", opencode: "ambiguous" }),
+    );
+    expect(answer.home.placements?.map((row) => [row.provider, row.login])).toEqual([
+      ["pi", { kind: "subscription" }],
+      ["opencode", { kind: "subscription" }],
+    ]);
+    expect(world.ran[0]?.payloads.join("")).not.toContain("sk-proj-");
+  });
+
+  it("refuses pi's login from a Codex file that names a key and holds none as not a ChatGPT login", async () => {
+    const world = newWorld();
+    expect(failed(await world.put({ onBehalfOfUserId: ALICE, pi: "keyless" }))).toMatchObject({
+      code: "connected-account-unsupported",
+      provider: "codex",
+      message: expect.stringContaining("not a ChatGPT login"),
+    });
+    expect(world.ran).toEqual([]);
   });
 
   it("refuses pi's login from a Codex account that is not a ChatGPT login, or that is missing", async () => {
