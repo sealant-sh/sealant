@@ -536,6 +536,7 @@ describe("the control plane's features", () => {
       connectedAccountLoginClass: true,
       kubernetesPersonLayout: true,
       credentialPlacements: true,
+      connectedAccountApiKeys: true,
     });
   });
 });

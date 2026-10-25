@@ -39,6 +39,7 @@ export const toFeatures = (index: SystemIndexResponse): SealantFeatures => {
     connectedAccountDefaults: features?.connectedAccountDefaults === true,
     connectedAccountLoginClass: features?.connectedAccountLoginClass === true,
     kubernetesPersonLayout: features?.kubernetesPersonLayout === true,
+    connectedAccountApiKeys: features?.connectedAccountApiKeys === true,
   };
 };
 

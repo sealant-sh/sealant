@@ -1552,6 +1552,11 @@ export interface SealantFeatures {
   readonly kubernetesPersonLayout: boolean;
   /** Credential homes answer placement receipts; a put takes `live`; `prune` exists. */
   readonly credentialPlacements: boolean;
+  /**
+   * Claude and Codex API keys are placed into homes: a Claude key's receipt carries `keyPath`, the
+   * file an `apiKeyHelper` reads. A launch at `$HOME` still refuses a Claude key.
+   */
+  readonly connectedAccountApiKeys: boolean;
 }
 
 /** A published workspace image. */
