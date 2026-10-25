@@ -1582,6 +1582,11 @@ export interface SealantFeatures {
    * file an `apiKeyHelper` reads. A launch at `$HOME` still refuses a Claude key.
    */
   readonly connectedAccountApiKeys: boolean;
+  /**
+   * `allowedLogin` on `inference.respond()` (a key is refused when it says `subscription`),
+   * `receipt` on its answers and errors, and inference on a Claude API key.
+   */
+  readonly inferenceAllowedLogin: boolean;
 }
 
 /** Tagged artifact facts reported by the control plane. */
@@ -2313,12 +2318,24 @@ export interface InferenceUsage {
   readonly outputTokens: number;
 }
 
+/**
+ * The login an exchange runs on, fixed when it starts: every continuation runs on it, even after
+ * the account is reconnected. `revision` is the account's credential revision at the start.
+ */
+export interface InferenceReceipt {
+  readonly accountId: string;
+  readonly revision: number;
+  readonly login: "subscription" | "api-key";
+}
+
 export interface InferenceResponse {
   /** Continuation handle for the tool loop (held in memory server-side; expires after idle). */
   readonly sessionId: string;
   readonly turn: InferenceTurn;
   /** Usage for the exchange, present on the final text turn. */
   readonly usage?: InferenceUsage;
+  /** The exchange's login; absent from a control plane without `features().inferenceAllowedLogin`. */
+  readonly receipt?: InferenceReceipt;
 }
 
 /** Starts a new inference exchange on a connected account. */
@@ -2332,6 +2349,12 @@ export interface InferenceRespondOptions {
   /** Structured output: reply as JSON (schema-constrained when `schema` is given). */
   readonly responseFormat?: { readonly type: "json"; readonly schema?: unknown };
   readonly credentials: InferenceCredentialsOptions;
+  /**
+   * `subscription` refuses an account holding an API key before the provider is asked (a
+   * `SealantApiError` with `reason` `login-not-allowed`); `any`, the default, runs on either.
+   * Needs `features().inferenceAllowedLogin`; without it nothing is sent.
+   */
+  readonly allowedLogin?: "subscription" | "any";
 }
 
 /** Continues an exchange by posting the results of the previous turn's tool calls. */
