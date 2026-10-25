@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   claudeEngineLayer,
   InferenceEngine,
-  InferenceEngineLive,
   type ClaudeEngineOptions,
   type InferenceStartInput,
 } from "./claude-engine.js";
@@ -22,10 +21,7 @@ const configDirs: string[] = [];
 
 beforeEach(async () => {
   fake = await startFakeAnthropic();
-  process.env["ANTHROPIC_BASE_URL"] = fake.baseUrl;
   process.env["ANTHROPIC_API_KEY"] = ambientKey;
-  process.env["DISABLE_AUTOUPDATER"] = "1";
-  process.env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1";
 });
 
 afterEach(async () => {
@@ -55,7 +51,7 @@ const keyStart = (): InferenceStartInput & { readonly configDir: string } => {
 const start = (input: InferenceStartInput, options?: ClaudeEngineOptions) =>
   Effect.runPromise(
     Effect.flatMap(InferenceEngine, (engine) => engine.start(input)).pipe(
-      Effect.provide(options === undefined ? InferenceEngineLive : claudeEngineLayer(options)),
+      Effect.provide(claudeEngineLayer({ anthropicBaseUrl: fake.baseUrl, ...options })),
     ),
   );
 
@@ -106,7 +102,11 @@ describe("claude engine cleanup", () => {
     const engine = Effect.runSync(
       Effect.provide(
         InferenceEngine,
-        claudeEngineLayer({ sessionIdleTtlMs: 3_000, sweepIntervalMs: 100 }),
+        claudeEngineLayer({
+          anthropicBaseUrl: fake.baseUrl,
+          sessionIdleTtlMs: 3_000,
+          sweepIntervalMs: 100,
+        }),
       ),
     );
 
@@ -125,5 +125,50 @@ describe("claude engine cleanup", () => {
       reason: "engine",
     });
     await expect.poll(() => existsSync(input.configDir), { timeout: 10_000 }).toBe(false);
+  });
+});
+
+describe("claude engine environment", () => {
+  const hostOnly = {
+    CLAUDE_CODE_USE_BEDROCK: "1",
+    CLAUDE_CODE_USE_VERTEX: "1",
+    CLAUDE_CODE_USE_FOUNDRY: "1",
+    ANTHROPIC_CUSTOM_HEADERS: "x-leak: 1",
+    AWS_ACCESS_KEY_ID: "AKIAFAKEHOSTCLOUDKEY",
+    SEALANT_CREDENTIALS_KEY: "FAKEhostcipherkey",
+    SEALANT_DATABASE_URL: "postgres://FAKE@host/db",
+  };
+
+  afterEach(() => {
+    for (const name of Object.keys(hostOnly)) delete process.env[name];
+    delete process.env["HTTPS_PROXY"];
+  });
+
+  it("hands the CLI its own login and the host's path, locale and proxy, nothing else", async () => {
+    Object.assign(process.env, hostOnly, {
+      ANTHROPIC_BASE_URL: "http://elsewhere.invalid",
+      HTTPS_PROXY: "http://proxy.invalid:3128",
+    });
+    let env: Record<string, string | undefined> | undefined;
+    const capturing: NonNullable<ClaudeEngineOptions["query"]> = (params) => {
+      env = params.options?.env;
+      throw new Error("captured");
+    };
+    const input = keyStart();
+
+    await expect(
+      start(input, { query: capturing, anthropicBaseUrl: "http://fake.invalid" }),
+    ).rejects.toMatchObject({ reason: "engine" });
+
+    expect(env).toMatchObject({
+      HOME: input.configDir,
+      CLAUDE_CONFIG_DIR: input.configDir,
+      ANTHROPIC_BASE_URL: "http://fake.invalid",
+      HTTPS_PROXY: "http://proxy.invalid:3128",
+      PATH: process.env["PATH"],
+    });
+    for (const name of [...Object.keys(hostOnly), "ANTHROPIC_API_KEY"]) {
+      expect(env).not.toHaveProperty(name);
+    }
   });
 });

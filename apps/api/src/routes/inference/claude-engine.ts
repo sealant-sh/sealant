@@ -9,9 +9,9 @@
  * empty one; session credential files are materialized into it (0700 dir / 0600 file) so the
  * official CLI reads the file itself AND can rotate the session with its refresh token — the
  * control plane never calls Anthropic's token endpoint. This module NEVER calls a model API
- * directly, never logs the token, and strips any ambient `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`
- * from the subprocess env so the exchange cannot silently bill a different identity than the
- * resolved connected account.
+ * directly, never logs the token, and builds the subprocess env from an allowlist
+ * ({@link providerCliEnv}), so no ambient key, cloud-provider switch or base URL can make the
+ * exchange bill a different identity than the resolved connected account.
  *
  * Caller-defined tools are exposed to the model through an in-process MCP server registered with
  * the caller's JSON schemas VERBATIM (the low-level @modelcontextprotocol/sdk server — the agent
@@ -32,7 +32,6 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { providerLoginEnvNames } from "@sealant/api-contracts";
 import { Context, Effect, Layer } from "effect";
 
 import type { Exchange } from "./exchange.js";
@@ -42,7 +41,7 @@ import {
   type SessionTurn,
   type ToolResultInput,
 } from "./session-state.js";
-import { extractJson, soundsLikeAuthFailure, redactSecrets } from "./support.js";
+import { extractJson, providerCliEnv, redactSecrets, soundsLikeAuthFailure } from "./support.js";
 
 const CALLER_SERVER_NAME = "caller";
 const DEFAULT_MAX_TURNS = 16;
@@ -197,19 +196,16 @@ const buildCallerToolServer = (
   return server;
 };
 
-/** Subprocess env: ambient Anthropic identities stripped, the resolved account's auth injected. */
-const buildEnv = (auth: InferenceAuth): Record<string, string | undefined> => {
-  const env: Record<string, string | undefined> = { ...process.env };
-  for (const name of providerLoginEnvNames.claude) delete env[name];
-  delete env["ANTHROPIC_PROFILE"];
-  env["CLAUDE_CONFIG_DIR"] = auth.configDir;
-  env["HOME"] = auth.configDir;
-  if (auth.kind === "oauth-token") {
-    env["CLAUDE_CODE_OAUTH_TOKEN"] = auth.oauthToken;
-  }
-  env["CLAUDE_AGENT_SDK_CLIENT_APP"] = "sealant-control-plane";
-  return env;
-};
+const buildEnv = (auth: InferenceAuth, anthropicBaseUrl: string | undefined) =>
+  providerCliEnv({
+    CLAUDE_CONFIG_DIR: auth.configDir,
+    HOME: auth.configDir,
+    DISABLE_AUTOUPDATER: "1",
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    CLAUDE_AGENT_SDK_CLIENT_APP: "sealant-control-plane",
+    ...(auth.kind === "oauth-token" ? { CLAUDE_CODE_OAUTH_TOKEN: auth.oauthToken } : {}),
+    ...(anthropicBaseUrl === undefined ? {} : { ANTHROPIC_BASE_URL: anthropicBaseUrl }),
+  });
 
 const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
 
@@ -268,6 +264,8 @@ const runSessionEnd = (onSessionEnd: (() => Promise<void>) | undefined): void =>
 
 export interface ClaudeEngineOptions {
   readonly query?: typeof query;
+  /** Tests only: the fake Anthropic API the CLI is sent to. */
+  readonly anthropicBaseUrl?: string;
   readonly turnTimeoutMs?: number;
   readonly sessionIdleTtlMs?: number;
   readonly sweepIntervalMs?: number;
@@ -349,7 +347,7 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
         prompt: input.prompt,
         options: {
           spawnClaudeCodeProcess,
-          env: buildEnv(input.auth),
+          env: buildEnv(input.auth, options.anthropicBaseUrl),
           ...authSettings(input.auth),
           cwd: tmpdir(),
           // Inference, not an agent workspace: no built-in tools, no filesystem settings, no partials.
