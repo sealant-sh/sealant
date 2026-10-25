@@ -36,6 +36,7 @@ export const toFeatures = (index: SystemIndexResponse): SealantFeatures => {
     personBinding: features?.personBinding === true,
     sshKeyRemovalEndsConnections: features?.sshKeyRemovalEndsConnections === true,
     connectedAccountDefaults: features?.connectedAccountDefaults === true,
+    connectedAccountLoginClass: features?.connectedAccountLoginClass === true,
     kubernetesPersonLayout: features?.kubernetesPersonLayout === true,
   };
 };
@@ -69,6 +70,19 @@ export const requireConnectedAccountDefaults = async (ctx: SdkContext): Promise<
     throw new SealantError(
       "This control plane cannot choose a default connected account or target one by id (it does not report the feature, or could not be asked); nothing was sent.",
       { code: "connected-account-defaults-unsupported" },
+    );
+  }
+};
+
+export const requireConnectedAccountLoginClass = async (ctx: SdkContext): Promise<void> => {
+  const supported = await readFeatures(ctx).then(
+    (features) => features.connectedAccountLoginClass,
+    () => false,
+  );
+  if (!supported) {
+    throw new SealantError(
+      "This control plane cannot check a connect's login class (it does not report the feature, or could not be asked), and would store the secret whatever it is; nothing was sent.",
+      { code: "connected-account-login-class-unsupported" },
     );
   }
 };

@@ -1018,6 +1018,7 @@ describe("processWorkspaceBuildJobEffect", () => {
               connectedAccountId: "cacc_claude_session",
               injection: "file",
               copy: true,
+              login: "subscription",
             },
           ],
         }),

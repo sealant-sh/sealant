@@ -1,5 +1,7 @@
-import { inspect, types } from "node:util";
+import { createServer, type Server } from "node:http";
+import { format, inspect, types } from "node:util";
 
+import { NodeHttpServer } from "@effect/platform-node";
 /**
  * No credential the API receives or sends reaches a span, a log line or an error report. Each case
  * is served as the API serves it (the router with its request tracer and request logger), with a
@@ -20,7 +22,18 @@ import {
 } from "@sealant/db";
 import { TelemetryQuery } from "@sealant/telemetry";
 import { SealantRuntime } from "@sealant/workspaces";
-import { Cause, Context, Effect, ErrorReporter, Exit, Layer, Logger, Tracer } from "effect";
+import {
+  Cause,
+  Context,
+  Effect,
+  ErrorReporter,
+  Exit,
+  Layer,
+  Logger,
+  References,
+  Scope,
+  Tracer,
+} from "effect";
 import {
   FetchHttpClient,
   HttpClient,
@@ -31,9 +44,10 @@ import {
   HttpServer,
   HttpServerError,
   HttpServerRequest,
+  HttpServerResponse,
 } from "effect/http";
 import { type HttpApi, HttpApiBuilder, type HttpApiGroup } from "effect/http-api";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { RequestRefusalLive } from "../routes/request-refusal.js";
 
@@ -170,6 +184,8 @@ const observers = (redacted: boolean) => {
         event(name, startTime, attributes);
       };
       span.end = (endTime, exit) => {
+        lines.push(`span name ${span.name}`);
+        for (const link of span.links) lines.push(`span link ${JSON.stringify(link.attributes)}`);
         for (const [key, value] of span.attributes) lines.push(`span ${key}=${String(value)}`);
         if (Exit.isFailure(exit)) lines.push(`span failure ${structured(exit.cause)}`);
         end(endTime, exit);
@@ -179,6 +195,10 @@ const observers = (redacted: boolean) => {
   });
   const logger = Logger.make((options) => {
     lines.push(`log ${inspect(options.message, { depth: 12 })} ${structured(options.cause)}`);
+    const annotations = options.fiber.getRef(References.CurrentLogAnnotations);
+    const spans = options.fiber.getRef(References.CurrentLogSpans);
+    lines.push(`log annotations ${inspect(annotations, { depth: 12 })}`);
+    lines.push(`log spans ${spans.map(([label]) => label).join(" ")}`);
   });
   const reporter = ErrorReporter.make(({ cause }) => {
     lines.push(`report ${structured(cause)}`);
@@ -266,6 +286,21 @@ describe("a credential in a request's URL", () => {
     });
   }
 
+  it("carries no provider key in its path or an unnamed parameter into any span attribute", async () => {
+    const key = "sk-proj-FAKEcodexkeyinaurl0000wxyz";
+    const path = `/v1/sessions/${key}/attach?from=0&ownerUserId=${OWNER}&token=${MARKER}&q=${key}`;
+    const server = serve(browserRoutes, true);
+    await server.send(path);
+    const observed = server.lines.join("\n");
+    expect(observed).toContain("url.full=");
+    expect(observed).toContain("url.query=");
+    expect(observed).not.toContain(key);
+
+    const control = serve(browserRoutes, false);
+    await control.send(path);
+    expect(control.lines.join("\n")).toContain(key);
+  });
+
   it("is not in the failure an attach that is no WebSocket ends with, in any observer", async () => {
     const path = `/v1/sessions/sess_live/attach?from=0&ownerUserId=${OWNER}&token=${MARKER}`;
     const server = serve(browserRoutes, true);
@@ -282,6 +317,120 @@ describe("a credential in a request's URL", () => {
     expect(control.lines.filter((line) => !line.startsWith("span url")).join("\n")).toContain(
       MARKER,
     );
+  });
+});
+
+/**
+ * The API as its process serves it: a TCP server, the router with its request logger and the
+ * service-key gate, the process's own loggers (and every built-in format beside them) printing to
+ * the console, all beneath `CredentialRedactionLive`. What the console receives is the process log.
+ */
+const serveOverTcp = async (
+  app: Layer.Layer<never, never, HttpRouter.HttpRouter>,
+  redacted: boolean,
+) => {
+  const { servicePrincipalMiddleware, makeServicePrincipals } =
+    await import("./service-principals.js");
+  const printed: string[] = [];
+  const print = (...args: unknown[]) => {
+    printed.push(format(...args));
+  };
+  const spies = (["log", "info", "warn", "error", "debug", "trace"] as const).map((method) =>
+    vi.spyOn(console, method).mockImplementation(print),
+  );
+  const loggers = Logger.layer(
+    [Logger.consoleJson, Logger.consoleLogFmt, Logger.consolePretty({ colors: false })],
+    { mergeWithExisting: true },
+  );
+  let server: Server | undefined;
+  const layer = HttpRouter.serve(app, {
+    middleware: servicePrincipalMiddleware(makeServicePrincipals(MARKER), GATEWAY_MARKER),
+  }).pipe(
+    Layer.provideMerge(NodeHttpServer.layer(() => (server = createServer()), { port: 0 })),
+    Layer.provide(redacted ? redaction.CredentialRedactionLive : Layer.empty),
+    Layer.provide(loggers),
+  );
+  const scope = Effect.runSync(Scope.make());
+  await Effect.runPromise(Layer.buildWithScope(layer, scope));
+  const address = server?.address();
+  if (typeof address !== "object" || address === null) throw new Error("expected a TCP address");
+  disposers.push(async () => {
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+    for (const spy of spies) spy.mockRestore();
+  });
+  const send = async (path: string) => {
+    const response = await fetch(`http://127.0.0.1:${address.port}${path}`, {
+      headers: { authorization: `Bearer ${MARKER}` },
+    });
+    await response.text();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return response.status;
+  };
+  return { send, printed };
+};
+
+describe("what the API process prints", () => {
+  const key = ["sk", "proj", `FAKE${"O".repeat(35)}O101`].join("-");
+  const probe = HttpRouter.add(
+    "GET",
+    "/v1/probe",
+    Effect.log("probe").pipe(
+      Effect.annotateLogs({
+        nested: { deep: [{ value: key }] },
+        link: new URL(`https://example.test/a?token=${MARKER}&q=${key}`),
+        apiKey: "fake-plain-value",
+        [`label ${key}`]: 1,
+      }),
+      Effect.withLogSpan(`probe ${key}`),
+      Effect.withSpan(`probe ${key}`, {
+        links: [
+          {
+            span: Tracer.externalSpan({ spanId: "span_1", traceId: "trace_1" }),
+            attributes: { note: `linked ${key}` },
+          },
+        ],
+      }),
+      Effect.as(HttpServerResponse.text("ok")),
+    ),
+  );
+  const app = () =>
+    Layer.mergeAll(browserRoutes, probe) as Layer.Layer<never, never, HttpRouter.HttpRouter>;
+  const requests = [
+    [`/v1/no-such/${key}?q=${key}`, 404],
+    [`/v1/workspaces/${key}?ownerUserId=${OWNER}&q=${key}`, 404],
+    [`/v1/sessions/${key}/output/stream?from=0&ownerUserId=${OWNER}&q=${key}`, 404],
+    ["/v1/probe", 200],
+  ] as const;
+
+  it("carries no provider key from a request's path or an unnamed parameter, nor from a log's annotations or span", async () => {
+    const server = await serveOverTcp(app(), true);
+    for (const [path, status] of requests) expect(await server.send(path)).toBe(status);
+    const printed = server.printed.join("\n");
+    expect(printed).toContain("http.url");
+    expect(printed).not.toContain(key);
+    expect(printed).not.toContain(MARKER);
+    expect(printed).toContain("/v1/no-such/REDACTED");
+    expect(printed).toContain("probe REDACTED");
+    expect(printed).not.toContain("fake-plain-value");
+
+    const control = await serveOverTcp(app(), false);
+    for (const [path] of requests) await control.send(path);
+    expect(control.printed.join("\n")).toContain(key);
+  });
+
+  it("gives no span a provider key in its name, links or attributes", async () => {
+    const bearer = { headers: { authorization: `Bearer ${MARKER}` } };
+    const server = serve(app(), true);
+    for (const [path, status] of requests) expect(await server.send(path, bearer)).toBe(status);
+    const observed = server.lines.join("\n");
+    expect(observed).toContain("span name probe REDACTED");
+    expect(observed).toContain('span link {"note":"linked REDACTED"}');
+    expect(observed).not.toContain(key);
+    expect(observed).not.toContain(MARKER);
+
+    const control = serve(app(), false);
+    for (const [path] of requests) await control.send(path, bearer);
+    expect(control.lines.join("\n")).toContain(`span name probe ${key}`);
   });
 });
 
@@ -374,18 +523,25 @@ const shapes = (bytes: number) => [
   `${'bearer \\"'.repeat(bytes / 9)}`,
   `https://u:${"%2F".repeat(bytes / 3)}`,
   `${"a%40".repeat(bytes / 4)}`,
+  `${"sk-".repeat(bytes / 3)}`,
+  `${"sk-ant-api0".repeat(bytes / 11)}`,
+  `${`sk-${"a".repeat(31)} `.repeat(bytes / 35)}`,
 ];
 
 /**
  * The expressions allowed to inspect more than a name's length of text (64 characters), each linear
  * by construction. A query pair starts only at a separator, and its name excludes the separators,
  * so a failed attempt reads at most to the next one; its value never fails. An auth scheme is a
- * literal of at most six characters, then blanks it never gives back. An expression added or changed
- * here needs the same argument.
+ * literal of at most six characters, then blanks it never gives back. A provider key starts only at
+ * the literal `sk-`, after one character that is no letter or digit (a lookbehind of one
+ * character); each branch is a literal prefix and one run of key characters it never gives back,
+ * so a failed attempt reads no further than that run. An expression added or changed here needs the
+ * same argument.
  */
 const LINEAR_SEARCHES = new Set([
   String.raw`/([?&;])([^=&\s#?;]+)=([^&\s#;"'<>)\\]*)/g`,
   String.raw`/\b(bearer|basic)[ \t]+/gi`,
+  String.raw`/(?<![A-Za-z0-9])sk-(?:(?:ant-(?:api|oat|ort|admin)\d*|proj|svcacct|admin)-[A-Za-z0-9_-]{8,}|[A-Za-z0-9_-]{32,})/g`,
 ]);
 
 /** The built-ins redaction calls today, each charged below. Calling any other needs review first. */
@@ -813,6 +969,38 @@ describe("observe", () => {
 });
 
 describe("redactCredentialsInText", () => {
+  it("replaces a provider key by its shape, wherever it stands", () => {
+    const keys = [
+      "sk-ant-api03-FAKEclaudekeyforthetests000000wxyz",
+      "sk-ant-oat01-FAKEsetuptoken0000wxyz",
+      "sk-proj-FAKEcodexkey0000wxyz",
+      "sk-FAKElegacyopenaikey00000000000000000000wxyz",
+    ];
+    for (const key of keys) {
+      const redacted = redaction.redactCredentialsInText(
+        `401 from the provider: invalid x-api-key ${key}, (key=${key})`,
+      );
+      expect(redacted).not.toContain(key);
+      expect(redacted).not.toContain("wxyz");
+      expect(redacted).toContain("401 from the provider: invalid x-api-key REDACTED");
+    }
+    expect(redaction.redactCredentialsInText("task-runner sk-learn sk-short risk-assessment")).toBe(
+      "task-runner sk-learn sk-short risk-assessment",
+    );
+    expect(redaction.redactCredentialsInText(`OPENAI_API_KEY_${keys[2]}`)).toBe(
+      "OPENAI_API_KEY_REDACTED",
+    );
+  });
+
+  it("replaces a provider key in an observed URL, its path and its parameters", () => {
+    const key = "sk-proj-FAKEcodexkeyinaurl0000wxyz";
+    const observed = redaction.observe({
+      url: new URL(`https://api.example.test/v1/${key}?q=${key}`),
+      params: new URLSearchParams({ q: key }),
+    });
+    expect(JSON.stringify(observed)).not.toContain(key);
+  });
+
   it("replaces a bearer or basic credential in any case, bare, quoted or escaped", () => {
     const SECRET = "slt_r6_credential_marker";
     for (const scheme of ["Bearer", "bearer", "BEARER", "Basic", "basic"]) {
@@ -910,6 +1098,33 @@ describe("a reporter beneath the redaction", () => {
     expect(plain).toHaveLength(2);
     expect(redacted).toHaveLength(plain.length);
     expect(redacted.join("\n")).not.toContain(MARKER);
+  });
+
+  it("reads the log annotations and log spans of the fiber it is given observed", async () => {
+    const key = ["sk", "proj", `FAKE${"O".repeat(35)}O202`].join("-");
+    const run = async (redacted: boolean) => {
+      const reports: string[] = [];
+      const recorder = ErrorReporter.make(({ fiber }) => {
+        const annotations = fiber.getRef(References.CurrentLogAnnotations);
+        const spans = fiber.getRef(References.CurrentLogSpans);
+        reports.push(inspect({ annotations, spans }, { depth: 12 }));
+      });
+      const reporters = redacted ? [redaction.redactingReporter(recorder)] : [recorder];
+      await Effect.runPromiseExit(
+        Effect.fail(new Error("failed")).pipe(
+          Effect.withErrorReporting,
+          Effect.annotateLogs({ request: { path: `/v1/no-such/${key}` } }),
+          Effect.withLogSpan(`span ${key}`),
+          Effect.provide(ErrorReporter.layer(reporters)),
+        ),
+      );
+      return reports.join("\n");
+    };
+    expect(await run(false)).toContain(key);
+    const redacted = await run(true);
+    expect(redacted).toContain("/v1/no-such/REDACTED");
+    expect(redacted).toContain("span REDACTED");
+    expect(redacted).not.toContain(key);
   });
 });
 

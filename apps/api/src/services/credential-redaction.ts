@@ -35,10 +35,22 @@
  * class and values. Install an exporter's tracer, logger or reporter beneath this layer, so its
  * output passes through it.
  *
- * Not covered: a fiber's log annotations and log-span labels (a logger reads them from the fiber),
- * a span's name and links. No Core code puts a credential there; keep it that way.
+ * A logger and a reporter read a fiber's log annotations and log spans from the fiber they are
+ * given, so they are given one that reads both observed: an annotation as a field, a span's label
+ * as text. A span's name and its links' attributes are observed as its attributes are.
  */
-import { Cause, Context, Effect, ErrorReporter, Exit, Layer, Logger, Tracer } from "effect";
+import {
+  Cause,
+  Context,
+  Effect,
+  ErrorReporter,
+  Exit,
+  type Fiber,
+  Layer,
+  Logger,
+  References,
+  Tracer,
+} from "effect";
 import {
   Headers,
   HttpClientRequest,
@@ -107,19 +119,24 @@ const isCredentialParameter = (rawName: string): boolean =>
 // URLs
 // ---------------------------------------------------------------------------------------------
 
-/** A query string (no leading `?`) with every credential parameter's value replaced. */
+/** A query string (no leading `?`) with credential parameter values and provider keys replaced. */
 export const redactQueryCredentials = (query: string): string =>
-  query
-    .split("&")
-    .map((pair) => {
-      const equals = pair.indexOf("=");
-      if (equals === -1) return pair;
-      const rawName = pair.slice(0, equals);
-      return isCredentialParameter(rawName) ? `${rawName}=${REDACTED}` : pair;
-    })
-    .join("&");
+  redactProviderKeys(
+    query
+      .split("&")
+      .map((pair) => {
+        const equals = pair.indexOf("=");
+        if (equals === -1) return pair;
+        const rawName = pair.slice(0, equals);
+        return isCredentialParameter(rawName) ? `${rawName}=${REDACTED}` : pair;
+      })
+      .join("&"),
+  );
 
-/** A full URL with its query credentials and userinfo replaced; other text through the text rules. */
+/**
+ * A full URL with its query credentials, its userinfo and any provider key (in its path too)
+ * replaced; other text through the text rules.
+ */
 export const redactUrlCredentials = (value: string): string => {
   let url: URL;
   try {
@@ -134,7 +151,7 @@ export const redactUrlCredentials = (value: string): string => {
   if (url.search !== "") {
     url.search = `?${redactQueryCredentials(url.search.slice(1))}`;
   }
-  return url.toString();
+  return redactProviderKeys(url.toString());
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -338,16 +355,28 @@ const redactNamedValues = (text: string): string => {
 };
 
 /**
+ * An Anthropic or OpenAI key by its shape, wherever it stands: after any character but a letter
+ * or a digit, so `OPENAI_API_KEY_sk-…` is caught and `risk-…` is not.
+ */
+const PROVIDER_KEY =
+  /(?<![A-Za-z0-9])sk-(?:(?:ant-(?:api|oat|ort|admin)\d*|proj|svcacct|admin)-[A-Za-z0-9_-]{8,}|[A-Za-z0-9_-]{32,})/g;
+
+const redactProviderKeys = (text: string): string => text.replace(PROVIDER_KEY, REDACTED);
+
+/**
  * Free text (an error message, a stack, a log line, an inspected value) with every credential it
  * can recognise replaced: a URL's userinfo (plain, slash-escaped or percent-encoded), a credential
- * query parameter, a `Bearer` or `Basic` credential (any case, quoted or escaped), and the value of
- * any field or header named for a credential. Linear in the text's length.
+ * query parameter, a `Bearer` or `Basic` credential (any case, quoted or escaped), the value of any
+ * field or header named for a credential, and an Anthropic or OpenAI key by its shape. Linear in
+ * the text's length.
  */
 export const redactCredentialsInText = (text: string): string =>
-  redactNamedValues(
-    redactAuthSchemes(
-      redactUserinfo(text).replace(QUERY_PAIR, (pair: string, separator: string, name: string) =>
-        isCredentialParameter(name) ? `${separator}${name}=${REDACTED}` : pair,
+  redactProviderKeys(
+    redactNamedValues(
+      redactAuthSchemes(
+        redactUserinfo(text).replace(QUERY_PAIR, (pair: string, separator: string, name: string) =>
+          isCredentialParameter(name) ? `${separator}${name}=${REDACTED}` : pair,
+        ),
       ),
     ),
   );
@@ -726,6 +755,10 @@ const observeObject = (value: object, walk: Walk, depth: number): unknown => {
  */
 export const observe = (value: unknown): unknown => observeInto(value, { path: new Set() }, 0);
 
+/** A record's fields as `observe` gives a plain object's: names through the text rules, each observed. */
+const observeRecord = (value: object): Record<string, unknown> =>
+  freshObject(observeFields(value, { path: new Set([value]) }, 0));
+
 // ---------------------------------------------------------------------------------------------
 // Causes
 // ---------------------------------------------------------------------------------------------
@@ -827,25 +860,74 @@ const observedAttributes = (
         Object.entries(attributes).map(([key, value]) => [key, observedAttribute(key, value)]),
       );
 
-/** `tracer`, with every span's attributes, events and ending failure observed. */
+const observedLinks = (links: ReadonlyArray<Tracer.SpanLink>): Array<Tracer.SpanLink> =>
+  links.map((link) => ({ span: link.span, attributes: observedAttributes(link.attributes) ?? {} }));
+
+/** `tracer`, with every span's name, links, attributes, events and ending failure observed. */
 export const redactingTracer = (tracer: Tracer.Tracer): Tracer.Tracer =>
   Tracer.make({
     ...tracer,
     span: (options) => {
-      const span = tracer.span(options);
+      const span = tracer.span({
+        ...options,
+        name: observedText(options.name),
+        links: observedLinks(options.links),
+      });
       const attribute = span.attribute.bind(span);
       const event = span.event.bind(span);
       const end = span.end.bind(span);
+      const addLinks = span.addLinks.bind(span);
       span.attribute = (key, value) => attribute(key, observedAttribute(key, value));
       span.event = (name, startTime, attributes) =>
         event(observedText(name), startTime, observedAttributes(attributes));
+      span.addLinks = (links) => addLinks(observedLinks(links));
       span.end = (endTime, exit) =>
         end(endTime, Exit.isFailure(exit) ? Exit.failCause(observedCause(exit.cause)) : exit);
       return span;
     },
   });
 
-/** `logger`, given every message and cause observed. */
+const observedRecord = safely(observeRecord, () => ({ [REDACTED]: REDACTION_FAILED }));
+
+/**
+ * `fiber`, reading its log annotations and log spans observed: what a logger or a reporter prints
+ * beside the message. Every other read is the fiber's own.
+ */
+const observedFiber = (fiber: Fiber.Fiber<unknown, unknown>): Fiber.Fiber<unknown, unknown> => {
+  const annotations = fiber.getRef(References.CurrentLogAnnotations);
+  const spans = fiber.getRef(References.CurrentLogSpans);
+  if (spans.length === 0 && Object.keys(annotations).length === 0) return fiber;
+  const context = Context.add(
+    Context.add(fiber.context, References.CurrentLogAnnotations, observedRecord(annotations)),
+    References.CurrentLogSpans,
+    spans.map(([label, timestamp]): [string, number] => [observedText(label), timestamp]),
+  );
+  return {
+    "~effect/Fiber": fiber["~effect/Fiber"],
+    get id() {
+      return fiber.id;
+    },
+    get currentOpCount() {
+      return fiber.currentOpCount;
+    },
+    getRef: (ref) => Context.get(context, ref),
+    context,
+    setContext: (next) => fiber.setContext(next),
+    get cache() {
+      return fiber.cache;
+    },
+    get currentDispatcher() {
+      return fiber.currentDispatcher;
+    },
+    addObserver: (observer) => fiber.addObserver(observer),
+    interruptUnsafe: (fiberId, interruptAnnotations) =>
+      fiber.interruptUnsafe(fiberId, interruptAnnotations),
+    pollUnsafe: () => fiber.pollUnsafe(),
+    pipe: fiber.pipe.bind(fiber),
+  };
+};
+
+/** `logger`, given every message, cause, log annotation and log span observed. */
 export const redactingLogger = <Output>(
   logger: Logger.Logger<unknown, Output>,
 ): Logger.Logger<unknown, Output> =>
@@ -854,6 +936,7 @@ export const redactingLogger = <Output>(
       ...options,
       message: observedValue(options.message),
       cause: observedCause(options.cause),
+      fiber: observedFiber(options.fiber),
     }),
   );
 
@@ -861,7 +944,7 @@ const failureOf = (reason: Cause.Reason<unknown>): unknown =>
   Cause.isFailReason(reason) ? reason.error : Cause.isDieReason(reason) ? reason.defect : undefined;
 
 /**
- * `reporter`, given each report's cause observed: one report in, at most one out. Like
+ * `reporter`, given each report's cause and fiber observed: one report in, at most one out. Like
  * `ErrorReporter.make`, a cause or a failure already reported (by identity of the original, not of
  * any copy) is not reported again, so the reporter's own skipping still holds across the fresh
  * copies it receives.
@@ -884,7 +967,11 @@ export const redactingReporter = (
         return true;
       });
       if (fresh.every((reason) => Cause.isInterruptReason(reason))) return;
-      reporter.report({ ...options, cause: observedCause(Cause.fromReasons(fresh)) });
+      reporter.report({
+        ...options,
+        cause: observedCause(Cause.fromReasons(fresh)),
+        fiber: observedFiber(options.fiber),
+      });
     },
   };
 };

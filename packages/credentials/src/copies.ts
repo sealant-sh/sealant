@@ -15,6 +15,8 @@ A copy works until its access token expires and cannot spend, rotate or revoke t
 2026-10-01 against Claude Code 2.1.286 and Codex 0.159.2.
 */
 
+import type { CodexCredentialPayload } from "./payloads.js";
+
 /** Stands in for Codex's refresh token in every copy; never a token any provider issues. */
 export const CODEX_COPY_REFRESH_TOKEN = "sealant-copy-cannot-refresh";
 
@@ -67,6 +69,16 @@ export const claudeSetupTokenCredentials = (token: string): string =>
       subscriptionType: null,
     },
   });
+
+/**
+ * A Codex API key as the file `codex login --with-api-key` writes, the only one `codex app-server`
+ * reads in that mode (observed 2026-10-24).
+ */
+export const codexApiKeyAuthJson = (apiKey: string): string =>
+  JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: apiKey });
+
+export const codexLoginFile = (payload: CodexCredentialPayload): string =>
+  "apiKey" in payload ? codexApiKeyAuthJson(payload.apiKey) : codexAuthJsonCopy(payload.authJson);
 
 /** A Codex auth.json whose holder cannot refresh it: the refresh token is a placeholder. */
 export const codexAuthJsonCopy = (authJson: string): string => {

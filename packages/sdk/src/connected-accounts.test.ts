@@ -28,7 +28,13 @@ let answer: { readonly status: number; readonly body: unknown } = { status: 500,
 let seen: Array<{ readonly method: string; readonly url: string; readonly body: unknown }> = [];
 let features: Record<string, boolean> = {};
 
-const currentControlPlane = { processUser: false, connectedAccountDefaults: true };
+const currentControlPlane = {
+  processUser: false,
+  connectedAccountDefaults: true,
+  connectedAccountLoginClass: true,
+};
+/** Chooses defaults, and drops a connect's `login` unread. */
+const defaultsOnlyControlPlane = { processUser: false, connectedAccountDefaults: true };
 const olderControlPlane = { processUser: false };
 
 const answering = (
@@ -145,6 +151,41 @@ describe("connectedAccounts", () => {
     await sealant.close();
   });
 
+  it("connect sends the login class it expects, and reads each account's class back", async () => {
+    answering(201, summary({ kind: "api-key", login: { kind: "api-key", suffix: "wxyz" } }));
+    const sealant = client();
+    const account = await sealant.connectedAccounts.connect({
+      provider: "codex",
+      secret: "sk-proj-FAKEcodexkey0000wxyz",
+      login: "api-key",
+    });
+    expect(seen[0]?.body).toEqual({
+      ownerUserId: "usr_owner",
+      provider: "codex",
+      secret: "sk-proj-FAKEcodexkey0000wxyz",
+      login: "api-key",
+    });
+    expect(account.login).toEqual({ kind: "api-key", suffix: "wxyz" });
+    await sealant.close();
+  });
+
+  it("listWithHistory says whether the owner ever connected a key", async () => {
+    answering(200, {
+      items: [summary({ login: { kind: "subscription" } })],
+      hasApiKeyHistory: true,
+    });
+    const sealant = client();
+    const listed = await sealant.connectedAccounts.listWithHistory();
+    expect(listed.hasApiKeyHistory).toBe(true);
+    expect(listed.accounts.map((account) => account.login)).toEqual([{ kind: "subscription" }]);
+
+    answering(200, { items: [summary()] });
+    const older = await sealant.connectedAccounts.listWithHistory();
+    expect(older).not.toHaveProperty("hasApiKeyHistory");
+    expect(older.accounts[0]).not.toHaveProperty("login");
+    await sealant.close();
+  });
+
   it("throws the candidates of a connect that names no account while several exist", async () => {
     answering(409, {
       _tag: "ConnectedAccountConflictError",
@@ -161,6 +202,39 @@ describe("connectedAccounts", () => {
       reason: "connected-account-ambiguous",
       candidateAccountIds: ["cacc_default", "cacc_work"],
     });
+    await sealant.close();
+  });
+});
+
+describe("connectedAccounts against a control plane that chooses defaults but reads no login class", () => {
+  it("sends no connect that expects a login class, which it would store unchecked", async () => {
+    answering(201, summary(), defaultsOnlyControlPlane);
+    const sealant = client();
+    await expect(
+      sealant.connectedAccounts.connect({
+        provider: "codex",
+        secret: JSON.stringify({ tokens: { refresh_token: "rt-fake" } }),
+        login: "api-key",
+      }),
+    ).rejects.toMatchObject({ code: "connected-account-login-class-unsupported" });
+    expect(seen).toEqual([]);
+
+    await sealant.connectedAccounts.connect({
+      provider: "claude",
+      secret: "sk-ant-oat01-fake",
+      accountId: "cacc_work",
+      makeDefault: true,
+    });
+    expect(seen.map((call) => call.method)).toEqual(["POST"]);
+    expect(seen[0]?.body).not.toHaveProperty("login");
+    await sealant.close();
+  });
+
+  it("lists without a key history it does not report", async () => {
+    answering(200, { items: [summary()] }, defaultsOnlyControlPlane);
+    const sealant = client();
+    const listed = await sealant.connectedAccounts.listWithHistory();
+    expect(listed).toEqual({ accounts: [expect.objectContaining({ name: "work" })] });
     await sealant.close();
   });
 });

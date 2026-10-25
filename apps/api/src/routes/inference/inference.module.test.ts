@@ -85,6 +85,21 @@ const claudeAccount = account({
   encryptedPayload: `sealed:${JSON.stringify({ credentialsJson: claudeCredentialsJson })}`,
 });
 
+const codexKey = "sk-proj-FAKEcodexkeyforthetests0000wxyz";
+const codexKeyAccount = account({
+  provider: "codex",
+  id: "cacc_codex_key",
+  kind: "api-key",
+  encryptedPayload: `sealed:${JSON.stringify({ apiKey: codexKey })}`,
+  metadata: { tokenSuffix: "wxyz" },
+});
+const claudeKeyAccount = account({
+  provider: "claude",
+  id: "cacc_claude_key",
+  kind: "api-key",
+  encryptedPayload: `sealed:${JSON.stringify({ apiKey: "sk-ant-api03-FAKEclaudekeyforthetests000000wxyz" })}`,
+});
+
 interface AccountsStubOptions {
   readonly byName?: Record<string, ConnectedAccount | undefined>;
   readonly defaults?: Record<string, ConnectedAccount | undefined>;
@@ -94,7 +109,9 @@ interface AccountsStubOptions {
 const accountsStub = (options: AccountsStubOptions = {}) => ({
   getById: vi.fn((id: string) =>
     Effect.succeed(
-      [codexAccount, claudeAccount].find((candidate) => candidate.id === id) ?? undefined,
+      [codexAccount, claudeAccount, codexKeyAccount, claudeKeyAccount].find(
+        (candidate) => candidate.id === id,
+      ) ?? undefined,
     ),
   ),
   getByOwnerProviderName: vi.fn((input: { provider: string; name: string }) =>
@@ -372,6 +389,49 @@ describe("inference.module provider routing", () => {
     expect(seen?.refresh_token).toBe(CODEX_COPY_REFRESH_TOKEN);
     expect(accounts.replacePayload).not.toHaveBeenCalled();
     expect(existsSync(home)).toBe(false);
+  });
+
+  it("runs Codex on a key from Codex's own key file in its private home", async () => {
+    const accounts = accountsStub();
+    let seen: unknown;
+    let home = "";
+    const { layer } = makeLayers({
+      accounts,
+      codexStart: async (startInput) => {
+        home = startInput.codexHome;
+        seen = JSON.parse(readFileSync(join(home, "auth.json"), "utf8"));
+        await startInput.onSessionEnd?.();
+        return doneTurn("ok");
+      },
+    });
+
+    await run(
+      respond(newExchange({ credentials: { codex: "cacc_codex_key" } })).pipe(
+        Effect.provide(layer),
+      ),
+    );
+
+    expect(seen).toEqual({ auth_mode: "apikey", OPENAI_API_KEY: codexKey });
+    expect(existsSync(home)).toBe(false);
+  });
+
+  it("refuses Claude on a key with words, and starts no engine", async () => {
+    const accounts = accountsStub();
+    const { layer, engines } = makeLayers({ accounts });
+
+    const error = await runFlipped(
+      respond(newExchange({ credentials: { claude: "cacc_claude_key" } })).pipe(
+        Effect.provide(layer),
+      ),
+    );
+
+    expect(error).toBeInstanceOf(InferenceConflictError);
+    expect(error).toMatchObject({
+      code: "connected-account-unsupported",
+      message: expect.stringContaining("Claude API keys are not supported by this Sealant yet"),
+    });
+    expect(engines.claudeStart).not.toHaveBeenCalled();
+    expect(accounts.markInvalid).not.toHaveBeenCalled();
   });
 
   it("serves a parked exchange only to the owner who opened it", async () => {

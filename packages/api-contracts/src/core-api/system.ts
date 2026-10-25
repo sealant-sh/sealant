@@ -57,6 +57,12 @@ export const systemIndexResponseSchema = Schema.Struct({
        */
       connectedAccountDefaults: Schema.optional(Schema.Boolean),
       /**
+       * A connect takes `login` and refuses a secret of the other login class, Claude and Codex
+       * API keys connect beside a subscription, summaries carry `login`, and the list carries
+       * `hasApiKeyHistory`. Without it, `login` on a connect is dropped unread.
+       */
+      connectedAccountLoginClass: Schema.optional(Schema.Boolean),
+      /**
        * `ownerMap` on a capture source is taken on Kubernetes (runc): the Pod lets each person's
        * `sudo` work, and the Kubernetes image builder records the image probe the launch checks.
        */

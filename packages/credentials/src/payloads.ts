@@ -1,3 +1,4 @@
+import type { ConnectedAccountLoginClass } from "@sealant/api-contracts";
 import { Schema } from "effect";
 
 /*
@@ -23,8 +24,56 @@ const asNonEmptyString = (value: unknown): string | undefined => {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 };
 
+export const CLAUDE_API_KEY_PREFIX = "sk-ant-api";
+export const CLAUDE_ADMIN_KEY_PREFIX = "sk-ant-admin";
+export const OPENAI_API_KEY_PREFIX = "sk-";
+const OPENAI_ADMIN_KEY_PREFIX = "sk-admin-";
+const API_KEY_MAX_LENGTH = 512;
+
+export const apiKeyPayloadSchema = Schema.Struct({
+  apiKey: Schema.String.check(Schema.isNonEmpty()),
+});
+export type ApiKeyPayload = typeof apiKeyPayloadSchema.Type;
+
+export type ParseApiKeyResult =
+  | { readonly valid: true; readonly apiKey: string }
+  | { readonly valid: false; readonly reason: string };
+
+export const parseApiKey = (provider: "claude" | "codex", raw: string): ParseApiKeyResult => {
+  const apiKey = raw.trim();
+  const label = provider === "claude" ? "Claude" : "Codex";
+  if (
+    apiKey.startsWith(CLAUDE_ADMIN_KEY_PREFIX) ||
+    (provider === "codex" && apiKey.startsWith(OPENAI_ADMIN_KEY_PREFIX))
+  ) {
+    return { valid: false, reason: "An Admin API key cannot run a model." };
+  }
+  if (provider === "codex" && apiKey.startsWith("sk-ant-")) {
+    return { valid: false, reason: "That is an Anthropic key; connect it as a Claude account." };
+  }
+  const prefix = provider === "claude" ? CLAUDE_API_KEY_PREFIX : OPENAI_API_KEY_PREFIX;
+  if (!apiKey.startsWith(prefix)) {
+    return { valid: false, reason: `A ${label} API key starts with "${prefix}".` };
+  }
+  if (/\s/.test(apiKey)) {
+    return { valid: false, reason: `A ${label} API key has no spaces or line breaks in it.` };
+  }
+  const minLength = provider === "claude" ? 40 : 20;
+  if (apiKey.length < minLength || apiKey.length > API_KEY_MAX_LENGTH) {
+    return {
+      valid: false,
+      reason: `That is not a whole ${label} API key: it should be ${String(minLength)} to ${String(API_KEY_MAX_LENGTH)} characters long.`,
+    };
+  }
+  return { valid: true, apiKey };
+};
+
+export const apiKeyMetadata = (payload: ApiKeyPayload): { readonly tokenSuffix: string } => ({
+  tokenSuffix: payload.apiKey.slice(-4),
+});
+
 // ---------------------------------------------------------------------------
-// Claude — two credential shapes:
+// Claude — two subscription credential shapes, beside an API key:
 //  - setup-token: `claude setup-token` output (1-year, inference-scoped, no
 //    refresh; Anthropic classifies it as API auth).
 //  - credentials file: ~/.claude/.credentials.json contents that the operator
@@ -46,15 +95,21 @@ export const claudeCredentialsFilePayloadSchema = Schema.Struct({
 });
 export type ClaudeCredentialsFilePayload = typeof claudeCredentialsFilePayloadSchema.Type;
 
+export const claudeApiKeyPayloadSchema = Schema.Struct({
+  apiKey: Schema.String.check(Schema.isStartingWith(CLAUDE_API_KEY_PREFIX)),
+});
+
 /**
- * Either claude shape; consumers dispatch on the payload SHAPE (`"token" in payload`), never on
- * the db `kind` column (which can lag behind a reconnect that switched shapes).
+ * Any claude shape; consumers dispatch on the payload SHAPE (`"token" in payload`), never on the
+ * db `kind` column (which can lag behind a reconnect that switched shapes).
  */
 export const claudeCredentialPayloadSchema = Schema.Union([
   claudeTokenCredentialPayloadSchema,
   claudeCredentialsFilePayloadSchema,
+  claudeApiKeyPayloadSchema,
 ]);
 export type ClaudeCredentialPayload = typeof claudeCredentialPayloadSchema.Type;
+export type ClaudeSubscriptionPayload = ClaudeTokenCredentialPayload | ClaudeCredentialsFilePayload;
 
 export const parseClaudeCredentialPayload = Schema.decodeUnknownSync(claudeCredentialPayloadSchema);
 export const parseClaudeCredentialsFilePayload = Schema.decodeUnknownSync(
@@ -231,12 +286,71 @@ export const extractClaudeOauthCredentials = (
 // can be re-materialized in the workspace; the official CLI refreshes it there).
 // ---------------------------------------------------------------------------
 
-export const codexCredentialPayloadSchema = Schema.Struct({
+export const codexAuthJsonPayloadSchema = Schema.Struct({
   authJson: Schema.String.check(Schema.isNonEmpty()),
 });
+export type CodexAuthJsonPayload = typeof codexAuthJsonPayloadSchema.Type;
+
+export const codexCredentialPayloadSchema = Schema.Union([
+  codexAuthJsonPayloadSchema,
+  apiKeyPayloadSchema,
+]);
 export type CodexCredentialPayload = typeof codexCredentialPayloadSchema.Type;
 
-export const parseCodexCredentialPayload = Schema.decodeUnknownSync(codexCredentialPayloadSchema);
+const AMBIGUOUS_CODEX_LOGIN =
+  "This auth.json holds both a ChatGPT login and an API key, and its auth_mode does not say which Codex uses. Sign in again with `codex login`, or paste the API key alone.";
+
+/**
+ * Which login an auth.json holds, as Codex picks it: `auth_mode` when the file names one, and
+ * otherwise the key whenever there is one. A key comes through {@link parseApiKey}, so it is only
+ * ever a key Sealant takes; a file holding both a ChatGPT login and a key without an `auth_mode`
+ * is a key Sealant refuses, since Codex would spend the key and the person may not know it.
+ */
+export type CodexAuthJsonLogin =
+  | { readonly login: "subscription" }
+  | { readonly login: "api-key"; readonly key: ParseApiKeyResult };
+
+export const codexAuthJsonLogin = (authJson: string): CodexAuthJsonLogin | undefined => {
+  let root: Record<string, unknown> | undefined;
+  try {
+    root = asRecord(JSON.parse(authJson));
+  } catch {
+    return undefined;
+  }
+  if (root === undefined) return undefined;
+  const rawKey = root.OPENAI_API_KEY;
+  switch (root.auth_mode) {
+    case "chatgpt":
+      return { login: "subscription" };
+    case "apikey":
+      return {
+        login: "api-key",
+        key:
+          typeof rawKey === "string"
+            ? parseApiKey("codex", rawKey)
+            : { valid: false, reason: "This auth.json says auth_mode apikey but holds no key." },
+      };
+  }
+  if (typeof rawKey !== "string" || rawKey.length === 0) return { login: "subscription" };
+  const tokens = asRecord(root.tokens);
+  if (tokens !== undefined && asNonEmptyString(tokens.refresh_token) !== undefined) {
+    return { login: "api-key", key: { valid: false, reason: AMBIGUOUS_CODEX_LOGIN } };
+  }
+  return { login: "api-key", key: parseApiKey("codex", rawKey) };
+};
+
+const decodeCodexCredentialPayload = Schema.decodeUnknownSync(codexCredentialPayloadSchema);
+
+/**
+ * A stored Codex payload, with an auth.json that holds a key Sealant takes read as that key. One
+ * holding a key Sealant refuses stays the auth.json it is: it is placed as it always was.
+ */
+export const parseCodexCredentialPayload = (value: unknown): CodexCredentialPayload => {
+  const payload = decodeCodexCredentialPayload(value);
+  if ("apiKey" in payload) return payload;
+  const login = codexAuthJsonLogin(payload.authJson);
+  return login?.login === "api-key" && login.key.valid ? { apiKey: login.key.apiKey } : payload;
+};
 
 /** Non-secret metadata extracted from auth.json at connect time (design doc §3). */
 export interface CodexAuthMetadata {
@@ -399,3 +513,74 @@ export const parseGitHubCredentialPayload = Schema.decodeUnknownSync(githubCrede
 export const hasKnownGitHubTokenPrefix = (token: string): boolean => {
   return GITHUB_TOKEN_PREFIXES.some((prefix) => token.startsWith(prefix));
 };
+
+export const connectedAccountKinds = [
+  "oauth-token",
+  "credentials-json",
+  "auth-json",
+  "gh-cli-token",
+  "api-key",
+] as const;
+export type ConnectedAccountKind = (typeof connectedAccountKinds)[number];
+
+export const parseConnectedAccountKind = (kind: string): ConnectedAccountKind | undefined =>
+  connectedAccountKinds.find((known) => known === kind);
+
+export type ProviderCredentialPayload =
+  | readonly ["claude", ClaudeCredentialPayload]
+  | readonly ["codex", CodexCredentialPayload]
+  | readonly ["github", GitHubCredentialPayload];
+
+/** A decrypted payload as the credential it is; throws when it is not one of `provider`'s. */
+export const parseStoredCredential = (
+  provider: ConnectedAccountProvider,
+  plaintext: string,
+): ProviderCredentialPayload => {
+  const parsed: unknown = JSON.parse(plaintext);
+  switch (provider) {
+    case "claude":
+      return ["claude", parseClaudeCredentialPayload(parsed)];
+    case "codex":
+      return ["codex", parseCodexCredentialPayload(parsed)];
+    case "github":
+      return ["github", parseGitHubCredentialPayload(parsed)];
+  }
+};
+
+export const credentialKindOf = (
+  ...credential: ProviderCredentialPayload
+): ConnectedAccountKind => {
+  const [provider, payload] = credential;
+  if (provider === "github") return "gh-cli-token";
+  if ("apiKey" in payload) return "api-key";
+  if (provider === "codex") return "auth-json";
+  return "token" in payload ? "oauth-token" : "credentials-json";
+};
+
+/**
+ * What a credential spends, read from the payload: the one authority for every decision that
+ * writes or places a login. An auth.json Codex would spend a key from is a key here, a key
+ * Sealant refuses included. GitHub has no login class.
+ */
+export const loginClassOf = (
+  ...credential: ProviderCredentialPayload
+): ConnectedAccountLoginClass | undefined => {
+  const [provider, payload] = credential;
+  if (provider === "github") return undefined;
+  if ("apiKey" in payload) return "api-key";
+  if (provider === "claude") return "subscription";
+  return codexAuthJsonLogin(payload.authJson)?.login ?? "subscription";
+};
+
+const loginClassOfKinds = {
+  "oauth-token": "subscription",
+  "credentials-json": "subscription",
+  "auth-json": "subscription",
+  "api-key": "api-key",
+  "gh-cli-token": undefined,
+} as const satisfies Record<ConnectedAccountKind, ConnectedAccountLoginClass | undefined>;
+
+/** The login class a stored `kind` says, for reads; a write decision uses {@link loginClassOf}. */
+export const loginClassOfKind = (
+  kind: ConnectedAccountKind,
+): ConnectedAccountLoginClass | undefined => loginClassOfKinds[kind];

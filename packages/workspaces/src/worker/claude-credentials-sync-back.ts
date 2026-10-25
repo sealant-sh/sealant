@@ -59,6 +59,7 @@ export type ClaudeCredentialsPersistOutcome =
   | "skipped-implausible-expiry"
   | "skipped-account-unavailable"
   | "skipped-not-session-file"
+  | "skipped-api-key"
   | "skipped-not-newer"
   | "skipped-superseded"
   | "failed";
@@ -151,6 +152,12 @@ export const persistClaudeCredentialsIfNewer = Effect.fn("persistClaudeCredentia
           `${describe} skipped-not-session-file: the stored payload is a setup token, never silently converted.`,
         );
         return "skipped-not-session-file" as const;
+      }
+      if ("apiKey" in storedPayload) {
+        yield* Effect.logInfo(
+          `${describe} skipped-api-key: the account holds an API key, which a session file never replaces.`,
+        );
+        return "skipped-api-key" as const;
       }
 
       // Freshness marker: the stored FILE's own expiresAt is authoritative; the metadata mirror

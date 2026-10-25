@@ -423,6 +423,7 @@ describe("features()", () => {
             personBinding: true,
             sshKeyRemovalEndsConnections: true,
             connectedAccountDefaults: true,
+            connectedAccountLoginClass: true,
             kubernetesPersonLayout: true,
           }),
         ),
@@ -437,6 +438,7 @@ describe("features()", () => {
       personBinding: true,
       sshKeyRemovalEndsConnections: true,
       connectedAccountDefaults: true,
+      connectedAccountLoginClass: true,
       kubernetesPersonLayout: true,
     });
     // A control plane from before the as-user routes names only `processUser`, and its `true`
@@ -451,10 +453,12 @@ describe("features()", () => {
       personBinding: false,
       sshKeyRemovalEndsConnections: false,
       connectedAccountDefaults: false,
+      connectedAccountLoginClass: false,
       kubernetesPersonLayout: false,
     });
     // One from before `features`: nothing.
     expect(Object.values(await readFeatures(makeCtx(withIndex(undefined))))).toEqual([
+      false,
       false,
       false,
       false,

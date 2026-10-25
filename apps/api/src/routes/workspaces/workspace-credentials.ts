@@ -38,8 +38,9 @@ import {
 } from "@sealant/api-contracts";
 import {
   chatgptLoginEntry,
+  claudeApiKeyUnsupported,
   claudeCredentialsFile,
-  codexAuthJsonCopy,
+  codexLoginFile,
   CredentialCipher,
   githubHostsYml,
   parseClaudeCredentialPayload,
@@ -278,12 +279,15 @@ const loginFileFor = (provider: WorkspaceCredentialHomeProvider, account: Connec
       catch: () => unusable,
     });
     if (provider === "pi" || provider === "opencode") {
-      const authJson = yield* Effect.try({
-        try: () => parseCodexCredentialPayload(parsed).authJson,
+      const login = yield* Effect.try({
+        try: () => parseCodexCredentialPayload(parsed),
         catch: () => unusable,
       });
       return yield* Effect.try({
-        try: () => chatgptLoginEntry(authJson),
+        try: () => {
+          if ("apiKey" in login) throw new Error("an API key is not a ChatGPT login");
+          return chatgptLoginEntry(login.authJson);
+        },
         catch: () =>
           new WorkspaceConflictError({
             message: `Connected codex account "${account.name}" is not a ChatGPT login (an API key, or a login with no account id), so it cannot be ${provider}'s login. Nothing was written.`,
@@ -292,22 +296,37 @@ const loginFileFor = (provider: WorkspaceCredentialHomeProvider, account: Connec
           }),
       });
     }
-    return yield* Effect.try({
-      try: () => {
-        if (provider === "github") {
+    if (provider === "github") {
+      return yield* Effect.try({
+        try: () => {
           const login = account.metadata?.["login"];
           return githubHostsYml(
             parseGitHubCredentialPayload(parsed).token,
             typeof login === "string" ? login : undefined,
           );
-        }
-        // A setup token too goes in as the file: a home is one person's, a variable is everyone's.
-        return provider === "claude"
-          ? claudeCredentialsFile(parseClaudeCredentialPayload(parsed))
-          : codexAuthJsonCopy(parseCodexCredentialPayload(parsed).authJson);
-      },
+        },
+        catch: () => unusable,
+      });
+    }
+    if (provider === "codex") {
+      return yield* Effect.try({
+        try: () => codexLoginFile(parseCodexCredentialPayload(parsed)),
+        catch: () => unusable,
+      });
+    }
+    const claude = yield* Effect.try({
+      try: () => parseClaudeCredentialPayload(parsed),
       catch: () => unusable,
     });
+    if ("apiKey" in claude) {
+      return yield* new WorkspaceConflictError({
+        message: claudeApiKeyUnsupported(account.name),
+        code: "connected-account-unsupported",
+        provider: accountProvider,
+      });
+    }
+    // A setup token too goes in as the file: a home is one person's, a variable is everyone's.
+    return yield* Effect.try({ try: () => claudeCredentialsFile(claude), catch: () => unusable });
   });
 
 /** The stable code of a refused account (missing, invalid, unsupported), or `undefined`. */

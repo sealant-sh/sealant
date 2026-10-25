@@ -141,6 +141,13 @@ export interface WorkspaceLaunchCredentialInjection {
    * wrote at `$HOME`.
    */
   readonly home?: string;
+  /**
+   * What the placed Claude or Codex login spends, read from its payload at launch: a refreshed
+   * subscription is pushed only into a launch that placed a subscription. Absent on GitHub logins
+   * and on rows launched before it was recorded, which placed a subscription or a key in an
+   * auth.json.
+   */
+  readonly login?: "subscription" | "api-key";
 }
 
 export const workspaceRuntimeInstances = pgTable(

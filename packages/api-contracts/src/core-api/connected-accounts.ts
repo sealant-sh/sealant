@@ -45,12 +45,24 @@ export const connectedAccountCredentialSchema = Schema.Struct({
 });
 export type ConnectedAccountCredential = typeof connectedAccountCredentialSchema.Type;
 
+/** What the person pays with: their subscription's login, or an API key billed per token. */
+export const connectedAccountLoginClassSchema = Schema.Literals(["subscription", "api-key"]);
+export type ConnectedAccountLoginClass = typeof connectedAccountLoginClassSchema.Type;
+
+/** A Claude or Codex account's login class; a key with its last four characters. */
+export const connectedAccountLoginSchema = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("subscription") }),
+  Schema.Struct({ kind: Schema.Literal("api-key"), suffix: NonEmptyString }),
+]);
+export type ConnectedAccountLogin = typeof connectedAccountLoginSchema.Type;
+
 export const connectedAccountSummarySchema = Schema.Struct({
   connectedAccountId: NonEmptyString,
   ownerUserId: NonEmptyString,
   provider: connectedAccountProviderSchema,
   name: NonEmptyString,
-  // "oauth-token" | "credentials-json" (claude) | "auth-json" (codex) | "gh-cli-token" (github).
+  // "oauth-token" | "credentials-json" (claude) | "auth-json" (codex) | "gh-cli-token" (github) |
+  // "api-key" (claude, codex).
   kind: NonEmptyString,
   status: connectedAccountStatusSchema,
   // NON-secret display/ops data (claude token suffix, codex account id/email, github login+scopes).
@@ -68,6 +80,8 @@ export const connectedAccountSummarySchema = Schema.Struct({
    * stores different bytes. Absent from older control planes.
    */
   credentialRevision: Schema.optional(Schema.Int),
+  /** Claude and Codex only: the account's login class. Absent from older control planes. */
+  login: Schema.optional(connectedAccountLoginSchema),
 });
 export type ConnectedAccountSummary = typeof connectedAccountSummarySchema.Type;
 
@@ -78,17 +92,25 @@ export const createConnectedAccountRequestSchema = Schema.Struct({
    * The account to connect or replace by name; a new name is a new account, and `default` names
    * the owner's chosen default. The owner's first account for the provider is named `default`
    * whatever this says. With neither `name` nor `accountId` (or `default` while none is chosen),
-   * the owner's only account is replaced, and with several the connect is refused (`409`,
-   * `connected-account-ambiguous`, with `candidateAccountIds`).
+   * the owner's only account of the secret's login class is replaced, so a key never replaces a
+   * subscription. With none of that class a new account is made, named `api-key` or
+   * `subscription` (with a number when the name is taken), and with several the connect is
+   * refused (`409`, `connected-account-ambiguous`, with `candidateAccountIds`).
    */
   name: Schema.optional(NonEmptyString),
   /** Replace this account (the owner's, of `provider`). Not with `name`. */
   accountId: Schema.optional(NonEmptyString),
   /** Make the connected account the owner's default for the provider, in the same write. */
   makeDefault: Schema.optional(Schema.Boolean),
-  // Provider-shaped plaintext: claude setup-token or verbatim .credentials.json contents /
-  // verbatim codex auth.json contents / github token. Encrypted server-side; never stored or
-  // echoed back as-is. Not trimmed here — pasted credential files are stored verbatim.
+  /**
+   * Claude and Codex only: the login class the caller expects the secret to be. A secret of the
+   * other class is refused (`400`) before anything is stored.
+   */
+  login: Schema.optional(connectedAccountLoginClassSchema),
+  // Provider-shaped plaintext: claude setup-token, API key or verbatim .credentials.json contents /
+  // verbatim codex auth.json contents or an OpenAI API key / github token. Encrypted server-side;
+  // never stored or echoed back as-is. Not trimmed here — pasted credential files are stored
+  // verbatim.
   secret: Schema.String.check(Schema.isNonEmpty()),
 });
 export type CreateConnectedAccountRequest = typeof createConnectedAccountRequestSchema.Type;
@@ -100,6 +122,11 @@ export type ListConnectedAccountsQuery = typeof listConnectedAccountsQuerySchema
 
 export const listConnectedAccountsResponseSchema = Schema.Struct({
   items: Schema.Array(connectedAccountSummarySchema),
+  /**
+   * Whether the owner ever connected an API key, archived ones included, so a surface keeps saying
+   * which login a turn spent after the key is gone. Absent from older control planes.
+   */
+  hasApiKeyHistory: Schema.optional(Schema.Boolean),
 });
 export type ListConnectedAccountsResponse = typeof listConnectedAccountsResponseSchema.Type;
 

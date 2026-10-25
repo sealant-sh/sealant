@@ -195,7 +195,12 @@ const refreshOneAccount = Effect.fn("refreshCodexSessionAccount")(function* (inp
 
   const outcome: CodexSessionRefreshOutcome = yield* Effect.gen(function* () {
     const plaintext = yield* credentialCipher.decrypt(account.encryptedPayload);
-    const { authJson } = parseCodexCredentialPayload(JSON.parse(plaintext));
+    const payload = parseCodexCredentialPayload(JSON.parse(plaintext));
+    if ("apiKey" in payload) {
+      yield* Effect.logInfo(`${describe} skipped: the account holds an API key.`);
+      return "skipped" as const;
+    }
+    const { authJson } = payload;
 
     // An API-key login has nothing to refresh; a stored copy would be a bug to report, not refresh.
     if (!codexAuthJsonCanRefresh(authJson)) {
@@ -366,3 +371,5 @@ export const refreshCodexSessionCredentials = async (
     sweepInProgress = false;
   }
 };
+
+export { refreshOneAccount as refreshCodexSessionAccount };

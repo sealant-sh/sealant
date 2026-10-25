@@ -88,6 +88,95 @@ describe("instancesHoldingAccount", () => {
     expect(instancesHoldingAccount(running, "cacc_1").map((row) => row.runId)).toEqual(["a", "b"]);
     expect(instancesHoldingAccount(running, "cacc_3")).toEqual([]);
   });
+
+  it("leaves out a launch that placed the account as an API key", () => {
+    const launches = [
+      instance("subscription", [
+        {
+          provider: "codex",
+          connectedAccountId: "cacc_1",
+          injection: "file",
+          copy: true,
+          login: "subscription",
+        },
+      ]),
+      instance("key", [
+        {
+          provider: "codex",
+          connectedAccountId: "cacc_1",
+          injection: "file",
+          copy: true,
+          login: "api-key",
+        },
+      ]),
+    ];
+    expect(instancesHoldingAccount(launches, "cacc_1").map((row) => row.runId)).toEqual([
+      "subscription",
+    ]);
+  });
+});
+
+const recording = (written: string[]): ControlChannel => ({
+  health: async () => {},
+  writeCredentialFiles: async (_target, files) => {
+    for (const file of files) written.push(Buffer.from(file.contentBase64, "base64").toString());
+  },
+});
+
+describe("pushCredentialCopy re-reads the account before writing at $HOME", () => {
+  const sealedCipher = {
+    encrypt: (plaintext: string) => Effect.succeed({ sealed: `sealed:${plaintext}`, keyId: "k" }),
+    decrypt: (sealed: string) => Effect.succeed(sealed.slice("sealed:".length)),
+  };
+  const holding = [
+    instance("a", [
+      { provider: "codex", connectedAccountId: "cacc_1", injection: "file", copy: true },
+    ]),
+  ];
+  const storing = (payload: unknown) =>
+    Layer.mergeAll(
+      instancesRepo(holding),
+      Layer.succeed(WorkspaceCredentialHomeRepo, makeInMemoryCredentialHomes(() => []).service),
+      Layer.succeed(ConnectedAccountRepo, {
+        getById: () =>
+          Effect.succeed({
+            id: "cacc_1",
+            archivedAt: null,
+            encryptedPayload: `sealed:${JSON.stringify(payload)}`,
+          }),
+      } as unknown as ConnectedAccountRepoService),
+    );
+  it.effect("writes nothing once the account holds a key", () => {
+    const written: string[] = [];
+    return Effect.gen(function* () {
+      const summary = yield* pushCredentialCopy({
+        connectedAccountId: "cacc_1",
+        provider: "codex",
+        copyJson: JSON.stringify({ tokens: { access_token: "at-stale" } }),
+        controlChannel: recording(written),
+        credentialCipher: sealedCipher,
+      });
+      expect(written).toEqual([]);
+      expect(summary).toEqual({ written: 0, failed: 0, unreachable: 0, released: 1 });
+    }).pipe(Effect.provide(storing({ apiKey: "sk-proj-FAKEcodexkeyforthetests0000wxyz" })));
+  });
+
+  it.effect("writes the account as stored now, not the copy it was handed", () => {
+    const written: string[] = [];
+    const authJson = JSON.stringify({ tokens: { access_token: "at-newer", refresh_token: "rt" } });
+    return Effect.gen(function* () {
+      yield* pushCredentialCopy({
+        connectedAccountId: "cacc_1",
+        provider: "codex",
+        copyJson: JSON.stringify({ tokens: { access_token: "at-stale" } }),
+        controlChannel: recording(written),
+        credentialCipher: sealedCipher,
+      });
+      expect(written).toHaveLength(1);
+      expect(written[0]).toContain("at-newer");
+      expect(written[0]).not.toContain('"rt"');
+    }).pipe(Effect.provide(storing({ authJson })));
+  });
 });
 
 describe("pushCredentialCopy", () => {

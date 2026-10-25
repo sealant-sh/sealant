@@ -493,8 +493,8 @@ export const connectedAccounts = pgTable(
     provider: text({ enum: connectedAccountProviderValues }).notNull(),
     // Multiple accounts per provider are allowed; (owner, provider, name) is unique while active.
     name: text().notNull().default("default"),
-    // "oauth-token" (claude) | "auth-json" (codex) | "gh-cli-token" (github today,
-    // "github-app-user" on the roadmap).
+    // "oauth-token" | "credentials-json" (claude) | "auth-json" (codex) | "api-key" (claude,
+    // codex) | "gh-cli-token" (github).
     kind: text().notNull(),
     status: text({ enum: connectedAccountStatusValues }).notNull().default("active"),
     encryptedPayload: text("encrypted_payload").notNull(),
@@ -519,6 +519,13 @@ export const connectedAccounts = pgTable(
     // One refresh per login at a time, across every worker (docs/connected-accounts-design.md §6a):
     // a keep-fresh pass claims the row until this instant; a crashed pass's claim lapses on its own.
     refreshClaimedUntil: timestamp("refresh_claimed_until", { mode: "date", withTimezone: true }),
+    // When this account first stored an API key. Never cleared, not by a replace with a
+    // subscription nor by an archive: it is the owner's key history.
+    apiKeyConnectedAt: timestamp("api_key_connected_at", { mode: "date", withTimezone: true }),
+    // A Codex auth.json row stored before an API key had its own kind: its `kind` may say
+    // subscription while its payload is a key. Cleared once the payload is read and its kind
+    // written from it, or a write names the kind.
+    kindUnchecked: boolean("kind_unchecked").notNull().default(false),
   },
   (table) => [
     // Partial so archived rows don't block reconnecting under the same name.

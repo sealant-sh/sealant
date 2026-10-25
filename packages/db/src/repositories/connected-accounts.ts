@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 import { SqlError } from "effect/sql/SqlError";
 
@@ -29,6 +29,8 @@ const connectedAccountRepoOperationSchema = Schema.Literals([
   "listByOwner",
   "listByOwnerProvider",
   "listActiveByProviderKind",
+  "listKindUnchecked",
+  "hasApiKeyHistory",
   "withOwnerLock",
   "getDefault",
   "setDefault",
@@ -103,6 +105,8 @@ const withDefaultFlag = (row: {
   isDefault: row.defaultAccountId !== null,
 });
 
+const API_KEY_KIND = "api-key";
+
 /** The credential revision once `payloadSha256` is stored: the same bytes keep it, new bytes move it on. */
 const revisionAfterStoring = (payloadSha256: string) =>
   sql`case when ${connectedAccounts.payloadSha256} = ${payloadSha256} then ${connectedAccounts.credentialRevision} else ${connectedAccounts.credentialRevision} + 1 end`;
@@ -119,7 +123,10 @@ export interface CreateConnectedAccountInput {
   readonly ownerUserId: string;
   readonly provider: ConnectedAccountProvider;
   readonly name: string;
-  /** "oauth-token" | "credentials-json" (claude) | "auth-json" (codex) | "gh-cli-token" (github). */
+  /**
+   * "oauth-token" | "credentials-json" (claude) | "auth-json" (codex) | "api-key" (claude, codex) |
+   * "gh-cli-token" (github).
+   */
   readonly kind: string;
   readonly encryptedPayload: string;
   readonly encryptionKeyId: string;
@@ -145,6 +152,11 @@ export interface ReplaceConnectedAccountPayloadInput {
   readonly payloadSha256: string;
   readonly metadata: Record<string, unknown>;
   readonly expectedRevision?: number;
+  /**
+   * Keep the account's status as it is (an invalid one stays invalid), for a write that changes
+   * how the same login is stored, not the login. Without it the account is active again.
+   */
+  readonly keepStatus?: boolean;
 }
 
 export interface ConnectedAccountDefaultInput {
@@ -204,6 +216,10 @@ export interface ConnectedAccountRepoService {
   readonly listByOwnerProvider: (
     input: ConnectedAccountDefaultInput,
   ) => Effect.Effect<readonly ConnectedAccountWithDefault[], ConnectedAccountRepoError>;
+  /** Whether any of the owner's accounts, archived ones included, ever stored an API key. */
+  readonly hasApiKeyHistory: (
+    ownerUserId: string,
+  ) => Effect.Effect<boolean, ConnectedAccountRepoError>;
   /** Run `use` in one transaction that holds this owner's lock, so their account writes take turns. */
   readonly withOwnerLock: <A, E, R>(
     ownerUserId: string,
@@ -227,6 +243,14 @@ export interface ConnectedAccountRepoService {
     readonly provider: ConnectedAccountProvider;
     readonly kind: string;
   }) => Effect.Effect<readonly ConnectedAccount[], ConnectedAccountRepoError>;
+  /** The provider's accounts, any status, whose `kind` has not been checked against the payload. */
+  readonly listKindUnchecked: (
+    provider: ConnectedAccountProvider,
+  ) => Effect.Effect<readonly ConnectedAccount[], ConnectedAccountRepoError>;
+  /**
+   * A write that names `kind` derives it from the payload, so it clears `kindUnchecked`; one that
+   * stores an API key stamps `apiKeyConnectedAt` the first time, and nothing clears it.
+   */
   readonly replacePayload: (
     input: ReplaceConnectedAccountPayloadInput,
   ) => Effect.Effect<ConnectedAccount | undefined, ConnectedAccountRepoError>;
@@ -321,6 +345,7 @@ export const ConnectedAccountRepoLive = Layer.effect(
                 encryptionKeyId: input.encryptionKeyId,
                 payloadSha256: input.payloadSha256,
                 metadata: input.metadata,
+                ...(input.kind === API_KEY_KIND ? { apiKeyConnectedAt: new Date() } : {}),
               } satisfies NewConnectedAccount)
               .returning();
 
@@ -393,6 +418,22 @@ export const ConnectedAccountRepoLive = Layer.effect(
             )
             .orderBy(desc(connectedAccounts.createdAt))
             .pipe(Effect.map((rows) => rows.map(withDefaultFlag))),
+        ),
+
+      hasApiKeyHistory: (ownerUserId) =>
+        withConnectedAccountRepoError(
+          "hasApiKeyHistory",
+          db
+            .select({ id: connectedAccounts.id })
+            .from(connectedAccounts)
+            .where(
+              and(
+                eq(connectedAccounts.ownerUserId, ownerUserId),
+                isNotNull(connectedAccounts.apiKeyConnectedAt),
+              ),
+            )
+            .limit(1)
+            .pipe(Effect.map((rows) => rows.length > 0)),
         ),
 
       withOwnerLock: (ownerUserId, use) =>
@@ -495,6 +536,21 @@ export const ConnectedAccountRepoLive = Layer.effect(
             .orderBy(desc(connectedAccounts.createdAt)),
         ),
 
+      listKindUnchecked: (provider) =>
+        withConnectedAccountRepoError(
+          "listKindUnchecked",
+          db
+            .select()
+            .from(connectedAccounts)
+            .where(
+              and(
+                eq(connectedAccounts.provider, provider),
+                eq(connectedAccounts.kindUnchecked, true),
+              ),
+            )
+            .orderBy(desc(connectedAccounts.createdAt)),
+        ),
+
       replacePayload: (input) =>
         withConnectedAccountRepoError(
           "replacePayload",
@@ -502,14 +558,18 @@ export const ConnectedAccountRepoLive = Layer.effect(
             const [connectedAccount] = yield* db
               .update(connectedAccounts)
               .set({
-                ...(input.kind === undefined ? {} : { kind: input.kind }),
+                ...(input.kind === undefined ? {} : { kind: input.kind, kindUnchecked: false }),
+                ...(input.kind === API_KEY_KIND
+                  ? {
+                      apiKeyConnectedAt: sql`coalesce(${connectedAccounts.apiKeyConnectedAt}, now())`,
+                    }
+                  : {}),
                 encryptedPayload: input.encryptedPayload,
                 encryptionKeyId: input.encryptionKeyId,
                 payloadSha256: input.payloadSha256,
                 credentialRevision: revisionAfterStoring(input.payloadSha256),
                 metadata: input.metadata,
-                status: "active",
-                invalidAt: null,
+                ...(input.keepStatus === true ? {} : { status: "active", invalidAt: null }),
               })
               .where(
                 and(

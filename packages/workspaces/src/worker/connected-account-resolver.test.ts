@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import type { CredentialCipherService } from "@sealant/credentials";
+import type { CredentialCipherService, CredentialInjection } from "@sealant/credentials";
 import {
   claudeCredentialsCopy,
   codexAuthJsonCopy,
@@ -228,14 +228,26 @@ describe("resolveCredentialInjections", () => {
       // Launch-time injection shapes, persisted so post-run sync-backs know what THIS workspace
       // was seeded with (env-injected claude must never sync the file back).
       expect(resolved.launchCredentialInjections).toEqual([
-        { provider: "claude", connectedAccountId: "cacc_1", injection: "env" },
+        {
+          provider: "claude",
+          connectedAccountId: "cacc_1",
+          injection: "env",
+          login: "subscription",
+        },
         {
           provider: "claude",
           connectedAccountId: "cacc_claude_session",
           injection: "file",
           copy: true,
+          login: "subscription",
         },
-        { provider: "codex", connectedAccountId: "cacc_codex", injection: "file", copy: true },
+        {
+          provider: "codex",
+          connectedAccountId: "cacc_codex",
+          injection: "file",
+          copy: true,
+          login: "subscription",
+        },
         { provider: "github", connectedAccountId: "cacc_github", injection: "env" },
       ]);
       expect(accounts.updateSyncState).toHaveBeenCalledTimes(4);
@@ -343,6 +355,7 @@ describe("resolveCredentialInjections into a credentialsHome", () => {
           injection: "file",
           copy: true,
           home: "/home/m4lice000",
+          login: "subscription",
         },
         {
           provider: "codex",
@@ -350,6 +363,7 @@ describe("resolveCredentialInjections into a credentialsHome", () => {
           injection: "file",
           copy: true,
           home: "/home/m4lice000",
+          login: "subscription",
         },
         {
           provider: "github",
@@ -360,4 +374,116 @@ describe("resolveCredentialInjections into a credentialsHome", () => {
       ]);
     }).pipe(Effect.provide(provideAccounts(accounts)));
   });
+});
+
+const fileContent = (injection: CredentialInjection | undefined) =>
+  injection?.kind === "file"
+    ? Buffer.from(injection.contentBase64, "base64").toString("utf8")
+    : undefined;
+
+describe("resolveCredentialInjections with an API key", () => {
+  const home = { path: "/home/m4lice000", uid: 40001, gid: 40000 };
+  const codexKey = "sk-proj-FAKEcodexkeyforthetests0000wxyz";
+  const officialFile = JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: codexKey });
+
+  const codexKeyAccount = (payload: unknown) =>
+    createAccount({
+      id: "cacc_codex_key",
+      provider: "codex",
+      kind: "api-key",
+      encryptedPayload: `sealed:${JSON.stringify(payload)}`,
+    });
+  const launch = (
+    account: ConnectedAccount,
+    provider: "claude" | "codex",
+    credentialsHome?: typeof home,
+  ) =>
+    resolveCredentialInjections({
+      blueprint: newWorkspaceSchema.parse({
+        sources: { workspace: { url: "https://github.com/example/repo.git" } },
+        harness: { id: "opencode" },
+        runtime: {
+          ...(credentialsHome === undefined ? {} : { credentialsHome }),
+          credentialRefs: [{ provider, ref: `connected-account:${account.id}` }],
+        },
+      }),
+      credentialCipher: fakeCipher,
+    }).pipe(Effect.provide(provideAccounts(connectedAccountRepoStub([account]))));
+
+  it.effect(
+    "writes a Codex key as Codex's own key file, at $HOME and in a home, never as env",
+    () =>
+      Effect.gen(function* () {
+        const atHome = yield* launch(codexKeyAccount({ apiKey: codexKey }), "codex");
+        expect(atHome.injections).toEqual([
+          expect.objectContaining({ kind: "file", path: "$HOME/.codex/auth.json", mode: "600" }),
+        ]);
+        expect(fileContent(atHome.injections[0])).toBe(officialFile);
+        expect(atHome.launchCredentialInjections).toEqual([
+          {
+            provider: "codex",
+            connectedAccountId: "cacc_codex_key",
+            injection: "file",
+            copy: true,
+            login: "api-key",
+          },
+        ]);
+
+        const inHome = yield* launch(codexKeyAccount({ apiKey: codexKey }), "codex", home);
+        expect(inHome.injections).toEqual([
+          expect.objectContaining({ kind: "file", path: `${home.path}/.codex/auth.json` }),
+        ]);
+        expect(fileContent(inHome.injections[0])).toBe(officialFile);
+      }),
+  );
+
+  it.effect("writes a key-only auth.json stored before keys had a payload as the same file", () =>
+    Effect.gen(function* () {
+      const resolved = yield* launch(
+        codexKeyAccount({
+          authJson: JSON.stringify({ OPENAI_API_KEY: codexKey, tokens: null, last_refresh: null }),
+        }),
+        "codex",
+      );
+      expect(fileContent(resolved.injections[0])).toBe(officialFile);
+      expect(resolved.launchCredentialInjections[0]?.login).toBe("api-key");
+    }),
+  );
+
+  it.effect(
+    "places an auth.json whose key Sealant refuses as it always did, and records it as a key",
+    () =>
+      Effect.gen(function* () {
+        const authJson = JSON.stringify({
+          OPENAI_API_KEY: "sk-ant-api03-FAKEunderthewrongprovider",
+        });
+        const resolved = yield* launch(codexKeyAccount({ authJson }), "codex");
+        expect(fileContent(resolved.injections[0])).toBe(codexAuthJsonCopy(authJson));
+        expect(resolved.launchCredentialInjections[0]?.login).toBe("api-key");
+      }),
+  );
+
+  it.effect("places an auth.json whose auth_mode says chatgpt as a subscription", () =>
+    Effect.gen(function* () {
+      const authJson = JSON.stringify({ auth_mode: "chatgpt", OPENAI_API_KEY: codexKey });
+      const resolved = yield* launch(codexKeyAccount({ authJson }), "codex");
+      expect(fileContent(resolved.injections[0])).toBe(codexAuthJsonCopy(authJson));
+      expect(resolved.launchCredentialInjections[0]?.login).toBe("subscription");
+    }),
+  );
+
+  it.effect("refuses a Claude key, at $HOME and in a home, with words", () =>
+    Effect.gen(function* () {
+      const claudeKey = createAccount({
+        id: "cacc_claude_key",
+        kind: "api-key",
+        encryptedPayload: `sealed:${JSON.stringify({ apiKey: "sk-ant-api03-FAKEclaudekeyforthetests000000wxyz" })}`,
+      });
+      for (const credentialsHome of [undefined, home]) {
+        const error = yield* launch(claudeKey, "claude", credentialsHome).pipe(Effect.flip);
+        expect(error.errorCode).toBe("connected-account-unsupported");
+        expect(error.message).toContain("Claude API keys are not supported by this Sealant yet");
+      }
+    }),
+  );
 });

@@ -145,10 +145,17 @@ export class InferenceNotFoundError extends Schema.TaggedError<InferenceNotFound
   { httpApiStatus: 404 },
 ) {}
 
-/** The selected account exists but is not usable (status "invalid") — reconnect it. */
+/**
+ * The selected account exists but is not usable: its status is "invalid" (reconnect it), or, with
+ * `code` `connected-account-unsupported`, it is a login this control plane cannot run on yet (a
+ * Claude API key).
+ */
 export class InferenceConflictError extends Schema.TaggedError<InferenceConflictError>()(
   "InferenceConflictError",
-  { message: Schema.String },
+  {
+    message: Schema.String,
+    code: Schema.optional(Schema.Literals(["connected-account-unsupported"])),
+  },
   { httpApiStatus: 409 },
 ) {}
 
