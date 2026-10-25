@@ -344,9 +344,9 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
       return child;
     };
 
-    let exchange: ReturnType<typeof query>;
+    let messages: ReturnType<typeof query>;
     try {
-      exchange = runQuery({
+      messages = runQuery({
         prompt: input.prompt,
         options: {
           spawnClaudeCodeProcess,
@@ -387,7 +387,7 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
     sessions.set(sessionId, {
       exchange: input.exchange,
       state,
-      close: () => exchange.close(),
+      close: () => messages.close(),
       exited: () => exited,
       onSessionEnd: input.onSessionEnd,
     });
@@ -396,7 +396,7 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
     void (async () => {
       try {
         let assistantError: SDKAssistantMessageError | undefined;
-        for await (const message of exchange) {
+        for await (const message of messages) {
           // The CLI retries a 401 and reruns a key's helper, which reads the same file, so a key's
           // first 401 settles the exchange instead of waiting out the backoff. A setup token is
           // judged by the final answer: the CLI's retry can still succeed on it.
