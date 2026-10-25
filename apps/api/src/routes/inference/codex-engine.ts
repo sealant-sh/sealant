@@ -10,6 +10,9 @@
  * from the subprocess env so the exchange cannot silently bill a different identity than the
  * resolved connected account.
  *
+ * `codex exec --json` reports a failed turn in words only (`turn.failed` carries `error.message`,
+ * no status), so an auth failure here is at most `auth-suspected`: it never marks a key invalid.
+ *
  * Differences from the claude engine, both deliberate:
  * - Tool-less v1: codex has no in-process MCP transport, so caller-defined tools are rejected at
  *   the route (the park-for-results session state is unused here). Every exchange is a single
@@ -303,7 +306,10 @@ const startExchange = async (
             : `Codex CLI exited with code ${code ?? "unknown"} without producing a result.`);
         const message = redactSecrets(`Codex inference failed: ${detail}`, input.secrets);
         reject(
-          new InferenceEngineError(isAuthFailureMessage(message) ? "auth" : "engine", message),
+          new InferenceEngineError(
+            isAuthFailureMessage(message) ? "auth-suspected" : "engine",
+            message,
+          ),
         );
       });
     });
@@ -337,7 +343,7 @@ const toEngineError = (error: unknown, secrets: readonly string[]): InferenceEng
   const raw = error instanceof Error ? error.message : String(error);
   const message = redactSecrets(raw, secrets);
   return isAuthFailureMessage(message)
-    ? new InferenceEngineError("auth", message, { cause: error })
+    ? new InferenceEngineError("auth-suspected", message, { cause: error })
     : new InferenceEngineError("engine", message, { cause: error });
 };
 

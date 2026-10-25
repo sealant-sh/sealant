@@ -164,15 +164,27 @@ export class InferenceNotFoundError extends Schema.TaggedError<InferenceNotFound
 ) {}
 
 /**
- * The selected account exists but is not usable: its status is "invalid" (reconnect it), or, with
- * `code` `connected-account-unsupported`, it is a login this control plane cannot run on yet (a
- * Claude API key).
+ * The selected account exists but is not usable: its status is "invalid" (reconnect it), or the
+ * provider refused it. `code`, when set:
+ *
+ * - `connected-account-unsupported`: a login this control plane cannot run on (from a control plane
+ *   that predates Claude API keys in inference).
+ * - `connected-account-refused`: the provider refused an API key with a 401; the account is now
+ *   invalid.
+ * - `connected-account-superseded`: the provider refused an API key with a 401, but the account
+ *   changed after the exchange started (`receipt.revision` is older), so nothing was marked.
  */
 export class InferenceConflictError extends Schema.TaggedError<InferenceConflictError>()(
   "InferenceConflictError",
   {
     message: Schema.String,
-    code: Schema.optional(Schema.Literals(["connected-account-unsupported"])),
+    code: Schema.optional(
+      Schema.Literals([
+        "connected-account-unsupported",
+        "connected-account-refused",
+        "connected-account-superseded",
+      ]),
+    ),
     receipt: errorReceipt,
   },
   { httpApiStatus: 409 },

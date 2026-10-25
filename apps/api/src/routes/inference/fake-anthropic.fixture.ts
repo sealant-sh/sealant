@@ -8,14 +8,18 @@ import { createServer, type ServerResponse } from "node:http";
 export type FakeAnthropicReply =
   | { readonly type: "text"; readonly text: string }
   | { readonly type: "toolUse"; readonly name: string; readonly input: unknown }
-  | { readonly type: "status"; readonly status: number; readonly errorType: string }
+  | {
+      readonly type: "status";
+      readonly status: number;
+      readonly errorType: string;
+      readonly message?: string;
+    }
   | { readonly type: "hang" };
 
 export interface FakeAnthropic {
   readonly baseUrl: string;
   readonly apiKeys: readonly (string | undefined)[];
   readonly reply: (...replies: readonly FakeAnthropicReply[]) => void;
-  readonly reset: () => void;
   readonly close: () => Promise<void>;
 }
 
@@ -110,7 +114,7 @@ export const startFakeAnthropic = async (): Promise<FakeAnthropic> => {
           res.end(
             JSON.stringify({
               type: "error",
-              error: { type: reply.errorType, message: "refused by the fake" },
+              error: { type: reply.errorType, message: reply.message ?? "refused by the fake" },
             }),
           );
           return;
@@ -133,10 +137,6 @@ export const startFakeAnthropic = async (): Promise<FakeAnthropic> => {
     apiKeys,
     reply: (...replies) => {
       queue.push(...replies);
-    },
-    reset: () => {
-      apiKeys.length = 0;
-      queue.length = 0;
     },
     close: async () => {
       for (const res of hanging) res.destroy();

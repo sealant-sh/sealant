@@ -185,9 +185,8 @@ type LoginShape = ExchangeLogin["shape"];
 interface Exchange {
   readonly ownerUserId: string;
   readonly receipt: InferenceReceipt;
-  readonly shape: LoginShape;
-  /** Every secret the login holds, kept ONLY to redact what leaves this module. */
-  readonly secrets: readonly (string | undefined)[];
+  /** The login as it was read at the start; its secrets serve only to redact what leaves here. */
+  readonly login: ExchangeLogin;
 }
 
 const loginClassOfShape = (shape: LoginShape): InferenceReceipt["login"] =>
@@ -327,27 +326,101 @@ const startEngine = (login: ExchangeLogin, payload: InferenceRespondRequest) =>
     }
   });
 
+type AuthReason = "auth" | "auth-suspected";
+type KeyLogin = Extract<ExchangeLogin, { readonly shape: "claude-key" | "codex-key" }>;
+
 /**
- * The words for a provider's auth rejection, per login. A subscription copy cannot refresh, so a
- * rejected one means the login itself ended; the platform's keep-fresh worker owns its state.
+ * Which auth failures mark the account invalid, per login. A key only on a structured 401, never on
+ * words. A setup token as before. A session file or a Codex ChatGPT login never: the keep-fresh
+ * worker owns its state.
  */
-const authFailureMessage = (exchange: Exchange, detail: string): string => {
-  switch (exchange.shape) {
-    case "claude-session": {
-      return "The Claude login did not authenticate. The platform refreshes it on a schedule, so this usually means the login itself was ended (signed out elsewhere, or revoked) — reconnect Claude.";
+const marksInvalidOn: Record<LoginShape, readonly AuthReason[]> = {
+  "claude-key": ["auth"],
+  "codex-key": ["auth"],
+  "claude-setup-token": ["auth", "auth-suspected"],
+  "claude-session": [],
+  "codex-chatgpt": [],
+};
+
+/** `superseded`: the account changed after the exchange started, so nothing was marked. */
+type Invalidation = "marked" | "superseded" | "unmarked";
+
+/**
+ * 401 feedback (the in-process equivalent of the `mark-invalid` endpoint) at the receipt's
+ * revision, so a late refusal of an old credential never marks the one that replaced it. A failed
+ * write leaves the account as it was; the caller's error wins.
+ */
+const invalidate = (exchange: Exchange, reason: AuthReason) =>
+  marksInvalidOn[exchange.login.shape].includes(reason)
+    ? Effect.flatMap(ConnectedAccountRepo, (accounts) =>
+        accounts
+          .markInvalid({ id: exchange.receipt.accountId, revision: exchange.receipt.revision })
+          .pipe(
+            Effect.map((marked): Invalidation => (marked === undefined ? "superseded" : "marked")),
+            Effect.orElseSucceed((): Invalidation => "unmarked"),
+          ),
+      )
+    : Effect.succeed<Invalidation>("unmarked");
+
+const keyRefusal = (login: KeyLogin, invalidation: Invalidation) => {
+  const provider = login.shape === "claude-key" ? "Anthropic" : "OpenAI";
+  const key = `Your ${login.shape === "claude-key" ? "Claude" : "Codex"} API key ····${login.apiKey.slice(-4)}`;
+  switch (invalidation) {
+    case "marked": {
+      return {
+        message: `${key} was refused by ${provider}. It is marked invalid; connect a new key.`,
+        code: "connected-account-refused",
+      } as const;
     }
-    case "codex-chatgpt": {
-      return "The Codex login did not authenticate. The platform refreshes it on a schedule, so this usually means the login itself was ended (signed out elsewhere, or revoked) — reconnect Codex.";
+    case "superseded": {
+      return {
+        message: `${key} was refused by ${provider}. The account changed after this exchange started, so it is not marked invalid.`,
+        code: "connected-account-superseded",
+      } as const;
     }
-    case "codex-key": {
-      return "The Codex API key did not authenticate: OpenAI refused it — connect a working key.";
-    }
-    case "claude-setup-token":
-    case "claude-key": {
-      return `The connected account was rejected by the provider — reconnect it. (${detail})`;
+    case "unmarked": {
+      return {
+        message: `${key} was not accepted by ${provider}. It is not marked invalid; if the key was revoked, connect a new one.`,
+      } as const;
     }
   }
 };
+
+/**
+ * The answer to a provider's auth rejection. A subscription copy cannot refresh, so a rejected one
+ * means the login itself ended.
+ */
+const authFailure = (exchange: Exchange, reason: AuthReason, detail: string) =>
+  Effect.gen(function* () {
+    const invalidation = yield* invalidate(exchange, reason);
+    const { login, receipt } = exchange;
+    switch (login.shape) {
+      case "claude-key":
+      case "codex-key": {
+        return new InferenceConflictError({ ...keyRefusal(login, invalidation), receipt });
+      }
+      case "claude-session": {
+        return new InferenceConflictError({
+          message:
+            "The Claude login did not authenticate. The platform refreshes it on a schedule, so this usually means the login itself was ended (signed out elsewhere, or revoked) — reconnect Claude.",
+          receipt,
+        });
+      }
+      case "codex-chatgpt": {
+        return new InferenceConflictError({
+          message:
+            "The Codex login did not authenticate. The platform refreshes it on a schedule, so this usually means the login itself was ended (signed out elsewhere, or revoked) — reconnect Codex.",
+          receipt,
+        });
+      }
+      case "claude-setup-token": {
+        return new InferenceConflictError({
+          message: `The connected account was rejected by the provider — reconnect it. (${detail})`,
+          receipt,
+        });
+      }
+    }
+  });
 
 /**
  * Which owner opened each parked exchange (CORE-03), and the exchange it holds. A continuation is
@@ -394,17 +467,12 @@ const answerTurn = (
   };
 };
 
-/**
- * A failed turn ends its exchange. A live auth rejection of a setup token marks the account invalid
- * (the in-process equivalent of the `mark-invalid` 401-feedback endpoint, at the receipt's revision;
- * best-effort, the caller's error wins). Session files and Codex ChatGPT logins are never marked:
- * the keep-fresh worker owns their state.
- */
+/** A failed turn ends its exchange. */
 const failTurn = (exchange: Exchange, sessionId: string | undefined, raw: InferenceEngineError) =>
   Effect.gen(function* () {
     if (sessionId !== undefined) parkedExchanges.delete(sessionId);
     const { receipt } = exchange;
-    const message = redactSecrets(raw.message, exchange.secrets);
+    const message = redactSecrets(raw.message, secretsOf(exchange.login));
     switch (raw.reason) {
       case "session-not-found": {
         return yield* new InferenceNotFoundError({ message, receipt });
@@ -416,17 +484,10 @@ const failTurn = (exchange: Exchange, sessionId: string | undefined, raw: Infere
       case "engine": {
         return yield* new InferenceInternalServerError({ message, receipt });
       }
-      case "auth": {
-        if (exchange.shape === "claude-setup-token") {
-          const accounts = yield* ConnectedAccountRepo;
-          yield* accounts
-            .markInvalid({ id: receipt.accountId, revision: receipt.revision })
-            .pipe(Effect.ignore);
-        }
-        return yield* new InferenceConflictError({
-          message: authFailureMessage(exchange, message),
-          receipt,
-        });
+      case "auth":
+      case "auth-suspected": {
+        const refusal = yield* authFailure(exchange, raw.reason, message);
+        return yield* refusal;
       }
     }
   });
@@ -490,8 +551,7 @@ const startExchange = (payload: InferenceRespondRequest) =>
         revision: account.credentialRevision,
         login: loginClassOfShape(login.shape),
       },
-      shape: login.shape,
-      secrets: secretsOf(login),
+      login,
     };
 
     // Tool-less v1: codex has no in-process MCP transport, so caller-defined tools are a 400 until

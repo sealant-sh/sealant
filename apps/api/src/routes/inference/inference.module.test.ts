@@ -27,11 +27,12 @@ import {
   type ProfileRepoService,
 } from "@sealant/db";
 import { Effect, Layer } from "effect";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { InferenceEngineTurn, InferenceStartInput } from "./claude-engine.js";
-import { InferenceEngine, InferenceEngineError } from "./claude-engine.js";
+import { claudeEngineLayer, InferenceEngine, InferenceEngineError } from "./claude-engine.js";
 import { CodexInferenceEngine, type CodexInferenceStartInput } from "./codex-engine.js";
+import { startFakeAnthropic, type FakeAnthropic } from "./fake-anthropic.fixture.js";
 
 process.env["SEALANT_CREDENTIALS_KEY"] = Buffer.alloc(32, 7).toString("base64");
 
@@ -124,7 +125,9 @@ const accountsStub = (options: AccountsStubOptions = {}) => ({
   ),
   getBindingsForProfileWithAccounts: vi.fn(() => Effect.succeed(options.bindings ?? [])),
   updateSyncState: vi.fn(() => Effect.succeed(undefined)),
-  markInvalid: vi.fn(() => Effect.succeed(undefined)),
+  markInvalid: vi.fn((_input: { id: string; revision?: number }) =>
+    Effect.succeed<ConnectedAccount | undefined>({ ...codexAccount, status: "invalid" }),
+  ),
   replacePayload: vi.fn(() => Effect.succeed(undefined)),
 });
 
@@ -583,4 +586,194 @@ describe("inference.module receipts", () => {
     expect(error).toMatchObject({ receipt: { accountId: "cacc_claude_token", revision: 1 } });
     expect(accounts.markInvalid).toHaveBeenCalledWith({ id: "cacc_claude_token", revision: 1 });
   });
+});
+
+/** `markInvalid` as the repository does it: only while the account is still at that revision. */
+const guardMarkInvalid = (
+  accounts: ReturnType<typeof accountsStub>,
+  current: () => ConnectedAccount,
+) => {
+  accounts.getById.mockImplementation(() => Effect.succeed(current()));
+  accounts.markInvalid.mockImplementation((input: { id: string; revision?: number }) =>
+    Effect.succeed(
+      input.revision === current().credentialRevision
+        ? { ...current(), status: "invalid" as const }
+        : undefined,
+    ),
+  );
+};
+
+describe("inference.module 401 feedback", () => {
+  it("marks a Codex key invalid on a structured 401, at the receipt's revision", async () => {
+    const accounts = accountsStub();
+    const { layer } = makeLayers({
+      accounts,
+      codexStart: () => Promise.reject(new InferenceEngineError("auth", "401")),
+    });
+
+    const error = await runFlipped(
+      respond(newExchange({ credentials: { codex: "cacc_codex_key" } })).pipe(
+        Effect.provide(layer),
+      ),
+    );
+
+    expect(error).toMatchObject({
+      code: "connected-account-refused",
+      message:
+        "Your Codex API key ····wxyz was refused by OpenAI. It is marked invalid; connect a new key.",
+    });
+    expect(accounts.markInvalid).toHaveBeenCalledWith({ id: "cacc_codex_key", revision: 1 });
+  });
+
+  it("never marks a key on words that only look like a 401", async () => {
+    const accounts = accountsStub();
+    const { layer } = makeLayers({
+      accounts,
+      codexStart: () =>
+        Promise.reject(new InferenceEngineError("auth-suspected", "401 Unauthorized")),
+    });
+    const claudeLayer = Layer.mergeAll(
+      layer,
+      Layer.succeed(InferenceEngine, {
+        start: () => Effect.fail(new InferenceEngineError("auth-suspected", "Invalid API key")),
+        continueSession: () => Effect.fail(new InferenceEngineError("session-not-found", "none")),
+      }),
+    );
+
+    const codex = await runFlipped(
+      respond(newExchange({ credentials: { codex: "cacc_codex_key" } })).pipe(
+        Effect.provide(layer),
+      ),
+    );
+    const claude = await runFlipped(
+      respond(newExchange({ credentials: { claude: "cacc_claude_key" } })).pipe(
+        Effect.provide(claudeLayer),
+      ),
+    );
+
+    expect(accounts.markInvalid).not.toHaveBeenCalled();
+    expect(codex).not.toHaveProperty("code");
+    expect(claude).not.toHaveProperty("code");
+    expect(claude).toMatchObject({
+      message:
+        "Your Claude API key ····wxyz was not accepted by Anthropic. It is not marked invalid; if the key was revoked, connect a new one.",
+    });
+  });
+});
+
+describe("inference.module on a Claude key, against the real CLI", () => {
+  let fake: FakeAnthropic;
+  const engineLayer = claudeEngineLayer();
+
+  // A fresh fake per test: a CLI still shutting down from the last test talks to its own.
+  beforeEach(async () => {
+    fake = await startFakeAnthropic();
+    process.env["ANTHROPIC_BASE_URL"] = fake.baseUrl;
+    process.env["DISABLE_AUTOUPDATER"] = "1";
+    process.env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1";
+  });
+
+  afterEach(async () => {
+    await fake.close();
+  });
+
+  const withRealEngine = (accounts: ReturnType<typeof accountsStub>) =>
+    Layer.mergeAll(makeLayers({ accounts }).layer, engineLayer);
+
+  const keyExchange = newExchange({
+    credentials: { claude: "cacc_claude_key" },
+    tools: [{ name: "search", inputSchema: { type: "object" } }],
+  });
+
+  it("marks the key invalid on Anthropic's 401", async () => {
+    const accounts = accountsStub();
+    guardMarkInvalid(accounts, () => claudeKeyAccount);
+    fake.reply({ type: "status", status: 401, errorType: "authentication_error" });
+
+    const error = await runFlipped(
+      respond(keyExchange).pipe(Effect.provide(withRealEngine(accounts))),
+    );
+
+    expect(new Set(fake.apiKeys)).toEqual(new Set([claudeKey]));
+    expect(error).toMatchObject({
+      code: "connected-account-refused",
+      message:
+        "Your Claude API key ····wxyz was refused by Anthropic. It is marked invalid; connect a new key.",
+      receipt: { accountId: "cacc_claude_key", revision: 1, login: "api-key" },
+    });
+    expect(accounts.markInvalid).toHaveBeenCalledWith({ id: "cacc_claude_key", revision: 1 });
+  }, 60_000);
+
+  it("does not mark the key on a refusal whose words say 401 but whose status does not", async () => {
+    const accounts = accountsStub();
+    guardMarkInvalid(accounts, () => claudeKeyAccount);
+    fake.reply({
+      type: "status",
+      status: 400,
+      errorType: "invalid_request_error",
+      message: "401 Unauthorized: invalid x-api-key",
+    });
+
+    const error = await runFlipped(
+      respond(keyExchange).pipe(Effect.provide(withRealEngine(accounts))),
+    );
+
+    expect(error).toMatchObject({
+      message: expect.stringContaining("was not accepted by Anthropic. It is not marked invalid"),
+    });
+    expect(error).not.toHaveProperty("code");
+    expect(accounts.markInvalid).not.toHaveBeenCalled();
+  }, 60_000);
+
+  it("marks the start's account on a 401 after a tool round", async () => {
+    const accounts = accountsStub();
+    guardMarkInvalid(accounts, () => claudeKeyAccount);
+    fake.reply(
+      { type: "toolUse", name: "mcp__caller__search", input: {} },
+      { type: "status", status: 401, errorType: "authentication_error" },
+    );
+    const layer = withRealEngine(accounts);
+
+    const parked = await run(respond(keyExchange).pipe(Effect.provide(layer)));
+    if (parked.turn.type !== "toolCalls") throw new Error("expected a tool round");
+    const toolCallId = parked.turn.calls[0]?.toolCallId ?? "";
+    const error = await runFlipped(
+      respond({
+        ownerUserId: "usr_1",
+        sessionId: parked.sessionId,
+        toolResults: [{ toolCallId, content: "found" }],
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(error).toMatchObject({ code: "connected-account-refused" });
+    expect(accounts.markInvalid).toHaveBeenCalledWith({ id: "cacc_claude_key", revision: 1 });
+  }, 60_000);
+
+  it("answers superseded to a late 401 from a key replaced since the exchange started", async () => {
+    let current = claudeKeyAccount;
+    const accounts = accountsStub();
+    guardMarkInvalid(accounts, () => current);
+    fake.reply(
+      { type: "toolUse", name: "mcp__caller__search", input: {} },
+      { type: "status", status: 401, errorType: "authentication_error" },
+    );
+    const layer = withRealEngine(accounts);
+
+    const parked = await run(respond(keyExchange).pipe(Effect.provide(layer)));
+    if (parked.turn.type !== "toolCalls") throw new Error("expected a tool round");
+    current = { ...claudeKeyAccount, credentialRevision: 2 };
+    const error = await runFlipped(
+      respond({
+        ownerUserId: "usr_1",
+        sessionId: parked.sessionId,
+        toolResults: [{ toolCallId: parked.turn.calls[0]?.toolCallId ?? "", content: "found" }],
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(error).toMatchObject({
+      code: "connected-account-superseded",
+      receipt: { accountId: "cacc_claude_key", revision: 1 },
+    });
+    expect(accounts.markInvalid).toHaveBeenCalledWith({ id: "cacc_claude_key", revision: 1 });
+  }, 60_000);
 });

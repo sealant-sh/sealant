@@ -162,10 +162,10 @@ describe("codex engine", () => {
     expect(sessionEnds).toBe(1);
   });
 
-  it("classifies a 401-shaped stderr as an auth failure", async () => {
+  it("classifies a 401-shaped stderr as a suspected auth failure, words with no status", async () => {
     process.env["FAKE_CODEX_MODE"] = "auth";
     const error = await startExpectingFailure({});
-    expect(error.reason).toBe("auth");
+    expect(error.reason).toBe("auth-suspected");
   });
 
   it("kills the subprocess and fails with reason 'timeout' past the deadline", async () => {

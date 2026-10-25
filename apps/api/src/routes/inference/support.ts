@@ -17,7 +17,11 @@ export const redactSecrets = (text: string, secrets: readonly (string | undefine
     text,
   );
 
-/** Auth-shaped engine failures mark the connected account invalid (401-feedback, design doc §2). */
+/**
+ * Engine failure text that reads like an auth failure. Words only: it picks the answer's words and
+ * marks a setup token invalid as before, but never an API key, which turns invalid only on a
+ * structured 401.
+ */
 export const isAuthFailureMessage = (message: string): boolean =>
   /authentication_failed|invalid api key|oauth token|401|unauthorized|token.*(expired|revoked)/i.test(
     message,
