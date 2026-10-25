@@ -327,6 +327,9 @@ const RAISE_MARK = `printf '%s' "$token" > "$hw.tmp"; mv -f "$hw.tmp" "$hw"`;
 const raiseMarkOfMissingHome = (): string =>
   `${READ_MARK}; if [ "$token" -lt "$mark" ]; then exit ${HOME_SCRIPT_EXIT.fenced}; fi; ${RAISE_MARK}; `;
 
+const readPayload = (index: number): string =>
+  `unset p${index}; IFS= read -r p${index} || [ -n "$p${index}" ] || exit ${HOME_SCRIPT_EXIT.shortPayload}`;
+
 /** The base64 payload lines a script reads, one per write, in order. */
 export const homeScriptStdin = (contents: readonly string[]): string =>
   contents.map((content) => `${Buffer.from(content, "utf8").toString("base64")}\n`).join("");
@@ -404,13 +407,10 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
   const payloads = [...input.writes.map((_, index) => index), ...keys.map(({ index }) => index)];
   const lines: string[] = ["set -eu", "umask 077", `home=${quote(home)}`, `token=${input.token}`];
 
-  // 1. Every payload first, into shell variables (never exported): the owner's half gets them on
-  //    its stdin, never through argv or the environment.
-  for (const index of payloads) {
-    lines.push(
-      `IFS= read -r p${index} || [ -n "$p${index}" ] || exit ${HOME_SCRIPT_EXIT.shortPayload}`,
-    );
-  }
+  // 1. Every payload first, into shell variables, never exported: each is unset before its read, as
+  //    `read` keeps the export of a variable of that name the exec inherited. The owner's half gets
+  //    them on its stdin, never through argv or the environment.
+  lines.push(...payloads.map(readPayload));
 
   // 2. No link on the way to the home.
   lines.push("p=");
@@ -518,12 +518,7 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
   // 6–7. Inside the home, as its owner. Its payloads arrive on its stdin (a here-document of the
   //      root half's), one base64 line per write, read before anything else.
   const inner: string[] = ["set -eu", "umask 077", `home=${quote(home)}`];
-  for (const index of payloads) {
-    inner.push(
-      `IFS= read -r p${index} || [ -n "$p${index}" ] || exit ${HOME_SCRIPT_EXIT.shortPayload}`,
-    );
-  }
-  inner.push("exec </dev/null");
+  inner.push(...payloads.map(readPayload), "exec </dev/null");
   const merges = [...input.writes, ...removes].some(isMergedLogin);
   if (merges) {
     inner.push(`m=${quote(MERGED_LOGIN_PROGRAM)}`, `[ "$uid" = 0 ] && rt=1 || rt=0`);

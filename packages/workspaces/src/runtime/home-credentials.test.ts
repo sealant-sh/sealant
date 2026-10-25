@@ -151,12 +151,18 @@ type RunInput = Omit<HomeCredentialScriptInput, "writes" | "stateDir" | "token" 
  * on both halves' PATH (the exec's, and the owner's half's fixed one), for commands that record
  * how they were run.
  */
-const world = (options: { readonly pathPrefix?: string } = {}) => {
+const world = (
+  options: { readonly pathPrefix?: string; readonly env?: Readonly<Record<string, string>> } = {},
+) => {
   const root = scratch();
   const prefix = [options.pathPrefix, shell.dir]
     .flatMap((entry) => (entry === undefined ? [] : [`${entry}:`]))
     .join("");
-  const env = { ...process.env, PATH: `${prefix}${process.env["PATH"] ?? SYSTEM_PATH}` };
+  const env = {
+    ...process.env,
+    ...options.env,
+    PATH: `${prefix}${process.env["PATH"] ?? SYSTEM_PATH}`,
+  };
   const state = join(root, "state");
   // A home the script makes is seeded from the skeleton. This machine's /etc/skel is not the test's:
   // GitHub's runner images keep 816 MB of toolchains there, and a cold copy of it took 23–38 s
@@ -1097,17 +1103,24 @@ forEachShell("a login is never in any process's argv or environment", () => {
     { provider: "pi", content: entry("SECRET-pi-0004") },
     { provider: "opencode", content: entry("SECRET-opencode-0005") },
   ];
+  const KEYS = [{ id: "cpl_key_secret", content: "sk-ant-api03-SECRET-key-0006" }];
   /** What must never appear: each secret, and the start of each payload's base64 line. */
-  const NEEDLES = [
-    ...LOGINS.map(({ content }) => /SECRET-[a-z]+-\d{4}/.exec(content)?.[0] ?? content),
-    ...LOGINS.map(({ content }) => Buffer.from(content, "utf8").toString("base64").slice(0, 24)),
-  ];
+  const NEEDLES = [...LOGINS, ...KEYS].flatMap(({ content }) => [
+    /SECRET-[a-z]+-\d{4}/.exec(content)?.[0] ?? content,
+    Buffer.from(content, "utf8").toString("base64").slice(0, 24),
+  ]);
 
   /** A take, a write under the hold and a release, every login in each; all succeed. */
   const putAndRelease = (w: ReturnType<typeof world>) => {
     const home = w.home("alice");
     const runs = [
-      w.run({ home, fence: { kind: "take", generation: GEN_A }, writes: LOGINS, removes: [] }),
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_A },
+        writes: LOGINS,
+        keys: KEYS,
+        removes: [],
+      }),
       w.run({ home, fence: { kind: "held", generation: GEN_A }, writes: LOGINS, removes: [] }),
     ];
     for (const run of runs) expect(run.status, run.stderr).toBe(0);
@@ -1117,6 +1130,7 @@ forEachShell("a login is never in any process's argv or environment", () => {
     expect(read(join(home, ".config/gh/hosts.yml"))).toContain("SECRET-github-0003");
     expect(read(join(home, ".pi/agent/auth.json"))).toContain("SECRET-pi-0004");
     expect(read(join(home, ".local/share/opencode/auth.json"))).toContain("SECRET-opencode-0005");
+    expect(read(join(home, CLAUDE_KEY_DIR, "cpl_key_secret"))).toContain("SECRET-key-0006");
     const released = w.run({
       home,
       fence: { kind: "release", generation: GEN_A },
@@ -1127,63 +1141,85 @@ forEachShell("a login is never in any process's argv or environment", () => {
     return [...runs, released];
   };
 
+  /** Runs a put and a release under shims that record every command's argv and environment. */
+  const recordEveryCommand = (env?: Readonly<Record<string, string>>) => {
+    const shims = scratch();
+    const log = join(shims, "exec.log");
+    const tr = realPath("tr");
+    // Every external command the script may start: each is a shim that records its argv and
+    // the environment it was started with (its own /proc/<pid>/environ), then runs the real one.
+    const commands = [
+      "env",
+      "setpriv",
+      "sh",
+      "flock",
+      "mkdir",
+      "chmod",
+      "chown",
+      "base64",
+      "node",
+      "stat",
+      "cp",
+      "rm",
+      "mv",
+      "cat",
+      "id",
+      "dirname",
+      "readlink",
+      "ln",
+      "true",
+    ];
+    for (const name of commands) {
+      const real = realPath(name);
+      if (!real.startsWith("/")) continue;
+      const shim = join(shims, name);
+      writeFileSync(
+        shim,
+        [
+          "#!/bin/sh",
+          `{ printf 'exec %s\\n' "$0"; printf 'arg %s\\n' "$@"; ${tr} '\\0' '\\n' < /proc/$$/environ | while IFS= read -r v; do printf 'env %s\\n' "$v"; done; } >> '${log}'`,
+          `exec '${real}' "$@"`,
+        ].join("\n"),
+      );
+      chmodSync(shim, 0o755);
+    }
+    putAndRelease(world({ pathPrefix: shims, ...(env === undefined ? {} : { env }) }));
+    const recorded = read(log);
+    const started = new Set(
+      recorded
+        .split("\n")
+        .filter((line) => line.startsWith("exec "))
+        .map((line) => line.slice(`exec ${shims}/`.length)),
+    );
+    return { recorded, started };
+  };
+
   it.skipIf(uid === 0)(
     "records the argv and environment of every command the script runs, and finds no login in any",
     () => {
-      const shims = scratch();
-      const log = join(shims, "exec.log");
-      const tr = realPath("tr");
-      // Every external command the script may start: each is a shim that records its argv and
-      // the environment it was started with (its own /proc/<pid>/environ), then runs the real one.
-      const commands = [
-        "env",
-        "setpriv",
-        "sh",
-        "flock",
-        "mkdir",
-        "chmod",
-        "chown",
-        "base64",
-        "node",
-        "stat",
-        "cp",
-        "rm",
-        "mv",
-        "cat",
-        "id",
-        "dirname",
-        "readlink",
-        "ln",
-        "true",
-      ];
-      for (const name of commands) {
-        const real = realPath(name);
-        if (!real.startsWith("/")) continue;
-        const shim = join(shims, name);
-        writeFileSync(
-          shim,
-          [
-            "#!/bin/sh",
-            `{ printf 'exec %s\\n' "$0"; printf 'arg %s\\n' "$@"; ${tr} '\\0' '\\n' < /proc/$$/environ | while IFS= read -r v; do printf 'env %s\\n' "$v"; done; } >> '${log}'`,
-            `exec '${real}' "$@"`,
-          ].join("\n"),
-        );
-        chmodSync(shim, 0o755);
-      }
-      putAndRelease(world({ pathPrefix: shims }));
-
-      const recorded = read(log);
-      const started = new Set(
-        recorded
-          .split("\n")
-          .filter((line) => line.startsWith("exec "))
-          .map((line) => line.slice(`exec ${shims}/`.length)),
-      );
+      const { recorded, started } = recordEveryCommand();
       // The commands that once carried a login (env's argv, setpriv's and sh's environment, node's
       // environment) and the ones that write them were all recorded.
-      for (const name of ["env", "setpriv", "sh", "base64", "node", "stat"]) {
+      for (const name of ["env", "setpriv", "sh", "base64", "node", "stat", "mv"]) {
         expect(started, name).toContain(name);
       }
+      for (const needle of NEEDLES) {
+        expect(recorded, needle).not.toContain(needle);
+      }
+    },
+  );
+
+  it.skipIf(uid === 0)(
+    "finds no login in any command's environment when the exec inherits exported variables of the payloads' names",
+    () => {
+      const inherited = Object.fromEntries(
+        Array.from({ length: LOGINS.length + KEYS.length }, (_, index) => [
+          `p${index}`,
+          "inherited",
+        ]),
+      );
+      const { recorded } = recordEveryCommand(inherited);
+      expect(recorded).toContain("env p0=inherited");
       for (const needle of NEEDLES) {
         expect(recorded, needle).not.toContain(needle);
       }
