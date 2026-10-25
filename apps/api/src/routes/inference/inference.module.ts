@@ -40,7 +40,7 @@ import {
   ProfileRepo,
   type ConnectedAccount,
 } from "@sealant/db";
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 
 import { env } from "../../runtime-env.js";
 import { budgetLimits } from "../../services/budget-limits.js";
@@ -201,8 +201,28 @@ const readLogin = (account: ConnectedAccount, payloadJson: string) =>
       }),
   });
 
-const provisionError = (what: string) => (cause: unknown) =>
-  new InferenceEngineError("engine", toErrorMessage(cause, `Failed to provision the ${what}.`));
+/**
+ * `start` on a private dir it provisions. The engine removes the dir when its session ends; a
+ * start interrupted before the engine answers removes it here too, so no window leaves it behind.
+ */
+const onPrivateDir = <D, A, E, R>(
+  what: string,
+  provision: () => D,
+  remove: (dir: D) => void,
+  start: (dir: D, onSessionEnd: () => Promise<void>) => Effect.Effect<A, E, R>,
+) =>
+  Effect.acquireUseRelease(
+    Effect.try({
+      try: provision,
+      catch: (cause) =>
+        new InferenceEngineError(
+          "engine",
+          toErrorMessage(cause, `Failed to provision the ${what}.`),
+        ),
+    }),
+    (dir) => start(dir, () => Promise.resolve(remove(dir))),
+    (dir, exit) => (Exit.hasInterrupts(exit) ? Effect.sync(() => remove(dir)) : Effect.void),
+  );
 
 const startEngine = (exchange: Exchange, payload: InferenceRespondRequest) =>
   Effect.gen(function* () {
@@ -216,21 +236,18 @@ const startEngine = (exchange: Exchange, payload: InferenceRespondRequest) =>
 
     if (login.shape === "codex-key" || login.shape === "codex-auth-json") {
       const engine = yield* CodexInferenceEngine;
-      const provisioned = yield* Effect.try({
-        try: () =>
+      return yield* onPrivateDir(
+        "codex home dir",
+        () =>
           provisionCodexHome({
             authJson: codexLoginFile(
               login.shape === "codex-key" ? { apiKey: login.apiKey } : { authJson: login.authJson },
             ),
-          }),
-        catch: provisionError("codex home dir"),
-      });
-      return yield* engine.start({
-        ...common,
-        codexHome: provisioned.codexHome,
-        secrets: exchange.secrets,
-        onSessionEnd: () => Promise.resolve(removeCodexHome(provisioned.codexHome)),
-      });
+          }).codexHome,
+        removeCodexHome,
+        (codexHome, onSessionEnd) =>
+          engine.start({ ...common, codexHome, secrets: exchange.secrets, onSessionEnd }),
+      );
     }
 
     const engine = yield* InferenceEngine;
@@ -242,40 +259,46 @@ const startEngine = (exchange: Exchange, payload: InferenceRespondRequest) =>
     };
     switch (login.shape) {
       case "claude-setup-token": {
-        const configDir = yield* Effect.try({
-          try: () => provisionClaudeTokenDir(),
-          catch: provisionError("claude token config dir"),
-        });
-        return yield* engine.start({
-          ...claudeCommon,
-          auth: { kind: "oauth-token", configDir, oauthToken: login.token },
-          onSessionEnd: () => Promise.resolve(removeClaudeConfigDir(configDir)),
-        });
+        return yield* onPrivateDir(
+          "claude token config dir",
+          () => provisionClaudeTokenDir(),
+          removeClaudeConfigDir,
+          (configDir, onSessionEnd) =>
+            engine.start({
+              ...claudeCommon,
+              auth: { kind: "oauth-token", configDir, oauthToken: login.token },
+              onSessionEnd,
+            }),
+        );
       }
       case "claude-session": {
-        const provisioned = yield* Effect.try({
-          try: () =>
+        return yield* onPrivateDir(
+          "claude session config dir",
+          () =>
             provisionClaudeConfigDir({
               credentialsJson: claudeCredentialsCopy(login.credentialsJson),
+            }).configDir,
+          removeClaudeConfigDir,
+          (configDir, onSessionEnd) =>
+            engine.start({
+              ...claudeCommon,
+              auth: { kind: "config-dir", configDir },
+              onSessionEnd,
             }),
-          catch: provisionError("claude session config dir"),
-        });
-        return yield* engine.start({
-          ...claudeCommon,
-          auth: { kind: "config-dir", configDir: provisioned.configDir },
-          onSessionEnd: () => Promise.resolve(removeClaudeConfigDir(provisioned.configDir)),
-        });
+        );
       }
       case "claude-key": {
-        const provisioned = yield* Effect.try({
-          try: () => provisionClaudeKeyDir({ apiKey: login.apiKey }),
-          catch: provisionError("claude key dir"),
-        });
-        return yield* engine.start({
-          ...claudeCommon,
-          auth: { kind: "api-key", configDir: provisioned.configDir, keyPath: provisioned.keyPath },
-          onSessionEnd: () => Promise.resolve(removeClaudeConfigDir(provisioned.configDir)),
-        });
+        return yield* onPrivateDir(
+          "claude key dir",
+          () => provisionClaudeKeyDir({ apiKey: login.apiKey }),
+          ({ configDir }) => removeClaudeConfigDir(configDir),
+          ({ configDir, keyPath }, onSessionEnd) =>
+            engine.start({
+              ...claudeCommon,
+              auth: { kind: "api-key", configDir, keyPath },
+              onSessionEnd,
+            }),
+        );
       }
     }
   });
