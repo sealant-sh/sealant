@@ -144,6 +144,30 @@ jobs:
       - name: Unit and integration tests
         run: pnpm exec turbo test --force
 
+      # The binary from the image Core pins (the reference pin-sealantd.mjs writes), copied out of a
+      # container that is created and never started.
+      - name: The pinned sealantd binary
+        run: |
+          image=$(node tooling/scripts/pin-sealantd.mjs --print-image)
+          echo "sealantd: $image"
+          container=$(docker create "$image" /usr/local/bin/sealantd)
+          docker cp "$container:/usr/local/bin/sealantd" "$RUNNER_TEMP/sealantd"
+          docker rm "$container"
+          "$RUNNER_TEMP/sealantd" --version
+
+      # The suites above skip these without a binary; REQUIRE_SEALANTD=1 makes a missing one fail.
+      - name: API forwards through a real sealantd (never skipped)
+        env:
+          SEALANTD_BIN: ${{ runner.temp }}/sealantd
+          REQUIRE_SEALANTD: "1"
+        run: pnpm --filter @sealant/api exec vitest run daemon.test --reporter=verbose
+
+      - name: SSH gateway forwards through a real sealantd (never skipped)
+        env:
+          SEALANTD_BIN: ${{ runner.temp }}/sealantd
+          REQUIRE_SEALANTD: "1"
+        run: pnpm --filter @sealant/ssh-gateway exec vitest run daemon.test --reporter=verbose
+
       # A workspace's Docker service is rootless dind, which needs unprivileged user namespaces.
       # GitHub's Ubuntu 24.04 image keeps Ubuntu's AppArmor default that refuses them, so the
       # service exits at start ("fork/exec /proc/self/exe: operation not permitted"; #373). Allow
