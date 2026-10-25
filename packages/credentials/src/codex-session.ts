@@ -1,6 +1,7 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { makePrivateDir } from "./private-dir.js";
 
 /*
 Codex control-plane CODEX_HOME provisioning (design doc §2 codex / §6), sibling of
@@ -42,15 +43,14 @@ export const provisionCodexHome = (input: {
   readonly authJson: string;
   /** Parent for the per-invocation dir; defaults to the OS tmp dir. */
   readonly baseDir?: string;
-}): ProvisionedCodexHome => {
+}): ProvisionedCodexHome =>
   // mkdtemp creates the directory 0700 already; the explicit mode on the file is the part that
   // matters (writeFileSync defaults to 0666 & umask).
-  const codexHome = mkdtempSync(join(input.baseDir ?? tmpdir(), "sealant-codex-session-"));
-  const authJsonPath = join(codexHome, CODEX_AUTH_FILE_NAME);
-  writeFileSync(authJsonPath, input.authJson, { mode: 0o600 });
-
-  return { codexHome, authJsonPath };
-};
+  makePrivateDir("sealant-codex-session-", input.baseDir, (codexHome) => {
+    const authJsonPath = join(codexHome, CODEX_AUTH_FILE_NAME);
+    writeFileSync(authJsonPath, input.authJson, { mode: 0o600 });
+    return { codexHome, authJsonPath };
+  });
 
 /**
  * Read the (possibly CLI-rotated) auth.json back out of a provisioned home dir. Returns undefined

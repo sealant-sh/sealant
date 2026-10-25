@@ -2,6 +2,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { makePrivateDir } from "./private-dir.js";
+
 /*
 Claude session-credential freshness + control-plane config dirs (design doc §2 claude / §6).
 
@@ -91,15 +93,14 @@ export const provisionClaudeConfigDir = (input: {
   readonly credentialsJson: string;
   /** Parent for the per-invocation dir; defaults to the OS tmp dir. */
   readonly baseDir?: string;
-}): ProvisionedClaudeConfigDir => {
+}): ProvisionedClaudeConfigDir =>
   // mkdtemp creates the directory 0700 already; the explicit mode on the file is the part that
   // matters (writeFileSync defaults to 0666 & umask).
-  const configDir = mkdtempSync(join(input.baseDir ?? tmpdir(), "sealant-claude-session-"));
-  const credentialsPath = join(configDir, CLAUDE_CREDENTIALS_FILE_NAME);
-  writeFileSync(credentialsPath, input.credentialsJson, { mode: 0o600 });
-
-  return { configDir, credentialsPath };
-};
+  makePrivateDir("sealant-claude-session-", input.baseDir, (configDir) => {
+    const credentialsPath = join(configDir, CLAUDE_CREDENTIALS_FILE_NAME);
+    writeFileSync(credentialsPath, input.credentialsJson, { mode: 0o600 });
+    return { configDir, credentialsPath };
+  });
 
 /**
  * Read the (possibly CLI-rotated) credentials file back out of a provisioned config dir.
@@ -136,10 +137,9 @@ export interface ProvisionedClaudeKeyDir {
 export const provisionClaudeKeyDir = (input: {
   readonly apiKey: string;
   readonly baseDir?: string;
-}): ProvisionedClaudeKeyDir => {
-  const configDir = mkdtempSync(join(input.baseDir ?? tmpdir(), "sealant-claude-key-"));
-  const keyPath = join(configDir, CLAUDE_API_KEY_FILE_NAME);
-  writeFileSync(keyPath, input.apiKey, { mode: 0o600 });
-
-  return { configDir, keyPath };
-};
+}): ProvisionedClaudeKeyDir =>
+  makePrivateDir("sealant-claude-key-", input.baseDir, (configDir) => {
+    const keyPath = join(configDir, CLAUDE_API_KEY_FILE_NAME);
+    writeFileSync(keyPath, input.apiKey, { mode: 0o600 });
+    return { configDir, keyPath };
+  });
