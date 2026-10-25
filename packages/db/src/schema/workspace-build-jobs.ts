@@ -292,6 +292,10 @@ export const workspaceCredentialHomes = pgTable(
   (table) => [primaryKey({ columns: [table.runId, table.home] })],
 );
 
+export type WorkspaceCredentialPlacementLogin =
+  | { readonly kind: "subscription" }
+  | { readonly kind: "api-key"; readonly suffix: string };
+
 export const workspaceCredentialPlacements = pgTable(
   "workspace_credential_placements",
   {
@@ -302,7 +306,7 @@ export const workspaceCredentialPlacements = pgTable(
     accountId: text("account_id").notNull(),
     revision: integer().notNull(),
     path: text().notNull(),
-    login: jsonb().$type<{ readonly kind: "subscription" }>().notNull(),
+    login: jsonb().$type<WorkspaceCredentialPlacementLogin>().notNull(),
     state: text({ enum: ["pending", "ready", "removing"] }).notNull(),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
@@ -315,7 +319,7 @@ export const workspaceCredentialPlacements = pgTable(
     }).onDelete("cascade"),
     index("credential_placements_account_state_idx").on(table.accountId, table.state),
     uniqueIndex("credential_placements_ready_slot_idx")
-      .on(table.runId, table.home, table.provider)
+      .on(table.runId, table.home, table.path)
       .where(sql`${table.state} = 'ready'`),
     check("credential_placements_revision_positive", sql`${table.revision} > 0`),
     check("credential_placements_state", sql`${table.state} in ('pending', 'ready', 'removing')`),

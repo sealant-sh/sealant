@@ -15,6 +15,7 @@ import {
   workspaceCredentialPlacements as placements,
   workspaceRuntimeInstances,
   type WorkspaceCredentialHome,
+  type WorkspaceCredentialPlacementLogin,
   type WorkspaceRuntimeInstance,
 } from "../schema.js";
 
@@ -46,13 +47,18 @@ export interface CredentialPlacementRepoService {
     { readonly result: A; readonly state: HomeState },
     CredentialPlacementRepoError
   >;
-  readonly homesHoldingAccount: (
+  readonly homesHoldingSubscription: (
     accountId: string,
   ) => Effect.Effect<readonly CredentialPlacementTarget[], CredentialPlacementRepoError>;
   readonly homesWithRemovalWork: () => Effect.Effect<
     readonly CredentialPlacementTarget[],
     CredentialPlacementRepoError
   >;
+  readonly recordLegacyCodexKey: (input: {
+    readonly accountId: string;
+    readonly revision: number;
+    readonly login: Extract<WorkspaceCredentialPlacementLogin, { readonly kind: "api-key" }>;
+  }) => Effect.Effect<void, CredentialPlacementRepoError>;
 }
 
 export class CredentialPlacementRepo extends Context.Service<
@@ -186,12 +192,12 @@ export const CredentialPlacementRepoLive = Layer.effect(
             }),
           ),
         ),
-      homesHoldingAccount: (accountId) =>
+      homesHoldingSubscription: (accountId) =>
         safe(
           homesWhere(
             and(
               eq(workspaceRuntimeInstances.status, "ready"),
-              sql`exists (select 1 from ${placements} where ${placements.runId} = ${workspaceCredentialHomes.runId} and ${placements.home} = ${workspaceCredentialHomes.home} and ${placements.accountId} = ${accountId} and ${placements.state} in ('pending', 'ready'))`,
+              sql`exists (select 1 from ${placements} where ${placements.runId} = ${workspaceCredentialHomes.runId} and ${placements.home} = ${workspaceCredentialHomes.home} and ${placements.accountId} = ${accountId} and ${placements.state} in ('pending', 'ready') and ${placements.login}->>'kind' = 'subscription')`,
             ),
           ),
         ),
@@ -206,6 +212,20 @@ export const CredentialPlacementRepoLive = Layer.effect(
               ),
             ),
           ),
+        ),
+      recordLegacyCodexKey: ({ accountId, revision, login }) =>
+        safe(
+          db
+            .update(placements)
+            .set({ login })
+            .where(
+              and(
+                eq(placements.accountId, accountId),
+                eq(placements.revision, revision),
+                eq(placements.provider, "codex"),
+                sql`${placements.login}->>'kind' = 'subscription'`,
+              ),
+            ),
         ),
     } satisfies CredentialPlacementRepoService;
   }),

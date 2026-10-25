@@ -335,7 +335,7 @@ describe("pushCredentialCopy into homes", () => {
         ["claude", "cacc_alice"],
       ]);
       // The listing still names Alice's home; under its lock, Bob holds it now.
-      const listed = yield* homes.placements.homesHoldingAccount("cacc_alice");
+      const listed = yield* homes.placements.homesHoldingSubscription("cacc_alice");
       yield* homes.service.withLockedHome({ runId: "h", home: "/run/mend/conv/ses_1" }, () =>
         Effect.succeed({ result: undefined, outcome: { kind: "release" as const } }),
       );
@@ -352,7 +352,7 @@ describe("pushCredentialCopy into homes", () => {
       }).pipe(
         Effect.provideService(CredentialPlacementRepo, {
           ...homes.placements,
-          homesHoldingAccount: () => Effect.succeed(listed),
+          homesHoldingSubscription: () => Effect.succeed(listed),
         }),
       );
 

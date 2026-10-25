@@ -5,6 +5,7 @@ import {
   loginClassOf,
   parseConnectedAccountRef,
   parseStoredCredential,
+  placedLoginOf,
   planCredentialInjections,
   type CredentialCipherService,
   type CredentialInjection,
@@ -13,6 +14,7 @@ import {
 import {
   ConnectedAccountRepo,
   type ConnectedAccount,
+  type WorkspaceCredentialPlacementLogin,
   type WorkspaceLaunchCredentialInjection,
 } from "@sealant/db";
 import type { NewWorkspace, WorkspaceCredentialsHome } from "@sealant/validators";
@@ -44,6 +46,7 @@ export interface ResolvedCredentialInjections {
    * the account's current payload shape, which a reconnect may have switched mid-run.
    */
   readonly launchCredentialInjections: readonly WorkspaceLaunchCredentialInjection[];
+  readonly homeLogins: ReadonlyMap<string, WorkspaceCredentialPlacementLogin>;
 }
 
 export interface ResolveCredentialInjectionsInput {
@@ -156,6 +159,7 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
       injections: [],
       codexAccounts: [],
       launchCredentialInjections: [],
+      homeLogins: new Map(),
     };
     return empty;
   }
@@ -172,6 +176,7 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
   const injections: CredentialInjection[] = [];
   const codexAccounts: ResolvedCodexAccount[] = [];
   const launchCredentialInjections: WorkspaceLaunchCredentialInjection[] = [];
+  const homeLogins = new Map<string, WorkspaceCredentialPlacementLogin>();
 
   for (const credentialRef of credentialRefs) {
     const connectedAccountId = parseConnectedAccountRef(credentialRef.ref);
@@ -213,10 +218,14 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
       .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
 
     const credentialsHome = input.blueprint.runtime.credentialsHome;
-    const { credential, plan } = yield* Effect.try({
+    const { credential, plan, homeLogin } = yield* Effect.try({
       try: () => {
         const stored = parseStoredCredential(credentialRef.provider, plaintext);
-        return { credential: stored, plan: planLogin(stored, account, credentialsHome) };
+        return {
+          credential: stored,
+          plan: planLogin(stored, account, credentialsHome),
+          homeLogin: credentialsHome === undefined ? undefined : placedLoginOf(...stored),
+        };
       },
       catch: (cause) =>
         workspaceBuildJobProcessingError({
@@ -234,6 +243,7 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
     const planned = plan.injections;
 
     injections.push(...planned);
+    if (homeLogin !== undefined) homeLogins.set(account.id, homeLogin);
     const login = loginClassOf(...credential);
     const fileInjected = planned.some((injection) => injection.kind === "file");
     launchCredentialInjections.push({
@@ -272,6 +282,7 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
     injections,
     codexAccounts,
     launchCredentialInjections,
+    homeLogins,
   };
   return resolved;
 });

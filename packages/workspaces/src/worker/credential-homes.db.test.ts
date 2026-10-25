@@ -235,7 +235,7 @@ describe.skipIf(DATABASE_URL === undefined)("credential homes (Postgres)", () =>
         yield* place(ready, "/home/b", `cacc_${randomUUID()}`, "ready");
         yield* place(ready, "/home/c", account, "removing");
         yield* place(stopped, "/home/a", account, "ready");
-        return yield* (yield* CredentialPlacementRepo).homesHoldingAccount(account);
+        return yield* (yield* CredentialPlacementRepo).homesHoldingSubscription(account);
       }),
     );
     expect(listed.map((target) => [target.home.runId, target.home.home])).toEqual([

@@ -570,7 +570,8 @@ describe("putWorkspaceCredentials", () => {
   it("writes a Codex key as Codex's own key file, a key stored as an auth.json too", async () => {
     for (const name of ["key", "legacy-key"]) {
       const world = newWorld();
-      succeeded(await world.put({ onBehalfOfUserId: ALICE, codex: name }));
+      const answer = succeeded(await world.put({ onBehalfOfUserId: ALICE, codex: name }));
+      expect(answer.home.placements?.[0]?.login).toEqual({ kind: "api-key", suffix: "wxyz" });
       expect(world.ran[0]?.payloads).toEqual([
         JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: codexKey }),
       ]);
@@ -578,14 +579,26 @@ describe("putWorkspaceCredentials", () => {
     }
   });
 
-  it("refuses a Claude key, and a Codex key as pi's login, with words and nothing written", async () => {
+  it("writes a Claude key alone into a file of its own, and its receipt names that file", async () => {
     const world = newWorld();
-    expect(failed(await world.put({ onBehalfOfUserId: ALICE, claude: "key" }))).toMatchObject({
-      _tag: "WorkspaceConflictError",
-      code: "connected-account-unsupported",
+    const answer = succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "key" }));
+    const receipt = answer.home.placements?.[0];
+    const keyPath = `${HOME}/.claude/.sealant-keys/${receipt?.placementId ?? "missing"}`;
+    expect(receipt).toMatchObject({
       provider: "claude",
-      message: expect.stringContaining("Claude API keys are not supported by this Sealant yet"),
+      accountId: aliceClaudeKey.id,
+      login: { kind: "api-key", suffix: "wxyz", keyPath },
+      pinned: false,
     });
+    expect(world.ran[0]?.payloads).toEqual(["sk-ant-api03-FAKEclaudekeyforthetests000000wxyz"]);
+    expect(world.ran[0]?.script).toContain(
+      `f="$home/.claude/.sealant-keys/${receipt?.placementId ?? ""}"`,
+    );
+    expect(world.ran[0]?.script).not.toContain('f="$home/.claude/.credentials.json"');
+  });
+
+  it("refuses a Codex key as pi's login, with words and nothing written", async () => {
+    const world = newWorld();
     expect(failed(await world.put({ onBehalfOfUserId: ALICE, pi: "key" }))).toMatchObject({
       code: "connected-account-unsupported",
       provider: "codex",

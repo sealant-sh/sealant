@@ -1,4 +1,4 @@
-import type { ConnectedAccountLoginClass } from "@sealant/api-contracts";
+import type { ConnectedAccountLogin, ConnectedAccountLoginClass } from "@sealant/api-contracts";
 import { Schema } from "effect";
 
 /*
@@ -570,6 +570,19 @@ export const loginClassOf = (
   if ("apiKey" in payload) return "api-key";
   if (provider === "claude") return "subscription";
   return codexAuthJsonLogin(payload.authJson)?.login ?? "subscription";
+};
+
+export const placedLoginOf = (...credential: ProviderCredentialPayload): ConnectedAccountLogin => {
+  const [provider, payload] = credential;
+  if (provider === "github") return { kind: "subscription" };
+  if ("apiKey" in payload) return { kind: "api-key", suffix: apiKeyMetadata(payload).tokenSuffix };
+  if (provider === "claude" || loginClassOf("codex", payload) === "subscription") {
+    return { kind: "subscription" };
+  }
+  const raw: unknown = asRecord(JSON.parse(payload.authJson))?.["OPENAI_API_KEY"];
+  const key = typeof raw === "string" ? raw.trim() : "";
+  if (key === "") throw new Error("This Codex auth.json names an API key and holds none.");
+  return { kind: "api-key", suffix: key.slice(-4) };
 };
 
 const loginClassOfKinds = {

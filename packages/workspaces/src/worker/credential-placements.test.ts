@@ -62,6 +62,8 @@ const stateOfRows = (rows: ReturnType<typeof stateOf>["placements"]) =>
 
 let ids = 0;
 const newId = () => `cpl_new_${String((ids += 1))}`;
+const SUB = { kind: "subscription" } as const;
+const KEY = { kind: "api-key", suffix: "FAKE" } as const;
 
 const begin = (state: HomeState, accountId: string, revision = 1, reuse?: string) => {
   const began = beginHomeWrite(state, {
@@ -72,12 +74,14 @@ const begin = (state: HomeState, accountId: string, revision = 1, reuse?: string
         provider: "claude",
         accountId,
         revision,
+        login: SUB,
         reuse,
+        id: reuse ?? newId(),
         path: `${key.home}/.claude/.credentials.json`,
       },
     ],
     removes: [],
-    newId,
+    removedKeys: [],
   });
   if (began.kind !== "begun") throw new Error("the write did not begin");
   return began;
@@ -90,12 +94,15 @@ describe("planHomePut", () => {
     const plan = planHomePut({
       placements: [ready, placement("cpl_g", { provider: "github" })],
       live: undefined,
-      selected: [{ provider: "claude", accountId: "cacc_a", revision: 1 }],
+      selected: [{ provider: "claude", accountId: "cacc_a", revision: 1, login: SUB }],
       removed: ["github"],
     });
     expect(plan).toEqual({
-      writes: [{ provider: "claude", accountId: "cacc_a", revision: 1, reuse: "cpl_a" }],
+      writes: [
+        { provider: "claude", accountId: "cacc_a", revision: 1, login: SUB, reuse: "cpl_a" },
+      ],
       removes: ["github"],
+      removedKeys: [],
       pinned: [],
     });
   });
@@ -109,35 +116,40 @@ describe("planHomePut", () => {
         planHomePut({
           placements: [ready],
           live: ["cpl_a"],
-          selected: [{ provider: "claude", ...selection }],
+          selected: [{ provider: "claude", login: SUB, ...selection }],
           removed: [],
         }),
-      ).toEqual({ writes: [], removes: [], pinned: ["cpl_a"] });
+      ).toEqual({ writes: [], removes: [], removedKeys: [], pinned: ["cpl_a"] });
     }
     expect(
       planHomePut({
         placements: [ready],
         live: ["cpl_a"],
-        selected: [{ provider: "claude", accountId: "cacc_a", revision: 1 }],
+        selected: [{ provider: "claude", accountId: "cacc_a", revision: 1, login: SUB }],
         removed: [],
       }).writes,
-    ).toEqual([{ provider: "claude", accountId: "cacc_a", revision: 1, reuse: "cpl_a" }]);
+    ).toEqual([
+      { provider: "claude", accountId: "cacc_a", revision: 1, login: SUB, reuse: "cpl_a" },
+    ]);
   });
 
   it("never removes a live slot, and a live id that is not ready protects nothing", () => {
     expect(
       planHomePut({ placements: [ready], live: ["cpl_a"], selected: [], removed: ["claude"] }),
-    ).toEqual({ writes: [], removes: [], pinned: ["cpl_a"] });
+    ).toEqual({ writes: [], removes: [], removedKeys: [], pinned: ["cpl_a"] });
     expect(
       planHomePut({
         placements: [placement("cpl_a", { state: "removing" })],
         live: ["cpl_a"],
-        selected: [{ provider: "claude", accountId: "cacc_b", revision: 1 }],
+        selected: [{ provider: "claude", accountId: "cacc_b", revision: 1, login: SUB }],
         removed: [],
       }),
     ).toEqual({
-      writes: [{ provider: "claude", accountId: "cacc_b", revision: 1, reuse: undefined }],
+      writes: [
+        { provider: "claude", accountId: "cacc_b", revision: 1, login: SUB, reuse: undefined },
+      ],
       removes: [],
+      removedKeys: [],
       pinned: [],
     });
   });
@@ -150,7 +162,7 @@ describe("a write's placements", () => {
         settleInDoubt([
           placement("cpl_a"),
           placement("cpl_b", { accountId: "cacc_b", state: "pending" }),
-          placement("cpl_g", { provider: "github" }),
+          placement("cpl_g", { provider: "github", path: `${key.home}/.config/gh/hosts.yml` }),
         ]),
       ).map((row) => row.state),
     ).toEqual(["removing", "removing", "ready"]);
@@ -172,12 +184,14 @@ describe("a write's placements", () => {
               provider: "claude",
               accountId: "cacc_b",
               revision: 1,
+              login: SUB,
               reuse: undefined,
+              id: newId(),
               path: "/home/m4lice000/.claude/.credentials.json",
             },
           ],
           removes: [],
-          newId,
+          removedKeys: [],
         }),
       ).toEqual({ kind: "accounts-moved" });
     }
@@ -216,7 +230,7 @@ describe("a write's placements", () => {
       onBehalfOfUserId: "alice",
       writes: [],
       removes: ["claude"],
-      newId,
+      removedKeys: [],
     });
     if (began.kind !== "begun") throw new Error("the write did not begin");
     expect(began.placements.map((row) => row.state)).toEqual(["removing"]);
@@ -250,12 +264,14 @@ describe("a write's placements", () => {
             provider: "pi",
             accountId: "cacc_c",
             revision: 1,
+            login: SUB,
             reuse: undefined,
+            id: newId(),
             path: pi.path,
           },
         ],
         removes: [],
-        newId,
+        removedKeys: [],
       },
     );
     if (began.kind !== "begun") throw new Error("the write did not begin");
@@ -332,7 +348,108 @@ describe("pruneHome and removalWork", () => {
     ]);
     expect(removalWork(pruned)).toEqual({
       removes: ["github"],
+      removedKeys: [],
       forget: ["cpl_other", "cpl_old"],
+    });
+  });
+});
+
+describe("Claude key placements", () => {
+  const subscription = placement("cpl_sub");
+  const keyRow = (id: string, overrides: Partial<WorkspaceCredentialPlacement> = {}) =>
+    placement(id, {
+      accountId: "cacc_k",
+      login: KEY,
+      path: `${key.home}/.claude/.sealant-keys/${id}`,
+      ...overrides,
+    });
+  const keySelection = {
+    provider: "claude",
+    accountId: "cacc_k",
+    revision: 1,
+    login: KEY,
+  } as const;
+
+  it("are written beside a live subscription and never pinned, and a put of the same key reuses its file", () => {
+    expect(
+      planHomePut({
+        placements: [subscription],
+        live: ["cpl_sub"],
+        selected: [keySelection],
+        removed: [],
+      }),
+    ).toEqual({
+      writes: [{ ...keySelection, reuse: undefined }],
+      removes: [],
+      removedKeys: [],
+      pinned: [],
+    });
+    expect(
+      planHomePut({
+        placements: [subscription, keyRow("cpl_k")],
+        live: ["cpl_k"],
+        selected: [keySelection],
+        removed: [],
+      }).writes,
+    ).toEqual([{ ...keySelection, reuse: "cpl_k" }]);
+    expect(
+      planHomePut({
+        placements: [keyRow("cpl_k")],
+        live: ["cpl_k"],
+        selected: [{ provider: "claude", accountId: "cacc_a", revision: 1, login: SUB }],
+        removed: [],
+      }),
+    ).toEqual({
+      writes: [
+        { provider: "claude", accountId: "cacc_a", revision: 1, login: SUB, reuse: undefined },
+      ],
+      removes: [],
+      removedKeys: [],
+      pinned: [],
+    });
+  });
+
+  it("are removed with a null Claude selection unless live, which pins them", () => {
+    expect(
+      planHomePut({
+        placements: [subscription, keyRow("cpl_k1"), keyRow("cpl_k2", { revision: 2 })],
+        live: ["cpl_k2"],
+        selected: [],
+        removed: ["claude"],
+      }),
+    ).toEqual({ writes: [], removes: ["claude"], removedKeys: ["cpl_k1"], pinned: ["cpl_k2"] });
+  });
+
+  it("leave the subscription's file alone when one lands, is in doubt, or is removed", () => {
+    const before = stateOf([subscription], [account("cacc_a"), account("cacc_k")]);
+    const began = beginHomeWrite(before, {
+      key,
+      onBehalfOfUserId: "alice",
+      writes: [{ ...keySelection, reuse: undefined, id: "cpl_k", path: keyRow("cpl_k").path }],
+      removes: [],
+      removedKeys: [],
+    });
+    if (began.kind !== "begun") throw new Error("the write did not begin");
+    expect(settleInDoubt(began.placements).map((row) => [row.id, row.state])).toEqual([
+      ["cpl_sub", "ready"],
+      ["cpl_k", "removing"],
+    ]);
+    const done = settleHomeWrite({ ...before, placements: began.placements }, began.intent, {
+      kind: "done",
+      written: ["claude"],
+      kept: [],
+    });
+    expect(done.placements.map((row) => [row.id, row.state, row.login])).toEqual([
+      ["cpl_sub", "ready", SUB],
+      ["cpl_k", "ready", KEY],
+    ]);
+    const removed = done.placements.map((row) =>
+      row.id === "cpl_k" ? { ...row, state: "removing" as const } : row,
+    );
+    expect(removalWork(removed)).toEqual({
+      removes: [],
+      removedKeys: ["cpl_k"],
+      forget: ["cpl_k"],
     });
   });
 });

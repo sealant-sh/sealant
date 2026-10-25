@@ -3,6 +3,7 @@ import type {
   WorkspaceCredentialHome,
   WorkspaceCredentialHomeProvider as Provider,
   WorkspaceCredentialPlacement as Placement,
+  WorkspaceCredentialPlacementLogin as Login,
 } from "./schema/workspace-build-jobs.js";
 
 type Placements = readonly Placement[];
@@ -49,12 +50,19 @@ const sourceOf = (provider: Provider): string =>
 
 const removing = (placement: Placement): Placement => ({ ...placement, state: "removing" });
 
+export const isClaudeKey = <L extends { readonly provider: Provider; readonly login: Login }>(
+  placed: L,
+): placed is L & {
+  readonly provider: "claude";
+  readonly login: Extract<Login, { readonly kind: "api-key" }>;
+} => placed.provider === "claude" && placed.login.kind === "api-key";
+
 export const settleInDoubt = (placements: Placements): Placements => {
   const doubtful = new Set(
-    placements.filter((row) => row.state === "pending").map((row) => row.provider),
+    placements.filter((row) => row.state === "pending").map((row) => row.path),
   );
   return placements.map((row) =>
-    doubtful.has(row.provider) && row.state !== "removing" ? removing(row) : row,
+    doubtful.has(row.path) && row.state !== "removing" ? removing(row) : row,
   );
 };
 
@@ -62,6 +70,7 @@ export interface HomeSelection {
   readonly provider: Provider;
   readonly accountId: string;
   readonly revision: number;
+  readonly login: Login;
 }
 
 export interface PlannedWrite extends HomeSelection {
@@ -69,14 +78,19 @@ export interface PlannedWrite extends HomeSelection {
 }
 
 export interface HomeWrite extends PlannedWrite {
+  readonly id: string;
   readonly path: string;
 }
 
 export interface HomePutPlan<S extends HomeSelection> {
   readonly writes: ReadonlyArray<S & { readonly reuse: string | undefined }>;
   readonly removes: readonly Provider[];
+  readonly removedKeys: readonly string[];
   readonly pinned: readonly string[];
 }
+
+const sameLogin = (row: Placement, selection: HomeSelection) =>
+  row.accountId === selection.accountId && row.revision === selection.revision;
 
 export const planHomePut = <S extends HomeSelection>(input: {
   readonly placements: Placements;
@@ -84,40 +98,46 @@ export const planHomePut = <S extends HomeSelection>(input: {
   readonly selected: readonly S[];
   readonly removed: readonly Provider[];
 }): HomePutPlan<S> => {
+  const ready = input.placements.filter((row) => row.state === "ready");
+  const live = (row: Placement) => input.live?.includes(row.id) === true;
   const slot = (provider: Provider) =>
-    input.placements.find((row) => row.state === "ready" && row.provider === provider);
-  const pinnedSlot = (provider: Provider) => {
-    const held = slot(provider);
-    return held !== undefined && input.live?.includes(held.id) === true ? held : undefined;
-  };
+    ready.find((row) => row.provider === provider && !isClaudeKey(row));
   const writes: Array<S & { readonly reuse: string | undefined }> = [];
   const removes: Provider[] = [];
+  const removedKeys: string[] = [];
   const pinned: string[] = [];
   for (const selection of input.selected) {
+    if (isClaudeKey(selection)) {
+      const same = ready.find((row) => isClaudeKey(row) && sameLogin(row, selection));
+      writes.push({ ...selection, reuse: same?.id });
+      continue;
+    }
     const held = slot(selection.provider);
-    const same =
-      held !== undefined &&
-      held.accountId === selection.accountId &&
-      held.revision === selection.revision;
-    const live = pinnedSlot(selection.provider);
-    if (live !== undefined && !same) {
-      pinned.push(live.id);
+    const same = held !== undefined && sameLogin(held, selection);
+    if (held !== undefined && live(held) && !same) {
+      pinned.push(held.id);
       continue;
     }
     writes.push({ ...selection, reuse: same ? held.id : undefined });
   }
   for (const provider of input.removed) {
-    const live = pinnedSlot(provider);
-    if (live === undefined) removes.push(provider);
-    else pinned.push(live.id);
+    const held = slot(provider);
+    if (held !== undefined && live(held)) pinned.push(held.id);
+    else removes.push(provider);
+    for (const row of ready) {
+      if (row.provider !== provider || !isClaudeKey(row)) continue;
+      if (live(row)) pinned.push(row.id);
+      else removedKeys.push(row.id);
+    }
   }
-  return { writes, removes, pinned };
+  return { writes, removes, removedKeys, pinned };
 };
 
 export interface HomeWriteIntent {
   readonly writes: ReadonlyArray<{
     readonly provider: Provider;
     readonly id: string;
+    readonly path: string;
     readonly revision: number;
     readonly inserted: boolean;
   }>;
@@ -135,7 +155,7 @@ export const beginHomeWrite = (
     readonly onBehalfOfUserId: string;
     readonly writes: readonly HomeWrite[];
     readonly removes: readonly Provider[];
-    readonly newId: () => string;
+    readonly removedKeys: readonly string[];
   },
 ): HomeWriteStart => {
   let placements = state.placements;
@@ -159,30 +179,42 @@ export const beginHomeWrite = (
       writes.push({
         provider: write.provider,
         id: reused.id,
+        path: reused.path,
         revision: write.revision,
         inserted: false,
       });
       continue;
     }
-    const id = input.newId();
     placements = [
       ...placements,
       {
-        id,
+        id: write.id,
         ...input.key,
         provider: write.provider,
         accountId: write.accountId,
         revision: write.revision,
         path: write.path,
-        login: { kind: "subscription" },
+        login: write.login,
         state: "pending",
         createdAt: new Date(),
       },
     ];
-    writes.push({ provider: write.provider, id, revision: write.revision, inserted: true });
+    writes.push({
+      provider: write.provider,
+      id: write.id,
+      path: write.path,
+      revision: write.revision,
+      inserted: true,
+    });
   }
   const retired = placements
-    .filter((row) => row.state === "ready" && input.removes.includes(row.provider))
+    .filter(
+      (row) =>
+        row.state === "ready" &&
+        (isClaudeKey(row)
+          ? input.removedKeys.includes(row.id)
+          : input.removes.includes(row.provider)),
+    )
     .map((row) => row.id);
   placements = placements.map((row) => (retired.includes(row.id) ? removing(row) : row));
   return { kind: "begun", placements, intent: { writes, retired } };
@@ -212,7 +244,7 @@ export const settleHomeWrite = (
     const landed = written.has(write.provider);
     if (landed || preserved.has(write.provider)) {
       placements = placements.map((row) =>
-        row.provider === write.provider && row.id !== write.id && row.state === "ready"
+        row.path === write.path && row.id !== write.id && row.state === "ready"
           ? removing(row)
           : row,
       );
@@ -273,11 +305,17 @@ export const pruneHome = (state: HomeState, live: readonly string[]): Placements
 
 export const removalWork = (
   placements: Placements,
-): { readonly removes: readonly Provider[]; readonly forget: readonly string[] } => {
+): {
+  readonly removes: readonly Provider[];
+  readonly removedKeys: readonly string[];
+  readonly forget: readonly string[];
+} => {
   const held = new Set(placements.filter((row) => row.state === "ready").map((row) => row.path));
   const left = placements.filter((row) => row.state === "removing");
+  const unheld = left.filter((row) => !held.has(row.path));
   return {
-    removes: [...new Set(left.filter((row) => !held.has(row.path)).map((row) => row.provider))],
+    removes: [...new Set(unheld.filter((row) => !isClaudeKey(row)).map((row) => row.provider))],
+    removedKeys: unheld.filter(isClaudeKey).map((row) => row.id),
     forget: left.map((row) => row.id),
   };
 };
@@ -289,6 +327,7 @@ export const recordLaunchHome = (
       readonly provider: Provider;
       readonly accountId: string;
       readonly path: string;
+      readonly login: Login;
     }>;
     readonly newId: () => string;
     readonly key: { readonly runId: string; readonly home: string };
@@ -304,7 +343,7 @@ export const recordLaunchHome = (
       accountId: login.accountId,
       revision: account?.revision ?? 1,
       path: login.path,
-      login: { kind: "subscription" },
+      login: login.login,
       state: accountUnarchived(state, login.accountId) ? "ready" : "removing",
       createdAt: new Date(),
     };

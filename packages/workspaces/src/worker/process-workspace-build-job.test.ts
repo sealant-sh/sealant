@@ -456,6 +456,8 @@ const connectedAccountStub = (input: {
   archivedAt: null,
 });
 
+const CODEX_KEY = "sk-proj-FAKE-codex-key-for-the-launch-tests-wxyz";
+
 describe("processWorkspaceBuildJobEffect", () => {
   it.effect("passes selected packages from the build job to the image compiler", () => {
     const packages = [{ id: "bat" }, { id: "lazygit" }, { id: "python" }];
@@ -1038,6 +1040,7 @@ describe("processWorkspaceBuildJobEffect", () => {
         credentialRefs: [
           { provider: "claude", ref: "connected-account:cacc_claude" },
           { provider: "github", ref: "connected-account:cacc_github" },
+          { provider: "codex", ref: "connected-account:cacc_codex_key" },
         ],
       });
       const jobs = workspaceBuildJobRepoStub({
@@ -1077,6 +1080,14 @@ describe("processWorkspaceBuildJobEffect", () => {
           }),
           kind: "gh-cli-token",
         },
+        {
+          ...connectedAccountStub({
+            id: "cacc_codex_key",
+            provider: "codex",
+            payload: { apiKey: CODEX_KEY },
+          }),
+          kind: "api-key",
+        },
       ];
       const connectedAccounts = {
         getById: vi.fn((id: string) =>
@@ -1114,9 +1125,15 @@ describe("processWorkspaceBuildJobEffect", () => {
                 contentBase64: homeScriptStdin([
                   claudeSetupTokenCredentials("sk-ant-oat01-alice"),
                   'github.com:\n    oauth_token: "gho_alice"\n    git_protocol: https\n',
+                  JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: CODEX_KEY }),
                 ]),
                 mode: "600",
-                home: { uid: 40001, gid: 40000, generation, providers: ["claude", "github"] },
+                home: {
+                  uid: 40001,
+                  gid: 40000,
+                  generation,
+                  providers: ["claude", "github", "codex"],
+                },
               },
             ],
           }),
@@ -1136,11 +1153,12 @@ describe("processWorkspaceBuildJobEffect", () => {
         });
         expect(
           [...homes.placementRows.values()].map(
-            ({ provider, accountId, revision, path, state }) => ({
+            ({ provider, accountId, revision, path, login, state }) => ({
               provider,
               accountId,
               revision,
               path,
+              login,
               state,
             }),
           ),
@@ -1150,6 +1168,7 @@ describe("processWorkspaceBuildJobEffect", () => {
             accountId: "cacc_claude",
             revision: 1,
             path: "/home/m4lice000/.claude/.credentials.json",
+            login: { kind: "subscription" },
             state: "ready",
           },
           {
@@ -1157,6 +1176,15 @@ describe("processWorkspaceBuildJobEffect", () => {
             accountId: "cacc_github",
             revision: 1,
             path: "/home/m4lice000/.config/gh/hosts.yml",
+            login: { kind: "subscription" },
+            state: "ready",
+          },
+          {
+            provider: "codex",
+            accountId: "cacc_codex_key",
+            revision: 1,
+            path: "/home/m4lice000/.codex/auth.json",
+            login: { kind: "api-key", suffix: CODEX_KEY.slice(-4) },
             state: "ready",
           },
         ]);

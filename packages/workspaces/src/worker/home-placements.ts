@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   beginHomeWrite,
   CredentialPlacementRepo,
+  isClaudeKey,
   removalWork,
   settleHomeWrite,
   settleInDoubt,
@@ -18,6 +19,7 @@ import { Duration, Effect, Result, Schema } from "effect";
 
 import {
   buildHomeCredentialScript,
+  CLAUDE_KEY_DIR,
   HOME_CREDENTIAL_FILES,
   HOME_SCRIPT_EXIT,
   homeCredentialProviderOf,
@@ -70,6 +72,15 @@ export const runHomeScript = (input: {
     }),
   );
 
+const placementPath = (
+  home: string,
+  write: Pick<PlannedWrite, "provider" | "login">,
+  id: string,
+): string =>
+  isClaudeKey(write)
+    ? `${home}/${CLAUDE_KEY_DIR}/${id}`
+    : `${home}/${HOME_CREDENTIAL_FILES[write.provider]}`;
+
 const landedBeforeRefusal = (
   writes: readonly HomeCredentialProvider[],
   exitCode: number,
@@ -103,13 +114,14 @@ export const writeIntoHome = (input: {
   readonly createWithOwner?: HomeOwner;
   readonly writes: ReadonlyArray<PlannedWrite & { readonly content: string }>;
   readonly removes: readonly HomeCredentialProvider[];
+  readonly removedKeys: readonly string[];
 }) =>
   Effect.gen(function* () {
     const repo = yield* CredentialPlacementRepo;
-    const writes = input.writes.map((write) => ({
-      ...write,
-      path: `${input.key.home}/${HOME_CREDENTIAL_FILES[write.provider]}`,
-    }));
+    const writes = input.writes.map((write) => {
+      const id = write.reuse ?? `cpl_${randomUUID()}`;
+      return { ...write, id, path: placementPath(input.key.home, write, id) };
+    });
     const begun = yield* repo.transact(
       input.key,
       writes.map((write) => write.accountId),
@@ -122,7 +134,7 @@ export const writeIntoHome = (input: {
             onBehalfOfUserId: input.onBehalfOfUserId,
             writes,
             removes: input.removes,
-            newId: () => `cpl_${randomUUID()}`,
+            removedKeys: input.removedKeys,
           },
         );
         return {
@@ -142,10 +154,18 @@ export const writeIntoHome = (input: {
     );
     if (begun.result.kind === "accounts-moved") return { kind: "moved" } satisfies HomeWriteResult;
     const intent = begun.result.intent;
-    if (input.fence.kind === "held" && writes.length === 0 && input.removes.length === 0) {
+    if (
+      input.fence.kind === "held" &&
+      writes.length === 0 &&
+      input.removes.length === 0 &&
+      input.removedKeys.length === 0
+    ) {
       return { kind: "done", stale: false, state: begun.state } satisfies HomeWriteResult;
     }
+    const keys = writes.filter(isClaudeKey);
+    const files = writes.filter((write) => !isClaudeKey(write));
     const providers = writes.map((write) => write.provider);
+    const fileProviders = files.map((write) => write.provider);
     const ran = yield* runHomeScript({
       channel: input.channel,
       target: input.target,
@@ -155,15 +175,16 @@ export const writeIntoHome = (input: {
         fence: input.fence,
         token: yield* input.nextFence,
         ...(input.createWithOwner === undefined ? {} : { createWithOwner: input.createWithOwner }),
-        writes: providers,
+        writes: fileProviders,
         removes:
           input.fence.kind === "take"
             ? workspaceCredentialHomeProviderValues.filter(
-                (provider) => !providers.includes(provider),
+                (provider) => !fileProviders.includes(provider),
               )
             : input.removes,
+        claudeKeys: { writes: keys.map((write) => write.id), removes: input.removedKeys },
       }),
-      stdin: homeScriptStdin(writes.map((write) => write.content)),
+      stdin: homeScriptStdin([...files, ...keys].map((write) => write.content)),
     });
     const outcome: HomeWriteOutcome =
       ran.kind === "done"
@@ -212,7 +233,10 @@ export const removeLeftovers = (input: {
       return { result: removalWork(placements), placements };
     });
     const releasing = input.fence.releasing;
-    if (input.target !== undefined && (releasing || work.removes.length > 0)) {
+    if (
+      input.target !== undefined &&
+      (releasing || work.removes.length > 0 || work.removedKeys.length > 0)
+    ) {
       const ran = yield* runHomeScript({
         channel: input.channel,
         target: input.target,
@@ -226,6 +250,7 @@ export const removeLeftovers = (input: {
           token: yield* input.nextFence,
           writes: [],
           removes: work.removes,
+          claudeKeys: { writes: [], removes: work.removedKeys },
         }),
       });
       const homeMissing = ran.kind === "refused" && ran.exitCode === HOME_SCRIPT_EXIT.missing;

@@ -98,6 +98,7 @@ export {
   parseCodexAuthJson,
   parseCodexCredentialPayload,
   parseGitHubCredentialPayload,
+  placedLoginOf,
   type ApiKeyPayload,
   type ClaudeCredentialPayload,
   type ClaudeCredentialsFilePayload,

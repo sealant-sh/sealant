@@ -1430,9 +1430,17 @@ export interface CredentialPlacementReceipt {
   readonly placementId: string;
   readonly accountId: string;
   readonly revision: number;
-  readonly login: { readonly kind: "subscription" };
+  readonly login: CredentialPlacementLogin;
   readonly pinned: boolean;
 }
+
+/**
+ * What a placed login spends. A key carries its last four characters; a Claude key also the
+ * absolute path of its file in the home, for an `apiKeyHelper` such as `cat <keyPath>`.
+ */
+export type CredentialPlacementLogin =
+  | { readonly kind: "subscription" }
+  | { readonly kind: "api-key"; readonly suffix: string; readonly keyPath?: string };
 
 /** A receipt associated with the provider slot it occupies in this home. */
 export interface WorkspaceCredentialPlacementReceipt extends CredentialPlacementReceipt {

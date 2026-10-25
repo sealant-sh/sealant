@@ -77,6 +77,7 @@ describe("resolveCredentialInjections", () => {
         injections: [],
         codexAccounts: [],
         launchCredentialInjections: [],
+        homeLogins: new Map(),
       });
       expect(accounts.getById).not.toHaveBeenCalled();
     }).pipe(Effect.provide(provideAccounts(accounts)));
