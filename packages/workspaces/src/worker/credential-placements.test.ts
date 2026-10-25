@@ -432,7 +432,7 @@ describe("Claude key placements", () => {
     });
   });
 
-  it("are removed with a null Claude selection unless live, which pins them", () => {
+  it("are removed with a null Claude selection unless live, which keeps them unpinned", () => {
     expect(
       planHomePut({
         placements: [subscription, keyRow("cpl_k1"), keyRow("cpl_k2", { revision: 2 })],
@@ -445,7 +445,7 @@ describe("Claude key placements", () => {
       keptKeys: [],
       removes: ["claude"],
       removedKeys: ["cpl_k1"],
-      pinned: ["cpl_k2"],
+      pinned: [],
     });
   });
 

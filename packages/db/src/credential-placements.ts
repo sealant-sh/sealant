@@ -138,9 +138,7 @@ export const planHomePut = <S extends HomeSelection>(input: {
     if (held !== undefined && live(held)) pinned.push(held.id);
     else removes.push(provider);
     for (const row of ready) {
-      if (row.provider !== provider || !isClaudeKey(row)) continue;
-      if (live(row)) pinned.push(row.id);
-      else removedKeys.push(row.id);
+      if (row.provider === provider && isClaudeKey(row) && !live(row)) removedKeys.push(row.id);
     }
   }
   return { writes, keptKeys, removes, removedKeys, pinned };
