@@ -320,7 +320,7 @@ type KeyLogin = Extract<ExchangeLogin, { readonly shape: "claude-key" | "codex-k
 
 const marksInvalidOn: Record<LoginShape, readonly AuthReason[]> = {
   "claude-key": ["auth-401"],
-  "codex-key": ["auth-401"],
+  "codex-key": [],
   "claude-setup-token": ["auth-401", "auth-words"],
   "claude-session": [],
   "codex-auth-json": [],
@@ -335,7 +335,12 @@ const invalidate = (exchange: Exchange, reason: AuthReason) =>
           .markInvalid({ id: exchange.receipt.accountId, revision: exchange.receipt.revision })
           .pipe(
             Effect.map((marked): Invalidation => (marked === undefined ? "superseded" : "marked")),
-            Effect.orElseSucceed((): Invalidation => "unmarked"),
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                `Failed to mark connected account ${exchange.receipt.accountId} invalid after the provider refused it.`,
+                cause,
+              ).pipe(Effect.as<Invalidation>("unmarked")),
+            ),
           ),
       )
     : Effect.succeed<Invalidation>("unmarked");
@@ -588,6 +593,8 @@ const runExchange = (
       });
     }
 
+    yield* spendOwnerLaunch(payload.ownerUserId);
+
     // Attribute the use exactly like workspace injection does — best-effort, never fails the call.
     const accounts = yield* ConnectedAccountRepo;
     yield* accounts.updateSyncState({ id: account.id, lastUsedAt: new Date() }).pipe(
@@ -629,10 +636,11 @@ const utcDay = (now: Date): string => now.toISOString().slice(0, 10);
 
 /**
  * `respond`, inside the owner's budgets (CORE-04). A new exchange needs room in the owner's daily
- * token budget and spends one launch; a continuation belongs to an exchange already admitted, so
- * it is never refused half-way. Usage is recorded when a turn reports it. Recording is
- * best-effort: a failed write is logged and the answer the owner paid for is still returned, so
- * the budget can under-count after a database fault and never over-refuses because of one.
+ * token budget, and spends one launch once nothing refuses it; a continuation belongs to an
+ * exchange already admitted, so it is never refused half-way. Usage is recorded when a turn
+ * reports it. Recording is best-effort: a failed write is logged and the answer the owner paid for
+ * is still returned, so the budget can under-count after a database fault and never over-refuses
+ * because of one.
  */
 export const respond = (payload: InferenceRespondRequest) =>
   Effect.gen(function* () {
@@ -669,7 +677,6 @@ export const respond = (payload: InferenceRespondRequest) =>
           });
         }
       }
-      yield* spendOwnerLaunch(payload.ownerUserId);
     }
 
     const response = yield* respondUnmetered(payload);
