@@ -13,16 +13,19 @@ export {
 } from "./cipher.js";
 
 export {
+  CLAUDE_API_KEY_FILE_NAME,
   CLAUDE_CONFIG_DIR_ENV_KEY,
   CLAUDE_CREDENTIALS_FILE_NAME,
   isNewerClaudeCredentials,
   isPlausibleClaudeExpiry,
   MAX_PLAUSIBLE_CLAUDE_EXPIRY_AHEAD_MS,
   provisionClaudeConfigDir,
+  provisionClaudeKeyDir,
   readClaudeConfigDirCredentials,
   readStoredClaudeExpiresAt,
   removeClaudeConfigDir,
   type ProvisionedClaudeConfigDir,
+  type ProvisionedClaudeKeyDir,
 } from "./claude-session.js";
 
 export {
