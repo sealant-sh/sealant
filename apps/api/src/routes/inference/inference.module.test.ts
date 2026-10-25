@@ -603,6 +603,37 @@ const guardMarkInvalid = (
   );
 };
 
+describe("inference.module allowedLogin", () => {
+  it("runs a subscription when the request allows only a subscription", async () => {
+    const { layer, engines } = makeLayers({ accounts: accountsStub() });
+
+    const response = await run(
+      respond(newExchange({ allowedLogin: "subscription" })).pipe(Effect.provide(layer)),
+    );
+
+    expect(response.receipt).toMatchObject({ login: "subscription" });
+    expect(engines.codexStart).toHaveBeenCalledOnce();
+  });
+
+  it("checks the account the selection resolved to, not the name it was asked by", async () => {
+    const accounts = accountsStub({ defaults: { codex: codexKeyAccount } });
+    const { layer, engines } = makeLayers({ accounts });
+
+    const error = await runFlipped(
+      respond(
+        newExchange({ credentials: { codex: "default" }, allowedLogin: "subscription" }),
+      ).pipe(Effect.provide(layer)),
+    );
+
+    expect(error).toMatchObject({
+      code: "login-not-allowed",
+      message:
+        'Connected codex account "default" holds an API key, and this request allows only a subscription. Nothing was sent to OpenAI.',
+    });
+    expect(engines.codexStart).not.toHaveBeenCalled();
+  });
+});
+
 describe("inference.module 401 feedback", () => {
   it("marks a Codex key invalid on a structured 401, at the receipt's revision", async () => {
     const accounts = accountsStub();
@@ -703,6 +734,24 @@ describe("inference.module on a Claude key, against the real CLI", () => {
     });
     expect(accounts.markInvalid).toHaveBeenCalledWith({ id: "cacc_claude_key", revision: 1 });
   }, 60_000);
+
+  it("refuses a key before any request when the request allows only a subscription", async () => {
+    const accounts = accountsStub();
+
+    const error = await runFlipped(
+      respond({ ...keyExchange, allowedLogin: "subscription" }).pipe(
+        Effect.provide(withRealEngine(accounts)),
+      ),
+    );
+
+    expect(error).toBeInstanceOf(InferenceConflictError);
+    expect(error).toMatchObject({
+      code: "login-not-allowed",
+      receipt: { accountId: "cacc_claude_key", login: "api-key" },
+    });
+    expect(fake.apiKeys).toEqual([]);
+    expect(accounts.updateSyncState).not.toHaveBeenCalled();
+  });
 
   it("does not mark the key on a refusal whose words say 401 but whose status does not", async () => {
     const accounts = accountsStub();

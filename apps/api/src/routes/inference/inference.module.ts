@@ -554,6 +554,14 @@ const startExchange = (payload: InferenceRespondRequest) =>
       login,
     };
 
+    if (payload.allowedLogin === "subscription" && exchange.receipt.login === "api-key") {
+      return yield* new InferenceConflictError({
+        message: `Connected ${account.provider} account "${account.name}" holds an API key, and this request allows only a subscription. Nothing was sent to ${account.provider === "claude" ? "Anthropic" : "OpenAI"}.`,
+        code: "login-not-allowed",
+        receipt: exchange.receipt,
+      });
+    }
+
     // Tool-less v1: codex has no in-process MCP transport, so caller-defined tools are a 400 until
     // a parked-tool transport ships (`maxTurns` is likewise claude-only and ignored there).
     if (account.provider === "codex" && (payload.tools ?? []).length > 0) {

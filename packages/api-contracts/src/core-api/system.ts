@@ -75,6 +75,12 @@ export const systemIndexResponseSchema = Schema.Struct({
        * Codex's own key file. A `$HOME` launch still refuses a Claude key.
        */
       connectedAccountApiKeys: Schema.optional(Schema.Boolean),
+      /**
+       * Inference takes `allowedLogin` and refuses a key when it says `subscription`, answers and
+       * errors carry the exchange's `receipt`, and a Claude API key runs inference. Without it,
+       * `allowedLogin` is dropped unread.
+       */
+      inferenceAllowedLogin: Schema.optional(Schema.Boolean),
     }),
   ),
 });
