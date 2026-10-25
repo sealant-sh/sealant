@@ -5,7 +5,13 @@ import {
   credentialCipherLayer,
   type CredentialCipherService,
 } from "@sealant/credentials";
-import { createSealantDB, type DB } from "@sealant/db";
+import {
+  createSealantDB,
+  SealantDB,
+  CredentialPlacementRepoLive,
+  WorkspaceCredentialHomeRepoLive,
+  type DB,
+} from "@sealant/db";
 import { createJobQueueService } from "@sealant/jobs";
 import { createGitHubSourceIntegration } from "@sealant/source-integrations";
 import { deleteExpiredRunRecords } from "@sealant/telemetry";
@@ -13,6 +19,8 @@ import type { WorkerEnv } from "@sealant/validators/env";
 import {
   consumeRunExecJobs,
   sweepRunExecJobRows,
+  sweepCredentialPlacements,
+  type PlacementSweepBackoff,
   consumeWorkspaceBuildJobs,
   consumeWorkspaceLifecycleJobs,
   databaseCaptureDrainLedger,
@@ -61,7 +69,7 @@ import {
   type CaptureDrainSettings,
   type RegistryClient,
 } from "@sealant/workspaces";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 
 import { processRunExecJob } from "./process-run-exec-job.js";
 import {
@@ -826,8 +834,32 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         }, CODEX_SESSION_REFRESH_INTERVAL_MS);
   codexRefreshTimer?.unref();
 
+  const placementLayer = Layer.mergeAll(
+    CredentialPlacementRepoLive,
+    WorkspaceCredentialHomeRepoLive,
+  ).pipe(Layer.provide(Layer.succeed(SealantDB, db)));
+  const placementSweepBackoff: PlacementSweepBackoff = new Map();
+  let placementSweepRunning = false;
+  const sweepPlacements = () => {
+    if (placementSweepRunning) return;
+    placementSweepRunning = true;
+    void Effect.runPromise(
+      sweepCredentialPlacements({ targetOptions, backoff: placementSweepBackoff }).pipe(
+        Effect.provide(placementLayer),
+      ),
+    )
+      .catch(() => console.error("Credential placement sweep failed; will retry."))
+      .finally(() => {
+        placementSweepRunning = false;
+      });
+  };
+  sweepPlacements();
+  const placementSweepTimer = setInterval(sweepPlacements, 30_000);
+  placementSweepTimer.unref();
+
   return {
     stop: async () => {
+      clearInterval(placementSweepTimer);
       clearInterval(reaperTimer);
       clearInterval(expiryReaperTimer);
       clearInterval(deadlineSweepTimer);

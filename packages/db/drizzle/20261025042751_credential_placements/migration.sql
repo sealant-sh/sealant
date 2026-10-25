@@ -36,3 +36,5 @@ CROSS JOIN LATERAL jsonb_array_elements(h."accounts") entry
 LEFT JOIN "connected_accounts" a ON a."id" = entry->>'connectedAccountId'
 WHERE entry->>'provider' IN ('claude', 'codex', 'github', 'pi', 'opencode') AND entry->>'connectedAccountId' IS NOT NULL
 ON CONFLICT DO NOTHING;
+--> statement-breakpoint
+ALTER TABLE "workspace_credential_homes" DROP COLUMN "accounts";

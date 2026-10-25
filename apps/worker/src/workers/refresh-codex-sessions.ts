@@ -34,6 +34,7 @@ import {
   ConnectedAccountRepoLive,
   SealantDB,
   WorkspaceCredentialHomeRepoLive,
+  CredentialPlacementRepoLive,
   WorkspaceRuntimeInstanceRepoLive,
   type ConnectedAccount,
   type DB,
@@ -327,6 +328,7 @@ export const refreshCodexSessionCredentials = async (
     ConnectedAccountRepoLive,
     WorkspaceRuntimeInstanceRepoLive,
     WorkspaceCredentialHomeRepoLive,
+    CredentialPlacementRepoLive,
   ).pipe(Layer.provide(Layer.succeed(SealantDB, options.db)));
 
   const program = Effect.gen(function* () {

@@ -14,10 +14,7 @@ import { SqlError } from "effect/sql/SqlError";
 import { SealantDB } from "../client.js";
 import {
   workspaceCredentialHomes,
-  workspaceRuntimeInstances,
   type WorkspaceCredentialHome,
-  type WorkspaceCredentialHomeAccount,
-  type WorkspaceRuntimeInstance,
 } from "../schema/workspace-build-jobs.js";
 
 export class WorkspaceCredentialHomeRepoError extends Schema.TaggedError<WorkspaceCredentialHomeRepoError>()(
@@ -56,22 +53,15 @@ const isLockTimeout = (cause: unknown, depth = 0): boolean => {
 export type WorkspaceCredentialHomeOutcome =
   /** Nothing changes (a refusal, or a push that wrote over what is recorded). */
   | { readonly kind: "keep" }
-  /** The home holds `onBehalfOfUserId`'s `accounts` (inserted when the home held nothing). */
+  /** The home is `onBehalfOfUserId`'s, its hold confirmed (inserted when the home held nothing). */
   | {
       readonly kind: "hold";
       readonly onBehalfOfUserId: string;
-      readonly accounts: readonly WorkspaceCredentialHomeAccount[];
       /** The hold's generation: new when the home held nothing, the held one otherwise. */
       readonly generation: string;
     }
   /** The home is released: the row is deleted. */
   | { readonly kind: "release" };
-
-/** A home and the instance it is in, as a refresh push lists them. */
-export interface WorkspaceCredentialHomeTarget {
-  readonly home: WorkspaceCredentialHome;
-  readonly instance: WorkspaceRuntimeInstance;
-}
 
 export interface WorkspaceCredentialHomeRepoService {
   /**
@@ -96,10 +86,6 @@ export interface WorkspaceCredentialHomeRepoService {
   readonly listByRunId: (
     runId: string,
   ) => Effect.Effect<readonly WorkspaceCredentialHome[], WorkspaceCredentialHomeRepoError>;
-  /** The homes of `ready` instances that hold `connectedAccountId`, with their instance. */
-  readonly listReadyHoldingAccount: (
-    connectedAccountId: string,
-  ) => Effect.Effect<readonly WorkspaceCredentialHomeTarget[], WorkspaceCredentialHomeRepoError>;
 }
 
 export class WorkspaceCredentialHomeRepo extends Context.Service<
@@ -210,14 +196,12 @@ export const makeWorkspaceCredentialHomeRepoLayer = (options: {
                       runId: input.runId,
                       home: input.home,
                       onBehalfOfUserId: outcome.onBehalfOfUserId,
-                      accounts: [...outcome.accounts],
                       generation: outcome.generation,
                     })
                     .onConflictDoUpdate({
                       target: [workspaceCredentialHomes.runId, workspaceCredentialHomes.home],
                       set: {
                         onBehalfOfUserId: outcome.onBehalfOfUserId,
-                        accounts: [...outcome.accounts],
                         generation: outcome.generation,
                         releasing: false,
                         updatedAt: new Date(),
@@ -257,24 +241,6 @@ export const makeWorkspaceCredentialHomeRepoLayer = (options: {
               .from(workspaceCredentialHomes)
               .where(eq(workspaceCredentialHomes.runId, runId))
               .orderBy(workspaceCredentialHomes.createdAt, workspaceCredentialHomes.home),
-          ),
-
-        listReadyHoldingAccount: (connectedAccountId) =>
-          withRepoError(
-            "listReadyHoldingAccount",
-            db
-              .select({ home: workspaceCredentialHomes, instance: workspaceRuntimeInstances })
-              .from(workspaceCredentialHomes)
-              .innerJoin(
-                workspaceRuntimeInstances,
-                eq(workspaceRuntimeInstances.runId, workspaceCredentialHomes.runId),
-              )
-              .where(
-                and(
-                  eq(workspaceRuntimeInstances.status, "ready"),
-                  sql`${workspaceCredentialHomes.accounts} @> ${JSON.stringify([{ connectedAccountId }])}::jsonb`,
-                ),
-              ),
           ),
       } satisfies WorkspaceCredentialHomeRepoService;
     }),

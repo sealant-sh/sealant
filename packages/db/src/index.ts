@@ -188,7 +188,6 @@ export {
   makeWorkspaceCredentialHomeRepoLayer,
   type WorkspaceCredentialHomeOutcome,
   type WorkspaceCredentialHomeRepoService,
-  type WorkspaceCredentialHomeTarget,
 } from "./repositories/workspace-credential-homes.js";
 
 export {
@@ -419,7 +418,6 @@ export {
   type WorkspaceLaunchCredentialInjection,
   type WorkspaceRuntimeInstance,
   type WorkspaceCredentialHome,
-  type WorkspaceCredentialHomeAccount,
   type WorkspaceCredentialHomeProvider,
   type WorkspaceRuntimeInstanceStatus,
   type WorkspaceRuntimeInstanceStopReason,

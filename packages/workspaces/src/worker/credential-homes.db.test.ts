@@ -2,7 +2,7 @@
  * The per-home login record against a REAL Postgres (docs/connected-accounts-design.md §6c): two
  * writes into one home take turns, the second deciding on what the first left (a first write too,
  * before any row exists); a failed write changes nothing; a release deletes the row; and a refresh
- * push lists only the homes of ready instances that hold the account. Gated on
+ * push lists only the homes of ready instances with a placement of the account. Gated on
  * SEALANT_TEST_DATABASE_URL (a disposable database with the migrations applied; it writes rows
  * under fresh ids and leaves them).
  *
@@ -11,6 +11,8 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  CredentialPlacementRepo,
+  CredentialPlacementRepoLive,
   createSealantDB,
   SealantDB,
   user,
@@ -21,6 +23,7 @@ import {
   WorkspaceRuntimeInstanceRepo,
   WorkspaceRuntimeInstanceRepoLive,
   type DB,
+  workspaceCredentialPlacements,
   type WorkspaceCredentialHome,
 } from "@sealant/db";
 import { Deferred, Effect, Fiber, Layer } from "effect";
@@ -28,13 +31,8 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 const DATABASE_URL = process.env.SEALANT_TEST_DATABASE_URL;
 
-const hold = (person: string, connectedAccountId: string) =>
-  ({
-    kind: "hold",
-    onBehalfOfUserId: person,
-    accounts: [{ provider: "claude", connectedAccountId }],
-    generation: `generation-${person}`,
-  }) as const;
+const hold = (person: string) =>
+  ({ kind: "hold", onBehalfOfUserId: person, generation: `generation-${person}` }) as const;
 
 describe.skipIf(DATABASE_URL === undefined)("credential homes (Postgres)", () => {
   let db: DB;
@@ -48,14 +46,20 @@ describe.skipIf(DATABASE_URL === undefined)("credential homes (Postgres)", () =>
   });
 
   const run = <A, E>(
-    effect: Effect.Effect<A, E, WorkspaceCredentialHomeRepo | WorkspaceRuntimeInstanceRepo>,
+    effect: Effect.Effect<
+      A,
+      E,
+      WorkspaceCredentialHomeRepo | WorkspaceRuntimeInstanceRepo | CredentialPlacementRepo
+    >,
   ) =>
     Effect.runPromise(
       effect.pipe(
         Effect.provide(
-          Layer.mergeAll(WorkspaceCredentialHomeRepoLive, WorkspaceRuntimeInstanceRepoLive).pipe(
-            Layer.provide(Layer.succeed(SealantDB, db)),
-          ),
+          Layer.mergeAll(
+            WorkspaceCredentialHomeRepoLive,
+            WorkspaceRuntimeInstanceRepoLive,
+            CredentialPlacementRepoLive,
+          ).pipe(Layer.provide(Layer.succeed(SealantDB, db))),
         ),
       ),
     );
@@ -92,7 +96,7 @@ describe.skipIf(DATABASE_URL === undefined)("credential homes (Postgres)", () =>
             Effect.gen(function* () {
               yield* Deferred.succeed(firstInside, undefined);
               yield* Deferred.await(letFirstFinish);
-              return { result: "first", outcome: hold("usr_alice", "cacc_alice") };
+              return { result: "first", outcome: hold("usr_alice") };
             }),
           )
           .pipe(Effect.forkChild);
@@ -180,7 +184,7 @@ describe.skipIf(DATABASE_URL === undefined)("credential homes (Postgres)", () =>
       Effect.gen(function* () {
         const repo = yield* WorkspaceCredentialHomeRepo;
         yield* repo.withLockedHome({ runId, home }, () =>
-          Effect.succeed({ result: undefined, outcome: hold("usr_alice", "cacc_alice") }),
+          Effect.succeed({ result: undefined, outcome: hold("usr_alice") }),
         );
         const failed = yield* repo
           .withLockedHome({ runId, home }, () => Effect.fail("the executor did not answer"))
@@ -193,29 +197,45 @@ describe.skipIf(DATABASE_URL === undefined)("credential homes (Postgres)", () =>
       }),
     );
     expect(rows.failed).toBe("the executor did not answer");
-    expect(rows.afterFailure.map((row) => [row.onBehalfOfUserId, row.accounts])).toEqual([
-      ["usr_alice", [{ provider: "claude", connectedAccountId: "cacc_alice" }]],
+    expect(rows.afterFailure.map((row) => [row.onBehalfOfUserId, row.generation])).toEqual([
+      ["usr_alice", "generation-usr_alice"],
     ]);
     expect(rows.afterRelease).toEqual([]);
   });
 
-  it("lists for a push only the homes of ready instances that hold the account", async () => {
+  it("lists for a push only the homes of ready instances with a ready placement of the account", async () => {
     const ready = await launch("ready");
     const stopped = await launch("stopped");
     const account = `cacc_${randomUUID()}`;
+    const place = (runId: string, home: string, accountId: string, state: "ready" | "removing") =>
+      db.insert(workspaceCredentialPlacements).values({
+        id: `cpl_${randomUUID()}`,
+        runId,
+        home,
+        provider: "claude",
+        accountId,
+        revision: 1,
+        path: `${home}/.claude/.credentials.json`,
+        login: { kind: "subscription" },
+        state,
+      });
     const listed = await run(
       Effect.gen(function* () {
         const repo = yield* WorkspaceCredentialHomeRepo;
-        yield* repo.withLockedHome({ runId: ready, home: "/home/a" }, () =>
-          Effect.succeed({ result: undefined, outcome: hold("usr_alice", account) }),
-        );
-        yield* repo.withLockedHome({ runId: ready, home: "/home/b" }, () =>
-          Effect.succeed({ result: undefined, outcome: hold("usr_bob", `cacc_${randomUUID()}`) }),
-        );
-        yield* repo.withLockedHome({ runId: stopped, home: "/home/a" }, () =>
-          Effect.succeed({ result: undefined, outcome: hold("usr_alice", account) }),
-        );
-        return yield* repo.listReadyHoldingAccount(account);
+        for (const [runId, home, person] of [
+          [ready, "/home/a", "usr_alice"],
+          [ready, "/home/b", "usr_bob"],
+          [ready, "/home/c", "usr_alice"],
+          [stopped, "/home/a", "usr_alice"],
+        ] as const)
+          yield* repo.withLockedHome({ runId, home }, () =>
+            Effect.succeed({ result: undefined, outcome: hold(person) }),
+          );
+        yield* place(ready, "/home/a", account, "ready");
+        yield* place(ready, "/home/b", `cacc_${randomUUID()}`, "ready");
+        yield* place(ready, "/home/c", account, "removing");
+        yield* place(stopped, "/home/a", account, "ready");
+        return yield* (yield* CredentialPlacementRepo).targets(account);
       }),
     );
     expect(listed.map((target) => [target.home.runId, target.home.home])).toEqual([

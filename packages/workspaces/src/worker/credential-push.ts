@@ -11,20 +11,18 @@ import {
 } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
+  CredentialPlacementRepo,
+  settleInDoubt,
   WorkspaceCredentialHomeRepo,
   WorkspaceRuntimeInstanceRepo,
-  type WorkspaceCredentialHomeTarget,
+  type CredentialPlacementTarget,
   type WorkspaceRuntimeInstance,
 } from "@sealant/db";
-import { Duration, Effect, Option } from "effect";
+import { Duration, Effect } from "effect";
 
 import {
-  buildHomeCredentialScript,
   HOME_SCRIPT_EXIT,
   homeLoginOfRefusal,
-  homeLoginsKept,
-  homeScriptRefusal,
-  homeScriptStdin,
   liveHomeCredentialChannel,
   type HomeCredentialChannel,
   type HomeCredentialProvider,
@@ -34,6 +32,7 @@ import {
   sealantTargetForRuntimeInstance,
   type SealantTargetDerivationOptions,
 } from "../sealantd/target.js";
+import { writeIntoHome } from "./home-placements.js";
 
 /*
 Push a refreshed login into running workspaces (docs/connected-accounts-design.md §6a "One
@@ -50,10 +49,11 @@ after the refresh and writes every workspace at the same time. Codex reloads aut
 A workspace that cannot be written keeps its copy until its access token expires, then fails with a
 401 and a clear reason. Never fails: every outcome is logged.
 
-Homes (§6c): every home whose record names the account gets the copy too, at `<home>/<file>`, owned
-by the home's owner. Each home is written under its row lock, re-read under that lock first: a home
-released (or emptied of this account) since the listing is left alone, so a refresh never lands in a
-home another person has taken since.
+Homes (§6c): every placement of the account in a home gets the copy too, at `<home>/<file>`, owned
+by the home's owner, ready or still being written by a put (which this push waits for). Each home is
+written under its lock, its placements read again under it: a home released (or emptied of this
+account) since the listing is left alone, so a refresh never lands in a home another person has
+taken since.
 */
 
 /** At most this many homes are written at once: each holds a database connection while it writes. */
@@ -124,12 +124,11 @@ export const pushCredentialCopy = Effect.fn("pushCredentialCopy")(function* (
   const describe = `Credential push (${input.provider}): account ${input.connectedAccountId}`;
   const channel = input.controlChannel ?? liveControlChannel;
   const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
-  const homeRepo = yield* WorkspaceCredentialHomeRepo;
   const holding = instancesHoldingAccount(
     yield* runtimeInstances.listRunningInstances(),
     input.connectedAccountId,
   );
-  const homes = yield* homeRepo.listReadyHoldingAccount(input.connectedAccountId);
+  const homes = yield* (yield* CredentialPlacementRepo).targets(input.connectedAccountId);
   if (holding.length === 0 && homes.length === 0) {
     return { written: 0, failed: 0, unreachable: 0, released: 0 } satisfies CredentialPushSummary;
   }
@@ -137,8 +136,8 @@ export const pushCredentialCopy = Effect.fn("pushCredentialCopy")(function* (
   const launchCopy: { readonly copyJson: string } | "released" | "failed" =
     input.credentialCipher === undefined || holding.length === 0
       ? { copyJson: input.copyJson }
-      : yield* currentCopy(input.connectedAccountId, input.provider, input.credentialCipher).pipe(
-          Effect.map((copyJson) => (copyJson === undefined ? "released" : { copyJson })),
+      : yield* currentCopy(input).pipe(
+          Effect.map((current) => (current === undefined ? "released" : current)),
           Effect.catchCause((cause) =>
             Effect.logWarning(`${describe}: the account could not be read again.`, cause).pipe(
               Effect.as("failed" as const),
@@ -198,107 +197,98 @@ export const pushCredentialCopy = Effect.fn("pushCredentialCopy")(function* (
   return summary;
 });
 
-/** One home's write, under its row lock, after reading the row again under it. */
+/**
+ * One home's write, under its lock: the home's ready placements of this account are written again
+ * at the account's revision as stored now, under their ids, so a running process keeps its receipt.
+ */
 const pushIntoHome = (
   input: PushCredentialCopyInput & {
     readonly describe: string;
-    readonly target: WorkspaceCredentialHomeTarget;
+    readonly target: CredentialPlacementTarget;
   },
 ) =>
   Effect.gen(function* () {
     const homeRepo = yield* WorkspaceCredentialHomeRepo;
+    const placements = yield* CredentialPlacementRepo;
     const { home, instance } = input.target;
     const target = sealantTargetForRuntimeInstance(instance, input.targetOptions ?? {});
     if (target === undefined) return "unreachable" as const;
-    const homeChannel = input.homeChannel ?? liveHomeCredentialChannel;
-    return yield* homeRepo.withLockedHome(
-      { runId: home.runId, home: home.home },
-      (held, nextFence) =>
-        Effect.gen(function* () {
+    const channel = input.homeChannel ?? liveHomeCredentialChannel;
+    const key = { runId: home.runId, home: home.home };
+    return yield* homeRepo.withLockedHome(key, (held, nextFence) =>
+      Effect.gen(function* () {
+        const keep = { kind: "keep" as const };
+        if (held === undefined || held.releasing)
+          return { result: "released" as const, outcome: keep };
+        // A login file the home refuses (pi's or opencode's unusable, any with another hard link)
+        // is left out and the rest written once more, as a partial put does.
+        const refused: HomeCredentialProvider[] = [];
+        for (let round = 1; ; round += 1) {
           // The home's logins made from this account: its own provider's, and for a Codex login
           // pi's and opencode's ChatGPT entries too.
-          const providers = (held?.accounts ?? []).flatMap((account) =>
-            account.connectedAccountId === input.connectedAccountId &&
-            homeLoginSource(account.provider) === input.provider
-              ? [account.provider]
-              : [],
+          const ready = settleInDoubt((yield* placements.state(key)).placements).filter(
+            (row) =>
+              row.state === "ready" &&
+              row.accountId === input.connectedAccountId &&
+              homeLoginSource(row.provider) === input.provider &&
+              !refused.includes(row.provider),
           );
-          if (held === undefined || providers.length === 0) {
-            return { result: "released" as const, outcome: { kind: "keep" as const } };
-          }
-          const copyJson =
-            input.credentialCipher === undefined
-              ? input.copyJson
-              : yield* currentCopy(
-                  input.connectedAccountId,
-                  input.provider,
-                  input.credentialCipher,
-                );
-          if (copyJson === undefined) {
-            return { result: "released" as const, outcome: { kind: "keep" as const } };
-          }
+          if (ready.length === 0) return { result: "released" as const, outcome: keep };
+          const current = yield* currentCopy(input);
+          if (current === undefined) return { result: "released" as const, outcome: keep };
           // A Codex copy is also where pi's and opencode's entries come from; a login that is not
           // a ChatGPT login (an API key) has none, and those entries are left as they are.
-          const writes = providers.flatMap(
-            (
-              provider,
-            ): Array<{ readonly provider: HomeCredentialProvider; readonly content: string }> => {
-              if (provider !== "pi" && provider !== "opencode") {
-                return [{ provider, content: copyJson }];
-              }
-              try {
-                return [{ provider, content: chatgptLoginEntry(copyJson) }];
-              } catch {
-                return [];
-              }
-            },
-          );
-          if (writes.length === 0) {
-            return { result: "written" as const, outcome: { kind: "keep" as const } };
-          }
+          const writes = ready.flatMap((row) => {
+            const write = {
+              provider: row.provider,
+              accountId: input.connectedAccountId,
+              revision: current.revision,
+              reuse: row.id,
+            };
+            if (row.provider !== "pi" && row.provider !== "opencode") {
+              return [{ ...write, content: current.copyJson }];
+            }
+            try {
+              return [{ ...write, content: chatgptLoginEntry(current.copyJson) }];
+            } catch {
+              return [];
+            }
+          });
+          if (writes.length === 0) return { result: "written" as const, outcome: keep };
           // Fenced by the hold's generation, under the home's lock in the executor: a write the
           // executor runs after the timeout, once the home is released or retaken, writes nothing.
-          // A login file the home refuses (pi's or opencode's unusable, any with another hard link)
-          // is left out and the rest written once more, as a partial put does: one bad file never
-          // keeps the home's other logins from this refresh.
-          let writing = writes;
-          for (;;) {
-            const exit = yield* homeChannel
-              .run(
-                target,
-                buildHomeCredentialScript({
-                  home: home.home,
-                  fence: { kind: "held", generation: held.generation },
-                  token: yield* nextFence,
-                  writes: writing.map(({ provider }) => provider),
-                  removes: [],
-                }),
-                homeScriptStdin(writing.map(({ content }) => content)),
-              )
-              .pipe(Effect.timeout(PUSH_TIMEOUT));
-            if (exit.exitCode === HOME_SCRIPT_EXIT.fenced) {
-              return { result: "released" as const, outcome: { kind: "keep" as const } };
+          const ran = yield* writeIntoHome({
+            key,
+            onBehalfOfUserId: held.onBehalfOfUserId,
+            target,
+            channel,
+            nextFence,
+            fence: { kind: "held", generation: held.generation },
+            writes,
+            removes: [],
+          });
+          if (ran.kind === "done") return { result: "written" as const, outcome: keep };
+          if (ran.kind === "moved" && round < PUSH_ROUNDS) continue;
+          if (ran.kind === "refused") {
+            if (ran.exitCode === HOME_SCRIPT_EXIT.fenced) {
+              return { result: "released" as const, outcome: keep };
             }
-            const refusedLogin = homeLoginOfRefusal(exit.exitCode);
-            if (
-              refusedLogin !== undefined &&
-              writing.some(({ provider }) => provider === refusedLogin)
-            ) {
-              writing = writing.filter(({ provider }) => provider !== refusedLogin);
+            const login = homeLoginOfRefusal(ran.exitCode);
+            if (login !== undefined && writes.some(({ provider }) => provider === login)) {
+              refused.push(login);
               yield* Effect.logWarning(
-                `${input.describe}: ${homeScriptRefusal(home.home, exit.exitCode) ?? `${refusedLogin}'s login file was refused`} ${refusedLogin}'s login in ${home.home} is not refreshed.`,
+                `${input.describe}: ${ran.message} ${login}'s login in ${home.home} is not refreshed.`,
               );
-              if (writing.length > 0) continue;
+              continue;
             }
-            if (homeLoginsKept(exit.exitCode) === undefined) {
-              return yield* Effect.fail(
-                new Error(`The write into ${home.home} exited with ${String(exit.exitCode)}.`),
-              );
-            }
-            break;
           }
-          return { result: "written" as const, outcome: { kind: "keep" as const } };
-        }),
+          return yield* Effect.fail(
+            new Error(
+              `The write into ${home.home} was not done: ${ran.kind === "moved" ? "the account kept changing" : ran.message}.`,
+            ),
+          );
+        }
+      }),
     );
   }).pipe(
     Effect.catchCause((cause) =>
@@ -309,30 +299,35 @@ const pushIntoHome = (
     ),
   );
 
-/** The account's copy as it is stored now; `undefined` when it is gone, archived, or a key. */
-const currentCopy = (
-  connectedAccountId: string,
-  provider: CredentialPushProvider,
-  cipher: CredentialCipherService,
-) =>
+/** A push writes again when the account moves before its write begins, at most this often. */
+const PUSH_ROUNDS = 3;
+
+/**
+ * The account's copy and revision as stored now; `undefined` when it is gone, archived, or a key.
+ * Without a cipher the copy is the one the push was handed.
+ */
+const currentCopy = (input: PushCredentialCopyInput) =>
   Effect.gen(function* () {
-    // Read through the service only where a cipher asks for it, so a push without one needs no
-    // account repository.
-    const repo = yield* Effect.serviceOption(ConnectedAccountRepo);
-    if (Option.isNone(repo)) {
-      return yield* Effect.fail(
-        new Error("A push that re-reads the account needs its repository."),
-      );
-    }
-    const account = yield* repo.value.getById(connectedAccountId);
+    const account = yield* (yield* ConnectedAccountRepo).getById(input.connectedAccountId);
     if (account === undefined || account.archivedAt !== null) return undefined;
-    const parsed: unknown = JSON.parse(yield* cipher.decrypt(account.encryptedPayload));
-    if (provider === "claude") {
-      const payload = parseClaudeCredentialPayload(parsed);
-      return "apiKey" in payload ? undefined : claudeCredentialsFile(payload);
+    if (input.credentialCipher === undefined) {
+      return { revision: account.credentialRevision, copyJson: input.copyJson };
     }
-    const payload = parseCodexCredentialPayload(parsed);
-    return "authJson" in payload && loginClassOf("codex", payload) === "subscription"
-      ? codexAuthJsonCopy(payload.authJson)
-      : undefined;
+    const parsed: unknown = JSON.parse(
+      yield* input.credentialCipher.decrypt(account.encryptedPayload),
+    );
+    const copyJson = subscriptionCopy(input.provider, parsed);
+    return copyJson === undefined ? undefined : { revision: account.credentialRevision, copyJson };
   });
+
+/** The subscription copy a stored payload makes; `undefined` for a key. */
+const subscriptionCopy = (provider: CredentialPushProvider, parsed: unknown) => {
+  if (provider === "claude") {
+    const payload = parseClaudeCredentialPayload(parsed);
+    return "apiKey" in payload ? undefined : claudeCredentialsFile(payload);
+  }
+  const payload = parseCodexCredentialPayload(parsed);
+  return "authJson" in payload && loginClassOf("codex", payload) === "subscription"
+    ? codexAuthJsonCopy(payload.authJson)
+    : undefined;
+};

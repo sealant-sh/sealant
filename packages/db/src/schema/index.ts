@@ -38,7 +38,6 @@ export {
   workspaceCredentialHomeFences,
   workspaceCredentialHomeProviderValues,
   type WorkspaceCredentialHome,
-  type WorkspaceCredentialHomeAccount,
   type WorkspaceCredentialHomeProvider,
   type WorkspaceRuntimeInstanceStatus,
   workspaceRuntimeInstanceStatusValues,

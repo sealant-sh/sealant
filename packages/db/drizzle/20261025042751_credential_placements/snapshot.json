@@ -5611,19 +5611,6 @@
       "table": "workspace_credential_homes"
     },
     {
-      "type": "jsonb",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "'[]'",
-      "generated": null,
-      "identity": null,
-      "name": "accounts",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "workspace_credential_homes"
-    },
-    {
       "type": "boolean",
       "typeSchema": null,
       "notNull": true,

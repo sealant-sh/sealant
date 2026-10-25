@@ -45,12 +45,18 @@ const LOGIN_FILES = {
   opencode: ".local/share/opencode/auth.json",
 } as const;
 
+/** What the placement rules read of an account. */
+type AccountRow = Pick<
+  ConnectedAccount,
+  "id" | "name" | "ownerUserId" | "credentialRevision" | "archivedAt"
+> & { readonly provider: string; readonly status: string };
+
 const keyOf = (input: CredentialPlacementHome) => `${input.runId} ${input.home}`;
 
 export const makeInMemoryCredentialHomes = (
   instances: () => readonly WorkspaceRuntimeInstance[],
   options: {
-    readonly accounts?: () => readonly ConnectedAccount[];
+    readonly accounts?: () => readonly AccountRow[];
     readonly defaults?: () => readonly string[];
   } = {},
 ): InMemoryCredentialHomes => {
@@ -88,7 +94,6 @@ export const makeInMemoryCredentialHomes = (
               runId: input.runId,
               home: input.home,
               onBehalfOfUserId: outcome.onBehalfOfUserId,
-              accounts: [...outcome.accounts],
               generation: outcome.generation,
               releasing: false,
               createdAt: previous?.createdAt ?? now,
@@ -100,16 +105,6 @@ export const makeInMemoryCredentialHomes = (
       ),
     listByRunId: (runId) =>
       Effect.sync(() => [...rows.values()].filter((row) => row.runId === runId)),
-    listReadyHoldingAccount: (connectedAccountId) =>
-      Effect.sync(() =>
-        [...rows.values()].flatMap((home) => {
-          const instance = instances().find((candidate) => candidate.runId === home.runId);
-          return instance?.status === "ready" &&
-            home.accounts.some((account) => account.connectedAccountId === connectedAccountId)
-            ? [{ home, instance }]
-            : [];
-        }),
-      ),
   };
 
   const state = (home: CredentialPlacementHome, accountIds: readonly string[]): HomeState => {
@@ -150,7 +145,6 @@ export const makeInMemoryCredentialHomes = (
           rows.set(key, {
             ...home,
             ...change.insertHome,
-            accounts: [],
             createdAt: new Date(),
             updatedAt: new Date(),
           });
