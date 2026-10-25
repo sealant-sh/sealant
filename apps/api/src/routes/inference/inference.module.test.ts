@@ -1066,6 +1066,24 @@ describe("inference.module on a Claude key, against the real CLI", () => {
     expect(sent).not.toContain(hostToken);
   }, 60_000);
 
+  it("marks nothing when a setup token's one 401 is followed by an answer", async () => {
+    const accounts = accountsStub();
+    guardMarkInvalid(accounts, () => setupTokenAccount);
+    fake.reply(
+      { type: "status", status: 401, errorType: "authentication_error" },
+      { type: "text", text: "answered after a retry" },
+    );
+
+    const response = await run(
+      respond(newExchange({ credentials: { claude: "cacc_claude_token" } })).pipe(
+        Effect.provide(withRealEngine(accounts)),
+      ),
+    );
+
+    expect(response.turn).toMatchObject({ type: "text", text: "answered after a retry" });
+    expect(accounts.markInvalid).not.toHaveBeenCalled();
+  }, 60_000);
+
   it("refuses a key before any request when the request allows only a subscription", async () => {
     const accounts = accountsStub();
 
