@@ -122,6 +122,10 @@ export const removeClaudeConfigDir = (configDir: string): void => {
   }
 };
 
+/** A setup token rides the CLI's environment, so its private config dir holds no login. */
+export const provisionClaudeTokenDir = (input: { readonly baseDir?: string } = {}): string =>
+  mkdtempSync(join(input.baseDir ?? tmpdir(), "sealant-claude-token-"));
+
 export const CLAUDE_API_KEY_FILE_NAME = "api-key";
 
 export interface ProvisionedClaudeKeyDir {

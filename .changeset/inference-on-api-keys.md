@@ -29,3 +29,7 @@ in words, so a refused Codex key is never marked invalid. A Claude key is not ma
 reports the refusal without Anthropic's 401 status. In both cases the error says the key "was not
 accepted" and "is not marked invalid": if you revoked the key, connect a new one; otherwise check
 the key with the provider.
+
+Every Claude exchange runs with a private home of its own that holds only that exchange's login,
+removed when the CLI exits, so a refused setup token no longer falls back to the login of the user
+running the control plane.

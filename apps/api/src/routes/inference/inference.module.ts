@@ -29,6 +29,7 @@ import {
   parseCodexCredentialPayload,
   provisionClaudeConfigDir,
   provisionClaudeKeyDir,
+  provisionClaudeTokenDir,
   provisionCodexHome,
   removeClaudeConfigDir,
   removeCodexHome,
@@ -270,9 +271,14 @@ const startEngine = (login: ExchangeLogin, payload: InferenceRespondRequest) =>
     };
     switch (login.shape) {
       case "claude-setup-token": {
+        const configDir = yield* Effect.try({
+          try: () => provisionClaudeTokenDir(),
+          catch: provisionError("claude token config dir"),
+        });
         return yield* engine.start({
           ...claudeCommon,
-          auth: { kind: "oauth-token", oauthToken: login.token },
+          auth: { kind: "oauth-token", configDir, oauthToken: login.token },
+          onSessionEnd: () => Promise.resolve(removeClaudeConfigDir(configDir)),
         });
       }
       case "claude-session": {

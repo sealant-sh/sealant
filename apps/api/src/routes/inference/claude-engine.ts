@@ -3,13 +3,15 @@
  *
  * COMPLIANCE (docs/connected-accounts-design.md §2/§9, load-bearing): the stored subscription
  * credential is consumed exactly the way Anthropic documents for third parties — through the
- * environment of the official Claude Code runtime, which the Agent SDK spawns and drives. Setup
- * tokens ride `CLAUDE_CODE_OAUTH_TOKEN`; session credential files are materialized into a private
- * per-invocation `CLAUDE_CONFIG_DIR` (0700 dir / 0600 file) so the official CLI reads the file
- * itself AND can rotate the session with its refresh token — the control plane never calls
- * Anthropic's token endpoint. This module NEVER calls a model API directly, never logs the token,
- * and strips any ambient `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` from the subprocess env so
- * the exchange cannot silently bill a different identity than the resolved connected account.
+ * environment of the official Claude Code runtime, which the Agent SDK spawns and drives. Every
+ * exchange runs with a private per-invocation directory as both `CLAUDE_CONFIG_DIR` and `HOME`,
+ * holding no login but the resolved account's: setup tokens ride `CLAUDE_CODE_OAUTH_TOKEN` over an
+ * empty one; session credential files are materialized into it (0700 dir / 0600 file) so the
+ * official CLI reads the file itself AND can rotate the session with its refresh token — the
+ * control plane never calls Anthropic's token endpoint. This module NEVER calls a model API
+ * directly, never logs the token, and strips any ambient `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`
+ * from the subprocess env so the exchange cannot silently bill a different identity than the
+ * resolved connected account.
  *
  * Caller-defined tools are exposed to the model through an in-process MCP server registered with
  * the caller's JSON schemas VERBATIM (the low-level @modelcontextprotocol/sdk server — the agent
@@ -62,12 +64,15 @@ export interface InferenceToolDefinition {
 
 /**
  * How the exchange authenticates the official Claude Code runtime. Secrets are used ONLY for the
- * subprocess env (or the config dir the caller provisioned); never stored, never logged.
+ * subprocess env (or the config dir the caller provisioned); never stored, never logged. Every
+ * variant carries the caller's private `configDir`, which the CLI also gets as `HOME`: without it
+ * a refused login falls back to the API host's own `~/.claude` login.
  */
 export type InferenceAuth =
   | {
       /** Setup-token accounts: the documented `CLAUDE_CODE_OAUTH_TOKEN` env path. */
       readonly kind: "oauth-token";
+      readonly configDir: string;
       readonly oauthToken: string;
     }
   | {
@@ -194,15 +199,10 @@ const buildEnv = (auth: InferenceAuth): Record<string, string | undefined> => {
   const env: Record<string, string | undefined> = { ...process.env };
   for (const name of providerLoginEnvNames.claude) delete env[name];
   delete env["ANTHROPIC_PROFILE"];
+  env["CLAUDE_CONFIG_DIR"] = auth.configDir;
+  env["HOME"] = auth.configDir;
   if (auth.kind === "oauth-token") {
     env["CLAUDE_CODE_OAUTH_TOKEN"] = auth.oauthToken;
-    delete env["CLAUDE_CONFIG_DIR"];
-  } else {
-    // Session file: the CLI must authenticate from the provisioned config dir's .credentials.json
-    // (and rotate it there with the refresh token); an ambient CLAUDE_CODE_OAUTH_TOKEN, stripped
-    // above, would shadow the file and disable the refresh. API key: an ambient ANTHROPIC_API_KEY
-    // would beat the helper, and the private config dir holds no login to fall back to.
-    env["CLAUDE_CONFIG_DIR"] = auth.configDir;
   }
   env["CLAUDE_AGENT_SDK_CLIENT_APP"] = "sealant-control-plane";
   return env;

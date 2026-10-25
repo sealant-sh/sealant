@@ -4,7 +4,16 @@
  * point-of-use auth.json persist hook — all against stub engines and repos. SEALANT_CREDENTIALS_KEY
  * is stubbed before the dynamic import because runtime-env parses process.env at module load.
  */
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
@@ -504,11 +513,12 @@ describe("inference.module provider routing", () => {
   });
 });
 
+const setupToken = "sk-ant-oat01-FAKEsetuptokenforthetests0000";
 const setupTokenAccount = account({
   provider: "claude",
   id: "cacc_claude_token",
   kind: "token",
-  encryptedPayload: `sealed:${JSON.stringify({ token: "sk-ant-oat01-FAKEsetuptokenforthetests0000" })}`,
+  encryptedPayload: `sealed:${JSON.stringify({ token: setupToken })}`,
 });
 
 const parkedTurn: InferenceEngineTurn = {
@@ -749,10 +759,10 @@ describe("inference.module 401 feedback", () => {
 describe("inference.module on a Claude key, against the real CLI", () => {
   let fake: FakeAnthropic;
   const realEngine = Effect.runSync(Effect.provide(InferenceEngine, claudeEngineLayer()));
-  const keyDirs: string[] = [];
+  const configDirs: string[] = [];
   const engineLayer = Layer.succeed(InferenceEngine, {
     start: (start) => {
-      if (start.auth.kind === "api-key") keyDirs.push(start.auth.configDir);
+      configDirs.push(start.auth.configDir);
       return realEngine.start(start);
     },
     continueSession: realEngine.continueSession,
@@ -767,7 +777,7 @@ describe("inference.module on a Claude key, against the real CLI", () => {
 
   afterEach(async () => {
     await expect
-      .poll(() => keyDirs.filter((dir) => existsSync(dir)), { timeout: 10_000 })
+      .poll(() => configDirs.filter((dir) => existsSync(dir)), { timeout: 10_000 })
       .toEqual([]);
     await fake.close();
   });
@@ -797,6 +807,54 @@ describe("inference.module on a Claude key, against the real CLI", () => {
       receipt: { accountId: "cacc_claude_key", revision: 1, login: "api-key" },
     });
     expect(accounts.markInvalid).toHaveBeenCalledWith({ id: "cacc_claude_key", revision: 1 });
+  }, 60_000);
+
+  it("never sends the host's own Claude login when a setup token is refused", async () => {
+    const hostToken = "sk-ant-oat01-FAKEtheapihostsownloginmustnotbeused000000host";
+    const home = mkdtempSync(join(tmpdir(), "inference-host-home-"));
+    mkdirSync(join(home, ".claude"), { mode: 0o700 });
+    writeFileSync(
+      join(home, ".claude", ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: hostToken,
+          refreshToken: "sk-ant-ort01-FAKEhostrefresh",
+          expiresAt: Date.now() + 365 * 24 * 3_600_000,
+          scopes: ["user:inference", "user:profile"],
+          subscriptionType: "max",
+        },
+      }),
+      { mode: 0o600 },
+    );
+    const accounts = accountsStub();
+    guardMarkInvalid(accounts, () => setupTokenAccount);
+    const previousHome = process.env["HOME"];
+    process.env["HOME"] = home;
+    fake.reply(
+      ...Array.from({ length: 20 }, () => ({
+        type: "status" as const,
+        status: 401,
+        errorType: "authentication_error",
+      })),
+    );
+
+    try {
+      await runFlipped(
+        respond(newExchange({ credentials: { claude: "cacc_claude_token" } })).pipe(
+          Effect.provide(withRealEngine(accounts)),
+        ),
+      );
+      await expect
+        .poll(() => configDirs.filter((dir) => existsSync(dir)), { timeout: 10_000 })
+        .toEqual([]);
+    } finally {
+      process.env["HOME"] = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+
+    expect(fake.authorizations).toContain(`Bearer ${setupToken}`);
+    const sent = [...fake.apiKeys, ...fake.authorizations].join("\n");
+    expect(sent).not.toContain(hostToken);
   }, 60_000);
 
   it("refuses a key before any request when the request allows only a subscription", async () => {

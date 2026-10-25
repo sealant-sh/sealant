@@ -21,6 +21,7 @@ export {
   MAX_PLAUSIBLE_CLAUDE_EXPIRY_AHEAD_MS,
   provisionClaudeConfigDir,
   provisionClaudeKeyDir,
+  provisionClaudeTokenDir,
   readClaudeConfigDirCredentials,
   readStoredClaudeExpiresAt,
   removeClaudeConfigDir,

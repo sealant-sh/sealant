@@ -14,6 +14,7 @@ export type FakeAnthropicReply =
 export interface FakeAnthropic {
   readonly baseUrl: string;
   readonly apiKeys: readonly (string | undefined)[];
+  readonly authorizations: readonly (string | undefined)[];
   readonly reply: (...replies: readonly FakeAnthropicReply[]) => void;
   readonly close: () => Promise<void>;
 }
@@ -85,6 +86,7 @@ const messageEvents = (
 
 export const startFakeAnthropic = async (): Promise<FakeAnthropic> => {
   const apiKeys: (string | undefined)[] = [];
+  const authorizations: (string | undefined)[] = [];
   const queue: FakeAnthropicReply[] = [];
   const hanging = new Set<ServerResponse>();
 
@@ -98,6 +100,7 @@ export const startFakeAnthropic = async (): Promise<FakeAnthropic> => {
       }
       const header = req.headers["x-api-key"];
       apiKeys.push(typeof header === "string" ? header : undefined);
+      authorizations.push(req.headers.authorization);
       const reply = queue.shift() ?? { type: "text", text: "ok" };
       switch (reply.type) {
         case "hang": {
@@ -130,6 +133,7 @@ export const startFakeAnthropic = async (): Promise<FakeAnthropic> => {
   return {
     baseUrl: `http://127.0.0.1:${String(port)}`,
     apiKeys,
+    authorizations,
     reply: (...replies) => {
       queue.push(...replies);
     },
