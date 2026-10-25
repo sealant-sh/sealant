@@ -140,6 +140,7 @@ type Writes = readonly { readonly provider: HomeCredentialProvider; readonly con
 type RunInput = Omit<HomeCredentialScriptInput, "writes" | "stateDir" | "token" | "claudeKeys"> & {
   readonly writes: Writes;
   readonly keys?: readonly { readonly id: string; readonly content: string }[];
+  readonly keptKeys?: readonly { readonly id: string; readonly content: string }[];
   readonly removedKeys?: readonly string[];
   /** Defaults to the next token of this world: every exec issued later than the last. */
   readonly token?: string;
@@ -179,13 +180,16 @@ const world = (options: { readonly pathPrefix?: string } = {}) => {
       writes: input.writes.map(({ provider }) => provider),
       claudeKeys: {
         writes: (input.keys ?? []).map(({ id }) => id),
+        restores: (input.keptKeys ?? []).map(({ id }) => id),
         removes: input.removedKeys ?? [],
       },
     });
   const run = (input: RunInput) =>
     spawnSync(shell.path, ["-c", scriptOf(input)], {
       input: homeScriptStdin(
-        [...input.writes, ...(input.keys ?? [])].map(({ content }) => content),
+        [...input.writes, ...(input.keys ?? []), ...(input.keptKeys ?? [])].map(
+          ({ content }) => content,
+        ),
       ),
       encoding: "utf8",
       env,
@@ -1480,6 +1484,43 @@ forEachShell("Claude keys, each a file of its own", () => {
       expect(released.status, released.stderr).toBe(0);
       expect(read(join(inside, "cpl_key_a")), linked).toBe("theirs");
     }
+  });
+
+  it("never rewrites a kept key's file, and writes it again only once it is gone", () => {
+    const w = world();
+    const home = w.home("alice");
+    expect(
+      w.run({
+        home,
+        fence: { kind: "take", generation: GEN_A },
+        writes: [],
+        keys: [{ id: "cpl_key_a", content: KEY_A }],
+        removes: [],
+      }).status,
+    ).toBe(0);
+    const inode = lstatSync(keyFile(home, "cpl_key_a")).ino;
+    const kept = w.run({
+      home,
+      fence: { kind: "held", generation: GEN_A },
+      writes: [],
+      keptKeys: [{ id: "cpl_key_a", content: "a different payload" }],
+      removes: [],
+    });
+    expect(kept.status, kept.stderr).toBe(0);
+    expect(read(keyFile(home, "cpl_key_a"))).toBe(KEY_A);
+    expect(lstatSync(keyFile(home, "cpl_key_a")).ino).toBe(inode);
+    rmSync(keyFile(home, "cpl_key_a"));
+    const restored = w.run({
+      home,
+      fence: { kind: "held", generation: GEN_A },
+      writes: [],
+      keptKeys: [{ id: "cpl_key_a", content: KEY_A }],
+      removes: [],
+    });
+    expect(restored.status, restored.stderr).toBe(0);
+    expect(read(keyFile(home, "cpl_key_a"))).toBe(KEY_A);
+    expect(mode(keyFile(home, "cpl_key_a"))).toBe(0o600);
+    expect(readdirSync(join(home, CLAUDE_KEY_DIR))).toEqual(["cpl_key_a"]);
   });
 
   it("refuses a placement id that is not one", () => {

@@ -591,9 +591,7 @@ describe("putWorkspaceCredentials", () => {
       pinned: false,
     });
     expect(world.ran[0]?.payloads).toEqual(["sk-ant-api03-FAKEclaudekeyforthetests000000wxyz"]);
-    expect(world.ran[0]?.script).toContain(
-      `f="$home/.sealant/keys/${receipt?.placementId ?? ""}"`,
-    );
+    expect(world.ran[0]?.script).toContain(`f="$home/.sealant/keys/${receipt?.placementId ?? ""}"`);
     expect(world.ran[0]?.script).not.toContain('f="$home/.claude/.credentials.json"');
   });
 

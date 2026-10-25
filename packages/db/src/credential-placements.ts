@@ -90,6 +90,11 @@ export interface HomeWrite extends PlannedWrite {
 
 export interface HomePutPlan<S extends HomeSelection> {
   readonly writes: ReadonlyArray<S & { readonly reuse: string | undefined }>;
+  /**
+   * Ready Claude key placements of the selected login, left ready as they are: a key file is
+   * immutable, so a put only restores one that went missing.
+   */
+  readonly keptKeys: ReadonlyArray<S & { readonly id: string }>;
   readonly removes: readonly Provider[];
   readonly removedKeys: readonly string[];
   readonly pinned: readonly string[];
@@ -109,13 +114,15 @@ export const planHomePut = <S extends HomeSelection>(input: {
   const slot = (provider: Provider) =>
     ready.find((row) => row.provider === provider && !isClaudeKey(row));
   const writes: Array<S & { readonly reuse: string | undefined }> = [];
+  const keptKeys: Array<S & { readonly id: string }> = [];
   const removes: Provider[] = [];
   const removedKeys: string[] = [];
   const pinned: string[] = [];
   for (const selection of input.selected) {
     if (isClaudeKey(selection)) {
       const same = ready.find((row) => isClaudeKey(row) && sameLogin(row, selection));
-      writes.push({ ...selection, reuse: same?.id });
+      if (same === undefined) writes.push({ ...selection, reuse: undefined });
+      else keptKeys.push({ ...selection, id: same.id });
       continue;
     }
     const held = slot(selection.provider);
@@ -136,7 +143,7 @@ export const planHomePut = <S extends HomeSelection>(input: {
       else removedKeys.push(row.id);
     }
   }
-  return { writes, removes, removedKeys, pinned };
+  return { writes, keptKeys, removes, removedKeys, pinned };
 };
 
 export interface HomeWriteIntent {
@@ -160,22 +167,30 @@ export const beginHomeWrite = (
     readonly key: { readonly runId: string; readonly home: string };
     readonly onBehalfOfUserId: string;
     readonly writes: readonly HomeWrite[];
+    readonly keptKeys?: ReadonlyArray<HomeSelection & { readonly id: string }>;
     readonly removes: readonly Provider[];
     readonly removedKeys: readonly string[];
   },
 ): HomeWriteStart => {
   let placements = state.placements;
   const writes: Array<HomeWriteIntent["writes"][number]> = [];
-  for (const write of input.writes) {
+  const moved = (write: HomeSelection) => {
     const account = state.accounts.get(write.accountId);
-    if (
+    return (
       account?.status !== "active" ||
       account.revision !== write.revision ||
       account.ownerUserId !== input.onBehalfOfUserId ||
       account.provider !== sourceOf(write.provider)
-    ) {
+    );
+  };
+  for (const kept of input.keptKeys ?? []) {
+    const row = placements.find((candidate) => candidate.id === kept.id);
+    if (moved(kept) || row?.state !== "ready" || !sameLogin(row, kept)) {
       return { kind: "accounts-moved" };
     }
+  }
+  for (const write of input.writes) {
+    if (moved(write)) return { kind: "accounts-moved" };
     if (write.reuse !== undefined) {
       const reused = placements.find((row) => row.id === write.reuse);
       if (reused?.state !== "ready") return { kind: "accounts-moved" };

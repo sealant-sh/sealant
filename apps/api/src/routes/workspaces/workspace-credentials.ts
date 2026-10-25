@@ -508,6 +508,7 @@ export const putWorkspaceCredentials = (input: {
               fence: { kind: taking ? "take" : "held", generation },
               ...(createWithOwner === undefined ? {} : { createWithOwner }),
               writes: plan.writes,
+              keptKeys: plan.keptKeys,
               removes: plan.removes,
               removedKeys: plan.removedKeys,
             });

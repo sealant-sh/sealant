@@ -575,6 +575,28 @@ describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", 
     );
   });
 
+  it("a repeat put of a live key left in doubt never removes that key", async () => {
+    const f = await fixture();
+    const ex = executor();
+    const key = await keyAccount(f, "claude", "key", CLAUDE_KEY);
+    const placed = (await run(put(f, ex.channel, { claude: key.id }))).home.placements?.[0];
+    const live = [placed?.placementId ?? "missing"];
+    ex.fail(true);
+    expect(
+      Result.isFailure(await run(put(f, ex.channel, { claude: key.id, live }).pipe(Effect.result))),
+    ).toBe(true);
+    ex.fail(false);
+    const ready = [expect.objectContaining({ id: placed?.placementId, state: "ready" })];
+    expect(await rows(f)).toEqual(ready);
+    await run(sweepCredentialPlacements({ homeChannel: ex.channel }));
+    expect(ex.files.get(pathOf(placed))).toBe(CLAUDE_KEY);
+    expect((await run(put(f, ex.channel, { claude: key.id, live }))).home.placements).toEqual([
+      placed,
+    ]);
+    expect(await rows(f)).toEqual(ready);
+    expect(keyFiles(ex, f.home)).toEqual([pathOf(placed)]);
+  });
+
   it("prune removes only a key file nothing live holds; archive leaves a key for the sweep; release removes every one", async () => {
     const f = await fixture();
     const ex = executor();

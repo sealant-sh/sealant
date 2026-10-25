@@ -188,8 +188,13 @@ export interface HomeCredentialScriptInput {
   readonly writes: readonly HomeCredentialProvider[];
   /** Providers whose login file is removed (a release removes them all). */
   readonly removes: readonly HomeCredentialProvider[];
+  /**
+   * Claude key placements by id, at `CLAUDE_KEY_DIR/<id>`: keys to write, in stdin order after the
+   * files; kept keys, written (after those) only where the file is missing; keys to remove.
+   */
   readonly claudeKeys?: {
     readonly writes: readonly string[];
+    readonly restores?: readonly string[];
     readonly removes: readonly string[];
   };
   /**
@@ -385,16 +390,18 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
     throw new Error(`An owner PATH is ':'-separated absolute paths of safe characters.`);
   }
   const keyWrites = input.claudeKeys?.writes ?? [];
+  const keyRestores = input.claudeKeys?.restores ?? [];
   const keyRemoves = input.claudeKeys?.removes ?? [];
-  for (const id of [...keyWrites, ...keyRemoves]) {
+  const keys = [
+    ...keyWrites.map((id) => ({ id, restore: false })),
+    ...keyRestores.map((id) => ({ id, restore: true })),
+  ].map((entry, k) => ({ ...entry, index: input.writes.length + k }));
+  for (const id of [...keyWrites, ...keyRestores, ...keyRemoves]) {
     if (!PLACEMENT_ID_PATTERN.test(id)) {
       throw new Error(`A placement id is 1 to 64 letters, digits, '_' or '-': '${id}'.`);
     }
   }
-  const payloads = [
-    ...input.writes.map((_, index) => index),
-    ...keyWrites.map((_, k) => input.writes.length + k),
-  ];
+  const payloads = [...input.writes.map((_, index) => index), ...keys.map(({ index }) => index)];
   const lines: string[] = ["set -eu", "umask 077", `home=${quote(home)}`, `token=${input.token}`];
 
   // 1. Every payload first, into shell variables (never exported): the owner's half gets them on
@@ -525,7 +532,7 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
     `if [ -n "$seed" ] && [ -d ${quote(skel)} ]; then cp -a ${quote(skel)}/. "$home"/; chmod 700 "$home"; fi`,
   );
   const clearsKeys = input.fence.kind === "take" || isRelease(input.fence);
-  const touchesKeys = clearsKeys || keyWrites.length > 0 || keyRemoves.length > 0;
+  const touchesKeys = clearsKeys || keys.length > 0 || keyRemoves.length > 0;
   const directories = new Set<string>();
   // A merged login is followed through its links and checked where it really is (the program).
   for (const directory of [...input.writes, ...removes]
@@ -551,8 +558,7 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
       ),
     );
   }
-  if (keyWrites.length > 0)
-    inner.push(`[ "$kl" = 0 ] || exit ${HOME_SCRIPT_EXIT.claudeKeyUnusable}`);
+  if (keys.length > 0) inner.push(`[ "$kl" = 0 ] || exit ${HOME_SCRIPT_EXIT.claudeKeyUnusable}`);
   if (clearsKeys) inner.push(`if [ "$kl" = 0 ]; then rm -rf "$home/${CLAUDE_KEY_DIR}"; fi`);
   for (const directory of new Set(
     input.writes.flatMap((provider) => parentsOf(HOME_CREDENTIAL_FILES[provider])),
@@ -561,7 +567,7 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
       `if [ ! -e "$home/${directory}" ] && [ ! -L "$home/${directory}" ]; then mkdir -m 700 "$home/${directory}"; fi`,
     );
   }
-  if (keyWrites.length > 0) {
+  if (keys.length > 0) {
     for (const directory of keyParent) {
       inner.push(`if [ ! -e "$home/${directory}" ]; then mkdir -m 700 "$home/${directory}"; fi`);
     }
@@ -578,7 +584,6 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
       ? []
       : [{ path: HOME_CREDENTIAL_FILES[file], exit: FILE_EXITS[file], index }];
   });
-  const keys = keyWrites.map((id, k) => ({ id, index: input.writes.length + k }));
   if (files.length > 0 || keys.length > 0) {
     inner.push(`made=`, `refuse() { for f in $made; do rm -f "$f"; done; exit "$1"; }`);
   }
@@ -612,15 +617,16 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
     );
   });
   // A key is written beside its name and renamed over it, in its own directory, which no link
-  // reaches: a reader never sees a part of it, and the name never keeps another link.
-  for (const { id, index } of keys) {
+  // reaches: a reader never sees a part of it, and the name never keeps another link. A kept key
+  // is written only where its file is missing: a running Claude may be reading it.
+  for (const { id, index, restore } of keys) {
     inner.push(
       `f="$home/${CLAUDE_KEY_DIR}/${id}"; t="$home/${CLAUDE_KEY_DIR}/.${id}.tmp"`,
-      `rm -f "$t"; made="$made $t"`,
+      `${restore ? 'if [ -L "$f" ] || [ ! -e "$f" ]; then ' : ""}rm -f "$t"; made="$made $t"`,
       `(set -C; base64 -d >"$t") <<SEALANT_LOGIN || refuse ${HOME_SCRIPT_EXIT.claudeKeyUnusable}`,
       `$p${index}`,
       "SEALANT_LOGIN",
-      `chmod 600 "$t"; mv -f "$t" "$f"`,
+      `chmod 600 "$t"; mv -f "$t" "$f"${restore ? "; fi" : ""}`,
     );
   }
   inner.push(KEPT_LOGINS_EXIT.shellInit);

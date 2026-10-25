@@ -102,6 +102,7 @@ describe("planHomePut", () => {
         { provider: "claude", accountId: "cacc_a", revision: 1, login: SUB, reuse: "cpl_a" },
       ],
       removes: ["github"],
+      keptKeys: [],
       removedKeys: [],
       pinned: [],
     });
@@ -119,7 +120,7 @@ describe("planHomePut", () => {
           selected: [{ provider: "claude", login: SUB, ...selection }],
           removed: [],
         }),
-      ).toEqual({ writes: [], removes: [], removedKeys: [], pinned: ["cpl_a"] });
+      ).toEqual({ writes: [], keptKeys: [], removes: [], removedKeys: [], pinned: ["cpl_a"] });
     }
     expect(
       planHomePut({
@@ -136,7 +137,7 @@ describe("planHomePut", () => {
   it("never removes a live slot, and a live id that is not ready protects nothing", () => {
     expect(
       planHomePut({ placements: [ready], live: ["cpl_a"], selected: [], removed: ["claude"] }),
-    ).toEqual({ writes: [], removes: [], removedKeys: [], pinned: ["cpl_a"] });
+    ).toEqual({ writes: [], keptKeys: [], removes: [], removedKeys: [], pinned: ["cpl_a"] });
     expect(
       planHomePut({
         placements: [placement("cpl_a", { state: "removing" })],
@@ -149,6 +150,7 @@ describe("planHomePut", () => {
         { provider: "claude", accountId: "cacc_b", revision: 1, login: SUB, reuse: undefined },
       ],
       removes: [],
+      keptKeys: [],
       removedKeys: [],
       pinned: [],
     });
@@ -380,6 +382,7 @@ describe("Claude key placements", () => {
       }),
     ).toEqual({
       writes: [{ ...keySelection, reuse: undefined }],
+      keptKeys: [],
       removes: [],
       removedKeys: [],
       pinned: [],
@@ -390,8 +393,8 @@ describe("Claude key placements", () => {
         live: ["cpl_k"],
         selected: [keySelection],
         removed: [],
-      }).writes,
-    ).toEqual([{ ...keySelection, reuse: "cpl_k" }]);
+      }),
+    ).toMatchObject({ writes: [], keptKeys: [{ ...keySelection, id: "cpl_k" }] });
     expect(
       planHomePut({
         placements: [keyRow("cpl_k")],
@@ -403,6 +406,7 @@ describe("Claude key placements", () => {
       writes: [
         { provider: "claude", accountId: "cacc_a", revision: 1, login: SUB, reuse: undefined },
       ],
+      keptKeys: [],
       removes: [],
       removedKeys: [],
       pinned: [],
@@ -417,7 +421,51 @@ describe("Claude key placements", () => {
         selected: [],
         removed: ["claude"],
       }),
-    ).toEqual({ writes: [], removes: ["claude"], removedKeys: ["cpl_k1"], pinned: ["cpl_k2"] });
+    ).toEqual({
+      writes: [],
+      keptKeys: [],
+      removes: ["claude"],
+      removedKeys: ["cpl_k1"],
+      pinned: ["cpl_k2"],
+    });
+  });
+
+  it("stay ready when a put keeps one, so an unconfirmed put never leaves it for removal", () => {
+    const before = stateOf([subscription, keyRow("cpl_k")], [account("cacc_a"), account("cacc_k")]);
+    const plan = planHomePut({
+      placements: before.placements,
+      live: ["cpl_k"],
+      selected: [keySelection],
+      removed: [],
+    });
+    const began = beginHomeWrite(before, {
+      key,
+      onBehalfOfUserId: "alice",
+      writes: [],
+      keptKeys: plan.keptKeys,
+      removes: [],
+      removedKeys: [],
+    });
+    if (began.kind !== "begun") throw new Error("the write did not begin");
+    const inDoubt = settleInDoubt(began.placements);
+    expect(inDoubt.map((row) => [row.id, row.state])).toEqual([
+      ["cpl_sub", "ready"],
+      ["cpl_k", "ready"],
+    ]);
+    expect(removalWork(inDoubt)).toEqual({ removes: [], removedKeys: [], forget: [] });
+    expect(
+      beginHomeWrite(
+        stateOf(before.placements, [account("cacc_a"), account("cacc_k", { revision: 2 })]),
+        {
+          key,
+          onBehalfOfUserId: "alice",
+          writes: [],
+          keptKeys: plan.keptKeys,
+          removes: [],
+          removedKeys: [],
+        },
+      ).kind,
+    ).toBe("accounts-moved");
   });
 
   it("leave the subscription's file alone when one lands, is in doubt, or is removed", () => {

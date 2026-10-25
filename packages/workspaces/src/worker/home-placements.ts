@@ -13,6 +13,7 @@ import {
   type CredentialPlacementHome,
   type HomeState,
   type HomeWriteOutcome,
+  type HomeSelection,
   type PlannedWrite,
   type WorkspaceCredentialHomeRepoError,
 } from "@sealant/db";
@@ -113,6 +114,9 @@ export const writeIntoHome = (input: {
   readonly fence: { readonly kind: "take" | "held"; readonly generation: string };
   readonly createWithOwner?: HomeOwner;
   readonly writes: ReadonlyArray<PlannedWrite & { readonly content: string }>;
+  readonly keptKeys?: ReadonlyArray<
+    HomeSelection & { readonly id: string; readonly content: string }
+  >;
   readonly removes: readonly HomeCredentialProvider[];
   readonly removedKeys: readonly string[];
 }) =>
@@ -122,9 +126,10 @@ export const writeIntoHome = (input: {
       const id = write.reuse ?? `cpl_${randomUUID()}`;
       return { ...write, id, path: placementPath(input.key.home, write, id) };
     });
+    const keptKeys = input.keptKeys ?? [];
     const begun = yield* repo.transact(
       input.key,
-      writes.map((write) => write.accountId),
+      [...writes, ...keptKeys].map((write) => write.accountId),
       (state) => {
         const placements = settleInDoubt(state.placements);
         const began = beginHomeWrite(
@@ -133,6 +138,7 @@ export const writeIntoHome = (input: {
             key: input.key,
             onBehalfOfUserId: input.onBehalfOfUserId,
             writes,
+            keptKeys,
             removes: input.removes,
             removedKeys: input.removedKeys,
           },
@@ -157,6 +163,7 @@ export const writeIntoHome = (input: {
     if (
       input.fence.kind === "held" &&
       writes.length === 0 &&
+      keptKeys.length === 0 &&
       input.removes.length === 0 &&
       input.removedKeys.length === 0
     ) {
@@ -182,9 +189,13 @@ export const writeIntoHome = (input: {
                 (provider) => !fileProviders.includes(provider),
               )
             : input.removes,
-        claudeKeys: { writes: keys.map((write) => write.id), removes: input.removedKeys },
+        claudeKeys: {
+          writes: keys.map((write) => write.id),
+          restores: keptKeys.map((kept) => kept.id),
+          removes: input.removedKeys,
+        },
       }),
-      stdin: homeScriptStdin([...files, ...keys].map((write) => write.content)),
+      stdin: homeScriptStdin([...files, ...keys, ...keptKeys].map((write) => write.content)),
     });
     const outcome: HomeWriteOutcome =
       ran.kind === "done"
