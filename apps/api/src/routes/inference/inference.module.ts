@@ -25,8 +25,9 @@ import {
   CredentialCipher,
   extractClaudeOauthCredentials,
   extractCodexSecrets,
-  parseClaudeCredentialPayload,
-  parseCodexCredentialPayload,
+  loginClassOf,
+  parseStoredCredential,
+  type ProviderCredentialPayload,
   provisionClaudeConfigDir,
   provisionClaudeKeyDir,
   provisionClaudeTokenDir,
@@ -172,7 +173,7 @@ type ExchangeLogin =
       readonly refreshToken: string | undefined;
     }
   | { readonly shape: "codex-key"; readonly apiKey: string }
-  | { readonly shape: "codex-chatgpt"; readonly authJson: string };
+  | { readonly shape: "codex-auth-json"; readonly authJson: string };
 
 type LoginShape = ExchangeLogin["shape"];
 
@@ -181,9 +182,6 @@ interface Exchange {
   readonly receipt: InferenceReceipt;
   readonly login: ExchangeLogin;
 }
-
-const loginClassOfShape = (shape: LoginShape): InferenceReceipt["login"] =>
-  shape === "claude-key" || shape === "codex-key" ? "api-key" : "subscription";
 
 const secretsOf = (login: ExchangeLogin): readonly (string | undefined)[] => {
   switch (login.shape) {
@@ -197,34 +195,41 @@ const secretsOf = (login: ExchangeLogin): readonly (string | undefined)[] => {
     case "claude-session": {
       return [login.accessToken, login.refreshToken];
     }
-    case "codex-chatgpt": {
+    case "codex-auth-json": {
       return extractCodexSecrets(login.authJson);
     }
   }
 };
 
+const exchangeLoginOf = (...credential: ProviderCredentialPayload): ExchangeLogin => {
+  const [provider, payload] = credential;
+  switch (provider) {
+    case "codex": {
+      return "apiKey" in payload
+        ? { shape: "codex-key", apiKey: payload.apiKey }
+        : { shape: "codex-auth-json", authJson: payload.authJson };
+    }
+    case "claude": {
+      if ("apiKey" in payload) return { shape: "claude-key", apiKey: payload.apiKey };
+      if ("token" in payload) return { shape: "claude-setup-token", token: payload.token };
+      const extracted = extractClaudeOauthCredentials(payload.credentialsJson);
+      if (extracted === undefined) throw new Error("credentials.json payload is unusable");
+      return { shape: "claude-session", credentialsJson: payload.credentialsJson, ...extracted };
+    }
+    case "github": {
+      throw new Error("a GitHub login runs no inference");
+    }
+  }
+};
+
+/** The login to run on, and what it spends as `loginClassOf` reads it: the one authority. */
 const readLogin = (account: ConnectedAccount, payloadJson: string) =>
   Effect.try({
-    try: (): ExchangeLogin => {
-      const payload: unknown = JSON.parse(payloadJson);
-      if (account.provider === "codex") {
-        const codex = parseCodexCredentialPayload(payload);
-        return "apiKey" in codex
-          ? { shape: "codex-key", apiKey: codex.apiKey }
-          : { shape: "codex-chatgpt", authJson: codex.authJson };
-      }
-      const claude = parseClaudeCredentialPayload(payload);
-      if ("apiKey" in claude) {
-        return { shape: "claude-key", apiKey: claude.apiKey };
-      }
-      if ("token" in claude) {
-        return { shape: "claude-setup-token", token: claude.token };
-      }
-      const extracted = extractClaudeOauthCredentials(claude.credentialsJson);
-      if (extracted === undefined) {
-        throw new Error("credentials.json payload is unusable");
-      }
-      return { shape: "claude-session", credentialsJson: claude.credentialsJson, ...extracted };
+    try: () => {
+      const credential = parseStoredCredential(account.provider, payloadJson);
+      const loginClass = loginClassOf(...credential);
+      if (loginClass === undefined) throw new Error("a GitHub login runs no inference");
+      return { login: exchangeLoginOf(...credential), loginClass };
     },
     catch: () =>
       new InferenceInternalServerError({
@@ -244,7 +249,7 @@ const startEngine = (login: ExchangeLogin, payload: InferenceRespondRequest) =>
       ...(payload.responseFormat === undefined ? {} : { responseFormat: payload.responseFormat }),
     };
 
-    if (login.shape === "codex-key" || login.shape === "codex-chatgpt") {
+    if (login.shape === "codex-key" || login.shape === "codex-auth-json") {
       const engine = yield* CodexInferenceEngine;
       const provisioned = yield* Effect.try({
         try: () =>
@@ -326,7 +331,7 @@ const marksInvalidOn: Record<LoginShape, readonly AuthReason[]> = {
   "codex-key": ["auth-401"],
   "claude-setup-token": ["auth-401", "auth-words"],
   "claude-session": [],
-  "codex-chatgpt": [],
+  "codex-auth-json": [],
 };
 
 type Invalidation = "marked" | "superseded" | "unmarked";
@@ -383,7 +388,7 @@ const authFailure = (exchange: Exchange, reason: AuthReason, detail: string) =>
           receipt,
         });
       }
-      case "codex-chatgpt": {
+      case "codex-auth-json": {
         return new InferenceConflictError({
           message:
             "The Codex login did not authenticate. The platform refreshes it on a schedule, so this usually means the login itself was ended (signed out elsewhere, or revoked) — reconnect Codex.",
@@ -525,14 +530,10 @@ const startExchange = (payload: InferenceRespondRequest) =>
       cipher.decrypt(account.encryptedPayload),
       "Failed to decrypt the connected account credential.",
     );
-    const login = yield* readLogin(account, payloadJson);
+    const { login, loginClass } = yield* readLogin(account, payloadJson);
     const exchange: Exchange = {
       ownerUserId: payload.ownerUserId,
-      receipt: {
-        accountId: account.id,
-        revision: account.credentialRevision,
-        login: loginClassOfShape(login.shape),
-      },
+      receipt: { accountId: account.id, revision: account.credentialRevision, login: loginClass },
       login,
     };
 

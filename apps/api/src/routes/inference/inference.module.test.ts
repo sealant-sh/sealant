@@ -694,6 +694,34 @@ describe("inference.module allowedLogin", () => {
     });
     expect(engines.codexStart).not.toHaveBeenCalled();
   });
+
+  it("refuses a Codex auth.json that Codex would spend a key from", async () => {
+    const ambiguous = account({
+      provider: "codex",
+      id: "cacc_codex_ambiguous",
+      encryptedPayload: `sealed:${JSON.stringify({
+        authJson: JSON.stringify({
+          OPENAI_API_KEY: "sk-proj-FAKEkeybesidearefreshtoken00000000",
+          tokens: { access_token: "at-codex", refresh_token: "rt-codex", id_token: "idt-codex" },
+        }),
+      })}`,
+    });
+    const { layer, engines } = makeLayers({
+      accounts: accountsStub({ defaults: { codex: ambiguous } }),
+    });
+
+    const error = await runFlipped(
+      respond(
+        newExchange({ credentials: { codex: "default" }, allowedLogin: "subscription" }),
+      ).pipe(Effect.provide(layer)),
+    );
+
+    expect(error).toMatchObject({
+      code: "login-not-allowed",
+      receipt: { accountId: "cacc_codex_ambiguous", login: "api-key" },
+    });
+    expect(engines.codexStart).not.toHaveBeenCalled();
+  });
 });
 
 describe("inference.module 401 feedback", () => {
