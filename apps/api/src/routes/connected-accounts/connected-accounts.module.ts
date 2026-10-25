@@ -8,19 +8,35 @@ import {
   ConnectedAccountServiceUnavailableError,
   DEFAULT_ACCOUNT_SELECTOR,
   type ConnectedAccountCredential,
+  type ConnectedAccountLogin,
+  type ConnectedAccountLoginClass,
   type ConnectedAccountSummary,
   type CreateConnectedAccountRequest,
   type ListConnectedAccountsResponse,
   type MarkConnectedAccountInvalidResponse,
 } from "@sealant/api-contracts";
 import {
+  apiKeyMetadata,
+  CLAUDE_ADMIN_KEY_PREFIX,
+  CLAUDE_API_KEY_PREFIX,
   CLAUDE_TOKEN_PREFIX,
+  codexAuthJsonLogin,
   CredentialCipher,
+  credentialKindOf,
+  loginClassOf,
+  loginClassOfKind,
   narrowClaudeCredentialsJson,
+  OPENAI_API_KEY_PREFIX,
+  parseApiKey,
   parseClaudeCredentialsJson,
   parseCodexAuthJson,
+  parseConnectedAccountKind,
+  parseStoredCredential,
   sha256Hex,
+  type ConnectedAccountKind,
   type ConnectedAccountProvider,
+  type CredentialCipherService,
+  type ProviderCredentialPayload,
 } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
@@ -95,9 +111,19 @@ const toCredentialFreshness = (account: ConnectedAccount): ConnectedAccountCrede
   };
 };
 
+/** A summary reads the stored `kind`; the Codex conversion corrects it on rows from before keys. */
+const toConnectedAccountLogin = (account: ConnectedAccount): ConnectedAccountLogin | undefined => {
+  const kind = parseConnectedAccountKind(account.kind);
+  const login = kind === undefined ? undefined : loginClassOfKind(kind);
+  if (login !== "api-key") return login === undefined ? undefined : { kind: login };
+  const suffix = account.metadata["tokenSuffix"];
+  return typeof suffix === "string" && suffix.length > 0 ? { kind: "api-key", suffix } : undefined;
+};
+
 export const toConnectedAccountSummary = (
   account: ConnectedAccountWithDefault,
 ): ConnectedAccountSummary => {
+  const login = toConnectedAccountLogin(account);
   return {
     connectedAccountId: account.id,
     ownerUserId: account.ownerUserId,
@@ -115,17 +141,34 @@ export const toConnectedAccountSummary = (
     credential: toCredentialFreshness(account),
     isDefault: account.isDefault,
     credentialRevision: account.credentialRevision,
+    ...(login === undefined ? {} : { login }),
   };
 };
 
 interface NormalizedCredential {
-  /** "oauth-token" | "credentials-json" (claude) | "auth-json" (codex) | "gh-cli-token" (github). */
-  readonly kind: string;
+  readonly kind: ConnectedAccountKind;
+  readonly login: ConnectedAccountLoginClass | undefined;
   /** JSON payload string that gets sealed — the only place secret material lives. */
   readonly payloadJson: string;
   /** NON-secret display/ops data persisted in the metadata column. */
   readonly metadata: Record<string, unknown>;
 }
+
+const credentialOf = (
+  credential: ProviderCredentialPayload,
+  metadata: Record<string, unknown>,
+): NormalizedCredential => ({
+  kind: credentialKindOf(...credential),
+  login: loginClassOf(...credential),
+  payloadJson: JSON.stringify(credential[1]),
+  metadata,
+});
+
+const apiKeyCredential = (provider: "claude" | "codex", apiKey: string): NormalizedCredential =>
+  credentialOf(provider === "claude" ? ["claude", { apiKey }] : ["codex", { apiKey }], {
+    ...apiKeyMetadata({ apiKey }),
+    connectedVia: "paste",
+  });
 
 type GitHubTokenVerification =
   | { readonly outcome: "verified"; readonly login?: string; readonly scopes: readonly string[] }
@@ -218,42 +261,64 @@ export const normalizeSecret = (
           // still stored narrow.
           const narrowed = narrowClaudeCredentialsJson(secret);
 
-          return {
-            kind: "credentials-json",
-            payloadJson: JSON.stringify({ credentialsJson: narrowed.credentialsJson }),
-            metadata: {
-              ...parsed.metadata,
-              connectedVia: "paste",
-              ...(narrowed.dropped.length === 0 ? {} : { droppedSections: [...narrowed.dropped] }),
-            },
-          };
+          return credentialOf(["claude", { credentialsJson: narrowed.credentialsJson }], {
+            ...parsed.metadata,
+            connectedVia: "paste",
+            ...(narrowed.dropped.length === 0 ? {} : { droppedSections: [...narrowed.dropped] }),
+          });
+        }
+
+        if (token.startsWith(CLAUDE_API_KEY_PREFIX) || token.startsWith(CLAUDE_ADMIN_KEY_PREFIX)) {
+          const key = parseApiKey("claude", token);
+          if (!key.valid) {
+            return yield* new ConnectedAccountBadRequestError({ message: key.reason });
+          }
+          return apiKeyCredential("claude", key.apiKey);
         }
 
         if (!token.startsWith(CLAUDE_TOKEN_PREFIX)) {
           return yield* new ConnectedAccountBadRequestError({
-            message: `Claude credential must be a \`claude setup-token\` value (starts with "${CLAUDE_TOKEN_PREFIX}") or the JSON contents of a Claude Code .credentials.json session file.`,
+            message: `Claude credential must be a \`claude setup-token\` value (starts with "${CLAUDE_TOKEN_PREFIX}"), an Anthropic API key (starts with "${CLAUDE_API_KEY_PREFIX}"), or the JSON contents of a Claude Code .credentials.json session file.`,
           });
         }
 
-        return {
-          kind: "oauth-token",
-          payloadJson: JSON.stringify({ token }),
-          metadata: { tokenSuffix: token.slice(-4), connectedVia: "paste" },
-        };
+        return credentialOf(["claude", { token }], {
+          tokenSuffix: token.slice(-4),
+          connectedVia: "paste",
+        });
       }
       case "codex": {
+        const trimmed = secret.trim();
+
+        if (!trimmed.startsWith("{")) {
+          if (!trimmed.startsWith(OPENAI_API_KEY_PREFIX)) {
+            return yield* new ConnectedAccountBadRequestError({
+              message: `Codex credential must be the JSON contents of ~/.codex/auth.json or an OpenAI API key (starts with "${OPENAI_API_KEY_PREFIX}").`,
+            });
+          }
+          const key = parseApiKey("codex", trimmed);
+          if (!key.valid) {
+            return yield* new ConnectedAccountBadRequestError({ message: key.reason });
+          }
+          return apiKeyCredential("codex", key.apiKey);
+        }
+
         const parsed = parseCodexAuthJson(secret);
 
         if (!parsed.valid) {
           return yield* new ConnectedAccountBadRequestError({ message: parsed.reason });
         }
 
-        return {
-          kind: "auth-json",
-          // Stored verbatim so the exact file can be re-materialized in the workspace.
-          payloadJson: JSON.stringify({ authJson: secret }),
-          metadata: { ...parsed.metadata },
-        };
+        const login = codexAuthJsonLogin(secret);
+        if (login?.login === "api-key") {
+          if (!login.key.valid) {
+            return yield* new ConnectedAccountBadRequestError({ message: login.key.reason });
+          }
+          return apiKeyCredential("codex", login.key.apiKey);
+        }
+
+        // Stored verbatim so the exact file can be re-materialized in the workspace.
+        return credentialOf(["codex", { authJson: secret }], { ...parsed.metadata });
       }
       case "github": {
         const token = secret.trim();
@@ -265,19 +330,17 @@ export const normalizeSecret = (
           });
         }
 
-        return {
-          kind: "gh-cli-token",
-          payloadJson: JSON.stringify({ token }),
-          metadata:
-            verification.outcome === "verified"
-              ? {
-                  ...(verification.login === undefined ? {} : { login: verification.login }),
-                  scopes: verification.scopes,
-                  tokenType: "gh-cli",
-                  scopesVerified: true,
-                }
-              : { tokenType: "gh-cli", scopesVerified: false },
-        };
+        return credentialOf(
+          ["github", { token }],
+          verification.outcome === "verified"
+            ? {
+                ...(verification.login === undefined ? {} : { login: verification.login }),
+                scopes: verification.scopes,
+                tokenType: "gh-cli",
+                scopesVerified: true,
+              }
+            : { tokenType: "gh-cli", scopesVerified: false },
+        );
       }
     }
   });
@@ -309,10 +372,41 @@ type ConnectTarget =
   | { readonly kind: "replace"; readonly account: ConnectedAccountWithDefault }
   | { readonly kind: "create"; readonly name: string };
 
+const providerLabel = { claude: "Claude", codex: "Codex", github: "GitHub" } as const;
+const loginLabel = { subscription: "subscription login", "api-key": "API key" } as const;
+
+type StoredLogin = ConnectedAccountLoginClass | "unreadable" | undefined;
+
+const storedLoginOf = (
+  cipher: CredentialCipherService,
+  account: ConnectedAccount,
+): Effect.Effect<StoredLogin> =>
+  cipher.decrypt(account.encryptedPayload).pipe(
+    Effect.flatMap((plaintext) =>
+      Effect.try(() => loginClassOf(...parseStoredCredential(account.provider, plaintext))),
+    ),
+    Effect.orElseSucceed((): StoredLogin => "unreadable"),
+  );
+
+const freeName = (base: string, existing: readonly ConnectedAccountWithDefault[]): string => {
+  const taken = new Set(existing.map((account) => account.name));
+  let name = base;
+  for (let suffix = 2; taken.has(name); suffix++) name = `${base}-${String(suffix)}`;
+  return name;
+};
+
+/**
+ * Which account a connect writes. Without a target it is the only account of the secret's login
+ * class, read from each stored payload (a row the Codex conversion has not reached yet included),
+ * so a key never replaces a subscription; an account whose payload cannot be read is a candidate
+ * of either class, so it is never passed over in silence.
+ */
 const connectTarget = (
   provider: ConnectedAccountProvider,
   requested: ConnectRequestTarget,
   existing: readonly ConnectedAccountWithDefault[],
+  login: ConnectedAccountLoginClass | undefined,
+  storedLogins: ReadonlyMap<string, StoredLogin>,
 ): Effect.Effect<ConnectTarget, ConnectedAccountNotFoundError | ConnectedAccountConflictError> => {
   if (requested.kind === "account") {
     const account = existing.find((candidate) => candidate.id === requested.accountId);
@@ -339,18 +433,35 @@ const connectTarget = (
       return Effect.succeed({ kind: "create", name: requested.name });
     }
   }
-  const [only, ...others] = existing;
+  const candidates =
+    login === undefined
+      ? existing
+      : existing.filter((candidate) => {
+          const stored = storedLogins.get(candidate.id);
+          return stored === login || stored === "unreadable";
+        });
+  const [only, ...others] = candidates;
   if (only !== undefined && others.length === 0) {
     return Effect.succeed({ kind: "replace", account: only });
   }
+  if (only === undefined && login !== undefined) {
+    return Effect.succeed({ kind: "create", name: freeName(login, existing) });
+  }
   return Effect.fail(
     new ConnectedAccountConflictError({
-      message: `Several ${provider} accounts are connected; say which one to replace with accountId, or name a new one.`,
+      message: `Several ${login === undefined ? provider : `${providerLabel[provider]} ${loginLabel[login]}`} accounts are connected; say which one to replace with accountId, or name a new one.`,
       code: "connected-account-ambiguous",
-      candidateAccountIds: existing.map((account) => account.id),
+      candidateAccountIds: candidates.map((account) => account.id),
     }),
   );
 };
+
+const loginMismatch = (
+  provider: "claude" | "codex",
+  expected: ConnectedAccountLoginClass,
+  actual: ConnectedAccountLoginClass,
+): string =>
+  `That is a ${providerLabel[provider]} ${loginLabel[actual]}, not ${expected === "api-key" ? "an" : "a"} ${loginLabel[expected]}.`;
 
 const withOwnerLock = <A, E, R>(ownerUserId: string, write: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
@@ -390,7 +501,24 @@ export const createConnectedAccount = (input: {
     const request = input.payload;
     const requested = yield* parseConnectRequestTarget(request);
 
+    if (request.provider === "github" && request.login !== undefined) {
+      return yield* new ConnectedAccountBadRequestError({
+        message:
+          "A GitHub token is neither a subscription login nor an API key; connect it without login.",
+      });
+    }
+
     const normalized = yield* normalizeSecret(request.provider, request.secret);
+    if (
+      request.provider !== "github" &&
+      request.login !== undefined &&
+      normalized.login !== undefined &&
+      normalized.login !== request.login
+    ) {
+      return yield* new ConnectedAccountBadRequestError({
+        message: loginMismatch(request.provider, request.login, normalized.login),
+      });
+    }
 
     const credentialCipher = yield* CredentialCipher;
     const sealed = yield* credentialCipher.encrypt(normalized.payloadJson).pipe(
@@ -415,7 +543,22 @@ export const createConnectedAccount = (input: {
           }),
           "Failed to look up connected accounts.",
         );
-        const target = yield* connectTarget(request.provider, requested, existing);
+        const storedLogins = new Map(
+          normalized.login === undefined
+            ? []
+            : yield* Effect.forEach(existing, (account) =>
+                storedLoginOf(credentialCipher, account).pipe(
+                  Effect.map((stored) => [account.id, stored] as const),
+                ),
+              ),
+        );
+        const target = yield* connectTarget(
+          request.provider,
+          requested,
+          existing,
+          normalized.login,
+          storedLogins,
+        );
 
         const account =
           target.kind === "replace"
@@ -489,8 +632,15 @@ export const listConnectedAccounts = (input: { readonly ownerUserId: string }) =
       connectedAccountRepo.listByOwner(input.ownerUserId),
       "Failed to list connected accounts.",
     );
+    const hasApiKeyHistory = yield* withInternalError(
+      connectedAccountRepo.hasApiKeyHistory(input.ownerUserId),
+      "Failed to list connected accounts.",
+    );
 
-    return { items: items.map(toConnectedAccountSummary) } satisfies ListConnectedAccountsResponse;
+    return {
+      items: items.map(toConnectedAccountSummary),
+      hasApiKeyHistory,
+    } satisfies ListConnectedAccountsResponse;
   });
 };
 
