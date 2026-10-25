@@ -306,7 +306,7 @@ export class Sealant {
    */
   readonly inference: InferenceNamespace = {
     respond: async (options) => {
-      if ("allowedLogin" in options && options.allowedLogin !== undefined) {
+      if ("allowedLogin" in options && options.allowedLogin === "subscription") {
         await requireInferenceAllowedLogin(this.#ctx);
       }
       const payload = buildInferenceRespondRequest(options, this.#ctx.config.hostLocal.ownerUserId);

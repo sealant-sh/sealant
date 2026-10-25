@@ -76,6 +76,27 @@ describe("inference.respond", () => {
     await sealant.close();
   });
 
+  it("sends allowedLogin any to a control plane that predates it, which runs any login anyway", async () => {
+    answering(
+      200,
+      { sessionId: "inf_1", turn: { type: "text", text: "named" } },
+      {
+        processUser: false,
+      },
+    );
+    const sealant = client();
+
+    const response = await sealant.inference.respond({
+      prompt: "name it",
+      credentials: { claude: true },
+      allowedLogin: "any",
+    });
+
+    expect(response.turn).toMatchObject({ text: "named" });
+    expect(seen).toHaveLength(1);
+    await sealant.close();
+  });
+
   it("reads the refusal's reason and receipt", async () => {
     answering(
       409,

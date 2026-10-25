@@ -2328,7 +2328,7 @@ export interface InferenceRespondOptions {
   /**
    * `subscription` refuses an account holding an API key before the provider is asked (a
    * `SealantApiError` with `reason` `login-not-allowed`); `any`, the default, runs on either.
-   * Needs `features().inferenceAllowedLogin`; without it nothing is sent.
+   * `subscription` needs `features().inferenceAllowedLogin`; without it nothing is sent.
    */
   readonly allowedLogin?: "subscription" | "any";
 }
