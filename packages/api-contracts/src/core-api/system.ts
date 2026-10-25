@@ -67,6 +67,8 @@ export const systemIndexResponseSchema = Schema.Struct({
        * `sudo` work, and the Kubernetes image builder records the image probe the launch checks.
        */
       kubernetesPersonLayout: Schema.optional(Schema.Boolean),
+      /** Credential homes answer placement receipts; a put takes `live`; prune exists. */
+      credentialPlacements: Schema.optional(Schema.Boolean),
     }),
   ),
 });

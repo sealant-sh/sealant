@@ -3,6 +3,7 @@ import { HttpApiBuilder } from "effect/http-api";
 
 import {
   listWorkspaceCredentials,
+  pruneWorkspaceCredentials,
   putWorkspaceCredentials,
   releaseWorkspaceCredentials,
 } from "./workspace-credentials.js";
@@ -35,6 +36,9 @@ export const WorkspacesHandlersLive = HttpApiBuilder.group(
   "workspaces",
   (handlers) => {
     return handlers
+      .handle("pruneWorkspaceCredentials", ({ params, payload }) =>
+        pruneWorkspaceCredentials({ workspaceId: params.workspaceId, payload }),
+      )
       .handle("createWorkspace", ({ headers, payload }) =>
         createWorkspace({
           headers,

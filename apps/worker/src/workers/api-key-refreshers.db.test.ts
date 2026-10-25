@@ -10,6 +10,7 @@ import {
   ConnectedAccountRepo,
   ConnectedAccountRepoLive,
   createSealantDB,
+  CredentialPlacementRepoLive,
   SealantDB,
   user,
   WorkspaceCredentialHomeRepoLive,
@@ -48,6 +49,7 @@ describe.skipIf(DATABASE_URL === undefined)(
         ConnectedAccountRepoLive,
         WorkspaceRuntimeInstanceRepoLive,
         WorkspaceCredentialHomeRepoLive,
+        CredentialPlacementRepoLive,
       ).pipe(Layer.provide(Layer.succeed(SealantDB, db)));
     const run = <A, E>(effect: Effect.Effect<A, E, Layer.Success<ReturnType<typeof layer>>>) =>
       Effect.runPromise(effect.pipe(Effect.provide(layer())));

@@ -164,7 +164,6 @@ const newWorld = (stage: Partial<DotfilesStageResult> | "throw" = {}) => {
           outcome: {
             kind: "hold" as const,
             onBehalfOfUserId: person,
-            accounts: [],
             generation: "g-1",
           },
         }),

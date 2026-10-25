@@ -12,6 +12,7 @@ import {
 } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
+  CredentialPlacementRepo,
   GitHubInstallationRepo,
   LAUNCH_OWNERSHIP_LOST_MESSAGE,
   LAUNCH_RETAINED_ERROR_CODE,
@@ -23,6 +24,7 @@ import {
   WorkspaceCredentialHomeRepo,
   WorkspaceRuntimeInstanceRepo,
   type ConnectedAccountRepoService,
+  type ConnectedAccountStatus,
   type GitHubInstallationRepoService,
   type GitHubInstallationRepositoryCacheRepoService,
   type WorkspaceAttemptRepoService,
@@ -433,7 +435,7 @@ const connectedAccountStub = (input: {
   readonly id: string;
   readonly provider: "claude" | "codex" | "github";
   readonly payload: Record<string, unknown>;
-  readonly status?: string;
+  readonly status?: ConnectedAccountStatus;
 }) => ({
   id: input.id,
   ownerUserId: "usr_1",
@@ -441,6 +443,7 @@ const connectedAccountStub = (input: {
   name: "default",
   kind: "oauth-token",
   status: input.status ?? "active",
+  credentialRevision: 1,
   encryptedPayload: `sealed:${JSON.stringify(input.payload)}`,
   encryptionKeyId: "k-test",
   payloadSha256: "sha",
@@ -1051,7 +1054,7 @@ describe("processWorkspaceBuildJobEffect", () => {
         getAttemptById: vi.fn((_id: string) => Effect.succeed({ ownerUserId: "usr_alice" })),
       };
       // The home is recorded before the instance reads `ready`, when nobody can act on it yet.
-      const homes = makeInMemoryCredentialHomes(() => []);
+      const homes = makeInMemoryCredentialHomes(() => [], { accounts: () => accountRows });
       let recordedAtReady: number | undefined;
       const runtimeInstances = {
         ...workspaceRuntimeInstanceRepoStub(),
@@ -1129,16 +1132,40 @@ describe("processWorkspaceBuildJobEffect", () => {
         // The home is the owner's, as a put would hold it: refreshes reach it through the record.
         expect(homes.rows.get("run_credentials_home /home/m4lice000")).toMatchObject({
           onBehalfOfUserId: "usr_alice",
-          accounts: [
-            { provider: "claude", connectedAccountId: "cacc_claude" },
-            { provider: "github", connectedAccountId: "cacc_github" },
-          ],
+          releasing: false,
         });
+        expect(
+          [...homes.placementRows.values()].map(
+            ({ provider, accountId, revision, path, state }) => ({
+              provider,
+              accountId,
+              revision,
+              path,
+              state,
+            }),
+          ),
+        ).toEqual([
+          {
+            provider: "claude",
+            accountId: "cacc_claude",
+            revision: 1,
+            path: "/home/m4lice000/.claude/.credentials.json",
+            state: "ready",
+          },
+          {
+            provider: "github",
+            accountId: "cacc_github",
+            revision: 1,
+            path: "/home/m4lice000/.config/gh/hosts.yml",
+            state: "ready",
+          },
+        ]);
       }).pipe(
         Effect.provide(
-          Layer.merge(
+          Layer.mergeAll(
             provideRepos({ jobs, runtimeInstances, attempts, connectedAccounts }),
             Layer.succeed(WorkspaceCredentialHomeRepo, homes.service),
+            Layer.succeed(CredentialPlacementRepo, homes.placements),
           ),
         ),
       );

@@ -39,13 +39,15 @@ export const HOME_CREDENTIAL_FILES: Readonly<Record<HomeCredentialProvider, stri
  * `auth.json`, which also holds the person's other logins, so the file is merged, never replaced.
  * The entry's key: `openai-codex` for pi, `openai` for opencode.
  */
-export const HOME_MERGED_LOGINS: Readonly<Partial<Record<HomeCredentialProvider, string>>> = {
+export const HOME_MERGED_LOGINS: Readonly<Record<MergedLoginProvider, string>> = {
   pi: "openai-codex",
   opencode: "openai",
 };
 
-const isMergedLogin = (provider: HomeCredentialProvider): boolean =>
-  HOME_MERGED_LOGINS[provider] !== undefined;
+export type MergedLoginProvider = "pi" | "opencode";
+
+const isMergedLogin = (provider: HomeCredentialProvider): provider is MergedLoginProvider =>
+  provider === "pi" || provider === "opencode";
 
 /** The refresh token every copy carries (`CODEX_COPY_REFRESH_TOKEN` in @sealant/credentials). */
 const COPY_REFRESH_TOKEN = "sealant-copy-cannot-refresh";
@@ -59,30 +61,32 @@ const COPY_REFRESH_TOKEN = "sealant-copy-cannot-refresh";
  *   exist yet included: Mend's person layout reaches opencode's `auth.json` through its saved data
  *   directory and back to `~/.mend/opencode/auth.json`). In a person's home that place must be
  *   inside the home and outside `/workspace`, and the file must have one link, so a login never
- *   lands in saved state: a put elsewhere exits 3.
+ *   lands in saved state: a put elsewhere exits `outside`.
  * - A put whose file cannot be reached, opened or written as a regular file (a directory there,
- *   the owner's permissions), or whose entry is not JSON, exits 4. A scrub has nothing of Core's to remove in any of these cases
+ *   the owner's permissions), or whose entry is not JSON, exits `unusable`. A scrub has nothing of Core's to remove in any of these cases
  *   (outside the home, unreachable, not a regular file) and exits 0.
  * - A put writes the entry only when there is none or it is a copy (its refresh token is
  *   `sealant-copy-cannot-refresh`): a login the person made inside pi or opencode stays (Mend's
- *   ADR 0016 decision 8a). A scrub removes the entry only when it is a copy. A file that is not a
- *   JSON object is left as it is.
+ *   ADR 0016 decision 8a), and the put exits `personalLoginKept`. A scrub removes the entry only when it is a copy. A
+ *   file that is not a JSON object is left as it is (a put exits `personalLoginKept` there too).
  * - Written in place (truncate and write), never through a rename, mode 0600; every other entry
  *   kept.
  */
+const MERGED_LOGIN_PROGRAM_EXIT = { outside: 3, unusable: 4, personalLoginKept: 5 } as const;
+
 const MERGED_LOGIN_PROGRAM = [
   `const fs=require("fs"),path=require("path"),[file,key,home,mode]=process.argv.slice(1),C=${JSON.stringify(COPY_REFRESH_TOKEN)},put=mode==="put";`,
-  `let entry;if(put){try{entry=JSON.parse(Buffer.from(fs.readFileSync(0,"utf8").trim(),"base64").toString("utf8"))}catch{process.exit(4)}}`,
+  `let entry;if(put){try{entry=JSON.parse(Buffer.from(fs.readFileSync(0,"utf8").trim(),"base64").toString("utf8"))}catch{process.exit(${MERGED_LOGIN_PROGRAM_EXIT.unusable})}}`,
   `function resolve(p){for(let i=0;i<40;i++){let st;try{st=fs.lstatSync(p)}catch(e){if(e.code!=="ENOENT")throw e;return path.join(fs.realpathSync(path.dirname(p)),path.basename(p))}`,
   `if(!st.isSymbolicLink())return fs.realpathSync(p);p=path.resolve(fs.realpathSync(path.dirname(p)),fs.readlinkSync(p))}throw new Error("too many links")}`,
-  `let real;try{real=resolve(file)}catch{process.exit(put?4:0)}`,
-  `if(process.env.root!=="1"&&(!real.startsWith(home+"/")||real.startsWith("/workspace/")))process.exit(put?3:0);`,
-  `const F=fs.constants;let fd;try{fd=fs.openSync(real,F.O_RDWR|F.O_NOFOLLOW|(put?F.O_CREAT:0),0o600)}catch{process.exit(put?4:0)}`,
-  `const st=fs.fstatSync(fd);if(!st.isFile())process.exit(put?4:0);if(put&&st.nlink>1)process.exit(3);`,
-  `let raw=fs.readFileSync(fd,"utf8"),v;if(raw.trim()==="")v={};else{try{v=JSON.parse(raw)}catch{process.exit(0)}}`,
-  `if(v===null||typeof v!=="object"||Array.isArray(v))process.exit(0);`,
+  `let real;try{real=resolve(file)}catch{process.exit(put?${MERGED_LOGIN_PROGRAM_EXIT.unusable}:0)}`,
+  `if(process.env.root!=="1"&&(!real.startsWith(home+"/")||real.startsWith("/workspace/")))process.exit(put?${MERGED_LOGIN_PROGRAM_EXIT.outside}:0);`,
+  `const F=fs.constants;let fd;try{fd=fs.openSync(real,F.O_RDWR|F.O_NOFOLLOW|(put?F.O_CREAT:0),0o600)}catch{process.exit(put?${MERGED_LOGIN_PROGRAM_EXIT.unusable}:0)}`,
+  `const st=fs.fstatSync(fd);if(!st.isFile())process.exit(put?${MERGED_LOGIN_PROGRAM_EXIT.unusable}:0);if(put&&st.nlink>1)process.exit(${MERGED_LOGIN_PROGRAM_EXIT.outside});`,
+  `let raw=fs.readFileSync(fd,"utf8"),v;if(raw.trim()==="")v={};else{try{v=JSON.parse(raw)}catch{process.exit(put?${MERGED_LOGIN_PROGRAM_EXIT.personalLoginKept}:0)}}`,
+  `if(v===null||typeof v!=="object"||Array.isArray(v))process.exit(put?${MERGED_LOGIN_PROGRAM_EXIT.personalLoginKept}:0);`,
   `const prior=v[key],copy=prior!==null&&typeof prior==="object"&&prior.refresh===C;`,
-  `if(put){if(prior!==undefined&&!copy)process.exit(0);v[key]=entry}else{if(!copy)process.exit(0);delete v[key]}`,
+  `if(put){if(prior!==undefined&&!copy)process.exit(${MERGED_LOGIN_PROGRAM_EXIT.personalLoginKept});v[key]=entry}else{if(!copy)process.exit(0);delete v[key]}`,
   `const out=Buffer.from(JSON.stringify(v,null,2));fs.ftruncateSync(fd,0);fs.writeSync(fd,out,0,out.length,0);fs.fchmodSync(fd,0o600);fs.closeSync(fd)`,
 ].join("");
 
@@ -151,10 +155,14 @@ export type HomeWriteFence =
   | { readonly kind: "held"; readonly generation: string }
   /**
    * A release: removes every login file Core names, and the marker, when the marker is absent or
-   * names `generation`. Without one (a home Core holds no record of) it removes them whatever the
-   * marker says.
+   * names `generation`.
    */
-  | { readonly kind: "release"; readonly generation?: string };
+  | { readonly kind: "release"; readonly generation: string }
+  /** A release of a home Core holds no record of: it removes them whatever the marker says. */
+  | { readonly kind: "release-unfenced" };
+
+const isRelease = (fence: HomeWriteFence): boolean =>
+  fence.kind === "release" || fence.kind === "release-unfenced";
 
 export interface HomeCredentialScriptInput {
   readonly home: string;
@@ -239,6 +247,35 @@ export const HOME_SCRIPT_EXIT = {
   githubLoginUnusable: 88,
 } as const;
 
+const KEPT_LOGINS_BASE = 90;
+const KEPT_LOGIN_BITS: Readonly<Record<MergedLoginProvider, number>> = { pi: 1, opencode: 2 };
+const MERGED_LOGIN_PROVIDERS: readonly MergedLoginProvider[] = ["pi", "opencode"];
+
+export const KEPT_LOGINS_EXIT = {
+  encode: (kept: readonly MergedLoginProvider[]): number =>
+    KEPT_LOGINS_BASE +
+    MERGED_LOGIN_PROVIDERS.filter((provider) => kept.includes(provider)).reduce(
+      (bits, provider) => bits + KEPT_LOGIN_BITS[provider],
+      0,
+    ),
+  decode: (exitCode: number): readonly MergedLoginProvider[] | undefined => {
+    const bits = exitCode - KEPT_LOGINS_BASE;
+    if (bits < 1 || bits > 3) return undefined;
+    return MERGED_LOGIN_PROVIDERS.filter((provider) => (bits & KEPT_LOGIN_BITS[provider]) !== 0);
+  },
+  shellInit: "kept=0",
+  shellKeep: (provider: MergedLoginProvider): string =>
+    `kept=$((kept + ${String(KEPT_LOGIN_BITS[provider])}))`,
+  shellExit: `if [ "$kept" != 0 ]; then exit $((${String(KEPT_LOGINS_BASE)} + kept)); fi`,
+} as const;
+
+export const homeLoginsKept = (
+  exitCode: number | undefined,
+): readonly HomeCredentialProvider[] | undefined => {
+  if (exitCode === 0) return [];
+  return exitCode === undefined ? undefined : KEPT_LOGINS_EXIT.decode(exitCode);
+};
+
 /** The exit a whole-file login's write answers when its file is unusable, per provider. */
 const FILE_EXITS: Readonly<Record<HomeFileCredentialProvider, number>> = {
   claude: HOME_SCRIPT_EXIT.claudeLoginUnusable,
@@ -251,13 +288,22 @@ const FIRST_LOGIN_FD = 3;
 
 /** The exits a merged login's write or removal answers for each provider. */
 const MERGED_EXITS: Readonly<
-  Partial<Record<HomeCredentialProvider, { readonly unusable: number; readonly outside: number }>>
+  Record<MergedLoginProvider, { readonly unusable: number; readonly outside: number }>
 > = {
-  pi: { unusable: 82, outside: 84 },
-  opencode: { unusable: 83, outside: 85 },
+  pi: { unusable: HOME_SCRIPT_EXIT.piLoginUnusable, outside: HOME_SCRIPT_EXIT.piLoginOutside },
+  opencode: {
+    unusable: HOME_SCRIPT_EXIT.opencodeLoginUnusable,
+    outside: HOME_SCRIPT_EXIT.opencodeLoginOutside,
+  },
 };
 
 const quote = (value: string): string => `'${value}'`;
+
+const READ_MARK = `mark=0; if [ -e "$hw" ]; then mark=$(cat "$hw"); case "$mark" in ''|*[!0-9]*) exit ${HOME_SCRIPT_EXIT.fenced} ;; esac; fi`;
+const RAISE_MARK = `printf '%s' "$token" > "$hw.tmp"; mv -f "$hw.tmp" "$hw"`;
+
+const raiseMarkOfMissingHome = (): string =>
+  `${READ_MARK}; if [ "$token" -lt "$mark" ]; then exit ${HOME_SCRIPT_EXIT.fenced}; fi; ${RAISE_MARK}; `;
 
 /** The base64 payload lines a script reads, one per write, in order. */
 export const homeScriptStdin = (contents: readonly string[]): string =>
@@ -291,7 +337,7 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
   if (problem !== undefined) {
     throw new Error(`Refusing to write credentials into '${input.home}': ${problem}`);
   }
-  const generation = input.fence.generation;
+  const generation = input.fence.kind === "release-unfenced" ? undefined : input.fence.generation;
   if (generation !== undefined && !GENERATION_PATTERN.test(generation)) {
     throw new Error("A home's generation is 8 to 64 letters, digits, '_' or '-'.");
   }
@@ -358,7 +404,9 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
     `trusted_parent() { par=$(dirname "$home"); [ -d "$par" ] && [ ! -L "$par" ] || exit ${HOME_SCRIPT_EXIT.untrusted}; po=$(stat -c %u "$par"); pm=$(stat -c %a "$par"); [ "$po" = ${parentOwner} ] || exit ${HOME_SCRIPT_EXIT.untrusted}; if [ $(( 0$pm & 022 )) -ne 0 ] && [ $(( 0$pm & 01000 )) -eq 0 ]; then exit ${HOME_SCRIPT_EXIT.untrusted}; fi; }`,
   );
   if (input.createWithOwner === undefined) {
-    lines.push(`if [ ! -d "$home" ]; then exit ${HOME_SCRIPT_EXIT.missing}; fi`);
+    lines.push(
+      `if [ ! -d "$home" ]; then ${input.writes.length === 0 ? raiseMarkOfMissingHome() : ""}exit ${HOME_SCRIPT_EXIT.missing}; fi`,
+    );
   } else {
     const { uid, gid } = input.createWithOwner;
     if (!Number.isInteger(uid) || uid < 0 || !Number.isInteger(gid) || gid < 0) {
@@ -376,7 +424,7 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
     `if [ "$uid" = 0 ] && [ "$home" != /root ]; then exit ${HOME_SCRIPT_EXIT.untrusted}; fi`,
     `held=; if [ -f "$m" ]; then held=$(cat "$m"); fi`,
     // A mark that is not a number (a write cut short) refuses every token, never lets one through.
-    `mark=0; if [ -e "$hw" ]; then mark=$(cat "$hw"); case "$mark" in ''|*[!0-9]*) exit ${HOME_SCRIPT_EXIT.fenced} ;; esac; fi`,
+    READ_MARK,
   );
 
   // 5. The fence: a token below the mark, or another hold's marker, writes nothing; a take its own
@@ -396,17 +444,16 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
       );
       break;
     case "release":
-      if (input.fence.generation !== undefined) {
-        lines.push(
-          `if [ -n "$held" ] && [ "$held" != ${quote(input.fence.generation)} ]; then exit ${HOME_SCRIPT_EXIT.fenced}; fi`,
-        );
-      }
+      lines.push(
+        `if [ -n "$held" ] && [ "$held" != ${quote(input.fence.generation)} ]; then exit ${HOME_SCRIPT_EXIT.fenced}; fi`,
+      );
+      break;
+    case "release-unfenced":
       break;
   }
-  const removes: readonly HomeCredentialProvider[] =
-    input.fence.kind === "release"
-      ? [...HOME_FILE_PROVIDERS, "pi", "opencode"]
-      : input.removes.filter((provider) => !input.writes.includes(provider));
+  const removes: readonly HomeCredentialProvider[] = isRelease(input.fence)
+    ? [...HOME_FILE_PROVIDERS, ...MERGED_LOGIN_PROVIDERS]
+    : input.removes.filter((provider) => !input.writes.includes(provider));
   // A merged login to remove that exists cannot be removed without node: refused, never skipped,
   // so an earlier holder's copy is never left behind for the next one (fail closed).
   const mergedRemovals = removes.filter(isMergedLogin);
@@ -426,7 +473,7 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
         `if [ "$hn" != 1 ] && { [ -e "$home/${HOME_CREDENTIAL_FILES[provider]}" ] || [ -L "$home/${HOME_CREDENTIAL_FILES[provider]}" ]; }; then exit ${HOME_SCRIPT_EXIT.noNode}; fi`,
     ),
     // Written whole or not at all (a temporary file, then a rename).
-    `printf '%s' "$token" > "$hw.tmp"; mv -f "$hw.tmp" "$hw"`,
+    RAISE_MARK,
   );
   if (input.fence.kind === "take") {
     lines.push(`printf '%s' ${quote(input.fence.generation)} > "$m.tmp"; mv -f "$m.tmp" "$m"`);
@@ -505,27 +552,26 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
       `exec ${fd}>&-`,
     );
   });
+  inner.push(KEPT_LOGINS_EXIT.shellInit);
   input.writes.forEach((provider, index) => {
-    const entryKey = HOME_MERGED_LOGINS[provider];
+    if (!isMergedLogin(provider)) return;
     const exits = MERGED_EXITS[provider];
-    if (entryKey === undefined || exits === undefined) return;
     inner.push(
-      `c=0; root="$rt" ${node} -e "$m" "$home/${HOME_CREDENTIAL_FILES[provider]}" ${entryKey} "$home" put <<SEALANT_LOGIN || c=$?`,
+      `c=0; root="$rt" ${node} -e "$m" "$home/${HOME_CREDENTIAL_FILES[provider]}" ${HOME_MERGED_LOGINS[provider]} "$home" put <<SEALANT_LOGIN || c=$?`,
       `$p${index}`,
       "SEALANT_LOGIN",
-      `case "$c" in 0) ;; 3) exit ${String(exits.outside)} ;; *) exit ${String(exits.unusable)} ;; esac`,
+      `case "$c" in 0) ;; ${String(MERGED_LOGIN_PROGRAM_EXIT.personalLoginKept)}) ${KEPT_LOGINS_EXIT.shellKeep(provider)} ;; ${String(MERGED_LOGIN_PROGRAM_EXIT.outside)}) exit ${String(exits.outside)} ;; *) exit ${String(exits.unusable)} ;; esac`,
     );
   });
   for (const provider of removes) {
-    const entryKey = HOME_MERGED_LOGINS[provider];
-    const exits = MERGED_EXITS[provider];
     inner.push(
-      entryKey === undefined || exits === undefined
-        ? `rm -f "$home/${HOME_CREDENTIAL_FILES[provider]}"`
-        : // Without node there is no such file (the root half refused otherwise).
-          `if [ "$hn" = 1 ]; then root="$rt" ${node} -e "$m" "$home/${HOME_CREDENTIAL_FILES[provider]}" ${entryKey} "$home" scrub || exit ${String(exits.unusable)}; fi`,
+      isMergedLogin(provider)
+        ? // Without node there is no such file (the root half refused otherwise).
+          `if [ "$hn" = 1 ]; then root="$rt" ${node} -e "$m" "$home/${HOME_CREDENTIAL_FILES[provider]}" ${HOME_MERGED_LOGINS[provider]} "$home" scrub || exit ${String(MERGED_EXITS[provider].unusable)}; fi`
+        : `rm -f "$home/${HOME_CREDENTIAL_FILES[provider]}"`,
     );
   }
+  inner.push(KEPT_LOGINS_EXIT.shellExit);
 
   // The owner's half starts from a clean environment: only a fixed PATH and its flags, never the
   // exec's (a token, the secret env), which the person could read through /proc, and never a
@@ -558,7 +604,7 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
       "SEALANT_LOGINS",
     );
   }
-  if (input.fence.kind === "release") {
+  if (isRelease(input.fence)) {
     lines.push(`rm -f "$m"`);
   }
   return lines.join("\n");

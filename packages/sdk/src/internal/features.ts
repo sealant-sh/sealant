@@ -35,6 +35,7 @@ export const toFeatures = (index: SystemIndexResponse): SealantFeatures => {
     workspaceSshUser: features?.workspaceSshUser === true,
     personBinding: features?.personBinding === true,
     sshKeyRemovalEndsConnections: features?.sshKeyRemovalEndsConnections === true,
+    credentialPlacements: features?.credentialPlacements === true,
     connectedAccountDefaults: features?.connectedAccountDefaults === true,
     connectedAccountLoginClass: features?.connectedAccountLoginClass === true,
     kubernetesPersonLayout: features?.kubernetesPersonLayout === true,
@@ -85,4 +86,16 @@ export const requireConnectedAccountLoginClass = async (ctx: SdkContext): Promis
       { code: "connected-account-login-class-unsupported" },
     );
   }
+};
+
+export const requireCredentialPlacements = async (ctx: SdkContext): Promise<void> => {
+  const supported = await readFeatures(ctx).then(
+    (features) => features.credentialPlacements,
+    () => false,
+  );
+  if (!supported)
+    throw new SealantError(
+      "This control plane cannot protect live credential placements or prune them; nothing was sent.",
+      { code: "credential-placements-unsupported" },
+    );
 };

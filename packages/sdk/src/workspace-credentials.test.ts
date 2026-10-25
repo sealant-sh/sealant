@@ -7,6 +7,8 @@
 import type {
   ListWorkspaceCredentialsQuery,
   PutWorkspaceCredentialsRequest,
+  PruneWorkspaceCredentialsRequest,
+  WorkspaceCredentialHome,
   ReleaseWorkspaceCredentialsQuery,
 } from "@sealant/api-contracts";
 import { Effect } from "effect";
@@ -25,7 +27,10 @@ const home = {
 };
 
 // The derived `ControlPlaneClient` surface is far wider; the narrowing cast is test-only.
-const makeStub = () => {
+const makeStub = (
+  features: "enabled" | "absent" | "failed" = "absent",
+  responseHome: WorkspaceCredentialHome = home,
+) => {
   const requests: Array<{ readonly op: string; readonly body: unknown }> = [];
   const workspaces = {
     putWorkspaceCredentials: (request: {
@@ -33,7 +38,14 @@ const makeStub = () => {
       payload: PutWorkspaceCredentialsRequest;
     }) => {
       requests.push({ op: "put", body: request });
-      return Effect.succeed({ workspaceId: "ws_1", runId: "run_1", home });
+      return Effect.succeed({ workspaceId: "ws_1", runId: "run_1", home: responseHome });
+    },
+    pruneWorkspaceCredentials: (request: {
+      params: { workspaceId: string };
+      payload: PruneWorkspaceCredentialsRequest;
+    }) => {
+      requests.push({ op: "prune", body: request });
+      return Effect.succeed({ workspaceId: "ws_1", runId: "run_1", home: responseHome });
     },
     releaseWorkspaceCredentials: (request: {
       params: { workspaceId: string };
@@ -52,10 +64,29 @@ const makeStub = () => {
       query: ListWorkspaceCredentialsQuery;
     }) => {
       requests.push({ op: "list", body: request });
-      return Effect.succeed({ workspaceId: "ws_1", runId: "run_1", homes: [home] });
+      return Effect.succeed({ workspaceId: "ws_1", runId: "run_1", homes: [responseHome] });
     },
   };
-  return { client: { workspaces } as unknown as ControlPlaneClient, requests };
+  return {
+    client: {
+      workspaces,
+      system: {
+        getIndex: () =>
+          features === "failed"
+            ? Effect.fail(new Error("unavailable"))
+            : Effect.succeed({
+                name: "Core",
+                version: "0.0.0",
+                docsPath: "/docs",
+                openApiPath: "/openapi.json",
+                ...(features === "enabled"
+                  ? { features: { processUser: false, credentialPlacements: true } }
+                  : {}),
+              }),
+      },
+    } as unknown as ControlPlaneClient,
+    requests,
+  };
 };
 
 const makeCtx = (client: ControlPlaneClient): SdkContext => ({
@@ -195,5 +226,55 @@ describe("workspace.credentials", () => {
       },
     ]);
     expect(answered.accounts.claude).toEqual({ connectedAccountId: "cacc_maria", name: "default" });
+  });
+  it("refuses live and prune before sending when support is absent or cannot be read", async () => {
+    for (const feature of ["absent", "failed"] as const) {
+      const { client, requests } = makeStub(feature);
+      const workspace = workspaceOver(client);
+      await expect(
+        workspace.credentials.put({
+          home: home.home,
+          onBehalfOf: "usr_maria",
+          claude: true,
+          live: [],
+        }),
+      ).rejects.toMatchObject({ code: "credential-placements-unsupported" });
+      await expect(workspace.credentials.prune(home.home, [])).rejects.toMatchObject({
+        code: "credential-placements-unsupported",
+      });
+      expect(requests).toEqual([]);
+    }
+  });
+
+  it("sends live and prune with support, and preserves receipts on put and list", async () => {
+    const receipts = [
+      {
+        provider: "claude" as const,
+        placementId: "cpl_1",
+        accountId: "cacc_maria",
+        revision: 3,
+        login: { kind: "subscription" as const },
+        pinned: true,
+      },
+    ];
+    const { client, requests } = makeStub("enabled", { ...home, placements: receipts });
+    const workspace = workspaceOver(client);
+    expect(
+      (
+        await workspace.credentials.put({
+          home: home.home,
+          onBehalfOf: "usr_maria",
+          claude: true,
+          live: ["cpl_1"],
+        })
+      ).placements,
+    ).toEqual(receipts);
+    expect((await workspace.credentials.list())[0]?.placements).toEqual(receipts);
+    expect((await workspace.credentials.prune(home.home, ["cpl_1"]))?.placements).toEqual(receipts);
+    expect(requests[0]).toMatchObject({ op: "put", body: { payload: { live: ["cpl_1"] } } });
+    expect(requests[2]).toMatchObject({
+      op: "prune",
+      body: { payload: { ownerUserId: "usr_owner", home: home.home, live: ["cpl_1"] } },
+    });
   });
 });

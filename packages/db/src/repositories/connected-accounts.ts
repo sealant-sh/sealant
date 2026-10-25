@@ -5,6 +5,7 @@ import { SqlError } from "effect/sql/SqlError";
 import { SealantDB } from "../client.js";
 import {
   connectedAccountDefaults,
+  workspaceCredentialPlacements,
   connectedAccounts,
   profileConnectedAccounts,
   type ConnectedAccount,
@@ -688,6 +689,10 @@ export const ConnectedAccountRepoLive = Layer.effect(
                 .returning();
 
               if (connectedAccount !== undefined) {
+                yield* db
+                  .update(workspaceCredentialPlacements)
+                  .set({ state: "removing" })
+                  .where(eq(workspaceCredentialPlacements.accountId, connectedAccount.id));
                 yield* db
                   .update(connectedAccountDefaults)
                   .set({ connectedAccountId: null, updatedAt: new Date() })

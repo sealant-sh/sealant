@@ -9,6 +9,8 @@
 import { CredentialCipher, type CredentialCipherService } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
+  CredentialPlacementRepo,
+  type CredentialPlacementRepoService,
   WorkspaceCredentialHomeRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
@@ -20,8 +22,11 @@ import {
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
-import { makeInMemoryCredentialHomes } from "@sealant/db/testing/credential-homes";
-import type { HomeCredentialChannel } from "@sealant/workspaces";
+import {
+  makeInMemoryCredentialHomes,
+  type InMemoryCredentialHomes,
+} from "@sealant/db/testing/credential-homes";
+import { sweepCredentialPlacements, type HomeCredentialChannel } from "@sealant/workspaces";
 import { Effect, Fiber, Layer, Result } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -64,6 +69,7 @@ const account = (overrides: Partial<ConnectedAccount>): ConnectedAccount =>
     encryptedPayload: `sealed:${JSON.stringify({ credentialsJson: claudeFile("at-alice") })}`,
     encryptionKeyId: "k-test",
     payloadSha256: "sha",
+    credentialRevision: 1,
     metadata: {},
     createdAt: new Date("2026-10-01T00:00:00.000Z"),
     updatedAt: new Date("2026-10-01T00:00:00.000Z"),
@@ -201,9 +207,15 @@ const newWorld = (
   defaults: ReadonlyMap<string, string> = chosenDefaults,
 ) => {
   const state = { instance };
-  const homes = makeInMemoryCredentialHomes(() => [state.instance]);
+  const currentAccounts = accounts.map((entry) => ({ ...entry }));
+  const homes = makeInMemoryCredentialHomes(() => [state.instance], {
+    accounts: () => currentAccounts,
+    defaults: () => [...defaults.values()],
+  });
   const ran: Ran[] = [];
   const exits: Array<number | "throw"> = [];
+  const afterRun: Array<() => void> = [];
+  let slowRead = false;
   const channel: HomeCredentialChannel = {
     run: (_target, script, stdin) =>
       Effect.suspend(() => {
@@ -216,20 +228,37 @@ const newWorld = (
             .filter((line) => line.length > 0)
             .map((line) => Buffer.from(line, "base64").toString("utf8")),
         });
+        afterRun.shift()?.();
         return Effect.succeed({ exitCode: next });
+      }),
+  };
+  const slowNextRead = () => {
+    slowRead = true;
+  };
+  const placements: CredentialPlacementRepoService = {
+    ...homes.placements,
+    state: (home, accountIds) =>
+      Effect.suspend(() => {
+        const slow = slowRead;
+        slowRead = false;
+        return slow
+          ? Effect.sleep("40 millis").pipe(Effect.andThen(homes.placements.state(home, accountIds)))
+          : homes.placements.state(home, accountIds);
       }),
   };
   const layer = Layer.mergeAll(
     Layer.succeed(CredentialCipher, fakeCipher),
     Layer.succeed(WorkspaceCredentialHomeRepo, homes.service),
+    Layer.succeed(CredentialPlacementRepo, placements),
     Layer.succeed(WorkspaceRepo, {
       getWorkspaceById: (id: string) => Effect.succeed(id === workspace.id ? workspace : undefined),
     } as unknown as WorkspaceRepoService),
     Layer.succeed(ConnectedAccountRepo, {
-      getById: (id: string) => Effect.succeed(accounts.find((candidate) => candidate.id === id)),
+      getById: (id: string) =>
+        Effect.succeed(currentAccounts.find((candidate) => candidate.id === id)),
       getByOwnerProviderName: (input: { ownerUserId: string; provider: string; name: string }) =>
         Effect.succeed(
-          accounts.find(
+          currentAccounts.find(
             (candidate) =>
               candidate.ownerUserId === input.ownerUserId &&
               candidate.provider === input.provider &&
@@ -239,12 +268,13 @@ const newWorld = (
         ),
       getDefault: (input: { ownerUserId: string; provider: string }) =>
         Effect.succeed(
-          accounts.find(
+          currentAccounts.find(
             (candidate) => candidate.id === defaults.get(`${input.ownerUserId} ${input.provider}`),
           ),
         ),
     } as unknown as ConnectedAccountRepoService),
     Layer.succeed(WorkspaceRuntimeInstanceRepo, {
+      listRunningInstances: () => Effect.succeed([state.instance]),
       getRuntimeInstanceByRunId: (runId: string) =>
         Effect.succeed(state.instance.runId === runId ? state.instance : undefined),
     } as unknown as WorkspaceRuntimeInstanceRepoService),
@@ -270,6 +300,7 @@ const newWorld = (
       readonly pi?: string | null;
       readonly opencode?: string | null;
       readonly partial?: boolean;
+      readonly live?: readonly string[];
       readonly uid?: number;
       readonly gid?: number;
     },
@@ -298,7 +329,29 @@ const newWorld = (
       routes.listWorkspaceCredentials({ workspaceId: workspace.id, query: { ownerUserId: OWNER } }),
     );
 
-  return { state, homes, ran, exits, put, release, list };
+  const prune = (live: readonly string[]) =>
+    run(
+      routes.pruneWorkspaceCredentials({
+        workspaceId: workspace.id,
+        payload: { ownerUserId: OWNER, home: HOME, live },
+        homeChannel: channel,
+      }),
+    );
+  const sweep = () => run(sweepCredentialPlacements({ homeChannel: channel }));
+  return {
+    state,
+    homes,
+    ran,
+    exits,
+    afterRun,
+    slowNextRead,
+    put,
+    release,
+    list,
+    prune,
+    sweep,
+    currentAccounts,
+  };
 };
 
 const succeeded = <A, E>(result: Result.Result<A, E>): A => {
@@ -310,6 +363,11 @@ const failed = <A, E>(result: Result.Result<A, E>): E => {
   if (!Result.isFailure(result)) throw new Error("expected a refusal");
   return result.failure;
 };
+
+const heldLogins = (world: { readonly homes: InMemoryCredentialHomes }) =>
+  [...world.homes.placementRows.values()]
+    .filter((row) => row.state === "ready")
+    .map((row) => ({ provider: row.provider, connectedAccountId: row.accountId }));
 
 describe("putWorkspaceCredentials", () => {
   it("writes the person's logins into the home as copies and records the home as theirs", async () => {
@@ -323,7 +381,7 @@ describe("putWorkspaceCredentials", () => {
       }),
     );
 
-    expect(answer).toEqual({
+    expect(answer).toMatchObject({
       workspaceId: "wks_1",
       runId: "run_1",
       home: {
@@ -381,10 +439,14 @@ describe("putWorkspaceCredentials", () => {
     const failure = failed(await world.put({ onBehalfOfUserId: BOB, claude: "default" }));
     expect(failure).toMatchObject({ _tag: "WorkspaceConflictError", code: "home-held" });
     expect(world.ran).toHaveLength(1);
-    expect(world.homes.rows.get(`run_1 ${HOME}`)).toMatchObject({
-      onBehalfOfUserId: ALICE,
-      accounts: [{ provider: "claude", connectedAccountId: aliceClaude.id }],
-    });
+    expect(world.homes.rows.get(`run_1 ${HOME}`)).toMatchObject({ onBehalfOfUserId: ALICE });
+    expect(
+      [...world.homes.placementRows.values()].map((row) => [
+        row.provider,
+        row.accountId,
+        row.state,
+      ]),
+    ).toEqual([["claude", aliceClaude.id, "ready"]]);
   });
 
   it("lets the same person change an account and remove a provider they have not connected", async () => {
@@ -426,7 +488,9 @@ describe("putWorkspaceCredentials", () => {
         },
       );
       expect(world.ran).toEqual([]);
-      expect(world.homes.rows.size).toBe(0);
+      expect([...world.homes.placementRows.values()].some((row) => row.state === "ready")).toBe(
+        false,
+      );
     }
     const world = newWorld();
     expect(failed(await world.put({ onBehalfOfUserId: ALICE, claude: "broken" }))).toMatchObject({
@@ -482,7 +546,7 @@ describe("putWorkspaceCredentials", () => {
     // The stored refresh token never leaves the store.
     expect(world.ran[0]?.payloads.join("")).not.toContain("rt-chatgpt");
     expect(world.ran[0]?.script).toContain("openai-codex");
-    expect(world.homes.rows.get(`run_1 ${HOME}`)?.accounts).toEqual([
+    expect(heldLogins(world)).toEqual([
       { provider: "pi", connectedAccountId: aliceChatGpt.id },
       { provider: "opencode", connectedAccountId: aliceChatGpt.id },
     ]);
@@ -576,9 +640,7 @@ describe("putWorkspaceCredentials", () => {
       expect.objectContaining({ provider: "github", code: "connected-account-missing" }),
     ]);
     expect(world.ran[1]?.script).toContain('rm -f "$home/.config/gh/hosts.yml"');
-    expect(world.homes.rows.get(`run_1 ${HOME}`)?.accounts).toEqual([
-      { provider: "claude", connectedAccountId: aliceClaude.id },
-    ]);
+    expect(heldLogins(world)).toEqual([{ provider: "claude", connectedAccountId: aliceClaude.id }]);
   });
 
   it("a partial put leaves out an opencode file it cannot write there, and still writes and removes the rest", async () => {
@@ -603,9 +665,7 @@ describe("putWorkspaceCredentials", () => {
     const retry = world.ran[world.ran.length - 1];
     expect(retry?.payloads).toHaveLength(1);
     expect(retry?.script).toContain('rm -f "$home/.config/gh/hosts.yml"');
-    expect(world.homes.rows.get(`run_1 ${HOME}`)?.accounts).toEqual([
-      { provider: "claude", connectedAccountId: aliceClaude.id },
-    ]);
+    expect(heldLogins(world)).toEqual([{ provider: "claude", connectedAccountId: aliceClaude.id }]);
     // A whole put fails on the same file, naming it.
     const whole = newWorld();
     whole.exits.push(85);
@@ -621,7 +681,7 @@ describe("putWorkspaceCredentials", () => {
       [88, "github"],
     ] as const) {
       const world = newWorld();
-      succeeded(await world.put({ onBehalfOfUserId: ALICE, codex: "default" }));
+      succeeded(await world.put({ onBehalfOfUserId: ALICE, codex: null }));
       world.exits.push(exit, 0);
       const answer = succeeded(
         await world.put({
@@ -637,9 +697,9 @@ describe("putWorkspaceCredentials", () => {
       ]);
       const retry = world.ran[world.ran.length - 1];
       expect(retry?.payloads).toHaveLength(2);
-      expect(
-        world.homes.rows.get(`run_1 ${HOME}`)?.accounts.map((entry) => entry.provider),
-      ).toEqual(["claude", "codex", "github"].filter((name) => name !== provider));
+      expect(heldLogins(world).map((entry) => entry.provider)).toEqual(
+        ["claude", "codex", "github"].filter((name) => name !== provider),
+      );
     }
   });
 
@@ -689,7 +749,9 @@ describe("putWorkspaceCredentials", () => {
       _tag: "WorkspaceConflictError",
       code: "home-unusable",
     });
-    expect(world.homes.rows.size).toBe(0);
+    expect([...world.homes.placementRows.values()].some((row) => row.state === "ready")).toBe(
+      false,
+    );
   });
 
   it("releases a first take's marker when its owner's half refuses a link, so the home can be taken again", async () => {
@@ -707,7 +769,9 @@ describe("putWorkspaceCredentials", () => {
     expect(generation).toBeDefined();
     expect(world.ran[1]?.script).toContain(`'${generation ?? ""}'`);
     expect(world.ran[1]?.script).toContain('rm -f "$m"');
-    expect(world.homes.rows.size).toBe(0);
+    expect([...world.homes.placementRows.values()].some((row) => row.state === "ready")).toBe(
+      false,
+    );
   });
 
   it("answers an unusable or outside pi/opencode file as home-unusable, naming it, and clears the take", async () => {
@@ -727,7 +791,9 @@ describe("putWorkspaceCredentials", () => {
       expect(refusal.message).not.toContain("symbolic link");
       // The take's release followed.
       expect(world.ran).toHaveLength(2);
-      expect(world.homes.rows.size).toBe(0);
+      expect([...world.homes.placementRows.values()].some((row) => row.state === "ready")).toBe(
+        false,
+      );
     }
   });
 
@@ -752,7 +818,9 @@ describe("putWorkspaceCredentials", () => {
       expect(refusal.message).toContain("hard link");
       // The take's release followed.
       expect(world.ran).toHaveLength(2);
-      expect(world.homes.rows.size).toBe(0);
+      expect([...world.homes.placementRows.values()].some((row) => row.state === "ready")).toBe(
+        false,
+      );
     }
   });
 
@@ -797,23 +865,33 @@ describe("putWorkspaceCredentials", () => {
     expect(failed(await world.put({ onBehalfOfUserId: ALICE, claude: "default" }))).toMatchObject({
       _tag: "WorkspaceBadGatewayError",
     });
-    expect(world.homes.rows.size).toBe(0);
+    expect([...world.homes.placementRows.values()].some((row) => row.state === "ready")).toBe(
+      false,
+    );
     expect(world.ran).toHaveLength(1);
     expect(world.ran[0]?.payloads).toEqual([]);
     expect(world.ran[0]?.script).toContain(`rm -f "$home/.claude/.credentials.json"`);
     expect(world.ran[0]?.script).toContain(`rm -f "$m"`);
   });
 
-  it("keeps a held home's record when a later write is unconfirmed", async () => {
+  it("keeps a held home when a later write is unconfirmed, and leaves its slot to removal", async () => {
     const world = newWorld();
     succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default" }));
     world.exits.push("throw");
-    expect(failed(await world.put({ onBehalfOfUserId: ALICE, claude: "work" }))).toMatchObject({
-      _tag: "WorkspaceBadGatewayError",
-    });
-    expect(world.homes.rows.get(`run_1 ${HOME}`)?.accounts).toEqual([
-      { provider: "claude", connectedAccountId: aliceClaude.id },
+    const failure = failed(await world.put({ onBehalfOfUserId: ALICE, claude: "work" }));
+    expect(failure).toMatchObject({ _tag: "WorkspaceBadGatewayError" });
+    expect(failure.message).toContain("Core removes whatever of it landed");
+    expect(world.homes.rows.get(`run_1 ${HOME}`)).toMatchObject({ onBehalfOfUserId: ALICE });
+    expect(
+      [...world.homes.placementRows.values()].map((row) => [row.accountId, row.state]),
+    ).toEqual([
+      [aliceClaude.id, "ready"],
+      [aliceWork.id, "pending"],
     ]);
+    succeeded(await world.sweep());
+    expect(world.ran.at(-1)?.script).toContain('rm -f "$home/.claude/.credentials.json"');
+    expect(world.homes.placementRows.size).toBe(0);
+    expect(world.homes.rows.get(`run_1 ${HOME}`)).toMatchObject({ onBehalfOfUserId: ALICE });
   });
 
   it("fences each write by the home's hold: a take makes the marker, later writes check it", async () => {
@@ -841,7 +919,9 @@ describe("putWorkspaceCredentials", () => {
       _tag: "WorkspaceConflictError",
       code: "home-held",
     });
-    expect(world.homes.rows.size).toBe(0);
+    expect([...world.homes.placementRows.values()].some((row) => row.state === "ready")).toBe(
+      false,
+    );
   });
 
   it("makes a home that does not exist yet for the uid and gid it is given", async () => {
@@ -870,16 +950,16 @@ describe("putWorkspaceCredentials", () => {
     const put = world.put({ onBehalfOfUserId: ALICE, claude: "default" });
     await new Promise((resolve) => setTimeout(resolve, 20));
     // Alice's Claude is refreshed meanwhile: the token the put would have decrypted is revoked.
-    const index = accounts.findIndex((candidate) => candidate.id === aliceClaude.id);
-    const previous = accounts[index];
-    accounts[index] = account({
+    const index = world.currentAccounts.findIndex((candidate) => candidate.id === aliceClaude.id);
+    const previous = world.currentAccounts[index];
+    world.currentAccounts[index] = account({
       id: "cacc_alice_claude",
       encryptedPayload: `sealed:${JSON.stringify({ credentialsJson: claudeFile("at-alice-refreshed") })}`,
     });
     release();
     await holder;
     succeeded(await put);
-    if (previous !== undefined) accounts[index] = previous;
+    if (previous !== undefined) world.currentAccounts[index] = previous;
     expect(world.ran[0]?.payloads[0]).toContain("at-alice-refreshed");
   });
 
@@ -937,7 +1017,9 @@ describe("releaseWorkspaceCredentials", () => {
     for (const file of [".claude/.credentials.json", ".codex/auth.json", ".config/gh/hosts.yml"]) {
       expect(script).toContain(`rm -f "$home/${file}"`);
     }
-    expect(world.homes.rows.size).toBe(0);
+    expect([...world.homes.placementRows.values()].some((row) => row.state === "ready")).toBe(
+      false,
+    );
     expect(succeeded(await world.release()).released).toBe(false);
   });
 
@@ -963,7 +1045,7 @@ describe("listWorkspaceCredentials", () => {
     const world = newWorld();
     succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default" }));
     succeeded(await world.put({ onBehalfOfUserId: BOB, home: CONV, claude: "default" }));
-    expect(succeeded(await world.list()).homes).toEqual([
+    expect(succeeded(await world.list()).homes).toMatchObject([
       {
         home: HOME,
         onBehalfOfUserId: ALICE,
@@ -995,5 +1077,181 @@ describe("withRunPermit", () => {
     );
     expect(otherRun).toBe("ran");
     for (const fiber of held) await Effect.runPromise(Fiber.interrupt(fiber));
+  });
+});
+
+describe("placement receipts", () => {
+  it("writes ready bytes again, and pins a live provider slot across account and revision changes", async () => {
+    const world = newWorld();
+    const first = succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default" })).home
+      .placements?.[0];
+    expect(first).toMatchObject({ accountId: aliceClaude.id, revision: 1, pinned: false });
+    expect(
+      succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default" })).home
+        .placements?.[0],
+    ).toEqual(first);
+    expect(world.ran).toHaveLength(2);
+    expect(world.ran[1]?.payloads[0]).toContain("at-alice");
+    const live = [first?.placementId ?? "missing"];
+    expect(
+      succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "work", live })).home
+        .placements?.[0],
+    ).toEqual({ ...first, pinned: true });
+    const selected = world.currentAccounts.find((entry) => entry.id === aliceClaude.id);
+    if (selected === undefined) throw new Error("missing fixture account");
+    selected.credentialRevision = 2;
+    expect(
+      succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default", live })).home
+        .placements?.[0],
+    ).toEqual({ ...first, pinned: true });
+    expect(world.ran).toHaveLength(2);
+    expect(succeeded(await world.list()).homes[0]?.placements?.[0]?.revision).toBe(1);
+    expect(
+      succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default", live: [] })).home
+        .placements?.[0],
+    ).toMatchObject({ revision: 2, pinned: false });
+    expect(world.ran).toHaveLength(3);
+  });
+
+  it("null and a partial missing selection cannot remove a live provider's file", async () => {
+    const world = newWorld();
+    const receipt = succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default" })).home
+      .placements?.[0];
+    const live = [receipt?.placementId ?? "missing"];
+    expect(
+      succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: null, live })).home
+        .placements?.[0],
+    ).toMatchObject({ pinned: true });
+    succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "missing", partial: true, live }));
+    for (const ran of world.ran.slice(1)) {
+      expect(ran.script).not.toContain('rm -f "$home/.claude/.credentials.json"');
+    }
+    expect(succeeded(await world.list()).homes[0]?.placements).toHaveLength(1);
+  });
+
+  it("a receipt that is not ready in this home protects nothing and refuses nothing", async () => {
+    const world = newWorld();
+    expect(
+      succeeded(
+        await world.put({ onBehalfOfUserId: ALICE, claude: "default", live: ["cpl_elsewhere"] }),
+      ).home.placements?.[0],
+    ).toMatchObject({ accountId: aliceClaude.id, pinned: false });
+    expect(world.ran).toHaveLength(1);
+    succeeded(await world.prune(["cpl_elsewhere"]));
+  });
+
+  it("keeps the working login when a put is refused before anything was written", async () => {
+    const world = newWorld();
+    const working = succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default" })).home
+      .placements?.[0];
+    world.exits.push(86);
+    expect(failed(await world.put({ onBehalfOfUserId: ALICE, claude: "work" }))).toMatchObject({
+      code: "home-unusable",
+    });
+    expect([...world.homes.placementRows.values()]).toEqual([
+      expect.objectContaining({
+        id: working?.placementId,
+        accountId: aliceClaude.id,
+        state: "ready",
+      }),
+    ]);
+    expect(succeeded(await world.list()).homes[0]?.placements).toEqual([working]);
+  });
+
+  it("records no placement for a pi login the person's own login kept", async () => {
+    const world = newWorld();
+    world.exits.push(91);
+    const answer = succeeded(
+      await world.put({ onBehalfOfUserId: ALICE, pi: "chatgpt", opencode: "chatgpt" }),
+    );
+    expect(answer.home.placements?.map((entry) => entry.provider)).toEqual(["opencode"]);
+    expect(answer.home.accounts).toEqual({
+      opencode: { connectedAccountId: aliceChatGpt.id, name: "chatgpt" },
+    });
+  });
+
+  it("answers each of two puts racing for one home with the receipt of its own selection", async () => {
+    const world = newWorld();
+    succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default" }));
+    world.afterRun.push(world.slowNextRead);
+    const first = world.put({ onBehalfOfUserId: ALICE, claude: "work", live: [] });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const second = world.put({ onBehalfOfUserId: ALICE, claude: "default", live: [] });
+    const answers = await Promise.all([first, second]);
+    expect(answers.map((answer) => succeeded(answer).home.placements?.[0]?.accountId)).toEqual([
+      aliceWork.id,
+      aliceClaude.id,
+    ]);
+  });
+
+  it("prune preserves defaults and live receipts, then removes a stopped process's nondefault", async () => {
+    const world = newWorld();
+    const placed = succeeded(
+      await world.put({ onBehalfOfUserId: ALICE, claude: "work", github: "default" }),
+    );
+    const live =
+      placed.home.placements
+        ?.filter((entry) => entry.provider === "claude")
+        .map((entry) => entry.placementId) ?? [];
+    succeeded(await world.prune(live));
+    expect(succeeded(await world.list()).homes[0]?.placements).toHaveLength(2);
+    succeeded(await world.prune([]));
+    expect(succeeded(await world.list()).homes[0]?.placements).toEqual([
+      expect.objectContaining({ accountId: aliceGitHub.id }),
+    ]);
+    const count = world.ran.length;
+    succeeded(await world.prune([]));
+    expect(world.ran).toHaveLength(count);
+  });
+
+  it("answers no home when pruning one that holds nothing, naming nobody", async () => {
+    const world = newWorld();
+    expect(succeeded(await world.prune([]))).toEqual({ workspaceId: "wks_1", runId: "run_1" });
+  });
+
+  it("releases a first take a crash left unconfirmed, so another person can take the home", async () => {
+    const world = newWorld();
+    await Effect.runPromise(
+      world.homes.placements.transact({ runId: "run_1", home: HOME }, [], () => ({
+        result: undefined,
+        placements: [],
+        insertHome: { onBehalfOfUserId: ALICE, generation: "interrupted_take", releasing: true },
+      })),
+    );
+    expect(failed(await world.put({ onBehalfOfUserId: ALICE, claude: "default" }))).toMatchObject({
+      code: "home-busy",
+    });
+    succeeded(await world.sweep());
+    expect(world.homes.rows.size).toBe(0);
+    succeeded(await world.put({ onBehalfOfUserId: BOB, claude: "default" }));
+    expect(succeeded(await world.list()).homes[0]?.onBehalfOfUserId).toBe(BOB);
+  });
+
+  it("the sweep retains failed removals and completes a release when the executor returns", async () => {
+    const world = newWorld();
+    succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default" }));
+    world.exits.push("throw");
+    const failure = failed(await world.release());
+    expect(failure.message).toContain("Core finishes the release once the executor answers");
+    expect([...world.homes.placementRows.values()]).toEqual([
+      expect.objectContaining({ state: "removing" }),
+    ]);
+    expect(world.homes.rows.get(`run_1 ${HOME}`)?.releasing).toBe(true);
+    world.exits.push("throw");
+    succeeded(await world.sweep());
+    expect(world.homes.placementRows.size).toBe(1);
+    succeeded(await world.sweep());
+    expect(world.homes.placementRows.size).toBe(0);
+    expect(world.homes.rows.size).toBe(0);
+  });
+
+  it("a release the home refuses leaves it held and usable", async () => {
+    const world = newWorld();
+    succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default" }));
+    world.exits.push(81);
+    expect(failed(await world.release()).message).toContain("the home stays held");
+    expect(world.homes.rows.get(`run_1 ${HOME}`)?.releasing).toBe(false);
+    expect([...world.homes.placementRows.values()].map((row) => row.state)).toEqual(["ready"]);
+    succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "work" }));
   });
 });

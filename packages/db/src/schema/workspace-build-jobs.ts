@@ -3,7 +3,9 @@ import { sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
+  check,
   doublePrecision,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -263,19 +265,6 @@ export const workspaceCredentialHomeProviderValues = [
 export type WorkspaceCredentialHomeProvider =
   (typeof workspaceCredentialHomeProviderValues)[number];
 
-/** One account whose copy Core wrote into a home, and keeps refreshed there. */
-export interface WorkspaceCredentialHomeAccount {
-  readonly provider: WorkspaceCredentialHomeProvider;
-  readonly connectedAccountId: string;
-}
-
-/**
- * The logins Core wrote into one home of a running instance (docs/connected-accounts-design.md
- * §6c): one person per home while it is held, so a home never holds two people's logins and a
- * refresh push reaches only homes whose person owns the account. The row is the lock: every write
- * into the home (a put, a release, a refresh push) holds it `FOR UPDATE` across its control-channel
- * write, so no write lands over another's. Released (deleted) with the files, and with the instance.
- */
 export const workspaceCredentialHomes = pgTable(
   "workspace_credential_homes",
   {
@@ -291,10 +280,7 @@ export const workspaceCredentialHomes = pgTable(
      * checks the marker in the executor, so a late write from an earlier hold never lands.
      */
     generation: text().notNull(),
-    accounts: jsonb()
-      .$type<readonly WorkspaceCredentialHomeAccount[]>()
-      .notNull()
-      .default(sql`'[]'::jsonb`),
+    releasing: boolean().notNull().default(false),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),
@@ -305,6 +291,38 @@ export const workspaceCredentialHomes = pgTable(
   },
   (table) => [primaryKey({ columns: [table.runId, table.home] })],
 );
+
+export const workspaceCredentialPlacements = pgTable(
+  "workspace_credential_placements",
+  {
+    id: text().primaryKey(),
+    runId: text("run_id").notNull(),
+    home: text().notNull(),
+    provider: text({ enum: workspaceCredentialHomeProviderValues }).notNull(),
+    accountId: text("account_id").notNull(),
+    revision: integer().notNull(),
+    path: text().notNull(),
+    login: jsonb().$type<{ readonly kind: "subscription" }>().notNull(),
+    state: text({ enum: ["pending", "ready", "removing"] }).notNull(),
+    createdAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.runId, table.home],
+      foreignColumns: [workspaceCredentialHomes.runId, workspaceCredentialHomes.home],
+    }).onDelete("cascade"),
+    index("credential_placements_account_state_idx").on(table.accountId, table.state),
+    uniqueIndex("credential_placements_ready_slot_idx")
+      .on(table.runId, table.home, table.provider)
+      .where(sql`${table.state} = 'ready'`),
+    check("credential_placements_revision_positive", sql`${table.revision} > 0`),
+    check("credential_placements_state", sql`${table.state} in ('pending', 'ready', 'removing')`),
+  ],
+);
+
+export type WorkspaceCredentialPlacement = typeof workspaceCredentialPlacements.$inferSelect;
 
 /**
  * What the last drain observation concluded about a capture-sourced runtime (`capture-drain.ts`):

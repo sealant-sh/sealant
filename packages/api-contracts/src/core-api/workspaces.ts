@@ -836,8 +836,31 @@ export const putWorkspaceCredentialsRequestSchema = Schema.Struct({
    * of the whole put failing. Every other refusal still fails the put. Default false.
    */
   partial: Schema.optional(Schema.Boolean),
+  /**
+   * The placements the person's running processes hold in this home: a provider whose slot one of
+   * them holds is not written over with another login. Absent, nothing is held.
+   */
+  live: Schema.optional(Schema.Array(NonEmptyString)),
 });
 export type PutWorkspaceCredentialsRequest = typeof putWorkspaceCredentialsRequestSchema.Type;
+
+/** One login written into one home: its id stays the same while a refresh moves its revision. */
+export const credentialPlacementReceiptSchema = Schema.Struct({
+  placementId: NonEmptyString,
+  accountId: NonEmptyString,
+  revision: Schema.Int.check(Schema.isGreaterThan(0)),
+  login: Schema.Struct({ kind: Schema.Literal("subscription") }),
+  pinned: Schema.Boolean,
+});
+export type CredentialPlacementReceipt = typeof credentialPlacementReceiptSchema.Type;
+
+/** A receipt tagged with the home provider whose slot it occupies. */
+export const workspaceCredentialPlacementReceiptSchema = Schema.Struct({
+  provider: Schema.Literals(workspaceCredentialHomeProviders),
+  ...credentialPlacementReceiptSchema.fields,
+});
+export type WorkspaceCredentialPlacementReceipt =
+  typeof workspaceCredentialPlacementReceiptSchema.Type;
 
 /** One account whose copy a home holds. */
 export const workspaceHomeAccountSchema = Schema.Struct({
@@ -852,6 +875,8 @@ export const workspaceCredentialHomeSchema = Schema.Struct({
   home: NonEmptyString,
   /** The one person whose logins the home holds. */
   onBehalfOfUserId: NonEmptyString,
+  /** The logins written there, one receipt each. Absent from a server without placements. */
+  placements: Schema.optional(Schema.Array(workspaceCredentialPlacementReceiptSchema)),
   /** By provider; a provider the home holds no login for is absent. */
   accounts: Schema.Struct({
     claude: Schema.optional(workspaceHomeAccountSchema),
@@ -888,6 +913,21 @@ export const putWorkspaceCredentialsResponseSchema = Schema.Struct({
   skipped: Schema.optional(Schema.Array(workspaceCredentialSkipSchema)),
 });
 export type PutWorkspaceCredentialsResponse = typeof putWorkspaceCredentialsResponseSchema.Type;
+
+/** Remove every login of one home that is neither live nor the ready one of the person's default. */
+export const pruneWorkspaceCredentialsRequestSchema = Schema.Struct({
+  ownerUserId: NonEmptyString,
+  home: NonEmptyString,
+  live: Schema.Array(NonEmptyString),
+});
+export type PruneWorkspaceCredentialsRequest = typeof pruneWorkspaceCredentialsRequestSchema.Type;
+export const pruneWorkspaceCredentialsResponseSchema = Schema.Struct({
+  workspaceId: NonEmptyString,
+  runId: NonEmptyString,
+  /** Absent when the home holds nothing (any more). */
+  home: Schema.optional(workspaceCredentialHomeSchema),
+});
+export type PruneWorkspaceCredentialsResponse = typeof pruneWorkspaceCredentialsResponseSchema.Type;
 
 /** Release one home: its login files are removed and its record deleted. */
 export const releaseWorkspaceCredentialsQuerySchema = Schema.Struct({
@@ -1699,6 +1739,22 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         // The executor did not confirm the write.
         WorkspaceBadGatewayError,
         // SEALANT_CREDENTIALS_KEY is not configured, or Core cannot reach the executor.
+        WorkspaceServiceUnavailableError,
+        WorkspaceInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("pruneWorkspaceCredentials", "/:workspaceId/credentials/prune", {
+      params: workspaceIdParams,
+      payload: pruneWorkspaceCredentialsRequestSchema,
+      success: pruneWorkspaceCredentialsResponseSchema,
+      error: [
+        WorkspaceBadRequestError,
+        WorkspaceForbiddenError,
+        WorkspaceNotFoundError,
+        WorkspaceConflictError,
+        WorkspaceBadGatewayError,
         WorkspaceServiceUnavailableError,
         WorkspaceInternalServerError,
       ],

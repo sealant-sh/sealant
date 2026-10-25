@@ -188,7 +188,6 @@ export {
   makeWorkspaceCredentialHomeRepoLayer,
   type WorkspaceCredentialHomeOutcome,
   type WorkspaceCredentialHomeRepoService,
-  type WorkspaceCredentialHomeTarget,
 } from "./repositories/workspace-credential-homes.js";
 
 export {
@@ -350,6 +349,8 @@ export {
   ociImageBuildJobStatusValues,
   workspaceRuntimeInstances,
   workspaceCredentialHomes,
+  workspaceCredentialPlacements,
+  type WorkspaceCredentialPlacement,
   workspaceCredentialHomeFences,
   workspaceCredentialHomeProviderValues,
   workspaceRuntimeInstanceStatusValues,
@@ -417,7 +418,6 @@ export {
   type WorkspaceLaunchCredentialInjection,
   type WorkspaceRuntimeInstance,
   type WorkspaceCredentialHome,
-  type WorkspaceCredentialHomeAccount,
   type WorkspaceCredentialHomeProvider,
   type WorkspaceRuntimeInstanceStatus,
   type WorkspaceRuntimeInstanceStopReason,
@@ -486,3 +486,6 @@ export {
   workspaceBuildJobSelectSchema,
   workspaceBuildJobStatusSchema,
 } from "./validation.js";
+
+export * from "./credential-placements.js";
+export * from "./repositories/workspace-credential-placements.js";

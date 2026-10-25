@@ -64,6 +64,7 @@ export {
   HOME_SCRIPT_EXIT,
   homeCredentialProviderOf,
   homeLoginOfRefusal,
+  homeLoginsKept,
   homePathProblem,
   homeScriptRefusal,
   homeScriptStdin,
