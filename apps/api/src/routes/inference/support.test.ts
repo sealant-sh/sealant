@@ -42,6 +42,12 @@ describe("soundsLikeAuthFailure", () => {
     expect(soundsLikeAuthFailure("model overloaded, retry later")).toBe(false);
     expect(soundsLikeAuthFailure("max turns exceeded")).toBe(false);
   });
+
+  it("reads 401 as a word, never inside a number or an id", () => {
+    expect(soundsLikeAuthFailure("prompt is too long: 64010 tokens")).toBe(false);
+    expect(soundsLikeAuthFailure("request req_401abc failed")).toBe(false);
+    expect(soundsLikeAuthFailure("upstream answered HTTP 401")).toBe(true);
+  });
 });
 
 describe("extractJson", () => {

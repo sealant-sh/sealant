@@ -959,8 +959,9 @@ describe("inference.module 401 feedback", () => {
     expect(claude).not.toHaveProperty("code");
     expect(claude).toMatchObject({
       message:
-        "Your Claude API key ····wxyz was not accepted by Anthropic. It is not marked invalid; if the key was revoked, connect a new one.",
+        "Your Claude API key ····wxyz was not accepted by Anthropic. It is not marked invalid; if the key was revoked, connect a new one. (Invalid API key)",
     });
+    expect(codex).toMatchObject({ message: expect.stringContaining("(401 Unauthorized)") });
   });
 });
 
@@ -1119,6 +1120,7 @@ describe("inference.module on a Claude key, against the real CLI", () => {
     expect(error).toMatchObject({
       message: expect.stringContaining("was not accepted by Anthropic. It is not marked invalid"),
     });
+    expect(error).toMatchObject({ message: expect.stringMatching(/\(Invalid API key\b.*\)$/) });
     expect(error).not.toHaveProperty("code");
     expect(accounts.markInvalid).not.toHaveBeenCalled();
   }, 60_000);

@@ -64,7 +64,7 @@ export const providerCliEnv = (own: Readonly<Record<string, string>>): Record<st
 };
 
 export const soundsLikeAuthFailure = (message: string): boolean =>
-  /authentication_failed|invalid api key|oauth token|401|unauthorized|token.*(expired|revoked)/i.test(
+  /authentication_failed|invalid api key|oauth token|\b401\b|unauthorized|token.*(expired|revoked)/i.test(
     message,
   );
 
