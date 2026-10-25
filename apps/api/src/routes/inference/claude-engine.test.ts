@@ -17,6 +17,7 @@ const apiKey = "sk-ant-api03-FAKEenginekeyforthetests00000000000a1b2";
 const ambientKey = "sk-ant-api03-FAKEambientkeythatmustnotbeused0000zzzz";
 
 let fake: FakeAnthropic;
+const configDirs: string[] = [];
 
 beforeEach(async () => {
   fake = await startFakeAnthropic();
@@ -27,11 +28,15 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await expect
+    .poll(() => configDirs.filter((dir) => existsSync(dir)), { timeout: 10_000 })
+    .toEqual([]);
   await fake.close();
 });
 
 const keyStart = (): InferenceStartInput & { readonly configDir: string } => {
   const provisioned = provisionClaudeKeyDir({ apiKey });
+  configDirs.push(provisioned.configDir);
   return {
     configDir: provisioned.configDir,
     auth: {
