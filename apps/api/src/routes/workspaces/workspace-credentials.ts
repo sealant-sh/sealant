@@ -1,3 +1,5 @@
+import { posix } from "node:path";
+
 /**
  * A person's logins in one home of a running workspace (docs/connected-accounts-design.md §6c).
  *
@@ -48,12 +50,15 @@ import {
   type ProviderCredentialPayload,
 } from "@sealant/credentials";
 import {
+  CLAUDE_KEY_DIR,
   CredentialPlacementRepo,
   isClaudeKey,
   planHomePut,
   pruneHome,
   releaseHome,
   settleInDoubt,
+  WorkspaceAttemptRepo,
+  WorkspaceBuildJobRepo,
   WorkspaceCredentialHomeRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
@@ -230,7 +235,53 @@ const requireNotLaunchHome = (
       )
     : Effect.void;
 
-const homeLoginFor = (provider: WorkspaceCredentialHomeProvider, account: ConnectedAccount) =>
+const pathsOverlap = (a: string, b: string): boolean =>
+  a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+
+/**
+ * Why a Claude key cannot be placed in `home`, or `undefined` when it can: never in the launch
+ * home, whose `.claude` the shared layout links into saved state, and never where the run saves
+ * state (its working directory, a capture's harness home). A run whose spec Core cannot read is
+ * refused: nothing says where it saves.
+ */
+const claudeKeyHomeProblem = (runId: string, home: string) =>
+  Effect.gen(function* () {
+    if (home === LAUNCH_HOME) {
+      return `${LAUNCH_HOME} is the launch's home, whose .claude the shared layout links into saved state; a Claude API key is placed only in a person's own home.`;
+    }
+    const snapshot = yield* withInternalError(
+      (yield* WorkspaceAttemptRepo).getAttemptSnapshotByRunId(runId),
+      "Failed to load the workspace attempt snapshot.",
+    );
+    const spec =
+      snapshot?.resolvedSpecPayload ??
+      (yield* withInternalError(
+        (yield* WorkspaceBuildJobRepo).getLatestJobByRunId(runId),
+        "Failed to load the latest workspace build job.",
+      ))?.requestPayload;
+    if (spec === undefined) {
+      return `Core has no recorded spec for run ${runId}, so it cannot tell where the run saves state; a Claude API key is placed only where nothing saves it.`;
+    }
+    const source = spec.sources.workspace;
+    const keys = `${home}/${CLAUDE_KEY_DIR}`;
+    const saved = [
+      spec.runtime.workingDirectory,
+      ...(source.kind === "capture" && source.harnessHome !== undefined
+        ? [source.harnessHome]
+        : []),
+    ]
+      .map((root) => posix.normalize(root).replace(/\/+$/, "") || "/")
+      .find((root) => pathsOverlap(keys, root));
+    return saved === undefined
+      ? undefined
+      : `${keys} lies in ${saved}, which the workspace saves; a Claude API key is placed only where nothing saves it.`;
+  });
+
+const homeLoginFor = <E, R>(
+  provider: WorkspaceCredentialHomeProvider,
+  account: ConnectedAccount,
+  keyHomeProblem: Effect.Effect<string | undefined, E, R>,
+) =>
   Effect.gen(function* () {
     const accountProvider = workspaceCredentialHomeAccountProvider[provider];
     const cipher = yield* CredentialCipher;
@@ -271,6 +322,16 @@ const homeLoginFor = (provider: WorkspaceCredentialHomeProvider, account: Connec
             provider: accountProvider,
           }),
       });
+    }
+    if (isClaudeKey({ provider, login })) {
+      const problem = yield* keyHomeProblem;
+      if (problem !== undefined) {
+        return yield* new WorkspaceConflictError({
+          message: `Connected claude account "${account.name}" holds an API key. ${problem} Nothing was written.`,
+          code: "connected-account-unsupported",
+          provider: accountProvider,
+        });
+      }
     }
     return yield* Effect.try({
       try: () => ({ content: homeLoginFile(credential, account), login }),
@@ -420,6 +481,7 @@ export const putWorkspaceCredentials = (input: {
     const placements = yield* CredentialPlacementRepo;
     const homeKey = { runId: instance.runId, home: payload.home };
     const person = payload.onBehalfOfUserId;
+    const keyHomeProblem = yield* Effect.cached(claudeKeyHomeProblem(instance.runId, payload.home));
     const answer = yield* withRunPermit(
       instance.runId,
       payload.home,
@@ -474,7 +536,11 @@ export const putWorkspaceCredentials = (input: {
                   provider: workspaceCredentialHomeAccountProvider[provider],
                   selection,
                 });
-                return { provider, account, ...(yield* homeLoginFor(provider, account)) };
+                return {
+                  provider,
+                  account,
+                  ...(yield* homeLoginFor(provider, account, keyHomeProblem)),
+                };
               }).pipe(Effect.result);
               if (Result.isSuccess(resolved)) {
                 selected.push(resolved.success);

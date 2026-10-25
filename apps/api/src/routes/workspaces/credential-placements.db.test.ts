@@ -17,12 +17,14 @@ import {
   SealantDB,
   user,
   workspaceAttempts,
+  workspaceAttemptSnapshots,
   WorkspaceCredentialHomeRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
   type DB,
 } from "@sealant/db";
 import { runMigrations } from "@sealant/db/migrate";
+import { newWorkspaceSchema } from "@sealant/validators";
 import {
   HOME_SCRIPT_EXIT,
   pushCredentialCopy,
@@ -142,6 +144,16 @@ describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", 
           .insert(user)
           .values({ id: owner, name: "fake person", email: `${owner}@example.test` });
         yield* db.insert(workspaceAttempts).values({ id: runId, ownerUserId: owner });
+        const spec = newWorkspaceSchema.parse({
+          sources: { workspace: { url: "https://github.com/example/repo.git" } },
+          harness: { id: "claude-code" },
+        });
+        yield* db.insert(workspaceAttemptSnapshots).values({
+          runId,
+          userSpecPayload: spec,
+          resolvedSpecPayload: spec,
+          blueprintPayload: spec,
+        });
         const workspaces = yield* WorkspaceRepo;
         yield* workspaces.createWorkspace({
           id: workspaceId,
@@ -573,6 +585,29 @@ describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", 
     expect((await run(put(f, ex.channel, { claude: key.id, live }))).home.placements).toEqual(
       after,
     );
+  });
+
+  it("refuses a Claude key whose home lies where the run's recorded spec saves state", async () => {
+    const f = await fixture();
+    const ex = executor();
+    const key = await keyAccount(f, "claude", "key", CLAUDE_KEY);
+    const spec = newWorkspaceSchema.parse({
+      sources: { workspace: { url: "https://github.com/example/repo.git" } },
+      harness: { id: "claude-code" },
+      runtime: { workingDirectory: "/home" },
+    });
+    await run(
+      db.execute(
+        `UPDATE workspace_attempt_snapshots SET resolved_spec_payload = '${JSON.stringify(spec)}'::jsonb WHERE run_id = '${f.runId}'`,
+      ),
+    );
+    const refused = await run(put(f, ex.channel, { claude: key.id }).pipe(Effect.flip));
+    expect(refused).toMatchObject({
+      code: "connected-account-unsupported",
+      message: expect.stringContaining("lies in /home, which the workspace saves"),
+    });
+    expect(ex.writes).toEqual([]);
+    expect(await rows(f)).toEqual([]);
   });
 
   it("prune removes a rotated default key's older file", async () => {

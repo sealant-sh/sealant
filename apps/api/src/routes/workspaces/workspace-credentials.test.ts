@@ -11,6 +11,8 @@ import {
   ConnectedAccountRepo,
   CredentialPlacementRepo,
   type CredentialPlacementRepoService,
+  WorkspaceAttemptRepo,
+  WorkspaceBuildJobRepo,
   WorkspaceCredentialHomeRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
@@ -18,6 +20,8 @@ import {
   type ConnectedAccountRepoService,
   type Workspace,
   type WorkspaceLaunchCredentialInjection,
+  type WorkspaceAttemptRepoService,
+  type WorkspaceBuildJobRepoService,
   type WorkspaceRepoService,
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceRepoService,
@@ -150,6 +154,13 @@ const aliceClaudeKey = account({
   name: "key",
   encryptedPayload: `sealed:${JSON.stringify({ apiKey: "sk-ant-api03-FAKEclaudekeyforthetests000000wxyz" })}`,
 });
+const ownerClaudeKey = account({
+  id: "cacc_owner_claude_key",
+  ownerUserId: OWNER,
+  kind: "api-key",
+  name: "key",
+  encryptedPayload: `sealed:${JSON.stringify({ apiKey: "sk-ant-api03-FAKEownerkeyforthetests00000000wxyz" })}`,
+});
 const bobClaude = account({
   id: "cacc_bob_claude",
   ownerUserId: BOB,
@@ -168,6 +179,7 @@ const accounts: ConnectedAccount[] = [
   aliceCodexKey,
   aliceLegacyCodexKey,
   aliceClaudeKey,
+  ownerClaudeKey,
   bobClaude,
 ];
 
@@ -194,6 +206,21 @@ const instanceRow = (
 
 const workspace = { id: "wks_1", ownerUserId: OWNER, latestRunId: "run_1" } as Workspace;
 
+/** The parts of a recorded spec a Claude key put reads: where the run saves state. */
+interface SavedRoots {
+  readonly workingDirectory: string;
+  readonly harnessHome?: string;
+}
+const recordedSpec = (roots: SavedRoots) => ({
+  runtime: { workingDirectory: roots.workingDirectory },
+  sources: {
+    workspace:
+      roots.harnessHome === undefined
+        ? { kind: "git" }
+        : { kind: "capture", harnessHome: roots.harnessHome },
+  },
+});
+
 interface Ran {
   readonly script: string;
   /** The decoded payloads, in order. */
@@ -206,7 +233,10 @@ const newWorld = (
   instance: WorkspaceRuntimeInstance = instanceRow(),
   defaults: ReadonlyMap<string, string> = chosenDefaults,
 ) => {
-  const state = { instance };
+  const state: { instance: WorkspaceRuntimeInstance; saved: SavedRoots | undefined } = {
+    instance,
+    saved: { workingDirectory: "/workspace/repo" },
+  };
   const currentAccounts = accounts.map((entry) => ({ ...entry }));
   const homes = makeInMemoryCredentialHomes(() => [state.instance], {
     accounts: () => currentAccounts,
@@ -273,6 +303,17 @@ const newWorld = (
           ),
         ),
     } as unknown as ConnectedAccountRepoService),
+    Layer.succeed(WorkspaceAttemptRepo, {
+      getAttemptSnapshotByRunId: (runId: string) =>
+        Effect.succeed(
+          runId === state.instance.runId && state.saved !== undefined
+            ? { resolvedSpecPayload: recordedSpec(state.saved) }
+            : undefined,
+        ),
+    } as unknown as WorkspaceAttemptRepoService),
+    Layer.succeed(WorkspaceBuildJobRepo, {
+      getLatestJobByRunId: () => Effect.succeed(undefined),
+    } as unknown as WorkspaceBuildJobRepoService),
     Layer.succeed(WorkspaceRuntimeInstanceRepo, {
       listRunningInstances: () => Effect.succeed([state.instance]),
       getRuntimeInstanceByRunId: (runId: string) =>
@@ -593,6 +634,65 @@ describe("putWorkspaceCredentials", () => {
     expect(world.ran[0]?.payloads).toEqual(["sk-ant-api03-FAKEclaudekeyforthetests000000wxyz"]);
     expect(world.ran[0]?.script).toContain(`f="$home/.sealant/keys/${receipt?.placementId ?? ""}"`);
     expect(world.ran[0]?.script).not.toContain('f="$home/.claude/.credentials.json"');
+  });
+
+  it("refuses a Claude key in the launch home, with words and nothing written", async () => {
+    const world = newWorld();
+    expect(
+      failed(await world.put({ onBehalfOfUserId: OWNER, home: "/root", claude: "key" })),
+    ).toMatchObject({
+      code: "connected-account-unsupported",
+      provider: "claude",
+      message: expect.stringContaining("/root is the launch's home"),
+    });
+    expect(world.ran).toEqual([]);
+  });
+
+  it("refuses a Claude key where the run saves state, or where Core cannot tell", async () => {
+    const cases: ReadonlyArray<readonly [SavedRoots | undefined, string, string]> = [
+      [
+        { workingDirectory: "/workspace/repo", harnessHome: "/captured" },
+        "/captured/people/alice",
+        "lies in /captured, which the workspace saves",
+      ],
+      [{ workingDirectory: "/srv/work" }, "/srv/work/alice", "lies in /srv/work"],
+      [{ workingDirectory: "/workspace/repo", harnessHome: `${HOME}/.sealant` }, HOME, "lies in"],
+      [undefined, HOME, "no recorded spec"],
+    ];
+    for (const [saved, home, words] of cases) {
+      const world = newWorld();
+      world.state.saved = saved;
+      expect(
+        failed(await world.put({ onBehalfOfUserId: ALICE, home, claude: "key" })),
+      ).toMatchObject({
+        code: "connected-account-unsupported",
+        message: expect.stringContaining(words),
+      });
+      expect(world.ran).toEqual([]);
+      const partial = succeeded(
+        await world.put({
+          onBehalfOfUserId: ALICE,
+          home,
+          claude: "key",
+          github: "default",
+          partial: true,
+        }),
+      );
+      expect(partial.skipped).toEqual([
+        {
+          provider: "claude",
+          code: "connected-account-unsupported",
+          message: expect.stringContaining(words),
+        },
+      ]);
+      expect(world.ran).toHaveLength(1);
+      expect(world.ran[0]?.payloads).toEqual([expect.stringContaining("gho_alice")]);
+    }
+    const beside = newWorld();
+    beside.state.saved = { workingDirectory: "/workspace/repo", harnessHome: "/captured" };
+    expect(
+      succeeded(await beside.put({ onBehalfOfUserId: ALICE, claude: "key" })).home.placements,
+    ).toEqual([expect.objectContaining({ accountId: aliceClaudeKey.id })]);
   });
 
   it("refuses a Codex key as pi's login, with words and nothing written", async () => {
