@@ -20,14 +20,15 @@
  * an agent workspace, and nothing may touch the control plane's filesystem or network on the
  * model's behalf.
  *
- * Sessions live in a module-level map (deliberately NOT layer state: they must survive across
- * requests regardless of how the request-dependency layer is scoped) and expire after a few idle
- * minutes.
+ * Sessions live in a map built once with the live layer's value (deliberately NOT layer state:
+ * they must survive across requests regardless of how the request-dependency layer is scoped) and
+ * expire after a few idle minutes. Every way a session ends runs its `onSessionEnd` once.
  */
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query, type SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { providerLoginEnvNames } from "@sealant/api-contracts";
@@ -153,58 +154,6 @@ export class InferenceEngine extends Context.Service<InferenceEngine, InferenceE
 // Live implementation
 // ---------------------------------------------------------------------------------------------
 
-interface LiveSession {
-  readonly state: InferenceSessionState;
-  readonly close: () => void;
-  /** End-of-session hook (config-dir persist + cleanup); undefined for token auth. */
-  readonly onSessionEnd?: (() => Promise<void>) | undefined;
-}
-
-// Module-level on purpose — see the header comment.
-const sessions = new Map<string, LiveSession>();
-
-/**
- * Fire the end-of-session hook exactly once (callers only invoke this right after removing the
- * session from the map, so a double-fire cannot happen). Fire-and-forget: the exchange result
- * never waits on — or fails because of — the hook.
- */
-const notifySessionEnd = (session: LiveSession): void => {
-  if (session.onSessionEnd === undefined) {
-    return;
-  }
-  void session.onSessionEnd().catch((error: unknown) => {
-    console.warn("Inference onSessionEnd hook failed", { error });
-  });
-};
-
-let sweeper: NodeJS.Timeout | undefined;
-const ensureSweeper = (): void => {
-  if (sweeper !== undefined) {
-    return;
-  }
-  sweeper = setInterval(() => {
-    const now = Date.now();
-    for (const [id, session] of sessions) {
-      if (now - session.state.lastActivityAt > SESSION_IDLE_TTL_MS) {
-        session.state.expire("Inference session expired after inactivity.");
-        session.close();
-        sessions.delete(id);
-        notifySessionEnd(session);
-      }
-    }
-  }, SWEEP_INTERVAL_MS);
-  sweeper.unref?.();
-};
-
-const dropSession = (id: string): void => {
-  const session = sessions.get(id);
-  if (session !== undefined) {
-    session.close();
-    sessions.delete(id);
-    notifySessionEnd(session);
-  }
-};
-
 /**
  * An MCP server exposing the caller's tools with their JSON schemas verbatim. Handlers park on the
  * session until the caller posts results back over HTTP.
@@ -294,161 +243,255 @@ const toEngineError = (error: unknown, secret: string): InferenceEngineError => 
     : new InferenceEngineError("engine", message, { cause: error });
 };
 
-const startExchange = async (input: InferenceStartInput): Promise<InferenceEngineTurn> => {
-  ensureSweeper();
-  const sessionId = `inf_${randomUUID()}`;
-  const state = new InferenceSessionState(sessionId);
-  const mcpServer = buildCallerToolServer(state, input.tools);
+interface LiveSession {
+  readonly state: InferenceSessionState;
+  readonly close: () => void;
+  /** Settles once the CLI process has exited (at once if it never started). */
+  readonly exited: () => Promise<void>;
+  readonly onSessionEnd: (() => Promise<void>) | undefined;
+}
 
-  const useNativeStructuredOutput =
-    input.responseFormat?.type === "json" &&
-    typeof input.responseFormat.schema === "object" &&
-    input.responseFormat.schema !== null;
-  const jsonByInstruction = input.responseFormat?.type === "json" && !useNativeStructuredOutput;
-
-  const system = [
-    ...(input.system === undefined ? [] : [input.system]),
-    ...(jsonByInstruction
-      ? [
-          "Respond ONLY with a single valid JSON value — no prose, no markdown fences around anything else.",
-        ]
-      : []),
-  ].join("\n\n");
-
-  const exchange = query({
-    prompt: input.prompt,
-    options: {
-      env: buildEnv(input.auth),
-      ...authSettings(input.auth),
-      cwd: tmpdir(),
-      // Inference, not an agent workspace: no built-in tools, no filesystem settings, no partials.
-      tools: [],
-      settingSources: [],
-      includePartialMessages: false,
-      ...(system.length > 0 ? { systemPrompt: system } : {}),
-      ...(input.model === undefined ? {} : { model: input.model }),
-      maxTurns: input.maxTurns ?? DEFAULT_MAX_TURNS,
-      mcpServers: {
-        [CALLER_SERVER_NAME]: {
-          type: "sdk",
-          name: CALLER_SERVER_NAME,
-          instance: mcpServer,
-        },
-      },
-      // Auto-approve exactly the caller's tools; nothing else exists to approve.
-      allowedTools: input.tools.map((tool) => `mcp__${CALLER_SERVER_NAME}__${tool.name}`),
-      ...(useNativeStructuredOutput
-        ? {
-            outputFormat: {
-              type: "json_schema" as const,
-              schema: input.responseFormat?.schema as Record<string, unknown>,
-            },
-          }
-        : {}),
-    },
+/** Fire-and-forget: the exchange result never waits on, or fails because of, the hook. */
+const runSessionEnd = (onSessionEnd: (() => Promise<void>) | undefined): void => {
+  void onSessionEnd?.().catch((error: unknown) => {
+    console.warn("Inference onSessionEnd hook failed", { error });
   });
+};
 
-  sessions.set(sessionId, { state, close: () => exchange.close() });
+export interface ClaudeEngineOptions {
+  readonly query?: typeof query;
+  readonly turnTimeoutMs?: number;
+  readonly sessionIdleTtlMs?: number;
+  readonly sweepIntervalMs?: number;
+}
 
-  // Drive the exchange in the background; the session state is the rendezvous point.
-  void (async () => {
+const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineService => {
+  const runQuery = options.query ?? query;
+  const turnTimeoutMs = options.turnTimeoutMs ?? TURN_TIMEOUT_MS;
+  const sessionIdleTtlMs = options.sessionIdleTtlMs ?? SESSION_IDLE_TTL_MS;
+  const sweepIntervalMs = options.sweepIntervalMs ?? SWEEP_INTERVAL_MS;
+  const sessions = new Map<string, LiveSession>();
+
+  /**
+   * Every way a session ends comes here once: it leaves the map and closes, and its hook runs once
+   * the CLI has exited, so nothing the CLI writes on its way out lands in a directory already removed.
+   */
+  const dropSession = (id: string): void => {
+    const session = sessions.get(id);
+    if (session !== undefined) {
+      sessions.delete(id);
+      session.close();
+      void session.exited().then(() => runSessionEnd(session.onSessionEnd));
+    }
+  };
+
+  let sweeper: NodeJS.Timeout | undefined;
+  const ensureSweeper = (): void => {
+    if (sweeper !== undefined) {
+      return;
+    }
+    sweeper = setInterval(() => {
+      const now = Date.now();
+      for (const [id, session] of sessions) {
+        if (now - session.state.lastActivityAt > sessionIdleTtlMs) {
+          session.state.expire("Inference session expired after inactivity.");
+          dropSession(id);
+        }
+      }
+    }, sweepIntervalMs);
+    sweeper.unref?.();
+  };
+
+  const startExchange = async (input: InferenceStartInput): Promise<InferenceEngineTurn> => {
+    ensureSweeper();
+    const sessionId = `inf_${randomUUID()}`;
+    const state = new InferenceSessionState(sessionId);
+
+    const useNativeStructuredOutput =
+      input.responseFormat?.type === "json" &&
+      typeof input.responseFormat.schema === "object" &&
+      input.responseFormat.schema !== null;
+    const jsonByInstruction = input.responseFormat?.type === "json" && !useNativeStructuredOutput;
+
+    const system = [
+      ...(input.system === undefined ? [] : [input.system]),
+      ...(jsonByInstruction
+        ? [
+            "Respond ONLY with a single valid JSON value — no prose, no markdown fences around anything else.",
+          ]
+        : []),
+    ].join("\n\n");
+
+    let exited: Promise<void> = Promise.resolve();
+    const spawnClaudeCodeProcess = (spawnOptions: SpawnOptions) => {
+      const child = spawn(spawnOptions.command, spawnOptions.args, {
+        cwd: spawnOptions.cwd,
+        env: spawnOptions.env,
+        signal: spawnOptions.signal,
+        stdio: ["pipe", "pipe", "ignore"],
+      });
+      exited = new Promise((resolve) => {
+        child.once("exit", () => resolve());
+        child.once("error", () => resolve());
+      });
+      return child;
+    };
+
+    let exchange: ReturnType<typeof query>;
     try {
-      for await (const message of exchange) {
-        if (message.type === "assistant" && message.error !== undefined) {
+      exchange = runQuery({
+        prompt: input.prompt,
+        options: {
+          spawnClaudeCodeProcess,
+          env: buildEnv(input.auth),
+          ...authSettings(input.auth),
+          cwd: tmpdir(),
+          // Inference, not an agent workspace: no built-in tools, no filesystem settings, no partials.
+          tools: [],
+          settingSources: [],
+          includePartialMessages: false,
+          ...(system.length > 0 ? { systemPrompt: system } : {}),
+          ...(input.model === undefined ? {} : { model: input.model }),
+          maxTurns: input.maxTurns ?? DEFAULT_MAX_TURNS,
+          mcpServers: {
+            [CALLER_SERVER_NAME]: {
+              type: "sdk",
+              name: CALLER_SERVER_NAME,
+              instance: buildCallerToolServer(state, input.tools),
+            },
+          },
+          // Auto-approve exactly the caller's tools; nothing else exists to approve.
+          allowedTools: input.tools.map((tool) => `mcp__${CALLER_SERVER_NAME}__${tool.name}`),
+          ...(useNativeStructuredOutput
+            ? {
+                outputFormat: {
+                  type: "json_schema" as const,
+                  schema: input.responseFormat?.schema as Record<string, unknown>,
+                },
+              }
+            : {}),
+        },
+      });
+    } catch (error) {
+      runSessionEnd(input.onSessionEnd);
+      throw toEngineError(error, authSecret(input.auth));
+    }
+
+    sessions.set(sessionId, {
+      state,
+      close: () => exchange.close(),
+      exited: () => exited,
+      onSessionEnd: input.onSessionEnd,
+    });
+
+    // Drive the exchange in the background; the session state is the rendezvous point.
+    void (async () => {
+      try {
+        for await (const message of exchange) {
+          if (message.type === "assistant" && message.error !== undefined) {
+            state.fail(
+              new InferenceEngineError(
+                message.error === "authentication_failed" ? "auth" : "engine",
+                `Inference failed: ${message.error}`,
+              ),
+            );
+          }
+          if (message.type !== "result") {
+            continue;
+          }
+          if (message.subtype === "success") {
+            const json = useNativeStructuredOutput
+              ? message.structured_output
+              : jsonByInstruction
+                ? extractJson(message.result)
+                : undefined;
+            state.finish({
+              text: message.result,
+              ...(json === undefined ? {} : { json }),
+              usage: {
+                inputTokens: message.usage.input_tokens,
+                outputTokens: message.usage.output_tokens,
+              },
+            });
+          } else {
+            const detail = message.errors.length > 0 ? message.errors.join("; ") : message.subtype;
+            state.fail(toEngineError(new Error(detail), authSecret(input.auth)));
+          }
+        }
+        if (!state.isSettled) {
           state.fail(
-            new InferenceEngineError(
-              message.error === "authentication_failed" ? "auth" : "engine",
-              `Inference failed: ${message.error}`,
-            ),
+            new InferenceEngineError("engine", "Inference ended without producing a result."),
           );
         }
-        if (message.type !== "result") {
-          continue;
-        }
-        if (message.subtype === "success") {
-          const json = useNativeStructuredOutput
-            ? message.structured_output
-            : jsonByInstruction
-              ? extractJson(message.result)
-              : undefined;
-          state.finish({
-            text: message.result,
-            ...(json === undefined ? {} : { json }),
-            usage: {
-              inputTokens: message.usage.input_tokens,
-              outputTokens: message.usage.output_tokens,
-            },
-          });
-        } else {
-          const detail = message.errors.length > 0 ? message.errors.join("; ") : message.subtype;
-          state.fail(toEngineError(new Error(detail), authSecret(input.auth)));
-        }
+      } catch (error) {
+        state.fail(toEngineError(error, authSecret(input.auth)));
       }
-      if (!state.isSettled) {
-        state.fail(
-          new InferenceEngineError("engine", "Inference ended without producing a result."),
-        );
+    })();
+
+    return awaitTurn(sessionId, state, authSecret(input.auth));
+  };
+
+  /** The session's next turn; a done turn or any failure ends the session. */
+  const awaitTurn = async (
+    sessionId: string,
+    state: InferenceSessionState,
+    secret: string,
+  ): Promise<InferenceEngineTurn> => {
+    try {
+      const turn = await state.nextTurn(turnTimeoutMs);
+      if (turn.type === "done") {
+        dropSession(sessionId);
       }
+      return { sessionId, turn };
     } catch (error) {
-      state.fail(toEngineError(error, authSecret(input.auth)));
-    }
-  })();
-
-  try {
-    const turn = await state.nextTurn(TURN_TIMEOUT_MS);
-    if (turn.type === "done") {
+      state.expire("Inference exchange failed.");
       dropSession(sessionId);
+      throw toEngineError(error, secret);
     }
-    return { sessionId, turn };
-  } catch (error) {
-    state.expire("Inference exchange failed.");
-    dropSession(sessionId);
-    throw toEngineError(error, authSecret(input.auth));
-  }
-};
+  };
 
-const continueExchange = async (input: InferenceContinueInput): Promise<InferenceEngineTurn> => {
-  const session = sessions.get(input.sessionId);
-  if (session === undefined) {
-    throw new InferenceEngineError(
-      "session-not-found",
-      `Inference session not found (or expired): ${input.sessionId}. Start the exchange over.`,
-    );
-  }
-  for (const result of input.toolResults) {
-    const resolved = session.state.resolveToolResult(result.toolCallId, {
-      content: result.content,
-      isError: result.isError === true,
-    });
-    if (!resolved) {
+  const continueExchange = async (input: InferenceContinueInput): Promise<InferenceEngineTurn> => {
+    const session = sessions.get(input.sessionId);
+    if (session === undefined) {
       throw new InferenceEngineError(
-        "bad-tool-result",
-        `Unknown or already-settled toolCallId: ${result.toolCallId}.`,
+        "session-not-found",
+        `Inference session not found (or expired): ${input.sessionId}. Start the exchange over.`,
       );
     }
-  }
-  try {
-    const turn = await session.state.nextTurn(TURN_TIMEOUT_MS);
-    if (turn.type === "done") {
-      dropSession(input.sessionId);
+    for (const result of input.toolResults) {
+      const resolved = session.state.resolveToolResult(result.toolCallId, {
+        content: result.content,
+        isError: result.isError === true,
+      });
+      if (!resolved) {
+        throw new InferenceEngineError(
+          "bad-tool-result",
+          `Unknown or already-settled toolCallId: ${result.toolCallId}.`,
+        );
+      }
     }
-    return { sessionId: input.sessionId, turn };
-  } catch (error) {
-    session.state.expire("Inference exchange failed.");
-    dropSession(input.sessionId);
-    throw toEngineError(error, "");
-  }
+    return awaitTurn(input.sessionId, session.state, "");
+  };
+
+  return {
+    start: (input) =>
+      Effect.tryPromise({
+        try: () => startExchange(input),
+        catch: (error) => toEngineError(error, authSecret(input.auth)),
+      }),
+    continueSession: (input) =>
+      Effect.tryPromise({
+        try: () => continueExchange(input),
+        catch: (error) => toEngineError(error, ""),
+      }),
+  };
 };
 
-export const InferenceEngineLive = Layer.succeed(InferenceEngine, {
-  start: (input) =>
-    Effect.tryPromise({
-      try: () => startExchange(input),
-      catch: (error) => toEngineError(error, authSecret(input.auth)),
-    }),
-  continueSession: (input) =>
-    Effect.tryPromise({
-      try: () => continueExchange(input),
-      catch: (error) => toEngineError(error, ""),
-    }),
-});
+/**
+ * Build the live layer. The options shorten its timings and replace the SDK's `query` for tests;
+ * the defaults are production's.
+ */
+export const claudeEngineLayer = (options?: ClaudeEngineOptions): Layer.Layer<InferenceEngine> =>
+  Layer.succeed(InferenceEngine, makeClaudeEngine(options));
+
+export const InferenceEngineLive: Layer.Layer<InferenceEngine> = claudeEngineLayer();
