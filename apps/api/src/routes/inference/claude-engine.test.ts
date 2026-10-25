@@ -11,6 +11,7 @@ import {
   type ClaudeEngineOptions,
   type InferenceStartInput,
 } from "./claude-engine.js";
+import { openExchange } from "./exchange.js";
 import { startFakeAnthropic, type FakeAnthropic } from "./fake-anthropic.fixture.js";
 
 const apiKey = "sk-ant-api03-FAKEenginekeyforthetests00000000000a1b2";
@@ -39,12 +40,12 @@ const keyStart = (): InferenceStartInput & { readonly configDir: string } => {
   configDirs.push(provisioned.configDir);
   return {
     configDir: provisioned.configDir,
-    auth: {
-      kind: "api-key",
-      configDir: provisioned.configDir,
-      keyPath: provisioned.keyPath,
-      apiKey,
-    },
+    exchange: openExchange({
+      ownerUserId: "usr_1",
+      receipt: { accountId: "cacc_key", revision: 1, login: "api-key" },
+      login: { shape: "claude-key", apiKey },
+    }),
+    auth: { kind: "api-key", configDir: provisioned.configDir, keyPath: provisioned.keyPath },
     onSessionEnd: () => Promise.resolve(removeClaudeConfigDir(provisioned.configDir)),
     prompt: "hello",
     tools: [],
@@ -99,12 +100,23 @@ describe("claude engine cleanup", () => {
     await expect.poll(() => existsSync(input.configDir), { timeout: 10_000 }).toBe(false);
   }, 60_000);
 
-  it("removes the key dir when a parked exchange expires idle", async () => {
+  it("releases the key dir and the exchange when a parked exchange expires idle", async () => {
     fake.reply({ type: "toolUse", name: "mcp__caller__search", input: { q: "x" } });
     const input = { ...keyStart(), tools: [searchTool] };
-    const turn = await start(input, { sessionIdleTtlMs: 3_000, sweepIntervalMs: 100 });
+    const engine = Effect.runSync(
+      Effect.provide(
+        InferenceEngine,
+        claudeEngineLayer({ sessionIdleTtlMs: 3_000, sweepIntervalMs: 100 }),
+      ),
+    );
+
+    const turn = await Effect.runPromise(engine.start(input));
+    const held = engine.exchange(turn.sessionId);
+
     expect(turn.turn).toMatchObject({ type: "toolCalls", calls: [{ name: "search" }] });
+    expect(held).toBe(input.exchange);
     await expect.poll(() => existsSync(input.configDir), { timeout: 10_000 }).toBe(false);
+    expect(engine.exchange(turn.sessionId)).toBeUndefined();
   }, 60_000);
 
   it("removes the key dir when the exchange cannot be started", async () => {

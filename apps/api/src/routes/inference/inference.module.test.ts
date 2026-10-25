@@ -38,9 +38,14 @@ import {
 import { Effect, Layer } from "effect";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { InferenceEngineTurn, InferenceStartInput } from "./claude-engine.js";
+import type {
+  InferenceEngineService,
+  InferenceEngineTurn,
+  InferenceStartInput,
+} from "./claude-engine.js";
 import { claudeEngineLayer, InferenceEngine, InferenceEngineError } from "./claude-engine.js";
 import { CodexInferenceEngine, type CodexInferenceStartInput } from "./codex-engine.js";
+import type { Exchange } from "./exchange.js";
 import { startFakeAnthropic, type FakeAnthropic } from "./fake-anthropic.fixture.js";
 
 process.env["SEALANT_CREDENTIALS_KEY"] = Buffer.alloc(32, 7).toString("base64");
@@ -191,12 +196,15 @@ const makeLayers = (input: {
     Layer.succeed(ConnectedAccountRepo, input.accounts as unknown as ConnectedAccountRepoService),
     Layer.succeed(ProfileRepo, profilesStub() as unknown as ProfileRepoService),
     Layer.succeed(CredentialCipher, fakeCipher),
-    Layer.succeed(InferenceEngine, {
-      start: claudeStart,
-      continueSession: vi.fn(() =>
-        Effect.fail(new InferenceEngineError("session-not-found", "no session")),
-      ),
-    }),
+    Layer.succeed(
+      InferenceEngine,
+      stubEngine({
+        start: claudeStart,
+        continueSession: vi.fn(() =>
+          Effect.fail(new InferenceEngineError("session-not-found", "no session")),
+        ),
+      }),
+    ),
     Layer.succeed(CodexInferenceEngine, { start: codexStart }),
     Layer.succeed(InferenceUsageRepo, {
       tokensOn: () => Effect.succeed(0),
@@ -209,6 +217,23 @@ const makeLayers = (input: {
 
   const engines: EngineStubs = { claudeStart, codexStart };
   return { layer, engines, recorded };
+};
+
+/** An engine stub that, like the live engine, holds each started exchange under its session. */
+const stubEngine = (
+  engine: Pick<InferenceEngineService, "start" | "continueSession">,
+): InferenceEngineService => {
+  const exchanges = new Map<string, Exchange>();
+  return {
+    exchange: (sessionId) => exchanges.get(sessionId),
+    start: (input) =>
+      engine
+        .start(input)
+        .pipe(
+          Effect.tap((turn) => Effect.sync(() => exchanges.set(turn.sessionId, input.exchange))),
+        ),
+    continueSession: engine.continueSession,
+  };
 };
 
 const run = <A, E>(effect: Effect.Effect<A, E, never>): Promise<A> => Effect.runPromise(effect);
@@ -444,21 +469,24 @@ describe("inference.module provider routing", () => {
     const { layer } = makeLayers({ accounts: accountsStub() });
     const reading = Layer.mergeAll(
       layer,
-      Layer.succeed(InferenceEngine, {
-        start: (start) =>
-          Effect.promise(async () => {
-            if (start.auth.kind !== "api-key") throw new Error("expected api-key auth");
-            configDir = start.auth.configDir;
-            seen = {
-              dirMode: statSync(start.auth.configDir).mode & 0o777,
-              fileMode: statSync(start.auth.keyPath).mode & 0o777,
-              key: readFileSync(start.auth.keyPath, "utf8"),
-            };
-            await start.onSessionEnd?.();
-            return doneTurn("claude answer");
-          }),
-        continueSession: () => Effect.fail(new InferenceEngineError("session-not-found", "none")),
-      }),
+      Layer.succeed(
+        InferenceEngine,
+        stubEngine({
+          start: (start) =>
+            Effect.promise(async () => {
+              if (start.auth.kind !== "api-key") throw new Error("expected api-key auth");
+              configDir = start.auth.configDir;
+              seen = {
+                dirMode: statSync(start.auth.configDir).mode & 0o777,
+                fileMode: statSync(start.auth.keyPath).mode & 0o777,
+                key: readFileSync(start.auth.keyPath, "utf8"),
+              };
+              await start.onSessionEnd?.();
+              return doneTurn("claude answer");
+            }),
+          continueSession: () => Effect.fail(new InferenceEngineError("session-not-found", "none")),
+        }),
+      ),
     );
 
     const response = await run(
@@ -482,10 +510,10 @@ describe("inference.module provider routing", () => {
     const { layer } = makeLayers({ accounts });
     const withParkedSession = Layer.mergeAll(
       layer,
-      Layer.succeed(InferenceEngine, {
-        start: endingWith(parked),
-        continueSession: continued,
-      }),
+      Layer.succeed(
+        InferenceEngine,
+        stubEngine({ start: endingWith(parked), continueSession: continued }),
+      ),
     );
     await run(
       respond(newExchange({ credentials: { claude: "cacc_claude" } })).pipe(
@@ -533,10 +561,10 @@ const parkingLayers = (
   const { layer } = makeLayers({ accounts });
   return Layer.mergeAll(
     layer,
-    Layer.succeed(InferenceEngine, {
-      start: endingWith(parkedTurn),
-      continueSession: vi.fn(continued),
-    }),
+    Layer.succeed(
+      InferenceEngine,
+      stubEngine({ start: endingWith(parkedTurn), continueSession: vi.fn(continued) }),
+    ),
   );
 };
 
@@ -754,13 +782,18 @@ describe("inference.module 401 feedback", () => {
     });
     const claudeLayer = Layer.mergeAll(
       layer,
-      Layer.succeed(InferenceEngine, {
-        start: (start) =>
-          Effect.promise(async () => start.onSessionEnd?.()).pipe(
-            Effect.andThen(Effect.fail(new InferenceEngineError("auth-words", "Invalid API key"))),
-          ),
-        continueSession: () => Effect.fail(new InferenceEngineError("session-not-found", "none")),
-      }),
+      Layer.succeed(
+        InferenceEngine,
+        stubEngine({
+          start: (start) =>
+            Effect.promise(async () => start.onSessionEnd?.()).pipe(
+              Effect.andThen(
+                Effect.fail(new InferenceEngineError("auth-words", "Invalid API key")),
+              ),
+            ),
+          continueSession: () => Effect.fail(new InferenceEngineError("session-not-found", "none")),
+        }),
+      ),
     );
 
     const codex = await runFlipped(
@@ -789,6 +822,7 @@ describe("inference.module on a Claude key, against the real CLI", () => {
   const realEngine = Effect.runSync(Effect.provide(InferenceEngine, claudeEngineLayer()));
   const configDirs: string[] = [];
   const engineLayer = Layer.succeed(InferenceEngine, {
+    exchange: realEngine.exchange,
     start: (start) => {
       configDirs.push(start.auth.configDir);
       return realEngine.start(start);
@@ -946,6 +980,32 @@ describe("inference.module on a Claude key, against the real CLI", () => {
 
     expect(error).toMatchObject({ code: "connected-account-refused" });
     expect(accounts.markInvalid).toHaveBeenCalledWith({ id: "cacc_claude_key", revision: 1 });
+  }, 60_000);
+
+  it("keeps the exchange through a batch with a bad id, so a corrected one finishes it", async () => {
+    const accounts = accountsStub();
+    fake.reply(
+      { type: "toolUse", name: "mcp__caller__search", input: {} },
+      { type: "text", text: "found it" },
+    );
+    const layer = withRealEngine(accounts);
+
+    const parked = await run(respond(keyExchange).pipe(Effect.provide(layer)));
+    if (parked.turn.type !== "toolCalls") throw new Error("expected a tool round");
+    const toolCallId = parked.turn.calls[0]?.toolCallId ?? "";
+    const results = (ids: readonly string[]) =>
+      respond({
+        ownerUserId: "usr_1",
+        sessionId: parked.sessionId,
+        toolResults: ids.map((id) => ({ toolCallId: id, content: "found" })),
+      }).pipe(Effect.provide(layer));
+
+    const refused = await runFlipped(results([toolCallId, "tc_bogus"]));
+    const finished = await run(results([toolCallId]));
+
+    expect(refused).toBeInstanceOf(InferenceBadRequestError);
+    expect(refused).toMatchObject({ receipt: { accountId: "cacc_claude_key" } });
+    expect(finished.turn).toMatchObject({ type: "text", text: "found it" });
   }, 60_000);
 
   it("answers superseded to a late 401 from a key replaced since the exchange started", async () => {

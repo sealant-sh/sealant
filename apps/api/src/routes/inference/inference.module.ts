@@ -14,7 +14,6 @@ import {
   InferenceInternalServerError,
   InferenceNotFoundError,
   InferenceUnavailableError,
-  type InferenceReceipt,
   type InferenceRespondRequest,
   type InferenceRespondResponse,
   type InferenceTurn,
@@ -24,7 +23,6 @@ import {
   codexLoginFile,
   CredentialCipher,
   extractClaudeOauthCredentials,
-  extractCodexSecrets,
   loginClassOf,
   parseStoredCredential,
   type ProviderCredentialPayload,
@@ -58,6 +56,7 @@ import {
   type InferenceEngineTurn,
 } from "./claude-engine.js";
 import { CodexInferenceEngine } from "./codex-engine.js";
+import { openExchange, type Exchange, type ExchangeLogin } from "./exchange.js";
 import { redactSecrets, redactStrings } from "./support.js";
 
 const toErrorMessage = (error: unknown, fallback: string): string =>
@@ -163,43 +162,7 @@ const resolveAccount = (input: {
     return account;
   });
 
-type ExchangeLogin =
-  | { readonly shape: "claude-key"; readonly apiKey: string }
-  | { readonly shape: "claude-setup-token"; readonly token: string }
-  | {
-      readonly shape: "claude-session";
-      readonly credentialsJson: string;
-      readonly accessToken: string;
-      readonly refreshToken: string | undefined;
-    }
-  | { readonly shape: "codex-key"; readonly apiKey: string }
-  | { readonly shape: "codex-auth-json"; readonly authJson: string };
-
 type LoginShape = ExchangeLogin["shape"];
-
-interface Exchange {
-  readonly ownerUserId: string;
-  readonly receipt: InferenceReceipt;
-  readonly login: ExchangeLogin;
-}
-
-const secretsOf = (login: ExchangeLogin): readonly (string | undefined)[] => {
-  switch (login.shape) {
-    case "claude-key":
-    case "codex-key": {
-      return [login.apiKey];
-    }
-    case "claude-setup-token": {
-      return [login.token];
-    }
-    case "claude-session": {
-      return [login.accessToken, login.refreshToken];
-    }
-    case "codex-auth-json": {
-      return extractCodexSecrets(login.authJson);
-    }
-  }
-};
 
 const exchangeLoginOf = (...credential: ProviderCredentialPayload): ExchangeLogin => {
   const [provider, payload] = credential;
@@ -240,8 +203,9 @@ const readLogin = (account: ConnectedAccount, payloadJson: string) =>
 const provisionError = (what: string) => (cause: unknown) =>
   new InferenceEngineError("engine", toErrorMessage(cause, `Failed to provision the ${what}.`));
 
-const startEngine = (login: ExchangeLogin, payload: InferenceRespondRequest) =>
+const startEngine = (exchange: Exchange, payload: InferenceRespondRequest) =>
   Effect.gen(function* () {
+    const { login } = exchange;
     const common = {
       prompt: payload.prompt ?? "",
       ...(payload.system === undefined ? {} : { system: payload.system }),
@@ -263,7 +227,7 @@ const startEngine = (login: ExchangeLogin, payload: InferenceRespondRequest) =>
       return yield* engine.start({
         ...common,
         codexHome: provisioned.codexHome,
-        secrets: secretsOf(login).filter((secret) => secret !== undefined),
+        secrets: exchange.secrets,
         onSessionEnd: () => Promise.resolve(removeCodexHome(provisioned.codexHome)),
       });
     }
@@ -271,6 +235,7 @@ const startEngine = (login: ExchangeLogin, payload: InferenceRespondRequest) =>
     const engine = yield* InferenceEngine;
     const claudeCommon = {
       ...common,
+      exchange,
       ...(payload.maxTurns === undefined ? {} : { maxTurns: payload.maxTurns }),
       tools: payload.tools ?? [],
     };
@@ -296,11 +261,7 @@ const startEngine = (login: ExchangeLogin, payload: InferenceRespondRequest) =>
         });
         return yield* engine.start({
           ...claudeCommon,
-          auth: {
-            kind: "config-dir",
-            configDir: provisioned.configDir,
-            accessToken: login.accessToken,
-          },
+          auth: { kind: "config-dir", configDir: provisioned.configDir },
           onSessionEnd: () => Promise.resolve(removeClaudeConfigDir(provisioned.configDir)),
         });
       }
@@ -311,12 +272,7 @@ const startEngine = (login: ExchangeLogin, payload: InferenceRespondRequest) =>
         });
         return yield* engine.start({
           ...claudeCommon,
-          auth: {
-            kind: "api-key",
-            configDir: provisioned.configDir,
-            keyPath: provisioned.keyPath,
-            apiKey: login.apiKey,
-          },
+          auth: { kind: "api-key", configDir: provisioned.configDir, keyPath: provisioned.keyPath },
           onSessionEnd: () => Promise.resolve(removeClaudeConfigDir(provisioned.configDir)),
         });
       }
@@ -404,31 +360,15 @@ const authFailure = (exchange: Exchange, reason: AuthReason, detail: string) =>
     }
   });
 
-const EXCHANGES_MAX = 10_000;
-const parkedExchanges = new Map<string, Exchange>();
-
-const parkExchange = (sessionId: string, exchange: Exchange): void => {
-  if (!parkedExchanges.has(sessionId) && parkedExchanges.size >= EXCHANGES_MAX) {
-    const oldest = parkedExchanges.keys().next();
-    if (oldest.done !== true) parkedExchanges.delete(oldest.value);
-  }
-  parkedExchanges.set(sessionId, exchange);
-};
-
 const redacting =
   (exchange: Exchange) =>
   (text: string): string =>
-    redactProviderKeys(redactSecrets(text, secretsOf(exchange.login)));
+    redactProviderKeys(redactSecrets(text, exchange.secrets));
 
 const answerTurn = (
   exchange: Exchange,
   engineTurn: InferenceEngineTurn,
 ): InferenceRespondResponse => {
-  if (engineTurn.turn.type === "toolCalls") {
-    parkExchange(engineTurn.sessionId, exchange);
-  } else {
-    parkedExchanges.delete(engineTurn.sessionId);
-  }
   const redact = redacting(exchange);
   const turn: InferenceTurn =
     engineTurn.turn.type === "done"
@@ -456,9 +396,8 @@ const answerTurn = (
   };
 };
 
-const failTurn = (exchange: Exchange, sessionId: string | undefined, raw: InferenceEngineError) =>
+const failTurn = (exchange: Exchange, raw: InferenceEngineError) =>
   Effect.gen(function* () {
-    if (sessionId !== undefined) parkedExchanges.delete(sessionId);
     const { receipt } = exchange;
     const message = redacting(exchange)(raw.message);
     switch (raw.reason) {
@@ -482,11 +421,10 @@ const failTurn = (exchange: Exchange, sessionId: string | undefined, raw: Infere
 
 const settleTurn = <R>(
   exchange: Exchange,
-  sessionId: string | undefined,
   turn: Effect.Effect<InferenceEngineTurn, InferenceEngineError, R>,
 ) =>
   turn.pipe(
-    Effect.catch((error) => failTurn(exchange, sessionId, error)),
+    Effect.catch((error) => failTurn(exchange, error)),
     Effect.map((engineTurn) => answerTurn(exchange, engineTurn)),
   );
 
@@ -495,17 +433,16 @@ const continueExchange = (
   toolResults: NonNullable<InferenceRespondRequest["toolResults"]>,
 ) =>
   Effect.gen(function* () {
-    const exchange = parkedExchanges.get(payload.sessionId);
+    const engine = yield* InferenceEngine;
+    const exchange = engine.exchange(payload.sessionId);
     // Another owner's session answers exactly like one that does not exist.
     if (exchange === undefined || exchange.ownerUserId !== payload.ownerUserId) {
       return yield* new InferenceNotFoundError({
         message: `Inference session not found (or expired): ${payload.sessionId}. Start the exchange over.`,
       });
     }
-    const engine = yield* InferenceEngine;
     return yield* settleTurn(
       exchange,
-      payload.sessionId,
       engine.continueSession({ sessionId: payload.sessionId, toolResults }),
     );
   });
@@ -531,11 +468,11 @@ const startExchange = (payload: InferenceRespondRequest) =>
       "Failed to decrypt the connected account credential.",
     );
     const { login, loginClass } = yield* readLogin(account, payloadJson);
-    const exchange: Exchange = {
+    const exchange = openExchange({
       ownerUserId: payload.ownerUserId,
       receipt: { accountId: account.id, revision: account.credentialRevision, login: loginClass },
       login,
-    };
+    });
 
     if (payload.allowedLogin === "subscription" && exchange.receipt.login === "api-key") {
       return yield* new InferenceConflictError({
@@ -564,7 +501,7 @@ const startExchange = (payload: InferenceRespondRequest) =>
       Effect.asVoid,
     );
 
-    return yield* settleTurn(exchange, undefined, startEngine(login, payload));
+    return yield* settleTurn(exchange, startEngine(exchange, payload));
   });
 
 const respondUnmetered = (payload: InferenceRespondRequest) =>
