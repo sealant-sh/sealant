@@ -226,7 +226,10 @@ const turnFailure = (
     return new InferenceEngineError("auth-401", "Inference failed: the provider answered 401.");
   }
   if (assistantError === "authentication_failed") {
-    return new InferenceEngineError("auth-words", "Inference failed: authentication_failed");
+    return new InferenceEngineError(
+      "auth-words",
+      detail.length > 0 ? redactSecrets(detail, secrets) : "authentication_failed",
+    );
   }
   return assistantError === undefined
     ? toEngineError(new Error(detail), secrets)

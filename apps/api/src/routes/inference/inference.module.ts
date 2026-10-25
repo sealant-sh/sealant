@@ -340,7 +340,7 @@ const invalidate = (exchange: Exchange, reason: AuthReason) =>
       )
     : Effect.succeed<Invalidation>("unmarked");
 
-const keyRefusal = (login: KeyLogin, invalidation: Invalidation) => {
+const keyRefusal = (login: KeyLogin, invalidation: Invalidation, detail: string) => {
   const provider = login.shape === "claude-key" ? "Anthropic" : "OpenAI";
   const key = `Your ${login.shape === "claude-key" ? "Claude" : "Codex"} API key ····${login.apiKey.slice(-4)}`;
   switch (invalidation) {
@@ -358,7 +358,7 @@ const keyRefusal = (login: KeyLogin, invalidation: Invalidation) => {
     }
     case "unmarked": {
       return {
-        message: `${key} was not accepted by ${provider}. It is not marked invalid; if the key was revoked, connect a new one.`,
+        message: `${key} was not accepted by ${provider}. It is not marked invalid; if the key was revoked, connect a new one. (${detail})`,
       } as const;
     }
   }
@@ -371,7 +371,7 @@ const authFailure = (exchange: Exchange, reason: AuthReason, detail: string) =>
     switch (login.shape) {
       case "claude-key":
       case "codex-key": {
-        return new InferenceConflictError({ ...keyRefusal(login, invalidation), receipt });
+        return new InferenceConflictError({ ...keyRefusal(login, invalidation, detail), receipt });
       }
       case "claude-session": {
         return new InferenceConflictError({
