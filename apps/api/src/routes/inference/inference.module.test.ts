@@ -691,6 +691,70 @@ describe("inference.module redaction", () => {
     expect(error).toMatchObject({ message: expect.stringContaining("token [redacted] beside") });
     expect(JSON.stringify(error)).not.toContain("sk-proj-FAKE");
   });
+
+  it("redacts them from property names and tool names too", async () => {
+    const answered = makeLayers({
+      accounts: accountsStub(),
+      codexStart: () =>
+        Promise.resolve({
+          sessionId: "inf_stub",
+          turn: { type: "done", text: "ok", json: { "at-codex": [{ "at-codex": "at-codex" }] } },
+        }),
+    });
+    const parked = Layer.mergeAll(
+      makeLayers({ accounts: accountsStub() }).layer,
+      Layer.succeed(
+        InferenceEngine,
+        stubEngine({
+          start: endingWith({
+            sessionId: "inf_parked",
+            turn: {
+              type: "toolCalls",
+              calls: [{ toolCallId: "call_1", name: "at-claude", input: { "at-claude": 1 } }],
+            },
+          }),
+          continueSession: () => Effect.fail(new InferenceEngineError("session-not-found", "")),
+        }),
+      ),
+    );
+
+    const done = await run(respond(newExchange({})).pipe(Effect.provide(answered.layer)));
+    const calls = await run(
+      respond(newExchange({ credentials: { claude: "cacc_claude" } })).pipe(Effect.provide(parked)),
+    );
+
+    expect(JSON.stringify(done)).not.toContain("at-codex");
+    expect(JSON.stringify(calls)).not.toContain("at-claude");
+  });
+
+  it("redacts a key-shaped name or selection from every refusal", async () => {
+    const keyName = "sk-ant-api03-FAKEanaccountnamedafterakey000";
+    const named = { ...claudeKeyAccount, name: keyName };
+    const accounts = accountsStub({
+      byName: {
+        [`claude:${keyName}`]: named,
+        "claude:invalid": { ...named, status: "invalid" },
+      },
+    });
+    const { layer } = makeLayers({ accounts });
+    const refusal = (overrides: Partial<InferenceRespondRequest>) =>
+      runFlipped(respond(newExchange(overrides)).pipe(Effect.provide(layer)));
+
+    const refusals = [
+      await refusal({ credentials: { claude: keyName }, allowedLogin: "subscription" }),
+      await refusal({ credentials: { claude: "invalid" } }),
+      await refusal({ credentials: { codex: "sk-proj-FAKEaselectionthatisakey000000" } }),
+    ];
+
+    expect(refusals.map((error) => JSON.stringify(error))).toEqual([
+      expect.stringContaining("login-not-allowed"),
+      expect.stringContaining("reconnect it"),
+      expect.stringContaining("InferenceNotFoundError"),
+    ]);
+    for (const error of refusals) {
+      expect(JSON.stringify(error)).not.toMatch(/sk-(ant|proj)-/);
+    }
+  });
 });
 
 describe("inference.module allowedLogin", () => {
