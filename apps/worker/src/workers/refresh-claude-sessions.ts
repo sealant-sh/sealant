@@ -160,6 +160,10 @@ const refreshOneAccount = Effect.fn("refreshClaudeSessionAccount")(function* (in
     const payload = parseClaudeCredentialPayload(JSON.parse(plaintext));
 
     // Shape dispatch, never the db `kind` column: a reconnect may have switched shapes.
+    if ("apiKey" in payload) {
+      yield* Effect.logInfo(`${describe} skipped: the account holds an API key.`);
+      return "skipped" as const;
+    }
     if ("token" in payload) {
       yield* Effect.logInfo(
         `${describe} skipped-not-session-file: stored payload is a setup token despite kind credentials-json.`,
@@ -346,3 +350,5 @@ export const refreshClaudeSessionCredentials = async (
     sweepInProgress = false;
   }
 };
+
+export { refreshOneAccount as refreshClaudeSessionAccount };

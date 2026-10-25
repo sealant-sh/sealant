@@ -121,6 +121,29 @@ const aliceSetupToken = account({
   kind: "oauth-token",
   encryptedPayload: `sealed:${JSON.stringify({ token: "sk-ant-oat01-alice" })}`,
 });
+const codexKey = "sk-proj-FAKEcodexkeyforthetests0000wxyz";
+const aliceCodexKey = account({
+  id: "cacc_alice_codex_key",
+  provider: "codex",
+  kind: "api-key",
+  name: "key",
+  encryptedPayload: `sealed:${JSON.stringify({ apiKey: codexKey })}`,
+});
+const aliceLegacyCodexKey = account({
+  id: "cacc_alice_codex_legacy_key",
+  provider: "codex",
+  kind: "auth-json",
+  name: "legacy-key",
+  encryptedPayload: `sealed:${JSON.stringify({
+    authJson: JSON.stringify({ OPENAI_API_KEY: codexKey, tokens: null }),
+  })}`,
+});
+const aliceClaudeKey = account({
+  id: "cacc_alice_claude_key",
+  kind: "api-key",
+  name: "key",
+  encryptedPayload: `sealed:${JSON.stringify({ apiKey: "sk-ant-api03-FAKEclaudekeyforthetests000000wxyz" })}`,
+});
 const bobClaude = account({
   id: "cacc_bob_claude",
   ownerUserId: BOB,
@@ -136,6 +159,9 @@ const accounts: ConnectedAccount[] = [
   aliceCorruptCodex,
   aliceChatGpt,
   aliceSetupToken,
+  aliceCodexKey,
+  aliceLegacyCodexKey,
+  aliceClaudeKey,
   bobClaude,
 ];
 
@@ -475,6 +501,32 @@ describe("putWorkspaceCredentials", () => {
       code: "connected-account-missing",
       provider: "codex",
     });
+  });
+
+  it("writes a Codex key as Codex's own key file, a key stored as an auth.json too", async () => {
+    for (const name of ["key", "legacy-key"]) {
+      const world = newWorld();
+      succeeded(await world.put({ onBehalfOfUserId: ALICE, codex: name }));
+      expect(world.ran[0]?.payloads).toEqual([
+        JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: codexKey }),
+      ]);
+      expect(world.ran[0]?.script).toContain(".codex/auth.json");
+    }
+  });
+
+  it("refuses a Claude key, and a Codex key as pi's login, with words and nothing written", async () => {
+    const world = newWorld();
+    expect(failed(await world.put({ onBehalfOfUserId: ALICE, claude: "key" }))).toMatchObject({
+      _tag: "WorkspaceConflictError",
+      code: "connected-account-unsupported",
+      provider: "claude",
+      message: expect.stringContaining("Claude API keys are not supported by this Sealant yet"),
+    });
+    expect(failed(await world.put({ onBehalfOfUserId: ALICE, pi: "key" }))).toMatchObject({
+      code: "connected-account-unsupported",
+      provider: "codex",
+    });
+    expect(world.ran).toEqual([]);
   });
 
   it("a partial put writes what is connected, in one exec, and says what it left out", async () => {

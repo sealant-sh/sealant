@@ -69,9 +69,12 @@ import {
   parseWorkspaceSecretEnv,
 } from "@sealant/api-contracts/workspace-environment";
 import {
+  claudeApiKeyUnsupported,
   connectedAccountProviders,
   createConnectedAccountRef,
   CredentialCipher,
+  loginClassOf,
+  parseStoredCredential,
 } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
@@ -1036,12 +1039,30 @@ const resolveGitHubDotfilesSelection = (input: {
 type WorkspaceCredentialRef = NewWorkspace["runtime"]["credentialRefs"][number];
 
 /**
+ * Whether a Claude account holds an API key, read from its payload. One that cannot be read is
+ * left to the launch, which refuses it with its own words.
+ */
+const holdsClaudeApiKey = (account: ConnectedAccount) =>
+  Effect.gen(function* () {
+    if (account.provider !== "claude") return false;
+    const cipher = yield* CredentialCipher;
+    return yield* cipher.decrypt(account.encryptedPayload).pipe(
+      Effect.flatMap((plaintext) =>
+        Effect.try(() => loginClassOf(...parseStoredCredential("claude", plaintext))),
+      ),
+      Effect.map((login) => login === "api-key"),
+      Effect.orElseSucceed(() => false),
+    );
+  });
+
+/**
  * Resolve the connected-account selection into opaque blueprint `credentialRefs`
  * (`connected-account:<id>`). Explicit per-provider entries win over the profile's bindings.
  * Values starting with "cacc_" are account ids; anything else is a per-provider account name.
- * No secret material is resolved here — the worker decrypts just before launch.
+ * Nothing is placed here — the worker decrypts just before launch; a Claude account is read only
+ * to refuse an API key early.
  */
-const resolveWorkspaceCredentialRefs = (input: {
+export const resolveWorkspaceCredentialRefs = (input: {
   readonly ownerUserId: string;
   readonly credentials: CreateWorkspaceRequest["credentials"];
 }) => {
@@ -1088,10 +1109,16 @@ const resolveWorkspaceCredentialRefs = (input: {
       if (explicit === undefined) {
         const bound = profileBound.get(provider);
 
-        // A binding pointing at an unusable account (archived, or invalidated by a 401) is
-        // effectively disconnected — skip it rather than fail every launch that uses this profile
-        // (surfaces show it as "needs reconnect"). Only an explicitly-named account hard-fails.
-        if (bound === undefined || bound.archivedAt !== null || bound.status !== "active") {
+        // A binding pointing at an unusable account (archived, invalidated by a 401, or a Claude
+        // API key, which cannot be placed yet) is effectively disconnected — skip it rather than
+        // fail every launch that uses this profile (surfaces show it as "needs reconnect"). Only
+        // an explicitly-named account hard-fails.
+        if (
+          bound === undefined ||
+          bound.archivedAt !== null ||
+          bound.status !== "active" ||
+          (yield* holdsClaudeApiKey(bound))
+        ) {
           continue;
         }
 
@@ -1103,6 +1130,14 @@ const resolveWorkspaceCredentialRefs = (input: {
           ownerUserId: input.ownerUserId,
           provider,
           selection: explicit,
+        });
+      }
+
+      if (explicit !== undefined && (yield* holdsClaudeApiKey(account))) {
+        return yield* new WorkspaceConflictError({
+          message: claudeApiKeyUnsupported(account.name),
+          code: "connected-account-unsupported",
+          provider,
         });
       }
 

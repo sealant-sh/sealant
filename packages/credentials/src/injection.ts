@@ -1,6 +1,6 @@
-import { claudeCredentialsCopy, claudeSetupTokenCredentials, codexAuthJsonCopy } from "./copies.js";
+import { claudeCredentialsCopy, claudeSetupTokenCredentials, codexLoginFile } from "./copies.js";
 import type {
-  ClaudeCredentialPayload,
+  ClaudeSubscriptionPayload,
   CodexCredentialPayload,
   GitHubCredentialPayload,
 } from "./payloads.js";
@@ -26,8 +26,15 @@ export const CLAUDE_CREDENTIALS_JSON_PATH = "$HOME/.claude/.credentials.json";
 export const CODEX_AUTH_JSON_PATH = "$HOME/.codex/auth.json";
 export const GITHUB_TOKEN_ENV_KEYS = ["GITHUB_TOKEN", "GH_TOKEN"] as const;
 
+/**
+ * The words every place that would put a Claude login somewhere (a create, a launch, a credentials
+ * put, inference) refuses a Claude API key with, until a key can be placed.
+ */
+export const claudeApiKeyUnsupported = (accountName: string): string =>
+  `Connected claude account "${accountName}" holds an API key. Claude API keys are not supported by this Sealant yet: choose a Claude subscription login. Nothing was written.`;
+
 type PlanCredentialInjectionsArgs =
-  | readonly ["claude", ClaudeCredentialPayload]
+  | readonly ["claude", ClaudeSubscriptionPayload]
   | readonly ["codex", CodexCredentialPayload]
   | readonly ["github", GitHubCredentialPayload];
 
@@ -63,10 +70,7 @@ export const planCredentialInjections = (
         {
           kind: "file",
           path: CODEX_AUTH_JSON_PATH,
-          // A copy with a placeholder refresh token: only the keep-fresh worker refreshes (§6a).
-          contentBase64: Buffer.from(codexAuthJsonCopy(payload.authJson), "utf8").toString(
-            "base64",
-          ),
+          contentBase64: Buffer.from(codexLoginFile(payload), "utf8").toString("base64"),
           mode: "600",
         },
       ];
@@ -88,7 +92,7 @@ export const planCredentialInjections = (
  * executor several people share), a variable would be one value for the whole container, so the
  * file is what is written; a launch at `$HOME` keeps the planner's variable for a setup token.
  */
-export const claudeCredentialsFile = (payload: ClaudeCredentialPayload): string =>
+export const claudeCredentialsFile = (payload: ClaudeSubscriptionPayload): string =>
   "token" in payload
     ? claudeSetupTokenCredentials(payload.token)
     : claudeCredentialsCopy(payload.credentialsJson);

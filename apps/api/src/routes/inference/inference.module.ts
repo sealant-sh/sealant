@@ -23,8 +23,9 @@ import {
   type InferenceTurn,
 } from "@sealant/api-contracts";
 import {
+  claudeApiKeyUnsupported,
   claudeCredentialsCopy,
-  codexAuthJsonCopy,
+  codexLoginFile,
   CredentialCipher,
   extractClaudeOauthCredentials,
   extractCodexSecrets,
@@ -229,15 +230,15 @@ const respondWithCodex = (input: {
 
     const engine = yield* CodexInferenceEngine;
 
-    const authJson = yield* Effect.try({
-      try: () => parseCodexCredentialPayload(JSON.parse(input.payloadJson)).authJson,
+    const login = yield* Effect.try({
+      try: () => parseCodexCredentialPayload(JSON.parse(input.payloadJson)),
       catch: () =>
         new InferenceInternalServerError({
           message: "Stored codex credential payload is malformed.",
         }),
     });
-    // Every token-like value auth.json carries, kept ONLY for redacting engine error text.
-    const secrets = extractCodexSecrets(authJson);
+    // Every token-like value the login carries, kept ONLY for redacting engine error text.
+    const secrets = "apiKey" in login ? [login.apiKey] : extractCodexSecrets(login.authJson);
 
     // Attribute the use exactly like workspace injection does — best-effort, never fails the call.
     yield* accounts.updateSyncState({ id: account.id, lastUsedAt: new Date() }).pipe(
@@ -250,12 +251,13 @@ const respondWithCodex = (input: {
       Effect.asVoid,
     );
 
-    // Materialize a COPY of the decrypted auth.json into a private per-invocation CODEX_HOME
-    // (0700/0600) the engine points the official CLI at: its refresh token is the copy placeholder,
-    // so the exchange cannot rotate the login — only the keep-fresh worker refreshes
-    // (docs/connected-accounts-design.md §6a). Nothing is read back; the dir is removed at the end.
+    // Materialize the login into a private per-invocation CODEX_HOME (0700/0600) the engine points
+    // the official CLI at: a key as Codex's key file, a ChatGPT login as a COPY whose refresh token
+    // is the copy placeholder, so the exchange cannot rotate the login — only the keep-fresh worker
+    // refreshes (docs/connected-accounts-design.md §6a). Nothing is read back; the dir is removed
+    // at the end.
     const provisioned = yield* Effect.try({
-      try: () => provisionCodexHome({ authJson: codexAuthJsonCopy(authJson) }),
+      try: () => provisionCodexHome({ authJson: codexLoginFile(login) }),
       catch: (cause) =>
         new InferenceInternalServerError({
           message: toErrorMessage(cause, "Failed to provision the codex home dir."),
@@ -280,7 +282,9 @@ const respondWithCodex = (input: {
           error.reason === "auth"
             ? new InferenceConflictError({
                 message:
-                  "The Codex login did not authenticate. The platform refreshes it on a schedule, so this usually means the login itself was ended (signed out elsewhere, or revoked) — reconnect Codex.",
+                  "apiKey" in login
+                    ? "The Codex API key did not authenticate: OpenAI refused it — connect a working key."
+                    : "The Codex login did not authenticate. The platform refreshes it on a schedule, so this usually means the login itself was ended (signed out elsewhere, or revoked) — reconnect Codex.",
               })
             : mapEngineError(error),
         ),
@@ -371,7 +375,20 @@ const respondAs = (payload: InferenceRespondRequest) =>
     if (account.provider === "codex") {
       return yield* respondWithCodex({ account, payload, payloadJson, accounts });
     }
-    // Either claude payload shape works here. A setup-token rides the documented
+    const malformed = new InferenceInternalServerError({
+      message: "Stored claude credential payload is malformed.",
+    });
+    const parsed = yield* Effect.try({
+      try: () => parseClaudeCredentialPayload(JSON.parse(payloadJson)),
+      catch: () => malformed,
+    });
+    if ("apiKey" in parsed) {
+      return yield* new InferenceConflictError({
+        message: claudeApiKeyUnsupported(account.name),
+        code: "connected-account-unsupported",
+      });
+    }
+    // Either claude subscription shape works here. A setup-token rides the documented
     // CLAUDE_CODE_OAUTH_TOKEN env path. A session credentials file is materialized into a private
     // per-invocation CLAUDE_CONFIG_DIR instead, so the official CLI authenticates from the FILE —
     // and can rotate the session with its refresh token right at the point of use (the control
@@ -382,8 +399,6 @@ const respondAs = (payload: InferenceRespondRequest) =>
         readonly shape: "token" | "credentials-json";
         readonly credentialsJson: string | undefined;
       } => {
-        const parsed = parseClaudeCredentialPayload(JSON.parse(payloadJson));
-
         if ("token" in parsed) {
           return {
             shape: "token",
@@ -401,10 +416,7 @@ const respondAs = (payload: InferenceRespondRequest) =>
 
         return { shape: "credentials-json", credentialsJson: parsed.credentialsJson, ...extracted };
       },
-      catch: () =>
-        new InferenceInternalServerError({
-          message: "Stored claude credential payload is malformed.",
-        }),
+      catch: () => malformed,
     });
 
     // Attribute the use exactly like workspace injection does — best-effort, never fails the call.

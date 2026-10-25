@@ -757,7 +757,8 @@ export type InspectWorkspaceImageResponse = typeof inspectWorkspaceImageResponse
  * else's) and `connected-account-invalid` (`WorkspaceConflictError`, 409: the account is marked
  * invalid, or holds an unusable credential; reconnect it) and `connected-account-unsupported`
  * (`WorkspaceConflictError`, 409: the account cannot serve what was asked, as a Codex API key cannot
- * be pi's or opencode's ChatGPT login). Nothing was written either way.
+ * be pi's or opencode's ChatGPT login, and a Claude API key cannot be placed yet). Nothing was
+ * written either way.
  */
 export const connectedAccountRefusalCodes = [
   "connected-account-missing",
@@ -923,11 +924,12 @@ export type ListWorkspaceCredentialsResponse = typeof listWorkspaceCredentialsRe
  * `workspace-not-running` (no ready executor), `connected-account-invalid` (a named account is
  * marked invalid or unusable: reconnect it; `provider` names its provider),
  * `connected-account-unsupported` (a Codex account named for pi or opencode is not a ChatGPT
- * login), `home-held` (the home holds another person's logins: release it
- * first; `/root` while the launch's own logins are at `$HOME`, or for anyone but the workspace's
- * owner), `home-unusable` (the home does not exist, is not a directory, is reached through a
- * symbolic link, or a login directory in it links outside it), `home-busy` (another write into the
- * home, or too many into this workspace, is still running: nothing was done, try again).
+ * login, or a Claude account is an API key, which cannot be placed yet), `home-held` (the home
+ * holds another person's logins: release it first; `/root` while the launch's own logins are at
+ * `$HOME`, or for anyone but the workspace's owner), `home-unusable` (the home does not exist, is
+ * not a directory, is reached through a symbolic link, or a login directory in it links outside
+ * it), `home-busy` (another write into the home, or too many into this workspace, is still
+ * running: nothing was done, try again).
  */
 export const workspaceCredentialsConflictCodes = [
   "workspace-not-running",

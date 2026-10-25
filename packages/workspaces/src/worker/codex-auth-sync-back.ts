@@ -1,6 +1,9 @@
 import {
   codexAuthJsonCanRefresh,
+  codexAuthJsonLogin,
+  loginClassOf,
   parseCodexAuthJson,
+  parseCodexCredentialPayload,
   parseConnectedAccountRef,
   sha256Hex,
   type CredentialCipherService,
@@ -60,12 +63,21 @@ export const isNewerCodexAuthRefresh = (input: {
   return observed > stored;
 };
 
+const storesApiKey = (plaintext: string): boolean => {
+  try {
+    return loginClassOf("codex", parseCodexCredentialPayload(JSON.parse(plaintext))) === "api-key";
+  } catch {
+    return false;
+  }
+};
+
 /** One-line outcome of a persist attempt; the reason string lands verbatim in the log line. */
 export type CodexAuthPersistOutcome =
   | "synced"
   | "skipped-invalid-file"
   | "skipped-copy"
   | "skipped-account-unavailable"
+  | "skipped-api-key"
   | "skipped-not-newer"
   | "skipped-superseded"
   | "failed";
@@ -113,6 +125,13 @@ export const persistCodexAuthJsonIfNewer = Effect.fn("persistCodexAuthJsonIfNewe
       return "skipped-copy" as const;
     }
 
+    if (codexAuthJsonLogin(input.observedAuthJson)?.login === "api-key") {
+      yield* Effect.logInfo(
+        `${describe} skipped-api-key: the observed auth.json spends an API key, which is connected, never read back.`,
+      );
+      return "skipped-api-key" as const;
+    }
+
     const accounts = yield* ConnectedAccountRepo;
 
     // Re-read the CURRENT stored copy right before deciding — another observer may have synced a
@@ -131,6 +150,14 @@ export const persistCodexAuthJsonIfNewer = Effect.fn("persistCodexAuthJsonIfNewe
         `${describe} skipped-superseded: the observed file came from credential revision ${input.sourceRevision}; the account now holds revision ${account.credentialRevision}.`,
       );
       return "skipped-superseded" as const;
+    }
+
+    const storedPlaintext = yield* input.credentialCipher.decrypt(account.encryptedPayload);
+    if (storesApiKey(storedPlaintext)) {
+      yield* Effect.logInfo(
+        `${describe} skipped-api-key: the account holds an API key, which an observed login never replaces.`,
+      );
+      return "skipped-api-key" as const;
     }
 
     const storedLastRefresh = readStoredCodexLastRefresh(account.metadata);

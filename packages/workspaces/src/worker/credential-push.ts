@@ -4,6 +4,7 @@ import {
   CODEX_AUTH_JSON_PATH,
   claudeCredentialsFile,
   codexAuthJsonCopy,
+  loginClassOf,
   parseClaudeCredentialPayload,
   parseCodexCredentialPayload,
   type CredentialCipherService,
@@ -80,9 +81,10 @@ export interface PushCredentialCopyInput {
   /** For tests; defaults to the live home channel. */
   readonly homeChannel?: HomeCredentialChannel;
   /**
-   * Given, each home's copy is made from the account as it is stored under that home's lock, never
-   * from `copyJson` captured before it: a later refresh that persisted while this push waited is
-   * what lands, never the token it revoked.
+   * Given, each copy is made from the account as it is stored when it is written, never from
+   * `copyJson` captured before it: a later refresh that persisted while this push waited is what
+   * lands, never the token it revoked, and an account that holds a key by then gets nothing. A home
+   * reads it under its lock, the launches at `$HOME` once before they are written.
    */
   readonly credentialCipher?: CredentialCipherService;
 }
@@ -96,8 +98,10 @@ export interface CredentialPushSummary {
 }
 
 /**
- * Running instances whose launch FILE-injected this account at `$HOME`. A launch that wrote into a
- * `credentialsHome` is reached through that home's record instead (§6d), never both.
+ * Running instances whose launch FILE-injected this account's subscription login at `$HOME`. A
+ * launch that wrote into a `credentialsHome` is reached through that home's record instead (§6d),
+ * never both; one that placed an API key (the account was replaced with one before it launched)
+ * never takes a subscription copy.
  */
 export const instancesHoldingAccount = (
   instances: readonly WorkspaceRuntimeInstance[],
@@ -108,7 +112,8 @@ export const instancesHoldingAccount = (
       (entry) =>
         entry.connectedAccountId === connectedAccountId &&
         entry.injection === "file" &&
-        entry.home === undefined,
+        entry.home === undefined &&
+        entry.login !== "api-key",
     ),
   );
 
@@ -128,12 +133,17 @@ export const pushCredentialCopy = Effect.fn("pushCredentialCopy")(function* (
     return { written: 0, failed: 0, unreachable: 0, released: 0 } satisfies CredentialPushSummary;
   }
 
-  const file = {
-    kind: "file" as const,
-    path: input.provider === "claude" ? CLAUDE_CREDENTIALS_JSON_PATH : CODEX_AUTH_JSON_PATH,
-    contentBase64: Buffer.from(input.copyJson, "utf8").toString("base64"),
-    mode: "600",
-  };
+  const launchCopy: { readonly copyJson: string } | "released" | "failed" =
+    input.credentialCipher === undefined || holding.length === 0
+      ? { copyJson: input.copyJson }
+      : yield* currentCopy(input.connectedAccountId, input.provider, input.credentialCipher).pipe(
+          Effect.map((copyJson) => (copyJson === undefined ? "released" : { copyJson })),
+          Effect.catchCause((cause) =>
+            Effect.logWarning(`${describe}: the account could not be read again.`, cause).pipe(
+              Effect.as("failed" as const),
+            ),
+          ),
+        );
 
   // Launches and homes at once: a Claude refresh has just revoked the previous token everywhere.
   const [launchOutcomes, homeOutcomes] = yield* Effect.all(
@@ -141,8 +151,15 @@ export const pushCredentialCopy = Effect.fn("pushCredentialCopy")(function* (
       Effect.forEach(
         holding,
         (instance) => {
+          if (typeof launchCopy === "string") return Effect.succeed(launchCopy);
           const target = sealantTargetForRuntimeInstance(instance, input.targetOptions ?? {});
           if (target === undefined) return Effect.succeed("unreachable" as const);
+          const file = {
+            kind: "file" as const,
+            path: input.provider === "claude" ? CLAUDE_CREDENTIALS_JSON_PATH : CODEX_AUTH_JSON_PATH,
+            contentBase64: Buffer.from(launchCopy.copyJson, "utf8").toString("base64"),
+            mode: "600",
+          };
           return Effect.tryPromise(() => channel.writeCredentialFiles(target, [file])).pipe(
             Effect.timeout(PUSH_TIMEOUT),
             Effect.as("written" as const),
@@ -291,7 +308,7 @@ const pushIntoHome = (
     ),
   );
 
-/** The account's copy as it is stored now; `undefined` when it is gone or archived. */
+/** The account's copy as it is stored now; `undefined` when it is gone, archived, or a key. */
 const currentCopy = (
   connectedAccountId: string,
   provider: CredentialPushProvider,
@@ -308,9 +325,13 @@ const currentCopy = (
     }
     const account = yield* repo.value.getById(connectedAccountId);
     if (account === undefined || account.archivedAt !== null) return undefined;
-    const plaintext = yield* cipher.decrypt(account.encryptedPayload);
-    const parsed: unknown = JSON.parse(plaintext);
-    return provider === "claude"
-      ? claudeCredentialsFile(parseClaudeCredentialPayload(parsed))
-      : codexAuthJsonCopy(parseCodexCredentialPayload(parsed).authJson);
+    const parsed: unknown = JSON.parse(yield* cipher.decrypt(account.encryptedPayload));
+    if (provider === "claude") {
+      const payload = parseClaudeCredentialPayload(parsed);
+      return "apiKey" in payload ? undefined : claudeCredentialsFile(payload);
+    }
+    const payload = parseCodexCredentialPayload(parsed);
+    return "authJson" in payload && loginClassOf("codex", payload) === "subscription"
+      ? codexAuthJsonCopy(payload.authJson)
+      : undefined;
   });
