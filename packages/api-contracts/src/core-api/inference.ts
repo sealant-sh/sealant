@@ -88,6 +88,12 @@ export const inferenceRespondRequestSchema = Schema.Struct({
       schema: Schema.optional(Schema.Unknown),
     }),
   ),
+  /**
+   * Which login a new exchange may run on: `subscription` refuses an account holding an API key
+   * (409, `login-not-allowed`, before any provider request); `any` (the default) runs on either.
+   * Checked against the account the selection resolved to.
+   */
+  allowedLogin: Schema.optional(Schema.Literals(["subscription", "any"])),
   sessionId: Schema.optional(NonEmptyString),
   toolResults: Schema.optional(Schema.Array(inferenceToolResultSchema).check(Schema.isNonEmpty())),
 });
@@ -173,6 +179,8 @@ export class InferenceNotFoundError extends Schema.TaggedError<InferenceNotFound
  *   invalid.
  * - `connected-account-superseded`: the provider refused an API key with a 401, but the account
  *   changed after the exchange started (`receipt.revision` is older), so nothing was marked.
+ * - `login-not-allowed`: the request's `allowedLogin` is `subscription` and the account holds an
+ *   API key; nothing was sent to the provider.
  */
 export class InferenceConflictError extends Schema.TaggedError<InferenceConflictError>()(
   "InferenceConflictError",
@@ -183,6 +191,7 @@ export class InferenceConflictError extends Schema.TaggedError<InferenceConflict
         "connected-account-unsupported",
         "connected-account-refused",
         "connected-account-superseded",
+        "login-not-allowed",
       ]),
     ),
     receipt: errorReceipt,
