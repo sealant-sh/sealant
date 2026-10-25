@@ -121,3 +121,27 @@ export const removeClaudeConfigDir = (configDir: string): void => {
     // Best-effort: a leaked tmp dir is preferable to failing the invocation that owned it.
   }
 };
+
+/** The file a provisioned key directory holds the Claude API key in. */
+export const CLAUDE_API_KEY_FILE_NAME = "api-key";
+
+export interface ProvisionedClaudeKeyDir {
+  readonly configDir: string;
+  readonly keyPath: string;
+}
+
+/**
+ * A fresh private config dir (0700) holding a Claude API key in a 0600 file, for the official CLI
+ * to read through an `apiKeyHelper` and to use as its `CLAUDE_CONFIG_DIR`, so it never falls back
+ * to a login of the host's own. Callers remove it with {@link removeClaudeConfigDir}.
+ */
+export const provisionClaudeKeyDir = (input: {
+  readonly apiKey: string;
+  readonly baseDir?: string;
+}): ProvisionedClaudeKeyDir => {
+  const configDir = mkdtempSync(join(input.baseDir ?? tmpdir(), "sealant-claude-key-"));
+  const keyPath = join(configDir, CLAUDE_API_KEY_FILE_NAME);
+  writeFileSync(keyPath, input.apiKey, { mode: 0o600 });
+
+  return { configDir, keyPath };
+};

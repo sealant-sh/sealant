@@ -23,7 +23,6 @@ import {
   type InferenceTurn,
 } from "@sealant/api-contracts";
 import {
-  claudeApiKeyUnsupported,
   claudeCredentialsCopy,
   codexLoginFile,
   CredentialCipher,
@@ -32,6 +31,7 @@ import {
   parseClaudeCredentialPayload,
   parseCodexCredentialPayload,
   provisionClaudeConfigDir,
+  provisionClaudeKeyDir,
   provisionCodexHome,
   removeClaudeConfigDir,
   removeCodexHome,
@@ -294,6 +294,65 @@ const respondWithCodex = (input: {
   });
 
 /**
+ * The claude arm on an API key: the key sits in a private 0700 dir as a 0600 file the official CLI
+ * reads through an `apiKeyHelper`; the dir is removed when the exchange ends.
+ */
+const respondWithClaudeKey = (input: {
+  readonly account: ConnectedAccount;
+  readonly payload: InferenceRespondRequest;
+  readonly apiKey: string;
+  readonly accounts: ConnectedAccountRepoService;
+}) =>
+  Effect.gen(function* () {
+    const { account, payload, apiKey, accounts } = input;
+    const engine = yield* InferenceEngine;
+
+    yield* accounts.updateSyncState({ id: account.id, lastUsedAt: new Date() }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Failed to stamp last_used_at for connected account ${account.id}; continuing.`,
+          cause,
+        ),
+      ),
+      Effect.asVoid,
+    );
+
+    const provisioned = yield* Effect.try({
+      try: () => provisionClaudeKeyDir({ apiKey }),
+      catch: (cause) =>
+        new InferenceInternalServerError({
+          message: toErrorMessage(cause, "Failed to provision the claude key dir."),
+        }),
+    });
+
+    const engineTurn = yield* engine
+      .start({
+        auth: {
+          kind: "api-key",
+          configDir: provisioned.configDir,
+          keyPath: provisioned.keyPath,
+          apiKey,
+        },
+        onSessionEnd: () => Promise.resolve(removeClaudeConfigDir(provisioned.configDir)),
+        prompt: payload.prompt ?? "",
+        ...(payload.system === undefined ? {} : { system: payload.system }),
+        ...(payload.model === undefined ? {} : { model: payload.model }),
+        ...(payload.maxTurns === undefined ? {} : { maxTurns: payload.maxTurns }),
+        tools: payload.tools ?? [],
+        ...(payload.responseFormat === undefined ? {} : { responseFormat: payload.responseFormat }),
+      })
+      .pipe(
+        Effect.mapError((error) =>
+          mapEngineError(
+            new InferenceEngineError(error.reason, redactSecrets(error.message, [apiKey])),
+          ),
+        ),
+      );
+
+    return mapEngineTurn(engineTurn);
+  });
+
+/**
  * Which owner opened each parked exchange (CORE-03). A continuation is addressed by session id, and
  * the session holds the opening owner's credentials, so it is served only to that owner. The
  * engines keep their sessions in this process's memory, so this map lives beside them; it is
@@ -383,10 +442,7 @@ const respondAs = (payload: InferenceRespondRequest) =>
       catch: () => malformed,
     });
     if ("apiKey" in parsed) {
-      return yield* new InferenceConflictError({
-        message: claudeApiKeyUnsupported(account.name),
-        code: "connected-account-unsupported",
-      });
+      return yield* respondWithClaudeKey({ account, payload, apiKey: parsed.apiKey, accounts });
     }
     // Either claude subscription shape works here. A setup-token rides the documented
     // CLAUDE_CODE_OAUTH_TOKEN env path. A session credentials file is materialized into a private

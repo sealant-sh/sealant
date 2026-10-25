@@ -4,7 +4,7 @@
  * point-of-use auth.json persist hook — all against stub engines and repos. SEALANT_CREDENTIALS_KEY
  * is stubbed before the dynamic import because runtime-env parses process.env at module load.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -29,7 +29,7 @@ import {
 import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import type { InferenceEngineTurn } from "./claude-engine.js";
+import type { InferenceEngineTurn, InferenceStartInput } from "./claude-engine.js";
 import { InferenceEngine, InferenceEngineError } from "./claude-engine.js";
 import { CodexInferenceEngine, type CodexInferenceStartInput } from "./codex-engine.js";
 
@@ -93,11 +93,12 @@ const codexKeyAccount = account({
   encryptedPayload: `sealed:${JSON.stringify({ apiKey: codexKey })}`,
   metadata: { tokenSuffix: "wxyz" },
 });
+const claudeKey = "sk-ant-api03-FAKEclaudekeyforthetests000000wxyz";
 const claudeKeyAccount = account({
   provider: "claude",
   id: "cacc_claude_key",
   kind: "api-key",
-  encryptedPayload: `sealed:${JSON.stringify({ apiKey: "sk-ant-api03-FAKEclaudekeyforthetests000000wxyz" })}`,
+  encryptedPayload: `sealed:${JSON.stringify({ apiKey: claudeKey })}`,
 });
 
 interface AccountsStubOptions {
@@ -151,7 +152,9 @@ const makeLayers = (input: {
     readonly inputTokens: number;
     readonly outputTokens: number;
   }> = [];
-  const claudeStart = vi.fn(() => Effect.succeed(doneTurn("claude answer")));
+  const claudeStart = vi.fn((_start: InferenceStartInput) =>
+    Effect.succeed(doneTurn("claude answer")),
+  );
   const codexStart = vi.fn((startInput: CodexInferenceStartInput) =>
     input.codexStart === undefined
       ? Effect.succeed(doneTurn("codex answer"))
@@ -415,23 +418,24 @@ describe("inference.module provider routing", () => {
     expect(existsSync(home)).toBe(false);
   });
 
-  it("refuses Claude on a key with words, and starts no engine", async () => {
+  it("runs Claude on a key from a private key file the engine reads, removed at the end", async () => {
     const accounts = accountsStub();
     const { layer, engines } = makeLayers({ accounts });
 
-    const error = await runFlipped(
+    const response = await run(
       respond(newExchange({ credentials: { claude: "cacc_claude_key" } })).pipe(
         Effect.provide(layer),
       ),
     );
 
-    expect(error).toBeInstanceOf(InferenceConflictError);
-    expect(error).toMatchObject({
-      code: "connected-account-unsupported",
-      message: expect.stringContaining("only through a credentials put into a person's home"),
-    });
-    expect(engines.claudeStart).not.toHaveBeenCalled();
-    expect(accounts.markInvalid).not.toHaveBeenCalled();
+    expect(response.turn).toEqual(expect.objectContaining({ text: "claude answer" }));
+    const startInput = engines.claudeStart.mock.calls[0]?.[0] as InferenceStartInput;
+    if (startInput.auth.kind !== "api-key") throw new Error("expected api-key auth");
+    expect(statSync(startInput.auth.configDir).mode & 0o777).toBe(0o700);
+    expect(statSync(startInput.auth.keyPath).mode & 0o777).toBe(0o600);
+    expect(readFileSync(startInput.auth.keyPath, "utf8")).toBe(claudeKey);
+    await startInput.onSessionEnd?.();
+    expect(existsSync(startInput.auth.configDir)).toBe(false);
   });
 
   it("serves a parked exchange only to the owner who opened it", async () => {

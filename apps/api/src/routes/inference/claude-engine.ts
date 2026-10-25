@@ -7,7 +7,8 @@
  * tokens ride `CLAUDE_CODE_OAUTH_TOKEN`; session credential files are materialized into a private
  * per-invocation `CLAUDE_CONFIG_DIR` (0700 dir / 0600 file) so the official CLI reads the file
  * itself AND can rotate the session with its refresh token — the control plane never calls
- * Anthropic's token endpoint. This module NEVER calls a model API directly, never logs the token,
+ * Anthropic's token endpoint. API keys sit in a private 0600 file the CLI reads through an
+ * `apiKeyHelper` passed in its flag settings, never in its environment or argv. This module NEVER calls a model API directly, never logs the token,
  * and strips any ambient `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` from the subprocess env so
  * the exchange cannot silently bill a different identity than the resolved connected account.
  *
@@ -78,6 +79,17 @@ export type InferenceAuth =
       readonly kind: "config-dir";
       readonly configDir: string;
       readonly accessToken: string;
+    }
+  | {
+      /**
+       * API-key accounts: a caller-provisioned private config dir holding the key in a file the
+       * CLI reads through an `apiKeyHelper`, so the key is never in the environment or argv.
+       * `apiKey` is carried ONLY so engine error text can be redacted.
+       */
+      readonly kind: "api-key";
+      readonly configDir: string;
+      readonly keyPath: string;
+      readonly apiKey: string;
     };
 
 export interface InferenceStartInput {
@@ -239,7 +251,8 @@ const buildEnv = (auth: InferenceAuth): Record<string, string | undefined> => {
   } else {
     // Session file: the CLI must authenticate from the provisioned config dir's .credentials.json
     // (and rotate it there with the refresh token); an ambient CLAUDE_CODE_OAUTH_TOKEN, stripped
-    // above, would shadow the file and disable the refresh.
+    // above, would shadow the file and disable the refresh. API key: an ambient ANTHROPIC_API_KEY
+    // would beat the helper, and the private config dir holds no login to fall back to.
     env["CLAUDE_CONFIG_DIR"] = auth.configDir;
   }
   env["CLAUDE_AGENT_SDK_CLIENT_APP"] = "sealant-control-plane";
@@ -247,8 +260,25 @@ const buildEnv = (auth: InferenceAuth): Record<string, string | undefined> => {
 };
 
 /** The secret to redact from engine error text, per auth mode. */
-const authSecret = (auth: InferenceAuth): string =>
-  auth.kind === "oauth-token" ? auth.oauthToken : auth.accessToken;
+const authSecret = (auth: InferenceAuth): string => {
+  switch (auth.kind) {
+    case "oauth-token": {
+      return auth.oauthToken;
+    }
+    case "config-dir": {
+      return auth.accessToken;
+    }
+    case "api-key": {
+      return auth.apiKey;
+    }
+  }
+};
+
+const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
+
+/** Flag-layer settings: an API key reaches the CLI only through a helper that reads its file. */
+const authSettings = (auth: InferenceAuth) =>
+  auth.kind === "api-key" ? { settings: { apiKeyHelper: `cat ${shellQuote(auth.keyPath)}` } } : {};
 
 const toEngineError = (error: unknown, secret: string): InferenceEngineError => {
   if (error instanceof InferenceEngineError) {
@@ -289,6 +319,7 @@ const startExchange = async (input: InferenceStartInput): Promise<InferenceEngin
     prompt: input.prompt,
     options: {
       env: buildEnv(input.auth),
+      ...authSettings(input.auth),
       cwd: tmpdir(),
       // Inference, not an agent workspace: no built-in tools, no filesystem settings, no partials.
       tools: [],
