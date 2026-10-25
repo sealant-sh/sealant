@@ -45,11 +45,12 @@ const insertAccount = (
   provider: ConnectedAccountProvider,
   name: string,
   status: "active" | "invalid" | "archived",
+  kind = "oauth-token",
 ) =>
   `insert into connected_accounts (id, owner_user_id, provider, name, kind, status,
      encrypted_payload, encryption_key_id, payload_sha256, metadata, created_at, updated_at,
      archived_at)
-   values ('${id}', '${owner}', '${provider}', '${name}', 'oauth-token', '${status}', 'sealed',
+   values ('${id}', '${owner}', '${provider}', '${name}', '${kind}', '${status}', 'sealed',
      'k-test', 'sha', '{}'::jsonb, now(), now(), ${status === "archived" ? "now()" : "null"})`;
 
 describe.skipIf(DATABASE_URL === undefined)("the default-pointer migration (Postgres)", () => {
@@ -69,6 +70,7 @@ describe.skipIf(DATABASE_URL === undefined)("the default-pointer migration (Post
     carolArchived: "cacc_carol_archived",
     carolClaude: "cacc_carol_claude",
     daveGithub: "cacc_dave_github",
+    daveCodex: "cacc_dave_codex",
   };
   const selections: ReadonlyArray<readonly [string, ConnectedAccountProvider]> = [
     ["alice", "claude"],
@@ -100,6 +102,7 @@ describe.skipIf(DATABASE_URL === undefined)("the default-pointer migration (Post
       insertAccount(seeded.carolArchived, "carol", "claude", "default", "archived"),
       insertAccount(seeded.carolClaude, "carol", "claude", "default", "active"),
       insertAccount(seeded.daveGithub, "dave", "github", "default", "active"),
+      insertAccount(seeded.daveCodex, "dave", "codex", "default", "archived", "auth-json"),
     ]) {
       await Effect.runPromise(db.execute(statement));
     }
@@ -124,6 +127,8 @@ describe.skipIf(DATABASE_URL === undefined)("the default-pointer migration (Post
     });
     rmSync(throughPointer, { recursive: true, force: true });
     expect(applied).toEqual([POINTER_MIGRATION]);
+    // The rest, so the repository reads the schema it is written for.
+    await runMigrations({ databaseUrl: fresh.toString(), migrationsFolder, log: silent });
   }, 120_000);
 
   afterAll(async () => {
@@ -187,6 +192,16 @@ describe.skipIf(DATABASE_URL === undefined)("the default-pointer migration (Post
       }),
     );
     expect(named.id).toBe(seeded.bobClaudeWork);
+  });
+
+  it("marks only the Codex auth.json rows stored before keys had a kind as unchecked", async () => {
+    const rows = await Effect.runPromise(
+      db.execute<{ readonly id: string }>(
+        "select id from connected_accounts where kind_unchecked order by id",
+        "objects",
+      ),
+    );
+    expect(rows).toEqual([{ id: seeded.daveCodex }]);
   });
 
   it("starts every account at credential revision 1", async () => {
