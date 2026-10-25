@@ -147,6 +147,14 @@ const doneTurn = (text: string): InferenceEngineTurn => ({
   turn: { type: "done", text, usage: { inputTokens: 1, outputTokens: 1 } },
 });
 
+const endingWith = (turn: InferenceEngineTurn) =>
+  vi.fn((start: InferenceStartInput) =>
+    Effect.promise(async () => {
+      await start.onSessionEnd?.();
+      return turn;
+    }),
+  );
+
 const makeLayers = (input: {
   readonly accounts: ReturnType<typeof accountsStub>;
   readonly codexStart?: (start: CodexInferenceStartInput) => Promise<InferenceEngineTurn>;
@@ -156,11 +164,9 @@ const makeLayers = (input: {
     readonly inputTokens: number;
     readonly outputTokens: number;
   }> = [];
-  const claudeStart = vi.fn((_start: InferenceStartInput) =>
-    Effect.succeed(doneTurn("claude answer")),
-  );
+  const claudeStart = endingWith(doneTurn("claude answer"));
   const codexStart = vi.fn((startInput: CodexInferenceStartInput) =>
-    input.codexStart === undefined
+    (input.codexStart === undefined
       ? Effect.succeed(doneTurn("codex answer"))
       : Effect.tryPromise({
           try: () => input.codexStart!(startInput),
@@ -168,7 +174,8 @@ const makeLayers = (input: {
             error instanceof InferenceEngineError
               ? error
               : new InferenceEngineError("engine", String(error)),
-        }),
+        })
+    ).pipe(Effect.ensuring(Effect.promise(async () => startInput.onSessionEnd?.()))),
   );
 
   const layer = Layer.mergeAll(
@@ -386,7 +393,6 @@ describe("inference.module provider routing", () => {
           join(home, "auth.json"),
           JSON.stringify({ tokens: { access_token: "at-2", refresh_token: "rt-2" } }),
         );
-        await startInput.onSessionEnd?.();
         return doneTurn("ok");
       },
     });
@@ -407,7 +413,6 @@ describe("inference.module provider routing", () => {
       codexStart: async (startInput) => {
         home = startInput.codexHome;
         seen = JSON.parse(readFileSync(join(home, "auth.json"), "utf8"));
-        await startInput.onSessionEnd?.();
         return doneTurn("ok");
       },
     });
@@ -423,23 +428,39 @@ describe("inference.module provider routing", () => {
   });
 
   it("runs Claude on a key from a private key file the engine reads, removed at the end", async () => {
-    const accounts = accountsStub();
-    const { layer, engines } = makeLayers({ accounts });
+    let seen:
+      | { readonly dirMode: number; readonly fileMode: number; readonly key: string }
+      | undefined;
+    let configDir = "";
+    const { layer } = makeLayers({ accounts: accountsStub() });
+    const reading = Layer.mergeAll(
+      layer,
+      Layer.succeed(InferenceEngine, {
+        start: (start) =>
+          Effect.promise(async () => {
+            if (start.auth.kind !== "api-key") throw new Error("expected api-key auth");
+            configDir = start.auth.configDir;
+            seen = {
+              dirMode: statSync(start.auth.configDir).mode & 0o777,
+              fileMode: statSync(start.auth.keyPath).mode & 0o777,
+              key: readFileSync(start.auth.keyPath, "utf8"),
+            };
+            await start.onSessionEnd?.();
+            return doneTurn("claude answer");
+          }),
+        continueSession: () => Effect.fail(new InferenceEngineError("session-not-found", "none")),
+      }),
+    );
 
     const response = await run(
       respond(newExchange({ credentials: { claude: "cacc_claude_key" } })).pipe(
-        Effect.provide(layer),
+        Effect.provide(reading),
       ),
     );
 
     expect(response.turn).toEqual(expect.objectContaining({ text: "claude answer" }));
-    const startInput = engines.claudeStart.mock.calls[0]?.[0] as InferenceStartInput;
-    if (startInput.auth.kind !== "api-key") throw new Error("expected api-key auth");
-    expect(statSync(startInput.auth.configDir).mode & 0o777).toBe(0o700);
-    expect(statSync(startInput.auth.keyPath).mode & 0o777).toBe(0o600);
-    expect(readFileSync(startInput.auth.keyPath, "utf8")).toBe(claudeKey);
-    await startInput.onSessionEnd?.();
-    expect(existsSync(startInput.auth.configDir)).toBe(false);
+    expect(seen).toEqual({ dirMode: 0o700, fileMode: 0o600, key: claudeKey });
+    expect(existsSync(configDir)).toBe(false);
   });
 
   it("serves a parked exchange only to the owner who opened it", async () => {
@@ -453,7 +474,7 @@ describe("inference.module provider routing", () => {
     const withParkedSession = Layer.mergeAll(
       layer,
       Layer.succeed(InferenceEngine, {
-        start: vi.fn(() => Effect.succeed(parked)),
+        start: endingWith(parked),
         continueSession: continued,
       }),
     );
@@ -503,7 +524,7 @@ const parkingLayers = (
   return Layer.mergeAll(
     layer,
     Layer.succeed(InferenceEngine, {
-      start: vi.fn(() => Effect.succeed(parkedTurn)),
+      start: endingWith(parkedTurn),
       continueSession: vi.fn(continued),
     }),
   );
@@ -696,7 +717,10 @@ describe("inference.module 401 feedback", () => {
     const claudeLayer = Layer.mergeAll(
       layer,
       Layer.succeed(InferenceEngine, {
-        start: () => Effect.fail(new InferenceEngineError("auth-words", "Invalid API key")),
+        start: (start) =>
+          Effect.promise(async () => start.onSessionEnd?.()).pipe(
+            Effect.andThen(Effect.fail(new InferenceEngineError("auth-words", "Invalid API key"))),
+          ),
         continueSession: () => Effect.fail(new InferenceEngineError("session-not-found", "none")),
       }),
     );
@@ -724,7 +748,15 @@ describe("inference.module 401 feedback", () => {
 
 describe("inference.module on a Claude key, against the real CLI", () => {
   let fake: FakeAnthropic;
-  const engineLayer = claudeEngineLayer();
+  const realEngine = Effect.runSync(Effect.provide(InferenceEngine, claudeEngineLayer()));
+  const keyDirs: string[] = [];
+  const engineLayer = Layer.succeed(InferenceEngine, {
+    start: (start) => {
+      if (start.auth.kind === "api-key") keyDirs.push(start.auth.configDir);
+      return realEngine.start(start);
+    },
+    continueSession: realEngine.continueSession,
+  });
 
   beforeEach(async () => {
     fake = await startFakeAnthropic();
@@ -734,6 +766,9 @@ describe("inference.module on a Claude key, against the real CLI", () => {
   });
 
   afterEach(async () => {
+    await expect
+      .poll(() => keyDirs.filter((dir) => existsSync(dir)), { timeout: 10_000 })
+      .toEqual([]);
     await fake.close();
   });
 
