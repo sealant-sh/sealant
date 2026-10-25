@@ -1461,7 +1461,12 @@ export interface WorkspaceCredentialHome {
   readonly home: string;
   /** The one person whose logins the home holds. */
   readonly onBehalfOf: string;
+  /**
+   * By provider, the account whose login holds the provider's one file. Claude keys are not here:
+   * the receipts in `placements` say which logins a home holds.
+   */
   readonly accounts: {
+    /** The account of Claude's subscription file, never a Claude key's. */
     readonly claude?: WorkspaceCredentialHomeAccount;
     readonly codex?: WorkspaceCredentialHomeAccount;
     readonly github?: WorkspaceCredentialHomeAccount;

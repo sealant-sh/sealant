@@ -891,8 +891,13 @@ export const workspaceCredentialHomeSchema = Schema.Struct({
   onBehalfOfUserId: NonEmptyString,
   /** The logins written there, one receipt each. Absent from a server without placements. */
   placements: Schema.optional(Schema.Array(workspaceCredentialPlacementReceiptSchema)),
-  /** By provider; a provider the home holds no login for is absent. */
+  /**
+   * By provider, the account whose login holds the provider's one file; a provider the home holds
+   * no such login for is absent. Claude keys are not here: each is a placement of its own, and the
+   * receipts in `placements` say which logins a home holds.
+   */
   accounts: Schema.Struct({
+    /** The account of Claude's subscription file, never a Claude key's. */
     claude: Schema.optional(workspaceHomeAccountSchema),
     codex: Schema.optional(workspaceHomeAccountSchema),
     github: Schema.optional(workspaceHomeAccountSchema),

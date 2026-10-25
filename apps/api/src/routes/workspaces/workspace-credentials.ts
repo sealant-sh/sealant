@@ -377,7 +377,7 @@ const toHomeView = (
   for (const row of state.placements) {
     if (row.state !== "ready") continue;
     const account = state.accounts.get(row.accountId);
-    if (account !== undefined) {
+    if (account !== undefined && !isClaudeKey(row)) {
       accounts[row.provider] = { connectedAccountId: account.id, name: account.name };
     }
     placements.push({

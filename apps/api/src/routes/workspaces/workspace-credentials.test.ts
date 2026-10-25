@@ -636,6 +636,28 @@ describe("putWorkspaceCredentials", () => {
     expect(world.ran[0]?.script).not.toContain('f="$home/.claude/.credentials.json"');
   });
 
+  it("names the subscription's account under accounts.claude, never a key's", async () => {
+    const world = newWorld();
+    succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "key" }));
+    const keyOnly = succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "key" }));
+    expect(keyOnly.home.accounts).toEqual({});
+    const keyId = keyOnly.home.placements?.[0]?.placementId ?? "missing";
+    const both = succeeded(
+      await world.put({ onBehalfOfUserId: ALICE, claude: "default", live: [keyId] }),
+    );
+    const again = succeeded(
+      await world.put({ onBehalfOfUserId: ALICE, claude: "key", live: [keyId] }),
+    );
+    for (const answer of [both, again]) {
+      expect(answer.home.accounts).toEqual({
+        claude: { connectedAccountId: aliceClaude.id, name: "default" },
+      });
+      expect(answer.home.placements?.map((row) => row.accountId).toSorted()).toEqual(
+        [aliceClaude.id, aliceClaudeKey.id].toSorted(),
+      );
+    }
+  });
+
   it("refuses a Claude key in the launch home, with words and nothing written", async () => {
     const world = newWorld();
     expect(
