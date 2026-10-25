@@ -3,7 +3,9 @@ import { sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
+  check,
   doublePrecision,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -295,6 +297,11 @@ export const workspaceCredentialHomes = pgTable(
       .$type<readonly WorkspaceCredentialHomeAccount[]>()
       .notNull()
       .default(sql`'[]'::jsonb`),
+    /**
+     * The hold is not (or no longer) confirmed: a first write has not answered yet, or a release
+     * did not. Nothing is written into the home; the sweep removes its files and the row.
+     */
+    releasing: boolean().notNull().default(false),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),
@@ -305,6 +312,46 @@ export const workspaceCredentialHomes = pgTable(
   },
   (table) => [primaryKey({ columns: [table.runId, table.home] })],
 );
+
+/**
+ * One login written into one home (docs/connected-accounts-design.md §6c): `pending` while its
+ * write has not answered, `ready` once it did, `removing` until its file is removed. At most one
+ * placement holds a provider's file slot `ready`.
+ */
+export const workspaceCredentialPlacements = pgTable(
+  "workspace_credential_placements",
+  {
+    /** Stable for the life of the placement: a refresh moves its revision, never its id. */
+    id: text().primaryKey(),
+    runId: text("run_id").notNull(),
+    home: text().notNull(),
+    provider: text({ enum: workspaceCredentialHomeProviderValues }).notNull(),
+    /** No foreign key: a placement outlives its account's row until its file is removed. */
+    accountId: text("account_id").notNull(),
+    /** The account's credential revision whose bytes the file holds. */
+    revision: integer().notNull(),
+    path: text().notNull(),
+    login: jsonb().$type<{ readonly kind: "subscription" }>().notNull(),
+    state: text({ enum: ["pending", "ready", "removing"] }).notNull(),
+    createdAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.runId, table.home],
+      foreignColumns: [workspaceCredentialHomes.runId, workspaceCredentialHomes.home],
+    }).onDelete("cascade"),
+    index("credential_placements_account_state_idx").on(table.accountId, table.state),
+    uniqueIndex("credential_placements_ready_slot_idx")
+      .on(table.runId, table.home, table.provider)
+      .where(sql`${table.state} = 'ready'`),
+    check("credential_placements_revision_positive", sql`${table.revision} > 0`),
+    check("credential_placements_state", sql`${table.state} in ('pending', 'ready', 'removing')`),
+  ],
+);
+
+export type WorkspaceCredentialPlacement = typeof workspaceCredentialPlacements.$inferSelect;
 
 /**
  * What the last drain observation concluded about a capture-sourced runtime (`capture-drain.ts`):

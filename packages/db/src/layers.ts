@@ -18,6 +18,7 @@ import { WorkspaceBuildJobRepoLive } from "./repositories/workspace-build-jobs.j
 import { WorkspaceCaptureDrainRepoLive } from "./repositories/workspace-capture-drains.js";
 import { WorkspaceCreateReservationRepoLive } from "./repositories/workspace-create-reservations.js";
 import { WorkspaceCredentialHomeRepoLive } from "./repositories/workspace-credential-homes.js";
+import { CredentialPlacementRepoLive } from "./repositories/workspace-credential-placements.js";
 import { WorkspaceRuntimeInstanceRepoLive } from "./repositories/workspace-runtime-instances.js";
 import { WorkspaceSessionRepoLive } from "./repositories/workspace-sessions.js";
 import { WorkspaceRepoLive } from "./repositories/workspaces.js";
@@ -52,6 +53,7 @@ export const ControlPlaneDataAccessLive = Layer.mergeAll(
   WorkspaceAttemptRepoLive,
   WorkspaceRuntimeInstanceRepoLive,
   WorkspaceCredentialHomeRepoLive,
+  CredentialPlacementRepoLive,
   WorkspaceCaptureDrainRepoLive,
   WorkspaceCreateReservationRepoLive,
   DatabaseTransactionLive,

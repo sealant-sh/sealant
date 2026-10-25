@@ -33,6 +33,8 @@ export {
   workspaceRuntimeInstances,
   type WorkspaceRuntimeInstance,
   workspaceCredentialHomes,
+  workspaceCredentialPlacements,
+  type WorkspaceCredentialPlacement,
   workspaceCredentialHomeFences,
   workspaceCredentialHomeProviderValues,
   type WorkspaceCredentialHome,

@@ -350,6 +350,8 @@ export {
   ociImageBuildJobStatusValues,
   workspaceRuntimeInstances,
   workspaceCredentialHomes,
+  workspaceCredentialPlacements,
+  type WorkspaceCredentialPlacement,
   workspaceCredentialHomeFences,
   workspaceCredentialHomeProviderValues,
   workspaceRuntimeInstanceStatusValues,
@@ -486,3 +488,6 @@ export {
   workspaceBuildJobSelectSchema,
   workspaceBuildJobStatusSchema,
 } from "./validation.js";
+
+export * from "./credential-placements.js";
+export * from "./repositories/workspace-credential-placements.js";
