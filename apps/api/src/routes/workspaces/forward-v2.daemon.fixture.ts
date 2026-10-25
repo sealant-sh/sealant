@@ -6,9 +6,14 @@ import { fileURLToPath } from "node:url";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 
-import { WorkspaceRepo, WorkspaceRuntimeInstanceRepo } from "@sealant/db";
-import { SealantRuntimeLive, SealantTransport, TransportError } from "@sealant/workspaces";
-import { Effect, Layer } from "effect";
+import { WorkspaceRepo, WorkspaceRuntimeInstanceRepo, WorkspaceSessionRepo } from "@sealant/db";
+import {
+  SealantRuntime,
+  SealantRuntimeLive,
+  SealantTransport,
+  TransportError,
+} from "@sealant/workspaces";
+import { Effect, Exit, Layer, Scope } from "effect";
 
 /**
  * The sealantd these tests run against: `SEALANTD_BIN`, or a debug build in a `sealantd` checkout
@@ -25,7 +30,10 @@ if (process.env["REQUIRE_SEALANTD"] === "1" && !hasSealantd) {
   throw new Error(`REQUIRE_SEALANTD=1, and no sealantd at ${SEALANTD_BIN}; set SEALANTD_BIN.`);
 }
 
+const TARGETS = fileURLToPath(new URL("./forward-v2.daemon.targets.mjs", import.meta.url));
+
 export interface LocalDaemon {
+  readonly dir: string;
   readonly socketPath: string;
   readonly stop: () => void;
 }
@@ -43,6 +51,7 @@ export const startSealantd = async (): Promise<LocalDaemon> => {
   }
   if (!existsSync(socketPath)) throw new Error("sealantd never created its control socket");
   return {
+    dir,
     socketPath,
     stop: () => {
       child.kill("SIGKILL");
@@ -54,8 +63,49 @@ export const startSealantd = async (): Promise<LocalDaemon> => {
 export const LIVE_OWNER = "usr_forward_live";
 export const LIVE_WORKSPACE = "wks_live";
 
-export const liveDaemonServices = (daemon: LocalDaemon) =>
+export interface LiveSession {
+  readonly status: "running" | "exited";
+  readonly daemonSessionId: string;
+}
+
+const runtimeOn = (daemon: LocalDaemon) =>
+  SealantRuntimeLive.pipe(
+    Layer.provide(
+      Layer.succeed(SealantTransport, {
+        open: () =>
+          Effect.acquireRelease(
+            Effect.callback<ReturnType<typeof connect>, TransportError>((resume) => {
+              const socket = connect(daemon.socketPath);
+              socket.once("connect", () => resume(Effect.succeed(socket)));
+              socket.once("error", (cause) =>
+                resume(
+                  Effect.fail(
+                    new TransportError({ operation: "open", message: cause.message, cause }),
+                  ),
+                ),
+              );
+            }),
+            (socket) => Effect.sync(() => socket.destroy()),
+          ),
+      }),
+    ),
+  );
+
+export const liveDaemonServices = (
+  daemon: LocalDaemon,
+  sessions: ReadonlyMap<string, LiveSession> = new Map(),
+) =>
   Layer.mergeAll(
+    Layer.succeed(WorkspaceSessionRepo, {
+      getSessionById: (id: string) => {
+        const session = sessions.get(id);
+        return Effect.succeed(
+          session === undefined
+            ? undefined
+            : { id, workspaceId: LIVE_WORKSPACE, ownerUserId: LIVE_OWNER, ...session },
+        );
+      },
+    } as never),
     Layer.succeed(WorkspaceRepo, {
       getWorkspaceById: (id: string) =>
         Effect.succeed(
@@ -75,28 +125,89 @@ export const liveDaemonServices = (daemon: LocalDaemon) =>
           endpoint: null,
         }),
     } as never),
-    SealantRuntimeLive.pipe(
-      Layer.provide(
-        Layer.succeed(SealantTransport, {
-          open: () =>
-            Effect.acquireRelease(
-              Effect.callback<ReturnType<typeof connect>, TransportError>((resume) => {
-                const socket = connect(daemon.socketPath);
-                socket.once("connect", () => resume(Effect.succeed(socket)));
-                socket.once("error", (cause) =>
-                  resume(
-                    Effect.fail(
-                      new TransportError({ operation: "open", message: cause.message, cause }),
-                    ),
-                  ),
-                );
-              }),
-              (socket) => Effect.sync(() => socket.destroy()),
-            ),
-        }),
-      ),
-    ),
+    runtimeOn(daemon),
   );
+
+export interface DaemonSession {
+  readonly sessionId: string;
+  readonly port: number;
+  readonly exit: () => Promise<void>;
+  readonly stopServer: () => void;
+}
+
+export interface SessionServer {
+  readonly mode?: "echo" | "produce" | "burst";
+  readonly bytes?: number;
+  readonly detached?: boolean;
+  readonly port?: number;
+}
+
+/** A `detached` server leaves the leader's Linux session but keeps `SEALANT_SESSION_MARKER`, which sealantd still counts as the session's. */
+export const daemonSessions = async (daemon: LocalDaemon) => {
+  const scope = Effect.runSync(Scope.make());
+  const control = await Effect.runPromise(
+    SealantRuntime.use((runtime) =>
+      runtime.connect({ kind: "unix-socket", socketPath: daemon.socketPath }),
+    ).pipe(Effect.provide(runtimeOn(daemon)), Scope.provide(scope)),
+  );
+  let served = 0;
+  return {
+    serve: async (server: SessionServer = {}): Promise<DaemonSession> => {
+      served += 1;
+      const pidfile = `${daemon.dir}/server-${served}.pid`;
+      const portfile = `${daemon.dir}/server-${served}.port`;
+      const mode = server.mode ?? "echo";
+      const modeArgs = mode === "echo" ? [mode] : [mode, String(server.bytes ?? 0)];
+      const opened = await Effect.runPromise(
+        control.openSession({
+          shell: process.execPath,
+          args: [TARGETS, ...(server.detached === true ? ["detached", ...modeArgs] : modeArgs)],
+          env: {
+            TARGET_PIDFILE: pidfile,
+            TARGET_PORTFILE: portfile,
+            ...(server.port === undefined ? {} : { TARGET_PORT: String(server.port) }),
+          },
+          cols: 80,
+          rows: 24,
+          mode: "pipe",
+        }),
+      );
+      const port = await listeningPort(portfile);
+      return {
+        sessionId: opened.sessionId,
+        port,
+        exit: async () => {
+          await Effect.runPromise(control.closeSession(opened.sessionId));
+          await gone(opened.pid);
+        },
+        stopServer: () => {
+          if (existsSync(pidfile)) process.kill(Number(readFileSync(pidfile, "utf8")), "SIGKILL");
+        },
+      };
+    },
+    close: () => Effect.runPromise(Scope.close(scope, Exit.void)),
+  };
+};
+
+const listeningPort = async (portfile: string) => {
+  for (let attempt = 0; attempt < 200 && !existsSync(portfile); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  if (!existsSync(portfile)) throw new Error("the session's server never listened");
+  return Number(readFileSync(portfile, "utf8"));
+};
+
+const gone = async (pid: number) => {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`process ${pid} is still running`);
+};
 
 export interface TargetProcess {
   readonly port: number;
@@ -114,8 +225,6 @@ export interface TargetReport {
 }
 
 export type TargetCommand = "pace" | "drain";
-
-const TARGETS = fileURLToPath(new URL("./forward-v2.daemon.targets.mjs", import.meta.url));
 
 export type Target =
   | { readonly mode: "produce"; readonly bytes: number }

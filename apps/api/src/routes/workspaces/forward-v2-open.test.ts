@@ -293,3 +293,19 @@ describe("a bounded forward", () => {
     }
   });
 });
+
+describe("a bounded forward bound to a session", () => {
+  it("refuses binding-unsupported when Core opens it unbound, and closes the socket", async () => {
+    const closed = Promise.withResolvers<void>();
+    const baseUrl = await fakeCore({
+      onSocket: (socket) => {
+        socket.on("close", () => closed.resolve());
+        socket.send(JSON.stringify({ t: "ready", version: 2, binding: { kind: "port" } }));
+      },
+    });
+    const error = await rejectionOf(open(baseUrl, { session: "ses_1" }));
+    expect(error).toBeInstanceOf(ForwardDialError);
+    expect(error).toMatchObject({ reason: "binding-unsupported", status: 409 });
+    await closed.promise;
+  });
+});

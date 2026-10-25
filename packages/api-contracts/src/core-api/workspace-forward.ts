@@ -69,7 +69,14 @@ export const FORWARD_REFUSAL_STATUS = {
   "binding-unsupported": 409,
 } as const satisfies Record<ForwardRefusalReason, number>;
 
-export const forwardBindingSchema = Schema.Struct({ kind: Schema.Literal("port") });
+/**
+ * What a forward reaches: whatever holds the port (`port`), or only a process of the session that
+ * `session` names (`session`), as the workspace runtime verified when it connected.
+ */
+export const forwardBindingSchema = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("port") }),
+  Schema.Struct({ kind: Schema.Literal("session"), session: Schema.String }),
+]);
 export type ForwardBinding = typeof forwardBindingSchema.Type;
 
 export const forwardReadyFrameSchema = Schema.Struct({

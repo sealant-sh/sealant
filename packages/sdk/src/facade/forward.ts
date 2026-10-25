@@ -1,4 +1,5 @@
 import {
+  FORWARD_REFUSAL_STATUS,
   FORWARD_V2_SUBPROTOCOL,
   forwardOpenFrameSchema,
   forwardRefusalReasonSchema,
@@ -8,6 +9,7 @@ import { Option, Schema } from "effect";
 
 import { ForwardDialError } from "../errors.js";
 import type {
+  BoundedForwardTarget,
   BoundedWorkspaceForward,
   BoundedWorkspaceForwardOptions,
   WorkspaceForward,
@@ -136,7 +138,8 @@ export const openForward = (
   });
 };
 
-export type ForwardV2Options = Omit<BoundedWorkspaceForwardOptions, "flow">;
+export type ForwardV2Options = BoundedForwardTarget &
+  Pick<BoundedWorkspaceForwardOptions, "signal" | "deadlineMs">;
 
 const FORWARD_V2_OPEN_DEADLINE_MS = 30_000;
 
@@ -192,11 +195,13 @@ export const openForwardV2 = (
   options?: ForwardV2Options,
 ): Promise<BoundedWorkspaceForward> => {
   const host = options?.host ?? "127.0.0.1";
+  const session = options?.session;
   const signal = options?.signal;
   const deadlineMs = options?.deadlineMs ?? FORWARD_V2_OPEN_DEADLINE_MS;
   const url = forwardUrl(endpoint, `/v1/workspaces/${workspaceId}/forward/v2`, {
     port: String(port),
     host,
+    session,
   });
   const origin = new URL(endpoint.baseUrl).origin;
 
@@ -250,8 +255,18 @@ export const openForwardV2 = (
         return unreadable(`${origin} answered the forward with a frame this SDK cannot read.`);
       }
       if (frame.value.t === "refused") return fail(refusalError(frame.value));
+      const { binding } = frame.value;
+      if (session !== undefined && (binding.kind !== "session" || binding.session !== session)) {
+        return fail(
+          new ForwardDialError({
+            reason: "binding-unsupported",
+            status: FORWARD_REFUSAL_STATUS["binding-unsupported"],
+            message: `${origin} opened the forward without binding it to session ${session}.`,
+          }),
+        );
+      }
       phase = "awaiting-window";
-      const forward = boundedForward(ws, frame.value.binding, () => {
+      const forward = boundedForward(ws, binding, () => {
         settle("open");
         resolve(forward);
       });

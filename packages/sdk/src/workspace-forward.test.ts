@@ -52,3 +52,37 @@ describe("workspace.forward", () => {
     expect(new URL(opened[0]?.url ?? "").searchParams.get("host")).toBe("docker");
   });
 });
+
+describe("a bounded forward bound to a session", () => {
+  it("asks Core for the session on the workspace's loopback", () => {
+    vi.stubGlobal("WebSocket", RecordingWebSocket);
+    const workspace = makeWorkspace(ctx, { id: "ws_1", name: "t", status: "ready" });
+
+    void workspace.forward(3000, { flow: "bounded", session: "ses_1" });
+
+    const url = new URL(opened[0]?.url ?? "");
+    expect(url.searchParams.get("session")).toBe("ses_1");
+    expect(url.searchParams.get("host")).toBe("127.0.0.1");
+  });
+
+  it("is a type error toward the Docker sidecar, also from an options object", () => {
+    vi.stubGlobal("WebSocket", RecordingWebSocket);
+    const workspace = makeWorkspace(ctx, { id: "ws_1", name: "t", status: "ready" });
+    const toDocker = { flow: "bounded", host: "docker", session: "ses_1" } as const;
+
+    // @ts-expect-error: a bound forward reaches the workspace's loopback only
+    void workspace.forward(5432, toDocker).catch(() => {});
+  });
+
+  it("is refused without flow: bounded, as a type error and when JavaScript asks anyway", async () => {
+    vi.stubGlobal("WebSocket", RecordingWebSocket);
+    const workspace = makeWorkspace(ctx, { id: "ws_1", name: "t", status: "ready" });
+    const unbounded = { host: "127.0.0.1", session: "ses_1" } as const;
+
+    // @ts-expect-error: only a bounded forward can be bound to a session
+    const opening = workspace.forward(3000, unbounded);
+
+    await expect(opening).rejects.toMatchObject({ code: "invalid_options" });
+    expect(opened).toEqual([]);
+  });
+});

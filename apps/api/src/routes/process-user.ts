@@ -10,10 +10,6 @@
  * starts a process only as one of its owner map's people or a person in Mend's reserved range (a uid
  * in 40001–49999 whose primary group is 40000); root, root's group and anyone outside the range are
  * refused.
- *
- * A yes is kept per executor and user for a few minutes, so a person's run of execs pays the
- * executor's answer once: the daemon's capabilities do not change while it runs, and a person's
- * passwd entry is made once at prepare.
  */
 import type { WorkspaceRuntimeInstance } from "@sealant/db";
 import {
@@ -28,21 +24,15 @@ import {
 } from "@sealant/workspaces";
 import { Duration, Effect, Result } from "effect";
 
+import { makeExecutorYesAnswers } from "./executor-answers.js";
+
 /** How long the executor may take to answer the check: one connection and one short exec. */
 const CHECK_TIMEOUT = Duration.seconds(30);
 
-/** How long a yes is kept, and for how many executor-user pairs. */
-const ALLOWED_TTL_MS = 10 * 60_000;
-const ALLOWED_MAX = 1024;
-
-/** `<executor run id>\u0000<user>` → when the yes expires. */
-const allowed = new Map<string, number>();
-
-const allowedKey = (instance: WorkspaceRuntimeInstance, user: string) =>
-  `${instance.runId}\u0000${user}`;
+const allowed = makeExecutorYesAnswers({ ttlMs: 10 * 60_000, max: 1024 });
 
 /** For tests: forget every kept yes. */
-export const forgetProcessUserAnswers = (): void => allowed.clear();
+export const forgetProcessUserAnswers = (): void => allowed.forgetAll();
 
 /** The words a refusal is answered with, by reason. Nothing was started either way. */
 export const processUserRefusalMessage = (
@@ -120,10 +110,8 @@ export const checkProcessUser = (input: {
         message: `Core has no way to reach workspace ${workspaceId}'s executor from here (its control client is not configured for this runtime), so it cannot check '${user}'. Nothing was started.`,
       } satisfies ProcessUserVerdict;
     }
-    const key = allowedKey(instance, user);
-    const now = Date.now();
-    const until = allowed.get(key);
-    if (until !== undefined && until > now) return { kind: "allowed" } satisfies ProcessUserVerdict;
+    if (allowed.holds(instance.runId, user))
+      return { kind: "allowed" } satisfies ProcessUserVerdict;
 
     const channel = input.channel ?? liveProcessUserChannel;
     const answered = yield* channel
@@ -137,12 +125,7 @@ export const checkProcessUser = (input: {
     }
     const outcome = processUserCheckOutcome(answered.success);
     if (outcome === "ok") {
-      allowed.delete(key);
-      if (allowed.size >= ALLOWED_MAX) {
-        const oldest = allowed.keys().next();
-        if (oldest.done !== true) allowed.delete(oldest.value);
-      }
-      allowed.set(key, now + ALLOWED_TTL_MS);
+      allowed.rememberYes(instance.runId, user);
       return { kind: "allowed" } satisfies ProcessUserVerdict;
     }
     if (outcome === "unanswered") {
@@ -151,7 +134,7 @@ export const checkProcessUser = (input: {
         message: `The workspace's executor did not confirm whether '${user}' may run a process (the check exited ${String(answered.success.exitCode)}). Nothing was started.`,
       } satisfies ProcessUserVerdict;
     }
-    allowed.delete(key);
+    allowed.forget(instance.runId, user);
     return {
       kind: "refused",
       message: processUserRefusalMessage(workspaceId, user, outcome),

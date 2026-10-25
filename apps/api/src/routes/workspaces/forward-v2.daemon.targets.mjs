@@ -1,7 +1,11 @@
+import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
+import { renameSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
+import { fileURLToPath } from "node:url";
 
-const [mode, totalArg] = process.argv.slice(2);
+const [mode, ...modeArgs] = process.argv.slice(2);
+const [totalArg] = modeArgs;
 const CHUNK = 64 * 1024;
 const PACE_BYTES_PER_TICK = 100 * 1024;
 
@@ -27,6 +31,10 @@ const produce = (socket) => {
     });
   };
   next();
+};
+
+const burst = (socket) => {
+  socket.write(randomBytes(Number(totalArg)));
 };
 
 const sink = (socket) => {
@@ -73,12 +81,27 @@ const echo = (socket) => {
   socket.pipe(socket);
 };
 
-const serve = { produce, sink, echo }[mode];
-if (serve === undefined) throw new Error(`unknown mode ${mode}`);
-
-const server = createServer((socket) => {
-  socket.on("error", () => {});
-  serve(socket);
-});
-server.listen(0, "127.0.0.1", () => report({ port: server.address().port }));
-process.on("disconnect", () => process.exit(0));
+if (mode === "detached") {
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...modeArgs], {
+    detached: true,
+    stdio: "ignore",
+  });
+  writeFileSync(process.env.TARGET_PIDFILE, String(child.pid));
+  setInterval(() => {}, 60_000);
+} else {
+  const serve = { produce, burst, sink, echo }[mode];
+  if (serve === undefined) throw new Error(`unknown mode ${mode}`);
+  const server = createServer((socket) => {
+    socket.on("error", () => {});
+    serve(socket);
+  });
+  server.listen(Number(process.env.TARGET_PORT ?? 0), "127.0.0.1", () => {
+    const { port } = server.address();
+    if (process.env.TARGET_PORTFILE !== undefined) {
+      writeFileSync(`${process.env.TARGET_PORTFILE}.tmp`, String(port));
+      renameSync(`${process.env.TARGET_PORTFILE}.tmp`, process.env.TARGET_PORTFILE);
+    }
+    report({ port });
+  });
+  process.on("disconnect", () => process.exit(0));
+}

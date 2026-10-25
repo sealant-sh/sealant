@@ -448,8 +448,14 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     options?: WorkspaceForwardOptions | BoundedWorkspaceForwardOptions,
   ): Promise<WorkspaceForward | BoundedWorkspaceForward> {
     if (options?.flow === "bounded") {
-      const { flow: _bounded, ...bounded } = options;
-      return openForwardV2(endpoint, init.id, port, bounded);
+      return openForwardV2(endpoint, init.id, port, options);
+    }
+    if (options !== undefined && "session" in options) {
+      return Promise.reject(
+        new SealantError('A forward bound to a session needs flow: "bounded".', {
+          code: "invalid_options",
+        }),
+      );
     }
     return openForward(endpoint, init.id, port, options);
   }

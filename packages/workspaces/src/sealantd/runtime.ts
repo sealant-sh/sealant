@@ -54,6 +54,8 @@ export {
   type ForwardConnectReason,
 } from "@sealant/runtime-protocol";
 
+export const FORWARD_OWNER_CAPABILITY = "forward.owner";
+
 // ---------------------------------------------------------------------------------------------
 // Targets
 // ---------------------------------------------------------------------------------------------
@@ -169,6 +171,11 @@ export class TransportError extends Schema.TaggedError<TransportError>()("Transp
   message: Schema.String,
   cause: Schema.Defect(),
 }) {}
+
+export class SealantForwardBindingUnsupported extends Schema.TaggedError<SealantForwardBindingUnsupported>()(
+  "SealantForwardBindingUnsupported",
+  { ownerSessionId: Schema.String },
+) {}
 
 /** A typed control error returned by the daemon (wraps the SDK's `SealantError`). */
 export class SealantControlError extends Schema.TaggedError<SealantControlError>()(
@@ -1258,13 +1265,18 @@ export interface SealantRuntimeService {
   readonly openForwardConnection: (
     target: SealantTarget,
     options: SealantForwardConnectionOptions,
-  ) => Effect.Effect<SealantForwardConnection, SealantError, Scope.Scope>;
+  ) => Effect.Effect<
+    SealantForwardConnection,
+    SealantError | SealantForwardBindingUnsupported,
+    Scope.Scope
+  >;
 }
 
 export interface SealantForwardConnectionOptions {
   readonly host: SealantForwardHost;
   readonly port: number;
   readonly highWaterMarkBytes: number;
+  readonly ownerSessionId?: string;
 }
 
 export type SealantForwardClose =
@@ -1282,8 +1294,13 @@ export interface SealantForwardChannel extends AsyncIterable<Uint8Array> {
   readonly closed: Promise<SealantForwardClose>;
 }
 
+export type SealantForwardBound =
+  | { readonly kind: "port" }
+  | { readonly kind: "session"; readonly daemonSessionId: string };
+
 export interface SealantForwardConnection {
   readonly channel: SealantForwardChannel;
+  readonly bound: SealantForwardBound;
 }
 
 export class SealantRuntime extends Context.Service<SealantRuntime, SealantRuntimeService>()(
@@ -1661,6 +1678,21 @@ const makeSession = (client: SealantClient, connection: ControlConnection): Seal
 });
 
 /** Builds the runtime service around a resolved transport (captured once at layer construction). */
+const refuseUnboundForward = <
+  Opened extends {
+    readonly channel: Channel;
+    readonly result: { readonly boundSessionId?: string | undefined };
+  },
+>(
+  opened: Opened,
+  ownerSessionId: string | undefined,
+) =>
+  ownerSessionId === undefined || opened.result.boundSessionId === ownerSessionId
+    ? Effect.succeed(opened)
+    : Effect.sync(() => opened.channel.destroy()).pipe(
+        Effect.andThen(Effect.fail(new SealantForwardBindingUnsupported({ ownerSessionId }))),
+      );
+
 const makeSealantRuntime = (transport: SealantTransportService): SealantRuntimeService => ({
   connect: (target) =>
     Effect.gen(function* () {
@@ -1684,16 +1716,21 @@ const makeSealantRuntime = (transport: SealantTransportService): SealantRuntimeS
   openForwardConnection: (target, options) =>
     Effect.gen(function* () {
       const duplex = yield* transport.open(target);
-      const { channel } = yield* Effect.acquireRelease(
+      const { ownerSessionId } = options;
+      const { channel, result } = yield* Effect.acquireRelease(
         withSealantError(
           watchConnection(duplex),
           "openForward",
           Effect.tryPromise(() => openForwardConnection(duplex, { ...options, protocol: "tcp" })),
-        ),
+        ).pipe(Effect.flatMap((opened) => refuseUnboundForward(opened, ownerSessionId))),
         (opened) => Effect.sync(() => opened.channel.destroy()),
         { interruptible: true },
       );
-      return { channel };
+      const bound: SealantForwardBound =
+        result.boundSessionId === undefined
+          ? { kind: "port" }
+          : { kind: "session", daemonSessionId: result.boundSessionId };
+      return { channel, bound };
     }),
 });
 

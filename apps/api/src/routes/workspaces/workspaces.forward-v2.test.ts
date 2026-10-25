@@ -3,12 +3,20 @@ import { request as httpRequest } from "node:http";
 import { connect, type Socket } from "node:net";
 import { Duplex } from "node:stream";
 
-import { AccessTokenRepo, WorkspaceRepo, WorkspaceRuntimeInstanceRepo } from "@sealant/db";
+import {
+  AccessTokenRepo,
+  WorkspaceRepo,
+  WorkspaceRuntimeInstanceRepo,
+  WorkspaceSessionRepo,
+} from "@sealant/db";
 import { ForwardDialError, SealantApiError } from "@sealant/sdk";
 import { openForwardV2 } from "@sealant/sdk/internal/forward";
 import {
   SealantControlError,
+  SealantForwardBindingUnsupported,
+  type SealantError,
   type SealantForwardChannel,
+  type SealantForwardConnection,
   type SealantForwardConnectionOptions,
   SealantRuntime,
   SealantRuntimeLive,
@@ -39,6 +47,8 @@ const FAILING_PORT = 7022;
 const BROKEN_PUMP_PORT = 7023;
 const ENDS_AFTER_UPLOAD_PORT = 7024;
 const FLOOD_BYTES = 1024 * 1024;
+const DAEMON_WITHOUT_BINDING_PORT = 7030;
+const RUNTIME_THAT_DROPS_THE_ECHO_PORT = 7031;
 
 const DAEMON_FAILURES: Record<number, () => SealantControlError> = {
   7001: () => controlError({ reason: "connection-refused" }),
@@ -47,6 +57,9 @@ const DAEMON_FAILURES: Record<number, () => SealantControlError> = {
   7004: () => controlError({ reason: "dial-timeout" }),
   7005: () => controlError(undefined),
   7006: () => controlError({ reason: "a-cause-this-core-has-never-heard-of" }),
+  7007: () => controlError({ reason: "owner-exited" }),
+  7008: () => controlError({ reason: "peer-mismatch" }),
+  7009: () => controlError({ reason: "binding-unverifiable" }),
 };
 
 function controlError(detail: object | undefined) {
@@ -203,6 +216,57 @@ const runtimeLosingItsConnection = Effect.runSync(
   ),
 );
 
+const sessions: Record<
+  string,
+  {
+    readonly workspaceId: string;
+    readonly ownerUserId: string;
+    readonly status: string;
+    readonly daemonSessionId: string | null;
+  }
+> = {
+  ses_serving: {
+    workspaceId: "wks_ready",
+    ownerUserId: OWNER,
+    status: "running",
+    daemonSessionId: "sess_serving",
+  },
+  ses_exited: {
+    workspaceId: "wks_ready",
+    ownerUserId: OWNER,
+    status: "exited",
+    daemonSessionId: "sess_exited",
+  },
+  ses_elsewhere: {
+    workspaceId: "wks_idle",
+    ownerUserId: OWNER,
+    status: "running",
+    daemonSessionId: "sess_elsewhere",
+  },
+  ses_theirs: {
+    workspaceId: "wks_ready",
+    ownerUserId: "usr_someone_else",
+    status: "running",
+    daemonSessionId: "sess_theirs",
+  },
+  ses_starting: {
+    workspaceId: "wks_ready",
+    ownerUserId: OWNER,
+    status: "starting",
+    daemonSessionId: null,
+  },
+  ses_on_old_daemon: {
+    workspaceId: "wks_old_daemon",
+    ownerUserId: OWNER,
+    status: "running",
+    daemonSessionId: "sess_on_old_daemon",
+  },
+};
+
+const capabilitiesAsked: string[] = [];
+
+const ownerSessionsAsked: Array<string | undefined> = [];
+
 let daemonConnects = 0;
 let daemonReleases = 0;
 let dialsStarted = 0;
@@ -214,6 +278,7 @@ const workspaces: Record<
   { readonly ownerUserId: string; readonly latestRunId: string | null }
 > = {
   wks_ready: { ownerUserId: OWNER, latestRunId: "run_ready" },
+  wks_old_daemon: { ownerUserId: OWNER, latestRunId: "run_old_daemon" },
   wks_slow: { ownerUserId: OWNER, latestRunId: "run_ready" },
   wks_idle: { ownerUserId: OWNER, latestRunId: null },
   wks_k8s: { ownerUserId: OWNER, latestRunId: "run_k8s" },
@@ -264,11 +329,22 @@ const fakes = Layer.mergeAll(
           : undefined,
       ),
   } as never),
+  Layer.succeed(WorkspaceSessionRepo, {
+    getSessionById: (id: string) =>
+      id === "ses_broken"
+        ? Effect.fail(new Error("connection terminated"))
+        : Effect.succeed(sessions[id] === undefined ? undefined : { id, ...sessions[id] }),
+  } as never),
   Layer.succeed(SealantRuntime, {
-    connect: () =>
+    connect: (target: SealantTarget) =>
       Effect.succeed({
         openForward: (port: number) =>
           Effect.fail(DAEMON_FAILURES[port]?.() ?? controlError(undefined)),
+        capabilities: Effect.sync(() => {
+          const containerId = target.kind === "docker-exec" ? target.containerId : "";
+          capabilitiesAsked.push(containerId);
+          return { supports: containerId === "ctr_old_daemon" ? [] : ["forward.owner"] };
+        }),
       }),
     openForwardConnection: (target: SealantTarget, options: SealantForwardConnectionOptions) => {
       const containerId = target.kind === "docker-exec" ? target.containerId : undefined;
@@ -280,31 +356,44 @@ const fakes = Layer.mergeAll(
           new TransportError({ operation: "open", message: "no such container", cause: null }),
         );
       }
+      ownerSessionsAsked.push(options.ownerSessionId);
+      const opened = (
+        channel: SealantForwardChannel,
+      ): Effect.Effect<SealantForwardConnection, SealantForwardBindingUnsupported> =>
+        options.port === DAEMON_WITHOUT_BINDING_PORT && options.ownerSessionId !== undefined
+          ? Effect.fail(
+              new SealantForwardBindingUnsupported({ ownerSessionId: options.ownerSessionId }),
+            )
+          : Effect.succeed({
+              channel,
+              bound:
+                options.ownerSessionId === undefined ||
+                options.port === RUNTIME_THAT_DROPS_THE_ECHO_PORT
+                  ? { kind: "port" }
+                  : { kind: "session", daemonSessionId: options.ownerSessionId },
+            });
       return Effect.acquireRelease(
         Effect.sync(() => (daemonConnects += 1)),
         () => Effect.sync(() => (daemonReleases += 1)),
       ).pipe(
-        Effect.andThen(() => {
-          if (options.port === SLOW_DIAL_PORT) {
-            dialsStarted += 1;
-            return Effect.never;
-          }
-          if (options.port === STALLED_PORT) return Effect.succeed({ channel: stalledChannel() });
-          if (options.port === FLOOD_PORT) return Effect.succeed({ channel: floodChannel() });
-          if (options.port === FAILING_PORT) {
-            return Effect.succeed({ channel: floodThenFailChannel() });
-          }
-          if (options.port === BROKEN_PUMP_PORT) {
-            return Effect.succeed({ channel: brokenPumpChannel() });
-          }
-          if (options.port === ENDS_AFTER_UPLOAD_PORT) {
-            return Effect.succeed({ channel: endsAfterUploadChannel() });
-          }
-          const failure = DAEMON_FAILURES[options.port];
-          return failure === undefined
-            ? Effect.succeed({ channel: echoChannel() })
-            : Effect.fail(failure());
-        }),
+        Effect.andThen(
+          (): Effect.Effect<
+            SealantForwardConnection,
+            SealantError | SealantForwardBindingUnsupported
+          > => {
+            if (options.port === SLOW_DIAL_PORT) {
+              dialsStarted += 1;
+              return Effect.never;
+            }
+            if (options.port === STALLED_PORT) return opened(stalledChannel());
+            if (options.port === FLOOD_PORT) return opened(floodChannel());
+            if (options.port === FAILING_PORT) return opened(floodThenFailChannel());
+            if (options.port === BROKEN_PUMP_PORT) return opened(brokenPumpChannel());
+            if (options.port === ENDS_AFTER_UPLOAD_PORT) return opened(endsAfterUploadChannel());
+            const failure = DAEMON_FAILURES[options.port];
+            return failure === undefined ? opened(echoChannel()) : Effect.fail(failure());
+          },
+        ),
       );
     },
   } as never),
@@ -698,6 +787,120 @@ describe("/forward/v2 windows", () => {
     send(socket);
     await closed;
     expect(texts.at(-1)).toEqual({ t: "reset", reason });
+  });
+});
+
+describe("a /forward/v2 bound to a session", () => {
+  const openBound = (session: string, port = ECHO_PORT) =>
+    openForwardV2(asService(core.baseUrl), "wks_ready", port, { session });
+
+  it("binds the forward to the session's daemon session, and says so in ready", async () => {
+    const forward = await openBound("ses_serving");
+    expect(forward.binding).toEqual({ kind: "session", session: "ses_serving" });
+    expect(ownerSessionsAsked.at(-1)).toBe("sess_serving");
+    forward.close();
+  });
+
+  it("asks the daemon for no binding without a session", async () => {
+    const forward = await openForwardV2(asService(core.baseUrl), "wks_ready", ECHO_PORT);
+    expect(forward.binding).toEqual({ kind: "port" });
+    expect(ownerSessionsAsked.at(-1)).toBeUndefined();
+    forward.close();
+  });
+
+  const refusals: ReadonlyArray<{
+    readonly reason: string;
+    readonly status: number;
+    readonly session: string;
+    readonly port?: number;
+    readonly dials: boolean;
+  }> = [
+    { reason: "not-found", status: 404, session: "ses_missing", dials: false },
+    { reason: "not-found", status: 404, session: "ses_theirs", dials: false },
+    { reason: "not-found", status: 404, session: "ses_elsewhere", dials: false },
+    { reason: "internal", status: 500, session: "ses_broken", dials: false },
+    { reason: "owner-exited", status: 409, session: "ses_exited", dials: false },
+    { reason: "owner-exited", status: 409, session: "ses_serving", port: 7007, dials: true },
+    { reason: "peer-mismatch", status: 409, session: "ses_serving", port: 7008, dials: true },
+    {
+      reason: "binding-unverifiable",
+      status: 409,
+      session: "ses_serving",
+      port: 7009,
+      dials: true,
+    },
+    {
+      reason: "binding-unsupported",
+      status: 409,
+      session: "ses_serving",
+      port: DAEMON_WITHOUT_BINDING_PORT,
+      dials: true,
+    },
+    {
+      reason: "binding-unsupported",
+      status: 409,
+      session: "ses_serving",
+      port: RUNTIME_THAT_DROPS_THE_ECHO_PORT,
+      dials: true,
+    },
+  ];
+
+  it.each(refusals)(
+    "refuses $reason ($status) for $session:$port",
+    async ({ reason, status, session, port, dials }) => {
+      const before = daemonConnects;
+      const error = await refusalOf(openBound(session, port));
+      expect({ reason: error.reason, status: error.status }).toEqual({ reason, status });
+      expect(daemonConnects - before).toBe(dials ? 1 : 0);
+    },
+  );
+
+  it("refuses binding-unsupported before it dials a runtime that cannot bind", async () => {
+    const asked = (containerId: string) =>
+      capabilitiesAsked.filter((id) => id === containerId).length;
+    const before = { connects: daemonConnects, oldDaemonAsked: asked("ctr_old_daemon") };
+    const openOnOldDaemon = () =>
+      openForwardV2(asService(core.baseUrl), "wks_old_daemon", ECHO_PORT, {
+        session: "ses_on_old_daemon",
+      });
+
+    expect((await refusalOf(openOnOldDaemon())).reason).toBe("binding-unsupported");
+    expect((await refusalOf(openOnOldDaemon())).reason).toBe("binding-unsupported");
+    expect(daemonConnects).toBe(before.connects);
+    expect(asked("ctr_old_daemon") - before.oldDaemonAsked).toBe(2);
+
+    const unbound = await openForwardV2(asService(core.baseUrl), "wks_old_daemon", ECHO_PORT);
+    expect(unbound.binding).toEqual({ kind: "port" });
+    unbound.close();
+
+    for (const forward of [await openBound("ses_serving"), await openBound("ses_serving")]) {
+      forward.close();
+    }
+    expect(asked("ctr_ready")).toBe(1);
+  });
+
+  it("tells a session that has not started yet so, rather than that it exited", async () => {
+    const error = await refusalOf(openBound("ses_starting"));
+    expect(error.reason).toBe("owner-exited");
+    expect(error.message).toMatch(/has not started/);
+  });
+
+  it("refuses a bound forward to the Docker sidecar as invalid-target, before it dials", async () => {
+    const before = daemonConnects;
+    const socket = new WebSocket(
+      forwardV2Url(
+        "wks_ready",
+        `port=${ECHO_PORT}&host=docker&session=ses_serving&ownerUserId=${OWNER}&token=${SERVICE_KEY}`,
+      ),
+      "sealant.forward.v2",
+    );
+    const frame = await new Promise<unknown>((resolve) =>
+      socket.addEventListener("message", (event) => resolve(JSON.parse(String(event.data))), {
+        once: true,
+      }),
+    );
+    expect(frame).toMatchObject({ t: "refused", reason: "invalid-target", status: 400 });
+    expect(daemonConnects).toBe(before);
   });
 });
 
