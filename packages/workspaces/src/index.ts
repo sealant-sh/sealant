@@ -15,6 +15,7 @@ export * from "./worker/codex-auth-sync-back.js";
 export * from "./worker/connected-account-resolver.js";
 export * from "./worker/credential-push.js";
 export * from "./worker/harness-credentials-sync-back.js";
+export * from "./worker/home-placements.js";
 export * from "./worker/process-workspace-build-job.js";
 export * from "./worker/process-workspace-stop.js";
 export * from "./worker/preserve-before-deadline.js";
