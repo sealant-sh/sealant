@@ -28,7 +28,11 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 
-import { query, type SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
+import {
+  query,
+  type SDKAssistantMessageError,
+  type SpawnOptions,
+} from "@anthropic-ai/claude-agent-sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { providerLoginEnvNames } from "@sealant/api-contracts";
@@ -126,7 +130,18 @@ export interface InferenceEngineTurn {
 
 export class InferenceEngineError extends Error {
   override readonly name = "InferenceEngineError";
-  readonly reason: "auth" | "session-not-found" | "bad-tool-result" | "timeout" | "engine";
+  /**
+   * `auth`: the provider refused the credential with an HTTP 401 status. `auth-suspected`: only
+   * words say so (the error's text, or a CLI type derived from it); never a reason to mark an API
+   * key invalid.
+   */
+  readonly reason:
+    | "auth"
+    | "auth-suspected"
+    | "session-not-found"
+    | "bad-tool-result"
+    | "timeout"
+    | "engine";
   constructor(
     reason: InferenceEngineError["reason"],
     message: string,
@@ -229,6 +244,28 @@ const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)
 const authSettings = (auth: InferenceAuth) =>
   auth.kind === "api-key" ? { settings: { apiKeyHelper: `cat ${shellQuote(auth.keyPath)}` } } : {};
 
+/**
+ * A refused turn: `auth` only on the provider's 401 status. The CLI's own `authentication_failed`
+ * type is read from the response's words (a 400 that mentions an invalid key carries it), so on
+ * its own it is only suspected.
+ */
+const turnFailure = (
+  status: number | null | undefined,
+  assistantError: SDKAssistantMessageError | undefined,
+  detail: string,
+  secret: string,
+): InferenceEngineError => {
+  if (status === 401) {
+    return new InferenceEngineError("auth", "Inference failed: the provider answered 401.");
+  }
+  if (assistantError === "authentication_failed") {
+    return new InferenceEngineError("auth-suspected", "Inference failed: authentication_failed");
+  }
+  return assistantError === undefined
+    ? toEngineError(new Error(detail), secret)
+    : new InferenceEngineError("engine", `Inference failed: ${assistantError}`);
+};
+
 const toEngineError = (error: unknown, secret: string): InferenceEngineError => {
   if (error instanceof InferenceEngineError) {
     return error;
@@ -239,7 +276,7 @@ const toEngineError = (error: unknown, secret: string): InferenceEngineError => 
   const raw = error instanceof Error ? error.message : String(error);
   const message = redactSecret(raw, secret);
   return isAuthFailureMessage(message)
-    ? new InferenceEngineError("auth", message, { cause: error })
+    ? new InferenceEngineError("auth-suspected", message, { cause: error })
     : new InferenceEngineError("engine", message, { cause: error });
 };
 
@@ -387,19 +424,24 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
     // Drive the exchange in the background; the session state is the rendezvous point.
     void (async () => {
       try {
+        let assistantError: SDKAssistantMessageError | undefined;
         for await (const message of exchange) {
+          // The CLI retries a 401 (and reruns a key's helper, which reads the same file), so the
+          // first refused request settles the exchange instead of waiting out its backoff.
+          if (
+            message.type === "system" &&
+            message.subtype === "api_retry" &&
+            message.error_status === 401
+          ) {
+            state.fail(turnFailure(401, assistantError, "", authSecret(input.auth)));
+          }
           if (message.type === "assistant" && message.error !== undefined) {
-            state.fail(
-              new InferenceEngineError(
-                message.error === "authentication_failed" ? "auth" : "engine",
-                `Inference failed: ${message.error}`,
-              ),
-            );
+            assistantError = message.error;
           }
           if (message.type !== "result") {
             continue;
           }
-          if (message.subtype === "success") {
+          if (message.subtype === "success" && !message.is_error) {
             const json = useNativeStructuredOutput
               ? message.structured_output
               : jsonByInstruction
@@ -413,9 +455,18 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
                 outputTokens: message.usage.output_tokens,
               },
             });
+          } else if (message.subtype === "success") {
+            state.fail(
+              turnFailure(
+                message.api_error_status,
+                assistantError,
+                message.result,
+                authSecret(input.auth),
+              ),
+            );
           } else {
             const detail = message.errors.length > 0 ? message.errors.join("; ") : message.subtype;
-            state.fail(toEngineError(new Error(detail), authSecret(input.auth)));
+            state.fail(turnFailure(undefined, assistantError, detail, authSecret(input.auth)));
           }
         }
         if (!state.isSettled) {

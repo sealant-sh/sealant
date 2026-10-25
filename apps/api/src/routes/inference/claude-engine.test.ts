@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 
 import { provisionClaudeKeyDir, removeClaudeConfigDir } from "@sealant/credentials";
 import { Effect } from "effect";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   claudeEngineLayer,
@@ -22,7 +22,8 @@ const ambientKey = "sk-ant-api03-FAKEambientkeythatmustnotbeused0000zzzz";
 
 let fake: FakeAnthropic;
 
-beforeAll(async () => {
+// A fresh fake per test: a CLI still shutting down from the last test talks to its own.
+beforeEach(async () => {
   fake = await startFakeAnthropic();
   process.env["ANTHROPIC_BASE_URL"] = fake.baseUrl;
   process.env["ANTHROPIC_API_KEY"] = ambientKey;
@@ -30,12 +31,8 @@ beforeAll(async () => {
   process.env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1";
 });
 
-afterAll(async () => {
+afterEach(async () => {
   await fake.close();
-});
-
-beforeEach(() => {
-  fake.reset();
 });
 
 const keyStart = (): InferenceStartInput & { readonly configDir: string } => {
