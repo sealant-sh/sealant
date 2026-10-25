@@ -1,11 +1,12 @@
 /**
- * Shared plumbing for the kind-cluster E2E suites (`cross-node.e2e.ts`, `docker-service.e2e.ts`).
+ * Shared plumbing for the kind-cluster E2E suites.
  *
  * The test process runs OUTSIDE the cluster, so every control connection goes through a
  * `kubectl port-forward` to the workspace Service with SNI set to the Service DNS name — the same
  * mTLS handshake a worker Pod performs, just routed. Nothing here is imported by production code.
  */
 import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -14,12 +15,12 @@ import type { WorkspaceBlueprint } from "@sealant/validators";
 import { Effect } from "effect";
 
 import { processImagePlatform } from "../buildkit/platform.js";
+import type { BuildAndPublishResult } from "../images/image-builder.js";
 import { createLiveKubernetesBuildApi } from "../images/kubernetes/api.js";
 import { KubernetesWorkspaceImageBuilder } from "../images/kubernetes/builder.js";
 import { kubernetesBuildConfigSchema } from "../images/kubernetes/config.js";
 import { createZotRegistryClient } from "../registry/client.js";
 import { liveControlChannel, type ControlChannel } from "../runtime/kubernetes/adapter.js";
-import type { PublishedImage } from "../runtime/runtime-adapter.js";
 import { SealantRuntimeControlLive, type SealantTarget } from "../sealantd/runtime.js";
 import { execInWorkspace } from "../sealantd/target.js";
 
@@ -147,7 +148,7 @@ export const buildWorkspaceImage = async (input: {
   readonly registryPort: number;
   readonly tag: string;
   readonly kubeconfigPath: string | undefined;
-}): Promise<PublishedImage> => {
+}): Promise<BuildAndPublishResult> => {
   const registryClient = createZotRegistryClient({
     baseUrl: `http://127.0.0.1:${String(input.registryPort)}`,
     pushRegistry: REGISTRY_PUSH,
@@ -169,12 +170,82 @@ export const buildWorkspaceImage = async (input: {
     }),
     registryClient,
   });
-  return (
-    await builder.buildAndPublish({
-      spec: input.blueprint,
-      repository: "sealant/workspaces/e2e",
-      tag: input.tag,
-      buildId: `e2e-${input.tag}`,
-    })
-  ).publishedImage;
+  return builder.buildAndPublish({
+    spec: input.blueprint,
+    repository: "sealant/workspaces/e2e",
+    tag: input.tag,
+    buildId: `e2e-${input.tag}`,
+  });
+};
+
+export interface UserNamespaceSupport {
+  readonly supported: boolean;
+  readonly reason: string;
+}
+
+/**
+ * Can this cluster run a user-namespaced Pod? A bare `hostUsers: false` Pod that only sleeps:
+ * Ready within the budget means yes; anything else (sandbox creation failing, the field ignored
+ * and the uid map left as the host's) means a suite that needs one has nothing to prove here.
+ */
+export const probeUserNamespaces = async (): Promise<UserNamespaceSupport> => {
+  const name = `userns-probe-${Date.now().toString(36)}`;
+  const manifest = JSON.stringify({
+    apiVersion: "v1",
+    kind: "Pod",
+    metadata: { name, namespace: NAMESPACE, labels: { "sealant.sh/e2e-probe": "userns" } },
+    spec: {
+      hostUsers: false,
+      restartPolicy: "Never",
+      nodeSelector: { "sealant.sh/e2e-role": "workspace" },
+      containers: [{ name: "probe", image: "alpine:3.20", command: ["sleep", "120"] }],
+    },
+  });
+  try {
+    // `kubectl apply -f -` needs stdin; go through a temp file instead.
+    const file = `/tmp/${name}.json`;
+    await writeFile(file, manifest);
+    try {
+      await kubectl("apply", "-f", file);
+    } finally {
+      await rm(file, { force: true });
+    }
+    const ready = await kubectl(
+      "wait",
+      "--for=condition=Ready",
+      `pod/${name}`,
+      "--timeout=90s",
+    ).then(
+      () => true,
+      () => false,
+    );
+    if (!ready) {
+      const events = await kubectl(
+        "get",
+        "events",
+        "--field-selector",
+        `involvedObject.name=${name}`,
+        "-o",
+        "jsonpath={range .items[*]}{.reason}: {.message}{'\\n'}{end}",
+      ).catch(() => "");
+      return {
+        supported: false,
+        reason: `a bare hostUsers:false Pod did not become Ready in 90s${events.trim() === "" ? "" : `:\n${events.trim().slice(0, 600)}`}`,
+      };
+    }
+    const uidMap = (
+      await kubectl("exec", name, "--", "cat", "/proc/self/uid_map").catch(() => "")
+    ).trim();
+    if (/^\s*0\s+0\s+4294967295\s*$/.test(uidMap)) {
+      return {
+        supported: false,
+        reason: "hostUsers:false was ignored — the Pod's uid map is the host's (0 0 4294967295)",
+      };
+    }
+    return { supported: true, reason: `uid map: ${uidMap.replace(/\s+/g, " ")}` };
+  } finally {
+    await kubectl("delete", "pod", name, "--ignore-not-found", "--wait=false").catch(
+      () => undefined,
+    );
+  }
 };

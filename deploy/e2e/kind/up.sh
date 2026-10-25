@@ -63,6 +63,35 @@ kubeconfig="${KUBECONFIG:-$HOME/.kube/config}"
 export KUBECONFIG="$kubeconfig"
 kubectl config use-context "kind-$cluster" >/dev/null
 
+# The kernel refuses a user namespace a new sysfs mount (`mounting "sysfs" ... operation not
+# permitted`) while files under the parent's /sys are overmounted, or read-only when it asks for rw.
+# kind overmounts dmi files on each node's /sys (product_uuid twice) and, through a createContainer
+# hook, in every container; and it mounts the node's /sys read-only. Each breaks one layer: a
+# hostUsers:false Pod's sandbox, a Pod with a privileged container (the Docker sidecar), and a
+# nested container inside that sidecar's daemon.
+step "removing kind's dmi overmounts and read-only /sys so user-namespaced Pods can start"
+for node in $(kind get nodes --name "$cluster"); do
+  docker exec "$node" sh -c '
+    warn() { echo "warning: $(hostname): $*" >&2; }
+    for f in product_uuid product_name; do
+      while grep -q " /sys/devices/virtual/dmi/id/$f " /proc/self/mountinfo; do
+        umount "/sys/devices/virtual/dmi/id/$f" || { warn "could not unmount dmi $f"; break; }
+      done
+    done
+    mount -o remount,rw /sys || warn "could not remount /sys read-write"
+    cri=/etc/containerd/cri-base.json
+    if ! command -v jq >/dev/null; then
+      warn "no jq, so the createContainer hook in $cri stays"
+    elif jq -e ".hooks.createContainer" "$cri" >/dev/null 2>&1; then
+      { jq "del(.hooks.createContainer)" "$cri" > /tmp/cri-base.json \
+        && mv /tmp/cri-base.json "$cri" && systemctl restart containerd; } \
+        || warn "could not remove the createContainer hook from $cri"
+    fi
+  ' || echo "warning: the user-namespace fixes did not run on $node" >&2
+done
+kubectl wait --for=condition=Ready node --all --timeout=180s \
+  || echo "warning: not every node is Ready after the user-namespace fixes" >&2
+
 step "rolling out cert-manager (images from quay.io)"
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.17.2/cert-manager.yaml
 kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout="$wait_timeout"

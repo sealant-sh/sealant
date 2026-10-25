@@ -434,10 +434,7 @@ describe("imagePersonLayoutSupport", () => {
     }
   });
 
-  it("refuses sudo under no_new_privs, seen by the probe or set by the runtime", () => {
-    expect(imagePersonLayoutSupport(readyProbe, { noNewPrivileges: true }).missing).toEqual([
-      "sudo-no-new-privileges",
-    ]);
+  it("refuses sudo under no_new_privs, as the probe saw it", () => {
     expect(imagePersonLayoutSupport({ ...readyProbe, noNewPrivileges: true }).missing).toEqual([
       "sudo-no-new-privileges",
     ]);

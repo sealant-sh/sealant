@@ -33,6 +33,7 @@ export const getIndex = () => {
       personBinding: true,
       sshKeyRemovalEndsConnections: true,
       connectedAccountDefaults: true,
+      kubernetesPersonLayout: true,
     },
   } satisfies SystemIndexResponse);
 };

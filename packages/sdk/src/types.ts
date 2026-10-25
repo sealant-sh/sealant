@@ -275,10 +275,11 @@ export interface WorkspaceCaptureSource {
    * leaves no-new-privileges unset so every person's `sudo` works. Fixed for the executor's life:
    * the daemon reads it at boot, so a standby's claim (`capture.replan()`) and a recovery restore
    * under the map it booted with (`replan({ expectedOwnerMap })` refuses a mismatch). Refused on
-   * Cloudflare and Kubernetes (no person's `sudo` works under `allowPrivilegeEscalation: false`),
-   * and at launch (`owner-map-unsupported`, nothing started) on an image whose probe does not
-   * report `restore.owner_map`. The workspace creator's choice of privilege; only this field sets
-   * it.
+   * Cloudflare, and on Kubernetes under gVisor (`ociRuntime: "runsc"`); under runc a per-person Pod
+   * may escalate, so each person's `sudo` works. Refused at launch, with nothing started, on an
+   * image whose sealantd does not report `restore.owner_map` (`owner-map-unsupported`) and on one
+   * with no probe Core can read (`owner-map-unverified`). The workspace creator's choice of
+   * privilege; only this field sets it.
    */
   readonly ownerMap?: WorkspaceCaptureOwnerMap;
 }
@@ -1485,6 +1486,12 @@ export interface SealantFeatures {
    * `default`.
    */
   readonly connectedAccountDefaults: boolean;
+  /**
+   * `ownerMap` is taken on Kubernetes (runc): each person's `sudo` works in the Pod, and images the
+   * cluster builds record the probe a per-person launch checks. From an older control plane a
+   * create with `ownerMap` on Kubernetes is refused.
+   */
+  readonly kubernetesPersonLayout: boolean;
 }
 
 /** A published workspace image. */

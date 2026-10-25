@@ -140,17 +140,14 @@ describe("a capture source's owner map at create", () => {
     }
   });
 
-  it("is refused on Kubernetes, saying why", async () => {
+  it("is taken on Kubernetes", async () => {
     for (const family of ["k8s", "k3s"]) {
-      const refused = failureOf(
-        await parseSpec({
-          ...spec,
-          sources: { workspace: captureSource({ ownerMap }) },
-          target: { runtime: { family } },
-        }),
-      );
-      expect(refused).toMatchObject({ _tag: "WorkspaceBadRequestError" });
-      expect(String(refused.message)).toContain("allowPrivilegeEscalation: false");
+      const taken = await parseSpec({
+        ...spec,
+        sources: { workspace: captureSource({ ownerMap }) },
+        target: { runtime: { family } },
+      });
+      expect(Result.isSuccess(taken)).toBe(true);
     }
   });
 
@@ -536,6 +533,7 @@ describe("the control plane's features", () => {
       personBinding: true,
       sshKeyRemovalEndsConnections: true,
       connectedAccountDefaults: true,
+      kubernetesPersonLayout: true,
     });
   });
 });

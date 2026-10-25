@@ -5,9 +5,11 @@ import { describe, expect, it } from "vitest";
  * here changes what runs in a cluster — the Pod security posture in particular is asserted field
  * by field so it cannot drift silently.
  */
+import { DOCKER_GID } from "../../buildkit/person-layout.js";
 import { shutdownFinalDeadlineMs } from "../capture-source.js";
 import { cases } from "../docker-runtime-adapter.golden-fixture.js";
 import { collectMountIntents } from "../mount-intent.js";
+import { parseRuntimeAdapterLaunchInput } from "../runtime-adapter.js";
 import { kubernetesRuntimeConfigSchema, type KubernetesRuntimeConfig } from "./config.js";
 import {
   buildCertificate,
@@ -503,9 +505,16 @@ describe("Kubernetes manifests", () => {
       "https://mirror.gcr.io",
     ]);
     expect(script).toContain(
-      "exec dockerd-entrypoint.sh dockerd --host=unix:///run/docker/docker.sock --data-root=/home/rootless/.local/share/docker --registry-mirror=http://docker-mirror.mend.svc:5000 --insecure-registry=docker-mirror.mend.svc:5000 --registry-mirror=https://mirror.gcr.io'",
+      "exec dockerd-entrypoint.sh dockerd --host=unix:///run/docker/docker.sock --group=1375 --data-root=/home/rootless/.local/share/docker --registry-mirror=http://docker-mirror.mend.svc:5000 --insecure-registry=docker-mirror.mend.svc:5000 --registry-mirror=https://mirror.gcr.io'",
     );
     expect(dockerSidecarScriptFor([])).toContain("--data-root=/home/rootless/.local/share/docker'");
+  });
+
+  it("names the socket's group so it is the docker group people join in the Pod", () => {
+    const script = dockerSidecarScriptFor([]);
+    const subgidStart = Number(/^echo 'rootless:(\d+):\d+' > \/etc\/subgid$/m.exec(script)?.[1]);
+    const innerGid = Number(/ --group=(\d+) /.exec(script)?.[1]);
+    expect(subgidStart + innerGid - 1).toBe(DOCKER_GID);
   });
 
   it("runs the Docker service as a rootless sidecar inside a user-namespaced Pod", () => {
@@ -571,7 +580,7 @@ describe("Kubernetes manifests", () => {
     expect(sidecar?.command?.slice(0, 2)).toEqual(["/bin/sh", "-ec"]);
     expect(script).toContain("echo 'rootless:1001:64533' > /etc/subuid");
     expect(script).toContain(
-      "exec dockerd-entrypoint.sh dockerd --host=unix:///run/docker/docker.sock --data-root=/home/rootless/.local/share/docker",
+      "exec dockerd-entrypoint.sh dockerd --host=unix:///run/docker/docker.sock --group=1375 --data-root=/home/rootless/.local/share/docker",
     );
     expect(script).not.toContain("tcp://");
 
@@ -600,5 +609,74 @@ describe("Kubernetes manifests", () => {
     expect(workspace?.env?.filter((entry) => entry.name === "DOCKER_HOST")).toEqual([
       { name: "DOCKER_HOST", value: "unix:///run/docker/docker.sock" },
     ]);
+  });
+
+  it("lets only a per-person Pod escalate and keep FSETID; hostUsers stays the Docker service's", () => {
+    const people = [{ id: "acct_a", uid: 40012 }];
+    const shared = {
+      privileged: false,
+      allowPrivilegeEscalation: false,
+      readOnlyRootFilesystem: false,
+      capabilities: {
+        drop: ["ALL"],
+        add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "KILL"],
+      },
+    };
+    const perPerson = {
+      ...shared,
+      allowPrivilegeEscalation: true,
+      capabilities: { drop: ["ALL"], add: [...shared.capabilities.add, "FSETID"] },
+    };
+    for (const docker of [false, true]) {
+      for (const [ownerMap, posture, encoded] of [
+        [undefined, shared, ""],
+        [
+          { gid: 40000, worktreeUid: 40012, people: [] },
+          shared,
+          '{"gid":40000,"worktree":40012,"people":{}}',
+        ],
+        [
+          { gid: 40000, worktreeUid: 40012, people },
+          perPerson,
+          '{"gid":40000,"worktree":40012,"people":{"acct_a":40012}}',
+        ],
+      ] as const) {
+        const launch = parseRuntimeAdapterLaunchInput({
+          ...cases.capture,
+          blueprint: {
+            ...cases.capture.blueprint,
+            sources: {
+              ...cases.capture.blueprint.sources,
+              workspace: {
+                ...cases.capture.blueprint.sources.workspace,
+                ...(ownerMap === undefined ? {} : { ownerMap }),
+              },
+            },
+            tooling: { packages: [], services: { docker: { enabled: docker } } },
+          },
+        });
+        const podConfig = { ...config, docker: { ...config.docker, enabled: docker } };
+        const pod = buildPod({
+          names,
+          config: podConfig,
+          labels,
+          input: launch,
+          lowered: { volumes: [], volumeMounts: [] },
+          plainEnv: plainEnvEntries(launch, podConfig, {
+            secretEnvFile: false,
+            dotfilesArchiveDir: undefined,
+          }),
+          secretEnvKeys: [],
+          launchSecret: undefined,
+          priorityClassName: undefined,
+        });
+        const workspace = pod.spec?.containers[0];
+        expect(workspace?.securityContext).toEqual(posture);
+        expect(pod.spec?.hostUsers).toBe(docker ? false : undefined);
+        expect(
+          workspace?.env?.filter((entry) => entry.name === "SEALANT_CAPTURE_OWNER_MAP"),
+        ).toEqual([{ name: "SEALANT_CAPTURE_OWNER_MAP", value: encoded }]);
+      }
+    }
   });
 });

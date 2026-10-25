@@ -147,11 +147,12 @@ passes it to `sealantd` at boot as `SEALANT_CAPTURE_OWNER_MAP`, JSON in `sealant
 
 Core checks the map at create: `gid` 40000, every uid in 40001–49999 (the range's first id is the
 group's), ids that are one directory name, no id and no uid twice, at most 256 people. It launches
-one only on an image whose probe reports `restore.owner_map` from its `sealantd`; on another image,
-or one with no probe, the launch fails with `owner-map-unsupported` and nothing starts. Cloudflare
-sandboxes refuse it at create, and so does Kubernetes: its workspace Pods run with
-`allowPrivilegeEscalation: false`, so the kubelet sets no-new-privileges and no person's `sudo`
-could work.
+one only on an image whose probe reports `restore.owner_map` from its `sealantd`. On an image whose
+`sealantd` does not report it, the launch fails with `owner-map-unsupported` and nothing starts. On
+an image with no probe, or with a probe Core cannot read, it fails with `owner-map-unverified`.
+Cloudflare sandboxes refuse it at create. On Kubernetes it runs under runc: a per-person Pod may
+escalate (`allowPrivilegeEscalation: true`) and adds `FSETID`, so each person's `sudo` works.
+Kubernetes refuses it under gVisor (`ociRuntime: "runsc"`).
 
 The map is the workspace creator's choice of privilege. Whoever can create a workspace can set one,
 for that workspace, and so turns off no-new-privileges there; they already choose its image, its
@@ -222,12 +223,18 @@ Every image, managed, `nix` or custom, runs a probe as its last build step and k
 - what `sealantd capabilities --json` reports;
 - whether the probe ran under `no_new_privs`.
 
-A managed image that lacks any of them fails its build. The Docker builder reads the answer back and
-records it on the build; a later build that reuses the image keeps it. A client can therefore learn
-before it creates a workspace whether the image can serve more than one person. The script stays in
-the image at `/usr/local/lib/sealant/image-probe`, so a running workspace can be asked the same
-question.
+A managed image that lacks any of them fails its build. Both builders read the answer back and
+record it on the build. The Docker builder runs the image with `cat`; the Kubernetes builder runs a
+short Job on the pushed digest that only prints the file. When the answer cannot be read, the build
+records a note and no answer, and still succeeds. A later build that reuses the image keeps its
+answer. When a per-person launch reuses a build that recorded no answer, the Kubernetes builder
+reads the answer from the reused image with the same Job. If that read fails too, the launch reuses
+the image without an answer, records the note, and fails with `owner-map-unverified`. The Docker
+builder builds the image again, from its layer cache, so its answer is read. A client can therefore
+learn before it creates a workspace whether the image can serve more than one person. The script
+stays in the image at `/usr/local/lib/sealant/image-probe`, so a running workspace can be asked the
+same question.
 
-The image is not the whole answer. Under `no_new_privs`, which Kubernetes pods run with
-(`allowPrivilegeEscalation: false`), `sudo` cannot raise a person's privileges; a probe run there
-reports it.
+The image is not the whole answer. Under `no_new_privs`, `sudo` cannot raise a person's privileges;
+a probe run there reports it. Shared Kubernetes Pods run with `allowPrivilegeEscalation: false`,
+which sets it; per-person Pods do not.

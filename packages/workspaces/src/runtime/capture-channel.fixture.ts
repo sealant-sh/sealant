@@ -83,6 +83,8 @@ export const startCaptureChannel = async (options: {
   readonly token: string;
   /** The worktree every plan answer names. */
   readonly worktreeId: string;
+  /** The host the endpoint and object URLs name; `127.0.0.1` when absent. */
+  readonly advertiseHost?: string;
 }): Promise<CaptureChannel> => {
   const state: CaptureChannelState = {
     objects: new Map(),
@@ -228,7 +230,7 @@ export const startCaptureChannel = async (options: {
     server.close();
     throw new Error("Capture channel did not bind a TCP port.");
   }
-  endpoint = `http://127.0.0.1:${address.port}`;
+  endpoint = `http://${options.advertiseHost ?? "127.0.0.1"}:${address.port}`;
 
   return {
     endpoint,

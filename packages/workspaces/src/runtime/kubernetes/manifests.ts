@@ -6,6 +6,9 @@
  *   - the workspace container is NOT privileged, cannot escalate, drops every capability and adds
  *     back only what `sealantd boot` needs to chown/apply dotfiles and signal its children, and
  *     runs under the runtime default seccomp profile;
+ *   - a per-person executor (`capturePerPerson`) may escalate, so each person's setuid `sudo` works
+ *     (the kubelet would otherwise set no-new-privileges), and adds `FSETID`, without which root's
+ *     `chmod 2775` on the `mend` group's directories silently drops the setgid bit;
  *   - it still runs as root (the images do), so this is baseline, not restricted, Pod Security;
  *   - no ServiceAccount token is mounted; no secret value ever appears in the Pod spec — secret
  *     env arrives through `valueFrom.secretKeyRef`, the boot secret file through a projected
@@ -25,12 +28,14 @@ import type {
   V1VolumeMount,
 } from "@kubernetes/client-node";
 
+import { DOCKER_GID } from "../../buildkit/person-layout.js";
 import { imagePlatformArchitecture } from "../../buildkit/platform.js";
 import { getHarnessIntegration } from "../../harness/integrations.js";
 import {
   CAPTURE_HARNESS_HOME_ENV,
   CAPTURE_SOURCE_ONLY_ENV,
   captureOwnerMapEnv,
+  capturePerPerson,
   captureSourceEnv,
 } from "../capture-source.js";
 import { dockerdRegistryMirrorArgs } from "../docker-registry-mirrors.js";
@@ -125,7 +130,13 @@ const DOCKER_ROOTLESS_UID = 1000;
  * overflow id for unmapped owners) unclaimed. Fewer than 65536 subordinate ids means an image
  * whose files are owned by a uid above ~64500 fails to extract — rare, documented.
  */
-const DOCKER_ROOTLESS_SUBID_RANGE = "1001:64533";
+const DOCKER_ROOTLESS_SUBID_START = 1001;
+const DOCKER_ROOTLESS_SUBID_RANGE = `${String(DOCKER_ROOTLESS_SUBID_START)}:64533`;
+/**
+ * dockerd resolves `--group` inside rootlesskit's user namespace, where gid n >= 1 is the Pod's
+ * gid `DOCKER_ROOTLESS_SUBID_START + n - 1`. This inner gid lands on `DOCKER_GID` in the Pod.
+ */
+const DOCKER_SOCKET_INNER_GID = DOCKER_GID - DOCKER_ROOTLESS_SUBID_START + 1;
 const DOCKER_SIDECAR_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 /**
@@ -143,7 +154,7 @@ export const dockerSidecarScriptFor = (registryMirrors: readonly string[]): stri
     `exec su ${DOCKER_ROOTLESS_USER} -s /bin/sh -c '` +
       `export XDG_RUNTIME_DIR=${DOCKER_RUN_PATH} HOME=/home/${DOCKER_ROOTLESS_USER} PATH=${DOCKER_SIDECAR_PATH} DOCKER_TLS_CERTDIR=; ` +
       [
-        `exec dockerd-entrypoint.sh dockerd --host=${DOCKER_HOST_VALUE} --data-root=${DOCKER_GRAPH_PATH}`,
+        `exec dockerd-entrypoint.sh dockerd --host=${DOCKER_HOST_VALUE} --group=${String(DOCKER_SOCKET_INNER_GID)} --data-root=${DOCKER_GRAPH_PATH}`,
         ...dockerdRegistryMirrorArgs(registryMirrors),
       ].join(" ") +
       "'",
@@ -586,6 +597,7 @@ export const buildPod = (build: BuildPodInput): V1Pod => {
     volumeMounts.push({ name: "launch", mountPath: LAUNCH_MOUNT_PATH, readOnly: true });
   }
   const dockerService = wantsDockerService(input.blueprint);
+  const perPerson = capturePerPerson(input.blueprint.sources.workspace);
   if (dockerService) {
     volumes.push({ name: "docker-run", emptyDir: {} });
     volumes.push({ name: "docker-graph", emptyDir: { sizeLimit: config.docker.graphSize } });
@@ -606,9 +618,12 @@ export const buildPod = (build: BuildPodInput): V1Pod => {
     },
     securityContext: {
       privileged: false,
-      allowPrivilegeEscalation: false,
+      allowPrivilegeEscalation: perPerson,
       readOnlyRootFilesystem: false,
-      capabilities: { drop: ["ALL"], add: [...WORKSPACE_CAPABILITIES] },
+      capabilities: {
+        drop: ["ALL"],
+        add: [...WORKSPACE_CAPABILITIES, ...(perPerson ? ["FSETID"] : [])],
+      },
     },
   };
 

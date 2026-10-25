@@ -33,7 +33,7 @@ import {
 import { makeInMemoryCredentialHomes } from "@sealant/db/testing/credential-homes";
 import type { GitHubSourceIntegration } from "@sealant/source-integrations";
 import type { NewWorkspace, WorkspaceBuild, WorkspaceImageProbe } from "@sealant/validators";
-import { Effect, Exit, Fiber, Layer, Result } from "effect";
+import { Cause, Effect, Exit, Fiber, Layer, Result } from "effect";
 import { vi } from "vitest";
 
 import {
@@ -183,6 +183,30 @@ const createRuntimeAdapterStub = (
       })),
   };
 };
+
+const probeOf = (supports: readonly string[]): WorkspaceImageProbe => ({
+  version: 1,
+  tools: {
+    sudo: true,
+    sudoSetuid: true,
+    useradd: true,
+    groupadd: true,
+    setfacl: true,
+    getfacl: true,
+    setpriv: true,
+    flock: true,
+  },
+  sudoersMend: true,
+  sudoersIncludesDir: true,
+  noNewPrivileges: false,
+  passwdWritable: true,
+  mendGroup: "present",
+  reservedIdsInUse: [],
+  personEnv: true,
+  sharedDirs: [],
+  gitTrustsWorktree: true,
+  sealantd: { schemaVersion: 1, supports: [...supports] },
+});
 
 const createCompileResult = (
   input: {
@@ -1761,11 +1785,12 @@ describe("processWorkspaceBuildJobEffect", () => {
       worktreeUid: 40012,
       people: [{ id: "acct_a", uid: 40012 }],
     };
-    const ownerMapJob = () =>
+    const ownerMapJob = (withMap = true, getLatestSucceededJobByPlanHash?: () => unknown) =>
       workspaceBuildJobRepoStub({
         claimJobById: () => ({
           id: "job_owner_map",
           runId: "run_owner_map",
+          registryId: "local-zot",
           repository: "sealant/workspaces/demo",
           tag: "opencode",
           requestPayload: {
@@ -1776,7 +1801,7 @@ describe("processWorkspaceBuildJobEffect", () => {
                 endpoint: "https://mend.example.com/session/s1",
                 worktreeId: "wt_1",
                 harnessHome: "/workspace/harness-home",
-                ownerMap,
+                ...(withMap ? { ownerMap } : {}),
               },
               inputs: [],
               mounts: [],
@@ -1784,44 +1809,25 @@ describe("processWorkspaceBuildJobEffect", () => {
           },
           secretEnvSealed: SEALED_CAPTURE_TOKEN,
         }),
+        ...(getLatestSucceededJobByPlanHash === undefined
+          ? {}
+          : { getLatestSucceededJobByPlanHash }),
       });
     const probed = (supports: readonly string[] | undefined): WorkspaceBuild => ({
       ...createCompileResult({ id: "nix" }),
       metadata: {
         notes: [],
-        ...(supports === undefined
-          ? {}
-          : {
-              imageProbe: {
-                version: 1 as const,
-                tools: {
-                  sudo: true,
-                  sudoSetuid: true,
-                  useradd: true,
-                  groupadd: true,
-                  setfacl: true,
-                  getfacl: true,
-                  setpriv: true,
-                  flock: true,
-                },
-                sudoersMend: true,
-                sudoersIncludesDir: true,
-                noNewPrivileges: false,
-                passwdWritable: true,
-                mendGroup: "present" as const,
-                reservedIdsInUse: [],
-                personEnv: true,
-                sharedDirs: [],
-                gitTrustsWorktree: true,
-                sealantd: { schemaVersion: 1, supports: [...supports] },
-              },
-            }),
+        ...(supports === undefined ? {} : { imageProbe: probeOf(supports) }),
       },
     });
 
-    for (const [name, build] of [
-      ["an image whose sealantd does not report restore.owner_map", probed(["exec.user"])],
-      ["an image built before the probe", probed(undefined)],
+    for (const [name, build, code] of [
+      [
+        "an image whose sealantd does not report restore.owner_map",
+        probed(["exec.user"]),
+        "owner-map-unsupported",
+      ],
+      ["an image built before the probe", probed(undefined), "owner-map-unverified"],
     ] as const) {
       it.effect(`is refused on ${name}, before anything starts`, () => {
         const jobs = ownerMapJob();
@@ -1845,7 +1851,7 @@ describe("processWorkspaceBuildJobEffect", () => {
             }),
           ).pipe(Effect.flip);
 
-          expect(error.errorCode).toBe("owner-map-unsupported");
+          expect(error.errorCode).toBe(code);
           expect(error.message).toContain("Nothing ran");
           expect(stager.stage).not.toHaveBeenCalled();
           expect(runtimeAdapter.launch).not.toHaveBeenCalled();
@@ -1853,7 +1859,7 @@ describe("processWorkspaceBuildJobEffect", () => {
             expect.objectContaining({
               runId: "run_owner_map",
               status: "failed",
-              errorCode: "owner-map-unsupported",
+              errorCode: code,
             }),
           );
           expect(attempts.markAttemptFailed).toHaveBeenCalledWith({ id: "run_owner_map" });
@@ -1886,6 +1892,176 @@ describe("processWorkspaceBuildJobEffect", () => {
         expect(source?.kind === "capture" ? source.ownerMap : undefined).toEqual(ownerMap);
       }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
     });
+
+    for (const [name, withMap, rebuilds] of [
+      ["builds again where its builder cannot read the probe back", true, true],
+      ["without one reuses it as before", false, false],
+    ] as const) {
+      it.effect(`on a published plan whose build recorded no probe, a launch ${name}`, () => {
+        const jobs = ownerMapJob(withMap, () => ({
+          id: "job_prior",
+          status: "succeeded",
+          registryId: "local-zot",
+          repository: "session-aaaa",
+          tag: "sdk-11111111",
+          resultPayload: probed(undefined),
+          publishedReference: "127.0.0.1:5000/session-aaaa:sdk-11111111",
+          publishedDigestReference: "127.0.0.1:5000/session-aaaa@sha256:prior",
+          publishedDigest: "sha256:prior",
+        }));
+        const attempts = workspaceAttemptRepoStub();
+        const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+        const runtimeAdapter = createRuntimeAdapterStub("docker");
+        const compileWorkspaceSpec = vi.fn(async () =>
+          probed(["dotfiles.user", "exec.user", "restore.owner_map"]),
+        );
+
+        return Effect.gen(function* () {
+          yield* processWorkspaceBuildJobEffect(
+            baseOptions({
+              jobId: "job_owner_map",
+              runtimeAdapters: [runtimeAdapter],
+              credentialCipher: fakeCredentialCipher,
+              compileWorkspaceSpec,
+              planWorkspaceSpec: () => ({
+                osFamily: "nix" as const,
+                platform: "linux/amd64" as const,
+                imagePlan: {} as never,
+                containerfile: "FROM nixos/nix",
+                planHash: "d".repeat(64),
+              }),
+              registryClient: {
+                ...successRegistryClient(),
+                headManifest: vi.fn(async () => "sha256:prior"),
+              } as unknown as RegistryClient,
+            }),
+          );
+          expect(compileWorkspaceSpec).toHaveBeenCalledTimes(rebuilds ? 1 : 0);
+          expect(runtimeAdapter.launch).toHaveBeenCalledOnce();
+        }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+      });
+    }
+
+    const readBack = probeOf(["dotfiles.user", "exec.user", "restore.owner_map"]);
+    const unreadNote =
+      "The image probe could not be read back from 127.0.0.1:5000/session-aaaa@sha256:prior: Job build-x-probe-0a1b2c3d failed: ErrImagePull";
+    for (const [name, read, expected] of [
+      [
+        "reuses it with the probe its builder reads back from the image",
+        async () => ({ kind: "read" as const, probe: readBack }),
+        { probe: readBack },
+      ],
+      [
+        "reuses it when the read fails, and is refused as owner-map-unverified",
+        async () => ({ kind: "unread" as const, note: unreadNote }),
+        { note: unreadNote },
+      ],
+      [
+        "reuses it when the read rejects, and is refused as owner-map-unverified",
+        async () => {
+          throw new Error("connect ECONNREFUSED 10.96.0.1:443");
+        },
+        {
+          note: "The image probe could not be read back from 127.0.0.1:5000/session-aaaa@sha256:prior: connect ECONNREFUSED 10.96.0.1:443",
+        },
+      ],
+    ] satisfies ReadonlyArray<
+      readonly [
+        string,
+        NonNullable<WorkspaceImageBuilder["readProbe"]>,
+        { readonly probe: WorkspaceImageProbe } | { readonly note: string },
+      ]
+    >) {
+      it.effect(`on a published plan whose build recorded no probe, a launch ${name}`, () => {
+        const jobs = ownerMapJob(true, () => ({
+          id: "job_prior",
+          status: "succeeded",
+          registryId: "local-zot",
+          repository: "session-aaaa",
+          tag: "sdk-11111111",
+          resultPayload: probed(undefined),
+          publishedReference: "127.0.0.1:5000/session-aaaa:sdk-11111111",
+          publishedDigestReference: "127.0.0.1:5000/session-aaaa@sha256:prior",
+          publishedDigest: "sha256:prior",
+        }));
+        const attempts = workspaceAttemptRepoStub();
+        const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+        const runtimeAdapter = createRuntimeAdapterStub("docker");
+        const registryClient = {
+          ...successRegistryClient(),
+          headManifest: vi.fn(async () => "sha256:prior"),
+        } as unknown as RegistryClient;
+        const compileWorkspaceSpec = vi.fn(async () => probed(undefined));
+        const readProbe = vi.fn(read);
+        const imageBuilder: WorkspaceImageBuilder = {
+          ...createDockerWorkspaceImageBuilder({
+            platform: "linux/amd64",
+            registryClient,
+            compileWorkspaceSpec,
+            planWorkspaceSpec: () => ({
+              osFamily: "nix" as const,
+              platform: "linux/amd64" as const,
+              imagePlan: {} as never,
+              containerfile: "FROM nixos/nix",
+              planHash: "d".repeat(64),
+            }),
+          }),
+          readProbe,
+        };
+
+        return Effect.gen(function* () {
+          const exit = yield* processWorkspaceBuildJobEffect(
+            baseOptions({
+              jobId: "job_owner_map",
+              runtimeAdapters: [runtimeAdapter],
+              credentialCipher: fakeCredentialCipher,
+              imageBuilder,
+              registryClient,
+            }),
+          ).pipe(Effect.exit);
+
+          expect(compileWorkspaceSpec).not.toHaveBeenCalled();
+          expect(readProbe).toHaveBeenCalledWith(
+            expect.objectContaining({
+              image: expect.objectContaining({
+                digestReference: "127.0.0.1:5000/session-aaaa@sha256:prior",
+              }),
+            }),
+          );
+          expect(jobs.markJobSucceeded).toHaveBeenCalledWith(
+            expect.objectContaining({
+              publishedDigest: "sha256:prior",
+              resultPayload: expect.objectContaining({
+                metadata:
+                  "probe" in expected
+                    ? expect.objectContaining({ imageProbe: expected.probe })
+                    : expect.not.objectContaining({ imageProbe: expect.anything() }),
+              }),
+            }),
+          );
+          if ("probe" in expected) {
+            expect(Exit.isSuccess(exit)).toBe(true);
+            expect(runtimeAdapter.launch).toHaveBeenCalledOnce();
+          } else {
+            expect(jobs.markJobSucceeded).toHaveBeenCalledWith(
+              expect.objectContaining({
+                resultPayload: expect.objectContaining({
+                  metadata: expect.objectContaining({
+                    notes: expect.arrayContaining([expected.note]),
+                  }),
+                }),
+              }),
+            );
+            expect(Exit.isFailure(exit) && !Cause.hasDies(exit.cause)).toBe(true);
+            expect(runtimeAdapter.launch).not.toHaveBeenCalled();
+            expect(attempts.markAttemptFailed).toHaveBeenCalledWith({ id: "run_owner_map" });
+            expect(runtimeInstances.upsertRuntimeInstance).toHaveBeenCalledWith(
+              expect.objectContaining({ status: "failed", errorCode: "owner-map-unverified" }),
+            );
+          }
+        }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+      });
+    }
   });
 
   describe("a capture launch whose recovery credential cannot be kept (review 5 #4)", () => {

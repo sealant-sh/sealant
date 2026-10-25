@@ -325,18 +325,33 @@ describe("the owner map in the boot env", () => {
     ).toBe("");
   });
 
-  it("is refused on Cloudflare and on Kubernetes, where no person's sudo could work", () => {
+  it("is refused on Cloudflare and under gVisor on Kubernetes, and taken under runc", () => {
     const blueprint = captureLaunch({ ownerMap: OWNER_MAP }).blueprint;
     expect(supportForCloudflare({ blueprint })).toMatchObject({
       supported: false,
       reason: "unsupported-runtime-requirement",
     });
+    const gvisor = { ...k8sConfig, gvisorRuntimeClass: "gvisor" };
+    const underRunsc = {
+      ...blueprint,
+      runtime: { ...blueprint.runtime, ociRuntime: "runsc" as const },
+    };
     for (const id of ["k8s", "k3s"] as const) {
-      expect(supportForKubernetes(id, k8sConfig, { blueprint })).toMatchObject({
+      expect(supportForKubernetes(id, gvisor, { blueprint })).toEqual({ supported: true });
+      const refused = supportForKubernetes(id, gvisor, { blueprint: underRunsc });
+      expect(refused).toMatchObject({
         supported: false,
         reason: "unsupported-runtime-requirement",
-        message: expect.stringContaining("allowPrivilegeEscalation: false"),
+        message: expect.stringContaining("ociRuntime 'runc'"),
       });
+      // Mend 0.36 reads these words as a permanent "no" for the image; a runsc refusal is not one.
+      const message = refused.supported ? "" : refused.message;
+      expect(message).not.toMatch(/is not available on Kubernetes|names an owner map/);
+      expect(
+        supportForKubernetes(id, gvisor, {
+          blueprint: { ...captureLaunch().blueprint, runtime: underRunsc.runtime },
+        }),
+      ).toEqual({ supported: true });
     }
   });
 });
@@ -359,13 +374,21 @@ describe("the launch's image check", () => {
   it("lets a map through only on an image that reports it, and never stops a launch without one", () => {
     const withMap = captureLaunch({ ownerMap: OWNER_MAP }).blueprint;
     expect(ownerMapLaunchRefusal(withMap, supported)).toBeUndefined();
-    for (const [image, why] of [
-      [probe({ schemaVersion: 1, supports: ["exec.user"] }), /does not report restore.owner_map/],
-      [probe("unreadable"), /answered the probe with something Core cannot read/],
-      [undefined, /records no probe/],
+    for (const [image, code, why] of [
+      [
+        probe({ schemaVersion: 1, supports: ["exec.user"] }),
+        "owner-map-unsupported",
+        /does not report restore.owner_map/,
+      ],
+      [
+        probe("unreadable"),
+        "owner-map-unverified",
+        /answered the probe with something Core cannot read/,
+      ],
+      [undefined, "owner-map-unverified", /records no probe/],
     ] as const) {
       const refusal = ownerMapLaunchRefusal(withMap, image);
-      expect(refusal?.code).toBe("owner-map-unsupported");
+      expect(refusal?.code).toBe(code);
       expect(refusal?.message).toMatch(why);
       expect(refusal?.message).toMatch(/Nothing ran/);
     }

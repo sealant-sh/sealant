@@ -20,7 +20,9 @@
  * `mounting "sysfs" … operation not permitted` inside the runner's nested containerd), so there
  * the suite skips with a loud note instead of failing on a limitation of the harness. It runs for
  * real against a cluster whose nodes support user namespaces (Talos 1.13 / containerd 2.2 is the
- * reference), which is where the feature is accepted.
+ * reference), which is where the feature is accepted. `up.sh` removes kind's dmi overmounts and
+ * read-only /sys; with that, the suite passes on a workstation's kind (v0.33, node 1.37, measured
+ * 2026-10-24). GitHub-hosted runners are not yet measured.
  */
 import { parseWorkspaceBlueprint } from "@sealant/validators";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -37,84 +39,14 @@ import {
   forwardedControlChannel,
   kubectl,
   NAMESPACE,
+  probeUserNamespaces,
   runIn,
   startRegistryForward,
   type RegistryForward,
+  type UserNamespaceSupport,
 } from "./e2e-support.js";
 
 const RUN_ID = `run-e2e-docker-${Date.now().toString(36)}`;
-const PROBE_POD = `userns-probe-${Date.now().toString(36)}`;
-
-/**
- * Can this cluster run a user-namespaced Pod? A bare `hostUsers: false` Pod that only sleeps:
- * Ready within the budget means yes; anything else (sandbox creation failing, the field ignored
- * and the uid map left as the host's) means the daemon suite has nothing to prove here.
- */
-const probeUserNamespaces = async (): Promise<{ supported: boolean; reason: string }> => {
-  const manifest = JSON.stringify({
-    apiVersion: "v1",
-    kind: "Pod",
-    metadata: {
-      name: PROBE_POD,
-      namespace: NAMESPACE,
-      labels: { "sealant.sh/e2e-probe": "userns" },
-    },
-    spec: {
-      hostUsers: false,
-      restartPolicy: "Never",
-      nodeSelector: { "sealant.sh/e2e-role": "workspace" },
-      containers: [{ name: "probe", image: "alpine:3.20", command: ["sleep", "120"] }],
-    },
-  });
-  try {
-    // `kubectl apply -f -` needs stdin; go through a temp file instead.
-    const { writeFile, rm } = await import("node:fs/promises");
-    const path = `/tmp/${PROBE_POD}.json`;
-    await writeFile(path, manifest);
-    try {
-      await kubectl("apply", "-f", path);
-    } finally {
-      await rm(path, { force: true });
-    }
-    const ready = await kubectl(
-      "wait",
-      "--for=condition=Ready",
-      `pod/${PROBE_POD}`,
-      "--timeout=90s",
-    ).then(
-      () => true,
-      () => false,
-    );
-    if (!ready) {
-      const events = await kubectl(
-        "get",
-        "events",
-        "--field-selector",
-        `involvedObject.name=${PROBE_POD}`,
-        "-o",
-        "jsonpath={range .items[*]}{.reason}: {.message}{'\\n'}{end}",
-      ).catch(() => "");
-      return {
-        supported: false,
-        reason: `a bare hostUsers:false Pod did not become Ready in 90s${events.trim() === "" ? "" : `:\n${events.trim().slice(0, 600)}`}`,
-      };
-    }
-    const uidMap = (
-      await kubectl("exec", PROBE_POD, "--", "cat", "/proc/self/uid_map").catch(() => "")
-    ).trim();
-    if (/^\s*0\s+0\s+4294967295\s*$/.test(uidMap)) {
-      return {
-        supported: false,
-        reason: "hostUsers:false was ignored — the Pod's uid map is the host's (0 0 4294967295)",
-      };
-    }
-    return { supported: true, reason: `uid map: ${uidMap.replace(/\s+/g, " ")}` };
-  } finally {
-    await kubectl("delete", "pod", PROBE_POD, "--ignore-not-found", "--wait=false").catch(
-      () => undefined,
-    );
-  }
-};
 
 const blueprint = parseWorkspaceBlueprint({
   version: "1",
@@ -163,7 +95,7 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes workspace-scoped Docker", () => {
   let target: SealantTarget | undefined;
   let podName = "";
   let registryForward: RegistryForward | undefined;
-  let userNamespaces: { supported: boolean; reason: string } = {
+  let userNamespaces: UserNamespaceSupport = {
     supported: false,
     reason: "not probed",
   };
@@ -185,12 +117,12 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes workspace-scoped Docker", () => {
       return;
     }
     registryForward = await startRegistryForward();
-    publishedImage = await buildWorkspaceImage({
+    ({ publishedImage } = await buildWorkspaceImage({
       blueprint,
       registryPort: registryForward.port,
       tag: "fedora-docker",
       kubeconfigPath,
-    });
+    }));
     const config = kubernetesRuntimeConfigSchema.parse({
       namespace: NAMESPACE,
       volumeMappings: [{ logicalRoot: "/var/lib/mend/store", claimName: "mend-store" }],

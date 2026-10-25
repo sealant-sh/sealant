@@ -31,11 +31,12 @@ export interface KubernetesBuildApi {
   readonly createSecret: (secret: V1Secret) => Promise<CreateOutcome<V1Secret>>;
   readonly deleteSecret: (name: string) => Promise<DeleteOutcome>;
   readonly listPods: (labelSelector: string) => Promise<readonly V1Pod[]>;
-  /** Tail of one container's log; empty when unavailable. Never throws. */
+  /** Tail of one container's log, at most `limitBytes`; empty when unavailable. Never throws. */
   readonly readPodLogTail: (
     podName: string,
     container: string,
     tailLines: number,
+    limitBytes?: number,
   ) => Promise<string>;
 }
 
@@ -147,9 +148,15 @@ export const createLiveKubernetesBuildApi = (options: {
         throw toApiError("list pods", error);
       }
     },
-    readPodLogTail: async (podName, container, tailLines) => {
+    readPodLogTail: async (podName, container, tailLines, limitBytes) => {
       try {
-        return await core.readNamespacedPodLog({ name: podName, namespace, container, tailLines });
+        return await core.readNamespacedPodLog({
+          name: podName,
+          namespace,
+          container,
+          tailLines,
+          ...(limitBytes === undefined ? {} : { limitBytes }),
+        });
       } catch {
         return "";
       }

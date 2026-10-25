@@ -107,15 +107,17 @@ the daemon's restore writes: each person's saved directory (`<harnessHome>/peopl
 the worktree the group's, and, when it names anyone, an executor without no-new-privileges, so every
 person's `sudo` works. It is checked at create (`400` with the reason): `gid` 40000, uids in
 40001–49999, ids that are one directory name, no id or uid twice, at most 256 people; refused on
-Cloudflare and Kubernetes (no person's `sudo` works under `allowPrivilegeEscalation: false`), and in
-`runtime.env`, whose names must be environment variable names. The launch refuses it
-(`owner-map-unsupported`, nothing started) on an image whose probe does not report
-`restore.owner_map`. `POST /v1/workspaces/:id/capture/replan` takes `expectedOwnerMap` (`null` for
-none) and answers `409` `owner-map-mismatch` on an executor launched with another map; the capture
-status reports `ownerMap`. `POST /v1/workspaces/image { ownerUserId, registryId, spec }` answers,
-before any create, the image plan the spec renders, the latest image published for it, and its
-per-person capability (`personLayout`, also on every workspace read's `publishedImage`). An exec or
-a session as a Linux user (a user name or uid) goes to its own route,
+Cloudflare, and in `runtime.env`, whose names must be environment variable names. Kubernetes takes
+it under runc and refuses it under gVisor (`ociRuntime: "runsc"`). The launch refuses it, with
+nothing started, on an image whose sealantd does not report `restore.owner_map`
+(`owner-map-unsupported`) and on one whose probe Core could not read (`owner-map-unverified`).
+`GET /` reports `features.kubernetesPersonLayout: true` from a control plane that takes it on
+Kubernetes. `POST /v1/workspaces/:id/capture/replan` takes `expectedOwnerMap` (`null` for none) and
+answers `409` `owner-map-mismatch` on an executor launched with another map; the capture status
+reports `ownerMap`. `POST /v1/workspaces/image { ownerUserId, registryId, spec }` answers, before
+any create, the image plan the spec renders, the latest image published for it, and its per-person
+capability (`personLayout`, also on every workspace read's `publishedImage`). An exec or a session
+as a Linux user (a user name or uid) goes to its own route,
 `POST /v1/workspaces/:workspaceId/exec-as-user` or `POST /v1/sessions/as-user`, with the same body
 and `user` required, so a control plane that cannot run one answers `404`; `user` on `/exec` or
 `/v1/sessions` is refused (`409` `user-unsupported`). The workspace's `sealantd` starts the process

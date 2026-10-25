@@ -704,9 +704,10 @@ unchanged. The SDK carries a typed error's body code as `SealantApiError.reason`
   names someone leaves no-new-privileges unset, sealantd#148). Core delivers it as
   `SEALANT_CAPTURE_OWNER_MAP` in sealantd's JSON (`{"gid","worktree","people":{id: uid}}`, people in
   id order) from `captureOwnerMapEnv`, emitted after every other entry and empty without a map, so
-  Docker, Kubernetes and MicroVM boot it alike. Cloudflare and Kubernetes refuse it at create and in
-  their adapters (Kubernetes Pods run with `allowPrivilegeEscalation: false`, so no person's `sudo`
-  could work).
+  Docker, Kubernetes and MicroVM boot it alike. Cloudflare refuses it at create and in its adapter.
+  Kubernetes takes it under runc: the per-person Pod may escalate and adds `FSETID`, and the
+  Kubernetes image builder reads the probe back from the pushed digest. Under gVisor
+  (`ociRuntime: "runsc"`) the Kubernetes adapter refuses it.
 - **One definition** of its shape, bounds and encoding in `@sealant/api-contracts/capture-owner-map`
   (`captureOwnerMapProblems`, `encodeCaptureOwnerMap`), used by the SDK's client-side refusal, the
   blueprint schema on every parse and the adapters: gid 40000, uids 40001–49999, ids that are one
@@ -720,10 +721,11 @@ unchanged. The SDK carries a typed error's body code as `SealantApiError.reason`
   that name is dropped; and the entry comes last and empty without a map, which also overrides an
   image `ENV`.
 - **Refused at launch on an image that may not apply it**: the worker reads the image probe the
-  build recorded (or the reused build's) and fails the launch with `owner-map-unsupported` before
-  the runtime row, the stager or the adapter is touched, unless its sealantd reported
-  `restore.owner_map`. Unknown is refused, never launched on the hope: a daemon without it ignores
-  the variable, restores everything root's and keeps no-new-privileges.
+  build recorded (or the reused build's) and fails the launch before the runtime row, the stager or
+  the adapter is touched, unless its sealantd reported `restore.owner_map`: `owner-map-unsupported`
+  when it answered without it, `owner-map-unverified` when no probe was recorded or its answer could
+  not be read. Unknown is refused, never launched on the hope: a daemon without it ignores the
+  variable, restores everything root's and keeps no-new-privileges.
 - **Fixed for the executor's life.** sealantd reads it at boot; a capture workspace is never
   restarted in place (its token is not retained), Docker's recovery restarts the same container and
   the MicroVM agent reuses the first boot's environment, so a recovery keeps it. A standby's claim

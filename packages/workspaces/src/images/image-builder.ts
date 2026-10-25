@@ -11,7 +11,12 @@
  *   - `KubernetesWorkspaceImageBuilder` (`./kubernetes/`) runs one rootless BuildKit Job per build
  *     that pushes straight to the registry.
  */
-import type { NewWorkspace, WorkspaceBuild, WorkspaceImagePlatform } from "@sealant/validators";
+import type {
+  NewWorkspace,
+  WorkspaceBuild,
+  WorkspaceImagePlatform,
+  WorkspaceImageProbe,
+} from "@sealant/validators";
 
 import {
   buildContextDirectoryOf,
@@ -56,6 +61,15 @@ export interface FindPublishedInput {
   readonly tag: string;
 }
 
+export interface ReadProbeInput {
+  readonly planned: PlannedWorkspaceImageBuild;
+  readonly image: PublishedImage;
+}
+
+export type ImageProbeReadback =
+  | { readonly kind: "read"; readonly probe: WorkspaceImageProbe }
+  | { readonly kind: "unread"; readonly note: string };
+
 export interface BuildAndPublishResult {
   readonly publishedImage: PublishedImage;
   /** What the job row records as `resultPayload`; shape is the compiler's build result. */
@@ -86,6 +100,11 @@ export interface WorkspaceImageBuilder {
    * Engine that kept its images). Null when there is none, or it cannot be vouched for.
    */
   readonly findPublished?: (input: FindPublishedInput) => Promise<BuildAndPublishResult | null>;
+  /**
+   * The probe of a published image, read from the image itself: for a reused publish whose build
+   * recorded none.
+   */
+  readonly readProbe?: (input: ReadProbeInput) => Promise<ImageProbeReadback>;
 }
 
 export interface DockerWorkspaceImageBuilderOptions {

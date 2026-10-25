@@ -1,7 +1,7 @@
 /**
  * An image's per-person capability as the API reports it: the verdict of the image's probe
- * (`metadata.imageProbe`) with the runtime's `no_new_privs` and the declared ACL support; supported
- * only when nothing is missing or unknown.
+ * (`metadata.imageProbe`) and the declared ACL support; supported only when nothing is missing or
+ * unknown.
  */
 import type { WorkspaceImageProbe } from "@sealant/validators";
 import { describe, expect, it } from "vitest";
@@ -57,10 +57,23 @@ describe("personLayoutCapability", () => {
         { runtime: "docker", acl: "unsupported" },
       ),
     ).toMatchObject({ status: "unsupported", missing: ["setpriv", "acl"] });
-    // Kubernetes workspaces run with no_new_privs, where sudo cannot raise a person.
-    expect(personLayoutCapability(ready, { runtime: "k8s", acl: "supported" })).toMatchObject({
-      status: "unsupported",
-      missing: ["sudo-no-new-privileges"],
-    });
+    expect(
+      personLayoutCapability(
+        { ...ready, noNewPrivileges: true },
+        { runtime: "k8s", acl: "supported" },
+      ),
+    ).toMatchObject({ status: "unsupported", missing: ["sudo-no-new-privileges"] });
+  });
+
+  it("is supported on Kubernetes like anywhere else: a per-person Pod may escalate", () => {
+    for (const runtime of ["k8s", "k3s"] as const) {
+      expect(personLayoutCapability(ready, { runtime, acl: "supported" })).toEqual({
+        status: "supported",
+        missing: [],
+        unknown: [],
+        runtime,
+        acl: "supported",
+      });
+    }
   });
 });

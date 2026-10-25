@@ -16,12 +16,18 @@
  *      truth, not the Job's stdout.
  *   6. Delete the ConfigMap and Secrets; the Job stays for `ttlSecondsAfterFinished` so the log
  *      can still be read, then Kubernetes reaps it.
+ *   7. Read the image probe back from the pushed digest (`probeJob`); a failed read is a note.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import type { V1ConfigMap, V1Job, V1Pod, V1Secret } from "@kubernetes/client-node";
-import type { NewWorkspace, WorkspaceBuild, WorkspaceImagePlatform } from "@sealant/validators";
+import {
+  parseWorkspaceImageProbe,
+  type NewWorkspace,
+  type WorkspaceBuild,
+  type WorkspaceImagePlatform,
+} from "@sealant/validators";
 
 import {
   ARCHLINUXARM_BUILDER_KEY,
@@ -32,21 +38,26 @@ import {
   usesArchlinuxArm,
   type PlannedWorkspaceImageBuild,
 } from "../../buildkit/index.js";
+import { IMAGE_PROBE_PATH } from "../../buildkit/person-layout.js";
 import { buildRegistryImageReference, type RegistryClient } from "../../registry/index.js";
 import {
   LABEL_COMPONENT,
   LABEL_MANAGED_BY,
   NODE_ARCH_LABEL,
 } from "../../runtime/kubernetes/config.js";
+import type { PublishedImage } from "../../runtime/runtime-adapter.js";
 import type {
   BuildAndPublishInput,
   BuildAndPublishResult,
+  ImageProbeReadback,
+  ReadProbeInput,
   WorkspaceImageBuilder,
 } from "../image-builder.js";
 import type { KubernetesBuildApi } from "./api.js";
 import type { KubernetesBuildConfig } from "./config.js";
 
 export const COMPONENT_BUILD = "image-build";
+export const COMPONENT_IMAGE_PROBE = "image-probe";
 export const LABEL_PLAN_HASH = "sealant.sh/plan-hash";
 export const LABEL_BUILD_ID = "sealant.sh/build-id";
 
@@ -63,6 +74,10 @@ const POLL_INTERVAL_MS = 2000;
  */
 const UNSCHEDULABLE_GRACE_MS = 5 * 60_000;
 const LOG_TAIL_LINES = 60;
+const PROBE_CONTAINER_NAME = "probe";
+/** Long enough for a cold image pull, inside the build job's lease (15 min by default). */
+const PROBE_DEADLINE_MS = 10 * 60_000;
+const PROBE_MAX_BYTES = 64 * 1024;
 
 export interface KubernetesWorkspaceImageBuilderOptions {
   readonly config: KubernetesBuildConfig;
@@ -289,6 +304,81 @@ export const buildJob = (input: BuildManifestsInput): V1Job => ({
   },
 });
 
+const freshProbeJobName = (buildName: string): string =>
+  `${buildName}-probe-${randomBytes(4).toString("hex")}`;
+
+const probeDeadlineMs = (config: KubernetesBuildConfig): number =>
+  Math.min(PROBE_DEADLINE_MS, config.timeoutMs);
+
+// A namespace under a ResourceQuota admits no Pod without requests.
+const PROBE_CONTAINER_RESOURCES = {
+  requests: { cpu: "10m", memory: "16Mi" },
+  limits: { cpu: "100m", memory: "64Mi" },
+};
+
+const said = (
+  status: { readonly reason?: string; readonly message?: string } | undefined,
+): string | undefined =>
+  status === undefined
+    ? undefined
+    : [status.reason, status.message].filter((part) => part !== undefined).join(": ");
+
+export interface ProbeJobInput {
+  readonly name: string;
+  readonly config: KubernetesBuildConfig;
+  readonly image: PublishedImage;
+  readonly platform: WorkspaceImagePlatform;
+  readonly nodeSelector?: Readonly<Record<string, string>>;
+}
+
+export const probeJob = (input: ProbeJobInput): V1Job => {
+  const labels = {
+    [LABEL_MANAGED_BY]: input.config.managedBy,
+    [LABEL_COMPONENT]: COMPONENT_IMAGE_PROBE,
+  };
+  return {
+    apiVersion: "batch/v1",
+    kind: "Job",
+    metadata: { name: input.name, namespace: input.config.namespace, labels },
+    spec: {
+      backoffLimit: 0,
+      ttlSecondsAfterFinished: input.config.ttlSecondsAfterFinished,
+      activeDeadlineSeconds: Math.ceil(probeDeadlineMs(input.config) / 1000),
+      template: {
+        metadata: { labels },
+        spec: {
+          restartPolicy: "Never",
+          nodeSelector: buildJobNodeSelector(input.nodeSelector ?? {}, input.platform),
+          automountServiceAccountToken: false,
+          enableServiceLinks: false,
+          ...(input.config.imagePullSecret === undefined
+            ? {}
+            : { imagePullSecrets: [{ name: input.config.imagePullSecret }] }),
+          securityContext: {
+            runAsNonRoot: true,
+            runAsUser: 65534,
+            runAsGroup: 65534,
+            seccompProfile: { type: "RuntimeDefault" },
+          },
+          containers: [
+            {
+              name: PROBE_CONTAINER_NAME,
+              image: input.image.digestReference,
+              command: ["/bin/sh", "-c", `cat ${IMAGE_PROBE_PATH}`],
+              resources: PROBE_CONTAINER_RESOURCES,
+              securityContext: {
+                allowPrivilegeEscalation: false,
+                readOnlyRootFilesystem: true,
+                capabilities: { drop: ["ALL"] },
+              },
+            },
+          ],
+        },
+      },
+    },
+  };
+};
+
 const b64 = (value: string | Buffer): string => Buffer.from(value).toString("base64");
 
 /** The workspace Pods' node selector, with the image's architecture. */
@@ -474,6 +564,7 @@ export class KubernetesWorkspaceImageBuilder implements WorkspaceImageBuilder {
       digestReference: `${config.pushRegistry}/${repository}@${digest}`,
       digest,
     };
+    const readback = await this.#readImageProbe(name, publishedImage, planned.platform);
     const build: WorkspaceBuild = {
       builder: { id: planned.osFamily, osFamily: planned.osFamily },
       artifacts: [
@@ -486,12 +577,23 @@ export class KubernetesWorkspaceImageBuilder implements WorkspaceImageBuilder {
       ],
       metadata: {
         defaultArtifactName: `${repository}:${input.tag}`,
-        notes: [`Built by BuildKit Job ${name} in namespace ${config.namespace}.`],
+        notes: [
+          `Built by BuildKit Job ${name} in namespace ${config.namespace}.`,
+          ...(readback.kind === "unread" ? [readback.note] : []),
+        ],
         planHash: planned.planHash,
+        ...(readback.kind === "read" ? { imageProbe: readback.probe } : {}),
       },
     };
     return { publishedImage, build };
   }
+
+  readonly readProbe = (input: ReadProbeInput): Promise<ImageProbeReadback> =>
+    this.#readImageProbe(
+      buildJobName(input.planned.planHash, input.image.repository, input.image.tag),
+      input.image,
+      input.planned.platform,
+    );
 
   /** Every build Job this worker owns (for reconciliation / cleanup policy). */
   async listManagedJobs(): Promise<readonly V1Job[]> {
@@ -547,13 +649,69 @@ export class KubernetesWorkspaceImageBuilder implements WorkspaceImageBuilder {
     }
   }
 
-  async #logTail(jobName: string): Promise<string> {
+  async #readImageProbe(
+    buildName: string,
+    image: PublishedImage,
+    platform: WorkspaceImagePlatform,
+  ): Promise<ImageProbeReadback> {
+    const name = freshProbeJobName(buildName);
+    let created = false;
+    try {
+      const outcome = await this.#api.createJob(
+        probeJob({ name, config: this.#config, image, platform, nodeSelector: this.#nodeSelector }),
+      );
+      if (outcome.outcome === "conflict") throw new Error(`Job ${name} already exists`);
+      created = true;
+      const deadline = this.#now() + probeDeadlineMs(this.#config) + 30_000;
+      for (;;) {
+        const job = await this.#api.getJob(name);
+        const status = jobStatus(job);
+        if (status === "succeeded") break;
+        if (status === "missing") throw new Error(`Job ${name} missing`);
+        if (status === "failed" || this.#now() > deadline) {
+          const ended = status === "failed" ? "failed" : "did not finish in time";
+          throw new Error(`Job ${name} ${ended}: ${await this.#probeFailure(job, name)}`);
+        }
+        await sleep(this.#pollIntervalMs);
+      }
+      const output = await this.#logTail(name, PROBE_CONTAINER_NAME, PROBE_MAX_BYTES);
+      return { kind: "read", probe: parseWorkspaceImageProbe(JSON.parse(output)) };
+    } catch (error) {
+      const reason = error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error);
+      return {
+        kind: "unread",
+        note: `The image probe could not be read back from ${image.digestReference}: ${reason}`,
+      };
+    } finally {
+      if (created) await this.#api.deleteJob(name).catch(() => undefined);
+    }
+  }
+
+  async #probeFailure(job: V1Job | undefined, name: string): Promise<string> {
+    const pods = await this.#api.listPods(`job-name=${name}`);
+    const waiting = pods
+      .flatMap((pod) => pod.status?.containerStatuses ?? [])
+      .find((status) => status.state?.waiting?.reason !== undefined)?.state?.waiting;
+    const failed = job?.status?.conditions?.find((c) => c.type === "Failed" && c.status === "True");
+    const reason = unschedulableCondition(pods) ?? said(waiting) ?? said(failed);
+    if (reason !== undefined) return reason;
+    const logLine = (await this.#logTail(name, PROBE_CONTAINER_NAME, PROBE_MAX_BYTES))
+      .split("\n")
+      .pop();
+    return logLine === undefined || logLine === "" ? "no reason reported" : logLine;
+  }
+
+  async #logTail(
+    jobName: string,
+    container = CONTAINER_NAME,
+    limitBytes?: number,
+  ): Promise<string> {
     const pods = await this.#api.listPods(`job-name=${jobName}`);
     const pod = pods[pods.length - 1];
     const podName = pod?.metadata?.name;
     if (podName === undefined) {
       return "";
     }
-    return (await this.#api.readPodLogTail(podName, CONTAINER_NAME, LOG_TAIL_LINES)).trim();
+    return (await this.#api.readPodLogTail(podName, container, LOG_TAIL_LINES, limitBytes)).trim();
   }
 }
