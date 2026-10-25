@@ -40,6 +40,7 @@ export const toFeatures = (index: SystemIndexResponse): SealantFeatures => {
     connectedAccountLoginClass: features?.connectedAccountLoginClass === true,
     kubernetesPersonLayout: features?.kubernetesPersonLayout === true,
     connectedAccountApiKeys: features?.connectedAccountApiKeys === true,
+    inferenceAllowedLogin: features?.inferenceAllowedLogin === true,
   };
 };
 
@@ -99,4 +100,17 @@ export const requireCredentialPlacements = async (ctx: SdkContext): Promise<void
       "This control plane cannot protect live credential placements or prune them; nothing was sent.",
       { code: "credential-placements-unsupported" },
     );
+};
+
+export const requireInferenceAllowedLogin = async (ctx: SdkContext): Promise<void> => {
+  const supported = await readFeatures(ctx).then(
+    (features) => features.inferenceAllowedLogin,
+    () => false,
+  );
+  if (!supported) {
+    throw new SealantError(
+      "This control plane cannot limit inference to a subscription (it does not report the feature, or could not be asked), and would run on a key; nothing was sent.",
+      { code: "inference-allowed-login-unsupported" },
+    );
+  }
 };

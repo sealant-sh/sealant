@@ -44,6 +44,7 @@ export const buildInferenceRespondRequest = (
       ...(codex === undefined ? {} : { codex }),
     },
     prompt: options.prompt,
+    ...(options.allowedLogin === undefined ? {} : { allowedLogin: options.allowedLogin }),
     ...(options.system === undefined ? {} : { system: options.system }),
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.maxTurns === undefined ? {} : { maxTurns: options.maxTurns }),
@@ -91,5 +92,6 @@ export const mapInferenceResponse = (wire: InferenceRespondResponse): InferenceR
     ...(wire.usage === undefined
       ? {}
       : { usage: { inputTokens: wire.usage.inputTokens, outputTokens: wire.usage.outputTokens } }),
+    ...(wire.receipt === undefined ? {} : { receipt: { ...wire.receipt } }),
   };
 };
