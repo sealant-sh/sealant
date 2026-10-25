@@ -7,8 +7,7 @@
  * tokens ride `CLAUDE_CODE_OAUTH_TOKEN`; session credential files are materialized into a private
  * per-invocation `CLAUDE_CONFIG_DIR` (0700 dir / 0600 file) so the official CLI reads the file
  * itself AND can rotate the session with its refresh token — the control plane never calls
- * Anthropic's token endpoint. API keys sit in a private 0600 file the CLI reads through an
- * `apiKeyHelper` passed in its flag settings, never in its environment or argv. This module NEVER calls a model API directly, never logs the token,
+ * Anthropic's token endpoint. This module NEVER calls a model API directly, never logs the token,
  * and strips any ambient `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` from the subprocess env so
  * the exchange cannot silently bill a different identity than the resolved connected account.
  *
@@ -19,10 +18,6 @@
  * Built-in Claude Code tools are disabled wholesale (`tools: []`): this endpoint is inference, not
  * an agent workspace, and nothing may touch the control plane's filesystem or network on the
  * model's behalf.
- *
- * Sessions live in a map built once with the live layer's value (deliberately NOT layer state:
- * they must survive across requests regardless of how the request-dependency layer is scoped) and
- * expire after a few idle minutes. Every way a session ends runs its `onSessionEnd` once.
  */
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -44,7 +39,7 @@ import {
   type SessionTurn,
   type ToolResultInput,
 } from "./session-state.js";
-import { extractJson, isAuthFailureMessage, redactSecret } from "./support.js";
+import { extractJson, soundsLikeAuthFailure, redactSecret } from "./support.js";
 
 const CALLER_SERVER_NAME = "caller";
 const DEFAULT_MAX_TURNS = 16;
@@ -86,11 +81,6 @@ export type InferenceAuth =
       readonly accessToken: string;
     }
   | {
-      /**
-       * API-key accounts: a caller-provisioned private config dir holding the key in a file the
-       * CLI reads through an `apiKeyHelper`, so the key is never in the environment or argv.
-       * `apiKey` is carried ONLY so engine error text can be redacted.
-       */
       readonly kind: "api-key";
       readonly configDir: string;
       readonly keyPath: string;
@@ -130,14 +120,9 @@ export interface InferenceEngineTurn {
 
 export class InferenceEngineError extends Error {
   override readonly name = "InferenceEngineError";
-  /**
-   * `auth`: the provider refused the credential with an HTTP 401 status. `auth-suspected`: only
-   * words say so (the error's text, or a CLI type derived from it); never a reason to mark an API
-   * key invalid.
-   */
   readonly reason:
-    | "auth"
-    | "auth-suspected"
+    | "auth-401"
+    | "auth-words"
     | "session-not-found"
     | "bad-tool-result"
     | "timeout"
@@ -240,14 +225,12 @@ const authSecret = (auth: InferenceAuth): string => {
 
 const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
 
-/** Flag-layer settings: an API key reaches the CLI only through a helper that reads its file. */
 const authSettings = (auth: InferenceAuth) =>
   auth.kind === "api-key" ? { settings: { apiKeyHelper: `cat ${shellQuote(auth.keyPath)}` } } : {};
 
 /**
- * A refused turn: `auth` only on the provider's 401 status. The CLI's own `authentication_failed`
- * type is read from the response's words (a 400 that mentions an invalid key carries it), so on
- * its own it is only suspected.
+ * The CLI also sets `authentication_failed` from words alone (any error whose message mentions
+ * `x-api-key`), so without a 401 status it counts only as auth words.
  */
 const turnFailure = (
   status: number | null | undefined,
@@ -256,10 +239,10 @@ const turnFailure = (
   secret: string,
 ): InferenceEngineError => {
   if (status === 401) {
-    return new InferenceEngineError("auth", "Inference failed: the provider answered 401.");
+    return new InferenceEngineError("auth-401", "Inference failed: the provider answered 401.");
   }
   if (assistantError === "authentication_failed") {
-    return new InferenceEngineError("auth-suspected", "Inference failed: authentication_failed");
+    return new InferenceEngineError("auth-words", "Inference failed: authentication_failed");
   }
   return assistantError === undefined
     ? toEngineError(new Error(detail), secret)
@@ -275,15 +258,14 @@ const toEngineError = (error: unknown, secret: string): InferenceEngineError => 
   }
   const raw = error instanceof Error ? error.message : String(error);
   const message = redactSecret(raw, secret);
-  return isAuthFailureMessage(message)
-    ? new InferenceEngineError("auth-suspected", message, { cause: error })
+  return soundsLikeAuthFailure(message)
+    ? new InferenceEngineError("auth-words", message, { cause: error })
     : new InferenceEngineError("engine", message, { cause: error });
 };
 
 interface LiveSession {
   readonly state: InferenceSessionState;
   readonly close: () => void;
-  /** Settles once the CLI process has exited (at once if it never started). */
   readonly exited: () => Promise<void>;
   readonly onSessionEnd: (() => Promise<void>) | undefined;
 }
@@ -309,15 +291,13 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
   const sweepIntervalMs = options.sweepIntervalMs ?? SWEEP_INTERVAL_MS;
   const sessions = new Map<string, LiveSession>();
 
-  /**
-   * Every way a session ends comes here once: it leaves the map and closes, and its hook runs once
-   * the CLI has exited, so nothing the CLI writes on its way out lands in a directory already removed.
-   */
   const dropSession = (id: string): void => {
     const session = sessions.get(id);
     if (session !== undefined) {
       sessions.delete(id);
       session.close();
+      // The CLI writes its transcript into the config dir while it shuts down (observed on
+      // 2.1.201), so a hook that removes the dir waits for the process to exit.
       void session.exited().then(() => runSessionEnd(session.onSessionEnd));
     }
   };
@@ -482,7 +462,6 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
     return awaitTurn(sessionId, state, authSecret(input.auth));
   };
 
-  /** The session's next turn; a done turn or any failure ends the session. */
   const awaitTurn = async (
     sessionId: string,
     state: InferenceSessionState,
@@ -538,10 +517,6 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
   };
 };
 
-/**
- * Build the live layer. The options shorten its timings and replace the SDK's `query` for tests;
- * the defaults are production's.
- */
 export const claudeEngineLayer = (options?: ClaudeEngineOptions): Layer.Layer<InferenceEngine> =>
   Layer.succeed(InferenceEngine, makeClaudeEngine(options));
 
