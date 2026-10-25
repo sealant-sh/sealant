@@ -25,6 +25,7 @@ import {
 import {
   CODEX_COPY_REFRESH_TOKEN,
   CredentialCipher,
+  CredentialCipherError,
   type CredentialCipherService,
 } from "@sealant/credentials";
 import {
@@ -632,6 +633,55 @@ describe("inference.module receipts", () => {
 
     expect(error).toMatchObject({
       receipt: { accountId: "cacc_codex", revision: 1, login: "subscription" },
+    });
+  });
+
+  it("carries the receipt on every failure before the engine starts", async () => {
+    const unusableGrant = account({
+      provider: "claude",
+      id: "cacc_claude_unusable",
+      kind: "credentials-json",
+      encryptedPayload: `sealed:${JSON.stringify({ credentialsJson: "{}" })}`,
+    });
+    const malformed = account({ id: "cacc_codex_malformed", encryptedPayload: "sealed:{" });
+    const invalid = { ...claudeKeyAccount, status: "invalid" as const };
+    const accounts = accountsStub({
+      byName: {
+        "claude:unusable": unusableGrant,
+        "codex:malformed": malformed,
+        "claude:invalid": invalid,
+      },
+    });
+    const { layer } = makeLayers({ accounts });
+    const undecryptable = Layer.mergeAll(
+      layer,
+      Layer.succeed(CredentialCipher, {
+        ...fakeCipher,
+        decrypt: () =>
+          Effect.fail(new CredentialCipherError({ operation: "decrypt", message: "bad key" })),
+      }),
+    );
+    const failure = (credentials: InferenceRespondRequest["credentials"]) =>
+      runFlipped(respond(newExchange({ credentials })).pipe(Effect.provide(layer)));
+
+    expect(await failure({ claude: "unusable" })).toMatchObject({
+      receipt: { accountId: "cacc_claude_unusable", revision: 1, login: "subscription" },
+    });
+    expect(await failure({ codex: "malformed" })).toMatchObject({
+      receipt: { accountId: "cacc_codex_malformed", revision: 1, login: "subscription" },
+    });
+    expect(await failure({ claude: "invalid" })).toMatchObject({
+      message: expect.stringContaining("reconnect it"),
+      receipt: { accountId: "cacc_claude_key", revision: 1, login: "api-key" },
+    });
+    expect(
+      await runFlipped(
+        respond(newExchange({ credentials: { codex: "cacc_codex_key" } })).pipe(
+          Effect.provide(undecryptable),
+        ),
+      ),
+    ).toMatchObject({
+      receipt: { accountId: "cacc_codex_key", revision: 1, login: "api-key" },
     });
   });
 

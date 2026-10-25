@@ -25,6 +25,8 @@ import {
   CredentialCipher,
   extractClaudeOauthCredentials,
   loginClassOf,
+  loginClassOfKind,
+  parseConnectedAccountKind,
   parseStoredCredential,
   type ProviderCredentialPayload,
   provisionClaudeConfigDir,
@@ -83,9 +85,9 @@ const requireCredentialsKey = Effect.gen(function* () {
 /**
  * Resolve the request's credential selection to a connected account, mirroring the
  * workspace-create semantics: explicit id/name wins over the profile binding; unknown, foreign,
- * wrong-provider, and archived accounts are a uniform 404; a non-active account is a 409
- * ("reconnect it"). Selecting both providers in one exchange is ambiguous (400). A profileId-only
- * selection prefers the profile's claude binding and falls back to its codex binding.
+ * wrong-provider, and archived accounts are a uniform 404. Selecting both providers in one exchange
+ * is ambiguous (400). A profileId-only selection prefers the profile's claude binding and falls
+ * back to its codex binding.
  */
 const resolveAccount = (input: {
   readonly ownerUserId: string;
@@ -153,15 +155,20 @@ const resolveAccount = (input: {
           "Inference requires a connected account: set credentials.claude or credentials.codex (id or name), or credentials.profileId with a claude or codex binding.",
       });
     }
-
-    // Inference IS the credential use — a non-active account is a hard error either way.
-    if (account.status !== "active") {
-      return yield* new InferenceConflictError({
-        message: `Connected ${account.provider} account "${account.name}" is invalid — reconnect it.`,
-      });
-    }
     return account;
   });
+
+const receiptField = (receipt: InferenceReceipt | undefined) =>
+  receipt === undefined ? {} : { receipt };
+
+/** What the account's stored kind says it spends, for an answer before its credential is read. */
+const kindReceipt = (account: ConnectedAccount): InferenceReceipt | undefined => {
+  const kind = parseConnectedAccountKind(account.kind);
+  const login = kind === undefined ? undefined : loginClassOfKind(kind);
+  return login === undefined
+    ? undefined
+    : { accountId: account.id, revision: account.credentialRevision, login };
+};
 
 type LoginShape = ExchangeLogin["shape"];
 
@@ -187,7 +194,11 @@ const exchangeLoginOf = (...credential: ProviderCredentialPayload): ExchangeLogi
 };
 
 /** The login to run on, and what it spends as `loginClassOf` reads it: the one authority. */
-const readLogin = (account: ConnectedAccount, payloadJson: string) =>
+const readLogin = (
+  account: ConnectedAccount,
+  payloadJson: string,
+  receipt: InferenceReceipt | undefined,
+) =>
   Effect.try({
     try: () => {
       const credential = parseStoredCredential(account.provider, payloadJson);
@@ -198,6 +209,7 @@ const readLogin = (account: ConnectedAccount, payloadJson: string) =>
     catch: () =>
       new InferenceInternalServerError({
         message: `Stored ${account.provider} credential payload is malformed.`,
+        ...receiptField(receipt),
       }),
   });
 
@@ -397,9 +409,6 @@ type RespondFailure =
   | InferenceUnavailableError
   | InferenceInternalServerError;
 
-const receiptField = (receipt: InferenceReceipt | undefined) =>
-  receipt === undefined ? {} : { receipt };
-
 const redactFailure =
   (redact: (text: string) => string) =>
   (failure: RespondFailure): RespondFailure => {
@@ -528,12 +537,27 @@ const startExchange = (payload: InferenceRespondRequest) =>
       credentials: payload.credentials,
     });
 
+    const resolved = kindReceipt(account);
+
+    // Inference IS the credential use — a non-active account is a hard error either way.
+    if (account.status !== "active") {
+      return yield* new InferenceConflictError({
+        message: `Connected ${account.provider} account "${account.name}" is invalid — reconnect it.`,
+        ...receiptField(resolved),
+      });
+    }
+
     const cipher = yield* CredentialCipher;
-    const payloadJson = yield* withInternalError(
-      cipher.decrypt(account.encryptedPayload),
-      "Failed to decrypt the connected account credential.",
+    const payloadJson = yield* cipher.decrypt(account.encryptedPayload).pipe(
+      Effect.mapError(
+        (error) =>
+          new InferenceInternalServerError({
+            message: toErrorMessage(error, "Failed to decrypt the connected account credential."),
+            ...receiptField(resolved),
+          }),
+      ),
     );
-    const { login, loginClass } = yield* readLogin(account, payloadJson);
+    const { login, loginClass } = yield* readLogin(account, payloadJson, resolved);
     const exchange = openExchange({
       ownerUserId: payload.ownerUserId,
       receipt: { accountId: account.id, revision: account.credentialRevision, login: loginClass },
