@@ -350,24 +350,24 @@ export const recordLaunchHome = (
       readonly accountId: string;
       readonly path: string;
       readonly login: Login;
+      readonly revision: number;
     }>;
     readonly newId: () => string;
     readonly key: { readonly runId: string; readonly home: string };
   },
 ): Placements => [
   ...state.placements,
-  ...input.logins.map((login): Placement => {
-    const account = state.accounts.get(login.accountId);
-    return {
+  ...input.logins.map(
+    (login): Placement => ({
       id: input.newId(),
       ...input.key,
       provider: login.provider,
       accountId: login.accountId,
-      revision: account?.revision ?? 1,
+      revision: login.revision,
       path: login.path,
       login: login.login,
       state: accountUnarchived(state, login.accountId) ? "ready" : "removing",
       createdAt: new Date(),
-    };
-  }),
+    }),
+  ),
 ];

@@ -128,7 +128,11 @@ export const ociImageBuildJobs = pgTable(
  * account reconnected token→session-file mid-run must NOT have this env-injected workspace's
  * harness-written credentials file synced back over the fresh paste.
  */
-export interface WorkspaceLaunchCredentialInjection {
+export type WorkspaceCredentialPlacementLogin =
+  | { readonly kind: "subscription" }
+  | { readonly kind: "api-key"; readonly suffix: string };
+
+interface WorkspaceLaunchCredentialInjectionBase {
   readonly provider: string;
   readonly connectedAccountId: string;
   readonly injection: "env" | "file";
@@ -138,12 +142,6 @@ export interface WorkspaceLaunchCredentialInjection {
    */
   readonly copy?: boolean;
   /**
-   * The home the launch wrote the file into (its `credentialsHome`), whose record is a
-   * `workspace_credential_homes` row: refreshes reach it through that row. Absent when the launch
-   * wrote at `$HOME`.
-   */
-  readonly home?: string;
-  /**
    * What the placed Claude or Codex login spends, read from its payload at launch: a refreshed
    * subscription is pushed only into a launch that placed a subscription. Absent on GitHub logins
    * and on rows launched before it was recorded, which placed a subscription or a key in an
@@ -151,6 +149,27 @@ export interface WorkspaceLaunchCredentialInjection {
    */
   readonly login?: "subscription" | "api-key";
 }
+
+export type WorkspaceLaunchCredentialInjection = WorkspaceLaunchCredentialInjectionBase &
+  (
+    | { readonly home?: undefined }
+    | {
+        /**
+         * The home the launch wrote the file into (its `credentialsHome`), whose record is a
+         * `workspace_credential_homes` row: refreshes reach it through that row. Absent when the
+         * launch wrote at `$HOME`.
+         */
+        readonly home: string;
+        /**
+         * The login the launch wrote and the account revision it read it at, recorded as the
+         * home's placement as they are: never joined to the account's later state.
+         */
+        readonly placed: {
+          readonly login: WorkspaceCredentialPlacementLogin;
+          readonly revision: number;
+        };
+      }
+  );
 
 export const workspaceRuntimeInstances = pgTable(
   "workspace_runtime_instances",
@@ -291,10 +310,6 @@ export const workspaceCredentialHomes = pgTable(
   },
   (table) => [primaryKey({ columns: [table.runId, table.home] })],
 );
-
-export type WorkspaceCredentialPlacementLogin =
-  | { readonly kind: "subscription" }
-  | { readonly kind: "api-key"; readonly suffix: string };
 
 export const workspaceCredentialPlacements = pgTable(
   "workspace_credential_placements",

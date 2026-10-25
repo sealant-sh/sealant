@@ -54,6 +54,7 @@ const running = [
       injection: "file",
       copy: true,
       home: "/home/m4lice000",
+      placed: { login: { kind: "subscription" }, revision: 1 },
     },
   ]),
 ];

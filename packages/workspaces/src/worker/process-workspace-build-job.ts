@@ -35,7 +35,6 @@ import {
   WorkspaceRuntimeInstanceRepoInvariantError,
   SealantDB,
   type DB,
-  type WorkspaceCredentialPlacementLogin,
   type WorkspaceLaunchCredentialInjection,
   workspaceCredentialHomeProviderValues,
 } from "@sealant/db";
@@ -427,7 +426,6 @@ const recordLaunchLoginsOrWarn = (input: {
   readonly generation: string;
   readonly ownerUserId: string | undefined;
   readonly injections: readonly WorkspaceLaunchCredentialInjection[];
-  readonly logins: ReadonlyMap<string, WorkspaceCredentialPlacementLogin>;
 }): Effect.Effect<void> =>
   Effect.gen(function* () {
     const homes = yield* Effect.serviceOption(WorkspaceCredentialHomeRepo);
@@ -440,7 +438,7 @@ const recordLaunchLoginsOrWarn = (input: {
     const onBehalfOfUserId = input.ownerUserId;
     const key = { runId: input.runId, home: input.home };
     const logins = input.injections.flatMap((entry) => {
-      if (entry.injection !== "file") return [];
+      if (entry.injection !== "file" || entry.home === undefined) return [];
       const provider = workspaceCredentialHomeProviderValues.find(
         (candidate) => candidate === entry.provider,
       );
@@ -451,7 +449,7 @@ const recordLaunchLoginsOrWarn = (input: {
               provider,
               accountId: entry.connectedAccountId,
               path: `${input.home}/${HOME_CREDENTIAL_FILES[provider]}`,
-              login: input.logins.get(entry.connectedAccountId) ?? { kind: "subscription" },
+              ...entry.placed,
             },
           ];
     });
@@ -1386,7 +1384,6 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
         generation: homeGeneration,
         ownerUserId: attemptIdentity?.ownerUserId,
         injections: resolvedCredentials.launchCredentialInjections,
-        logins: resolvedCredentials.homeLogins,
       });
     }
 

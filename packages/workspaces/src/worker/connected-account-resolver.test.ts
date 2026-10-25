@@ -37,6 +37,7 @@ const createAccount = (overrides: Partial<ConnectedAccount> = {}): ConnectedAcco
     encryptedPayload: `sealed:${JSON.stringify({ token: "sk-ant-oat01-test" })}`,
     encryptionKeyId: "k-test",
     payloadSha256: "abc",
+    credentialRevision: 1,
     metadata: {},
     createdAt: new Date("2026-06-01T00:00:00.000Z"),
     updatedAt: new Date("2026-06-01T00:00:00.000Z"),
@@ -77,7 +78,6 @@ describe("resolveCredentialInjections", () => {
         injections: [],
         codexAccounts: [],
         launchCredentialInjections: [],
-        homeLogins: new Map(),
       });
       expect(accounts.getById).not.toHaveBeenCalled();
     }).pipe(Effect.provide(provideAccounts(accounts)));
@@ -304,6 +304,7 @@ describe("resolveCredentialInjections into a credentialsHome", () => {
       id: "cacc_codex",
       provider: "codex",
       kind: "auth-json",
+      credentialRevision: 3,
       encryptedPayload: `sealed:${JSON.stringify({
         authJson: JSON.stringify({ tokens: { access_token: "at", refresh_token: "rt" } }),
       })}`,
@@ -356,6 +357,7 @@ describe("resolveCredentialInjections into a credentialsHome", () => {
           injection: "file",
           copy: true,
           home: "/home/m4lice000",
+          placed: { login: { kind: "subscription" }, revision: 1 },
           login: "subscription",
         },
         {
@@ -364,6 +366,7 @@ describe("resolveCredentialInjections into a credentialsHome", () => {
           injection: "file",
           copy: true,
           home: "/home/m4lice000",
+          placed: { login: { kind: "subscription" }, revision: 3 },
           login: "subscription",
         },
         {
@@ -371,6 +374,7 @@ describe("resolveCredentialInjections into a credentialsHome", () => {
           connectedAccountId: "cacc_github",
           injection: "file",
           home: "/home/m4lice000",
+          placed: { login: { kind: "subscription" }, revision: 1 },
         },
       ]);
     }).pipe(Effect.provide(provideAccounts(accounts)));

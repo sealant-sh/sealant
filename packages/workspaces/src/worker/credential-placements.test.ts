@@ -2,6 +2,7 @@ import {
   beginHomeWrite,
   planHomePut,
   pruneHome,
+  recordLaunchHome,
   removalWork,
   settleHomeWrite,
   settleInDoubt,
@@ -353,6 +354,38 @@ describe("pruneHome and removalWork", () => {
       removedKeys: [],
       forget: ["cpl_other", "cpl_old"],
     });
+  });
+});
+
+describe("recordLaunchHome", () => {
+  it("records the login and revision the launch resolved, whatever the account says since", () => {
+    const codexKey = { kind: "api-key", suffix: "wxyz" } as const;
+    const reconnected = stateOf([], [account("cacc_c", { provider: "codex", revision: 2 })]);
+    const recorded = recordLaunchHome(reconnected, {
+      key,
+      newId: () => "cpl_launch",
+      logins: [
+        {
+          provider: "codex",
+          accountId: "cacc_c",
+          path: `${key.home}/.codex/auth.json`,
+          login: codexKey,
+          revision: 1,
+        },
+      ],
+    });
+    expect(
+      recorded.map(({ id, revision, login, state }) => ({ id, revision, login, state })),
+    ).toEqual([{ id: "cpl_launch", revision: 1, login: codexKey, state: "ready" }]);
+    const plan = planHomePut({
+      placements: recorded,
+      live: [],
+      selected: [{ provider: "codex", accountId: "cacc_c", revision: 2, login: SUB }],
+      removed: [],
+    });
+    expect(plan.writes).toEqual([
+      { provider: "codex", accountId: "cacc_c", revision: 2, login: SUB, reuse: undefined },
+    ]);
   });
 });
 

@@ -14,7 +14,6 @@ import {
 import {
   ConnectedAccountRepo,
   type ConnectedAccount,
-  type WorkspaceCredentialPlacementLogin,
   type WorkspaceLaunchCredentialInjection,
 } from "@sealant/db";
 import type { NewWorkspace, WorkspaceCredentialsHome } from "@sealant/validators";
@@ -46,7 +45,6 @@ export interface ResolvedCredentialInjections {
    * the account's current payload shape, which a reconnect may have switched mid-run.
    */
   readonly launchCredentialInjections: readonly WorkspaceLaunchCredentialInjection[];
-  readonly homeLogins: ReadonlyMap<string, WorkspaceCredentialPlacementLogin>;
 }
 
 export interface ResolveCredentialInjectionsInput {
@@ -159,7 +157,6 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
       injections: [],
       codexAccounts: [],
       launchCredentialInjections: [],
-      homeLogins: new Map(),
     };
     return empty;
   }
@@ -176,7 +173,6 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
   const injections: CredentialInjection[] = [];
   const codexAccounts: ResolvedCodexAccount[] = [];
   const launchCredentialInjections: WorkspaceLaunchCredentialInjection[] = [];
-  const homeLogins = new Map<string, WorkspaceCredentialPlacementLogin>();
 
   for (const credentialRef of credentialRefs) {
     const connectedAccountId = parseConnectedAccountRef(credentialRef.ref);
@@ -243,21 +239,28 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
     const planned = plan.injections;
 
     injections.push(...planned);
-    if (homeLogin !== undefined) homeLogins.set(account.id, homeLogin);
     const login = loginClassOf(...credential);
     const fileInjected = planned.some((injection) => injection.kind === "file");
-    launchCredentialInjections.push({
+    const entry = {
       provider: credentialRef.provider,
       connectedAccountId: account.id,
-      injection: fileInjected ? "file" : "env",
+      injection: fileInjected ? ("file" as const) : ("env" as const),
       // Every Claude/Codex FILE planCredentialInjections writes is a copy that cannot refresh.
       ...(fileInjected &&
       (credentialRef.provider === "claude" || credentialRef.provider === "codex")
         ? { copy: true }
         : {}),
-      ...(credentialsHome === undefined ? {} : { home: credentialsHome.path }),
       ...(login === undefined ? {} : { login }),
-    });
+    };
+    launchCredentialInjections.push(
+      credentialsHome === undefined || homeLogin === undefined
+        ? entry
+        : {
+            ...entry,
+            home: credentialsHome.path,
+            placed: { login: homeLogin, revision: account.credentialRevision },
+          },
+    );
 
     if (credentialRef.provider === "codex") {
       codexAccounts.push({
@@ -282,7 +285,6 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
     injections,
     codexAccounts,
     launchCredentialInjections,
-    homeLogins,
   };
   return resolved;
 });
