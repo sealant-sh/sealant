@@ -107,19 +107,24 @@ const isCredentialParameter = (rawName: string): boolean =>
 // URLs
 // ---------------------------------------------------------------------------------------------
 
-/** A query string (no leading `?`) with every credential parameter's value replaced. */
+/** A query string (no leading `?`) with credential parameter values and provider keys replaced. */
 export const redactQueryCredentials = (query: string): string =>
-  query
-    .split("&")
-    .map((pair) => {
-      const equals = pair.indexOf("=");
-      if (equals === -1) return pair;
-      const rawName = pair.slice(0, equals);
-      return isCredentialParameter(rawName) ? `${rawName}=${REDACTED}` : pair;
-    })
-    .join("&");
+  redactProviderKeys(
+    query
+      .split("&")
+      .map((pair) => {
+        const equals = pair.indexOf("=");
+        if (equals === -1) return pair;
+        const rawName = pair.slice(0, equals);
+        return isCredentialParameter(rawName) ? `${rawName}=${REDACTED}` : pair;
+      })
+      .join("&"),
+  );
 
-/** A full URL with its query credentials and userinfo replaced; other text through the text rules. */
+/**
+ * A full URL with its query credentials, its userinfo and any provider key (in its path too)
+ * replaced; other text through the text rules.
+ */
 export const redactUrlCredentials = (value: string): string => {
   let url: URL;
   try {
@@ -134,7 +139,7 @@ export const redactUrlCredentials = (value: string): string => {
   if (url.search !== "") {
     url.search = `?${redactQueryCredentials(url.search.slice(1))}`;
   }
-  return url.toString();
+  return redactProviderKeys(url.toString());
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -338,16 +343,28 @@ const redactNamedValues = (text: string): string => {
 };
 
 /**
+ * An Anthropic or OpenAI key by its shape, wherever it stands: after any character but a letter
+ * or a digit, so `OPENAI_API_KEY_sk-…` is caught and `risk-…` is not.
+ */
+const PROVIDER_KEY =
+  /(?<![A-Za-z0-9])sk-(?:(?:ant-(?:api|oat|ort|admin)\d*|proj|svcacct|admin)-[A-Za-z0-9_-]{8,}|[A-Za-z0-9_-]{32,})/g;
+
+const redactProviderKeys = (text: string): string => text.replace(PROVIDER_KEY, REDACTED);
+
+/**
  * Free text (an error message, a stack, a log line, an inspected value) with every credential it
  * can recognise replaced: a URL's userinfo (plain, slash-escaped or percent-encoded), a credential
- * query parameter, a `Bearer` or `Basic` credential (any case, quoted or escaped), and the value of
- * any field or header named for a credential. Linear in the text's length.
+ * query parameter, a `Bearer` or `Basic` credential (any case, quoted or escaped), the value of any
+ * field or header named for a credential, and an Anthropic or OpenAI key by its shape. Linear in
+ * the text's length.
  */
 export const redactCredentialsInText = (text: string): string =>
-  redactNamedValues(
-    redactAuthSchemes(
-      redactUserinfo(text).replace(QUERY_PAIR, (pair: string, separator: string, name: string) =>
-        isCredentialParameter(name) ? `${separator}${name}=${REDACTED}` : pair,
+  redactProviderKeys(
+    redactNamedValues(
+      redactAuthSchemes(
+        redactUserinfo(text).replace(QUERY_PAIR, (pair: string, separator: string, name: string) =>
+          isCredentialParameter(name) ? `${separator}${name}=${REDACTED}` : pair,
+        ),
       ),
     ),
   );

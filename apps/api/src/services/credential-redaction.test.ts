@@ -266,6 +266,21 @@ describe("a credential in a request's URL", () => {
     });
   }
 
+  it("carries no provider key in its path or an unnamed parameter into any span attribute", async () => {
+    const key = "sk-proj-FAKEcodexkeyinaurl0000wxyz";
+    const path = `/v1/sessions/${key}/attach?from=0&ownerUserId=${OWNER}&token=${MARKER}&q=${key}`;
+    const server = serve(browserRoutes, true);
+    await server.send(path);
+    const observed = server.lines.join("\n");
+    expect(observed).toContain("url.full=");
+    expect(observed).toContain("url.query=");
+    expect(observed).not.toContain(key);
+
+    const control = serve(browserRoutes, false);
+    await control.send(path);
+    expect(control.lines.join("\n")).toContain(key);
+  });
+
   it("is not in the failure an attach that is no WebSocket ends with, in any observer", async () => {
     const path = `/v1/sessions/sess_live/attach?from=0&ownerUserId=${OWNER}&token=${MARKER}`;
     const server = serve(browserRoutes, true);
@@ -374,18 +389,25 @@ const shapes = (bytes: number) => [
   `${'bearer \\"'.repeat(bytes / 9)}`,
   `https://u:${"%2F".repeat(bytes / 3)}`,
   `${"a%40".repeat(bytes / 4)}`,
+  `${"sk-".repeat(bytes / 3)}`,
+  `${"sk-ant-api0".repeat(bytes / 11)}`,
+  `${`sk-${"a".repeat(31)} `.repeat(bytes / 35)}`,
 ];
 
 /**
  * The expressions allowed to inspect more than a name's length of text (64 characters), each linear
  * by construction. A query pair starts only at a separator, and its name excludes the separators,
  * so a failed attempt reads at most to the next one; its value never fails. An auth scheme is a
- * literal of at most six characters, then blanks it never gives back. An expression added or changed
- * here needs the same argument.
+ * literal of at most six characters, then blanks it never gives back. A provider key starts only at
+ * the literal `sk-`, after one character that is no letter or digit (a lookbehind of one
+ * character); each branch is a literal prefix and one run of key characters it never gives back,
+ * so a failed attempt reads no further than that run. An expression added or changed here needs the
+ * same argument.
  */
 const LINEAR_SEARCHES = new Set([
   String.raw`/([?&;])([^=&\s#?;]+)=([^&\s#;"'<>)\\]*)/g`,
   String.raw`/\b(bearer|basic)[ \t]+/gi`,
+  String.raw`/(?<![A-Za-z0-9])sk-(?:(?:ant-(?:api|oat|ort|admin)\d*|proj|svcacct|admin)-[A-Za-z0-9_-]{8,}|[A-Za-z0-9_-]{32,})/g`,
 ]);
 
 /** The built-ins redaction calls today, each charged below. Calling any other needs review first. */
@@ -813,6 +835,38 @@ describe("observe", () => {
 });
 
 describe("redactCredentialsInText", () => {
+  it("replaces a provider key by its shape, wherever it stands", () => {
+    const keys = [
+      "sk-ant-api03-FAKEclaudekeyforthetests000000wxyz",
+      "sk-ant-oat01-FAKEsetuptoken0000wxyz",
+      "sk-proj-FAKEcodexkey0000wxyz",
+      "sk-FAKElegacyopenaikey00000000000000000000wxyz",
+    ];
+    for (const key of keys) {
+      const redacted = redaction.redactCredentialsInText(
+        `401 from the provider: invalid x-api-key ${key}, (key=${key})`,
+      );
+      expect(redacted).not.toContain(key);
+      expect(redacted).not.toContain("wxyz");
+      expect(redacted).toContain("401 from the provider: invalid x-api-key REDACTED");
+    }
+    expect(redaction.redactCredentialsInText("task-runner sk-learn sk-short risk-assessment")).toBe(
+      "task-runner sk-learn sk-short risk-assessment",
+    );
+    expect(redaction.redactCredentialsInText(`OPENAI_API_KEY_${keys[2]}`)).toBe(
+      "OPENAI_API_KEY_REDACTED",
+    );
+  });
+
+  it("replaces a provider key in an observed URL, its path and its parameters", () => {
+    const key = "sk-proj-FAKEcodexkeyinaurl0000wxyz";
+    const observed = redaction.observe({
+      url: new URL(`https://api.example.test/v1/${key}?q=${key}`),
+      params: new URLSearchParams({ q: key }),
+    });
+    expect(JSON.stringify(observed)).not.toContain(key);
+  });
+
   it("replaces a bearer or basic credential in any case, bare, quoted or escaped", () => {
     const SECRET = "slt_r6_credential_marker";
     for (const scheme of ["Bearer", "bearer", "BEARER", "Basic", "basic"]) {
