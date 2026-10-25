@@ -396,9 +396,11 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
       try {
         let assistantError: SDKAssistantMessageError | undefined;
         for await (const message of exchange) {
-          // The CLI retries a 401 (and reruns a key's helper, which reads the same file), so the
-          // first refused request settles the exchange instead of waiting out its backoff.
+          // The CLI retries a 401 and reruns a key's helper, which reads the same file, so a key's
+          // first 401 settles the exchange instead of waiting out the backoff. A setup token is
+          // judged by the final answer: the CLI's retry can still succeed on it.
           if (
+            input.auth.kind === "api-key" &&
             message.type === "system" &&
             message.subtype === "api_retry" &&
             message.error_status === 401
