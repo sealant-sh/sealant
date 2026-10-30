@@ -9,6 +9,7 @@ import { InferenceUsageRepoLive } from "./repositories/inference-usage.js";
 import { PackageResolutionCacheRepoLive } from "./repositories/package-resolution-cache.js";
 import { ProfileRepoLive } from "./repositories/profiles.js";
 import { RepositoryProfileRepoLive } from "./repositories/repository-profiles.js";
+import { ResourceDomainRepoLive } from "./repositories/resource-domains.js";
 import { RunRepoLive } from "./repositories/runs.js";
 import { SshKeyRepoLive } from "./repositories/ssh-keys.js";
 import { DatabaseTransactionLive } from "./repositories/transaction.js";
@@ -65,5 +66,6 @@ export const ControlPlaneDataAccessLive = Layer.mergeAll(
   ProfileRepoLive,
   SshKeyRepoLive,
   UserRepoLive,
+  ResourceDomainRepoLive,
   ConnectedAccountRepoLive,
 );

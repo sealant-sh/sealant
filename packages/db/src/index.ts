@@ -252,6 +252,14 @@ export {
 } from "./repositories/users.js";
 
 export {
+  ResourceDomainRepo,
+  ResourceDomainRepoError,
+  ResourceDomainRepoLive,
+  type ResourceDomainRecord,
+  type ResourceDomainRepoService,
+} from "./repositories/resource-domains.js";
+
+export {
   ConnectedAccountRepo,
   ConnectedAccountRepoInvariantError,
   ConnectedAccountRepoLive,

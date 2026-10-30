@@ -308,7 +308,14 @@ export const workspaceCredentialHomes = pgTable(
       .$defaultFn(() => new Date())
       .$onUpdate(() => new Date()),
   },
-  (table) => [primaryKey({ columns: [table.runId, table.home] })],
+  (table) => [
+    primaryKey({ columns: [table.runId, table.home] }),
+    // No foreign key holds this column to a person, so the ban on `user.id` does not reach it.
+    check(
+      "workspace_credential_homes_holder_not_resource_domain",
+      sql`${table.onBehalfOfUserId} not like 'rdm:%'`,
+    ),
+  ],
 );
 
 export const workspaceCredentialPlacements = pgTable(
