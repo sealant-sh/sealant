@@ -39,6 +39,7 @@ import {
   SealantRuntime,
   type SealantSession,
   type SealantTarget,
+  type SyncBackWorkspaceCredentialsInput,
   TransportError,
 } from "@sealant/workspaces";
 import { Deferred, Effect, Layer, Stream } from "effect";
@@ -52,6 +53,12 @@ export const FAKE_TARGET: SealantTarget = {
 };
 
 const unscripted = (call: string) => () => Effect.die(`unscripted call ${call}`);
+
+/** A credentials cipher, as an API or worker with SEALANT_CREDENTIALS_KEY holds one. */
+export const FAKE_CIPHER: NonNullable<SyncBackWorkspaceCredentialsInput["credentialCipher"]> = {
+  encrypt: unscripted("encrypt"),
+  decrypt: unscripted("decrypt"),
+};
 
 /** The daemon's `processExited` for one process. */
 export const exitedEvent = (
