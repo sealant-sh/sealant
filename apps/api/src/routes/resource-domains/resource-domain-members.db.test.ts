@@ -46,108 +46,130 @@ describe.skipIf(DATABASE_URL === undefined)("resource domain members (Postgres)"
   const decide = (
     at: { readonly resourceDomainId: string; readonly userId: string },
     state: ResourceDomainMemberDecision["state"],
-    expectedVersion: number,
+    version: number,
   ) =>
-    run(
-      Effect.flatMap(ResourceDomainRepo, (repo) =>
-        repo.decideMember({ ...at, state, expectedVersion }),
-      ),
-    );
+    run(Effect.flatMap(ResourceDomainRepo, (repo) => repo.decideMember({ ...at, state, version })));
 
   const members = (resourceDomainId: string) =>
     run(Effect.flatMap(ResourceDomainRepo, (repo) => repo.listMembers(resourceDomainId)));
 
-  it.each([0, 1])(
-    "a grant from version %i waits out a revoke from that version, then cannot undo it",
-    async (from) => {
-      const at = await pair();
-      if (from === 1) await decide(at, "member", 0);
-      const raced = await run(
-        Effect.gen(function* () {
-          const repo = yield* ResourceDomainRepo;
-          const written = yield* Deferred.make<void>();
-          const commit = yield* Deferred.make<void>();
-          // The revoke's transaction has written its row and holds it, uncommitted.
-          const revoke = yield* Effect.forkChild(
-            db.transaction(() =>
-              repo.decideMember({ ...at, state: "revoked", expectedVersion: from }).pipe(
-                Effect.tap(() => Deferred.succeed(written, undefined)),
-                Effect.tap(() => Deferred.await(commit)),
-              ),
+  /**
+   * `held` is written in a transaction that stays open while `late` runs, then commits: `late`
+   * must wait for the row and decide against what `held` left.
+   */
+  const race = (
+    at: { readonly resourceDomainId: string; readonly userId: string },
+    held: { readonly state: ResourceDomainMemberDecision["state"]; readonly version: number },
+    late: { readonly state: ResourceDomainMemberDecision["state"]; readonly version: number },
+  ) =>
+    run(
+      Effect.gen(function* () {
+        const repo = yield* ResourceDomainRepo;
+        const written = yield* Deferred.make<void>();
+        const commit = yield* Deferred.make<void>();
+        const first = yield* Effect.forkChild(
+          db.transaction(() =>
+            repo.decideMember({ ...at, ...held }).pipe(
+              Effect.tap(() => Deferred.succeed(written, undefined)),
+              Effect.tap(() => Deferred.await(commit)),
             ),
-          );
-          yield* Deferred.await(written);
-          const grant = yield* Effect.forkChild(
-            repo.decideMember({ ...at, state: "member", expectedVersion: from }),
-          );
-          yield* Effect.sleep("300 millis");
-          const grantWaited = grant.pollUnsafe() === undefined;
-          yield* Deferred.succeed(commit, undefined);
-          return {
-            grantWaited,
-            revoke: yield* Fiber.join(revoke),
-            grant: yield* Fiber.join(grant),
-          };
-        }),
+          ),
+        );
+        yield* Deferred.await(written);
+        const second = yield* Effect.forkChild(repo.decideMember({ ...at, ...late }));
+        yield* Effect.sleep("300 millis");
+        const waited = second.pollUnsafe() === undefined;
+        yield* Deferred.succeed(commit, undefined);
+        return { waited, held: yield* Fiber.join(first), late: yield* Fiber.join(second) };
+      }),
+    );
+
+  it.each([
+    ["no decision yet", []],
+    ["a grant at 1", [{ state: "member", version: 1 }]],
+  ] as const)(
+    "a delayed grant waits out a newer revoke, then cannot undo it (%s)",
+    async (_before, earlier) => {
+      const at = await pair();
+      for (const decision of earlier) await decide(at, decision.state, decision.version);
+      const raced = await race(
+        at,
+        { state: "revoked", version: 3 },
+        { state: "member", version: 2 },
       );
-      expect(raced.grantWaited).toBe(true);
-      expect(raced.revoke).toMatchObject({
+      expect(raced.waited).toBe(true);
+      expect(raced.held).toMatchObject({
         kind: "decided",
-        member: { state: "revoked", version: from + 1 },
+        member: { state: "revoked", version: 3 },
       });
-      expect(raced.grant).toEqual({ kind: "version-moved" });
+      expect(raced.late).toMatchObject({
+        kind: "stale",
+        current: { state: "revoked", version: 3 },
+      });
       expect(await members(at.resourceDomainId)).toEqual([
-        expect.objectContaining({ userId: at.userId, state: "revoked", version: from + 1 }),
+        expect.objectContaining({ userId: at.userId, state: "revoked", version: 3 }),
       ]);
     },
   );
 
-  it("writes one of many concurrent decisions from one version, and refuses the rest", async () => {
+  it("a newer grant that waits out an older revoke replaces it", async () => {
     const at = await pair();
-    await decide(at, "member", 0);
-    const outcomes = await Promise.all(
-      Array.from({ length: 16 }, (_, index) =>
-        decide(at, index % 2 === 0 ? "revoked" : "member", 1),
-      ),
-    );
-    const [current] = await members(at.resourceDomainId);
-    expect(current?.version).toBe(2);
-    for (const outcome of outcomes) {
-      if (outcome.kind === "decided") expect(outcome.member).toEqual(current);
-      else expect(outcome).toEqual({ kind: "version-moved" });
-    }
-    expect(outcomes.filter(({ kind }) => kind === "version-moved")).toHaveLength(8);
-  });
-
-  it("answers a repeated grant or revoke with the row it wrote, and keeps a revoked row", async () => {
-    const at = await pair();
-    const granted = await decide(at, "member", 0);
-    expect(granted).toMatchObject({ kind: "decided", member: { state: "member", version: 1 } });
-    expect(await decide(at, "member", 0)).toEqual(granted);
-
-    const revoked = await decide(at, "revoked", 1);
-    expect(revoked).toMatchObject({ kind: "decided", member: { state: "revoked", version: 2 } });
-    expect(await decide(at, "revoked", 1)).toEqual(revoked);
-    // The first grant, delivered once more after the revoke, changes nothing.
-    expect(await decide(at, "member", 0)).toEqual({ kind: "version-moved" });
-
-    expect(await members(at.resourceDomainId)).toEqual(
-      revoked.kind === "decided" ? [revoked.member] : [],
-    );
-  });
-
-  it("refuses a version that is not the member's, behind or ahead, and a person who does not exist", async () => {
-    const at = await pair();
-    expect(await decide(at, "member", 1)).toEqual({ kind: "version-moved" });
-    await decide(at, "member", 0);
-    await decide(at, "revoked", 1);
-    expect(await decide(at, "member", 1)).toEqual({ kind: "version-moved" });
-    expect(await decide(at, "member", 5)).toEqual({ kind: "version-moved" });
+    const raced = await race(at, { state: "revoked", version: 1 }, { state: "member", version: 2 });
+    expect(raced.waited).toBe(true);
+    expect(raced.late).toMatchObject({ kind: "decided", member: { state: "member", version: 2 } });
     expect(await members(at.resourceDomainId)).toEqual([
-      expect.objectContaining({ state: "revoked", version: 2 }),
+      expect.objectContaining({ state: "member", version: 2 }),
     ]);
-    expect(await decide({ ...at, userId: `user_nobody_${randomUUID()}` }, "member", 0)).toEqual({
-      kind: "no-such-person",
+  });
+
+  it("keeps the highest of many concurrent decisions, whatever order they land in", async () => {
+    const at = await pair();
+    const decisions = Array.from({ length: 16 }, (_, index) => ({
+      state: index % 2 === 0 ? ("revoked" as const) : ("member" as const),
+      version: index + 1,
+    })).toSorted(() => Math.random() - 0.5);
+    const outcomes = await Promise.all(
+      decisions.map((decision) => decide(at, decision.state, decision.version)),
+    );
+    expect(await members(at.resourceDomainId)).toEqual([
+      expect.objectContaining({ state: "member", version: 16 }),
+    ]);
+    outcomes.forEach((outcome, index) => {
+      const sent = decisions[index];
+      if (outcome.kind === "decided") expect(outcome.member).toMatchObject({ ...sent });
+      else if (outcome.kind === "stale")
+        expect(outcome.current.version).toBeGreaterThan(sent?.version ?? 0);
+      else throw new Error(`unexpected ${outcome.kind}`);
     });
   });
+
+  it("answers a repeated grant or revoke with the row it wrote, and refuses an older or contrary one", async () => {
+    const at = await pair();
+    const granted = await decide(at, "member", 1);
+    expect(granted).toMatchObject({ kind: "decided", member: { state: "member", version: 1 } });
+    expect(await decide(at, "member", 1)).toEqual(granted);
+
+    const revoked = await decide(at, "revoked", 2);
+    expect(revoked).toMatchObject({ kind: "decided", member: { state: "revoked", version: 2 } });
+    expect(await decide(at, "revoked", 2)).toEqual(revoked);
+    if (revoked.kind !== "decided") throw new Error("the revoke was not written");
+
+    // The first grant, delivered once more after the revoke, changes nothing.
+    expect(await decide(at, "member", 1)).toEqual({ kind: "stale", current: revoked.member });
+    // So does a grant that claims the revoke's own version.
+    expect(await decide(at, "member", 2)).toEqual({ kind: "stale", current: revoked.member });
+    expect(await members(at.resourceDomainId)).toEqual([revoked.member]);
+  });
+
+  it.each([1, 7])(
+    "answers a person who does not exist as missing, at version %i",
+    async (version) => {
+      const at = await pair();
+      expect(
+        await decide({ ...at, userId: `user_nobody_${randomUUID()}` }, "member", version),
+      ).toEqual({
+        kind: "no-such-person",
+      });
+    },
+  );
 });

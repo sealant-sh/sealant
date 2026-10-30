@@ -63,14 +63,14 @@ describe.skipIf(DATABASE_URL === undefined)("sealant.scopes against the API", ()
     const project = sealant.scopes.actAs(id);
     const [alice, bob] = [await person(), await person()];
 
-    const granted = await project.members.grant(alice, { expectedVersion: 0 });
+    const granted = await project.members.grant(alice, { version: 1 });
     expect(granted).toMatchObject({ userId: alice, state: "member", version: 1 });
-    expect(await project.members.grant(alice, { expectedVersion: 0 })).toEqual(granted);
-    await project.members.grant(bob, { expectedVersion: 0 });
-    const revoked = await project.members.revoke(bob, { expectedVersion: 1 });
+    expect(await project.members.grant(alice, { version: 1 })).toEqual(granted);
+    await project.members.grant(bob, { version: 1 });
+    const revoked = await project.members.revoke(bob, { version: 2 });
     expect(revoked).toMatchObject({ userId: bob, state: "revoked", version: 2 });
 
-    const late = project.members.grant(bob, { expectedVersion: 0 });
+    const late = project.members.grant(bob, { version: 1 });
     await expect(late).rejects.toBeInstanceOf(SealantApiError);
     await expect(late).rejects.toMatchObject({ code: "ResourceDomainMemberVersionConflictError" });
 

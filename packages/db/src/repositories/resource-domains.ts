@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, lt, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -38,13 +38,14 @@ export interface ResourceDomainMemberDecision {
   readonly resourceDomainId: string;
   readonly userId: string;
   readonly state: ResourceDomainMemberState;
-  /** The version this decision replaces: 0 when the person has no decision in the domain yet. */
-  readonly expectedVersion: number;
+  /** The application's own version of this decision, rising with each decision it makes. */
+  readonly version: number;
 }
 
 export type ResourceDomainMemberOutcome =
   | { readonly kind: "decided"; readonly member: ResourceDomainMemberRecord }
-  | { readonly kind: "version-moved" }
+  /** A newer decision stands, or one of this version with the other state; it is unchanged. */
+  | { readonly kind: "stale"; readonly current: ResourceDomainMemberRecord }
   | { readonly kind: "no-such-person" };
 
 export interface ResourceDomainRepoService {
@@ -62,9 +63,9 @@ export interface ResourceDomainRepoService {
     id: string,
   ) => Effect.Effect<ResourceDomainRecord | undefined, ResourceDomainRepoError>;
   /**
-   * Compare-and-set one person's decision, by the rule on `resourceDomainMembers`. Each write is a
-   * single statement conditioned on the expected version, so of two concurrent decisions from one
-   * version exactly one is written.
+   * Record one person's decision, by the rule on `resourceDomainMembers`. The write is one
+   * statement that replaces the row only under a lower version, so whatever the order decisions
+   * arrive in, and however often each is retried, the highest version stands.
    */
   readonly decideMember: (
     decision: ResourceDomainMemberDecision,
@@ -108,9 +109,9 @@ const memberColumns = {
   updatedAt: resourceDomainMembers.updatedAt,
 };
 
-/** The decision that wrote `current`, asked again: it answers `current` instead of a conflict. */
+/** The decision that wrote `current`, sent again: it answers `current` instead of a conflict. */
 const repeats = (current: ResourceDomainMemberRecord, decision: ResourceDomainMemberDecision) =>
-  current.version === decision.expectedVersion + 1 && current.state === decision.state;
+  current.version === decision.version && current.state === decision.state;
 
 export const ResourceDomainRepoLive: Layer.Layer<ResourceDomainRepo, never, SealantDB> =
   Layer.effect(
@@ -152,44 +153,37 @@ export const ResourceDomainRepoLive: Layer.Layer<ResourceDomainRepo, never, Seal
           withError(
             "decideMember",
             Effect.gen(function* () {
-              const row = and(
-                eq(resourceDomainMembers.resourceDomainId, decision.resourceDomainId),
-                eq(resourceDomainMembers.userId, decision.userId),
-              );
-              const next = { state: decision.state, version: decision.expectedVersion + 1 };
-              if (decision.expectedVersion === 0) {
-                const [person] = yield* db
-                  .select({ id: user.id })
-                  .from(user)
-                  .where(eq(user.id, decision.userId))
-                  .limit(1);
-                if (person === undefined) return { kind: "no-such-person" } as const;
-              }
-              const [written] =
-                decision.expectedVersion === 0
-                  ? yield* db
-                      .insert(resourceDomainMembers)
-                      .values({
-                        resourceDomainId: decision.resourceDomainId,
-                        userId: decision.userId,
-                        ...next,
-                      })
-                      .onConflictDoNothing()
-                      .returning(memberColumns)
-                  : yield* db
-                      .update(resourceDomainMembers)
-                      .set({ ...next, updatedAt: sql`now()` })
-                      .where(and(row, eq(resourceDomainMembers.version, decision.expectedVersion)))
-                      .returning(memberColumns);
+              const [person] = yield* db
+                .select({ id: user.id })
+                .from(user)
+                .where(eq(user.id, decision.userId))
+                .limit(1);
+              if (person === undefined) return { kind: "no-such-person" } as const;
+              const { resourceDomainId, userId, state, version } = decision;
+              const [written] = yield* db
+                .insert(resourceDomainMembers)
+                .values({ resourceDomainId, userId, state, version })
+                .onConflictDoUpdate({
+                  target: [resourceDomainMembers.resourceDomainId, resourceDomainMembers.userId],
+                  set: { state, version, updatedAt: sql`now()` },
+                  setWhere: lt(resourceDomainMembers.version, version),
+                })
+                .returning(memberColumns);
               if (written !== undefined) return { kind: "decided", member: written } as const;
               const [current] = yield* db
                 .select(memberColumns)
                 .from(resourceDomainMembers)
-                .where(row)
+                .where(
+                  and(
+                    eq(resourceDomainMembers.resourceDomainId, resourceDomainId),
+                    eq(resourceDomainMembers.userId, userId),
+                  ),
+                )
                 .limit(1);
-              return current !== undefined && repeats(current, decision)
+              if (current === undefined) return { kind: "no-such-person" } as const;
+              return repeats(current, decision)
                 ? ({ kind: "decided", member: current } as const)
-                : ({ kind: "version-moved" } as const);
+                : ({ kind: "stale", current } as const);
             }),
           ),
         listMembers: (resourceDomainId) =>

@@ -16,10 +16,10 @@ export const ResourceDomainsHandlersLive = HttpApiBuilder.group(
       .handle("ensureResourceDomain", ({ payload }) => ensureResourceDomain(payload))
       .handle("getResourceDomain", ({ params }) => getResourceDomain(params.resourceDomainId))
       .handle("grantResourceDomainMember", ({ params, payload }) =>
-        decideResourceDomainMember(params, "member", payload.expectedVersion),
+        decideResourceDomainMember(params, "member", payload.version),
       )
       .handle("revokeResourceDomainMember", ({ params, payload }) =>
-        decideResourceDomainMember(params, "revoked", payload.expectedVersion),
+        decideResourceDomainMember(params, "revoked", payload.version),
       )
       .handle("listResourceDomainMembers", ({ params }) =>
         listResourceDomainMembers(params.resourceDomainId),

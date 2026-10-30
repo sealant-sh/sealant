@@ -76,23 +76,24 @@ const memberToWire = (member: ResourceDomainMemberRecord): ResourceDomainMemberW
 export const decideResourceDomainMember = (
   params: { readonly resourceDomainId: string; readonly userId: string },
   state: ResourceDomainMemberRecord["state"],
-  expectedVersion: number,
+  version: number,
 ) =>
   Effect.gen(function* () {
     yield* loadDomain(params.resourceDomainId);
     const repo = yield* ResourceDomainRepo;
     const outcome = yield* repo
-      .decideMember({ ...params, state, expectedVersion })
+      .decideMember({ ...params, state, version })
       .pipe(Effect.mapError(internal("Failed to record the member decision.")));
     switch (outcome.kind) {
       case "decided":
         return memberToWire(outcome.member);
       case "no-such-person":
         return yield* new ResourceDomainNotFoundError({ message: "No person has this id." });
-      case "version-moved":
+      case "stale":
         return yield* new ResourceDomainMemberVersionConflictError({
           message:
-            "The member's version is not the one this decision replaces. List the members and decide again from the current version.",
+            "A decision at least as new about this person stands, so this one changed nothing.",
+          current: { state: outcome.current.state, version: outcome.current.version },
         });
     }
   });

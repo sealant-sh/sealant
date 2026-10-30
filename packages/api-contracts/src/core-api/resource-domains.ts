@@ -15,6 +15,15 @@
  * before a handler runs. A deployment served without authentication (the development exception)
  * serves them as it serves every other route. A request body is decoded strictly: a field the contract does not declare (an
  * owner, a credential) is refused with `400` instead of being dropped.
+ *
+ * Members are the people the application lets reach the domain. A grant or a revoke carries
+ * `version`, the application's own number for its decision about this person, rising with each
+ * decision it makes (its record's revision, say). Core writes the decision only over a lower
+ * version. The same version with the same state is a repeat, answered with the member unchanged.
+ * The same version with the other state, or a lower one, is stale: `409`, carrying the decision
+ * that stands. So a delayed grant never undoes a newer revoke, whatever order decisions arrive in
+ * and however often each is retried, and the application never reads before it writes. A revoke
+ * keeps the member's row, with its version, and the list shows it.
  */
 import { Schema } from "effect";
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
@@ -58,20 +67,22 @@ export const ensureResourceDomainResponseSchema = Schema.Struct({
 });
 export type EnsureResourceDomainResponse = typeof ensureResourceDomainResponseSchema.Type;
 
-const versionFrom = (minimum: number, headroom: number) =>
-  Schema.Int.check(Schema.isBetween({ minimum, maximum: Number.MAX_SAFE_INTEGER - headroom }));
+const MemberVersion = Schema.Int.check(
+  Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+);
+const MemberState = Schema.Literals(["member", "revoked"]);
 
 export const resourceDomainMemberSchema = Schema.Struct({
   userId: PersonId,
-  state: Schema.Literals(["member", "revoked"]),
-  version: versionFrom(1, 0),
+  state: MemberState,
+  version: MemberVersion,
   updatedAt: Schema.String,
 });
 export type ResourceDomainMemberWire = typeof resourceDomainMemberSchema.Type;
 
 export const resourceDomainMemberDecisionSchema = Schema.Struct({
-  /** The member's version this decision replaces: 0 when the person has no decision yet. */
-  expectedVersion: versionFrom(0, 1),
+  /** The application's own version of this decision, rising with each decision it makes. */
+  version: MemberVersion,
 });
 export type ResourceDomainMemberDecisionRequest = typeof resourceDomainMemberDecisionSchema.Type;
 
@@ -92,10 +103,16 @@ export class ResourceDomainNotFoundError extends Schema.TaggedError<ResourceDoma
   { httpApiStatus: 404 },
 ) {}
 
-/** The member's version is no longer the one the decision replaces. Never quotes either version. */
+/**
+ * A decision at least as new stands, so this one changed nothing. `current` is the decision that
+ * stands; the message quotes nothing the request sent.
+ */
 export class ResourceDomainMemberVersionConflictError extends Schema.TaggedError<ResourceDomainMemberVersionConflictError>()(
   "ResourceDomainMemberVersionConflictError",
-  { message: Schema.String },
+  {
+    message: Schema.String,
+    current: Schema.Struct({ state: MemberState, version: MemberVersion }),
+  },
   { httpApiStatus: 409 },
 ) {}
 

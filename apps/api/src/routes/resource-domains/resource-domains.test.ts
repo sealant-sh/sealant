@@ -18,7 +18,13 @@ const KEY = "mend:install-1:project:prj_1";
 
 const calls: string[] = [];
 const domains = new Map<string, ResourceDomainRecord>();
-let decided: ResourceDomainMemberOutcome = { kind: "version-moved" };
+const standing = {
+  userId: "usr_alice",
+  state: "revoked" as const,
+  version: 9,
+  updatedAt: new Date(0),
+};
+let decided: ResourceDomainMemberOutcome = { kind: "stale", current: standing };
 
 const repo = Layer.succeed(ResourceDomainRepo, {
   ensure: (key) =>
@@ -41,7 +47,7 @@ const repo = Layer.succeed(ResourceDomainRepo, {
     }),
   decideMember: (decision) =>
     Effect.sync(() => {
-      calls.push(`decide ${decision.userId} ${decision.state} from ${decision.expectedVersion}`);
+      calls.push(`decide ${decision.userId} ${decision.state} at ${decision.version}`);
       return decided;
     }),
   listMembers: (id) =>
@@ -91,7 +97,7 @@ const send = async (
 beforeEach(() => {
   calls.length = 0;
   domains.clear();
-  decided = { kind: "version-moved" };
+  decided = { kind: "stale", current: standing };
 });
 
 const ensureDomain = async () => {
@@ -162,7 +168,7 @@ describe("resource domains", () => {
     expect(calls).toEqual([]);
   });
 
-  it("grants and revokes a member from the version the decision replaces", async () => {
+  it("grants and revokes a member at the application's version", async () => {
     const id = await ensureDomain();
     const updatedAt = new Date(0);
     decided = {
@@ -170,7 +176,7 @@ describe("resource domains", () => {
       member: { userId: "usr_alice", state: "member", version: 1, updatedAt },
     };
     const granted = await send(service, "POST", `/${id}/members/usr_alice/grant`, {
-      expectedVersion: 0,
+      version: 1,
     });
     expect(granted).toEqual({
       status: 200,
@@ -181,30 +187,31 @@ describe("resource domains", () => {
         updatedAt: updatedAt.toISOString(),
       },
     });
-    await send(service, "POST", `/${id}/members/usr_alice/revoke`, { expectedVersion: 1 });
+    await send(service, "POST", `/${id}/members/usr_alice/revoke`, { version: 2 });
     const listed = await send(service, "GET", `/${id}/members`);
     expect(listed).toEqual({ status: 200, body: { items: [] } });
     expect(calls).toEqual([
       `get ${id}`,
-      "decide usr_alice member from 0",
+      "decide usr_alice member at 1",
       `get ${id}`,
-      "decide usr_alice revoked from 1",
+      "decide usr_alice revoked at 2",
       `get ${id}`,
       `list ${id}`,
     ]);
   });
 
-  it("refuses a decision from a version that has moved on, quoting neither version", async () => {
+  it("refuses a stale decision with the decision that stands, quoting nothing it was sent", async () => {
     const id = await ensureDomain();
     const refused = await send(service, "POST", `/${id}/members/usr_alice/grant`, {
-      expectedVersion: 7,
+      version: 7,
     });
     expect(refused).toEqual({
       status: 409,
       body: {
         _tag: "ResourceDomainMemberVersionConflictError",
         message:
-          "The member's version is not the one this decision replaces. List the members and decide again from the current version.",
+          "A decision at least as new about this person stands, so this one changed nothing.",
+        current: { state: "revoked", version: 9 },
       },
     });
   });
@@ -213,7 +220,7 @@ describe("resource domains", () => {
     const id = await ensureDomain();
     decided = { kind: "no-such-person" };
     const person = await send(service, "POST", `/${id}/members/usr_nobody/grant`, {
-      expectedVersion: 0,
+      version: 1,
     });
     expect(person).toEqual({
       status: 404,
@@ -222,17 +229,18 @@ describe("resource domains", () => {
     calls.length = 0;
     const missing = "rdm:00000000-0000-4000-8000-0000000000ff";
     const domain = await send(service, "POST", `/${missing}/members/usr_alice/grant`, {
-      expectedVersion: 0,
+      version: 1,
     });
     expect(domain.status).toBe(404);
     expect(calls).toEqual([`get ${missing}`]);
   });
 
   it.each([
-    ["an owner", { expectedVersion: 0, ownerUserId: "usr_alice" }],
-    ["a state", { expectedVersion: 0, state: "member" }],
-    ["a negative version", { expectedVersion: -1 }],
-    ["a fractional version", { expectedVersion: 0.5 }],
+    ["an owner", { version: 1, ownerUserId: "usr_alice" }],
+    ["a state", { version: 1, state: "member" }],
+    ["version 0", { version: 0 }],
+    ["a fractional version", { version: 1.5 }],
+    ["the version it replaces instead", { expectedVersion: 1 }],
     ["no version", {}],
   ])("refuses a member decision with %s before anything is read", async (_what, body) => {
     const id = await ensureDomain();
@@ -245,8 +253,8 @@ describe("resource domains", () => {
   it("answers 403 to the gateway's secret on the member routes, before the repository is asked", async () => {
     const id = "rdm:00000000-0000-4000-8000-000000000000";
     const statuses = await Promise.all([
-      send(gateway, "POST", `/${id}/members/usr_alice/grant`, { expectedVersion: 0 }),
-      send(gateway, "POST", `/${id}/members/usr_alice/revoke`, { expectedVersion: 0 }),
+      send(gateway, "POST", `/${id}/members/usr_alice/grant`, { version: 1 }),
+      send(gateway, "POST", `/${id}/members/usr_alice/revoke`, { version: 1 }),
       send(gateway, "GET", `/${id}/members`),
     ]);
     expect(statuses.map(({ status }) => status)).toEqual([403, 403, 403]);

@@ -68,8 +68,8 @@ describe("scopes", () => {
     });
     const project = sealant.scopes.actAs(SCOPE);
     expect(await project.get()).toEqual(scope);
-    expect(await project.members.grant("usr_alice", { expectedVersion: 0 })).toEqual(member);
-    await project.members.revoke("usr_alice", { expectedVersion: 1 });
+    expect(await project.members.grant("usr_alice", { version: 1 })).toEqual(member);
+    await project.members.revoke("usr_alice", { version: 2 });
     expect(await project.members.list()).toEqual([member]);
 
     expect(seen).toEqual([
@@ -78,12 +78,12 @@ describe("scopes", () => {
       {
         method: "POST",
         path: `/v1/resource-domains/${SCOPE}/members/usr_alice/grant`,
-        body: { expectedVersion: 0 },
+        body: { version: 1 },
       },
       {
         method: "POST",
         path: `/v1/resource-domains/${SCOPE}/members/usr_alice/revoke`,
-        body: { expectedVersion: 1 },
+        body: { version: 2 },
       },
       { method: "GET", path: `/v1/resource-domains/${SCOPE}/members`, body: undefined },
     ]);
@@ -93,10 +93,14 @@ describe("scopes", () => {
   it("reject a stale member version as the control plane's conflict", async () => {
     stub(() => ({
       status: 409,
-      body: { _tag: "ResourceDomainMemberVersionConflictError", message: "moved" },
+      body: {
+        _tag: "ResourceDomainMemberVersionConflictError",
+        message: "moved",
+        current: { state: "revoked", version: 4 },
+      },
     }));
     const sealant = new Sealant({ baseUrl: "http://stub.invalid" });
-    const refused = sealant.scopes.actAs(SCOPE).members.grant("usr_alice", { expectedVersion: 3 });
+    const refused = sealant.scopes.actAs(SCOPE).members.grant("usr_alice", { version: 3 });
     await expect(refused).rejects.toBeInstanceOf(SealantApiError);
     await expect(refused).rejects.toMatchObject({
       code: "ResourceDomainMemberVersionConflictError",

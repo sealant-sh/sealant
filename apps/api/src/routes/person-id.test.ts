@@ -356,7 +356,7 @@ const ENTRY_POINTS: readonly EntryPoint[] = [
     method: "POST",
     path: (person) =>
       `/v1/resource-domains/rdm:00000000-0000-4000-8000-000000000001/members/${encodeURIComponent(person)}/grant`,
-    body: () => ({ expectedVersion: 0 }),
+    body: () => ({ version: 1 }),
     field: "userId",
   },
   {

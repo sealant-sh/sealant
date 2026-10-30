@@ -42,13 +42,15 @@ export interface ScopeMember {
 }
 
 /**
- * A grant or revoke names the member's version it replaces: 0 for a person with no decision yet,
- * else the `version` last read. Another version rejects (409,
- * `ResourceDomainMemberVersionConflictError`) and changes nothing, so a delayed grant never undoes
- * a newer revoke. Repeating the decision that wrote the current version answers it unchanged.
+ * `version` is the application's own number for its decision about this person, rising with each
+ * decision it makes (its record's revision, say). The scope keeps the highest. The same version
+ * with the same state is a repeat and answers the member unchanged. The same version with the
+ * other state, or a lower one, rejects (409, `ResourceDomainMemberVersionConflictError`, whose
+ * `current` is the decision that stands) and changes nothing. So a delayed grant never undoes a
+ * newer revoke, and nothing needs reading first.
  */
 export interface ScopeMemberDecision {
-  readonly expectedVersion: number;
+  readonly version: number;
 }
 
 export interface ScopeMembers {
@@ -92,17 +94,9 @@ export const makeScopes = (runtime: SdkRuntime): ScopesNamespace => {
       get: () => get(scopeId),
       members: {
         grant: (userId, decision) =>
-          runtime.run(
-            grantResourceDomainMemberOp(scopeId, userId, {
-              expectedVersion: decision.expectedVersion,
-            }),
-          ),
+          runtime.run(grantResourceDomainMemberOp(scopeId, userId, { version: decision.version })),
         revoke: (userId, decision) =>
-          runtime.run(
-            revokeResourceDomainMemberOp(scopeId, userId, {
-              expectedVersion: decision.expectedVersion,
-            }),
-          ),
+          runtime.run(revokeResourceDomainMemberOp(scopeId, userId, { version: decision.version })),
         list: async () => (await runtime.run(listResourceDomainMembersOp(scopeId))).items,
       },
     }),
