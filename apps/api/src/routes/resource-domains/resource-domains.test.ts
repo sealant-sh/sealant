@@ -2,7 +2,12 @@
  * The resource domain routes as the API serves them: the real contract and handlers, with the
  * principal the transport gate would have admitted and a repository that records every call.
  */
-import { ResourceDomainRepo, type ResourceDomainRecord } from "@sealant/db";
+import {
+  ResourceDomainRepo,
+  type ResourceDomainMemberLookup,
+  type ResourceDomainMemberOutcome,
+  type ResourceDomainRecord,
+} from "@sealant/db";
 import { Effect, Layer } from "effect";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -14,6 +19,15 @@ const KEY = "mend:install-1:project:prj_1";
 
 const calls: string[] = [];
 const domains = new Map<string, ResourceDomainRecord>();
+const standing = {
+  userId: "usr_alice",
+  state: "revoked" as const,
+  version: 9,
+  updatedAt: new Date(0),
+};
+/** What the next decision answers; `written` writes what it was sent. */
+let decided: ResourceDomainMemberOutcome | "written" = { kind: "stale", current: standing };
+let looked: ResourceDomainMemberLookup = { kind: "no-decision" };
 
 const repo = Layer.succeed(ResourceDomainRepo, {
   ensure: (key) =>
@@ -33,6 +47,31 @@ const repo = Layer.succeed(ResourceDomainRepo, {
     Effect.sync(() => {
       calls.push(`get ${id}`);
       return [...domains.values()].find((domain) => domain.id === id);
+    }),
+  decideMember: (decision) =>
+    Effect.sync(() => {
+      calls.push(`decide ${decision.userId} ${decision.state} at ${decision.version}`);
+      return decided === "written"
+        ? {
+            kind: "decided" as const,
+            member: {
+              userId: decision.userId,
+              state: decision.state,
+              version: decision.version,
+              updatedAt: new Date(0),
+            },
+          }
+        : decided;
+    }),
+  getMember: (id, userId) =>
+    Effect.sync(() => {
+      calls.push(`read ${id} ${userId}`);
+      return looked;
+    }),
+  listMembers: ({ resourceDomainId, after, limit }) =>
+    Effect.sync(() => {
+      calls.push(`list ${resourceDomainId} after ${after ?? "start"} limit ${limit}`);
+      return { members: [standing], next: standing.userId };
     }),
 });
 
@@ -76,7 +115,21 @@ const send = async (
 beforeEach(() => {
   calls.length = 0;
   domains.clear();
+  decided = { kind: "stale", current: standing };
+  looked = { kind: "no-decision" };
 });
+
+/** The answer to a decision the stub wrote as it was sent. */
+const written = (state: string, version: number) => ({
+  status: 200,
+  body: { userId: "usr_alice", state, version, updatedAt: new Date(0).toISOString() },
+});
+
+const ensureDomain = async () => {
+  const { body } = await send(service, "POST", "/", { key: KEY });
+  calls.length = 0;
+  return String(body["resourceDomainId"]);
+};
 
 describe("resource domains", () => {
   it("cannot be served without their repository: the handlers' layer does not compile", () => {
@@ -139,4 +192,134 @@ describe("resource domains", () => {
     });
     expect(calls).toEqual([]);
   });
+
+  it("grants and revokes a member at the application's version", async () => {
+    const id = await ensureDomain();
+    decided = "written";
+    expect(await send(service, "POST", `/${id}/members/usr_alice/grant`, { version: 1 })).toEqual(
+      written("member", 1),
+    );
+    expect(await send(service, "POST", `/${id}/members/usr_alice/revoke`, { version: 2 })).toEqual(
+      written("revoked", 2),
+    );
+  });
+
+  it("refuses a stale decision with the decision that stands, quoting nothing it was sent", async () => {
+    const id = await ensureDomain();
+    const refused = await send(service, "POST", `/${id}/members/usr_alice/grant`, {
+      version: 7,
+    });
+    expect(refused).toEqual({
+      status: 409,
+      body: {
+        _tag: "ResourceDomainMemberVersionConflictError",
+        message:
+          "A decision at least as new about this person stands, so this one changed nothing.",
+        current: { state: "revoked", version: 9 },
+      },
+    });
+  });
+
+  it("answers 404 for a person that does not exist, and checks the domain before deciding", async () => {
+    const id = await ensureDomain();
+    decided = { kind: "no-such-person" };
+    const person = await send(service, "POST", `/${id}/members/usr_nobody/grant`, {
+      version: 1,
+    });
+    expect(person).toEqual({
+      status: 404,
+      body: { _tag: "ResourceDomainPersonNotFoundError", message: "No person has this id." },
+    });
+    calls.length = 0;
+    const missing = "rdm:00000000-0000-4000-8000-0000000000ff";
+    const domain = await send(service, "POST", `/${missing}/members/usr_alice/grant`, {
+      version: 1,
+    });
+    expect(domain).toEqual({
+      status: 404,
+      body: { _tag: "ResourceDomainNotFoundError", message: "Resource domain not found." },
+    });
+    expect(calls).toEqual([`get ${missing}`]);
+  });
+
+  it.each([
+    ["an owner", { version: 1, ownerUserId: "usr_alice" }],
+    ["a state", { version: 1, state: "member" }],
+    ["version 0", { version: 0 }],
+    ["a fractional version", { version: 1.5 }],
+    ["the version it replaces instead", { expectedVersion: 1 }],
+    ["no version", {}],
+  ])("refuses a member decision with %s before anything is read", async (_what, body) => {
+    const id = await ensureDomain();
+    const refused = await send(service, "POST", `/${id}/members/usr_alice/grant`, body);
+    expect(refused.status).toBe(400);
+    expect(refused.body["_tag"]).toBe("RequestRefusedError");
+    expect(calls).toEqual([]);
+  });
+
+  it("answers 403 to the gateway's secret on the member routes, before the repository is asked", async () => {
+    const id = "rdm:00000000-0000-4000-8000-000000000000";
+    const statuses = await Promise.all([
+      send(gateway, "POST", `/${id}/members/usr_alice/grant`, { version: 1 }),
+      send(gateway, "POST", `/${id}/members/usr_alice/revoke`, { version: 1 }),
+      send(gateway, "GET", `/${id}/members`),
+    ]);
+    expect(statuses.map(({ status }) => status)).toEqual([403, 403, 403]);
+    expect(calls).toEqual([]);
+  });
+
+  it("reads one member, and tells no decision, no such person and no such domain apart", async () => {
+    const id = await ensureDomain();
+    const read = () => send(service, "GET", `/${id}/members/usr_alice`);
+    looked = { kind: "found", member: standing };
+    expect(await read()).toEqual({
+      status: 200,
+      body: {
+        userId: "usr_alice",
+        state: "revoked",
+        version: 9,
+        updatedAt: new Date(0).toISOString(),
+      },
+    });
+    looked = { kind: "no-decision" };
+    expect((await read()).body["_tag"]).toBe("ResourceDomainMemberNotFoundError");
+    looked = { kind: "no-such-person" };
+    expect((await read()).body["_tag"]).toBe("ResourceDomainPersonNotFoundError");
+    const elsewhere = await send(
+      service,
+      "GET",
+      "/rdm:00000000-0000-4000-8000-0000000000ff/members/usr_alice",
+    );
+    expect(elsewhere.body["_tag"]).toBe("ResourceDomainNotFoundError");
+  });
+
+  it("pages the members with a limit and the previous page's cursor", async () => {
+    const id = await ensureDomain();
+    const page = await send(service, "GET", `/${id}/members?limit=1&cursor=usr_aaron`);
+    expect(page).toEqual({
+      status: 200,
+      body: {
+        items: [
+          {
+            userId: "usr_alice",
+            state: "revoked",
+            version: 9,
+            updatedAt: new Date(0).toISOString(),
+          },
+        ],
+        nextCursor: "usr_alice",
+      },
+    });
+    expect(calls).toEqual([`get ${id}`, `list ${id} after usr_aaron limit 1`]);
+  });
+
+  it.each(["0", "501", "1.5", "many"])(
+    "refuses a page limit of %s before anything is read",
+    async (limit) => {
+      const id = await ensureDomain();
+      const refused = await send(service, "GET", `/${id}/members?limit=${limit}`);
+      expect(refused.status).toBe(400);
+      expect(calls).toEqual([]);
+    },
+  );
 });

@@ -29,6 +29,7 @@ import type {
   GetRunTimelineQuery,
   GetSessionOutputQuery,
   InferenceRespondRequest,
+  ListResourceDomainMembersQuery,
   ListRunsQuery,
   ListSessionsQuery,
   ListWorkspacesQuery,
@@ -39,6 +40,7 @@ import type {
   SessionInputRequest,
   InspectWorkspaceImageRequest,
   PutWorkspaceCredentialsRequest,
+  ResourceDomainMemberDecisionRequest,
   PruneWorkspaceCredentialsRequest,
   ReleaseWorkspaceCredentialsQuery,
   ListWorkspaceCredentialsQuery,
@@ -376,4 +378,53 @@ export const listSshKeysOp = (ownerUserId: string) =>
 export const archiveSshKeyOp = (sshKeyId: string, ownerUserId: string) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.sshKeys.archiveSshKey({ params: { sshKeyId }, query: { ownerUserId } }),
+  );
+
+// ---- resource domains (the SDK's scopes) ----
+
+export const ensureResourceDomainOp = (key: string) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.resourceDomains.ensureResourceDomain({ payload: { key } }),
+  );
+
+export const getResourceDomainOp = (resourceDomainId: string) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.resourceDomains.getResourceDomain({ params: { resourceDomainId } }),
+  );
+
+export const grantResourceDomainMemberOp = (
+  resourceDomainId: string,
+  userId: string,
+  payload: ResourceDomainMemberDecisionRequest,
+) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.resourceDomains.grantResourceDomainMember({
+      params: { resourceDomainId, userId },
+      payload,
+    }),
+  );
+
+export const revokeResourceDomainMemberOp = (
+  resourceDomainId: string,
+  userId: string,
+  payload: ResourceDomainMemberDecisionRequest,
+) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.resourceDomains.revokeResourceDomainMember({
+      params: { resourceDomainId, userId },
+      payload,
+    }),
+  );
+
+export const getResourceDomainMemberOp = (resourceDomainId: string, userId: string) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.resourceDomains.getResourceDomainMember({ params: { resourceDomainId, userId } }),
+  );
+
+export const listResourceDomainMembersOp = (
+  resourceDomainId: string,
+  query: ListResourceDomainMembersQuery,
+) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.resourceDomains.listResourceDomainMembers({ params: { resourceDomainId }, query }),
   );

@@ -27,6 +27,16 @@ export {
   SealantRuntimeError,
 } from "./errors.js";
 export type * from "./types.js";
+export type {
+  EnsuredScope,
+  ScopeClient,
+  ScopeInfo,
+  ScopeMember,
+  ScopeMemberDecision,
+  ScopeMemberPage,
+  ScopeMembers,
+  ScopesNamespace,
+} from "./scopes.js";
 // The workspace environment policy (`CreateOptions.env` validation) is public API: downstream
 // products validate at their own boundaries with the exact rules the platform enforces.
 export {

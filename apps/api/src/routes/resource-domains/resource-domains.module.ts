@@ -8,11 +8,21 @@
 import {
   ResourceDomainForbiddenError,
   ResourceDomainInternalServerError,
+  ResourceDomainMemberNotFoundError,
+  ResourceDomainMemberVersionConflictError,
   ResourceDomainNotFoundError,
+  ResourceDomainPersonNotFoundError,
+  RESOURCE_DOMAIN_MEMBERS_PAGE,
   type EnsureResourceDomainRequest,
+  type ListResourceDomainMembersQuery,
+  type ResourceDomainMemberWire,
   type ResourceDomainWire,
 } from "@sealant/api-contracts";
-import { ResourceDomainRepo, type ResourceDomainRecord } from "@sealant/db";
+import {
+  ResourceDomainRepo,
+  type ResourceDomainMemberRecord,
+  type ResourceDomainRecord,
+} from "@sealant/db";
 import { Effect } from "effect";
 
 import { CurrentPrincipal } from "../../services/service-principals.js";
@@ -44,7 +54,7 @@ export const ensureResourceDomain = (payload: EnsureResourceDomainRequest) =>
     return { ...toWire(domain), created };
   });
 
-export const getResourceDomain = (resourceDomainId: string) =>
+const loadDomain = (resourceDomainId: string) =>
   Effect.gen(function* () {
     yield* requireServiceKey;
     const repo = yield* ResourceDomainRepo;
@@ -54,5 +64,84 @@ export const getResourceDomain = (resourceDomainId: string) =>
     if (domain === undefined) {
       return yield* new ResourceDomainNotFoundError({ message: "Resource domain not found." });
     }
-    return toWire(domain);
+    return domain;
+  });
+
+export const getResourceDomain = (resourceDomainId: string) =>
+  Effect.map(loadDomain(resourceDomainId), toWire);
+
+const memberToWire = (member: ResourceDomainMemberRecord): ResourceDomainMemberWire => ({
+  userId: member.userId,
+  state: member.state,
+  version: member.version,
+  updatedAt: member.updatedAt.toISOString(),
+});
+
+export const decideResourceDomainMember = (
+  params: { readonly resourceDomainId: string; readonly userId: string },
+  state: ResourceDomainMemberRecord["state"],
+  version: number,
+) =>
+  Effect.gen(function* () {
+    yield* loadDomain(params.resourceDomainId);
+    const repo = yield* ResourceDomainRepo;
+    const outcome = yield* repo
+      .decideMember({ ...params, state, version })
+      .pipe(Effect.mapError(internal("Failed to record the member decision.")));
+    switch (outcome.kind) {
+      case "decided":
+        return memberToWire(outcome.member);
+      case "no-such-person":
+        return yield* noPerson();
+      case "stale":
+        return yield* new ResourceDomainMemberVersionConflictError({
+          message:
+            "A decision at least as new about this person stands, so this one changed nothing.",
+          current: { state: outcome.current.state, version: outcome.current.version },
+        });
+    }
+  });
+
+const noPerson = () => new ResourceDomainPersonNotFoundError({ message: "No person has this id." });
+
+export const getResourceDomainMember = (params: {
+  readonly resourceDomainId: string;
+  readonly userId: string;
+}) =>
+  Effect.gen(function* () {
+    yield* loadDomain(params.resourceDomainId);
+    const repo = yield* ResourceDomainRepo;
+    const lookup = yield* repo
+      .getMember(params.resourceDomainId, params.userId)
+      .pipe(Effect.mapError(internal("Failed to read the member.")));
+    switch (lookup.kind) {
+      case "found":
+        return memberToWire(lookup.member);
+      case "no-such-person":
+        return yield* noPerson();
+      case "no-decision":
+        return yield* new ResourceDomainMemberNotFoundError({
+          message: "This person has no decision in this resource domain.",
+        });
+    }
+  });
+
+export const listResourceDomainMembers = (
+  resourceDomainId: string,
+  query: ListResourceDomainMembersQuery,
+) =>
+  Effect.gen(function* () {
+    yield* loadDomain(resourceDomainId);
+    const repo = yield* ResourceDomainRepo;
+    const page = yield* repo
+      .listMembers({
+        resourceDomainId,
+        limit: query.limit ?? RESOURCE_DOMAIN_MEMBERS_PAGE.default,
+        ...(query.cursor === undefined ? {} : { after: query.cursor }),
+      })
+      .pipe(Effect.mapError(internal("Failed to list the resource domain's members.")));
+    return {
+      items: page.members.map(memberToWire),
+      ...(page.next === undefined ? {} : { nextCursor: page.next }),
+    };
   });

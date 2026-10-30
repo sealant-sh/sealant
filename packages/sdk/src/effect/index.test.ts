@@ -20,6 +20,15 @@ describe("@sealant/sdk/effect subpath", () => {
     expect(typeof effectSubpath.expireWorkspaceOp).toBe("function");
   });
 
+  it("exposes the scope operations, as it does every other namespace's", () => {
+    expect(typeof effectSubpath.ensureResourceDomainOp).toBe("function");
+    expect(typeof effectSubpath.getResourceDomainOp).toBe("function");
+    expect(typeof effectSubpath.grantResourceDomainMemberOp).toBe("function");
+    expect(typeof effectSubpath.revokeResourceDomainMemberOp).toBe("function");
+    expect(typeof effectSubpath.getResourceDomainMemberOp).toBe("function");
+    expect(typeof effectSubpath.listResourceDomainMembersOp).toBe("function");
+  });
+
   it("exposes the typed contract errors for catchTag matching", async () => {
     const { Effect } = await import("effect");
     const recovered = await Effect.runPromise(

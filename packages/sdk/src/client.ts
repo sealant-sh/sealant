@@ -61,6 +61,7 @@ import { imageSpecKey } from "./internal/image-key.js";
 import { buildInferenceRespondRequest, mapInferenceResponse } from "./internal/inference.js";
 import { requireSshUser } from "./internal/process-user.js";
 import { mapSshKey, mapWorkspaceSshInfo } from "./internal/ssh.js";
+import { makeScopes, type ScopesNamespace } from "./scopes.js";
 import type {
   AccessTokensNamespace,
   ConnectedAccount,
@@ -115,6 +116,12 @@ export class Sealant {
   readonly #runtime: SdkRuntime;
   readonly #ctx: SdkContext;
 
+  /**
+   * Owners that are projects, not people: ensure one per project and name its members. With a
+   * service key; `actAs` gives a client for one scope that cannot reach a credential or a harness.
+   */
+  readonly scopes: ScopesNamespace;
+
   constructor(config: SealantConfig) {
     if (config.baseUrl.trim().length === 0) {
       throw new SealantError("Sealant requires a non-empty `baseUrl`.", { code: "invalid_config" });
@@ -123,6 +130,7 @@ export class Sealant {
     this.#config = config;
     this.#runtime = makeSdkRuntime(internalConfig);
     this.#ctx = { runtime: this.#runtime, config: internalConfig };
+    this.scopes = makeScopes(this.#runtime);
   }
 
   /** The configured control-plane base URL. */
