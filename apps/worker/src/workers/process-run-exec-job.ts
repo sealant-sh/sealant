@@ -1,8 +1,8 @@
 /**
  * The run-exec job: claims the run, resolves the workspace's runtime, and hands the run to its
- * framing. The exec recorder itself (`captureRun`, `produceExecRun`) lives in @sealant/telemetry, so
- * the API can run an exec in its own request with the same recording; the harness and dotfiles
- * framings stay here.
+ * framing. The exec recorder, with the exec and harness framings, lives in @sealant/telemetry, so
+ * the API can run an exec in its own request with the same recording; the dotfiles framing stays
+ * here.
  */
 import type { CredentialCipherService } from "@sealant/credentials";
 import {
@@ -21,17 +21,13 @@ import {
   SealantDB,
 } from "@sealant/db";
 import {
-  captureChanges,
-  captureRun,
   DAEMON_CONNECT_RETRY,
   InlineByteaArtifactStoreLive,
-  launchFailureMessage,
-  normalizeEnvelope,
   PostgresTelemetrySinkLive,
   produceExecRun,
-  RECORD_BATCH_SIZE,
-  RECORD_BATCH_WINDOW,
+  produceHarnessRun,
   recordConflictMessage,
+  recordProcess,
   settleClaimedRun,
   TelemetrySink,
   TelemetrySinkConflictError,
@@ -53,7 +49,7 @@ import {
   type SealantTargetDerivationOptions,
   type SealantTarget,
 } from "@sealant/workspaces";
-import { Cause, Duration, Effect, Layer, Result, Stream } from "effect";
+import { Cause, Duration, Effect, Layer, Result } from "effect";
 
 /** How long `dotfiles.apply` may take to answer: the clone and the apply, not the bootstrap. */
 const DOTFILES_APPLY_TIMEOUT = Duration.minutes(10);
@@ -127,34 +123,6 @@ const resolveRuntimeTarget = (runId: string, targetOptions: SealantTargetDerivat
       attemptId: workspace.latestRunId,
       launchCredentialInjections: instance.launchCredentialInjections ?? [],
     };
-  });
-
-/** HARNESS framing: one command; a nonzero exit marks the run failed. */
-const produceHarnessRun = (runId: string, target: SealantTarget, command: RunExecCommand) =>
-  Effect.gen(function* () {
-    const runs = yield* RunRepo;
-    const captured = yield* captureRun(runId, target, command).pipe(
-      Effect.catchTag("TelemetrySinkConflictError", Effect.succeed),
-      Effect.catchTag("ExecLaunchFailedError", (error) =>
-        runs
-          .markRunFailed({ id: runId, errorMessage: launchFailureMessage(error, "the harness") })
-          .pipe(Effect.as(undefined)),
-      ),
-    );
-    if (captured === undefined) return;
-    const changes = yield* captureChanges(runId, target);
-    if (typeof captured !== "number") {
-      yield* runs.markRunFailed({
-        id: runId,
-        errorMessage: recordConflictMessage(captured),
-        ...changes,
-      });
-      return;
-    }
-    const exitCode = captured;
-    yield* exitCode === 0
-      ? runs.markRunCompleted({ id: runId, exitCode: 0, ...changes })
-      : runs.markRunFailed({ id: runId, exitCode, ...changes });
   });
 
 /**
@@ -274,33 +242,15 @@ export const produceDotfilesRun = (
         return;
       }
 
-      let exitCode: number | undefined;
-      const drained = yield* session.events.pipe(
-        // Only this run's own events: the bootstrap's (the daemon stamps the execution on them).
-        Stream.filter((event) => event.executionId === runId),
-        Stream.takeUntil(
-          (event) =>
-            event.payload.case === "processExited" && event.processId === bootstrap.processId,
-        ),
-        Stream.tap((event) =>
-          Effect.sync(() => {
-            if (event.payload.case === "processExited" && event.processId === bootstrap.processId) {
-              exitCode = event.payload.value.exitCode ?? -1;
-            }
-          }),
-        ),
-        Stream.groupedWithin(RECORD_BATCH_SIZE, RECORD_BATCH_WINDOW),
-        Stream.mapEffect((batch) =>
-          sink.appendBatch({ runId, runtimeId, batch: Array.from(batch).map(normalizeEnvelope) }),
-        ),
-        Stream.runDrain,
-        Effect.timeout(options.bootstrapTimeout ?? DOTFILES_BOOTSTRAP_TIMEOUT),
-        Effect.result,
-      );
-      yield* close(
-        exitCode === undefined ? "transport-close" : "stream-end",
-        exitCode === undefined,
-      );
+      // Only this run's own events: the bootstrap's (the daemon stamps the execution on them).
+      const { exitCode, drained } = yield* recordProcess({
+        session,
+        runId,
+        runtimeId,
+        processId: bootstrap.processId,
+        includeUntagged: false,
+        bound: options.bootstrapTimeout ?? DOTFILES_BOOTSTRAP_TIMEOUT,
+      });
       if (Result.isFailure(drained) && Cause.isTimeoutError(drained.failure)) {
         yield* session.signalProcess(bootstrap.processId, SIGTERM).pipe(Effect.ignore);
         yield* runs.markRunFailed({

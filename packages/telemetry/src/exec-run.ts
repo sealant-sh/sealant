@@ -7,27 +7,29 @@
  * depends on @sealant/workspaces: putting it there would be a dependency cycle.
  */
 import { type CreateRunInput, type RunFileChange, RunRepo } from "@sealant/db";
+import type { EventEnvelope } from "@sealant/runtime-protocol";
 import {
   execInWorkspace,
   PROCESS_USER_CAPABILITY,
   type RunExecCommand,
   SealantControlError,
   SealantRuntime,
+  type SealantSession,
   type SealantTarget,
   splitWorkingTreeChanges,
   syncBackWorkspaceCredentials,
   type SyncBackWorkspaceCredentialsInput,
   workingTreeChangesScript,
 } from "@sealant/workspaces";
-import { Cause, Effect, Schedule, Schema, Stream } from "effect";
+import { Cause, type Duration, Effect, Result, Schedule, Schema, Stream } from "effect";
 
 import type { TelemetrySinkConflictError } from "./errors.js";
 import { normalizeEnvelope } from "./normalize.js";
 import { TelemetrySink } from "./sink.js";
 
 const WORKDIR = "/workspace/repo";
-export const RECORD_BATCH_SIZE = 256;
-export const RECORD_BATCH_WINDOW = "250 millis";
+const RECORD_BATCH_SIZE = 256;
+const RECORD_BATCH_WINDOW = "250 millis";
 /**
  * The control transport can flake while a freshly launched daemon comes up (socat bridge, WSS
  * service endpoints), so connecting and its health read are retried. An exec is never retried: its
@@ -91,10 +93,73 @@ export class ExecLaunchFailedError extends Schema.TaggedError<ExecLaunchFailedEr
 ) {}
 
 /** Why the run failed, naming what was sent (`command 2/3`) and nothing it carried. */
-export const launchFailureMessage = (error: ExecLaunchFailedError, what: string) =>
+const launchFailureMessage = (error: ExecLaunchFailedError, what: string) =>
   error.refusedCode === undefined
     ? `Run ${error.runId}: ${what} was sent to the workspace and its answer was lost, so whether it started is unknown; it may still be running. It was not sent again.`
     : `Run ${error.runId}: the workspace refused to start ${what} (daemon error ${String(error.refusedCode)}); nothing was started.`;
+
+/**
+ * Records one process into its run's record: the run's events, and with `includeUntagged` the
+ * daemon's untagged ones too, up to the process's exit, batched into the sink. The epoch then
+ * closes, suspicious when the exit was not seen. `exitCode` is undefined when the exit was not
+ * seen (and -1 when the daemon reported none); `bound` ends the recording, never the process.
+ */
+export const recordProcess = (input: {
+  readonly session: SealantSession;
+  readonly runId: string;
+  readonly runtimeId: string;
+  readonly processId: string;
+  readonly includeUntagged: boolean;
+  readonly bound?: Duration.Input;
+}) =>
+  Effect.gen(function* () {
+    const sink = yield* TelemetrySink;
+    const { runId, runtimeId, processId } = input;
+    const isExit = (event: EventEnvelope) =>
+      event.payload.case === "processExited" && event.processId === processId;
+    let exitCode: number | undefined;
+    const drain = input.session.events.pipe(
+      // Untagged daemon events (boot, heartbeats) are the pre-attribution behavior, and the
+      // compatibility path for daemons that ignore execution_id. Events tagged with a DIFFERENT
+      // execution (a concurrent SSH session) belong to that run; the telemetry worker's
+      // full-stream ingester attributes them there.
+      Stream.filter(
+        (event) =>
+          event.executionId === runId || (input.includeUntagged && event.executionId === undefined),
+      ),
+      Stream.takeUntil(isExit),
+      Stream.tap((event) =>
+        Effect.sync(() => {
+          if (event.payload.case === "processExited" && isExit(event)) {
+            exitCode = event.payload.value.exitCode ?? -1;
+          }
+        }),
+      ),
+      Stream.groupedWithin(RECORD_BATCH_SIZE, RECORD_BATCH_WINDOW),
+      Stream.mapEffect((batch) =>
+        sink.appendBatch({ runId, runtimeId, batch: Array.from(batch).map(normalizeEnvelope) }),
+      ),
+      Stream.runDrain,
+    );
+    const drained = yield* (
+      input.bound === undefined ? drain : Effect.timeout(drain, input.bound)
+    ).pipe(
+      Effect.ensuring(
+        Effect.suspend(() =>
+          sink
+            .closeEpoch({
+              runId,
+              runtimeId,
+              closeReason: exitCode === undefined ? "transport-close" : "stream-end",
+              suspicious: exitCode === undefined,
+            })
+            .pipe(Effect.ignore),
+        ),
+      ),
+      Effect.result,
+    );
+    return { exitCode, drained };
+  });
 
 /**
  * Execs the harness and records its telemetry, bounded to the harness process. Returns the exit
@@ -155,47 +220,15 @@ export const captureRun = (
         );
 
       yield* sink.openEpoch({ runId, runtimeId, schemaVersion: 0 });
-
-      let exitCode = -1;
-      const drain = session.events.pipe(
-        // Ingest this run's own events plus untagged daemon events (boot, heartbeats — the
-        // pre-attribution behavior, and the compatibility path for daemons that ignore
-        // execution_id). Events tagged with a DIFFERENT execution (a concurrent SSH session)
-        // belong to that run; the telemetry worker's full-stream ingester attributes them there.
-        Stream.filter((event) => event.executionId === undefined || event.executionId === runId),
-        Stream.takeUntil(
-          (event) =>
-            event.payload.case === "processExited" && event.processId === accepted.processId,
-        ),
-        Stream.tap((event) =>
-          Effect.sync(() => {
-            if (event.payload.case === "processExited" && event.processId === accepted.processId) {
-              exitCode = event.payload.value.exitCode ?? -1;
-            }
-          }),
-        ),
-        Stream.groupedWithin(RECORD_BATCH_SIZE, RECORD_BATCH_WINDOW),
-        Stream.mapEffect((batch) =>
-          sink.appendBatch({ runId, runtimeId, batch: Array.from(batch).map(normalizeEnvelope) }),
-        ),
-        Stream.runDrain,
-      );
-
-      yield* drain.pipe(
-        Effect.ensuring(
-          Effect.suspend(() =>
-            sink
-              .closeEpoch({
-                runId,
-                runtimeId,
-                closeReason: exitCode === -1 ? "transport-close" : "stream-end",
-                suspicious: exitCode === -1,
-              })
-              .pipe(Effect.ignore),
-          ),
-        ),
-      );
-      return exitCode;
+      const { exitCode, drained } = yield* recordProcess({
+        session,
+        runId,
+        runtimeId,
+        processId: accepted.processId,
+        includeUntagged: true,
+      });
+      if (Result.isFailure(drained)) return yield* Effect.fail(drained.failure);
+      return exitCode ?? -1;
     }),
   );
 
@@ -205,7 +238,7 @@ export const captureRun = (
  * A reading that failed (the script exited nonzero) is no reading: the run's diff and changed
  * files stay unrecorded (null), never an empty change that reads as "nothing changed".
  */
-export const captureChanges = (runId: string, target: SealantTarget) =>
+const captureChanges = (runId: string, target: SealantTarget) =>
   Effect.gen(function* () {
     const output = yield* shellExec(target, workingTreeChangesScript());
     if (output.exitCode !== 0) {
@@ -280,6 +313,34 @@ export const produceExecRun = (
     }
     const changes = yield* captureChanges(runId, target);
     yield* runs.markRunCompleted({ id: runId, exitCode: lastExitCode, ...changes });
+  });
+
+/** HARNESS framing: one command; a nonzero exit marks the run failed. */
+export const produceHarnessRun = (runId: string, target: SealantTarget, command: RunExecCommand) =>
+  Effect.gen(function* () {
+    const runs = yield* RunRepo;
+    const captured = yield* captureRun(runId, target, command).pipe(
+      Effect.catchTag("TelemetrySinkConflictError", Effect.succeed),
+      Effect.catchTag("ExecLaunchFailedError", (error) =>
+        runs
+          .markRunFailed({ id: runId, errorMessage: launchFailureMessage(error, "the harness") })
+          .pipe(Effect.as(undefined)),
+      ),
+    );
+    if (captured === undefined) return;
+    const changes = yield* captureChanges(runId, target);
+    if (typeof captured !== "number") {
+      yield* runs.markRunFailed({
+        id: runId,
+        errorMessage: recordConflictMessage(captured),
+        ...changes,
+      });
+      return;
+    }
+    const exitCode = captured;
+    yield* exitCode === 0
+      ? runs.markRunCompleted({ id: runId, exitCode: 0, ...changes })
+      : runs.markRunFailed({ id: runId, exitCode, ...changes });
   });
 
 /** A claimed run: where its processes run, and what its credential sync-back reads afterwards. */

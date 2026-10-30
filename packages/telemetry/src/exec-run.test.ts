@@ -96,3 +96,15 @@ describe("an exec run executed in its request", () => {
     });
   });
 });
+
+describe("the package's recorder surface", () => {
+  it("names the framings and the in-request run, and keeps the recorder's helpers to itself", async () => {
+    const telemetry = await import("./index.js");
+    for (const name of ["captureChanges", "launchFailureMessage", "RECORD_BATCH_SIZE"]) {
+      expect(telemetry).not.toHaveProperty(name);
+    }
+    for (const name of ["produceExecRun", "produceHarnessRun", "recordProcess", "executeExecRun"]) {
+      expect(telemetry).toHaveProperty(name);
+    }
+  });
+});
