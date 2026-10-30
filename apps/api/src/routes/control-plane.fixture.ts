@@ -1,9 +1,17 @@
+import { once } from "node:events";
+
+import { serve } from "@hono/node-server";
 import { ControlPlaneAPI, type RequestRefusal } from "@sealant/api-contracts";
 import { Effect, Layer } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
 import { type HttpApi, HttpApiBuilder, type HttpApiGroup } from "effect/http-api";
 
-import { CurrentPrincipal, type RequestPrincipal } from "../services/service-principals.js";
+import {
+  CurrentPrincipal,
+  makeServicePrincipals,
+  servicePrincipalMiddleware,
+  type RequestPrincipal,
+} from "../services/service-principals.js";
 import { RequestRefusalLive } from "./request-refusal.js";
 
 type ControlPlaneGroups =
@@ -11,17 +19,7 @@ type ControlPlaneGroups =
 type ControlPlaneGroupName = ControlPlaneGroups["identifier"];
 type ControlPlaneHandlers = HttpApiGroup.ToService<"sealantControlPlaneApi", ControlPlaneGroups>;
 
-/**
- * The real `ControlPlaneAPI` as a web handler, with its request refusal and `principal` as the one
- * the transport gate admitted. `handlers` serves the `groups` under test and must need nothing but
- * the request refusal, so a test that forgets to provide a service does not compile. Every
- * endpoint of every other group is a spy that calls `reached` with its name, then fails as not
- * under test.
- */
-export const serveControlPlane = <
-  Tested extends ControlPlaneGroupName = never,
-  Provided = never,
->(options: {
+interface ControlPlaneOptions<Tested extends ControlPlaneGroupName, Provided> {
   readonly handlers?: Layer.Layer<
     HttpApiGroup.Service<"sealantControlPlaneApi", Tested>,
     never,
@@ -30,9 +28,12 @@ export const serveControlPlane = <
   /** What the handlers need for each request, as the API provides it (`provideRequest`). */
   readonly provides: Layer.Layer<Provided>;
   readonly groups?: ReadonlyArray<Tested>;
-  readonly principal?: RequestPrincipal;
   readonly reached?: (endpoint: string) => void;
-}) => {
+}
+
+const controlPlane = <Tested extends ControlPlaneGroupName, Provided>(
+  options: ControlPlaneOptions<Tested, Provided>,
+) => {
   const tested: ReadonlyArray<string> = options.groups ?? [];
   const spies = Object.values(ControlPlaneAPI.groups)
     .filter((group) => !tested.includes(group.identifier))
@@ -59,16 +60,54 @@ export const serveControlPlane = <
     never,
     RequestRefusal | HttpRouter.Request.From<"Requires", Provided>
   > = Layer.mergeAll(Layer.empty, ...spies, options.handlers ?? Layer.empty);
-  return HttpRouter.toWebHandler(
-    HttpApiBuilder.layer(ControlPlaneAPI).pipe(
-      Layer.provide(handlers),
-      Layer.provide(RequestRefusalLive),
-      Layer.provide(HttpServer.layerServices),
-      HttpRouter.provideRequest(options.provides),
-    ),
-    {
-      middleware: (app) =>
-        Effect.provideService(app, CurrentPrincipal, options.principal ?? { kind: "service" }),
-    },
+  return HttpApiBuilder.layer(ControlPlaneAPI).pipe(
+    Layer.provide(handlers),
+    Layer.provide(RequestRefusalLive),
+    HttpRouter.provideRequest(options.provides),
   );
+};
+
+/**
+ * The real `ControlPlaneAPI` as a web handler, with its request refusal and `principal` as the one
+ * the transport gate admitted. `handlers` serves the `groups` under test and must need nothing but
+ * the request refusal, so a test that forgets to provide a service does not compile. Every
+ * endpoint of every other group is a spy that calls `reached` with its name, then fails as not
+ * under test.
+ */
+export const serveControlPlane = <Tested extends ControlPlaneGroupName = never, Provided = never>(
+  options: ControlPlaneOptions<Tested, Provided> & { readonly principal?: RequestPrincipal },
+) =>
+  HttpRouter.toWebHandler(controlPlane(options).pipe(Layer.provide(HttpServer.layerServices)), {
+    middleware: (app) =>
+      Effect.provideService(app, CurrentPrincipal, options.principal ?? { kind: "service" }),
+  });
+
+/** The same API behind the real transport gate, which admits `serviceKey` as a service. */
+export const gateControlPlane = <Tested extends ControlPlaneGroupName, Provided>(
+  options: ControlPlaneOptions<Tested, Provided> & { readonly serviceKey: string },
+) =>
+  HttpRouter.toWebHandler(controlPlane(options).pipe(Layer.provide(HttpServer.layerServices)), {
+    middleware: servicePrincipalMiddleware(makeServicePrincipals(options.serviceKey)),
+  });
+
+/** A web handler listening on a loopback port, as a client outside the process reaches it. */
+export const listenOnLoopback = async (served: {
+  readonly handler: (request: Request) => Promise<Response>;
+  readonly dispose: () => Promise<void>;
+}) => {
+  const server = serve({
+    fetch: (request) => served.handler(request),
+    port: 0,
+    hostname: "127.0.0.1",
+  });
+  await once(server, "listening");
+  const address = server.address();
+  if (typeof address !== "object" || address === null) throw new Error("expected a TCP address");
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: async () => {
+      await new Promise((resolve) => server.close(resolve));
+      await served.dispose();
+    },
+  };
 };
