@@ -187,6 +187,55 @@ describe("a run as a user (the as-user queue)", () => {
   });
 });
 
+describe("secret env on a run-exec queue", () => {
+  const value = "fake-password-7f3a";
+  const command = { executable: "psql", args: [] };
+  const commands = [command];
+  const asUser = {
+    kind: runExecAsUserRequestedMessageKind,
+    runId: "run_1",
+    commands,
+    user: "m4lice000",
+    checkedExecutorRunId: "run_launch",
+  };
+  const withSecret = (message: Record<string, unknown>) => [
+    { ...message, secretEnv: { PGPASSWORD: value } },
+    { ...message, secretEnv: {} },
+    { ...message, commands: [command, { ...command, secretEnv: { PGPASSWORD: value } }] },
+  ];
+
+  it("is refused by both parsers, on the message or any command, without echoing a value", () => {
+    const refusals = [
+      ...withSecret({ ...base, commands }).map((bad) => () => parseRunExecRequestedMessage(bad)),
+      () =>
+        parseRunExecRequestedMessage({
+          ...base,
+          command: { executable: "opencode", args: [], secretEnv: { PGPASSWORD: value } },
+        }),
+      ...withSecret(asUser).map((bad) => () => parseRunExecAsUserRequestedMessage(bad)),
+    ];
+    for (const refuse of refusals) {
+      expect(refuse).toThrow(/secretEnv, which is never queued/);
+      expect(refuse).not.toThrow(value);
+    }
+  });
+
+  it("is refused before it is published", () => {
+    const smuggled = [{ ...command, secretEnv: { PGPASSWORD: value } }];
+    expect(() => runExecRequestEnvelope({ runId: "run_1", commands: smuggled })).toThrow(
+      /secretEnv, which is never queued/,
+    );
+    expect(() =>
+      runExecRequestEnvelope({
+        runId: "run_1",
+        commands: smuggled,
+        user: "m4lice000",
+        checkedExecutorRunId: "run_launch",
+      }),
+    ).toThrow(/secretEnv, which is never queued/);
+  });
+});
+
 describe("sharedConcurrencyLimit (both run-exec queues)", () => {
   it("runs at most its permits at once across every caller, the rest in order", async () => {
     const limit = sharedConcurrencyLimit(2);

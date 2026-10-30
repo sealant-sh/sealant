@@ -123,6 +123,25 @@ const parseCommand = (input: unknown, label: string): RunExecCommand => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+/**
+ * Secret env never rides a queue: a process that needs it runs in its request (`executeExecRun` in
+ * @sealant/telemetry). A message naming `secretEnv`, on itself or any command and even empty, is
+ * refused before it is published and again when a worker takes it, naming where, never a value.
+ */
+const refuseSecretEnv = (input: Record<string, unknown>, label: string) => {
+  const commands: unknown[] = Array.isArray(input["commands"]) ? input["commands"] : [];
+  const places: Array<readonly [string, unknown]> = [
+    ["it", input],
+    ["its command", input["command"]],
+    ...commands.map((command, index) => [`commands[${index}]`, command] as const),
+  ];
+  for (const [where, value] of places) {
+    if (isRecord(value) && Object.hasOwn(value, "secretEnv")) {
+      throw new Error(`${label}: ${where} names secretEnv, which is never queued.`);
+    }
+  }
+};
+
 const optionalString = (value: unknown, label: string): string | undefined => {
   if (value === undefined) return undefined;
   if (typeof value !== "string" || value.length === 0) {
@@ -200,6 +219,7 @@ export const parseRunExecRequestedMessage = (input: unknown): RunExecRequestedMe
     throw new Error("Invalid run-exec message: not an object.");
   }
   const obj = input as Record<string, unknown>;
+  refuseSecretEnv(obj, "Invalid run-exec message");
   if (obj.kind !== runExecRequestedMessageKind) {
     throw new Error(`Invalid run-exec message: unexpected kind ${String(obj.kind)}.`);
   }
@@ -244,6 +264,7 @@ export const parseRunExecAsUserRequestedMessage = (input: unknown): RunExecReque
   if (!isRecord(input)) {
     throw new Error("Invalid run-exec-as-user message: not an object.");
   }
+  refuseSecretEnv(input, "Invalid run-exec-as-user message");
   if (input["kind"] !== runExecAsUserRequestedMessageKind) {
     throw new Error(`Invalid run-exec-as-user message: unexpected kind ${String(input["kind"])}.`);
   }
@@ -293,6 +314,7 @@ export interface RunExecRequestInput {
 export const runExecRequestEnvelope = (
   input: RunExecRequestInput,
 ): { readonly queue: typeof runExecQueue; readonly message: RunExecRequestedMessage } => {
+  refuseSecretEnv({ ...input }, "A run-exec request");
   if (input.user !== undefined) {
     if (input.commands === undefined || input.checkedExecutorRunId === undefined) {
       throw new Error("Only the exec framing (`commands`) runs as a user, on a checked executor.");
