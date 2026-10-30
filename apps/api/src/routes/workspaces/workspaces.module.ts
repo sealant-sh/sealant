@@ -2986,8 +2986,8 @@ export const execWorkspace = (input: ExecWorkspaceInput) => {
 
 /**
  * The bounds of an exec in its request. `admission` bounds the checks before the run exists;
- * `budget`, the SDK's exec budget, bounds the run from its claim through its credential sync-back,
- * of which `syncBack` is the sync-back's share.
+ * `budget`, the SDK's exec budget, is one deadline for the run from its creation to its read
+ * back, of which `syncBack` is the credential sync-back's share.
  */
 const EXEC_IN_REQUEST_BOUNDS = {
   admission: Duration.minutes(1),
@@ -3069,7 +3069,7 @@ export const execWorkspaceInRequest = (
         ExecRunUnreadableError: () =>
           Effect.fail(
             new WorkspaceInternalServerError({
-              message: `Exec run ${runId} settled but could not be read back; its commands ran, so read it at GET /v1/runs/${runId} rather than running them again.`,
+              message: `Exec run ${runId} settled but could not be read back; its commands may have run, so read it at GET /v1/runs/${runId} rather than running them again.`,
             }),
           ),
       }),

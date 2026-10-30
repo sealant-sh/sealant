@@ -27,7 +27,18 @@ import {
   type SyncBackWorkspaceCredentialsInput,
   workingTreeChangesScript,
 } from "@sealant/workspaces";
-import { Cause, Duration, Effect, Option, Result, Schedule, Schema, Stream } from "effect";
+import {
+  Cause,
+  Clock,
+  Context,
+  Duration,
+  Effect,
+  Option,
+  Result,
+  Schedule,
+  Schema,
+  Stream,
+} from "effect";
 
 import type { TelemetrySinkConflictError } from "./errors.js";
 import { normalizeEnvelope } from "./normalize.js";
@@ -111,6 +122,14 @@ const launchFailureMessage = (error: ExecLaunchFailedError, what: string) =>
     : `Run ${error.runId}: the workspace refused to start ${what} (daemon error ${String(error.refusedCode)}); nothing was started.`;
 
 /**
+ * How long closing a process's record may wait. The worker waits for it; an exec run in its
+ * request bounds it inside its budget.
+ */
+const EpochCloseBound = Context.Reference<Duration.Duration>("@sealant/telemetry/EpochCloseBound", {
+  defaultValue: () => Duration.infinity,
+});
+
+/**
  * Records one process into its run's record: the run's events, and with `includeUntagged` the
  * daemon's untagged ones too, up to the process's exit, batched into the sink. The epoch then
  * closes, suspicious when the exit was not seen. `exitCode` is undefined when the exit was not
@@ -157,16 +176,17 @@ export const recordProcess = (input: {
       input.bound === undefined ? drain : Effect.timeout(drain, input.bound)
     ).pipe(
       Effect.ensuring(
-        Effect.suspend(() =>
-          sink
-            .closeEpoch({
+        Effect.gen(function* () {
+          const bound = yield* EpochCloseBound;
+          yield* Effect.interruptible(
+            sink.closeEpoch({
               runId,
               runtimeId,
               closeReason: exitCode === undefined ? "transport-close" : "stream-end",
               suspicious: exitCode === undefined,
-            })
-            .pipe(Effect.ignore),
-        ),
+            }),
+          ).pipe(Effect.timeout(bound), Effect.ignore);
+        }),
       ),
       Effect.result,
     );
@@ -379,7 +399,7 @@ export class ExecRunUnsettledError extends Schema.TaggedError<ExecRunUnsettledEr
   { runId: Schema.String },
 ) {}
 
-/** The run settled, and could not be read back; its commands ran. */
+/** The run settled, and could not be read back; its commands may have run. */
 export class ExecRunUnreadableError extends Schema.TaggedError<ExecRunUnreadableError>()(
   "ExecRunUnreadableError",
   { runId: Schema.String },
@@ -400,7 +420,12 @@ const causeTags = (cause: Cause.Cause<unknown>) =>
     .join(", ");
 
 /** Writes that a run stopped short; a write that fails leaves the run unsettled, and says so. */
-const failStoppedRun = (runs: RunRepoService, runId: string, cause: Cause.Cause<unknown>) =>
+const failStoppedRun = (
+  runs: RunRepoService,
+  runId: string,
+  cause: Cause.Cause<unknown>,
+  bound: Duration.Duration = Duration.infinity,
+) =>
   runs.markRunFailed({ id: runId, errorMessage: stoppedShortReason(runId, cause) }).pipe(
     Effect.tapCause((writeCause) =>
       Effect.logError(
@@ -408,6 +433,10 @@ const failStoppedRun = (runs: RunRepoService, runId: string, cause: Cause.Cause<
       ),
     ),
     Effect.mapError(() => new ExecRunUnsettledError({ runId })),
+    Effect.timeoutOrElse({
+      duration: bound,
+      orElse: () => Effect.fail(new ExecRunUnsettledError({ runId })),
+    }),
   );
 
 const isTerminal = (run: Run) =>
@@ -459,9 +488,14 @@ class ExecBudgetExceeded extends Schema.TaggedError<ExecBudgetExceeded>()(
  * created and claimed, its commands run in order with the worker's recording, and the settled run
  * is returned, completed or failed, a run past its budget too. Its commands live only in this
  * fiber, and each reaches only its own exec, never a later command, the changes reading or the
- * credential sync-back. `budget` bounds the whole run: claiming, every command and the changes
- * reading get what the credential sync-back's `syncBackDeadline` leaves. Past it no further
- * command is sent and the run fails; a client that goes away or an API that stops does the same.
+ * credential sync-back.
+ *
+ * `budget` is one deadline for the whole of it: creating the run, the commands, the record's
+ * close, writing a failure, the credential sync-back (`syncBackDeadline`) and reading the run back.
+ * Each write, read and close waits at most a tenth of the budget (ten seconds at most), and the
+ * commands get what those leave; once that is spent no command is sent. A write that does not
+ * finish in time answers as the run's state is then known: not created (nothing ran), unsettled,
+ * or unreadable. A client that goes away or an API that stops fails the run as the budget does.
  */
 export const executeExecRun = (input: {
   readonly run: CreateRunInput;
@@ -474,31 +508,56 @@ export const executeExecRun = (input: {
   Effect.gen(function* () {
     const runs = yield* RunRepo;
     const id = input.run.id;
+    const budgetMs = Duration.toMillis(input.budget);
     const syncBackDeadline = Duration.fromInputUnsafe(input.syncBackDeadline);
-    const produce = Effect.gen(function* () {
-      const claim = yield* runs.claimRunForExec({ id });
-      if (claim.outcome !== "claimed") {
-        return yield* Effect.die(`Run ${id} was claimed elsewhere; it is on no queue.`);
-      }
-      yield* produceExecRun(id, input.executor.target, input.commands, input.user);
-    }).pipe(
-      Effect.timeoutOrElse({
-        duration: Duration.subtract(Duration.fromInputUnsafe(input.budget), syncBackDeadline),
-        orElse: () => Effect.fail(new ExecBudgetExceeded()),
-      }),
+    const step = Duration.millis(Math.min(10_000, budgetMs / 10));
+    // After the commands: the record's close, a failure's write, the sync-back, the read back.
+    const tailMs = 3 * Duration.toMillis(step) + Duration.toMillis(syncBackDeadline);
+    const commandsEnd = (yield* Clock.currentTimeMillis) + budgetMs - tailMs;
+    const untilCommandsEnd = Effect.map(Clock.currentTimeMillis, (now) =>
+      Duration.millis(Math.max(0, commandsEnd - now)),
     );
-    // Only creating the run and installing what settles it are uninterruptible: a run never stays
-    // queued. The sync-back runs whatever happened, interruptibly and within its deadline.
-    yield* Effect.uninterruptibleMask((restore) =>
-      runs.createRun(input.run).pipe(
-        Effect.tapCause((cause) =>
-          Effect.logError(`An exec run was not created (${causeTags(cause)}); nothing ran.`),
+
+    const create = untilCommandsEnd.pipe(
+      Effect.flatMap((left) =>
+        runs.createRun(input.run).pipe(
+          Effect.timeoutOrElse({
+            duration: Duration.min(step, left),
+            orElse: () => Effect.fail(new ExecRunNotCreatedError()),
+          }),
         ),
-        Effect.mapError(() => new ExecRunNotCreatedError()),
+      ),
+      Effect.tapCause((cause) =>
+        Effect.logError(`An exec run was not created (${causeTags(cause)}); nothing ran.`),
+      ),
+      Effect.mapError(() => new ExecRunNotCreatedError()),
+    );
+    const produce = Effect.gen(function* () {
+      const left = yield* untilCommandsEnd;
+      if (Duration.isZero(left)) return yield* new ExecBudgetExceeded();
+      yield* Effect.gen(function* () {
+        const claim = yield* runs.claimRunForExec({ id });
+        if (claim.outcome !== "claimed") {
+          return yield* Effect.die(`Run ${id} was claimed elsewhere; it is on no queue.`);
+        }
+        yield* produceExecRun(id, input.executor.target, input.commands, input.user);
+      }).pipe(
+        Effect.provideService(EpochCloseBound, step),
+        Effect.timeoutOrElse({
+          duration: left,
+          orElse: () => Effect.fail(new ExecBudgetExceeded()),
+        }),
+      );
+    });
+
+    // Only the moment between the run's creation and installing what settles it is
+    // uninterruptible: a run never stays queued. Every wait around it is bounded and interruptible.
+    yield* Effect.uninterruptibleMask((restore) =>
+      restore(create).pipe(
         Effect.andThen(
           restore(produce).pipe(
             Effect.catchCause((cause) =>
-              failStoppedRun(runs, id, cause).pipe(
+              failStoppedRun(runs, id, cause, step).pipe(
                 Effect.andThen(
                   Cause.hasInterrupts(cause)
                     ? Effect.interrupt
@@ -526,6 +585,10 @@ export const executeExecRun = (input: {
       ),
     );
     const run = yield* runs.getRunById(id).pipe(
+      Effect.timeoutOrElse({
+        duration: step,
+        orElse: () => Effect.fail(new ExecRunUnreadableError({ runId: id })),
+      }),
       Effect.tapCause((cause) =>
         Effect.logError(`Run ${id} settled and could not be read back (${causeTags(cause)}).`),
       ),
