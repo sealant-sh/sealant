@@ -432,6 +432,7 @@ const allocationValues = (request: ResourceDomainAdmissionRequest) => {
   const values = {
     use: request.use,
     objectKey: request.objectKey,
+    sourceObjectKey: request.use === "protection" ? request.sourceObjectKey : null,
     cpuMillicores: request.use === "compute" ? request.cpuMillicores : 0,
     memoryBytes: request.use === "compute" ? request.memoryBytes : 0,
     storageBytes: request.use === "volume" ? request.storageBytes : 0,
@@ -462,6 +463,7 @@ const sameAllocation = (
 ) =>
   row.use === values.use &&
   row.objectKey === values.objectKey &&
+  row.sourceObjectKey === values.sourceObjectKey &&
   row.cpuMillicores === values.cpuMillicores &&
   row.memoryBytes === values.memoryBytes &&
   row.storageBytes === values.storageBytes &&

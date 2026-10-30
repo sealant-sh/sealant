@@ -193,14 +193,25 @@ describe.skipIf(DATABASE_URL === undefined)("sealant.scopes against the API", ()
       budget: { cpuMillicores: 1000, memoryBytes: 1000, storageBytes: 2000 },
     });
     const project = sealant.scopes.actAs(id);
-    const data = await hold(id, { storageBytes: 700, protectionBytes: 300, state: "archived" });
+    const volumeKey = `volume:${randomUUID()}`;
+    const data = await hold(id, {
+      objectKey: volumeKey,
+      storageBytes: 700,
+      protectionBytes: 300,
+      state: "archived",
+    });
     expect((await project.budget.get()).storageBytes).toMatchObject({
       used: 1000,
       archived: 700,
       protection: 0,
     });
     const backup = (protectionBytes: number) =>
-      hold(id, { use: "protection", sourceAllocationId: data, protectionBytes });
+      hold(id, {
+        use: "protection",
+        sourceObjectKey: volumeKey,
+        sourceAllocationId: data,
+        protectionBytes,
+      });
     await backup(200);
     expect((await project.budget.get()).storageBytes).toMatchObject({
       used: 800,

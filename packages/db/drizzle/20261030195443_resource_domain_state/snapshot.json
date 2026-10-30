@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "a77d9e7a-28c3-48a0-94bb-688239e6bb2d",
+  "id": "acce8141-663d-4664-b6a8-af29fa0de35e",
   "prevIds": ["4aff105b-5700-4e25-943c-3c9e96005f8d"],
   "ddl": [
     {
@@ -6130,6 +6130,19 @@
       "default": null,
       "generated": null,
       "identity": null,
+      "name": "source_object_key",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "resource_domain_allocations"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
       "name": "source_allocation_id",
       "entityType": "columns",
       "schema": "public",
@@ -11448,6 +11461,13 @@
     {
       "value": "\"state\" in ('reserved', 'in-use', 'archived', 'released') and (\"state\" <> 'archived' or \"use\" = 'volume')",
       "name": "resource_domain_allocations_state",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "resource_domain_allocations"
+    },
+    {
+      "value": "(\"use\" = 'protection') = (\"source_object_key\" is not null)",
+      "name": "resource_domain_allocations_source_key",
       "entityType": "checks",
       "schema": "public",
       "table": "resource_domain_allocations"

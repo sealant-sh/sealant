@@ -324,6 +324,32 @@ describe.skipIf(DATABASE_URL === undefined)("resource domain admission (Postgres
     expect(await charge(id)).toMatchObject({ reserved: { storageBytes: 0 }, protectionBytes: 0 });
   });
 
+  it("replays a backup only when it names the same source, even after that source's purge", async () => {
+    const id = await domain({ storageBytes: 1000 });
+    const a = (await admit(id, volume(100, 200))).allocation;
+    const b = (await admit(id, volume(100))).allocation;
+    const objectKey = `backup:${randomUUID()}`;
+    const backupOf = (sourceObjectKey: string): ResourceDomainAdmissionRequest => ({
+      use: "protection",
+      objectKey,
+      sourceObjectKey,
+      protectionBytes: 200,
+    });
+    const request = backupOf(a.objectKey);
+    const kept = (await admit(id, request, "backup-once")).allocation;
+    for (const sourceObjectKey of [b.objectKey, "volume:never-held"]) {
+      expect(await failure(admission(id, backupOf(sourceObjectKey), "backup-once"))).toMatchObject({
+        _tag: "ResourceDomainAdmissionRefusedError",
+        reason: "operation-key-reused",
+      });
+    }
+    await run(record(id, a.id, "purged"));
+    const charged = await charge(id);
+    expect(charged).toMatchObject({ reserved: { storageBytes: 300 }, protectionBytes: 200 });
+    expect(await admit(id, request, "backup-once")).toEqual({ allocation: kept, replayed: true });
+    expect(await charge(id)).toEqual(charged);
+  });
+
   it("queues a purge and a backup of the purged volume, so the backup never outlives its check", async () => {
     // The budget is full: before the purge a backup does not fit; after it, it has no volume.
     const id = await domain({ storageBytes: 100 });

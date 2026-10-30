@@ -126,6 +126,8 @@ export const resourceDomainAllocations = pgTable(
       .references(() => resourceDomains.id, { onDelete: "restrict" }),
     use: text({ enum: resourceDomainAllocationUseValues }).notNull(),
     objectKey: text().notNull(),
+    /** The volume a backup names, as its admission named it: what a replay must name again. */
+    sourceObjectKey: text(),
     sourceAllocationId: text().references((): AnyPgColumn => resourceDomainAllocations.id, {
       onDelete: "restrict",
     }),
@@ -154,6 +156,10 @@ export const resourceDomainAllocations = pgTable(
     check(
       "resource_domain_allocations_state",
       sql`${table.state} in ('reserved', 'in-use', 'archived', 'released') and (${table.state} <> 'archived' or ${table.use} = 'volume')`,
+    ),
+    check(
+      "resource_domain_allocations_source_key",
+      sql`(${table.use} = 'protection') = (${table.sourceObjectKey} is not null)`,
     ),
     check(
       "resource_domain_allocations_shape",
