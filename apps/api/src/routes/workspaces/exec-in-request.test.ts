@@ -103,4 +103,28 @@ describe("an exec run in its request", () => {
     });
     expect(w.steps).toEqual([]);
   });
+
+  it("answers each failure of the record with what the caller may do", async () => {
+    const failureOf = async (options: FakeExecWorldOptions) => {
+      const w = world(options);
+      const answered = await w.run(["0"]);
+      if (!Result.isFailure(answered)) throw new Error("expected a failure");
+      return { failure: answered.failure, runId: w.row()?.id ?? "" };
+    };
+    const notCreated = await failureOf({ failCreate: true });
+    expect(notCreated.failure).toMatchObject({
+      _tag: "WorkspaceInternalServerError",
+      message: "The exec run could not be created; nothing ran, so it is safe to ask again.",
+    });
+    const unsettled = await failureOf({ failTerminalWrites: true });
+    expect(unsettled.failure).toMatchObject({
+      _tag: "WorkspaceInternalServerError",
+      message: `Exec run ${unsettled.runId}'s outcome could not be recorded, and its commands may have run; do not run them again.`,
+    });
+    const unreadable = await failureOf({ failRead: true });
+    expect(unreadable.failure).toMatchObject({
+      _tag: "WorkspaceInternalServerError",
+      message: `Exec run ${unreadable.runId} settled but could not be read back; its commands ran, so read it at GET /v1/runs/${unreadable.runId} rather than running them again.`,
+    });
+  });
 });

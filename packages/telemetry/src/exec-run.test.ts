@@ -5,7 +5,7 @@
  * order, a nonzero exit as data, and an interruption sends no further command and fails the run.
  */
 import { RunRepo } from "@sealant/db";
-import { Deferred, type Duration, Effect, Exit, Fiber } from "effect";
+import { Deferred, type Duration, Effect, Exit, Fiber, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { FAKE_TARGET, fakeExecWorld } from "./exec-run.fixture.js";
@@ -169,5 +169,31 @@ describe("the two retry policies", () => {
     expect(runCommands(w)).toEqual([["0"]]);
     expect(w.sent.filter((exec) => exec.executionId === undefined)).toHaveLength(3);
     expect(w.row()).toMatchObject({ status: "completed", exitCode: 0 });
+  });
+});
+
+describe("an exec run in its request whose record fails it", () => {
+  const failureOf = async (world: ReturnType<typeof fakeExecWorld>) => {
+    const answered = await Effect.runPromise(Effect.result(execute(world, ["0"])));
+    if (!Result.isFailure(answered)) throw new Error("expected a failure");
+    return answered.failure;
+  };
+
+  it("never answers with a running run when its outcome cannot be written", async () => {
+    const w = fakeExecWorld({ failTerminalWrites: true });
+    expect(await failureOf(w)).toMatchObject({ _tag: "ExecRunUnsettledError", runId: RUN });
+    expect(w.row()).toMatchObject({ status: "running" });
+  });
+
+  it("says nothing ran when the run was never created", async () => {
+    const w = fakeExecWorld({ failCreate: true });
+    expect(await failureOf(w)).toMatchObject({ _tag: "ExecRunNotCreatedError" });
+    expect(w.sent).toEqual([]);
+  });
+
+  it("says its commands ran when the settled run cannot be read back", async () => {
+    const w = fakeExecWorld({ failRead: true });
+    expect(await failureOf(w)).toMatchObject({ _tag: "ExecRunUnreadableError", runId: RUN });
+    expect(runCommands(w)).toEqual([["0"]]);
   });
 });

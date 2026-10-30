@@ -3050,15 +3050,28 @@ export const execWorkspaceInRequest = (
       budget: bounds.budget,
       syncBackDeadline: bounds.syncBack,
     }).pipe(
-      Effect.mapError(
-        () => new WorkspaceInternalServerError({ message: `Failed to record exec run ${runId}.` }),
-      ),
+      Effect.catchTags({
+        ExecRunNotCreatedError: () =>
+          Effect.fail(
+            new WorkspaceInternalServerError({
+              message:
+                "The exec run could not be created; nothing ran, so it is safe to ask again.",
+            }),
+          ),
+        ExecRunUnsettledError: () =>
+          Effect.fail(
+            new WorkspaceInternalServerError({
+              message: `Exec run ${runId}'s outcome could not be recorded, and its commands may have run; do not run them again.`,
+            }),
+          ),
+        ExecRunUnreadableError: () =>
+          Effect.fail(
+            new WorkspaceInternalServerError({
+              message: `Exec run ${runId} settled but could not be read back; its commands ran, so read it at GET /v1/runs/${runId} rather than running them again.`,
+            }),
+          ),
+      }),
     );
-    if (run === undefined) {
-      return yield* new WorkspaceInternalServerError({
-        message: `Exec run ${runId} is gone.`,
-      });
-    }
     return mapRun(run);
   });
 
