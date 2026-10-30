@@ -1,8 +1,8 @@
-import { once } from "node:events";
+import { createServer, type Server } from "node:http";
 
-import { serve } from "@hono/node-server";
+import { NodeHttpServer } from "@effect/platform-node";
 import { ControlPlaneAPI, type RequestRefusal } from "@sealant/api-contracts";
-import { Effect, Layer } from "effect";
+import { Effect, Exit, Layer, Scope } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
 import { type HttpApi, HttpApiBuilder, type HttpApiGroup } from "effect/http-api";
 
@@ -82,32 +82,35 @@ export const serveControlPlane = <Tested extends ControlPlaneGroupName = never, 
       Effect.provideService(app, CurrentPrincipal, options.principal ?? { kind: "service" }),
   });
 
-/** The same API behind the real transport gate, which admits `serviceKey` as a service. */
-export const gateControlPlane = <Tested extends ControlPlaneGroupName, Provided>(
-  options: ControlPlaneOptions<Tested, Provided> & { readonly serviceKey: string },
-) =>
-  HttpRouter.toWebHandler(controlPlane(options).pipe(Layer.provide(HttpServer.layerServices)), {
-    middleware: servicePrincipalMiddleware(makeServicePrincipals(options.serviceKey)),
-  });
+/** What a Node HTTP server layer provides the routes it serves. */
+type NodeServed = Layer.Success<ReturnType<typeof NodeHttpServer.layer>>;
 
-/** A web handler listening on a loopback port, as a client outside the process reaches it. */
-export const listenOnLoopback = async (served: {
-  readonly handler: (request: Request) => Promise<Response>;
-  readonly dispose: () => Promise<void>;
-}) => {
-  const server = serve({
-    fetch: (request) => served.handler(request),
-    port: 0,
-    hostname: "127.0.0.1",
-  });
-  await once(server, "listening");
-  const address = server.address();
+/** The routes `serveControlPlane` serves, to put behind a gate of a test's own. */
+export const controlPlaneRoutes = controlPlane;
+
+/**
+ * `routes` behind the real transport gate, which admits `serviceKey` as a service and refuses
+ * every other bearer with `401`, listening on a loopback port as a client outside the process
+ * reaches it.
+ */
+export const gateControlPlane = async (
+  routes: Layer.Layer<never, never, HttpRouter.HttpRouter | NodeServed>,
+  serviceKey: string,
+) => {
+  let server: Server | undefined;
+  const layer = HttpRouter.serve(routes, {
+    middleware: servicePrincipalMiddleware(makeServicePrincipals(serviceKey)),
+  }).pipe(
+    Layer.provideMerge(
+      NodeHttpServer.layer(() => (server = createServer()), { port: 0, host: "127.0.0.1" }),
+    ),
+  );
+  const scope = Effect.runSync(Scope.make());
+  await Effect.runPromise(Layer.buildWithScope(layer, scope));
+  const address = server?.address();
   if (typeof address !== "object" || address === null) throw new Error("expected a TCP address");
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
-    close: async () => {
-      await new Promise((resolve) => server.close(resolve));
-      await served.dispose();
-    },
+    close: () => Effect.runPromise(Scope.close(scope, Exit.void)),
   };
 };

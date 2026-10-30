@@ -10,7 +10,7 @@ import { Sealant, SealantApiError } from "@sealant/sdk";
 import { Effect, Layer } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { gateControlPlane, listenOnLoopback } from "../control-plane.fixture.js";
+import { controlPlaneRoutes, gateControlPlane } from "../control-plane.fixture.js";
 import { ResourceDomainsHandlersLive } from "./resource-domains.http-api.js";
 
 const DATABASE_URL = process.env.SEALANT_TEST_DATABASE_URL;
@@ -18,18 +18,18 @@ const SERVICE_KEY = `slt_scopes_${randomUUID()}`;
 
 describe.skipIf(DATABASE_URL === undefined)("sealant.scopes against the API", () => {
   let db: DB;
-  let api: Awaited<ReturnType<typeof listenOnLoopback>>;
+  let api: Awaited<ReturnType<typeof gateControlPlane>>;
   let sealant: Sealant;
 
   beforeAll(async () => {
     db = await createSealantDB(DATABASE_URL ?? "");
-    api = await listenOnLoopback(
-      gateControlPlane({
+    api = await gateControlPlane(
+      controlPlaneRoutes({
         handlers: ResourceDomainsHandlersLive,
         provides: ResourceDomainRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, db))),
         groups: ["resourceDomains"],
-        serviceKey: SERVICE_KEY,
       }),
+      SERVICE_KEY,
     );
     sealant = new Sealant({ baseUrl: api.baseUrl, apiKey: SERVICE_KEY });
   });
