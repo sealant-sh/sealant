@@ -2,7 +2,11 @@
  * The resource domain routes as the API serves them: the real contract and handlers, with the
  * principal the transport gate would have admitted and a repository that records every call.
  */
-import { ResourceDomainRepo, type ResourceDomainRecord } from "@sealant/db";
+import {
+  ResourceDomainRepo,
+  type ResourceDomainMemberOutcome,
+  type ResourceDomainRecord,
+} from "@sealant/db";
 import { Effect, Layer } from "effect";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -14,6 +18,7 @@ const KEY = "mend:install-1:project:prj_1";
 
 const calls: string[] = [];
 const domains = new Map<string, ResourceDomainRecord>();
+let decided: ResourceDomainMemberOutcome = { kind: "version-moved" };
 
 const repo = Layer.succeed(ResourceDomainRepo, {
   ensure: (key) =>
@@ -33,6 +38,16 @@ const repo = Layer.succeed(ResourceDomainRepo, {
     Effect.sync(() => {
       calls.push(`get ${id}`);
       return [...domains.values()].find((domain) => domain.id === id);
+    }),
+  decideMember: (decision) =>
+    Effect.sync(() => {
+      calls.push(`decide ${decision.userId} ${decision.state} from ${decision.expectedVersion}`);
+      return decided;
+    }),
+  listMembers: (id) =>
+    Effect.sync(() => {
+      calls.push(`list ${id}`);
+      return [];
     }),
 });
 
@@ -76,6 +91,7 @@ const send = async (
 beforeEach(() => {
   calls.length = 0;
   domains.clear();
+  decided = { kind: "version-moved" };
 });
 
 describe("resource domains", () => {

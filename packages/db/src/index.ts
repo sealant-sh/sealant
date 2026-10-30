@@ -255,6 +255,9 @@ export {
   ResourceDomainRepo,
   ResourceDomainRepoError,
   ResourceDomainRepoLive,
+  type ResourceDomainMemberDecision,
+  type ResourceDomainMemberOutcome,
+  type ResourceDomainMemberRecord,
   type ResourceDomainRecord,
   type ResourceDomainRepoService,
 } from "./repositories/resource-domains.js";

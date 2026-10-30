@@ -40,8 +40,12 @@ export const resourceDomainMemberStateValues = ["member", "revoked"] as const;
 export type ResourceDomainMemberState = (typeof resourceDomainMemberStateValues)[number];
 
 /**
- * The application's latest decision about one person in a domain, and the version it gave it: a
- * decision only ever replaces one with a lower version, so a delayed grant never undoes a revoke.
+ * The application's latest decision about one person in a domain, and its version. Each grant or
+ * revoke names the version it replaces (0 when there is no row) and writes the next one; any other
+ * expected version is refused, except a repeat of the decision that wrote the current version (same
+ * state, one above), which answers the row unchanged. Versions only rise, so a delayed grant never
+ * undoes a revoke. A revoke keeps its row as that version's record. `ResourceDomainRepo` enforces
+ * this rule.
  */
 export const resourceDomainMembers = pgTable(
   "resource_domain_members",
