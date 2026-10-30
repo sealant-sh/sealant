@@ -108,3 +108,13 @@ describe("the package's recorder surface", () => {
     }
   });
 });
+
+describe("the two retry policies", () => {
+  it("reads the changes again after a lost answer, and never sends a command again", async () => {
+    const w = fakeExecWorld({ readFailures: 2, readExitCode: 0 });
+    await produce(w, ["0"]);
+    expect(runCommands(w)).toEqual([["0"]]);
+    expect(w.sent.filter((exec) => exec.executionId === undefined)).toHaveLength(3);
+    expect(w.row()).toMatchObject({ status: "completed", exitCode: 0 });
+  });
+});
