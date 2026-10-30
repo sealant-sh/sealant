@@ -31,11 +31,17 @@ const WORKDIR = "/workspace/repo";
 const RECORD_BATCH_SIZE = 256;
 const RECORD_BATCH_WINDOW = "250 millis";
 /**
- * The control transport can flake while a freshly launched daemon comes up (socat bridge, WSS
- * service endpoints), so connecting and its health read are retried. An exec is never retried: its
+ * Connecting and the health read only. The control transport can flake while a freshly launched
+ * daemon comes up (socat bridge, WSS service endpoints). A command's exec never takes it: its
  * acceptance can be lost after the process started, and a second send would start it twice.
  */
 export const DAEMON_CONNECT_RETRY = { schedule: Schedule.spaced("400 millis"), times: 10 };
+
+/**
+ * A read-only script run whole again (connect, exec, drain) after a lost answer: the changes
+ * reading. Safe because a second run reads the same bytes and writes nothing a user owns.
+ */
+const IDEMPOTENT_READ_RETRY = { schedule: Schedule.spaced("400 millis"), times: 10 };
 
 const parseNameStatus = (output: string): RunFileChange[] => {
   const files: RunFileChange[] = [];
@@ -70,7 +76,7 @@ const parseNameStatus = (output: string): RunFileChange[] => {
  */
 const shellExec = (target: SealantTarget, script: string) =>
   execInWorkspace(target, { executable: "sh", args: ["-c", script], cwd: WORKDIR }).pipe(
-    Effect.retry(DAEMON_CONNECT_RETRY),
+    Effect.retry(IDEMPOTENT_READ_RETRY),
   );
 
 /**

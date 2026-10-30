@@ -94,11 +94,14 @@ const newRow = (input: CreateRunInput): Run => ({
   createdAt: new Date(0),
   updatedAt: new Date(0),
 });
+
 export interface FakeExecWorldOptions {
   /** How many health reads fail before the daemon answers. */
   readonly healthFailures?: number;
   /** The exit code of every exec that is not a run's command. */
   readonly readExitCode?: number;
+  /** How many of those execs lose their answer before the daemon answers them. */
+  readonly readFailures?: number;
   readonly failCreate?: boolean;
   /** `markRunCompleted` and `markRunFailed` fail; reads still answer. */
   readonly failTerminalWrites?: boolean;
@@ -114,6 +117,7 @@ export const fakeExecWorld = (options: FakeExecWorldOptions = {}) => {
   const epochs: Array<{ readonly suspicious: boolean }> = [];
   const hanging = Deferred.makeUnsafe<void>();
   let healthReads = 0;
+  let readsFailed = 0;
   let row: Run | undefined;
 
   const outcomeOf = (exec: SealantExecOptions) =>
@@ -130,6 +134,12 @@ export const fakeExecWorld = (options: FakeExecWorldOptions = {}) => {
     exec: (exec) =>
       Effect.suspend((): Effect.Effect<ExecAccepted, SealantError> => {
         sent.push(exec);
+        if (exec.executionId === undefined && readsFailed < (options.readFailures ?? 0)) {
+          readsFailed += 1;
+          return Effect.fail(
+            new TransportError({ operation: "exec", message: "bridge closed", cause: 0 }),
+          );
+        }
         const outcome = outcomeOf(exec);
         if (outcome === "lost") {
           return Effect.fail(
