@@ -361,6 +361,22 @@ const ENTRY_POINTS: readonly EntryPoint[] = [
     field: "userId",
   },
   {
+    endpoint: "revokeResourceDomainMember",
+    method: "POST",
+    path: (person) =>
+      `/v1/resource-domains/rdm:00000000-0000-4000-8000-000000000001/members/${encodeURIComponent(person)}/revoke`,
+    body: () => ({ version: 1 }),
+    field: "userId",
+  },
+  {
+    endpoint: "getResourceDomainMember",
+    method: "GET",
+    path: (person) =>
+      `/v1/resource-domains/rdm:00000000-0000-4000-8000-000000000001/members/${encodeURIComponent(person)}`,
+    body: () => undefined,
+    field: "userId",
+  },
+  {
     endpoint: "getWorkspaceSshTarget",
     method: "GET",
     path: at("/v1/workspaces/ws_1/ssh-target"),

@@ -25,7 +25,8 @@ const standing = {
   version: 9,
   updatedAt: new Date(0),
 };
-let decided: ResourceDomainMemberOutcome = { kind: "stale", current: standing };
+/** What the next decision answers; `written` writes what it was sent. */
+let decided: ResourceDomainMemberOutcome | "written" = { kind: "stale", current: standing };
 let looked: ResourceDomainMemberLookup = { kind: "no-decision" };
 
 const repo = Layer.succeed(ResourceDomainRepo, {
@@ -50,7 +51,17 @@ const repo = Layer.succeed(ResourceDomainRepo, {
   decideMember: (decision) =>
     Effect.sync(() => {
       calls.push(`decide ${decision.userId} ${decision.state} at ${decision.version}`);
-      return decided;
+      return decided === "written"
+        ? {
+            kind: "decided" as const,
+            member: {
+              userId: decision.userId,
+              state: decision.state,
+              version: decision.version,
+              updatedAt: new Date(0),
+            },
+          }
+        : decided;
     }),
   getMember: (id, userId) =>
     Effect.sync(() => {
@@ -106,6 +117,12 @@ beforeEach(() => {
   domains.clear();
   decided = { kind: "stale", current: standing };
   looked = { kind: "no-decision" };
+});
+
+/** The answer to a decision the stub wrote as it was sent. */
+const written = (state: string, version: number) => ({
+  status: 200,
+  body: { userId: "usr_alice", state, version, updatedAt: new Date(0).toISOString() },
 });
 
 const ensureDomain = async () => {
@@ -178,33 +195,13 @@ describe("resource domains", () => {
 
   it("grants and revokes a member at the application's version", async () => {
     const id = await ensureDomain();
-    const updatedAt = new Date(0);
-    decided = {
-      kind: "decided",
-      member: { userId: "usr_alice", state: "member", version: 1, updatedAt },
-    };
-    const granted = await send(service, "POST", `/${id}/members/usr_alice/grant`, {
-      version: 1,
-    });
-    expect(granted).toEqual({
-      status: 200,
-      body: {
-        userId: "usr_alice",
-        state: "member",
-        version: 1,
-        updatedAt: updatedAt.toISOString(),
-      },
-    });
-    await send(service, "POST", `/${id}/members/usr_alice/revoke`, { version: 2 });
-    await send(service, "GET", `/${id}/members`);
-    expect(calls).toEqual([
-      `get ${id}`,
-      "decide usr_alice member at 1",
-      `get ${id}`,
-      "decide usr_alice revoked at 2",
-      `get ${id}`,
-      `list ${id} after start limit 100`,
-    ]);
+    decided = "written";
+    expect(await send(service, "POST", `/${id}/members/usr_alice/grant`, { version: 1 })).toEqual(
+      written("member", 1),
+    );
+    expect(await send(service, "POST", `/${id}/members/usr_alice/revoke`, { version: 2 })).toEqual(
+      written("revoked", 2),
+    );
   });
 
   it("refuses a stale decision with the decision that stands, quoting nothing it was sent", async () => {
@@ -223,7 +220,7 @@ describe("resource domains", () => {
     });
   });
 
-  it("answers 404 for a person that does not exist, and for a domain before any decision", async () => {
+  it("answers 404 for a person that does not exist, and checks the domain before deciding", async () => {
     const id = await ensureDomain();
     decided = { kind: "no-such-person" };
     const person = await send(service, "POST", `/${id}/members/usr_nobody/grant`, {
