@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import { RESOURCE_DOMAIN_ID_PREFIX } from "@sealant/api-contracts";
 import {
   ConnectedAccountRepo,
   CredentialPlacementRepo,
@@ -361,6 +362,43 @@ describe("pushCredentialCopy into homes", () => {
       expect(ran).toEqual([]);
     }).pipe(Effect.provide(layer));
   });
+
+  it.effect(
+    "leaves a home recorded for a resource domain as no longer held, unread and unwritten",
+    () => {
+      const { homes, layer } = homesOf(ready, accounts);
+      const ran: RanScript[] = [];
+      const read: string[] = [];
+      return Effect.gen(function* () {
+        // The database refuses this row (workspace_credential_homes_holder_not_resource_domain);
+        // the push refuses it again, in case a row ever gets past that.
+        yield* hold(
+          homes,
+          "/home/project",
+          `${RESOURCE_DOMAIN_ID_PREFIX}6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5b`,
+          "generation-domain",
+          [["claude", "cacc_alice"]],
+        );
+        const summary = yield* pushCredentialCopy({
+          connectedAccountId: "cacc_alice",
+          provider: "claude",
+          copyJson: JSON.stringify({ claudeAiOauth: { accessToken: "at-alice-2" } }),
+          controlChannel: silentLaunchChannel,
+          homeChannel: recordingHomeChannel(ran),
+        }).pipe(
+          Effect.provideService(ConnectedAccountRepo, {
+            getById: (id: string) =>
+              Effect.sync(() => read.push(id)).pipe(
+                Effect.as(accounts.find((row) => row.id === id)),
+              ),
+          } as unknown as ConnectedAccountRepoService),
+        );
+        expect(summary).toEqual({ written: 0, failed: 0, unreachable: 0, released: 1 });
+        expect(ran).toEqual([]);
+        expect(read).toEqual([]);
+      }).pipe(Effect.provide(layer));
+    },
+  );
 
   it.effect("counts a write the executor fenced as no longer held, never as written", () => {
     const { homes, layer } = homesOf(ready, accounts);
