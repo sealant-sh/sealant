@@ -224,14 +224,17 @@ describe("resource domains", () => {
     });
     expect(person).toEqual({
       status: 404,
-      body: { _tag: "ResourceDomainNotFoundError", message: "No person has this id." },
+      body: { _tag: "ResourceDomainPersonNotFoundError", message: "No person has this id." },
     });
     calls.length = 0;
     const missing = "rdm:00000000-0000-4000-8000-0000000000ff";
     const domain = await send(service, "POST", `/${missing}/members/usr_alice/grant`, {
       version: 1,
     });
-    expect(domain.status).toBe(404);
+    expect(domain).toEqual({
+      status: 404,
+      body: { _tag: "ResourceDomainNotFoundError", message: "Resource domain not found." },
+    });
     expect(calls).toEqual([`get ${missing}`]);
   });
 

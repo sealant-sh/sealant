@@ -74,6 +74,13 @@ describe.skipIf(DATABASE_URL === undefined)("sealant.scopes against the API", ()
     await expect(late).rejects.toBeInstanceOf(SealantApiError);
     await expect(late).rejects.toMatchObject({ code: "ResourceDomainMemberVersionConflictError" });
 
+    const nobody = project.members.grant(`user_nobody_${randomUUID()}`, { version: 1 });
+    await expect(nobody).rejects.toMatchObject({ code: "ResourceDomainPersonNotFoundError" });
+    const elsewhere = sealant.scopes
+      .actAs("rdm:00000000-0000-4000-8000-0000000000ff")
+      .members.grant(alice, { version: 1 });
+    await expect(elsewhere).rejects.toMatchObject({ code: "ResourceDomainNotFoundError" });
+
     expect(await project.members.list()).toEqual(
       [granted, revoked].toSorted((a, b) => a.userId.localeCompare(b.userId)),
     );

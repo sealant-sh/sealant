@@ -10,6 +10,7 @@ import {
   ResourceDomainInternalServerError,
   ResourceDomainMemberVersionConflictError,
   ResourceDomainNotFoundError,
+  ResourceDomainPersonNotFoundError,
   type EnsureResourceDomainRequest,
   type ResourceDomainMemberWire,
   type ResourceDomainWire,
@@ -88,7 +89,7 @@ export const decideResourceDomainMember = (
       case "decided":
         return memberToWire(outcome.member);
       case "no-such-person":
-        return yield* new ResourceDomainNotFoundError({ message: "No person has this id." });
+        return yield* new ResourceDomainPersonNotFoundError({ message: "No person has this id." });
       case "stale":
         return yield* new ResourceDomainMemberVersionConflictError({
           message:

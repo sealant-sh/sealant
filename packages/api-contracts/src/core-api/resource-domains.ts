@@ -103,6 +103,13 @@ export class ResourceDomainNotFoundError extends Schema.TaggedError<ResourceDoma
   { httpApiStatus: 404 },
 ) {}
 
+/** The person a member route names does not exist (the domain does). */
+export class ResourceDomainPersonNotFoundError extends Schema.TaggedError<ResourceDomainPersonNotFoundError>()(
+  "ResourceDomainPersonNotFoundError",
+  { message: Schema.String },
+  { httpApiStatus: 404 },
+) {}
+
 /**
  * A decision at least as new stands, so this one changed nothing. `current` is the decision that
  * stands; the message quotes nothing the request sent.
@@ -126,6 +133,7 @@ const memberParams = Schema.Struct({ resourceDomainId: ResourceDomainId, userId:
 const memberErrors = [
   ResourceDomainForbiddenError,
   ResourceDomainNotFoundError,
+  ResourceDomainPersonNotFoundError,
   ResourceDomainMemberVersionConflictError,
   ResourceDomainInternalServerError,
 ];
