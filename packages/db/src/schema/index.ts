@@ -185,12 +185,14 @@ export {
   type ResourceDomainAllocationUse,
   type ResourceDomainMember,
   type ResourceDomainMemberState,
+  type ResourceDomainState,
   resourceDomainAllocations,
   resourceDomainAllocationStateValues,
   resourceDomainAllocationUseValues,
   resourceDomainMembers,
   resourceDomainMemberStateValues,
   resourceDomains,
+  resourceDomainStateValues,
 } from "./resource-domains.js";
 
 export {
