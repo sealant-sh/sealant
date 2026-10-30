@@ -23,6 +23,7 @@ import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
 import { BudgetExceededError } from "./budgets.js";
+import { PersonId } from "./person-id.js";
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
@@ -64,7 +65,7 @@ export type InferenceToolResult = typeof inferenceToolResultSchema.Type;
  *   authenticated when it started; credential fields must be absent.
  */
 export const inferenceRespondRequestSchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   credentials: Schema.optional(inferenceCredentialsSchema),
   prompt: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
   system: Schema.optional(Schema.String),

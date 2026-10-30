@@ -1,6 +1,8 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
+import { PersonId } from "./person-id.js";
+
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
 /*
@@ -20,7 +22,7 @@ export type SshKeyGatewayHeaders = typeof sshKeyGatewayHeadersSchema.Type;
 export const createSshKeyRequestSchema = Schema.Struct({
   // Same trust model as createWorkspace: the internal API trusts the caller-supplied owner; the web
   // server injects the session user id.
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   name: Schema.optional(NonEmptyString),
   // Raw `<algorithm> <base64> [comment]` line; the API normalizes and fingerprints it.
   publicKey: NonEmptyString,
@@ -29,7 +31,7 @@ export type CreateSshKeyRequest = typeof createSshKeyRequestSchema.Type;
 
 export const sshKeySummarySchema = Schema.Struct({
   sshKeyId: NonEmptyString,
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   name: NonEmptyString,
   algorithm: NonEmptyString,
   fingerprint: NonEmptyString,
@@ -38,7 +40,7 @@ export const sshKeySummarySchema = Schema.Struct({
 export type SshKeySummary = typeof sshKeySummarySchema.Type;
 
 export const listSshKeysQuerySchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
 });
 
 export const listSshKeysResponseSchema = Schema.Struct({
@@ -55,7 +57,7 @@ export const resolveSshPrincipalRequestSchema = Schema.Struct({
 export type ResolveSshPrincipalRequest = typeof resolveSshPrincipalRequestSchema.Type;
 
 export const resolveSshPrincipalResponseSchema = Schema.Struct({
-  principalId: NonEmptyString,
+  principalId: PersonId,
   sshKeyId: NonEmptyString,
   fingerprint: NonEmptyString,
 });

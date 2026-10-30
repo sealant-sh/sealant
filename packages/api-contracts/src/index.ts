@@ -3,6 +3,7 @@ export * from "./core-api/control-plane.js";
 export * from "./core-api/github.js";
 export * from "./core-api/inference.js";
 export * from "./core-api/packages.js";
+export * from "./core-api/person-id.js";
 export * from "./core-api/profiles.js";
 export * from "./core-api/record-events.js";
 export * from "./core-api/budgets.js";

@@ -13,6 +13,7 @@ import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
 import { BudgetExceededError } from "./budgets.js";
+import { PersonId } from "./person-id.js";
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
@@ -60,7 +61,7 @@ export const runSchema = Schema.Struct({
   runId: NonEmptyString,
   workspaceId: NonEmptyString,
   attemptId: Schema.optional(NonEmptyString),
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   harnessId: NonEmptyString,
   mode: runModeSchema,
   status: runStatusSchema,
@@ -98,7 +99,7 @@ export type RunFileChangeWire = typeof runFileChangeSchema.Type;
 export const createRunRequestSchema = Schema.Struct({
   workspaceId: NonEmptyString,
   harnessId: NonEmptyString,
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   mode: Schema.optional(runModeSchema),
   prompt: Schema.optional(Schema.String),
   attemptId: Schema.optional(NonEmptyString),
@@ -116,7 +117,7 @@ export type CreateRunRequest = typeof createRunRequestSchema.Type;
 
 export const updateRunRequestSchema = Schema.Struct({
   /** The run's owner. Required by the control plane: an update that names no owner finds no run. */
-  ownerUserId: Schema.optional(NonEmptyString),
+  ownerUserId: Schema.optional(PersonId),
   status: Schema.optional(runStatusSchema),
   exitCode: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(Schema.String),
@@ -131,7 +132,7 @@ export type UpdateRunRequest = typeof updateRunRequestSchema.Type;
 
 export const listRunsQuerySchema = Schema.Struct({
   workspaceId: Schema.optional(NonEmptyString),
-  ownerUserId: Schema.optional(NonEmptyString),
+  ownerUserId: Schema.optional(PersonId),
   status: Schema.optional(runStatusSchema),
   limit: Schema.optional(NonEmptyString),
 });
@@ -165,12 +166,12 @@ export type TimelineEntry = typeof timelineEntrySchema.Type;
  * names no owner finds no run.
  */
 export const runOwnerQuerySchema = Schema.Struct({
-  ownerUserId: Schema.optional(NonEmptyString),
+  ownerUserId: Schema.optional(PersonId),
 });
 export type RunOwnerQuery = typeof runOwnerQuerySchema.Type;
 
 export const getRunTimelineQuerySchema = Schema.Struct({
-  ownerUserId: Schema.optional(NonEmptyString),
+  ownerUserId: Schema.optional(PersonId),
   fromSequence: Schema.optional(NonEmptyString),
   toSequence: Schema.optional(NonEmptyString),
   limit: Schema.optional(NonEmptyString),
@@ -222,7 +223,7 @@ export type RunEvent = typeof runEventSchema.Type;
 // ---------------------------------------------------------------------------------------------
 
 export const getRunScrollbackQuerySchema = Schema.Struct({
-  ownerUserId: Schema.optional(NonEmptyString),
+  ownerUserId: Schema.optional(PersonId),
   processId: NonEmptyString,
   stream: ioStreamSchema,
   atSequence: Schema.optional(NonEmptyString),

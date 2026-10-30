@@ -1,6 +1,8 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
+import { PersonId } from "./person-id.js";
+
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
 /*
@@ -58,7 +60,7 @@ export type ConnectedAccountLogin = typeof connectedAccountLoginSchema.Type;
 
 export const connectedAccountSummarySchema = Schema.Struct({
   connectedAccountId: NonEmptyString,
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   provider: connectedAccountProviderSchema,
   name: NonEmptyString,
   // "oauth-token" | "credentials-json" (claude) | "auth-json" (codex) | "gh-cli-token" (github) |
@@ -86,7 +88,7 @@ export const connectedAccountSummarySchema = Schema.Struct({
 export type ConnectedAccountSummary = typeof connectedAccountSummarySchema.Type;
 
 export const createConnectedAccountRequestSchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   provider: connectedAccountProviderSchema,
   /**
    * The account to connect or replace by name; a new name is a new account, and `default` names
@@ -116,7 +118,7 @@ export const createConnectedAccountRequestSchema = Schema.Struct({
 export type CreateConnectedAccountRequest = typeof createConnectedAccountRequestSchema.Type;
 
 export const listConnectedAccountsQuerySchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
 });
 export type ListConnectedAccountsQuery = typeof listConnectedAccountsQuerySchema.Type;
 
@@ -131,7 +133,7 @@ export const listConnectedAccountsResponseSchema = Schema.Struct({
 export type ListConnectedAccountsResponse = typeof listConnectedAccountsResponseSchema.Type;
 
 export const markConnectedAccountInvalidRequestSchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   /**
    * The `credentialRevision` the refusal was observed on. When the stored credential has moved on
    * since, nothing is marked and the answer's `outcome` is `superseded`.
@@ -150,7 +152,7 @@ export type MarkConnectedAccountInvalidResponse =
   typeof markConnectedAccountInvalidResponseSchema.Type;
 
 export const setConnectedAccountDefaultRequestSchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   connectedAccountId: NonEmptyString,
 });
 export type SetConnectedAccountDefaultRequest = typeof setConnectedAccountDefaultRequestSchema.Type;

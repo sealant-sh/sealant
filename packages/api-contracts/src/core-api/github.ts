@@ -1,6 +1,8 @@
 import { Schema } from "effect";
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
+import { PersonId } from "./person-id.js";
+
 // These literal sets mirror the control-plane DB enums (packages/db `control-plane.ts`). They are
 // INLINED here so the public contract package carries NO @sealant/db dependency — which keeps
 // consumers like @sealant/sdk free of drizzle/pg. Keep them in sync with the db schema.
@@ -21,24 +23,24 @@ export const messageResponseSchema = Schema.Struct({
 });
 
 export const githubInstallationsQuerySchema = Schema.Struct({
-  userId: NonEmptyString,
+  userId: PersonId,
 });
 export type GitHubInstallationsQuery = typeof githubInstallationsQuerySchema.Type;
 
 export const githubInstallationRepositoriesQuerySchema = Schema.Struct({
-  userId: NonEmptyString,
+  userId: PersonId,
   search: Schema.optional(NonEmptyString),
 });
 export type GitHubInstallationRepositoriesQuery =
   typeof githubInstallationRepositoriesQuerySchema.Type;
 
 export const syncGitHubInstallationQuerySchema = Schema.Struct({
-  userId: NonEmptyString,
+  userId: PersonId,
 });
 export type SyncGitHubInstallationQuery = typeof syncGitHubInstallationQuerySchema.Type;
 
 export const importGitHubInstallationRequestSchema = Schema.Struct({
-  userId: NonEmptyString,
+  userId: PersonId,
   externalInstallationId: NonEmptyString,
 });
 export type ImportGitHubInstallationRequest = typeof importGitHubInstallationRequestSchema.Type;

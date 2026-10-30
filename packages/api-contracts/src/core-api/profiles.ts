@@ -5,6 +5,7 @@ import {
   connectedAccountProviderSchema,
   connectedAccountSummarySchema,
 } from "./connected-accounts.js";
+import { PersonId } from "./person-id.js";
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
@@ -20,7 +21,7 @@ export type ProfileStatus = typeof profileStatusSchema.Type;
 
 export const profileSummarySchema = Schema.Struct({
   profileId: NonEmptyString,
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   slug: NonEmptyString,
   name: NonEmptyString,
   description: Schema.NullOr(Schema.String),
@@ -32,7 +33,7 @@ export const profileSummarySchema = Schema.Struct({
 export type ProfileSummary = typeof profileSummarySchema.Type;
 
 export const listProfilesQuerySchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
 });
 export type ListProfilesQuery = typeof listProfilesQuerySchema.Type;
 
@@ -57,7 +58,7 @@ export type ListProfileCredentialBindingsResponse =
   typeof listProfileCredentialBindingsResponseSchema.Type;
 
 export const setProfileCredentialBindingRequestSchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   provider: connectedAccountProviderSchema,
   /**
    * The account to bind: its id, or `default` for the owner's chosen default for `provider` (an

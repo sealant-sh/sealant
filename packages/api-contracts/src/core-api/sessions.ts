@@ -16,6 +16,8 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
+import { PersonId } from "./person-id.js";
+
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
 export const sessionStatusSchema = Schema.Literals(["starting", "running", "exited", "failed"]);
@@ -135,7 +137,7 @@ export const sessionArgvSchema = Schema.Array(Schema.String).check(
 
 export const createSessionRequestSchema = Schema.Struct({
   workspaceId: NonEmptyString,
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   /**
    * argv[0] is the program the session runs; the rest its arguments, passed to it as an argv array,
    * never through a shell. See `sessionArgvIssue` for what is refused.
@@ -177,7 +179,7 @@ export const sessionSchema = Schema.Struct({
   workspaceId: NonEmptyString,
   /** The interactive run recording this session; its record is the durable evidence. */
   runId: NonEmptyString,
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   status: sessionStatusSchema,
   /**
    * Only `argv[0]`, the program: Sealant never stores a session's arguments, because they can carry
@@ -209,7 +211,7 @@ export const sessionSchema = Schema.Struct({
 export type SessionWire = typeof sessionSchema.Type;
 
 export const listSessionsQuerySchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   workspaceId: Schema.optional(NonEmptyString),
   status: Schema.optional(sessionStatusSchema),
   limit: Schema.optional(NonEmptyString),
@@ -222,28 +224,28 @@ export const listSessionsResponseSchema = Schema.Struct({
 export type ListSessionsResponse = typeof listSessionsResponseSchema.Type;
 
 export const sessionInputRequestSchema = Schema.Struct({
-  ownerUserId: Schema.optional(NonEmptyString),
+  ownerUserId: Schema.optional(PersonId),
   /** Base64-encoded keystrokes (bytes, not text — binary-safe). */
   dataBase64: NonEmptyString,
 });
 export type SessionInputRequest = typeof sessionInputRequestSchema.Type;
 
 export const sessionResizeRequestSchema = Schema.Struct({
-  ownerUserId: Schema.optional(NonEmptyString),
+  ownerUserId: Schema.optional(PersonId),
   cols: Schema.Int.check(Schema.isGreaterThan(0)),
   rows: Schema.Int.check(Schema.isGreaterThan(0)),
 });
 export type SessionResizeRequest = typeof sessionResizeRequestSchema.Type;
 
 export const sessionSignalRequestSchema = Schema.Struct({
-  ownerUserId: Schema.optional(NonEmptyString),
+  ownerUserId: Schema.optional(PersonId),
   /** POSIX signal number (e.g. 2 = SIGINT, 15 = SIGTERM). */
   signal: Schema.Int.check(Schema.isGreaterThan(0)),
 });
 export type SessionSignalRequest = typeof sessionSignalRequestSchema.Type;
 
 export const closeSessionRequestSchema = Schema.Struct({
-  ownerUserId: Schema.optional(NonEmptyString),
+  ownerUserId: Schema.optional(PersonId),
 });
 export type CloseSessionRequest = typeof closeSessionRequestSchema.Type;
 
@@ -253,7 +255,7 @@ export type CloseSessionRequest = typeof closeSessionRequestSchema.Type;
  * as-recorded: redacted upstream by the daemon, PTY output stream only.
  */
 export const getSessionOutputQuerySchema = Schema.Struct({
-  ownerUserId: Schema.optional(NonEmptyString),
+  ownerUserId: Schema.optional(PersonId),
   from: Schema.optional(NonEmptyString),
   limit: Schema.optional(NonEmptyString),
 });
@@ -378,7 +380,7 @@ export const SessionsGroup = HttpApiGroup.make("sessions")
     HttpApiEndpoint.get("getSession", "/:sessionId", {
       params: sessionIdParams,
       headers: sessionAuthorizationHeadersSchema,
-      query: Schema.Struct({ ownerUserId: Schema.optional(NonEmptyString) }),
+      query: Schema.Struct({ ownerUserId: Schema.optional(PersonId) }),
       success: sessionSchema,
       error: [
         SessionBadRequestError,
