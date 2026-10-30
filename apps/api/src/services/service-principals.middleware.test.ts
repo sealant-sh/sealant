@@ -74,6 +74,21 @@ describe("service principal middleware", () => {
     expect(await statusOf("k", "/v1/users", { method: "POST" })).toBe(401);
   });
 
+  it("admits only a service key to the resource domain routes: a user's bearer or the gateway's secret is a 401", async () => {
+    const path = "/v1/resource-domains";
+    expect(
+      await statusOf("k", path, { method: "POST", headers: { authorization: "Bearer k" } }),
+    ).toBe(200);
+    expect(
+      await statusOf("k", path, { method: "POST", headers: { authorization: "Bearer usr-token" } }),
+    ).toBe(401);
+    expect(
+      await statusOf("k", `${path}/rdm:1`, {
+        headers: { "x-sealant-gateway-token": "gateway-secret" },
+      }),
+    ).toBe(401);
+  });
+
   it("admits a service key by header or by query token", async () => {
     expect(await statusOf("k1,k2", "/v1/users", { headers: { authorization: "Bearer k2" } })).toBe(
       200,

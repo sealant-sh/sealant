@@ -8,6 +8,7 @@ import { PackagesGroup } from "./packages.js";
 import { ProfilesGroup } from "./profiles.js";
 import { RegistriesGroup } from "./registries.js";
 import { RequestRefusal } from "./request-refusal.js";
+import { ResourceDomainsGroup } from "./resource-domains.js";
 import { RunsGroup } from "./runs.js";
 import { SessionsGroup } from "./sessions.js";
 import { SshKeysGroup } from "./ssh-keys.js";
@@ -29,6 +30,7 @@ export const ControlPlaneAPI = HttpApi.make("sealantControlPlaneApi")
   .add(RegistriesGroup.prefix("/v1/registries"))
   .add(GitHubGroup.prefix("/v1/github"))
   .add(UsersGroup.prefix("/v1/users"))
+  .add(ResourceDomainsGroup.prefix("/v1/resource-domains"))
   // Last, so it reaches every endpoint above (`HttpApi.middleware` skips endpoints added after it).
   .middleware(RequestRefusal)
   .annotate(OpenApi.Title, "Sealant Control Plane API")

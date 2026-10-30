@@ -10,6 +10,7 @@ import { PackagesHandlersLive } from "./packages/packages.http-api.js";
 import { ProfilesHandlersLive } from "./profiles/profiles.http-api.js";
 import { RegistriesHandlersLive } from "./registries/registries.http-api.js";
 import { RequestRefusalLive } from "./request-refusal.js";
+import { ResourceDomainsHandlersLive } from "./resource-domains/resource-domains.http-api.js";
 import { RunsHandlersLive } from "./runs/runs.http-api.js";
 import { SessionsHandlersLive } from "./sessions/sessions.http-api.js";
 import { SshKeysHandlersLive } from "./ssh-keys/ssh-keys.http-api.js";
@@ -31,6 +32,7 @@ const ControlPlaneHandlersLive = Layer.mergeAll(
   RegistriesHandlersLive,
   GitHubHandlersLive,
   UsersHandlersLive,
+  ResourceDomainsHandlersLive,
 );
 
 export const makeControlPlaneHttpApiLayer = () => {
