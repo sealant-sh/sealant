@@ -2984,73 +2984,82 @@ export const execWorkspace = (input: ExecWorkspaceInput) => {
   });
 };
 
-/** The SDK's exec budget, here over the whole request: admission, submission and recording. */
-const EXEC_IN_REQUEST_BUDGET = Duration.minutes(30);
+/**
+ * The bounds of an exec in its request. `admission` bounds the checks before the run exists;
+ * `budget`, the SDK's exec budget, bounds the run from its claim through its credential sync-back,
+ * of which `syncBack` is the sync-back's share.
+ */
+const EXEC_IN_REQUEST_BOUNDS = {
+  admission: Duration.minutes(1),
+  budget: Duration.minutes(30),
+  syncBack: Duration.seconds(30),
+} satisfies Record<string, Duration.Input>;
 
 /**
  * Exec in the request, never queued: `execWorkspace`'s admission, then the run is created, claimed
- * and recorded inside this request with the worker's recording, and returned settled: completed
- * with the last command's exit code (a nonzero exit is data), or failed when the machinery broke.
- * When the client goes away, the API stops or the budget runs out, no further command is sent and
- * the run fails; a command already started is not stopped and may still be running.
+ * and recorded inside this request with the worker's recording, and the settled run is the
+ * answer: completed with the last command's exit code (a nonzero exit is data), or failed, with
+ * why, when the machinery broke or the budget ran out. Past its budget, or when the client goes
+ * away or the API stops, no further command is sent and the run fails; a command already started
+ * is not stopped and may still be running.
  */
 export const execWorkspaceInRequest = (
   input: ExecWorkspaceInput & {
-    /** For tests; defaults to `EXEC_IN_REQUEST_BUDGET`. */
-    readonly budget?: Duration.Input;
+    /** For tests; defaults to `EXEC_IN_REQUEST_BOUNDS`. */
+    readonly bounds?: Partial<Record<keyof typeof EXEC_IN_REQUEST_BOUNDS, Duration.Input>>;
   },
 ) =>
   Effect.gen(function* () {
-    const runId = `run_${yield* randomId}`;
-    return yield* Effect.gen(function* () {
-      const workspace = yield* admitExec(input);
-      const executor = yield* requireReadyExecutor(
-        workspace.id,
-        input.payload.user,
-        input.processUserChannel,
-      );
-      const asUserRun = executor.asUserRun;
-      const cipher = yield* Effect.serviceOption(CredentialCipher);
-      const run = yield* executeExecRun({
-        run: {
-          id: runId,
-          workspaceId: workspace.id,
-          ownerUserId: input.payload.ownerUserId,
-          harnessId: execRunHarnessId,
-          mode: "one-shot",
-          ...(asUserRun === undefined ? {} : { processUser: asUserRun.user }),
-        },
-        executor: {
-          target: executor.target,
-          attemptId: executor.instance.runId,
-          launchCredentialInjections: executor.instance.launchCredentialInjections ?? [],
-          ...(Option.isSome(cipher) ? { credentialCipher: cipher.value } : {}),
-        },
-        commands: execCommands(input.payload),
-        ...(asUserRun === undefined ? {} : { user: asUserRun.user }),
-      }).pipe(
-        Effect.mapError(
-          () =>
-            new WorkspaceInternalServerError({ message: `Failed to record exec run ${runId}.` }),
+    const bounds = { ...EXEC_IN_REQUEST_BOUNDS, ...input.bounds };
+    const { workspace, executor } = yield* admitExec(input).pipe(
+      Effect.flatMap((admitted) =>
+        requireReadyExecutor(admitted.id, input.payload.user, input.processUserChannel).pipe(
+          Effect.map((ready) => ({ workspace: admitted, executor: ready })),
         ),
-      );
-      if (run === undefined) {
-        return yield* new WorkspaceInternalServerError({
-          message: `Exec run ${runId} is gone.`,
-        });
-      }
-      return mapRun(run);
-    }).pipe(
+      ),
       Effect.timeoutOrElse({
-        duration: input.budget ?? EXEC_IN_REQUEST_BUDGET,
+        duration: bounds.admission,
         orElse: () =>
           Effect.fail(
             new WorkspaceBadGatewayError({
-              message: `Exec run ${runId} ran past its budget and failed; a command it started may still be running.`,
+              message: `Workspace ${input.workspaceId} did not answer the exec's checks in time; nothing was started.`,
             }),
           ),
       }),
     );
+    const asUserRun = executor.asUserRun;
+    const runId = `run_${yield* randomId}`;
+    const cipher = yield* Effect.serviceOption(CredentialCipher);
+    const run = yield* executeExecRun({
+      run: {
+        id: runId,
+        workspaceId: workspace.id,
+        ownerUserId: input.payload.ownerUserId,
+        harnessId: execRunHarnessId,
+        mode: "one-shot",
+        ...(asUserRun === undefined ? {} : { processUser: asUserRun.user }),
+      },
+      executor: {
+        target: executor.target,
+        attemptId: executor.instance.runId,
+        launchCredentialInjections: executor.instance.launchCredentialInjections ?? [],
+        ...(Option.isSome(cipher) ? { credentialCipher: cipher.value } : {}),
+      },
+      commands: execCommands(input.payload),
+      ...(asUserRun === undefined ? {} : { user: asUserRun.user }),
+      budget: bounds.budget,
+      syncBackDeadline: bounds.syncBack,
+    }).pipe(
+      Effect.mapError(
+        () => new WorkspaceInternalServerError({ message: `Failed to record exec run ${runId}.` }),
+      ),
+    );
+    if (run === undefined) {
+      return yield* new WorkspaceInternalServerError({
+        message: `Exec run ${runId} is gone.`,
+      });
+    }
+    return mapRun(run);
   });
 
 /**

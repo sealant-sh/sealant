@@ -21,7 +21,7 @@ import {
   type SyncBackWorkspaceCredentialsInput,
   workingTreeChangesScript,
 } from "@sealant/workspaces";
-import { Cause, type Duration, Effect, Result, Schedule, Schema, Stream } from "effect";
+import { Cause, Duration, Effect, Option, Result, Schedule, Schema, Stream } from "effect";
 
 import type { TelemetrySinkConflictError } from "./errors.js";
 import { normalizeEnvelope } from "./normalize.js";
@@ -361,6 +361,16 @@ export interface ClaimedRun extends Omit<SyncBackWorkspaceCredentialsInput, "cre
   readonly credentialCipher?: SyncBackWorkspaceCredentialsInput["credentialCipher"];
 }
 
+/** A run that stopped short of its outcome: why, as its record says it. */
+const stoppedShortReason = (runId: string, cause: Cause.Cause<unknown>) =>
+  Cause.hasInterruptsOnly(cause)
+    ? `Run ${runId} was interrupted before it completed: no further command was sent, and one already started may still be running.`
+    : Cause.findErrorOption(cause).pipe(
+          Option.exists((error) => error instanceof ExecBudgetExceeded),
+        )
+      ? `Run ${runId} ran past its budget: no further command was sent, and one already started may still be running.`
+      : "Run execution failed before completion.";
+
 /**
  * Runs a claimed run's work so that every way out moves the run off `running`, a defect included,
  * and the credential sync-back runs on each: the CLIs may have rotated their session files even
@@ -373,60 +383,88 @@ export const settleClaimedRun = <E, R>(run: ClaimedRun, produce: Effect.Effect<v
     yield* produce.pipe(
       Effect.onError((cause) =>
         runs
-          .markRunFailed({
-            id: run.runId,
-            errorMessage: Cause.hasInterruptsOnly(cause)
-              ? `Run ${run.runId} was interrupted before it completed: no further command was sent, and one already started may still be running.`
-              : "Run execution failed before completion.",
-          })
+          .markRunFailed({ id: run.runId, errorMessage: stoppedShortReason(run.runId, cause) })
           .pipe(Effect.ignore),
       ),
-      Effect.ensuring(
-        syncBackWorkspaceCredentials({
-          attemptId: run.attemptId,
-          target: run.target,
-          launchCredentialInjections: run.launchCredentialInjections,
-          credentialCipher: run.credentialCipher,
-        }),
-      ),
+      Effect.ensuring(syncBack(run)),
     );
   });
+
+const syncBack = (run: ClaimedRun) =>
+  syncBackWorkspaceCredentials({
+    attemptId: run.attemptId,
+    target: run.target,
+    launchCredentialInjections: run.launchCredentialInjections,
+    credentialCipher: run.credentialCipher,
+  });
+
+class ExecBudgetExceeded extends Schema.TaggedError<ExecBudgetExceeded>()(
+  "ExecBudgetExceeded",
+  {},
+) {}
 
 /**
  * An exec run executed in the caller's own fiber (an API request) rather than queued: the run is
  * created and claimed, its commands run in order with the worker's recording, and the settled run
- * is returned, a failed one too. Its commands live only in this fiber, and each reaches only its own
- * exec, never a later command, the changes reading or the credential sync-back. Interrupting it
- * (the client went away, the API stopped, the caller's budget ran out) fails the run the same way.
+ * is returned, completed or failed, a run past its budget too. Its commands live only in this
+ * fiber, and each reaches only its own exec, never a later command, the changes reading or the
+ * credential sync-back. `budget` bounds the whole run: claiming, every command and the changes
+ * reading get what the credential sync-back's `syncBackDeadline` leaves. Past it no further
+ * command is sent and the run fails; a client that goes away or an API that stops does the same.
  */
 export const executeExecRun = (input: {
   readonly run: CreateRunInput;
   readonly executor: Omit<ClaimedRun, "runId">;
   readonly commands: readonly RunExecCommand[];
   readonly user?: string;
+  readonly budget: Duration.Input;
+  readonly syncBackDeadline: Duration.Input;
 }) =>
-  // Between creating the run and settling it nothing is interrupted: a run never stays queued.
-  Effect.uninterruptibleMask((restore) =>
-    Effect.gen(function* () {
-      const runs = yield* RunRepo;
-      const { id } = yield* runs.createRun(input.run);
-      yield* settleClaimedRun(
-        { ...input.executor, runId: id },
-        Effect.gen(function* () {
-          const claim = yield* runs.claimRunForExec({ id });
-          if (claim.outcome !== "claimed") {
-            return yield* Effect.die(`Run ${id} was claimed elsewhere; it is on no queue.`);
-          }
-          yield* restore(produceExecRun(id, input.executor.target, input.commands, input.user));
-        }),
-      ).pipe(
-        // The run says why it failed; an interruption is the caller's to see.
-        Effect.catchCause((cause) =>
-          Cause.hasInterrupts(cause)
-            ? Effect.failCause(cause)
-            : Effect.logWarning(`Run ${id} failed before completion.`, cause),
+  Effect.gen(function* () {
+    const runs = yield* RunRepo;
+    const id = input.run.id;
+    const syncBackDeadline = Duration.fromInputUnsafe(input.syncBackDeadline);
+    const produce = Effect.gen(function* () {
+      const claim = yield* runs.claimRunForExec({ id });
+      if (claim.outcome !== "claimed") {
+        return yield* Effect.die(`Run ${id} was claimed elsewhere; it is on no queue.`);
+      }
+      yield* produceExecRun(id, input.executor.target, input.commands, input.user);
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: Duration.subtract(Duration.fromInputUnsafe(input.budget), syncBackDeadline),
+        orElse: () => Effect.fail(new ExecBudgetExceeded()),
+      }),
+    );
+    // Only creating the run and installing what settles it are uninterruptible: a run never stays
+    // queued. The sync-back runs whatever happened, interruptibly and within its deadline.
+    yield* Effect.uninterruptibleMask((restore) =>
+      runs.createRun(input.run).pipe(
+        Effect.andThen(
+          restore(produce).pipe(
+            Effect.catchCause((cause) =>
+              runs
+                .markRunFailed({ id, errorMessage: stoppedShortReason(id, cause) })
+                .pipe(
+                  Effect.ignore,
+                  Effect.andThen(
+                    Cause.hasInterrupts(cause)
+                      ? Effect.interrupt
+                      : Effect.logWarning(`Run ${id} failed before completion.`, cause),
+                  ),
+                ),
+            ),
+            Effect.ensuring(
+              Effect.interruptible(syncBack({ ...input.executor, runId: id })).pipe(
+                Effect.timeout(syncBackDeadline),
+                Effect.catchTag("TimeoutError", () =>
+                  Effect.logWarning(`Run ${id}: its credential sync-back ran past its deadline.`),
+                ),
+              ),
+            ),
+          ),
         ),
-      );
-      return yield* runs.getRunById(id);
-    }),
-  );
+      ),
+    );
+    return yield* runs.getRunById(id);
+  });
