@@ -138,6 +138,9 @@ describe("person fields", () => {
         "users.getUser.params.userId",
         "workspaces.getWorkspaceSshTarget.headers.x-sealant-principal-id",
         "sshKeys.resolveSshPrincipal.success.principalId",
+        "resourceDomains.grantResourceDomainMember.params.userId",
+        "resourceDomains.revokeResourceDomainMember.success.userId",
+        "resourceDomains.listResourceDomainMembers.success.items[].userId",
       ]),
     );
   });
@@ -346,6 +349,14 @@ const ENTRY_POINTS: readonly EntryPoint[] = [
     method: "POST",
     path: (person) => `/v1/users/${encodeURIComponent(person)}/person`,
     body: () => ({ id: "alice", uid: 40001, home: "/home/alice" }),
+    field: "userId",
+  },
+  {
+    endpoint: "grantResourceDomainMember",
+    method: "POST",
+    path: (person) =>
+      `/v1/resource-domains/rdm:00000000-0000-4000-8000-000000000001/members/${encodeURIComponent(person)}/grant`,
+    body: () => ({ expectedVersion: 0 }),
     field: "userId",
   },
   {

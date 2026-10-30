@@ -19,7 +19,7 @@
 import { Schema } from "effect";
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
 
-import { RESOURCE_DOMAIN_ID_PREFIX } from "./person-id.js";
+import { PersonId, RESOURCE_DOMAIN_ID_PREFIX } from "./person-id.js";
 
 const RESOURCE_DOMAIN_ID_PATTERN = new RegExp(
   `^${RESOURCE_DOMAIN_ID_PREFIX}[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,
@@ -58,6 +58,28 @@ export const ensureResourceDomainResponseSchema = Schema.Struct({
 });
 export type EnsureResourceDomainResponse = typeof ensureResourceDomainResponseSchema.Type;
 
+const versionFrom = (minimum: number, headroom: number) =>
+  Schema.Int.check(Schema.isBetween({ minimum, maximum: Number.MAX_SAFE_INTEGER - headroom }));
+
+export const resourceDomainMemberSchema = Schema.Struct({
+  userId: PersonId,
+  state: Schema.Literals(["member", "revoked"]),
+  version: versionFrom(1, 0),
+  updatedAt: Schema.String,
+});
+export type ResourceDomainMemberWire = typeof resourceDomainMemberSchema.Type;
+
+export const resourceDomainMemberDecisionSchema = Schema.Struct({
+  /** The member's version this decision replaces: 0 when the person has no decision yet. */
+  expectedVersion: versionFrom(0, 1),
+});
+export type ResourceDomainMemberDecisionRequest = typeof resourceDomainMemberDecisionSchema.Type;
+
+export const listResourceDomainMembersResponseSchema = Schema.Struct({
+  items: Schema.Array(resourceDomainMemberSchema),
+});
+export type ListResourceDomainMembersResponse = typeof listResourceDomainMembersResponseSchema.Type;
+
 export class ResourceDomainForbiddenError extends Schema.TaggedError<ResourceDomainForbiddenError>()(
   "ResourceDomainForbiddenError",
   { message: Schema.String },
@@ -70,11 +92,26 @@ export class ResourceDomainNotFoundError extends Schema.TaggedError<ResourceDoma
   { httpApiStatus: 404 },
 ) {}
 
+/** The member's version is no longer the one the decision replaces. Never quotes either version. */
+export class ResourceDomainMemberVersionConflictError extends Schema.TaggedError<ResourceDomainMemberVersionConflictError>()(
+  "ResourceDomainMemberVersionConflictError",
+  { message: Schema.String },
+  { httpApiStatus: 409 },
+) {}
+
 export class ResourceDomainInternalServerError extends Schema.TaggedError<ResourceDomainInternalServerError>()(
   "ResourceDomainInternalServerError",
   { message: Schema.String },
   { httpApiStatus: 500 },
 ) {}
+
+const memberParams = Schema.Struct({ resourceDomainId: ResourceDomainId, userId: PersonId });
+const memberErrors = [
+  ResourceDomainForbiddenError,
+  ResourceDomainNotFoundError,
+  ResourceDomainMemberVersionConflictError,
+  ResourceDomainInternalServerError,
+];
 
 export const ResourceDomainsGroup = HttpApiGroup.make("resourceDomains")
   .add(
@@ -88,6 +125,37 @@ export const ResourceDomainsGroup = HttpApiGroup.make("resourceDomains")
     HttpApiEndpoint.get("getResourceDomain", "/:resourceDomainId", {
       params: Schema.Struct({ resourceDomainId: ResourceDomainId }),
       success: resourceDomainSchema,
+      error: [
+        ResourceDomainForbiddenError,
+        ResourceDomainNotFoundError,
+        ResourceDomainInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("grantResourceDomainMember", "/:resourceDomainId/members/:userId/grant", {
+      params: memberParams,
+      payload: resourceDomainMemberDecisionSchema,
+      success: resourceDomainMemberSchema,
+      error: memberErrors,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post(
+      "revokeResourceDomainMember",
+      "/:resourceDomainId/members/:userId/revoke",
+      {
+        params: memberParams,
+        payload: resourceDomainMemberDecisionSchema,
+        success: resourceDomainMemberSchema,
+        error: memberErrors,
+      },
+    ),
+  )
+  .add(
+    HttpApiEndpoint.get("listResourceDomainMembers", "/:resourceDomainId/members", {
+      params: Schema.Struct({ resourceDomainId: ResourceDomainId }),
+      success: listResourceDomainMembersResponseSchema,
       error: [
         ResourceDomainForbiddenError,
         ResourceDomainNotFoundError,

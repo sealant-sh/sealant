@@ -94,6 +94,12 @@ beforeEach(() => {
   decided = { kind: "version-moved" };
 });
 
+const ensureDomain = async () => {
+  const { body } = await send(service, "POST", "/", { key: KEY });
+  calls.length = 0;
+  return String(body["resourceDomainId"]);
+};
+
 describe("resource domains", () => {
   it("cannot be served without their repository: the handlers' layer does not compile", () => {
     expect(servedWithoutRepository).toBeTypeOf("function");
@@ -153,6 +159,97 @@ describe("resource domains", () => {
       _tag: "ResourceDomainForbiddenError",
       message: "A service key is required to manage resource domains.",
     });
+    expect(calls).toEqual([]);
+  });
+
+  it("grants and revokes a member from the version the decision replaces", async () => {
+    const id = await ensureDomain();
+    const updatedAt = new Date(0);
+    decided = {
+      kind: "decided",
+      member: { userId: "usr_alice", state: "member", version: 1, updatedAt },
+    };
+    const granted = await send(service, "POST", `/${id}/members/usr_alice/grant`, {
+      expectedVersion: 0,
+    });
+    expect(granted).toEqual({
+      status: 200,
+      body: {
+        userId: "usr_alice",
+        state: "member",
+        version: 1,
+        updatedAt: updatedAt.toISOString(),
+      },
+    });
+    await send(service, "POST", `/${id}/members/usr_alice/revoke`, { expectedVersion: 1 });
+    const listed = await send(service, "GET", `/${id}/members`);
+    expect(listed).toEqual({ status: 200, body: { items: [] } });
+    expect(calls).toEqual([
+      `get ${id}`,
+      "decide usr_alice member from 0",
+      `get ${id}`,
+      "decide usr_alice revoked from 1",
+      `get ${id}`,
+      `list ${id}`,
+    ]);
+  });
+
+  it("refuses a decision from a version that has moved on, quoting neither version", async () => {
+    const id = await ensureDomain();
+    const refused = await send(service, "POST", `/${id}/members/usr_alice/grant`, {
+      expectedVersion: 7,
+    });
+    expect(refused).toEqual({
+      status: 409,
+      body: {
+        _tag: "ResourceDomainMemberVersionConflictError",
+        message:
+          "The member's version is not the one this decision replaces. List the members and decide again from the current version.",
+      },
+    });
+  });
+
+  it("answers 404 for a person that does not exist, and for a domain before any decision", async () => {
+    const id = await ensureDomain();
+    decided = { kind: "no-such-person" };
+    const person = await send(service, "POST", `/${id}/members/usr_nobody/grant`, {
+      expectedVersion: 0,
+    });
+    expect(person).toEqual({
+      status: 404,
+      body: { _tag: "ResourceDomainNotFoundError", message: "No person has this id." },
+    });
+    calls.length = 0;
+    const missing = "rdm:00000000-0000-4000-8000-0000000000ff";
+    const domain = await send(service, "POST", `/${missing}/members/usr_alice/grant`, {
+      expectedVersion: 0,
+    });
+    expect(domain.status).toBe(404);
+    expect(calls).toEqual([`get ${missing}`]);
+  });
+
+  it.each([
+    ["an owner", { expectedVersion: 0, ownerUserId: "usr_alice" }],
+    ["a state", { expectedVersion: 0, state: "member" }],
+    ["a negative version", { expectedVersion: -1 }],
+    ["a fractional version", { expectedVersion: 0.5 }],
+    ["no version", {}],
+  ])("refuses a member decision with %s before anything is read", async (_what, body) => {
+    const id = await ensureDomain();
+    const refused = await send(service, "POST", `/${id}/members/usr_alice/grant`, body);
+    expect(refused.status).toBe(400);
+    expect(refused.body["_tag"]).toBe("RequestRefusedError");
+    expect(calls).toEqual([]);
+  });
+
+  it("answers 403 to the gateway's secret on the member routes, before the repository is asked", async () => {
+    const id = "rdm:00000000-0000-4000-8000-000000000000";
+    const statuses = await Promise.all([
+      send(gateway, "POST", `/${id}/members/usr_alice/grant`, { expectedVersion: 0 }),
+      send(gateway, "POST", `/${id}/members/usr_alice/revoke`, { expectedVersion: 0 }),
+      send(gateway, "GET", `/${id}/members`),
+    ]);
+    expect(statuses.map(({ status }) => status)).toEqual([403, 403, 403]);
     expect(calls).toEqual([]);
   });
 });

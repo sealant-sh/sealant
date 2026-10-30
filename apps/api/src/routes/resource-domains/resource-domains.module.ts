@@ -8,11 +8,17 @@
 import {
   ResourceDomainForbiddenError,
   ResourceDomainInternalServerError,
+  ResourceDomainMemberVersionConflictError,
   ResourceDomainNotFoundError,
   type EnsureResourceDomainRequest,
+  type ResourceDomainMemberWire,
   type ResourceDomainWire,
 } from "@sealant/api-contracts";
-import { ResourceDomainRepo, type ResourceDomainRecord } from "@sealant/db";
+import {
+  ResourceDomainRepo,
+  type ResourceDomainMemberRecord,
+  type ResourceDomainRecord,
+} from "@sealant/db";
 import { Effect } from "effect";
 
 import { CurrentPrincipal } from "../../services/service-principals.js";
@@ -44,7 +50,7 @@ export const ensureResourceDomain = (payload: EnsureResourceDomainRequest) =>
     return { ...toWire(domain), created };
   });
 
-export const getResourceDomain = (resourceDomainId: string) =>
+const loadDomain = (resourceDomainId: string) =>
   Effect.gen(function* () {
     yield* requireServiceKey;
     const repo = yield* ResourceDomainRepo;
@@ -54,5 +60,49 @@ export const getResourceDomain = (resourceDomainId: string) =>
     if (domain === undefined) {
       return yield* new ResourceDomainNotFoundError({ message: "Resource domain not found." });
     }
-    return toWire(domain);
+    return domain;
+  });
+
+export const getResourceDomain = (resourceDomainId: string) =>
+  Effect.map(loadDomain(resourceDomainId), toWire);
+
+const memberToWire = (member: ResourceDomainMemberRecord): ResourceDomainMemberWire => ({
+  userId: member.userId,
+  state: member.state,
+  version: member.version,
+  updatedAt: member.updatedAt.toISOString(),
+});
+
+export const decideResourceDomainMember = (
+  params: { readonly resourceDomainId: string; readonly userId: string },
+  state: ResourceDomainMemberRecord["state"],
+  expectedVersion: number,
+) =>
+  Effect.gen(function* () {
+    yield* loadDomain(params.resourceDomainId);
+    const repo = yield* ResourceDomainRepo;
+    const outcome = yield* repo
+      .decideMember({ ...params, state, expectedVersion })
+      .pipe(Effect.mapError(internal("Failed to record the member decision.")));
+    switch (outcome.kind) {
+      case "decided":
+        return memberToWire(outcome.member);
+      case "no-such-person":
+        return yield* new ResourceDomainNotFoundError({ message: "No person has this id." });
+      case "version-moved":
+        return yield* new ResourceDomainMemberVersionConflictError({
+          message:
+            "The member's version is not the one this decision replaces. List the members and decide again from the current version.",
+        });
+    }
+  });
+
+export const listResourceDomainMembers = (resourceDomainId: string) =>
+  Effect.gen(function* () {
+    yield* loadDomain(resourceDomainId);
+    const repo = yield* ResourceDomainRepo;
+    const members = yield* repo
+      .listMembers(resourceDomainId)
+      .pipe(Effect.mapError(internal("Failed to list the resource domain's members.")));
+    return { items: members.map(memberToWire) };
   });
