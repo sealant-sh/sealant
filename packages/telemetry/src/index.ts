@@ -10,3 +10,4 @@ export * from "./run-telemetry.js";
 export * from "./ingester.js";
 export * from "./redelivery.js";
 export * from "./retention.js";
+export * from "./exec-run.js";

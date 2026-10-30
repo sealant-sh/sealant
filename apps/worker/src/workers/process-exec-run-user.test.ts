@@ -14,7 +14,7 @@ import {
   WorkspaceRuntimeInstanceRepo,
   type RunRepoService,
 } from "@sealant/db";
-import { TelemetrySink, type TelemetrySinkService } from "@sealant/telemetry";
+import { produceExecRun, TelemetrySink, type TelemetrySinkService } from "@sealant/telemetry";
 import {
   SealantRuntime,
   type ProcessUserChannel,
@@ -25,7 +25,7 @@ import {
 import { Effect, Layer, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { processRunExecJobEffect, produceExecRun } from "./process-run-exec-job.js";
+import { processRunExecJobEffect } from "./process-run-exec-job.js";
 
 type EventEnvelope = Stream.Success<SealantSession["events"]>;
 
