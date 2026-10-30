@@ -59,7 +59,11 @@ const world = (run = runRow()) => {
     createRun: () => wrote("createRun"),
     markRunRunning: () => wrote("markRunRunning"),
     markRunCompleted: () => wrote("markRunCompleted"),
-    markRunFailed: () => wrote("markRunFailed"),
+    // As the repository: a run that settled is never written over as failed.
+    markRunFailed: () =>
+      run.status === "queued" || run.status === "running"
+        ? wrote("markRunFailed")
+        : Effect.succeed(null),
     setRunCapturedChanges: () => wrote("setRunCapturedChanges"),
   } as unknown as RunRepoService;
   const workspaces = {
@@ -232,6 +236,19 @@ describe("a run's changes say whether they were read", () => {
     expect(await changesOf({ status: "running" })).toMatchObject({
       available: false,
       unavailableReason: "the run has not ended",
+    });
+  });
+});
+
+describe("a failure reported for a run that already settled", () => {
+  it("answers with the run as it settled, never as missing", async () => {
+    const { run } = world(runRow({ status: "completed", exitCode: 0 }));
+    const result = await run(
+      updateRun({ runId: "run_1", payload: { ownerUserId: "usr_a", status: "failed" } }),
+    );
+    expect(Result.isSuccess(result) ? result.success : result.failure).toMatchObject({
+      status: "completed",
+      exitCode: 0,
     });
   });
 });
