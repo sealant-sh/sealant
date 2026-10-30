@@ -820,6 +820,9 @@ importers:
       '@effect/sql-pg':
         specifier: 'catalog:'
         version: 4.0.5(effect@4.0.5)
+      '@sealant/api-contracts':
+        specifier: workspace:*
+        version: link:../api-contracts
       '@sealant/validators':
         specifier: workspace:*
         version: link:../validators

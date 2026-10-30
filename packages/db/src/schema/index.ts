@@ -180,8 +180,14 @@ export {
 
 export {
   type ResourceDomain,
+  type ResourceDomainAllocation,
+  type ResourceDomainAllocationState,
+  type ResourceDomainAllocationUse,
   type ResourceDomainMember,
   type ResourceDomainMemberState,
+  resourceDomainAllocations,
+  resourceDomainAllocationStateValues,
+  resourceDomainAllocationUseValues,
   resourceDomainMembers,
   resourceDomainMemberStateValues,
   resourceDomains,

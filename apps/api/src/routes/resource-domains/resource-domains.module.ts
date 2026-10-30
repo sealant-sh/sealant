@@ -6,6 +6,10 @@
  * loopback control plane from ensuring a domain.
  */
 import {
+  RESOURCE_DOMAIN_BUDGET_DIMENSIONS,
+  RESOURCE_DOMAIN_BUDGET_WARNINGS,
+  ResourceDomainBudgetDiffersError,
+  ResourceDomainBudgetRevisionConflictError,
   ResourceDomainForbiddenError,
   ResourceDomainInternalServerError,
   ResourceDomainMemberNotFoundError,
@@ -15,15 +19,20 @@ import {
   RESOURCE_DOMAIN_MEMBERS_PAGE,
   type EnsureResourceDomainRequest,
   type ListResourceDomainMembersQuery,
+  type ResourceDomainBudgetWarning,
+  type ResourceDomainBudgetWire,
   type ResourceDomainMemberWire,
   type ResourceDomainWire,
+  type SetResourceDomainBudgetRequest,
 } from "@sealant/api-contracts";
 import {
   ResourceDomainRepo,
+  type ResourceDomainBudgetRecord,
   type ResourceDomainMemberRecord,
   type ResourceDomainRecord,
 } from "@sealant/db";
 import { Effect } from "effect";
+import * as Rec from "effect/Record";
 
 import { CurrentPrincipal } from "../../services/service-principals.js";
 
@@ -48,10 +57,18 @@ export const ensureResourceDomain = (payload: EnsureResourceDomainRequest) =>
   Effect.gen(function* () {
     yield* requireServiceKey;
     const repo = yield* ResourceDomainRepo;
-    const { domain, created } = yield* repo
-      .ensure(payload.key)
+    const ensured = yield* repo
+      .ensure(payload.key, payload.budget)
       .pipe(Effect.mapError(internal("Failed to ensure the resource domain.")));
-    return { ...toWire(domain), created };
+    if (ensured.kind === "budget-differs") {
+      return yield* new ResourceDomainBudgetDiffersError({
+        message:
+          "This resource domain exists with another budget, and ensuring it never changes one: set its budget at its revision.",
+        resourceDomainId: ensured.domain.id,
+        revision: ensured.revision,
+      });
+    }
+    return { ...toWire(ensured.domain), created: ensured.created };
   });
 
 const loadDomain = (resourceDomainId: string) =>
@@ -69,6 +86,69 @@ const loadDomain = (resourceDomainId: string) =>
 
 export const getResourceDomain = (resourceDomainId: string) =>
   Effect.map(loadDomain(resourceDomainId), toWire);
+
+const warningAt = (charged: number, limit: number): ResourceDomainBudgetWarning => {
+  if (charged >= limit) return "full";
+  const share = (percent: number) => BigInt(charged) * 100n >= BigInt(limit) * BigInt(percent);
+  if (share(RESOURCE_DOMAIN_BUDGET_WARNINGS["95-percent"])) return "95-percent";
+  if (share(RESOURCE_DOMAIN_BUDGET_WARNINGS["80-percent"])) return "80-percent";
+  return "none";
+};
+
+const budgetToWire = ({ budget, revision, charge }: ResourceDomainBudgetRecord) => {
+  const dimensions = Rec.map(RESOURCE_DOMAIN_BUDGET_DIMENSIONS, (_, name) => ({
+    limit: budget[name],
+    used: charge.used[name],
+    reserved: charge.reserved[name],
+    warning: warningAt(charge.used[name] + charge.reserved[name], budget[name]),
+  }));
+  return {
+    revision,
+    ...dimensions,
+    storageBytes: {
+      ...dimensions.storageBytes,
+      archived: charge.archivedBytes,
+      protection: charge.protectionBytes,
+    },
+  } satisfies ResourceDomainBudgetWire;
+};
+
+export const getResourceDomainBudget = (resourceDomainId: string) =>
+  Effect.gen(function* () {
+    yield* requireServiceKey;
+    const repo = yield* ResourceDomainRepo;
+    const record = yield* repo
+      .getBudget(resourceDomainId)
+      .pipe(Effect.mapError(internal("Failed to read the resource domain's budget.")));
+    if (record === undefined) {
+      return yield* new ResourceDomainNotFoundError({ message: "Resource domain not found." });
+    }
+    return budgetToWire(record);
+  });
+
+export const setResourceDomainBudget = (
+  resourceDomainId: string,
+  { revision, ...budget }: SetResourceDomainBudgetRequest,
+) =>
+  Effect.gen(function* () {
+    yield* requireServiceKey;
+    const repo = yield* ResourceDomainRepo;
+    const outcome = yield* repo
+      .setBudget({ resourceDomainId, revision, budget })
+      .pipe(Effect.mapError(internal("Failed to set the resource domain's budget.")));
+    switch (outcome.kind) {
+      case "no-such-domain":
+        return yield* new ResourceDomainNotFoundError({ message: "Resource domain not found." });
+      case "stale":
+        return yield* new ResourceDomainBudgetRevisionConflictError({
+          message:
+            "The budget changed since that revision was read, so this change changed nothing.",
+          revision: outcome.revision,
+        });
+      case "set":
+        return budgetToWire(outcome.record);
+    }
+  });
 
 const memberToWire = (member: ResourceDomainMemberRecord): ResourceDomainMemberWire => ({
   userId: member.userId,

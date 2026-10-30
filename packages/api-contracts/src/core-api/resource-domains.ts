@@ -26,9 +26,20 @@
  * keeps the member's row, with its version. One member reads at `GET …/members/:userId`, and the
  * list pages by user id: `limit` (100 unless named, at most 500) and the previous page's
  * `nextCursor` as `cursor`.
+ *
+ * A budget caps CPU (millicores), memory and storage (bytes): ceilings, not measurements, and
+ * zero allows nothing. Storage is one allowance for volumes, archived ones included, and the
+ * backups and snapshots that protect them. `ensureResourceDomain` may name a new domain's budget
+ * and never changes one: naming another gets `409`, carrying the domain and its revision.
+ * `setResourceDomainBudget` takes the `revision` it read: a change made since gets `409`, so a
+ * delayed update never overwrites a newer one, and it answers the budget it wrote. Changing a
+ * budget changes nothing the domain holds. The read is one snapshot. It reports, per dimension,
+ * `used` (confirmed to exist), `reserved` (admitted, not yet confirmed), the `limit` and a `warning`
+ * once both reach 80%, 95% or all of it; storage also reports its `archived` and `protection` bytes.
  */
 import { Schema } from "effect";
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
+import * as Rec from "effect/Record";
 
 import { PersonId, RESOURCE_DOMAIN_ID_PREFIX } from "./person-id.js";
 
@@ -52,6 +63,60 @@ const ResourceDomainKey = Schema.String.check(
   ),
 );
 
+const Amount = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }));
+const BudgetRevision = Schema.Int.check(
+  Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+);
+
+/**
+ * The dimensions a budget caps, defined once: the contract's schemas, the database's budget, the
+ * admission check and the SDK all take theirs from these keys. `freedBy` is what makes room in a
+ * dimension besides raising its limit.
+ */
+export const RESOURCE_DOMAIN_BUDGET_DIMENSIONS = {
+  cpuMillicores: { name: "CPU", freedBy: "stop-objects" },
+  memoryBytes: { name: "memory", freedBy: "stop-objects" },
+  storageBytes: { name: "storage", freedBy: "purge-objects" },
+} as const;
+export type ResourceDomainBudgetDimension = keyof typeof RESOURCE_DOMAIN_BUDGET_DIMENSIONS;
+
+export const resourceDomainBudgetLimitsSchema = Schema.Struct(
+  Rec.map(RESOURCE_DOMAIN_BUDGET_DIMENSIONS, () => Amount),
+);
+export type ResourceDomainBudgetLimits = typeof resourceDomainBudgetLimitsSchema.Type;
+
+/** The share of a limit at which the budget read starts to warn. */
+export const RESOURCE_DOMAIN_BUDGET_WARNINGS = { "80-percent": 80, "95-percent": 95 } as const;
+const BudgetWarning = Schema.Literals(["none", "80-percent", "95-percent", "full"]);
+export type ResourceDomainBudgetWarning = typeof BudgetWarning.Type;
+
+const budgetDimensionSchema = Schema.Struct({
+  limit: Amount,
+  used: Amount,
+  reserved: Amount,
+  warning: BudgetWarning,
+});
+
+export const resourceDomainBudgetSchema = Schema.Struct({
+  revision: BudgetRevision,
+  ...Rec.map(RESOURCE_DOMAIN_BUDGET_DIMENSIONS, () => budgetDimensionSchema),
+  storageBytes: Schema.Struct({
+    ...budgetDimensionSchema.fields,
+    /** Archived volumes' data bytes, part of `used`: kept until a person purges them. */
+    archived: Amount,
+    /** Bytes that backups and snapshots hold, not a volume's unused reserve for them. */
+    protection: Amount,
+  }),
+});
+export type ResourceDomainBudgetWire = typeof resourceDomainBudgetSchema.Type;
+
+export const setResourceDomainBudgetRequestSchema = Schema.Struct({
+  ...resourceDomainBudgetLimitsSchema.fields,
+  /** The revision this change replaces: the one the caller last read. */
+  revision: BudgetRevision,
+});
+export type SetResourceDomainBudgetRequest = typeof setResourceDomainBudgetRequestSchema.Type;
+
 export const resourceDomainSchema = Schema.Struct({
   resourceDomainId: ResourceDomainId,
   key: ResourceDomainKey,
@@ -59,7 +124,11 @@ export const resourceDomainSchema = Schema.Struct({
 });
 export type ResourceDomainWire = typeof resourceDomainSchema.Type;
 
-export const ensureResourceDomainRequestSchema = Schema.Struct({ key: ResourceDomainKey });
+export const ensureResourceDomainRequestSchema = Schema.Struct({
+  key: ResourceDomainKey,
+  /** The budget a new domain starts with; none starts it at zero. */
+  budget: Schema.optional(resourceDomainBudgetLimitsSchema),
+});
 export type EnsureResourceDomainRequest = typeof ensureResourceDomainRequestSchema.Type;
 
 export const ensureResourceDomainResponseSchema = Schema.Struct({
@@ -149,6 +218,20 @@ export class ResourceDomainMemberVersionConflictError extends Schema.TaggedError
   { httpApiStatus: 409 },
 ) {}
 
+/** The domain exists with another budget, at `revision`; nothing changed. */
+export class ResourceDomainBudgetDiffersError extends Schema.TaggedError<ResourceDomainBudgetDiffersError>()(
+  "ResourceDomainBudgetDiffersError",
+  { message: Schema.String, resourceDomainId: ResourceDomainId, revision: BudgetRevision },
+  { httpApiStatus: 409 },
+) {}
+
+/** `revision` is the current one. */
+export class ResourceDomainBudgetRevisionConflictError extends Schema.TaggedError<ResourceDomainBudgetRevisionConflictError>()(
+  "ResourceDomainBudgetRevisionConflictError",
+  { message: Schema.String, revision: BudgetRevision },
+  { httpApiStatus: 409 },
+) {}
+
 export class ResourceDomainInternalServerError extends Schema.TaggedError<ResourceDomainInternalServerError>()(
   "ResourceDomainInternalServerError",
   { message: Schema.String },
@@ -169,7 +252,11 @@ export const ResourceDomainsGroup = HttpApiGroup.make("resourceDomains")
     HttpApiEndpoint.post("ensureResourceDomain", "/", {
       payload: ensureResourceDomainRequestSchema,
       success: ensureResourceDomainResponseSchema,
-      error: [ResourceDomainForbiddenError, ResourceDomainInternalServerError],
+      error: [
+        ResourceDomainForbiddenError,
+        ResourceDomainBudgetDiffersError,
+        ResourceDomainInternalServerError,
+      ],
     }),
   )
   .add(
@@ -224,6 +311,30 @@ export const ResourceDomainsGroup = HttpApiGroup.make("resourceDomains")
       error: [
         ResourceDomainForbiddenError,
         ResourceDomainNotFoundError,
+        ResourceDomainInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("getResourceDomainBudget", "/:resourceDomainId/budget", {
+      params: Schema.Struct({ resourceDomainId: ResourceDomainId }),
+      success: resourceDomainBudgetSchema,
+      error: [
+        ResourceDomainForbiddenError,
+        ResourceDomainNotFoundError,
+        ResourceDomainInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.put("setResourceDomainBudget", "/:resourceDomainId/budget", {
+      params: Schema.Struct({ resourceDomainId: ResourceDomainId }),
+      payload: setResourceDomainBudgetRequestSchema,
+      success: resourceDomainBudgetSchema,
+      error: [
+        ResourceDomainForbiddenError,
+        ResourceDomainNotFoundError,
+        ResourceDomainBudgetRevisionConflictError,
         ResourceDomainInternalServerError,
       ],
     }),
