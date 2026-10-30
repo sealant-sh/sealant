@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { cases } from "../runtime/docker-runtime-adapter.golden-fixture.js";
 import { planWorkspaceImageBuild } from "./index.js";
 import {
+  type CatalogEntry,
   CATALOG_OS_FAMILIES,
   familyInstall,
   knownWorkspacePackageIds,
@@ -40,12 +41,20 @@ const containerfileFor = (family: "fedora" | "arch" | "ubuntu" | "nix", packages
     },
   }).containerfile;
 
+describe("a family slot", () => {
+  it("holds either packages or a reason, never both", () => {
+    // @ts-expect-error: a reason and packages together is not a family slot
+    const both: CatalogEntry["ubuntu"] = { unsupported: "a reason", packages: ["chromium"] };
+    expect(both).toBeDefined();
+  });
+});
+
 describe("the workspace package catalog", () => {
   it("answers every id on every managed family, by a repository package, a pinned release, npm or a reason it cannot", () => {
     for (const [id, entry] of Object.entries(WORKSPACE_PACKAGE_CATALOG)) {
       for (const family of CATALOG_OS_FAMILIES) {
         const install = entry[family];
-        if ("unsupported" in install) {
+        if (install.unsupported !== undefined) {
           expect(install.unsupported.length, `${id} on ${family} gives no reason`).toBeGreaterThan(
             0,
           );

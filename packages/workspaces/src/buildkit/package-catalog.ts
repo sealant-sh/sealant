@@ -74,11 +74,16 @@ export interface FamilyInstall {
   readonly npmGlobal?: readonly string[];
   /** Shell lines after the install: a link from the name a blueprint asked for to the binary. */
   readonly postInstall?: readonly string[];
+  readonly unsupported?: never;
 }
 
 /** A family whose package for the id installs but cannot run: why, for the refusal. */
 export interface FamilyUnsupported {
   readonly unsupported: string;
+  readonly packages?: never;
+  readonly release?: never;
+  readonly npmGlobal?: never;
+  readonly postInstall?: never;
 }
 
 export type CatalogEntry = Readonly<Record<CatalogOsFamily, FamilyInstall | FamilyUnsupported>>;
@@ -374,7 +379,7 @@ export class UnknownWorkspacePackageError extends Error {
 /** How the family installs the id: none when the catalog does not know it or refuses it there. */
 export const familyInstall = (id: string, family: CatalogOsFamily): FamilyInstall | undefined => {
   const install = WORKSPACE_PACKAGE_CATALOG[id]?.[family];
-  return install === undefined || "unsupported" in install ? undefined : install;
+  return install === undefined || install.unsupported !== undefined ? undefined : install;
 };
 
 export interface UnsupportedWorkspacePackage {
@@ -389,7 +394,7 @@ export const unsupportedWorkspacePackages = (
 ): readonly UnsupportedWorkspacePackage[] =>
   [...new Set(ids)].flatMap((id) => {
     const install = WORKSPACE_PACKAGE_CATALOG[id]?.[family];
-    return install !== undefined && "unsupported" in install
+    return install !== undefined && install.unsupported !== undefined
       ? [{ id, reason: install.unsupported }]
       : [];
   });
