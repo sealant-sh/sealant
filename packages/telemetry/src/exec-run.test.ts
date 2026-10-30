@@ -5,7 +5,7 @@
  * order, a nonzero exit as data, and an interruption sends no further command and fails the run.
  */
 import { RunRepo } from "@sealant/db";
-import { Deferred, Effect, Exit, Fiber } from "effect";
+import { Deferred, type Duration, Effect, Exit, Fiber } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { FAKE_TARGET, fakeExecWorld } from "./exec-run.fixture.js";
@@ -64,12 +64,23 @@ describe("an exec whose answer is lost after it was sent", () => {
   });
 });
 
-const execute = (world: ReturnType<typeof fakeExecWorld>, args: readonly string[]) =>
+const execute = (
+  world: ReturnType<typeof fakeExecWorld>,
+  args: readonly string[],
+  bounds: { readonly budget: Duration.Input; readonly syncBackDeadline: Duration.Input } = {
+    budget: "30 minutes",
+    syncBackDeadline: "30 seconds",
+  },
+) =>
   executeExecRun({
     run: { id: RUN, workspaceId: "ws_1", ownerUserId: "usr_1", harnessId: "exec" },
     executor: { target: FAKE_TARGET, attemptId: "run_launch", launchCredentialInjections: [] },
     commands: commandsOf(args),
+    ...bounds,
   }).pipe(Effect.provide(world.layer));
+
+const interruptedReason = `Run ${RUN} was interrupted before it completed: no further command was sent, and one already started may still be running.`;
+const budgetReason = `Run ${RUN} ran past its budget: no further command was sent, and one already started may still be running.`;
 
 describe("a command the daemon refuses after others ran", () => {
   it("keeps the changes the earlier commands made, since nothing of it started", async () => {
@@ -113,8 +124,29 @@ describe("an exec run executed in its request", () => {
     expect(w.steps).toEqual(["create", "claim", "failed", "sync-back"]);
     expect(w.row()).toMatchObject({
       status: "failed",
-      errorMessage: `Run ${RUN} was interrupted before it completed: no further command was sent, and one already started may still be running.`,
+      errorMessage: interruptedReason,
     });
+  });
+});
+
+describe("an exec run in its request, against its budget", () => {
+  const bounds = { budget: "300 millis", syncBackDeadline: "100 millis" } as const;
+
+  it("past its budget, with a sync-back that never answers, answers within the budget with the failed run", async () => {
+    const w = fakeExecWorld({ syncBack: "hangs" });
+    const started = Date.now();
+    const run = await Effect.runPromise(execute(w, ["hang", "0"], bounds));
+    expect(Date.now() - started).toBeLessThan(300 + 100);
+    expect(runCommands(w)).toEqual([["hang"]]);
+    expect(w.steps).toEqual(["create", "claim", "failed", "sync-back", "sync-back stopped"]);
+    expect(run).toMatchObject({ id: RUN, status: "failed", errorMessage: budgetReason });
+  });
+
+  it("whose commands completed before the sync-back stalled answers with the completed run", async () => {
+    const w = fakeExecWorld({ syncBack: "hangs" });
+    const run = await Effect.runPromise(execute(w, ["0"], bounds));
+    expect(w.steps).toEqual(["create", "claim", "completed", "sync-back", "sync-back stopped"]);
+    expect(run).toMatchObject({ id: RUN, status: "completed", exitCode: 0 });
   });
 });
 

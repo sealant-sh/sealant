@@ -1,8 +1,9 @@
 /**
  * An exec run in its request (`execWorkspaceInRequest`): after `execWorkspace`'s admission the run
  * is created, claimed and recorded inside the request, never queued, and the settled run comes
- * back. One budget covers the whole request: past it no further command is sent and the run
- * fails. Driven against the telemetry package's scripted workspace and typed repositories. A
+ * back. Its checks have their own bound; its budget covers the run: past it no further command is
+ * sent and the run fails. Driven against the telemetry package's scripted workspace and typed
+ * repositories. A
  * service key is configured before the dynamic import because runtime-env parses process.env at
  * module load.
  */
@@ -24,13 +25,20 @@ beforeAll(async () => {
 });
 
 const OWNER = "usr_alice";
-const world = (options: FakeExecWorldOptions & { readonly ready?: boolean } = {}) => {
+type Bounds = Partial<Record<"admission" | "budget" | "syncBack", Duration.Input>>;
+
+const world = (
+  options: FakeExecWorldOptions & { readonly ready?: boolean; readonly answers?: boolean } = {},
+) => {
   const exec = fakeExecWorld(options);
   const layer = Layer.mergeAll(
     exec.layer,
-    fakeWorkspaceRepos(OWNER, options.ready === false ? { ready: false } : {}),
+    fakeWorkspaceRepos(OWNER, {
+      ...(options.ready === undefined ? {} : { ready: options.ready }),
+      ...(options.answers === undefined ? {} : { answers: options.answers }),
+    }),
   );
-  const run = (args: readonly string[], budget?: Duration.Input) =>
+  const run = (args: readonly string[], bounds?: Bounds) =>
     Effect.runPromise(
       Effect.result(
         workspacesModule
@@ -40,7 +48,7 @@ const world = (options: FakeExecWorldOptions & { readonly ready?: boolean } = {}
               ownerUserId: OWNER,
               commands: args.map((arg) => ({ executable: "check", args: [arg] })),
             },
-            ...(budget === undefined ? {} : { budget }),
+            ...(bounds === undefined ? {} : { bounds }),
           })
           .pipe(Effect.provide(layer)),
       ),
@@ -61,20 +69,27 @@ describe("an exec run in its request", () => {
     ]);
   });
 
-  it("past its budget sends no further command, and the run fails", async () => {
+  it("past its budget sends no further command, and answers with the failed run", async () => {
     const w = world();
-    const answered = await w.run(["hang", "0"], "50 millis");
-    if (!Result.isFailure(answered)) throw new Error("expected the budget to run out");
-    const runId = w.row()?.id ?? "";
-    expect(answered.failure).toMatchObject({
-      _tag: "WorkspaceBadGatewayError",
-      message: `Exec run ${runId} ran past its budget and failed; a command it started may still be running.`,
+    const answered = await w.run(["hang", "0"], { budget: "150 millis", syncBack: "50 millis" });
+    if (!Result.isSuccess(answered)) throw new Error("expected the settled run");
+    const runId = answered.success.runId;
+    expect(answered.success).toMatchObject({
+      status: "failed",
+      errorMessage: `Run ${runId} ran past its budget: no further command was sent, and one already started may still be running.`,
     });
     expect(w.sent.map((exec) => exec.args)).toEqual([["hang"]]);
-    expect(w.row()).toMatchObject({
-      status: "failed",
-      errorMessage: `Run ${runId} was interrupted before it completed: no further command was sent, and one already started may still be running.`,
+  });
+
+  it("whose checks do not answer in time is refused, naming no run, and nothing is created", async () => {
+    const w = world({ answers: false });
+    const answered = await w.run(["0"], { admission: "50 millis" });
+    if (!Result.isFailure(answered)) throw new Error("expected a refusal");
+    expect(answered.failure).toMatchObject({
+      _tag: "WorkspaceBadGatewayError",
+      message: `Workspace ${FAKE_WORKSPACE_ID} did not answer the exec's checks in time; nothing was started.`,
     });
+    expect(w.steps).toEqual([]);
   });
 
   it("without a ready executor is refused before any run exists", async () => {

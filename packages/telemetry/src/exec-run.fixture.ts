@@ -323,11 +323,12 @@ export const FAKE_WORKSPACE_ID = "wks_1";
 
 /**
  * A workspace and its docker executor, launched by `run_launch`, for the paths that resolve a
- * run's runtime from the database. With `ready: false` the executor is not ready.
+ * run's runtime from the database. With `ready: false` the executor is not ready; with
+ * `answers: false` the workspace's row is never read back.
  */
 export const fakeWorkspaceRepos = (
   ownerUserId: string,
-  options: { readonly ready?: boolean } = {},
+  options: { readonly ready?: boolean; readonly answers?: boolean } = {},
 ) => {
   const workspace: Workspace = {
     id: FAKE_WORKSPACE_ID,
@@ -374,7 +375,10 @@ export const fakeWorkspaceRepos = (
   const workspaces: WorkspaceRepoService = {
     createWorkspace: unscripted("createWorkspace"),
     getWorkspaceByAttemptId: unscripted("getWorkspaceByAttemptId"),
-    getWorkspaceById: (id) => Effect.succeed(id === workspace.id ? workspace : undefined),
+    getWorkspaceById: (id) =>
+      options.answers === false
+        ? Effect.never
+        : Effect.succeed(id === workspace.id ? workspace : undefined),
     getWorkspaceByIdempotencyKey: unscripted("getWorkspaceByIdempotencyKey"),
     linkWorkspaceAttempt: unscripted("linkWorkspaceAttempt"),
     listWorkspaces: unscripted("listWorkspaces"),
