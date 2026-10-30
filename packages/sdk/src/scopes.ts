@@ -6,10 +6,15 @@
  * a harness, so the client that acts as one (`actAs`) has no workspace, run, inference or
  * credential methods at all. These calls need a service key and never use `ownerUserId`.
  */
-import type { ResourceDomainMemberWire, ResourceDomainWire } from "@sealant/api-contracts";
-import { Effect } from "effect";
+import type { ResourceDomainWire } from "@sealant/api-contracts";
 
-import { SealantApiClient } from "./effect/api-client.js";
+import {
+  ensureResourceDomainOp,
+  getResourceDomainOp,
+  grantResourceDomainMemberOp,
+  listResourceDomainMembersOp,
+  revokeResourceDomainMemberOp,
+} from "./effect/operations.js";
 import type { SdkRuntime } from "./effect/runtime.js";
 
 export interface ScopeInfo {
@@ -74,41 +79,11 @@ const toScope = (wire: ResourceDomainWire): ScopeInfo => ({
   createdAt: wire.createdAt,
 });
 
-const toMember = (wire: ResourceDomainMemberWire): ScopeMember => ({
-  userId: wire.userId,
-  state: wire.state,
-  version: wire.version,
-  updatedAt: wire.updatedAt,
-});
-
 export const makeScopes = (runtime: SdkRuntime): ScopesNamespace => {
-  const call = <A>(request: (client: SealantApiClient["Service"]) => Effect.Effect<A, unknown>) =>
-    runtime.run(Effect.flatMap(SealantApiClient, request));
-  const decide = async (
-    endpoint: "grantResourceDomainMember" | "revokeResourceDomainMember",
-    scopeId: string,
-    userId: string,
-    decision: ScopeMemberDecision,
-  ) =>
-    toMember(
-      await call((client) =>
-        client.resourceDomains[endpoint]({
-          params: { resourceDomainId: scopeId, userId },
-          payload: { expectedVersion: decision.expectedVersion },
-        }),
-      ),
-    );
-  const get = async (scopeId: string) =>
-    toScope(
-      await call((client) =>
-        client.resourceDomains.getResourceDomain({ params: { resourceDomainId: scopeId } }),
-      ),
-    );
+  const get = async (scopeId: string) => toScope(await runtime.run(getResourceDomainOp(scopeId)));
   return {
     ensure: async ({ key }) => {
-      const wire = await call((client) =>
-        client.resourceDomains.ensureResourceDomain({ payload: { key } }),
-      );
+      const wire = await runtime.run(ensureResourceDomainOp(key));
       return { ...toScope(wire), created: wire.created };
     },
     get,
@@ -116,17 +91,19 @@ export const makeScopes = (runtime: SdkRuntime): ScopesNamespace => {
       id: scopeId,
       get: () => get(scopeId),
       members: {
-        grant: (userId, decision) => decide("grantResourceDomainMember", scopeId, userId, decision),
-        revoke: (userId, decision) =>
-          decide("revokeResourceDomainMember", scopeId, userId, decision),
-        list: async () => {
-          const wire = await call((client) =>
-            client.resourceDomains.listResourceDomainMembers({
-              params: { resourceDomainId: scopeId },
+        grant: (userId, decision) =>
+          runtime.run(
+            grantResourceDomainMemberOp(scopeId, userId, {
+              expectedVersion: decision.expectedVersion,
             }),
-          );
-          return wire.items.map(toMember);
-        },
+          ),
+        revoke: (userId, decision) =>
+          runtime.run(
+            revokeResourceDomainMemberOp(scopeId, userId, {
+              expectedVersion: decision.expectedVersion,
+            }),
+          ),
+        list: async () => (await runtime.run(listResourceDomainMembersOp(scopeId))).items,
       },
     }),
   };
