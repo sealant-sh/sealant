@@ -3,10 +3,10 @@
  * is created, claimed and recorded inside the request, never queued, and the settled run comes
  * back. Its checks have their own bound; its budget covers the run: past it no further command is
  * sent and the run fails. Driven against the telemetry package's scripted workspace and typed
- * repositories. A
- * service key is configured before the dynamic import because runtime-env parses process.env at
- * module load.
+ * repositories. A service key is configured before the dynamic import because runtime-env parses
+ * process.env at module load.
  */
+import { credentialCipherLayer } from "@sealant/credentials";
 import {
   FAKE_WORKSPACE_ID,
   fakeExecWorld,
@@ -14,7 +14,7 @@ import {
   fakeWorkspaceRepos,
 } from "@sealant/telemetry/testing";
 import { Duration, Effect, Layer, Result } from "effect";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 process.env["SEALANT_SERVICE_KEYS"] = "svc-test";
 
@@ -25,6 +25,7 @@ beforeAll(async () => {
 });
 
 const OWNER = "usr_alice";
+const KEY = Buffer.alloc(32, 7).toString("base64");
 type Bounds = Partial<Record<"admission" | "budget" | "syncBack", Duration.Input>>;
 
 const world = (
@@ -33,15 +34,16 @@ const world = (
   const exec = fakeExecWorld(options);
   const layer = Layer.mergeAll(
     exec.layer,
+    credentialCipherLayer({ key: KEY }),
     fakeWorkspaceRepos(OWNER, {
       ...(options.ready === undefined ? {} : { ready: options.ready }),
       ...(options.answers === undefined ? {} : { answers: options.answers }),
     }),
   );
-  const run = (args: readonly string[], bounds?: Bounds) =>
+  const run = (args: readonly string[], bounds?: Bounds, module = workspacesModule) =>
     Effect.runPromise(
       Effect.result(
-        workspacesModule
+        module
           .execWorkspaceInRequest({
             workspaceId: FAKE_WORKSPACE_ID,
             payload: {
@@ -126,5 +128,29 @@ describe("an exec run in its request", () => {
       _tag: "WorkspaceInternalServerError",
       message: `Exec run ${unreadable.runId} settled but could not be read back; its commands ran, so read it at GET /v1/runs/${unreadable.runId} rather than running them again.`,
     });
+  });
+});
+
+/** The module as an API started with or without SEALANT_CREDENTIALS_KEY reads its config. */
+const moduleWithKey = async (key: string | undefined) => {
+  vi.resetModules();
+  if (key === undefined) delete process.env["SEALANT_CREDENTIALS_KEY"];
+  else process.env["SEALANT_CREDENTIALS_KEY"] = key;
+  return import("./workspaces.module.js");
+};
+
+describe("the credential sync-back after an exec in its request", () => {
+  it("runs when the credentials key is configured", async () => {
+    const w = world();
+    const answered = await w.run(["0"], undefined, await moduleWithKey(KEY));
+    expect(Result.isSuccess(answered)).toBe(true);
+    expect(w.steps).toContain("sync-back");
+  });
+
+  it("does not run without the key, though the API always has a cipher", async () => {
+    const w = world();
+    const answered = await w.run(["0"], undefined, await moduleWithKey(undefined));
+    expect(Result.isSuccess(answered)).toBe(true);
+    expect(w.steps).not.toContain("sync-back");
   });
 });

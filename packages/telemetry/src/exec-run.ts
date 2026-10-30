@@ -508,13 +508,18 @@ export const executeExecRun = (input: {
                 ),
               ),
             ),
+            // Without a credentials key there is nothing to seal a rotated login with.
             Effect.ensuring(
-              Effect.interruptible(syncBack({ ...input.executor, runId: id })).pipe(
-                Effect.timeout(syncBackDeadline),
-                Effect.catchTag("TimeoutError", () =>
-                  Effect.logWarning(`Run ${id}: its credential sync-back ran past its deadline.`),
-                ),
-              ),
+              input.executor.credentialCipher === undefined
+                ? Effect.void
+                : Effect.interruptible(syncBack({ ...input.executor, runId: id })).pipe(
+                    Effect.timeout(syncBackDeadline),
+                    Effect.catchTag("TimeoutError", () =>
+                      Effect.logWarning(
+                        `Run ${id}: its credential sync-back ran past its deadline.`,
+                      ),
+                    ),
+                  ),
             ),
           ),
         ),

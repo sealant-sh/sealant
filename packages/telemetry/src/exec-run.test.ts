@@ -8,7 +8,7 @@ import { RunRepo } from "@sealant/db";
 import { Deferred, type Duration, Effect, Exit, Fiber, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { FAKE_TARGET, fakeExecWorld } from "./exec-run.fixture.js";
+import { FAKE_CIPHER, FAKE_TARGET, fakeExecWorld } from "./exec-run.fixture.js";
 import { executeExecRun, produceExecRun } from "./exec-run.js";
 
 const RUN = "run_exec";
@@ -71,10 +71,16 @@ const execute = (
     budget: "30 minutes",
     syncBackDeadline: "30 seconds",
   },
+  keyConfigured = true,
 ) =>
   executeExecRun({
     run: { id: RUN, workspaceId: "ws_1", ownerUserId: "usr_1", harnessId: "exec" },
-    executor: { target: FAKE_TARGET, attemptId: "run_launch", launchCredentialInjections: [] },
+    executor: {
+      target: FAKE_TARGET,
+      attemptId: "run_launch",
+      launchCredentialInjections: [],
+      ...(keyConfigured ? { credentialCipher: FAKE_CIPHER } : {}),
+    },
     commands: commandsOf(args),
     ...bounds,
   }).pipe(Effect.provide(world.layer));
@@ -195,5 +201,15 @@ describe("an exec run in its request whose record fails it", () => {
     const w = fakeExecWorld({ failRead: true });
     expect(await failureOf(w)).toMatchObject({ _tag: "ExecRunUnreadableError", runId: RUN });
     expect(runCommands(w)).toEqual([["0"]]);
+  });
+});
+
+describe("the credential sync-back after an exec run in its request", () => {
+  it("does not run without a credentials cipher, as the worker's helpers skip one", async () => {
+    const w = fakeExecWorld();
+    const bounds = { budget: "30 minutes", syncBackDeadline: "30 seconds" } as const;
+    const run = await Effect.runPromise(execute(w, ["0"], bounds, false));
+    expect(run).toMatchObject({ status: "completed" });
+    expect(w.steps).toEqual(["create", "claim", "completed"]);
   });
 });

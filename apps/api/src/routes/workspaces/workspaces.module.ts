@@ -142,7 +142,7 @@ import {
   executorIsRetained,
   type WorkspaceSshGatewayConfig,
 } from "@sealant/workspaces";
-import { Cause, type Context, Duration, Effect, Option, Result } from "effect";
+import { Cause, type Context, Duration, Effect, Result } from "effect";
 import { z } from "zod";
 
 import { resolveWorkspaceSshGatewayConfig } from "../../lib/workspace-ssh-gateway.js";
@@ -3029,7 +3029,9 @@ export const execWorkspaceInRequest = (
     );
     const asUserRun = executor.asUserRun;
     const runId = `run_${yield* randomId}`;
-    const cipher = yield* Effect.serviceOption(CredentialCipher);
+    // As the worker decides: the API always holds a cipher, a zero-key one without the key.
+    const credentialCipher =
+      (env.SEALANT_CREDENTIALS_KEY?.trim() ?? "") === "" ? undefined : yield* CredentialCipher;
     const run = yield* executeExecRun({
       run: {
         id: runId,
@@ -3043,7 +3045,7 @@ export const execWorkspaceInRequest = (
         target: executor.target,
         attemptId: executor.instance.runId,
         launchCredentialInjections: executor.instance.launchCredentialInjections ?? [],
-        ...(Option.isSome(cipher) ? { credentialCipher: cipher.value } : {}),
+        ...(credentialCipher === undefined ? {} : { credentialCipher }),
       },
       commands: execCommands(input.payload),
       ...(asUserRun === undefined ? {} : { user: asUserRun.user }),
