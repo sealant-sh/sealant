@@ -6,15 +6,22 @@
  * a harness, so the client that acts as one (`actAs`) has no workspace, run, inference or
  * credential methods at all. These calls need a service key and never use `ownerUserId`.
  */
-import type { ResourceDomainWire } from "@sealant/api-contracts";
+import {
+  RESOURCE_DOMAIN_BUDGET_DIMENSIONS,
+  type ResourceDomainBudgetDimension,
+  type ResourceDomainWire,
+} from "@sealant/api-contracts";
+import * as Rec from "effect/Record";
 
 import {
   ensureResourceDomainOp,
+  getResourceDomainBudgetOp,
   getResourceDomainMemberOp,
   getResourceDomainOp,
   grantResourceDomainMemberOp,
   listResourceDomainMembersOp,
   revokeResourceDomainMemberOp,
+  setResourceDomainBudgetOp,
 } from "./effect/operations.js";
 import type { SdkRuntime } from "./effect/runtime.js";
 
@@ -75,16 +82,56 @@ export interface ScopeMembers {
   list(options?: { readonly limit?: number; readonly cursor?: string }): Promise<ScopeMemberPage>;
 }
 
+/** Ceilings on what a scope's objects may hold (CPU millicores, memory and storage bytes). */
+export type ScopeBudgetLimits = { readonly [D in ResourceDomainBudgetDimension]: number };
+
+/**
+ * `used` (confirmed to exist) and `reserved` (admitted, not yet confirmed) both count against
+ * `limit`; `warning` is the highest share of it they reach.
+ */
+export interface ScopeBudgetDimension {
+  readonly limit: number;
+  readonly used: number;
+  readonly reserved: number;
+  readonly warning: "none" | "80-percent" | "95-percent" | "full";
+}
+
+/** Storage is one allowance, archived volumes and protection included; nothing is deleted to free it. */
+export type ScopeBudget = {
+  /** Name it to change the budget: a change made since refuses yours. */
+  readonly revision: number;
+} & { readonly [D in ResourceDomainBudgetDimension]: ScopeBudgetDimension } & {
+  readonly storageBytes: { readonly archived: number; readonly protection: number };
+};
+
+export interface ScopeBudgets {
+  get(): Promise<ScopeBudget>;
+  /**
+   * Replace the budget at the `revision` you read. A change since rejects (409,
+   * `ResourceDomainBudgetRevisionConflictError`). It answers the budget it wrote, and changes
+   * nothing the scope holds.
+   */
+  set(change: ScopeBudgetLimits & { readonly revision: number }): Promise<ScopeBudget>;
+}
+
 /** A client acting as one scope. It has no method that could reach a credential or a harness. */
 export interface ScopeClient {
   readonly id: string;
   get(): Promise<ScopeInfo>;
   readonly members: ScopeMembers;
+  readonly budget: ScopeBudgets;
 }
 
 export interface ScopesNamespace {
-  /** The scope with this key, created on the first call; later and concurrent calls answer it. */
-  ensure(options: { readonly key: string }): Promise<EnsuredScope>;
+  /**
+   * The scope with this key, created on the first call (with `budget`, or zero); later and
+   * concurrent calls answer it. Naming another budget rejects (409,
+   * `ResourceDomainBudgetDiffersError`, carrying the scope's id and its budget's revision).
+   */
+  ensure(options: {
+    readonly key: string;
+    readonly budget?: ScopeBudgetLimits;
+  }): Promise<EnsuredScope>;
   get(scopeId: string): Promise<ScopeInfo>;
   /** A client for this scope alone, and the only way to its members. Nothing is checked until its first call. */
   actAs(scopeId: string): ScopeClient;
@@ -99,8 +146,8 @@ const toScope = (wire: ResourceDomainWire): ScopeInfo => ({
 export const makeScopes = (runtime: SdkRuntime): ScopesNamespace => {
   const get = async (scopeId: string) => toScope(await runtime.run(getResourceDomainOp(scopeId)));
   return {
-    ensure: async ({ key }) => {
-      const wire = await runtime.run(ensureResourceDomainOp(key));
+    ensure: async ({ key, budget }) => {
+      const wire = await runtime.run(ensureResourceDomainOp(key, budget));
       return { ...toScope(wire), created: wire.created };
     },
     get,
@@ -119,6 +166,16 @@ export const makeScopes = (runtime: SdkRuntime): ScopesNamespace => {
             ? { items: page.items }
             : { items: page.items, nextCursor: page.nextCursor };
         },
+      },
+      budget: {
+        get: () => runtime.run(getResourceDomainBudgetOp(scopeId)),
+        set: (change) =>
+          runtime.run(
+            setResourceDomainBudgetOp(scopeId, {
+              ...Rec.map(RESOURCE_DOMAIN_BUDGET_DIMENSIONS, (_, dimension) => change[dimension]),
+              revision: change.revision,
+            }),
+          ),
       },
     }),
   };
