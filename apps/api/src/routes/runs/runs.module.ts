@@ -393,11 +393,16 @@ export const updateRun = (input: { readonly runId: string; readonly payload: Upd
       });
     }
 
-    if (updated === null) {
+    // A run that settled already keeps its outcome: a failure is never written over it.
+    const current =
+      updated === null && status === "failed"
+        ? yield* withRunInternalError(runs.getRunById(input.runId), "Failed to read the run.")
+        : updated;
+    if (current === null || current === undefined) {
       return yield* new RunNotFoundError({ message: `Run not found: ${input.runId}` });
     }
 
-    return mapRun(updated);
+    return mapRun(current);
   });
 
 export const getRunTimeline = (input: {

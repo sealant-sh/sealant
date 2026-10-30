@@ -246,14 +246,20 @@ export const fakeExecWorld = (options: FakeExecWorldOptions = {}) => {
         ...(input.diff === undefined ? {} : { diff: input.diff }),
         ...(input.changedFiles === undefined ? {} : { changedFiles: [...input.changedFiles] }),
       }),
+    // As the repository: a settled run is never written over as failed.
     markRunFailed: (input) =>
-      terminal("markRunFailed", {
-        status: "failed",
-        errorMessage: input.errorMessage ?? null,
-        ...(input.exitCode === undefined ? {} : { exitCode: input.exitCode }),
-        ...(input.diff === undefined ? {} : { diff: input.diff }),
-        ...(input.changedFiles === undefined ? {} : { changedFiles: [...input.changedFiles] }),
-      }),
+      row !== undefined && row.status !== "queued" && row.status !== "running"
+        ? Effect.sync(() => {
+            steps.push("failure write skipped: settled");
+            return null;
+          })
+        : terminal("markRunFailed", {
+            status: "failed",
+            errorMessage: input.errorMessage ?? null,
+            ...(input.exitCode === undefined ? {} : { exitCode: input.exitCode }),
+            ...(input.diff === undefined ? {} : { diff: input.diff }),
+            ...(input.changedFiles === undefined ? {} : { changedFiles: [...input.changedFiles] }),
+          }),
   };
 
   const attempts: WorkspaceAttemptRepoService = {

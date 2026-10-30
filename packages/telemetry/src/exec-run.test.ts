@@ -4,7 +4,7 @@
  * again, and the run fails saying so. An exec run executed in its request runs its commands in
  * order, a nonzero exit as data, and an interruption sends no further command and fails the run.
  */
-import { RunRepo } from "@sealant/db";
+import { RunRepo, RunRepoUnexpectedError } from "@sealant/db";
 import { Deferred, type Duration, Effect, Exit, Fiber, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -64,15 +64,11 @@ describe("an exec whose answer is lost after it was sent", () => {
   });
 });
 
-const execute = (
-  world: ReturnType<typeof fakeExecWorld>,
-  args: readonly string[],
-  bounds: { readonly budget: Duration.Input; readonly syncBackDeadline: Duration.Input } = {
-    budget: "30 minutes",
-    syncBackDeadline: "30 seconds",
-  },
-  keyConfigured = true,
-) =>
+type Bounds = { readonly budget: Duration.Input; readonly syncBackDeadline: Duration.Input };
+const FULL_BOUNDS: Bounds = { budget: "30 minutes", syncBackDeadline: "30 seconds" };
+
+/** The run, with its services still to provide: a test can wrap one first. */
+const executeRun = (args: readonly string[], bounds: Bounds = FULL_BOUNDS, keyConfigured = true) =>
   executeExecRun({
     run: { id: RUN, workspaceId: "ws_1", ownerUserId: "usr_1", harnessId: "exec" },
     executor: {
@@ -83,7 +79,14 @@ const execute = (
     },
     commands: commandsOf(args),
     ...bounds,
-  }).pipe(Effect.provide(world.layer));
+  });
+
+const execute = (
+  world: ReturnType<typeof fakeExecWorld>,
+  args: readonly string[],
+  bounds: Bounds = FULL_BOUNDS,
+  keyConfigured = true,
+) => executeRun(args, bounds, keyConfigured).pipe(Effect.provide(world.layer));
 
 const interruptedReason = `Run ${RUN} was interrupted before it completed: no further command was sent, and one already started may still be running.`;
 const budgetReason = `Run ${RUN} ran past its budget: no further command was sent, and one already started may still be running.`;
@@ -211,5 +214,36 @@ describe("the credential sync-back after an exec run in its request", () => {
     const run = await Effect.runPromise(execute(w, ["0"], bounds, false));
     expect(run).toMatchObject({ status: "completed" });
     expect(w.steps).toEqual(["create", "claim", "completed"]);
+  });
+});
+
+describe("an exec run in its request whose completion answer is lost", () => {
+  it("answers with the completed run, and never writes it off as failed", async () => {
+    const w = fakeExecWorld();
+    const run = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runs = yield* RunRepo;
+        return yield* executeRun(["0"]).pipe(
+          Effect.provideService(RunRepo, {
+            ...runs,
+            markRunCompleted: (input) =>
+              runs.markRunCompleted(input).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    new RunRepoUnexpectedError({
+                      operation: "markRunCompleted",
+                      message: "the answer was lost",
+                      cause: 0,
+                    }),
+                  ),
+                ),
+              ),
+          }),
+        );
+      }).pipe(Effect.provide(w.layer)),
+    );
+    expect(run).toMatchObject({ id: RUN, status: "completed", exitCode: 0 });
+    expect(w.row()).toMatchObject({ status: "completed", errorMessage: null });
+    expect(w.steps).not.toContain("failed");
   });
 });
