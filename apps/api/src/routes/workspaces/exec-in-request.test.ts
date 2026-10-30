@@ -24,9 +24,12 @@ beforeAll(async () => {
 });
 
 const OWNER = "usr_alice";
-const world = (options: FakeExecWorldOptions = {}) => {
+const world = (options: FakeExecWorldOptions & { readonly ready?: boolean } = {}) => {
   const exec = fakeExecWorld(options);
-  const layer = Layer.mergeAll(exec.layer, fakeWorkspaceRepos(OWNER));
+  const layer = Layer.mergeAll(
+    exec.layer,
+    fakeWorkspaceRepos(OWNER, options.ready === false ? { ready: false } : {}),
+  );
   const run = (args: readonly string[], budget?: Duration.Input) =>
     Effect.runPromise(
       Effect.result(
@@ -72,5 +75,17 @@ describe("an exec run in its request", () => {
       status: "failed",
       errorMessage: `Run ${runId} was interrupted before it completed: no further command was sent, and one already started may still be running.`,
     });
+  });
+
+  it("without a ready executor is refused before any run exists", async () => {
+    const w = world({ ready: false });
+    const answered = await w.run(["0"]);
+    if (!Result.isFailure(answered)) throw new Error("expected a refusal");
+    expect(answered.failure).toMatchObject({
+      _tag: "WorkspaceConflictError",
+      code: "workspace-not-running",
+      message: `Workspace ${FAKE_WORKSPACE_ID} has no running executor to exec in.`,
+    });
+    expect(w.steps).toEqual([]);
   });
 });

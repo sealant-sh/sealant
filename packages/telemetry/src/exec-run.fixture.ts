@@ -322,10 +322,13 @@ export const fakeExecWorld = (options: FakeExecWorldOptions = {}) => {
 export const FAKE_WORKSPACE_ID = "wks_1";
 
 /**
- * A workspace and its ready docker executor, launched by `run_launch`, for the paths that resolve
- * a run's runtime from the database.
+ * A workspace and its docker executor, launched by `run_launch`, for the paths that resolve a
+ * run's runtime from the database. With `ready: false` the executor is not ready.
  */
-export const fakeWorkspaceRepos = (ownerUserId: string) => {
+export const fakeWorkspaceRepos = (
+  ownerUserId: string,
+  options: { readonly ready?: boolean } = {},
+) => {
   const workspace: Workspace = {
     id: FAKE_WORKSPACE_ID,
     name: "",
@@ -346,7 +349,7 @@ export const fakeWorkspaceRepos = (ownerUserId: string) => {
   };
   const instance: WorkspaceRuntimeInstance = {
     runId: "run_launch",
-    status: "ready",
+    status: options.ready === false ? "pending" : "ready",
     adapter: "docker",
     resourceId: "container-1",
     launchCredentialInjections: [],

@@ -2839,11 +2839,10 @@ interface ExecWorkspaceInput {
 }
 
 /**
- * What an exec asks before its run exists, so a refusal leaves nothing behind: the owner, a user
- * only on the as-user route and in Mend's range, a launched runtime, and, for a user or when
- * `executorRequired`, the ready executor, whose daemon must start a process as that user.
+ * What every exec asks before its run exists, so a refusal leaves nothing behind: the owner, a
+ * user only on the as-user route and in Mend's range, and a launched runtime.
  */
-const admitExec = (input: ExecWorkspaceInput, executorRequired: boolean) =>
+const admitExec = (input: ExecWorkspaceInput) =>
   Effect.gen(function* () {
     const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
     const user = input.payload.user;
@@ -2867,10 +2866,20 @@ const admitExec = (input: ExecWorkspaceInput, executorRequired: boolean) =>
         message: `Workspace ${input.workspaceId} has no launched runtime to exec in yet; wait for it to become ready.`,
       });
     }
-    if (user === undefined && !executorRequired) {
-      return { workspace, executor: undefined, asUserRun: undefined };
-    }
-    const executor = yield* resolveDaemonInstance(workspace.id).pipe(
+    return workspace;
+  });
+
+/**
+ * The workspace's ready executor, reachable from here, and for a user one whose daemon starts a
+ * process as them (checked before the run exists); or the refusal that says why not.
+ */
+const requireReadyExecutor = (
+  workspaceId: string,
+  user: string | undefined,
+  channel: ProcessUserChannel | undefined,
+) =>
+  Effect.gen(function* () {
+    const executor = yield* resolveDaemonInstance(workspaceId).pipe(
       Effect.mapError(
         (error) =>
           new WorkspaceInternalServerError({
@@ -2882,34 +2891,40 @@ const admitExec = (input: ExecWorkspaceInput, executorRequired: boolean) =>
       return yield* new WorkspaceConflictError({
         message:
           user === undefined
-            ? `Workspace ${input.workspaceId} has no running executor to exec in.`
-            : `Workspace ${input.workspaceId} has no running executor to run a process as '${user}' in.`,
+            ? `Workspace ${workspaceId} has no running executor to exec in.`
+            : `Workspace ${workspaceId} has no running executor to run a process as '${user}' in.`,
         code: "workspace-not-running",
       });
     }
-    if (user === undefined) {
-      return { workspace, executor, asUserRun: undefined };
+    if (user !== undefined) {
+      const verdict = yield* checkProcessUser({
+        workspaceId,
+        instance: executor.instance,
+        target: executor.target,
+        user,
+        ...(channel === undefined ? {} : { channel }),
+      });
+      if (verdict.kind === "refused") {
+        return yield* new WorkspaceConflictError({
+          message: verdict.message,
+          code: PROCESS_USER_UNSUPPORTED_CODE,
+        });
+      }
+      if (verdict.kind === "unanswered") {
+        return yield* new WorkspaceBadGatewayError({ message: verdict.message });
+      }
     }
-    const verdict = yield* checkProcessUser({
-      workspaceId: workspace.id,
-      instance: executor.instance,
-      target: executor.target,
-      user,
-      ...(input.processUserChannel === undefined ? {} : { channel: input.processUserChannel }),
-    });
-    if (verdict.kind === "refused") {
-      return yield* new WorkspaceConflictError({
-        message: verdict.message,
-        code: PROCESS_USER_UNSUPPORTED_CODE,
+    const target = executor.target;
+    if (target === undefined) {
+      return yield* new WorkspaceBadGatewayError({
+        message: `Core has no way to reach workspace ${workspaceId}'s executor from here (its control client is not configured for this runtime). Nothing was started.`,
       });
     }
-    if (verdict.kind === "unanswered") {
-      return yield* new WorkspaceBadGatewayError({ message: verdict.message });
-    }
     return {
-      workspace,
-      executor,
-      asUserRun: { user, checkedExecutorRunId: executor.instance.runId },
+      instance: executor.instance,
+      target,
+      asUserRun:
+        user === undefined ? undefined : { user, checkedExecutorRunId: executor.instance.runId },
     };
   });
 
@@ -2930,7 +2945,13 @@ const execCommands = (payload: ExecWorkspaceRequest) =>
  */
 export const execWorkspace = (input: ExecWorkspaceInput) => {
   return Effect.gen(function* () {
-    const { workspace, asUserRun } = yield* admitExec(input, false);
+    const workspace = yield* admitExec(input);
+    const user = input.payload.user;
+    // A run as a user goes to the as-user queue, never the legacy one.
+    const asUserRun =
+      user === undefined
+        ? undefined
+        : (yield* requireReadyExecutor(workspace.id, user, input.processUserChannel)).asUserRun;
     const runs = yield* RunRepo;
     const runId = `run_${yield* randomId}`;
     const run = yield* withInternalError(
@@ -2982,12 +3003,13 @@ export const execWorkspaceInRequest = (
   Effect.gen(function* () {
     const runId = `run_${yield* randomId}`;
     return yield* Effect.gen(function* () {
-      const { workspace, executor, asUserRun } = yield* admitExec(input, true);
-      if (executor?.target === undefined) {
-        return yield* new WorkspaceBadGatewayError({
-          message: `Core has no way to reach workspace ${workspace.id}'s executor from here (its control client is not configured for this runtime). Nothing was started.`,
-        });
-      }
+      const workspace = yield* admitExec(input);
+      const executor = yield* requireReadyExecutor(
+        workspace.id,
+        input.payload.user,
+        input.processUserChannel,
+      );
+      const asUserRun = executor.asUserRun;
       const cipher = yield* Effect.serviceOption(CredentialCipher);
       const run = yield* executeExecRun({
         run: {
