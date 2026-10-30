@@ -25,6 +25,7 @@ import {
   captureRun,
   DAEMON_CONNECT_RETRY,
   InlineByteaArtifactStoreLive,
+  launchFailureMessage,
   normalizeEnvelope,
   PostgresTelemetrySinkLive,
   produceExecRun,
@@ -134,7 +135,13 @@ const produceHarnessRun = (runId: string, target: SealantTarget, command: RunExe
     const runs = yield* RunRepo;
     const captured = yield* captureRun(runId, target, command).pipe(
       Effect.catchTag("TelemetrySinkConflictError", Effect.succeed),
+      Effect.catchTag("ExecLaunchFailedError", (error) =>
+        runs
+          .markRunFailed({ id: runId, errorMessage: launchFailureMessage(error, "the harness") })
+          .pipe(Effect.as(undefined)),
+      ),
     );
+    if (captured === undefined) return;
     const changes = yield* captureChanges(runId, target);
     if (typeof captured !== "number") {
       yield* runs.markRunFailed({

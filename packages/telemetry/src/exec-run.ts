@@ -11,6 +11,7 @@ import {
   execInWorkspace,
   PROCESS_USER_CAPABILITY,
   type RunExecCommand,
+  SealantControlError,
   SealantRuntime,
   type SealantTarget,
   splitWorkingTreeChanges,
@@ -25,9 +26,11 @@ import { TelemetrySink } from "./sink.js";
 const WORKDIR = "/workspace/repo";
 export const RECORD_BATCH_SIZE = 256;
 export const RECORD_BATCH_WINDOW = "250 millis";
-// The control transport can flake while a freshly-launched daemon comes up (socat bridge, WSS
-// service endpoints); retry the connect+health+exec unit with a spaced window. exec resolves on process-accept, so retry can't
-// double-run the harness.
+/**
+ * The control transport can flake while a freshly launched daemon comes up (socat bridge, WSS
+ * service endpoints), so connecting and its health read are retried. An exec is never retried: its
+ * acceptance can be lost after the process started, and a second send would start it twice.
+ */
 export const DAEMON_CONNECT_RETRY = { schedule: Schedule.spaced("400 millis"), times: 10 };
 
 const parseNameStatus = (output: string): RunFileChange[] => {
@@ -77,6 +80,21 @@ export class ProcessUserUnavailableError extends Schema.TaggedError<ProcessUserU
 ) {}
 
 /**
+ * An exec was sent and no acceptance came back. With `refusedCode` the daemon refused it and nothing
+ * started; without, its answer was lost, so whether the process started is unknown.
+ */
+export class ExecLaunchFailedError extends Schema.TaggedError<ExecLaunchFailedError>()(
+  "ExecLaunchFailedError",
+  { runId: Schema.String, refusedCode: Schema.optional(Schema.Number) },
+) {}
+
+/** Why the run failed, naming what was sent (`command 2/3`) and nothing it carried. */
+export const launchFailureMessage = (error: ExecLaunchFailedError, what: string) =>
+  error.refusedCode === undefined
+    ? `Run ${error.runId}: ${what} was sent to the workspace and its answer was lost, so whether it started is unknown; it may still be running. It was not sent again.`
+    : `Run ${error.runId}: the workspace refused to start ${what} (daemon error ${String(error.refusedCode)}); nothing was started.`;
+
+/**
  * Execs the harness and records its telemetry, bounded to the harness process. Returns the exit
  * code. With `user`, the daemon starts the process as that Linux user (`ExecArgs.user`), and only a
  * daemon that reports `exec.user` is asked to (one capabilities read on the same connection).
@@ -92,7 +110,7 @@ export const captureRun = (
       const runtime = yield* SealantRuntime;
       const sink = yield* TelemetrySink;
 
-      const { session, runtimeId, accepted } = yield* runtime.connect(target).pipe(
+      const { session, runtimeId } = yield* runtime.connect(target).pipe(
         Effect.flatMap((connected) =>
           Effect.gen(function* () {
             const health = yield* connected.health;
@@ -104,18 +122,7 @@ export const captureRun = (
                 });
               }
             }
-            const started = yield* connected.exec({
-              executable: command.executable,
-              args: [...command.args],
-              // The run id doubles as the daemon execution id: sealantd stamps it on every event
-              // this exec produces, which is what lets ingest attribute them to THIS run (and lets
-              // concurrent executions — e.g. an SSH session — keep their events out of it).
-              executionId: runId,
-              cwd: command.cwd ?? WORKDIR,
-              stdin: false,
-              ...(user === undefined ? {} : { user }),
-            });
-            return { session: connected, runtimeId: health.runtimeId, accepted: started };
+            return { session: connected, runtimeId: health.runtimeId };
           }),
         ),
         Effect.retry({
@@ -123,6 +130,27 @@ export const captureRun = (
           while: (error) => !(error instanceof ProcessUserUnavailableError),
         }),
       );
+      const accepted = yield* session
+        .exec({
+          executable: command.executable,
+          args: [...command.args],
+          // The run id doubles as the daemon execution id: sealantd stamps it on every event
+          // this exec produces, which is what lets ingest attribute them to THIS run (and lets
+          // concurrent executions — e.g. an SSH session — keep their events out of it).
+          executionId: runId,
+          cwd: command.cwd ?? WORKDIR,
+          stdin: false,
+          ...(user === undefined ? {} : { user }),
+        })
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new ExecLaunchFailedError({
+                runId,
+                ...(error instanceof SealantControlError ? { refusedCode: error.code } : {}),
+              }),
+          ),
+        );
 
       yield* sink.openEpoch({ runId, runtimeId, schemaVersion: 0 });
 
@@ -215,6 +243,14 @@ export const produceExecRun = (
       const captured = yield* captureRun(runId, target, command, user).pipe(
         Effect.catchTag("ProcessUserUnavailableError", (error) =>
           runs.markRunFailed({ id: runId, errorMessage: error.message }).pipe(Effect.as(undefined)),
+        ),
+        Effect.catchTag("ExecLaunchFailedError", (error) =>
+          runs
+            .markRunFailed({
+              id: runId,
+              errorMessage: launchFailureMessage(error, `command ${index + 1}/${commands.length}`),
+            })
+            .pipe(Effect.as(undefined)),
         ),
         // The commands after it do not run; what the ones before it changed is still the run's.
         Effect.catchTag("TelemetrySinkConflictError", (error) =>
