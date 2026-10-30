@@ -5,11 +5,12 @@
  * order, a nonzero exit as data, and an interruption sends no further command and fails the run.
  */
 import { RunRepo, RunRepoUnexpectedError } from "@sealant/db";
-import { Deferred, type Duration, Effect, Exit, Fiber, Result } from "effect";
+import { Deferred, Duration, Effect, Exit, Fiber, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { FAKE_CIPHER, FAKE_TARGET, fakeExecWorld } from "./exec-run.fixture.js";
 import { executeExecRun, produceExecRun } from "./exec-run.js";
+import { TelemetrySink } from "./sink.js";
 
 const RUN = "run_exec";
 
@@ -245,5 +246,78 @@ describe("an exec run in its request whose completion answer is lost", () => {
     expect(run).toMatchObject({ id: RUN, status: "completed", exitCode: 0 });
     expect(w.row()).toMatchObject({ status: "completed", errorMessage: null });
     expect(w.steps).not.toContain("failed");
+  });
+});
+
+/** A boundary 300 ms slow: a database or telemetry call that stalls. */
+const stall = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.sleep("300 millis").pipe(Effect.andThen(effect));
+
+describe("an exec run in its request whose persistence stalls", () => {
+  const BUDGET_MS = 60;
+  /** What the timers may add on top of the budget. */
+  const SLACK_MS = 40;
+  const bounds: Bounds = { budget: Duration.millis(BUDGET_MS), syncBackDeadline: "10 millis" };
+
+  /** The run with one boundary 300 ms slow, answered (success or failure) and timed. */
+  const probe = async (
+    stalled: "create" | "read" | "settlement" | "closeEpoch",
+    command: "0" | "hang",
+  ) => {
+    const w = fakeExecWorld();
+    const started = Date.now();
+    const answered = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runs = yield* RunRepo;
+        const sink = yield* TelemetrySink;
+        return yield* executeRun([command], bounds, false).pipe(
+          Effect.provideService(RunRepo, {
+            ...runs,
+            createRun: (input) =>
+              stalled === "create" ? stall(runs.createRun(input)) : runs.createRun(input),
+            getRunById: (id) =>
+              stalled === "read" ? stall(runs.getRunById(id)) : runs.getRunById(id),
+            markRunFailed: (input) =>
+              stalled === "settlement"
+                ? stall(runs.markRunFailed(input))
+                : runs.markRunFailed(input),
+          }),
+          Effect.provideService(TelemetrySink, {
+            ...sink,
+            closeEpoch: (input) =>
+              stalled === "closeEpoch" ? stall(sink.closeEpoch(input)) : sink.closeEpoch(input),
+          }),
+          Effect.result,
+        );
+      }).pipe(Effect.provide(w.layer)),
+    );
+    return { answered, elapsedMs: Date.now() - started, world: w };
+  };
+
+  it("answers within its budget when creating the run stalls, and sends nothing", async () => {
+    const { answered, elapsedMs, world } = await probe("create", "0");
+    expect(elapsedMs).toBeLessThan(BUDGET_MS + SLACK_MS);
+    expect(answered).toMatchObject({ failure: { _tag: "ExecRunNotCreatedError" } });
+    expect(world.sent).toEqual([]);
+  });
+
+  it("answers within its budget when reading the settled run back stalls", async () => {
+    const { answered, elapsedMs } = await probe("read", "0");
+    expect(elapsedMs).toBeLessThan(BUDGET_MS + SLACK_MS);
+    expect(answered).toMatchObject({ failure: { _tag: "ExecRunUnreadableError", runId: RUN } });
+  });
+
+  it("answers within its budget when writing its failure stalls", async () => {
+    const { answered, elapsedMs } = await probe("settlement", "hang");
+    expect(elapsedMs).toBeLessThan(BUDGET_MS + SLACK_MS);
+    expect(answered).toMatchObject({ failure: { _tag: "ExecRunUnsettledError", runId: RUN } });
+  });
+
+  it("answers within its budget, with the failed run, when closing its record stalls", async () => {
+    const { answered, elapsedMs } = await probe("closeEpoch", "hang");
+    expect(elapsedMs).toBeLessThan(BUDGET_MS + SLACK_MS);
+    expect(answered).toMatchObject({
+      success: { id: RUN, status: "failed", errorMessage: budgetReason },
+    });
   });
 });

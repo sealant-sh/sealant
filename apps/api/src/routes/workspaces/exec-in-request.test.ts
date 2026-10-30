@@ -126,7 +126,7 @@ describe("an exec run in its request", () => {
     const unreadable = await failureOf({ failRead: true });
     expect(unreadable.failure).toMatchObject({
       _tag: "WorkspaceInternalServerError",
-      message: `Exec run ${unreadable.runId} settled but could not be read back; its commands ran, so read it at GET /v1/runs/${unreadable.runId} rather than running them again.`,
+      message: `Exec run ${unreadable.runId} settled but could not be read back; its commands may have run, so read it at GET /v1/runs/${unreadable.runId} rather than running them again.`,
     });
   });
 });
