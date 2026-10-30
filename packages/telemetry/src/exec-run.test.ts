@@ -71,6 +71,27 @@ const execute = (world: ReturnType<typeof fakeExecWorld>, args: readonly string[
     commands: commandsOf(args),
   }).pipe(Effect.provide(world.layer));
 
+describe("a command the daemon refuses after others ran", () => {
+  it("keeps the changes the earlier commands made, since nothing of it started", async () => {
+    const w = fakeExecWorld({ readExitCode: 0 });
+    await produce(w, ["0", "refused", "0"]);
+    expect(runCommands(w)).toEqual([["0"], ["refused"]]);
+    expect(w.sent.filter((exec) => exec.executionId === undefined)).toHaveLength(1);
+    expect(w.row()).toMatchObject({
+      status: "failed",
+      errorMessage: `Run ${RUN}: the workspace refused to start command 2/3 (daemon error 3); nothing was started.`,
+      changedFiles: [],
+    });
+  });
+
+  it("reads nothing when the answer was lost, since the process may still be writing", async () => {
+    const w = fakeExecWorld({ readExitCode: 0 });
+    await produce(w, ["0", "lost"]);
+    expect(w.sent.filter((exec) => exec.executionId === undefined)).toHaveLength(0);
+    expect(w.row()).toMatchObject({ status: "failed", changedFiles: null });
+  });
+});
+
 describe("an exec run executed in its request", () => {
   it("runs its commands in order, a nonzero exit as data, and returns the settled run", async () => {
     const w = fakeExecWorld();

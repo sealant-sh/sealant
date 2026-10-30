@@ -285,13 +285,19 @@ export const produceExecRun = (
         Effect.catchTag("ProcessUserUnavailableError", (error) =>
           runs.markRunFailed({ id: runId, errorMessage: error.message }).pipe(Effect.as(undefined)),
         ),
+        // A refused command started nothing, so what the ones before it changed is read as on a
+        // conflict; after a lost answer the process may still be writing, so nothing is read.
         Effect.catchTag("ExecLaunchFailedError", (error) =>
-          runs
-            .markRunFailed({
+          Effect.gen(function* () {
+            const changes =
+              error.refusedCode === undefined ? {} : yield* captureChanges(runId, target);
+            yield* runs.markRunFailed({
               id: runId,
               errorMessage: launchFailureMessage(error, `command ${index + 1}/${commands.length}`),
-            })
-            .pipe(Effect.as(undefined)),
+              ...changes,
+            });
+            return undefined;
+          }),
         ),
         // The commands after it do not run; what the ones before it changed is still the run's.
         Effect.catchTag("TelemetrySinkConflictError", (error) =>
