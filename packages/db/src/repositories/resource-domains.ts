@@ -4,7 +4,7 @@ import {
   RESOURCE_DOMAIN_BUDGET_DIMENSIONS,
   type ResourceDomainBudgetDimension,
 } from "@sealant/api-contracts";
-import { and, asc, eq, gt, lt, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, lt, ne, sql } from "drizzle-orm";
 import { Cause, Context, Effect, Layer, Schema } from "effect";
 import * as Rec from "effect/Record";
 
@@ -14,6 +14,9 @@ import {
   resourceDomainMembers,
   resourceDomains,
   user,
+  type ResourceDomainAllocation,
+  type ResourceDomainAllocationState,
+  type ResourceDomainAllocationUse,
   type ResourceDomainMemberState,
 } from "../schema.js";
 
@@ -28,6 +31,8 @@ export class ResourceDomainRepoError extends Schema.TaggedError<ResourceDomainRe
       "listMembers",
       "getBudget",
       "setBudget",
+      "admit",
+      "record",
     ]),
     message: Schema.String,
     cause: Schema.Defect(),
@@ -156,6 +161,110 @@ export interface ResourceDomainRepoService {
     | { readonly kind: "no-such-domain" },
     ResourceDomainRepoError
   >;
+  readonly admit: ResourceDomainAdmissionService["admit"];
+  readonly record: ResourceDomainAdmissionService["record"];
+}
+
+/** What an admission asks to hold. See `resourceDomainAllocations` for each use. */
+export type ResourceDomainAdmissionRequest =
+  | {
+      readonly use: "compute";
+      readonly objectKey: string;
+      readonly cpuMillicores: number;
+      readonly memoryBytes: number;
+    }
+  | {
+      readonly use: "volume";
+      readonly objectKey: string;
+      readonly storageBytes: number;
+      /** Reserved with the volume for its backups and snapshots, which draw on it first. */
+      readonly protectionBytes: number;
+    }
+  | {
+      readonly use: "protection";
+      readonly objectKey: string;
+      /** The volume this backs up: one the domain holds, archived or not. */
+      readonly sourceObjectKey: string;
+      readonly protectionBytes: number;
+    };
+
+export type ResourceDomainAllocationRecord = ResourceDomainAllocation;
+
+export type ResourceDomainAdmission =
+  /** Held from now on. `replayed`: this operation was admitted before, and charged then. */
+  | {
+      readonly kind: "admitted";
+      readonly allocation: ResourceDomainAllocationRecord;
+      readonly replayed: boolean;
+    }
+  /**
+   * `used + reserved + requested > limit` in `dimension`, where `requested` is what the admission
+   * would add: a backup's bytes beyond its volume's unused reserve.
+   */
+  | {
+      readonly kind: "over-budget";
+      readonly dimension: ResourceDomainBudgetDimension;
+      readonly used: number;
+      readonly reserved: number;
+      readonly requested: number;
+      readonly limit: number;
+    }
+  | {
+      readonly kind: "refused";
+      readonly reason:
+        | "invalid-amount"
+        | "domain-not-active"
+        | "operation-key-reused"
+        | "operation-released"
+        | "object-held"
+        | "no-source-volume";
+    }
+  | { readonly kind: "no-such-domain" };
+
+/**
+ * What the runtime confirmed about an allocation's object. Only these move a row, so nothing is
+ * released on a guess: compute on a confirmed stop, storage on a confirmed purge.
+ */
+export type ResourceDomainAllocationEvent = "created" | "archived" | "stopped" | "purged";
+
+export type ResourceDomainAllocationOutcome =
+  /** The allocation is in the event's state now, whether this call or an earlier one moved it. */
+  | { readonly kind: "recorded"; readonly allocation: ResourceDomainAllocationRecord }
+  /** The event does not apply to this allocation's use or state; nothing changed. */
+  | { readonly kind: "refused"; readonly allocation: ResourceDomainAllocationRecord }
+  | { readonly kind: "no-such-allocation" };
+
+/** `admit` and `record` hold the domain row; any other isolation would read sums it cannot see. */
+export const RESOURCE_DOMAIN_ADMISSION_ISOLATION =
+  "Resource domain admission runs only at READ COMMITTED: a snapshot older than the domain's lock would miss allocations committed while it waited.";
+
+/** Admission and allocation events, each under the domain row's lock (`admit`, `record`). */
+export interface ResourceDomainAdmissionService {
+  /**
+   * Admit one operation. It holds the domain row (`FOR NO KEY UPDATE`, so inserts that reference
+   * the domain, such as a member grant, do not wait) until its transaction commits: admissions and
+   * events on every server queue for it, and each reads the sums the last one left. Inside a
+   * caller's `DatabaseTransaction` the allocation commits with the caller's writes, and the hold
+   * lasts until then. It runs only at READ COMMITTED and fails otherwise. Only an active domain
+   * admits new work; any domain admits a backup of a volume it holds, within its budget. A backup
+   * draws first on its volume's unused reserve. An amount that is not a safe integer, or a volume
+   * whose data and reserve add up to more than one, is `invalid-amount`.
+   */
+  readonly admit: (input: {
+    readonly resourceDomainId: string;
+    readonly operationKey: string;
+    readonly request: ResourceDomainAdmissionRequest;
+  }) => Effect.Effect<ResourceDomainAdmission, ResourceDomainRepoError>;
+  /**
+   * Record what the runtime confirmed, under the same lock as `admit`, taken first, so an event
+   * and an admission never interleave. Purging a volume releases its data and unused reserve; its
+   * backups stay charged until each is purged. READ COMMITTED only, as `admit`.
+   */
+  readonly record: (input: {
+    readonly resourceDomainId: string;
+    readonly allocationId: string;
+    readonly event: ResourceDomainAllocationEvent;
+  }) => Effect.Effect<ResourceDomainAllocationOutcome, ResourceDomainRepoError>;
 }
 
 export class ResourceDomainRepo extends Context.Service<
@@ -293,6 +402,74 @@ const toRecord = (read: ResourceDomainBudgetAmounts): ResourceDomainBudgetRecord
 const sameBudget = (a: ResourceDomainBudget, b: ResourceDomainBudget) =>
   DIMENSIONS.every((dimension) => a[dimension] === b[dimension]);
 
+/** Which events move an allocation, of which use, from which states, to which. */
+const EVENTS: Record<
+  ResourceDomainAllocationEvent,
+  {
+    readonly to: ResourceDomainAllocationState;
+    readonly from: ReadonlyArray<ResourceDomainAllocationState>;
+    readonly uses: ReadonlyArray<ResourceDomainAllocationUse>;
+  }
+> = {
+  created: { to: "in-use", from: ["reserved"], uses: ["compute", "volume", "protection"] },
+  archived: { to: "archived", from: ["in-use"], uses: ["volume"] },
+  stopped: { to: "released", from: ["reserved", "in-use"], uses: ["compute"] },
+  purged: {
+    to: "released",
+    from: ["reserved", "in-use", "archived"],
+    uses: ["volume", "protection"],
+  },
+};
+
+const MAX_AMOUNT = BigInt(Number.MAX_SAFE_INTEGER);
+
+/**
+ * The row an admission writes, every amount zero where its use holds none, or `undefined` when an
+ * amount is not a positive safe integer (a reserve may be zero) or a volume's data and reserve
+ * together are not one.
+ */
+const allocationValues = (request: ResourceDomainAdmissionRequest) => {
+  const values = {
+    use: request.use,
+    objectKey: request.objectKey,
+    cpuMillicores: request.use === "compute" ? request.cpuMillicores : 0,
+    memoryBytes: request.use === "compute" ? request.memoryBytes : 0,
+    storageBytes: request.use === "volume" ? request.storageBytes : 0,
+    protectionBytes: request.use === "compute" ? 0 : request.protectionBytes,
+  };
+  const positive =
+    request.use === "compute"
+      ? [values.cpuMillicores, values.memoryBytes]
+      : request.use === "volume"
+        ? [values.storageBytes]
+        : [values.protectionBytes];
+  const all = [
+    values.cpuMillicores,
+    values.memoryBytes,
+    values.storageBytes,
+    values.protectionBytes,
+  ];
+  return all.every((amount) => Number.isSafeInteger(amount) && amount >= 0) &&
+    positive.every((amount) => amount > 0) &&
+    BigInt(values.storageBytes) + BigInt(values.protectionBytes) <= MAX_AMOUNT
+    ? values
+    : undefined;
+};
+
+const sameAllocation = (
+  row: ResourceDomainAllocationRecord,
+  values: NonNullable<ReturnType<typeof allocationValues>>,
+) =>
+  row.use === values.use &&
+  row.objectKey === values.objectKey &&
+  row.cpuMillicores === values.cpuMillicores &&
+  row.memoryBytes === values.memoryBytes &&
+  row.storageBytes === values.storageBytes &&
+  row.protectionBytes === values.protectionBytes;
+
+const refused = (reason: Extract<ResourceDomainAdmission, { kind: "refused" }>["reason"]) =>
+  ({ kind: "refused", reason }) as const;
+
 /** The decision that wrote `current`, sent again: it answers `current` instead of a conflict. */
 const repeats = (current: ResourceDomainMemberRecord, decision: ResourceDomainMemberDecision) =>
   current.version === decision.version && current.state === decision.state;
@@ -327,6 +504,25 @@ export const ResourceDomainRepoLive: Layer.Layer<ResourceDomainRepo, never, Seal
           ),
           ([row]) => (row === undefined ? undefined : amounts(row)),
         );
+      /**
+       * Hold the domain row until the transaction ends, and answer its state. The first thing
+       * `admit` and `record` do, so every holder takes the same locks in the same order.
+       */
+      const lockDomain = (resourceDomainId: string) =>
+        Effect.gen(function* () {
+          const [row] = yield* db
+            .select({
+              state: resourceDomains.state,
+              isolation: sql<string>`current_setting('transaction_isolation')`,
+            })
+            .from(resourceDomains)
+            .where(eq(resourceDomains.id, resourceDomainId))
+            .for("no key update");
+          if (row !== undefined && row.isolation !== "read committed") {
+            return yield* Effect.fail(new Error(RESOURCE_DOMAIN_ADMISSION_ISOLATION));
+          }
+          return row?.state;
+        });
       return {
         ensure: (key, budget) =>
           withError(
@@ -392,6 +588,144 @@ export const ResourceDomainRepoLive: Layer.Layer<ResourceDomainRepo, never, Seal
                   (record.revision === revision + 1 && sameBudget(record.budget, budget))
                   ? ({ kind: "set", record } as const)
                   : ({ kind: "stale", revision: record.revision } as const);
+              }),
+            ),
+          ),
+        admit: ({ resourceDomainId, operationKey, request }) =>
+          withError(
+            "admit",
+            db.transaction(() =>
+              Effect.gen(function* () {
+                const values = allocationValues(request);
+                if (values === undefined) return refused("invalid-amount");
+                const state = yield* lockDomain(resourceDomainId);
+                if (state === undefined) return { kind: "no-such-domain" } as const;
+                const [prior] = yield* db
+                  .select()
+                  .from(resourceDomainAllocations)
+                  .where(
+                    and(
+                      eq(resourceDomainAllocations.resourceDomainId, resourceDomainId),
+                      eq(resourceDomainAllocations.operationKey, operationKey),
+                    ),
+                  );
+                if (prior !== undefined) {
+                  if (!sameAllocation(prior, values)) return refused("operation-key-reused");
+                  return prior.state === "released"
+                    ? refused("operation-released")
+                    : ({ kind: "admitted", allocation: prior, replayed: true } as const);
+                }
+                if (state !== "active" && request.use !== "protection") {
+                  return refused("domain-not-active");
+                }
+                const [held] = yield* db
+                  .select({ id: resourceDomainAllocations.id })
+                  .from(resourceDomainAllocations)
+                  .where(
+                    and(
+                      eq(resourceDomainAllocations.resourceDomainId, resourceDomainId),
+                      eq(resourceDomainAllocations.use, request.use),
+                      eq(resourceDomainAllocations.objectKey, request.objectKey),
+                      ne(resourceDomainAllocations.state, "released"),
+                    ),
+                  );
+                if (held !== undefined) return refused("object-held");
+                // A backup takes its volume's unused reserve first, and only the rest is new.
+                let source: { readonly id: string; readonly unused: bigint } | undefined;
+                if (request.use === "protection") {
+                  const [volume] = yield* db.execute<{
+                    readonly id: string;
+                    readonly unused: string;
+                  }>(
+                    sql`select v.id, greatest(0, v.protection_bytes - coalesce(sum(p.protection_bytes), 0))::text as unused
+                      from ${resourceDomainAllocations} v
+                      left join ${resourceDomainAllocations} p
+                        on p.source_allocation_id = v.id and p.state <> 'released'
+                      where v.resource_domain_id = ${resourceDomainId} and v.use = 'volume'
+                        and v.object_key = ${request.sourceObjectKey} and v.state <> 'released'
+                      group by v.id`,
+                    "objects",
+                  );
+                  if (volume === undefined) return refused("no-source-volume");
+                  source = { id: volume.id, unused: BigInt(volume.unused) };
+                }
+                const read = yield* budgetOf(resourceDomainId);
+                if (read === undefined) return { kind: "no-such-domain" } as const;
+                const requested: { readonly [D in ResourceDomainBudgetDimension]: bigint } = {
+                  cpuMillicores: BigInt(values.cpuMillicores),
+                  memoryBytes: BigInt(values.memoryBytes),
+                  storageBytes:
+                    source === undefined
+                      ? BigInt(values.storageBytes) + BigInt(values.protectionBytes)
+                      : BigInt(values.protectionBytes) > source.unused
+                        ? BigInt(values.protectionBytes) - source.unused
+                        : 0n,
+                };
+                for (const dimension of DIMENSIONS) {
+                  const [used, reserved, ask, limit] = [
+                    read.used[dimension],
+                    read.reserved[dimension],
+                    requested[dimension],
+                    read.limit[dimension],
+                  ];
+                  if (ask > 0n && used + reserved + ask > limit) {
+                    return {
+                      kind: "over-budget",
+                      dimension,
+                      used: Number(used),
+                      reserved: Number(reserved),
+                      requested: Number(ask),
+                      limit: Number(limit),
+                    } as const;
+                  }
+                }
+                const [allocation] = yield* db
+                  .insert(resourceDomainAllocations)
+                  .values({
+                    id: randomUUID(),
+                    resourceDomainId,
+                    operationKey,
+                    sourceAllocationId: source?.id ?? null,
+                    ...values,
+                  })
+                  .returning();
+                if (allocation === undefined) {
+                  return yield* Effect.fail(new Error("The allocation was not written."));
+                }
+                return { kind: "admitted", allocation, replayed: false } as const;
+              }),
+            ),
+          ),
+        record: ({ resourceDomainId, allocationId, event }) =>
+          withError(
+            "record",
+            db.transaction(() =>
+              Effect.gen(function* () {
+                if ((yield* lockDomain(resourceDomainId)) === undefined) {
+                  return { kind: "no-such-allocation" } as const;
+                }
+                const rule = EVENTS[event];
+                const at = and(
+                  eq(resourceDomainAllocations.id, allocationId),
+                  eq(resourceDomainAllocations.resourceDomainId, resourceDomainId),
+                );
+                const [moved] = yield* db
+                  .update(resourceDomainAllocations)
+                  .set({ state: rule.to, updatedAt: sql`now()` })
+                  .where(
+                    and(
+                      at,
+                      inArray(resourceDomainAllocations.state, [...rule.from]),
+                      inArray(resourceDomainAllocations.use, [...rule.uses]),
+                    ),
+                  )
+                  .returning();
+                if (moved !== undefined) return { kind: "recorded", allocation: moved } as const;
+                const [current] = yield* db.select().from(resourceDomainAllocations).where(at);
+                if (current === undefined) return { kind: "no-such-allocation" } as const;
+                return current.state === rule.to && rule.uses.includes(current.use)
+                  ? ({ kind: "recorded", allocation: current } as const)
+                  : ({ kind: "refused", allocation: current } as const);
               }),
             ),
           ),
