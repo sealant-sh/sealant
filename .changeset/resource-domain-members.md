@@ -12,8 +12,8 @@ the same state is a repeat and answers the member unchanged. The same version wi
 or a lower one, gets `409` `ResourceDomainMemberVersionConflictError`, which quotes nothing the
 request sent and carries the decision that stands as `current`. So a delayed grant never undoes a
 newer revoke, whatever order decisions arrive in, and the application never reads before it writes.
-A person who does not exist gets `404`. The routes take a service key, as ensure and get do, and
-`userId` is a `PersonId`.
+A person who does not exist gets `404`, whatever the version, even when deleted while the decision
+is written. The routes take a service key, as ensure and get do, and `userId` is a `PersonId`.
 
 The SDK reaches these routes as `sealant.scopes`: `ensure({ key })`, `get(id)` and `actAs(id)`.
 `actAs(id)` returns a `ScopeClient` for one scope, and its `members` are the only way to a scope's

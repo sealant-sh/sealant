@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { and, asc, eq, lt, sql } from "drizzle-orm";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Cause, Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
 import {
@@ -113,6 +113,18 @@ const memberColumns = {
 const repeats = (current: ResourceDomainMemberRecord, decision: ResourceDomainMemberDecision) =>
   current.version === decision.version && current.state === decision.state;
 
+const PERSON_KEY = "resource_domain_members_user_id_user_id_fkey";
+
+/** Whether the member's foreign key to its person refused a write, anywhere in the chain. */
+const namesPersonKey = (error: unknown, depth = 0): boolean => {
+  if (depth > 8 || typeof error !== "object" || error === null) return false;
+  if ("constraint" in error && error.constraint === PERSON_KEY) return true;
+  const nested = Cause.isCause(error)
+    ? error.reasons.flatMap((reason) => (Cause.isFailReason(reason) ? [reason.error] : []))
+    : [...("cause" in error ? [error.cause] : []), ...("reason" in error ? [error.reason] : [])];
+  return nested.some((next) => namesPersonKey(next, depth + 1));
+};
+
 export const ResourceDomainRepoLive: Layer.Layer<ResourceDomainRepo, never, SealantDB> =
   Layer.effect(
     ResourceDomainRepo,
@@ -153,14 +165,8 @@ export const ResourceDomainRepoLive: Layer.Layer<ResourceDomainRepo, never, Seal
           withError(
             "decideMember",
             Effect.gen(function* () {
-              const [person] = yield* db
-                .select({ id: user.id })
-                .from(user)
-                .where(eq(user.id, decision.userId))
-                .limit(1);
-              if (person === undefined) return { kind: "no-such-person" } as const;
               const { resourceDomainId, userId, state, version } = decision;
-              const [written] = yield* db
+              const written = yield* db
                 .insert(resourceDomainMembers)
                 .values({ resourceDomainId, userId, state, version })
                 .onConflictDoUpdate({
@@ -168,7 +174,13 @@ export const ResourceDomainRepoLive: Layer.Layer<ResourceDomainRepo, never, Seal
                   set: { state, version, updatedAt: sql`now()` },
                   setWhere: lt(resourceDomainMembers.version, version),
                 })
-                .returning(memberColumns);
+                .returning(memberColumns)
+                .pipe(
+                  Effect.map(([row]) => row),
+                  // The person was deleted before the write could hold their row.
+                  Effect.catchIf(namesPersonKey, () => Effect.succeed(null)),
+                );
+              if (written === null) return { kind: "no-such-person" } as const;
               if (written !== undefined) return { kind: "decided", member: written } as const;
               const [current] = yield* db
                 .select(memberColumns)
@@ -180,7 +192,15 @@ export const ResourceDomainRepoLive: Layer.Layer<ResourceDomainRepo, never, Seal
                   ),
                 )
                 .limit(1);
-              if (current === undefined) return { kind: "no-such-person" } as const;
+              if (current === undefined) {
+                const [person] = yield* db
+                  .select({ id: user.id })
+                  .from(user)
+                  .where(eq(user.id, userId))
+                  .limit(1);
+                if (person === undefined) return { kind: "no-such-person" } as const;
+                return yield* Effect.fail(new Error("The member's decision was not found."));
+              }
               return repeats(current, decision)
                 ? ({ kind: "decided", member: current } as const)
                 : ({ kind: "stale", current } as const);

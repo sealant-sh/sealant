@@ -14,7 +14,7 @@ import {
   type DB,
   type ResourceDomainMemberDecision,
 } from "@sealant/db";
-import { Deferred, Effect, Fiber } from "effect";
+import { Deferred, Effect, Exit, Fiber } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 
 const DATABASE_URL = process.env.SEALANT_TEST_DATABASE_URL;
@@ -49,6 +49,9 @@ describe.skipIf(DATABASE_URL === undefined)("resource domain members (Postgres)"
     version: number,
   ) =>
     run(Effect.flatMap(ResourceDomainRepo, (repo) => repo.decideMember({ ...at, state, version })));
+
+  const deletePerson = (userId: string) =>
+    db.execute(`DELETE FROM "user" WHERE "id" = '${userId}'`);
 
   const members = (resourceDomainId: string) =>
     run(Effect.flatMap(ResourceDomainRepo, (repo) => repo.listMembers(resourceDomainId)));
@@ -172,4 +175,42 @@ describe.skipIf(DATABASE_URL === undefined)("resource domain members (Postgres)"
       });
     },
   );
+
+  it("answers a person deleted while their first decision is written as missing, not as a failure", async () => {
+    const at = await pair();
+    const outcome = await run(
+      Effect.gen(function* () {
+        const repo = yield* ResourceDomainRepo;
+        const deleted = yield* Deferred.make<void>();
+        const commit = yield* Deferred.make<void>();
+        const removal = yield* Effect.forkChild(
+          db.transaction(() =>
+            deletePerson(at.userId).pipe(
+              Effect.tap(() => Deferred.succeed(deleted, undefined)),
+              Effect.tap(() => Deferred.await(commit)),
+            ),
+          ),
+        );
+        yield* Deferred.await(deleted);
+        const decision = yield* Effect.forkChild(
+          Effect.exit(repo.decideMember({ ...at, state: "member", version: 1 })),
+        );
+        yield* Effect.sleep("300 millis");
+        const waited = decision.pollUnsafe() === undefined;
+        yield* Deferred.succeed(commit, undefined);
+        yield* Fiber.join(removal);
+        return { waited, exit: yield* Fiber.join(decision) };
+      }),
+    );
+    expect(outcome.waited).toBe(true);
+    expect(outcome.exit).toEqual(Exit.succeed({ kind: "no-such-person" }));
+  });
+
+  it("answers a person deleted after their decisions as missing, whatever version comes next", async () => {
+    const at = await pair();
+    await decide(at, "member", 1);
+    await Effect.runPromise(deletePerson(at.userId));
+    expect(await decide(at, "revoked", 2)).toEqual({ kind: "no-such-person" });
+    expect(await members(at.resourceDomainId)).toEqual([]);
+  });
 });
