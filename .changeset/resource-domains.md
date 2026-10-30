@@ -11,6 +11,7 @@ without authentication serves them as it serves every route. A body field the co
 declare is refused with `400` instead of being dropped. A domain id is `rdm:<uuid>`, and every
 person field of the API (`ownerUserId`, `onBehalfOfUserId`, `userId`, and the SSH gateway's
 `x-sealant-principal-id` and `principalId`) is now a `PersonId`, which refuses one with `400`
-`RequestRefusedError` before any handler runs. `@sealant/api-contracts` exports `PersonId`,
+`RequestRefusedError` before any handler runs. A forward refused because its asserted owner is a
+domain says `not-a-person` (`400`). `@sealant/api-contracts` exports `PersonId`,
 `isResourceDomainId`, `RESOURCE_DOMAIN_ID_PREFIX` and the resource domain schemas. The SDK does not
 call these routes yet.

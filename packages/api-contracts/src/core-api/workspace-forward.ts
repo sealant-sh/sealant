@@ -38,6 +38,7 @@ export const forwardRefusalReasonSchema = Schema.Literals([
   "budget-exceeded",
   "invalid-target",
   "owner-required",
+  "not-a-person",
   "internal",
   "owner-exited",
   "peer-mismatch",
@@ -62,6 +63,8 @@ export const FORWARD_REFUSAL_STATUS = {
   "budget-exceeded": 429,
   "invalid-target": 400,
   "owner-required": 400,
+  /** The asserted owner is a resource domain, which never opens a forward. */
+  "not-a-person": 400,
   internal: 500,
   "owner-exited": 409,
   "peer-mismatch": 409,

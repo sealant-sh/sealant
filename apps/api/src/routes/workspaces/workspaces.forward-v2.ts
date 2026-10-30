@@ -51,6 +51,7 @@ const CHECK_REFUSAL = {
   unauthorized: "unauthorized",
   forbidden: "forbidden",
   "owner-required": "owner-required",
+  "not-a-person": "not-a-person",
   "not-found": "not-found",
   "workspace-unreadable": "internal",
   internal: "internal",

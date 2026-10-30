@@ -42,6 +42,7 @@ const STATUS: Record<ForwardCheck, number> = {
   unauthorized: 401,
   forbidden: 403,
   "owner-required": 400,
+  "not-a-person": 400,
   "not-found": 404,
   "workspace-unreadable": 404,
   internal: 500,
