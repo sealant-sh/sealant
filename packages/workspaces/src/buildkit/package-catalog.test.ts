@@ -3,10 +3,13 @@ import { describe, expect, it } from "vitest";
 import { cases } from "../runtime/docker-runtime-adapter.golden-fixture.js";
 import { planWorkspaceImageBuild } from "./index.js";
 import {
+  type CatalogEntry,
   CATALOG_OS_FAMILIES,
+  familyInstall,
   knownWorkspacePackageIds,
   renderReleaseInstall,
   unknownWorkspacePackageIds,
+  unsupportedWorkspacePackages,
   WORKSPACE_PACKAGE_CATALOG,
 } from "./package-catalog.js";
 
@@ -38,11 +41,25 @@ const containerfileFor = (family: "fedora" | "arch" | "ubuntu" | "nix", packages
     },
   }).containerfile;
 
+describe("a family slot", () => {
+  it("holds either packages or a reason, never both", () => {
+    // @ts-expect-error: a reason and packages together is not a family slot
+    const both: CatalogEntry["ubuntu"] = { unsupported: "a reason", packages: ["chromium"] };
+    expect(both).toBeDefined();
+  });
+});
+
 describe("the workspace package catalog", () => {
-  it("answers every id on every managed family, by a repository package, a pinned release or npm", () => {
+  it("answers every id on every managed family, by a repository package, a pinned release, npm or a reason it cannot", () => {
     for (const [id, entry] of Object.entries(WORKSPACE_PACKAGE_CATALOG)) {
       for (const family of CATALOG_OS_FAMILIES) {
         const install = entry[family];
+        if (install.unsupported !== undefined) {
+          expect(install.unsupported.length, `${id} on ${family} gives no reason`).toBeGreaterThan(
+            0,
+          );
+          continue;
+        }
         const ways = [install.packages?.length, install.release, install.npmGlobal?.length].filter(
           Boolean,
         );
@@ -76,6 +93,79 @@ describe("the workspace package catalog", () => {
   it("refuses an id it does not know when the image is planned, naming it", () => {
     expect(() => containerfileFor("fedora", ["ripgrep", "nope"])).toThrow(
       /Unknown workspace package 'nope'/,
+    );
+  });
+
+  it("installs what a screen needs under each family's own names", () => {
+    const screen = ["tigervnc", "xauth", "xdpyinfo", "openbox", "chromium", "fonts-dejavu"];
+    const expected = {
+      fedora: [
+        ["tigervnc-server-minimal"],
+        ["xorg-x11-xauth"],
+        ["xdpyinfo"],
+        ["openbox"],
+        ["chromium"],
+        ["dejavu-sans-fonts", "dejavu-serif-fonts", "dejavu-sans-mono-fonts"],
+      ],
+      arch: [
+        ["tigervnc"],
+        ["xorg-xauth"],
+        ["xorg-xdpyinfo"],
+        ["openbox"],
+        ["chromium"],
+        ["ttf-dejavu"],
+      ],
+      ubuntu: [
+        ["tigervnc-standalone-server", "tigervnc-tools"],
+        ["xauth"],
+        ["x11-utils"],
+        ["openbox"],
+        undefined,
+        ["fonts-dejavu-core"],
+      ],
+      nix: [["tigervnc"], ["xauth"], ["xdpyinfo"], ["openbox"], ["chromium"], ["dejavu_fonts"]],
+    } as const;
+    for (const family of CATALOG_OS_FAMILIES) {
+      expect(
+        screen.map((id) => familyInstall(id, family)?.packages),
+        family,
+      ).toEqual(expected[family]);
+    }
+
+    const fedora = containerfileFor("fedora", screen);
+    for (const name of expected.fedora.flat()) {
+      expect(fedora, name).toMatch(new RegExp(`dnf -y install .*\\b${name}\\b`));
+    }
+    // Fedora installs it as `chromium-browser`.
+    expect(fedora).toContain("ln -sf /usr/bin/chromium-browser /usr/local/bin/chromium");
+    const arch = containerfileFor("arch", screen);
+    for (const name of expected.arch.flat()) {
+      expect(arch, name).toMatch(new RegExp(`pacman -S .*\\b${name}\\b`));
+    }
+    const nix = containerfileFor("nix", screen);
+    for (const name of expected.nix.flat()) expect(nix, name).toContain(`'nixpkgs#${name}'`);
+    const ubuntu = containerfileFor(
+      "ubuntu",
+      screen.filter((id) => id !== "chromium"),
+    );
+    for (const name of expected.ubuntu.flat()) {
+      if (name !== undefined)
+        expect(ubuntu, name).toMatch(new RegExp(`apt-get install .*\\b${name}\\b`));
+    }
+  });
+
+  it("refuses chromium on Ubuntu when the image is planned, with why", () => {
+    expect(unsupportedWorkspacePackages("ubuntu", ["openbox", "chromium", "chromium"])).toEqual([
+      {
+        id: "chromium",
+        reason: expect.stringContaining("stub for the chromium snap"),
+      },
+    ]);
+    for (const family of ["fedora", "arch", "nix"] as const) {
+      expect(unsupportedWorkspacePackages(family, ["chromium"]), family).toEqual([]);
+    }
+    expect(() => containerfileFor("ubuntu", ["openbox", "chromium"])).toThrow(
+      /Workspace package 'chromium' is not available on ubuntu: Ubuntu 24\.04's chromium-browser package is a stub for the chromium snap/,
     );
   });
 
@@ -133,7 +223,7 @@ describe("the workspace package catalog", () => {
   });
 
   it("installs a zsh plugin's release as a file to source, not a program", () => {
-    const release = WORKSPACE_PACKAGE_CATALOG["zsh-history-substring-search"]!.ubuntu.release!;
+    const release = familyInstall("zsh-history-substring-search", "ubuntu")!.release!;
     const step = renderReleaseInstall(release);
     // The tag's archive is the same script for every architecture.
     expect(release.archives.aarch64).toEqual(release.archives.x86_64);
@@ -146,7 +236,7 @@ describe("the workspace package catalog", () => {
     expect(step).not.toContain("/usr/local/bin");
     expect(step.indexOf("sha256sum -c")).toBeLessThan(step.indexOf("tar -xzf"));
     // starship is a program: /usr/local/bin, executable.
-    const starship = renderReleaseInstall(WORKSPACE_PACKAGE_CATALOG.starship!.fedora.release!);
+    const starship = renderReleaseInstall(familyInstall("starship", "fedora")!.release!);
     expect(starship).toContain(
       "aarch64) url='https://github.com/starship/starship/releases/download/v1.26.0/starship-aarch64-unknown-linux-musl.tar.gz'; sha=dc30189378d2f2e287384e8a692d3f95ad1df64cf0e8c36aa9201516028aed6b",
     );
@@ -171,7 +261,7 @@ describe("the workspace package catalog", () => {
   });
 
   it("renders a zip release that checks the checksum before unzipping", () => {
-    const step = renderReleaseInstall(WORKSPACE_PACKAGE_CATALOG.bun!.ubuntu.release!);
+    const step = renderReleaseInstall(familyInstall("bun", "ubuntu")!.release!);
     expect(step).toContain(
       "x86_64) url='https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-x64-baseline.zip'; sha=c678040f14fe0440eb839d37cbd0ce4c051a32da72806ac97de6a6aab6bf728f; members='bun-linux-x64-baseline/bun';;",
     );
@@ -187,7 +277,7 @@ describe("the workspace package catalog", () => {
   });
 
   it("renders a release install that checks the checksum before unpacking, per architecture", () => {
-    const step = renderReleaseInstall(WORKSPACE_PACKAGE_CATALOG.mise!.fedora.release!);
+    const step = renderReleaseInstall(familyInstall("mise", "fedora")!.release!);
     expect(step).toContain(
       "x86_64) url='https://github.com/jdx/mise/releases/download/v2026.9.12/mise-v2026.9.12-linux-x64.tar.gz'; sha=b4058dece685259910d3aba5782445996eea79dbdb3cf952a6eb81aadf0373ff",
     );

@@ -34,12 +34,17 @@ export type {
 export {
   CATALOG_OS_FAMILIES,
   UnknownWorkspacePackageError,
+  UnsupportedWorkspacePackageError,
   WORKSPACE_PACKAGE_CATALOG,
+  familyInstall,
   knownWorkspacePackageIds,
   unknownWorkspacePackageIds,
+  unsupportedWorkspacePackages,
   type CatalogEntry,
   type CatalogOsFamily,
   type FamilyInstall,
+  type FamilyUnsupported,
+  type UnsupportedWorkspacePackage,
   type ReleaseInstall,
 } from "./package-catalog.js";
 export {

@@ -73,7 +73,7 @@ const blueprint: NewWorkspace = {
   },
 };
 
-/** One command per catalog entry, by the name it installs. */
+/** One command per catalog entry, by the name it installs (`fonts-dejavu` installs fonts only). */
 const COMMANDS = [
   "bash",
   "bat",
@@ -81,6 +81,7 @@ const COMMANDS = [
   "bunx",
   "bwrap",
   "chezmoi",
+  "chromium",
   "curl",
   "direnv",
   "eza",
@@ -96,6 +97,7 @@ const COMMANDS = [
   "node",
   "npm",
   "nvim",
+  "openbox",
   "pnpm",
   "python3",
   "rg",
@@ -105,6 +107,10 @@ const COMMANDS = [
   "tmux",
   "unzip",
   "uv",
+  "vncpasswd",
+  "Xvnc",
+  "xauth",
+  "xdpyinfo",
   "zsh",
   "sealantd",
 ] as const;
@@ -167,7 +173,7 @@ describe("an Arch workspace image on the Docker daemon's architecture", () => {
 
   it("carries every catalog package and every baked harness, and they run", async () => {
     const found = await run(
-      `for c in ${COMMANDS.join(" ")}; do command -v "$c" >/dev/null || echo "missing $c"; done; echo checked`,
+      `for c in ${COMMANDS.join(" ")}; do command -v "$c" >/dev/null || echo "missing $c"; done; [ -f /usr/share/fonts/TTF/DejaVuSans.ttf ] || echo "missing DejaVuSans"; echo checked`,
     );
     expect(found.trim()).toBe("checked");
 

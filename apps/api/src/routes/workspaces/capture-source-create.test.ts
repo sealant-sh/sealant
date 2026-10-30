@@ -592,6 +592,24 @@ describe("createWorkspace package ids", () => {
       }).pipe(Effect.provide(makeRecordingLayer(state))),
     );
   });
+
+  it("refuses an id the family installs but cannot run, with the catalog's reason", async () => {
+    const state: RecordingState = {};
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const result = yield* Effect.result(
+          createWorkspace({ payload: payloadWithPackages("ubuntu", ["chromium"]), headers: {} }),
+        );
+        expect(Result.isFailure(result)).toBe(true);
+        if (Result.isFailure(result)) {
+          expect(result.failure.message).toContain(
+            "Workspace package 'chromium' is not available on ubuntu: Ubuntu 24.04's chromium-browser package is a stub for the chromium snap",
+          );
+        }
+        expect(state.job).toBeUndefined();
+      }).pipe(Effect.provide(makeRecordingLayer(state))),
+    );
+  });
 });
 
 describe("createWorkspace · idempotency key", () => {

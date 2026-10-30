@@ -11,12 +11,18 @@
  *
  * An id the catalog does not know is refused when the image is planned, and by the API when the
  * workspace is created, instead of being handed to the package manager to fail minutes into a
- * build. Measured on 2026-09-21: Fedora 41 has no `mise` or `lazygit` and calls the GitHub CLI
- * `gh`; Ubuntu 24.04 also lacks `uv` and `pnpm`; Arch Linux ARM lacks `mise`; nixpkgs has all.
+ * build. A family whose package installs but cannot run names why instead of an install, and the
+ * id is refused on that family the same way, with that reason. Measured on 2026-09-21: Fedora 41
+ * has no `mise` or `lazygit` and calls the GitHub CLI `gh`; Ubuntu 24.04 also lacks `uv` and
+ * `pnpm`; Arch Linux ARM lacks `mise`; nixpkgs has all.
  * Measured on 2026-09-26: neither Fedora 41 nor Ubuntu 24.04 has `starship` or
  * `zsh-history-substring-search`; Arch (x86_64 and ARM) and nixpkgs have both.
  * Measured on 2026-10-10: Fedora 41 and Ubuntu 24.04 have no `bun`; Arch packages it on x86_64
  * only; nixpkgs has it. Every family packages `unzip`.
+ * Measured on 2026-10-30 by installing on x86_64 (aarch64 from the repository indexes only):
+ * every family packages `tigervnc`, `xauth`, `xdpyinfo`, `openbox` and `fonts-dejavu`; Fedora 41
+ * installs `chromium` as `chromium-browser`, and Ubuntu 24.04's `chromium-browser` is a stub for
+ * the chromium snap that exits 1, so `chromium` is refused there.
  *
  * A zsh plugin's `.zsh` file lands where its family puts it, which differs:
  *
@@ -68,9 +74,19 @@ export interface FamilyInstall {
   readonly npmGlobal?: readonly string[];
   /** Shell lines after the install: a link from the name a blueprint asked for to the binary. */
   readonly postInstall?: readonly string[];
+  readonly unsupported?: never;
 }
 
-export type CatalogEntry = Readonly<Record<CatalogOsFamily, FamilyInstall>>;
+/** A family whose package for the id installs but cannot run: why, for the refusal. */
+export interface FamilyUnsupported {
+  readonly unsupported: string;
+  readonly packages?: never;
+  readonly release?: never;
+  readonly npmGlobal?: never;
+  readonly postInstall?: never;
+}
+
+export type CatalogEntry = Readonly<Record<CatalogOsFamily, FamilyInstall | FamilyUnsupported>>;
 
 const everywhere = (name: string, nix = name): CatalogEntry => ({
   fedora: { packages: [name] },
@@ -225,6 +241,18 @@ export const WORKSPACE_PACKAGE_CATALOG: Readonly<Record<string, CatalogEntry>> =
     ubuntu: { packages: ["curl", "ca-certificates"] },
     nix: { packages: ["chezmoi"] },
   },
+  chromium: {
+    fedora: {
+      packages: ["chromium"],
+      postInstall: ["ln -sf /usr/bin/chromium-browser /usr/local/bin/chromium"],
+    },
+    arch: { packages: ["chromium"] },
+    ubuntu: {
+      unsupported:
+        "Ubuntu 24.04's chromium-browser package is a stub for the chromium snap, and a workspace image runs no snapd. Fedora, Arch and nix install a working chromium.",
+    },
+    nix: { packages: ["chromium"] },
+  },
   "ca-certificates": everywhere("ca-certificates", "cacert"),
   curl: everywhere("curl"),
   direnv: everywhere("direnv"),
@@ -233,6 +261,12 @@ export const WORKSPACE_PACKAGE_CATALOG: Readonly<Record<string, CatalogEntry>> =
   // Debian's and Fedora's name for it, kept as an id since blueprints have used it.
   "fd-find": fd,
   fish: everywhere("fish"),
+  "fonts-dejavu": {
+    fedora: { packages: ["dejavu-sans-fonts", "dejavu-serif-fonts", "dejavu-sans-mono-fonts"] },
+    arch: { packages: ["ttf-dejavu"] },
+    ubuntu: { packages: ["fonts-dejavu-core"] },
+    nix: { packages: ["dejavu_fonts"] },
+  },
   fzf: everywhere("fzf"),
   git: everywhere("git", "gitMinimal"),
   htop: everywhere("htop"),
@@ -263,6 +297,7 @@ export const WORKSPACE_PACKAGE_CATALOG: Readonly<Record<string, CatalogEntry>> =
     ubuntu: { packages: ["nodejs", "npm"] },
     nix: { packages: ["nodejs"] },
   },
+  openbox: everywhere("openbox"),
   pnpm: {
     fedora: { packages: ["nodejs", "npm", "pnpm"] },
     arch: { packages: ["nodejs", "npm", "pnpm"] },
@@ -284,6 +319,13 @@ export const WORKSPACE_PACKAGE_CATALOG: Readonly<Record<string, CatalogEntry>> =
   },
   stow: everywhere("stow"),
   tar: everywhere("tar", "gnutar"),
+  // `Xvnc` and `vncpasswd`, which Ubuntu splits across two packages.
+  tigervnc: {
+    fedora: { packages: ["tigervnc-server-minimal"] },
+    arch: { packages: ["tigervnc"] },
+    ubuntu: { packages: ["tigervnc-standalone-server", "tigervnc-tools"] },
+    nix: { packages: ["tigervnc"] },
+  },
   tmux: everywhere("tmux"),
   unzip: everywhere("unzip"),
   uv: {
@@ -291,6 +333,18 @@ export const WORKSPACE_PACKAGE_CATALOG: Readonly<Record<string, CatalogEntry>> =
     arch: { packages: ["uv"] },
     ubuntu: { release: uv },
     nix: { packages: ["uv"] },
+  },
+  xauth: {
+    fedora: { packages: ["xorg-x11-xauth"] },
+    arch: { packages: ["xorg-xauth"] },
+    ubuntu: { packages: ["xauth"] },
+    nix: { packages: ["xauth"] },
+  },
+  xdpyinfo: {
+    fedora: { packages: ["xdpyinfo"] },
+    arch: { packages: ["xorg-xdpyinfo"] },
+    ubuntu: { packages: ["x11-utils"] },
+    nix: { packages: ["xdpyinfo"] },
   },
   zsh: everywhere("zsh"),
   "zsh-autosuggestions": everywhere("zsh-autosuggestions"),
@@ -319,6 +373,46 @@ export class UnknownWorkspacePackageError extends Error {
     );
     this.name = "UnknownWorkspacePackageError";
     this.unknown = unknown;
+  }
+}
+
+/** How the family installs the id: none when the catalog does not know it or refuses it there. */
+export const familyInstall = (id: string, family: CatalogOsFamily): FamilyInstall | undefined => {
+  const install = WORKSPACE_PACKAGE_CATALOG[id]?.[family];
+  return install === undefined || install.unsupported !== undefined ? undefined : install;
+};
+
+export interface UnsupportedWorkspacePackage {
+  readonly id: string;
+  readonly reason: string;
+}
+
+/** The ids a request names that the family cannot run, with why, in request order, once each. */
+export const unsupportedWorkspacePackages = (
+  family: CatalogOsFamily,
+  ids: Iterable<string>,
+): readonly UnsupportedWorkspacePackage[] =>
+  [...new Set(ids)].flatMap((id) => {
+    const install = WORKSPACE_PACKAGE_CATALOG[id]?.[family];
+    return install !== undefined && install.unsupported !== undefined
+      ? [{ id, reason: install.unsupported }]
+      : [];
+  });
+
+export class UnsupportedWorkspacePackageError extends Error {
+  readonly family: CatalogOsFamily;
+  readonly unsupported: readonly UnsupportedWorkspacePackage[];
+  constructor(family: CatalogOsFamily, unsupported: readonly UnsupportedWorkspacePackage[]) {
+    super(
+      unsupported
+        .map(
+          ({ id, reason }) => `Workspace package '${id}' is not available on ${family}: ${reason}`,
+        )
+        .join(" "),
+    );
+    this.name = "UnsupportedWorkspacePackageError";
+    this.family = family;
+    this.unsupported = unsupported;
   }
 }
 

@@ -2,7 +2,11 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 import { vi } from "vitest";
 
-import { knownWorkspacePackageIds, WORKSPACE_PACKAGE_CATALOG } from "./buildkit/package-catalog.js";
+import {
+  familyInstall,
+  knownWorkspacePackageIds,
+  unsupportedWorkspacePackages,
+} from "./buildkit/package-catalog.js";
 import {
   createPackageStandardizer,
   packageResolutionSchema,
@@ -294,13 +298,13 @@ describe("createPackageStandardizer.resolvePackage", () => {
         expect(resolution.osSupport.arch.supported, query).toBe(true);
         // On aarch64 the image installs it from Arch Linux ARM's repositories, or from a release
         // with an aarch64 archive (bun and mise: Arch Linux ARM packages neither).
-        const install = WORKSPACE_PACKAGE_CATALOG[query]?.arch;
+        const install = familyInstall(query, "arch");
         expect(
           (install?.packages?.length ?? 0) > 0 || install?.release?.archives.aarch64 !== undefined,
           query,
         ).toBe(true);
       }
-      expect(WORKSPACE_PACKAGE_CATALOG.bun?.arch.release?.archives.aarch64.url).toContain(
+      expect(familyInstall("bun", "arch")?.release?.archives.aarch64.url).toContain(
         "bun-linux-aarch64.zip",
       );
       expect(repologyClient.getProject).not.toHaveBeenCalled();
@@ -309,7 +313,7 @@ describe("createPackageStandardizer.resolvePackage", () => {
   });
 
   it.effect(
-    "resolves every catalog id as supported on every family the image installs it on",
+    "resolves every catalog id as supported on every family the image installs it on, and unsupported where it is refused",
     () => {
       const standardizer = createPackageStandardizer({
         repologyClient: fakeRepologyClient(),
@@ -321,7 +325,10 @@ describe("createPackageStandardizer.resolvePackage", () => {
           for (const targetOs of ["arch", "fedora", "nix", "ubuntu"] as const) {
             const resolution = yield* standardizer.resolvePackage({ query, targetOs });
             expect(resolution.canonicalId, `${query} on ${targetOs}`).not.toBeNull();
-            expect(resolution.osSupport[targetOs].supported, `${query} on ${targetOs}`).toBe(true);
+            const refused = unsupportedWorkspacePackages(targetOs, [query]).length > 0;
+            expect(resolution.osSupport[targetOs].supported, `${query} on ${targetOs}`).toBe(
+              !refused,
+            );
           }
         }
       });
