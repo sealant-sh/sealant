@@ -30,6 +30,8 @@ import type {
   GetSessionOutputQuery,
   InferenceRespondRequest,
   ListResourceDomainMembersQuery,
+  ResourceDomainBudgetLimits,
+  SetResourceDomainBudgetRequest,
   ListRunsQuery,
   ListSessionsQuery,
   ListWorkspacesQuery,
@@ -382,9 +384,11 @@ export const archiveSshKeyOp = (sshKeyId: string, ownerUserId: string) =>
 
 // ---- resource domains (the SDK's scopes) ----
 
-export const ensureResourceDomainOp = (key: string) =>
+export const ensureResourceDomainOp = (key: string, budget?: ResourceDomainBudgetLimits) =>
   Effect.flatMap(SealantApiClient, (client) =>
-    client.resourceDomains.ensureResourceDomain({ payload: { key } }),
+    client.resourceDomains.ensureResourceDomain({
+      payload: budget === undefined ? { key } : { key, budget },
+    }),
   );
 
 export const getResourceDomainOp = (resourceDomainId: string) =>
@@ -427,4 +431,17 @@ export const listResourceDomainMembersOp = (
 ) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.resourceDomains.listResourceDomainMembers({ params: { resourceDomainId }, query }),
+  );
+
+export const getResourceDomainBudgetOp = (resourceDomainId: string) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.resourceDomains.getResourceDomainBudget({ params: { resourceDomainId } }),
+  );
+
+export const setResourceDomainBudgetOp = (
+  resourceDomainId: string,
+  payload: SetResourceDomainBudgetRequest,
+) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.resourceDomains.setResourceDomainBudget({ params: { resourceDomainId }, payload }),
   );

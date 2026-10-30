@@ -71,7 +71,7 @@ describe.skipIf(DATABASE_URL === undefined)("resource domains (Postgres)", () =>
       ),
     );
     expect(new Set(results.map(({ domain }) => domain.id)).size).toBe(1);
-    expect(results.filter(({ created }) => created)).toHaveLength(1);
+    expect(results.filter((result) => result.kind === "ensured" && result.created)).toHaveLength(1);
     const [first] = results;
     expect(first?.domain.id.startsWith(RESOURCE_DOMAIN_ID_PREFIX)).toBe(true);
     expect(

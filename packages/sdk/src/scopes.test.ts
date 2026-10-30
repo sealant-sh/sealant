@@ -103,6 +103,49 @@ describe("scopes", () => {
     await sealant.close();
   });
 
+  it("read and set a scope's budget, sending only the limits and the revision", async () => {
+    const dimension = { limit: 10, used: 8, reserved: 0, warning: "80-percent" };
+    const budget = {
+      revision: 2,
+      cpuMillicores: dimension,
+      memoryBytes: dimension,
+      storageBytes: { ...dimension, archived: 3, protection: 1 },
+    };
+    stub((path) => ({
+      status: 200,
+      body: path.endsWith("/budget")
+        ? budget
+        : {
+            resourceDomainId: SCOPE,
+            key: "mend:i:project:p",
+            createdAt: CREATED_AT,
+            created: false,
+          },
+    }));
+    const sealant = new Sealant({ baseUrl: "http://stub.invalid", ownerUserId: "usr_owner" });
+    const limits = { cpuMillicores: 10, memoryBytes: 10, storageBytes: 10 };
+    await sealant.scopes.ensure({ key: "mend:i:project:p", budget: limits });
+    const project = sealant.scopes.actAs(SCOPE);
+    expect(await project.budget.get()).toEqual(budget);
+    const change = { ...limits, revision: 2, ownerUserId: "usr_owner" };
+    expect(await project.budget.set(change)).toEqual(budget);
+
+    expect(seen).toEqual([
+      {
+        method: "POST",
+        path: "/v1/resource-domains",
+        body: { key: "mend:i:project:p", budget: limits },
+      },
+      { method: "GET", path: `/v1/resource-domains/${SCOPE}/budget`, body: undefined },
+      {
+        method: "PUT",
+        path: `/v1/resource-domains/${SCOPE}/budget`,
+        body: { ...limits, revision: 2 },
+      },
+    ]);
+    await sealant.close();
+  });
+
   it("reject a stale member version as the control plane's conflict", async () => {
     stub(() => ({
       status: 409,

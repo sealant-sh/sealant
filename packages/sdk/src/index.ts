@@ -29,6 +29,10 @@ export {
 export type * from "./types.js";
 export type {
   EnsuredScope,
+  ScopeBudget,
+  ScopeBudgetDimension,
+  ScopeBudgetLimits,
+  ScopeBudgets,
   ScopeClient,
   ScopeInfo,
   ScopeMember,

@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@effect/sql-pg": "catalog:",
+    "@sealant/api-contracts": "workspace:*",
     "@sealant/validators": "workspace:*",
     "drizzle-orm": "catalog:",
     "effect": "catalog:",

@@ -34,14 +34,14 @@ const repo = Layer.succeed(ResourceDomainRepo, {
     Effect.sync(() => {
       calls.push(`ensure ${key}`);
       const existing = domains.get(key);
-      if (existing !== undefined) return { domain: existing, created: false };
+      if (existing !== undefined) return { kind: "ensured", domain: existing, created: false };
       const domain = {
         id: `rdm:00000000-0000-4000-8000-00000000000${domains.size}`,
         key,
         createdAt: new Date(0),
       };
       domains.set(key, domain);
-      return { domain, created: true };
+      return { kind: "ensured", domain, created: true };
     }),
   get: (id) =>
     Effect.sync(() => {
@@ -73,6 +73,9 @@ const repo = Layer.succeed(ResourceDomainRepo, {
       calls.push(`list ${resourceDomainId} after ${after ?? "start"} limit ${limit}`);
       return { members: [standing], next: standing.userId };
     }),
+  // Budgets run against Postgres (`resource-domain-budgets.db.test.ts`, `resource-domains.sdk.test.ts`).
+  getBudget: () => Effect.die("unused"),
+  setBudget: () => Effect.die("unused"),
 });
 
 const serve = (principal: RequestPrincipal) =>
@@ -176,6 +179,28 @@ describe("resource domains", () => {
     });
     expect(calls).toEqual([]);
   });
+
+  it.each([
+    ["into a budget change", "PUT", `/${"rdm:00000000-0000-4000-8000-000000000000"}/budget`, {}],
+    ["into ensure's budget", "POST", "/", { key: KEY }],
+  ] as const)(
+    "refuses an owner smuggled %s, instead of dropping it",
+    async (_what, method, path, base) => {
+      const limits = { cpuMillicores: 1, memoryBytes: 1, storageBytes: 1 };
+      const body =
+        method === "PUT"
+          ? { ...limits, revision: 1, ownerUserId: "usr_alice" }
+          : { ...base, budget: { ...limits, ownerUserId: "usr_alice" } };
+      expect(await send(service, method, path, body)).toEqual({
+        status: 400,
+        body: {
+          _tag: "RequestRefusedError",
+          message: expect.stringMatching(/\[…\] is not allowed$/),
+        },
+      });
+      expect(calls).toEqual([]);
+    },
+  );
 
   it("serves a deployment run without authentication, as every credential route does", async () => {
     const ensured = await send(open, "POST", "/", { key: KEY });
