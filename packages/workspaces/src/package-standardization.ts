@@ -11,6 +11,7 @@ import { Effect, Schema } from "effect";
 
 import {
   CATALOG_OS_FAMILIES,
+  familyInstall,
   WORKSPACE_PACKAGE_CATALOG,
   type FamilyInstall,
 } from "./buildkit/package-catalog.js";
@@ -79,19 +80,20 @@ const installName = (id: string, install: FamilyInstall): string | undefined =>
 
 /**
  * What a package id resolves to: the build's own catalog (`WORKSPACE_PACKAGE_CATALOG`), so an id
- * resolves as supported on a family exactly when an image of that family installs it. A release
- * install carries an archive for each architecture, and a family's repository packages are
- * installed on both (Arch Linux ARM on arm64; `arch-native.e2e.ts` builds every id there), so the
- * answer holds for the platform the server builds on, amd64 or arm64. `docker` is the platform's
- * own service, never an OS package.
+ * resolves as supported on a family exactly when an image of that family installs it, and as
+ * unsupported on a family the catalog refuses it on. A release install carries an archive for each
+ * architecture, and a family's repository packages are installed on both (Arch Linux ARM on arm64;
+ * `arch-native.e2e.ts` builds every id there), so the answer holds for the platform the server
+ * builds on, amd64 or arm64. `docker` is the platform's own service, never an OS package.
  */
 const catalogEntries: readonly CatalogEntry[] = [
-  ...Object.entries(WORKSPACE_PACKAGE_CATALOG)
-    .filter(([id]) => !Object.values(catalogAliases).some((aliases) => aliases.includes(id)))
-    .map(([id, families]): CatalogEntry => {
+  ...Object.keys(WORKSPACE_PACKAGE_CATALOG)
+    .filter((id) => !Object.values(catalogAliases).some((aliases) => aliases.includes(id)))
+    .map((id): CatalogEntry => {
       const targets: Partial<Record<PackageTargetOs, CatalogOsMapping>> = {};
       for (const family of CATALOG_OS_FAMILIES) {
-        const packageName = installName(id, families[family]);
+        const install = familyInstall(id, family);
+        const packageName = install === undefined ? undefined : installName(id, install);
         if (packageName !== undefined) targets[family] = { packageName };
       }
       return { id, aliases: [id, ...(catalogAliases[id] ?? [])], targets };

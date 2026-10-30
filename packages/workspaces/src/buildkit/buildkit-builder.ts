@@ -41,11 +41,13 @@ import {
   type ImageBuildProgress,
 } from "./build-progress.js";
 import {
+  familyInstall,
   releaseInstallPackages,
   UnknownWorkspacePackageError,
-  WORKSPACE_PACKAGE_CATALOG,
+  UnsupportedWorkspacePackageError,
   renderReleaseInstall,
   unknownWorkspacePackageIds,
+  unsupportedWorkspacePackages,
 } from "./package-catalog.js";
 import {
   GIT_SAFE_DIRECTORY_ANY,
@@ -749,16 +751,16 @@ const resolvePackages = (
     }
   }
 
-  const unknown = unknownWorkspacePackageIds(requests.map((request) => request.id));
+  const ids = requests.map((request) => request.id);
+  const unknown = unknownWorkspacePackageIds(ids);
   if (unknown.length > 0) throw new UnknownWorkspacePackageError(unknown);
-  return requests.map((request) => {
-    const install = WORKSPACE_PACKAGE_CATALOG[request.id]?.[osFamily];
-    return {
-      requestId: request.id,
-      ...(request.version === undefined ? {} : { requestedVersion: request.version }),
-      installPackages: [...(install?.packages ?? [])],
-    };
-  });
+  const unsupported = unsupportedWorkspacePackages(osFamily, ids);
+  if (unsupported.length > 0) throw new UnsupportedWorkspacePackageError(osFamily, unsupported);
+  return requests.map((request) => ({
+    requestId: request.id,
+    ...(request.version === undefined ? {} : { requestedVersion: request.version }),
+    installPackages: [...(familyInstall(request.id, osFamily)?.packages ?? [])],
+  }));
 };
 
 /**
@@ -921,7 +923,7 @@ const catalogExtras = (plan: ResolvedImagePlan) => {
   for (const pkg of plan.packages) {
     if (seen.has(pkg.requestId)) continue;
     seen.add(pkg.requestId);
-    const install = WORKSPACE_PACKAGE_CATALOG[pkg.requestId]?.[family];
+    const install = familyInstall(pkg.requestId, family);
     if (install?.release !== undefined) releases.push(install.release);
     if (install?.npmGlobal !== undefined) npmGlobal.push(...install.npmGlobal);
     if (install?.postInstall !== undefined) postInstall.push(...install.postInstall);

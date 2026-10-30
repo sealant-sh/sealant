@@ -126,6 +126,8 @@ import {
   runtimeRestartsRetainedExecutors,
   UnknownWorkspacePackageError,
   unknownWorkspacePackageIds,
+  UnsupportedWorkspacePackageError,
+  unsupportedWorkspacePackages,
   SealantRuntime,
   type CaptureFlushRequest,
   type SealantError,
@@ -1712,6 +1714,20 @@ export const createWorkspace = (input: {
       return yield* new WorkspaceBadRequestError({
         message: new UnknownWorkspacePackageError(unknownPackages).message,
       });
+    }
+    // A package the family installs but cannot run (Ubuntu's chromium snap stub), refused the
+    // same way, with the catalog's reason.
+    const osFamily = parsedSpec.target.os.family;
+    if (osFamily !== "custom" && osFamily !== "auto") {
+      const unsupportedPackages = unsupportedWorkspacePackages(
+        osFamily,
+        parseRequestedPackageIds(parsedSpec),
+      );
+      if (unsupportedPackages.length > 0) {
+        return yield* new WorkspaceBadRequestError({
+          message: new UnsupportedWorkspacePackageError(osFamily, unsupportedPackages).message,
+        });
+      }
     }
 
     const envReferencesRefusal = runtimeEnvReferencesRefusal(
