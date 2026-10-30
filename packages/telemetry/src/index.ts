@@ -10,4 +10,16 @@ export * from "./run-telemetry.js";
 export * from "./ingester.js";
 export * from "./redelivery.js";
 export * from "./retention.js";
-export * from "./exec-run.js";
+export {
+  captureRun,
+  type ClaimedRun,
+  DAEMON_CONNECT_RETRY,
+  ExecLaunchFailedError,
+  executeExecRun,
+  ProcessUserUnavailableError,
+  produceExecRun,
+  produceHarnessRun,
+  recordConflictMessage,
+  recordProcess,
+  settleClaimedRun,
+} from "./exec-run.js";
