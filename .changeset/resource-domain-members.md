@@ -13,7 +13,7 @@ undoes a newer revoke. Repeating the decision that wrote the current version ans
 person who does not exist gets `404`. The routes take a service key, as ensure and get do, and
 `userId` is a `PersonId`.
 
-The SDK reaches these routes as `sealant.scopes`: `ensure({ key })`, `get(id)`, `members.grant`,
-`members.revoke` and `members.list`. `scopes.actAs(id)` returns a `ScopeClient` for one scope. It
-has no workspace, run, inference, credential, SSH key, access token or user method, so calling one
-does not compile.
+The SDK reaches these routes as `sealant.scopes`: `ensure({ key })`, `get(id)` and `actAs(id)`.
+`actAs(id)` returns a `ScopeClient` for one scope, and its `members` are the only way to a scope's
+members. It has no workspace, run, inference, credential, SSH key, access token or user method, so
+calling one does not compile.

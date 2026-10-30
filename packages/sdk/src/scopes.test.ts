@@ -69,7 +69,7 @@ describe("scopes", () => {
     const project = sealant.scopes.actAs(SCOPE);
     expect(await project.get()).toEqual(scope);
     expect(await project.members.grant("usr_alice", { expectedVersion: 0 })).toEqual(member);
-    await sealant.scopes.members.revoke(SCOPE, "usr_alice", { expectedVersion: 1 });
+    await project.members.revoke("usr_alice", { expectedVersion: 1 });
     expect(await project.members.list()).toEqual([member]);
 
     expect(seen).toEqual([
@@ -96,12 +96,19 @@ describe("scopes", () => {
       body: { _tag: "ResourceDomainMemberVersionConflictError", message: "moved" },
     }));
     const sealant = new Sealant({ baseUrl: "http://stub.invalid" });
-    const refused = sealant.scopes.members.grant(SCOPE, "usr_alice", { expectedVersion: 3 });
+    const refused = sealant.scopes.actAs(SCOPE).members.grant("usr_alice", { expectedVersion: 3 });
     await expect(refused).rejects.toBeInstanceOf(SealantApiError);
     await expect(refused).rejects.toMatchObject({
       code: "ResourceDomainMemberVersionConflictError",
     });
     await sealant.close();
+  });
+
+  it("reach members only through the client acting as the scope", () => {
+    const sealant = new Sealant({ baseUrl: "http://stub.invalid" });
+    expect(Object.keys(sealant.scopes).toSorted()).toEqual(["actAs", "ensure", "get"]);
+    // @ts-expect-error Members are reached through actAs(id).members.
+    expect(sealant.scopes.members).toBeUndefined();
   });
 
   it("act as a scope with no workspace, run, inference or credential method", () => {

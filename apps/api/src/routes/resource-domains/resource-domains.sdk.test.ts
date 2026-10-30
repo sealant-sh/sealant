@@ -66,7 +66,7 @@ describe.skipIf(DATABASE_URL === undefined)("sealant.scopes against the API", ()
     const granted = await project.members.grant(alice, { expectedVersion: 0 });
     expect(granted).toMatchObject({ userId: alice, state: "member", version: 1 });
     expect(await project.members.grant(alice, { expectedVersion: 0 })).toEqual(granted);
-    await sealant.scopes.members.grant(id, bob, { expectedVersion: 0 });
+    await project.members.grant(bob, { expectedVersion: 0 });
     const revoked = await project.members.revoke(bob, { expectedVersion: 1 });
     expect(revoked).toMatchObject({ userId: bob, state: "revoked", version: 2 });
 
@@ -74,7 +74,7 @@ describe.skipIf(DATABASE_URL === undefined)("sealant.scopes against the API", ()
     await expect(late).rejects.toBeInstanceOf(SealantApiError);
     await expect(late).rejects.toMatchObject({ code: "ResourceDomainMemberVersionConflictError" });
 
-    expect(await sealant.scopes.members.list(id)).toEqual(
+    expect(await project.members.list()).toEqual(
       [granted, revoked].toSorted((a, b) => a.userId.localeCompare(b.userId)),
     );
   });
