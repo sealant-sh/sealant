@@ -5,7 +5,8 @@
   "description": "Append-only, event-sourced run-telemetry log (system of record) + pluggable storage seam for sealantd EventEnvelope ingestion",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./testing": "./src/exec-run.fixture.ts"
   },
   "scripts": {
     "lint": "oxlint .",
