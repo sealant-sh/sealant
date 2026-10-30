@@ -3,6 +3,7 @@ import { request as httpRequest } from "node:http";
 import { connect, type Socket } from "node:net";
 import { Duplex } from "node:stream";
 
+import { NOT_A_PERSON, RESOURCE_DOMAIN_ID_PREFIX } from "@sealant/api-contracts";
 import {
   AccessTokenRepo,
   WorkspaceRepo,
@@ -36,6 +37,7 @@ import {
 } from "./forward-v2.fixture.js";
 
 const SERVICE_KEY = FORWARD_SERVICE_KEY;
+const DOMAIN = `${RESOURCE_DOMAIN_ID_PREFIX}6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5b`;
 
 const OWNER = "usr_forward";
 const TOKEN_WITHOUT_EXEC = "slt_token_without_workspace_exec";
@@ -528,6 +530,19 @@ describe("/forward/v2", () => {
     expect(frame).toMatchObject({ t: "refused", reason: "owner-required", status: 400 });
   });
 
+  it("refuses not-a-person (400) when a service key asserts a resource domain as owner", async () => {
+    const socket = new WebSocket(
+      forwardV2Url("wks_ready", `port=${ECHO_PORT}&token=${SERVICE_KEY}&ownerUserId=${DOMAIN}`),
+      "sealant.forward.v2",
+    );
+    const frame = await new Promise<unknown>((resolve) =>
+      socket.addEventListener("message", (event) => resolve(JSON.parse(String(event.data))), {
+        once: true,
+      }),
+    );
+    expect(frame).toMatchObject({ t: "refused", reason: "not-a-person", status: 400 });
+  });
+
   it("refuses budget-exceeded (429) once the credential's request budget is spent", async () => {
     const tight = await serve({ release: "current", requestsPerMinute: 1 });
     try {
@@ -956,6 +971,11 @@ describe("the legacy /forward route", () => {
       path: `/v1/workspaces/wks_ready/forward?port=7000&token=${SERVICE_KEY}`,
       status: 400,
       body: "ownerUserId is required when authenticating as a service principal.",
+    },
+    {
+      path: `/v1/workspaces/wks_ready/forward?port=7000&token=${SERVICE_KEY}&ownerUserId=${DOMAIN}`,
+      status: 400,
+      body: `ownerUserId ${NOT_A_PERSON}`,
     },
     {
       path: `/v1/workspaces/wks_ready/forward?port=7000&token=${TOKEN_WITHOUT_EXEC}`,

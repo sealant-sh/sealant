@@ -1,3 +1,4 @@
+import { isResourceDomainId } from "@sealant/api-contracts";
 import {
   chatgptLoginEntry,
   CLAUDE_CREDENTIALS_JSON_PATH,
@@ -218,6 +219,11 @@ const pushIntoHome = (
         const keep = { kind: "keep" as const };
         if (held === undefined || held.releasing)
           return { result: "released" as const, outcome: keep };
+        // A resource domain never holds a login (the database refuses such a row): a home
+        // recorded for one is left as no longer held, never written and never tried again.
+        if (isResourceDomainId(held.onBehalfOfUserId)) {
+          return { result: "released" as const, outcome: keep };
+        }
         const refused: HomeCredentialProvider[] = [];
         for (let round = 1; ; round += 1) {
           const ready = settleInDoubt((yield* placements.state(key)).placements).filter(

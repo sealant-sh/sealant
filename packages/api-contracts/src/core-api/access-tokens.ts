@@ -10,6 +10,8 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
+import { PersonId } from "./person-id.js";
+
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
 export const accessTokenScopeSchema = Schema.Literals([
@@ -20,7 +22,7 @@ export const accessTokenScopeSchema = Schema.Literals([
 export type AccessTokenScopeWire = typeof accessTokenScopeSchema.Type;
 
 export const createAccessTokenRequestSchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   scopes: Schema.Array(accessTokenScopeSchema).check(Schema.isNonEmpty()),
   name: Schema.optional(NonEmptyString),
   /** When set, the token is valid only for this workspace. */
@@ -32,7 +34,7 @@ export type CreateAccessTokenRequest = typeof createAccessTokenRequestSchema.Typ
 
 export const accessTokenSchema = Schema.Struct({
   tokenId: NonEmptyString,
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   name: Schema.optional(NonEmptyString),
   scopes: Schema.Array(accessTokenScopeSchema),
   workspaceId: Schema.optional(NonEmptyString),
@@ -50,7 +52,7 @@ export const createAccessTokenResponseSchema = Schema.Struct({
 export type CreateAccessTokenResponse = typeof createAccessTokenResponseSchema.Type;
 
 export const listAccessTokensQuerySchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
 });
 export type ListAccessTokensQuery = typeof listAccessTokensQuerySchema.Type;
 
@@ -97,7 +99,7 @@ export const AccessTokensGroup = HttpApiGroup.make("accessTokens")
   .add(
     HttpApiEndpoint.post("revokeAccessToken", "/:tokenId/revoke", {
       params: tokenIdParams,
-      payload: Schema.Struct({ ownerUserId: NonEmptyString }),
+      payload: Schema.Struct({ ownerUserId: PersonId }),
       success: accessTokenSchema,
       error: [AccessTokenBadRequestError, AccessTokenNotFoundError, AccessTokenInternalServerError],
     }),

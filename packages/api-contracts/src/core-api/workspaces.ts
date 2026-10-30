@@ -3,6 +3,7 @@ import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/ht
 
 import { BudgetExceededError } from "./budgets.js";
 import { connectedAccountProviderSchema } from "./connected-accounts.js";
+import { PersonId } from "./person-id.js";
 import { runCommandSchema, runSchema } from "./runs.js";
 import { workspaceProcessUserSchema } from "./sessions.js";
 
@@ -155,7 +156,7 @@ export const createWorkspaceCredentialsSchema = Schema.Struct({
 export type CreateWorkspaceCredentials = typeof createWorkspaceCredentialsSchema.Type;
 
 export const createWorkspaceRequestSchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   registryId: NonEmptyString,
   repository: NonEmptyString,
   tag: NonEmptyString,
@@ -227,7 +228,7 @@ export const execRunHarnessId = "exec";
  * "can I trust these exit codes", not "did the checks pass".
  */
 export const execWorkspaceRequestSchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   /** Commands execute sequentially in the workspace, each recorded like any other process. */
   commands: Schema.Array(runCommandSchema).check(Schema.isNonEmpty(), Schema.isMaxLength(32)),
   /**
@@ -309,9 +310,9 @@ export const applyWorkspaceDotfilesArchiveSchema = Schema.Struct({
  */
 export const applyWorkspaceDotfilesRequestSchema = Schema.Struct({
   /** The workspace's owner (owner scope; uniform 404 otherwise). */
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   /** The Sealant user whose dotfiles these are: recorded on the run (`metadata.dotfiles`). */
-  onBehalfOfUserId: NonEmptyString,
+  onBehalfOfUserId: PersonId,
   /** The Linux user to apply as (a login name or a uid); never root. */
   user: workspaceProcessUserSchema,
   /** The user's passwd home: absolute, normalised, never under `/workspace`. */
@@ -348,7 +349,7 @@ export type WorkspaceDotfilesConflictCode = (typeof workspaceDotfilesConflictCod
  * unbinds. The reply is the workspace's full set of live bindings, which every relaunch re-applies.
  */
 export const bindWorkspaceRequestSchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   mountPath: Schema.optional(NonEmptyString),
   subpath: Schema.String,
 });
@@ -380,7 +381,7 @@ export type WorkspaceCaptureFlushKind = typeof workspaceCaptureFlushKindSchema.T
  * `kind: "suspend"` (the default) is a checkpoint: the executor keeps running.
  */
 export const flushWorkspaceCaptureRequestSchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   /** `final` or `suspend` (the default). */
   kind: Schema.optional(workspaceCaptureFlushKindSchema),
   /** How long the daemon may take before it answers, in milliseconds. Absent: its own default. */
@@ -398,7 +399,7 @@ export type FlushWorkspaceCaptureRequest = typeof flushWorkspaceCaptureRequestSc
  * what a drain polls to show `saving · N left` and to know when the executor may go away.
  */
 export const getWorkspaceCaptureStatusQuerySchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
 });
 export type GetWorkspaceCaptureStatusQuery = typeof getWorkspaceCaptureStatusQuerySchema.Type;
 
@@ -565,7 +566,7 @@ export type WorkspaceCaptureStatus = typeof workspaceCaptureStatusSchema.Type;
  * answer named the worktree and epoch already in force.
  */
 export const replanWorkspaceCaptureRequestSchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   /**
    * The owner map the claim needs (a capture source's `ownerMap`), or `null` for none. The daemon
    * reads its map only at boot, so a re-plan restores under the map the executor was launched
@@ -602,7 +603,7 @@ export type WorkspaceCaptureReplanned = typeof workspaceCaptureReplannedSchema.T
 export const renameWorkspaceRequestSchema = Schema.Struct({
   name: NonEmptyString,
   /** The workspace's owner. Required by the control plane: a rename that names none finds nothing. */
-  ownerUserId: Schema.optional(NonEmptyString),
+  ownerUserId: Schema.optional(PersonId),
 });
 export type RenameWorkspaceRequest = typeof renameWorkspaceRequestSchema.Type;
 
@@ -612,14 +613,14 @@ export type RenameWorkspaceRequest = typeof renameWorkspaceRequestSchema.Type;
  */
 export const clearWorkspaceSshUserQuerySchema = Schema.Struct({
   /** The workspace's owner. Required by the control plane: a request that names none finds nothing. */
-  ownerUserId: Schema.optional(NonEmptyString),
+  ownerUserId: Schema.optional(PersonId),
 });
 export type ClearWorkspaceSshUserQuery = typeof clearWorkspaceSshUserQuerySchema.Type;
 
 // Lifecycle actions are owner-scoped like execWorkspace: ownerUserId rides in the payload and a
 // mismatch yields a uniform 404 (existence is not leaked).
 export const stopWorkspaceRequestSchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   /**
    * End the workspace WITHOUT saving its unsaved captures. A capture-sourced workspace is
    * otherwise drained before it stops, and kept running for as long as its work cannot be
@@ -697,7 +698,7 @@ export type StopWorkspaceResponse = typeof stopWorkspaceResponseSchema.Type;
 
 /** Owner-scoped: ask the control plane to recover the workspace's retained executor now. */
 export const recoverWorkspaceRequestSchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
 });
 export type RecoverWorkspaceRequest = typeof recoverWorkspaceRequestSchema.Type;
 
@@ -715,7 +716,7 @@ export const recoverWorkspaceResponseSchema = Schema.Struct({
 export type RecoverWorkspaceResponse = typeof recoverWorkspaceResponseSchema.Type;
 
 export const restartWorkspaceRequestSchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
 });
 export type RestartWorkspaceRequest = typeof restartWorkspaceRequestSchema.Type;
 
@@ -733,7 +734,7 @@ export type RestartWorkspaceResponse = typeof restartWorkspaceResponseSchema.Typ
  * image published for that plan answers. Nothing is created, built or reserved.
  */
 export const inspectWorkspaceImageRequestSchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   registryId: NonEmptyString,
   /** The spec a create would send (`CreateWorkspaceRequest.spec`). */
   spec: Schema.Unknown,
@@ -798,9 +799,9 @@ export const workspaceCredentialHomeAccountProvider: Readonly<
  */
 export const putWorkspaceCredentialsRequestSchema = Schema.Struct({
   /** The workspace's owner (owner scope; uniform 404 otherwise). */
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   /** The person whose logins the home holds: every named account must be theirs. */
-  onBehalfOfUserId: NonEmptyString,
+  onBehalfOfUserId: PersonId,
   /**
    * Absolute path of the home inside the executor: a person's home, a conversation home, or
    * `/root`. Normalised, never under `/workspace`, and reached without a symbolic link. It must
@@ -888,7 +889,7 @@ export type WorkspaceHomeAccount = typeof workspaceHomeAccountSchema.Type;
 export const workspaceCredentialHomeSchema = Schema.Struct({
   home: NonEmptyString,
   /** The one person whose logins the home holds. */
-  onBehalfOfUserId: NonEmptyString,
+  onBehalfOfUserId: PersonId,
   /** The logins written there, one receipt each. Absent from a server without placements. */
   placements: Schema.optional(Schema.Array(workspaceCredentialPlacementReceiptSchema)),
   /**
@@ -935,7 +936,7 @@ export type PutWorkspaceCredentialsResponse = typeof putWorkspaceCredentialsResp
 
 /** Remove every login of one home that is neither live nor the ready one of the person's default. */
 export const pruneWorkspaceCredentialsRequestSchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   home: NonEmptyString,
   live: Schema.Array(NonEmptyString),
 });
@@ -950,7 +951,7 @@ export type PruneWorkspaceCredentialsResponse = typeof pruneWorkspaceCredentials
 
 /** Release one home: its login files are removed and its record deleted. */
 export const releaseWorkspaceCredentialsQuerySchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   home: NonEmptyString,
 });
 export type ReleaseWorkspaceCredentialsQuery = typeof releaseWorkspaceCredentialsQuerySchema.Type;
@@ -966,7 +967,7 @@ export type ReleaseWorkspaceCredentialsResponse =
   typeof releaseWorkspaceCredentialsResponseSchema.Type;
 
 export const listWorkspaceCredentialsQuerySchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
 });
 export type ListWorkspaceCredentialsQuery = typeof listWorkspaceCredentialsQuerySchema.Type;
 
@@ -1001,7 +1002,7 @@ export const workspaceCredentialsConflictCodes = [
 export type WorkspaceCredentialsConflictCode = (typeof workspaceCredentialsConflictCodes)[number];
 
 export const expireWorkspaceRequestSchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   // Seconds from now until the workspace expires; null clears the TTL (never expires); omitted =
   // expire immediately (the reaper stops it on its next tick).
   ttlSeconds: Schema.optional(Schema.NullOr(Schema.Int.check(Schema.isGreaterThan(0)))),
@@ -1071,13 +1072,13 @@ export const workspaceCreateStateSchema = Schema.Struct({
 export type WorkspaceCreateState = typeof workspaceCreateStateSchema.Type;
 
 export const getWorkspaceCreateQuerySchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
 });
 export type GetWorkspaceCreateQuery = typeof getWorkspaceCreateQuerySchema.Type;
 
 /** Owner-scoped: cancel the create with this key, so it never commits. */
 export const cancelWorkspaceCreateRequestSchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
 });
 export type CancelWorkspaceCreateRequest = typeof cancelWorkspaceCreateRequestSchema.Type;
 
@@ -1115,7 +1116,7 @@ export type WorkspacePhase = typeof workspacePhaseSchema.Type;
 export const workspaceSummarySchema = Schema.Struct({
   workspaceId: NonEmptyString,
   name: NonEmptyString,
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   status: workspaceStatusSchema,
   registryId: Schema.optional(NonEmptyString),
   repository: Schema.optional(NonEmptyString),
@@ -1225,7 +1226,7 @@ export type WorkspaceCaptureDrain = typeof workspaceCaptureDrainSchema.Type;
 export const workspaceDetailsSchema = Schema.Struct({
   workspaceId: NonEmptyString,
   name: NonEmptyString,
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   status: workspaceStatusSchema,
   registryId: Schema.optional(NonEmptyString),
   repository: Schema.optional(NonEmptyString),
@@ -1256,12 +1257,12 @@ export type WorkspaceDetails = typeof workspaceDetailsSchema.Type;
  * Optional on the wire for older callers; the control plane requires it.
  */
 export const getWorkspaceQuerySchema = Schema.Struct({
-  ownerUserId: Schema.optional(NonEmptyString),
+  ownerUserId: Schema.optional(PersonId),
 });
 export type GetWorkspaceQuery = typeof getWorkspaceQuerySchema.Type;
 
 export const listWorkspacesQuerySchema = Schema.Struct({
-  ownerUserId: NonEmptyString,
+  ownerUserId: PersonId,
   status: Schema.optional(workspaceStatusSchema),
   limit: Schema.optional(NonEmptyString),
   /** Only the owner's workspace created with this `idempotencyKey` (none or one item). */
@@ -1275,7 +1276,7 @@ export const listWorkspacesResponseSchema = Schema.Struct({
 export type ListWorkspacesResponse = typeof listWorkspacesResponseSchema.Type;
 
 export const listWorkspaceAttemptsQuerySchema = Schema.Struct({
-  ownerUserId: Schema.optional(NonEmptyString),
+  ownerUserId: Schema.optional(PersonId),
   limit: Schema.optional(NonEmptyString),
 });
 export type ListWorkspaceAttemptsQuery = typeof listWorkspaceAttemptsQuerySchema.Type;
@@ -1306,7 +1307,7 @@ export const listWorkspaceAttemptsResponseSchema = Schema.Struct({
 export type ListWorkspaceAttemptsResponse = typeof listWorkspaceAttemptsResponseSchema.Type;
 
 export const listWorkspaceEventsQuerySchema = Schema.Struct({
-  ownerUserId: Schema.optional(NonEmptyString),
+  ownerUserId: Schema.optional(PersonId),
   limit: Schema.optional(NonEmptyString),
 });
 export type ListWorkspaceEventsQuery = typeof listWorkspaceEventsQuerySchema.Type;
@@ -1348,7 +1349,7 @@ export const workspaceGatewayHeadersSchema = Schema.Struct({
   "x-sealant-gateway-token": Schema.optional(NonEmptyString),
   // Identifies the client principal (the SSH key's owner). The API authorizes principal x workspace
   // before returning a control target (gateway-spec §3.4).
-  "x-sealant-principal-id": Schema.optional(NonEmptyString),
+  "x-sealant-principal-id": Schema.optional(PersonId),
   // `1` from a gateway that runs a workspace's SSH sessions as its `sshUser`. A workspace with a
   // user answers no target to a gateway without it, which would run the session as root.
   "x-sealant-gateway-ssh-user": Schema.optional(NonEmptyString),

@@ -179,6 +179,15 @@ export {
 } from "./control-plane.js";
 
 export {
+  type ResourceDomain,
+  type ResourceDomainMember,
+  type ResourceDomainMemberState,
+  resourceDomainMembers,
+  resourceDomainMemberStateValues,
+  resourceDomains,
+} from "./resource-domains.js";
+
+export {
   type NewTelemetryArtifact,
   type NewTelemetryEvent,
   type NewTelemetryLossSpan,

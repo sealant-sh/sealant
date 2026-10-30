@@ -1,5 +1,7 @@
+import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   index,
   integer,
   snakeCase,
@@ -28,7 +30,11 @@ export const user = pgTable(
       .$defaultFn(() => new Date())
       .$onUpdate(() => new Date()),
   },
-  (table) => [uniqueIndex("user_email_idx").on(table.email)],
+  (table) => [
+    uniqueIndex("user_email_idx").on(table.email),
+    // A resource domain's id (`rdm:<uuid>`) never names a person.
+    check("user_id_not_resource_domain", sql`${table.id} not like 'rdm:%'`),
+  ],
 );
 
 /**

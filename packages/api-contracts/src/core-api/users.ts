@@ -9,10 +9,12 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
 
+import { PersonId } from "./person-id.js";
+
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
 export const userSchema = Schema.Struct({
-  userId: NonEmptyString,
+  userId: PersonId,
   email: NonEmptyString,
   name: NonEmptyString,
   createdAt: Schema.String,
@@ -24,7 +26,7 @@ export const ensureUserRequestSchema = Schema.Struct({
   email: NonEmptyString,
   name: NonEmptyString,
   /** Caller-chosen id for a NEW user (`usr_…`); ignored when the email already exists. */
-  userId: Schema.optional(NonEmptyString),
+  userId: Schema.optional(PersonId),
 });
 export type EnsureUserRequest = typeof ensureUserRequestSchema.Type;
 
@@ -48,7 +50,7 @@ export const personBindingSchema = Schema.Struct({
 export type PersonBindingWire = typeof personBindingSchema.Type;
 
 export const bindUserPersonResponseSchema = Schema.Struct({
-  userId: NonEmptyString,
+  userId: PersonId,
   person: personBindingSchema,
   /** True when this call made the binding; false when it was already exactly this. */
   created: Schema.Boolean,
@@ -87,7 +89,7 @@ export class UserInternalServerError extends Schema.TaggedError<UserInternalServ
   { httpApiStatus: 500 },
 ) {}
 
-const userIdParams = Schema.Struct({ userId: NonEmptyString });
+const userIdParams = Schema.Struct({ userId: PersonId });
 
 export const UsersGroup = HttpApiGroup.make("users")
   .add(

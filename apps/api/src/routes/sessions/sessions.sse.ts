@@ -13,6 +13,7 @@
  * sequence, so a reconnecting client resumes byte-exact with no gap. Scope: `session:read`.
  */
 import {
+  RequestRefusedError,
   SessionBadRequestError,
   SessionForbiddenError,
   SessionNotFoundError,
@@ -148,7 +149,8 @@ export const SessionOutputStreamRoute = HttpRouter.add(
                   ? 403
                   : error instanceof SessionNotFoundError
                     ? 404
-                    : error instanceof SessionBadRequestError
+                    : error instanceof SessionBadRequestError ||
+                        error instanceof RequestRefusedError
                       ? 400
                       : 500,
             message: error.message,

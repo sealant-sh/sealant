@@ -22,6 +22,7 @@
  * scopes. Registered as a RAW route (HttpApi cannot express an upgrade).
  */
 import {
+  RequestRefusedError,
   SessionBadRequestError,
   SessionForbiddenError,
   SessionNotFoundError,
@@ -84,7 +85,8 @@ export const SessionAttachRoute = HttpRouter.add(
                   ? 403
                   : error instanceof SessionNotFoundError
                     ? 404
-                    : error instanceof SessionBadRequestError
+                    : error instanceof SessionBadRequestError ||
+                        error instanceof RequestRefusedError
                       ? 400
                       : 500,
             message: error.message,

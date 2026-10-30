@@ -20,7 +20,10 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import {
+  isResourceDomainId,
+  NOT_A_PERSON,
   PROCESS_USER_UNSUPPORTED_CODE,
+  RequestRefusedError,
   SessionBadGatewayError,
   SessionBadRequestError,
   SessionConflictError,
@@ -131,6 +134,11 @@ export const authorize = (input: {
   readonly assertedOwnerUserId: string | undefined;
 }) =>
   Effect.gen(function* () {
+    // The raw session routes (WebSocket, SSE, forwards) read ownerUserId from the query string
+    // themselves, past the contract's PersonId.
+    if (input.assertedOwnerUserId !== undefined && isResourceDomainId(input.assertedOwnerUserId)) {
+      return yield* new RequestRefusedError({ message: `ownerUserId ${NOT_A_PERSON}` });
+    }
     const header = input.headers.authorization?.trim();
     if (header === undefined || header.length === 0) {
       if (authPosture.kind !== "open") {

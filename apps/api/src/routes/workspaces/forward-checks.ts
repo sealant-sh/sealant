@@ -1,4 +1,5 @@
 import {
+  RequestRefusedError,
   SessionBadRequestError,
   SessionForbiddenError,
   SessionUnauthorizedError,
@@ -22,6 +23,7 @@ export type ForwardCheck =
   | "unauthorized"
   | "forbidden"
   | "owner-required"
+  | "not-a-person"
   | "not-found"
   | "workspace-unreadable"
   | "internal";
@@ -88,9 +90,11 @@ export const checkForward = (input: {
             ? "unauthorized"
             : error instanceof SessionForbiddenError
               ? "forbidden"
-              : error instanceof SessionBadRequestError
-                ? "owner-required"
-                : "internal",
+              : error instanceof RequestRefusedError
+                ? "not-a-person"
+                : error instanceof SessionBadRequestError
+                  ? "owner-required"
+                  : "internal",
           error.message,
         ),
       ),
