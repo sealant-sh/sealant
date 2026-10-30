@@ -23,6 +23,7 @@ import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
 import { BudgetExceededError } from "./budgets.js";
+import { connectedAccountLoginClassSchema } from "./connected-accounts.js";
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
@@ -87,6 +88,12 @@ export const inferenceRespondRequestSchema = Schema.Struct({
       schema: Schema.optional(Schema.Unknown),
     }),
   ),
+  /**
+   * Which login a new exchange may run on: `subscription` refuses an account holding an API key
+   * (409, `login-not-allowed`, before any provider request); `any` (the default) runs on either.
+   * Checked against the account the selection resolved to.
+   */
+  allowedLogin: Schema.optional(Schema.Literals(["subscription", "any"])),
   sessionId: Schema.optional(NonEmptyString),
   toolResults: Schema.optional(Schema.Array(inferenceToolResultSchema).check(Schema.isNonEmpty())),
 });
@@ -120,11 +127,25 @@ export const inferenceUsageSchema = Schema.Struct({
 });
 export type InferenceUsage = typeof inferenceUsageSchema.Type;
 
+/**
+ * The login an exchange runs on, fixed when it starts: every continuation runs on it and is judged
+ * by it, even after the account is reconnected. `revision` is the account's credential revision at
+ * the start.
+ */
+export const inferenceReceiptSchema = Schema.Struct({
+  accountId: NonEmptyString,
+  revision: Schema.Number.check(Schema.isInt()),
+  login: connectedAccountLoginClassSchema,
+});
+export type InferenceReceipt = typeof inferenceReceiptSchema.Type;
+
 export const inferenceRespondResponseSchema = Schema.Struct({
   sessionId: NonEmptyString,
   turn: inferenceTurnSchema,
   /** Usage for the exchange so far; present on the final (text) turn. */
   usage: Schema.optional(inferenceUsageSchema),
+  /** The exchange's login. Absent from a control plane that predates receipts. */
+  receipt: Schema.optional(inferenceReceiptSchema),
 });
 export type InferenceRespondResponse = typeof inferenceRespondResponseSchema.Type;
 
@@ -132,29 +153,48 @@ export type InferenceRespondResponse = typeof inferenceRespondResponseSchema.Typ
 // Errors
 // ---------------------------------------------------------------------------------------------
 
+/** On an error after the account was resolved: the exchange's login. */
+const errorReceipt = Schema.optional(inferenceReceiptSchema);
+
 export class InferenceBadRequestError extends Schema.TaggedError<InferenceBadRequestError>()(
   "InferenceBadRequestError",
-  { message: Schema.String },
+  { message: Schema.String, receipt: errorReceipt },
   { httpApiStatus: 400 },
 ) {}
 
 /** Unknown account/profile (uniform for foreign owners) or an expired/unknown inference session. */
 export class InferenceNotFoundError extends Schema.TaggedError<InferenceNotFoundError>()(
   "InferenceNotFoundError",
-  { message: Schema.String },
+  { message: Schema.String, receipt: errorReceipt },
   { httpApiStatus: 404 },
 ) {}
 
 /**
- * The selected account exists but is not usable: its status is "invalid" (reconnect it), or, with
- * `code` `connected-account-unsupported`, it is a login this control plane cannot run on yet (a
- * Claude API key).
+ * The selected account exists but is not usable: its status is "invalid" (reconnect it), or the
+ * provider refused it. `code`, when set:
+ *
+ * - `connected-account-unsupported`: a login this control plane cannot run on (from a control plane
+ *   that predates Claude API keys in inference).
+ * - `connected-account-refused`: the provider refused an API key with a 401; the account is now
+ *   invalid.
+ * - `connected-account-superseded`: the provider refused an API key with a 401, but the account
+ *   changed after the exchange started (`receipt.revision` is older), so nothing was marked.
+ * - `login-not-allowed`: the request's `allowedLogin` is `subscription` and the account holds an
+ *   API key; nothing was sent to the provider.
  */
 export class InferenceConflictError extends Schema.TaggedError<InferenceConflictError>()(
   "InferenceConflictError",
   {
     message: Schema.String,
-    code: Schema.optional(Schema.Literals(["connected-account-unsupported"])),
+    code: Schema.optional(
+      Schema.Literals([
+        "connected-account-unsupported",
+        "connected-account-refused",
+        "connected-account-superseded",
+        "login-not-allowed",
+      ]),
+    ),
+    receipt: errorReceipt,
   },
   { httpApiStatus: 409 },
 ) {}
@@ -167,7 +207,7 @@ export class InferenceUnavailableError extends Schema.TaggedError<InferenceUnava
 
 export class InferenceInternalServerError extends Schema.TaggedError<InferenceInternalServerError>()(
   "InferenceInternalServerError",
-  { message: Schema.String },
+  { message: Schema.String, receipt: errorReceipt },
   { httpApiStatus: 500 },
 ) {}
 

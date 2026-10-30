@@ -5,6 +5,7 @@
  * here. This is the single funnel that keeps Effect internals out of the public, Promise-based API.
  */
 import { SealantApiError, SealantError } from "../errors.js";
+import type { InferenceReceipt } from "../types.js";
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
@@ -25,6 +26,18 @@ const extractStatus = (record: Record<string, unknown> | undefined): number | un
 
 const nonEmptyString = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 ? value : undefined;
+
+const toReceipt = (value: unknown): InferenceReceipt | undefined => {
+  const record = asRecord(value);
+  const accountId = nonEmptyString(record?.["accountId"]);
+  const revision = record?.["revision"];
+  const login = record?.["login"];
+  return accountId !== undefined &&
+    typeof revision === "number" &&
+    (login === "subscription" || login === "api-key")
+    ? { accountId, revision, login }
+    : undefined;
+};
 
 export const toSealantError = (cause: unknown): SealantError => {
   if (cause instanceof SealantError) {
@@ -50,12 +63,14 @@ export const toSealantError = (cause: unknown): SealantError => {
     const candidateAccountIds = Array.isArray(candidates)
       ? candidates.filter((id): id is string => typeof id === "string")
       : undefined;
+    const receipt = toReceipt(record?.["receipt"]);
     return new SealantApiError(message, {
       code: tag,
       ...(status === undefined ? {} : { status }),
       ...(reason === undefined ? {} : { reason }),
       ...(provider === undefined ? {} : { provider }),
       ...(candidateAccountIds === undefined ? {} : { candidateAccountIds }),
+      ...(receipt === undefined ? {} : { receipt }),
       cause,
     });
   }

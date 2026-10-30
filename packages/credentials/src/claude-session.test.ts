@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import { describe, expect, it } from "@effect/vitest";
@@ -8,6 +8,8 @@ import {
   isPlausibleClaudeExpiry,
   MAX_PLAUSIBLE_CLAUDE_EXPIRY_AHEAD_MS,
   provisionClaudeConfigDir,
+  provisionClaudeKeyDir,
+  provisionClaudeTokenDir,
   readClaudeConfigDirCredentials,
   readStoredClaudeExpiresAt,
   removeClaudeConfigDir,
@@ -89,5 +91,27 @@ describe("claude config dir provisioning", () => {
     expect(readClaudeConfigDirCredentials(provisioned.configDir)).toBeUndefined();
     // Removing an already-removed dir must not throw.
     removeClaudeConfigDir(provisioned.configDir);
+  });
+});
+
+describe("provisionClaudeKeyDir", () => {
+  it("holds the key in a private file (0600) in a private dir (0700), and is removed whole", () => {
+    const apiKey = "sk-ant-api03-FAKEkeyfortheprovisiontest000000000000a1b2";
+    const provisioned = provisionClaudeKeyDir({ apiKey });
+    expect(statSync(provisioned.configDir).mode & 0o777).toBe(0o700);
+    expect(statSync(provisioned.keyPath).mode & 0o777).toBe(0o600);
+    expect(readFileSync(provisioned.keyPath, "utf8")).toBe(apiKey);
+    removeClaudeConfigDir(provisioned.configDir);
+    expect(existsSync(provisioned.configDir)).toBe(false);
+  });
+});
+
+describe("provisionClaudeTokenDir", () => {
+  it("is a private dir (0700) that holds nothing", () => {
+    const configDir = provisionClaudeTokenDir();
+    expect(statSync(configDir).mode & 0o777).toBe(0o700);
+    expect(readdirSync(configDir)).toEqual([]);
+    removeClaudeConfigDir(configDir);
+    expect(existsSync(configDir)).toBe(false);
   });
 });

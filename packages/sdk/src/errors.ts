@@ -1,6 +1,6 @@
 import type { ForwardRefusalReason } from "@sealant/api-contracts";
 
-import type { ForwardResetCause } from "./types.js";
+import type { ForwardResetCause, InferenceReceipt } from "./types.js";
 
 /**
  * Public SDK errors. The Effect core fails on a typed `Schema.TaggedError` channel; the facade maps
@@ -49,6 +49,8 @@ export class SealantApiError extends SealantError {
   readonly provider?: string;
   /** The accounts a `connected-account-ambiguous` connect could have meant. */
   readonly candidateAccountIds?: readonly string[];
+  /** An inference error after the account was resolved: the exchange's login. */
+  readonly receipt?: InferenceReceipt;
   constructor(
     message: string,
     options?: {
@@ -57,6 +59,7 @@ export class SealantApiError extends SealantError {
       readonly reason?: string;
       readonly provider?: string;
       readonly candidateAccountIds?: readonly string[];
+      readonly receipt?: InferenceReceipt;
       readonly cause?: unknown;
     },
   ) {
@@ -75,6 +78,9 @@ export class SealantApiError extends SealantError {
     }
     if (options?.candidateAccountIds !== undefined) {
       this.candidateAccountIds = options.candidateAccountIds;
+    }
+    if (options?.receipt !== undefined) {
+      this.receipt = options.receipt;
     }
   }
 }

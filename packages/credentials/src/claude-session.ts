@@ -2,6 +2,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { makePrivateDir } from "./private-dir.js";
+
 /*
 Claude session-credential freshness + control-plane config dirs (design doc §2 claude / §6).
 
@@ -91,15 +93,14 @@ export const provisionClaudeConfigDir = (input: {
   readonly credentialsJson: string;
   /** Parent for the per-invocation dir; defaults to the OS tmp dir. */
   readonly baseDir?: string;
-}): ProvisionedClaudeConfigDir => {
+}): ProvisionedClaudeConfigDir =>
   // mkdtemp creates the directory 0700 already; the explicit mode on the file is the part that
   // matters (writeFileSync defaults to 0666 & umask).
-  const configDir = mkdtempSync(join(input.baseDir ?? tmpdir(), "sealant-claude-session-"));
-  const credentialsPath = join(configDir, CLAUDE_CREDENTIALS_FILE_NAME);
-  writeFileSync(credentialsPath, input.credentialsJson, { mode: 0o600 });
-
-  return { configDir, credentialsPath };
-};
+  makePrivateDir("sealant-claude-session-", input.baseDir, (configDir) => {
+    const credentialsPath = join(configDir, CLAUDE_CREDENTIALS_FILE_NAME);
+    writeFileSync(credentialsPath, input.credentialsJson, { mode: 0o600 });
+    return { configDir, credentialsPath };
+  });
 
 /**
  * Read the (possibly CLI-rotated) credentials file back out of a provisioned config dir.
@@ -121,3 +122,24 @@ export const removeClaudeConfigDir = (configDir: string): void => {
     // Best-effort: a leaked tmp dir is preferable to failing the invocation that owned it.
   }
 };
+
+/** A setup token rides the CLI's environment, so its private config dir holds no login. */
+export const provisionClaudeTokenDir = (input: { readonly baseDir?: string } = {}): string =>
+  mkdtempSync(join(input.baseDir ?? tmpdir(), "sealant-claude-token-"));
+
+export const CLAUDE_API_KEY_FILE_NAME = "api-key";
+
+export interface ProvisionedClaudeKeyDir {
+  readonly configDir: string;
+  readonly keyPath: string;
+}
+
+export const provisionClaudeKeyDir = (input: {
+  readonly apiKey: string;
+  readonly baseDir?: string;
+}): ProvisionedClaudeKeyDir =>
+  makePrivateDir("sealant-claude-key-", input.baseDir, (configDir) => {
+    const keyPath = join(configDir, CLAUDE_API_KEY_FILE_NAME);
+    writeFileSync(keyPath, input.apiKey, { mode: 0o600 });
+    return { configDir, keyPath };
+  });
