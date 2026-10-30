@@ -5,7 +5,11 @@ import * as PgClient from "@effect/sql-pg/PgClient";
 import { credentialCipherLayer } from "@sealant/credentials";
 import { ControlPlaneDataAccessLive, SealantDBLive } from "@sealant/db";
 import { gitHubSourceIntegrationLayer } from "@sealant/source-integrations";
-import { InlineByteaArtifactStoreLive, TelemetryQueryLive } from "@sealant/telemetry";
+import {
+  InlineByteaArtifactStoreLive,
+  PostgresTelemetrySinkLive,
+  TelemetryQueryLive,
+} from "@sealant/telemetry";
 import { urlForDisplay } from "@sealant/validators/url-for-display";
 import { SealantRuntimeControlLive } from "@sealant/workspaces";
 import { Effect, Layer, Redacted } from "effect";
@@ -128,6 +132,21 @@ const telemetryQueryLayer = TelemetryQueryLive.pipe(
 );
 
 /**
+ * Telemetry write layer:
+ *
+ * An exec run in its request records its processes into the telemetry log, as the worker does,
+ * over the same Postgres client and artifact store as the read layer.
+ */
+const telemetrySinkLayer = PostgresTelemetrySinkLive.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      databaseClientLayer,
+      InlineByteaArtifactStoreLive.pipe(Layer.provide(databaseClientLayer)),
+    ),
+  ),
+);
+
+/**
  * Credential cipher layer:
  *
  * Seals connected-account payloads at rest (AES-256-GCM, key from
@@ -140,10 +159,11 @@ const credentialCipher = credentialCipherLayer({
   key: env.SEALANT_CREDENTIALS_KEY ?? Buffer.alloc(32).toString("base64"),
 });
 
-const requestDependenciesLayer = Layer.mergeAll(
+export const requestDependenciesLayer = Layer.mergeAll(
   sourceIntegrationLayer,
   ControlPlaneCapabilitiesLive,
   telemetryQueryLayer,
+  telemetrySinkLayer,
   credentialCipher,
   // Daemon control-channel access for the interactive-session verbs: each request opens a
   // short-lived docker-exec bridge to the workspace daemon (sessions are daemon-owned, so no
