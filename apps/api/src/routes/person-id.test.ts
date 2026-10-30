@@ -141,6 +141,7 @@ describe("person fields", () => {
         "resourceDomains.grantResourceDomainMember.params.userId",
         "resourceDomains.revokeResourceDomainMember.success.userId",
         "resourceDomains.listResourceDomainMembers.success.items[].userId",
+        "resourceDomains.getResourceDomainMember.params.userId",
       ]),
     );
   });

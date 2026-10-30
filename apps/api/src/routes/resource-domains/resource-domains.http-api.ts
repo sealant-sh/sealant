@@ -4,6 +4,7 @@ import { HttpApiBuilder } from "effect/http-api";
 import {
   decideResourceDomainMember,
   ensureResourceDomain,
+  getResourceDomainMember,
   getResourceDomain,
   listResourceDomainMembers,
 } from "./resource-domains.module.js";
@@ -21,7 +22,8 @@ export const ResourceDomainsHandlersLive = HttpApiBuilder.group(
       .handle("revokeResourceDomainMember", ({ params, payload }) =>
         decideResourceDomainMember(params, "revoked", payload.version),
       )
-      .handle("listResourceDomainMembers", ({ params }) =>
-        listResourceDomainMembers(params.resourceDomainId),
+      .handle("getResourceDomainMember", ({ params }) => getResourceDomainMember(params))
+      .handle("listResourceDomainMembers", ({ params, query }) =>
+        listResourceDomainMembers(params.resourceDomainId, query),
       ),
 );

@@ -4,6 +4,7 @@
  */
 import {
   ResourceDomainRepo,
+  type ResourceDomainMemberLookup,
   type ResourceDomainMemberOutcome,
   type ResourceDomainRecord,
 } from "@sealant/db";
@@ -25,6 +26,7 @@ const standing = {
   updatedAt: new Date(0),
 };
 let decided: ResourceDomainMemberOutcome = { kind: "stale", current: standing };
+let looked: ResourceDomainMemberLookup = { kind: "no-decision" };
 
 const repo = Layer.succeed(ResourceDomainRepo, {
   ensure: (key) =>
@@ -50,10 +52,15 @@ const repo = Layer.succeed(ResourceDomainRepo, {
       calls.push(`decide ${decision.userId} ${decision.state} at ${decision.version}`);
       return decided;
     }),
-  listMembers: (id) =>
+  getMember: (id, userId) =>
     Effect.sync(() => {
-      calls.push(`list ${id}`);
-      return [];
+      calls.push(`read ${id} ${userId}`);
+      return looked;
+    }),
+  listMembers: ({ resourceDomainId, after, limit }) =>
+    Effect.sync(() => {
+      calls.push(`list ${resourceDomainId} after ${after ?? "start"} limit ${limit}`);
+      return { members: [standing], next: standing.userId };
     }),
 });
 
@@ -98,6 +105,7 @@ beforeEach(() => {
   calls.length = 0;
   domains.clear();
   decided = { kind: "stale", current: standing };
+  looked = { kind: "no-decision" };
 });
 
 const ensureDomain = async () => {
@@ -188,15 +196,14 @@ describe("resource domains", () => {
       },
     });
     await send(service, "POST", `/${id}/members/usr_alice/revoke`, { version: 2 });
-    const listed = await send(service, "GET", `/${id}/members`);
-    expect(listed).toEqual({ status: 200, body: { items: [] } });
+    await send(service, "GET", `/${id}/members`);
     expect(calls).toEqual([
       `get ${id}`,
       "decide usr_alice member at 1",
       `get ${id}`,
       "decide usr_alice revoked at 2",
       `get ${id}`,
-      `list ${id}`,
+      `list ${id} after start limit 100`,
     ]);
   });
 
@@ -263,4 +270,59 @@ describe("resource domains", () => {
     expect(statuses.map(({ status }) => status)).toEqual([403, 403, 403]);
     expect(calls).toEqual([]);
   });
+
+  it("reads one member, and tells no decision, no such person and no such domain apart", async () => {
+    const id = await ensureDomain();
+    const read = () => send(service, "GET", `/${id}/members/usr_alice`);
+    looked = { kind: "found", member: standing };
+    expect(await read()).toEqual({
+      status: 200,
+      body: {
+        userId: "usr_alice",
+        state: "revoked",
+        version: 9,
+        updatedAt: new Date(0).toISOString(),
+      },
+    });
+    looked = { kind: "no-decision" };
+    expect((await read()).body["_tag"]).toBe("ResourceDomainMemberNotFoundError");
+    looked = { kind: "no-such-person" };
+    expect((await read()).body["_tag"]).toBe("ResourceDomainPersonNotFoundError");
+    const elsewhere = await send(
+      service,
+      "GET",
+      "/rdm:00000000-0000-4000-8000-0000000000ff/members/usr_alice",
+    );
+    expect(elsewhere.body["_tag"]).toBe("ResourceDomainNotFoundError");
+  });
+
+  it("pages the members with a limit and the previous page's cursor", async () => {
+    const id = await ensureDomain();
+    const page = await send(service, "GET", `/${id}/members?limit=1&cursor=usr_aaron`);
+    expect(page).toEqual({
+      status: 200,
+      body: {
+        items: [
+          {
+            userId: "usr_alice",
+            state: "revoked",
+            version: 9,
+            updatedAt: new Date(0).toISOString(),
+          },
+        ],
+        nextCursor: "usr_alice",
+      },
+    });
+    expect(calls).toEqual([`get ${id}`, `list ${id} after usr_aaron limit 1`]);
+  });
+
+  it.each(["0", "501", "1.5", "many"])(
+    "refuses a page limit of %s before anything is read",
+    async (limit) => {
+      const id = await ensureDomain();
+      const refused = await send(service, "GET", `/${id}/members?limit=${limit}`);
+      expect(refused.status).toBe(400);
+      expect(calls).toEqual([]);
+    },
+  );
 });

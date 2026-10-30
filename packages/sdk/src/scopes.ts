@@ -10,6 +10,7 @@ import type { ResourceDomainWire } from "@sealant/api-contracts";
 
 import {
   ensureResourceDomainOp,
+  getResourceDomainMemberOp,
   getResourceDomainOp,
   grantResourceDomainMemberOp,
   listResourceDomainMembersOp,
@@ -53,11 +54,25 @@ export interface ScopeMemberDecision {
   readonly version: number;
 }
 
+/** A page of a scope's members. `nextCursor` is present when more follow. */
+export interface ScopeMemberPage {
+  readonly items: readonly ScopeMember[];
+  readonly nextCursor?: string;
+}
+
 export interface ScopeMembers {
   grant(userId: string, decision: ScopeMemberDecision): Promise<ScopeMember>;
   revoke(userId: string, decision: ScopeMemberDecision): Promise<ScopeMember>;
-  /** Every person with a decision in the scope, revoked ones included, by user id. */
-  list(): Promise<readonly ScopeMember[]>;
+  /**
+   * One person's decision. Rejects with 404 `ResourceDomainMemberNotFoundError` when there is none,
+   * `ResourceDomainPersonNotFoundError` when the person does not exist.
+   */
+  get(userId: string): Promise<ScopeMember>;
+  /**
+   * A page of the people with a decision in the scope, revoked ones included, by user id: `limit`
+   * of them (100 unless named, at most 500), after the previous page's `nextCursor` as `cursor`.
+   */
+  list(options?: { readonly limit?: number; readonly cursor?: string }): Promise<ScopeMemberPage>;
 }
 
 /** A client acting as one scope. It has no method that could reach a credential or a harness. */
@@ -97,7 +112,13 @@ export const makeScopes = (runtime: SdkRuntime): ScopesNamespace => {
           runtime.run(grantResourceDomainMemberOp(scopeId, userId, { version: decision.version })),
         revoke: (userId, decision) =>
           runtime.run(revokeResourceDomainMemberOp(scopeId, userId, { version: decision.version })),
-        list: async () => (await runtime.run(listResourceDomainMembersOp(scopeId))).items,
+        get: (userId) => runtime.run(getResourceDomainMemberOp(scopeId, userId)),
+        list: async (options) => {
+          const page = await runtime.run(listResourceDomainMembersOp(scopeId, { ...options }));
+          return page.nextCursor === undefined
+            ? { items: page.items }
+            : { items: page.items, nextCursor: page.nextCursor };
+        },
       },
     }),
   };

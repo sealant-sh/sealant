@@ -81,9 +81,13 @@ describe.skipIf(DATABASE_URL === undefined)("sealant.scopes against the API", ()
       .members.grant(alice, { version: 1 });
     await expect(elsewhere).rejects.toMatchObject({ code: "ResourceDomainNotFoundError" });
 
-    expect(await project.members.list()).toEqual(
-      [granted, revoked].toSorted((a, b) => a.userId.localeCompare(b.userId)),
-    );
+    expect(await project.members.get(bob)).toEqual(revoked);
+    const [first, second] = [granted, revoked].toSorted((a, b) => a.userId.localeCompare(b.userId));
+    const page = await project.members.list({ limit: 1 });
+    expect(page).toEqual({ items: [first], nextCursor: first?.userId });
+    expect(await project.members.list({ limit: 1, cursor: page.nextCursor ?? "" })).toEqual({
+      items: [second],
+    });
   });
 
   it("is refused with the transport's 401 to a client without the service key", async () => {

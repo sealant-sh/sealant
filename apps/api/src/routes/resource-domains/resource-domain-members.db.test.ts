@@ -54,7 +54,11 @@ describe.skipIf(DATABASE_URL === undefined)("resource domain members (Postgres)"
     db.execute(`DELETE FROM "user" WHERE "id" = '${userId}'`);
 
   const members = (resourceDomainId: string) =>
-    run(Effect.flatMap(ResourceDomainRepo, (repo) => repo.listMembers(resourceDomainId)));
+    run(
+      Effect.flatMap(ResourceDomainRepo, (repo) =>
+        repo.listMembers({ resourceDomainId, limit: 500 }),
+      ),
+    ).then((page) => page.members);
 
   /**
    * `held` is written in a transaction that stays open while `late` runs, then commits: `late`
@@ -212,5 +216,54 @@ describe.skipIf(DATABASE_URL === undefined)("resource domain members (Postgres)"
     await Effect.runPromise(deletePerson(at.userId));
     expect(await decide(at, "revoked", 2)).toEqual({ kind: "no-such-person" });
     expect(await members(at.resourceDomainId)).toEqual([]);
+  });
+
+  it("reads one person's decision, and tells no decision from no such person", async () => {
+    const at = await pair();
+    const read = (userId: string) =>
+      run(
+        Effect.flatMap(ResourceDomainRepo, (repo) => repo.getMember(at.resourceDomainId, userId)),
+      );
+    expect(await read(at.userId)).toEqual({ kind: "no-decision" });
+    const revoked = await decide(at, "revoked", 4);
+    expect(await read(at.userId)).toEqual(
+      revoked.kind === "decided" ? { kind: "found", member: revoked.member } : revoked,
+    );
+    expect(await read(`user_nobody_${randomUUID()}`)).toEqual({ kind: "no-such-person" });
+  });
+
+  it("pages every decision, revoked ones included, by user id", async () => {
+    const { resourceDomainId } = await pair();
+    const people = await Promise.all(
+      Array.from({ length: 5 }, async (_, index) => {
+        const userId = `user_page_${index}_${randomUUID()}`;
+        await Effect.runPromise(
+          db.insert(user).values({ id: userId, name: "page", email: `${userId}@example.test` }),
+        );
+        await decide({ resourceDomainId, userId }, index % 2 === 0 ? "member" : "revoked", 1);
+        return userId;
+      }),
+    );
+    const pages: Array<{ readonly users: readonly string[]; readonly next?: string }> = [];
+    let after: string | undefined;
+    do {
+      const page = await run(
+        Effect.flatMap(ResourceDomainRepo, (repo) =>
+          repo.listMembers({
+            resourceDomainId,
+            limit: 2,
+            ...(after === undefined ? {} : { after }),
+          }),
+        ),
+      );
+      pages.push({
+        users: page.members.map(({ userId }) => userId),
+        ...(page.next === undefined ? {} : { next: page.next }),
+      });
+      after = page.next;
+    } while (after !== undefined);
+    expect(pages.map(({ users }) => users.length)).toEqual([2, 2, 1]);
+    expect(pages.flatMap(({ users }) => users)).toEqual(people.toSorted());
+    expect(pages.at(-1)?.next).toBeUndefined();
   });
 });

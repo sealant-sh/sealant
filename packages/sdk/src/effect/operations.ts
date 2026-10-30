@@ -29,6 +29,7 @@ import type {
   GetRunTimelineQuery,
   GetSessionOutputQuery,
   InferenceRespondRequest,
+  ListResourceDomainMembersQuery,
   ListRunsQuery,
   ListSessionsQuery,
   ListWorkspacesQuery,
@@ -415,7 +416,15 @@ export const revokeResourceDomainMemberOp = (
     }),
   );
 
-export const listResourceDomainMembersOp = (resourceDomainId: string) =>
+export const getResourceDomainMemberOp = (resourceDomainId: string, userId: string) =>
   Effect.flatMap(SealantApiClient, (client) =>
-    client.resourceDomains.listResourceDomainMembers({ params: { resourceDomainId } }),
+    client.resourceDomains.getResourceDomainMember({ params: { resourceDomainId, userId } }),
+  );
+
+export const listResourceDomainMembersOp = (
+  resourceDomainId: string,
+  query: ListResourceDomainMembersQuery,
+) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.resourceDomains.listResourceDomainMembers({ params: { resourceDomainId }, query }),
   );

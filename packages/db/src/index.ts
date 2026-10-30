@@ -256,6 +256,7 @@ export {
   ResourceDomainRepoError,
   ResourceDomainRepoLive,
   type ResourceDomainMemberDecision,
+  type ResourceDomainMemberLookup,
   type ResourceDomainMemberOutcome,
   type ResourceDomainMemberRecord,
   type ResourceDomainRecord,

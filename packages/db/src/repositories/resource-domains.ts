@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, eq, lt, sql } from "drizzle-orm";
+import { and, asc, eq, gt, lt, sql } from "drizzle-orm";
 import { Cause, Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -14,7 +14,7 @@ import {
 export class ResourceDomainRepoError extends Schema.TaggedError<ResourceDomainRepoError>()(
   "ResourceDomainRepoError",
   {
-    operation: Schema.Literals(["ensure", "get", "decideMember", "listMembers"]),
+    operation: Schema.Literals(["ensure", "get", "decideMember", "getMember", "listMembers"]),
     message: Schema.String,
     cause: Schema.Defect(),
   },
@@ -48,6 +48,11 @@ export type ResourceDomainMemberOutcome =
   | { readonly kind: "stale"; readonly current: ResourceDomainMemberRecord }
   | { readonly kind: "no-such-person" };
 
+export type ResourceDomainMemberLookup =
+  | { readonly kind: "found"; readonly member: ResourceDomainMemberRecord }
+  | { readonly kind: "no-decision" }
+  | { readonly kind: "no-such-person" };
+
 export interface ResourceDomainRepoService {
   /**
    * The domain with this key, created on the first call. Concurrent calls with one key answer one
@@ -70,10 +75,23 @@ export interface ResourceDomainRepoService {
   readonly decideMember: (
     decision: ResourceDomainMemberDecision,
   ) => Effect.Effect<ResourceDomainMemberOutcome, ResourceDomainRepoError>;
-  /** Every person with a decision in the domain, revoked ones included, by user id. */
-  readonly listMembers: (
+  /** One person's decision in the domain, or why there is none. */
+  readonly getMember: (
     resourceDomainId: string,
-  ) => Effect.Effect<ReadonlyArray<ResourceDomainMemberRecord>, ResourceDomainRepoError>;
+    userId: string,
+  ) => Effect.Effect<ResourceDomainMemberLookup, ResourceDomainRepoError>;
+  /**
+   * A page of the people with a decision in the domain, revoked ones included, by user id after
+   * `after`. `next` is the last user id of a page with more after it.
+   */
+  readonly listMembers: (input: {
+    readonly resourceDomainId: string;
+    readonly after?: string;
+    readonly limit: number;
+  }) => Effect.Effect<
+    { readonly members: ReadonlyArray<ResourceDomainMemberRecord>; readonly next?: string },
+    ResourceDomainRepoError
+  >;
 }
 
 export class ResourceDomainRepo extends Context.Service<
@@ -130,6 +148,11 @@ export const ResourceDomainRepoLive: Layer.Layer<ResourceDomainRepo, never, Seal
     ResourceDomainRepo,
     Effect.gen(function* () {
       const db = yield* SealantDB;
+      const personExists = (userId: string) =>
+        Effect.map(
+          db.select({ id: user.id }).from(user).where(eq(user.id, userId)).limit(1),
+          (rows) => rows.length > 0,
+        );
       return {
         ensure: (key) =>
           withError(
@@ -193,12 +216,7 @@ export const ResourceDomainRepoLive: Layer.Layer<ResourceDomainRepo, never, Seal
                 )
                 .limit(1);
               if (current === undefined) {
-                const [person] = yield* db
-                  .select({ id: user.id })
-                  .from(user)
-                  .where(eq(user.id, userId))
-                  .limit(1);
-                if (person === undefined) return { kind: "no-such-person" } as const;
+                if (!(yield* personExists(userId))) return { kind: "no-such-person" } as const;
                 return yield* Effect.fail(new Error("The member's decision was not found."));
               }
               return repeats(current, decision)
@@ -206,14 +224,50 @@ export const ResourceDomainRepoLive: Layer.Layer<ResourceDomainRepo, never, Seal
                 : ({ kind: "stale", current } as const);
             }),
           ),
-        listMembers: (resourceDomainId) =>
+        getMember: (resourceDomainId, userId) =>
+          withError(
+            "getMember",
+            Effect.gen(function* () {
+              const [member] = yield* db
+                .select(memberColumns)
+                .from(resourceDomainMembers)
+                .where(
+                  and(
+                    eq(resourceDomainMembers.resourceDomainId, resourceDomainId),
+                    eq(resourceDomainMembers.userId, userId),
+                  ),
+                )
+                .limit(1);
+              if (member !== undefined) return { kind: "found", member } as const;
+              const exists = yield* personExists(userId);
+              return exists
+                ? ({ kind: "no-decision" } as const)
+                : ({ kind: "no-such-person" } as const);
+            }),
+          ),
+        listMembers: ({ resourceDomainId, after, limit }) =>
           withError(
             "listMembers",
-            db
-              .select(memberColumns)
-              .from(resourceDomainMembers)
-              .where(eq(resourceDomainMembers.resourceDomainId, resourceDomainId))
-              .orderBy(asc(resourceDomainMembers.userId)),
+            Effect.map(
+              db
+                .select(memberColumns)
+                .from(resourceDomainMembers)
+                .where(
+                  and(
+                    eq(resourceDomainMembers.resourceDomainId, resourceDomainId),
+                    after === undefined ? undefined : gt(resourceDomainMembers.userId, after),
+                  ),
+                )
+                .orderBy(asc(resourceDomainMembers.userId))
+                .limit(limit + 1),
+              (rows) => {
+                const members = rows.slice(0, limit);
+                const last = members.at(-1);
+                return rows.length > limit && last !== undefined
+                  ? { members, next: last.userId }
+                  : { members };
+              },
+            ),
           ),
       } satisfies ResourceDomainRepoService;
     }),

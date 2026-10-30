@@ -33,6 +33,7 @@ export type {
   ScopeInfo,
   ScopeMember,
   ScopeMemberDecision,
+  ScopeMemberPage,
   ScopeMembers,
   ScopesNamespace,
 } from "./scopes.js";

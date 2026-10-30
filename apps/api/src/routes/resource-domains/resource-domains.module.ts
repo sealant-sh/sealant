@@ -8,10 +8,13 @@
 import {
   ResourceDomainForbiddenError,
   ResourceDomainInternalServerError,
+  ResourceDomainMemberNotFoundError,
   ResourceDomainMemberVersionConflictError,
   ResourceDomainNotFoundError,
   ResourceDomainPersonNotFoundError,
+  RESOURCE_DOMAIN_MEMBERS_PAGE,
   type EnsureResourceDomainRequest,
+  type ListResourceDomainMembersQuery,
   type ResourceDomainMemberWire,
   type ResourceDomainWire,
 } from "@sealant/api-contracts";
@@ -89,7 +92,7 @@ export const decideResourceDomainMember = (
       case "decided":
         return memberToWire(outcome.member);
       case "no-such-person":
-        return yield* new ResourceDomainPersonNotFoundError({ message: "No person has this id." });
+        return yield* noPerson();
       case "stale":
         return yield* new ResourceDomainMemberVersionConflictError({
           message:
@@ -99,12 +102,46 @@ export const decideResourceDomainMember = (
     }
   });
 
-export const listResourceDomainMembers = (resourceDomainId: string) =>
+const noPerson = () => new ResourceDomainPersonNotFoundError({ message: "No person has this id." });
+
+export const getResourceDomainMember = (params: {
+  readonly resourceDomainId: string;
+  readonly userId: string;
+}) =>
+  Effect.gen(function* () {
+    yield* loadDomain(params.resourceDomainId);
+    const repo = yield* ResourceDomainRepo;
+    const lookup = yield* repo
+      .getMember(params.resourceDomainId, params.userId)
+      .pipe(Effect.mapError(internal("Failed to read the member.")));
+    switch (lookup.kind) {
+      case "found":
+        return memberToWire(lookup.member);
+      case "no-such-person":
+        return yield* noPerson();
+      case "no-decision":
+        return yield* new ResourceDomainMemberNotFoundError({
+          message: "This person has no decision in this resource domain.",
+        });
+    }
+  });
+
+export const listResourceDomainMembers = (
+  resourceDomainId: string,
+  query: ListResourceDomainMembersQuery,
+) =>
   Effect.gen(function* () {
     yield* loadDomain(resourceDomainId);
     const repo = yield* ResourceDomainRepo;
-    const members = yield* repo
-      .listMembers(resourceDomainId)
+    const page = yield* repo
+      .listMembers({
+        resourceDomainId,
+        limit: query.limit ?? RESOURCE_DOMAIN_MEMBERS_PAGE.default,
+        ...(query.cursor === undefined ? {} : { after: query.cursor }),
+      })
       .pipe(Effect.mapError(internal("Failed to list the resource domain's members.")));
-    return { items: members.map(memberToWire) };
+    return {
+      items: page.members.map(memberToWire),
+      ...(page.next === undefined ? {} : { nextCursor: page.next }),
+    };
   });

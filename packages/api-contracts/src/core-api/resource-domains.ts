@@ -23,7 +23,9 @@
  * The same version with the other state, or a lower one, is stale: `409`, carrying the decision
  * that stands. So a delayed grant never undoes a newer revoke, whatever order decisions arrive in
  * and however often each is retried, and the application never reads before it writes. A revoke
- * keeps the member's row, with its version, and the list shows it.
+ * keeps the member's row, with its version. One member reads at `GET …/members/:userId`, and the
+ * list pages by user id: `limit` (100 unless named, at most 500) and the previous page's
+ * `nextCursor` as `cursor`.
  */
 import { Schema } from "effect";
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
@@ -86,8 +88,25 @@ export const resourceDomainMemberDecisionSchema = Schema.Struct({
 });
 export type ResourceDomainMemberDecisionRequest = typeof resourceDomainMemberDecisionSchema.Type;
 
+/** At most this many members a page, and this many when the request names no `limit`. */
+export const RESOURCE_DOMAIN_MEMBERS_PAGE = { default: 100, max: 500 } as const;
+
+export const listResourceDomainMembersQuerySchema = Schema.Struct({
+  limit: Schema.optional(
+    Schema.FiniteFromString.check(
+      Schema.isInt(),
+      Schema.isBetween({ minimum: 1, maximum: RESOURCE_DOMAIN_MEMBERS_PAGE.max }),
+    ),
+  ),
+  /** A previous page's `nextCursor`: the page starts after it. */
+  cursor: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
+});
+export type ListResourceDomainMembersQuery = typeof listResourceDomainMembersQuerySchema.Type;
+
 export const listResourceDomainMembersResponseSchema = Schema.Struct({
   items: Schema.Array(resourceDomainMemberSchema),
+  /** Present when more members follow: pass it as `cursor` for the next page. */
+  nextCursor: Schema.optional(Schema.String),
 });
 export type ListResourceDomainMembersResponse = typeof listResourceDomainMembersResponseSchema.Type;
 
@@ -106,6 +125,13 @@ export class ResourceDomainNotFoundError extends Schema.TaggedError<ResourceDoma
 /** The person a member route names does not exist (the domain does). */
 export class ResourceDomainPersonNotFoundError extends Schema.TaggedError<ResourceDomainPersonNotFoundError>()(
   "ResourceDomainPersonNotFoundError",
+  { message: Schema.String },
+  { httpApiStatus: 404 },
+) {}
+
+/** The person exists, and the application has made no decision about them in the domain. */
+export class ResourceDomainMemberNotFoundError extends Schema.TaggedError<ResourceDomainMemberNotFoundError>()(
+  "ResourceDomainMemberNotFoundError",
   { message: Schema.String },
   { httpApiStatus: 404 },
 ) {}
@@ -178,8 +204,22 @@ export const ResourceDomainsGroup = HttpApiGroup.make("resourceDomains")
     ),
   )
   .add(
+    HttpApiEndpoint.get("getResourceDomainMember", "/:resourceDomainId/members/:userId", {
+      params: memberParams,
+      success: resourceDomainMemberSchema,
+      error: [
+        ResourceDomainForbiddenError,
+        ResourceDomainNotFoundError,
+        ResourceDomainPersonNotFoundError,
+        ResourceDomainMemberNotFoundError,
+        ResourceDomainInternalServerError,
+      ],
+    }),
+  )
+  .add(
     HttpApiEndpoint.get("listResourceDomainMembers", "/:resourceDomainId/members", {
       params: Schema.Struct({ resourceDomainId: ResourceDomainId }),
+      query: listResourceDomainMembersQuerySchema,
       success: listResourceDomainMembersResponseSchema,
       error: [
         ResourceDomainForbiddenError,

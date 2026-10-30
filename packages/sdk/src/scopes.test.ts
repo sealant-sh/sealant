@@ -23,9 +23,14 @@ beforeAll(() => {
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = input instanceof Request ? input : new Request(input, init);
-      const path = decodeURIComponent(new URL(request.url).pathname);
+      const url = new URL(request.url);
+      const path = decodeURIComponent(url.pathname);
       const text = await request.text();
-      seen.push({ method: request.method, path, body: text === "" ? undefined : JSON.parse(text) });
+      seen.push({
+        method: request.method,
+        path: `${path}${url.search}`,
+        body: text === "" ? undefined : JSON.parse(text),
+      });
       const { status, body } = answer(path);
       return new Response(JSON.stringify(body), {
         status,
@@ -49,7 +54,7 @@ describe("scopes", () => {
     stub((path) => ({
       status: 200,
       body: path.endsWith("/members")
-        ? { items: [member] }
+        ? { items: [member], nextCursor: "usr_alice" }
         : path.includes("/members/")
           ? member
           : {
@@ -70,7 +75,9 @@ describe("scopes", () => {
     expect(await project.get()).toEqual(scope);
     expect(await project.members.grant("usr_alice", { version: 1 })).toEqual(member);
     await project.members.revoke("usr_alice", { version: 2 });
-    expect(await project.members.list()).toEqual([member]);
+    expect(await project.members.get("usr_alice")).toEqual(member);
+    expect(await project.members.list()).toEqual({ items: [member], nextCursor: "usr_alice" });
+    await project.members.list({ limit: 1, cursor: "usr_aaron" });
 
     expect(seen).toEqual([
       { method: "POST", path: "/v1/resource-domains", body: { key: "mend:i:project:p" } },
@@ -85,7 +92,13 @@ describe("scopes", () => {
         path: `/v1/resource-domains/${SCOPE}/members/usr_alice/revoke`,
         body: { version: 2 },
       },
+      { method: "GET", path: `/v1/resource-domains/${SCOPE}/members/usr_alice`, body: undefined },
       { method: "GET", path: `/v1/resource-domains/${SCOPE}/members`, body: undefined },
+      {
+        method: "GET",
+        path: `/v1/resource-domains/${SCOPE}/members?limit=1&cursor=usr_aaron`,
+        body: undefined,
+      },
     ]);
     await sealant.close();
   });

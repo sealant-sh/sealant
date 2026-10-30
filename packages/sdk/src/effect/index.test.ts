@@ -25,6 +25,7 @@ describe("@sealant/sdk/effect subpath", () => {
     expect(typeof effectSubpath.getResourceDomainOp).toBe("function");
     expect(typeof effectSubpath.grantResourceDomainMemberOp).toBe("function");
     expect(typeof effectSubpath.revokeResourceDomainMemberOp).toBe("function");
+    expect(typeof effectSubpath.getResourceDomainMemberOp).toBe("function");
     expect(typeof effectSubpath.listResourceDomainMembersOp).toBe("function");
   });
 
