@@ -15,6 +15,9 @@ import { user } from "./auth.js";
 
 const pgTable = snakeCase.table;
 
+export const resourceDomainStateValues = ["active", "fenced", "archived"] as const;
+export type ResourceDomainState = (typeof resourceDomainStateValues)[number];
+
 /**
  * An owner that is a project, not a person (`@sealant/api-contracts` `resource-domains.ts`). It
  * has no owner of its own and nothing cascades into it: whatever comes to belong to a domain
@@ -28,6 +31,11 @@ export const resourceDomains = pgTable(
     /** `<application>:<name>`, unique across every application. */
     key: text().notNull(),
     /**
+     * Only `active` admits new work. A `fenced` or `archived` domain still admits preservation (a
+     * backup of a volume it holds), so fencing never stops a backup.
+     */
+    state: text({ enum: resourceDomainStateValues }).notNull().default("active"),
+    /**
      * The budget: ceilings on what its held allocations may add up to, not measurements. Zero
      * admits nothing; there is no unlimited. `budgetRevision` rises with every change, which only
      * a caller naming the revision it read may make.
@@ -40,6 +48,7 @@ export const resourceDomains = pgTable(
   },
   (table) => [
     uniqueIndex("resource_domains_key_idx").on(table.key),
+    check("resource_domains_state", sql`${table.state} in ('active', 'fenced', 'archived')`),
     check(
       "resource_domains_budget",
       sql`${table.cpuMillicores} between 0 and 9007199254740991 and ${table.memoryBytes} between 0 and 9007199254740991 and ${table.storageBytes} between 0 and 9007199254740991 and ${table.budgetRevision} between 1 and 9007199254740991`,
@@ -117,6 +126,8 @@ export const resourceDomainAllocations = pgTable(
       .references(() => resourceDomains.id, { onDelete: "restrict" }),
     use: text({ enum: resourceDomainAllocationUseValues }).notNull(),
     objectKey: text().notNull(),
+    /** The volume a backup names, as its admission named it: what a replay must name again. */
+    sourceObjectKey: text(),
     sourceAllocationId: text().references((): AnyPgColumn => resourceDomainAllocations.id, {
       onDelete: "restrict",
     }),
@@ -145,6 +156,10 @@ export const resourceDomainAllocations = pgTable(
     check(
       "resource_domain_allocations_state",
       sql`${table.state} in ('reserved', 'in-use', 'archived', 'released') and (${table.state} <> 'archived' or ${table.use} = 'volume')`,
+    ),
+    check(
+      "resource_domain_allocations_source_key",
+      sql`(${table.use} = 'protection') = (${table.sourceObjectKey} is not null)`,
     ),
     check(
       "resource_domain_allocations_shape",

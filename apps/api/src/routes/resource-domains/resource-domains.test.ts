@@ -76,6 +76,9 @@ const repo = Layer.succeed(ResourceDomainRepo, {
   // Budgets run against Postgres (`resource-domain-budgets.db.test.ts`, `resource-domains.sdk.test.ts`).
   getBudget: () => Effect.die("unused"),
   setBudget: () => Effect.die("unused"),
+  // Admission runs against Postgres (`services/resource-domain-admission.db.test.ts`).
+  admit: () => Effect.die("unused"),
+  record: () => Effect.die("unused"),
 });
 
 const serve = (principal: RequestPrincipal) =>
