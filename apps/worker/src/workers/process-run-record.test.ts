@@ -6,6 +6,7 @@
  */
 import { RunRepo, type RunRepoService } from "@sealant/db";
 import {
+  produceExecRun,
   TelemetrySink,
   TelemetrySinkConflictError,
   type TelemetrySinkService,
@@ -18,8 +19,6 @@ import {
 } from "@sealant/workspaces";
 import { Effect, Layer, Stream } from "effect";
 import { describe, expect, it } from "vitest";
-
-import { produceExecRun } from "./process-run-exec-job.js";
 
 type EventEnvelope = Stream.Success<SealantSession["events"]>;
 
