@@ -6,7 +6,13 @@
  * Lives here, not in @sealant/workspaces, because it needs the sink, and this package already
  * depends on @sealant/workspaces: putting it there would be a dependency cycle.
  */
-import { type CreateRunInput, type RunFileChange, RunRepo } from "@sealant/db";
+import {
+  type CreateRunInput,
+  type Run,
+  type RunFileChange,
+  RunRepo,
+  type RunRepoService,
+} from "@sealant/db";
 import type { EventEnvelope } from "@sealant/runtime-protocol";
 import {
   execInWorkspace,
@@ -361,6 +367,52 @@ export interface ClaimedRun extends Omit<SyncBackWorkspaceCredentialsInput, "cre
   readonly credentialCipher?: SyncBackWorkspaceCredentialsInput["credentialCipher"];
 }
 
+/** The run's row was never written: nothing ran, so asking again is safe. */
+export class ExecRunNotCreatedError extends Schema.TaggedError<ExecRunNotCreatedError>()(
+  "ExecRunNotCreatedError",
+  {},
+) {}
+
+/** The run's outcome could not be written, so its row is not settled; its commands may have run. */
+export class ExecRunUnsettledError extends Schema.TaggedError<ExecRunUnsettledError>()(
+  "ExecRunUnsettledError",
+  { runId: Schema.String },
+) {}
+
+/** The run settled, and could not be read back; its commands ran. */
+export class ExecRunUnreadableError extends Schema.TaggedError<ExecRunUnreadableError>()(
+  "ExecRunUnreadableError",
+  { runId: Schema.String },
+) {}
+
+/** What went wrong, by tag only: a cause's messages can carry a daemon's or a database's words. */
+const causeTags = (cause: Cause.Cause<unknown>) =>
+  cause.reasons
+    .map((reason) =>
+      Cause.isFailReason(reason)
+        ? reason.error instanceof Error
+          ? reason.error.name
+          : "error"
+        : Cause.isDieReason(reason)
+          ? "defect"
+          : "interrupt",
+    )
+    .join(", ");
+
+/** Writes that a run stopped short; a write that fails leaves the run unsettled, and says so. */
+const failStoppedRun = (runs: RunRepoService, runId: string, cause: Cause.Cause<unknown>) =>
+  runs.markRunFailed({ id: runId, errorMessage: stoppedShortReason(runId, cause) }).pipe(
+    Effect.tapCause((writeCause) =>
+      Effect.logError(
+        `Run ${runId}: its failure could not be recorded (${causeTags(writeCause)}).`,
+      ),
+    ),
+    Effect.mapError(() => new ExecRunUnsettledError({ runId })),
+  );
+
+const isTerminal = (run: Run) =>
+  run.status === "completed" || run.status === "failed" || run.status === "cancelled";
+
 /** A run that stopped short of its outcome: why, as its record says it. */
 const stoppedShortReason = (runId: string, cause: Cause.Cause<unknown>) =>
   Cause.hasInterruptsOnly(cause)
@@ -375,16 +427,15 @@ const stoppedShortReason = (runId: string, cause: Cause.Cause<unknown>) =>
  * Runs a claimed run's work so that every way out moves the run off `running`, a defect included,
  * and the credential sync-back runs on each: the CLIs may have rotated their session files even
  * when the run failed, and it never fails. An interruption sends no further command, and says a
- * process already started may still be running: it is not stopped.
+ * process already started may still be running: it is not stopped. A failure whose record cannot
+ * be written fails with `ExecRunUnsettledError`, never passing for a settled run.
  */
 export const settleClaimedRun = <E, R>(run: ClaimedRun, produce: Effect.Effect<void, E, R>) =>
   Effect.gen(function* () {
     const runs = yield* RunRepo;
     yield* produce.pipe(
-      Effect.onError((cause) =>
-        runs
-          .markRunFailed({ id: run.runId, errorMessage: stoppedShortReason(run.runId, cause) })
-          .pipe(Effect.ignore),
+      Effect.catchCause((cause) =>
+        failStoppedRun(runs, run.runId, cause).pipe(Effect.andThen(Effect.failCause(cause))),
       ),
       Effect.ensuring(syncBack(run)),
     );
@@ -440,19 +491,22 @@ export const executeExecRun = (input: {
     // queued. The sync-back runs whatever happened, interruptibly and within its deadline.
     yield* Effect.uninterruptibleMask((restore) =>
       runs.createRun(input.run).pipe(
+        Effect.tapCause((cause) =>
+          Effect.logError(`An exec run was not created (${causeTags(cause)}); nothing ran.`),
+        ),
+        Effect.mapError(() => new ExecRunNotCreatedError()),
         Effect.andThen(
           restore(produce).pipe(
             Effect.catchCause((cause) =>
-              runs
-                .markRunFailed({ id, errorMessage: stoppedShortReason(id, cause) })
-                .pipe(
-                  Effect.ignore,
-                  Effect.andThen(
-                    Cause.hasInterrupts(cause)
-                      ? Effect.interrupt
-                      : Effect.logWarning(`Run ${id} failed before completion.`, cause),
-                  ),
+              failStoppedRun(runs, id, cause).pipe(
+                Effect.andThen(
+                  Cause.hasInterrupts(cause)
+                    ? Effect.interrupt
+                    : Effect.logWarning(
+                        `Run ${id} failed before completion (${causeTags(cause)}).`,
+                      ),
                 ),
+              ),
             ),
             Effect.ensuring(
               Effect.interruptible(syncBack({ ...input.executor, runId: id })).pipe(
@@ -466,5 +520,13 @@ export const executeExecRun = (input: {
         ),
       ),
     );
-    return yield* runs.getRunById(id);
+    const run = yield* runs.getRunById(id).pipe(
+      Effect.tapCause((cause) =>
+        Effect.logError(`Run ${id} settled and could not be read back (${causeTags(cause)}).`),
+      ),
+      Effect.mapError(() => new ExecRunUnreadableError({ runId: id })),
+    );
+    if (run === undefined) return yield* new ExecRunUnreadableError({ runId: id });
+    if (!isTerminal(run)) return yield* new ExecRunUnsettledError({ runId: id });
+    return run;
   });
