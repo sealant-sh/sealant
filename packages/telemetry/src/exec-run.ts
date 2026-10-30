@@ -6,7 +6,7 @@
  * Lives here, not in @sealant/workspaces, because it needs the sink, and this package already
  * depends on @sealant/workspaces: putting it there would be a dependency cycle.
  */
-import { type RunFileChange, RunRepo } from "@sealant/db";
+import { type CreateRunInput, type RunFileChange, RunRepo } from "@sealant/db";
 import {
   execInWorkspace,
   PROCESS_USER_CAPABILITY,
@@ -15,9 +15,11 @@ import {
   SealantRuntime,
   type SealantTarget,
   splitWorkingTreeChanges,
+  syncBackWorkspaceCredentials,
+  type SyncBackWorkspaceCredentialsInput,
   workingTreeChangesScript,
 } from "@sealant/workspaces";
-import { Effect, Schedule, Schema, Stream } from "effect";
+import { Cause, Effect, Schedule, Schema, Stream } from "effect";
 
 import type { TelemetrySinkConflictError } from "./errors.js";
 import { normalizeEnvelope } from "./normalize.js";
@@ -279,3 +281,79 @@ export const produceExecRun = (
     const changes = yield* captureChanges(runId, target);
     yield* runs.markRunCompleted({ id: runId, exitCode: lastExitCode, ...changes });
   });
+
+/** A claimed run: where its processes run, and what its credential sync-back reads afterwards. */
+export interface ClaimedRun extends Omit<SyncBackWorkspaceCredentialsInput, "credentialCipher"> {
+  readonly runId: string;
+  readonly credentialCipher?: SyncBackWorkspaceCredentialsInput["credentialCipher"];
+}
+
+/**
+ * Runs a claimed run's work so that every way out moves the run off `running`, a defect included,
+ * and the credential sync-back runs on each: the CLIs may have rotated their session files even
+ * when the run failed, and it never fails. An interruption sends no further command, and says a
+ * process already started may still be running: it is not stopped.
+ */
+export const settleClaimedRun = <E, R>(run: ClaimedRun, produce: Effect.Effect<void, E, R>) =>
+  Effect.gen(function* () {
+    const runs = yield* RunRepo;
+    yield* produce.pipe(
+      Effect.onError((cause) =>
+        runs
+          .markRunFailed({
+            id: run.runId,
+            errorMessage: Cause.hasInterruptsOnly(cause)
+              ? `Run ${run.runId} was interrupted before it completed: no further command was sent, and one already started may still be running.`
+              : "Run execution failed before completion.",
+          })
+          .pipe(Effect.ignore),
+      ),
+      Effect.ensuring(
+        syncBackWorkspaceCredentials({
+          attemptId: run.attemptId,
+          target: run.target,
+          launchCredentialInjections: run.launchCredentialInjections,
+          credentialCipher: run.credentialCipher,
+        }),
+      ),
+    );
+  });
+
+/**
+ * An exec run executed in the caller's own fiber (an API request) rather than queued: the run is
+ * created and claimed, its commands run in order with the worker's recording, and the settled run
+ * is returned, a failed one too. Its commands live only in this fiber, and each reaches only its own
+ * exec, never a later command, the changes reading or the credential sync-back. Interrupting it
+ * (the client went away, the API stopped, the caller's budget ran out) fails the run the same way.
+ */
+export const executeExecRun = (input: {
+  readonly run: CreateRunInput;
+  readonly executor: Omit<ClaimedRun, "runId">;
+  readonly commands: readonly RunExecCommand[];
+  readonly user?: string;
+}) =>
+  // Between creating the run and settling it nothing is interrupted: a run never stays queued.
+  Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const runs = yield* RunRepo;
+      const { id } = yield* runs.createRun(input.run);
+      yield* settleClaimedRun(
+        { ...input.executor, runId: id },
+        Effect.gen(function* () {
+          const claim = yield* runs.claimRunForExec({ id });
+          if (claim.outcome !== "claimed") {
+            return yield* Effect.die(`Run ${id} was claimed elsewhere; it is on no queue.`);
+          }
+          yield* restore(produceExecRun(id, input.executor.target, input.commands, input.user));
+        }),
+      ).pipe(
+        // The run says why it failed; an interruption is the caller's to see.
+        Effect.catchCause((cause) =>
+          Cause.hasInterrupts(cause)
+            ? Effect.failCause(cause)
+            : Effect.logWarning(`Run ${id} failed before completion.`, cause),
+        ),
+      );
+      return yield* runs.getRunById(id);
+    }),
+  );

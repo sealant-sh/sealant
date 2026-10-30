@@ -32,6 +32,7 @@ import {
   RECORD_BATCH_SIZE,
   RECORD_BATCH_WINDOW,
   recordConflictMessage,
+  settleClaimedRun,
   TelemetrySink,
   TelemetrySinkConflictError,
 } from "@sealant/telemetry";
@@ -50,7 +51,6 @@ import {
   describeUnaddressableRuntimeInstance,
   sealantTargetForRuntimeInstance,
   type SealantTargetDerivationOptions,
-  syncBackWorkspaceCredentials,
   type SealantTarget,
 } from "@sealant/workspaces";
 import { Cause, Duration, Effect, Layer, Result, Stream } from "effect";
@@ -450,27 +450,15 @@ export const processRunExecJobEffect = (
           ? produceHarnessRun(options.runId, target, command)
           : Effect.void; // unreachable: the framing guard above rejected the neither-set case
 
-    // Never leave the run pinned in "running": reconcile to failed on ANY abnormal exit (onError fires
-    // on typed failures AND defects, e.g. a "connection closed" surfaced as a die).
-    // The credential sync-back runs on EVERY exit path (`ensuring`): the CLIs may have rotated their
-    // session files even when the run itself failed, and the helpers never fail (warnings only).
-    yield* produce.pipe(
-      Effect.onError(() =>
-        runs
-          .markRunFailed({
-            id: options.runId,
-            errorMessage: "Run execution failed before completion.",
-          })
-          .pipe(Effect.ignore),
-      ),
-      Effect.ensuring(
-        syncBackWorkspaceCredentials({
-          attemptId,
-          target,
-          launchCredentialInjections,
-          credentialCipher: options.credentialCipher,
-        }),
-      ),
+    yield* settleClaimedRun(
+      {
+        runId: options.runId,
+        attemptId,
+        target,
+        launchCredentialInjections,
+        credentialCipher: options.credentialCipher,
+      },
+      produce,
     );
   });
 

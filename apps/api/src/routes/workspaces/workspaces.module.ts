@@ -99,6 +99,7 @@ import {
   GitHubSourceIntegrationService,
   createGitHubInstallationRepositoryAuthRef,
 } from "@sealant/source-integrations";
+import { executeExecRun } from "@sealant/telemetry";
 import {
   type RuntimeAdapterId,
   newWorkspaceSchema,
@@ -141,7 +142,7 @@ import {
   executorIsRetained,
   type WorkspaceSshGatewayConfig,
 } from "@sealant/workspaces";
-import { Cause, type Context, Effect, Result } from "effect";
+import { Cause, type Context, Duration, Effect, Option, Result } from "effect";
 import { z } from "zod";
 
 import { resolveWorkspaceSshGatewayConfig } from "../../lib/workspace-ssh-gateway.js";
@@ -2824,14 +2825,7 @@ export const listWorkspaceEvents = (input: {
   });
 };
 
-/**
- * Deterministic exec — run an ordered command list in the workspace, recorded as ONE run (a "check
- * run") on the same run-exec pipeline as harness runs. The run is created with
- * `harnessId: "exec"` and executed asynchronously by the worker under EXEC framing (see
- * `execWorkspaceRequestSchema` for the completed-vs-failed semantics); callers poll
- * `GET /v1/runs/:runId` and read exit codes / output from the run record.
- */
-export const execWorkspace = (input: {
+interface ExecWorkspaceInput {
   readonly workspaceId: string;
   readonly payload: ExecWorkspaceRequest;
   /** For tests; defaults to the live channel (asked only for an exec as a user). */
@@ -2842,8 +2836,15 @@ export const execWorkspace = (input: {
    * would accept and ignore.
    */
   readonly asUser?: boolean;
-}) => {
-  return Effect.gen(function* () {
+}
+
+/**
+ * What an exec asks before its run exists, so a refusal leaves nothing behind: the owner, a user
+ * only on the as-user route and in Mend's range, a launched runtime, and, for a user or when
+ * `executorRequired`, the ready executor, whose daemon must start a process as that user.
+ */
+const admitExec = (input: ExecWorkspaceInput, executorRequired: boolean) =>
+  Effect.gen(function* () {
     const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
     const user = input.payload.user;
     if (user !== undefined && input.asUser !== true) {
@@ -2852,8 +2853,6 @@ export const execWorkspace = (input: {
         code: PROCESS_USER_UNSUPPORTED_CODE,
       });
     }
-    // Set once the user is checked: the run goes to the as-user queue, never the legacy one.
-    let asUserRun: { readonly user: string; readonly checkedExecutorRunId: string } | undefined;
     if (user !== undefined) {
       const refused = processUserNameRefusal(workspace.id, user);
       if (refused !== undefined) {
@@ -2868,42 +2867,70 @@ export const execWorkspace = (input: {
         message: `Workspace ${input.workspaceId} has no launched runtime to exec in yet; wait for it to become ready.`,
       });
     }
-    // An exec as a person: only where the running executor's daemon starts one as that user, for
-    // a person in Mend's range. Asked before the run exists, so a refusal leaves nothing behind.
-    if (user !== undefined) {
-      const resolved = yield* resolveDaemonInstance(workspace.id).pipe(
-        Effect.mapError(
-          (error) =>
-            new WorkspaceInternalServerError({
-              message: toErrorMessage(error, "Failed to load the workspace runtime."),
-            }),
-        ),
-      );
-      if (resolved === undefined) {
-        return yield* new WorkspaceConflictError({
-          message: `Workspace ${input.workspaceId} has no running executor to run a process as '${user}' in.`,
-          code: "workspace-not-running",
-        });
-      }
-      const verdict = yield* checkProcessUser({
-        workspaceId: workspace.id,
-        instance: resolved.instance,
-        target: resolved.target,
-        user,
-        ...(input.processUserChannel === undefined ? {} : { channel: input.processUserChannel }),
-      });
-      if (verdict.kind === "refused") {
-        return yield* new WorkspaceConflictError({
-          message: verdict.message,
-          code: PROCESS_USER_UNSUPPORTED_CODE,
-        });
-      }
-      if (verdict.kind === "unanswered") {
-        return yield* new WorkspaceBadGatewayError({ message: verdict.message });
-      }
-      asUserRun = { user, checkedExecutorRunId: resolved.instance.runId };
+    if (user === undefined && !executorRequired) {
+      return { workspace, executor: undefined, asUserRun: undefined };
     }
+    const executor = yield* resolveDaemonInstance(workspace.id).pipe(
+      Effect.mapError(
+        (error) =>
+          new WorkspaceInternalServerError({
+            message: toErrorMessage(error, "Failed to load the workspace runtime."),
+          }),
+      ),
+    );
+    if (executor === undefined) {
+      return yield* new WorkspaceConflictError({
+        message:
+          user === undefined
+            ? `Workspace ${input.workspaceId} has no running executor to exec in.`
+            : `Workspace ${input.workspaceId} has no running executor to run a process as '${user}' in.`,
+        code: "workspace-not-running",
+      });
+    }
+    if (user === undefined) {
+      return { workspace, executor, asUserRun: undefined };
+    }
+    const verdict = yield* checkProcessUser({
+      workspaceId: workspace.id,
+      instance: executor.instance,
+      target: executor.target,
+      user,
+      ...(input.processUserChannel === undefined ? {} : { channel: input.processUserChannel }),
+    });
+    if (verdict.kind === "refused") {
+      return yield* new WorkspaceConflictError({
+        message: verdict.message,
+        code: PROCESS_USER_UNSUPPORTED_CODE,
+      });
+    }
+    if (verdict.kind === "unanswered") {
+      return yield* new WorkspaceBadGatewayError({ message: verdict.message });
+    }
+    return {
+      workspace,
+      executor,
+      asUserRun: { user, checkedExecutorRunId: executor.instance.runId },
+    };
+  });
 
+/** The commands as the run executes them: only the fields an exec sends, never the request. */
+const execCommands = (payload: ExecWorkspaceRequest) =>
+  payload.commands.map((command) => ({
+    executable: command.executable,
+    args: [...command.args],
+    ...(command.cwd === undefined ? {} : { cwd: command.cwd }),
+  }));
+
+/**
+ * Deterministic exec — run an ordered command list in the workspace, recorded as ONE run (a "check
+ * run") on the same run-exec pipeline as harness runs. The run is created with
+ * `harnessId: "exec"` and executed asynchronously by the worker under EXEC framing (see
+ * `execWorkspaceRequestSchema` for the completed-vs-failed semantics); callers poll
+ * `GET /v1/runs/:runId` and read exit codes / output from the run record.
+ */
+export const execWorkspace = (input: ExecWorkspaceInput) => {
+  return Effect.gen(function* () {
+    const { workspace, asUserRun } = yield* admitExec(input, false);
     const runs = yield* RunRepo;
     const runId = `run_${yield* randomId}`;
     const run = yield* withInternalError(
@@ -2923,11 +2950,7 @@ export const execWorkspace = (input: {
       try: () =>
         publisher.publishRequested({
           runId: run.id,
-          commands: input.payload.commands.map((command) => ({
-            executable: command.executable,
-            args: [...command.args],
-            ...(command.cwd === undefined ? {} : { cwd: command.cwd }),
-          })),
+          commands: execCommands(input.payload),
           ...asUserRun,
         }),
       catch: (error) =>
@@ -2939,6 +2962,74 @@ export const execWorkspace = (input: {
     return mapRun(run);
   });
 };
+
+/** The SDK's exec budget, here over the whole request: admission, submission and recording. */
+const EXEC_IN_REQUEST_BUDGET = Duration.minutes(30);
+
+/**
+ * Exec in the request, never queued: `execWorkspace`'s admission, then the run is created, claimed
+ * and recorded inside this request with the worker's recording, and returned settled: completed
+ * with the last command's exit code (a nonzero exit is data), or failed when the machinery broke.
+ * When the client goes away, the API stops or the budget runs out, no further command is sent and
+ * the run fails; a command already started is not stopped and may still be running.
+ */
+export const execWorkspaceInRequest = (
+  input: ExecWorkspaceInput & {
+    /** For tests; defaults to `EXEC_IN_REQUEST_BUDGET`. */
+    readonly budget?: Duration.Input;
+  },
+) =>
+  Effect.gen(function* () {
+    const runId = `run_${yield* randomId}`;
+    return yield* Effect.gen(function* () {
+      const { workspace, executor, asUserRun } = yield* admitExec(input, true);
+      if (executor?.target === undefined) {
+        return yield* new WorkspaceBadGatewayError({
+          message: `Core has no way to reach workspace ${workspace.id}'s executor from here (its control client is not configured for this runtime). Nothing was started.`,
+        });
+      }
+      const cipher = yield* Effect.serviceOption(CredentialCipher);
+      const run = yield* executeExecRun({
+        run: {
+          id: runId,
+          workspaceId: workspace.id,
+          ownerUserId: input.payload.ownerUserId,
+          harnessId: execRunHarnessId,
+          mode: "one-shot",
+          ...(asUserRun === undefined ? {} : { processUser: asUserRun.user }),
+        },
+        executor: {
+          target: executor.target,
+          attemptId: executor.instance.runId,
+          launchCredentialInjections: executor.instance.launchCredentialInjections ?? [],
+          ...(Option.isSome(cipher) ? { credentialCipher: cipher.value } : {}),
+        },
+        commands: execCommands(input.payload),
+        ...(asUserRun === undefined ? {} : { user: asUserRun.user }),
+      }).pipe(
+        Effect.mapError(
+          () =>
+            new WorkspaceInternalServerError({ message: `Failed to record exec run ${runId}.` }),
+        ),
+      );
+      if (run === undefined) {
+        return yield* new WorkspaceInternalServerError({
+          message: `Exec run ${runId} is gone.`,
+        });
+      }
+      return mapRun(run);
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: input.budget ?? EXEC_IN_REQUEST_BUDGET,
+        orElse: () =>
+          Effect.fail(
+            new WorkspaceBadGatewayError({
+              message: `Exec run ${runId} ran past its budget and failed; a command it started may still be running.`,
+            }),
+          ),
+      }),
+    );
+  });
 
 /**
  * Bind (sealantd ADR-0014): point a standby workspace's working directory, or a bindable extra
