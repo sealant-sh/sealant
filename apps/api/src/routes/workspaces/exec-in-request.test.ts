@@ -7,14 +7,11 @@
  * module load.
  */
 import {
-  type Workspace,
-  WorkspaceRepo,
-  type WorkspaceRepoService,
-  type WorkspaceRuntimeInstance,
-  WorkspaceRuntimeInstanceRepo,
-  type WorkspaceRuntimeInstanceRepoService,
-} from "@sealant/db";
-import { fakeExecWorld, type FakeExecWorldOptions } from "@sealant/telemetry/testing";
+  FAKE_WORKSPACE_ID,
+  fakeExecWorld,
+  type FakeExecWorldOptions,
+  fakeWorkspaceRepos,
+} from "@sealant/telemetry/testing";
 import { Duration, Effect, Layer, Result } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -27,100 +24,15 @@ beforeAll(async () => {
 });
 
 const OWNER = "usr_alice";
-const workspace: Workspace = {
-  id: "wks_1",
-  name: "",
-  ownerUserId: OWNER,
-  repositoryId: null,
-  repositoryProfileRevisionId: null,
-  profileRevisionId: null,
-  requestedByUserId: null,
-  status: "ready",
-  latestRunId: "run_launch",
-  expiresAt: null,
-  createdAt: new Date(0),
-  updatedAt: new Date(0),
-  archivedAt: null,
-  binds: [],
-  idempotencyKey: null,
-  sshUser: null,
-};
-const instance: WorkspaceRuntimeInstance = {
-  runId: "run_launch",
-  status: "ready",
-  adapter: "docker",
-  resourceId: "container-1",
-  launchCredentialInjections: [],
-  reference: "container-1",
-  endpoint: null,
-  errorCode: null,
-  errorMessage: null,
-  stopReason: null,
-  launchedAt: null,
-  finishedAt: null,
-  removedAt: null,
-  runtimeDeadlineAt: null,
-  sourceKind: null,
-  launchOwner: null,
-  launchLeaseExpiresAt: null,
-  daemonImage: null,
-  daemonRecoveryBoot: null,
-  createdAt: new Date(0),
-  updatedAt: new Date(0),
-};
-
-const unscripted = (call: string) => () => Effect.die(`unscripted call ${call}`);
-
-const workspaces: WorkspaceRepoService = {
-  createWorkspace: unscripted("createWorkspace"),
-  getWorkspaceByAttemptId: unscripted("getWorkspaceByAttemptId"),
-  getWorkspaceById: (id) => Effect.succeed(id === workspace.id ? workspace : undefined),
-  getWorkspaceByIdempotencyKey: unscripted("getWorkspaceByIdempotencyKey"),
-  linkWorkspaceAttempt: unscripted("linkWorkspaceAttempt"),
-  listWorkspaces: unscripted("listWorkspaces"),
-  listWorkspaceAttemptLinks: unscripted("listWorkspaceAttemptLinks"),
-  setWorkspaceName: unscripted("setWorkspaceName"),
-  setWorkspaceBinds: unscripted("setWorkspaceBinds"),
-  setWorkspaceSshUser: unscripted("setWorkspaceSshUser"),
-  setWorkspaceExpiry: unscripted("setWorkspaceExpiry"),
-  setWorkspaceStatus: unscripted("setWorkspaceStatus"),
-};
-
-const instances: WorkspaceRuntimeInstanceRepoService = {
-  upsertRuntimeInstance: unscripted("upsertRuntimeInstance"),
-  markExited: unscripted("markExited"),
-  markStopRequested: unscripted("markStopRequested"),
-  markStopped: unscripted("markStopped"),
-  markRemoved: unscripted("markRemoved"),
-  getRuntimeInstanceByRunId: () => Effect.succeed(instance),
-  listRuntimeInstancesByRunIds: unscripted("listRuntimeInstancesByRunIds"),
-  listRunningInstances: unscripted("listRunningInstances"),
-  listRetainedLaunches: unscripted("listRetainedLaunches"),
-  listStrandedLaunches: unscripted("listStrandedLaunches"),
-  adoptStrandedLaunch: unscripted("adoptStrandedLaunch"),
-  listUnidentifiedStrandedLaunches: unscripted("listUnidentifiedStrandedLaunches"),
-  identifyStrandedLaunch: unscripted("identifyStrandedLaunch"),
-  failLostLaunch: unscripted("failLostLaunch"),
-  preemptLaunch: unscripted("preemptLaunch"),
-  renewLaunchLease: unscripted("renewLaunchLease"),
-  listPreservationCandidates: unscripted("listPreservationCandidates"),
-  listUnsettledCaptureExecutors: unscripted("listUnsettledCaptureExecutors"),
-  listStoppedWithRemains: unscripted("listStoppedWithRemains"),
-};
-
 const world = (options: FakeExecWorldOptions = {}) => {
   const exec = fakeExecWorld(options);
-  const layer = Layer.mergeAll(
-    exec.layer,
-    Layer.succeed(WorkspaceRepo, workspaces),
-    Layer.succeed(WorkspaceRuntimeInstanceRepo, instances),
-  );
+  const layer = Layer.mergeAll(exec.layer, fakeWorkspaceRepos(OWNER));
   const run = (args: readonly string[], budget?: Duration.Input) =>
     Effect.runPromise(
       Effect.result(
         workspacesModule
           .execWorkspaceInRequest({
-            workspaceId: workspace.id,
+            workspaceId: FAKE_WORKSPACE_ID,
             payload: {
               ownerUserId: OWNER,
               commands: args.map((arg) => ({ executable: "check", args: [arg] })),

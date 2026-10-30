@@ -17,6 +17,12 @@ import {
   RunRepoUnexpectedError,
   WorkspaceAttemptRepo,
   type WorkspaceAttemptRepoService,
+  type Workspace,
+  WorkspaceRepo,
+  type WorkspaceRepoService,
+  type WorkspaceRuntimeInstance,
+  WorkspaceRuntimeInstanceRepo,
+  type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
 import {
   CapabilitiesSchema,
@@ -311,4 +317,95 @@ export const fakeExecWorld = (options: FakeExecWorldOptions = {}) => {
     healthReads: () => healthReads,
     row: () => row,
   };
+};
+
+export const FAKE_WORKSPACE_ID = "wks_1";
+
+/**
+ * A workspace and its ready docker executor, launched by `run_launch`, for the paths that resolve
+ * a run's runtime from the database.
+ */
+export const fakeWorkspaceRepos = (ownerUserId: string) => {
+  const workspace: Workspace = {
+    id: FAKE_WORKSPACE_ID,
+    name: "",
+    ownerUserId,
+    repositoryId: null,
+    repositoryProfileRevisionId: null,
+    profileRevisionId: null,
+    requestedByUserId: null,
+    status: "ready",
+    latestRunId: "run_launch",
+    expiresAt: null,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+    archivedAt: null,
+    binds: [],
+    idempotencyKey: null,
+    sshUser: null,
+  };
+  const instance: WorkspaceRuntimeInstance = {
+    runId: "run_launch",
+    status: "ready",
+    adapter: "docker",
+    resourceId: "container-1",
+    launchCredentialInjections: [],
+    reference: "container-1",
+    endpoint: null,
+    errorCode: null,
+    errorMessage: null,
+    stopReason: null,
+    launchedAt: null,
+    finishedAt: null,
+    removedAt: null,
+    runtimeDeadlineAt: null,
+    sourceKind: null,
+    launchOwner: null,
+    launchLeaseExpiresAt: null,
+    daemonImage: null,
+    daemonRecoveryBoot: null,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  };
+
+  const workspaces: WorkspaceRepoService = {
+    createWorkspace: unscripted("createWorkspace"),
+    getWorkspaceByAttemptId: unscripted("getWorkspaceByAttemptId"),
+    getWorkspaceById: (id) => Effect.succeed(id === workspace.id ? workspace : undefined),
+    getWorkspaceByIdempotencyKey: unscripted("getWorkspaceByIdempotencyKey"),
+    linkWorkspaceAttempt: unscripted("linkWorkspaceAttempt"),
+    listWorkspaces: unscripted("listWorkspaces"),
+    listWorkspaceAttemptLinks: unscripted("listWorkspaceAttemptLinks"),
+    setWorkspaceName: unscripted("setWorkspaceName"),
+    setWorkspaceBinds: unscripted("setWorkspaceBinds"),
+    setWorkspaceSshUser: unscripted("setWorkspaceSshUser"),
+    setWorkspaceExpiry: unscripted("setWorkspaceExpiry"),
+    setWorkspaceStatus: unscripted("setWorkspaceStatus"),
+  };
+
+  const instances: WorkspaceRuntimeInstanceRepoService = {
+    upsertRuntimeInstance: unscripted("upsertRuntimeInstance"),
+    markExited: unscripted("markExited"),
+    markStopRequested: unscripted("markStopRequested"),
+    markStopped: unscripted("markStopped"),
+    markRemoved: unscripted("markRemoved"),
+    getRuntimeInstanceByRunId: () => Effect.succeed(instance),
+    listRuntimeInstancesByRunIds: unscripted("listRuntimeInstancesByRunIds"),
+    listRunningInstances: unscripted("listRunningInstances"),
+    listRetainedLaunches: unscripted("listRetainedLaunches"),
+    listStrandedLaunches: unscripted("listStrandedLaunches"),
+    adoptStrandedLaunch: unscripted("adoptStrandedLaunch"),
+    listUnidentifiedStrandedLaunches: unscripted("listUnidentifiedStrandedLaunches"),
+    identifyStrandedLaunch: unscripted("identifyStrandedLaunch"),
+    failLostLaunch: unscripted("failLostLaunch"),
+    preemptLaunch: unscripted("preemptLaunch"),
+    renewLaunchLease: unscripted("renewLaunchLease"),
+    listPreservationCandidates: unscripted("listPreservationCandidates"),
+    listUnsettledCaptureExecutors: unscripted("listUnsettledCaptureExecutors"),
+    listStoppedWithRemains: unscripted("listStoppedWithRemains"),
+  };
+  return Layer.mergeAll(
+    Layer.succeed(WorkspaceRepo, workspaces),
+    Layer.succeed(WorkspaceRuntimeInstanceRepo, instances),
+  );
 };
