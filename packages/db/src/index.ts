@@ -503,6 +503,8 @@ export {
   telemetryTimeline,
 } from "./schema.js";
 
+export { type ResourceInstanceDesired, type ResourceNetworkKind } from "./schema.js";
+
 export * as schema from "./schema/index.js";
 export { describeArguments, type WithheldArguments } from "./withheld-arguments.js";
 
