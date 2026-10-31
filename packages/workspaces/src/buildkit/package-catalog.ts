@@ -24,6 +24,11 @@
  * installs `chromium` as `chromium-browser`, and Ubuntu 24.04's `chromium-browser` is a stub for
  * the chromium snap that exits 1, so `chromium` is refused there.
  *
+ * Measured on 2026-10-31 by installing on x86_64 (aarch64 from repository indexes only):
+ * Arch, Fedora 41 and Ubuntu 24.04 start XFCE with `dbus-run-session`. nixpkgs installs the
+ * components, but its dbus-run-session fails without /etc/dbus-1/session.conf, so dbus is refused.
+ * Arch and Ubuntu's ffmpeg and nixpkgs' ffmpeg-full have XCB x11grab and libx264. Fedora 41's ffmpeg-free has x11grab but no libx264 encoder, so ffmpeg is refused.
+ *
  * A zsh plugin's `.zsh` file lands where its family puts it, which differs:
  *
  * - `zsh-autosuggestions`: Fedora and Ubuntu `/usr/share/zsh-autosuggestions/`, Arch
@@ -255,11 +260,29 @@ export const WORKSPACE_PACKAGE_CATALOG: Readonly<Record<string, CatalogEntry>> =
   },
   "ca-certificates": everywhere("ca-certificates", "cacert"),
   curl: everywhere("curl"),
+  dbus: {
+    fedora: { packages: ["dbus-daemon"] },
+    arch: { packages: ["dbus"] },
+    ubuntu: { packages: ["dbus-daemon"] },
+    nix: {
+      unsupported:
+        "nixpkgs' dbus-run-session exits before starting its command: /etc/dbus-1/session.conf is absent in the workspace image. Installing the dbus package alone does not configure a session bus.",
+    },
+  },
   direnv: everywhere("direnv"),
   eza: everywhere("eza"),
   fd,
   // Debian's and Fedora's name for it, kept as an id since blueprints have used it.
   "fd-find": fd,
+  ffmpeg: {
+    fedora: {
+      unsupported:
+        "Fedora 41's ffmpeg-free has XCB x11grab but no libx264 encoder. Arch, Ubuntu and nix install both.",
+    },
+    arch: { packages: ["ffmpeg"] },
+    ubuntu: { packages: ["ffmpeg"] },
+    nix: { packages: ["ffmpeg-full"] },
+  },
   fish: everywhere("fish"),
   "fonts-dejavu": {
     fedora: { packages: ["dejavu-sans-fonts", "dejavu-serif-fonts", "dejavu-sans-mono-fonts"] },
@@ -345,6 +368,69 @@ export const WORKSPACE_PACKAGE_CATALOG: Readonly<Record<string, CatalogEntry>> =
     arch: { packages: ["xorg-xdpyinfo"] },
     ubuntu: { packages: ["x11-utils"] },
     nix: { packages: ["xdpyinfo"] },
+  },
+  // Individual components only: no locker, screensaver, power or clipboard manager.
+  xfce: {
+    fedora: {
+      packages: [
+        "xfce4-session",
+        "xfwm4",
+        "xfdesktop",
+        "xfce4-panel",
+        "xfce4-settings",
+        "xfconf",
+        "Thunar",
+        "xfce4-terminal",
+        "xset",
+        "procps-ng",
+        "adwaita-icon-theme",
+      ],
+    },
+    arch: {
+      packages: [
+        "xfce4-session",
+        "xfwm4",
+        "xfdesktop",
+        "xfce4-panel",
+        "xfce4-settings",
+        "xfconf",
+        "thunar",
+        "xfce4-terminal",
+        "xorg-xset",
+        "procps-ng",
+        "adwaita-icon-theme",
+      ],
+    },
+    ubuntu: {
+      packages: [
+        "xfce4-session",
+        "xfwm4",
+        "xfdesktop4",
+        "xfce4-panel",
+        "xfce4-settings",
+        "xfconf",
+        "thunar",
+        "xfce4-terminal",
+        "x11-xserver-utils",
+        "procps",
+        "adwaita-icon-theme",
+      ],
+    },
+    nix: {
+      packages: [
+        "xfce4-session",
+        "xfwm4",
+        "xfdesktop",
+        "xfce4-panel",
+        "xfce4-settings",
+        "xfconf",
+        "thunar",
+        "xfce4-terminal",
+        "xset",
+        "procps",
+        "adwaita-icon-theme",
+      ],
+    },
   },
   zsh: everywhere("zsh"),
   "zsh-autosuggestions": everywhere("zsh-autosuggestions"),

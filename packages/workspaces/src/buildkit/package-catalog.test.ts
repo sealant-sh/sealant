@@ -169,6 +169,99 @@ describe("the workspace package catalog", () => {
     );
   });
 
+  it("installs the screen's XFCE components and private session bus, without desktop extras", () => {
+    const expected = {
+      fedora: [
+        "xfce4-session",
+        "xfwm4",
+        "xfdesktop",
+        "xfce4-panel",
+        "xfce4-settings",
+        "xfconf",
+        "Thunar",
+        "xfce4-terminal",
+        "xset",
+        "procps-ng",
+        "adwaita-icon-theme",
+      ],
+      arch: [
+        "xfce4-session",
+        "xfwm4",
+        "xfdesktop",
+        "xfce4-panel",
+        "xfce4-settings",
+        "xfconf",
+        "thunar",
+        "xfce4-terminal",
+        "xorg-xset",
+        "procps-ng",
+        "adwaita-icon-theme",
+      ],
+      ubuntu: [
+        "xfce4-session",
+        "xfwm4",
+        "xfdesktop4",
+        "xfce4-panel",
+        "xfce4-settings",
+        "xfconf",
+        "thunar",
+        "xfce4-terminal",
+        "x11-xserver-utils",
+        "procps",
+        "adwaita-icon-theme",
+      ],
+      nix: [
+        "xfce4-session",
+        "xfwm4",
+        "xfdesktop",
+        "xfce4-panel",
+        "xfce4-settings",
+        "xfconf",
+        "thunar",
+        "xfce4-terminal",
+        "xset",
+        "procps",
+        "adwaita-icon-theme",
+      ],
+    } as const;
+    for (const family of CATALOG_OS_FAMILIES) {
+      expect(familyInstall("xfce", family)?.packages, family).toEqual(expected[family]);
+      expect(unsupportedWorkspacePackages(family, ["xfce"])).toEqual([]);
+      const planned = containerfileFor(family, family === "nix" ? ["xfce"] : ["xfce", "dbus"]);
+      for (const name of expected[family]) expect(planned, family).toContain(name);
+      expect(planned).not.toMatch(/xfce4-(screensaver|power-manager|clipman)|light-locker/);
+      if (family !== "nix") {
+        expect(familyInstall("dbus", family)?.packages).toEqual([
+          family === "arch" ? "dbus" : "dbus-daemon",
+        ]);
+      }
+    }
+  });
+
+  it("refuses nixpkgs' unconfigured session bus, with the measured failure", () => {
+    expect(unsupportedWorkspacePackages("nix", ["dbus"])).toEqual([
+      { id: "dbus", reason: expect.stringContaining("/etc/dbus-1/session.conf is absent") },
+    ]);
+    expect(() => containerfileFor("nix", ["xfce", "dbus", "ffmpeg"])).toThrow(
+      /Workspace package 'dbus' is not available on nix:.*session.conf is absent/,
+    );
+  });
+
+  it("requires both XCB x11grab and libx264 for ffmpeg", () => {
+    for (const family of ["arch", "ubuntu", "nix"] as const) {
+      expect(familyInstall("ffmpeg", family)?.packages).toEqual([
+        family === "nix" ? "ffmpeg-full" : "ffmpeg",
+      ]);
+      expect(containerfileFor(family, ["ffmpeg"])).toContain("ffmpeg");
+    }
+    expect(unsupportedWorkspacePackages("fedora", ["ffmpeg"])).toEqual([
+      { id: "ffmpeg", reason: expect.stringContaining("no libx264 encoder") },
+    ]);
+    expect(() => containerfileFor("fedora", ["xfce", "dbus", "ffmpeg"])).toThrow(
+      /Workspace package 'ffmpeg' is not available on fedora:.*no libx264 encoder/,
+    );
+  });
+
   it("installs a pinned release where a family's repositories have no package", () => {
     const fedora = containerfileFor("fedora", ["mise", "lazygit"]);
     expect(fedora).toContain("mise 2026.9.12");
