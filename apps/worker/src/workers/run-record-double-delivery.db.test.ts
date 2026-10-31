@@ -16,6 +16,7 @@
  */
 import { makeSealantDBLayer, runs, SealantDB, user, workspaces } from "@sealant/db";
 import {
+  captureRun,
   ExecutionRunResolverLive,
   InlineByteaArtifactStoreLive,
   PostgresTelemetrySinkLive,
@@ -25,8 +26,6 @@ import {
 import { SealantRuntime, type SealantSession, type SealantTarget } from "@sealant/workspaces";
 import { Deferred, Effect, Layer, Logger, PubSub, Stream } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
-import { captureRun } from "./process-run-exec-job.js";
 
 type EventEnvelope = Stream.Success<SealantSession["events"]>;
 

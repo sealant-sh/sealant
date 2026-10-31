@@ -148,6 +148,10 @@ export interface RunRepoService {
   readonly markRunCompleted: (
     input: MarkRunCompletedInput,
   ) => Effect.Effect<Run | null, RunRepoError>;
+  /**
+   * Fails a run that has not settled (queued or running), and answers `null` for one that has: a
+   * completion whose answer was lost is never written over as a failure.
+   */
   readonly markRunFailed: (input: MarkRunFailedInput) => Effect.Effect<Run | null, RunRepoError>;
 }
 
@@ -320,7 +324,7 @@ export const RunRepoLive = Layer.effect(
                   : { changedFiles: [...input.changedFiles] }),
                 ...(input.changesReadFailed === true ? { changesReadFailedAt: new Date() } : {}),
               })
-              .where(eq(runs.id, input.id))
+              .where(and(eq(runs.id, input.id), inArray(runs.status, ["queued", "running"])))
               .returning();
             return run ?? null;
           }),
