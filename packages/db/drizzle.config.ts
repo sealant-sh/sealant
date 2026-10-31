@@ -9,6 +9,7 @@ export default defineConfig({
     "./src/schema/control-plane.ts",
     "./src/schema/workspace-build-jobs.ts",
     "./src/schema/resource-domains.ts",
+    "./src/schema/resource-instances.ts",
     "./src/schema/telemetry.ts",
   ],
   out: "./drizzle",

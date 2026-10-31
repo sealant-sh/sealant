@@ -12,6 +12,7 @@ export * from "./core-api/registries.js";
 export * from "./core-api/runs.js";
 export * from "./core-api/request-refusal.js";
 export * from "./core-api/resource-domains.js";
+export * from "./core-api/resource-instances.js";
 export * from "./core-api/sessions.js";
 export * from "./core-api/access-tokens.js";
 export * from "./core-api/workspaces.js";
