@@ -3,6 +3,7 @@ export * from "./harness/integrations.js";
 export * from "./images/index.js";
 export * from "./registry/index.js";
 export * from "./runtime/index.js";
+export * from "./resources/index.js";
 export * from "./sealantd/index.js";
 export * from "./queue/index.js";
 export * from "./package-standardization.js";
