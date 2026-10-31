@@ -10,7 +10,9 @@
  * The spec has no field for privileged mode, capabilities, host networking, host paths, devices,
  * the Docker socket or shared namespaces, and the decoder names each one it is sent.
  */
-import { Schema } from "effect";
+import { Result, Schema } from "effect";
+
+import { describeRequestIssue } from "./request-refusal.js";
 
 export const RESOURCE_INSTANCE_ID_PREFIX = "rin:";
 
@@ -177,3 +179,71 @@ export const resourceInstanceStateSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("archived"), at: Schema.String }),
 ]);
 export type ResourceInstanceState = typeof resourceInstanceStateSchema.Type;
+
+const NAMESPACE = "an instance shares no namespace with the host or another container";
+const MOUNTS = "an instance mounts named volumes only, never a host path or the Docker socket";
+const CAPABILITIES = "Sealant adds no capability to an instance";
+const NETWORK = "an instance joins only the networks Sealant gives it, never the host's";
+
+/**
+ * What a spec may never ask for, by the names a caller might send it under, each with the sentence
+ * the refusal carries. None of them is a field of `resourceInstanceSpecSchema`.
+ */
+export const FORBIDDEN_RESOURCE_INSTANCE_SPEC_FIELDS: Readonly<Record<string, string>> = {
+  privileged: "Sealant never runs an instance privileged",
+  capAdd: CAPABILITIES,
+  cap_add: CAPABILITIES,
+  capabilities: CAPABILITIES,
+  network: NETWORK,
+  networkMode: NETWORK,
+  network_mode: NETWORK,
+  hostNetwork: NETWORK,
+  binds: MOUNTS,
+  bind: MOUNTS,
+  mounts: MOUNTS,
+  hostPath: MOUNTS,
+  dockerSocket: MOUNTS,
+  devices: "an instance gets no device",
+  pid: NAMESPACE,
+  ipc: NAMESPACE,
+  uts: NAMESPACE,
+  userns: NAMESPACE,
+  usernsMode: NAMESPACE,
+  securityOpt: "an instance's security options are Sealant's",
+  security_opt: "an instance's security options are Sealant's",
+};
+
+export interface ResourceInstanceSpecRefusal {
+  /** Where the spec is wrong (`privileged`, `volumes[0].mountPath`); never a value it held. */
+  readonly field: string;
+  readonly reason: string;
+}
+
+export type ResourceInstanceSpecDecoding =
+  | { readonly kind: "spec"; readonly spec: ResourceInstanceSpec }
+  | { readonly kind: "refused"; readonly refusals: ReadonlyArray<ResourceInstanceSpecRefusal> };
+
+const decodeSpec = Schema.decodeUnknownResult(resourceInstanceSpecSchema);
+
+/**
+ * A spec from outside: each forbidden field refused by name with its sentence, then the schema's
+ * own decode with no excess key allowed.
+ */
+export const decodeResourceInstanceSpec = (input: unknown): ResourceInstanceSpecDecoding => {
+  const forbidden =
+    typeof input === "object" && input !== null
+      ? Object.keys(input).flatMap((field) =>
+          Object.hasOwn(FORBIDDEN_RESOURCE_INSTANCE_SPEC_FIELDS, field)
+            ? [{ field, reason: FORBIDDEN_RESOURCE_INSTANCE_SPEC_FIELDS[field] ?? "" }]
+            : [],
+        )
+      : [];
+  if (forbidden.length > 0) return { kind: "refused", refusals: forbidden };
+  const decoded = decodeSpec(input, { onExcessProperty: "error", errors: "all" });
+  return Result.isSuccess(decoded)
+    ? { kind: "spec", spec: decoded.success }
+    : {
+        kind: "refused",
+        refusals: [{ field: "spec", reason: describeRequestIssue("spec", decoded.failure.issue) }],
+      };
+};

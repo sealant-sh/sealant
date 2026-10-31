@@ -105,6 +105,31 @@ const CLOUD_METADATA_GUARD_SCRIPT = [
   "if [ -e /proc/net/if_inet6 ]; then ip -6 route replace prohibit fd00:ec2::254/128; fi",
 ].join("\n");
 
+/**
+ * `docker run` of the guard image in a container's network namespace (`CLOUD_METADATA_GUARD_SCRIPT`),
+ * with `NET_ADMIN` that the container itself never holds. Always runc: the route goes into the
+ * namespace the kernel routes for.
+ */
+export const cloudMetadataGuardArgv = (container: string, image: string): Array<string> => [
+  "run",
+  "--rm",
+  "--runtime",
+  "runc",
+  "--network",
+  `container:${container}`,
+  "--cap-drop",
+  "ALL",
+  "--cap-add",
+  "NET_ADMIN",
+  "--user",
+  "0",
+  "--entrypoint",
+  "sh",
+  image,
+  "-c",
+  CLOUD_METADATA_GUARD_SCRIPT,
+];
+
 /** What an operator does about a guard that cannot run. */
 const NETWORK_GUARD_REMEDY =
   "Make the image pullable from the Docker host, or point SEALANT_DOCKER_NETWORK_GUARD_IMAGE at a reachable copy. A workspace that needs the address sets runtime.network.cloudMetadata.";
@@ -1526,25 +1551,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     try {
       await this.commandRunner(
         "docker",
-        [
-          "run",
-          "--rm",
-          "--runtime",
-          "runc",
-          "--network",
-          `container:${containerId}`,
-          "--cap-drop",
-          "ALL",
-          "--cap-add",
-          "NET_ADMIN",
-          "--user",
-          "0",
-          "--entrypoint",
-          "sh",
-          this.networkGuardImage,
-          "-c",
-          CLOUD_METADATA_GUARD_SCRIPT,
-        ],
+        cloudMetadataGuardArgv(containerId, this.networkGuardImage),
         { timeoutMs: NETWORK_GUARD_TIMEOUT_MS },
       );
     } catch (error) {
