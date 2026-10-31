@@ -48,6 +48,7 @@ import {
   renderReleaseInstall,
   unknownWorkspacePackageIds,
   unsupportedWorkspacePackages,
+  WORKSPACE_PACKAGE_CATALOG,
 } from "./package-catalog.js";
 import {
   GIT_SAFE_DIRECTORY_ANY,
@@ -695,13 +696,14 @@ const resolvePackages = (
   osFamily: BuildkitTargetOsFamily,
 ): ResolvedImagePackage[] => {
   if (osFamily === "custom") {
-    // No distro map: requested names pass through verbatim to the base's own detected package
-    // manager. Harness runtime packages (nodejs/npm) are NOT added — the custom-base contract
+    // Portable catalog releases opt in explicitly; other names pass through verbatim to the
+    // base's package manager. Harness runtime packages (nodejs/npm) are NOT added: the contract
     // requires node in the base — and shell/dotfiles helpers cannot apply (support-checked).
     return blueprint.tooling.packages.map((request) => ({
       requestId: request.id,
       ...(request.version === undefined ? {} : { requestedVersion: request.version }),
-      installPackages: [request.id],
+      installPackages:
+        WORKSPACE_PACKAGE_CATALOG[request.id]?.customRelease === undefined ? [request.id] : [],
     }));
   }
 
@@ -914,7 +916,6 @@ const renderCustomBaseContractPreflight = (): string => {
 
 /** What the catalog adds for this plan beyond repository packages, in request order, once each. */
 const catalogExtras = (plan: ResolvedImagePlan) => {
-  if (plan.osFamily === "custom") return { releases: [], npmGlobal: [], postInstall: [] };
   const family = plan.osFamily;
   const seen = new Set<string>();
   const releases = [];
@@ -923,6 +924,11 @@ const catalogExtras = (plan: ResolvedImagePlan) => {
   for (const pkg of plan.packages) {
     if (seen.has(pkg.requestId)) continue;
     seen.add(pkg.requestId);
+    if (family === "custom") {
+      const release = WORKSPACE_PACKAGE_CATALOG[pkg.requestId]?.customRelease;
+      if (release !== undefined) releases.push(release);
+      continue;
+    }
     const install = familyInstall(pkg.requestId, family);
     if (install?.release !== undefined) releases.push(install.release);
     if (install?.npmGlobal !== undefined) npmGlobal.push(...install.npmGlobal);
@@ -1357,7 +1363,7 @@ const renderChezmoiInstallStep = (plan: ResolvedImagePlan): string | undefined =
 /**
  * The custom-base Containerfile: an arbitrary caller-supplied base, overlaid with ONLY the
  * sealantd supervisor (+ its static socat relay, vendored in the sealantd image), the harness
- * CLIs via npm, any explicitly requested packages through the base's own package manager, git's
+ * CLIs via npm, requested portable releases or packages through the base's own package manager, git's
  * `safe.directory = *` for the person layout, and the image probe. No distro package installs, no shell reconfiguration — the contract (see the SDK README's
  * "Custom base images") is: any Linux base, amd64/arm64, with a POSIX shell; node + npm for the
  * node-based harness CLIs; git for clone/mount workspace sources.
@@ -1365,8 +1371,12 @@ const renderChezmoiInstallStep = (plan: ResolvedImagePlan): string | undefined =
  * `COPY --chmod` is used instead of a chmod RUN so nothing here assumes coreutils in the base.
  */
 const renderCustomBaseContainerfile = (plan: ResolvedImagePlan): string => {
+  const releases = catalogExtras(plan).releases;
   const packageInstallStep = renderCustomBasePackageInstallCommand(
-    normalizeInstallPackages(plan.packages.flatMap((pkg) => pkg.installPackages)),
+    normalizeInstallPackages([
+      ...plan.packages.flatMap((pkg) => pkg.installPackages),
+      ...(releases.length === 0 ? [] : ["curl", "ca-certificates", "tar", "coreutils"]),
+    ]),
   );
 
   return [
@@ -1375,6 +1385,7 @@ const renderCustomBaseContainerfile = (plan: ResolvedImagePlan): string => {
     "",
     renderCustomBaseContractPreflight(),
     ...(packageInstallStep === undefined ? [] : ["", packageInstallStep]),
+    ...renderCatalogExtras(plan),
     "",
     renderHarnessInstallCommand(plan),
     "",
