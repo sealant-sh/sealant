@@ -24,6 +24,13 @@ import {
   setResourceDomainBudgetOp,
 } from "./effect/operations.js";
 import type { SdkRuntime } from "./effect/runtime.js";
+import type { SealantInternalConfig } from "./internal/config.js";
+import {
+  makeScopeInstances,
+  type ScopeArchivedVolume,
+  type ScopeInstances,
+  type ScopeWorkspaces,
+} from "./scope-instances.js";
 
 export interface ScopeInfo {
   /** `rdm:<uuid>`. No person field of the API accepts it. */
@@ -120,6 +127,14 @@ export interface ScopeClient {
   get(): Promise<ScopeInfo>;
   readonly members: ScopeMembers;
   readonly budget: ScopeBudgets;
+  /** The scope's long-running instances (Docker only). */
+  readonly instances: ScopeInstances;
+  readonly workspaces: ScopeWorkspaces;
+  /**
+   * Fence the scope, archive every instance (each volume kept, listed with its size) and unlink
+   * every workspace. A repeat answers no volume.
+   */
+  archive(): Promise<{ readonly volumes: ReadonlyArray<ScopeArchivedVolume> }>;
 }
 
 export interface ScopesNamespace {
@@ -143,7 +158,7 @@ const toScope = (wire: ResourceDomainWire): ScopeInfo => ({
   createdAt: wire.createdAt,
 });
 
-export const makeScopes = (runtime: SdkRuntime): ScopesNamespace => {
+export const makeScopes = (runtime: SdkRuntime, config: SealantInternalConfig): ScopesNamespace => {
   const get = async (scopeId: string) => toScope(await runtime.run(getResourceDomainOp(scopeId)));
   return {
     ensure: async ({ key, budget }) => {
@@ -153,6 +168,7 @@ export const makeScopes = (runtime: SdkRuntime): ScopesNamespace => {
     get,
     actAs: (scopeId) => ({
       id: scopeId,
+      ...makeScopeInstances(runtime, config, scopeId),
       get: () => get(scopeId),
       members: {
         grant: (userId, decision) =>

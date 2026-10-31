@@ -18,6 +18,7 @@ import { HttpMiddleware, HttpRouter, HttpServerResponse } from "effect/http";
 import { makeControlPlaneHttpApiLayer } from "./routes/control-plane.http-api.js";
 import { InferenceEngineLive } from "./routes/inference/claude-engine.js";
 import { CodexInferenceEngineLive } from "./routes/inference/codex-engine.js";
+import { ResourceInstanceExecRoute } from "./routes/resource-domains/resource-instances.exec.js";
 import { SessionOutputStreamRoute } from "./routes/sessions/sessions.sse.js";
 import { SessionAttachRoute } from "./routes/sessions/sessions.ws.js";
 import { parseAllowedCaptureOrigins } from "./routes/workspaces/credential-destinations.js";
@@ -31,6 +32,7 @@ import { CodexApiKeyConversionLive } from "./services/codex-api-key-conversion.j
 import { ConnectedAccountDefaultsBackfillLive } from "./services/connected-account-defaults-backfill.js";
 import { ControlPlaneCapabilitiesLive } from "./services/control-plane-capabilities.js";
 import { CredentialRedactionLive, observedMain } from "./services/credential-redaction.js";
+import { ResourceRuntimeHostLive } from "./services/resource-runtime.js";
 import {
   authPosture,
   servicePrincipalMiddleware,
@@ -174,6 +176,8 @@ export const requestDependenciesLayer = Layer.mergeAll(
   InferenceEngineLive,
   // The codex engine is stateless (tool-less v1: every exchange settles in one spawn).
   CodexInferenceEngineLive,
+  // Resource instances run on this process's Docker host (or refuse by the runtime's name).
+  ResourceRuntimeHostLive.pipe(Layer.provide(databaseLayer)),
 ).pipe(Layer.provideMerge(databaseLayer));
 
 /**
@@ -275,7 +279,19 @@ const forwardLayer = Layer.mergeAll(WorkspaceForwardRoute, WorkspaceForwardV2Rou
   HttpRouter.provideRequest(requestDependenciesLayer),
 );
 
-const appLayer = Layer.mergeAll(apiLayer, sseLayer, wsLayer, forwardLayer, docsLayer);
+/** The raw resource instance exec (resource-instances.exec.ts): stdin streamed into the instance. */
+const resourceExecLayer = ResourceInstanceExecRoute.pipe(
+  HttpRouter.provideRequest(requestDependenciesLayer),
+);
+
+const appLayer = Layer.mergeAll(
+  apiLayer,
+  sseLayer,
+  wsLayer,
+  forwardLayer,
+  resourceExecLayer,
+  docsLayer,
+);
 
 /**
  * Server layer.

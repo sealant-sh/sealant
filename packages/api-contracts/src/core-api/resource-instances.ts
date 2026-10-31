@@ -11,8 +11,15 @@
  * the Docker socket or shared namespaces, and the decoder names each one it is sent.
  */
 import { Result, Schema } from "effect";
+import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
 
 import { describeRequestIssue } from "./request-refusal.js";
+import {
+  ResourceDomainForbiddenError,
+  ResourceDomainId,
+  ResourceDomainInternalServerError,
+  ResourceDomainNotFoundError,
+} from "./resource-domains.js";
 
 export const RESOURCE_INSTANCE_ID_PREFIX = "rin:";
 
@@ -247,3 +254,265 @@ export const decodeResourceInstanceSpec = (input: unknown): ResourceInstanceSpec
         refusals: [{ field: "spec", reason: describeRequestIssue("spec", decoded.failure.issue) }],
       };
 };
+
+// ---------------------------------------------------------------------------------------------
+// Routes, under `/v1/resource-domains/:resourceDomainId`. Only a service key reaches them, as with
+// every resource domain route. `exec` is a raw route beside these (see `RESOURCE_INSTANCE_EXEC`).
+// ---------------------------------------------------------------------------------------------
+
+export const resourceInstanceUpCauseSchema = Schema.Literals(["use", "person"]);
+export type ResourceInstanceUpCause = typeof resourceInstanceUpCauseSchema.Type;
+
+export const upResourceInstanceRequestSchema = Schema.Struct({
+  /**
+   * A `ResourceInstanceSpec`, decoded by `decodeResourceInstanceSpec` so a refused field is named
+   * with its sentence (`ResourceInstanceSpecRefusedError`).
+   */
+  spec: Schema.Record(Schema.String, Schema.Unknown),
+  /** `use`: a launch or a wake, which leaves a person's stop standing. `person`: a person's Start. */
+  cause: resourceInstanceUpCauseSchema,
+});
+export type UpResourceInstanceRequest = typeof upResourceInstanceRequestSchema.Type;
+
+export const stopResourceInstanceRequestSchema = Schema.Struct({
+  /** The application's words for who stopped it (Mend: a display name). */
+  by: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200)),
+});
+export type StopResourceInstanceRequest = typeof stopResourceInstanceRequestSchema.Type;
+
+const Timestamp = Schema.String;
+
+export const resourceInstanceSchema = Schema.Struct({
+  resourceInstanceId: ResourceInstanceId,
+  key: ResourceInstanceKey,
+  alias: ResourceInstanceAlias,
+  worktreeKey: Schema.NullOr(ResourceWorktreeKey),
+  specDigest: Schema.String,
+  /** What was asked of it. */
+  desired: Schema.Literals(["running", "stopped", "archived"]),
+  /** Why it is stopped, while `desired` is `stopped`. */
+  stopReason: Schema.NullOr(resourceInstanceStopReasonSchema),
+  /** What Core last observed, and when. */
+  state: resourceInstanceStateSchema,
+  observedAt: Timestamp,
+  startedAt: Schema.NullOr(Timestamp),
+  lastReachedAt: Schema.NullOr(Timestamp),
+  /** The Docker volumes it mounts, which outlive it. */
+  volumes: Schema.Array(Schema.Struct({ name: Schema.String, dockerName: Schema.String })),
+});
+export type ResourceInstanceWire = typeof resourceInstanceSchema.Type;
+
+export const resourceInstanceArchivedVolumeSchema = Schema.Struct({
+  instanceKey: ResourceInstanceKey,
+  name: Schema.String,
+  dockerName: Schema.String,
+  /** Measured at archive; null when it could not be. */
+  bytes: Schema.NullOr(Schema.Int),
+});
+export type ResourceInstanceArchivedVolumeWire = typeof resourceInstanceArchivedVolumeSchema.Type;
+
+export const listResourceInstancesQuerySchema = Schema.Struct({
+  /** `true`: the archived instances, whose volumes are kept. Otherwise every other one. */
+  archived: Schema.optional(Schema.Literals(["true", "false"])),
+});
+
+export const linkResourceWorkspaceRequestSchema = Schema.Struct({
+  worktreeKey: ResourceWorktreeKey,
+});
+
+export const resourceWorkspaceLinkSchema = Schema.Struct({
+  workspaceId: Schema.String,
+  worktreeKey: ResourceWorktreeKey,
+  /** How many of the workspace's live executors were attached by this call. */
+  attachedExecutors: Schema.Int,
+});
+export type ResourceWorkspaceLinkWire = typeof resourceWorkspaceLinkSchema.Type;
+
+/** The spec asks for what an instance may never have, or is not a spec; nothing was written. */
+export class ResourceInstanceSpecRefusedError extends Schema.TaggedError<ResourceInstanceSpecRefusedError>()(
+  "ResourceInstanceSpecRefusedError",
+  {
+    message: Schema.String,
+    refusals: Schema.Array(Schema.Struct({ field: Schema.String, reason: Schema.String })),
+  },
+  { httpApiStatus: 400 },
+) {}
+
+export class ResourceInstanceNotFoundError extends Schema.TaggedError<ResourceInstanceNotFoundError>()(
+  "ResourceInstanceNotFoundError",
+  { message: Schema.String },
+  { httpApiStatus: 404 },
+) {}
+
+/** This Sealant's workspace runtime cannot run instances: `resources run on Docker; this Sealant runs <runtime>`. */
+export class ResourceRuntimeUnsupportedError extends Schema.TaggedError<ResourceRuntimeUnsupportedError>()(
+  "ResourceRuntimeUnsupportedError",
+  { message: Schema.String, runtime: Schema.String },
+  { httpApiStatus: 409 },
+) {}
+
+/** The key names an archived instance: it stays archived, and its volumes are kept. */
+export class ResourceInstanceArchivedError extends Schema.TaggedError<ResourceInstanceArchivedError>()(
+  "ResourceInstanceArchivedError",
+  { message: Schema.String },
+  { httpApiStatus: 409 },
+) {}
+
+/** Another instance that is not archived answers to this alias for the same worktree key. */
+export class ResourceInstanceAliasTakenError extends Schema.TaggedError<ResourceInstanceAliasTakenError>()(
+  "ResourceInstanceAliasTakenError",
+  { message: Schema.String },
+  { httpApiStatus: 409 },
+) {}
+
+/** The domain is fenced or archived and admits no new instance or link. */
+export class ResourceDomainNotActiveError extends Schema.TaggedError<ResourceDomainNotActiveError>()(
+  "ResourceDomainNotActiveError",
+  { message: Schema.String, state: Schema.Literals(["fenced", "archived"]) },
+  { httpApiStatus: 409 },
+) {}
+
+export class ResourceWorkspaceNotFoundError extends Schema.TaggedError<ResourceWorkspaceNotFoundError>()(
+  "ResourceWorkspaceNotFoundError",
+  { message: Schema.String },
+  { httpApiStatus: 404 },
+) {}
+
+/** A workspace links to one domain; it is linked to `resourceDomainId`. */
+export class ResourceWorkspaceLinkedElsewhereError extends Schema.TaggedError<ResourceWorkspaceLinkedElsewhereError>()(
+  "ResourceWorkspaceLinkedElsewhereError",
+  { message: Schema.String, resourceDomainId: Schema.String },
+  { httpApiStatus: 409 },
+) {}
+
+const instanceParams = Schema.Struct({
+  resourceDomainId: ResourceDomainId,
+  key: ResourceInstanceKey,
+});
+const domainParams = Schema.Struct({ resourceDomainId: ResourceDomainId });
+const baseErrors = [
+  ResourceDomainForbiddenError,
+  ResourceDomainNotFoundError,
+  ResourceDomainInternalServerError,
+] as const;
+
+export const ResourceInstancesGroup = HttpApiGroup.make("resourceInstances")
+  .add(
+    HttpApiEndpoint.post("upResourceInstance", "/:resourceDomainId/instances/:key/up", {
+      params: instanceParams,
+      payload: upResourceInstanceRequestSchema,
+      success: resourceInstanceSchema,
+      error: [
+        ...baseErrors,
+        ResourceInstanceSpecRefusedError,
+        ResourceRuntimeUnsupportedError,
+        ResourceInstanceArchivedError,
+        ResourceInstanceAliasTakenError,
+        ResourceDomainNotActiveError,
+      ],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("listResourceInstances", "/:resourceDomainId/instances", {
+      params: domainParams,
+      query: listResourceInstancesQuerySchema,
+      success: Schema.Struct({ items: Schema.Array(resourceInstanceSchema) }),
+      error: [...baseErrors],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("getResourceInstance", "/:resourceDomainId/instances/:key", {
+      params: instanceParams,
+      success: resourceInstanceSchema,
+      error: [...baseErrors, ResourceInstanceNotFoundError],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("stopResourceInstance", "/:resourceDomainId/instances/:key/stop", {
+      params: instanceParams,
+      payload: stopResourceInstanceRequestSchema,
+      success: resourceInstanceSchema,
+      error: [
+        ...baseErrors,
+        ResourceInstanceNotFoundError,
+        ResourceInstanceArchivedError,
+        ResourceRuntimeUnsupportedError,
+      ],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("archiveResourceInstance", "/:resourceDomainId/instances/:key/archive", {
+      params: instanceParams,
+      success: Schema.Struct({
+        instance: resourceInstanceSchema,
+        volumes: Schema.Array(resourceInstanceArchivedVolumeSchema),
+      }),
+      error: [...baseErrors, ResourceInstanceNotFoundError, ResourceRuntimeUnsupportedError],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.put(
+      "linkResourceWorkspace",
+      "/:resourceDomainId/workspace-links/:workspaceId",
+      {
+        params: Schema.Struct({
+          resourceDomainId: ResourceDomainId,
+          workspaceId: Schema.String.check(Schema.isMinLength(1)),
+        }),
+        payload: linkResourceWorkspaceRequestSchema,
+        success: resourceWorkspaceLinkSchema,
+        error: [
+          ...baseErrors,
+          ResourceWorkspaceNotFoundError,
+          ResourceWorkspaceLinkedElsewhereError,
+          ResourceDomainNotActiveError,
+          ResourceRuntimeUnsupportedError,
+        ],
+      },
+    ),
+  )
+  .add(
+    HttpApiEndpoint.post("archiveResourceDomain", "/:resourceDomainId/archive", {
+      params: domainParams,
+      success: Schema.Struct({ volumes: Schema.Array(resourceInstanceArchivedVolumeSchema) }),
+      error: [...baseErrors, ResourceRuntimeUnsupportedError],
+    }),
+  )
+  .annotate(HttpApi.PayloadParseOptions, { onExcessProperty: "error" })
+  .annotate(
+    OpenApi.Description,
+    "Long-running instances a resource domain runs, and the workspaces that reach them.",
+  );
+
+/**
+ * The raw exec route, beside the contract: `POST /v1/resource-domains/:id/instances/:key/exec`.
+ * Its body is one JSON line (`execFrame`, at most `maxFrameBytes`) and then the command's stdin,
+ * raw, to the end of the body. It answers `ResourceInstanceExecResult` as JSON. No header, query or
+ * log line carries the argv or stdin, and no run record is written: a secret goes in stdin.
+ */
+export const RESOURCE_INSTANCE_EXEC = {
+  path: "/v1/resource-domains/:resourceDomainId/instances/:key/exec",
+  maxFrameBytes: 64 * 1024,
+  defaultTimeoutMs: 10 * 60_000,
+  maxTimeoutMs: 6 * 60 * 60_000,
+} as const;
+
+export const resourceInstanceExecFrameSchema = Schema.Struct({
+  argv: Schema.Array(Argument).check(Schema.isMinLength(1), Schema.isMaxLength(4096)),
+  user: Schema.NullOr(Schema.String.check(matching(/^[A-Za-z0-9._:-]{1,64}$/, "must be a user"))),
+  timeoutMs: Schema.Int.check(
+    Schema.isBetween({ minimum: 1000, maximum: RESOURCE_INSTANCE_EXEC.maxTimeoutMs }),
+  ),
+});
+export type ResourceInstanceExecFrame = typeof resourceInstanceExecFrameSchema.Type;
+
+export const resourceInstanceExecResultSchema = Schema.Struct({
+  /** Null when the command was killed at its timeout. */
+  exitCode: Schema.NullOr(Schema.Int),
+  /** The tail of stdout, at most 1 MiB. */
+  stdout: Schema.String,
+  stderr: Schema.String,
+  truncated: Schema.Boolean,
+  timedOut: Schema.Boolean,
+});
+export type ResourceInstanceExecResult = typeof resourceInstanceExecResultSchema.Type;

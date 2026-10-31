@@ -79,7 +79,7 @@ export type ResourceInstanceUpOutcome =
   | { readonly kind: "archived"; readonly instance: ResourceInstanceRecord }
   /** Another instance that is not archived holds this alias for the same worktree key. */
   | { readonly kind: "alias-taken" }
-  | { readonly kind: "domain-not-active"; readonly state: ResourceDomainState }
+  | { readonly kind: "domain-not-active"; readonly state: Exclude<ResourceDomainState, "active"> }
   | { readonly kind: "no-such-domain" };
 
 /** What is asked of an instance from now on. */
@@ -104,7 +104,7 @@ export type ResourceWorkspaceLinkOutcome =
   /** The workspace is linked to another domain; nothing changed. */
   | { readonly kind: "other-domain"; readonly resourceDomainId: string }
   | { readonly kind: "no-such-workspace" }
-  | { readonly kind: "domain-not-active"; readonly state: ResourceDomainState }
+  | { readonly kind: "domain-not-active"; readonly state: Exclude<ResourceDomainState, "active"> }
   | { readonly kind: "no-such-domain" };
 
 /** An IPv4 range Core carves into equal subnets for its networks. */

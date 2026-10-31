@@ -41,6 +41,16 @@ export type {
   ScopeMembers,
   ScopesNamespace,
 } from "./scopes.js";
+export type {
+  ScopeArchivedVolume,
+  ScopeExecResult,
+  ScopeInstance,
+  ScopeInstances,
+  ScopeInstanceSpec,
+  ScopeInstanceState,
+  ScopeInstanceStopReason,
+  ScopeWorkspaces,
+} from "./scope-instances.js";
 // The workspace environment policy (`CreateOptions.env` validation) is public API: downstream
 // products validate at their own boundaries with the exact rules the platform enforces.
 export {

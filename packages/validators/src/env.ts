@@ -458,6 +458,22 @@ export const workspaceImagePlatformEnvSchema = z.object({
   SEALANT_WORKSPACE_IMAGE_PLATFORM: workspaceImagePlatformSchema.optional(),
 });
 
+const IPV4_RANGE = /^(?:\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/u;
+
+/**
+ * Resource instances (Mend ADR 0019): the Docker host that runs them, and the IPv4 ranges Core
+ * carves its own networks from, so they never draw on the daemon's default address pools. A
+ * linked executor's reach network takes a `/27` of the reach range; an instance's egress network a
+ * `/28` of the egress range. Read by the API (up, stop, exec, link) and the worker (the hooks and
+ * the tick): set the same values on both.
+ */
+export const resourceInstancesEnvSchema = z.object({
+  DOCKER_SOCKET_PATH: z.string().trim().min(1).default("/var/run/docker.sock"),
+  SEALANT_DOCKER_NETWORK_GUARD_IMAGE: z.string().trim().min(1).optional(),
+  SEALANT_RESOURCE_REACH_SUBNETS: z.string().trim().regex(IPV4_RANGE).default("10.231.0.0/16"),
+  SEALANT_RESOURCE_EGRESS_SUBNETS: z.string().trim().regex(IPV4_RANGE).default("10.232.0.0/16"),
+});
+
 export const appServerEnvSchema = databaseEnvSchema
   .merge(jobQueueEnvSchema)
   .merge(appCoreEnvSchema)
@@ -467,7 +483,8 @@ export const appServerEnvSchema = databaseEnvSchema
   .merge(controlClientTlsEnvSchema)
   .merge(defaultRuntimeAdapterEnvSchema)
   .merge(microvmRuntimeEnvSchema)
-  .merge(workspaceImagePlatformEnvSchema);
+  .merge(workspaceImagePlatformEnvSchema)
+  .merge(resourceInstancesEnvSchema);
 
 export const appEnvSchema = appServerEnvSchema.superRefine((input, ctx) => {
   addControlClientTlsIssue(input, ctx);
