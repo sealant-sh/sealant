@@ -383,6 +383,7 @@ export const WORKSPACE_PACKAGE_CATALOG: Readonly<Record<string, CatalogEntry>> =
         "xfce4-terminal",
         "xset",
         "procps-ng",
+        "adwaita-icon-theme",
       ],
     },
     arch: {
@@ -397,6 +398,7 @@ export const WORKSPACE_PACKAGE_CATALOG: Readonly<Record<string, CatalogEntry>> =
         "xfce4-terminal",
         "xorg-xset",
         "procps-ng",
+        "adwaita-icon-theme",
       ],
     },
     ubuntu: {

@@ -182,6 +182,7 @@ describe("the workspace package catalog", () => {
         "xfce4-terminal",
         "xset",
         "procps-ng",
+        "adwaita-icon-theme",
       ],
       arch: [
         "xfce4-session",
@@ -194,6 +195,7 @@ describe("the workspace package catalog", () => {
         "xfce4-terminal",
         "xorg-xset",
         "procps-ng",
+        "adwaita-icon-theme",
       ],
       ubuntu: [
         "xfce4-session",
