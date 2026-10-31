@@ -1,6 +1,6 @@
 {
-  "typescript.tsdk": "./node_modules/typescript/lib",
-  "typescript.enablePromptUseWorkspaceTsdk": true,
+  "js/ts.experimental.useTsgo": true,
+  "js/ts.tsdk.path": "node_modules/typescript",
   "tailwindCSS.experimental.configFile": {
     "apps/docs/src/styles.css": "apps/docs/src/**",
     "apps/web/src/styles.css": "apps/web/src/**",

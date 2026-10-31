@@ -32,7 +32,7 @@ Sealant is a `pnpm` + `turbo` monorepo for building isolated, reproducible codin
   scope moves between releases, move the feature. If the roadmap directory is missing on your
   machine, say so in your report.
 - After code changes, always run `pnpm format:fix`.
-- For type-checking, always use `tsgo` (`pnpm typecheck`) and do not use `tsc`.
+- For type-checking, use `pnpm typecheck`. It runs TypeScript 7's native `tsc` in every package.
 - `pnpm-lock.yaml` is generated, never hand-edited: let `pnpm install` / `pnpm add` write it, and
   commit the result alongside the `package.json` change that caused it. CI and every image build
   install with `--frozen-lockfile`, so a dependency change without its lockfile update fails CI. No

@@ -13,7 +13,7 @@
     "dev": "vite dev --port 3002",
     "lint": "oxlint .",
     "preview": "vite preview",
-    "typecheck": "tsgo -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@fontsource/bebas-neue": "^5.2.7",

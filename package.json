@@ -22,7 +22,6 @@
     "lint:tui": "turbo lint --ui=tui",
     "lint:types": "oxlint . --type-aware --type-check",
     "playwright:open-google": "node tooling/playwright/open-google.mjs",
-    "prepare": "effect-language-service patch",
     "ssh:setup:dev": "node tooling/scripts/setup-ssh-gateway-dev.mjs",
     "test": "turbo test",
     "test:e2e": "playwright test",
@@ -40,10 +39,8 @@
   "devDependencies": {
     "@actions/expressions": "^0.3.61",
     "@changesets/cli": "^2.29.5",
-    "@effect/language-service": "^0.86.2",
     "@playwright/test": "^1.56.1",
     "@types/node": "^24.0.0",
-    "@typescript/native-preview": "7.0.0-dev.20260315.1",
     "effect-solutions": "^0.5.2",
     "esbuild": "^0.28.1",
     "oxfmt": "^0.40.0",
@@ -51,7 +48,7 @@
     "oxlint-tsgolint": "^0.17.0",
     "tsx": "^4.20.6",
     "turbo": "2.11.9",
-    "typescript": "^5.9.3",
+    "typescript": "catalog:",
     "vitest": "catalog:",
     "yaml": "catalog:"
   },

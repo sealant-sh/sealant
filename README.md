@@ -158,7 +158,7 @@ Run common tasks from the repo root (wired through Turbo):
 pnpm dev          # run apps in development
 pnpm build        # build everything
 pnpm lint         # repo-wide lint (oxlint)
-pnpm typecheck    # type-aware checks (tsgo)
+pnpm typecheck    # type-aware checks (TypeScript 7 tsc)
 pnpm test         # run tests
 pnpm format       # format (oxfmt)
 ```
@@ -188,7 +188,8 @@ disables the normal download flow (the part that fails on NixOS). Place end-to-e
 - `Turborepo` + `pnpm` give task orchestration, caching, and strict, centralized dependencies.
 - `oxlint` (with `oxlint-tsgolint` for type-aware rules) handles linting; `oxfmt` handles
   formatting.
-- `@typescript/native-preview` provides the `tsgo` CLI alongside regular `typescript`.
+- `typescript` 7 is the native compiler: `tsc` typechecks, and `tsc --lsp` is the editor's language
+  server.
 
 ## Design principles
 

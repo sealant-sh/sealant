@@ -82,7 +82,7 @@ owner. See [SSH access](/docs/guides/ssh-access) for how key resolution and auth
 
 Follow the repo-wide agent defaults in
 [`AGENTS.md`](https://github.com/sealant-sh/sealant/blob/main/AGENTS.md): run `pnpm format:fix`, use
-`pnpm typecheck` (`tsgo`, not `tsc`), and never hand-edit `pnpm-lock.yaml`.
+`pnpm typecheck` (TypeScript 7's `tsc`), and never hand-edit `pnpm-lock.yaml`.
 
 ## Releasing
 

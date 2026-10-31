@@ -16,7 +16,7 @@
     "prelint": "pnpm run docs:generate",
     "pretypecheck": "pnpm run docs:generate",
     "preview": "vite preview",
-    "typecheck": "tsgo -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@fontsource/plus-jakarta-sans": "^5.2.6",

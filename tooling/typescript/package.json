@@ -11,6 +11,6 @@
   },
   "scripts": {
     "lint": "oxlint . --no-error-on-unmatched-pattern",
-    "typecheck": "tsgo -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   }
 }
