@@ -1,5 +1,214 @@
 # @sealant/api-contracts
 
+## 0.40.0
+
+### Minor Changes
+
+- 4d306e5: A Claude or Codex connected account can be an API key. `connect()` takes an Anthropic API key
+  (`sk-ant-api…`), an OpenAI key (`sk-…`), or a Codex `auth.json` whose login is a key, and stores an
+  account of kind `api-key` holding the key alone. A key in an `auth.json` is checked as a bare key
+  is: an Admin key, a key pasted under the other provider, and a broken or truncated key are refused
+  with the reason, and so is an `auth.json` holding both a ChatGPT login and a key without an
+  `auth_mode` saying which. An `auth_mode` decides first.
+  `connect({ login: "subscription" | "api-key" })` refuses a secret of the other class before anything
+  is stored ("That is a Claude subscription login, not an API key."). Without `accountId` or `name`, a
+  connect replaces the only account of the secret's login class, read from each stored login, so a key
+  added beside a subscription never replaces it: with none of that class it makes one named `api-key`
+  or `subscription`, and with several it fails with `connected-account-ambiguous`. The default moves
+  only as before. `ConnectedAccount.login` is `{ kind: "subscription" }` or
+  `{ kind: "api-key", suffix }` for Claude and Codex accounts, and
+  `connectedAccounts.listWithHistory()` answers the accounts with `hasApiKeyHistory`: whether the
+  owner ever stored a key, which a later replace with a subscription or an archive does not forget. A
+  control plane reports all of this as `features().connectedAccountLoginClass`; the SDK sends `login`
+  only to one that does, and otherwise throws `connected-account-login-class-unsupported` before
+  sending anything.
+
+  A Codex key runs as the file `codex login --with-api-key` writes, at the Codex slot of a home, a
+  launch and inference, where a key-only `auth.json` went before; Codex accounts stored as such an
+  `auth.json` are stored again as the key when the control plane starts. A Claude key cannot be placed
+  yet: workspace create, a launch, a credentials put and inference refuse it with
+  `connected-account-unsupported` ("Claude API keys are not supported by this Sealant yet"), which
+  `InferenceConflictError` now carries as its `code`; a profile bound to one skips it at create, as it
+  skips an account that needs reconnecting. Nothing refreshes a key, writes a login read back from a
+  workspace over one, or pushes a refreshed subscription into a workspace that was launched with a
+  key. The control plane's traces, logs and error reports replace a provider key by its shape, in a
+  request's URL too; the worker's logs are not covered.
+
+- 97076a8: A credentials put places a Claude API key into a home. The key is written alone, mode 0600 and owned
+  by the home's owner, at `<home>/.sealant/keys/<placementId>`, a directory reached through no
+  symbolic link, never into `.credentials.json` or anywhere under `.claude`. Any number of key files
+  sit beside a subscription's file, so a later put never changes the file a running Claude reads, and
+  a key file is never pinned. Prune, release, archive and the removal sweep remove a key file with its
+  placement. A put refuses a Claude key, in words, for `/root` and for a home whose key directory lies
+  in the run's working directory or a capture's harness home. A Claude key is still refused at `$HOME`
+  and in a launch.
+
+  A placement receipt's `login` says what it spends: `{ kind: "subscription" }`, or
+  `{ kind: "api-key", suffix, keyPath? }`. `keyPath` is the absolute path of a Claude key's file, for
+  an `apiKeyHelper` such as `cat <keyPath>`; a Codex key has no `keyPath`. A Codex key now reads as
+  `api-key` too. A refresh never writes into a key placement. The control plane reports
+  `features.connectedAccountApiKeys`, and the SDK reports it as `features().connectedAccountApiKeys`.
+
+- f51aa3c: A person's default connected account per provider is a choice, not the account named `default`.
+  `true` (`default` on the wire) resolves to it at workspace create, a credentials put, inference and
+  a profile binding; a person's first account for a provider is named `default` and becomes it, and
+  existing accounts named `default` already are.
+  `connectedAccounts.setDefault({ provider, accountId })`
+  (`PUT /v1/connected-accounts/defaults/:provider`) chooses another. Disconnecting the default leaves
+  none chosen (`connected-account-missing`); no other account is picked. `connect()` takes `accountId`
+  to replace one account and `makeDefault`, and `name: "default"` replaces the chosen default; without
+  a target it replaces the only account, and with several it fails with `reason`
+  `connected-account-ambiguous` and `candidateAccountIds`. `ConnectedAccount` carries `isDefault` and
+  `credentialRevision`, and `connectedAccounts.markInvalid(id, { revision })` marks nothing once the
+  credential has moved on (`outcome: "superseded"`). The SDK sends `accountId`, `makeDefault`,
+  `setDefault` and a `revision` only to a control plane that reports
+  `features().connectedAccountDefaults`, and otherwise throws `connected-account-defaults-unsupported`
+  before sending anything. `@sealant/api-contracts` exports `providerLoginEnvNames`, the environment
+  names each provider's CLI reads as a login (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+  `CLAUDE_CODE_OAUTH_TOKEN`; `OPENAI_API_KEY`, `CODEX_API_KEY`), and `DEFAULT_ACCOUNT_SELECTOR`
+  (`"default"`), also from the dependency-free `@sealant/api-contracts/connected-account-selector`.
+- 9802ef3: A home's logins carry placement receipts. Each credentials home a put or a list answers has
+  `placements`: one receipt per login written there, with `placementId` (stable while a refresh moves
+  the login's revision), `accountId`, the `revision` of the account whose bytes were written, `login`
+  and `pinned`. A put takes `live`, the placement ids its running processes hold in that home; a
+  selection that differs from a live placement's leaves that file in place and answers it with
+  `pinned: true`. A receipt whose placement is no longer ready (archived, pruned, released) protects
+  nothing. `credentials.prune(home, live)` (`POST /v1/workspaces/:workspaceId/credentials/prune`)
+  removes every login of the home that is neither live nor the person's default, and answers no home
+  for one that holds nothing. The SDK sends `live` and calls prune only on a control plane that
+  reports `features().credentialPlacements`, and otherwise throws `credential-placements-unsupported`
+  before sending anything. A put without `live` behaves as before.
+- c741e10: A bounded workspace forward can be bound to a session.
+  `workspace.forward(port, { flow: "bounded", session })` opens only when a process of that session
+  holds the accepted connection on the workspace's loopback, and its `binding` is
+  `{ kind: "session", session }`: Core states the binding the workspace runtime verified, never the
+  one it asked for. A bound forward cannot target the Docker sidecar: `host: "docker"` with `session`
+  is a type error, also from an options object. Only a bounded forward takes a `session`: the old
+  overload's options cannot carry one, and a call that passes one anyway rejects with a `SealantError`
+  (`invalid_options`) and opens nothing.
+
+  The open rejects with a `ForwardDialError` whose reason is `owner-exited` (the session is not
+  running, or has not started yet), `peer-mismatch` (a process outside the session holds the port),
+  `binding-unverifiable` (the runtime could not tell who holds it) or `binding-unsupported` (the
+  workspace runtime or the control plane cannot bind forwards; Core asks the runtime before it
+  connects to anything). Once the session's leader exits, the forward resets with `owner-exited`,
+  ahead of data Core holds that the caller has not read. The SDK never resolves a forward that asked
+  for a session without that binding.
+
+  `forwardBindingSchema` gains `{ kind: "session", session }`.
+
+- 0992d5b: A workspace forward can now hold back a fast producer.
+  `workspace.forward(port, { flow: "bounded" })` opens a TCP forward on `/forward/v2` and resolves
+  with a `BoundedWorkspaceForward`: a `readable` and a `writable` web stream, the `binding`, a
+  `closed` promise and `close()`. The workspace sends only as fast as `readable` is read: while
+  nothing reads it, Core stops reading the workspace runtime, and the runtime stops reading the
+  program. `writer.ready` waits, and `writer.desiredSize` is 0, while Core has granted no more upload
+  credit, so a producer that awaits `writer.ready` pulls nothing it cannot send. The forward resolves
+  once Core has granted the first credit. `writable.close()` half-closes toward the workspace, and
+  `readable` keeps delivering until the workspace closes its side. `Duplex.fromWeb(forward)` makes it
+  a Node stream. It accepts `host`, `signal` and `deadlineMs`, and rejects with a `ForwardDialError`
+  when the forward does not open. The old overload is unchanged, and its options cannot carry a
+  `flow`.
+
+  `closed` resolves with `{ kind: "end" }` when the workspace closed its side after it took everything
+  written to it. Otherwise it resolves with `{ kind: "reset", reason }`, and both streams fail at once
+  with a `ForwardResetError`, also while the caller is not reading: `writer.ready`, `writer.closed`
+  and `writable.close()` reject. A reset that Core sends, such as `runtime-lost` when the workspace
+  runtime fails, reaches the caller ahead of data it has not read. When the workspace ends the forward
+  before it took everything written, the reason is `workspace-ended`: `readable` still yields all that
+  the workspace sent, and the writer fails. A write after the workspace ended fails with the same
+  reason. `writer.abort()` and `close()` release a write that waits for credit.
+
+  The contracts add the frames that bound each direction after `ready`: `progress { bytes, frames }`
+  (cumulative bytes and frames consumed, as decimal strings), `fin { bytes, frames }` and
+  `reset { reason }`. Each direction has a window of `FORWARD_V2_WINDOW` (256 KiB and 32 frames) past
+  what its receiver consumed. A side sends no data before the other's first `progress`, and resets a
+  peer that sends past its window. Core sends a `progress` naming exactly what reached the workspace
+  before its `fin`. `ForwardFlow` keeps that account for either side, with no I/O, and grants credit
+  only when a `progress` is sent, so a side that holds acknowledgements back while its socket is
+  backed up holds its peer back too.
+
+- 30986c2: A workspace forward can now say why it did not open. The contracts describe a v2 forward route,
+  `GET /v1/workspaces/:workspaceId/forward/v2` with the subprotocol `sealant.forward.v2`: the server
+  accepts the WebSocket upgrade, then sends one text frame, either `ready` or `refused` with a
+  `reason`, a `message` and the HTTP `status` the refusal stands for. The reasons and their statuses
+  are one table, `FORWARD_REFUSAL_STATUS`. A browser or Node `WebSocket` can read this answer, which
+  it could not read from a refused upgrade. A client decodes any `reason`, so a refusal from a newer
+  Core keeps its status and message.
+
+  The SDK exports `ForwardDialError`, a `SealantApiError` whose `reason` is one of those reasons,
+  `unrecognized-refusal` (a reason newer than the SDK, kept in `wireReason`), `protocol-unsupported`
+  (the control plane predates the v2 route) or `transport-unavailable` (no answer could be read). Its
+  `status` is the one Core sent. `SealantApiError.name` is now typed `string`, so a subclass can name
+  itself. `workspace.forward` and its errors are unchanged; the v2 open is not public yet.
+
+- eb43ab8: A capture source's `ownerMap` now runs on Kubernetes under runc, where each person's `sudo` works
+  and the image builder records the image probe the launch checks
+  (`features().kubernetesPersonLayout`). A per-person launch on an image with no readable probe now
+  fails with `owner-map-unverified` instead of `owner-map-unsupported`.
+- 697e8d5: Resource domain budgets. A domain's budget caps CPU (millicores), memory and storage (bytes). The
+  caps are ceilings on what the domain's objects hold, not measurements, and zero allows nothing.
+  `POST /v1/resource-domains` takes an optional `budget` that a new domain starts with. It never
+  changes an existing domain's: naming another one gets `409` `ResourceDomainBudgetDiffersError`,
+  which carries the domain's `resourceDomainId` and its budget's `revision`.
+  `GET /v1/resource-domains/:resourceDomainId/budget` reads the budget and what the domain holds of
+  it, in one snapshot: per dimension, the `limit`, what is `used` (confirmed to exist) and `reserved`
+  (not yet confirmed), and a `warning` of `80-percent`, `95-percent` or `full` once `used + reserved`
+  reaches that share of the limit. Storage also reports what archived volumes (`archived`) and backups
+  and snapshots (`protection`) hold; both count against the one storage allowance. Nothing creates a
+  domain's objects yet, so `used` and `reserved` read zero. `PUT …/budget` replaces the budget, given
+  the `revision` the caller read, and answers the budget it wrote; a change made since gets `409`
+  `ResourceDomainBudgetRevisionConflictError` and changes nothing. `RESOURCE_DOMAIN_BUDGET_DIMENSIONS`
+  names the dimensions.
+
+  The SDK reaches the budget as `sealant.scopes.actAs(id).budget.get()` and
+  `.budget.set({ cpuMillicores, memoryBytes, storageBytes, revision })`, and
+  `sealant.scopes.ensure({ key, budget })` takes the starting budget.
+
+- 1e8b4f1: Resource domain members. `POST /v1/resource-domains/:resourceDomainId/members/:userId/grant` and
+  `/revoke` record the application's decision about one person, and
+  `GET /v1/resource-domains/:resourceDomainId/members/:userId` reads one, and
+  `GET /v1/resource-domains/:resourceDomainId/members` pages every decision by user id, revoked ones
+  included: `limit` (100 unless named, at most 500), and the previous page's `nextCursor` as `cursor`.
+  A person with no decision reads as `404` `ResourceDomainMemberNotFoundError`. Each decision carries
+  `version`, the application's own number for its decision about this person, rising with each
+  decision it makes. Core writes it only over a lower version. The same version with the same state is
+  a repeat and answers the member unchanged. The same version with the other state, or a lower one,
+  gets `409` `ResourceDomainMemberVersionConflictError`, which quotes nothing the request sent and
+  carries the decision that stands as `current`. So a delayed grant never undoes a newer revoke,
+  whatever order decisions arrive in, and the application never reads before it writes. A person who
+  does not exist gets `404` `ResourceDomainPersonNotFoundError`, apart from a domain that does not
+  exist (`ResourceDomainNotFoundError`), whatever the version, even when deleted while the decision is
+  written. The routes take a service key, as ensure and get do, and `userId` is a `PersonId`.
+
+  The SDK reaches these routes as `sealant.scopes`: `ensure({ key })`, `get(id)` and `actAs(id)`.
+  `actAs(id)` returns a `ScopeClient` for one scope, and its `members` are the only way to a scope's
+  members. It has no workspace, run, inference, credential, SSH key, access token or user method, so
+  calling one does not compile.
+
+- ab6f8d9: Resource domains: an owner that is a project, not a person. It never holds a login or a provider
+  credential and never runs a harness. `POST /v1/resource-domains` with `{ key }` ensures one, and
+  `GET /v1/resource-domains/:resourceDomainId` reads it. The key is `<application>:<name>` and global,
+  and a repeated or concurrent ensure answers the same domain (`created` is true once). Only a service
+  key reaches these routes: any other bearer gets the transport's `401`, and a deployment served
+  without authentication serves them as it serves every route. A body field the contract does not
+  declare is refused with `400` instead of being dropped. A domain id is `rdm:<uuid>`, and every
+  person field of the API (`ownerUserId`, `onBehalfOfUserId`, `userId`, and the SSH gateway's
+  `x-sealant-principal-id` and `principalId`) is now a `PersonId`, which refuses one with `400`
+  `RequestRefusedError` before any handler runs. A forward refused because its asserted owner is a
+  domain says `not-a-person` (`400`). `@sealant/api-contracts` exports `PersonId`,
+  `isResourceDomainId`, `RESOURCE_DOMAIN_ID_PREFIX` and the resource domain schemas. The SDK does not
+  call these routes yet.
+
+### Patch Changes
+
+- f1e27d7: The workspace package catalog knows what a screen needs: `tigervnc` (`Xvnc` and `vncpasswd`),
+  `xauth`, `xdpyinfo`, `openbox`, `chromium` and `fonts-dejavu`, under each family's own names. Fedora
+  installs `chromium` as `chromium-browser`, and the build links `chromium` to it. A catalog entry may
+  now name a family it cannot run on: `chromium` on Ubuntu 24.04 is a stub for the chromium snap, and
+  a workspace image runs no snapd, so creating an Ubuntu workspace that asks for it is refused with a
+  `400` that names the id, the family and the reason, and the image planner refuses it the same way.
+
 ## 0.39.0
 
 ### Minor Changes
