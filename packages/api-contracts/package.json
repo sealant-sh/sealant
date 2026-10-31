@@ -40,10 +40,10 @@
     }
   },
   "scripts": {
-    "build": "tsgo -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json",
     "lint": "oxlint .",
     "prepublishOnly": "pnpm run build",
-    "typecheck": "tsgo -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@sealant/typescript": "workspace:*",

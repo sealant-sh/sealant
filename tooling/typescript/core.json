@@ -1,5 +1,4 @@
 {
-  "$schema": "https://raw.githubusercontent.com/Effect-TS/language-service/refs/heads/main/schema.json",
   "compilerOptions": {
     "target": "ESNext",
     "module": "NodeNext",
@@ -16,11 +15,6 @@
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
-    "plugins": [
-      {
-        "name": "@effect/language-service"
-      }
-    ]
+    "exactOptionalPropertyTypes": true
   }
 }

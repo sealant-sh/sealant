@@ -21,7 +21,7 @@
     "db:studio": "drizzle-kit studio",
     "dev": "drizzle-kit studio",
     "lint": "oxlint .",
-    "typecheck": "tsgo -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@effect/sql-pg": "catalog:",

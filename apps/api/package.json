@@ -9,7 +9,7 @@
     "dev": "dotenv -e ../../.env -- sh -c 'SEALANT_ALLOW_OPEN_API=${SEALANT_ALLOW_OPEN_API:-true} exec tsx watch src/index.ts'",
     "lint": "oxlint .",
     "test": "vitest run",
-    "typecheck": "tsgo -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "catalog:",
