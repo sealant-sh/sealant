@@ -100,6 +100,23 @@ describe("the workspace package catalog", () => {
     expect(containerfile).toContain(renderReleaseInstall(release));
   });
 
+  it("installs the Postgres client and redis-cli on every family, from each one's own package", () => {
+    const expected = {
+      fedora: ["postgresql", "redis"],
+      arch: ["postgresql", "valkey"],
+      ubuntu: ["postgresql-client", "redis-tools"],
+      nix: ["postgresql", "redis"],
+    } as const;
+    for (const family of CATALOG_OS_FAMILIES) {
+      expect([
+        ...(familyInstall("postgresql-client", family)?.packages ?? []),
+        ...(familyInstall("redis-cli", family)?.packages ?? []),
+      ]).toEqual(expected[family]);
+      const containerfile = containerfileFor(family, ["postgresql-client", "redis-cli"]);
+      for (const name of expected[family]) expect(containerfile).toContain(name);
+    }
+  });
+
   it("answers every id on every managed family, by a repository package, a pinned release, npm or a reason it cannot", () => {
     for (const [id, entry] of Object.entries(WORKSPACE_PACKAGE_CATALOG)) {
       for (const family of CATALOG_OS_FAMILIES) {
