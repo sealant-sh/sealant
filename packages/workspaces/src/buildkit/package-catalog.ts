@@ -91,7 +91,10 @@ export interface FamilyUnsupported {
   readonly postInstall?: never;
 }
 
-export type CatalogEntry = Readonly<Record<CatalogOsFamily, FamilyInstall | FamilyUnsupported>>;
+export type CatalogEntry = Readonly<Record<CatalogOsFamily, FamilyInstall | FamilyUnsupported>> & {
+  /** An opt-in portable release for custom bases; other names keep their package-manager meaning. */
+  readonly customRelease?: ReleaseInstall;
+};
 
 const everywhere = (name: string, nix = name): CatalogEntry => ({
   fedora: { packages: [name] },
@@ -99,6 +102,23 @@ const everywhere = (name: string, nix = name): CatalogEntry => ({
   ubuntu: { packages: [name] },
   nix: { packages: [nix] },
 });
+
+const DOPPLER_VERSION = "3.77.1";
+const doppler: ReleaseInstall = {
+  name: "doppler",
+  version: DOPPLER_VERSION,
+  archives: {
+    x86_64: {
+      url: `https://github.com/DopplerHQ/cli/releases/download/${DOPPLER_VERSION}/doppler_${DOPPLER_VERSION}_linux_amd64.tar.gz`,
+      sha256: "001f89a42629f9cb827cd86683c4c2dbf87c6299a8d6130643b98044bf5ed80a",
+    },
+    aarch64: {
+      url: `https://github.com/DopplerHQ/cli/releases/download/${DOPPLER_VERSION}/doppler_${DOPPLER_VERSION}_linux_arm64.tar.gz`,
+      sha256: "a7f4be5b30295921dfe1cdc34f905cd017210ec3264a47d46e315ab09cb03e1c",
+    },
+  },
+  members: { x86_64: ["doppler"], aarch64: ["doppler"] },
+};
 
 const MISE_VERSION = "2026.9.12";
 const mise: ReleaseInstall = {
@@ -270,6 +290,13 @@ export const WORKSPACE_PACKAGE_CATALOG: Readonly<Record<string, CatalogEntry>> =
     },
   },
   direnv: everywhere("direnv"),
+  doppler: {
+    fedora: { release: doppler },
+    arch: { release: doppler },
+    ubuntu: { release: doppler },
+    nix: { release: doppler },
+    customRelease: doppler,
+  },
   eza: everywhere("eza"),
   fd,
   // Debian's and Fedora's name for it, kept as an id since blueprints have used it.

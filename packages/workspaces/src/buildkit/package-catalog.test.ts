@@ -50,6 +50,56 @@ describe("a family slot", () => {
 });
 
 describe("the workspace package catalog", () => {
+  it("installs one checksum-pinned Doppler release on every family and architecture", () => {
+    const release = WORKSPACE_PACKAGE_CATALOG.doppler?.customRelease;
+    expect(release?.version).toBe("3.77.1");
+    for (const family of CATALOG_OS_FAMILIES) {
+      expect(familyInstall("doppler", family)?.release).toBe(release);
+      const containerfile = containerfileFor(family, ["doppler"]);
+      expect(containerfile).toContain("doppler_3.77.1_linux_amd64.tar.gz");
+      expect(containerfile).toContain("doppler_3.77.1_linux_arm64.tar.gz");
+      expect(containerfile).toContain(
+        "001f89a42629f9cb827cd86683c4c2dbf87c6299a8d6130643b98044bf5ed80a",
+      );
+      expect(containerfile).toContain(
+        "a7f4be5b30295921dfe1cdc34f905cd017210ec3264a47d46e315ab09cb03e1c",
+      );
+      expect(containerfile.indexOf("sha256sum -c")).toBeLessThan(containerfile.indexOf("tar -xzf"));
+      expect(containerfile).toContain('install -m 0755 "$d/$m" "/usr/local/bin/$(basename "$m")"');
+    }
+  });
+
+  it("uses the same Doppler release for custom bases and keeps other package names verbatim", () => {
+    const { containerfile, imagePlan } = planWorkspaceImageBuild({
+      platform: "linux/arm64",
+      blueprint: {
+        ...cases.gitSource.blueprint,
+        target: {
+          ...cases.gitSource.blueprint.target,
+          os: { family: "custom", mode: "require", baseImage: "node:26-bookworm" },
+        },
+        tooling: {
+          ...cases.gitSource.blueprint.tooling,
+          packages: [{ id: "doppler" }, { id: "my-distro-package" }],
+        },
+        customization: {
+          ...cases.gitSource.blueprint.customization,
+          defaultShell: "bash",
+          applyDotfiles: false,
+        },
+      },
+    });
+    expect(imagePlan.packages.find((pkg) => pkg.requestId === "doppler")?.installPackages).toEqual(
+      [],
+    );
+    expect(containerfile).toContain("my-distro-package");
+    expect(containerfile).not.toMatch(/install -y[^\n]* doppler/);
+    expect(containerfile).toContain("curl ca-certificates tar coreutils");
+    const release = WORKSPACE_PACKAGE_CATALOG.doppler?.customRelease;
+    if (release === undefined) throw new Error("Doppler has no portable release");
+    expect(containerfile).toContain(renderReleaseInstall(release));
+  });
+
   it("answers every id on every managed family, by a repository package, a pinned release, npm or a reason it cannot", () => {
     for (const [id, entry] of Object.entries(WORKSPACE_PACKAGE_CATALOG)) {
       for (const family of CATALOG_OS_FAMILIES) {
