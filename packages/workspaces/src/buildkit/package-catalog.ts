@@ -29,6 +29,12 @@
  * components, but its dbus-run-session fails without /etc/dbus-1/session.conf, so dbus is refused.
  * Arch and Ubuntu's ffmpeg and nixpkgs' ffmpeg-full have XCB x11grab and libx264. Fedora 41's ffmpeg-free has x11grab but no libx264 encoder, so ffmpeg is refused.
  *
+ * Measured on 2026-11-01 by installing on x86_64: every family has the Postgres client (`psql`,
+ * `pg_dump`, `pg_restore`): Fedora 41 and Arch in `postgresql` (16 and 18), Ubuntu 24.04 in
+ * `postgresql-client` (16), nixpkgs in `postgresql` (17). Every family has `redis-cli`: Fedora 41's
+ * `redis` is `valkey-compat-redis`, Arch has no `redis` and its `valkey` installs `redis-cli`,
+ * Ubuntu's is `redis-tools`, nixpkgs' `redis`.
+ *
  * A zsh plugin's `.zsh` file lands where its family puts it, which differs:
  *
  * - `zsh-autosuggestions`: Fedora and Ubuntu `/usr/share/zsh-autosuggestions/`, Arch
@@ -354,11 +360,23 @@ export const WORKSPACE_PACKAGE_CATALOG: Readonly<Record<string, CatalogEntry>> =
     ubuntu: { packages: ["nodejs", "npm"], npmGlobal: ["pnpm"] },
     nix: { packages: ["nodejs", "pnpm"] },
   },
+  "postgresql-client": {
+    fedora: { packages: ["postgresql"] },
+    arch: { packages: ["postgresql"] },
+    ubuntu: { packages: ["postgresql-client"] },
+    nix: { packages: ["postgresql"] },
+  },
   python: {
     fedora: { packages: ["python3"] },
     arch: { packages: ["python"] },
     ubuntu: { packages: ["python3"] },
     nix: { packages: ["python3"] },
+  },
+  "redis-cli": {
+    fedora: { packages: ["redis"] },
+    arch: { packages: ["valkey"] },
+    ubuntu: { packages: ["redis-tools"] },
+    nix: { packages: ["redis"] },
   },
   ripgrep: everywhere("ripgrep"),
   starship: {
