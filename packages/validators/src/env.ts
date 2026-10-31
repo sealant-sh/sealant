@@ -472,6 +472,8 @@ export const resourceInstancesEnvSchema = z.object({
   SEALANT_DOCKER_NETWORK_GUARD_IMAGE: z.string().trim().min(1).optional(),
   SEALANT_RESOURCE_REACH_SUBNETS: z.string().trim().regex(IPV4_RANGE).default("10.231.0.0/16"),
   SEALANT_RESOURCE_EGRESS_SUBNETS: z.string().trim().regex(IPV4_RANGE).default("10.232.0.0/16"),
+  /** How often the worker reconciles resource instances (restart, idle stop, reach). */
+  SEALANT_RESOURCE_TICK_MS: z.coerce.number().int().positive().default(30_000),
 });
 
 export const appServerEnvSchema = databaseEnvSchema
@@ -749,7 +751,8 @@ export const workerServerEnvSchema = databaseEnvSchema
   .merge(kubernetesRuntimeEnvSchema)
   .merge(cloudflareRuntimeEnvSchema)
   .merge(microvmRuntimeEnvSchema)
-  .merge(workspaceImagePlatformEnvSchema);
+  .merge(workspaceImagePlatformEnvSchema)
+  .merge(resourceInstancesEnvSchema);
 
 export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) => {
   addControlClientTlsIssue(input, ctx);

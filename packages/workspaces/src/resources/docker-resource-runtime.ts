@@ -311,6 +311,10 @@ export class DockerResourceRuntime implements ResourceRuntime {
   /** The executor's reach network exists with the executor on it. */
   private async ensureReach(executor: string): Promise<void> {
     const network = reachNetworkName(executor);
+    // A network for an executor that is not there would only wait to be swept: refuse first.
+    if ((await this.inspectContainer(executor)) === undefined) {
+      throw new Error(`The executor ${executor} is not on this Docker host.`);
+    }
     await this.ensureNetwork(network, "reach", executor);
     await this.runTolerating(["network", "connect", network, executor], isPresent);
   }
@@ -351,24 +355,25 @@ export class DockerResourceRuntime implements ResourceRuntime {
     const container = instanceContainerName(instance.id);
     let volumes: ReadonlyArray<ResourceInstanceVolume>;
     try {
+      // The image first: one that cannot be had leaves nothing else behind.
+      const imageVolumes = await this.imageVolumes(instance.spec.image);
       await this.ensureNetwork(egressNetworkName(instance.id), "egress", instance.id);
-      volumes = coverImageVolumes(
-        instance.spec.volumes,
-        await this.imageVolumes(instance.spec.image),
-      );
+      volumes = coverImageVolumes(instance.spec.volumes, imageVolumes);
       for (const volume of volumes) await this.run(volumeCreateArgv(instance, volume));
-      let existing = await this.inspectContainer(container);
-      if (existing !== undefined && existing.specDigest !== instance.specDigest) {
-        // A changed spec is a new container over the same volumes.
+      const existing = await this.inspectContainer(container);
+      // Every start is a new container over the same volumes: one that stopped may still name a
+      // reach network whose executor went meanwhile, and Docker would refuse to start it. A
+      // running one with the same spec is kept.
+      if (
+        existing !== undefined &&
+        (!existing.running || existing.specDigest !== instance.specDigest)
+      ) {
         await this.stop(instance);
         await this.runTolerating(["rm", container], isMissing);
-        existing = undefined;
       }
-      if (existing === undefined) {
+      if (existing?.running !== true || existing.specDigest !== instance.specDigest) {
         // A name conflict is a concurrent `up` that created it first: adopt it.
         await this.runTolerating(instanceRunArgv(instance, volumes), isPresent);
-      } else if (!existing.running) {
-        await this.run(["start", container]);
       }
       const started = await this.inspectContainer(container);
       if (started?.running !== true) {
@@ -562,6 +567,10 @@ export class DockerResourceRuntime implements ResourceRuntime {
       ...present.map((network) => network.slice(0, -"-reach".length)),
       ...input.knownExecutors,
     ]);
+    // An executor its row calls live but Docker no longer has is gone too.
+    for (const executor of live) {
+      if ((await this.inspectContainer(executor)) === undefined) live.delete(executor);
+    }
     for (const executor of gone) {
       if (!live.has(executor)) await this.detachExecutor(executor);
     }

@@ -9,6 +9,8 @@ import {
   createSealantDB,
   SealantDB,
   CredentialPlacementRepoLive,
+  ResourceInstanceRepo,
+  ResourceInstanceRepoLive,
   WorkspaceCredentialHomeRepoLive,
   type DB,
 } from "@sealant/db";
@@ -17,6 +19,10 @@ import { createGitHubSourceIntegration } from "@sealant/source-integrations";
 import { deleteExpiredRunRecords } from "@sealant/telemetry";
 import type { WorkerEnv } from "@sealant/validators/env";
 import {
+  DockerResourceRuntime,
+  makeResourceReconciler,
+  repositorySubnets,
+  resourceSubnetPools,
   consumeRunExecJobs,
   sweepRunExecJobRows,
   sweepCredentialPlacements,
@@ -297,6 +303,34 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     env.SEALANT_DOCKER_REGISTRY_MIRRORS === undefined
       ? undefined
       : parseDockerRegistryMirrors(env.SEALANT_DOCKER_REGISTRY_MIRRORS);
+  // Resource instances (Mend ADR 0019) run on this Docker host: the adapter tells their reach
+  // about every executor it launches and removes, and a tick below keeps them at their rows.
+  const resourceReconciler = !env.DOCKER_RUNTIME_ENABLED
+    ? undefined
+    : await Effect.runPromise(
+        Effect.map(ResourceInstanceRepo, (repo) =>
+          makeResourceReconciler({
+            repo,
+            runtime: new DockerResourceRuntime({
+              subnets: repositorySubnets(
+                repo,
+                resourceSubnetPools({
+                  reach: env.SEALANT_RESOURCE_REACH_SUBNETS,
+                  egress: env.SEALANT_RESOURCE_EGRESS_SUBNETS,
+                }),
+              ),
+              dockerSocketPath: env.DOCKER_SOCKET_PATH,
+              ...(env.SEALANT_DOCKER_NETWORK_GUARD_IMAGE === undefined
+                ? {}
+                : { guardImage: env.SEALANT_DOCKER_NETWORK_GUARD_IMAGE }),
+            }),
+          }),
+        ).pipe(
+          Effect.provide(
+            ResourceInstanceRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, db))),
+          ),
+        ),
+      );
   const dockerAdapters = !env.DOCKER_RUNTIME_ENABLED
     ? []
     : [
@@ -328,6 +362,9 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           stopGraceSeconds: env.SEALANT_DOCKER_STOP_GRACE_SECONDS,
           captureStopGraceSeconds: env.SEALANT_DOCKER_CAPTURE_STOP_GRACE_SECONDS,
           containerStopTimeoutSeconds: env.SEALANT_DOCKER_CONTAINER_STOP_TIMEOUT_SECONDS,
+          ...(resourceReconciler === undefined
+            ? {}
+            : { executorNetworks: resourceReconciler.hooks }),
         }),
       ];
 
@@ -857,9 +894,39 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   const placementSweepTimer = setInterval(sweepPlacements, 30_000);
   placementSweepTimer.unref();
 
+  // Resource instances: restart what ended on its own, stop what nobody reached for its idle time,
+  // converge every reach network. One tick at a time; the first at start.
+  let resourceTickRunning = false;
+  const resourceTick = () => {
+    if (resourceReconciler === undefined || resourceTickRunning) return;
+    resourceTickRunning = true;
+    void resourceReconciler
+      .tick()
+      .then((report) => {
+        const acted =
+          report.restarted.length + report.stopped.length + report.idleStopped.length > 0;
+        if (acted || report.problems.length > 0) {
+          console.log("Resource instances reconciled", report);
+        }
+        return report;
+      })
+      .catch((error: unknown) =>
+        console.error("Resource instance tick failed; will retry.", {
+          error: error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error),
+        }),
+      )
+      .finally(() => {
+        resourceTickRunning = false;
+      });
+  };
+  resourceTick();
+  const resourceTickTimer = setInterval(resourceTick, env.SEALANT_RESOURCE_TICK_MS);
+  resourceTickTimer.unref();
+
   return {
     stop: async () => {
       clearInterval(placementSweepTimer);
+      clearInterval(resourceTickTimer);
       clearInterval(reaperTimer);
       clearInterval(expiryReaperTimer);
       clearInterval(deadlineSweepTimer);

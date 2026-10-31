@@ -24,3 +24,8 @@ export {
   type ReachAttachment,
 } from "./reach.js";
 export { repositorySubnets, resourceSubnetPools, type ResourceSubnetPools } from "./subnets.js";
+export {
+  makeResourceReconciler,
+  type ResourceReconciler,
+  type ResourceTickReport,
+} from "./reconciler.js";
