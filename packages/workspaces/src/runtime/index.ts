@@ -25,6 +25,7 @@ export {
 export {
   DEFAULT_NETWORK_GUARD_IMAGE,
   DockerRuntimeAdapter,
+  type DockerExecutorNetworkHooks,
   type DockerCommandResult,
   type DockerCommandRunner,
   type DockerRuntimeCatalog,

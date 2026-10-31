@@ -184,6 +184,14 @@ jobs:
         run: >-
           pnpm --filter @sealant/workspaces test:e2e src/runtime/cloud-metadata.e2e.ts
 
+      # Resource instances on this daemon: reach by name and never between workspaces, data kept
+      # through stop and archive, streamed exec; then the worker's hooks and tick, in a database of
+      # their own made from the migrated one.
+      - name: Resource instances run, reach their workspaces only, and keep their data
+        run: >-
+          pnpm --filter @sealant/workspaces test:e2e src/resources/docker-resource-runtime.e2e.ts
+          src/resources/reconciler.e2e.ts
+
   # An Arch workspace image built and run on each architecture's own Docker daemon: Docker Hub's
   # `archlinux` on amd64, Arch Linux ARM's verified rootfs on arm64. It carries every catalog
   # package and every baked harness, and checks they run natively (`uname -m`, the harnesses).

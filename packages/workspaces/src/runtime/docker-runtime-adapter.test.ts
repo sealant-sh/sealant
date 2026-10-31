@@ -846,6 +846,52 @@ describe("DockerRuntimeAdapter", () => {
     expect(runArgs[nameIndex + 1]).toBe("sealant-run-xyz");
   });
 
+  it("tells resource reach about a launched executor before ready, and a removed one, and never fails for it", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") return { stdout: "container-id-run\n", stderr: "" };
+      if (args[0] === "exec" || args[0] === "rm") return { stdout: "", stderr: "" };
+      if (args[0] === "inspect" && args.includes("{{.Id}}\t{{.State.Running}}")) {
+        return { stdout: "docker-service-id\ttrue\n", stderr: "" };
+      }
+      if (args[0] === "network") return { stdout: "network-id\n", stderr: "" };
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const events: Array<string> = [];
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      executorNetworks: {
+        launched: async ({ runId, executor }) => {
+          events.push(`launched ${runId ?? "?"} ${executor}`);
+          throw new Error("the reach network could not be created");
+        },
+        removed: async (executor) => {
+          events.push(`removed ${executor}`);
+          throw new Error("the reach network could not be removed");
+        },
+      },
+    });
+
+    const launched = await adapter.launch(
+      parseRuntimeAdapterLaunchInput({ ...createLaunchInput(), runId: "run-xyz" }),
+    );
+    expect(launched.status).toBe("ready");
+    expect(events).toEqual(["launched run-xyz sealant-run-xyz"]);
+
+    const removed = await adapter.stop({
+      resourceId: "container-id-run",
+      reference: "sealant-run-xyz",
+      phase: "remove",
+    });
+    expect(removed.outcome).toBe("stopped");
+    expect(events).toEqual(["launched run-xyz sealant-run-xyz", "removed sealant-run-xyz"]);
+  });
+
   it("adopts an existing live container instead of double-launching the same run (#4)", async () => {
     const commandRunner = vi.fn<
       (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>

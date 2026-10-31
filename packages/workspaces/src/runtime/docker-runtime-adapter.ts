@@ -239,6 +239,14 @@ interface DockerServiceProvision {
   readonly acquisition: DockerContainerAcquisition;
 }
 
+export interface DockerExecutorNetworkHooks {
+  readonly launched: (input: {
+    readonly runId: string | undefined;
+    readonly executor: string;
+  }) => Promise<void>;
+  readonly removed: (executor: string) => Promise<void>;
+}
+
 export interface DockerRuntimeAdapterOptions {
   readonly commandRunner?: DockerCommandRunner;
   readonly runtimeCatalogLoader?: DockerRuntimeCatalogLoader;
@@ -321,6 +329,13 @@ export interface DockerRuntimeAdapterOptions {
   readonly registryMirrorContainer?: string;
   /** Test seam for `watchExits`: how a `docker events` stream is opened. */
   readonly eventStreamOpener?: DockerEventStreamOpener;
+  /**
+   * Resource reach (`../resources`): told when an executor runs, so the instances its workspace
+   * may reach join its reach network before the launch reports ready, and when it is removed, so
+   * that network goes with it. A hook that fails is logged and never fails the launch or the stop:
+   * the resource reconciler's tick converges what it left.
+   */
+  readonly executorNetworks?: DockerExecutorNetworkHooks;
   /**
    * How long a planned stop waits after SIGTERM before Docker kills the container
    * (`docker stop -t`, `SEALANT_DOCKER_STOP_GRACE_SECONDS`). sealantd flushes its capture queue
@@ -954,6 +969,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   private readonly stopGraceSeconds: number;
   private readonly captureStopGraceSeconds: number;
   private readonly containerStopTimeoutSeconds: number;
+  private readonly executorNetworks: DockerExecutorNetworkHooks | undefined;
 
   public constructor(options: DockerRuntimeAdapterOptions = {}) {
     const dockerSocketPath = options.dockerSocketPath ?? "/var/run/docker.sock";
@@ -974,6 +990,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       options.captureStopGraceSeconds ?? DEFAULT_DOCKER_CAPTURE_STOP_GRACE_SECONDS;
     this.containerStopTimeoutSeconds =
       options.containerStopTimeoutSeconds ?? DEFAULT_DOCKER_CONTAINER_STOP_TIMEOUT_SECONDS;
+    this.executorNetworks = options.executorNetworks;
     this.controlSocketHostDir = options.controlSocketHostDir;
     this.mountAllowedStoreRoots = options.mountAllowedStoreRoots;
     this.volumeMappings = options.volumeMappings;
@@ -2262,6 +2279,14 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         `Workspace container '${workspace}' was removed, but whether its Docker sidecar '${sidecarName}' remains could not be told.`,
       );
     }
+    if (parsed.reference !== undefined) {
+      await this.executorNetworks?.removed(parsed.reference).catch((error: unknown) => {
+        console.warn("Resource reach could not detach a removed executor", {
+          container: parsed.reference,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
     if (network === "unknown") {
       throw createAdapterError(
         "adapter-unavailable",
@@ -2537,6 +2562,14 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         ? Promise.resolve()
         : this.blockCloudMetadata(containerId, containerName);
       void guarded.catch(() => undefined);
+      const reached = this.executorNetworks
+        ?.launched({ runId: parsed.runId, executor: containerName })
+        .catch((error: unknown) => {
+          console.warn("Resource reach could not attach a launched executor", {
+            container: containerName,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
       await reportStartedLaunch(hooks, executor.identity);
 
       await readyThenGuarded(
@@ -2551,6 +2584,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         })(),
         guarded,
       );
+      await reached;
 
       // The endpoint is the daemon control target used by every control-plane session, independent
       // of whether the workspace also allows SSH access. Persisting it is what lets API containers
