@@ -49,7 +49,7 @@ const RESOURCE_DOMAIN_ID_PATTERN = new RegExp(
 
 const RESOURCE_DOMAIN_KEY_PATTERN = /^[a-z][a-z0-9-]{0,31}:[A-Za-z0-9._:/@+=-]{1,223}$/;
 
-const ResourceDomainId = Schema.String.check(
+export const ResourceDomainId = Schema.String.check(
   Schema.makeFilter((id: string) =>
     RESOURCE_DOMAIN_ID_PATTERN.test(id) ? undefined : "must be a resource domain id (rdm:<uuid>)",
   ),

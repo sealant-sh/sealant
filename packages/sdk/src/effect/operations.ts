@@ -51,7 +51,9 @@ import type {
   SetConnectedAccountDefaultRequest,
   StopWorkspaceRequest,
   UpdateRunRequest,
+  UpResourceInstanceRequest,
 } from "@sealant/api-contracts";
+import { ResourceInstanceKey, ResourceWorktreeKey } from "@sealant/api-contracts";
 import { Effect } from "effect";
 
 import { SealantApiClient } from "./api-client.js";
@@ -444,4 +446,68 @@ export const setResourceDomainBudgetOp = (
 ) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.resourceDomains.setResourceDomainBudget({ params: { resourceDomainId }, payload }),
+  );
+
+// ---- resource instances (a scope's `instances`, `workspaces` and `archive`) ----
+
+/** The key, checked as the contract checks it; an invalid one fails before any request. */
+const instanceKey = (key: string) => Effect.try(() => ResourceInstanceKey.make(key));
+
+export const upResourceInstanceOp = (
+  resourceDomainId: string,
+  key: string,
+  payload: UpResourceInstanceRequest,
+) =>
+  Effect.flatMap(Effect.all([SealantApiClient, instanceKey(key)]), ([client, checked]) =>
+    client.resourceInstances.upResourceInstance({
+      params: { resourceDomainId, key: checked },
+      payload,
+    }),
+  );
+
+export const getResourceInstanceOp = (resourceDomainId: string, key: string) =>
+  Effect.flatMap(Effect.all([SealantApiClient, instanceKey(key)]), ([client, checked]) =>
+    client.resourceInstances.getResourceInstance({ params: { resourceDomainId, key: checked } }),
+  );
+
+export const listResourceInstancesOp = (resourceDomainId: string, archived: boolean) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.resourceInstances.listResourceInstances({
+      params: { resourceDomainId },
+      query: { archived: archived ? "true" : "false" },
+    }),
+  );
+
+export const stopResourceInstanceOp = (resourceDomainId: string, key: string, by: string) =>
+  Effect.flatMap(Effect.all([SealantApiClient, instanceKey(key)]), ([client, checked]) =>
+    client.resourceInstances.stopResourceInstance({
+      params: { resourceDomainId, key: checked },
+      payload: { by },
+    }),
+  );
+
+export const archiveResourceInstanceOp = (resourceDomainId: string, key: string) =>
+  Effect.flatMap(Effect.all([SealantApiClient, instanceKey(key)]), ([client, checked]) =>
+    client.resourceInstances.archiveResourceInstance({
+      params: { resourceDomainId, key: checked },
+    }),
+  );
+
+export const linkResourceWorkspaceOp = (
+  resourceDomainId: string,
+  workspaceId: string,
+  worktreeKey: string,
+) =>
+  Effect.flatMap(
+    Effect.all([SealantApiClient, Effect.try(() => ResourceWorktreeKey.make(worktreeKey))]),
+    ([client, checked]) =>
+      client.resourceInstances.linkResourceWorkspace({
+        params: { resourceDomainId, workspaceId },
+        payload: { worktreeKey: checked },
+      }),
+  );
+
+export const archiveResourceDomainOp = (resourceDomainId: string) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.resourceInstances.archiveResourceDomain({ params: { resourceDomainId } }),
   );

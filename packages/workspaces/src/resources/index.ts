@@ -5,6 +5,7 @@ export {
 } from "./docker-resource-argv.js";
 export {
   DockerResourceRuntime,
+  dockerFailureReason,
   RESOURCE_EXEC_OUTPUT_LIMIT,
   type ArchivedVolume,
   type DockerResourceRuntimeOptions,
@@ -22,3 +23,4 @@ export {
   type IdleVerdict,
   type ReachAttachment,
 } from "./reach.js";
+export { repositorySubnets, resourceSubnetPools, type ResourceSubnetPools } from "./subnets.js";

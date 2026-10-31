@@ -130,7 +130,7 @@ export class Sealant {
     this.#config = config;
     this.#runtime = makeSdkRuntime(internalConfig);
     this.#ctx = { runtime: this.#runtime, config: internalConfig };
-    this.scopes = makeScopes(this.#runtime);
+    this.scopes = makeScopes(this.#runtime, internalConfig);
   }
 
   /** The configured control-plane base URL. */

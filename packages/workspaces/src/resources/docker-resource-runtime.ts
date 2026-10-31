@@ -163,14 +163,18 @@ const isMissing = (error: unknown) =>
 const isPresent = (error: unknown) => /already exists|is already in use/i.test(errorText(error));
 const isNotConnected = (error: unknown) => /is not connected/i.test(errorText(error));
 
-/** The first line of a Docker failure, for a state's message; never an argv. */
-const reasonOf = (error: unknown): string => {
-  const stderr =
-    error instanceof Error && "stderr" in error && typeof error.stderr === "string"
-      ? error.stderr.trim()
-      : "";
-  const line = (stderr || (error instanceof Error ? error.message : String(error))).split("\n")[0];
-  return (line ?? "").replace(/^Error response from daemon:\s*/i, "").slice(0, 500);
+/** The first line of a Docker failure, for a state's message or a reply; never an argv. */
+export const dockerFailureReason = (error: unknown): string => {
+  if (!(error instanceof Error)) return String(error).slice(0, 500);
+  if (!("stderr" in error)) return (error.message.split("\n")[0] ?? "").slice(0, 500);
+  const stderr = typeof error.stderr === "string" ? error.stderr.trim() : "";
+  if (stderr.length === 0) {
+    // execFile's own message starts with the whole command line: never repeat it.
+    const killed = "killed" in error && error.killed === true;
+    return killed ? "the docker command did not finish in time" : "the docker command failed";
+  }
+  const line = stderr.split("\n")[0] ?? "";
+  return line.replace(/^Error response from daemon:\s*/i, "").slice(0, 500);
 };
 
 /** The last `limit` bytes of a stream, and whether anything before them was dropped. */
@@ -373,19 +377,22 @@ export class DockerResourceRuntime implements ResourceRuntime {
         );
       }
     } catch (error) {
-      return failed(reasonOf(error));
+      return failed(dockerFailureReason(error));
     }
     try {
       await this.run(cloudMetadataGuardArgv(container, this.guardImage), GUARD_TIMEOUT_MS);
     } catch (error) {
       // Fail closed: an instance never runs without the guard.
       await this.run(["stop", "-t", "10", container]).catch(() => undefined);
-      return failed(`the cloud metadata guard could not run: ${reasonOf(error)}`);
+      return failed(`the cloud metadata guard could not run: ${dockerFailureReason(error)}`);
     }
     try {
       await this.attach(attachments);
     } catch (error) {
-      return { ...failed(`it could not join a workspace's network: ${reasonOf(error)}`), volumes };
+      return {
+        ...failed(`it could not join a workspace's network: ${dockerFailureReason(error)}`),
+        volumes,
+      };
     }
     const notReady = await this.awaitReady(instance, container);
     if (notReady !== undefined) return { ...failed(notReady), volumes };
