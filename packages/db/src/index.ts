@@ -271,6 +271,23 @@ export {
   type ResourceDomainRecord,
   type ResourceDomainRepoService,
 } from "./repositories/resource-domains.js";
+export {
+  parseSubnetPool,
+  ResourceInstanceRepo,
+  ResourceInstanceRepoError,
+  ResourceInstanceRepoLive,
+  resourceInstanceSpecDigest,
+  type LinkedExecutor,
+  type NetworkAllocation,
+  type ResourceInstanceDesire,
+  type ResourceInstanceRecord,
+  type ResourceInstanceRepoService,
+  type ResourceInstanceUpCause,
+  type ResourceInstanceUpOutcome,
+  type ResourceWorkspaceLink,
+  type ResourceWorkspaceLinkOutcome,
+  type SubnetPool,
+} from "./repositories/resource-instances.js";
 
 export {
   ConnectedAccountRepo,

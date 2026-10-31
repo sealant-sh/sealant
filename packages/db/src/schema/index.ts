@@ -196,6 +196,19 @@ export {
 } from "./resource-domains.js";
 
 export {
+  type ResourceInstanceDesired,
+  type ResourceInstanceRow,
+  type ResourceNetworkKind,
+  type ResourceNetworkRow,
+  type ResourceWorkspaceLinkRow,
+  resourceInstanceDesiredValues,
+  resourceInstances,
+  resourceNetworkKindValues,
+  resourceNetworks,
+  resourceWorkspaceLinks,
+} from "./resource-instances.js";
+
+export {
   type NewTelemetryArtifact,
   type NewTelemetryEvent,
   type NewTelemetryLossSpan,
