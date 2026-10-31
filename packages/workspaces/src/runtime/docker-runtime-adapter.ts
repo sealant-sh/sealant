@@ -397,7 +397,8 @@ const assertDockerContainerName = (name: string): string => {
   return name;
 };
 
-const createDefaultCommandRunner = (dockerSocketPath: string): DockerCommandRunner => {
+/** The `docker` CLI against one socket, its output buffered (10 MB at most). */
+export const createDockerCommandRunner = (dockerSocketPath: string): DockerCommandRunner => {
   return async (command, args, options) => {
     const pendingResult = execFileAsync(command, args, {
       maxBuffer: 1024 * 1024 * 10,
@@ -957,7 +958,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   public constructor(options: DockerRuntimeAdapterOptions = {}) {
     const dockerSocketPath = options.dockerSocketPath ?? "/var/run/docker.sock";
 
-    this.commandRunner = options.commandRunner ?? createDefaultCommandRunner(dockerSocketPath);
+    this.commandRunner = options.commandRunner ?? createDockerCommandRunner(dockerSocketPath);
     this.eventStreamOpener =
       options.eventStreamOpener ?? createDefaultEventStreamOpener(dockerSocketPath);
     this.runtimeCatalogLoader =
