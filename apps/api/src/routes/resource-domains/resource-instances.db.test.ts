@@ -316,6 +316,7 @@ describe.skipIf(DATABASE_URL === undefined)("resource instances (Postgres)", () 
       workspaceId: linked[0]?.workspaceId,
       resourceDomainId: domain,
       worktreeKey: "w0",
+      aliases: null,
     });
     expect(await run((repo) => repo.linkOfRun(unlinked.runId))).toBeUndefined();
     await run((repo) => repo.unlink(linked[0]?.workspaceId ?? ""));

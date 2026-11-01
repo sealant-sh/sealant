@@ -287,9 +287,18 @@ describe.skipIf(DATABASE_URL === undefined)("a scope's instances through the SDK
     const workspaceId = await workspaceWithExecutor(executor);
     expect(await scope.workspaces.link(workspaceId, { worktreeKey: "w1" })).toEqual({
       worktreeKey: "w1",
+      aliases: null,
       attachedExecutors: 1,
     });
     expect(recorded.calls.attach.at(-1)).toEqual({ executor, aliases: ["db", "mail"] });
+    expect(
+      await scope.workspaces.link(workspaceId, {
+        worktreeKey: "w1",
+        aliases: { mail: "worktree" },
+      }),
+    ).toEqual({ worktreeKey: "w1", aliases: { mail: "worktree" }, attachedExecutors: 1 });
+    expect(recorded.calls.attach.at(-1)).toEqual({ executor, aliases: ["mail"] });
+    await scope.workspaces.link(workspaceId, { worktreeKey: "w1" });
     const other = await newScope();
     await expect(other.workspaces.link(workspaceId, { worktreeKey: "w1" })).rejects.toMatchObject({
       code: "ResourceWorkspaceLinkedElsewhereError",
