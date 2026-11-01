@@ -1,6 +1,8 @@
 import {
   ResourceInstanceId,
   ResourceInstanceKey,
+  ResourceReachAliases,
+  type ResourceReachLevel,
   ResourceWorktreeKey,
   resourceInstanceSpecSchema,
   type ResourceInstanceSpec,
@@ -55,9 +57,11 @@ export const linkedExecutor = (
   executor: string,
   worktreeKey: string,
   resourceDomainId = DOMAIN,
+  aliases: Readonly<Record<string, ResourceReachLevel>> | null = null,
 ): LinkedExecutor => ({
   workspaceId: `ws-${executor}`,
   resourceDomainId,
   worktreeKey: ResourceWorktreeKey.make(worktreeKey),
+  aliases: aliases === null ? null : Schema.decodeUnknownSync(ResourceReachAliases)(aliases),
   executor,
 });

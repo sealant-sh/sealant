@@ -189,6 +189,7 @@ describe.skipIf(DATABASE_URL === undefined)("the resource reconciler", () => {
         workspaceId,
         resourceDomainId: domainId,
         worktreeKey: ResourceWorktreeKey.make("w1"),
+        aliases: null,
       }),
     );
   }, 120_000);

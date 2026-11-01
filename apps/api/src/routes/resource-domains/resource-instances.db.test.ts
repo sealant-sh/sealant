@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   ResourceInstanceKey,
+  ResourceReachAliases,
   ResourceWorktreeKey,
   resourceInstanceSpecSchema,
   type ResourceInstanceSpec,
@@ -221,29 +222,60 @@ describe.skipIf(DATABASE_URL === undefined)("resource instances (Postgres)", () 
     expect(outcome).toEqual({ kind: "domain-not-active", state: "fenced" });
   });
 
-  it("links a workspace once, moves its worktree key, and refuses a second domain", async () => {
+  it("links a workspace once, moves its worktree key and map, and refuses a second domain", async () => {
     const domain = await newDomain();
     const otherDomain = await newDomain();
     const { workspaceId } = await workspaceWithExecutor(`sealant-${randomUUID()}`, "ready");
-    const [first, again, moved, other, missing] = await run((repo) =>
+    const aliases = Schema.decodeUnknownSync(ResourceReachAliases)({ mail: "worktree" });
+    const [first, again, moved, mapped, cleared, other, missing] = await run((repo) =>
       Effect.all([
-        repo.link({ workspaceId, resourceDomainId: domain, worktreeKey: worktree("w1") }),
-        repo.link({ workspaceId, resourceDomainId: domain, worktreeKey: worktree("w1") }),
-        repo.link({ workspaceId, resourceDomainId: domain, worktreeKey: worktree("w2") }),
-        repo.link({ workspaceId, resourceDomainId: otherDomain, worktreeKey: worktree("w1") }),
+        repo.link({
+          workspaceId,
+          resourceDomainId: domain,
+          worktreeKey: worktree("w1"),
+          aliases: null,
+        }),
+        repo.link({
+          workspaceId,
+          resourceDomainId: domain,
+          worktreeKey: worktree("w1"),
+          aliases: null,
+        }),
+        repo.link({
+          workspaceId,
+          resourceDomainId: domain,
+          worktreeKey: worktree("w2"),
+          aliases: null,
+        }),
+        repo.link({ workspaceId, resourceDomainId: domain, worktreeKey: worktree("w2"), aliases }),
+        repo.link({
+          workspaceId,
+          resourceDomainId: domain,
+          worktreeKey: worktree("w2"),
+          aliases: null,
+        }),
+        repo.link({
+          workspaceId,
+          resourceDomainId: otherDomain,
+          worktreeKey: worktree("w1"),
+          aliases: null,
+        }),
         repo.link({
           workspaceId: `ws_${randomUUID()}`,
           resourceDomainId: domain,
           worktreeKey: worktree("w1"),
+          aliases: null,
         }),
       ]),
     );
     expect(first).toEqual({
       kind: "linked",
-      link: { workspaceId, resourceDomainId: domain, worktreeKey: "w1" },
+      link: { workspaceId, resourceDomainId: domain, worktreeKey: "w1", aliases: null },
     });
     expect(again).toEqual(first);
     expect(moved.kind === "linked" && moved.link.worktreeKey).toBe("w2");
+    expect(mapped.kind === "linked" && mapped.link.aliases).toEqual({ mail: "worktree" });
+    expect(cleared.kind === "linked" && cleared.link.aliases).toBeNull();
     expect(other).toEqual({ kind: "other-domain", resourceDomainId: domain });
     expect(missing).toEqual({ kind: "no-such-workspace" });
     expect(await run((repo) => repo.links(domain))).toHaveLength(1);
@@ -267,6 +299,7 @@ describe.skipIf(DATABASE_URL === undefined)("resource instances (Postgres)", () 
             workspaceId,
             resourceDomainId: domain,
             worktreeKey: worktree(`w${String(index)}`),
+            aliases: null,
           }),
         ),
       ),
@@ -283,6 +316,7 @@ describe.skipIf(DATABASE_URL === undefined)("resource instances (Postgres)", () 
       workspaceId: linked[0]?.workspaceId,
       resourceDomainId: domain,
       worktreeKey: "w0",
+      aliases: null,
     });
     expect(await run((repo) => repo.linkOfRun(unlinked.runId))).toBeUndefined();
     await run((repo) => repo.unlink(linked[0]?.workspaceId ?? ""));

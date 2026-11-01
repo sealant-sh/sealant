@@ -53,8 +53,12 @@ import type {
   UpdateRunRequest,
   UpResourceInstanceRequest,
 } from "@sealant/api-contracts";
-import { ResourceInstanceKey, ResourceWorktreeKey } from "@sealant/api-contracts";
-import { Effect } from "effect";
+import {
+  ResourceInstanceKey,
+  ResourceReachAliases,
+  ResourceWorktreeKey,
+} from "@sealant/api-contracts";
+import { Effect, Schema } from "effect";
 
 import { SealantApiClient } from "./api-client.js";
 
@@ -497,13 +501,21 @@ export const linkResourceWorkspaceOp = (
   resourceDomainId: string,
   workspaceId: string,
   worktreeKey: string,
+  aliases?: Readonly<Record<string, "project" | "worktree">>,
 ) =>
   Effect.flatMap(
-    Effect.all([SealantApiClient, Effect.try(() => ResourceWorktreeKey.make(worktreeKey))]),
-    ([client, checked]) =>
+    Effect.all([
+      SealantApiClient,
+      Effect.try(() => ResourceWorktreeKey.make(worktreeKey)),
+      Effect.try(() =>
+        aliases === undefined ? undefined : Schema.decodeUnknownSync(ResourceReachAliases)(aliases),
+      ),
+    ]),
+    ([client, checked, reach]) =>
       client.resourceInstances.linkResourceWorkspace({
         params: { resourceDomainId, workspaceId },
-        payload: { worktreeKey: checked },
+        payload:
+          reach === undefined ? { worktreeKey: checked } : { worktreeKey: checked, aliases: reach },
       }),
   );
 

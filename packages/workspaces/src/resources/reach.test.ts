@@ -23,6 +23,31 @@ describe("reaches", () => {
     expect([reaches(w1, mailW1), reaches(w2, mailW1)]).toEqual([true, false]);
   });
 
+  it("reaches only the level a link's map names for each alias", () => {
+    const mailProject = instanceRecord({
+      uuid: "33333333-3333-4333-8333-333333333333",
+      spec: postgresSpec({ alias: "mail" }),
+    });
+    const own = linkedExecutor("sealant-a", "w1", undefined, { mail: "worktree", db: "project" });
+    const shared = linkedExecutor("sealant-b", "w1", undefined, { mail: "project" });
+    expect([reaches(own, mailW1), reaches(own, mailProject), reaches(own, project)]).toEqual([
+      true,
+      false,
+      true,
+    ]);
+    // `db` is left out of this map, so the workspace does not reach it.
+    expect([
+      reaches(shared, mailW1),
+      reaches(shared, mailProject),
+      reaches(shared, project),
+    ]).toEqual([false, true, false]);
+  });
+
+  it("never reaches another worktree's instance, whatever the map says", () => {
+    const w2 = linkedExecutor("sealant-c", "w2", undefined, { mail: "worktree" });
+    expect(reaches(w2, mailW1)).toBe(false);
+  });
+
   it("never reaches another domain's instance", () => {
     const other = linkedExecutor("sealant-c", "w1", "rdm:99999999-9999-4999-8999-999999999999");
     expect(reaches(other, project)).toBe(false);
@@ -51,6 +76,18 @@ describe("desiredAttachments", () => {
       "sealant-old-reach",
       "sealant-new-reach",
     ]);
+  });
+
+  it("attaches one container under an alias when a project and a worktree instance share it", () => {
+    const mailProject = instanceRecord({
+      uuid: "33333333-3333-4333-8333-333333333333",
+      spec: postgresSpec({ alias: "mail" }),
+    });
+    const attachments = desiredAttachments(
+      [linkedExecutor("sealant-a", "w1", undefined, { mail: "worktree" })],
+      [mailProject, mailW1],
+    );
+    expect(attachments.map((attachment) => attachment.instanceId)).toEqual([mailW1.id]);
   });
 
   it("holds nothing when no executor is live", () => {

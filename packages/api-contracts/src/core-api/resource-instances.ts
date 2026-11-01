@@ -316,13 +316,27 @@ export const listResourceInstancesQuerySchema = Schema.Struct({
   archived: Schema.optional(Schema.Literals(["true", "false"])),
 });
 
+/** Which instance a linked workspace reaches under an alias: the project's, or its worktree's. */
+export const ResourceReachLevel = Schema.Literals(["project", "worktree"]);
+export type ResourceReachLevel = typeof ResourceReachLevel.Type;
+
+/**
+ * A link's map from alias to the level the workspace reaches it at. An alias it does not name is not
+ * reached; a link with no map reaches every project instance and its worktree's own.
+ */
+export const ResourceReachAliases = Schema.Record(ResourceInstanceAlias, ResourceReachLevel);
+export type ResourceReachAliases = typeof ResourceReachAliases.Type;
+
 export const linkResourceWorkspaceRequestSchema = Schema.Struct({
   worktreeKey: ResourceWorktreeKey,
+  /** Replaces the link's map; omitted, the link has none. */
+  aliases: Schema.optional(ResourceReachAliases),
 });
 
 export const resourceWorkspaceLinkSchema = Schema.Struct({
   workspaceId: Schema.String,
   worktreeKey: ResourceWorktreeKey,
+  aliases: Schema.NullOr(ResourceReachAliases),
   /** How many of the workspace's live executors were attached by this call. */
   attachedExecutors: Schema.Int,
 });

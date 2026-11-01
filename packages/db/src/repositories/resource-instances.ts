@@ -4,6 +4,8 @@ import {
   RESOURCE_INSTANCE_ID_PREFIX,
   ResourceInstanceId,
   ResourceInstanceKey,
+  ResourceReachAliases,
+  type ResourceReachLevel,
   ResourceWorktreeKey,
   type ResourceInstanceSpec,
   type ResourceInstanceState,
@@ -92,6 +94,8 @@ export interface ResourceWorkspaceLink {
   readonly workspaceId: string;
   readonly resourceDomainId: string;
   readonly worktreeKey: ResourceWorktreeKey;
+  /** Alias to the level reached at; null reaches every project instance and the worktree's own. */
+  readonly aliases: ResourceReachAliases | null;
 }
 
 /** A live executor of a linked workspace: the Docker container its reach network is named by. */
@@ -307,16 +311,21 @@ const linkColumns = {
   workspaceId: resourceWorkspaceLinks.workspaceId,
   resourceDomainId: resourceWorkspaceLinks.resourceDomainId,
   worktreeKey: resourceWorkspaceLinks.worktreeKey,
+  aliases: resourceWorkspaceLinks.aliases,
 };
+
+const decodeAliases = Schema.decodeUnknownSync(ResourceReachAliases);
 
 const toLink = (row: {
   readonly workspaceId: string;
   readonly resourceDomainId: string;
   readonly worktreeKey: string;
+  readonly aliases: Readonly<Record<string, ResourceReachLevel>> | null;
 }): ResourceWorkspaceLink => ({
   workspaceId: row.workspaceId,
   resourceDomainId: row.resourceDomainId,
   worktreeKey: ResourceWorktreeKey.make(row.worktreeKey),
+  aliases: row.aliases === null ? null : decodeAliases(row.aliases),
 });
 
 /** A person's stop holds against `use`: what `up` leaves standing when it is the cause. */
@@ -494,7 +503,7 @@ export const ResourceInstanceRepoLive: Layer.Layer<ResourceInstanceRepo, never, 
                     .where(inArray(resourceInstances.id, [...ids])),
                 ),
           ),
-        link: ({ workspaceId, resourceDomainId, worktreeKey }) =>
+        link: ({ workspaceId, resourceDomainId, worktreeKey, aliases }) =>
           withError(
             "link",
             Effect.gen(function* () {
@@ -509,10 +518,10 @@ export const ResourceInstanceRepoLive: Layer.Layer<ResourceInstanceRepo, never, 
               if (workspace === undefined) return { kind: "no-such-workspace" } as const;
               const [row] = yield* db
                 .insert(resourceWorkspaceLinks)
-                .values({ workspaceId, resourceDomainId, worktreeKey })
+                .values({ workspaceId, resourceDomainId, worktreeKey, aliases })
                 .onConflictDoUpdate({
                   target: resourceWorkspaceLinks.workspaceId,
-                  set: { worktreeKey, updatedAt: new Date() },
+                  set: { worktreeKey, aliases, updatedAt: new Date() },
                   setWhere: eq(resourceWorkspaceLinks.resourceDomainId, resourceDomainId),
                 })
                 .returning(linkColumns);

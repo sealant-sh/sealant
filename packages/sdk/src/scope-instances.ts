@@ -153,14 +153,24 @@ export interface ScopeInstances {
 export interface ScopeWorkspaces {
   /**
    * Let this workspace reach the scope's project instances, and those of `worktreeKey`, by alias:
-   * now, and across executor replacements, until the workspace ends. Linking again moves it to
-   * another worktree key; a workspace linked to another scope rejects (409
-   * `ResourceWorkspaceLinkedElsewhereError`). Answers once its running executors are attached.
+   * now, and across executor replacements, until the workspace ends. With `aliases`, it reaches
+   * only what the map names, each alias at its level: `{ mail: "worktree", db: "project" }` reaches
+   * the worktree's own `mail` and the project's `db`, and no other instance. Without it, every
+   * project instance and the worktree's own. Linking again replaces the worktree key and the map,
+   * and detaches what the new map leaves out at once; a workspace linked to another scope rejects
+   * (409 `ResourceWorkspaceLinkedElsewhereError`). Answers once its running executors converged.
    */
   link(
     workspaceId: string,
-    options: { readonly worktreeKey: string },
-  ): Promise<{ readonly worktreeKey: string; readonly attachedExecutors: number }>;
+    options: {
+      readonly worktreeKey: string;
+      readonly aliases?: Readonly<Record<string, "project" | "worktree">>;
+    },
+  ): Promise<{
+    readonly worktreeKey: string;
+    readonly aliases: Readonly<Record<string, "project" | "worktree">> | null;
+    readonly attachedExecutors: number;
+  }>;
 }
 
 const date = (value: string) => new Date(value);
@@ -327,9 +337,15 @@ export const makeScopeInstances = (
     },
   },
   workspaces: {
-    link: async (workspaceId, { worktreeKey }) => {
-      const answer = await runtime.run(linkResourceWorkspaceOp(scopeId, workspaceId, worktreeKey));
-      return { worktreeKey: answer.worktreeKey, attachedExecutors: answer.attachedExecutors };
+    link: async (workspaceId, { worktreeKey, aliases }) => {
+      const answer = await runtime.run(
+        linkResourceWorkspaceOp(scopeId, workspaceId, worktreeKey, aliases),
+      );
+      return {
+        worktreeKey: answer.worktreeKey,
+        aliases: answer.aliases,
+        attachedExecutors: answer.attachedExecutors,
+      };
     },
   },
   archive: async () => {

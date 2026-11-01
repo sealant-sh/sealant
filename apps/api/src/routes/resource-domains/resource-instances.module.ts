@@ -17,6 +17,7 @@ import {
   ResourceRuntimeUnsupportedError,
   ResourceWorkspaceLinkedElsewhereError,
   ResourceWorkspaceNotFoundError,
+  type ResourceReachAliases,
   ResourceWorktreeKey,
   type ResourceInstanceArchivedVolumeWire,
   type ResourceInstanceKey,
@@ -253,13 +254,14 @@ export const linkResourceWorkspace = (
   resourceDomainId: string,
   workspaceId: string,
   worktreeKey: ResourceWorktreeKey,
+  aliases: ResourceReachAliases | null,
 ) =>
   Effect.gen(function* () {
     yield* requireDomain(resourceDomainId);
     const runtime = yield* requireDockerRuntime;
     const repo = yield* ResourceInstanceRepo;
     const outcome = yield* repo
-      .link({ workspaceId, resourceDomainId, worktreeKey })
+      .link({ workspaceId, resourceDomainId, worktreeKey, aliases })
       .pipe(Effect.mapError(internal("Failed to link the workspace.")));
     switch (outcome.kind) {
       case "no-such-domain":
@@ -277,7 +279,8 @@ export const linkResourceWorkspace = (
           resourceDomainId: outcome.resourceDomainId,
         });
       case "linked": {
-        // Attach the executors it runs now; a later launch attaches its own (the worker's hook).
+        // Converge the executors it runs now, so a narrower map detaches at once; a later launch
+        // attaches its own (the worker's hook).
         const executors = (yield* repo
           .linkedExecutors(resourceDomainId)
           .pipe(Effect.mapError(internal("Failed to read the workspace's executors.")))).filter(
@@ -295,6 +298,7 @@ export const linkResourceWorkspace = (
         return {
           workspaceId,
           worktreeKey: ResourceWorktreeKey.make(outcome.link.worktreeKey),
+          aliases: outcome.link.aliases,
           attachedExecutors: executors.length,
         } satisfies ResourceWorkspaceLinkWire;
       }
