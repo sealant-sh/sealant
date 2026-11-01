@@ -17,10 +17,19 @@ export interface ReachAttachment {
   readonly alias: ResourceInstanceAlias;
 }
 
-/** Same domain, and the instance is the project's (no worktree key) or the link's worktree's. */
-export const reaches = (link: ResourceWorkspaceLink, instance: ResourceInstanceRecord): boolean =>
-  link.resourceDomainId === instance.resourceDomainId &&
-  (instance.spec.worktreeKey === null || instance.spec.worktreeKey === link.worktreeKey);
+/**
+ * Same domain, and the instance is the project's (no worktree key) or the link's worktree's. A link
+ * with an alias map reaches only the level it names for each alias, so a worktree's own `mail`
+ * replaces the project's there, and an alias it leaves out is not reached at all.
+ */
+export const reaches = (link: ResourceWorkspaceLink, instance: ResourceInstanceRecord): boolean => {
+  if (link.resourceDomainId !== instance.resourceDomainId) return false;
+  const worktree = instance.spec.worktreeKey;
+  if (worktree !== null && worktree !== link.worktreeKey) return false;
+  if (link.aliases === null) return true;
+  const level = link.aliases[instance.spec.alias];
+  return level === (worktree === null ? "project" : "worktree");
+};
 
 /** Every attachment Docker should hold: each live linked executor with each instance it reaches. */
 export const desiredAttachments = (

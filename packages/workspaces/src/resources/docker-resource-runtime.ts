@@ -107,7 +107,10 @@ export interface ResourceRuntime {
     command: ResourceExecCommand,
     stdin: AsyncIterable<Uint8Array> | null,
   ) => Promise<ResourceExecResult>;
-  /** The executor's reach network, created on Core's subnet, with the executor and each instance it reaches. */
+  /**
+   * The executor's reach network, created on Core's subnet, holding exactly the executor and each
+   * instance it reaches: an instance the attachments leave out is disconnected.
+   */
   readonly attachExecutor: (
     executor: string,
     attachments: ReadonlyArray<ReachAttachment>,
@@ -537,8 +540,7 @@ export class DockerResourceRuntime implements ResourceRuntime {
     executor: string,
     attachments: ReadonlyArray<ReachAttachment>,
   ): Promise<void> {
-    await this.ensureReach(executor);
-    await this.attach(attachments.filter((attachment) => attachment.executor === executor));
+    await this.convergeExecutor(executor, attachments);
   }
 
   public async detachExecutor(executor: string): Promise<void> {

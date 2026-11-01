@@ -32,7 +32,12 @@ export const ResourceInstancesHandlersLive = HttpApiBuilder.group(
         archiveResourceInstance(params.resourceDomainId, params.key),
       )
       .handle("linkResourceWorkspace", ({ params, payload }) =>
-        linkResourceWorkspace(params.resourceDomainId, params.workspaceId, payload.worktreeKey),
+        linkResourceWorkspace(
+          params.resourceDomainId,
+          params.workspaceId,
+          payload.worktreeKey,
+          payload.aliases ?? null,
+        ),
       )
       .handle("archiveResourceDomain", ({ params }) =>
         archiveResourceDomain(params.resourceDomainId),

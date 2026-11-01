@@ -1,0 +1,1 @@
+ALTER TABLE "resource_workspace_links" ADD COLUMN "aliases" jsonb;

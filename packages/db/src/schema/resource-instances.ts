@@ -3,6 +3,7 @@ import type {
   ResourceInstanceState,
   ResourceInstanceStopReason,
   ResourceInstanceVolume,
+  ResourceReachLevel,
 } from "@sealant/api-contracts";
 import { sql } from "drizzle-orm";
 import {
@@ -100,6 +101,8 @@ export const resourceWorkspaceLinks = pgTable(
       .notNull()
       .references(() => resourceDomains.id, { onDelete: "restrict" }),
     worktreeKey: text().notNull(),
+    /** Alias to the level reached at; null reaches every project instance and the worktree's own. */
+    aliases: jsonb().$type<Readonly<Record<string, ResourceReachLevel>>>(),
     createdAt: timestamp({ mode: "date", withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp({ mode: "date", withTimezone: true }).notNull().defaultNow(),
   },

@@ -93,6 +93,16 @@ describe("resource instances on Docker", () => {
       ready: { kind: "tcp", port: 6379 },
     }),
   );
+  const mailProject = record(
+    randomUUID(),
+    postgresSpec({
+      alias: "mail",
+      image: REDIS,
+      volumes: [{ name: "data", mountPath: "/data" }],
+      env: {},
+      ready: { kind: "tcp", port: 6379 },
+    }),
+  );
   const created = { volumes: new Set<string>(), networks: new Set<string>() };
   const up = async (instance: ResourceInstanceRecord) => {
     const result = await runtime.up(instance, desiredAttachments(links, [instance]));
@@ -150,6 +160,7 @@ describe("resource instances on Docker", () => {
       executors.w2,
       instanceContainerName(db.id),
       instanceContainerName(mail.id),
+      instanceContainerName(mailProject.id),
     ];
     // Exactly what this file made: its containers (rm -f without -v), networks and volumes.
     await docker("rm", "-f", ...containers).catch(() => undefined);
@@ -216,6 +227,57 @@ describe("resource instances on Docker", () => {
     expect(await succeeds("exec", executors.w1, "nc", "-z", "-w", "3", "mail", "6379")).toBe(true);
     expect(await succeeds("exec", executors.w2, "nc", "-z", "-w", "3", "mail", "6379")).toBe(false);
     expect(await succeeds("exec", executors.w2, "nslookup", "mail")).toBe(false);
+  }, 180_000);
+
+  it("resolves an alias to the level the link's map names, and flips on the next attach", async () => {
+    const started = await up(mailProject);
+    expect(started.result.state.kind).toBe("running");
+    // ping prints the address the name resolved to first, whether or not the ping is answered.
+    const resolved = async () =>
+      [
+        ...(
+          await docker("exec", executors.w1, "sh", "-c", "ping -c 1 -W 1 mail 2>&1 || true")
+        ).matchAll(/^PING mail \(([0-9.]+)\)/gm),
+      ].map((match) => match[1]);
+    const addressOn = async (instance: ResourceInstanceRecord) =>
+      docker(
+        "inspect",
+        "--format",
+        `{{(index .NetworkSettings.Networks "${reachNetworkName(executors.w1)}").IPAddress}}`,
+        instanceContainerName(instance.id),
+      );
+    const attach = (level: "project" | "worktree") =>
+      runtime.attachExecutor(
+        executors.w1,
+        desiredAttachments(
+          [linkedExecutor(executors.w1, "w1", undefined, { db: "project", mail: level })],
+          [db, mail, mailProject],
+        ),
+      );
+    const onReach = async () =>
+      (
+        await docker(
+          "network",
+          "inspect",
+          "--format",
+          "{{range .Containers}}{{.Name}} {{end}}",
+          reachNetworkName(executors.w1),
+        )
+      )
+        .split(" ")
+        .filter((name) => name.startsWith("sealres-"))
+        .toSorted();
+    await attach("worktree");
+    expect(await resolved()).toEqual([await addressOn(mail)]);
+    expect(await onReach()).toEqual(
+      [instanceContainerName(db.id), instanceContainerName(mail.id)].toSorted(),
+    );
+    await attach("project");
+    expect(await resolved()).toEqual([await addressOn(mailProject)]);
+    expect(await onReach()).toEqual(
+      [instanceContainerName(db.id), instanceContainerName(mailProject.id)].toSorted(),
+    );
+    await runtime.attachExecutor(executors.w1, desiredAttachments(links, [db, mail]));
   }, 180_000);
 
   it("keeps a write through stop and up, and refuses the metadata address after the restart", async () => {
