@@ -1,0 +1,247 @@
+{
+  "provenance": {
+    "repository": "Mend",
+    "commit": "f0defb5753e6d489439be29f13e05ca585447900",
+    "file": "packages/domain/src/settings.ts",
+    "symbol": "screenPackageIds",
+    "line": 118,
+    "nixSupplement": "The Mend caller omits ffmpeg on Nix. This proof requests it separately through the catalog. The caller fix follows later.",
+    "gitBlob": "abc6af533dcb75d5d911ef767e8c4cdfb1fd95c0"
+  },
+  "ubuntu": {
+    "screenPackageIds": [
+      "tigervnc",
+      "xauth",
+      "xdpyinfo",
+      "xfce",
+      "dbus",
+      "ffmpeg",
+      "chromium",
+      "fonts-dejavu"
+    ],
+    "supplementalPackageIds": [],
+    "blueprint": {
+      "version": "1",
+      "sources": {
+        "workspace": {
+          "kind": "git",
+          "provider": "generic",
+          "url": "https://github.com/example/repo.git",
+          "ref": "main"
+        },
+        "inputs": [
+          {
+            "id": "public-build-dots",
+            "kind": "git",
+            "purpose": "dotfiles",
+            "provider": "generic",
+            "url": "https://github.com/octocat/Hello-World.git",
+            "ref": "master"
+          }
+        ],
+        "mounts": []
+      },
+      "harness": {
+        "id": "opencode"
+      },
+      "access": {
+        "ssh": {
+          "enabled": false,
+          "listenPort": 2222
+        }
+      },
+      "tooling": {
+        "packages": [
+          {
+            "id": "tigervnc"
+          },
+          {
+            "id": "xauth"
+          },
+          {
+            "id": "xdpyinfo"
+          },
+          {
+            "id": "xfce"
+          },
+          {
+            "id": "dbus"
+          },
+          {
+            "id": "ffmpeg"
+          },
+          {
+            "id": "chromium"
+          },
+          {
+            "id": "fonts-dejavu"
+          }
+        ]
+      },
+      "customization": {
+        "defaultShell": "zsh",
+        "dotfilesManager": "copy",
+        "dotfilesTarget": "home",
+        "applyDotfiles": true,
+        "dotfilesBootstrap": false
+      },
+      "lifecycle": {
+        "setup": [
+          {
+            "run": "printf x >>/var/lib/sealant/setup-marker",
+            "shell": "sh"
+          }
+        ],
+        "startup": {
+          "steps": [
+            {
+              "run": "printf x >>/var/lib/sealant/startup-marker",
+              "shell": "sh"
+            }
+          ],
+          "foreground": {
+            "kind": "harness"
+          }
+        }
+      },
+      "runtime": {
+        "env": {},
+        "userEnv": {},
+        "credentialRefs": [],
+        "dotfilesArchives": [],
+        "workspaceRoot": "/workspace",
+        "workingDirectory": "/workspace/repo",
+        "persistence": "ephemeral",
+        "envFrom": [],
+        "kubernetes": {},
+        "ociRuntime": "runc",
+        "network": {
+          "outbound": true,
+          "cloudMetadata": false
+        }
+      },
+      "target": {
+        "os": {
+          "family": "ubuntu",
+          "mode": "require"
+        },
+        "runtime": {
+          "family": "auto",
+          "mode": "prefer"
+        }
+      }
+    }
+  },
+  "nix": {
+    "screenPackageIds": ["tigervnc", "xauth", "xdpyinfo", "openbox", "chromium", "fonts-dejavu"],
+    "supplementalPackageIds": ["ffmpeg"],
+    "blueprint": {
+      "version": "1",
+      "sources": {
+        "workspace": {
+          "kind": "git",
+          "provider": "generic",
+          "url": "https://github.com/example/repo.git",
+          "ref": "main"
+        },
+        "inputs": [
+          {
+            "id": "public-build-dots",
+            "kind": "git",
+            "purpose": "dotfiles",
+            "provider": "generic",
+            "url": "https://github.com/octocat/Hello-World.git",
+            "ref": "master"
+          }
+        ],
+        "mounts": []
+      },
+      "harness": {
+        "id": "opencode"
+      },
+      "access": {
+        "ssh": {
+          "enabled": false,
+          "listenPort": 2222
+        }
+      },
+      "tooling": {
+        "packages": [
+          {
+            "id": "tigervnc"
+          },
+          {
+            "id": "xauth"
+          },
+          {
+            "id": "xdpyinfo"
+          },
+          {
+            "id": "openbox"
+          },
+          {
+            "id": "chromium"
+          },
+          {
+            "id": "fonts-dejavu"
+          },
+          {
+            "id": "ffmpeg"
+          }
+        ]
+      },
+      "customization": {
+        "defaultShell": "zsh",
+        "dotfilesManager": "copy",
+        "dotfilesTarget": "home",
+        "applyDotfiles": true,
+        "dotfilesBootstrap": false
+      },
+      "lifecycle": {
+        "setup": [
+          {
+            "run": "printf x >>/var/lib/sealant/setup-marker",
+            "shell": "sh"
+          }
+        ],
+        "startup": {
+          "steps": [
+            {
+              "run": "printf x >>/var/lib/sealant/startup-marker",
+              "shell": "sh"
+            }
+          ],
+          "foreground": {
+            "kind": "harness"
+          }
+        }
+      },
+      "runtime": {
+        "env": {},
+        "userEnv": {},
+        "credentialRefs": [],
+        "dotfilesArchives": [],
+        "workspaceRoot": "/workspace",
+        "workingDirectory": "/workspace/repo",
+        "persistence": "ephemeral",
+        "envFrom": [],
+        "kubernetes": {},
+        "ociRuntime": "runc",
+        "network": {
+          "outbound": true,
+          "cloudMetadata": false
+        }
+      },
+      "target": {
+        "os": {
+          "family": "nix",
+          "mode": "require"
+        },
+        "runtime": {
+          "family": "auto",
+          "mode": "prefer"
+        }
+      }
+    }
+  }
+}

@@ -187,7 +187,7 @@ describe("the workspace package catalog", () => {
         ["xauth"],
         ["x11-utils"],
         ["openbox"],
-        undefined,
+        familyInstall("chromium", "ubuntu")?.packages,
         ["fonts-dejavu-core"],
       ],
       nix: [["tigervnc"], ["xauth"], ["xdpyinfo"], ["openbox"], ["chromium"], ["dejavu_fonts"]],
@@ -211,29 +211,23 @@ describe("the workspace package catalog", () => {
     }
     const nix = containerfileFor("nix", screen);
     for (const name of expected.nix.flat()) expect(nix, name).toContain(`'nixpkgs#${name}'`);
-    const ubuntu = containerfileFor(
-      "ubuntu",
-      screen.filter((id) => id !== "chromium"),
-    );
+    const ubuntu = containerfileFor("ubuntu", screen);
     for (const name of expected.ubuntu.flat()) {
       if (name !== undefined)
         expect(ubuntu, name).toMatch(new RegExp(`apt-get install .*\\b${name}\\b`));
     }
   });
 
-  it("refuses chromium on Ubuntu when the image is planned, with why", () => {
-    expect(unsupportedWorkspacePackages("ubuntu", ["openbox", "chromium", "chromium"])).toEqual([
-      {
-        id: "chromium",
-        reason: expect.stringContaining("stub for the chromium snap"),
-      },
-    ]);
-    for (const family of ["fedora", "arch", "nix"] as const) {
-      expect(unsupportedWorkspacePackages(family, ["chromium"]), family).toEqual([]);
-    }
-    expect(() => containerfileFor("ubuntu", ["openbox", "chromium"])).toThrow(
-      /Workspace package 'chromium' is not available on ubuntu: Ubuntu 24\.04's chromium-browser package is a stub for the chromium snap/,
-    );
+  it("installs the complete checksum-pinned Ubuntu Chromium tree and refuses ARM before build", () => {
+    expect(unsupportedWorkspacePackages("ubuntu", ["chromium"])).toEqual([]);
+    const text = containerfileFor("ubuntu", ["chromium"]);
+    expect(text).toContain("Linux_x64/1735811/chrome-linux.zip");
+    expect(text).toContain("3bffe88b3d7456b103c403602e6a2cb449071f1b51ee98fed750625c436e9977");
+    expect(text).toContain('cp -a "$d/"');
+    expect(text).toContain("/opt/chromium-1735811");
+    expect(text).toContain("libnss3");
+    expect(text).not.toMatch(/apt-get install[^\n]*chromium-browser/);
+    expect(familyInstall("chromium", "ubuntu")?.release?.archives.aarch64).toBeUndefined();
   });
 
   it("installs the screen's XFCE components and private session bus, without desktop extras", () => {

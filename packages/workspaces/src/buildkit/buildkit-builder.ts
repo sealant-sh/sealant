@@ -46,6 +46,7 @@ import {
   UnknownWorkspacePackageError,
   UnsupportedWorkspacePackageError,
   renderReleaseInstall,
+  releaseInstallCommands,
   unknownWorkspacePackageIds,
   unsupportedWorkspacePackages,
   WORKSPACE_PACKAGE_CATALOG,
@@ -59,6 +60,8 @@ import {
   isPersonLayoutFamily,
   renderImageProbeStep,
   renderPersonLayoutSteps,
+  personLayoutCommands,
+  imageProbeCommands,
 } from "./person-layout.js";
 
 /**
@@ -815,6 +818,20 @@ const mapBlueprintToResolvedImagePlan = (
           },
         ];
 
+  const packages = resolvePackages(blueprint, osFamily);
+  for (const pkg of packages) {
+    const release =
+      osFamily === "custom"
+        ? WORKSPACE_PACKAGE_CATALOG[pkg.requestId]?.customRelease
+        : familyInstall(pkg.requestId, osFamily)?.release;
+    const arch = platform === "linux/amd64" ? "x86_64" : "aarch64";
+    if (release !== undefined && release.archives[arch] === undefined) {
+      throw createBuildkitCompilerError(
+        "unsupported-package-architecture",
+        `${release.name} has no verified release for ${platform}.`,
+      );
+    }
+  }
   return {
     blueprint,
     osFamily,
@@ -825,7 +842,7 @@ const mapBlueprintToResolvedImagePlan = (
           ? ARCHLINUXARM_ROOTFS
           : distroDefinitions[osFamily].baseImage,
     packageManager: osFamily === "custom" ? "none" : distroDefinitions[osFamily].packageManager,
-    packages: resolvePackages(blueprint, osFamily),
+    packages,
     customization: blueprint.customization,
     ...(dotfiles === undefined || !blueprint.customization.applyDotfiles
       ? {}
@@ -974,14 +991,11 @@ const maskSshdUnits = [
   `for unit in ${SSHD_UNITS_MASKED.join(" ")}; do rm -f /etc/systemd/system/*.wants/"$unit" && ln -sfn /dev/null /etc/systemd/system/"$unit"; done`,
 ].join(" && ");
 
-const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
-  if (plan.osFamily === "custom") {
-    throw new Error("Custom-base plans render through renderCustomBasePackageInstallCommand.");
-  }
-
+const installPackageList = (plan: ResolvedImagePlan): readonly string[] => {
+  if (plan.osFamily === "custom") throw new Error("Custom bases have no shared package list.");
   const distro = distroDefinitions[plan.osFamily];
   const extras = catalogExtras(plan);
-  const packageList = normalizeInstallPackages([
+  return normalizeInstallPackages([
     ...distro.internalPackages,
     ...releaseInstallPackages(plan.osFamily, extras.releases),
     // `socat` (and any other relay deps) are always installed: `sealantd boot` is the mandatory
@@ -989,6 +1003,34 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
     ...distro.sealantdPackages,
     ...plan.packages.flatMap((pkg) => pkg.installPackages),
   ]);
+};
+
+const ubuntuPackageCommands = (
+  plan: ResolvedImagePlan,
+  npm: "distribution" | "provided" = "distribution",
+): readonly string[] => [
+  "apt-get update",
+  `DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${installPackageList(
+    plan,
+  )
+    .filter((pkg) => npm === "distribution" || pkg !== "npm")
+    .join(" ")}`,
+];
+
+const nixPackageCommands = (plan: ResolvedImagePlan): readonly string[] => [
+  `nix profile add --profile ${NIX_PROFILE} --priority 6 --accept-flake-config --extra-experimental-features 'nix-command flakes' \\`,
+  `    ${installPackageList(plan)
+    .map((pkg) => shellQuote(`nixpkgs#${pkg}`))
+    .join(" ")} && \\`,
+  "    nix --extra-experimental-features 'nix-command flakes' profile list > /dev/null",
+];
+
+const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
+  if (plan.osFamily === "custom") {
+    throw new Error("Custom-base plans render through renderCustomBasePackageInstallCommand.");
+  }
+
+  const packageList = installPackageList(plan);
 
   if (plan.packageManager === "dnf") {
     return [
@@ -1022,17 +1064,13 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
       "RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \\",
       "    --mount=type=cache,target=/var/lib/apt,sharing=locked \\",
       "    rm -f /etc/apt/apt.conf.d/docker-clean && \\",
-      "    apt-get update && \\",
-      `    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${packageList.join(" ")} && \\`,
+      ...ubuntuPackageCommands(plan).map((command) => `    ${command} && \\`),
       `    ${maskSshdUnits}`,
     ].join("\n");
   }
 
-  const nixPackageList = packageList.map((pkg) => shellQuote(`nixpkgs#${pkg}`));
   return [
-    `RUN nix profile add --profile ${NIX_PROFILE} --priority 6 --accept-flake-config --extra-experimental-features 'nix-command flakes' \\`,
-    `    ${nixPackageList.join(" ")} && \\`,
-    "    nix --extra-experimental-features 'nix-command flakes' profile list > /dev/null",
+    `RUN ${nixPackageCommands(plan).join("\n")}`,
     // The nix image has no /lib64/ld-linux-*: every binary in it names a loader inside the store.
     // A harness's native binary (codex, claude, opencode) names the FHS loader path and cannot
     // start without it, though npm installs it without complaint. Linking glibc's loader into the
@@ -1059,21 +1097,28 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
  * relying on npm global locations that can be awkward in nix-based containers. A harness's native
  * binary needs the FHS loader link the package layer makes (see renderPackageInstallCommand).
  */
-const renderHarnessInstallCommand = (plan: ResolvedImagePlan): string => {
+const harnessInstallCommands = (
+  plan: ResolvedImagePlan,
+  target: "container" | "native" = "container",
+): readonly string[] => {
   const integrations = imageHarnessIntegrations(resolveHarnessIntegration(plan.blueprint));
-  return integrations
-    .map((integration) => {
-      if (plan.osFamily === "nix") {
-        const npmInstallGlobalPattern = /^npm\s+install\s+-g\s+(.+)$/;
-        const match = npmInstallGlobalPattern.exec(integration.installCommand);
-        if (match !== null) {
-          return `RUN npm install -g --prefix /usr/local ${match[1]}`;
-        }
+  return integrations.map((integration) => {
+    if (plan.osFamily === "nix" || target === "native") {
+      const npmInstallGlobalPattern = /^npm\s+install\s+-g\s+(.+)$/;
+      const match = npmInstallGlobalPattern.exec(integration.installCommand);
+      if (match !== null) {
+        // Boat preinstalls some CLIs outside this npm prefix. Replace those links deliberately.
+        return `npm install -g --prefix /usr/local${target === "native" ? " --force" : ""} ${match[1]}`;
       }
-      return `RUN ${integration.installCommand}`;
-    })
-    .join("\n");
+    }
+    return integration.installCommand;
+  });
 };
+
+const renderHarnessInstallCommand = (plan: ResolvedImagePlan): string =>
+  harnessInstallCommands(plan)
+    .map((command) => `RUN ${command}`)
+    .join("\n");
 
 /**
  * JSON encoding of a single lifecycle step for the `SEALANT_LIFECYCLE_*_JSON` / `SEALANT_FOREGROUND_RUN_JSON`
@@ -1133,7 +1178,7 @@ const renderEnvBlock = (entries: ReadonlyArray<readonly [string, string]>): stri
  *   chose runtime apply (GitHub-installation-backed dotfiles). Build-time dotfiles stay a `RUN`
  *   layer (see `renderDotfilesStep`) and emit no boot env.
  */
-const renderBootEnv = (plan: ResolvedImagePlan): string => {
+const staticBootEntries = (plan: ResolvedImagePlan): ReadonlyArray<readonly [string, string]> => {
   // Custom bases guarantee a POSIX shell and nothing more: every shell path degrades to /bin/sh
   // (support checks reject non-default shells), and the sshd path keeps the conventional
   // location for the env contract's sake.
@@ -1194,8 +1239,10 @@ const renderBootEnv = (plan: ResolvedImagePlan): string => {
     }
   }
 
-  return renderEnvBlock(entries);
+  return entries;
 };
+
+const renderBootEnv = (plan: ResolvedImagePlan): string => renderEnvBlock(staticBootEntries(plan));
 
 /**
  * Renders the optional Dockerfile layer that applies dotfiles during image build.
@@ -1203,7 +1250,7 @@ const renderBootEnv = (plan: ResolvedImagePlan): string => {
  * This is used only when `plan.dotfiles.applyAt === "build"`. Runtime apply uses entrypoint logic
  * instead so auth can be supplied at launch time.
  */
-const renderDotfilesStep = (plan: ResolvedImagePlan): string | undefined => {
+const dotfilesInstallCommand = (plan: ResolvedImagePlan): string | undefined => {
   if (plan.dotfiles === undefined || plan.dotfiles.applyAt !== "build") {
     return undefined;
   }
@@ -1279,6 +1326,12 @@ const renderDotfilesStep = (plan: ResolvedImagePlan): string | undefined => {
           `GIT_SSH_COMMAND='ssh -i /run/sealant/dotfiles_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no' git clone --depth=1 ${branchArguments}${shellQuote(plan.dotfiles.url)} ${shellQuote(sourceDirectory)}`,
           `/bin/bash -lc ${shellQuote(applyCommand)}`,
         ].join(" && ");
+  return cloneCommand;
+};
+
+const renderDotfilesStep = (plan: ResolvedImagePlan): string | undefined => {
+  const cloneCommand = dotfilesInstallCommand(plan);
+  if (cloneCommand === undefined || plan.dotfiles === undefined) return undefined;
   const mountPrefix =
     plan.dotfiles.authSecretId === undefined
       ? "RUN "
@@ -1322,13 +1375,13 @@ const planWantsChezmoi = (plan: ResolvedImagePlan): boolean => {
  * `chezmoi` packageMap entry on those distros installs the prerequisites (curl + CA roots), so
  * this step always runs after the package layer.
  */
-const renderChezmoiInstallStep = (plan: ResolvedImagePlan): string | undefined => {
+const chezmoiInstallCommands = (plan: ResolvedImagePlan): readonly string[] | undefined => {
   if (plan.osFamily !== "ubuntu" || !planWantsChezmoi(plan)) {
     return undefined;
   }
   const { version, sha256 } = chezmoiRelease;
   return [
-    "RUN set -e; \\",
+    "set -e; \\",
     '    arch="$(dpkg --print-architecture)"; \\',
     '    case "$arch" in \\',
     `      amd64) sha=${sha256.amd64} ;; \\`,
@@ -1340,7 +1393,12 @@ const renderChezmoiInstallStep = (plan: ResolvedImagePlan): string | undefined =
     "    tar -xzf /tmp/chezmoi.tar.gz -C /usr/local/bin chezmoi; \\",
     "    chmod 755 /usr/local/bin/chezmoi; \\",
     "    rm /tmp/chezmoi.tar.gz",
-  ].join("\n");
+  ];
+};
+
+const renderChezmoiInstallStep = (plan: ResolvedImagePlan): string | undefined => {
+  const commands = chezmoiInstallCommands(plan);
+  return commands === undefined ? undefined : `RUN ${commands.join("\n")}`;
 };
 
 /**
@@ -1962,4 +2020,103 @@ export const mapBlueprintToBuildkitImagePlan = (
   platform: WorkspaceImagePlatform,
 ) => {
   return mapBlueprintToResolvedImagePlan(blueprint, osFamily, platform);
+};
+
+/** Shared installation bodies and static boot entries for the native Ubuntu/Nix materializer. */
+export const nativeWorkspaceInstallation = (
+  blueprint: WorkspaceBlueprint,
+): {
+  readonly family: "ubuntu" | "nix";
+  readonly shell: string;
+  readonly bootEntries: ReadonlyArray<readonly [string, string]>;
+} => {
+  if (
+    blueprint.target.os.family !== "auto" &&
+    blueprint.target.os.family !== "ubuntu" &&
+    blueprint.target.os.family !== "nix"
+  ) {
+    throw createBuildkitCompilerError(
+      "native-unsupported-os",
+      "Native snapshots support Ubuntu and Nix only.",
+    );
+  }
+  const parsed = parseWorkspaceBlueprint(blueprint);
+  if (parsed.tooling.services?.docker?.enabled) {
+    throw createBuildkitCompilerError(
+      "native-workspace-docker-unsupported",
+      "Native snapshots cannot supply workspace Docker.",
+    );
+  }
+  for (const source of parsed.sources.inputs) {
+    if (source.purpose !== "dotfiles" || source.kind !== "git") continue;
+    const url = new URL(source.url);
+    if (
+      url.password !== "" ||
+      (url.username !== "" && url.protocol !== "ssh:") ||
+      url.search !== "" ||
+      url.hash !== ""
+    ) {
+      throw createBuildkitCompilerError(
+        "native-dotfiles-unsafe-url",
+        "Native dotfiles URLs must omit credentials, query parameters and fragments.",
+      );
+    }
+  }
+  const candidates: readonly ("ubuntu" | "nix")[] =
+    blueprint.target.os.family === "auto" ? ["ubuntu", "nix"] : [blueprint.target.os.family];
+  const { family, plan } = (() => {
+    let unsupported: unknown;
+    for (const candidateFamily of candidates) {
+      try {
+        return {
+          family: candidateFamily,
+          plan: mapBlueprintToResolvedImagePlan(parsed, candidateFamily, "linux/amd64"),
+        };
+      } catch (error) {
+        if (!(error instanceof UnsupportedWorkspacePackageError)) throw error;
+        unsupported = error;
+      }
+    }
+    throw unsupported;
+  })();
+  if (plan.dotfiles?.applyAt === "build" && plan.dotfiles.authSecretId !== undefined) {
+    throw createBuildkitCompilerError(
+      "native-dotfiles-tmpfs-unproven",
+      "Authenticated build dotfiles require proven tmpfs file staging.",
+    );
+  }
+  const extras = catalogExtras(plan);
+  const chezmoi = chezmoiInstallCommands(plan);
+  const dotfiles = dotfilesInstallCommand(plan);
+  const shell = [
+    ...(family === "ubuntu"
+      ? [
+          [
+            // Boat's NodeSource nodejs bundles npm and conflicts with Ubuntu's separate npm package.
+            "if dpkg-query -W -f='${Version}' nodejs 2>/dev/null | grep -q nodesource; then",
+            "command -v npm && npm --version",
+            ...ubuntuPackageCommands(plan, "provided"),
+            "else",
+            ...ubuntuPackageCommands(plan),
+            "fi",
+          ].join("\n"),
+        ]
+      : [nixPackageCommands(plan).join("\n")]),
+    ...extras.releases.map((release) => releaseInstallCommands(release).join("\n")),
+    ...(extras.npmGlobal.length === 0
+      ? []
+      : [
+          `npm install -g --prefix /usr/local --force ${extras.npmGlobal.map(shellQuote).join(" ")}`,
+        ]),
+    ...extras.postInstall,
+    ...(chezmoi === undefined ? [] : [chezmoi.join("\n")]),
+    ...harnessInstallCommands(plan, "native"),
+    personLayoutCommands({ family, dockerService: false }).join(";\n"),
+    `usermod -s ${shellQuote(distroDefinitions[family].shellPaths[plan.customization.defaultShell])} root`,
+    ...(dotfiles === undefined ? [] : [dotfiles]),
+    ...imageProbeCommands({ require: true }),
+  ]
+    .map((command) => `(\n${command}\n)`)
+    .join("\n");
+  return { family, shell, bootEntries: staticBootEntries(plan) };
 };

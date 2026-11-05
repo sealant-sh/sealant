@@ -55,6 +55,64 @@ const respond = (response: http.ServerResponse, value: unknown, status = 200) =>
 };
 
 describe("Boat API boundary", () => {
+  it("bounds native commands and lets cancellation stop waiting without retrying them", async () => {
+    const bodies: unknown[] = [];
+    const api = await server((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        bodies.push(JSON.parse(Buffer.concat(chunks).toString()));
+        if (bodies.length === 1)
+          respond(response, { ok: true, exitCode: 0, timedOut: false, stdout: "done", stderr: "" });
+      });
+    });
+    expect(await api.execute(id, "public-install", { timeoutSeconds: 600 })).toMatchObject({
+      ok: true,
+    });
+    expect(await api.execute(id, "invalid", { timeoutSeconds: 601 })).toMatchObject({
+      ok: false,
+      error: { code: "invalid_timeout" },
+    });
+    const abort = new AbortController();
+    const pending = api.execute(id, "long-install", { timeoutSeconds: 600, signal: abort.signal });
+    setTimeout(() => abort.abort(), 20);
+    expect(await pending).toMatchObject({ ok: false, error: { code: "transport_error" } });
+    expect(bodies).toEqual([
+      { command: "public-install", timeoutSeconds: 600 },
+      { command: "long-install", timeoutSeconds: 600 },
+    ]);
+  });
+
+  it("adds owned native allocation labels while forcing the same small isolated VM policy", async () => {
+    let body: unknown;
+    const api = await server((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        body = JSON.parse(Buffer.concat(chunks).toString());
+        respond(response, { ok: true, sandbox: { id, state: "ready" } });
+      });
+    });
+    expect(
+      await api.create({
+        marker,
+        idempotencyKey: marker,
+        purpose: "native-build",
+        ttlSeconds: 600,
+      }),
+    ).toMatchObject({ ok: true });
+    expect(body).toEqual({
+      type: "small",
+      ttlSeconds: 600,
+      noEnv: true,
+      monitoring: false,
+      labels: { "sealant-dev": "boat-stream", "sealant-build": marker },
+    });
+    expect(await api.create({ marker, idempotencyKey: marker, ttlSeconds: 1801 })).toMatchObject({
+      ok: false,
+    });
+  });
+
   it("creates one small isolated allocation with stable retry identity and strips provider URLs", async () => {
     const requests: Array<{ key: string | string[] | undefined; body: unknown }> = [];
     const api = await server((request, response) => {

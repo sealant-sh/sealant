@@ -15,6 +15,7 @@ import {
 import { parseBoatHostedControl, type BoatHostedControl } from "./connection.js";
 
 const sandboxSchema = z.object({
+  labels: z.record(z.string(), z.string()).optional(),
   id: boatSandboxIdSchema,
   state: z.enum([
     "init",
@@ -95,9 +96,18 @@ export interface BoatApi {
     readonly marker: string;
     readonly idempotencyKey: string;
     readonly from?: BoatSnapshotName;
+    readonly purpose?: "native-build";
+    readonly ttlSeconds?: number;
   }): Promise<BoatResult<BoatSandbox>>;
   get(id: BoatSandboxId): Promise<BoatResult<BoatSandbox>>;
-  execute(id: BoatSandboxId, command: string): Promise<BoatResult<BoatCommand>>;
+  execute(
+    id: BoatSandboxId,
+    command: string,
+    options?: {
+      readonly timeoutSeconds?: number;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<BoatResult<BoatCommand>>;
   writeFile(
     id: BoatSandboxId,
     path: string,
@@ -158,10 +168,18 @@ export class HttpBoatApi implements BoatApi {
     readonly marker: string;
     readonly idempotencyKey: string;
     readonly from?: BoatSnapshotName;
+    readonly purpose?: "native-build";
+    readonly ttlSeconds?: number;
   }): Promise<BoatResult<BoatSandbox>> {
     if (
       !z.uuid().safeParse(input.marker).success ||
-      !z.uuid().safeParse(input.idempotencyKey).success
+      !z.uuid().safeParse(input.idempotencyKey).success ||
+      !z
+        .number()
+        .int()
+        .min(60)
+        .max(1800)
+        .safeParse(input.ttlSeconds ?? 900).success
     ) {
       return Promise.resolve({
         ok: false,
@@ -175,10 +193,13 @@ export class HttpBoatApi implements BoatApi {
       sandboxResponse,
       {
         type: "small",
-        ttlSeconds: 900,
+        ttlSeconds: input.ttlSeconds ?? 900,
         noEnv: true,
         monitoring: false,
-        labels: { "sealant-dev": "boat-stream", "sealant-spike": input.marker },
+        labels: {
+          "sealant-dev": "boat-stream",
+          [input.purpose === "native-build" ? "sealant-build" : "sealant-spike"]: input.marker,
+        },
         ...(input.from === undefined ? {} : { from: input.from }),
       },
       { "Idempotency-Key": input.idempotencyKey },
@@ -194,13 +215,33 @@ export class HttpBoatApi implements BoatApi {
     );
   }
 
-  execute(id: BoatSandboxId, command: string): Promise<BoatResult<BoatCommand>> {
+  /** Commands are never retried: an interrupted response can leave guest work running. */
+  execute(
+    id: BoatSandboxId,
+    command: string,
+    options?: {
+      readonly timeoutSeconds?: number;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<BoatResult<BoatCommand>> {
+    const seconds = options?.timeoutSeconds ?? 30;
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 600) {
+      return Promise.resolve({
+        ok: false,
+        error: new BoatApiError("execute", null, "invalid_timeout"),
+      });
+    }
     return this.#request(
       "execute",
       "POST",
       `/sandboxes/${id}/commands`,
       successSchema.extend(commandSchema.shape),
-      { command, timeoutSeconds: 30 },
+      { command, timeoutSeconds: seconds },
+      undefined,
+      {
+        timeoutMs: Math.max(this.#timeout, seconds * 1000 + 15_000),
+        ...(options?.signal === undefined ? {} : { signal: options.signal }),
+      },
     );
   }
 
@@ -324,6 +365,7 @@ export class HttpBoatApi implements BoatApi {
     schema: z.ZodType<T>,
     body?: unknown,
     extra?: Record<string, string>,
+    options?: { readonly timeoutMs: number; readonly signal?: AbortSignal },
   ): Promise<BoatResult<T>> {
     let status: number | null = null;
     try {
@@ -335,7 +377,10 @@ export class HttpBoatApi implements BoatApi {
           ...extra,
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        signal: AbortSignal.timeout(this.#timeout),
+        signal:
+          options?.signal === undefined
+            ? AbortSignal.timeout(options?.timeoutMs ?? this.#timeout)
+            : AbortSignal.any([options.signal, AbortSignal.timeout(options.timeoutMs)]),
         redirect: "error",
       });
       status = response.status;

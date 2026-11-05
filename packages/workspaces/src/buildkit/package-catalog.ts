@@ -21,8 +21,9 @@
  * only; nixpkgs has it. Every family packages `unzip`.
  * Measured on 2026-10-30 by installing on x86_64 (aarch64 from the repository indexes only):
  * every family packages `tigervnc`, `xauth`, `xdpyinfo`, `openbox` and `fonts-dejavu`; Fedora 41
- * installs `chromium` as `chromium-browser`, and Ubuntu 24.04's `chromium-browser` is a stub for
- * the chromium snap that exits 1, so `chromium` is refused there.
+ * installs `chromium` as `chromium-browser`. Ubuntu 24.04's distribution package requires snapd,
+ * so Ubuntu uses checksum-pinned upstream Chromium snapshot 1735811 on x86_64 instead. There is
+ * no pinned aarch64 archive, so Ubuntu Chromium is refused on ARM during image planning.
  *
  * Measured on 2026-10-31 by installing on x86_64 (aarch64 from repository indexes only):
  * Arch, Fedora 41 and Ubuntu 24.04 start XFCE with `dbus-run-session`. nixpkgs installs the
@@ -64,16 +65,20 @@ export interface ReleaseInstall {
   readonly name: string;
   readonly version: string;
   /** Download URL and SHA-256 of the archive for each architecture. */
-  readonly archives: Readonly<Record<ReleaseArchitecture, { url: string; sha256: string }>>;
+  readonly archives: Readonly<
+    Partial<Record<ReleaseArchitecture, { url: string; sha256: string }>>
+  >;
   /** `tar.gz` unless set. A `zip` needs `unzip`, which the build installs with it. */
   readonly format?: "tar.gz" | "zip";
   /** Paths inside the archive to install, each to /usr/local/bin/<basename>. */
-  readonly members: Readonly<Record<ReleaseArchitecture, readonly string[]>>;
+  readonly members: Readonly<Partial<Record<ReleaseArchitecture, readonly string[]>>>;
   /**
    * Installs the members to <directory>/<basename> as plain files (0644) instead of to
    * /usr/local/bin as programs: a shell plugin is sourced, not run.
    */
   readonly directory?: string;
+  /** Copy the complete extracted directory, retaining resources beside its executable. */
+  readonly tree?: { readonly root: string; readonly directory: string };
 }
 
 export interface FamilyInstall {
@@ -240,6 +245,20 @@ const bun: ReleaseInstall = {
 // `bunx` is `bun` called by another name, as bun's own installer links it.
 const bunx = "ln -sf /usr/local/bin/bun /usr/local/bin/bunx";
 
+const chromium: ReleaseInstall = {
+  name: "chromium",
+  version: "1735811",
+  format: "zip",
+  archives: {
+    x86_64: {
+      url: "https://storage.googleapis.com/chromium-browser-snapshots/Linux_x64/1735811/chrome-linux.zip",
+      sha256: "3bffe88b3d7456b103c403602e6a2cb449071f1b51ee98fed750625c436e9977",
+    },
+  },
+  members: { x86_64: ["chrome-linux/chrome"] },
+  tree: { root: "chrome-linux", directory: "/opt/chromium-1735811" },
+};
+
 const fd: CatalogEntry = {
   fedora: { packages: ["fd-find"] },
   arch: { packages: ["fd"] },
@@ -279,8 +298,31 @@ export const WORKSPACE_PACKAGE_CATALOG: Readonly<Record<string, CatalogEntry>> =
     },
     arch: { packages: ["chromium"] },
     ubuntu: {
-      unsupported:
-        "Ubuntu 24.04's chromium-browser package is a stub for the chromium snap, and a workspace image runs no snapd. Fedora, Arch and nix install a working chromium.",
+      release: chromium,
+      packages: [
+        "libasound2t64",
+        "libatk1.0-0",
+        "libatk-bridge2.0-0",
+        "libatspi2.0-0",
+        "libcairo2",
+        "libcups2t64",
+        "libdbus-1-3",
+        "libgbm1",
+        "libglib2.0-0t64",
+        "libgtk-3-0t64",
+        "libnspr4",
+        "libnss3",
+        "libpango-1.0-0",
+        "libx11-6",
+        "libx11-xcb1",
+        "libxcb1",
+        "libxcomposite1",
+        "libxdamage1",
+        "libxext6",
+        "libxfixes3",
+        "libxrandr2",
+      ],
+      postInstall: ["ln -sf /opt/chromium-1735811/chrome /usr/local/bin/chromium"],
     },
     nix: { packages: ["chromium"] },
   },
@@ -573,24 +615,26 @@ const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", `'
  * release's own directory). Nothing is unpacked before the checksum matches, and a machine of
  * another architecture fails the step.
  */
-export const renderReleaseInstall = (release: ReleaseInstall): string => {
+export const releaseInstallCommands = (release: ReleaseInstall): readonly string[] => {
   const branch = (arch: ReleaseArchitecture): string => {
     const archive = release.archives[arch];
     const members = release.members[arch];
+    if (archive === undefined || members === undefined) return "";
     return `${arch}) url=${shellSingleQuote(archive.url)}; sha=${archive.sha256}; members=${shellSingleQuote(members.join(" "))};;`;
   };
   const installOne =
     release.directory === undefined
       ? `install -m 0755 "$d/$m" "/usr/local/bin/$(basename "$m")"`
       : `install -D -m 0644 "$d/$m" ${shellSingleQuote(release.directory)}"/$(basename "$m")"`;
-  const installAll = `for m in $members; do ${installOne}; done`;
+  const installAll =
+    release.tree === undefined
+      ? `for m in $members; do ${installOne}; done`
+      : `mkdir -p ${shellSingleQuote(release.tree.directory)}; cp -a "$d/"${shellSingleQuote(release.tree.root)}"/." ${shellSingleQuote(release.tree.directory)}`;
   const zip = release.format === "zip";
   const archive = `$d/archive.${zip ? "zip" : "tar.gz"}`;
   const unpack = zip ? `unzip -q "${archive}" -d "$d"` : `tar -xzf "${archive}" -C "$d"`;
   return [
-    `# ${release.name} ${release.version}: the project's own release, pinned by checksum, since the`,
-    "# repositories of this family or this architecture have no package for it.",
-    "RUN set -eu; \\",
+    "set -eu; \\",
     `    case "$(uname -m)" in ${branch("x86_64")} ${branch("aarch64")} *) echo "${release.name}: no release for $(uname -m)" >&2; exit 1;; esac; \\`,
     '    d="$(mktemp -d)"; \\',
     `    curl -fsSL --retry 3 -o "${archive}" "$url"; \\`,
@@ -598,5 +642,13 @@ export const renderReleaseInstall = (release: ReleaseInstall): string => {
     `    ${unpack}; \\`,
     `    ${installAll}; \\`,
     '    rm -rf "$d"',
-  ].join("\n");
+  ];
 };
+
+/** Docker serialization of the shared checksum-verified release shell body. */
+export const renderReleaseInstall = (release: ReleaseInstall): string =>
+  [
+    `# ${release.name} ${release.version}: the project's own release, pinned by checksum, since the`,
+    "# repositories of this family or this architecture have no package for it.",
+    `RUN ${releaseInstallCommands(release).join("\n")}`,
+  ].join("\n");
