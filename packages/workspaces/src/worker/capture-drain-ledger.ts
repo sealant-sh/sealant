@@ -107,6 +107,7 @@ const unsavedFromRow = (
 };
 
 const entryFromRow = (row: WorkspaceCaptureDrain): CaptureDrainEntry => ({
+  ...(row.custodyContract === 3 ? { preservationManaged: true } : {}),
   lastProgressAt: row.lastProgressAt?.getTime(),
   last: captureStatusFromStored(row.lastStatus),
   lastAtMs: row.lastStatusAt?.getTime(),
