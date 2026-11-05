@@ -84,6 +84,7 @@ const journalSchema = z.object({
     .object({
       key: z.uuid(),
       requestedAt: z.iso.datetime(),
+      requestVersion: z.union([z.literal(1), z.literal(2)]).default(1),
       from: boatSnapshotNameSchema.optional(),
       id: boatSandboxIdSchema.optional(),
       deletion: boatDeletionIdSchema.optional(),
@@ -132,12 +133,14 @@ const allocate = async (from?: z.infer<typeof boatSnapshotNameSchema>) => {
   journal.allocation = {
     key: randomUUID(),
     requestedAt: new Date().toISOString(),
+    requestVersion: 2,
     ...(from === undefined ? {} : { from }),
   };
   await persist();
   let result = await api.create({
     marker: journal.marker,
     lifetime: { kind: "bounded" },
+    requestVersion: journal.allocation.requestVersion,
     idempotencyKey: journal.allocation.key,
     ...(from === undefined ? {} : { from }),
   });
@@ -154,6 +157,7 @@ const allocate = async (from?: z.infer<typeof boatSnapshotNameSchema>) => {
     result = await api.create({
       marker: journal.marker,
       lifetime: { kind: "bounded" },
+      requestVersion: journal.allocation.requestVersion,
       idempotencyKey: journal.allocation.key,
       ...(from === undefined ? {} : { from }),
     });
@@ -179,6 +183,7 @@ const cleanupSandbox = async () => {
       await api.create({
         marker: journal.marker,
         lifetime: { kind: "bounded" },
+        requestVersion: allocation.requestVersion,
         idempotencyKey: allocation.key,
         ...(allocation.from === undefined ? {} : { from: allocation.from }),
       }),

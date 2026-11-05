@@ -258,8 +258,6 @@ describe("attempt-owned durable native cleanup", () => {
       ttlSeconds: 900,
       noEnv: true,
       monitoring: false,
-      snapshots: true,
-      visibility: "private",
       labels: { "sealant-dev": "boat-stream", "sealant-build": f.journal.build },
     });
     expect(creates[1]).toEqual(creates[0]);
@@ -271,6 +269,32 @@ describe("attempt-owned durable native cleanup", () => {
     const count = f.requests.length;
     expect(await f.builder.cleanup(f.path)).toEqual({ ok: true, value: undefined });
     expect(f.requests).toHaveLength(count);
+  });
+
+  it("replays the private snapshot policy recorded by a newer allocation intent", async () => {
+    const f = await fixture();
+    await f.write({
+      ...f.journal,
+      allocation: { ...f.journal.allocation, requestVersion: 2 },
+    });
+    f.loseCreate();
+    expect(await f.builder.cleanup(f.path)).toEqual({ ok: true, value: undefined });
+    const creates = f.requests.filter((r) => r.method === "POST");
+    expect(creates).toHaveLength(2);
+    expect(creates[0]?.body).toEqual({
+      type: "small",
+      ttlSeconds: 900,
+      noEnv: true,
+      monitoring: false,
+      snapshots: true,
+      visibility: "private",
+      labels: { "sealant-dev": "boat-stream", "sealant-build": f.journal.build },
+    });
+    expect(creates[1]).toEqual(creates[0]);
+    expect(await f.read()).toMatchObject({
+      phase: "complete",
+      allocation: { state: "deleted", requestVersion: 2 },
+    });
   });
 
   it("refuses an expired allocation intent without allocating a replacement", async () => {

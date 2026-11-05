@@ -65,16 +65,20 @@ synchronous ledger writes, interruption handling, and cleanup when initial inven
 Parent review also made creates explicitly private and removed undocumented `monitoring` and
 `snapshots` fields from resume requests. The recorded proof sent those extra resume fields but does
 not establish that Boat honors them. The client reads the resulting snapshot and monitoring flags.
-These helper changes were syntax checked without allocating another VM.
+The helper now requires explicit `snapshots: true` and `monitoring: false` observations. Missing
+flags cannot pass. These helper changes were syntax checked without allocating another VM.
 
 ## Provider contracts
 
 `BoatCreateInput` requires an explicit lifetime. Production sessions require a parsed, immutable
 `BoatOwnership`. Their create and resume bodies send exact null TTL. Bounded callers retain the
 900-second default and the local 60-to-1800-second limit. The builder explicitly retains its
-900-second TTL. Creates request small private VMs with snapshots enabled and monitoring off,
-independently of the account's organization sharing default. Resume sends only documented `type`,
-`ttlSeconds`, and `noEnv` fields and reads the resulting retention and monitoring flags.
+900-second TTL. New creates request small private VMs with snapshots enabled and monitoring off,
+independently of the account's organization sharing default. Bounded callers record the create
+request version before issuing it. Old journals without a version replay the original version 1
+body, which omitted `snapshots` and `visibility`, so recovery preserves Boat's same-key/same-body
+guarantee. New intents use version 2. Resume sends only documented `type`, `ttlSeconds`, and `noEnv`
+fields and reads the resulting retention and monitoring flags.
 
 Create returns the allocated ID even when valid response evidence cannot verify disabled auto-stop.
 `BoatSandbox.autoStop.kind` is `disabled` only with explicit `archiveAfter: null` and no

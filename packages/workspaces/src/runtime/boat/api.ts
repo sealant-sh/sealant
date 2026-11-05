@@ -134,6 +134,8 @@ export type BoatCreateInput = {
     }
   | {
       readonly lifetime: Extract<BoatLifetime, { readonly kind: "bounded" }>;
+      /** Replay the recorded body version. Version 1 predates explicit snapshot/privacy fields. */
+      readonly requestVersion: 1 | 2;
       readonly marker: string;
       readonly purpose?: "native-build";
     }
@@ -253,7 +255,9 @@ export class HttpBoatApi implements BoatApi {
       (production
         ? !(input.ownership instanceof BoatOwnership) ||
           input.lifetime.kind !== "production-session"
-        : !z.uuid().safeParse(input.marker).success || input.lifetime.kind !== "bounded")
+        : !z.uuid().safeParse(input.marker).success ||
+          input.lifetime.kind !== "bounded" ||
+          (input.requestVersion !== 1 && input.requestVersion !== 2))
     ) {
       return Promise.resolve({
         ok: false,
@@ -270,8 +274,9 @@ export class HttpBoatApi implements BoatApi {
         ttlSeconds: ttl.value,
         noEnv: true,
         monitoring: false,
-        snapshots: true,
-        visibility: "private",
+        ...(production || input.requestVersion === 2
+          ? { snapshots: true, visibility: "private" }
+          : {}),
         labels: production
           ? ownershipLabels(input.ownership)
           : {

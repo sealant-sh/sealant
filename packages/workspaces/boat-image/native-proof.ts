@@ -146,6 +146,7 @@ const stateSchema = z.object({
       marker: z.uuid(),
       key: z.uuid(),
       requestedAt: z.iso.datetime(),
+      requestVersion: z.union([z.literal(1), z.literal(2)]).default(1),
       from: boatSnapshotNameSchema,
       id: boatSandboxIdSchema.optional(),
       deletionIntent: z.literal(true).optional(),
@@ -207,6 +208,7 @@ const createClone = async () => {
   const result = must(
     await api.create({
       lifetime: { kind: "bounded" },
+      requestVersion: clone.requestVersion,
       marker: clone.marker,
       idempotencyKey: clone.key,
       from: clone.from,
@@ -270,6 +272,7 @@ try {
       marker: randomUUID(),
       key: randomUUID(),
       requestedAt: new Date().toISOString(),
+      requestVersion: 2,
       from: artifact.identity.name,
     };
     await persist();

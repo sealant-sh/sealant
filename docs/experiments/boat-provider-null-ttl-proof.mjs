@@ -182,8 +182,8 @@ const verify = (s) => {
   if (
     s.archiveAfter !== null ||
     (Object.hasOwn(s, "ttlSeconds") && s.ttlSeconds !== null) ||
-    s.snapshots === false ||
-    s.monitoring === true ||
+    s.snapshots !== true ||
+    s.monitoring !== false ||
     s.dataExpiredAt != null
   )
     fail("retention_not_verified");

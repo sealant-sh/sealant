@@ -580,6 +580,7 @@ describe("Boat API boundary", () => {
         idempotencyKey: marker,
         purpose: "native-build",
         lifetime: { kind: "bounded", ttlSeconds: 600 },
+        requestVersion: 2,
       }),
     ).toMatchObject({ ok: true });
     expect(body).toEqual({
@@ -596,6 +597,7 @@ describe("Boat API boundary", () => {
         marker,
         idempotencyKey: marker,
         lifetime: { kind: "bounded", ttlSeconds: 1801 },
+        requestVersion: 2,
       }),
     ).toMatchObject({
       ok: false,
@@ -628,7 +630,12 @@ describe("Boat API boundary", () => {
         );
       });
     });
-    const input = { marker, idempotencyKey: marker, lifetime: { kind: "bounded" } } as const;
+    const input = {
+      marker,
+      idempotencyKey: marker,
+      lifetime: { kind: "bounded" },
+      requestVersion: 2,
+    } as const;
     const first = must(await api.create(input));
     const second = must(await api.create(input));
     expect(first).toEqual({ id, state: "ready", autoStop: { kind: "unverified" } });

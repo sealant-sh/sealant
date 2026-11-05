@@ -84,6 +84,13 @@ const fixture = async (
       const path = request.url ?? "";
       if (request.method !== "GET") mutations.push(request.method + " " + path);
       if (path === "/api/v1/sandboxes" && request.method === "POST") {
+        expect(body).toMatchObject({
+          ttlSeconds: 900,
+          noEnv: true,
+          monitoring: false,
+          snapshots: true,
+          visibility: "private",
+        });
         if (typeof body !== "object" || body === null || !("labels" in body))
           throw new Error("missing allocation labels");
         const labels = body.labels;

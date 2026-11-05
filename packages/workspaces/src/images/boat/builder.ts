@@ -50,7 +50,11 @@ const artifactSchema = z.object({
 /** Exact owned saved artifact. Source-and-creation fallback is a checked handle, never a disk digest. */
 export type NativeSnapshotArtifact = z.infer<typeof artifactSchema>;
 
-const allocationIntent = z.object({ key: z.uuid(), requestedAt: z.iso.datetime() });
+const allocationIntent = z.object({
+  key: z.uuid(),
+  requestedAt: z.iso.datetime(),
+  requestVersion: z.union([z.literal(1), z.literal(2)]).default(1),
+});
 const allocationSchema = z.discriminatedUnion("state", [
   allocationIntent.extend({ state: z.literal("intent") }),
   allocationIntent.extend({
@@ -288,6 +292,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
               idempotencyKey: allocation.key,
               purpose: "native-build",
               lifetime: { kind: "bounded", ttlSeconds: 900 },
+              requestVersion: allocation.requestVersion,
             }),
           signal,
         );
@@ -557,7 +562,12 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
         recipeHash: recipe.hash,
         runtime: recipe.runtime,
         phase: "running",
-        allocation: { state: "intent", key: randomUUID(), requestedAt: new Date().toISOString() },
+        allocation: {
+          state: "intent",
+          key: randomUUID(),
+          requestedAt: new Date().toISOString(),
+          requestVersion: 2,
+        },
         save: { state: "none" },
       };
       journal = attempt;
