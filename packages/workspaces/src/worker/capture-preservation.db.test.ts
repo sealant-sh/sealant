@@ -7,6 +7,8 @@ import {
   user,
   WorkspaceCaptureDrainRepo,
   WorkspaceCaptureDrainRepoLive,
+  WorkspaceRuntimeInstanceRepo,
+  WorkspaceRuntimeInstanceRepoLive,
   workspaceAttempts,
   type DB,
   type WorkspaceCaptureDrainRepoService,
@@ -98,6 +100,23 @@ describe("canonical Boat custody in migrated Postgres", () => {
   }, 90000);
   afterAll(async () => {
     await close?.();
+  });
+
+  it("keeps enrolled sources readable through runtime discovery", async () => {
+    const s = await source();
+    const instances = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* (yield* WorkspaceRuntimeInstanceRepo).listRunningInstances();
+      }).pipe(
+        Effect.provide(
+          WorkspaceRuntimeInstanceRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, dbA))),
+        ),
+      ),
+    );
+    expect(instances.find((instance) => instance.runId === s.runId)).toMatchObject({
+      publicationId: s.publicationId,
+      publication: { kind: "boat-native", publicationId: s.publicationId },
+    });
   });
 
   it("records a running failure using DB time and freezes the default deadline once", async () => {

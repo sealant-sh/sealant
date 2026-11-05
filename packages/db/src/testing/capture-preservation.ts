@@ -147,6 +147,7 @@ export const seedParkingSource = (db: DB, runId: string, retainedAt?: Date) =>
       status: "ready",
       resourceId: sandboxId,
       reference: sandboxId,
+      publicationId,
       publication,
     });
     yield* db.insert(roots).values({

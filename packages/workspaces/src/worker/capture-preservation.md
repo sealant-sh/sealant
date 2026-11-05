@@ -165,3 +165,18 @@ blocked roots, prepared replay, earlier observation obligations and rejected rem
 existing 16 generated schedules continue to pass. These are canonical repository proofs using
 synthetic issued history. They do not establish provider dispatch, guest custody or functional
 parking.
+
+## Shared-database fixture verification
+
+CI found that the parking source fixture stored its publication JSON without the matching scalar
+publication ID. Runtime discovery rejected those rows and prevented unrelated exit and recovery
+suites from reading the shared database. The fixture now writes both identities. A regression reads
+an enrolled source through the actual runtime repository.
+
+The four affected PostgreSQL suites passed all 48 tests together. A broader serial workspace run
+passed 1,409 tests with 31 skips, excluding the two host-dependent home-credential and MicroVM agent
+files. The API suite passed 726 tests with 11 skips. The broad parallel run exposed the separate
+unscoped launch-crash/stranded-launch fixture race tracked in
+[SLNT-552](https://linear.app/sealant/issue/SLNT-552/core-tests-unscoped-launch-crash-sweep-races-stranded-launch-fixtures).
+Those tests and their adoption implementation match merged main. CI concurrency and timeouts remain
+unchanged.
