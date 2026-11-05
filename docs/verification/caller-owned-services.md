@@ -53,6 +53,12 @@ full run with CI's Node 24 also hit the two shell-tracing failures, recorded in
 the SDK suite passed 287 tests, the workspace suite excluding the shell file passed 1,308, and the
 isolated shell file passed 48.
 
+The Docker CI follow-up is recorded in `/tmp/coresvc-ci.4N2FeF/`. Hosted Docker represented absent
+port bindings as `null`, while local Docker returned `{}`. The no-published-port assertion now
+checks the map length instead of its JSON spelling. `ci-failure.log` captures the original failure;
+`port-bindings.log` checks zero bindings and a one-binding negative control. `caller-docker.log`,
+`typecheck-forced.log` and `lint-forced.log` record the follow-up verification.
+
 ## Independent reproduction
 
 Use a checkout of this PR, Docker with bridge networking and NET_ADMIN support, pnpm, Node 24 or
@@ -62,6 +68,7 @@ container; the test prints and removes its own exact container/network/volume na
 ```sh
 pnpm install --frozen-lockfile
 docker run -d --name coresvc-verify-postgres \
+  --tmpfs /var/lib/postgresql/data \
   -e POSTGRES_PASSWORD=coresvc-test -e POSTGRES_DB=coresvc_test \
   -p 127.0.0.1:15439:5432 postgres:17
 docker exec coresvc-verify-postgres pg_isready -U postgres

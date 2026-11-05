@@ -168,8 +168,8 @@ describe.skipIf(!enabled)("caller instances through the public SDK on real Docke
         "1610612736",
       );
       expect(
-        await docker("inspect", "--format", "{{json .HostConfig.PortBindings}}", workload),
-      ).toBe("{}");
+        await docker("inspect", "--format", "{{len .HostConfig.PortBindings}}", workload),
+      ).toBe("0");
       expect(
         await docker("exec", client, "wget", "-qO-", `http://${first.endpoint?.host}:4400`),
       ).toBe("retained-data");
