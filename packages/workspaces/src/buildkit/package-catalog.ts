@@ -244,7 +244,6 @@ const bun: ReleaseInstall = {
 // `bunx` is `bun` called by another name, as bun's own installer links it.
 const bunx = "ln -sf /usr/local/bin/bun /usr/local/bin/bunx";
 
-// Official immutable Chromium snapshot, downloaded and hashed through Boat on 2026-11-05.
 const chromium: ReleaseInstall = {
   name: "chromium",
   version: "1735811",

@@ -24,22 +24,79 @@ const runtime: NativeRuntimeIdentity = {
   socat: NATIVE_RUNTIME_PIN.socat,
   relay: "a".repeat(64),
 };
-// A serialization fixture only. Builder and live proofs require VerifiedRuntimeBundle.parse.
-const content = { identity: runtime, files: () => [] };
+const serializationBundleFixture = { identity: runtime, files: () => [] };
 const spec = (family: "ubuntu" | "nix" | "auto" | "arch" | "fedora" | "custom" = "ubuntu") =>
   createWorkspaceBuildSpec({
     target: { os: { family, mode: "require" }, runtime: { family: "auto", mode: "prefer" } },
   });
 
 describe("native recipe boundary", () => {
+  it("refuses inline dotfiles credentials before build or runtime serialization", async () => {
+    const base = spec();
+    for (const authRef of [undefined, "github-installation-repository:gh_installation_repo_1"]) {
+      for (const url of [
+        "https://user:token@example.invalid/dots.git",
+        "https://token@example.invalid/dots.git",
+        "ssh://git:token@example.invalid/dots.git",
+        "https://example.invalid/dots.git?access_token=secret",
+        "https://example.invalid/dots.git?X-Amz-Signature=secret",
+        "https://example.invalid/dots.git#secret",
+      ]) {
+        const result = await createNativeRecipe(
+          {
+            ...base,
+            sources: {
+              ...base.sources,
+              inputs: [
+                {
+                  id: "dotfiles",
+                  purpose: "dotfiles",
+                  kind: "git",
+                  provider: "generic",
+                  url,
+                  ...(authRef === undefined ? {} : { authRef }),
+                },
+              ],
+            },
+          },
+          serializationBundleFixture,
+        );
+        expect(result).toMatchObject({ ok: false, error: { code: "native-dotfiles-unsafe-url" } });
+        expect(JSON.stringify(result)).not.toContain("secret");
+      }
+    }
+    expect(
+      await createNativeRecipe(
+        {
+          ...base,
+          sources: {
+            ...base.sources,
+            inputs: [
+              {
+                id: "dotfiles",
+                purpose: "dotfiles",
+                kind: "git",
+                provider: "generic",
+                url: "ssh://git@example.invalid/dots.git",
+              },
+            ],
+          },
+        },
+        serializationBundleFixture,
+      ),
+    ).toMatchObject({ ok: true });
+  });
   it("keeps container-only service and loader changes out of native installation", async () => {
     for (const family of ["ubuntu", "nix"] as const) {
-      const recipe = await createNativeRecipe(spec(family), content);
+      const recipe = await createNativeRecipe(spec(family), serializationBundleFixture);
       expect(recipe.ok).toBe(true);
       if (!recipe.ok) throw recipe.error;
       expect(() =>
         execFileSync("bash", ["-n"], { input: recipe.value.installScript }),
       ).not.toThrow();
+      const nixStart = recipe.value.files.find((f) => f.path.endsWith("native-nix-start"));
+      expect(nixStart).toBeDefined();
+      expect(() => execFileSync("sh", ["-n"], { input: nixStart?.bytes })).not.toThrow();
       expect(recipe.value.installScript).not.toContain("sshd.service");
       expect(recipe.value.installScript).not.toContain('ln -sf "$loader"');
       for (const cli of ["codex@", "claude-code@", "opencode-ai@", "pi-linux-"])
@@ -57,14 +114,14 @@ describe("native recipe boundary", () => {
 
   it("refuses unsupported families, workspace Docker, and unproven authenticated build staging", async () => {
     for (const family of ["arch", "fedora", "custom"] as const)
-      expect(await createNativeRecipe(spec(family), content)).toMatchObject({
+      expect(await createNativeRecipe(spec(family), serializationBundleFixture)).toMatchObject({
         ok: false,
         error: { code: "native-unsupported-os" },
       });
     expect(
       await createNativeRecipe(
         { ...spec(), tooling: { packages: [], services: { docker: { enabled: true } } } },
-        content,
+        serializationBundleFixture,
       ),
     ).toMatchObject({ ok: false, error: { code: "native-workspace-docker-unsupported" } });
     const base = spec();
@@ -86,30 +143,33 @@ describe("native recipe boundary", () => {
             ],
           },
         },
-        content,
+        serializationBundleFixture,
       ),
     ).toMatchObject({ ok: false, error: { code: "native-dotfiles-tmpfs-unproven" } });
   });
 
   it("hashes actual file bytes, relay identity, shell, lifecycle metadata, and immutable inputs", async () => {
     const base = spec();
-    const first = await createNativeRecipe(base, content);
+    const first = await createNativeRecipe(base, serializationBundleFixture);
     if (!first.ok) throw first.error;
     const changes = [
       createNativeRecipe(
         { ...base, customization: { ...base.customization, defaultShell: "zsh" } },
-        content,
+        serializationBundleFixture,
       ),
       createNativeRecipe(
         {
           ...base,
           lifecycle: { ...base.lifecycle, setup: [{ run: "touch /must-not-run", shell: "sh" }] },
         },
-        content,
+        serializationBundleFixture,
       ),
-      createNativeRecipe(base, { ...content, identity: { ...runtime, relay: "b".repeat(64) } }),
       createNativeRecipe(base, {
-        ...content,
+        ...serializationBundleFixture,
+        identity: { ...runtime, relay: "b".repeat(64) },
+      }),
+      createNativeRecipe(base, {
+        ...serializationBundleFixture,
         files: () => [{ path: "/test", bytes: Buffer.from("changed"), sha256: sha256("changed") }],
       }),
     ];

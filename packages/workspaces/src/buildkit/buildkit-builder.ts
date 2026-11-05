@@ -2047,6 +2047,21 @@ export const nativeWorkspaceInstallation = (
       "Native snapshots cannot supply workspace Docker.",
     );
   }
+  for (const source of parsed.sources.inputs) {
+    if (source.purpose !== "dotfiles" || source.kind !== "git") continue;
+    const url = new URL(source.url);
+    if (
+      url.password !== "" ||
+      (url.username !== "" && url.protocol !== "ssh:") ||
+      url.search !== "" ||
+      url.hash !== ""
+    ) {
+      throw createBuildkitCompilerError(
+        "native-dotfiles-unsafe-url",
+        "Native dotfiles URLs must omit credentials, query parameters and fragments.",
+      );
+    }
+  }
   const candidates: readonly ("ubuntu" | "nix")[] =
     blueprint.target.os.family === "auto" ? ["ubuntu", "nix"] : [blueprint.target.os.family];
   const { family, plan } = (() => {

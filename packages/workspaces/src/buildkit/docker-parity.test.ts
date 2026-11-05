@@ -7,7 +7,6 @@ import { describe, expect, it } from "vitest";
 import { planWorkspaceImageBuild } from "./buildkit-builder.js";
 import { createWorkspaceBuildSpec } from "./docker-parity.fixture.js";
 
-/** Valid input matrix captured at 03a1f14, before extracting installation content. */
 const dockerParityCases = () =>
   (["fedora", "arch", "ubuntu", "nix"] as const).flatMap((family) =>
     (["bash", "zsh", "fish"] as const).flatMap((shell) =>

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Extract the pinned native runtime in one owned Boat guest, then delete that guest."""
 
 import hashlib
 import json

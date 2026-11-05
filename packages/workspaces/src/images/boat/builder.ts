@@ -59,6 +59,11 @@ const allocationSchema = z.discriminatedUnion("state", [
     deletion: boatDeletionIdSchema.optional(),
   }),
   allocationIntent.extend({
+    state: z.literal("deleting"),
+    id: boatSandboxIdSchema,
+    deletion: boatDeletionIdSchema.optional(),
+  }),
+  allocationIntent.extend({
     state: z.literal("deleted"),
     id: boatSandboxIdSchema,
     deletion: boatDeletionIdSchema,
@@ -132,10 +137,11 @@ const failure = (error: unknown, path?: string) =>
     ? new NativeBuildError(error.code, path ?? error.journalPath)
     : new NativeBuildError("native-local-io-failed", path);
 
-// Each request is bounded independently of the provider's response. An ambiguous mutation
-// remains an intent in the fsynced journal, even when the transport outlives this waiter.
 const noop = () => undefined;
-const call = async <T>(request: () => Promise<BoatResult<T>>, signal: AbortSignal): Promise<T> => {
+const awaitProviderResponse = async <T>(
+  request: () => Promise<BoatResult<T>>,
+  signal: AbortSignal,
+): Promise<T> => {
   if (signal.aborted) throw new NativeBuildError("native-interrupted");
   let abort: () => void = noop;
   try {
@@ -275,7 +281,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
     let last: unknown;
     for (let retry = 0; retry < 3; retry++) {
       try {
-        const vm = await call(
+        const vm = await awaitProviderResponse(
           () =>
             this.#options.api.create({
               marker: journal.build,
@@ -307,17 +313,26 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
 
   async #deleteScratch(journal: Journal, path: string, signal: AbortSignal): Promise<void> {
     await this.#allocate(journal, path, signal);
-    const allocation = journal.allocation;
-    if (allocation.state !== "known") return;
-    if (allocation.deletion === undefined) {
-      const vm = await call(() => this.#options.api.get(allocation.id), signal);
+    let allocation = journal.allocation;
+    if (allocation.state !== "known" && allocation.state !== "deleting") return;
+    const sandboxId = allocation.id;
+    if (allocation.state === "known" && allocation.deletion === undefined) {
+      const vm = await awaitProviderResponse(() => this.#options.api.get(sandboxId), signal);
       if (
         vm.id !== allocation.id ||
         vm.labels?.["sealant-build"] !== journal.build ||
         vm.labels["sealant-dev"] !== "boat-stream"
       )
         throw new NativeBuildError("native-sandbox-identity-mismatch");
-      const deletion = await call(() => this.#options.api.deleteSandbox(allocation.id), signal);
+      allocation = { ...allocation, state: "deleting" };
+      journal.allocation = allocation;
+      await persist(path, journal);
+    }
+    if (allocation.deletion === undefined) {
+      const deletion = await awaitProviderResponse(
+        () => this.#options.api.deleteSandbox(sandboxId),
+        signal,
+      );
       if (deletion.targetId !== allocation.id)
         throw new NativeBuildError("native-deletion-identity-mismatch");
       allocation.deletion = deletion.id;
@@ -325,7 +340,10 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
     }
     const deletionId = allocation.deletion;
     await this.#poll(async () => {
-      const operation = await call(() => this.#options.api.getDeletion(deletionId), signal);
+      const operation = await awaitProviderResponse(
+        () => this.#options.api.getDeletion(deletionId),
+        signal,
+      );
       if (operation.id !== deletionId || operation.targetId !== allocation.id)
         throw new NativeBuildError("native-deletion-identity-mismatch");
       if (operation.status === "blocked") throw new NativeBuildError("native-deletion-blocked");
@@ -339,7 +357,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
     name: z.infer<typeof boatSnapshotNameSchema>,
     signal: AbortSignal,
   ): Promise<BoatSavedSnapshot | null> {
-    const result = await call<BoatSavedSnapshot | null>(async () => {
+    const result = await awaitProviderResponse<BoatSavedSnapshot | null>(async () => {
       const found = await this.#options.api.getSnapshot(name);
       return !found.ok && found.error.status === 404 ? { ok: true, value: null } : found;
     }, signal);
@@ -379,22 +397,39 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
     return found;
   }
 
+  async #saveOnceThenObserve(journal: Journal, path: string, signal: AbortSignal): Promise<void> {
+    const save = journal.save;
+    if (save.state !== "intent") throw new NativeBuildError("native-save-intent-missing");
+    const saved = await awaitProviderResponse(
+      () => this.#options.api.saveSnapshot(save.sourceSandboxId, save.name),
+      signal,
+    ).catch(async () => this.#observeSave(journal, path, signal));
+    if (
+      saved.name !== save.name ||
+      saved.sourceSandboxId !== save.sourceSandboxId ||
+      Date.parse(saved.createdAt) < Date.parse(save.requestedAt) - 5000
+    )
+      throw new NativeBuildError("native-snapshot-identity-mismatch");
+    if (journal.save.state === "intent") {
+      journal.save = { ...save, state: "known", identity: identitySchema.parse(saved) };
+      await persist(path, journal);
+    }
+  }
+
   async #discardSave(journal: Journal, path: string, signal: AbortSignal): Promise<void> {
     const save = journal.save;
     if (save.state === "none" || save.state === "removed") return;
     const found = await this.#getSnapshot(save.name, signal);
     if (found === null) {
-      // An unacknowledged save can still arrive after a 404. Keep its intent for explicit retry.
       if (save.state === "intent") throw new NativeBuildError("native-save-unresolved");
     } else {
       const settled = await this.#poll(async () => {
         const observed = await this.#observeSave(journal, path, signal);
         return observed.status === "saving" ? undefined : observed;
       }, signal);
-      // Re-check immediately before removal, including provider ID when it was supplied.
       if (journal.save.state !== "known" || !sameIdentity(journal.save.identity, settled))
         throw new NativeBuildError("native-snapshot-identity-mismatch");
-      await call(() => this.#options.api.deleteSnapshot(save.name), signal);
+      await awaitProviderResponse(() => this.#options.api.deleteSnapshot(save.name), signal);
       await this.#poll(
         async () => ((await this.#getSnapshot(save.name, signal)) === null ? true : undefined),
         signal,
@@ -428,7 +463,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
     const id = allocation.id;
     const stage = `/home/user/sealant-dev-boat-stream-${journal.build}`;
     const command = async (script: string, timeoutSeconds = 30) => {
-      const output = await call(
+      const output = await awaitProviderResponse(
         () => this.#options.api.execute(id, `set -eu\n${script}`, { timeoutSeconds, signal }),
         signal,
       );
@@ -441,12 +476,15 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       const file = recipe.files[i];
       if (file === undefined) throw new NativeBuildError("native-file-missing");
       const staged = `${stage}/file-${i}`;
-      await call(() => this.#options.api.uploadFile(id, staged, file.bytes), signal);
+      await awaitProviderResponse(
+        () => this.#options.api.uploadFile(id, staged, file.bytes),
+        signal,
+      );
       await command(
         `echo '${file.sha256}  '${quote(staged)} | sha256sum -c - >/dev/null\n/usr/bin/sudo install -D -m${file.mode} ${quote(staged)} ${quote(file.path)}`,
       );
     }
-    await call(
+    await awaitProviderResponse(
       () => this.#options.api.writeFile(id, `${stage}/install.sh`, recipe.installScript),
       signal,
     );
@@ -476,7 +514,10 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
         substrate: recipe.substrate,
         probe,
       }) + "\n";
-    await call(() => this.#options.api.writeFile(id, stage + "/receipt.json", receipt), signal);
+    await awaitProviderResponse(
+      () => this.#options.api.writeFile(id, stage + "/receipt.json", receipt),
+      signal,
+    );
     const receiptHash = sha256(receipt);
     await command(
       `/usr/bin/sudo install -m600 ${quote(stage + "/receipt.json")} /etc/sealant/native-receipt.json\necho '${receiptHash}  /etc/sealant/native-receipt.json' | /usr/bin/sudo sha256sum -c - >/dev/null\nls -d ${quote(stage)}\nrm -rf ${quote(stage)}`,
@@ -526,7 +567,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       const allocation = attempt.allocation;
       if (allocation.state !== "known") throw new NativeBuildError("native-allocation-missing");
       await this.#poll(async () => {
-        const vm = await call(() => this.#options.api.get(allocation.id), signal);
+        const vm = await awaitProviderResponse(() => this.#options.api.get(allocation.id), signal);
         if (
           vm.id !== allocation.id ||
           vm.labels?.["sealant-build"] !== attempt.build ||
@@ -551,21 +592,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       };
       await persist(path, attempt);
       input.onProgress?.("saving");
-      // Save has no idempotency contract. Never repeat POST after a lost response.
-      const saved = await call(
-        () => this.#options.api.saveSnapshot(allocation.id, name),
-        signal,
-      ).catch(async () => this.#observeSave(attempt, path, signal));
-      if (
-        saved.name !== name ||
-        saved.sourceSandboxId !== allocation.id ||
-        Date.parse(saved.createdAt) < Date.parse(attempt.save.requestedAt) - 5000
-      )
-        throw new NativeBuildError("native-snapshot-identity-mismatch");
-      if (attempt.save.state === "intent") {
-        attempt.save = { ...attempt.save, state: "known", identity: identitySchema.parse(saved) };
-        await persist(path, attempt);
-      }
+      await this.#saveOnceThenObserve(attempt, path, signal);
       const ready = await this.#poll(async () => {
         const observed = await this.#observeSave(attempt, path, signal);
         if (observed.status === "failed") throw new NativeBuildError("native-save-failed");
@@ -673,7 +700,10 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       if (!sameIdentity(artifact.identity, found))
         throw new NativeBuildError("native-snapshot-identity-mismatch");
       if (found.status === "saving") throw new NativeBuildError("native-save-pending");
-      await call(() => this.#options.api.deleteSnapshot(artifact.identity.name), signal);
+      await awaitProviderResponse(
+        () => this.#options.api.deleteSnapshot(artifact.identity.name),
+        signal,
+      );
       await this.#poll(
         async () =>
           (await this.#getSnapshot(artifact.identity.name, signal)) === null ? true : undefined,

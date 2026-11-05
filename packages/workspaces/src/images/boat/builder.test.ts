@@ -68,6 +68,7 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
       }
     | undefined;
   let deletionPolls = 0;
+  let deletionAccepted = false;
   let delayDelete = false;
   let finishDelete: (() => void) | undefined;
   const server = http.createServer((request, response) => {
@@ -100,7 +101,11 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
             labels: { "sealant-dev": "boat-stream", "sealant-build": build },
           },
         });
-      } else if (request.url === "/api/v1/sandboxes/" + id && request.method === "GET")
+      } else if (request.url === "/api/v1/sandboxes/" + id && request.method === "GET") {
+        if (deletionAccepted) {
+          respond(response, { ok: false, code: "not_found" }, 404);
+          return;
+        }
         respond(response, {
           ok: true,
           sandbox: {
@@ -109,7 +114,11 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
             labels: { "sealant-dev": "boat-stream", "sealant-build": build },
           },
         });
-      else if (request.url === "/api/v1/sandboxes/" + id && request.method === "DELETE") {
+      } else if (request.url === "/api/v1/sandboxes/" + id && request.method === "DELETE") {
+        expect(JSON.parse(requireJournal())).toMatchObject({
+          allocation: { state: "deleting", id },
+        });
+        deletionAccepted = true;
         const send = () =>
           respond(response, {
             ok: true,
@@ -136,7 +145,6 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
       } else respond(response, { ok: false, code: "not_found" }, 404);
     });
   });
-  // Synchronous observation in the provider verifies fsynced intent precedes mutation.
   const requireJournal = () => readFileSync(path, "utf8");
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   resources.push(async () => {
@@ -176,6 +184,9 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
     holdDelete: () => {
       delayDelete = true;
     },
+    hideSandbox: () => {
+      deletionAccepted = true;
+    },
     releaseDelete: () => {
       delayDelete = false;
       finishDelete?.();
@@ -186,6 +197,34 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
 };
 
 describe("attempt-owned durable native cleanup", () => {
+  it("keeps missing sandboxes unresolved without a validated deletion intent", async () => {
+    const f = await fixture();
+    await f.write({ ...f.journal, allocation: { ...f.journal.allocation, state: "known", id } });
+    f.hideSandbox();
+    expect(await f.builder.cleanup(f.path)).toMatchObject({
+      ok: false,
+      error: { code: "native-provider-not_found" },
+    });
+    expect(f.requests.some((r) => r.method === "DELETE")).toBe(false);
+  });
+
+  it("polls deletion operations recorded by earlier known-state journals", async () => {
+    const f = await fixture();
+    await f.write({
+      ...f.journal,
+      allocation: { ...f.journal.allocation, state: "known", id, deletion: operation },
+    });
+    f.hideSandbox();
+    expect(await f.builder.cleanup(f.path)).toEqual({ ok: true, value: undefined });
+    expect(await f.read()).toMatchObject({
+      phase: "complete",
+      allocation: { state: "deleted", deletion: operation },
+    });
+    expect(
+      f.requests.every((r) => r.method === "GET" && r.path.includes("deletion-operations")),
+    ).toBe(true);
+  });
+
   it("bounds a lost deletion response and leaves an exact retryable obligation", async () => {
     const f = await fixture(40);
     f.holdDelete();
@@ -193,13 +232,18 @@ describe("attempt-owned durable native cleanup", () => {
       ok: false,
       error: { code: "native-interrupted" },
     });
-    expect(await f.read()).toMatchObject({ phase: "running", allocation: { state: "known", id } });
+    expect(await f.read()).toMatchObject({
+      phase: "running",
+      allocation: { state: "deleting", id },
+    });
     f.releaseDelete();
     expect(await f.builder.cleanup(f.path)).toEqual({ ok: true, value: undefined });
     expect(await f.read()).toMatchObject({
       phase: "complete",
       allocation: { state: "deleted", id, deletion: operation },
     });
+    expect(f.requests.filter((r) => r.method === "GET" && r.path.endsWith(id))).toHaveLength(1);
+    expect(f.requests.filter((r) => r.method === "DELETE" && r.path.endsWith(id))).toHaveLength(2);
   });
 
   it("reconciles a lost allocation response with exactly the recorded key and confirms deletion", async () => {

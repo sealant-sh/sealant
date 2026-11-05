@@ -633,7 +633,7 @@
   ],
   "deviations": [
     "InaccessiblePaths combined with private /run returned systemd 226/NAMESPACE in a real diagnostic. The unit uses private /run and the launcher refuses visible known manager socket aliases.",
-    "Native Nix readiness was raised from 10 to 90 seconds after a cold socket failure. This adjustment has not passed its live gate. Docker keeps 10 seconds and byte parity.",
+    "The unverified native Nix readiness increase to 90 seconds was reverted to the existing 10-second budget after review. The socket failure remains unresolved. Native failure diagnostics now retain binary paths, daemon state, cgroup, log tail, and available exit status. Docker output is unchanged.",
     "Person sudo passed outside the clone-mode daemon. Owner-map admission and per-person daemon sudo remain part of later registration.",
     "Full daemon, screens, writer containment and resume gates did not complete. No support, registration or FINAL preservation claim is made.",
     "The polished acquisition operator script was syntax checked; its extraction body and exact artifacts were verified by the preceding guest acquisition, not a rerun of the polished wrapper."
@@ -647,13 +647,35 @@
   },
   "diagnosticHandling": "An earlier broad host-process diagnostic printed a temporary provider snapshot grant in tool output. That output was not copied into this evidence. Later host diagnostics use process names only. The Boat API key was never printed or persisted.",
   "lastCleanupObservation": {
-    "checkedAt": "2026-11-05T01:25:33.823710+00:00",
+    "checkedAt": "2026-11-05T01:41:46.389957+00:00",
     "id": "bdop_875e15afda1345d4816722b06d3dc59f",
     "kind": "sandbox",
     "targetId": "bx_5fyw4fab",
+    "reason": "explicit",
     "status": "blocked",
     "stage": "retrying",
-    "attemptCount": 8,
+    "expectedBy": null,
+    "attemptCount": 10,
+    "requestedAt": "2026-11-05T01:17:53.029Z",
     "completedAt": null
+  },
+  "parentReview": {
+    "implementationHead": "0ee41c0aefee6648329fa88cd8b91e1dc73359cf",
+    "codeReview": "Independent read-only gpt-6-astra review identified lost-delete recovery and inline dotfiles credential leaks. Both corrected locally with HTTP/journal and recipe-boundary regressions.",
+    "commentsReview": "Independent read-only comments review completed. Removed narration and unsupported Nix cause. Kept exported-symbol JSDoc required by coding-standards and the evidenced external constraints.",
+    "liveProofAfterCorrections": "Not run. Existing provider deletion obligation remains blocked. No new allocations.",
+    "deletionReplay": "Repeated DELETE of exact owned bx_5fyw4fab returned 202 and the existing bdop_875e15afda1345d4816722b06d3dc59f while sandbox GET was 404. Completion remains unconfirmed.",
+    "checks": {
+      "focusedTests": 170,
+      "focusedFiles": 9,
+      "exactBundleHttpJournalCases": 5,
+      "forcedTypecheckPackages": 20,
+      "forcedLintPackages": 20,
+      "format": "pnpm format:fix",
+      "pythonSyntax": "passed",
+      "generatedShellSyntax": "Ubuntu/Nix install scripts and native Nix helper passed",
+      "redCapability": "Both confirmed bugs reproduced against 0ee41c0a source and pass after correction",
+      "testRunner": "Run from @sealant/workspaces. Root vitest mixes @effect/vitest contexts for package-standardization.test.ts; package-local runner passes all 11 tests."
+    }
   }
 }

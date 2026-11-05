@@ -1,5 +1,4 @@
 #!/usr/bin/python3
-"""Start only an explicitly admitted session, inside the unit's private namespaces."""
 import json
 import os
 import stat
@@ -18,7 +17,6 @@ def private_json(path):
 if os.getpid() != 1:
     raise SystemExit("native daemon requires PID1")
 
-# Private /run also hides /var/run aliases. Refuse an unexpected outer socket alias.
 for socket_path in (
     "/run/systemd/private",
     "/var/run/systemd/private",

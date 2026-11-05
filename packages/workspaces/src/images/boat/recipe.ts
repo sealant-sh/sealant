@@ -44,6 +44,7 @@ export interface NativeRecipe {
 }
 
 const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
+const NATIVE_NIX_DAEMON_READY_SECONDS = 10;
 const file = (
   path: string,
   bytes: Uint8Array | string,
@@ -93,8 +94,21 @@ export const createNativeRecipe = async (
       ),
       file(
         "/usr/local/lib/sealant/native-nix-start",
-        // Cold Boat clones fault Nix's store pages on demand before the daemon can listen.
-        ["#!/bin/sh", "set -eu", ...nixDaemonStartCommands(90)].join("\n") + "\n",
+        [
+          "#!/bin/sh",
+          "set -eu",
+          ...nixDaemonStartCommands(NATIVE_NIX_DAEMON_READY_SECONDS),
+          "if ! NIX_REMOTE=daemon timeout -k 1 2 nix --extra-experimental-features nix-command store info; then",
+          '  printf "nix=%s\\nnix-daemon=%s\\n" "$(command -v nix)" "$(command -v nix-daemon)" >&2',
+          '  ps -o pid,ppid,stat,comm -p "$daemon" >&2 || true',
+          '  readlink -f "/proc/$daemon/exe" >&2 || true',
+          '  cat "/proc/$daemon/cgroup" >&2 || true',
+          '  tail -n 60 "$log" >&2 || true',
+          '  state=$(ps -o stat= -p "$daemon" || true)',
+          '  case "$state" in ""|Z*) status=0; wait "$daemon" || status=$?; echo "nix-daemon exit=$status" >&2 ;; esac',
+          "  exit 1",
+          "fi",
+        ].join("\n") + "\n",
         "0755",
       ),
     ];
@@ -116,7 +130,6 @@ export const createNativeRecipe = async (
         shared.shell,
         "install -d -m0700 /var/lib/sealant/control",
         "systemctl daemon-reload",
-        // No Install section, descriptor, restart, lifecycle, or credentials are baked.
         "test ! -e /var/lib/sealant/control/launch.json",
         "test ! -e /run/sealant/control.sock",
         "! systemctl is-active --quiet sealant-workspace.service",

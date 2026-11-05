@@ -13,6 +13,10 @@ import { BoatSnapshotBuilder } from "./builder.js";
 import { VerifiedRuntimeBundle } from "./runtime-bundle.js";
 
 const directory = process.env.SEALANT_BOAT_RUNTIME_BUNDLE;
+const assertNonemptyBundleBytes: BoatApi["uploadFile"] = async (_id, _path, bytes) => {
+  expect(bytes.length).toBeGreaterThan(0);
+  return { ok: true, value: undefined };
+};
 const resources: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const stop of resources.splice(0).toReversed()) await stop();
@@ -194,11 +198,7 @@ const fixture = async (
     get: api.get.bind(api),
     execute: api.execute.bind(api),
     writeFile: api.writeFile.bind(api),
-    // File-transfer mechanics have separate API tests. This local fixture receives real bundle bytes.
-    uploadFile: async (_id, _path, bytes) => {
-      expect(bytes.length).toBeGreaterThan(0);
-      return { ok: true, value: undefined };
-    },
+    uploadFile: assertNonemptyBundleBytes,
     hostControl: api.hostControl.bind(api),
     stop: api.stop.bind(api),
     resume: api.resume.bind(api),
@@ -232,7 +232,6 @@ const fixture = async (
   };
 };
 
-// Offline integration requires the separately verified distribution, never a cached substitute.
 describe.skipIf(!directory)(
   "native builder through HTTP and durable journals with the exact bundle",
   () => {
@@ -247,6 +246,26 @@ describe.skipIf(!directory)(
             },
           }),
         ).toMatchObject({ ok: false, error: { code: "native-unsupported-os" } });
+        expect(f.mutations).toEqual([]);
+        expect(
+          await f.builder.build({
+            spec: {
+              ...f.spec,
+              sources: {
+                ...f.spec.sources,
+                inputs: [
+                  {
+                    id: "dotfiles",
+                    purpose: "dotfiles",
+                    kind: "git",
+                    provider: "generic",
+                    url: "https://user:secret@example.invalid/dots.git",
+                  },
+                ],
+              },
+            },
+          }),
+        ).toMatchObject({ ok: false, error: { code: "native-dotfiles-unsafe-url" } });
         expect(f.mutations).toEqual([]);
         const result = await f.builder.build({ spec: f.spec });
         if (!result.ok) throw result.error;

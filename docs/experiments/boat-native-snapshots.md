@@ -53,8 +53,11 @@ key at most three times within a conservative 23-hour window. An ambiguous save 
 causes a second save POST. A missing snapshot after an ambiguous save retains the intent for later
 explicit reconciliation. A cleanup deadline expires independently of cancellation.
 `native-cleanup-pending` is failure, with the exact journal path, rather than build success.
-Snapshot names fit 63 characters. Full recipe hashes remain in journals and receipts. The journal
-retains the original safe failure code when failure cleanup begins.
+Deletion intent is persisted after live ownership validation and before DELETE. Reconciliation
+replays that exact VM ID to recover a lost response and polls the returned operation. A hidden VM
+with GET 404 does not discharge the obligation. Snapshot names fit 63 characters. Full recipe hashes
+remain in journals and receipts. The journal retains the original safe failure code when failure
+cleanup begins.
 
 Native installation shares package, harness, shell, person, dotfiles and boot content with the
 Docker owner before Docker formatting. The Docker parity fixture covers 192 prior valid inputs.
@@ -64,8 +67,9 @@ its nodejs package conflicts with Ubuntu's separate npm package.
 Ubuntu and Nix are the only families. Auto tries Ubuntu first, then Nix when catalog support
 requires it. Explicit Arch/Fedora/custom and workspace Docker fail before allocation. Authenticated
 build dotfiles fail with `native-dotfiles-tmpfs-unproven`. Public build dotfiles use the shared
-installer; runtime dotfiles stay in boot metadata. Setup, startup and harness launches never execute
-during image build.
+installer; runtime dotfiles stay in boot metadata. Inline credentials, query parameters, and
+fragments in dotfiles URLs fail with `native-dotfiles-unsafe-url` before allocation in either phase.
+SSH usernames remain allowed. Setup, startup and harness launches never execute during image build.
 
 ## Run the serial live proof
 
@@ -100,8 +104,10 @@ Nix's outer socket/service is masked; the daemon starts inside the namespace.
 Person sudo is checked outside sealantd. The proof launches clone mode, which deliberately sets
 no-new-privileges. Per-person daemon sudo requires owner-map admission and capture restore in the
 later registration work. The Nix worker check drops to the person uid and compares the worker's
-cgroup with PID1's cgroup. Native Nix readiness has a bounded 90-second budget for cold store pages.
-Docker retains its existing 10-second budget.
+cgroup with PID1's cgroup. Native Nix readiness uses the existing 10-second budget. On failure, the
+native helper records the resolved binaries, daemon PID state, cgroup, log tail, and exit status
+when available. The proof runner captures those diagnostics before teardown. Docker output remains
+unchanged.
 
 The saved unit has no Install section or restart policy, and no launch descriptor or credentials. An
 explicit admitted descriptor is required. The resume check holds admission and verifies that
@@ -121,7 +127,8 @@ and person sudo passed. The real cancellation probe completed exact-ID cleanup.
 
 Nix's first native admission failed because its daemon socket did not become ready. The launcher
 entered the private namespace, but health and capabilities through the hosted relay were not
-reached. The later 90-second native readiness budget has not been verified live.
+reached. An unverified increase to 90 seconds was reverted. The socket failure has no established
+cause, and no daemon diagnostic evidence from the failed clone was retained.
 
 The latest Ubuntu install did not reach save. Its failure response was not captured before cleanup.
 The provider reports deletion operation `bdop_875e15afda1345d4816722b06d3dc59f` for source

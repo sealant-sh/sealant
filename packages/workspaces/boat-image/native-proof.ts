@@ -148,6 +148,7 @@ const stateSchema = z.object({
       requestedAt: z.iso.datetime(),
       from: boatSnapshotNameSchema,
       id: boatSandboxIdSchema.optional(),
+      deletionIntent: z.literal(true).optional(),
       deletion: boatDeletionIdSchema.optional(),
       deleted: z.boolean().optional(),
     })
@@ -443,7 +444,6 @@ echo PROOF_INSIDE_COMPLETE
       throw new Error("expected writers did not remain in the session cgroup");
     if (family === "nix" && !scope.includes("nix-daemon"))
       throw new Error("Nix daemon did not remain in the session cgroup");
-    // Hold the cgroup.events FD across unit removal so absence is never mistaken for emptiness.
     const stopScript = `import pathlib,subprocess
 group=subprocess.check_output(["systemctl","show","sealant-workspace.service","-p","ControlGroup","--value"],text=True).strip()
 with open("/sys/fs/cgroup"+group+"/cgroup.events") as f:
@@ -492,6 +492,26 @@ echo admission-held-lifecycle-unchanged`,
     await persist();
   }
   report.error = error instanceof Error ? error.message : "unknown proof failure";
+  if (state.clone?.id !== undefined && !state.clone.deleted) {
+    const diagnostics = await api.execute(
+      state.clone.id,
+      `set -u
+/usr/bin/sudo journalctl -u sealant-workspace.service -n 100 --no-pager
+/usr/bin/sudo sh -c 'export PATH=/usr/local/bin:/nix/var/nix/profiles/default/bin:/usr/sbin:/usr/bin:/sbin:/bin
+command -v nix || true
+command -v nix-daemon || true
+tail -n 60 /nix/var/log/nix/nix-daemon.log 2>/dev/null || true
+for pid in $(pgrep -x nix-daemon || true); do
+  ps -o pid,ppid,stat,comm -p "$pid"
+  readlink -f "/proc/$pid/exe" || true
+  cat "/proc/$pid/cgroup" || true
+done'`,
+      { timeoutSeconds: 15, signal: AbortSignal.timeout(20_000) },
+    );
+    report.failureDiagnostics = diagnostics.ok
+      ? diagnostics.value
+      : { code: diagnostics.error.code, status: diagnostics.error.status };
+  }
   process.exitCode = 1;
 } finally {
   client?.close();
@@ -518,7 +538,7 @@ echo admission-held-lifecycle-unchanged`,
   const removeClone = async () => {
     if (clone && !clone.deleted) {
       const id = clone.id ?? (await cleanupRequest(createClone));
-      if (clone.deletion === undefined) {
+      if (clone.deletion === undefined && clone.deletionIntent !== true) {
         const vm = must(await cleanupRequest(() => api.get(id)));
         if (
           vm.id !== id ||
@@ -526,6 +546,10 @@ echo admission-held-lifecycle-unchanged`,
           vm.labels["sealant-dev"] !== "boat-stream"
         )
           throw new Error("clone cleanup refused sandbox identity mismatch");
+        clone.deletionIntent = true;
+        await persist();
+      }
+      if (clone.deletion === undefined) {
         const deletion = must(await cleanupRequest(() => api.deleteSandbox(id)));
         if (deletion.targetId !== id) throw new Error("clone deletion identity mismatch");
         clone.deletion = deletion.id;
