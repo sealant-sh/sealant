@@ -100,7 +100,6 @@ export interface CapturePreservationClaim {
   readonly revision: number;
 }
 
-/** Serializable internal facts. Public API projection waits for incarnation-aware executor integration. */
 export interface CapturePreservationFacts {
   readonly version: 1;
   readonly runId: string;
@@ -167,7 +166,6 @@ type Decision =
   | { readonly kind: "stale-evidence" }
   | { readonly kind: "observe-only" };
 
-/** Private child persistence of WorkspaceCaptureDrainRepo, with no provider or guest dependency. */
 export interface CapturePreservationStore {
   readonly enrollSource: (
     input: unknown,

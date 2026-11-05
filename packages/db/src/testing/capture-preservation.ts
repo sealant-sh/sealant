@@ -26,7 +26,6 @@ import {
 
 const hash = "a".repeat(64);
 
-/** A removal receipt without an attributable provider operation must fail at the database edge. */
 export const seedUnattributedParkingReceipt = (
   db: DB,
   runId: string,
@@ -48,7 +47,6 @@ export const seedUnattributedParkingReceipt = (
     }),
   );
 
-/** Test the immediate root-shape check independently of the deferred incarnation foreign key. */
 export const rejectsUnenrolledParkingPointer = (db: DB, runId: string) =>
   db.transaction((tx) =>
     Effect.gen(function* () {
@@ -69,7 +67,6 @@ export const rejectsUnenrolledParkingPointer = (db: DB, runId: string) =>
     }),
   );
 
-/** Synthetic persisted source identity. No guest, wire client, runtime bundle or provider access. */
 export const seedParkingSource = (db: DB, runId: string, retainedAt?: Date) =>
   Effect.gen(function* () {
     const publicationId = randomUUID();
@@ -171,7 +168,6 @@ export const seedParkingSource = (db: DB, runId: string, retainedAt?: Date) =>
     };
   });
 
-/** Expire only this test's claim, without sleeping or changing its frozen policy. */
 export const expireParkingClaim = (db: DB, runId: string) =>
   db.transaction((tx) =>
     Effect.gen(function* () {
@@ -183,7 +179,6 @@ export const expireParkingClaim = (db: DB, runId: string) =>
     }),
   );
 
-/** A current writer cannot turn an ambiguous issued packet back into a sendable reservation. */
 export const resetIssuedParkingOperation = (db: DB, operationId: string) =>
   db.transaction((tx) =>
     Effect.gen(function* () {
@@ -195,7 +190,6 @@ export const resetIssuedParkingOperation = (db: DB, operationId: string) =>
     }),
   );
 
-/** Exercise the previous release's marker, including its terminal observation clear. */
 export const oldParkingWriter = (db: DB, runId: string, state: "stopped" | "gone" | "discarded") =>
   db.transaction((tx) =>
     Effect.gen(function* () {
@@ -207,7 +201,6 @@ export const oldParkingWriter = (db: DB, runId: string, state: "stopped" | "gone
     }),
   );
 
-/** Immutable-source and sealed-material guards also apply to direct current-contract writes. */
 export const rewriteParkingSource = (db: DB, runId: string) =>
   db.transaction((tx) =>
     Effect.gen(function* () {
@@ -219,14 +212,12 @@ export const rewriteParkingSource = (db: DB, runId: string) =>
     }),
   );
 
-/** Try the catalog's existing explicit release boundary against an enrolled lineage. */
 export const releaseParkingPublication = (db: DB, runId: string) =>
   db
     .update(nativePublicationConsumers)
     .set({ state: "released", releasedAt: sql`now()` })
     .where(eq(nativePublicationConsumers.runId, runId));
 
-/** Inspect canonical children without exporting writable tables to application code. */
 export const parkingRows = (db: DB, runId: string) =>
   Effect.gen(function* () {
     const [root] = yield* db.select().from(roots).where(eq(roots.runId, runId));
@@ -240,7 +231,6 @@ export const parkingRows = (db: DB, runId: string) =>
     return { root, episode, effects, sources, pin };
   });
 
-/** Simulate an issued packet from a future compatible executor, never an actual external send. */
 export const seedIssuedParkingClose = (db: DB, runId: string) =>
   db.transaction((tx) =>
     Effect.gen(function* () {
@@ -276,7 +266,6 @@ export const seedIssuedParkingClose = (db: DB, runId: string) =>
     }),
   );
 
-/** Seed target-bound custody history to test replay and ordering, without claiming live proof. */
 export const seedParkingRemoval = (db: DB, runId: string, verified: boolean) =>
   db.transaction((tx) =>
     Effect.gen(function* () {
@@ -359,7 +348,6 @@ export const seedParkingRemoval = (db: DB, runId: string, verified: boolean) =>
     }),
   );
 
-/** Omit a reservation's required typed row to exercise deferred relational validation. */
 export const seedMissingParkingDetail = (db: DB, runId: string) =>
   db.transaction((tx) =>
     Effect.gen(function* () {
@@ -383,7 +371,6 @@ export const seedMissingParkingDetail = (db: DB, runId: string) =>
     }),
   );
 
-/** One account-level observation is reused by every lineage in that scope. */
 export const seedParkingAllowance = (db: DB, accountScope: string, stale: boolean) =>
   db.insert(boatSnapshotAllowanceObservations).values({
     accountScope,
@@ -394,7 +381,6 @@ export const seedParkingAllowance = (db: DB, accountScope: string, stale: boolea
     observedAt: stale ? sql`now() - interval '301 seconds'` : sql`now()`,
   });
 
-/** Unknown allocation occupies one child slot even before any sandbox is positively discovered. */
 export const seedUnknownParkingRecovery = (db: DB, runId: string, removalOperationId: string) =>
   db.transaction((tx) =>
     Effect.gen(function* () {
@@ -438,7 +424,6 @@ export const seedUnknownParkingRecovery = (db: DB, runId: string, removalOperati
     }),
   );
 
-/** Known held children retain immutable parent identity without changing the current pointer. */
 export const seedHeldParkingChild = (
   db: DB,
   runId: string,

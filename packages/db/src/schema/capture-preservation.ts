@@ -20,7 +20,6 @@ import { workspaceCaptureDrains } from "./workspace-build-jobs.js";
 
 const instant = () => timestamp({ mode: "date", withTimezone: true });
 
-/** Frozen policy for one continuous retained lineage, including recovered descendants. */
 export const captureRetentionEpisodes = snakeCase.table(
   "capture_retention_episodes",
   {
@@ -50,7 +49,6 @@ export const captureRetentionEpisodes = snakeCase.table(
   ],
 );
 
-/** Immutable provider identity. Lifecycle observations never repoint the original runtime row. */
 export const captureExecutorIncarnations = snakeCase.table(
   "capture_executor_incarnations",
   {
@@ -102,7 +100,6 @@ export const captureExecutorIncarnations = snakeCase.table(
   ],
 );
 
-/** Reserved recovery names remain tombstones after retirement and never enter the image catalog. */
 export const captureRecoveryArtifacts = snakeCase.table(
   "capture_recovery_artifacts",
   {
@@ -150,7 +147,6 @@ export const captureRecoveryArtifacts = snakeCase.table(
   ],
 );
 
-/** An issued packet stays occupied after claim expiry. Only attributable settlement ends it. */
 export const capturePreservationOperations = snakeCase.table(
   "capture_preservation_operations",
   {
@@ -220,7 +216,6 @@ export const capturePreservationOperations = snakeCase.table(
 );
 
 const detailColumns = () => ({ runId: text().notNull(), operationId: uuid().notNull() });
-/** A close reservation is an intention, never permission to stop a guest. */
 export const captureParkingCloses = snakeCase.table(
   "capture_parking_closes",
   {
@@ -239,7 +234,6 @@ export const captureParkingCloses = snakeCase.table(
   ],
 );
 
-/** Capsule preparation requires a previously recorded terminal close. */
 export const captureCapsulePreparations = snakeCase.table(
   "capture_capsule_preparations",
   {
@@ -262,7 +256,6 @@ export const captureCapsulePreparations = snakeCase.table(
   ],
 );
 
-/** Save dispatch is bound to one permanent name and exact prepared source. */
 export const captureSnapshotSaves = snakeCase.table(
   "capture_snapshot_saves",
   {
@@ -289,7 +282,6 @@ export const captureSnapshotSaves = snakeCase.table(
   ],
 );
 
-/** Removal evidence names the exact sandbox, never inventory absence. */
 export const captureSandboxRemovals = snakeCase.table(
   "capture_sandbox_removals",
   {
@@ -322,7 +314,6 @@ export const captureSandboxRemovals = snakeCase.table(
   ],
 );
 
-/** Unknown creates keep their destination identity and artifact reservation. */
 export const captureRecoveryCreates = snakeCase.table(
   "capture_recovery_creates",
   {
@@ -350,7 +341,6 @@ export const captureRecoveryCreates = snakeCase.table(
   ],
 );
 
-/** Recovery admission remains separate from allocation and uses fresh guest identities. */
 export const captureRecoveryAdmissions = snakeCase.table(
   "capture_recovery_admissions",
   {
@@ -373,7 +363,6 @@ export const captureRecoveryAdmissions = snakeCase.table(
   ],
 );
 
-/** Snapshot retirement keeps the permanent identity and its discharge fence. */
 export const captureSnapshotRetirements = snakeCase.table(
   "capture_snapshot_retirements",
   {
@@ -395,7 +384,6 @@ export const captureSnapshotRetirements = snakeCase.table(
   ],
 );
 
-/** Append-only observations do not themselves confer custody or dispatch authority. */
 export const capturePreservationReceipts = snakeCase.table(
   "capture_preservation_receipts",
   {
@@ -422,7 +410,6 @@ export const capturePreservationReceipts = snakeCase.table(
   ],
 );
 
-/** Issued operations and descendants keep their artifacts pinned until canonical release. */
 export const capturePreservationConsumers = snakeCase.table(
   "capture_preservation_consumers",
   {
@@ -445,7 +432,6 @@ export const capturePreservationConsumers = snakeCase.table(
   ],
 );
 
-/** Account observations are shared aggregates, never per-artifact included-slot assignments. */
 export const boatSnapshotAllowanceObservations = snakeCase.table(
   "boat_snapshot_allowance_observations",
   {
