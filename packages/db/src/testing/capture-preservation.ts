@@ -190,6 +190,17 @@ export const resetIssuedParkingOperation = (db: DB, operationId: string) =>
     }),
   );
 
+export const makeParkingActionDue = (db: DB, runId: string) =>
+  db.transaction((tx) =>
+    Effect.gen(function* () {
+      yield* markCurrentWriter(tx);
+      yield* tx
+        .update(roots)
+        .set({ nextPreservationActionAt: sql`now() - interval '1 second'` })
+        .where(eq(roots.runId, runId));
+    }),
+  );
+
 export const oldParkingWriter = (db: DB, runId: string, state: "stopped" | "gone" | "discarded") =>
   db.transaction((tx) =>
     Effect.gen(function* () {

@@ -1405,7 +1405,7 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
               const [row] = yield* tx
                 .update(workspaceCaptureDrains)
                 .set({
-                  nextRecoveryAt: sql`now()`,
+                  nextRecoveryAt: sql`greatest(now(), ${workspaceCaptureDrains.recoveryLeaseUntil})`,
                   preservationDesired: sql`case when ${workspaceCaptureDrains.custodyContract} = 3 and ${workspaceCaptureDrains.discardRequestedAt} is null then 'recover' else ${workspaceCaptureDrains.preservationDesired} end`,
                   custodyRevision: sql`${workspaceCaptureDrains.custodyRevision} + case when ${workspaceCaptureDrains.custodyContract} = 3 then 1 else 0 end`,
                 })

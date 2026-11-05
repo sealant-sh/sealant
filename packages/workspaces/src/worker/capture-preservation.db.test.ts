@@ -14,6 +14,7 @@ import {
 import { runMigrations } from "@sealant/db/migrate";
 import {
   expireParkingClaim,
+  makeParkingActionDue,
   oldParkingWriter,
   parkingRows,
   releaseParkingPublication,
@@ -282,9 +283,12 @@ describe("canonical Boat custody in migrated Postgres", () => {
     expect(await repo(dbA, (r) => r.preservation.reserveClose(old))).toEqual({
       kind: "claim-lost",
     });
+    const beforeRelease = await Effect.runPromise(parkingRows(dbB, s.runId));
     await repo(dbA, (r) => r.preservation.release(old));
-    expect((await Effect.runPromise(parkingRows(dbA, s.runId))).root?.preservationClaimToken).toBe(
-      fresh?.token,
+    const afterRelease = await Effect.runPromise(parkingRows(dbA, s.runId));
+    expect(afterRelease.root?.preservationClaimToken).toBe(fresh?.token);
+    expect(afterRelease.root?.nextPreservationActionAt).toEqual(
+      beforeRelease.root?.nextPreservationActionAt,
     );
   });
 
@@ -299,6 +303,63 @@ describe("canonical Boat custody in migrated Postgres", () => {
     expect(a.length).toBeLessThanOrEqual(10);
     expect(b.length).toBeLessThanOrEqual(10);
     expect(a.some((claim) => b.some((other) => claim.runId === other.runId))).toBe(false);
+  });
+
+  it("reaches eligible work after releasing a full batch of blocked roots", async () => {
+    const blocked = await Promise.all(
+      Array.from({ length: 10 }, () => retained(new Date("2020-01-01T00:00:00Z"))),
+    );
+    for (const s of blocked)
+      await repo(dbA, (r) => r.requestDiscard({ runId: s.runId, requestedBy: owner }));
+    const eligible = await retained(new Date("2021-01-01T00:00:00Z"));
+    const first = await repo(dbA, (r) => r.preservation.claimDue(10));
+    expect(first.map((claim) => claim.runId).toSorted()).toEqual(
+      blocked.map((s) => s.runId).toSorted(),
+    );
+    for (const claim of first) {
+      expect(await repo(dbA, (r) => r.preservation.reserveClose(claim))).toEqual({
+        kind: "blocked",
+        reason: "discard-requested",
+      });
+      await repo(dbA, (r) => r.preservation.release(claim));
+      const after = await Effect.runPromise(parkingRows(dbA, claim.runId));
+      expect(after.episode[0]?.eligibleAt).toEqual(new Date("2020-01-01T01:00:00Z"));
+      expect(after.root?.nextPreservationActionAt?.getTime()).toBeGreaterThan(Date.now());
+      expect(after.root?.nextPreservationActionAt?.getTime()).toBeLessThanOrEqual(
+        Date.now() + 300000,
+      );
+    }
+    const next = await repo(dbB, (r) => r.preservation.claimDue(10));
+    expect(next.map((claim) => claim.runId)).toContain(eligible.runId);
+    expect(next.some((claim) => blocked.some((s) => s.runId === claim.runId))).toBe(false);
+  });
+
+  it("defers expired prepared replay without moving an earlier observation obligation", async () => {
+    const s = await retained(past);
+    const claim = await repo(dbA, (r) => r.preservation.claim(s.runId));
+    if (claim === undefined) throw new Error("missing claim");
+    const reserved = await repo(dbA, (r) => r.preservation.reserveClose(claim));
+    if (reserved.kind !== "reserved") throw new Error("missing reservation");
+    await repo(dbA, (r) => r.preservation.release(claim));
+    await Effect.runPromise(makeParkingActionDue(dbA, s.runId));
+    const replay = await repo(dbB, (r) => r.preservation.claim(s.runId));
+    if (replay === undefined) throw new Error("missing replay claim");
+    expect(await repo(dbB, (r) => r.preservation.reserveClose(replay))).toEqual(reserved);
+    await repo(dbB, (r) => r.preservation.release(replay));
+    const after = await Effect.runPromise(parkingRows(dbA, s.runId));
+    expect(after.root?.nextPreservationActionAt?.getTime()).toBeGreaterThan(Date.now());
+    expect(after.effects).toHaveLength(1);
+
+    const issued = await retained(past);
+    const effect = await Effect.runPromise(seedIssuedParkingClose(dbA, issued.runId));
+    const issuedClaim = await repo(dbA, (r) => r.preservation.claim(issued.runId));
+    if (issuedClaim === undefined) throw new Error("missing issued claim");
+    const before = await Effect.runPromise(parkingRows(dbA, issued.runId));
+    await repo(dbA, (r) => r.preservation.release(issuedClaim));
+    const released = await Effect.runPromise(parkingRows(dbA, issued.runId));
+    expect(released.root?.nextPreservationActionAt).toEqual(
+      before.effects.find((op) => op.id === effect.operationId)?.nextObservationAt,
+    );
   });
 
   it.each(["stopped", "gone", "discarded"] as const)(
@@ -440,6 +501,94 @@ describe("canonical Boat custody in migrated Postgres", () => {
     expect(rows.sources[0]?.removedAt).toBeNull();
     expect(rows.effects.find((op) => op.id === effect.operationId)?.state).toBe("issued");
   });
+
+  it.each(["pending", "unknown"] as const)(
+    "ignores an older %s reply after completed removal without losing conflict detection",
+    async (kind) => {
+      const s = await retained(past);
+      const effect = await Effect.runPromise(seedParkingRemoval(dbA, s.runId, true));
+      const rows = await Effect.runPromise(parkingRows(dbA, s.runId));
+      const issuedAt = rows.effects.find((op) => op.id === effect.operationId)?.issuedAt;
+      if (issuedAt === null || issuedAt === undefined) throw new Error("missing issued time");
+      const completed = {
+        runId: s.runId,
+        ...effect,
+        receiptId: randomUUID(),
+        kind: "removal-completed",
+        observedAt: new Date(),
+      };
+      expect(await repo(dbA, (r) => r.preservation.observe(completed))).toBe("recorded");
+      const pending = {
+        ...completed,
+        receiptId: randomUUID(),
+        kind,
+        observedAt: issuedAt,
+      };
+      expect(await repo(dbB, (r) => r.preservation.observe(pending))).toBe("superseded");
+      expect(await repo(dbA, (r) => r.preservation.observe(pending))).toBe("duplicate");
+      const settled = await Effect.runPromise(parkingRows(dbA, s.runId));
+      expect(settled.effects.find((op) => op.id === effect.operationId)?.state).toBe("settled");
+      expect(settled.sources[0]?.removedAt).toEqual(completed.observedAt);
+      expect((await repo(dbA, (r) => r.preservation.read(s.runId)))?.state).toBe("parked");
+      expect(
+        await repo(dbB, (r) =>
+          r.preservation.observe({ ...pending, providerOperationId: "wrong-operation" }),
+        ),
+      ).toBe("conflict");
+      expect((await repo(dbA, (r) => r.preservation.read(s.runId)))?.state).toBe("unknown");
+
+      const duplicate = await retained(past);
+      const removal = await Effect.runPromise(seedParkingRemoval(dbA, duplicate.runId, true));
+      const receipt = {
+        ...completed,
+        runId: duplicate.runId,
+        ...removal,
+        observedAt: new Date(),
+      };
+      expect(await repo(dbA, (r) => r.preservation.observe(receipt))).toBe("recorded");
+      expect(await repo(dbB, (r) => r.preservation.observe({ ...receipt, kind }))).toBe("conflict");
+
+      const reused = await retained(past);
+      const reusedRemoval = await Effect.runPromise(seedParkingRemoval(dbA, reused.runId, true));
+      const reusedCompleted = {
+        ...completed,
+        runId: reused.runId,
+        ...reusedRemoval,
+        observedAt: new Date(),
+      };
+      await repo(dbA, (r) => r.preservation.observe(reusedCompleted));
+      const reusedPending = { ...reusedCompleted, receiptId: randomUUID(), kind };
+      expect(await repo(dbA, (r) => r.preservation.observe(reusedPending))).toBe("superseded");
+      expect(
+        await repo(dbB, (r) =>
+          r.preservation.observe({ ...reusedPending, kind: "removal-completed" }),
+        ),
+      ).toBe("conflict");
+    },
+  );
+
+  it.each(["future", "before-issue"] as const)(
+    "rejects a %s removal time without settling custody",
+    async (invalid) => {
+      const s = await retained(past);
+      const effect = await Effect.runPromise(seedParkingRemoval(dbA, s.runId, true));
+      await expect(
+        repo(dbA, (r) =>
+          r.preservation.observe({
+            runId: s.runId,
+            ...effect,
+            receiptId: randomUUID(),
+            kind: "removal-completed",
+            observedAt: invalid === "future" ? new Date("2099-01-01T00:00:00Z") : past,
+          }),
+        ),
+      ).rejects.toThrow("invalid-input");
+      const rows = await Effect.runPromise(parkingRows(dbB, s.runId));
+      expect(rows.sources[0]?.removedAt).toBeNull();
+      expect(rows.effects.find((op) => op.id === effect.operationId)?.state).toBe("issued");
+      expect((await repo(dbA, (r) => r.preservation.read(s.runId)))?.state).toBe("parking");
+    },
+  );
 
   it("rolls back crashes before a retention or intention commit", async () => {
     const s = await source();

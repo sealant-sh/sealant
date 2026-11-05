@@ -1600,6 +1600,12 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
       expect(await dueToOld()).toEqual([]);
       await withOld((repo) => repo.requestRecovery(runId));
       expect(await dueToOld()).toEqual([]);
+      await current((repo) => repo.requestRecovery(runId));
+      expect(await dueToOld()).toEqual([]);
+      const requested = await row(runId);
+      expect(requested?.nextRecoveryAt?.getTime()).toBeGreaterThanOrEqual(
+        requested?.recoveryLeaseUntil?.getTime() ?? Infinity,
+      );
       const version = (await row(runId))?.evidenceVersion ?? 0;
       const refused = await Effect.runPromiseExit(
         Effect.gen(function* () {

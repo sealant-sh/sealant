@@ -34,12 +34,21 @@ Claims last 120 seconds of database time, carry a monotonic fence and refuse exp
 indexed due selector takes at most ten roots with `FOR UPDATE SKIP LOCKED`. An eligible close
 reservation persists its immutable target details and request digest. `issue` always refuses
 prepared work with `executor-unavailable`; issued work is observe-only. A claim is no dispatch
-permit. There is no issuance callback or provider dependency.
+permit. There is no issuance callback or provider dependency. Fenced release schedules a retry
+within 300 seconds, preserving any earlier future root action or outstanding operation observation.
+Blocked roots and expired prepared reservations therefore yield the next batch to later due work.
+This retry schedule does not move the frozen episode eligibility time.
 
 Observation replay can reconcile synthetic preexisting issued work. Exact completed removal
 observations must match the sandbox and recorded provider operation. Snapshot readiness alone cannot
 produce `parked`. Unknown outcomes retain their occupied operation and pins across claim expiry and
-restart. Removal settlement does not clear run retention or sealed recovery material.
+restart. An attributable pending or unknown reply observed no later than the completed removal is
+recorded as `superseded` without changing settlement. Its exact replay is `duplicate`; a reused
+receipt ID with changed contents, wrong sandbox or mismatched provider operation remains a conflict.
+Observation times must fall between operation issuance and database `clock_timestamp()`, inclusive
+at JavaScript millisecond precision. No additional clock skew is accepted. Impossible times return
+typed `invalid-input` without settling the obligation. Removal settlement does not clear run
+retention or sealed recovery material.
 
 The internal serializable view distinguishes retained, parking, parked, recovering and unknown
 facts. It names known VMs and snapshots. Compute observations retain their timestamp and become
@@ -140,3 +149,19 @@ starting any suite. No application change or timeout increase was needed. The ow
 tmpfs with no volume, and its deletion and absence were confirmed.
 
 Functional parking, public status projection and ordinary Boat admission remain unavailable.
+
+## Independent review fixes
+
+The review reproduced a rolling-deployment recovery overlap, permanent quarantine after a delayed
+nonterminal reply, due-batch starvation and impossible permanent removal times. Regression tests
+failed on each original path before the fixes. The current writer now clamps requested generic
+recovery to the active lease, preserving exclusion for old recovery workers. The replay, release and
+time contracts above cover the custody fixes.
+
+On 2026-11-05, the fixed implementation passed 332 workspace tests across eight files and 36 API
+tests across three files, with zero skips, on migrated local PostgreSQL 17. The parking suite has 39
+cases, including both nonterminal reply kinds, changed receipt bodies, queue progress after ten
+blocked roots, prepared replay, earlier observation obligations and rejected removal times. The
+existing 16 generated schedules continue to pass. These are canonical repository proofs using
+synthetic issued history. They do not establish provider dispatch, guest custody or functional
+parking.

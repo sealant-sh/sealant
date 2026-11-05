@@ -205,7 +205,7 @@ export interface CapturePreservationStore {
   readonly observe: (
     input: unknown,
   ) => Effect.Effect<
-    "recorded" | "duplicate" | "conflict" | "unknown-effect",
+    "recorded" | "duplicate" | "superseded" | "conflict" | "unknown-effect",
     CapturePreservationError
   >;
   readonly recordCompute: (input: unknown) => Effect.Effect<boolean, CapturePreservationError>;
@@ -823,7 +823,16 @@ export const makeCapturePreservationStore = (
             yield* markWriter(db);
             yield* db
               .update(roots)
-              .set({ preservationClaimToken: null, preservationClaimUntil: null })
+              .set({
+                preservationClaimToken: null,
+                preservationClaimUntil: null,
+                nextPreservationActionAt: sql`least(
+                  now() + interval '300 seconds',
+                  case when ${roots.nextPreservationActionAt} > now() then ${roots.nextPreservationActionAt} end,
+                  (select min(${operations.nextObservationAt}) from ${operations}
+                   where ${operations.runId} = ${roots.runId} and ${operations.state} in ('issued', 'unknown'))
+                )`,
+              })
               .where(claimFence(claim));
           }),
         ),
@@ -1029,7 +1038,29 @@ export const makeCapturePreservationStore = (
                 .pipe(Effect.as("conflict" as const));
             if (duplicate !== undefined || source.sandboxId !== value.sandboxId)
               return yield* conflict();
-            if (value.kind === "removal-completed") {
+            const [clock] = yield* db
+              .select({ now: sql<string>`clock_timestamp()::text` })
+              .from(roots)
+              .where(eq(roots.runId, value.runId));
+            const now = new Date(clock?.now ?? "invalid").getTime();
+            if (operation.issuedAt === null || !Number.isFinite(now))
+              return yield* Effect.fail(
+                new CapturePreservationError({
+                  operation: "observe-time",
+                  reason: "record-invalid",
+                }),
+              );
+            if (
+              value.observedAt.getTime() < operation.issuedAt.getTime() ||
+              value.observedAt.getTime() > now
+            )
+              return yield* Effect.fail(
+                new CapturePreservationError({
+                  operation: "observe-time",
+                  reason: "invalid-input",
+                }),
+              );
+            if (value.kind === "removal-completed" || operation.state === "settled") {
               const [removalRaw] = yield* db
                 .select()
                 .from(removals)
@@ -1049,8 +1080,15 @@ export const makeCapturePreservationStore = (
                 removal.providerOperationId !== value.providerOperationId
               )
                 return yield* conflict();
-              if (operation.state === "settled") return "duplicate" as const;
-            } else if (operation.state === "settled") return yield* conflict();
+              if (
+                operation.state === "settled" &&
+                value.kind !== "removal-completed" &&
+                (source.removalOperationId !== operation.id ||
+                  source.removedAt === null ||
+                  value.observedAt.getTime() > source.removedAt.getTime())
+              )
+                return yield* conflict();
+            }
             yield* db.insert(receipts).values({
               runId: value.runId,
               id: value.receiptId,
@@ -1061,6 +1099,10 @@ export const makeCapturePreservationStore = (
               providerOperationId: value.providerOperationId ?? null,
               observedAt: value.observedAt,
             });
+            if (operation.state === "settled")
+              return value.kind === "removal-completed"
+                ? ("duplicate" as const)
+                : ("superseded" as const);
             yield* db
               .update(operations)
               .set(
