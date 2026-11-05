@@ -138,4 +138,8 @@ metadata:
 provisioner: sealant.sh/e2e-nfs
 reclaimPolicy: Delete
 volumeBindingMode: Immediate
-mountOptions: [vers=4.1, hard, noatime]
+# NFSv4.0, not 4.1: from Linux 7.0 (GitHub's ubuntu-24.04 image since 20261026) a 4.1 or 4.2 client
+# gets an error from this ganesha (V4.0.8) that it cannot map, so READDIR and GETATTR on a directory
+# fail with EREMOTEIO ("Remote I/O error"). 4.0 is the same idmapped NFSv4 to the application, and
+# up.sh lists the claim from the store Pod, so a client the server cannot answer fails the bring-up.
+mountOptions: [vers=4.0, hard, noatime]
