@@ -53,9 +53,12 @@ Set `DEFAULT_RUNTIME_ADAPTER=k8s` or `k3s`, and configure both API and worker:
 
 Create `SEALANT_RESOURCE_K8S_NAMESPACE`, default `sealant-services`, with a default StorageClass.
 Grant Core read/write access to StatefulSets, PVCs, Services, Secrets, Pods, pod exec and
-NetworkPolicies in that namespace. It reads its standard Kubernetes configuration, or the explicit
-`SEALANT_RESOURCE_K8S_KUBECONFIG` path. Set `SEALANT_RESOURCE_K8S_NETWORK_POLICY=true` only with a
-policy-enforcing CNI. The namespace must have no broader policy admitting workspace traffic.
+NetworkPolicies in that namespace. Purge also requires cluster-scoped `get`/`list` on
+PersistentVolumes to verify Delete reclaim policy and confirm storage reclaim, including after a
+retry where the PVC is already gone. No cluster-scoped writes are required. It reads its standard
+Kubernetes configuration, or the explicit `SEALANT_RESOURCE_K8S_KUBECONFIG` path. Set
+`SEALANT_RESOURCE_K8S_NETWORK_POLICY=true` only with a policy-enforcing CNI. The namespace must have
+no broader policy admitting workspace traffic.
 
 Core creates one replica, stops it before changing its template, retains individually named PVCs,
 and returns a stable ClusterIP DNS endpoint. Ingress admits only the configured caller pods on the
@@ -87,9 +90,43 @@ releases compute and retains storage. `backup(key, volume)` returns an uncompres
 holds the instance lock until completion or cancellation. Consume or cancel the stream before
 starting it again. Discard an incomplete tar if the stream fails, including a concurrent start
 winning the lock. Backups need an application-owned destination. `archive` removes the workload and
-networking while retaining every volume. This API has no volume deletion operation.
+networking while retaining every volume. Use explicit purge to delete retained data.
 
 Same-size upgrades reuse budget. Increases reserve the whole replacement before stopping the old
 workload; stop first if the scope lacks that headroom. Failed starts retain reservations. Archive
 retains declared storage, including after a failed start. Capacity decreases keep the old charge
 until stop. These choices keep existing resource-domain admission conservative after a crash.
+
+## Remove an organization's service
+
+`secretEnv: {}` clears only Core's env, and archive keeps the data volume. To remove Executor's
+stored OAuth tokens too, stop or archive its caller-owned instance, then purge its observed id:
+
+```ts
+const instance = await services.get("executor");
+await services.stop("executor", { kind: "person", by: "remove organization Executor" });
+await services.purge("executor", { expectedInstanceId: instance.id });
+// { kind: "purged" }; a repeat returns { kind: "already-purged" }.
+```
+
+Purge is irreversible and applies only to organization and installation scopes. Project scopes keep
+their existing lifecycle. It refuses a running instance, including one Docker still runs after a
+failed stop. The expected id prevents a delayed retry from purging a replacement that uses the same
+key. An absent key reports already-purged after scope authorization; no tombstone is kept. An
+archived scope can still purge its instances. Reusing a purged key creates a new instance id.
+
+After the stopped provider check, Core fences the instance as archived and clears sealed env and its
+secret revision. Docker removes its workload, anchor, helpers, callback allow rule, dedicated
+networks and named volumes. Kubernetes removes its StatefulSet, pod, backup helper/policy, Service,
+Secret, NetworkPolicy and retained PVCs, waiting for object deletion and underlying Delete-policy
+volume reclamation. A bound Retain-policy PV refuses purge before deletion, because PVC deletion
+would leave its data. Change the PV reclaim policy through the cluster operator, then retry.
+
+Only confirmed provider deletion releases budgets and removes the instance row. If cleanup fails,
+retry the same purge. It retains an archived record and conservative charges, cannot restart, and
+continues from missing resources without recreating them. Backup streams and other lifecycle
+operations share the purge lock; consume or cancel a backup before purging.
+
+Core retains no caller-volume backup files. It streams downloads directly and purge removes any
+abandoned helper. Mend must delete backups it downloaded or stored elsewhere. External provider
+snapshots, database/WAL backups and physical media sanitization remain operator responsibilities.

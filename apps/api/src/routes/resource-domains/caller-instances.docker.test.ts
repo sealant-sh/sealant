@@ -62,6 +62,7 @@ describe.skipIf(!enabled)("caller instances through the public SDK on real Docke
     const client = `coresvc-client-${token}`;
     const outsider = `coresvc-outsider-${token}`;
     const outsiderNetwork = `coresvc-outsider-${token}`;
+    const blocker = `coresvc-purge-blocker-${token}`;
     const ids: string[] = [];
     let instanceName: string | undefined;
     let api: Awaited<ReturnType<typeof gateControlPlane>> | undefined;
@@ -164,6 +165,18 @@ describe.skipIf(!enabled)("caller instances through the public SDK on real Docke
       expect(first.state.kind).toBe("running");
       expect(first.endpoint?.port).toBe(4400);
       const workload = `${instanceName}-workload`;
+      await expect(
+        services.purge("executor", { expectedInstanceId: first.id }),
+      ).rejects.toMatchObject({
+        code: "ResourceInstancePurgeRefusedError",
+      });
+      expect(
+        (
+          await services.exec("executor", {
+            argv: ["sh", "-c", 'printf "%s" "$ORG_SECRET" > /app/data/oauth-token'],
+          })
+        ).exitCode,
+      ).toBe(0);
       expect(await docker("inspect", "--format", "{{.HostConfig.Memory}}", workload)).toBe(
         "1610612736",
       );
@@ -225,6 +238,11 @@ describe.skipIf(!enabled)("caller instances through the public SDK on real Docke
       );
       await acquired.promise;
       try {
+        await expect(
+          services.purge("executor", { expectedInstanceId: first.id }),
+        ).rejects.toMatchObject({
+          code: "ResourceInstanceBusyError",
+        });
         await expect(
           services.stop("executor", { kind: "person", by: "concurrent" }),
         ).rejects.toMatchObject({ code: "ResourceInstanceBusyError" });
@@ -304,6 +322,7 @@ describe.skipIf(!enabled)("caller instances through the public SDK on real Docke
         await new Response(await services.backup("executor", "data")).arrayBuffer(),
       );
       expect(tar.includes(Buffer.from("retained-data"))).toBe(true);
+      expect(tar.includes(Buffer.from(secret))).toBe(true);
       expect((await services.up("executor", spec, { cause: "use" })).desired).toBe("stopped");
       const rotated = await services.up("executor", spec, { cause: "person", secretEnv: {} });
       expect(rotated.state.kind).toBe("running");
@@ -362,10 +381,111 @@ describe.skipIf(!enabled)("caller instances through the public SDK on real Docke
         "CORESVC_CB_4401",
       );
       expect(rules).not.toContain(instanceName);
+      const archivedName = instanceName;
+      await docker(
+        "run",
+        "-d",
+        "--name",
+        `${archivedName}-backup`,
+        "--network",
+        "none",
+        "--cap-drop",
+        "ALL",
+        "--mount",
+        `type=volume,src=${archivedName}-data,dst=/data,readonly`,
+        busybox,
+        "sleep",
+        "86400",
+      );
+      expect(await services.purge("executor", { expectedInstanceId: first.id })).toEqual({
+        kind: "purged",
+      });
+      await expect(docker("inspect", `${archivedName}-backup`)).rejects.toThrow();
+      expect(await services.purge("executor", { expectedInstanceId: first.id })).toEqual({
+        kind: "already-purged",
+      });
+      expect(
+        await Effect.runPromise(repo.get(scope.id, ResourceInstanceKey.make("executor"))),
+      ).toBeUndefined();
+      expect(await services.list({ archived: true })).toEqual([]);
+      expect((await sealant.scopes.actAs(scope.id).budget.get()).storageBytes.used).toBe(0);
+      await expect(docker("volume", "inspect", `${archivedName}-data`)).rejects.toThrow();
+      for (const suffix of ["caller", "egress"])
+        await expect(docker("network", "inspect", `${archivedName}-${suffix}`)).rejects.toThrow();
+      await expect(services.get("executor")).rejects.toMatchObject({
+        code: "ResourceInstanceNotFoundError",
+      });
+
+      const replacement = await services.up("executor", spec, {
+        cause: "person",
+        secretEnv: { ORG_SECRET: secret },
+      });
+      instanceName = callerInstanceName(replacement.id);
+      expect(replacement.id).not.toBe(first.id);
+      await expect(
+        services.purge("executor", { expectedInstanceId: first.id }),
+      ).rejects.toMatchObject({
+        code: "ResourceInstancePurgeRefusedError",
+      });
+      await services.stop("executor", { kind: "person", by: "purge" });
+      // A failed stop must not make a still-running provider workload deletable.
+      await docker("start", `${instanceName}-workload`);
+      await expect(
+        services.purge("executor", { expectedInstanceId: replacement.id }),
+      ).rejects.toMatchObject({
+        code: "ResourceInstancePurgeRefusedError",
+      });
+      expect((await services.get("executor")).desired).toBe("stopped");
+      await services.stop("executor", { kind: "person", by: "confirm provider stop" });
+      await docker(
+        "run",
+        "-d",
+        "--name",
+        blocker,
+        "--mount",
+        `type=volume,src=${instanceName}-data,dst=/data`,
+        busybox,
+        "sleep",
+        "86400",
+      );
+      await expect(
+        services.purge("executor", { expectedInstanceId: replacement.id }),
+      ).rejects.toMatchObject({
+        code: "ResourceDomainInternalServerError",
+      });
+      const retryable = await Effect.runPromise(
+        repo.get(scope.id, ResourceInstanceKey.make("executor")),
+      );
+      expect(retryable).toMatchObject({
+        desired: "archived",
+        secretEnvSealed: null,
+        secretRevision: null,
+      });
+      expect((await sealant.scopes.actAs(scope.id).budget.get()).storageBytes.used).toBe(
+        1024 * 1024,
+      );
+      await expect(services.up("executor", spec, { cause: "person" })).rejects.toMatchObject({
+        code: "ResourceInstanceArchivedError",
+      });
+      console.log("Removing owned purge blocker:", blocker);
+      await docker("rm", "-f", blocker);
+      expect(await services.purge("executor", { expectedInstanceId: replacement.id })).toEqual({
+        kind: "purged",
+      });
+      expect(await services.purge("executor", { expectedInstanceId: replacement.id })).toEqual({
+        kind: "already-purged",
+      });
+      const purgedBudget = await sealant.scopes.actAs(scope.id).budget.get();
+      expect(purgedBudget.memoryBytes.used).toBe(0);
+      expect(purgedBudget.storageBytes.used).toBe(0);
+      await expect(docker("volume", "inspect", `${instanceName}-data`)).rejects.toThrow();
+      for (const suffix of ["", "-workload", "-backup"])
+        await expect(docker("inspect", `${instanceName}${suffix}`)).rejects.toThrow();
     } finally {
       await sealant?.close();
       await api?.close();
       const names = [
+        blocker,
         client,
         outsider,
         ...(instanceName === undefined

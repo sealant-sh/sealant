@@ -39,6 +39,8 @@ export class ResourceInstanceRepoError extends Schema.TaggedError<ResourceInstan
       "get",
       "list",
       "setDesired",
+      "preparePurge",
+      "delete",
       "recordObserved",
       "touchReached",
       "link",
@@ -139,6 +141,12 @@ export type NetworkAllocation =
   | { readonly kind: "pool-exhausted" };
 
 export interface ResourceInstanceRepoService {
+  /** Fence retries as archived and scrub sealed env before irreversible provider deletion. */
+  readonly preparePurge: (
+    id: ResourceInstanceId,
+  ) => Effect.Effect<ResourceInstanceRecord | undefined, ResourceInstanceRepoError>;
+  /** Only after provider deletion, in the transaction releasing its allocations. */
+  readonly delete: (id: ResourceInstanceId) => Effect.Effect<void, ResourceInstanceRepoError>;
   /** Session advisory lock across provider I/O, without holding a database transaction open. */
   readonly withLock: <A, E, R>(
     key: string,
@@ -460,6 +468,32 @@ export const ResourceInstanceRepoLive: Layer.Layer<ResourceInstanceRepo, never, 
         );
 
       return {
+        preparePurge: (id) =>
+          withError(
+            "preparePurge",
+            Effect.map(
+              db
+                .update(resourceInstances)
+                .set({
+                  desired: "archived",
+                  stopReason: null,
+                  archivedAt: new Date(),
+                  observed: { kind: "archived", at: new Date().toISOString() },
+                  observedAt: new Date(),
+                  secretEnvSealed: null,
+                  secretRevision: null,
+                  updatedAt: new Date(),
+                })
+                .where(and(eq(resourceInstances.id, id), ne(resourceInstances.desired, "running")))
+                .returning(),
+              ([row]) => (row === undefined ? undefined : toRecord(row)),
+            ),
+          ),
+        delete: (id) =>
+          withError(
+            "delete",
+            Effect.asVoid(db.delete(resourceInstances).where(eq(resourceInstances.id, id))),
+          ),
         withLock: (key, effect) =>
           Effect.uninterruptible(
             Effect.scoped(

@@ -9,11 +9,13 @@ import {
   type ResourceInstanceArchivedVolumeWire,
   type ResourceInstanceState,
   type ResourceInstanceWire,
+  type ResourceInstancePurgeResult,
 } from "@sealant/api-contracts";
 
 import {
   archiveResourceDomainOp,
   archiveResourceInstanceOp,
+  purgeResourceInstanceOp,
   getResourceInstanceOp,
   linkResourceWorkspaceOp,
   listResourceInstancesOp,
@@ -126,7 +128,19 @@ export interface ScopeExecResult {
   readonly timedOut: boolean;
 }
 
+/** Whether this call removed the instance or found its key already absent. */
+export type ScopeInstancePurgeResult = ResourceInstancePurgeResult;
+
 export interface ScopeInstances {
+  /**
+   * Irreversibly delete a stopped or archived caller-owned instance, including retained volumes
+   * and sealed env. Pass its observed id to protect a replacement using the same key. No Core
+   * backup is retained; previously downloaded copies belong to their recipient.
+   */
+  purge(
+    key: string,
+    options: { readonly expectedInstanceId: string },
+  ): Promise<ScopeInstancePurgeResult>;
   /**
    * Create or update the instance by key, start it and answer once its ready check passed or its
    * start failed (`state.kind`). `cause: "use"` (a launch, a wake) leaves an instance a person
@@ -349,6 +363,8 @@ export const makeScopeInstances = (
   readonly archive: () => Promise<{ readonly volumes: ReadonlyArray<ScopeArchivedVolume> }>;
 } => ({
   instances: {
+    purge: (key, options) =>
+      runtime.run(purgeResourceInstanceOp(scopeId, key, options.expectedInstanceId)),
     up: async (key, spec, { cause, secretEnv }) =>
       toInstance(
         await runtime.run(
