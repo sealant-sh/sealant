@@ -68,6 +68,7 @@ export const nativeBuilderFixture = async (
   let allocationLabels: Record<string, string> = {};
   let marker = "",
     snapshot: { name: string; sourceSandboxId: string; createdAt: string } | undefined;
+  const snapshots = new Map<string, NonNullable<typeof snapshot>>();
   let savedPosts = 0,
     deleted = false,
     polls = 0;
@@ -109,6 +110,8 @@ export const nativeBuilderFixture = async (
           typeof labels["sealant-build"] !== "string"
         )
           throw new Error("missing build");
+        deleted = false;
+        polls = 0;
         marker = labels["sealant-build"];
         allocationLabels = Object.fromEntries(
           Object.entries(labels).filter(
@@ -158,6 +161,7 @@ export const nativeBuilderFixture = async (
         )
           throw new Error("missing name");
         snapshot = { name: body.name, sourceSandboxId: id, createdAt: new Date().toISOString() };
+        snapshots.set(snapshot.name, snapshot);
         if (mode === "lost-save") {
           response.destroy();
           return;
@@ -181,8 +185,10 @@ export const nativeBuilderFixture = async (
           },
         });
       } else if (path.startsWith("/api/v1/saved-snapshots/")) {
+        snapshot = snapshots.get(decodeURIComponent(path.slice("/api/v1/saved-snapshots/".length)));
         if (request.method === "DELETE" && snapshot) {
           const name = snapshot.name;
+          snapshots.delete(name);
           snapshot = undefined;
           respond({ ok: true, name, status: "deleted" });
         } else if (snapshot)

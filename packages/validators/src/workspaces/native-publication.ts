@@ -111,3 +111,63 @@ export type NativePublicationKey = z.infer<typeof nativePublicationKeySchema>;
 export type NativePublication = z.infer<typeof nativePublicationSchema>;
 /** Probe, receipt and measured runtime provenance preserved through reuse. */
 export type NativePublicationEvidence = z.infer<typeof nativePublicationEvidenceSchema>;
+
+/** Runtime-instance rows are currently keyed by run_id, not a second invented UUID. */
+export const nativeArtifactConsumerSchema = z
+  .object({
+    runId: z
+      .string()
+      .regex(/^run_[A-Za-z0-9_-]+$/)
+      .brand<"NativeConsumerRunId">(),
+    runtimeInstanceId: z
+      .string()
+      .regex(/^run_[A-Za-z0-9_-]+$/)
+      .brand<"NativeConsumerInstanceId">(),
+  })
+  .refine((consumer) => consumer.runId.toString() === consumer.runtimeInstanceId.toString());
+
+/** A consumer remains pinned in every state except canonical explicit release. */
+export const nativeConsumerStateSchema = z.enum([
+  "pending",
+  "live",
+  "retained",
+  "unknown",
+  "released",
+]);
+
+/** A generation and token fence each external operation's completion. */
+export const nativeCatalogClaimSchema = z.object({
+  publicationId: z.uuid(),
+  generation: z.number().int().min(1),
+  token: z.uuid(),
+  purpose: z.enum(["build", "reconcile", "remove"]),
+  expiresAt: z.date(),
+});
+const reservation = z.object({
+  ownership: nativeBuildOwnershipSchema,
+  generation: z.number().int().nonnegative(),
+  claim: nativeCatalogClaimSchema.nullable(),
+  createdAt: z.date(),
+  readyAt: z.date().nullable(),
+  reason: z.string().nullable(),
+});
+/** Parsed lifecycle states keep incomplete publications out of ready/removal paths. */
+export const nativeCatalogRecordSchema = z.discriminatedUnion("state", [
+  reservation.extend({ state: z.literal("reserved"), publication: z.null() }),
+  reservation.extend({ state: z.literal("building"), publication: z.null() }),
+  reservation.extend({ state: z.literal("ready"), publication: nativePublicationSchema }),
+  reservation.extend({ state: z.literal("retiring"), publication: nativePublicationSchema }),
+  reservation.extend({ state: z.literal("removed"), publication: nativePublicationSchema }),
+  reservation.extend({
+    state: z.literal("quarantined"),
+    publication: nativePublicationSchema.nullable(),
+  }),
+]);
+/** Exact durable consumer binding, unchanged by retries. */
+export type NativeArtifactConsumer = z.infer<typeof nativeArtifactConsumerSchema>;
+/** Parsed reservation; editable ORM rows never leave the repository. */
+export type NativeCatalogRecord = z.infer<typeof nativeCatalogRecordSchema>;
+/** Claim ownership is temporary; expiration never releases a consumer. */
+export type NativeCatalogClaim = z.infer<typeof nativeCatalogClaimSchema>;
+/** A released consumer is a permanent tombstone for that binding. */
+export type NativeConsumerState = z.infer<typeof nativeConsumerStateSchema>;

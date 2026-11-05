@@ -1,0 +1,1 @@
+ALTER TABLE "native_publications" DROP CONSTRAINT "native_publications_claim", ADD CONSTRAINT "native_publications_claim" CHECK (("claim_token" is null and "claim_until" is null and "claim_purpose" is null) or ("claim_token" is not null and "claim_until" is not null and "claim_purpose" is not null and "claim_purpose" in ('build','reconcile','remove')));

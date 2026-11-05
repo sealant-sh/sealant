@@ -237,3 +237,5 @@ export {
   type TelemetryTimelineRow,
   telemetryTimeline,
 } from "./telemetry.js";
+
+export { nativePublications, nativePublicationConsumers } from "./native-publications.js";
