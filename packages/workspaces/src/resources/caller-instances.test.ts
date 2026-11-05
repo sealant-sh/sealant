@@ -81,6 +81,31 @@ it("Kubernetes admits only the configured caller, retains PVCs and never mounts 
     },
   ]);
   expect(policy.spec?.egress?.[0]?.ports).toEqual([{ protocol: "TCP", port: 4401 }]);
+  expect(policy.spec?.egress?.[1]).toEqual({
+    to: [
+      {
+        namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "kube-system" } },
+        podSelector: { matchLabels: { "k8s-app": "kube-dns" } },
+      },
+    ],
+    ports: [
+      { protocol: "UDP", port: 53 },
+      { protocol: "TCP", port: 53 },
+    ],
+  });
+  expect(policy.spec?.egress?.[2]?.to).toEqual([
+    {
+      ipBlock: {
+        cidr: "0.0.0.0/0",
+        except: expect.arrayContaining([
+          "10.0.0.0/8",
+          "172.16.0.0/12",
+          "192.168.0.0/16",
+          "169.254.0.0/16",
+        ]),
+      },
+    },
+  ]);
   expect(service.spec?.type).toBe("ClusterIP");
   expect(service.spec?.ports).toEqual([
     { name: "service", port: 4400, targetPort: 4400, protocol: "TCP" },
@@ -88,10 +113,53 @@ it("Kubernetes admits only the configured caller, retains PVCs and never mounts 
 });
 
 it("Docker guards deny private and IPv6 egress while admitting exactly one callback", () => {
-  const rules = callerGuardScript("10.231.0.2", 4400, 4401);
+  const rules = callerGuardScript("10.231.0.2", 4400, 4401, "nameserver 192.168.1.1\n");
   expect(rules).toContain("iptables -A INPUT -s 10.231.0.2/32 -p tcp --dport 4400 -j ACCEPT");
   expect(rules).toContain("iptables -A OUTPUT -d 10.231.0.2/32 -p tcp --dport 4401 -j ACCEPT");
   expect(rules).toContain("169.254.0.0/16 -j REJECT");
   expect(rules).toContain("ip6tables -P OUTPUT DROP");
   expect(rules.indexOf("--dport 4401")).toBeLessThan(rules.indexOf("10.0.0.0/8 -j REJECT"));
+});
+
+it("Docker reads embedded upstream metadata, preserving exact destinations and both DNS transports", () => {
+  const rules = callerGuardScript(
+    "10.231.0.2",
+    4400,
+    4401,
+    "nameserver 127.0.0.11\n# ExtServers: [host(192.168.1.1) 10.1.2.3 192.168.1.1 2001:db8::53]\n",
+  );
+  for (const ip of ["192.168.1.1", "10.1.2.3"]) {
+    for (const protocol of ["udp", "tcp"]) {
+      const rule = `iptables -A OUTPUT -d ${ip}/32 -p ${protocol} --dport 53 -j ACCEPT`;
+      expect(rules.split(rule)).toHaveLength(2);
+      expect(rules.indexOf(rule)).toBeLessThan(rules.indexOf("10.0.0.0/8 -j REJECT"));
+    }
+  }
+  expect(rules).not.toContain("2001:db8");
+  expect(rules).not.toContain("-d 127.0.0.11/32");
+});
+
+it("Docker refuses missing or malformed upstreams instead of admitting arbitrary private DNS", () => {
+  for (const config of [
+    "",
+    "nameserver 127.0.0.11",
+    "nameserver 127.0.0.11\n# ExtServers: []",
+    "nameserver 127.0.0.11\n# ExtServers: [host(192.168.1.1);echo injected]",
+    "nameserver 127.0.0.11\n# ExtServers: [host(999.1.1.1)]",
+    "nameserver 127.0.0.11\n# ExtServers: [2001:db8::53]",
+    "nameserver 192.168.1.1 extra",
+    "nameserver 999.1.1.1",
+    "nameserver 192.168.1.1;echo injected",
+    "nameserver 2001:db8::53",
+  ])
+    expect(() => callerGuardScript("10.231.0.2", 4400, 4401, config)).toThrow(
+      "The Docker caller DNS configuration is unavailable or unsupported.",
+    );
+  const rules = callerGuardScript(
+    "10.231.0.2",
+    4400,
+    4401,
+    "# legacy Docker file\nnameserver 192.168.1.1 # configured DNS\nnameserver 10.0.0.53\n",
+  );
+  expect(rules).toContain("-d 10.0.0.53/32 -p tcp --dport 53 -j ACCEPT");
 });

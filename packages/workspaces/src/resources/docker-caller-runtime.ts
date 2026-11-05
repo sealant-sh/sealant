@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { request } from "node:http";
+import { isIP } from "node:net";
 
 import {
   resourceInstanceSecretEnvSchema,
@@ -34,6 +35,41 @@ const missing = (error: unknown): boolean =>
   /no such|not found/i.test(error.stderr);
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+class CallerDnsConfigurationError extends Schema.TaggedError<CallerDnsConfigurationError>()(
+  "CallerDnsConfigurationError",
+  {},
+) {
+  override readonly message =
+    "The Docker caller DNS configuration is unavailable or unsupported. Docker must report IPv4 upstreams in its generated resolver file.";
+}
+
+const parseDnsResolvers = (config: string): ReadonlyArray<string> => {
+  const nameservers = config
+    .split("\n")
+    .filter((line) => /^\s*nameserver\b/.test(line))
+    .map((line) => {
+      const fields = line.split("#")[0]?.trim().split(/\s+/);
+      const address = fields?.[1];
+      if (fields?.length !== 2 || address === undefined || isIP(address) === 0)
+        throw new CallerDnsConfigurationError();
+      return address;
+    });
+  // Docker's file describes the daemon's actual upstreams, unlike Core's own resolv.conf in
+  // a packaged container. Never interpret the embedded loopback address as the upstream.
+  const external = /^# ExtServers:\s*\[([^\]\n]*)\]\s*$/m.exec(config)?.[1];
+  const addresses = nameservers.includes("127.0.0.11")
+    ? external
+        ?.trim()
+        .split(/\s+/)
+        .map((entry) => /^host\(([^)]+)\)$/.exec(entry)?.[1] ?? entry)
+    : nameservers;
+  if (addresses === undefined || addresses.some((address) => isIP(address) === 0))
+    throw new CallerDnsConfigurationError();
+  const ipv4 = [...new Set(addresses.filter((address) => isIP(address) === 4))];
+  if (ipv4.length === 0) throw new CallerDnsConfigurationError();
+  return ipv4;
+};
+
 /** Process env goes in an Engine request body, never command arguments, files or error messages. */
 const engineCreate = (socketPath: string, name: string, body: unknown): Promise<void> =>
   new Promise((resolve, reject) => {
@@ -65,6 +101,7 @@ export const callerGuardScript = (
   callerIp: string,
   servicePort: number,
   callbackPort: number,
+  resolverConfig: string,
 ): string =>
   [
     "set -eu",
@@ -78,6 +115,11 @@ export const callerGuardScript = (
     "iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
     `iptables -A INPUT -s ${callerIp}/32 -p tcp --dport ${String(servicePort)} -j ACCEPT`,
     `iptables -A OUTPUT -d ${callerIp}/32 -p tcp --dport ${String(callbackPort)} -j ACCEPT`,
+    ...parseDnsResolvers(resolverConfig).flatMap((address) =>
+      ["udp", "tcp"].map(
+        (protocol) => `iptables -A OUTPUT -d ${address}/32 -p ${protocol} --dport 53 -j ACCEPT`,
+      ),
+    ),
     ...[
       "0.0.0.0/8",
       "10.0.0.0/8",
@@ -288,6 +330,13 @@ export class DockerCallerRuntime {
       ).stdout.trim();
       if (!/^\d+\.\d+\.\d+\.\d+$/.test(callerIp))
         throw new Error("The caller has no private address.");
+      const resolverConfig = (await this.run(["exec", name, "cat", "/etc/resolv.conf"])).stdout;
+      const guardScript = callerGuardScript(
+        callerIp,
+        reach.port,
+        reach.callbackPort,
+        resolverConfig,
+      );
       await this.run([
         "run",
         "--rm",
@@ -305,7 +354,7 @@ export class DockerCallerRuntime {
         "sh",
         this.guard,
         "-c",
-        callerGuardScript(callerIp, reach.port, reach.callbackPort),
+        guardScript,
       ]);
       const anchorIp = (
         await this.run([
@@ -368,9 +417,19 @@ export class DockerCallerRuntime {
             workload,
           ])
         ).stdout.trim();
+        const resolverReadOnly =
+          (
+            await this.run([
+              "inspect",
+              "--format",
+              '{{range .Mounts}}{{if eq .Destination "/etc/resolv.conf"}}{{.RW}}{{end}}{{end}}',
+              workload,
+            ])
+          ).stdout.trim() === "false";
         if (
           digest !== instance.specDigest ||
           previousAnchor !== anchorEpoch ||
+          !resolverReadOnly ||
           !(await this.running(workload))
         ) {
           await this.stop(instance);
@@ -378,6 +437,9 @@ export class DockerCallerRuntime {
         }
       }
       if (!(await this.exists("container", workload))) {
+        const resolverPath = (
+          await this.run(["inspect", "--format", "{{.ResolvConfPath}}", name])
+        ).stdout.trim();
         let secretEnv: Readonly<Record<string, string>> = {};
         if (instance.secretEnvSealed != null) {
           if (this.options.cipher === undefined)
@@ -405,11 +467,21 @@ export class DockerCallerRuntime {
             PidsLimit: 1024,
             CapDrop: ["NET_RAW"],
             SecurityOpt: ["no-new-privileges:true"],
-            Mounts: volumes.map((volume) => ({
-              Type: "volume",
-              Source: `${name}-${volume.name}`,
-              Target: volume.mountPath,
-            })),
+            Mounts: [
+              ...volumes.map((volume) => ({
+                Type: "volume",
+                Source: `${name}-${volume.name}`,
+                Target: volume.mountPath,
+              })),
+              {
+                // The shared generated file supplies the next guard's allowlist. The workload
+                // must not rewrite its ExtServers metadata to nominate another private peer.
+                Type: "bind",
+                Source: resolverPath,
+                Target: "/etc/resolv.conf",
+                ReadOnly: true,
+              },
+            ],
           },
         });
         await this.run(["start", workload]);
@@ -429,7 +501,7 @@ export class DockerCallerRuntime {
         await delay(1000);
       } while (Date.now() < deadline);
       throw new Error("The caller instance health check timed out.");
-    } catch {
+    } catch (error) {
       if (await this.exists("container", workload).catch(() => false))
         await this.run(["stop", "-t", "10", workload]).catch(() => undefined);
       // Engine and probe errors may repeat process env or output. Never persist them.
@@ -438,7 +510,9 @@ export class DockerCallerRuntime {
           kind: "failed",
           at: new Date().toISOString(),
           message:
-            "The caller instance could not start. Check its image, retained volumes, caller configuration and health check.",
+            error instanceof CallerDnsConfigurationError
+              ? error.message
+              : "The caller instance could not start. Check its image, retained volumes, caller configuration and health check.",
         },
         volumes: confirmedVolumes,
       };
