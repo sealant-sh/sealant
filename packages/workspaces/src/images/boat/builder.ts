@@ -144,7 +144,13 @@ export interface IBoatSnapshotBuilder {
     readonly after?: string;
   }): Promise<NativeResult<NativeJournalPage>>;
   /** Locks and observes an attempt. It never replays installation or save. */
-  reconcileBuild(ownership: NativeBuildOwnership): Promise<NativeResult<NativeBuildRecovery>>;
+  reconcileBuild(
+    ownership: NativeBuildOwnership,
+    expected?: {
+      readonly artifact: NativeSnapshotArtifact;
+      readonly evidence: NativePublicationEvidence;
+    },
+  ): Promise<NativeResult<NativeBuildRecovery>>;
 }
 
 /** Reconciliation preserves unknown work and only adopts complete published evidence. */
@@ -954,6 +960,10 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
   /** Adoption is an observation under the same kernel lock as build and cleanup. */
   async reconcileBuild(
     ownership: NativeBuildOwnership,
+    expected?: {
+      readonly artifact: NativeSnapshotArtifact;
+      readonly evidence: NativePublicationEvidence;
+    },
   ): Promise<NativeResult<NativeBuildRecovery>> {
     let unlock: (() => Promise<void>) | undefined;
     try {
@@ -965,6 +975,11 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       if (journal === undefined) return { ok: true, value: { kind: "missing" } };
       if (!isDeepStrictEqual(journal.ownership, parsed))
         throw new NativeBuildError("native-build-ownership-mismatch");
+      if (expected !== undefined) {
+        await this.#ownedArtifact(expected.artifact);
+        if (!isDeepStrictEqual(await this.#evidence(expected.artifact), expected.evidence))
+          throw new NativeBuildError("native-publication-evidence-mismatch");
+      }
       return { ok: true, value: await this.#recover(journal, path) };
     } catch (error) {
       return { ok: false, error: failure(error) };
@@ -1109,6 +1124,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
     try {
       await this.#directoryReady();
       if (
+        pathInput !== path ||
         dirname(path) !== this.#directory ||
         !/^[a-f0-9-]{36}\.json$/.test(path.slice(this.#directory.length + 1))
       )

@@ -99,7 +99,18 @@ describe.skipIf(!directory)(
       });
     it("cleans failed saves without returning ordinary success", async () => {
       const f = await fixture("failed-save");
-      const result = await f.builder.build({ spec: f.spec });
+      const plan = await f.builder.plan(f.spec);
+      if (!plan.ok) throw plan.error;
+      const ownership = {
+        publicationId: randomUUID(),
+        buildId: randomUUID(),
+        key: {
+          ...plan.value,
+          deploymentId: "local-stage2a",
+          scope: { kind: "owner" as const, ownerUserId: "usr_stage2a" },
+        },
+      };
+      const result = await f.builder.build({ spec: f.spec, ownership });
       expect(result).toMatchObject({
         ok: false,
         error: { code: "native-save-failed" },
@@ -111,6 +122,12 @@ describe.skipIf(!directory)(
       });
       expect(f.deleted()).toBe(true);
       expect(f.mutations.some((p) => p.startsWith("DELETE /api/v1/saved-snapshots/"))).toBe(true);
+      const mutations = [...f.mutations];
+      expect(await f.builder.build({ spec: f.spec, ownership })).toMatchObject({
+        ok: false,
+        error: { code: "native-build-abandoned" },
+      });
+      expect(f.mutations).toEqual(mutations);
     });
     it("cancels installation with an independent cleanup finalizer", async () => {
       const f = await fixture("cancel");

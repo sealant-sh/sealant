@@ -15,7 +15,7 @@ import {
   type NativePublication,
   type NativePublicationKey,
 } from "@sealant/validators";
-import { and, asc, eq, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gt, ne, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -83,6 +83,7 @@ export interface NativePublicationRepoService {
   readonly candidates: (
     scope: Pick<NativePublicationKey, "deploymentId" | "scope">,
     limit: number,
+    after?: string,
   ) => Effect.Effect<ReadonlyArray<NativeCatalogRecord>, NativeCatalogStoreError>;
   readonly retire: (
     publicationId: string,
@@ -187,7 +188,7 @@ const fence = (claim: NativeCatalogClaim) =>
     eq(publications.generation, claim.generation),
     eq(publications.claimToken, claim.token),
     eq(publications.claimPurpose, claim.purpose),
-    sql`${publications.claimUntil} > now()`,
+    sql`${publications.claimUntil} > clock_timestamp()`,
   );
 const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = Effect.gen(
   function* () {
@@ -287,7 +288,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
         return yield* Effect.fail(new NativeCatalogStoreError("claim", "invalid-input"));
       const eligible =
         purpose === "build"
-          ? sql`${publications.state} in ('reserved','building')`
+          ? eq(publications.state, "reserved")
           : purpose === "remove"
             ? eq(publications.state, "retiring")
             : sql`(${publications.state} in ('reserved','building') or (${publications.state} = 'quarantined' and ${publications.reason} <> 'native-removal-pending'))`;
@@ -296,7 +297,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
         .set({
           claimToken: randomUUID(),
           claimPurpose: purpose,
-          claimUntil: sql`now() + ${ttlMs} * interval '1 millisecond'`,
+          claimUntil: sql`clock_timestamp() + ${ttlMs} * interval '1 millisecond'`,
           generation: sql`${publications.generation} + 1`,
           ...(purpose === "build" ? { state: "building" } : {}),
         })
@@ -304,7 +305,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
           and(
             eq(publications.id, id),
             eligible,
-            sql`(${publications.claimUntil} is null or ${publications.claimUntil} <= now())`,
+            sql`(${publications.claimUntil} is null or ${publications.claimUntil} <= clock_timestamp())`,
           ),
         )
         .returning();
@@ -435,8 +436,15 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
     const candidates = Effect.fn("NativePublicationRepo.candidates")(function* (
       scope: Pick<NativePublicationKey, "deploymentId" | "scope">,
       limit: number,
+      after?: string,
     ) {
-      if (!Number.isInteger(limit) || limit < 1 || limit > 200)
+      if (
+        !Number.isInteger(limit) ||
+        limit < 1 ||
+        limit > 200 ||
+        (after !== undefined &&
+          !nativePublicationSchema.shape.publicationId.safeParse(after).success)
+      )
         return yield* Effect.fail(new NativeCatalogStoreError("candidates", "invalid-input"));
       const rows = yield* db
         .select()
@@ -446,10 +454,11 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
             eq(publications.deploymentId, scope.deploymentId),
             eq(publications.scopeKind, scope.scope.kind),
             eq(publications.scopeId, scopeId(scope.scope)),
+            after === undefined ? undefined : gt(publications.id, after),
             sql`(${publications.state} in ('ready','retiring') or (${publications.state} = 'quarantined' and ${publications.reason} = 'native-removal-pending'))`,
           ),
         )
-        .orderBy(asc(publications.createdAt), asc(publications.id))
+        .orderBy(asc(publications.id))
         .limit(limit);
       return yield* Effect.forEach(rows, parseRow);
     });
@@ -555,7 +564,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
       markConsumer: (consumer, id, state) =>
         boundary("markConsumer", changeConsumer(consumer, id, state)),
       release: (consumer, id) => boundary("release", changeConsumer(consumer, id, "released")),
-      candidates: (scope, limit) => boundary("candidates", candidates(scope, limit)),
+      candidates: (scope, limit, after) => boundary("candidates", candidates(scope, limit, after)),
       retire: (id, policy) => boundary("retire", retire(id, policy)),
       removed: (claim) => boundary("removed", removed(claim)),
     });

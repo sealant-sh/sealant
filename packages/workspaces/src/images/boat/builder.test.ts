@@ -1,14 +1,25 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { mkdtemp, readFile, rm, stat, writeFile, symlink, readdir } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+  symlink,
+  readdir,
+  chmod,
+  link,
+} from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { nativeBuildOwnershipSchema } from "@sealant/validators";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { HttpBoatApi } from "../../runtime/boat/api.js";
-import { BoatSecret } from "../../runtime/boat/config.js";
+import { HttpBoatApi, boatBuildOwnershipLabels } from "../../runtime/boat/api.js";
+import { BoatSecret, BoatBuildOwnership } from "../../runtime/boat/config.js";
 import { BoatSnapshotBuilder } from "./builder.js";
 import { NATIVE_RUNTIME_PIN } from "./runtime-bundle.js";
 
@@ -72,6 +83,7 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
   let deletionAccepted = false;
   let delayDelete = false;
   let finishDelete: (() => void) | undefined;
+  let inventory: Array<{ id: string; state: string; labels: Record<string, string> }> = [];
   const server = http.createServer((request, response) => {
     const data: Buffer[] = [];
     request.on("data", (b: Buffer) => data.push(b));
@@ -84,7 +96,13 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
           ? {}
           : { key: request.headers["idempotency-key"] }),
       });
-      if (request.url === "/api/v1/sandboxes" && request.method === "POST") {
+      if (request.url?.startsWith("/api/v1/sandboxes?")) {
+        respond(response, {
+          ok: true,
+          sandboxes: inventory,
+          pageInfo: { hasMore: false, nextCursor: null, limit: 200 },
+        });
+      } else if (request.url === "/api/v1/sandboxes" && request.method === "POST") {
         const saved: unknown = JSON.parse(requireJournal());
         expect(saved).toMatchObject({
           allocation: { state: "intent", key: journal.allocation.key },
@@ -171,11 +189,15 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
   });
   return {
     builder,
+    api: parsed.value,
     directory,
     path,
     journal,
     identity,
     requests,
+    inventory: (entries: typeof inventory) => {
+      inventory = entries;
+    },
     loseCreate: () => {
       failCreateOnce = true;
     },
@@ -234,6 +256,55 @@ describe("attempt-owned durable native cleanup", () => {
         entries: [{ buildId: f.journal.build }],
         failures: [{ name: alias.slice(f.directory.length + 1) }],
       },
+    });
+    expect(f.requests).toEqual([]);
+  });
+  it("rejects noncanonical paths, public files, hard links and an aliased root", async () => {
+    const f = await fixture();
+    expect(
+      await f.builder.cleanup(
+        f.directory + "/../" + f.directory.split("/").at(-1) + "/" + f.journal.build + ".json",
+      ),
+    ).toMatchObject({ ok: false, error: { code: "native-invalid-journal-path" } });
+    await chmod(f.path, 0o644);
+    expect(await f.builder.cleanup(f.path)).toMatchObject({
+      ok: false,
+      error: { code: "native-unsafe-journal" },
+    });
+    await chmod(f.path, 0o600);
+    const hardLink = join(f.directory, randomUUID() + ".json");
+    await link(f.path, hardLink);
+    expect(await f.builder.cleanup(f.path)).toMatchObject({
+      ok: false,
+      error: { code: "native-unsafe-journal" },
+    });
+    const alias = join(f.directory, "alias");
+    await symlink(f.directory, alias);
+    const builder = new BoatSnapshotBuilder({ api: f.api, owner, journalDirectory: alias });
+    expect(await builder.journals({ limit: 10 })).toMatchObject({
+      ok: false,
+      error: { code: "native-unsafe-journal-directory" },
+    });
+    expect(f.requests).toEqual([]);
+  });
+  it("continues bounded inventory past an invalid basename without reading outside the root", async () => {
+    const f = await fixture();
+    await writeFile(join(f.directory, "!invalid"), "untrusted", { mode: 0o600 });
+    expect(await f.builder.journals({ limit: 1 })).toMatchObject({
+      ok: true,
+      value: {
+        next: "!invalid",
+        entries: [],
+        failures: [{ name: "!invalid", error: { code: "native-invalid-journal-path" } }],
+      },
+    });
+    expect(await f.builder.journals({ limit: 1, after: "!invalid" })).toMatchObject({
+      ok: true,
+      value: { entries: [{ buildId: f.journal.build }], failures: [] },
+    });
+    expect(await f.builder.journals({ limit: 1, after: "../unowned" })).toMatchObject({
+      ok: false,
+      error: { code: "native-invalid-journal-page" },
     });
     expect(f.requests).toEqual([]);
   });
@@ -349,6 +420,62 @@ describe("attempt-owned durable native cleanup", () => {
     });
     expect(f.requests).toEqual([]);
   });
+
+  it.each(["unknown", "duplicate"] as const)(
+    "keeps an expired version 3 create %s without reissuing or saving",
+    async (mode) => {
+      const f = await fixture();
+      const ownership = nativeBuildOwnershipSchema.parse({
+        publicationId: randomUUID(),
+        buildId: f.journal.build,
+        key: {
+          deploymentId: "local-stage2a",
+          scope: { kind: "owner", ownerUserId: "usr_stage2a" },
+          recipeHash: f.journal.recipeHash,
+          runtime: f.journal.runtime,
+          assetsHash: "d".repeat(64),
+          platform: "linux/amd64",
+        },
+      });
+      const parsed = BoatBuildOwnership.parse({ owner, reservation: ownership });
+      if (!parsed.ok) throw parsed.error;
+      if (mode === "duplicate") {
+        const labels = boatBuildOwnershipLabels(parsed.value);
+        f.inventory([
+          { id, state: "ready", labels },
+          { id: "bx_3456789a", state: "ready", labels },
+        ]);
+      }
+      await f.write({
+        ...f.journal,
+        ownership,
+        allocation: {
+          ...f.journal.allocation,
+          requestVersion: 3,
+          requestedAt: "2020-01-01T00:00:00.000Z",
+        },
+      });
+      expect(await f.builder.reconcileBuild(ownership)).toMatchObject({
+        ok: false,
+        error: {
+          code:
+            mode === "duplicate"
+              ? "native-allocation-conflict"
+              : "native-idempotency-window-expired",
+        },
+      });
+      expect(f.requests.length).toBeGreaterThan(0);
+      expect(
+        f.requests.every(
+          (request) => request.method === "GET" && request.path.startsWith("/api/v1/sandboxes?"),
+        ),
+      ).toBe(true);
+      expect(await f.read()).toMatchObject({
+        allocation: { state: "intent", requestVersion: 3 },
+        save: { state: "none" },
+      });
+    },
+  );
 
   it.each(["name", "sourceSandboxId", "createdAt", "snapshotId"] as const)(
     "never deletes a snapshot with replaced %s after scratch cleanup",

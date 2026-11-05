@@ -61,6 +61,17 @@ export {
   type MicrovmImageState,
 } from "./microvm/image-api.js";
 export {
+  BoatNativeCatalog,
+  NativeCatalogError,
+  boatNativeCatalogLayer,
+  boatNativeCatalogLayerNoDeps,
+  type BoatNativeCatalogService,
+  type BoatNativeCatalogOptions,
+  type NativeAcquireInput,
+  type NativeCatalogFailure,
+  type NativeCatalogSweep,
+} from "./boat/catalog.js";
+export {
   MICROVM_AGENT_FILES,
   MICROVM_RECIPE_VERSION,
   isMicrovmImageNameOf,

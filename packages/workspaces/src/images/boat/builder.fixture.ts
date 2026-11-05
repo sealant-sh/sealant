@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, readdir } from "node:fs/promises";
 import http from "node:http";
@@ -71,7 +72,8 @@ export const nativeBuilderFixture = async (
   const snapshots = new Map<string, NonNullable<typeof snapshot>>();
   let savedPosts = 0,
     deleted = false,
-    polls = 0;
+    polls = 0,
+    removalFailures = 0;
   const cancellation = new AbortController();
   const server = http.createServer((request, response) => {
     const chunks: Buffer[] = [];
@@ -187,6 +189,11 @@ export const nativeBuilderFixture = async (
       } else if (path.startsWith("/api/v1/saved-snapshots/")) {
         snapshot = snapshots.get(decodeURIComponent(path.slice("/api/v1/saved-snapshots/".length)));
         if (request.method === "DELETE" && snapshot) {
+          if (removalFailures > 0) {
+            removalFailures--;
+            respond({ ok: false, code: "temporarily_unavailable" }, 503);
+            return;
+          }
           const name = snapshot.name;
           snapshots.delete(name);
           snapshot = undefined;
@@ -259,5 +266,39 @@ export const nativeBuilderFixture = async (
     cancellation,
     deleted: () => deleted,
     posts: () => savedPosts,
+    failSnapshotRemoval: () => {
+      removalFailures++;
+    },
+    replaceSnapshot: (name: string) =>
+      snapshots.set(name, {
+        name,
+        sourceSandboxId: "bx_3456789a",
+        createdAt: new Date(0).toISOString(),
+      }),
+    holdAttempt: async (buildId: string) => {
+      const child = spawn(
+        "flock",
+        [
+          "-n",
+          join(root, buildId + ".json.lock"),
+          "sh",
+          "-c",
+          "printf 'locked\\n'; cat >/dev/null",
+        ],
+        { env: { PATH: "/usr/bin:/bin" }, stdio: ["pipe", "pipe", "ignore"] },
+      );
+      const exited = new Promise<void>((done) => child.once("close", () => done()));
+      const release = async () => {
+        child.stdin.end();
+        await exited;
+      };
+      resources.push(release);
+      await new Promise<void>((done, reject) => {
+        child.once("error", reject);
+        child.once("exit", () => reject(new Error("fixture lock failed")));
+        child.stdout.once("data", () => done());
+      });
+      return release;
+    },
   };
 };

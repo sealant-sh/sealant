@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { it } from "@effect/vitest";
@@ -20,11 +22,21 @@ import {
   nativeConsumerRows,
   ageNativePublication,
 } from "@sealant/db/testing/native-publications";
-import { nativeArtifactConsumerSchema, type NativePublicationKey } from "@sealant/validators";
-import { Effect, Layer, Result } from "effect";
+import {
+  nativeArtifactConsumerSchema,
+  nativeBuildOwnershipSchema,
+  type NativePublicationKey,
+} from "@sealant/validators";
+import { Arbitrary, Effect, Layer, Result, Schema } from "effect";
 import { beforeAll, describe, expect } from "vitest";
+import { z } from "zod";
 
 import { nativeBuilderFixture } from "./builder.fixture.js";
+import {
+  BoatNativeCatalog,
+  boatNativeCatalogLayer,
+  type BoatNativeCatalogService,
+} from "./catalog.js";
 
 const databaseUrl = process.env.SEALANT_BOAT_CATALOG_TEST_DATABASE_URL;
 const enabled = databaseUrl !== undefined && process.env.SEALANT_BOAT_RUNTIME_BUNDLE !== undefined;
@@ -85,6 +97,22 @@ const published = (repo: NativePublicationRepoService, db: DB) =>
     };
     return { ...fixture, pin, reservation, claim, publication };
   });
+
+const throughCatalog = <A, E>(
+  db: DB,
+  fixture: Pick<Awaited<ReturnType<typeof nativeBuilderFixture>>, "builder">,
+  run: (catalog: BoatNativeCatalogService) => Effect.Effect<A, E>,
+) =>
+  Effect.gen(function* () {
+    const catalog = yield* BoatNativeCatalog;
+    return yield* run(catalog);
+  }).pipe(
+    Effect.provide(
+      boatNativeCatalogLayer({ builder: fixture.builder, deploymentId: "local-stage2a" }).pipe(
+        Layer.provide(Layer.succeed(SealantDB, db)),
+      ),
+    ),
+  );
 
 describe.skipIf(!enabled)("native publication ownership in migrated disposable Postgres", () => {
   beforeAll(async () => {
@@ -299,6 +327,396 @@ describe.skipIf(!enabled)("native publication ownership in migrated disposable P
           ).toEqual([
             `DELETE /api/v1/saved-snapshots/${retiring.publication.snapshot.identity.name}`,
           ]);
+        }),
+      ),
+    30000,
+  );
+
+  it.live(
+    "acquires one publication concurrently through the catalog and preserves exact pins on retry",
+    () =>
+      test((_repo, db) =>
+        Effect.gen(function* () {
+          const f = yield* prepare(db);
+          const pins = yield* Effect.forEach(Array.from({ length: 8 }), () =>
+            consumer(db, f.owner),
+          );
+          yield* throughCatalog(db, f, (catalog) =>
+            Effect.gen(function* () {
+              const input = (pin: (typeof pins)[number]) => ({
+                scope: f.key.scope,
+                spec: f.spec,
+                consumer: pin,
+              });
+              const results = yield* Effect.all(
+                pins.map((pin) => Effect.result(catalog.acquire(input(pin)))),
+                { concurrency: "unbounded" },
+              );
+              for (const result of results) {
+                if (Result.isFailure(result))
+                  expect(result.failure).toMatchObject({ code: "publication-pending" });
+              }
+              const acquired = yield* Effect.forEach(pins, (pin) => catalog.acquire(input(pin)));
+              expect(new Set(acquired.map((entry) => entry.publicationId)).size).toBe(1);
+              const first = acquired[0];
+              if (first === undefined) throw new Error("missing publication");
+              for (const entry of acquired) expect(entry).toEqual(first);
+              expect(f.posts()).toBe(1);
+              for (const pin of pins)
+                expect(yield* nativeConsumerRows(db, pin.runId)).toEqual([
+                  { state: "pending", publicationId: first.publicationId },
+                ]);
+              const other = yield* catalog.acquire({
+                ...input(yield* consumer(db, f.owner)),
+                scope: { kind: "resource-domain", domainId: `rdm:${randomUUID()}` },
+              });
+              expect(other.publicationId).not.toBe(first.publicationId);
+              expect(f.posts()).toBe(2);
+              const pin = pins[0];
+              if (pin === undefined) throw new Error("missing pin");
+              yield* catalog.markConsumer(pin, first.publicationId, "parked");
+              expect(yield* catalog.acquire(input(pin))).toEqual(first);
+              expect(yield* nativeConsumerRows(db, pin.runId)).toEqual([
+                { state: "parked", publicationId: first.publicationId },
+              ]);
+              yield* catalog.release(pin, first.publicationId);
+              yield* catalog.release(pin, first.publicationId);
+              expect(yield* Effect.flip(catalog.acquire(input(pin)))).toMatchObject({
+                code: "consumer-released",
+              });
+            }),
+          );
+        }),
+      ),
+  );
+
+  it.live(
+    "skips an active claim, then adopts a crash after journal publication without installing or saving again",
+    () =>
+      test((repo, db) =>
+        Effect.gen(function* () {
+          const f = yield* published(repo, db);
+          const mutations = [...f.mutations];
+          yield* throughCatalog(db, f, (catalog) =>
+            Effect.gen(function* () {
+              expect((yield* catalog.reconcile({ limit: 20 })).entries).toContainEqual({
+                id: f.reservation.ownership.buildId,
+                outcome: "skipped",
+                code: "active-claim",
+              });
+              yield* expireNativeClaim(db, f.publication.publicationId);
+              const unlock = yield* Effect.promise(() =>
+                f.holdAttempt(f.reservation.ownership.buildId),
+              );
+              expect((yield* catalog.reconcile({ limit: 20 })).entries).toContainEqual({
+                id: f.reservation.ownership.buildId,
+                outcome: "skipped",
+                code: "active-attempt",
+              });
+              expect((yield* repo.get(f.publication.publicationId))?.claim).toBeNull();
+              yield* Effect.promise(unlock);
+              expect((yield* catalog.reconcile({ limit: 20 })).entries).toContainEqual({
+                id: f.reservation.ownership.buildId,
+                outcome: "updated",
+                code: "adopted",
+              });
+              expect(
+                yield* catalog.acquire({ scope: f.key.scope, spec: f.spec, consumer: f.pin }),
+              ).toEqual(f.publication);
+              expect(f.posts()).toBe(1);
+              expect(f.mutations).toEqual(mutations);
+              expect(yield* Effect.flip(repo.publish(f.claim, f.publication))).toMatchObject({
+                code: "stale-claim",
+              });
+            }),
+          );
+        }),
+      ),
+  );
+
+  it.live(
+    "retries acquisition after a lost catalog commit by adopting the stable builder journal",
+    () =>
+      test((repo, db) =>
+        Effect.gen(function* () {
+          const f = yield* published(repo, db);
+          yield* expireNativeClaim(db, f.publication.publicationId);
+          yield* throughCatalog(db, f, (catalog) =>
+            Effect.gen(function* () {
+              expect(
+                yield* catalog.acquire({ scope: f.key.scope, spec: f.spec, consumer: f.pin }),
+              ).toEqual(f.publication);
+              expect(f.posts()).toBe(1);
+              expect((yield* catalog.reconcile({ limit: 20 })).entries).toContainEqual({
+                id: f.reservation.ownership.buildId,
+                outcome: "skipped",
+                code: "verified",
+              });
+            }),
+          );
+        }),
+      ),
+  );
+  it.live(
+    "keeps a started reservation with a missing journal quarantined without allocating again",
+    () =>
+      test((repo, db) =>
+        Effect.gen(function* () {
+          const f = yield* prepare(db);
+          const pin = yield* consumer(db, f.owner);
+          const record = yield* repo.reserve(f.key, pin);
+          const id = record.ownership.publicationId;
+          expect(yield* repo.claim(id, "build", 60000)).toBeDefined();
+          yield* expireNativeClaim(db, id);
+          expect(yield* repo.claim(id, "build", 60000)).toBeUndefined();
+          yield* throughCatalog(db, f, (catalog) =>
+            Effect.gen(function* () {
+              const input = { scope: f.key.scope, spec: f.spec, consumer: pin };
+              expect(yield* Effect.flip(catalog.acquire(input))).toMatchObject({
+                code: "mechanism-failed",
+                detail: "native-journal-missing",
+              });
+              expect(yield* Effect.flip(catalog.acquire(input))).toMatchObject({
+                code: "publication-quarantined",
+                detail: "native-journal-missing",
+              });
+              expect((yield* repo.get(id))?.state).toBe("quarantined");
+              expect(f.mutations).toEqual([]);
+            }),
+          );
+        }),
+      ),
+  );
+
+  it.live(
+    "quarantines disagreement with private evidence and keeps unowned journals as obligations",
+    () =>
+      test((_repo, db) =>
+        Effect.gen(function* () {
+          const f = yield* prepare(db);
+          const pin = yield* consumer(db, f.owner);
+          yield* throughCatalog(db, f, (catalog) =>
+            Effect.gen(function* () {
+              const input = { scope: f.key.scope, spec: f.spec, consumer: pin };
+              const ready = yield* catalog.acquire(input);
+              yield* corruptNativePublication(db, ready.publicationId, {
+                ...ready,
+                evidence: { ...ready.evidence, daemonRecovery: "unknown" },
+              });
+              expect(yield* Effect.flip(catalog.acquire(input))).toMatchObject({
+                code: "publication-quarantined",
+                detail: "native-publication-evidence-mismatch",
+              });
+              const orphan = yield* Effect.promise(() => f.builder.build({ spec: f.spec }));
+              if (!orphan.ok) throw orphan.error;
+              const report = yield* catalog.reconcile({ limit: 20 });
+              expect(report.entries).toContainEqual({
+                id: orphan.value.artifact.build,
+                outcome: "obligation",
+                code: "native-journal-ownership-unresolved",
+              });
+              expect(report.entries).toContainEqual({
+                id: ready.snapshot.build,
+                outcome: "obligation",
+                code: "native-publication-evidence-mismatch",
+              });
+              expect(
+                f.mutations.filter((entry) => entry.startsWith("DELETE /api/v1/saved-snapshots/")),
+              ).toEqual([]);
+              const path = join(f.root, ready.snapshot.build + ".json");
+              const journal = yield* Effect.promise(async () => {
+                const contents: unknown = JSON.parse(await readFile(path, "utf8"));
+                return z
+                  .object({ ownership: nativeBuildOwnershipSchema })
+                  .passthrough()
+                  .parse(contents);
+              });
+              yield* Effect.promise(() =>
+                writeFile(path, JSON.stringify({ ...journal, phase: "running" })),
+              );
+              expect((yield* catalog.reconcile({ limit: 20 })).entries).toContainEqual({
+                id: ready.snapshot.build,
+                outcome: "obligation",
+                code: "native-artifact-not-owned",
+              });
+              expect(
+                f.mutations.filter((entry) => entry.startsWith("DELETE /api/v1/saved-snapshots/")),
+              ).toEqual([]);
+              yield* Effect.promise(() =>
+                writeFile(
+                  path,
+                  JSON.stringify({
+                    ...journal,
+                    ownership: { ...journal.ownership, publicationId: randomUUID() },
+                  }),
+                ),
+              );
+              expect((yield* catalog.reconcile({ limit: 20 })).entries).toContainEqual({
+                id: ready.snapshot.build,
+                outcome: "obligation",
+                code: "native-journal-ownership-unresolved",
+              });
+            }),
+          );
+        }),
+      ),
+  );
+
+  it.live(
+    "reaps only unpinned native publications and retries uncertain removal without resurrection",
+    () =>
+      test((repo, db) =>
+        Effect.gen(function* () {
+          const f = yield* prepare(db);
+          yield* throughCatalog(db, f, (catalog) =>
+            Effect.gen(function* () {
+              const entries: Array<{ id: string }> = [];
+              for (let index = 0; index < 12; index++) {
+                const spec = {
+                  ...f.spec,
+                  lifecycle: {
+                    ...f.spec.lifecycle,
+                    setup: [{ run: `echo catalog-${index}`, shell: "bash" as const }],
+                  },
+                };
+                const pin = yield* consumer(db, f.owner);
+                const ready = yield* catalog.acquire({ scope: f.key.scope, spec, consumer: pin });
+                yield* catalog.release(pin, ready.publicationId);
+                entries.push({ id: ready.publicationId });
+              }
+              let after: string | undefined;
+              const visited: string[] = [];
+              do {
+                const page = yield* catalog.reap({
+                  scope: f.key.scope,
+                  limit: 5,
+                  ...(after === undefined ? {} : { after }),
+                });
+                expect(page.entries.length).toBeLessThanOrEqual(5);
+                visited.push(...page.entries.map((entry) => entry.id));
+                after = page.next;
+              } while (after !== undefined);
+              expect(visited.toSorted()).toEqual(entries.map((entry) => entry.id).toSorted());
+              const oldest = entries[0],
+                other = entries[1];
+              if (!oldest || !other) throw new Error("missing publications");
+              yield* ageNativePublication(db, oldest.id);
+              yield* ageNativePublication(db, other.id);
+              const record = yield* repo.get(oldest.id);
+              if (!record || record.publication === null) throw new Error("missing publication");
+              const artifact = record.publication.snapshot;
+              const recovery = yield* consumer(db, f.owner);
+              yield* repo.reserve(record.ownership.key, recovery);
+              yield* catalog.markConsumer(recovery, oldest.id, "parked");
+              expect(
+                (yield* catalog.reap({ scope: f.key.scope, limit: 200 })).entries,
+              ).toContainEqual({ id: oldest.id, outcome: "skipped", code: "retained" });
+              yield* catalog.markConsumer(recovery, oldest.id, "unknown");
+              expect(yield* repo.retire(oldest.id)).toBeUndefined();
+              yield* catalog.release(recovery, oldest.id);
+              f.failSnapshotRemoval();
+              expect(
+                (yield* catalog.reap({ scope: f.key.scope, limit: 200 })).entries,
+              ).toContainEqual({
+                id: oldest.id,
+                outcome: "obligation",
+                code: "native-provider-provider_error",
+              });
+              expect((yield* repo.get(oldest.id))?.state).toBe("quarantined");
+              expect(yield* repo.claim(oldest.id, "reconcile", 60000)).toBeUndefined();
+              expect(
+                yield* Effect.flip(
+                  repo.reserve(record.ownership.key, yield* consumer(db, f.owner)),
+                ),
+              ).toMatchObject({ code: "consumer-conflict" });
+              expect((yield* catalog.reconcile({ limit: 100 })).entries).toContainEqual({
+                id: record.ownership.buildId,
+                outcome: "updated",
+                code: "removed",
+              });
+              expect((yield* repo.get(oldest.id))?.state).toBe("removed");
+              f.replaceSnapshot(artifact.identity.name);
+              expect(yield* Effect.promise(() => f.builder.remove(artifact))).toEqual({
+                ok: true,
+                value: "absent",
+              });
+              const deletions = f.mutations.filter((entry) =>
+                entry.startsWith("DELETE /api/v1/saved-snapshots/"),
+              );
+              expect(
+                deletions.filter((entry) => entry.endsWith(artifact.identity.name)),
+              ).toHaveLength(2);
+              expect(
+                deletions.every((entry) => entry.startsWith("DELETE /api/v1/saved-snapshots/")),
+              ).toBe(true);
+            }),
+          );
+        }),
+      ),
+    30000,
+  );
+
+  it.live(
+    "preserves exact bindings and permanent release across generated state and retry sequences",
+    () =>
+      test((repo, db) =>
+        Effect.gen(function* () {
+          const f = yield* prepare(db);
+          const commands = Arbitrary.array(
+            Arbitrary.schema(
+              Schema.Literals(["pending", "live", "retained", "parked", "unknown", "released"]),
+            ),
+            { minLength: 1, maxLength: 15 },
+          );
+          const result = yield* Arbitrary.checkEffect(
+            commands,
+            (states) =>
+              Effect.gen(function* () {
+                const pin = yield* consumer(db, f.owner);
+                const reserved = yield* repo.reserve(f.key, pin);
+                let released = false;
+                for (const state of states) {
+                  if (state === "released") {
+                    yield* repo.release(pin, reserved.ownership.publicationId);
+                    released = true;
+                  } else if (!released) {
+                    yield* repo.markConsumer(pin, reserved.ownership.publicationId, state);
+                  } else {
+                    expect(
+                      yield* Effect.flip(
+                        repo.markConsumer(pin, reserved.ownership.publicationId, state),
+                      ),
+                    ).toMatchObject({ code: "consumer-released" });
+                  }
+                  const replay = yield* Effect.result(
+                    repo.reserve(
+                      {
+                        platform: f.key.platform,
+                        assetsHash: f.key.assetsHash,
+                        runtime: { ...f.key.runtime },
+                        recipeHash: f.key.recipeHash,
+                        scope: f.key.scope,
+                        deploymentId: f.key.deploymentId,
+                      },
+                      pin,
+                    ),
+                  );
+                  if (released)
+                    expect(replay).toMatchObject({
+                      _tag: "Failure",
+                      failure: { code: "consumer-released" },
+                    });
+                  else {
+                    if (Result.isFailure(replay)) return false;
+                    expect(replay.success.ownership).toEqual(reserved.ownership);
+                  }
+                }
+                return true;
+              }),
+            { runs: 24, size: 15, seed: "boat-stage2a-consumers" },
+          );
+          expect(Arbitrary.formatCheckFailure(result)).toBeUndefined();
+          expect(result).toMatchObject({ _tag: "Passed", runs: 24 });
         }),
       ),
     30000,
