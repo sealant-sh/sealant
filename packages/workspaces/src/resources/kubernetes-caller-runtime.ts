@@ -186,6 +186,8 @@ export const callerKubernetesObjects = (
 
 /** Caller-only StatefulSets. The operator must attest NetworkPolicy enforcement before use. */
 export class KubernetesCallerRuntime implements ResourceRuntime {
+  /** Project/workspace instances still belong to their Docker provider. */
+  public readonly workspaceReach = false;
   private readonly objects: KubernetesObjectApi;
   private readonly core: CoreV1Api;
   private readonly execution: Exec;
@@ -365,6 +367,8 @@ export class KubernetesCallerRuntime implements ResourceRuntime {
   }
   /** Scale to zero and wait for the old pod to disappear before releasing compute or volumes. */
   public async stop(instance: ResourceInstanceRecord): Promise<void> {
+    if (instance.spec.reach === undefined)
+      throw new Error("Kubernetes supports caller-only instances.");
     const name = callerInstanceName(instance.id);
     let controllerExists = true;
     try {

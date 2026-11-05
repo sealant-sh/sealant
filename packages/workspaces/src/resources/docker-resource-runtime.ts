@@ -90,6 +90,8 @@ export interface ObservedContainer {
 }
 
 export interface ResourceRuntime {
+  /** False when this provider must leave legacy workspace-instance records untouched. */
+  readonly workspaceReach?: boolean;
   /** Provider configuration checks performed before writing desired state. */
   readonly validateCaller?: (spec: ResourceInstanceRecord["spec"]) => void;
   readonly endpoint?: (instance: ResourceInstanceRecord) => {

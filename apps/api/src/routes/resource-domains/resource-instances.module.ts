@@ -72,6 +72,18 @@ export const requireDockerRuntime = Effect.gen(function* () {
   return host.runtime;
 });
 
+const requireWorkspaceRuntime = Effect.gen(function* () {
+  const host = yield* ResourceRuntimeHost;
+  if (host.kind === "kubernetes")
+    return yield* new ResourceRuntimeUnsupportedError({
+      message: "Kubernetes supports caller-only instances; workspace instances require Docker.",
+      runtime: "kubernetes-workspace-reach",
+    });
+  return yield* requireDockerRuntime;
+});
+const requireInstanceRuntime = (instance: ResourceInstanceRecord) =>
+  instance.spec.reach === undefined ? requireWorkspaceRuntime : requireDockerRuntime;
+
 /** Provider errors are sanitized before reaching persistent state or an HTTP reply. */
 const docker = <A>(what: string, call: () => Promise<A>) =>
   Effect.tryPromise({
@@ -411,7 +423,7 @@ const stopResourceInstanceUnlocked = (
     if (instance.desired === "archived") {
       return yield* new ResourceInstanceArchivedError({ message: "This instance is archived." });
     }
-    const runtime = yield* requireDockerRuntime;
+    const runtime = yield* requireInstanceRuntime(instance);
     const repo = yield* ResourceInstanceRepo;
     const reason = { kind: "person", by } as const;
     yield* repo
@@ -454,7 +466,7 @@ export const archiveInstance = (runtime: ResourceRuntime, instance: ResourceInst
 const archiveResourceInstanceUnlocked = (resourceDomainId: string, key: ResourceInstanceKey) =>
   Effect.gen(function* () {
     const instance = yield* requireInstance(resourceDomainId, key);
-    const runtime = yield* requireDockerRuntime;
+    const runtime = yield* requireInstanceRuntime(instance);
     const archived = yield* archiveInstance(runtime, instance);
     return { instance: toInstanceWire(archived.instance), volumes: archived.volumes };
   });
@@ -467,7 +479,7 @@ export const linkResourceWorkspace = (
 ) =>
   Effect.gen(function* () {
     yield* requireDomain(resourceDomainId);
-    const runtime = yield* requireDockerRuntime;
+    const runtime = yield* requireWorkspaceRuntime;
     const repo = yield* ResourceInstanceRepo;
     const outcome = yield* repo
       .link({ workspaceId, resourceDomainId, worktreeKey, aliases })
@@ -525,8 +537,10 @@ export const linkResourceWorkspace = (
  */
 export const archiveResourceDomain = (resourceDomainId: string) =>
   Effect.gen(function* () {
-    yield* requireDomain(resourceDomainId);
-    const runtime = yield* requireDockerRuntime;
+    const domain = yield* requireDomain(resourceDomainId);
+    const runtime = yield* (domain.ownerKind ?? "project") === "project"
+      ? requireWorkspaceRuntime
+      : requireDockerRuntime;
     const repo = yield* ResourceInstanceRepo;
     const failed = internal("Failed to archive the resource domain.");
     yield* repo.setDomainState(resourceDomainId, "fenced").pipe(Effect.mapError(failed));

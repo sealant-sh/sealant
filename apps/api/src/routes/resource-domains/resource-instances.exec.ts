@@ -110,6 +110,12 @@ export const ResourceInstanceExecRoute = HttpRouter.add(
           "This resource domain has no instance with that key.",
         );
       }
+      if (host.kind === "kubernetes" && instance.spec.reach === undefined)
+        return refuse(
+          409,
+          "ResourceRuntimeUnsupportedError",
+          "Kubernetes supports caller-only instances; workspace instances require Docker.",
+        );
       if (instance.desired !== "running" || instance.observed.kind !== "running") {
         return refuse(
           409,

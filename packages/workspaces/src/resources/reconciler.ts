@@ -98,6 +98,7 @@ export const makeResourceReconciler = (input: {
     ]);
     const running: Array<ResourceInstanceRecord> = [];
     for (const instance of instances) {
+      if (runtime.workspaceReach === false && instance.spec.reach === undefined) continue;
       if (instance.spec.reach?.kind === "caller") {
         await attempt(`caller ${instance.key}`, () =>
           run(

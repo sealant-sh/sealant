@@ -35,8 +35,11 @@ caller selectors and restricted egress. Kubernetes was not run against a live cl
 
 The local raw command logs are in `/tmp/coresvc-work.IFMhnf/`: `caller-tests-final.log`,
 `regression-3.log`, `all-tests-final.log`, `typecheck-final.log`, `lint-final.log` and
-`format-final.log`. The focused regression run passed 117 tests with the gated Docker test skipped;
+`format-final.log`. The focused regression run passed 123 tests with the gated Docker test skipped;
 the explicit Docker command below enables that test. CI runs it explicitly in the Docker job too.
+The final provider-change regression is in `regression-post-pr.log`, with required checks in
+`typecheck-post-pr.log` and `lint-post-pr.log`. It proves Kubernetes refuses legacy workspace
+up/stop/archive/exec/link operations before changing desired state or invoking the provider.
 
 The full local `turbo test --force` run hit two failures in the unchanged
 `packages/workspaces/src/runtime/home-credentials.test.ts`. Its tracing shim did not observe the
