@@ -41,7 +41,9 @@ const probe = {
   sealantd: { schemaVersion: 1, supports: ["exec.user", "dotfiles.user", "restore.owner_map"] },
 };
 
-const fixture = async (mode: "normal" | "lost-save" | "failed-save" | "cancel") => {
+const fixture = async (
+  mode: "normal" | "lost-save" | "failed-save" | "cancel" | "cancel-cleaning",
+) => {
   if (!directory) throw new Error("exact runtime bundle required");
   const bundle = VerifiedRuntimeBundle.parse({
     sourceIndex: await readFile(join(directory, "source-index.json")),
@@ -116,7 +118,7 @@ const fixture = async (mode: "normal" | "lost-save" | "failed-save" | "cancel") 
           exitCode: 0,
           timedOut: false,
           stdout:
-            body.command === "set -eu\nsudo cat /etc/sealant/image-probe.json"
+            body.command === "set -eu\n/usr/bin/sudo cat /etc/sealant/image-probe.json"
               ? JSON.stringify(probe)
               : "",
           stderr: "",
@@ -144,6 +146,7 @@ const fixture = async (mode: "normal" | "lost-save" | "failed-save" | "cancel") 
         });
       else if (path === "/api/v1/deletion-operations/" + deletion) {
         if (++polls > 1) deleted = true;
+        if (mode === "cancel-cleaning" && deleted) cancellation.abort();
         respond({
           ok: true,
           operation: {
@@ -285,6 +288,16 @@ describe.skipIf(!directory)(
       });
       expect(f.deleted()).toBe(true);
       expect(f.posts()).toBe(0);
+    });
+    it("removes the saved artifact when cancelled during source deletion", async () => {
+      const f = await fixture("cancel-cleaning");
+      expect(await f.builder.build({ spec: f.spec, signal: f.cancellation.signal })).toMatchObject({
+        ok: false,
+        error: { code: "native-interrupted" },
+      });
+      expect(f.deleted()).toBe(true);
+      expect(f.posts()).toBe(1);
+      expect(f.mutations.some((p) => p.startsWith("DELETE /api/v1/saved-snapshots/"))).toBe(true);
     });
   },
 );

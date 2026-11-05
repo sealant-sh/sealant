@@ -1097,14 +1097,18 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
  * relying on npm global locations that can be awkward in nix-based containers. A harness's native
  * binary needs the FHS loader link the package layer makes (see renderPackageInstallCommand).
  */
-const harnessInstallCommands = (plan: ResolvedImagePlan): readonly string[] => {
+const harnessInstallCommands = (
+  plan: ResolvedImagePlan,
+  target: "container" | "native" = "container",
+): readonly string[] => {
   const integrations = imageHarnessIntegrations(resolveHarnessIntegration(plan.blueprint));
   return integrations.map((integration) => {
-    if (plan.osFamily === "nix") {
+    if (plan.osFamily === "nix" || target === "native") {
       const npmInstallGlobalPattern = /^npm\s+install\s+-g\s+(.+)$/;
       const match = npmInstallGlobalPattern.exec(integration.installCommand);
       if (match !== null) {
-        return `npm install -g --prefix /usr/local ${match[1]}`;
+        // Boat preinstalls some CLIs outside this npm prefix. Replace those links deliberately.
+        return `npm install -g --prefix /usr/local${target === "native" ? " --force" : ""} ${match[1]}`;
       }
     }
     return integration.installCommand;
@@ -2086,10 +2090,12 @@ export const nativeWorkspaceInstallation = (
     ...extras.releases.map((release) => releaseInstallCommands(release).join("\n")),
     ...(extras.npmGlobal.length === 0
       ? []
-      : [`npm install -g ${extras.npmGlobal.map(shellQuote).join(" ")}`]),
+      : [
+          `npm install -g --prefix /usr/local --force ${extras.npmGlobal.map(shellQuote).join(" ")}`,
+        ]),
     ...extras.postInstall,
     ...(chezmoi === undefined ? [] : [chezmoi.join("\n")]),
-    ...harnessInstallCommands(plan),
+    ...harnessInstallCommands(plan, "native"),
     personLayoutCommands({ family, dockerService: false }).join(";\n"),
     `usermod -s ${shellQuote(distroDefinitions[family].shellPaths[plan.customization.defaultShell])} root`,
     ...(dotfiles === undefined ? [] : [dotfiles]),

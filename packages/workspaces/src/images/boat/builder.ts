@@ -439,7 +439,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       const staged = `${stage}/file-${i}`;
       await call(() => this.#options.api.uploadFile(id, staged, file.bytes), signal);
       await command(
-        `echo '${file.sha256}  '${quote(staged)} | sha256sum -c - >/dev/null\nsudo install -D -m${file.mode} ${quote(staged)} ${quote(file.path)}`,
+        `echo '${file.sha256}  '${quote(staged)} | sha256sum -c - >/dev/null\n/usr/bin/sudo install -D -m${file.mode} ${quote(staged)} ${quote(file.path)}`,
       );
     }
     await call(
@@ -447,16 +447,18 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       signal,
     );
     await command(
-      `echo '${sha256(recipe.installScript)}  '${quote(stage + "/install.sh")} | sha256sum -c - >/dev/null\nsudo /bin/bash ${quote(stage + "/install.sh")}`,
+      `echo '${sha256(recipe.installScript)}  '${quote(stage + "/install.sh")} | sha256sum -c - >/dev/null\n/usr/bin/sudo /bin/bash ${quote(stage + "/install.sh")}`,
       600,
     );
     await command(
       recipe.files
-        .map((file) => `echo '${file.sha256}  ${file.path}' | sudo sha256sum -c - >/dev/null`)
+        .map(
+          (file) => `echo '${file.sha256}  ${file.path}' | /usr/bin/sudo sha256sum -c - >/dev/null`,
+        )
         .join("\n"),
     );
     const probe = parseWorkspaceImageProbe(
-      JSON.parse(await command(`sudo cat ${IMAGE_PROBE_PATH}`)),
+      JSON.parse(await command(`/usr/bin/sudo cat ${IMAGE_PROBE_PATH}`)),
     );
     if (imagePersonLayoutSupport(probe).status !== "supported")
       throw new NativeBuildError("native-person-capabilities-unsupported");
@@ -473,7 +475,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
     await call(() => this.#options.api.writeFile(id, stage + "/receipt.json", receipt), signal);
     const receiptHash = sha256(receipt);
     await command(
-      `sudo install -m600 ${quote(stage + "/receipt.json")} /etc/sealant/native-receipt.json\necho '${receiptHash}  /etc/sealant/native-receipt.json' | sudo sha256sum -c - >/dev/null\nls -d ${quote(stage)}\nrm -rf ${quote(stage)}`,
+      `/usr/bin/sudo install -m600 ${quote(stage + "/receipt.json")} /etc/sealant/native-receipt.json\necho '${receiptHash}  /etc/sealant/native-receipt.json' | /usr/bin/sudo sha256sum -c - >/dev/null\nls -d ${quote(stage)}\nrm -rf ${quote(stage)}`,
     );
     return { receiptHash, probe };
   }
@@ -567,6 +569,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       }, signal);
       input.onProgress?.("cleaning");
       await this.#deleteScratch(attempt, path, this.#signal(true));
+      if (signal.aborted) throw new NativeBuildError("native-interrupted");
       const artifact = artifactSchema.parse({
         kind: "boat-saved-snapshot",
         owner: attempt.owner,
@@ -651,10 +654,13 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
 
   /** Explicit removal validates all provider identity facts immediately before deletion. */
   async remove(input: NativeSnapshotArtifact): Promise<NativeResult<"deleted" | "absent">> {
+    let unlock: (() => Promise<void>) | undefined;
     try {
       const artifact = artifactSchema.parse(input);
       if (artifact.owner !== this.#options.owner)
         throw new NativeBuildError("native-owner-mismatch");
+      await this.#directoryReady();
+      unlock = await lockAttempt(join(this.#directory, artifact.build + ".json"));
       await this.#ownedArtifact(artifact);
       const signal = this.#signal(true);
       const found = await this.#getSnapshot(artifact.identity.name, signal);
@@ -671,6 +677,8 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       return { ok: true, value: "deleted" };
     } catch (error) {
       return { ok: false, error: failure(error) };
+    } finally {
+      await unlock?.();
     }
   }
 
