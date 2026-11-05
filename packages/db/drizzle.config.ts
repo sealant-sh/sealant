@@ -11,6 +11,7 @@ export default defineConfig({
     "./src/schema/resource-domains.ts",
     "./src/schema/resource-instances.ts",
     "./src/schema/native-publications.ts",
+    "./src/schema/capture-preservation.ts",
     "./src/schema/telemetry.ts",
   ],
   out: "./drizzle",
