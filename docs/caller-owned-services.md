@@ -26,8 +26,16 @@ Workspaces cannot link to these scopes or join their caller networks. The servic
 IPv4 integration endpoints, DNS and its one private callback port. Other private destinations and
 IPv6 are denied.
 
+Docker DNS is allowed over UDP and TCP destination port 53 only to the instance's configured IPv4
+resolvers. Core reads the anchor's Docker-generated `/etc/resolv.conf`, including `ExtServers` for
+embedded DNS, so private LAN/VPC upstreams work without opening other private ports or other private
+DNS servers. Docker must expose this upstream metadata; missing, malformed or IPv6-only
+configuration refuses startup. Core does not substitute its own container's resolver or public
+fallbacks. The workload gets this file read-only. On the next convergence, existing workloads
+without the read-only mount are replaced over their retained volumes.
+
 Core pins its guard/probe/backup helper by digest. `SEALANT_RESOURCE_CALLER_GUARD_IMAGE` optionally
-selects an operator-maintained equivalent containing `iptables`, `ip6tables`, `nc`, `tar` and
+selects an operator-maintained equivalent containing `iptables`, `ip6tables`, `nc`, `tar`, `cat` and
 `sleep`. The normal resource subnet pools must have capacity for two /24 networks per instance.
 
 Run the worker: it restarts failed workloads from durable desired state, independently of workspace
@@ -64,10 +72,11 @@ Core creates one replica, stops it before changing its template, retains individ
 and returns a stable ClusterIP DNS endpoint. Ingress admits only the configured caller pods on the
 service port. Egress permits their callback port, kube-dns and public IPv4 destinations. The
 callback host must route to those caller pods on the same port. Mend's deployment must keep the
-callback listener private and restrict its own ingress. DNS rules assume the standard kube-dns
-labels in `kube-system`; adapt deployment labels if the cluster differs. IPv6-only clusters are
-unsupported. Kubernetes is covered by contract/manifest tests; a live cluster is still required for
-deployment acceptance of its CNI, storage, DNS and RBAC behavior.
+callback listener private and restrict its own ingress. DNS admits only UDP/TCP 53 to
+`k8s-app=kube-dns` pods in `kube-system`, including standard CoreDNS installations. Custom DNS
+labels and NodeLocal DNS need deployment-specific policy. IPv6-only clusters are unsupported.
+Kubernetes is covered by contract/manifest tests; a live cluster is still required for deployment
+acceptance of its CNI, storage, DNS and RBAC behavior.
 
 AWS MicroVM, Firecracker and other runtime adapters return `ResourceRuntimeUnsupportedError`. An
 external caller with no configured container or pod endpoint is refused.

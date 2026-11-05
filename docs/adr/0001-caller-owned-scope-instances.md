@@ -82,13 +82,14 @@ network namespace anchor gets the rules before the workload starts. Only the cal
 declared service port. New connections from the instance reach only the caller's callback port among
 private addresses. Public internet egress remains available for integration tools. No port is
 published and workspaces never join these networks. Rules deny private, link-local, metadata and
-IPv6 destinations except that explicit callback. The workload holds neither NET_ADMIN nor NET_RAW.
-The anchor and its networks outlive workload replacement, preserving DNS and addresses. Core also
-filters the caller's callback port on every interface, so a workspace-facing interface cannot expose
-that listener. Other caller ports keep their deployment's existing behavior. Archive removes that
-instance's callback allow rule and keeps the port closed to other sources. Operators must not
-replace the configured caller container while an instance runs; stop its instances first, replace
-the caller, then start them so Core restores networks and guards.
+IPv6 destinations except that explicit callback and the configured IPv4 DNS resolvers on UDP/TCP 53.
+The workload holds neither NET_ADMIN nor NET_RAW. The anchor and its networks outlive workload
+replacement, preserving DNS and addresses. Core also filters the caller's callback port on every
+interface, so a workspace-facing interface cannot expose that listener. Other caller ports keep
+their deployment's existing behavior. Archive removes that instance's callback allow rule and keeps
+the port closed to other sources. Operators must not replace the configured caller container while
+an instance runs; stop its instances first, replace the caller, then start them so Core restores
+networks and guards.
 
 Kubernetes uses a one-replica StatefulSet with retained, individually named PVCs, a ClusterIP
 Service, a write-only Secret, readiness probes and a NetworkPolicy. Caller namespace and pod
@@ -125,6 +126,39 @@ retains the declared storage charge. This avoids undercounting after ambiguous p
 
 The existing Docker workspace-instance path remains separate from caller reach. It is unsuitable for
 Mend because a workspace network would expose the gateway and tie its lifetime to sessions.
+
+## Configured DNS egress, 2026-11-05
+
+A Docker host commonly uses a private LAN/VPC resolver. Allowing loopback to Docker's embedded
+`127.0.0.11` is insufficient: its forwarded queries can traverse the instance's OUTPUT guard and hit
+the private-address rejection. A real private-resolver fixture reproduces this with
+`registry.npmjs.org` before any production change.
+
+Keep the SDK/API and operator caller configuration unchanged. On each provider convergence, read the
+anchor's Docker-generated `/etc/resolv.conf` before installing its guard. With embedded DNS, parse
+Docker's `ExtServers` metadata, including `host(address)` entries; otherwise parse the file's
+nameservers. Accept only validated IP literals, deduplicate them, and admit IPv4 UDP/TCP destination
+port 53 to those exact addresses before private-address rejection. IPv6 stays denied. An
+unavailable, malformed or IPv6-only resolver configuration fails startup closed. Do not fall back to
+Core's own resolver file, which can describe a different container from the Docker host, and do not
+add public fallback resolvers or a blanket private port-53 exemption. Existing anchors get the
+current rules on their next convergence. This remains inside the existing Docker caller adapter; a
+new configuration service or public DNS option would add unnecessary caller burden.
+
+Bind the generated resolver file read-only into the workload, retaining Docker's embedded DNS and
+search configuration while preventing it from rewriting the next guard's allowlist metadata.
+Convergence replaces an older workload lacking that mount, keeping its retained volumes.
+
+Kubernetes already admits both DNS transports only to pods labelled `k8s-app=kube-dns` in
+`kube-system`, covering the standard kube-dns/CoreDNS deployment. Preserve that rule and add
+explicit contract coverage of its destination and ports. Custom DNS labels or NodeLocal DNS need
+deployment-specific policy and remain outside this contract. Project/workspace egress is unchanged.
+
+Verify using a real Docker caller workload, an embedded resolver forwarding to one configured
+private resolver container, and a second unconfigured private resolver. Both embedded and direct
+configured UDP/TCP queries must resolve a public name. DNS to the other resolver and non-DNS TCP/UDP
+to private listeners must fail. Kubernetes coverage checks the emitted NetworkPolicy; live CNI
+acceptance remains SLNT-544.
 
 ## Explicit purge, 2026-11-05
 
