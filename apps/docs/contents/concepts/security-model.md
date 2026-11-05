@@ -118,7 +118,7 @@ be removed once every caller is upgraded.
 
 Per-container CPU and memory limits bound one workspace. Each service key also has independent
 request budgets for each declared `ownerUserId`, a separate budget for requests without an owner,
-and a fixed ceiling for the whole key. The defaults are 2,400 requests per minute per owner, 6,000
+and a fixed ceiling for the whole key. The defaults are 6,000 requests per minute per owner, 6,000
 without an owner, and 12,000 for the key. The key ceiling counts authenticated attempts, including
 requests later refused by the owner's budget. It does not grow with active owners. Unknown routes
 count against the key ceiling.
@@ -128,7 +128,8 @@ precedence, even when missing or invalid. An undeclared query parameter or heade
 another bucket. Raw session streams, terminal attachments and forwards use their existing owner
 query. Resource exec has no owner field and uses the ownerless budget without reading stdin.
 
-Normal service-key requests leave 20% of each request allowance for interactive requests. The
+Normal service-key requests leave 20% of each request allowance for interactive requests. With the
+defaults, normal requests can use 4,800 requests per owner and 9,600 across the key each minute. The
 `x-sealant-request-priority` header accepts `normal` or `interactive`. An absent or unknown hint is
 normal. Interactive requests count toward the same hard ceiling and can exhaust it. Non-service
 principals retain their per-credential request allowance.

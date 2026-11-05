@@ -128,7 +128,7 @@ export const servicePrincipalsEnvSchema = z.object({
   // work; 0 turns one off. Request windows are per API process; the rest are read from Postgres.
   // One service key is one credential however many people the product behind it serves, so this
   // one is sized for a whole product: 200 requests a second.
-  SEALANT_BUDGET_SERVICE_OWNER_REQUESTS_PER_MINUTE: z.coerce.number().int().min(0).default(2400),
+  SEALANT_BUDGET_SERVICE_OWNER_REQUESTS_PER_MINUTE: z.coerce.number().int().min(0).default(6000),
   SEALANT_BUDGET_SERVICE_UNOWNED_REQUESTS_PER_MINUTE: z.coerce.number().int().min(0).default(6000),
   SEALANT_BUDGET_REQUEST_INTERACTIVE_RESERVE_PERCENT: z.coerce.number().min(0).max(99).default(20),
   SEALANT_BUDGET_PRINCIPAL_REQUESTS_PER_MINUTE: z.coerce.number().int().min(0).default(12000),
