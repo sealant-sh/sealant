@@ -2,7 +2,7 @@
   "base": "8c22bfc4a06ff03a7b764ae75de2d954a2dbec52",
   "proofKind": "single-small-vm-paid-null-ttl-warm-stop-resume",
   "executedScratchRunnerSha256": "0836c7514b5b1f459a6d8952ba82d19a56a11ae8e70c4dcb85fd3fe441434b67",
-  "execution": "Standalone HTTP proof before provider changes. The committed rerun helper adds validation and cleanup hardening to the same wire requests; it was syntax checked without another live allocation.",
+  "execution": "Standalone HTTP proof before provider changes. The committed rerun helper adds validation and cleanup hardening, explicitly private create, and only documented resume fields. It was syntax checked without another live allocation. Recorded live events are unchanged.",
   "retentionDecision": "Decided by the orchestrator overnight under Yiannis's overnight carry-on authority; Yiannis to confirm in the morning. Yiannis has not seen or accepted it yet.",
   "limitations": [
     "Warm resume only; no cold-snapshot claim.",

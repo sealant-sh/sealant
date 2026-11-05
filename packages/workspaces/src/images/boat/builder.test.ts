@@ -259,6 +259,7 @@ describe("attempt-owned durable native cleanup", () => {
       noEnv: true,
       monitoring: false,
       snapshots: true,
+      visibility: "private",
       labels: { "sealant-dev": "boat-stream", "sealant-build": f.journal.build },
     });
     expect(creates[1]).toEqual(creates[0]);

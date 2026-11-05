@@ -124,7 +124,7 @@ describe("Boat ownership and lifetime inputs", () => {
 });
 
 describe("Boat production lifetime at the HTTP boundary", () => {
-  it("creates and resumes a small isolated session with exact null TTL, and leaves idle observations live", async () => {
+  it("creates a private session and resumes with exact null TTL, leaving idle observations live", async () => {
     const requests: Array<{
       method: string | undefined;
       path: string | undefined;
@@ -185,15 +185,20 @@ describe("Boat production lifetime at the HTTP boundary", () => {
       type: "small",
       ttlSeconds: null,
       noEnv: true,
-      monitoring: false,
-      snapshots: true,
     };
     expect(requests).toEqual([
       ...[0, 1].map(() => ({
         method: "POST",
         path: "/api/v1/sandboxes",
         key: marker,
-        body: { ...body, labels: productionLabels, from: "source-a" },
+        body: {
+          ...body,
+          monitoring: false,
+          snapshots: true,
+          visibility: "private",
+          labels: productionLabels,
+          from: "source-a",
+        },
       })),
       { method: "POST", path: `/api/v1/sandboxes/${id}/resume`, key: undefined, body },
       ...[0, 1].map(() => ({
@@ -342,8 +347,6 @@ describe("Boat production lifetime at the HTTP boundary", () => {
       type: "small",
       ttlSeconds: 600,
       noEnv: true,
-      monitoring: false,
-      snapshots: true,
     });
     expect(await api.resume(id, { kind: "bounded", ttlSeconds: 59 })).toMatchObject({
       ok: false,
@@ -585,6 +588,7 @@ describe("Boat API boundary", () => {
       noEnv: true,
       monitoring: false,
       snapshots: true,
+      visibility: "private",
       labels: { "sealant-dev": "boat-stream", "sealant-build": marker },
     });
     expect(
@@ -638,6 +642,7 @@ describe("Boat API boundary", () => {
           noEnv: true,
           monitoring: false,
           snapshots: true,
+          visibility: "private",
           labels: { "sealant-dev": "boat-stream", "sealant-spike": marker },
         },
       })),
@@ -703,7 +708,7 @@ describe("Boat API boundary", () => {
       { path: `/api/v1/sandboxes/${id}/stop`, body: {} },
       {
         path: `/api/v1/sandboxes/${id}/resume`,
-        body: { type: "small", ttlSeconds: 900, noEnv: true, monitoring: false, snapshots: true },
+        body: { type: "small", ttlSeconds: 900, noEnv: true },
       },
       { path: `/api/v1/sandboxes/${id}`, body: undefined },
     ]);

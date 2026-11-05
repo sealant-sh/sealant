@@ -271,6 +271,7 @@ export class HttpBoatApi implements BoatApi {
         noEnv: true,
         monitoring: false,
         snapshots: true,
+        visibility: "private",
         labels: production
           ? ownershipLabels(input.ownership)
           : {
@@ -431,8 +432,6 @@ export class HttpBoatApi implements BoatApi {
       type: "small",
       ttlSeconds: ttl.value,
       noEnv: true,
-      monitoring: false,
-      snapshots: true,
     });
     return result.ok ? this.get(id) : result;
   }

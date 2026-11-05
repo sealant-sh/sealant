@@ -60,16 +60,21 @@ Never delete unrelated objects. To remove a completed local proof directory, fir
 created directory, then remove only that exact path.
 
 The recorded live run used a standalone scratch runner before provider implementation. The evidence
-includes that runner's SHA-256. The committed helper keeps the same wire requests and adds stricter
-observation validation, synchronous ledger writes, interruption handling, and cleanup when initial
-inventory is unavailable. Those helper changes were syntax checked without allocating another VM.
+includes that runner's SHA-256. The committed helper adds stricter observation validation,
+synchronous ledger writes, interruption handling, and cleanup when initial inventory is unavailable.
+Parent review also made creates explicitly private and removed undocumented `monitoring` and
+`snapshots` fields from resume requests. The recorded proof sent those extra resume fields but does
+not establish that Boat honors them. The client reads the resulting snapshot and monitoring flags.
+These helper changes were syntax checked without allocating another VM.
 
 ## Provider contracts
 
 `BoatCreateInput` requires an explicit lifetime. Production sessions require a parsed, immutable
 `BoatOwnership`. Their create and resume bodies send exact null TTL. Bounded callers retain the
 900-second default and the local 60-to-1800-second limit. The builder explicitly retains its
-900-second TTL. Both choices request small isolated VMs with snapshots enabled and monitoring off.
+900-second TTL. Creates request small private VMs with snapshots enabled and monitoring off,
+independently of the account's organization sharing default. Resume sends only documented `type`,
+`ttlSeconds`, and `noEnv` fields and reads the resulting retention and monitoring flags.
 
 Create returns the allocated ID even when valid response evidence cannot verify disabled auto-stop.
 `BoatSandbox.autoStop.kind` is `disabled` only with explicit `archiveAfter: null` and no

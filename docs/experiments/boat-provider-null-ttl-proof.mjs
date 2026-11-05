@@ -225,6 +225,7 @@ try {
     noEnv: true,
     monitoring: false,
     snapshots: true,
+    visibility: "private",
     labels,
   };
   record("create_request", { body, idempotencyKey: marker });
@@ -242,8 +243,6 @@ try {
     type: "small",
     ttlSeconds: null,
     noEnv: true,
-    monitoring: false,
-    snapshots: true,
   };
   record("resume_request", { id, body: resumeBody });
   const resumed = await request("POST", "/sandboxes/" + id + "/resume", resumeBody);
