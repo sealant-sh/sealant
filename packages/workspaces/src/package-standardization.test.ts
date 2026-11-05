@@ -304,7 +304,7 @@ describe("createPackageStandardizer.resolvePackage", () => {
           query,
         ).toBe(true);
       }
-      expect(familyInstall("bun", "arch")?.release?.archives.aarch64.url).toContain(
+      expect(familyInstall("bun", "arch")?.release?.archives.aarch64?.url).toContain(
         "bun-linux-aarch64.zip",
       );
       expect(repologyClient.getProject).not.toHaveBeenCalled();

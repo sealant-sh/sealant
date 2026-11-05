@@ -1716,7 +1716,7 @@ export const createWorkspace = (input: {
         message: new UnknownWorkspacePackageError(unknownPackages).message,
       });
     }
-    // A package the family installs but cannot run (Ubuntu's chromium snap stub), refused the
+    // A package the family installs but cannot run (Fedora's ffmpeg without libx264), refused the
     // same way, with the catalog's reason.
     const osFamily = parsedSpec.target.os.family;
     if (osFamily !== "custom" && osFamily !== "auto") {
