@@ -21,8 +21,9 @@
  * only; nixpkgs has it. Every family packages `unzip`.
  * Measured on 2026-10-30 by installing on x86_64 (aarch64 from the repository indexes only):
  * every family packages `tigervnc`, `xauth`, `xdpyinfo`, `openbox` and `fonts-dejavu`; Fedora 41
- * installs `chromium` as `chromium-browser`, and Ubuntu 24.04's `chromium-browser` is a stub for
- * the chromium snap that exits 1, so `chromium` is refused there.
+ * installs `chromium` as `chromium-browser`. Ubuntu 24.04's distribution package requires snapd,
+ * so Ubuntu uses checksum-pinned upstream Chromium snapshot 1735811 on x86_64 instead. There is
+ * no pinned aarch64 archive, so Ubuntu Chromium is refused on ARM during image planning.
  *
  * Measured on 2026-10-31 by installing on x86_64 (aarch64 from repository indexes only):
  * Arch, Fedora 41 and Ubuntu 24.04 start XFCE with `dbus-run-session`. nixpkgs installs the

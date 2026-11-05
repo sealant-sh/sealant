@@ -598,17 +598,38 @@ describe("createWorkspace package ids", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const result = yield* Effect.result(
-          createWorkspace({ payload: payloadWithPackages("ubuntu", ["chromium"]), headers: {} }),
+          createWorkspace({ payload: payloadWithPackages("fedora", ["ffmpeg"]), headers: {} }),
         );
         expect(Result.isFailure(result)).toBe(true);
         if (Result.isFailure(result)) {
           expect(result.failure.message).toContain(
-            "Workspace package 'chromium' is not available on ubuntu: Ubuntu 24.04's chromium-browser package is a stub for the chromium snap",
+            "Workspace package 'ffmpeg' is not available on fedora: Fedora 41's ffmpeg-free has XCB x11grab but no libx264 encoder. Arch, Ubuntu and nix install both.",
           );
         }
+        expect(state.snapshot).toBeUndefined();
         expect(state.job).toBeUndefined();
       }).pipe(Effect.provide(makeRecordingLayer(state))),
     );
+  });
+
+  it("accepts Ubuntu chromium and plans its pinned release on amd64", async () => {
+    const state: RecordingState = {};
+    await Effect.runPromise(
+      createWorkspace({ payload: payloadWithPackages("ubuntu", ["chromium"]), headers: {} }).pipe(
+        Effect.provide(makeRecordingLayer(state)),
+      ),
+    );
+    expect(state.snapshot?.tooling.packages).toEqual([{ id: "chromium" }]);
+    expect(state.job?.tooling.packages).toEqual([{ id: "chromium" }]);
+    if (state.job === undefined) throw new Error("no job was queued");
+    const { containerfile } = planWorkspaceImageBuild({
+      platform: "linux/amd64",
+      blueprint: state.job,
+    });
+    expect(containerfile).toContain(
+      "chromium-browser-snapshots/Linux_x64/1735811/chrome-linux.zip",
+    );
+    expect(containerfile).toContain("ln -sf /opt/chromium-1735811/chrome /usr/local/bin/chromium");
   });
 });
 

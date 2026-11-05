@@ -11,7 +11,7 @@ the catalog says for that family. An id the catalog does not know is refused whe
 created (`400`, naming the id and the catalog), not minutes later as a failed build. A custom base
 image (`target.os.family: custom`) takes any name its own package manager knows.
 
-Three kinds of entry:
+Four kinds of entry:
 
 - **A repository package**, in the family's own name. This is the first choice.
 - **A pinned upstream release**, where the family's repositories have no package, or lag the
@@ -21,15 +21,26 @@ Three kinds of entry:
   `/usr/local/bin` (a zsh plugin's script to its own directory under `/usr/local/share`). The
   version and the checksum move together, by pull request to Sealant.
 - **npm**, for a tool a family does not package but npm does (`pnpm` on Ubuntu).
-- **Unsupported**, where a family's package installs but cannot run (`chromium` on Ubuntu 24.04 is a
-  stub for the chromium snap, and a workspace image runs no snapd). The id is refused on that family
-  when the workspace is created (`400`, naming the id, the family and the reason).
+- **Unsupported**, where a family's package lacks required functionality (`ffmpeg-free` on Fedora 41
+  has no libx264 encoder). The id is refused on that family when the workspace is created (`400`,
+  naming the id, the family and the reason).
 
 Where a repository installs a binary under another name, the build links the name the blueprint
 asked for (`fd` for Debian's `fdfind`, `bat` for its `batcat`). The `bun` release also links `bunx`
 to `bun`, as bun's own installer does. Fedora installs `chromium` as `chromium-browser`, and the
 build links `chromium` to it. On x86_64 it is bun's baseline build, which runs on a CPU without
 AVX2.
+
+On Ubuntu 24.04, `chromium` installs upstream snapshot 1735811 and its shared-library dependencies
+on amd64. Sealant verifies the archive's SHA-256 and preserves the complete browser directory.
+Ubuntu's distribution package requires snapd, which workspace images do not run. The pinned upstream
+archive runs without it. Ubuntu Chromium is refused during image planning on arm64 because the
+catalog has no pinned archive for that architecture. This replaces the previous refusal on both
+architectures.
+
+This Chromium snapshot receives no automatic security updates. Updating it requires a pull request
+that bumps the revision and checksum, followed by rebuilding the workspace image or boat snapshot.
+Existing images and snapshots keep their installed version until rebuilt.
 
 Every entry was built and run on every family, on ARM64 Lambda MicroVMs, on 2026-09-21, except the
 shell prompt's six (`starship`, `direnv`, `eza` and the three zsh plugins), added on 2026-09-26:
@@ -57,7 +68,7 @@ Fedora 41's `redis` is `valkey-compat-redis`, and Arch has no `redis`, so its `v
 | `bubblewrap`                   | `bubblewrap`                                                                                                             | `bubblewrap`                                                                                                                  | `bubblewrap`                                                                                                                                             | `bubblewrap`                                                                                                                               |
 | `bun`                          | release 1.4.2                                                                                                            | release 1.4.2                                                                                                                 | release 1.4.2                                                                                                                                            | `bun`                                                                                                                                      |
 | `chezmoi`                      | `chezmoi`                                                                                                                | `chezmoi`                                                                                                                     | `curl` `ca-certificates`                                                                                                                                 | `chezmoi`                                                                                                                                  |
-| `chromium`                     | `chromium`, linked                                                                                                       | `chromium`                                                                                                                    | unsupported                                                                                                                                              | `chromium`                                                                                                                                 |
+| `chromium`                     | `chromium`, linked                                                                                                       | `chromium`                                                                                                                    | snapshot 1735811 on amd64; unsupported on arm64                                                                                                          | `chromium`                                                                                                                                 |
 | `curl`                         | `curl`                                                                                                                   | `curl`                                                                                                                        | `curl`                                                                                                                                                   | `curl`                                                                                                                                     |
 | `direnv`                       | `direnv`                                                                                                                 | `direnv`                                                                                                                      | `direnv`                                                                                                                                                 | `direnv`                                                                                                                                   |
 | `eza`                          | `eza`                                                                                                                    | `eza`                                                                                                                         | `eza`                                                                                                                                                    | `eza`                                                                                                                                      |
