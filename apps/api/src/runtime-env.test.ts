@@ -9,6 +9,17 @@ const RETIRED = {
   SEALANT_MICROVM_DOCKER_IMAGE_VERSION: "7",
 };
 
+describe("API service request budget defaults", () => {
+  it("gives each owner 6000 requests under the fixed key ceiling with a 20% reserve", () => {
+    expect(parseAppEnv({})).toMatchObject({
+      SEALANT_BUDGET_SERVICE_OWNER_REQUESTS_PER_MINUTE: 6000,
+      SEALANT_BUDGET_SERVICE_UNOWNED_REQUESTS_PER_MINUTE: 6000,
+      SEALANT_BUDGET_PRINCIPAL_REQUESTS_PER_MINUTE: 12000,
+      SEALANT_BUDGET_REQUEST_INTERACTIVE_RESERVE_PERCENT: 20,
+    });
+  });
+});
+
 describe("API MicroVM environment", () => {
   it("refuses each retired one-image setting by name, and says what replaces it", () => {
     for (const [key, value] of Object.entries(RETIRED)) {

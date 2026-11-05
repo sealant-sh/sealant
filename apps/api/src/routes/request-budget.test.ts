@@ -168,6 +168,31 @@ describe("service request admission over Node HTTP", () => {
     }
   });
 
+  it("admits another owner's interactive sends after one owner's flood fills the normal key allowance", async () => {
+    const s = await serve({ key: 20, owner: 10, unowned: 10, reserve: 20 });
+    try {
+      for (let i = 0; i < 8; i++)
+        expect((await s.send("/read?ownerUserId=alice")).status).toBe(200);
+      for (let i = 0; i < 8; i++)
+        await refusal(await s.send("/read?ownerUserId=alice"), "owner", 8);
+      await refusal(await s.send("/read?ownerUserId=alice"), "key", 16);
+      await refusal(await s.send("/read?ownerUserId=bob"), "key", 16);
+
+      for (let i = 0; i < 4; i++)
+        expect(await (await s.send("/write", write("bob"), "interactive")).json()).toBe(
+          "body survived",
+        );
+      await refusal(await s.send("/write", write("alice"), "interactive"), "key", 20);
+      await refusal(await s.send("/write", write("bob"), "interactive"), "key", 20);
+      expect(s.reached).toEqual([
+        ...Array<string>(8).fill("alice"),
+        ...Array<string>(4).fill("bob"),
+      ]);
+    } finally {
+      await s.close();
+    }
+  });
+
   it("keeps disabled budgets off and never turns a tiny normal allowance into an unlimited one", async () => {
     const unlimited = await serve({ key: 0, owner: 0, unowned: 0, reserve: 99 });
     try {
