@@ -111,6 +111,11 @@ step "rolling out the in-cluster registry (image from ghcr.io)"
 kubectl -n sealant rollout status deploy/sealant-registry --timeout="$wait_timeout"
 step "waiting for the store Pod (image from docker.io)"
 kubectl -n sealant wait --for=condition=Ready pod/store --timeout="$wait_timeout"
+# A mounted claim is not a working one: on a kernel the NFS server cannot answer, the mount succeeds
+# and a directory listing fails (EREMOTEIO). Prove the store can list and write its claim now.
+step "listing and writing the RWX claim from the store Pod"
+kubectl -n sealant exec store -- sh -ec \
+  'ls -a /var/lib/mend/store >/dev/null; mkdir -p /var/lib/mend/store/.probe; rmdir /var/lib/mend/store/.probe'
 # Export the client TLS material for the test process.
 step "exporting the client TLS material"
 out="${E2E_TLS_DIR:-$here/.tls}"
