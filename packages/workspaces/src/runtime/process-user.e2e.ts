@@ -42,6 +42,7 @@ import {
 import { sealantTargetForDockerContainer } from "../sealantd/target.js";
 import { startCaptureChannel, type CaptureChannel } from "./capture-channel.fixture.js";
 import { DockerRuntimeAdapter, parseRuntimeAdapterLaunchInput } from "./index.js";
+import { inspectLocalPublishedImage } from "./local-image.e2e-support.js";
 import {
   liveProcessUserChannel,
   PROCESS_USER_CHECK_EXIT,
@@ -225,13 +226,11 @@ const launchWithOwnerMap = async () => {
       publication: {
         kind: "oci",
         publicationId: "fixture-publication",
-        image: {
+        image: await inspectLocalPublishedImage({
           repository: "sealant-workspace-fedora",
           tag: "latest",
           reference: IMAGE_REF,
-          digestReference: IMAGE_REF,
-          digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-        },
+        }),
         evidence: {},
       },
       runId: `process-user-e2e-${randomUUID()}`,
@@ -272,13 +271,11 @@ const launchPlain = async (image: string) => {
       publication: {
         kind: "oci",
         publicationId: "fixture-publication",
-        image: {
+        image: await inspectLocalPublishedImage({
           repository: "sealant-workspace-fedora",
           tag: "latest",
           reference: image,
-          digestReference: image,
-          digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-        },
+        }),
         evidence: {},
       },
       runId: `process-user-e2e-old-${randomUUID()}`,

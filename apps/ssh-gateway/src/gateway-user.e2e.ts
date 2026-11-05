@@ -158,6 +158,14 @@ const dockerExec = (script: string) => run("docker", ["exec", containerId, "sh",
 
 beforeAll(async () => {
   if (!runsAsUser) return;
+  const inspectedImage = await run("docker", [
+    "image",
+    "inspect",
+    IMAGE_REF,
+    "--format",
+    "{{.Id}}",
+  ]);
+  const imageId = inspectedImage.stdout.trim();
   scratch = await mkdtemp(join(tmpdir(), "sealant-ssh-user-e2e-"));
 
   // A plain executor of the per-person image; its people are Mend's range in the `mend` group.
@@ -190,8 +198,8 @@ beforeAll(async () => {
           repository: "sealant-workspace-fedora",
           tag: "latest",
           reference: IMAGE_REF,
-          digestReference: IMAGE_REF,
-          digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          digestReference: imageId,
+          digest: imageId,
         },
         evidence: {},
       },

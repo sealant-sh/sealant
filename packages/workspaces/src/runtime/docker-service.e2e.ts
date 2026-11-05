@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { DockerRuntimeAdapter, type DockerCommandRunner } from "./docker-runtime-adapter.js";
+import { inspectLocalPublishedImage } from "./local-image.e2e-support.js";
 import { parseRuntimeAdapterLaunchInput } from "./runtime-adapter.js";
 
 const execFileAsync = promisify(execFile);
@@ -87,13 +88,11 @@ describe("workspace Docker service", () => {
         publication: {
           kind: "oci",
           publicationId: "fixture-publication",
-          image: {
+          image: await inspectLocalPublishedImage({
             repository: "sealant/docker-service-fixture",
             tag: "e2e",
             reference: image,
-            digestReference: image,
-            digest: "sha256:e2e-fixture",
-          },
+          }),
           evidence: {},
         },
       }),

@@ -49,6 +49,7 @@ import {
   type RuntimeAdapterLaunchInput,
 } from "./index.js";
 import { WORKSPACE_CAPABILITIES } from "./kubernetes/manifests.js";
+import { inspectLocalPublishedImage } from "./local-image.e2e-support.js";
 
 const IMAGE_REF = process.env["SEALANT_OWNER_MAP_E2E_IMAGE"] ?? "sealant-workspace-fedora:latest";
 const CAPTURE_TOKEN = "capture-owner-map-e2e-token";
@@ -70,12 +71,12 @@ const OWNER_MAP = {
   ],
 };
 
-const launchInput = (input: {
+const launchInput = async (input: {
   readonly endpoint: string;
   readonly secretEnvDir: string;
   readonly ownerMap?: typeof OWNER_MAP;
   readonly image?: string;
-}): RuntimeAdapterLaunchInput =>
+}): Promise<RuntimeAdapterLaunchInput> =>
   parseRuntimeAdapterLaunchInput({
     blueprint: {
       version: "1",
@@ -101,13 +102,11 @@ const launchInput = (input: {
     publication: {
       kind: "oci",
       publicationId: "fixture-publication",
-      image: {
+      image: await inspectLocalPublishedImage({
         repository: "sealant-workspace-fedora",
         tag: "latest",
         reference: input.image ?? IMAGE_REF,
-        digestReference: input.image ?? IMAGE_REF,
-        digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-      },
+      }),
       evidence: {},
     },
     runId: `owner-map-e2e-${randomUUID()}`,
@@ -239,7 +238,7 @@ const adapter = new DockerRuntimeAdapter({
 const launch = async (ownerMap?: typeof OWNER_MAP, image?: string) => {
   if (channel === undefined) throw new Error("the capture channel is not up");
   const launched = await adapter.launch(
-    launchInput({
+    await launchInput({
       endpoint: channel.endpoint,
       secretEnvDir,
       ...(ownerMap === undefined ? {} : { ownerMap }),

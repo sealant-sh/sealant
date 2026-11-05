@@ -23,6 +23,7 @@ import {
   type DockerRuntimeAdapterOptions,
 } from "./docker-runtime-adapter.js";
 import { parseDockerVolumeMappings } from "./docker-volume-mounts.js";
+import { inspectLocalPublishedImage } from "./local-image.e2e-support.js";
 import { bindRootMountPath } from "./mount-intent.js";
 import {
   parseRuntimeAdapterLaunchInput,
@@ -94,14 +95,6 @@ const assertCondition = (condition: boolean, message: string): void => {
     throw new Error(message);
   }
 };
-
-const publishedImage = (image: string) => ({
-  repository: "sealant/volume-mount-e2e-workspace",
-  tag: "fixture",
-  reference: image,
-  digestReference: image,
-  digest: "sha256:e2e-fixture",
-});
 
 const baseBlueprint = (
   workspace:
@@ -242,7 +235,7 @@ const expectLaunchRejected = async (
   throw new Error(`${label} launch unexpectedly succeeded.`);
 };
 
-const createLaunchInput = (
+const createLaunchInput = async (
   image: string,
   runId: string,
   blueprint: ReturnType<typeof baseBlueprint>,
@@ -251,13 +244,17 @@ const createLaunchInput = (
     readonly secretEnvDir?: string;
     readonly binds?: ReadonlyArray<{ readonly mountPath: string; readonly subpath: string }>;
   } = {},
-): RuntimeAdapterLaunchInput =>
+): Promise<RuntimeAdapterLaunchInput> =>
   parseRuntimeAdapterLaunchInput({
     blueprint,
     publication: {
       kind: "oci",
       publicationId: "fixture-publication",
-      image: publishedImage(image),
+      image: await inspectLocalPublishedImage({
+        repository: "sealant/volume-mount-e2e-workspace",
+        tag: "fixture",
+        reference: image,
+      }),
       evidence: {},
     },
     runId,
@@ -448,7 +445,7 @@ const main = async (): Promise<void> => {
       await once(sessionServer, "listening");
 
       try {
-        const primaryInput = createLaunchInput(
+        const primaryInput = await createLaunchInput(
           image,
           "primary",
           baseBlueprint({ kind: "mount", hostPath: WORKTREE }, [
@@ -565,7 +562,7 @@ const main = async (): Promise<void> => {
           `Wrong session socket request: ${request}`,
         );
 
-        const standbyInput = createLaunchInput(
+        const standbyInput = await createLaunchInput(
           image,
           "standby",
           baseBlueprint({ kind: "standby", rootPath: STANDBY_ROOT }),
@@ -610,7 +607,7 @@ const main = async (): Promise<void> => {
         );
         await closeSession(primaryTarget, primarySession);
 
-        const missingInput = createLaunchInput(
+        const missingInput = await createLaunchInput(
           image,
           "missing",
           baseBlueprint({ kind: "mount", hostPath: `${STORE_ROOT}/missing/worktree` }),
@@ -622,7 +619,7 @@ const main = async (): Promise<void> => {
           /does not exist/,
         );
 
-        const escapeInput = createLaunchInput(
+        const escapeInput = await createLaunchInput(
           image,
           "escape",
           baseBlueprint({ kind: "mount", hostPath: `${STORE_ROOT}/escape/worktree` }),
@@ -637,7 +634,7 @@ const main = async (): Promise<void> => {
         // also reject an alias to a different directory inside that same volume.
         await expectLaunchRejected(
           adapter,
-          createLaunchInput(
+          await createLaunchInput(
             image,
             "internal-alias",
             baseBlueprint({
@@ -696,7 +693,7 @@ const main = async (): Promise<void> => {
       );
       // Reuse the same deterministic run name and retained control directory after the first
       // controller exits. A stale socket entry must not prevent the new daemon from becoming ready.
-      const replacementInput = createLaunchInput(
+      const replacementInput = await createLaunchInput(
         image,
         "primary",
         baseBlueprint({ kind: "mount", hostPath: WORKTREE }, [

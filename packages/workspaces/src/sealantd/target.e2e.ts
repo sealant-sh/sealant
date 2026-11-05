@@ -32,8 +32,6 @@
  *      wrap the REAL docker command runner and, for the `run` invocation only, splice in
  *      `-v <hostTmp-with-.git>:/workspace/repo`. Every other docker call (inspect/etc.) passes through
  *      untouched to the real docker CLI. We assert the spliced argv is otherwise the adapter's own.
- *      The published image is the local tag (set as `digestReference`, which `launch` passes straight
- *      to `docker run`); no registry is involved.
  *
  * Net: the only thing NOT real is the volume mount injection (an API gap in `launch`) and the
  * keep-alive env (a deliberate test affordance, identical to the P3/P5 boots). The container id →
@@ -57,6 +55,7 @@ import {
   parseRuntimeAdapterSupportInput,
   type DockerCommandRunner,
 } from "../runtime/index.js";
+import { inspectLocalPublishedImage } from "../runtime/local-image.e2e-support.js";
 import {
   assertImageRequirement,
   DEFAULT_IMAGE_REF,
@@ -190,7 +189,6 @@ describe.skipIf(!imageAvailable)(
         { mode: 0o600 },
       );
 
-      // Drive the REAL launch(): keep-alive via blueprint env; the local tag as the published image.
       const launchInput = parseRuntimeAdapterLaunchInput({
         blueprint: createBlueprint({
           runtime: {
@@ -207,14 +205,11 @@ describe.skipIf(!imageAvailable)(
         publication: {
           kind: "oci",
           publicationId: "fixture-publication",
-          image: {
+          image: await inspectLocalPublishedImage({
             repository: "sealant-workspace-fedora",
             tag: "latest",
             reference: DEFAULT_IMAGE_REF,
-            // `launch` runs `docker run ... <digestReference>`; the local tag resolves directly.
-            digestReference: DEFAULT_IMAGE_REF,
-            digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-          },
+          }),
           evidence: {},
         },
         secretEnvDir,
@@ -252,7 +247,7 @@ describe.skipIf(!imageAvailable)(
       }
     });
 
-    it("launched via the real adapter argv, augmented only by the `.git` mount", () => {
+    it("launched via the real adapter argv, augmented only by the `.git` mount", async () => {
       // The adapter built the run argv; we asserted our shim only added the documented `-v` mount.
       expect(capturedRunArgs).toBeDefined();
       expect(capturedRunArgs?.[0]).toBe("run");
@@ -261,8 +256,9 @@ describe.skipIf(!imageAvailable)(
       expect(capturedRunArgs).toContain("runc");
       // The keep-alive env is a real adapter input derived from blueprint.runtime.env.
       expect(capturedRunArgs).toContain("SEALANT_FOREGROUND_COMMAND=sleep infinity");
-      // The published image (local tag) is the trailing arg the adapter passes to docker run.
-      expect(capturedRunArgs?.[capturedRunArgs.length - 1]).toBe(DEFAULT_IMAGE_REF);
+      expect(capturedRunArgs?.[capturedRunArgs.length - 1]).toBe(
+        await docker(["image", "inspect", DEFAULT_IMAGE_REF, "--format", "{{.Id}}"]),
+      );
       // The adapter adds no working-directory mount itself (proves the splice is the only delta
       // there); its one `-v` is the read-only secret-env bind this test stages.
       const volumeArgs = (capturedRunArgs ?? []).filter((_, index, all) => all[index - 1] === "-v");
