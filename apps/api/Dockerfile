@@ -35,6 +35,7 @@ ENV NODE_ENV=production
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /app/apps/api/dist ./dist
+COPY --from=builder /app/packages/workspaces/microvm-image ./microvm-image
 # Committed SQL migrations for dist/migrate.js (folder-per-migration layout drizzle-orm reads directly).
 COPY --from=builder /app/packages/db/drizzle ./drizzle
 # The Agent SDK's platform package (inference spawns its `claude` binary) — see the builder stage.

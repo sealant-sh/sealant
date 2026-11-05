@@ -1,0 +1,254 @@
+{
+  "base": "8c22bfc4a06ff03a7b764ae75de2d954a2dbec52",
+  "proofKind": "single-small-vm-paid-null-ttl-warm-stop-resume",
+  "executedScratchRunnerSha256": "0836c7514b5b1f459a6d8952ba82d19a56a11ae8e70c4dcb85fd3fe441434b67",
+  "execution": "Standalone HTTP proof before provider changes. The committed rerun helper adds validation and cleanup hardening, explicitly private create, and only documented resume fields. It was syntax checked without another live allocation. Recorded live events are unchanged.",
+  "retentionDecision": "Decided by the orchestrator overnight under Yiannis's overnight carry-on authority; Yiannis to confirm in the morning. Yiannis has not seen or accepted it yet.",
+  "limitations": [
+    "Warm resume only; no cold-snapshot claim.",
+    "No runtime registration, executor failed-FINAL/idle-maintenance integration, or public Core/SDK VM-ID-and-compute-cost serialization proof.",
+    "Short observation verifies the documented provider contract, not indefinite uptime or protection from provider failures or account balance exhaustion."
+  ],
+  "events": [
+    {
+      "at": "2026-11-05T05:34:32.346Z",
+      "event": "proof_started",
+      "marker": "d2336a5a-641c-4d93-aae9-2f975b32354a",
+      "labels": {
+        "sealant-dev": "boat-stream",
+        "sealant-proof": "d2336a5a-641c-4d93-aae9-2f975b32354a",
+        "sealant-deployment": "stage1-proof",
+        "sealant-workspace": "d2336a5a-641c-4d93-aae9-2f975b32354a",
+        "sealant-run": "d2336a5a-641c-4d93-aae9-2f975b32354a",
+        "sealant-instance": "d2336a5a-641c-4d93-aae9-2f975b32354a",
+        "sealant-attempt": "d2336a5a-641c-4d93-aae9-2f975b32354a",
+        "sealant-source": "base-ubuntu"
+      },
+      "maxSmallVms": 1
+    },
+    {
+      "at": "2026-11-05T05:34:32.449Z",
+      "event": "account_retention",
+      "enabled": false,
+      "enabledAt": null,
+      "snapshotsOff": false,
+      "monitoringOff": false
+    },
+    {
+      "at": "2026-11-05T05:34:32.449Z",
+      "event": "create_request",
+      "body": {
+        "type": "small",
+        "ttlSeconds": null,
+        "noEnv": true,
+        "monitoring": false,
+        "snapshots": true,
+        "labels": {
+          "sealant-dev": "boat-stream",
+          "sealant-proof": "d2336a5a-641c-4d93-aae9-2f975b32354a",
+          "sealant-deployment": "stage1-proof",
+          "sealant-workspace": "d2336a5a-641c-4d93-aae9-2f975b32354a",
+          "sealant-run": "d2336a5a-641c-4d93-aae9-2f975b32354a",
+          "sealant-instance": "d2336a5a-641c-4d93-aae9-2f975b32354a",
+          "sealant-attempt": "d2336a5a-641c-4d93-aae9-2f975b32354a",
+          "sealant-source": "base-ubuntu"
+        }
+      },
+      "idempotencyKey": "d2336a5a-641c-4d93-aae9-2f975b32354a"
+    },
+    {
+      "at": "2026-11-05T05:34:32.947Z",
+      "event": "create_accepted",
+      "status": 202,
+      "id": "bx_tpua7qtx"
+    },
+    {
+      "at": "2026-11-05T05:34:32.947Z",
+      "event": "create_observation",
+      "id": "bx_tpua7qtx",
+      "state": "provisioned",
+      "archiveAfter": null,
+      "ttlSeconds": null,
+      "snapshots": true,
+      "monitoring": false,
+      "dataExpiredAt": null,
+      "stoppedAt": null
+    },
+    {
+      "at": "2026-11-05T05:34:33.007Z",
+      "event": "create_live_observation",
+      "id": "bx_tpua7qtx",
+      "state": "cloning",
+      "archiveAfter": null,
+      "ttlSeconds": null,
+      "snapshots": true,
+      "monitoring": false,
+      "dataExpiredAt": null,
+      "stoppedAt": null
+    },
+    {
+      "at": "2026-11-05T05:34:35.070Z",
+      "event": "create_live_observation",
+      "id": "bx_tpua7qtx",
+      "state": "idle",
+      "archiveAfter": null,
+      "ttlSeconds": null,
+      "snapshots": true,
+      "monitoring": false,
+      "dataExpiredAt": null,
+      "stoppedAt": null
+    },
+    {
+      "at": "2026-11-05T05:34:35.070Z",
+      "event": "intentional_stop_request",
+      "id": "bx_tpua7qtx"
+    },
+    {
+      "at": "2026-11-05T05:34:35.185Z",
+      "event": "stop_accepted",
+      "id": "bx_tpua7qtx",
+      "status": 202
+    },
+    {
+      "at": "2026-11-05T05:34:35.243Z",
+      "event": "stop_observation",
+      "id": "bx_tpua7qtx",
+      "state": "archiving",
+      "archiveAfter": null,
+      "ttlSeconds": null,
+      "snapshots": true,
+      "monitoring": false,
+      "dataExpiredAt": null,
+      "stoppedAt": null
+    },
+    {
+      "at": "2026-11-05T05:34:37.303Z",
+      "event": "stop_observation",
+      "id": "bx_tpua7qtx",
+      "state": "archiving",
+      "archiveAfter": null,
+      "ttlSeconds": null,
+      "snapshots": true,
+      "monitoring": false,
+      "dataExpiredAt": null,
+      "stoppedAt": null
+    },
+    {
+      "at": "2026-11-05T05:34:39.364Z",
+      "event": "stop_observation",
+      "id": "bx_tpua7qtx",
+      "state": "archiving",
+      "archiveAfter": null,
+      "ttlSeconds": null,
+      "snapshots": true,
+      "monitoring": false,
+      "dataExpiredAt": null,
+      "stoppedAt": null
+    },
+    {
+      "at": "2026-11-05T05:34:41.424Z",
+      "event": "stop_observation",
+      "id": "bx_tpua7qtx",
+      "state": "archiving",
+      "archiveAfter": null,
+      "ttlSeconds": null,
+      "snapshots": true,
+      "monitoring": false,
+      "dataExpiredAt": null,
+      "stoppedAt": null
+    },
+    {
+      "at": "2026-11-05T05:34:43.482Z",
+      "event": "stop_observation",
+      "id": "bx_tpua7qtx",
+      "state": "archived",
+      "archiveAfter": null,
+      "ttlSeconds": null,
+      "snapshots": true,
+      "monitoring": false,
+      "dataExpiredAt": null,
+      "stoppedAt": "2026-11-05T05:34:41.899Z"
+    },
+    {
+      "at": "2026-11-05T05:34:43.482Z",
+      "event": "resume_request",
+      "id": "bx_tpua7qtx",
+      "body": {
+        "type": "small",
+        "ttlSeconds": null,
+        "noEnv": true,
+        "monitoring": false,
+        "snapshots": true
+      }
+    },
+    {
+      "at": "2026-11-05T05:34:44.192Z",
+      "event": "resume_accepted",
+      "id": "bx_tpua7qtx",
+      "status": 202
+    },
+    {
+      "at": "2026-11-05T05:34:44.280Z",
+      "event": "resume_live_observation",
+      "id": "bx_tpua7qtx",
+      "state": "provisioned",
+      "archiveAfter": null,
+      "ttlSeconds": null,
+      "snapshots": true,
+      "monitoring": false,
+      "dataExpiredAt": null,
+      "stoppedAt": null
+    },
+    {
+      "at": "2026-11-05T05:34:46.408Z",
+      "event": "resume_live_observation",
+      "id": "bx_tpua7qtx",
+      "state": "idle",
+      "archiveAfter": null,
+      "ttlSeconds": null,
+      "snapshots": true,
+      "monitoring": false,
+      "dataExpiredAt": null,
+      "stoppedAt": null
+    },
+    {
+      "at": "2026-11-05T05:34:46.573Z",
+      "event": "delete_accepted",
+      "id": "bx_tpua7qtx",
+      "status": 202,
+      "operationId": "bdop_e54bd3d20fb147b0aa54f220ed741750",
+      "operationStatus": "pending"
+    },
+    {
+      "at": "2026-11-05T05:34:48.629Z",
+      "event": "delete_observation",
+      "id": "bx_tpua7qtx",
+      "operationId": "bdop_e54bd3d20fb147b0aa54f220ed741750",
+      "operationStatus": "processing"
+    },
+    {
+      "at": "2026-11-05T05:34:50.684Z",
+      "event": "delete_observation",
+      "id": "bx_tpua7qtx",
+      "operationId": "bdop_e54bd3d20fb147b0aa54f220ed741750",
+      "operationStatus": "completed"
+    },
+    {
+      "at": "2026-11-05T05:34:50.815Z",
+      "event": "cleanup_inventory",
+      "sandboxPages": 1,
+      "sandboxTotal": 0,
+      "ownedSandboxes": [],
+      "snapshotPages": 1,
+      "snapshotTotal": 0,
+      "ownedSavedSnapshots": []
+    },
+    {
+      "at": "2026-11-05T05:34:50.815Z",
+      "event": "proof_finished",
+      "passed": true,
+      "elapsedSeconds": 18,
+      "ownedIds": ["bx_tpua7qtx"]
+    }
+  ]
+}

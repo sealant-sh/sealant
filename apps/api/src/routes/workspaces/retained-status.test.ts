@@ -60,6 +60,9 @@ const harness = (input: {
     durationMs: null,
   } as unknown as WorkspaceAttempt;
   const job = {
+    publication: null,
+    publicationId: null,
+    imageScope: null,
     id: "job_1",
     runId: "run_1",
     status: "succeeded",

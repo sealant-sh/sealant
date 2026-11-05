@@ -23,12 +23,17 @@ const captureSource = (input: {
       },
       harness: { id: "claude-code" },
     },
-    publishedImage: {
-      repository: "sealant/workspaces/demo",
-      tag: "capture",
-      reference: "registry.example.com/demo:capture",
-      digestReference: "registry.example.com/demo@sha256:test",
-      digest: "sha256:test",
+    publication: {
+      kind: "oci",
+      publicationId: "fixture-publication",
+      image: {
+        repository: "sealant/workspaces/demo",
+        tag: "capture",
+        reference: "registry.example.com/demo:capture",
+        digestReference: "registry.example.com/demo@sha256:test",
+        digest: "sha256:test",
+      },
+      evidence: {},
     },
   });
   const source = launch.blueprint.sources.workspace;

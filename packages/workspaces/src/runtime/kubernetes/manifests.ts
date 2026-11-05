@@ -606,7 +606,7 @@ export const buildPod = (build: BuildPodInput): V1Pod => {
 
   const container: V1Container = {
     name: WORKSPACE_CONTAINER_NAME,
-    image: input.publishedImage.digestReference,
+    image: input.publication.image.digestReference,
     imagePullPolicy: "IfNotPresent",
     workingDir: input.blueprint.runtime.workingDirectory,
     env: envList(build.plainEnv, names.envSecret, build.secretEnvKeys),

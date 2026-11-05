@@ -18,6 +18,7 @@ import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { DockerRuntimeAdapter, type DockerCommandRunner } from "./docker-runtime-adapter.js";
+import { inspectLocalPublishedImage } from "./local-image.e2e-support.js";
 import { parseRuntimeAdapterLaunchInput } from "./runtime-adapter.js";
 
 const execFileAsync = promisify(execFile);
@@ -85,12 +86,15 @@ describe("the cloud metadata address", () => {
             runtime: { family: "docker", mode: "require" },
           },
         },
-        publishedImage: {
-          repository: "sealant/metadata-fixture",
-          tag: "e2e",
-          reference: image,
-          digestReference: image,
-          digest: "sha256:e2e-fixture",
+        publication: {
+          kind: "oci",
+          publicationId: "fixture-publication",
+          image: await inspectLocalPublishedImage({
+            repository: "sealant/metadata-fixture",
+            tag: "e2e",
+            reference: image,
+          }),
+          evidence: {},
         },
       }),
     );

@@ -216,6 +216,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       ? []
       : [
           {
+            kind: "microvm" as const,
             adapter: new MicrovmRuntimeAdapter({
               config: microvmConfig,
               api: microvmApi,
@@ -447,7 +448,11 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   const runtimes = [
     ...(containerImageBuilder === undefined
       ? []
-      : containerAdapters.map((adapter) => ({ adapter, imageBuilder: containerImageBuilder }))),
+      : containerAdapters.map((adapter) => ({
+          kind: "oci" as const,
+          adapter,
+          imageBuilder: containerImageBuilder,
+        }))),
     ...microvmRuntimes,
   ];
   const runtimeAdapters = runtimes.map((runtime) => runtime.adapter);
@@ -591,10 +596,6 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     },
   });
 
-  // Reaper (#5): periodically re-drive build jobs stranded by a dead lease holder. The normal path is
-  // queue delivery; this is the recovery net for a worker that died mid-build (pg-boss fails and
-  // dead-letters the expired delivery, it does not redeliver it). Safe to repeat (idempotent build +
-  // container adopt, Stage 1).
   const runReaperTick = (): void => {
     reapStaleWorkspaceBuildJobs({
       db,

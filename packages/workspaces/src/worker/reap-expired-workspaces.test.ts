@@ -24,6 +24,9 @@ import { inMemoryCaptureDrainLedger } from "./capture-drain.js";
 import { reapExpiredWorkspacesEffect } from "./reap-expired-workspaces.js";
 
 const retainedRow: WorkspaceRuntimeInstance = {
+  imageScope: null,
+  publication: null,
+  publicationId: null,
   runId: "run_retained",
   status: "failed",
   adapter: "docker",

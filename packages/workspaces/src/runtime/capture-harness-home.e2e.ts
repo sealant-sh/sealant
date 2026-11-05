@@ -20,6 +20,7 @@ import {
   parseRuntimeAdapterLaunchInput,
   type RuntimeAdapterLaunchInput,
 } from "./index.js";
+import { inspectLocalPublishedImage } from "./local-image.e2e-support.js";
 
 const IMAGE_REF = process.env["SEALANT_CAPTURE_E2E_IMAGE"] ?? DEFAULT_IMAGE_REF;
 const CAPTURE_TOKEN = "capture-harness-home-e2e-token";
@@ -28,11 +29,11 @@ const HARNESS_HOME = "/workspace/harness-home";
 const HARNESS_FILE = `${HARNESS_HOME}/state.json`;
 const HARNESS_CONTENT = '{"session":"restored"}\n';
 
-const createCaptureLaunchInput = (input: {
+const createCaptureLaunchInput = async (input: {
   readonly endpoint: string;
   readonly secretEnvDir: string;
   readonly runId: string;
-}): RuntimeAdapterLaunchInput =>
+}): Promise<RuntimeAdapterLaunchInput> =>
   parseRuntimeAdapterLaunchInput({
     blueprint: {
       version: "1",
@@ -73,12 +74,15 @@ const createCaptureLaunchInput = (input: {
         runtime: { family: "docker", mode: "prefer" },
       },
     },
-    publishedImage: {
-      repository: "sealant-workspace-fedora",
-      tag: "latest",
-      reference: IMAGE_REF,
-      digestReference: IMAGE_REF,
-      digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    publication: {
+      kind: "oci",
+      publicationId: "fixture-publication",
+      image: await inspectLocalPublishedImage({
+        repository: "sealant-workspace-fedora",
+        tag: "latest",
+        reference: IMAGE_REF,
+      }),
+      evidence: {},
     },
     runId: input.runId,
     secretEnvDir: input.secretEnvDir,
@@ -140,7 +144,7 @@ describe.skipIf(!imageAvailable)("capture harness home restoration through the r
     });
 
     const first = await adapter.launch(
-      createCaptureLaunchInput({
+      await createCaptureLaunchInput({
         endpoint: channel.endpoint,
         secretEnvDir,
         runId: `capture-home-source-${randomUUID()}`,
@@ -167,7 +171,7 @@ describe.skipIf(!imageAvailable)("capture harness home restoration through the r
     containers.delete(first.resourceId);
 
     const second = await adapter.launch(
-      createCaptureLaunchInput({
+      await createCaptureLaunchInput({
         endpoint: channel.endpoint,
         secretEnvDir,
         runId: `capture-home-restore-${randomUUID()}`,

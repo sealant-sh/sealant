@@ -362,6 +362,9 @@ export const fakeWorkspaceRepos = (
     sshUser: null,
   };
   const instance: WorkspaceRuntimeInstance = {
+    imageScope: null,
+    publication: null,
+    publicationId: null,
     runId: "run_launch",
     status: options.ready === false ? "pending" : "ready",
     adapter: "docker",

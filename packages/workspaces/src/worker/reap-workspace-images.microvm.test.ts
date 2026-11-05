@@ -20,17 +20,18 @@ const nameOf = (letter: string): string => microvmImageName(plan(letter));
 
 const microvm = (
   letter: string,
-  overrides: Partial<PublishedWorkspaceImage> = {},
+  overrides: { readonly runId?: string; readonly publishedAt?: Date } = {},
 ): PublishedWorkspaceImage => ({
   jobId: `job-${letter}`,
-  runId: null,
+  runId: overrides.runId ?? null,
   registryId: "default",
-  publishedReference: `${arn(nameOf(letter))}:1.0`,
-  repository: nameOf(letter),
-  digest: `sha256:${plan(letter)}`,
-  planHash: plan(letter),
-  publishedAt: hoursAgo(1),
-  ...overrides,
+  publication: {
+    kind: "microvm",
+    publicationId: `job-${letter}`,
+    image: { imageArn: arn(nameOf(letter)), imageVersion: "1.0", planHash: plan(letter) },
+    evidence: { planHash: plan(letter) },
+  },
+  publishedAt: overrides.publishedAt ?? hoursAgo(1),
 });
 
 // Newest first, as the repository returns them.
@@ -40,9 +41,22 @@ const published: PublishedWorkspaceImage[] = [
   microvm("b", { publishedAt: hoursAgo(2) }),
   microvm("c", { publishedAt: hoursAgo(3) }),
   {
-    ...microvm("d", { publishedAt: hoursAgo(4) }),
-    publishedReference: "sealant-workspace-arch:plan-000000000000",
-    repository: "sealant-workspace-arch",
+    jobId: "job-d",
+    runId: null,
+    registryId: "default",
+    publishedAt: hoursAgo(4),
+    publication: {
+      kind: "oci",
+      publicationId: "job-d",
+      evidence: { planHash: plan("d") },
+      image: {
+        repository: "sealant-workspace-arch",
+        tag: "plan-000000000000",
+        reference: "sealant-workspace-arch:plan-000000000000",
+        digestReference: `sealant-workspace-arch@sha256:${plan("d")}`,
+        digest: `sha256:${plan("d")}`,
+      },
+    },
   },
 ];
 
@@ -130,6 +144,36 @@ describe("reapWorkspaceImages, MicroVM images", () => {
       { repository: "sealant-workspace-arch", digest: `sha256:${plan("d")}` },
     ]);
     expect(summary).toMatchObject({ kept: 2, deleted: 2 });
+  });
+
+  it("keeps every version of an image when one version is retained", async () => {
+    const existing = microvm("a");
+    if (existing.publication.kind !== "microvm") throw new Error("MicroVM fixture required.");
+    published.push({
+      ...existing,
+      jobId: "job-a-old-version",
+      runId: null,
+      publishedAt: hoursAgo(100),
+      publication: {
+        ...existing.publication,
+        publicationId: "job-a-old-version",
+        image: { ...existing.publication.image, imageVersion: "0.9" },
+      },
+    });
+    const aws = account([]);
+    try {
+      await reapWorkspaceImages({
+        db: {} as never,
+        registryClient: registry().registryClient,
+        microvmImages: aws.microvmImages,
+        retainedPlans: 0,
+        minAgeMs: 0,
+        now,
+      });
+      expect(aws.deleted).toEqual([nameOf("b"), nameOf("c")]);
+    } finally {
+      published.pop();
+    }
   });
 
   it("leaves MicroVM images alone on a worker that does not build them", async () => {

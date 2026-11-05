@@ -114,6 +114,22 @@ const IN_PROGRESS: ReadonlySet<MicrovmImageDescription["state"]> = new Set([
   "DELETING",
 ]);
 
+/** The existing MicroVM recipe owner also plans read-only inspection. */
+export const planMicrovmWorkspaceImage = (
+  spec: NewWorkspace,
+  settings: {
+    readonly agentPort: number;
+    readonly memoryMiB: number;
+    readonly contextDigest: string;
+  },
+  planWorkspaceSpec = (blueprint: NewWorkspace) =>
+    planWorkspaceImageBuild({ blueprint, platform: MICROVM_IMAGE_PLATFORM }),
+): PlannedWorkspaceImageBuild => {
+  const planned = planWorkspaceSpec(spec);
+  const recipe = microvmRecipe(planned, { ...settings, dockerService: wantsDockerService(spec) });
+  return { ...planned, containerfile: recipe.containerfile, planHash: recipe.planHash };
+};
+
 export class MicrovmWorkspaceImageBuilder implements WorkspaceImageBuilder {
   // AWS's managed image build: recipe steps run on the platform, under the build role.
   readonly isolation = "isolated" as const;
@@ -124,20 +140,16 @@ export class MicrovmWorkspaceImageBuilder implements WorkspaceImageBuilder {
     this.#options = options;
   }
 
-  readonly plan = (spec: NewWorkspace): PlannedWorkspaceImageBuild => {
-    const planned = (
-      this.#options.planWorkspaceSpec ??
-      ((blueprint: NewWorkspace) =>
-        planWorkspaceImageBuild({ blueprint, platform: MICROVM_IMAGE_PLATFORM }))
-    )(spec);
-    const recipe = microvmRecipe(planned, {
-      agentPort: this.#options.config.agentPort,
-      memoryMiB: this.#options.config.memoryMiB,
-      dockerService: wantsDockerService(spec),
-      contextDigest: this.#options.contextDigest,
-    });
-    return { ...planned, containerfile: recipe.containerfile, planHash: recipe.planHash };
-  };
+  readonly plan = (spec: NewWorkspace): PlannedWorkspaceImageBuild =>
+    planMicrovmWorkspaceImage(
+      spec,
+      {
+        agentPort: this.#options.config.agentPort,
+        memoryMiB: this.#options.config.memoryMiB,
+        contextDigest: this.#options.contextDigest,
+      },
+      this.#options.planWorkspaceSpec,
+    );
 
   readonly buildAndPublish = async (
     input: BuildAndPublishInput,
@@ -181,7 +193,7 @@ export class MicrovmWorkspaceImageBuilder implements WorkspaceImageBuilder {
     };
     const build: WorkspaceBuild = {
       builder: { id: planned.osFamily, osFamily: planned.osFamily },
-      artifacts: [{ kind: "oci-image", name, reference }],
+      artifacts: [{ kind: "microvm-image", name, imageArn: image.imageArn, imageVersion: version }],
       metadata: {
         defaultArtifactName: name,
         notes: [

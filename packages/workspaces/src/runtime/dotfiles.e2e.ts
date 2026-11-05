@@ -38,6 +38,7 @@ import {
   dotfilesProbeFindings,
 } from "./dotfiles-e2e-fixture.js";
 import { hostDirectoryLaunchMaterialStager } from "./launch-material.js";
+import { inspectLocalPublishedImage } from "./local-image.e2e-support.js";
 import { parseRuntimeAdapterLaunchInput } from "./runtime-adapter.js";
 
 const E2E_ENABLED = process.env["SEALANT_DOTFILES_E2E"] === "1";
@@ -142,12 +143,15 @@ describe.skipIf(!E2E_ENABLED)(
         parseRuntimeAdapterLaunchInput({
           runId,
           blueprint,
-          publishedImage: {
-            repository: "sealant/dotfiles-e2e",
-            tag: "e2e",
-            reference: imageReference,
-            digestReference: imageReference,
-            digest: "sha256:dotfiles-e2e",
+          publication: {
+            kind: "oci",
+            publicationId: "fixture-publication",
+            image: await inspectLocalPublishedImage({
+              repository: "sealant/dotfiles-e2e",
+              tag: "e2e",
+              reference: imageReference,
+            }),
+            evidence: {},
           },
           ...(staged.dotfilesArchiveDir === undefined
             ? {}

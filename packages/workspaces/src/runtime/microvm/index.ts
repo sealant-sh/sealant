@@ -25,6 +25,7 @@ export {
   MICROVM_MAX_DURATION_CAP_SECONDS,
   MicrovmRuntimeConfigError,
   microvmRuntimeConfigFromEnv,
+  microvmImagePlanConfigFromEnv,
   microvmRuntimeConfigSchema,
   type MicrovmRuntimeConfig,
   type MicrovmRuntimeEnvLike,

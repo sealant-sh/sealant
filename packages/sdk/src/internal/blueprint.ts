@@ -320,6 +320,7 @@ export const buildCreateWorkspaceRequest = (
   return {
     payload: {
       ownerUserId: config.hostLocal.ownerUserId,
+      ...(options.imageScopeId === undefined ? {} : { imageScopeId: options.imageScopeId }),
       registryId: config.hostLocal.registryId,
       repository: sanitizeRepoSlug(tail),
       tag: `sdk-${randomUUID().slice(0, 8)}`,

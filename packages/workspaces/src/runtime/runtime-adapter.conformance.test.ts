@@ -9,11 +9,6 @@
  *      and
  *   2. the launch boots the image that build published, and no other.
  *
- * The cases are keyed by `RuntimeAdapterId`, so adding an id without a case does not compile, and
- * a case that cannot say which image it boots fails here. A runtime that boots no container image
- * (MicroVM) builds with its own builder here, and is held to the same two facts. Live proof stays
- * with each runtime's e2e.
- *
  * A blueprint's dotfiles are part of what a project is too. Each adapter id is also held to a
  * third fact:
  *
@@ -59,7 +54,11 @@ import type { MicrovmRunInput } from "./microvm/api.js";
 import { microvmRuntimeConfigFromEnv } from "./microvm/config.js";
 import { microvmImageReference } from "./microvm/image-reference.js";
 import { collectMountIntents } from "./mount-intent.js";
-import { runtimeAdapterIdSchema, type RuntimeAdapterId } from "./runtime-adapter.js";
+import {
+  selectRuntimeAdapter,
+  runtimeAdapterIdSchema,
+  type RuntimeAdapterId,
+} from "./runtime-adapter.js";
 
 const PACKAGE = "ripgrep";
 
@@ -73,7 +72,7 @@ const customisedBlueprint: NewWorkspace = {
   tooling: { ...cases.gitSource.blueprint.tooling, packages: [{ id: PACKAGE }] },
 };
 
-const launchInput = { ...cases.gitSource, blueprint: customisedBlueprint, publishedImage };
+const launchInput = { ...cases.gitSource, blueprint: customisedBlueprint };
 
 const kubernetesBootedImage = (adapter: "k8s" | "k3s"): string => {
   const config = kubernetesRuntimeConfigSchema.parse({
@@ -157,7 +156,7 @@ interface BuiltAndBooted {
   readonly booted: string;
 }
 
-const bootedImage: Record<RuntimeAdapterId, () => Promise<BuiltAndBooted>> = {
+const bootedImage: Record<Exclude<RuntimeAdapterId, "boat">, () => Promise<BuiltAndBooted>> = {
   docker: async () => {
     const calls: string[][] = [];
     const adapter = new DockerRuntimeAdapter({
@@ -247,7 +246,22 @@ const bootedImage: Record<RuntimeAdapterId, () => Promise<BuiltAndBooted>> = {
       buildId: "job-conformance",
     });
     await adapter
-      .launch({ ...launchInput, publishedImage: built.publishedImage })
+      .launch({
+        ...launchInput,
+        publication: {
+          kind: "microvm",
+          publicationId: "fixture-publication",
+          image: {
+            imageArn: built.publishedImage.reference.slice(
+              0,
+              built.publishedImage.reference.lastIndexOf(":"),
+            ),
+            imageVersion: built.publishedImage.tag,
+            planHash: built.publishedImage.digest.replace(/^sha256:/, ""),
+          },
+          evidence: {},
+        },
+      })
       .catch(() => undefined);
     const run = runs[0];
     return {
@@ -276,13 +290,26 @@ describe("runtime adapter conformance: a blueprint's image customisation", () =>
     expect(microvm.containerfile).toContain(PACKAGE);
   });
 
-  it("has a case for every adapter id, and no case for an id that does not exist", () => {
+  it("refuses required Boat execution while Boat has no registered adapter", () => {
+    expect(() =>
+      selectRuntimeAdapter({
+        blueprint: {
+          ...customisedBlueprint,
+          target: { ...customisedBlueprint.target, runtime: { family: "boat", mode: "require" } },
+        },
+        adapters: [new DockerRuntimeAdapter()],
+        defaultAdapterId: "docker",
+      }),
+    ).toThrow("No runtime adapter is registered for target.runtime.family 'boat'.");
+  });
+
+  it("has a case for every registered adapter family", () => {
     expect(Object.keys(bootedImage).toSorted()).toEqual(
-      [...runtimeAdapterIdSchema.options].toSorted(),
+      runtimeAdapterIdSchema.options.filter((id) => id !== "boat").toSorted(),
     );
   });
 
-  for (const adapterId of runtimeAdapterIdSchema.options) {
+  for (const adapterId of runtimeAdapterIdSchema.options.filter((id) => id !== "boat")) {
     it(`${adapterId} boots the image the build published`, async () => {
       const { published, booted } = await bootedImage[adapterId]();
       expect(published).not.toBe("");
@@ -421,7 +448,7 @@ const kubernetesCarriedDotfiles = async (adapter: "k8s" | "k3s"): Promise<Carrie
   };
 };
 
-const carriedDotfiles: Record<RuntimeAdapterId, () => Promise<CarriedDotfiles>> = {
+const carriedDotfiles: Record<Exclude<RuntimeAdapterId, "boat">, () => Promise<CarriedDotfiles>> = {
   docker: async () => {
     const dir = await stageOnHost();
     const calls: string[][] = [];
@@ -532,7 +559,19 @@ const carriedDotfiles: Record<RuntimeAdapterId, () => Promise<CarriedDotfiles>> 
         blueprint: dotfilesBlueprint,
         runId: DOTFILES_RUN_ID,
         dotfilesArchiveDir: dir,
-        publishedImage: built.publishedImage,
+        publication: {
+          kind: "microvm",
+          publicationId: "fixture-publication",
+          image: {
+            imageArn: built.publishedImage.reference.slice(
+              0,
+              built.publishedImage.reference.lastIndexOf(":"),
+            ),
+            imageVersion: built.publishedImage.tag,
+            planHash: built.publishedImage.digest.replace(/^sha256:/, ""),
+          },
+          evidence: {},
+        },
       })
       .catch(() => undefined);
     const push = agentLaunchRequestSchema.parse(pushes[0]);
@@ -545,7 +584,7 @@ const carriedDotfiles: Record<RuntimeAdapterId, () => Promise<CarriedDotfiles>> 
 };
 
 /** Where each runtime tells the daemon to read the archives; the bridge decides for Cloudflare. */
-const expectedArchiveDir: Record<RuntimeAdapterId, string | undefined> = {
+const expectedArchiveDir: Record<Exclude<RuntimeAdapterId, "boat">, string | undefined> = {
   docker: "/run/sealant/dotfiles",
   k8s: `${LAUNCH_MOUNT_PATH}/dotfiles`,
   k3s: `${LAUNCH_MOUNT_PATH}/dotfiles`,
@@ -571,13 +610,13 @@ describe("runtime adapter conformance: a blueprint's dotfiles", () => {
     expect(microvm.containerfile).toMatch(/\bchezmoi\b/);
   });
 
-  it("has a case for every adapter id", () => {
+  it("has a case for every registered adapter family", () => {
     expect(Object.keys(carriedDotfiles).toSorted()).toEqual(
-      [...runtimeAdapterIdSchema.options].toSorted(),
+      runtimeAdapterIdSchema.options.filter((id) => id !== "boat").toSorted(),
     );
   });
 
-  for (const adapterId of runtimeAdapterIdSchema.options) {
+  for (const adapterId of runtimeAdapterIdSchema.options.filter((id) => id !== "boat")) {
     it(`${adapterId} carries every archive, in order, with its manager, to the daemon`, async () => {
       const carried = await carriedDotfiles[adapterId]();
       expect(carried.manifest).toEqual({

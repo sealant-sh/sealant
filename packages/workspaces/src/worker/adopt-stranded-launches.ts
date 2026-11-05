@@ -37,11 +37,11 @@ import {
 import { Effect } from "effect";
 
 import type { RuntimeLaunchIdentity } from "../runtime/launch-retention.js";
-import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
+import type { RuntimeAdapterLifecycle } from "../runtime/runtime-adapter.js";
 import { runIsCaptureSourced, type CaptureDrainLedger } from "./capture-drain.js";
 
 export interface AdoptStrandedLaunchesOptions {
-  readonly runtimeAdapters: readonly RuntimeAdapter[];
+  readonly runtimeAdapters: readonly RuntimeAdapterLifecycle[];
   /** Only these runtime resources (an exit event names one); absent = every stranded launch. */
   readonly resourceIds?: readonly string[];
   /** Records an adopted executor that already ended as retained, so recovery takes it. */

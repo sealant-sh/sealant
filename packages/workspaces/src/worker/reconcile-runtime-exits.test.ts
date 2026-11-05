@@ -59,6 +59,9 @@ vi.mock("@sealant/db", async (importOriginal) => {
 const runtimeInstance = (
   overrides: Partial<WorkspaceRuntimeInstance> = {},
 ): WorkspaceRuntimeInstance => ({
+  imageScope: null,
+  publication: null,
+  publicationId: null,
   runId: "run_1",
   status: "ready",
   adapter: "docker",

@@ -34,6 +34,7 @@ import {
   type HomeWriteFence,
 } from "./home-credentials.js";
 import { DockerRuntimeAdapter, parseRuntimeAdapterLaunchInput } from "./index.js";
+import { inspectLocalPublishedImage } from "./local-image.e2e-support.js";
 
 const IMAGE_REF =
   process.env["SEALANT_HOME_CREDENTIALS_E2E_IMAGE"] ?? "sealant-workspace-fedora:latest";
@@ -105,12 +106,15 @@ beforeAll(async () => {
         },
         target: { os: { family: "fedora" }, runtime: { family: "docker" } },
       },
-      publishedImage: {
-        repository: "sealant-workspace-fedora",
-        tag: "latest",
-        reference: IMAGE_REF,
-        digestReference: IMAGE_REF,
-        digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      publication: {
+        kind: "oci",
+        publicationId: "fixture-publication",
+        image: await inspectLocalPublishedImage({
+          repository: "sealant-workspace-fedora",
+          tag: "latest",
+          reference: IMAGE_REF,
+        }),
+        evidence: {},
       },
       runId: `home-credentials-e2e-${randomUUID()}`,
     }),

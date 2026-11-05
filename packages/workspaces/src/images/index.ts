@@ -43,6 +43,7 @@ export {
   MICROVM_IMAGE_PLAN_TAG,
   MicrovmImageBuildError,
   MicrovmWorkspaceImageBuilder,
+  planMicrovmWorkspaceImage,
   type MicrovmImageBuildConfig,
   type MicrovmWorkspaceImageBuilderOptions,
 } from "./microvm/builder.js";
@@ -61,6 +62,17 @@ export {
   type MicrovmImageState,
 } from "./microvm/image-api.js";
 export {
+  BoatNativeCatalog,
+  NativeCatalogError,
+  boatNativeCatalogLayer,
+  boatNativeCatalogLayerNoDeps,
+  type BoatNativeCatalogService,
+  type BoatNativeCatalogOptions,
+  type NativeAcquireInput,
+  type NativeCatalogFailure,
+  type NativeCatalogSweep,
+} from "./boat/catalog.js";
+export {
   MICROVM_AGENT_FILES,
   MICROVM_RECIPE_VERSION,
   isMicrovmImageNameOf,
@@ -69,3 +81,9 @@ export {
   microvmRecipe,
   mirroredBaseImage,
 } from "./microvm/recipe.js";
+
+export {
+  BoatImageInspection,
+  boatImageInspectionLayer,
+  type BoatImageInspectionService,
+} from "./boat/inspection.js";

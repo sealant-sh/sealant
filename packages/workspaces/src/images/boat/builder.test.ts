@@ -1,14 +1,25 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+  symlink,
+  readdir,
+  chmod,
+  link,
+} from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { nativeBuildOwnershipSchema, nativeSnapshotArtifactSchema } from "@sealant/validators";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { HttpBoatApi } from "../../runtime/boat/api.js";
-import { BoatSecret } from "../../runtime/boat/config.js";
+import { HttpBoatApi, boatBuildOwnershipLabels } from "../../runtime/boat/api.js";
+import { BoatSecret, BoatBuildOwnership } from "../../runtime/boat/config.js";
 import { BoatSnapshotBuilder } from "./builder.js";
 import { NATIVE_RUNTIME_PIN } from "./runtime-bundle.js";
 
@@ -25,6 +36,7 @@ const respond = (r: http.ServerResponse, value: unknown, status = 200) =>
 const fixture = async (cleanupTimeoutMs = 1000) => {
   const directory = await mkdtemp(join(tmpdir(), "boat-builder-test-"));
   resources.push(async () => {
+    await readdir(directory);
     await rm(directory, { recursive: true, force: true });
   });
   const build = randomUUID();
@@ -71,6 +83,8 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
   let deletionAccepted = false;
   let delayDelete = false;
   let finishDelete: (() => void) | undefined;
+  let snapshotReadFailure: "html" | "unexpected-code" | "wrong-resource" | undefined;
+  let inventory: Array<{ id: string; state: string; labels: Record<string, string> }> = [];
   const server = http.createServer((request, response) => {
     const data: Buffer[] = [];
     request.on("data", (b: Buffer) => data.push(b));
@@ -83,7 +97,13 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
           ? {}
           : { key: request.headers["idempotency-key"] }),
       });
-      if (request.url === "/api/v1/sandboxes" && request.method === "POST") {
+      if (request.url?.startsWith("/api/v1/sandboxes?")) {
+        respond(response, {
+          ok: true,
+          sandboxes: inventory,
+          pageInfo: { hasMore: false, nextCursor: null, limit: 200 },
+        });
+      } else if (request.url === "/api/v1/sandboxes" && request.method === "POST") {
         const saved: unknown = JSON.parse(requireJournal());
         expect(saved).toMatchObject({
           allocation: { state: "intent", key: journal.allocation.key },
@@ -140,6 +160,18 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
         if (request.method === "DELETE") {
           snapshot = undefined;
           respond(response, { ok: true, name, status: "deleted" });
+        } else if (snapshotReadFailure === "html") {
+          response.writeHead(404, { "content-type": "text/html" }).end("<html>Not found</html>");
+        } else if (snapshotReadFailure !== undefined) {
+          respond(
+            response,
+            {
+              ok: false,
+              code:
+                snapshotReadFailure === "wrong-resource" ? "sandbox_not_found" : "unknown_route",
+            },
+            404,
+          );
         } else if (snapshot !== undefined) respond(response, { ok: true, snapshot });
         else respond(response, { ok: false, code: "not_found" }, 404);
       } else respond(response, { ok: false, code: "not_found" }, 404);
@@ -170,16 +202,23 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
   });
   return {
     builder,
+    api: parsed.value,
     directory,
     path,
     journal,
     identity,
     requests,
+    inventory: (entries: typeof inventory) => {
+      inventory = entries;
+    },
     loseCreate: () => {
       failCreateOnce = true;
     },
     snapshot: (value: typeof snapshot) => {
       snapshot = value;
+    },
+    failSnapshotRead: (value: typeof snapshotReadFailure) => {
+      snapshotReadFailure = value;
     },
     holdDelete: () => {
       delayDelete = true;
@@ -197,6 +236,94 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
 };
 
 describe("attempt-owned durable native cleanup", () => {
+  it("cleans a historical runtime identity without current-pin reuse authority or invented probe", async () => {
+    const f = await fixture();
+    await f.write({
+      ...f.journal,
+      runtime: {
+        ...f.journal.runtime,
+        source: f.journal.runtime.source.replace("next.180", "next.100"),
+        manifest: "d".repeat(64),
+        sealantd: "e".repeat(64),
+      },
+      allocation: { ...f.journal.allocation, state: "known", id },
+    });
+    expect(await f.builder.cleanup(f.path)).toEqual({ ok: true, value: undefined });
+    expect(await f.read()).toMatchObject({
+      phase: "complete",
+      runtime: { manifest: "d".repeat(64) },
+    });
+    expect(await f.read()).not.toHaveProperty("evidence");
+  });
+
+  it("rejects traversal and symlink journals without provider work", async () => {
+    const f = await fixture();
+    const alias = join(f.directory, randomUUID() + ".json");
+    await symlink(f.path, alias);
+    expect(await f.builder.cleanup(alias)).toMatchObject({ ok: false });
+    expect(await f.builder.cleanup(join(f.directory, "..", "unowned.json"))).toMatchObject({
+      ok: false,
+      error: { code: "native-invalid-journal-path" },
+    });
+    const inventory = await f.builder.journals({ limit: 10 });
+    expect(inventory).toMatchObject({
+      ok: true,
+      value: {
+        entries: [{ buildId: f.journal.build }],
+        failures: [{ name: alias.slice(f.directory.length + 1) }],
+      },
+    });
+    expect(f.requests).toEqual([]);
+  });
+  it("rejects noncanonical paths, public files, hard links and an aliased root", async () => {
+    const f = await fixture();
+    expect(
+      await f.builder.cleanup(
+        f.directory + "/../" + f.directory.split("/").at(-1) + "/" + f.journal.build + ".json",
+      ),
+    ).toMatchObject({ ok: false, error: { code: "native-invalid-journal-path" } });
+    await chmod(f.path, 0o644);
+    expect(await f.builder.cleanup(f.path)).toMatchObject({
+      ok: false,
+      error: { code: "native-unsafe-journal" },
+    });
+    await chmod(f.path, 0o600);
+    const hardLink = join(f.directory, randomUUID() + ".json");
+    await link(f.path, hardLink);
+    expect(await f.builder.cleanup(f.path)).toMatchObject({
+      ok: false,
+      error: { code: "native-unsafe-journal" },
+    });
+    const alias = join(f.directory, "alias");
+    await symlink(f.directory, alias);
+    const builder = new BoatSnapshotBuilder({ api: f.api, owner, journalDirectory: alias });
+    expect(await builder.journals({ limit: 10 })).toMatchObject({
+      ok: false,
+      error: { code: "native-unsafe-journal-directory" },
+    });
+    expect(f.requests).toEqual([]);
+  });
+  it("continues bounded inventory past an invalid basename without reading outside the root", async () => {
+    const f = await fixture();
+    await writeFile(join(f.directory, "!invalid"), "untrusted", { mode: 0o600 });
+    expect(await f.builder.journals({ limit: 1 })).toMatchObject({
+      ok: true,
+      value: {
+        next: "!invalid",
+        entries: [],
+        failures: [{ name: "!invalid", error: { code: "native-invalid-journal-path" } }],
+      },
+    });
+    expect(await f.builder.journals({ limit: 1, after: "!invalid" })).toMatchObject({
+      ok: true,
+      value: { entries: [{ buildId: f.journal.build }], failures: [] },
+    });
+    expect(await f.builder.journals({ limit: 1, after: "../unowned" })).toMatchObject({
+      ok: false,
+      error: { code: "native-invalid-journal-page" },
+    });
+    expect(f.requests).toEqual([]);
+  });
   it("keeps missing sandboxes unresolved without a validated deletion intent", async () => {
     const f = await fixture();
     await f.write({ ...f.journal, allocation: { ...f.journal.allocation, state: "known", id } });
@@ -253,6 +380,13 @@ describe("attempt-owned durable native cleanup", () => {
     const creates = f.requests.filter((r) => r.method === "POST");
     expect(creates).toHaveLength(2);
     expect(creates[0]?.key).toBe(f.journal.allocation.key);
+    expect(creates[0]?.body).toEqual({
+      type: "small",
+      ttlSeconds: 900,
+      noEnv: true,
+      monitoring: false,
+      labels: { "sealant-dev": "boat-stream", "sealant-build": f.journal.build },
+    });
     expect(creates[1]).toEqual(creates[0]);
     expect(await f.read()).toMatchObject({
       phase: "complete",
@@ -262,6 +396,32 @@ describe("attempt-owned durable native cleanup", () => {
     const count = f.requests.length;
     expect(await f.builder.cleanup(f.path)).toEqual({ ok: true, value: undefined });
     expect(f.requests).toHaveLength(count);
+  });
+
+  it("replays the private snapshot policy recorded by a newer allocation intent", async () => {
+    const f = await fixture();
+    await f.write({
+      ...f.journal,
+      allocation: { ...f.journal.allocation, requestVersion: 2 },
+    });
+    f.loseCreate();
+    expect(await f.builder.cleanup(f.path)).toEqual({ ok: true, value: undefined });
+    const creates = f.requests.filter((r) => r.method === "POST");
+    expect(creates).toHaveLength(2);
+    expect(creates[0]?.body).toEqual({
+      type: "small",
+      ttlSeconds: 900,
+      noEnv: true,
+      monitoring: false,
+      snapshots: true,
+      visibility: "private",
+      labels: { "sealant-dev": "boat-stream", "sealant-build": f.journal.build },
+    });
+    expect(creates[1]).toEqual(creates[0]);
+    expect(await f.read()).toMatchObject({
+      phase: "complete",
+      allocation: { state: "deleted", requestVersion: 2 },
+    });
   });
 
   it("refuses an expired allocation intent without allocating a replacement", async () => {
@@ -276,6 +436,62 @@ describe("attempt-owned durable native cleanup", () => {
     });
     expect(f.requests).toEqual([]);
   });
+
+  it.each(["unknown", "duplicate"] as const)(
+    "keeps an expired version 3 create %s without reissuing or saving",
+    async (mode) => {
+      const f = await fixture();
+      const ownership = nativeBuildOwnershipSchema.parse({
+        publicationId: randomUUID(),
+        buildId: f.journal.build,
+        key: {
+          deploymentId: "local-stage2a",
+          scope: { kind: "owner", ownerUserId: "usr_stage2a" },
+          recipeHash: f.journal.recipeHash,
+          runtime: f.journal.runtime,
+          assetsHash: "d".repeat(64),
+          platform: "linux/amd64",
+        },
+      });
+      const parsed = BoatBuildOwnership.parse({ owner, reservation: ownership });
+      if (!parsed.ok) throw parsed.error;
+      if (mode === "duplicate") {
+        const labels = boatBuildOwnershipLabels(parsed.value);
+        f.inventory([
+          { id, state: "ready", labels },
+          { id: "bx_3456789a", state: "ready", labels },
+        ]);
+      }
+      await f.write({
+        ...f.journal,
+        ownership,
+        allocation: {
+          ...f.journal.allocation,
+          requestVersion: 3,
+          requestedAt: "2020-01-01T00:00:00.000Z",
+        },
+      });
+      expect(await f.builder.reconcileBuild(ownership)).toMatchObject({
+        ok: false,
+        error: {
+          code:
+            mode === "duplicate"
+              ? "native-allocation-conflict"
+              : "native-idempotency-window-expired",
+        },
+      });
+      expect(f.requests.length).toBeGreaterThan(0);
+      expect(
+        f.requests.every(
+          (request) => request.method === "GET" && request.path.startsWith("/api/v1/sandboxes?"),
+        ),
+      ).toBe(true);
+      expect(await f.read()).toMatchObject({
+        allocation: { state: "intent", requestVersion: 3 },
+        save: { state: "none" },
+      });
+    },
+  );
 
   it.each(["name", "sourceSandboxId", "createdAt", "snapshotId"] as const)(
     "never deletes a snapshot with replaced %s after scratch cleanup",
@@ -324,6 +540,53 @@ describe("attempt-owned durable native cleanup", () => {
     expect(f.requests.filter((r) => r.method === "POST")).toHaveLength(1);
     expect(await f.read()).toMatchObject({ phase: "complete", save: { state: "removed" } });
   });
+
+  for (const failure of ["html", "unexpected-code", "wrong-resource"] as const)
+    it(`keeps ${failure} snapshot 404 unresolved until a valid provider observation`, async () => {
+      const f = await fixture();
+      const artifact = nativeSnapshotArtifactSchema.parse({
+        kind: "boat-saved-snapshot",
+        owner,
+        build: f.journal.build,
+        recipeHash: f.journal.recipeHash,
+        receiptHash: "e".repeat(64),
+        runtime: f.journal.runtime,
+        identity: f.identity,
+      });
+      await f.write({
+        ...f.journal,
+        phase: "published",
+        receiptHash: artifact.receiptHash,
+        allocation: { ...f.journal.allocation, state: "deleted", id, deletion: operation },
+        save: {
+          state: "known",
+          name: f.identity.name,
+          sourceSandboxId: id,
+          requestedAt: f.identity.createdAt,
+          identity: f.identity,
+        },
+      });
+      f.failSnapshotRead(failure);
+      const code =
+        failure === "html"
+          ? "invalid_response"
+          : failure === "wrong-resource"
+            ? "sandbox_not_found"
+            : "provider_error";
+      expect(await f.builder.remove(artifact)).toMatchObject({
+        ok: false,
+        error: { code: `native-provider-${code}` },
+      });
+      expect(await f.read()).not.toHaveProperty("removal");
+      expect(f.requests.some((request) => request.method === "DELETE")).toBe(false);
+
+      const observations = f.requests.length;
+      f.failSnapshotRead(undefined);
+      f.snapshot({ ...f.identity, status: "ready" });
+      expect(await f.builder.remove(artifact)).toEqual({ ok: true, value: "deleted" });
+      expect(f.requests.length).toBeGreaterThan(observations);
+      expect(await f.read()).toMatchObject({ phase: "published", removal: "complete" });
+    });
 
   it("serializes only the same attempt across kernel locks", async () => {
     const f = await fixture();

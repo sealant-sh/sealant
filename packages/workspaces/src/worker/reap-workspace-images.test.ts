@@ -6,17 +6,31 @@ import { reapWorkspaceImages } from "./reap-workspace-images.js";
 
 const hoursAgo = (hours: number): Date => new Date(Date.UTC(2026, 8, 12, 12 - hours));
 
-const image = (
-  overrides: Partial<PublishedWorkspaceImage> & { readonly digest: string },
-): PublishedWorkspaceImage => ({
-  jobId: `job-${overrides.digest}`,
-  runId: null,
+const image = (overrides: {
+  readonly digest: string;
+  readonly jobId?: string;
+  readonly runId?: string;
+  readonly planHash?: string;
+  readonly publishedAt?: Date;
+  readonly publishedReference?: string;
+  readonly repository?: string;
+}): PublishedWorkspaceImage => ({
+  jobId: overrides.jobId ?? `job-${overrides.digest}`,
+  runId: overrides.runId ?? null,
   registryId: "default",
-  publishedReference: "sealant-workspace-arch:plan-000000000000",
-  repository: "wt-legacy",
-  planHash: null,
-  publishedAt: hoursAgo(1),
-  ...overrides,
+  publication: {
+    kind: "oci",
+    publicationId: `job-${overrides.digest}`,
+    image: {
+      repository: overrides.repository ?? "wt-legacy",
+      tag: "test",
+      reference: overrides.publishedReference ?? "sealant-workspace-arch:plan-000000000000",
+      digestReference: `wt-legacy@${overrides.digest}`,
+      digest: overrides.digest,
+    },
+    evidence: overrides.planHash === undefined ? {} : { planHash: overrides.planHash },
+  },
+  publishedAt: overrides.publishedAt ?? hoursAgo(1),
 });
 
 // Newest first, as the repository returns them.

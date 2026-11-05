@@ -70,7 +70,10 @@ import {
   hostDirectoryLaunchMaterialStager,
   type LaunchMaterialStager,
 } from "../runtime/launch-material.js";
-import type { RuntimeAdapter, RuntimeAdapterRecoverResult } from "../runtime/runtime-adapter.js";
+import type {
+  RuntimeAdapterLifecycle,
+  RuntimeAdapterRecoverResult,
+} from "../runtime/runtime-adapter.js";
 import { SealantRuntimeControlLive } from "../sealantd/runtime.js";
 import {
   sealantTargetForRuntimeInstance,
@@ -139,7 +142,7 @@ const RECOVERY_CLAIM_MARGIN_MS = 3 * 60_000;
 const DEFAULT_MAX_CONCURRENT = 8;
 
 export interface RecoverRetainedExecutorsOptions {
-  readonly runtimeAdapters: readonly RuntimeAdapter[];
+  readonly runtimeAdapters: readonly RuntimeAdapterLifecycle[];
   readonly targetOptions?: SealantTargetDerivationOptions;
   readonly captureDrain: {
     readonly ledger: CaptureDrainLedger;

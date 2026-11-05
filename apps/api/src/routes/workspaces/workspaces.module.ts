@@ -9,6 +9,7 @@ import {
   type FlushWorkspaceCaptureRequest,
   type GetWorkspaceCaptureStatusQuery,
   type ReplanWorkspaceCaptureRequest,
+  WorkspaceRuntimeRequirementUnsupportedError,
   WorkspaceBadGatewayError,
   isOciRepository,
   isOciTag,
@@ -77,6 +78,7 @@ import {
   parseStoredCredential,
 } from "@sealant/credentials";
 import {
+  ResourceDomainRepo,
   ConnectedAccountRepo,
   GitHubInstallationRepo,
   GitHubInstallationRepositoryCacheRepo,
@@ -101,6 +103,9 @@ import {
 } from "@sealant/source-integrations";
 import { executeExecRun } from "@sealant/telemetry";
 import {
+  boatSupport,
+  nativeImageScopeSchema,
+  BOAT_RUNTIME_ID,
   type RuntimeAdapterId,
   newWorkspaceSchema,
   workspaceBindSchema,
@@ -112,6 +117,9 @@ import {
   processUserCapability,
   type ProcessUserChannel,
   planWorkspaceImageBuild,
+  planMicrovmWorkspaceImage,
+  microvmImagePlanConfigFromEnv,
+  loadMicrovmContextFiles,
   processImagePlatform,
   type PersonLayoutContext,
   homePathProblem,
@@ -136,13 +144,15 @@ import {
   type SealantTarget,
   resolveWorkspaceError,
   resolveWorkspacePublishedImage,
+  resolveWorkspacePublication,
+  BoatImageInspection,
   resolveWorkspaceRuntime,
   resolveWorkspacePhase,
   resolveWorkspaceStatus,
   executorIsRetained,
   type WorkspaceSshGatewayConfig,
 } from "@sealant/workspaces";
-import { Cause, type Context, Duration, Effect, Result } from "effect";
+import { Cause, type Context, Duration, Effect, Option, Result } from "effect";
 import { z } from "zod";
 
 import { resolveWorkspaceSshGatewayConfig } from "../../lib/workspace-ssh-gateway.js";
@@ -592,23 +602,6 @@ const mapStoredWorkspaceStatus = (
     case "failed":
       return "failed";
     case "stopped":
-      return "stopped";
-  }
-};
-
-const mapAttemptStatusToWorkspaceStatus = (
-  status: WorkspaceAttemptRecord["status"],
-): WorkspaceRecord["status"] => {
-  switch (status) {
-    case "queued":
-      return "queued";
-    case "running":
-      return "running";
-    case "succeeded":
-      return "ready";
-    case "failed":
-      return "failed";
-    case "cancelled":
       return "stopped";
   }
 };
@@ -1164,6 +1157,7 @@ const mapWorkspaceAttemptSummary = (
     ...(sshGatewayConfig === undefined ? {} : { sshGateway: sshGatewayConfig }),
     retained,
   });
+  const publication = resolveWorkspacePublication(latestJob);
   const publishedImage = resolveWorkspacePublishedImage(
     latestJob,
     personLayoutContext(runtimeInstance?.adapter),
@@ -1185,6 +1179,7 @@ const mapWorkspaceAttemptSummary = (
     ...(attempt.triggerRef === null ? {} : { triggerRef: attempt.triggerRef }),
     ...(runtime === undefined ? {} : { runtime }),
     ...(publishedImage === undefined ? {} : { publishedImage }),
+    ...(publication === undefined ? {} : { publication }),
     ...(error === undefined ? {} : { error }),
     ...(latestJob === undefined ? {} : { spec: latestJob.requestPayload }),
     queuedAt: attempt.queuedAt.toISOString(),
@@ -1223,52 +1218,6 @@ const toEventResponse = (input: WorkspaceEventDraft): WorkspaceEvent => {
   };
 };
 
-const ensureWorkspaceForAttempt = (attempt: WorkspaceAttemptRecord) => {
-  return Effect.gen(function* () {
-    const workspaceRepository = yield* WorkspaceRepo;
-
-    const existing = yield* withInternalError(
-      workspaceRepository.getWorkspaceByAttemptId(attempt.id),
-      "Failed to load workspace by attempt id.",
-    );
-
-    if (existing !== undefined) {
-      return existing;
-    }
-
-    const workspace = yield* withInternalError(
-      workspaceRepository.createWorkspace({
-        id: yield* randomId,
-        name: `Workspace ${attempt.id.slice(0, 8)}`,
-        ownerUserId: attempt.ownerUserId,
-        ...(attempt.repositoryId === null ? {} : { repositoryId: attempt.repositoryId }),
-        ...(attempt.repositoryProfileRevisionId === null
-          ? {}
-          : { repositoryProfileRevisionId: attempt.repositoryProfileRevisionId }),
-        ...(attempt.profileRevisionId === null
-          ? {}
-          : { profileRevisionId: attempt.profileRevisionId }),
-        ...(attempt.requestedByUserId === null
-          ? {}
-          : { requestedByUserId: attempt.requestedByUserId }),
-        status: mapAttemptStatusToWorkspaceStatus(attempt.status),
-      }),
-      "Failed to create workspace for existing attempt.",
-    );
-
-    yield* withInternalError(
-      workspaceRepository.linkWorkspaceAttempt({
-        workspaceId: workspace.id,
-        attemptId: attempt.id,
-        relation: "launch",
-      }),
-      "Failed to link workspace attempt.",
-    );
-
-    return workspace;
-  });
-};
-
 const mapWorkspaceSummary = (
   workspace: WorkspaceRecord,
   attempt: WorkspaceAttemptRecord | undefined,
@@ -1290,6 +1239,7 @@ const mapWorkspaceSummary = (
     resolvedRuntime === undefined || launchId === null
       ? resolvedRuntime
       : { ...resolvedRuntime, launchId };
+  const publication = resolveWorkspacePublication(latestJob);
   const publishedImage = resolveWorkspacePublishedImage(
     latestJob,
     personLayoutContext(runtimeInstance?.adapter),
@@ -1340,6 +1290,7 @@ const mapWorkspaceSummary = (
         }),
     ...(runtime === undefined ? {} : { runtime }),
     ...(publishedImage === undefined ? {} : { publishedImage }),
+    ...(publication === undefined ? {} : { publication }),
     ...(processUser === undefined ? {} : { processUser }),
     ...(error === undefined ? {} : { error }),
     ...(phase === undefined ? {} : { phase }),
@@ -1473,35 +1424,6 @@ const workspaceCreateFinished = (workspace: WorkspaceRecord) =>
   });
 
 /**
- * A replay finds the create committed. Its launch job may still be `queued` because the process
- * died between the commit and the queue publish: publishing again is safe (the worker claims a
- * job once) and is the only thing that moves it.
- */
-const republishQueuedLaunch = (workspace: WorkspaceRecord) =>
-  Effect.gen(function* () {
-    const runId = workspace.latestRunId;
-    if (runId === null) {
-      return;
-    }
-    const job = yield* withInternalError(
-      (yield* WorkspaceBuildJobRepo).getLatestJobByRunId(runId),
-      "Failed to load the workspace build job.",
-    );
-    if (job === undefined || job.status !== "queued") {
-      return;
-    }
-    const publisher = yield* WorkspaceBuildJobPublisherService;
-    yield* Effect.tryPromise(() => publisher.publishRequested({ jobId: job.id })).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning(
-          `Workspace ${workspace.id}: publishing its queued launch job ${job.id} again on a replayed create failed; the next replay retries.`,
-          cause,
-        ),
-      ),
-    );
-  });
-
-/**
  * The owner's workspace an earlier create with this idempotency key made, as a replayed answer —
  * or, when that create never finished (a half-made workspace from before creates were atomic),
  * the workspace to finish (`resume`). Keys are scoped to the owner: another owner's workspace is
@@ -1518,7 +1440,6 @@ const findIdempotentWorkspace = (idempotencyKey: string, ownerUserId: string) =>
       if (!(yield* workspaceCreateFinished(byKey))) {
         return { resume: byKey } as const;
       }
-      yield* republishQueuedLaunch(byKey);
       return { replay: yield* replayedWorkspaceResponse(byKey) } as const;
     }
 
@@ -1538,7 +1459,14 @@ const findIdempotentWorkspace = (idempotencyKey: string, ownerUserId: string) =>
     if (existingRun === undefined || existingRun.ownerUserId !== ownerUserId) {
       return undefined;
     }
-    const existingWorkspace = yield* ensureWorkspaceForAttempt(existingRun);
+    const existingWorkspace = yield* withInternalError(
+      (yield* WorkspaceRepo).getWorkspaceByAttemptId(existingRun.id),
+      "Failed to load existing workspace.",
+    );
+    if (existingWorkspace === undefined)
+      return yield* new WorkspaceConflictError({
+        message: "The committed create no longer has a workspace.",
+      });
     return { replay: yield* replayedWorkspaceResponse(existingWorkspace) } as const;
   });
 };
@@ -1639,6 +1567,36 @@ export const dockerServiceRefusal = (
   return `This deployment runs workspaces on the '${family}' runtime, which has no workspace-scoped Docker. Turn Docker off for this workspace.`;
 };
 
+const authorizeImageScope = (input: {
+  readonly ownerUserId: string;
+  readonly imageScopeId?: string | undefined;
+}) =>
+  Effect.gen(function* () {
+    const parsed = nativeImageScopeSchema.safeParse(
+      input.imageScopeId === undefined
+        ? { kind: "owner", ownerUserId: input.ownerUserId }
+        : { kind: "resource-domain", domainId: input.imageScopeId },
+    );
+    if (!parsed.success)
+      return yield* new WorkspaceNotFoundError({ message: "Image scope not found." });
+    const scope = parsed.data;
+    if (scope.kind === "resource-domain") {
+      const authorized = yield* withInternalError(
+        Effect.gen(function* () {
+          const domains = yield* Effect.serviceOption(ResourceDomainRepo);
+          return (
+            Option.isSome(domains) &&
+            (yield* domains.value.canUseImages(scope.domainId, input.ownerUserId))
+          );
+        }),
+        "Failed to authorize image scope.",
+      );
+      if (!authorized)
+        return yield* new WorkspaceNotFoundError({ message: "Image scope not found." });
+    }
+    return scope;
+  });
+
 export const createWorkspace = (input: {
   readonly payload: CreateWorkspaceRequest;
   readonly headers: CreateWorkspaceHeaders;
@@ -1647,11 +1605,6 @@ export const createWorkspace = (input: {
     const body = input.payload;
     const idempotencyKey = body.idempotencyKey ?? readIdempotencyKey(input.headers);
 
-    if (body.registryId !== env.REGISTRY_NAME) {
-      return yield* new WorkspaceNotFoundError({
-        message: `Unknown registry: ${body.registryId}`,
-      });
-    }
     // An idempotent create: a committed one replays; a cancelled key refuses; a create from
     // before creates were atomic that left its workspace half-made is finished (`resuming`). The
     // key is reserved (`pending`) before anything is written, and committed with everything the
@@ -1664,6 +1617,40 @@ export const createWorkspace = (input: {
         return found.replay;
       }
       resuming = found?.resume;
+    }
+
+    if (body.registryId !== env.REGISTRY_NAME) {
+      return yield* new WorkspaceNotFoundError({
+        message: `Unknown registry: ${body.registryId}`,
+      });
+    }
+    // The image name becomes registry URL segments and `docker` arguments in the worker. Refuse
+    // one outside the OCI grammar here, as a 400, not an hour later as a failed build.
+    if (!isOciRepository(body.repository.trim()) || !isOciTag(body.tag.trim())) {
+      return yield* new WorkspaceBadRequestError({
+        message: `repository ${OCI_REPOSITORY_MESSAGE}; tag must match [A-Za-z0-9_][A-Za-z0-9._-]{0,127}.`,
+      });
+    }
+
+    const parsedSpec = yield* parseWorkspaceSpec(body.spec);
+    const imageScope = yield* authorizeImageScope(body);
+    const runtimeFamily =
+      parsedSpec.target.runtime.family === "auto"
+        ? env.DEFAULT_RUNTIME_ADAPTER
+        : parsedSpec.target.runtime.family;
+    if (runtimeFamily === BOAT_RUNTIME_ID) {
+      const support = boatSupport(parsedSpec);
+      if (!support.supported)
+        return yield* new WorkspaceRuntimeRequirementUnsupportedError({
+          message: support.message,
+          code: support.reason,
+        });
+      return yield* new WorkspaceServiceUnavailableError({
+        message: "Boat execution is not available on this deployment.",
+        code: "boat-production-capability-unverified",
+      });
+    }
+    if (idempotencyKey !== undefined) {
       const reservation = yield* withInternalError(
         reservations.reserve({
           ownerUserId: body.ownerUserId,
@@ -1690,15 +1677,6 @@ export const createWorkspace = (input: {
       }
     }
 
-    // The image name becomes registry URL segments and `docker` arguments in the worker. Refuse
-    // one outside the OCI grammar here, as a 400, not an hour later as a failed build.
-    if (!isOciRepository(body.repository.trim()) || !isOciTag(body.tag.trim())) {
-      return yield* new WorkspaceBadRequestError({
-        message: `repository ${OCI_REPOSITORY_MESSAGE}; tag must match [A-Za-z0-9_][A-Za-z0-9._-]{0,127}.`,
-      });
-    }
-
-    const parsedSpec = yield* parseWorkspaceSpec(body.spec);
     // The owner's own Linux user, never one the caller names (Mend ADR 0016, decision 10): the
     // uid of the home Core writes and holds the owner's logins in.
     const sshUser =
@@ -1902,6 +1880,7 @@ export const createWorkspace = (input: {
           repository: body.repository,
           tag: body.tag,
           requestPayload: resolvedSpec,
+          imageScope,
           ...(secretEnvSealed === undefined ? {} : { secretEnvSealed }),
         });
 
@@ -3874,6 +3853,32 @@ export const restartWorkspace = (input: {
       });
     }
     const recordedSpec = yield* parseWorkspaceSpec(specPayload);
+    const previousScope = previousJob.imageScope;
+    const imageScope = yield* authorizeImageScope({
+      ownerUserId: input.payload.ownerUserId,
+      ...(previousScope?.kind === "resource-domain"
+        ? { imageScopeId: previousScope.domainId }
+        : {}),
+    });
+    if (previousScope?.kind === "owner" && previousScope.ownerUserId !== input.payload.ownerUserId)
+      return yield* new WorkspaceNotFoundError({ message: "Image scope not found." });
+    const runtimeFamily =
+      recordedSpec.target.runtime.family === "auto"
+        ? env.DEFAULT_RUNTIME_ADAPTER
+        : recordedSpec.target.runtime.family;
+    if (runtimeFamily === BOAT_RUNTIME_ID) {
+      const support = boatSupport(recordedSpec);
+      if (!support.supported)
+        return yield* new WorkspaceRuntimeRequirementUnsupportedError({
+          message: support.message,
+          code: support.reason,
+        });
+      return yield* new WorkspaceServiceUnavailableError({
+        message: "Boat execution is not available on this deployment.",
+        code: "boat-production-capability-unverified",
+      });
+    }
+
     // The snapshot never carries the dotfiles archive payloads (`snapshotSpecOf`); the previous
     // build job does. Relaunch with them, so the restarted workspace applies the same dotfiles
     // and its image plan keeps the managers they need (tar, chezmoi, stow).
@@ -3968,6 +3973,7 @@ export const restartWorkspace = (input: {
           id: jobId,
           runId: attempt.id,
           registryId: previousJob.registryId,
+          imageScope,
           repository: previousJob.repository,
           tag: restartTag,
           requestPayload: spec,
@@ -4071,21 +4077,63 @@ export const inspectWorkspaceImage = (input: { readonly payload: InspectWorkspac
       return yield* new WorkspaceNotFoundError({ message: `Unknown registry: ${body.registryId}` });
     }
     const spec = yield* parseWorkspaceSpec(body.spec);
-    const planned = yield* Effect.try({
-      try: () =>
-        planWorkspaceImageBuild({
-          blueprint: spec,
-          platform: env.SEALANT_WORKSPACE_IMAGE_PLATFORM ?? processImagePlatform(),
-        }),
-      catch: (error) =>
-        new WorkspaceBadRequestError({
-          message: `The spec does not plan an image: ${error instanceof Error ? error.message : "unknown error"}`,
-        }),
-    });
+    const family =
+      spec.target.runtime.family === "auto"
+        ? env.DEFAULT_RUNTIME_ADAPTER
+        : spec.target.runtime.family;
+    const scope = yield* authorizeImageScope(body);
+    const planned = yield* family === BOAT_RUNTIME_ID
+      ? Effect.gen(function* () {
+          const support = boatSupport(spec);
+          if (!support.supported)
+            return yield* new WorkspaceRuntimeRequirementUnsupportedError({
+              message: support.message,
+              code: support.reason,
+            });
+          const inspector = yield* Effect.serviceOption(BoatImageInspection);
+          if (Option.isNone(inspector))
+            return yield* new WorkspaceServiceUnavailableError({
+              message: "Boat image inspection is not available on this deployment.",
+              code: "boat-production-capability-unverified",
+            });
+          return yield* inspector.value
+            .plan(spec)
+            .pipe(
+              Effect.mapError((error) => new WorkspaceBadRequestError({ message: error.message })),
+            );
+        })
+      : family === "microvm"
+        ? Effect.tryPromise({
+            try: async () => {
+              const config = microvmImagePlanConfigFromEnv(env);
+              const context = await loadMicrovmContextFiles();
+              return planMicrovmWorkspaceImage(spec, {
+                agentPort: config.agentPort,
+                memoryMiB: config.memoryMiB,
+                contextDigest: context.digest,
+              });
+            },
+            catch: () =>
+              new WorkspaceServiceUnavailableError({
+                message: "MicroVM image planning is not available on this deployment.",
+              }),
+          })
+        : Effect.try({
+            try: () =>
+              planWorkspaceImageBuild({
+                blueprint: spec,
+                platform: env.SEALANT_WORKSPACE_IMAGE_PLATFORM ?? processImagePlatform(),
+              }),
+            catch: (error) =>
+              new WorkspaceBadRequestError({
+                message: `The spec does not plan an image: ${error instanceof Error ? error.message : "unknown error"}`,
+              }),
+          });
     const job = yield* withInternalError(
       (yield* WorkspaceBuildJobRepo).getLatestSucceededJobByPlanHash({
         registryId: body.registryId,
         planHash: planned.planHash,
+        ...(family === BOAT_RUNTIME_ID ? { imageScope: scope } : {}),
       }),
       "Failed to look up the image for the plan.",
     );
@@ -4097,14 +4145,20 @@ export const inspectWorkspaceImage = (input: { readonly payload: InspectWorkspac
             "Failed to load the build's launch.",
           );
     const context = personLayoutContext();
-    const image = resolveWorkspacePublishedImage(job, context);
+    const visible = family === BOAT_RUNTIME_ID || attempt?.ownerUserId === body.ownerUserId;
+    const image = visible ? resolveWorkspacePublishedImage(job, context) : undefined;
+    const publication = visible ? resolveWorkspacePublication(job) : undefined;
     return {
       planHash: planned.planHash,
+      ...(publication === undefined ? {} : { publication }),
       ...(image === undefined || attempt?.ownerUserId !== body.ownerUserId
         ? {}
         : { publishedImage: image }),
       personLayout:
         image?.personLayout ??
-        personLayoutCapability(job?.resultPayload?.metadata?.imageProbe, context),
+        personLayoutCapability(
+          visible ? job?.resultPayload?.metadata?.imageProbe : undefined,
+          context,
+        ),
     } satisfies InspectWorkspaceImageResponse;
   });

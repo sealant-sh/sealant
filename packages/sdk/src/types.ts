@@ -21,6 +21,7 @@ import type {
 } from "node:stream/web";
 
 import type {
+  WorkspacePublication as WireWorkspacePublication,
   ConnectedAccountLogin,
   ConnectedAccountLoginClass,
   ForwardBinding,
@@ -855,6 +856,8 @@ export interface WorkspaceEnvFromSource {
 }
 
 export interface CreateOptions {
+  /** Reuse images within this existing resource domain, subject to current owner membership. */
+  readonly imageScopeId?: string;
   /**
    * Source git repository to build the workspace around (e.g. `"github.com/acme/billing-service"`).
    * Exactly one of `repository` or `source` must be provided.
@@ -1035,8 +1038,8 @@ export interface WorkspaceCreateState {
  * record at launch and to name in `stop({ completion })`.
  */
 export interface WorkspaceRuntimeInfo {
-  /** The runtime family: `docker`, `k8s`, `k3s`, `cloudflare` or `microvm`. */
-  readonly kind: "docker" | "k8s" | "k3s" | "cloudflare" | "microvm";
+  /** Recorded runtime family. Boat records remain readable while execution is unavailable. */
+  readonly kind: "docker" | "k8s" | "k3s" | "cloudflare" | "microvm" | "boat";
   /** The executor's id on its runtime: the container id, the Pod name, the MicroVM id. */
   readonly resourceId: string;
   /** The runtime's name for it (container name, Pod name, MicroVM id). */
@@ -1066,6 +1069,7 @@ export interface WorkspaceLaunch {
   readonly launchId?: string;
   /** The image the executor booted, with its per-person capability; filled in by `ready()`. */
   readonly image?: WorkspaceImage;
+  readonly publication?: WorkspacePublication;
   /** Whether its processes can be started as a user (`processUser()`); filled in by `ready()`. */
   readonly processUser?: WorkspaceProcessUserCapability;
 }
@@ -1136,6 +1140,8 @@ export interface Workspace {
   runtime(): Promise<WorkspaceRuntimeInfo | null>;
   /** The image the workspace's latest launch booted, with its per-person capability. */
   image(): Promise<WorkspaceImage | null>;
+  /** Exact typed artifact used by this workspace, including native provenance. */
+  publication(): Promise<WorkspacePublication | null>;
   /**
    * Whether this workspace's processes can be started as a person's Linux user (`user` on
    * `exec()` and `sessions.open()`), read now (see {@link WorkspaceProcessUserCapability}).
@@ -1572,6 +1578,9 @@ export interface SealantFeatures {
   readonly connectedAccountApiKeys: boolean;
 }
 
+/** Tagged artifact facts reported by the control plane. */
+export type WorkspacePublication = WireWorkspacePublication;
+
 /** A published workspace image. */
 export interface WorkspaceImage {
   readonly reference: string;
@@ -1589,6 +1598,7 @@ export interface WorkspaceImageInspection {
   readonly planHash: string;
   /** The latest image published for the plan, when this owner has built one. */
   readonly image?: WorkspaceImage;
+  readonly publication?: WorkspacePublication;
   /** The image's per-person capability (`unknown` when none has been built yet). */
   readonly personLayout: WorkspaceImagePersonLayout;
 }

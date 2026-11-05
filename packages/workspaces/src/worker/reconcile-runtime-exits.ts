@@ -78,7 +78,7 @@ import {
   type LaunchMaterialStager,
 } from "../runtime/launch-material.js";
 import type {
-  RuntimeAdapter,
+  RuntimeAdapterLifecycle,
   RuntimeAdapterExitWatch,
   RuntimeAdapterInspectResult,
 } from "../runtime/runtime-adapter.js";
@@ -103,7 +103,7 @@ import {
 } from "./capture-drain.js";
 
 export interface ReconcileRuntimeExitsEffectOptions {
-  readonly runtimeAdapters: readonly RuntimeAdapter[];
+  readonly runtimeAdapters: readonly RuntimeAdapterLifecycle[];
   /** Check only these runtime resources (an exit event names one); absent = every `ready` instance. */
   readonly resourceIds?: readonly string[];
   /** Where this worker staged launch material; defaults to host directories (Docker). */
@@ -200,7 +200,7 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
   // right before the runtime call; voided (newer evidence arrived), nothing is removed and the
   // unsettled sweep looks at it again.
   const removeRemains = (
-    adapter: RuntimeAdapter,
+    adapter: RuntimeAdapterLifecycle,
     instance: WorkspaceRuntimeInstance,
     resourceId: string,
     removal: RemovalBasis,
@@ -568,7 +568,7 @@ const settleUnsettledExecutors = (
   options: ReconcileRuntimeExitsEffectOptions,
   ledger: CaptureDrainLedger,
   removeRemains: (
-    adapter: RuntimeAdapter,
+    adapter: RuntimeAdapterLifecycle,
     instance: WorkspaceRuntimeInstance,
     resourceId: string,
     removal: RemovalBasis,
@@ -673,7 +673,7 @@ const settleUnsettledExecutors = (
 const drainBeforeRecording = (
   options: ReconcileRuntimeExitsEffectOptions,
   instance: WorkspaceRuntimeInstance,
-  adapter: RuntimeAdapter,
+  adapter: RuntimeAdapterLifecycle,
   inspection: RuntimeEnd,
 ): Effect.Effect<
   | { readonly verdict: "record"; readonly removal: RemovalBasis }
@@ -816,7 +816,7 @@ const NOT_CAPTURE: RemovalBasis = { captureSourced: false, basis: "not-capture" 
 
 /** A fresh `inspect`: exited or missing only on a positive answer; unknown is `running`. */
 const runtimeReportsState = (
-  adapter: RuntimeAdapter,
+  adapter: RuntimeAdapterLifecycle,
   resourceId: string,
 ): Effect.Effect<"running" | "exited" | "missing"> => {
   const inspect = adapter.inspect;

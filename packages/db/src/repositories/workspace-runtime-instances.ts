@@ -1,4 +1,10 @@
-import type { RuntimeAdapterId } from "@sealant/validators";
+import {
+  workspacePublicationSchema,
+  nativeImageScopeSchema,
+  type WorkspacePublication,
+  type NativePublicationKey,
+  type RuntimeAdapterId,
+} from "@sealant/validators";
 import { and, desc, eq, gt, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
@@ -15,6 +21,8 @@ import {
 export interface UpsertWorkspaceRuntimeInstanceInput {
   readonly runId: string;
   readonly status: WorkspaceRuntimeInstanceStatus;
+  readonly publication?: WorkspacePublication;
+  readonly imageScope?: NativePublicationKey["scope"];
   readonly adapter?: RuntimeAdapterId;
   readonly resourceId?: string;
   readonly reference?: string;
@@ -136,6 +144,19 @@ const mapWorkspaceRuntimeInstanceRepoError = (
     cause,
   });
 };
+
+const parseInstance = (row: WorkspaceRuntimeInstance) =>
+  Effect.try(() => {
+    const publication =
+      row.publication == null ? null : workspacePublicationSchema.parse(row.publication);
+    if ((publication?.publicationId ?? null) !== row.publicationId)
+      throw new Error("Publication identity mismatch.");
+    return {
+      ...row,
+      publication,
+      imageScope: row.imageScope == null ? null : nativeImageScopeSchema.parse(row.imageScope),
+    };
+  });
 
 const withWorkspaceRuntimeInstanceRepoError = <A>(
   operation: WorkspaceRuntimeInstanceRepoOperation,
@@ -431,6 +452,15 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
           Effect.gen(function* () {
             const mutableColumns = {
               status: input.status,
+              ...(input.publication === undefined
+                ? {}
+                : {
+                    publication: workspacePublicationSchema.parse(input.publication),
+                    publicationId: input.publication.publicationId,
+                  }),
+              ...(input.imageScope === undefined
+                ? {}
+                : { imageScope: nativeImageScopeSchema.parse(input.imageScope) }),
               ...(input.adapter === undefined ? {} : { adapter: input.adapter }),
               ...(input.resourceId === undefined ? {} : { resourceId: input.resourceId }),
               ...(input.reference === undefined ? {} : { reference: input.reference }),
@@ -467,6 +497,24 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
             // A late "failed" upsert from a superseded/stale worker (a redelivery or reaper
             // interleaving after a newer launch already went "ready") must NOT clobber a live
             // "ready" instance — guard the conflict update so a "failed" write is skipped when ready.
+            const binding = and(
+              ...(input.publication === undefined
+                ? []
+                : [
+                    or(
+                      isNull(workspaceRuntimeInstances.publication),
+                      sql`${workspaceRuntimeInstances.publication} = ${JSON.stringify(input.publication)}::jsonb`,
+                    ),
+                  ]),
+              ...(input.imageScope === undefined
+                ? []
+                : [
+                    or(
+                      isNull(workspaceRuntimeInstances.imageScope),
+                      sql`${workspaceRuntimeInstances.imageScope} = ${JSON.stringify(input.imageScope)}::jsonb`,
+                    ),
+                  ]),
+            );
             const guardAgainstReady = input.status === "failed";
             // A launch write fenced on its owner lands only while the launch is still theirs.
             const fence =
@@ -481,10 +529,10 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               const [fenced] = yield* db
                 .update(workspaceRuntimeInstances)
                 .set(mutableColumns)
-                .where(and(eq(workspaceRuntimeInstances.runId, input.runId), fence))
+                .where(and(eq(workspaceRuntimeInstances.runId, input.runId), fence, binding))
                 .returning();
               if (fenced !== undefined) {
-                return fenced;
+                return yield* parseInstance(fenced);
               }
               return yield* new WorkspaceRuntimeInstanceRepoInvariantError({
                 operation: "upsertRuntimeInstance",
@@ -501,14 +549,16 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               .onConflictDoUpdate({
                 target: workspaceRuntimeInstances.runId,
                 set: mutableColumns,
-                ...(guardAgainstReady
-                  ? { setWhere: ne(workspaceRuntimeInstances.status, "ready") }
-                  : {}),
+                setWhere:
+                  and(
+                    binding,
+                    guardAgainstReady ? ne(workspaceRuntimeInstances.status, "ready") : undefined,
+                  ) ?? sql`true`,
               })
               .returning();
 
             if (runtimeInstance !== undefined) {
-              return runtimeInstance;
+              return yield* parseInstance(runtimeInstance);
             }
 
             // No row returned: with the ready-guard this means the conflict update was skipped because
@@ -517,9 +567,13 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               const [existing] = yield* db
                 .select()
                 .from(workspaceRuntimeInstances)
-                .where(eq(workspaceRuntimeInstances.runId, input.runId));
-              if (existing !== undefined) {
-                return existing;
+                .where(and(eq(workspaceRuntimeInstances.runId, input.runId), binding));
+              if (
+                existing !== undefined &&
+                (input.publication === undefined ||
+                  existing.publicationId === input.publication.publicationId)
+              ) {
+                return yield* parseInstance(existing);
               }
             }
 
@@ -553,7 +607,7 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               )
               .returning();
 
-            return updated;
+            return updated === undefined ? undefined : yield* parseInstance(updated);
           }),
         ),
 
@@ -593,7 +647,7 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               .returning();
 
             if (updated !== undefined) {
-              return updated;
+              return yield* parseInstance(updated);
             }
 
             // No row updated: either the instance is already stopped (idempotent success — the
@@ -605,7 +659,7 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               .limit(1);
 
             if (existing !== undefined) {
-              return existing;
+              return yield* parseInstance(existing);
             }
 
             return yield* new WorkspaceRuntimeInstanceRepoInvariantError({
@@ -641,7 +695,9 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               .where(eq(workspaceRuntimeInstances.runId, runId))
               .limit(1);
 
-            return runtimeInstance;
+            return runtimeInstance === undefined
+              ? undefined
+              : yield* parseInstance(runtimeInstance);
           }),
         ),
 
@@ -660,9 +716,7 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               .orderBy(desc(workspaceRuntimeInstances.updatedAt));
 
             return new Map(
-              rows.map((row: WorkspaceRuntimeInstance) => {
-                return [row.runId, row] as const;
-              }),
+              (yield* Effect.forEach(rows, parseInstance)).map((row) => [row.runId, row] as const),
             );
           }),
         ),
@@ -676,7 +730,8 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
             // "ready" = control channel accepting. The launch path no longer emits "running", so
             // keying on "ready" finds the instances that are actually reachable (e.g. for telemetry).
             .where(eq(workspaceRuntimeInstances.status, "ready"))
-            .orderBy(desc(workspaceRuntimeInstances.updatedAt)),
+            .orderBy(desc(workspaceRuntimeInstances.updatedAt))
+            .pipe(Effect.flatMap((rows) => Effect.forEach(rows, parseInstance))),
         ),
 
       listRetainedLaunches: () =>
@@ -691,7 +746,8 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
                 eq(workspaceRuntimeInstances.errorCode, LAUNCH_RETAINED_ERROR_CODE),
               ),
             )
-            .orderBy(desc(workspaceRuntimeInstances.updatedAt)),
+            .orderBy(desc(workspaceRuntimeInstances.updatedAt))
+            .pipe(Effect.flatMap((rows) => Effect.forEach(rows, parseInstance))),
         ),
 
       listStrandedLaunches: (input) =>
@@ -701,7 +757,8 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
             .select()
             .from(workspaceRuntimeInstances)
             .where(stranded(input.unownedGraceMs))
-            .orderBy(desc(workspaceRuntimeInstances.updatedAt)),
+            .orderBy(desc(workspaceRuntimeInstances.updatedAt))
+            .pipe(Effect.flatMap((rows) => Effect.forEach(rows, parseInstance))),
         ),
 
       adoptStrandedLaunch: (input) =>
@@ -724,7 +781,7 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
                 ),
               )
               .returning();
-            return adopted;
+            return adopted === undefined ? undefined : yield* parseInstance(adopted);
           }),
         ),
 
@@ -735,7 +792,8 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
             .select()
             .from(workspaceRuntimeInstances)
             .where(strandedUnidentified(input.unownedGraceMs))
-            .orderBy(desc(workspaceRuntimeInstances.updatedAt)),
+            .orderBy(desc(workspaceRuntimeInstances.updatedAt))
+            .pipe(Effect.flatMap((rows) => Effect.forEach(rows, parseInstance))),
         ),
 
       identifyStrandedLaunch: (input) =>
@@ -757,7 +815,7 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
                 ),
               )
               .returning();
-            return identified;
+            return identified === undefined ? undefined : yield* parseInstance(identified);
           }),
         ),
 
@@ -782,7 +840,7 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
                 ),
               )
               .returning();
-            return failed;
+            return failed === undefined ? undefined : yield* parseInstance(failed);
           }),
         ),
 
@@ -807,7 +865,7 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
                 ),
               )
               .returning();
-            return preempted;
+            return preempted === undefined ? undefined : yield* parseInstance(preempted);
           }),
         ),
 
@@ -852,7 +910,8 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
                 ),
               ),
             )
-            .orderBy(desc(workspaceRuntimeInstances.updatedAt)),
+            .orderBy(desc(workspaceRuntimeInstances.updatedAt))
+            .pipe(Effect.flatMap((rows) => Effect.forEach(rows, parseInstance))),
         ),
 
       listUnsettledCaptureExecutors: (input) =>
@@ -891,7 +950,7 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               )
               .orderBy(workspaceRuntimeInstances.updatedAt)
               .limit(Math.max(1, Math.round(input.limit)));
-            return rows.map((row: { instance: WorkspaceRuntimeInstance }) => row.instance);
+            return yield* Effect.forEach(rows, (row) => parseInstance(row.instance));
           }),
         ),
 
@@ -940,7 +999,7 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               )
               .orderBy(workspaceRuntimeInstances.finishedAt)
               .limit(Math.max(1, Math.round(input.limit)));
-            return rows.map((row: { instance: WorkspaceRuntimeInstance }) => row.instance);
+            return yield* Effect.forEach(rows, (row) => parseInstance(row.instance));
           }),
         ),
     } satisfies WorkspaceRuntimeInstanceRepoService;

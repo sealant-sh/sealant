@@ -31,6 +31,9 @@ import {
 const NOW = Date.parse("2026-09-28T00:00:00.000Z");
 
 const instance = (overrides: Partial<WorkspaceRuntimeInstance> = {}): WorkspaceRuntimeInstance => ({
+  imageScope: null,
+  publication: null,
+  publicationId: null,
   runId: "run_1",
   status: "failed",
   adapter: "docker",

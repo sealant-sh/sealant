@@ -419,7 +419,11 @@ const baseOptions = (overrides: BuildJobTestOverrides): ProcessWorkspaceBuildJob
     defaultRuntimeAdapterId: "docker",
     ...rest,
     registryClient,
-    runtimes: runtimeAdapters.map((adapter) => ({ adapter, imageBuilder: builder })),
+    runtimes: runtimeAdapters.map((adapter) => ({
+      kind: "oci" as const,
+      adapter,
+      imageBuilder: builder,
+    })),
   };
 };
 
@@ -626,7 +630,7 @@ describe("processWorkspaceBuildJobEffect", () => {
       });
       // The liveness check HEADs the PRIOR publish's tag — the new job's tag was never pushed.
       expect(headManifest).toHaveBeenCalledWith("session-aaaa", "sdk-11111111");
-      expect(published).toEqual(
+      expect(published?.kind === "oci" ? published.image : undefined).toEqual(
         expect.objectContaining({
           digestReference: "127.0.0.1:5000/session-aaaa@sha256:prior",
         }),
@@ -635,8 +639,13 @@ describe("processWorkspaceBuildJobEffect", () => {
         expect.objectContaining({
           id: "job_reuse",
           builderId: "fedora",
-          publishedReference: "127.0.0.1:5000/session-aaaa:sdk-11111111",
-          publishedDigest: "sha256:prior",
+          publication: expect.objectContaining({
+            kind: "oci",
+            image: expect.objectContaining({
+              reference: "127.0.0.1:5000/session-aaaa:sdk-11111111",
+              digest: "sha256:prior",
+            }),
+          }),
           resultPayload: expect.objectContaining({
             metadata: expect.objectContaining({
               planHash: priorPlanHash,
@@ -647,7 +656,10 @@ describe("processWorkspaceBuildJobEffect", () => {
       );
       expect(runtimeAdapter.launch).toHaveBeenCalledWith(
         expect.objectContaining({
-          publishedImage: expect.objectContaining({ digest: "sha256:prior" }),
+          publication: expect.objectContaining({
+            kind: "oci",
+            image: expect.objectContaining({ digest: "sha256:prior" }),
+          }),
         }),
         // The launch hooks (onReady records the executor at readiness).
         expect.anything(),
@@ -826,7 +838,7 @@ describe("processWorkspaceBuildJobEffect", () => {
 
       expect(headManifest).toHaveBeenCalledWith("sealant-workspace-fedora", "plan-eeeeeeeeeeee");
       expect(compileWorkspaceSpec).not.toHaveBeenCalled();
-      expect(published).toEqual(
+      expect(published?.kind === "oci" ? published.image : undefined).toEqual(
         expect.objectContaining({
           repository: "sealant-workspace-fedora",
           tag: "plan-eeeeeeeeeeee",
@@ -1678,6 +1690,7 @@ describe("processWorkspaceBuildJobEffect", () => {
             {
               runId: "run_job_retained",
               status: "pending",
+              publication: expect.objectContaining({ kind: "oci" }),
               sourceKind: "capture",
               launchOwner: expect.stringMatching(/^worker-test:job_retained:/),
               // The launch's own lease (2 min), not the build job's: a worker lost mid-launch
@@ -2086,7 +2099,10 @@ describe("processWorkspaceBuildJobEffect", () => {
           );
           expect(jobs.markJobSucceeded).toHaveBeenCalledWith(
             expect.objectContaining({
-              publishedDigest: "sha256:prior",
+              publication: expect.objectContaining({
+                kind: "oci",
+                image: expect.objectContaining({ digest: "sha256:prior" }),
+              }),
               resultPayload: expect.objectContaining({
                 metadata:
                   "probe" in expected
@@ -2635,7 +2651,7 @@ describe("processWorkspaceBuildJobEffect", () => {
         }),
       );
 
-      expect(result?.digest).toBe("sha256:test");
+      expect(result).toMatchObject({ kind: "oci", image: { digest: "sha256:test" } });
       expect(jobs.claimJobById).toHaveBeenCalledWith({
         id: "job_123",
         workerId: "worker-test",
@@ -2734,7 +2750,7 @@ describe("processWorkspaceBuildJobEffect", () => {
     }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
   });
 
-  it.effect("keeps build succeeded when runtime launch selection fails", () => {
+  it.effect("fails unavailable selection before building or recording publication success", () => {
     const jobs = workspaceBuildJobRepoStub({
       claimJobById: () => ({
         id: "job_123",
@@ -2762,8 +2778,8 @@ describe("processWorkspaceBuildJobEffect", () => {
       expect(error.message).toContain(
         "No runtime adapter is registered for target.runtime.family 'k8s'.",
       );
-      expect(jobs.markJobFailed).not.toHaveBeenCalled();
-      expect(jobs.markJobSucceeded).toHaveBeenCalledTimes(1);
+      expect(jobs.markJobFailed).toHaveBeenCalledOnce();
+      expect(jobs.markJobSucceeded).not.toHaveBeenCalled();
     }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
   });
 
@@ -3065,16 +3081,25 @@ describe("a launch never waits past its runtime's preservation start (review 4 #
   it("stops waiting once its launch ownership was taken over (preempted by the deadline sweep)", async () => {
     const jobs = captureJob("job_preempted", "run_preempted");
     const attempts = workspaceAttemptRepoStub();
+    let started = false;
+    const waiting = neverReady(new Date(Date.now() + 3_600_000).toISOString());
+    const adapter: RuntimeAdapter = {
+      ...waiting,
+      launch: (input, hooks) => {
+        started = true;
+        return waiting.launch(input, hooks);
+      },
+    };
     const runtimeInstances = {
       ...workspaceRuntimeInstanceRepoStub(),
-      renewLaunchLease: vi.fn(() => Effect.succeed(false)),
+      renewLaunchLease: vi.fn(() => Effect.sync(() => !started)),
     };
     const exit = await Effect.runPromise(
       processWorkspaceBuildJobEffect(
         baseOptions({
           jobId: "job_preempted",
           credentialCipher: fakeCredentialCipher,
-          runtimeAdapters: [neverReady(new Date(Date.now() + 3_600_000).toISOString())],
+          runtimeAdapters: [adapter],
           compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
           launchLeaseMs: 1_000,
         }),
@@ -3271,11 +3296,20 @@ describe("processWorkspaceBuildJobEffect: the image-build phase", () => {
         });
         expect(buildAndPublish).not.toHaveBeenCalled();
         expect(jobs.markJobSucceeded).toHaveBeenCalledWith(
-          expect.objectContaining({ id: "job_phase", publishedDigest: "sha256:kept" }),
+          expect.objectContaining({
+            id: "job_phase",
+            publication: expect.objectContaining({
+              kind: "oci",
+              image: expect.objectContaining({ digest: "sha256:kept" }),
+            }),
+          }),
         );
         expect(runtimeAdapter.launch).toHaveBeenCalledWith(
           expect.objectContaining({
-            publishedImage: expect.objectContaining({ digest: "sha256:kept" }),
+            publication: expect.objectContaining({
+              kind: "oci",
+              image: expect.objectContaining({ digest: "sha256:kept" }),
+            }),
           }),
           expect.anything(),
         );

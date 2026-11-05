@@ -382,7 +382,7 @@ describe("Kubernetes manifests", () => {
     expect(pod.spec?.topologySpreadConstraints?.[0]?.topologyKey).toBe("kubernetes.io/hostname");
 
     const container = pod.spec?.containers[0];
-    expect(container?.image).toBe(input.publishedImage.digestReference);
+    expect(container?.image).toBe(input.publication.image.digestReference);
     expect(container?.workingDir).toBe("/workspace/repo");
     expect(container?.securityContext).toEqual({
       privileged: false,

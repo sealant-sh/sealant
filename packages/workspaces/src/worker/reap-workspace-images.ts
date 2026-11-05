@@ -12,10 +12,9 @@ import {
 import { Effect, Layer } from "effect";
 
 import type { MicrovmImageApi } from "../images/microvm/image-api.js";
-import { isMicrovmImageNameOf, microvmImageName } from "../images/microvm/recipe.js";
+import { isMicrovmImageNameOf } from "../images/microvm/recipe.js";
 import { parsePublishedReference } from "../images/plan-coordinates.js";
 import type { RegistryClient } from "../registry/client.js";
-import { parseMicrovmImageReference } from "../runtime/microvm/image-reference.js";
 
 export interface ReapWorkspaceImagesOptions {
   readonly db: DB;
@@ -60,6 +59,15 @@ export interface WorkspaceImageReapSummary {
   readonly deferred: number;
 }
 
+const identity = (image: PublishedWorkspaceImage) =>
+  image.publication.kind === "oci"
+    ? image.publication.image.digest
+    : image.publication.image.imageArn;
+const planHash = (image: PublishedWorkspaceImage) =>
+  image.publication.kind === "microvm"
+    ? image.publication.image.planHash
+    : image.publication.evidence.planHash;
+
 const DEFAULT_RETAINED_PLANS = 10;
 const DEFAULT_MIN_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_DELETES_PER_TICK = 25;
@@ -82,8 +90,8 @@ const LIVE_WORKSPACE_STATUSES = ["queued", "running", "ready"] as const;
  *
  * Everything else the build-job history says was published is deleted through the store: on the
  * Engine store an `image rm -f` by image id (refused, and kept, while any container references
- * it), on a registry a manifest delete, on Lambda MicroVMs a `DeleteMicrovmImage`. There one plan is
- * one image whose digest is the plan hash, so every workspace on a plan keeps the same image. Best-effort per image: one failure never aborts the sweep,
+ * it), on a registry a manifest delete, on Lambda MicroVMs a `DeleteMicrovmImage`. Every version of a retained MicroVM
+ * image keeps its ARN because deleting the image removes all versions. One failure never aborts the sweep,
  * and the job rows are never touched — they stay the audit trail of what was built.
  */
 export const reapWorkspaceImages = async (
@@ -121,33 +129,35 @@ export const reapWorkspaceImages = async (
     }
     const latestJobs = yield* jobs.listLatestJobsByRunIds([...runIds]);
     for (const job of latestJobs.values()) {
-      if (job.publishedDigest !== null) keep.add(job.publishedDigest);
+      if (job.publication?.kind === "oci") keep.add(job.publication.image.digest);
+      if (job.publication?.kind === "microvm") keep.add(job.publication.image.imageArn);
     }
     // Belt and braces: a live run whose latest job is a reuse still names the reused digest.
     for (const image of published) {
-      if (image.runId !== null && runIds.has(image.runId)) keep.add(image.digest);
+      if (image.runId !== null && runIds.has(image.runId)) keep.add(identity(image));
     }
 
     // The newest publish of each of the last N distinct plans (rows arrive newest first).
     const retainedPlanHashes = new Set<string>();
     for (const image of published) {
-      if (image.planHash === null) continue;
-      if (retainedPlanHashes.has(image.planHash)) continue;
+      const hash = planHash(image);
+      if (hash === undefined) continue;
+      if (retainedPlanHashes.has(hash)) continue;
       if (retainedPlanHashes.size >= retainedPlans) continue;
-      retainedPlanHashes.add(image.planHash);
-      keep.add(image.digest);
+      retainedPlanHashes.add(hash);
+      keep.add(identity(image));
     }
 
     // Anything published within the minimum age, whatever plan it belongs to.
     for (const image of published) {
-      if (image.publishedAt.getTime() > publishedAfter) keep.add(image.digest);
+      if (image.publishedAt.getTime() > publishedAfter) keep.add(identity(image));
     }
 
     // Candidates: every other digest, once each, attributed to the repository it was published in.
     const candidates = new Map<string, PublishedWorkspaceImage>();
     for (const image of published) {
-      if (keep.has(image.digest) || candidates.has(image.digest)) continue;
-      candidates.set(image.digest, image);
+      if (keep.has(identity(image)) || candidates.has(identity(image))) continue;
+      candidates.set(identity(image), image);
     }
 
     const summary = { kept: keep.size, deleted: 0, inUse: 0, missing: 0, failed: 0, deferred: 0 };
@@ -157,11 +167,13 @@ export const reapWorkspaceImages = async (
         summary.deferred += 1;
         continue;
       }
-      const microvmImage = parseMicrovmImageReference(image.publishedReference);
-      if (microvmImage !== undefined) {
+      const publication = image.publication;
+      if (publication.kind === "microvm") {
         if (options.microvmImages === undefined) continue;
         attempted += 1;
-        const name = microvmImage.imageArn.slice(microvmImage.imageArn.lastIndexOf(":") + 1);
+        const name = publication.image.imageArn.slice(
+          publication.image.imageArn.lastIndexOf(":") + 1,
+        );
         const removed = yield* deleteMicrovmImage(options.microvmImages.api, name);
         if (removed === "deleted") summary.deleted += 1;
         else if (removed === "not-found") summary.missing += 1;
@@ -170,13 +182,14 @@ export const reapWorkspaceImages = async (
       }
       attempted += 1;
       const repository =
-        parsePublishedReference(image.publishedReference)?.repository ?? image.repository;
+        parsePublishedReference(publication.image.reference)?.repository ??
+        publication.image.repository;
       const outcome = yield* Effect.tryPromise(() =>
-        options.registryClient.deleteImage({ repository, digest: image.digest }),
+        options.registryClient.deleteImage({ repository, digest: identity(image) }),
       ).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning(
-            `Image retention: deleting ${image.digest} (${repository}) failed.`,
+            `Image retention: deleting ${identity(image)} (${repository}) failed.`,
             cause,
           ).pipe(Effect.as("failed" as const)),
         ),
@@ -203,8 +216,14 @@ export const reapWorkspaceImages = async (
       const { api, namePrefix } = microvmImages;
       // Every name the job history accounts for: kept above, or a candidate the loop above owns.
       const accountedFor = new Set(
-        [...keep, ...published.map((image) => image.digest)].map((digest) =>
-          microvmImageName(planOf(digest), namePrefix),
+        published.flatMap((image) =>
+          image.publication.kind === "microvm"
+            ? [
+                image.publication.image.imageArn.slice(
+                  image.publication.image.imageArn.lastIndexOf(":") + 1,
+                ),
+              ]
+            : [],
         ),
       );
       const listed = yield* Effect.tryPromise(() => api.listImages(namePrefix)).pipe(
@@ -245,6 +264,3 @@ const deleteMicrovmImage = (api: Pick<MicrovmImageApi, "deleteImage">, name: str
       ),
     ),
   );
-
-/** A MicroVM image's digest is `sha256:<plan hash>`. */
-const planOf = (digest: string): string => digest.slice(digest.indexOf(":") + 1);

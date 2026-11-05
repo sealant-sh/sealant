@@ -1,24 +1,35 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, open, rename, stat } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, realpath, rename } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   parseWorkspaceImageProbe,
+  nativeBuildOwnershipSchema,
+  nativeSnapshotArtifactSchema,
+  nativePublicationEvidenceSchema,
+  type NativeBuildOwnership,
+  type NativePublicationEvidence,
   type WorkspaceBlueprint,
-  type WorkspaceImageProbe,
 } from "@sealant/validators";
 import { z } from "zod";
 
 import { IMAGE_PROBE_PATH, imagePersonLayoutSupport } from "../../buildkit/person-layout.js";
-import type { BoatApi, BoatSavedSnapshot } from "../../runtime/boat/api.js";
 import {
+  boatBuildOwnershipLabels,
+  type BoatApi,
+  type BoatSavedSnapshot,
+} from "../../runtime/boat/api.js";
+import {
+  BoatBuildOwnership,
   boatDeletionIdSchema,
   boatSandboxIdSchema,
   boatSnapshotNameSchema,
   type BoatResult,
 } from "../../runtime/boat/config.js";
+import { sealantdHasRecoveryBoot } from "../../runtime/daemon-recovery.js";
 import { createNativeRecipe, type NativeRecipe } from "./recipe.js";
 import {
   NativeBuildError,
@@ -38,19 +49,15 @@ const identitySchema = z.object({
     .regex(/^[A-Za-z0-9_-]{1,256}$/)
     .optional(),
 });
-const artifactSchema = z.object({
-  kind: z.literal("boat-saved-snapshot"),
-  owner: z.uuid(),
-  build: z.uuid(),
-  recipeHash: hashSchema,
-  receiptHash: hashSchema,
-  runtime: nativeRuntimeIdentitySchema,
-  identity: identitySchema,
-});
+const artifactSchema = nativeSnapshotArtifactSchema;
 /** Exact owned saved artifact. Source-and-creation fallback is a checked handle, never a disk digest. */
 export type NativeSnapshotArtifact = z.infer<typeof artifactSchema>;
 
-const allocationIntent = z.object({ key: z.uuid(), requestedAt: z.iso.datetime() });
+const allocationIntent = z.object({
+  key: z.uuid(),
+  requestedAt: z.iso.datetime(),
+  requestVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(1),
+});
 const allocationSchema = z.discriminatedUnion("state", [
   allocationIntent.extend({ state: z.literal("intent") }),
   allocationIntent.extend({
@@ -87,6 +94,9 @@ const journalSchema = z.object({
   recipeHash: hashSchema,
   runtime: nativeRuntimeIdentitySchema,
   receiptHash: hashSchema.optional(),
+  ownership: nativeBuildOwnershipSchema.optional(),
+  evidence: nativePublicationEvidenceSchema.optional(),
+  removal: z.enum(["intent", "complete"]).optional(),
   failureCode: z
     .string()
     .regex(/^native-[a-z_-]+$/)
@@ -99,8 +109,17 @@ type Journal = z.infer<typeof journalSchema>;
 
 /** One cohesive owner of install, publication, reuse, removal, and interrupted-attempt cleanup. */
 export interface IBoatSnapshotBuilder {
+  /** Prepare complete identity before reserving any provider work. */
+  plan(
+    spec: WorkspaceBlueprint,
+  ): Promise<
+    NativeResult<
+      Pick<NativeBuildOwnership["key"], "recipeHash" | "runtime" | "assetsHash" | "platform">
+    >
+  >;
   build(input: {
     readonly spec: WorkspaceBlueprint;
+    readonly ownership?: NativeBuildOwnership;
     readonly previous?: NativeSnapshotArtifact;
     readonly signal?: AbortSignal;
     readonly onProgress?: (phase: "preparing" | "installing" | "saving" | "cleaning") => void;
@@ -108,15 +127,49 @@ export interface IBoatSnapshotBuilder {
     NativeResult<{
       readonly outcome: "built" | "reused";
       readonly artifact: NativeSnapshotArtifact;
+      readonly evidence: NativePublicationEvidence;
       readonly journalPath?: string;
     }>
   >;
   findPublished(input: {
     readonly spec: WorkspaceBlueprint;
     readonly previous: NativeSnapshotArtifact;
+    readonly evidence?: NativePublicationEvidence;
   }): Promise<NativeResult<NativeSnapshotArtifact | null>>;
   remove(artifact: NativeSnapshotArtifact): Promise<NativeResult<"deleted" | "absent">>;
   cleanup(journalPath: string): Promise<NativeResult<void>>;
+  /** Bounded enumeration contains parsed obligations, never raw journal rows. */
+  journals(input: {
+    readonly limit: number;
+    readonly after?: string;
+  }): Promise<NativeResult<NativeJournalPage>>;
+  /** Locks and observes an attempt. It never replays installation or save. */
+  reconcileBuild(
+    ownership: NativeBuildOwnership,
+    expected?: {
+      readonly artifact: NativeSnapshotArtifact;
+      readonly evidence: NativePublicationEvidence;
+    },
+  ): Promise<NativeResult<NativeBuildRecovery>>;
+}
+
+/** Reconciliation preserves unknown work and only adopts complete published evidence. */
+export type NativeBuildRecovery =
+  | {
+      readonly kind: "published";
+      readonly artifact: NativeSnapshotArtifact;
+      readonly evidence: NativePublicationEvidence;
+    }
+  | { readonly kind: "abandoned" }
+  | { readonly kind: "missing" };
+/** Private journal inventory, bounded by caller-supplied page size. */
+export interface NativeJournalPage {
+  readonly entries: ReadonlyArray<{
+    readonly buildId: string;
+    readonly ownership?: NativeBuildOwnership;
+  }>;
+  readonly failures: ReadonlyArray<{ readonly name: string; readonly error: NativeBuildError }>;
+  readonly next?: string;
 }
 
 /** Explicit infrastructure and bounds, with no owner-global index or discovery operation. */
@@ -213,10 +266,21 @@ const persist = async (path: string, journal: Journal) => {
 const lockAttempt = async (path: string): Promise<() => Promise<void>> => {
   const file = await open(
     path + ".lock",
-    constants.O_CREAT | constants.O_RDWR | constants.O_NOFOLLOW,
+    constants.O_CREAT | constants.O_RDWR | constants.O_NOFOLLOW | constants.O_NONBLOCK,
     0o600,
   );
-  await file.close();
+  try {
+    const info = await file.stat();
+    if (
+      !info.isFile() ||
+      info.nlink !== 1 ||
+      info.uid !== process.getuid?.() ||
+      (info.mode & 0o077) !== 0
+    )
+      throw new NativeBuildError("native-unsafe-journal-lock");
+  } finally {
+    await file.close();
+  }
   const child = spawn(
     "flock",
     ["-n", path + ".lock", "sh", "-c", "printf 'locked\\n'; cat >/dev/null"],
@@ -251,8 +315,13 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
     if (!z.uuid().safeParse(this.#options.owner).success)
       throw new NativeBuildError("native-invalid-owner");
     await mkdir(this.#directory, { recursive: true, mode: 0o700 });
-    const info = await stat(this.#directory);
-    if (!info.isDirectory() || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0)
+    const info = await lstat(this.#directory);
+    if (
+      (await realpath(this.#directory)) !== this.#directory ||
+      !info.isDirectory() ||
+      info.uid !== process.getuid?.() ||
+      (info.mode & 0o077) !== 0
+    )
       throw new NativeBuildError("native-unsafe-journal-directory");
   }
 
@@ -273,9 +342,41 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
     }
   }
 
+  #buildOwnership(journal: Journal): BoatBuildOwnership {
+    const parsed = BoatBuildOwnership.parse({
+      owner: journal.owner,
+      reservation: journal.ownership,
+    });
+    if (!parsed.ok) throw new NativeBuildError("native-build-ownership-missing");
+    return parsed.value;
+  }
+
+  #matchesAllocation(
+    journal: Journal,
+    labels: Readonly<Record<string, string>> | undefined,
+  ): boolean {
+    const expected =
+      journal.allocation.requestVersion === 3
+        ? boatBuildOwnershipLabels(this.#buildOwnership(journal))
+        : { "sealant-build": journal.build, "sealant-dev": "boat-stream" };
+    return Object.entries(expected).every(([key, value]) => labels?.[key] === value);
+  }
+
   async #allocate(journal: Journal, path: string, signal: AbortSignal): Promise<void> {
     if (journal.allocation.state !== "intent") return;
     const allocation = journal.allocation;
+    if (allocation.requestVersion === 3) {
+      const ownership = this.#buildOwnership(journal);
+      const discovered = await this.#options.api.discover(ownership);
+      if (discovered.kind === "conflict") throw new NativeBuildError("native-allocation-conflict");
+      if (discovered.kind === "found") {
+        journal.allocation = { ...allocation, state: "known", id: discovered.sandbox.id };
+        await persist(path, journal);
+        return;
+      }
+      if (discovered.reason === "inventory-unavailable")
+        throw new NativeBuildError("native-allocation-unknown");
+    }
     if (Date.now() - Date.parse(allocation.requestedAt) >= 23 * 60 * 60 * 1000)
       throw new NativeBuildError("native-idempotency-window-expired");
     let last: unknown;
@@ -283,12 +384,22 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       try {
         const vm = await awaitProviderResponse(
           () =>
-            this.#options.api.create({
-              marker: journal.build,
-              idempotencyKey: allocation.key,
-              purpose: "native-build",
-              ttlSeconds: 900,
-            }),
+            this.#options.api.create(
+              allocation.requestVersion === 3
+                ? {
+                    idempotencyKey: allocation.key,
+                    buildOwnership: this.#buildOwnership(journal),
+                    requestVersion: 3,
+                    lifetime: { kind: "bounded", ttlSeconds: 900 },
+                  }
+                : {
+                    marker: journal.build,
+                    idempotencyKey: allocation.key,
+                    purpose: "native-build",
+                    lifetime: { kind: "bounded", ttlSeconds: 900 },
+                    requestVersion: allocation.requestVersion,
+                  },
+            ),
           signal,
         );
         journal.allocation = { ...allocation, state: "known", id: vm.id };
@@ -318,11 +429,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
     const sandboxId = allocation.id;
     if (allocation.state === "known" && allocation.deletion === undefined) {
       const vm = await awaitProviderResponse(() => this.#options.api.get(sandboxId), signal);
-      if (
-        vm.id !== allocation.id ||
-        vm.labels?.["sealant-build"] !== journal.build ||
-        vm.labels["sealant-dev"] !== "boat-stream"
-      )
+      if (vm.id !== allocation.id || !this.#matchesAllocation(journal, vm.labels))
         throw new NativeBuildError("native-sandbox-identity-mismatch");
       allocation = { ...allocation, state: "deleting" };
       journal.allocation = allocation;
@@ -359,7 +466,11 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
   ): Promise<BoatSavedSnapshot | null> {
     const result = await awaitProviderResponse<BoatSavedSnapshot | null>(async () => {
       const found = await this.#options.api.getSnapshot(name);
-      return !found.ok && found.error.status === 404 ? { ok: true, value: null } : found;
+      return !found.ok &&
+        found.error.status === 404 &&
+        (found.error.code === "not_found" || found.error.code === "snapshot_not_found")
+        ? { ok: true, value: null }
+        : found;
     }, signal);
     if (result !== null && result.name !== name)
       throw new NativeBuildError("native-snapshot-identity-mismatch");
@@ -457,7 +568,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
     recipe: NativeRecipe,
     journal: Journal,
     signal: AbortSignal,
-  ): Promise<{ receiptHash: string; probe: WorkspaceImageProbe }> {
+  ): Promise<NativePublicationEvidence> {
     const allocation = journal.allocation;
     if (allocation.state !== "known") throw new NativeBuildError("native-allocation-missing");
     const id = allocation.id;
@@ -506,7 +617,9 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       throw new NativeBuildError("native-person-capabilities-unsupported");
     const receipt =
       JSON.stringify({
-        version: 1,
+        version: 2,
+        ownership: journal.ownership,
+        assetsHash: recipe.assetsHash,
         owner: journal.owner,
         build: journal.build,
         recipeHash: recipe.hash,
@@ -522,7 +635,41 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
     await command(
       `/usr/bin/sudo install -m600 ${quote(stage + "/receipt.json")} /etc/sealant/native-receipt.json\necho '${receiptHash}  /etc/sealant/native-receipt.json' | /usr/bin/sudo sha256sum -c - >/dev/null\nls -d ${quote(stage)}\nrm -rf ${quote(stage)}`,
     );
-    return { receiptHash, probe };
+    const capabilities = z
+      .object({ supports: z.array(z.string()), daemonVersion: z.string().optional() })
+      .safeParse(probe.sealantd);
+    return {
+      receiptHash,
+      receipt,
+      imageProbe: probe,
+      runtime: recipe.runtime,
+      recipeHash: recipe.hash,
+      assetsHash: recipe.assetsHash,
+      daemonRecovery: capabilities.success
+        ? sealantdHasRecoveryBoot(recipe.runtime.source, []) === true
+          ? "supported"
+          : "unsupported"
+        : "unknown",
+      executorRecovery: "unverified",
+    };
+  }
+
+  /** Complete recipe identity includes every installed asset byte and the verified runtime. */
+  async plan(spec: WorkspaceBlueprint): ReturnType<IBoatSnapshotBuilder["plan"]> {
+    if (this.#options.runtimeBundle === undefined)
+      return { ok: false, error: new NativeBuildError("native-runtime-bundle-required") };
+    const recipe = await createNativeRecipe(spec, this.#options.runtimeBundle);
+    return recipe.ok
+      ? {
+          ok: true,
+          value: {
+            recipeHash: recipe.value.hash,
+            assetsHash: recipe.value.assetsHash,
+            runtime: recipe.value.runtime,
+            platform: recipe.value.platform,
+          },
+        }
+      : recipe;
   }
 
   /** Build a clean artifact, or explicitly reuse the previous exact owned publication. */
@@ -533,20 +680,66 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       return { ok: false, error: new NativeBuildError("native-runtime-bundle-required") };
     const planned = await createNativeRecipe(input.spec, this.#options.runtimeBundle);
     if (!planned.ok) return planned;
+    const recipe = planned.value;
+    const ownership =
+      input.ownership === undefined
+        ? undefined
+        : nativeBuildOwnershipSchema.safeParse(input.ownership);
+    if (
+      ownership !== undefined &&
+      (!ownership.success ||
+        ownership.data.key.recipeHash !== recipe.hash ||
+        ownership.data.key.assetsHash !== recipe.assetsHash ||
+        !isDeepStrictEqual(ownership.data.key.runtime, recipe.runtime))
+    )
+      return { ok: false, error: new NativeBuildError("native-build-ownership-mismatch") };
     if (input.previous !== undefined) {
       const reused = await this.findPublished({ spec: input.spec, previous: input.previous });
       if (!reused.ok) return reused;
-      if (reused.value !== null)
-        return { ok: true, value: { outcome: "reused", artifact: reused.value } };
+      if (input.ownership !== undefined && input.previous.build !== input.ownership.buildId)
+        return { ok: false, error: new NativeBuildError("native-build-ownership-mismatch") };
+      if (reused.value !== null) {
+        try {
+          return {
+            ok: true,
+            value: {
+              outcome: "reused",
+              artifact: reused.value,
+              evidence: await this.#evidence(reused.value),
+            },
+          };
+        } catch (error) {
+          return { ok: false, error: failure(error) };
+        }
+      }
     }
-    const recipe = planned.value;
-    const build = randomUUID();
+    const build = ownership?.success ? ownership.data.buildId : randomUUID();
     const path = join(this.#directory, build + ".json");
     let unlock: (() => Promise<void>) | undefined;
     let journal: Journal | undefined;
     try {
       await this.#directoryReady();
       unlock = await lockAttempt(path);
+      const existing = await this.#readJournal(path, true);
+      if (existing !== undefined) {
+        if (
+          !isDeepStrictEqual(existing.ownership, input.ownership) ||
+          existing.recipeHash !== recipe.hash
+        )
+          throw new NativeBuildError("native-build-ownership-mismatch");
+        const recovered = await this.#recover(existing, path);
+        if (recovered.kind === "published")
+          return {
+            ok: true,
+            value: {
+              outcome: "reused",
+              artifact: recovered.artifact,
+              evidence: recovered.evidence,
+              journalPath: path,
+            },
+          };
+        return { ok: false, error: new NativeBuildError("native-build-abandoned", path) };
+      }
       const bound = this.#signal();
       const signal = input.signal === undefined ? bound : AbortSignal.any([bound, input.signal]);
       if (signal.aborted) throw new NativeBuildError("native-interrupted");
@@ -556,8 +749,14 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
         build,
         recipeHash: recipe.hash,
         runtime: recipe.runtime,
+        ...(ownership?.success ? { ownership: ownership.data } : {}),
         phase: "running",
-        allocation: { state: "intent", key: randomUUID(), requestedAt: new Date().toISOString() },
+        allocation: {
+          state: "intent",
+          key: randomUUID(),
+          requestedAt: new Date().toISOString(),
+          requestVersion: ownership?.success ? 3 : 2,
+        },
         save: { state: "none" },
       };
       journal = attempt;
@@ -568,11 +767,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       if (allocation.state !== "known") throw new NativeBuildError("native-allocation-missing");
       await this.#poll(async () => {
         const vm = await awaitProviderResponse(() => this.#options.api.get(allocation.id), signal);
-        if (
-          vm.id !== allocation.id ||
-          vm.labels?.["sealant-build"] !== attempt.build ||
-          vm.labels["sealant-dev"] !== "boat-stream"
-        )
+        if (vm.id !== allocation.id || !this.#matchesAllocation(attempt, vm.labels))
           throw new NativeBuildError("native-sandbox-identity-mismatch");
         if (["error", "cancelled", "archived"].includes(vm.state))
           throw new NativeBuildError("native-sandbox-failed");
@@ -581,6 +776,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       input.onProgress?.("installing");
       const installed = await this.#install(recipe, attempt, signal);
       attempt.receiptHash = installed.receiptHash;
+      attempt.evidence = installed;
       const name = boatSnapshotNameSchema.parse(
         `sealant-dev-boat-stream-${build.replaceAll("-", "")}`,
       );
@@ -612,10 +808,18 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       });
       attempt.phase = "published";
       await persist(path, attempt);
-      return { ok: true, value: { outcome: "built", artifact, journalPath: path } };
+      return {
+        ok: true,
+        value: { outcome: "built", artifact, evidence: installed, journalPath: path },
+      };
     } catch (error) {
       if (journal !== undefined) {
         try {
+          if (journal.phase === "published")
+            return {
+              ok: false,
+              error: new NativeBuildError("native-publication-commit-pending", path),
+            };
           journal.phase = "cleanup";
           journal.failureCode = failure(error).code;
           await persist(path, journal);
@@ -633,26 +837,209 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
   async #ownedArtifact(artifact: NativeSnapshotArtifact): Promise<void> {
     await this.#directoryReady();
     const path = join(this.#directory, artifact.build + ".json");
-    const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const journal = await this.#readJournal(path);
+    if (
+      journal === undefined ||
+      journal.owner !== artifact.owner ||
+      journal.build !== artifact.build ||
+      journal.phase !== "published" ||
+      journal.allocation.state !== "deleted" ||
+      journal.save.state !== "known" ||
+      journal.recipeHash !== artifact.recipeHash ||
+      journal.receiptHash !== artifact.receiptHash ||
+      !isDeepStrictEqual(journal.runtime, artifact.runtime) ||
+      !isDeepStrictEqual(journal.save.identity, artifact.identity)
+    )
+      throw new NativeBuildError("native-artifact-not-owned");
+  }
+
+  async #evidence(artifact: NativeSnapshotArtifact): Promise<NativePublicationEvidence> {
+    const journal = await this.#readJournal(join(this.#directory, artifact.build + ".json"));
+    if (journal?.evidence === undefined)
+      throw new NativeBuildError("native-publication-evidence-missing");
+    this.#checkEvidence(journal);
+    return journal.evidence;
+  }
+
+  #checkEvidence(journal: Journal): void {
+    const evidence = journal.evidence;
+    if (
+      evidence === undefined ||
+      evidence.receiptHash !== journal.receiptHash ||
+      sha256(evidence.receipt) !== evidence.receiptHash ||
+      evidence.recipeHash !== journal.recipeHash ||
+      !isDeepStrictEqual(evidence.runtime, journal.runtime)
+    )
+      throw new NativeBuildError("native-publication-evidence-mismatch");
+    const receipt = z
+      .object({
+        version: z.literal(2),
+        owner: z.uuid(),
+        build: z.uuid(),
+        recipeHash: hashSchema,
+        assetsHash: hashSchema,
+        runtime: nativeRuntimeIdentitySchema,
+        probe: z.unknown(),
+        ownership: nativeBuildOwnershipSchema.optional(),
+      })
+      .parse(JSON.parse(evidence.receipt));
+    if (
+      receipt.owner !== journal.owner ||
+      receipt.build !== journal.build ||
+      receipt.recipeHash !== journal.recipeHash ||
+      receipt.assetsHash !== evidence.assetsHash ||
+      !isDeepStrictEqual(receipt.runtime, journal.runtime) ||
+      !isDeepStrictEqual(receipt.probe, evidence.imageProbe) ||
+      !isDeepStrictEqual(receipt.ownership, journal.ownership)
+    )
+      throw new NativeBuildError("native-publication-evidence-mismatch");
+  }
+
+  async #readJournal(path: string, missing = false): Promise<Journal | undefined> {
+    let file;
+    try {
+      file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    } catch (error) {
+      if (missing && z.object({ code: z.literal("ENOENT") }).safeParse(error).success)
+        return undefined;
+      throw error;
+    }
     try {
       const info = await file.stat();
-      if (!info.isFile() || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0)
+      if (
+        !info.isFile() ||
+        info.nlink !== 1 ||
+        info.size > 1048576 ||
+        info.uid !== process.getuid?.() ||
+        (info.mode & 0o077) !== 0
+      )
         throw new NativeBuildError("native-unsafe-journal");
       const journal = journalSchema.parse(JSON.parse(await file.readFile("utf8")));
       if (
-        journal.owner !== artifact.owner ||
-        journal.build !== artifact.build ||
-        journal.phase !== "published" ||
-        journal.allocation.state !== "deleted" ||
-        journal.save.state !== "known" ||
-        journal.recipeHash !== artifact.recipeHash ||
-        journal.receiptHash !== artifact.receiptHash ||
-        JSON.stringify(journal.runtime) !== JSON.stringify(artifact.runtime) ||
-        JSON.stringify(journal.save.identity) !== JSON.stringify(artifact.identity)
+        journal.owner !== this.#options.owner ||
+        path !== join(this.#directory, journal.build + ".json")
       )
-        throw new NativeBuildError("native-artifact-not-owned");
+        throw new NativeBuildError("native-owner-mismatch");
+      if (
+        journal.ownership !== undefined &&
+        (journal.build !== journal.ownership.buildId ||
+          journal.recipeHash !== journal.ownership.key.recipeHash ||
+          !isDeepStrictEqual(journal.runtime, journal.ownership.key.runtime))
+      )
+        throw new NativeBuildError("native-build-ownership-mismatch");
+      return journal;
     } finally {
       await file.close();
+    }
+  }
+
+  async #recover(journal: Journal, path: string): Promise<NativeBuildRecovery> {
+    if (journal.phase === "published") {
+      if (journal.removal !== undefined) throw new NativeBuildError("native-publication-retiring");
+      this.#checkEvidence(journal);
+      if (
+        journal.save.state !== "known" ||
+        journal.allocation.state !== "deleted" ||
+        journal.evidence === undefined
+      )
+        throw new NativeBuildError("native-publication-incomplete");
+      const artifact = artifactSchema.parse({
+        kind: "boat-saved-snapshot",
+        owner: journal.owner,
+        build: journal.build,
+        recipeHash: journal.recipeHash,
+        receiptHash: journal.receiptHash,
+        runtime: journal.runtime,
+        identity: journal.save.identity,
+      });
+      const found = await this.#getSnapshot(artifact.identity.name, this.#signal());
+      if (found === null || !sameIdentity(artifact.identity, found) || found.status !== "ready")
+        throw new NativeBuildError("native-snapshot-identity-mismatch");
+      return { kind: "published", artifact, evidence: journal.evidence };
+    }
+    await this.#cleanup(journal, path);
+    return { kind: "abandoned" };
+  }
+
+  /** Adoption is an observation under the same kernel lock as build and cleanup. */
+  async reconcileBuild(
+    ownership: NativeBuildOwnership,
+    expected?: {
+      readonly artifact: NativeSnapshotArtifact;
+      readonly evidence: NativePublicationEvidence;
+    },
+  ): Promise<NativeResult<NativeBuildRecovery>> {
+    let unlock: (() => Promise<void>) | undefined;
+    try {
+      const parsed = nativeBuildOwnershipSchema.parse(ownership);
+      await this.#directoryReady();
+      const path = join(this.#directory, parsed.buildId + ".json");
+      unlock = await lockAttempt(path);
+      const journal = await this.#readJournal(path, true);
+      if (journal === undefined) return { ok: true, value: { kind: "missing" } };
+      if (!isDeepStrictEqual(journal.ownership, parsed))
+        throw new NativeBuildError("native-build-ownership-mismatch");
+      if (expected !== undefined) {
+        await this.#ownedArtifact(expected.artifact);
+        if (!isDeepStrictEqual(await this.#evidence(expected.artifact), expected.evidence))
+          throw new NativeBuildError("native-publication-evidence-mismatch");
+      }
+      return { ok: true, value: await this.#recover(journal, path) };
+    } catch (error) {
+      return { ok: false, error: failure(error) };
+    } finally {
+      await unlock?.();
+    }
+  }
+
+  /** Only direct, private regular files in the configured root can become sweep obligations. */
+  async journals(input: {
+    readonly limit: number;
+    readonly after?: string;
+  }): Promise<NativeResult<NativeJournalPage>> {
+    try {
+      await this.#directoryReady();
+      if (
+        !Number.isInteger(input.limit) ||
+        input.limit < 1 ||
+        input.limit > 200 ||
+        (input.after !== undefined &&
+          (input.after.length === 0 ||
+            input.after.length > 256 ||
+            /[/\\]/.test(input.after) ||
+            input.after.includes("\0")))
+      )
+        throw new NativeBuildError("native-invalid-journal-page");
+      const names = (await readdir(this.#directory))
+        .filter((name) => !name.endsWith(".lock"))
+        .toSorted()
+        .filter((name) => input.after === undefined || name > input.after);
+      const entries: Array<{ buildId: string; ownership?: NativeBuildOwnership }> = [];
+      const failures: Array<{ name: string; error: NativeBuildError }> = [];
+      for (const name of names.slice(0, input.limit)) {
+        try {
+          if (!/^[a-f0-9-]{36}\.json$/.test(name))
+            throw new NativeBuildError("native-invalid-journal-path");
+          const journal = await this.#readJournal(join(this.#directory, name));
+          if (journal !== undefined)
+            entries.push({
+              buildId: journal.build,
+              ...(journal.ownership === undefined ? {} : { ownership: journal.ownership }),
+            });
+        } catch (error) {
+          failures.push({ name, error: failure(error) });
+        }
+      }
+      return {
+        ok: true,
+        value: {
+          entries,
+          failures,
+          ...(names.length > input.limit ? { next: names[input.limit - 1] } : {}),
+        },
+      };
+    } catch (error) {
+      return { ok: false, error: failure(error) };
     }
   }
 
@@ -667,11 +1054,16 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       if (artifact.owner !== this.#options.owner)
         throw new NativeBuildError("native-owner-mismatch");
       await this.#ownedArtifact(artifact);
+      const evidence = await this.#evidence(artifact);
+      if (input.evidence !== undefined && !isDeepStrictEqual(input.evidence, evidence))
+        throw new NativeBuildError("native-publication-evidence-mismatch");
+      const journal = await this.#readJournal(join(this.#directory, artifact.build + ".json"));
+      if (journal?.removal !== undefined) throw new NativeBuildError("native-publication-retiring");
       const recipe = await createNativeRecipe(input.spec, this.#options.runtimeBundle);
       if (!recipe.ok) return recipe;
       if (
         artifact.recipeHash !== recipe.value.hash ||
-        JSON.stringify(artifact.runtime) !== JSON.stringify(recipe.value.runtime)
+        !isDeepStrictEqual(artifact.runtime, recipe.value.runtime)
       )
         return { ok: true, value: null };
       const found = await this.#getSnapshot(artifact.identity.name, this.#signal());
@@ -694,12 +1086,22 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       await this.#directoryReady();
       unlock = await lockAttempt(join(this.#directory, artifact.build + ".json"));
       await this.#ownedArtifact(artifact);
+      const path = join(this.#directory, artifact.build + ".json");
+      const journal = await this.#readJournal(path);
+      if (journal === undefined) throw new NativeBuildError("native-journal-missing");
+      if (journal.removal === "complete") return { ok: true, value: "absent" };
       const signal = this.#signal(true);
       const found = await this.#getSnapshot(artifact.identity.name, signal);
-      if (found === null) return { ok: true, value: "absent" };
+      if (found === null) {
+        journal.removal = "complete";
+        await persist(path, journal);
+        return { ok: true, value: "absent" };
+      }
       if (!sameIdentity(artifact.identity, found))
         throw new NativeBuildError("native-snapshot-identity-mismatch");
       if (found.status === "saving") throw new NativeBuildError("native-save-pending");
+      journal.removal = "intent";
+      await persist(path, journal);
       await awaitProviderResponse(
         () => this.#options.api.deleteSnapshot(artifact.identity.name),
         signal,
@@ -709,6 +1111,8 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
           (await this.#getSnapshot(artifact.identity.name, signal)) === null ? true : undefined,
         signal,
       );
+      journal.removal = "complete";
+      await persist(path, journal);
       return { ok: true, value: "deleted" };
     } catch (error) {
       return { ok: false, error: failure(error) };
@@ -724,26 +1128,14 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
     try {
       await this.#directoryReady();
       if (
+        pathInput !== path ||
         dirname(path) !== this.#directory ||
         !/^[a-f0-9-]{36}\.json$/.test(path.slice(this.#directory.length + 1))
       )
         throw new NativeBuildError("native-invalid-journal-path");
       unlock = await lockAttempt(path);
-      const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-      let journal: Journal;
-      try {
-        const info = await file.stat();
-        if (!info.isFile() || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0)
-          throw new NativeBuildError("native-unsafe-journal");
-        journal = journalSchema.parse(JSON.parse(await file.readFile("utf8")));
-      } finally {
-        await file.close();
-      }
-      if (
-        journal.owner !== this.#options.owner ||
-        path !== join(this.#directory, journal.build + ".json")
-      )
-        throw new NativeBuildError("native-owner-mismatch");
+      const journal = await this.#readJournal(path);
+      if (journal === undefined) throw new NativeBuildError("native-journal-missing");
       await this.#cleanup(journal, path);
       return { ok: true, value: undefined };
     } catch (error) {

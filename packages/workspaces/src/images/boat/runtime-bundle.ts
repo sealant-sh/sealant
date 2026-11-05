@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 
+import { nativeRuntimeIdentitySchema } from "@sealant/validators";
 import { z } from "zod";
+
+export { nativeRuntimeIdentitySchema } from "@sealant/validators";
 
 import runtimePin from "./runtime-pin.json" with { type: "json" };
 
@@ -30,15 +33,6 @@ export type NativeResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: NativeBuildError };
 
-/** Serialized runtime identity used by recipes, receipts, and attempt journals. */
-export const nativeRuntimeIdentitySchema = z.object({
-  source: z.literal(NATIVE_RUNTIME_PIN.source),
-  platform: z.literal("linux/amd64"),
-  manifest: z.literal(NATIVE_RUNTIME_PIN.manifest),
-  sealantd: z.literal(NATIVE_RUNTIME_PIN.sealantd),
-  socat: z.literal(NATIVE_RUNTIME_PIN.socat),
-  relay: z.string().regex(/^[a-f0-9]{64}$/),
-});
 /** The relay hash covers the bundled local relay and its dependencies. */
 export type NativeRuntimeIdentity = z.infer<typeof nativeRuntimeIdentitySchema>;
 

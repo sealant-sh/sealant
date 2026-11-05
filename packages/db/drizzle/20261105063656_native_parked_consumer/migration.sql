@@ -1,0 +1,1 @@
+ALTER TABLE "native_publication_consumers" DROP CONSTRAINT "native_publication_consumers_state", ADD CONSTRAINT "native_publication_consumers_state" CHECK ("state" in ('pending','live','retained','parked','unknown','released'));

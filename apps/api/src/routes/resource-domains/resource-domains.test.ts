@@ -30,6 +30,7 @@ let decided: ResourceDomainMemberOutcome | "written" = { kind: "stale", current:
 let looked: ResourceDomainMemberLookup = { kind: "no-decision" };
 
 const repo = Layer.succeed(ResourceDomainRepo, {
+  canUseImages: () => Effect.die("unused"),
   ensure: (key) =>
     Effect.sync(() => {
       calls.push(`ensure ${key}`);

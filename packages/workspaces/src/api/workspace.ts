@@ -1,9 +1,10 @@
+import type { WorkspacePublication as PublicWorkspacePublication } from "@sealant/api-contracts";
 import {
   LAUNCH_RETAINED_ERROR_CODE,
   type WorkspaceRuntimeInstance,
   type WorkspaceBuildJob,
 } from "@sealant/db";
-import type { RuntimeAdapterId } from "@sealant/validators";
+import { parsePersistedWorkspacePublication, type RuntimeAdapterId } from "@sealant/validators";
 
 import {
   personLayoutCapability,
@@ -252,32 +253,58 @@ export const resolveWorkspaceRuntime = (
   };
 };
 
+/** Public publication facts omit private installation receipts and raw probe evidence. */
+export const resolveWorkspacePublication = (
+  job: WorkspaceBuildJob | undefined,
+): PublicWorkspacePublication | undefined => {
+  if (job === undefined) return undefined;
+  const publication =
+    job.publication ??
+    parsePersistedWorkspacePublication({
+      ...job,
+      publication: null,
+      evidence: job.resultPayload?.metadata ?? {},
+    });
+  if (publication === null) return undefined;
+  if (publication.kind === "oci")
+    return { kind: "oci", publicationId: publication.publicationId, image: publication.image };
+  if (publication.kind === "microvm")
+    return { kind: "microvm", publicationId: publication.publicationId, image: publication.image };
+  const { recipeHash, receiptHash, assetsHash, runtime, daemonRecovery, executorRecovery } =
+    publication.evidence;
+  return {
+    kind: "boat-native",
+    publicationId: publication.publicationId,
+    snapshot: {
+      kind: "boat-saved-snapshot",
+      owner: publication.snapshot.owner,
+      build: publication.snapshot.build,
+      recipeHash: publication.snapshot.recipeHash,
+      receiptHash: publication.snapshot.receiptHash,
+      identity: publication.snapshot.identity,
+    },
+    evidence: { recipeHash, receiptHash, assetsHash, runtime, daemonRecovery, executorRecovery },
+  };
+};
+
+/** Legacy image coordinates are exposed only for real OCI publications. */
 export const resolveWorkspacePublishedImage = (
   latestJob: WorkspaceBuildJob | undefined,
   /** Given, the image's per-person capability is derived for this runtime. */
   personLayout?: PersonLayoutContext,
 ): WorkspacePublishedImage | undefined => {
-  if (latestJob === undefined) {
-    return undefined;
-  }
-
-  if (
-    latestJob.publishedReference === null ||
-    latestJob.publishedDigestReference === null ||
-    latestJob.publishedDigest === null
-  ) {
-    return undefined;
-  }
+  const publication = resolveWorkspacePublication(latestJob);
+  if (publication?.kind !== "oci") return undefined;
 
   return {
-    reference: latestJob.publishedReference,
-    digestReference: latestJob.publishedDigestReference,
-    digest: latestJob.publishedDigest,
+    reference: publication.image.reference,
+    digestReference: publication.image.digestReference,
+    digest: publication.image.digest,
     ...(personLayout === undefined
       ? {}
       : {
           personLayout: personLayoutCapability(
-            latestJob.resultPayload?.metadata?.imageProbe,
+            latestJob?.resultPayload?.metadata?.imageProbe,
             personLayout,
           ),
         }),

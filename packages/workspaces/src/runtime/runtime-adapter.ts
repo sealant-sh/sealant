@@ -1,5 +1,10 @@
 import {
   workspaceBindSchema,
+  ociPublicationSchema,
+  microvmPublicationSchema,
+  type WorkspacePublication,
+  type OciPublication,
+  type MicrovmPublication,
   newWorkspaceSchema,
   runtimeAdapterIdSchema,
 } from "@sealant/validators";
@@ -18,6 +23,9 @@ export const runtimeAdapterSupportFailureReasonSchema = z.enum([
   "unsupported-access-mode",
   "unsupported-runtime-requirement",
   "adapter-unavailable",
+  "runtime-os-unsupported",
+  "runtime-requirement-unsupported",
+  "workspace-docker-unsupported",
 ]);
 
 export const runtimeAdapterSupportSchema = z.discriminatedUnion("supported", [
@@ -31,13 +39,7 @@ export const runtimeAdapterSupportSchema = z.discriminatedUnion("supported", [
   }),
 ]);
 
-export const publishedImageSchema = z.strictObject({
-  repository: z.string().trim().min(1),
-  tag: z.string().trim().min(1),
-  reference: z.string().trim().min(1),
-  digestReference: z.string().trim().min(1),
-  digest: z.string().trim().min(1),
-});
+export { publishedImageSchema } from "@sealant/validators";
 
 export const workspaceCloneAuthSchema = z.discriminatedUnion("type", [
   z.strictObject({
@@ -82,9 +84,9 @@ export const credentialFileInjectionSchema = z.strictObject({
     .optional(),
 });
 
-export const runtimeAdapterLaunchInputSchema = z.strictObject({
+const runtimeLaunchFields = {
   blueprint: runtimeAdapterBlueprintSchema,
-  publishedImage: publishedImageSchema,
+
   workspaceCloneAuth: workspaceCloneAuthSchema.optional(),
   // Connected-account env injections (e.g. CLAUDE_CODE_OAUTH_TOKEN); they join the existing `-e`
   // args, sharing the exposure profile of today's clone tokens (plaintext-argv hardening is a
@@ -132,6 +134,17 @@ export const runtimeAdapterLaunchInputSchema = z.strictObject({
   principalId: z.string().trim().min(1).optional(),
   /** Hot-pool skeletons may get a different PriorityClass. */
   pool: z.enum(["hot"]).optional(),
+};
+
+/** Parse an OCI launch at the container adapter boundary. */
+export const runtimeAdapterLaunchInputSchema = z.strictObject({
+  ...runtimeLaunchFields,
+  publication: ociPublicationSchema,
+});
+/** Parse a MicroVM launch at its provider adapter boundary. */
+export const microvmLaunchInputSchema = z.strictObject({
+  ...runtimeLaunchFields,
+  publication: microvmPublicationSchema,
 });
 
 export const runtimeAdapterLaunchResultSchema = z.strictObject({
@@ -278,13 +291,21 @@ export type RuntimeAdapterSupport = z.infer<typeof runtimeAdapterSupportSchema>;
 
 export type RuntimeAdapterSupportInput = z.infer<typeof runtimeAdapterSupportInputSchema>;
 
-export type PublishedImage = z.infer<typeof publishedImageSchema>;
+export type { PublishedImage } from "@sealant/validators";
 
 export type WorkspaceCloneAuth = z.infer<typeof workspaceCloneAuthSchema>;
 
 export type CredentialFileInjection = z.infer<typeof credentialFileInjectionSchema>;
 
-export type RuntimeAdapterLaunchInput = z.infer<typeof runtimeAdapterLaunchInputSchema>;
+/** Shared launch fields remain identical for every publication kind. */
+export type RuntimeLaunch<P extends WorkspacePublication> = Omit<
+  z.infer<typeof runtimeAdapterLaunchInputSchema>,
+  "publication"
+> & { readonly publication: P };
+export type RuntimeAdapterLaunchInput = RuntimeLaunch<OciPublication>;
+export type MicrovmLaunchInput = RuntimeLaunch<MicrovmPublication>;
+export const parseMicrovmLaunchInput = (input: unknown): MicrovmLaunchInput =>
+  microvmLaunchInputSchema.parse(input);
 
 export type RuntimeAdapterLaunchResult = z.infer<typeof runtimeAdapterLaunchResultSchema>;
 
@@ -392,7 +413,7 @@ export const isRemovalRefusal = (error: unknown): boolean => {
   return false;
 };
 
-export interface RuntimeAdapter {
+export interface RuntimeAdapter<P extends WorkspacePublication = OciPublication> {
   readonly id: RuntimeAdapterId;
   /**
    * Optional: the provider's own bound on a removal request (review 9 #5, decision 27): once this
@@ -420,10 +441,10 @@ export interface RuntimeAdapter {
    * step; a capture-sourced launch that fails after that keeps its executor and throws
    * `LaunchRetainedError` (`launch-retention.ts`).
    */
-  launch(
-    input: RuntimeAdapterLaunchInput,
+  readonly launch: (
+    input: RuntimeLaunch<P>,
     hooks?: RuntimeAdapterLaunchHooks,
-  ): Promise<RuntimeAdapterLaunchResult>;
+  ) => Promise<RuntimeAdapterLaunchResult>;
   stop(input: RuntimeAdapterStopInput): Promise<RuntimeAdapterStopResult>;
   /**
    * Optional: what the runtime knows about a launched executor right now. Adapters that cannot
@@ -494,18 +515,23 @@ const candidateAdapterIds = (
   return [...new Set([requested, defaultAdapterId])];
 };
 
-export interface SelectRuntimeAdapterInput {
+/** Lifecycle consumers cannot launch a publication of the wrong kind. */
+export type RuntimeAdapterLifecycle = Omit<RuntimeAdapter<never>, "launch">;
+
+export interface SelectRuntimeAdapterInput<A extends RuntimeAdapterLifecycle> {
   readonly blueprint: RuntimeAdapterBlueprint;
-  readonly adapters: readonly RuntimeAdapter[];
+  readonly adapters: readonly A[];
   readonly defaultAdapterId: RuntimeAdapterId;
 }
 
-export interface RuntimeAdapterSelection {
-  readonly adapter: RuntimeAdapter;
+export interface RuntimeAdapterSelection<A extends RuntimeAdapterLifecycle> {
+  readonly adapter: A;
   readonly adapterId: RuntimeAdapterId;
 }
 
-export const selectRuntimeAdapter = (input: SelectRuntimeAdapterInput): RuntimeAdapterSelection => {
+export const selectRuntimeAdapter = <A extends RuntimeAdapterLifecycle>(
+  input: SelectRuntimeAdapterInput<A>,
+): RuntimeAdapterSelection<A> => {
   const supportInput = parseRuntimeAdapterSupportInput({
     blueprint: input.blueprint,
   });

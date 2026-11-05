@@ -1,37 +1,70 @@
+import { createHash } from "node:crypto";
+
 import { z } from "zod";
 
 import {
   BoatApiError,
+  BoatOwnership,
+  BoatBuildOwnership,
   BoatSecret,
   boatDeletionIdSchema,
   boatSandboxIdSchema,
   boatSnapshotNameSchema,
   parseBoatUrl,
+  parseBoatLifetime,
   type BoatDeletionId,
   type BoatResult,
   type BoatSandboxId,
   type BoatSnapshotName,
+  type BoatLifetime,
 } from "./config.js";
 import { parseBoatHostedControl, type BoatHostedControl } from "./connection.js";
 
-const sandboxSchema = z.object({
-  labels: z.record(z.string(), z.string()).optional(),
-  id: boatSandboxIdSchema,
-  state: z.enum([
-    "init",
-    "provisioning",
-    "provisioned",
-    "cloning",
-    "ready",
-    "idle",
-    "running",
-    "archiving",
-    "archived",
-    "error",
-    "cancelled",
-  ]),
-});
-/** Archived sandboxes can still have live writers during Boat's grace period. No state fences writers. */
+/** Only an explicit null deadline without a contradictory TTL verifies disabled auto-stop. */
+export type BoatAutoStop =
+  | { readonly kind: "disabled" }
+  | { readonly kind: "scheduled"; readonly at: string }
+  | { readonly kind: "unverified" };
+
+const sandboxSchema = z
+  .object({
+    labels: z.record(z.string(), z.string()).optional(),
+    id: boatSandboxIdSchema,
+    state: z.enum([
+      "init",
+      "provisioning",
+      "provisioned",
+      "cloning",
+      "ready",
+      "idle",
+      "running",
+      "archiving",
+      "archived",
+      "error",
+      "cancelled",
+    ]),
+    archiveAfter: z.iso.datetime({ offset: true }).nullable().optional(),
+    ttlSeconds: z.number().int().min(1).max(2592000).nullable().optional(),
+    snapshots: z.boolean().optional(),
+    monitoring: z.boolean().optional(),
+    dataExpiredAt: z.iso.datetime({ offset: true }).nullable().optional(),
+    stoppedAt: z.iso.datetime({ offset: true }).nullable().optional(),
+    stop: z
+      .object({ status: z.enum(["pending", "failing", "completed", "superseded"]) })
+      .nullable()
+      .optional(),
+  })
+  .transform((sandbox) => {
+    const autoStop: BoatAutoStop =
+      sandbox.archiveAfter === null &&
+      (sandbox.ttlSeconds === undefined || sandbox.ttlSeconds === null)
+        ? { kind: "disabled" }
+        : typeof sandbox.archiveAfter === "string" && sandbox.ttlSeconds !== null
+          ? { kind: "scheduled", at: sandbox.archiveAfter }
+          : { kind: "unverified" };
+    return { ...sandbox, autoStop };
+  });
+/** Creation success preserves allocation identity even when auto-stop is unverified. No provider state fences writers. */
 export type BoatSandbox = z.infer<typeof sandboxSchema>;
 
 const deletionSchema = z.object({
@@ -84,6 +117,8 @@ const safeCodes = new Set([
   "no_ready_machine",
   "machine_class_plan_required",
   "insufficient_balance",
+  "trial_auto_stop_required",
+  "snapshot_data_expired",
 ]);
 const codeSchema = z.object({ code: z.string() });
 const stagingPathSchema = z
@@ -91,14 +126,92 @@ const stagingPathSchema = z
   .regex(/^\/home\/user\/sealant-dev-boat-stream-[a-f0-9-]{36}\/[A-Za-z0-9._/-]+$/)
   .refine((value) => !value.split("/").some((part) => part === "." || part === ".."));
 
+/** Production allocations require full identity. Build and proof allocations remain bounded. */
+export type BoatCreateInput = {
+  readonly idempotencyKey: string;
+  readonly from?: BoatSnapshotName;
+} & (
+  | {
+      readonly lifetime: Extract<BoatLifetime, { readonly kind: "production-session" }>;
+      readonly ownership: BoatOwnership;
+    }
+  | {
+      readonly lifetime: Extract<BoatLifetime, { readonly kind: "bounded" }>;
+      /** Replay the recorded body version. Version 1 predates explicit snapshot/privacy fields. */
+      readonly requestVersion: 1 | 2;
+      readonly marker: string;
+      readonly purpose?: "native-build";
+    }
+  | {
+      readonly lifetime: Extract<BoatLifetime, { readonly kind: "bounded" }>;
+      readonly requestVersion: 3;
+      readonly buildOwnership: BoatBuildOwnership;
+    }
+);
+
+/** Positive adoption requires a complete inventory. No match never establishes absence. */
+export type BoatDiscovery =
+  | {
+      readonly kind: "found";
+      readonly ownership: BoatOwnership | BoatBuildOwnership;
+      readonly sandbox: BoatSandbox;
+    }
+  | { readonly kind: "unknown"; readonly reason: "no-positive-evidence" }
+  | {
+      readonly kind: "unknown";
+      readonly reason: "inventory-unavailable";
+      readonly error: BoatApiError;
+    }
+  | {
+      readonly kind: "conflict";
+      readonly ownership: BoatOwnership | BoatBuildOwnership;
+      readonly matches: readonly BoatSandbox[];
+    };
+
+const ownershipLabels = (identity: BoatOwnership) => ({
+  "sealant-runtime": "boat",
+  "sealant-deployment": identity.deploymentId,
+  "sealant-workspace": identity.workspaceId,
+  "sealant-run": identity.runId,
+  "sealant-instance": identity.runtimeInstanceId,
+  "sealant-attempt": identity.launchAttemptId,
+  "sealant-source": identity.sourceId,
+});
+/** Version 3 labels bind the complete reservation, never a correlation tag alone. */
+export const boatBuildOwnershipLabels = (
+  identity: BoatBuildOwnership,
+): Readonly<Record<string, string>> => {
+  const { key, buildId, publicationId } = identity.reservation;
+  return {
+    "sealant-dev": "boat-stream",
+    "sealant-runtime": "boat",
+    "sealant-owner": identity.owner,
+    "sealant-build": buildId,
+    "sealant-publication": publicationId,
+    "sealant-deployment": key.deploymentId,
+    "sealant-scope-kind": key.scope.kind,
+    "sealant-scope": key.scope.kind === "owner" ? key.scope.ownerUserId : key.scope.domainId,
+    "sealant-recipe": key.recipeHash,
+    "sealant-assets": key.assetsHash,
+    "sealant-runtime-hash": createHash("sha256").update(JSON.stringify(key.runtime)).digest("hex"),
+    "sealant-platform": key.platform,
+  };
+};
+const inventoryResponse = successSchema.extend({
+  sandboxes: z.array(sandboxSchema),
+  pageInfo: z
+    .object({
+      nextCursor: z.string().min(1).nullable(),
+      hasMore: z.boolean(),
+      limit: z.number().int().min(1).max(200),
+    })
+    .refine((page) => page.hasMore === (page.nextCursor !== null)),
+});
+
 export interface BoatApi {
-  create(input: {
-    readonly marker: string;
-    readonly idempotencyKey: string;
-    readonly from?: BoatSnapshotName;
-    readonly purpose?: "native-build";
-    readonly ttlSeconds?: number;
-  }): Promise<BoatResult<BoatSandbox>>;
+  create(input: BoatCreateInput): Promise<BoatResult<BoatSandbox>>;
+  /** Reads all cursor pages and verifies every ownership label locally. Never issues create. */
+  discover(ownership: BoatOwnership | BoatBuildOwnership): Promise<BoatDiscovery>;
   get(id: BoatSandboxId): Promise<BoatResult<BoatSandbox>>;
   execute(
     id: BoatSandboxId,
@@ -116,7 +229,8 @@ export interface BoatApi {
   uploadFile(id: BoatSandboxId, path: string, bytes: Uint8Array): Promise<BoatResult<void>>;
   hostControl(id: BoatSandboxId): Promise<BoatResult<BoatHostedControl>>;
   stop(id: BoatSandboxId): Promise<BoatResult<void>>;
-  resume(id: BoatSandboxId): Promise<BoatResult<void>>;
+  /** Returns a fresh observation. An accepted resume alone does not verify lifetime or liveness. */
+  resume(id: BoatSandboxId, lifetime: BoatLifetime): Promise<BoatResult<BoatSandbox>>;
   deleteSandbox(id: BoatSandboxId): Promise<BoatResult<BoatDeletion>>;
   getDeletion(id: BoatDeletionId): Promise<BoatResult<BoatDeletion>>;
   saveSnapshot(id: BoatSandboxId, name: BoatSnapshotName): Promise<BoatResult<BoatSavedSnapshot>>;
@@ -163,23 +277,24 @@ export class HttpBoatApi implements BoatApi {
     }
   }
 
-  /** Reusing the same marker, key and source retries the same allocation for 24 hours. */
-  create(input: {
-    readonly marker: string;
-    readonly idempotencyKey: string;
-    readonly from?: BoatSnapshotName;
-    readonly purpose?: "native-build";
-    readonly ttlSeconds?: number;
-  }): Promise<BoatResult<BoatSandbox>> {
+  /** Only the durable allocation owner may retry the same body/key within Boat's 24-hour guarantee. */
+  create(input: BoatCreateInput): Promise<BoatResult<BoatSandbox>> {
+    const ttl = parseBoatLifetime(input.lifetime);
+    if (!ttl.ok) return Promise.resolve(ttl);
+    const production = "ownership" in input;
+    const build = "buildOwnership" in input;
     if (
-      !z.uuid().safeParse(input.marker).success ||
       !z.uuid().safeParse(input.idempotencyKey).success ||
-      !z
-        .number()
-        .int()
-        .min(60)
-        .max(1800)
-        .safeParse(input.ttlSeconds ?? 900).success
+      (production
+        ? !(input.ownership instanceof BoatOwnership) ||
+          input.lifetime.kind !== "production-session"
+        : build
+          ? !(input.buildOwnership instanceof BoatBuildOwnership) ||
+            input.requestVersion !== 3 ||
+            input.lifetime.kind !== "bounded"
+          : !z.uuid().safeParse(input.marker).success ||
+            input.lifetime.kind !== "bounded" ||
+            (input.requestVersion !== 1 && input.requestVersion !== 2))
     ) {
       return Promise.resolve({
         ok: false,
@@ -193,17 +308,62 @@ export class HttpBoatApi implements BoatApi {
       sandboxResponse,
       {
         type: "small",
-        ttlSeconds: input.ttlSeconds ?? 900,
+        ttlSeconds: ttl.value,
         noEnv: true,
         monitoring: false,
-        labels: {
-          "sealant-dev": "boat-stream",
-          [input.purpose === "native-build" ? "sealant-build" : "sealant-spike"]: input.marker,
-        },
+        ...(production || build || input.requestVersion === 2
+          ? { snapshots: true, visibility: "private" }
+          : {}),
+        labels: production
+          ? ownershipLabels(input.ownership)
+          : build
+            ? boatBuildOwnershipLabels(input.buildOwnership)
+            : {
+                "sealant-dev": "boat-stream",
+                [input.purpose === "native-build" ? "sealant-build" : "sealant-spike"]:
+                  input.marker,
+              },
         ...(input.from === undefined ? {} : { from: input.from }),
       },
       { "Idempotency-Key": input.idempotencyKey },
     );
+  }
+
+  /** A positive page cannot authorize adoption while any later page remains unavailable. */
+  async discover(ownership: BoatOwnership | BoatBuildOwnership): Promise<BoatDiscovery> {
+    const expected =
+      ownership instanceof BoatBuildOwnership
+        ? boatBuildOwnershipLabels(ownership)
+        : ownershipLabels(ownership);
+    const matches = new Map<BoatSandboxId, BoatSandbox>();
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+    for (;;) {
+      const query = new URLSearchParams({ limit: "200" });
+      for (const [key, value] of Object.entries(expected)) query.append("label", `${key}=${value}`);
+      if (cursor !== null) query.set("cursor", cursor);
+      const page = await this.#request("discover", "GET", `/sandboxes?${query}`, inventoryResponse);
+      if (!page.ok) return { kind: "unknown", reason: "inventory-unavailable", error: page.error };
+      for (const sandbox of page.value.sandboxes) {
+        if (Object.entries(expected).every(([key, value]) => sandbox.labels?.[key] === value))
+          matches.set(sandbox.id, sandbox);
+      }
+      cursor = page.value.pageInfo.nextCursor;
+      if (cursor === null) break;
+      if (seenCursors.has(cursor))
+        return {
+          kind: "unknown",
+          reason: "inventory-unavailable",
+          error: new BoatApiError("discover", null, "repeated_cursor"),
+        };
+      seenCursors.add(cursor);
+    }
+    const complete = [...matches.values()];
+    const first = complete[0];
+    if (first === undefined) return { kind: "unknown", reason: "no-positive-evidence" };
+    return complete.length === 1
+      ? { kind: "found", ownership, sandbox: first }
+      : { kind: "conflict", ownership, matches: complete };
   }
 
   get(id: BoatSandboxId): Promise<BoatResult<BoatSandbox>> {
@@ -313,12 +473,15 @@ export class HttpBoatApi implements BoatApi {
     return result.ok ? { ok: true, value: undefined } : result;
   }
 
-  async resume(id: BoatSandboxId): Promise<BoatResult<void>> {
+  async resume(id: BoatSandboxId, lifetime: BoatLifetime): Promise<BoatResult<BoatSandbox>> {
+    const ttl = parseBoatLifetime(lifetime);
+    if (!ttl.ok) return ttl;
     const result = await this.#request("resume", "POST", `/sandboxes/${id}/resume`, successSchema, {
-      ttlSeconds: 900,
+      type: "small",
+      ttlSeconds: ttl.value,
       noEnv: true,
     });
-    return result.ok ? { ok: true, value: undefined } : result;
+    return result.ok ? this.get(id) : result;
   }
 
   deleteSandbox(id: BoatSandboxId): Promise<BoatResult<BoatDeletion>> {

@@ -64,6 +64,7 @@ const events: unknown[] = [];
 let cancellationProbe = false;
 const api: BoatApi = {
   create: httpApi.create.bind(httpApi),
+  discover: httpApi.discover.bind(httpApi),
   get: httpApi.get.bind(httpApi),
   writeFile: httpApi.writeFile.bind(httpApi),
   uploadFile: httpApi.uploadFile.bind(httpApi),
@@ -145,6 +146,7 @@ const stateSchema = z.object({
       marker: z.uuid(),
       key: z.uuid(),
       requestedAt: z.iso.datetime(),
+      requestVersion: z.union([z.literal(1), z.literal(2)]).default(1),
       from: boatSnapshotNameSchema,
       id: boatSandboxIdSchema.optional(),
       deletionIntent: z.literal(true).optional(),
@@ -205,6 +207,8 @@ const createClone = async () => {
     throw new Error("unsafe clone reconciliation");
   const result = must(
     await api.create({
+      lifetime: { kind: "bounded" },
+      requestVersion: clone.requestVersion,
       marker: clone.marker,
       idempotencyKey: clone.key,
       from: clone.from,
@@ -268,6 +272,7 @@ try {
       marker: randomUUID(),
       key: randomUUID(),
       requestedAt: new Date().toISOString(),
+      requestVersion: 2,
       from: artifact.identity.name,
     };
     await persist();
@@ -568,7 +573,7 @@ print("outer sentinel and relay survived")
     );
     must(await api.stop(id));
     await poll(async () => (must(await api.get(id)).state === "archived" ? true : undefined));
-    must(await api.resume(id));
+    must(await api.resume(id, { kind: "bounded" }));
     await poll(async () =>
       ["ready", "idle", "running"].includes(must(await api.get(id)).state) ? true : undefined,
     );

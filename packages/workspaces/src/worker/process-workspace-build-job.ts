@@ -8,6 +8,8 @@ import {
 } from "@sealant/api-contracts/workspace-environment";
 import type { CredentialCipherService, CredentialInjection } from "@sealant/credentials";
 import {
+  ResourceDomainRepo,
+  ResourceDomainRepoLive,
   ConnectedAccountRepo,
   ConnectedAccountRepoLive,
   GitHubInstallationRepo,
@@ -40,6 +42,10 @@ import {
 } from "@sealant/db";
 import { type GitHubSourceIntegration } from "@sealant/source-integrations";
 import {
+  nativeArtifactConsumerSchema,
+  parseLegacyWorkspacePublication,
+  type WorkspacePublication,
+  type NativePublicationKey,
   newWorkspaceSchema,
   workspaceImageProbeSchema,
   type NewWorkspace,
@@ -47,15 +53,17 @@ import {
   type WorkspaceCredentialsHome,
   type WorkspaceImageProbe,
 } from "@sealant/validators";
-import { Clock, Deferred, Effect, Exit, Layer, Option, Schedule } from "effect";
+import { Clock, Deferred, Effect, Exit, Layer, Option, Result, Schedule } from "effect";
 import { z } from "zod";
 
+import { nativeWorkspaceInstallation } from "../buildkit/buildkit-builder.js";
 import {
   describeImageBuildStep,
   type ImageBuildProgress,
   type PlannedWorkspaceImageBuild,
 } from "../buildkit/index.js";
 import { imageAppliesOwnerMap } from "../buildkit/person-layout.js";
+import { NativeCatalogError } from "../images/boat/catalog.js";
 import {
   parsePublishedReference,
   planImageCoordinates,
@@ -81,12 +89,12 @@ import {
   type RuntimeAdapterId,
   type RuntimeAdapterLaunchHooks,
   type RuntimeLaunchIdentity,
-  type WorkspaceCloneAuth,
 } from "../runtime/index.js";
 import {
   hostDirectoryLaunchMaterialStager,
   type LaunchMaterialStager,
 } from "../runtime/launch-material.js";
+import type { RuntimeLaunch } from "../runtime/runtime-adapter.js";
 import { resolveCredentialInjections } from "./connected-account-resolver.js";
 import {
   WorkspaceBuildJobProcessingError,
@@ -255,59 +263,21 @@ const keepRecoveryCredential = (input: {
 /** Options for the Effect-native pipeline: repositories come from context, not `db`. */
 export type ProcessWorkspaceBuildJobEffectOptions = Omit<ProcessWorkspaceBuildJobOptions, "db">;
 
-const launchPublishedImage = async (input: {
-  readonly spec: NewWorkspace;
-  readonly runtimeAdapters: readonly RuntimeAdapter[];
-  readonly defaultRuntimeAdapterId: RuntimeAdapterId;
-  readonly publishedImage: PublishedImage;
-  readonly workspaceCloneAuth?: WorkspaceCloneAuth;
-  readonly platformEnv?: Record<string, string>;
-  readonly credentialEnv?: Record<string, string>;
-  readonly credentialFiles?: readonly CredentialFileInjection[];
-  readonly dotfilesArchiveDir?: string;
-  readonly secretEnvDir?: string;
-  readonly secretEnv?: Readonly<Record<string, string>>;
-  readonly runId?: string;
-  readonly launchId?: string;
-  readonly workspaceId?: string;
-  readonly principalId?: string;
-  readonly binds?: readonly { readonly mountPath: string; readonly subpath: string }[];
-  readonly hooks?: RuntimeAdapterLaunchHooks;
-}) => {
-  const selectedAdapter = selectRuntimeAdapter({
-    blueprint: input.spec,
-    adapters: input.runtimeAdapters,
-    defaultAdapterId: input.defaultRuntimeAdapterId,
-  });
-
-  return selectedAdapter.adapter.launch(
-    {
-      blueprint: input.spec,
-      publishedImage: input.publishedImage,
-      ...(input.workspaceCloneAuth === undefined
-        ? {}
-        : { workspaceCloneAuth: input.workspaceCloneAuth }),
-      ...(input.platformEnv === undefined ? {} : { platformEnv: input.platformEnv }),
-      ...(input.credentialEnv === undefined ? {} : { credentialEnv: input.credentialEnv }),
-      ...(input.credentialFiles === undefined
-        ? {}
-        : { credentialFiles: [...input.credentialFiles] }),
-      ...(input.dotfilesArchiveDir === undefined
-        ? {}
-        : { dotfilesArchiveDir: input.dotfilesArchiveDir }),
-      ...(input.secretEnvDir === undefined ? {} : { secretEnvDir: input.secretEnvDir }),
-      ...(input.secretEnv === undefined ? {} : { secretEnv: { ...input.secretEnv } }),
-      // Deterministic per-run container name -> idempotent launch/adopt (#4).
-      ...(input.runId === undefined ? {} : { runId: input.runId }),
-      // The launch the create named: a capture executor boots with it (SEALANT_CAPTURE_LAUNCH_ID).
-      ...(input.launchId === undefined ? {} : { launchId: input.launchId }),
-      ...(input.workspaceId === undefined ? {} : { workspaceId: input.workspaceId }),
-      ...(input.principalId === undefined ? {} : { principalId: input.principalId }),
-      ...(input.binds === undefined || input.binds.length === 0 ? {} : { binds: [...input.binds] }),
-    },
-    input.hooks,
-  );
-};
+type LaunchFields = Omit<RuntimeLaunch<WorkspacePublication>, "publication">;
+interface PreparedPublication {
+  readonly publication: WorkspacePublication;
+  readonly launch: (
+    input: LaunchFields,
+    hooks?: RuntimeAdapterLaunchHooks,
+  ) => ReturnType<RuntimeAdapter["launch"]>;
+}
+const preparedPublication = <P extends WorkspacePublication>(
+  adapter: RuntimeAdapter<P>,
+  publication: P,
+): PreparedPublication => ({
+  publication,
+  launch: (input, hooks) => adapter.launch({ ...input, publication }, hooks),
+});
 
 // Staging of launch material (dotfiles archives, secret env) lives in
 // `../runtime/launch-material.ts`; these re-exports keep the historical import paths working.
@@ -828,14 +798,38 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
   const markSucceeded = (fields: {
     readonly builderId: string;
     readonly resultPayload: WorkspaceBuild;
-    readonly publishedReference: string;
-    readonly publishedDigestReference: string;
-    readonly publishedDigest: string;
+    readonly publication: WorkspacePublication;
   }) =>
     jobs.markJobSucceeded({ id: job.id, claim, ...fields }).pipe(
       Effect.mapError(toWorkspaceBuildJobProcessingError),
       Effect.map((succeeded) => succeeded !== null),
     );
+
+  const authorizeScope = (scope: NativePublicationKey["scope"] | null) =>
+    Effect.gen(function* () {
+      if (scope === null) return;
+      const attempt =
+        job.runId === null
+          ? undefined
+          : yield* attempts
+              .getAttemptById(job.runId)
+              .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+      const domains = yield* Effect.serviceOption(ResourceDomainRepo);
+      if (
+        attempt === undefined ||
+        (scope.kind === "owner"
+          ? scope.ownerUserId !== attempt.ownerUserId
+          : Option.isNone(domains) ||
+            !(yield* domains.value
+              .canUseImages(scope.domainId, attempt.ownerUserId)
+              .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError))))
+      ) {
+        return yield* workspaceBuildJobProcessingError({
+          errorCode: "image-scope-unavailable",
+          message: "Image scope not found.",
+        });
+      }
+    });
 
   // Phase A: build the image, publish it, and mark the job succeeded.
   const buildAndPublish = Effect.gen(function* () {
@@ -850,28 +844,112 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       catch: toWorkspaceBuildJobProcessingError,
     });
 
-    // The runtime is chosen before anything is built, because the image is built by the builder
-    // registered with it (docs/workspace-image-builders-design.md, D1). Selection is pure, and
-    // phase B repeats it. A blueprint no adapter supports is phase B's to report, with the build
-    // left succeeded, so an unsupported blueprint builds with the default runtime's builder.
-    const adapters = options.runtimes.map((runtime) => runtime.adapter);
-    const selectedAdapterId = yield* Effect.try(
-      () =>
+    const selectedAdapterId = yield* Effect.try({
+      try: () =>
         selectRuntimeAdapter({
           blueprint: spec,
-          adapters,
+          adapters: options.runtimes.map((runtime) => runtime.adapter),
           defaultAdapterId: options.defaultRuntimeAdapterId,
         }).adapterId,
-    ).pipe(Effect.catch(() => Effect.succeed(options.defaultRuntimeAdapterId)));
-    const runtime =
-      options.runtimes.find((candidate) => candidate.adapter.id === selectedAdapterId) ??
-      options.runtimes[0];
-    if (runtime === undefined) {
+      catch: toWorkspaceBuildJobProcessingError,
+    });
+    const runtime = options.runtimes.find(
+      (candidate) => candidate.adapter.id === selectedAdapterId,
+    );
+    if (runtime === undefined)
       return yield* toWorkspaceBuildJobProcessingError(
-        new Error("This worker has no runtime registered, so nothing can build or launch."),
+        new Error("Selected runtime is not registered."),
       );
+    const scope = job.imageScope ?? null;
+    yield* authorizeScope(scope);
+    if (runtime.kind === "boat-native") {
+      if (job.runId === null || scope === null)
+        return yield* workspaceBuildJobProcessingError({
+          errorCode: "native-consumer-missing",
+          message: "Native publication needs a durable run and authorized image scope.",
+        });
+      const consumer = yield* Effect.try({
+        try: () =>
+          nativeArtifactConsumerSchema.parse({ runId: job.runId, runtimeInstanceId: job.runId }),
+        catch: toWorkspaceBuildJobProcessingError,
+      });
+      const renew = jobs
+        .recordJobProgress({ id: job.id, claim, leaseDurationMs: options.leaseDurationMs })
+        .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+      if (!(yield* renew)) return null;
+      const lost = yield* Deferred.make<void>();
+      const heartbeat = renew.pipe(
+        Effect.flatMap((held) => (held ? Effect.void : Deferred.succeed(lost, undefined))),
+        Effect.repeat(Schedule.spaced(Math.max(100, Math.floor(options.leaseDurationMs / 3)))),
+      );
+      const acquire = Effect.gen(function* () {
+        for (;;) {
+          if (!(yield* renew)) return null;
+          yield* authorizeScope(scope);
+          const result = yield* Effect.result(runtime.artifacts.acquire({ spec, scope, consumer }));
+          if (Result.isSuccess(result)) return result.success;
+          const error = result.failure;
+          if (!(error instanceof NativeCatalogError) || error.code !== "publication-pending")
+            return yield* toWorkspaceBuildJobProcessingError(error);
+          yield* Effect.sleep(Math.min(5000, Math.max(100, options.leaseDurationMs / 3)));
+        }
+      });
+      const publication = yield* Effect.raceFirst(
+        acquire,
+        Effect.raceFirst(
+          heartbeat.pipe(Effect.as(null)),
+          Deferred.await(lost).pipe(Effect.as(null)),
+        ),
+      );
+      if (publication === null || !(yield* renew)) return null;
+      yield* authorizeScope(scope);
+      const family = nativeWorkspaceInstallation(spec).family;
+      const resultPayload: WorkspaceBuild = {
+        builder: { id: family, osFamily: family },
+        artifacts: [
+          {
+            kind: "boat-native-snapshot",
+            name: publication.snapshot.identity.name,
+            publicationId: publication.publicationId,
+            snapshot: publication.snapshot,
+          },
+        ],
+        metadata: {
+          notes: [],
+          planHash: publication.evidence.recipeHash,
+          imageProbe: publication.evidence.imageProbe,
+        },
+      };
+      if (!(yield* markSucceeded({ builderId: "boat-native", resultPayload, publication })))
+        return null;
+      return {
+        prepared: preparedPublication(runtime.adapter, publication),
+        spec,
+        planned: null,
+        scope,
+        imageProbe: publication.evidence.imageProbe,
+      };
     }
     const imageBuilder = runtime.imageBuilder;
+    const prepare = (image: PublishedImage, resultPayload: WorkspaceBuild): PreparedPublication => {
+      const publication = parseLegacyWorkspacePublication({
+        publicationId: job.id,
+        image,
+        evidence: {
+          ...(resultPayload.metadata?.planHash === undefined
+            ? {}
+            : { planHash: resultPayload.metadata.planHash }),
+          ...(resultPayload.metadata?.imageProbe === undefined
+            ? {}
+            : { imageProbe: resultPayload.metadata.imageProbe }),
+        },
+      });
+      if (runtime.kind === "oci" && publication.kind === "oci")
+        return preparedPublication(runtime.adapter, publication);
+      if (runtime.kind === "microvm" && publication.kind === "microvm")
+        return preparedPublication(runtime.adapter, publication);
+      throw new Error("Publication kind does not match selected runtime.");
+    };
     // Plan once: the hash both keys the reuse lookup and names the publish. A planner that throws
     // is treated like no planner — the full build surfaces the real error.
     const planned =
@@ -882,7 +960,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           );
 
     const reuse =
-      planned === null
+      planned === null || runtime.kind !== "oci"
         ? null
         : yield* attemptPlanHashReuse({
             job,
@@ -896,9 +974,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       const owned = yield* markSucceeded({
         builderId: reuse.builderId,
         resultPayload: reuse.resultPayload,
-        publishedReference: reuse.publishedImage.reference,
-        publishedDigestReference: reuse.publishedImage.digestReference,
-        publishedDigest: reuse.publishedImage.digest,
+        publication: prepare(reuse.publishedImage, reuse.resultPayload).publication,
       });
       if (!owned) {
         return null;
@@ -909,9 +985,10 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       );
 
       return {
-        publishedImage: reuse.publishedImage,
+        prepared: prepare(reuse.publishedImage, reuse.resultPayload),
         spec,
         planned,
+        scope,
         imageProbe: reuse.resultPayload.metadata?.imageProbe,
       };
     }
@@ -1042,15 +1119,19 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     const owned = yield* markSucceeded({
       builderId: compileResult.builder.id,
       resultPayload: compileResult,
-      publishedReference: publishedImage.reference,
-      publishedDigestReference: publishedImage.digestReference,
-      publishedDigest: publishedImage.digest,
+      publication: prepare(publishedImage, compileResult).publication,
     });
     if (!owned) {
       return null;
     }
 
-    return { publishedImage, spec, planned, imageProbe: compileResult.metadata?.imageProbe };
+    return {
+      prepared: prepare(publishedImage, compileResult),
+      spec,
+      planned,
+      scope,
+      imageProbe: compileResult.metadata?.imageProbe,
+    };
   });
 
   const built = yield* buildAndPublish.pipe(Effect.tapError(buildFailureCleanup));
@@ -1062,7 +1143,8 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     );
     return null;
   }
-  const { publishedImage, spec, planned, imageProbe } = built;
+  const { prepared, spec, planned, scope, imageProbe } = built;
+  const publication = prepared.publication;
 
   // Phase B: launch the runtime instance and record its state.
   const stager = options.launchMaterialStager ?? hostDirectoryLaunchMaterialStager;
@@ -1073,8 +1155,15 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
   // recovery boot: recovery restarts a retained executor in place only when it does (a daemon
   // without it would run its ordinary boot over the work its disk holds). Unknown stays unknown.
   const daemonImage =
-    planned === null ? undefined : sealantdImageOfContainerfile(planned.containerfile);
-  const daemonRecoveryBoot = sealantdHasRecoveryBoot(daemonImage);
+    publication.kind === "boat-native"
+      ? publication.evidence.runtime.source
+      : planned === null
+        ? undefined
+        : sealantdImageOfContainerfile(planned.containerfile);
+  const daemonRecoveryBoot =
+    publication.kind === "boat-native"
+      ? publication.evidence.daemonRecovery === "supported"
+      : sealantdHasRecoveryBoot(daemonImage);
   // Launch ownership: from the first `pending` row until the terminal launch write, the row names
   // this launch as its owner under a lease the heartbeat below renews. The build job is already
   // `succeeded`, so nothing else would ever look at this launch again if the worker died: a
@@ -1094,6 +1183,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     options.preservationLeadMs ?? DEFAULT_CAPTURE_DEADLINE_SETTINGS.leadMs,
   );
   const launchAndRecord = Effect.gen(function* () {
+    yield* authorizeScope(scope);
     // A per-person launch (its capture source names an owner map) needs a daemon that applies the
     // map; one that does not would ignore it, restore everything root's and keep
     // no-new-privileges. Refused before anything is written or started.
@@ -1106,6 +1196,20 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     // it), or its runtime's preservation start arrived before it settled. A pending launch never
     // holds an executor past the moment its work must start being saved (review 4 #6).
     const abandon = yield* Deferred.make<string>();
+    const abandonedLaunch = Deferred.await(abandon).pipe(
+      Effect.flatMap((reason) =>
+        Effect.fail(
+          toWorkspaceBuildJobProcessingError(
+            startedIdentity === undefined
+              ? new Error(`The launch was abandoned: ${reason}.`)
+              : new LaunchRetainedError(
+                  startedIdentity,
+                  new Error(`The launch was abandoned: ${reason}.`),
+                ),
+          ),
+        ),
+      ),
+    );
     // The executor's identity as soon as the adapter reports it (its deadline included).
     const started = yield* Deferred.make<RuntimeLaunchIdentity>();
     yield* Effect.forkScoped(
@@ -1133,6 +1237,8 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
         .upsertRuntimeInstance({
           runId,
           status: "pending",
+          publication,
+          ...(scope === null ? {} : { imageScope: scope }),
           sourceKind,
           launchOwner,
           launchLeaseMs,
@@ -1298,45 +1404,54 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
         );
       };
 
+    yield* authorizeScope(scope);
+    if (job.runId !== null) {
+      const held = yield* runtimeInstances
+        .renewLaunchLease({ runId: job.runId, owner: launchOwner, leaseMs: launchLeaseMs })
+        .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+      if (!held) {
+        launchOwnership.lost = true;
+        yield* Deferred.succeed(abandon, "its launch ownership was lost before dispatch");
+      }
+    }
+    if (yield* Deferred.isDone(abandon)) return yield* abandonedLaunch;
     const runtimeLaunchResult = yield* Effect.tryPromise({
       try: () =>
-        launchPublishedImage({
-          spec,
-          runtimeAdapters: options.runtimes.map((runtime) => runtime.adapter),
-          defaultRuntimeAdapterId: options.defaultRuntimeAdapterId,
-          publishedImage,
-          ...(workspaceCloneAuth === undefined ? {} : { workspaceCloneAuth }),
-          // Worker-resolved dotfiles clone auth rides the TRANSIENT platform launch field, never a
-          // blueprint env map: the blueprint is the persisted restart source and must stay free of
-          // resolved tokens. A restart re-resolves fresh tokens through this same path.
-          ...(Object.keys(dotfilesRuntimeEnv).length === 0
-            ? {}
-            : { platformEnv: dotfilesRuntimeEnv }),
-          ...(Object.keys(credentialEnv).length === 0 ? {} : { credentialEnv }),
-          ...(credentialFiles.length === 0 ? {} : { credentialFiles }),
-          ...(dotfilesArchiveDir === undefined ? {} : { dotfilesArchiveDir }),
-          ...(secretEnvDir === undefined ? {} : { secretEnvDir }),
-          ...(passThroughSecretEnv === undefined ? {} : { secretEnv: passThroughSecretEnv }),
-          ...(job.runId === null ? {} : { runId: job.runId }),
-          ...(attemptIdentity?.launchId === null || attemptIdentity?.launchId === undefined
-            ? {}
-            : { launchId: attemptIdentity.launchId }),
-          ...(labelWorkspaceId === undefined ? {} : { workspaceId: labelWorkspaceId }),
-          ...(binds.length === 0 ? {} : { binds }),
-          ...(attemptIdentity?.ownerUserId === undefined
-            ? {}
-            : { principalId: attemptIdentity.ownerUserId }),
-          // As soon as the executor exists — and again once its daemon answers — its identity is
-          // on the row before any later launch step runs: a worker that dies after this leaves a
-          // runtime it can be found by (a capture executor is retained from its start).
-          hooks:
-            job.runId === null
+        prepared.launch(
+          {
+            blueprint: spec,
+            ...(workspaceCloneAuth === undefined ? {} : { workspaceCloneAuth }),
+            // Worker-resolved dotfiles clone auth rides the TRANSIENT platform launch field, never a
+            // blueprint env map: the blueprint is the persisted restart source and must stay free of
+            // resolved tokens. A restart re-resolves fresh tokens through this same path.
+            ...(Object.keys(dotfilesRuntimeEnv).length === 0
               ? {}
-              : {
-                  onStarted: recordReadyIdentity(job.runId),
-                  onReady: recordReadyIdentity(job.runId),
-                },
-        }),
+              : { platformEnv: dotfilesRuntimeEnv }),
+            ...(Object.keys(credentialEnv).length === 0 ? {} : { credentialEnv }),
+            ...(credentialFiles.length === 0 ? {} : { credentialFiles: [...credentialFiles] }),
+            ...(dotfilesArchiveDir === undefined ? {} : { dotfilesArchiveDir }),
+            ...(secretEnvDir === undefined ? {} : { secretEnvDir }),
+            ...(passThroughSecretEnv === undefined ? {} : { secretEnv: passThroughSecretEnv }),
+            ...(job.runId === null ? {} : { runId: job.runId }),
+            ...(attemptIdentity?.launchId === null || attemptIdentity?.launchId === undefined
+              ? {}
+              : { launchId: attemptIdentity.launchId }),
+            ...(labelWorkspaceId === undefined ? {} : { workspaceId: labelWorkspaceId }),
+            ...(binds.length === 0 ? {} : { binds: [...binds] }),
+            ...(attemptIdentity?.ownerUserId === undefined
+              ? {}
+              : { principalId: attemptIdentity.ownerUserId }),
+            // As soon as the executor exists — and again once its daemon answers — its identity is
+            // on the row before any later launch step runs: a worker that dies after this leaves a
+            // runtime it can be found by (a capture executor is retained from its start).
+          },
+          job.runId === null
+            ? {}
+            : {
+                onStarted: recordReadyIdentity(job.runId),
+                onReady: recordReadyIdentity(job.runId),
+              },
+        ),
       catch: toWorkspaceBuildJobProcessingError,
     }).pipe(
       // Ready = the daemon has already read the file at boot; nothing may still need it.
@@ -1347,24 +1462,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       ),
       // Abandoned (see `abandon`): the launch stops waiting and fails; a started executor is kept
       // as a retained launch (never removed here), which the deadline sweep drains.
-      (launching) =>
-        Effect.raceFirst(
-          launching,
-          Deferred.await(abandon).pipe(
-            Effect.flatMap((reason) =>
-              Effect.fail(
-                toWorkspaceBuildJobProcessingError(
-                  startedIdentity === undefined
-                    ? new Error(`The launch was abandoned: ${reason}.`)
-                    : new LaunchRetainedError(
-                        startedIdentity,
-                        new Error(`The launch was abandoned: ${reason}.`),
-                      ),
-                ),
-              ),
-            ),
-          ),
-        ),
+      (launching) => Effect.raceFirst(launching, abandonedLaunch),
     );
 
     // Before the instance reads `ready`: nobody acts on the home (a put, a release) until then, so
@@ -1488,7 +1586,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     ),
   );
 
-  return publishedImage;
+  return publication;
 });
 
 /**
@@ -1500,9 +1598,10 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
  */
 export const processWorkspaceBuildJob = (
   options: ProcessWorkspaceBuildJobOptions,
-): Promise<PublishedImage | null> => {
+): Promise<WorkspacePublication | null> => {
   const dbLayer = Layer.succeed(SealantDB, options.db);
   const dataAccessLayer = Layer.mergeAll(
+    ResourceDomainRepoLive,
     WorkspaceBuildJobRepoLive,
     WorkspaceRuntimeInstanceRepoLive,
     WorkspaceRepoLive,
