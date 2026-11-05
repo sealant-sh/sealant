@@ -1,0 +1,7 @@
+{
+  "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+  "index": "f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+  "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+  "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+  "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885"
+}

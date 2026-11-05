@@ -46,6 +46,7 @@ import {
   UnknownWorkspacePackageError,
   UnsupportedWorkspacePackageError,
   renderReleaseInstall,
+  releaseInstallCommands,
   unknownWorkspacePackageIds,
   unsupportedWorkspacePackages,
   WORKSPACE_PACKAGE_CATALOG,
@@ -59,6 +60,8 @@ import {
   isPersonLayoutFamily,
   renderImageProbeStep,
   renderPersonLayoutSteps,
+  personLayoutCommands,
+  imageProbeCommands,
 } from "./person-layout.js";
 
 /**
@@ -815,6 +818,20 @@ const mapBlueprintToResolvedImagePlan = (
           },
         ];
 
+  const packages = resolvePackages(blueprint, osFamily);
+  for (const pkg of packages) {
+    const release =
+      osFamily === "custom"
+        ? WORKSPACE_PACKAGE_CATALOG[pkg.requestId]?.customRelease
+        : familyInstall(pkg.requestId, osFamily)?.release;
+    const arch = platform === "linux/amd64" ? "x86_64" : "aarch64";
+    if (release !== undefined && release.archives[arch] === undefined) {
+      throw createBuildkitCompilerError(
+        "unsupported-package-architecture",
+        `${release.name} has no verified release for ${platform}.`,
+      );
+    }
+  }
   return {
     blueprint,
     osFamily,
@@ -825,7 +842,7 @@ const mapBlueprintToResolvedImagePlan = (
           ? ARCHLINUXARM_ROOTFS
           : distroDefinitions[osFamily].baseImage,
     packageManager: osFamily === "custom" ? "none" : distroDefinitions[osFamily].packageManager,
-    packages: resolvePackages(blueprint, osFamily),
+    packages,
     customization: blueprint.customization,
     ...(dotfiles === undefined || !blueprint.customization.applyDotfiles
       ? {}
@@ -988,6 +1005,26 @@ const installPackageList = (plan: ResolvedImagePlan): readonly string[] => {
   ]);
 };
 
+const ubuntuPackageCommands = (
+  plan: ResolvedImagePlan,
+  npm: "distribution" | "provided" = "distribution",
+): readonly string[] => [
+  "apt-get update",
+  `DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${installPackageList(
+    plan,
+  )
+    .filter((pkg) => npm === "distribution" || pkg !== "npm")
+    .join(" ")}`,
+];
+
+const nixPackageCommands = (plan: ResolvedImagePlan): readonly string[] => [
+  `nix profile add --profile ${NIX_PROFILE} --priority 6 --accept-flake-config --extra-experimental-features 'nix-command flakes' \\`,
+  `    ${installPackageList(plan)
+    .map((pkg) => shellQuote(`nixpkgs#${pkg}`))
+    .join(" ")} && \\`,
+  "    nix --extra-experimental-features 'nix-command flakes' profile list > /dev/null",
+];
+
 const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
   if (plan.osFamily === "custom") {
     throw new Error("Custom-base plans render through renderCustomBasePackageInstallCommand.");
@@ -1027,17 +1064,13 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
       "RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \\",
       "    --mount=type=cache,target=/var/lib/apt,sharing=locked \\",
       "    rm -f /etc/apt/apt.conf.d/docker-clean && \\",
-      "    apt-get update && \\",
-      `    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${packageList.join(" ")} && \\`,
+      ...ubuntuPackageCommands(plan).map((command) => `    ${command} && \\`),
       `    ${maskSshdUnits}`,
     ].join("\n");
   }
 
-  const nixPackageList = packageList.map((pkg) => shellQuote(`nixpkgs#${pkg}`));
   return [
-    `RUN nix profile add --profile ${NIX_PROFILE} --priority 6 --accept-flake-config --extra-experimental-features 'nix-command flakes' \\`,
-    `    ${nixPackageList.join(" ")} && \\`,
-    "    nix --extra-experimental-features 'nix-command flakes' profile list > /dev/null",
+    `RUN ${nixPackageCommands(plan).join("\n")}`,
     // The nix image has no /lib64/ld-linux-*: every binary in it names a loader inside the store.
     // A harness's native binary (codex, claude, opencode) names the FHS loader path and cannot
     // start without it, though npm installs it without complaint. Linking glibc's loader into the
@@ -1983,4 +2016,86 @@ export const mapBlueprintToBuildkitImagePlan = (
   platform: WorkspaceImagePlatform,
 ) => {
   return mapBlueprintToResolvedImagePlan(blueprint, osFamily, platform);
+};
+
+/** Shared installation bodies and static boot entries for the native Ubuntu/Nix materializer. */
+export const nativeWorkspaceInstallation = (
+  blueprint: WorkspaceBlueprint,
+): {
+  readonly family: "ubuntu" | "nix";
+  readonly shell: string;
+  readonly bootEntries: ReadonlyArray<readonly [string, string]>;
+} => {
+  if (
+    blueprint.target.os.family !== "auto" &&
+    blueprint.target.os.family !== "ubuntu" &&
+    blueprint.target.os.family !== "nix"
+  ) {
+    throw createBuildkitCompilerError(
+      "native-unsupported-os",
+      "Native snapshots support Ubuntu and Nix only.",
+    );
+  }
+  const parsed = parseWorkspaceBlueprint(blueprint);
+  if (parsed.tooling.services?.docker?.enabled) {
+    throw createBuildkitCompilerError(
+      "native-workspace-docker-unsupported",
+      "Native snapshots cannot supply workspace Docker.",
+    );
+  }
+  const candidates: readonly ("ubuntu" | "nix")[] =
+    blueprint.target.os.family === "auto" ? ["ubuntu", "nix"] : [blueprint.target.os.family];
+  const { family, plan } = (() => {
+    let unsupported: unknown;
+    for (const candidateFamily of candidates) {
+      try {
+        return {
+          family: candidateFamily,
+          plan: mapBlueprintToResolvedImagePlan(parsed, candidateFamily, "linux/amd64"),
+        };
+      } catch (error) {
+        if (!(error instanceof UnsupportedWorkspacePackageError)) throw error;
+        unsupported = error;
+      }
+    }
+    throw unsupported;
+  })();
+  if (plan.dotfiles?.applyAt === "build" && plan.dotfiles.authSecretId !== undefined) {
+    throw createBuildkitCompilerError(
+      "native-dotfiles-tmpfs-unproven",
+      "Authenticated build dotfiles require proven tmpfs file staging.",
+    );
+  }
+  const extras = catalogExtras(plan);
+  const chezmoi = chezmoiInstallCommands(plan);
+  const dotfiles = dotfilesInstallCommand(plan);
+  const shell = [
+    ...(family === "ubuntu"
+      ? [
+          [
+            // Boat's NodeSource nodejs bundles npm and conflicts with Ubuntu's separate npm package.
+            "if dpkg-query -W -f='${Version}' nodejs 2>/dev/null | grep -q nodesource; then",
+            "command -v npm && npm --version",
+            ...ubuntuPackageCommands(plan, "provided"),
+            "else",
+            ...ubuntuPackageCommands(plan),
+            "fi",
+          ].join("\n"),
+        ]
+      : [nixPackageCommands(plan).join("\n")]),
+    ...extras.releases.map((release) => releaseInstallCommands(release).join("\n")),
+    ...(extras.npmGlobal.length === 0
+      ? []
+      : [`npm install -g ${extras.npmGlobal.map(shellQuote).join(" ")}`]),
+    ...extras.postInstall,
+    ...(chezmoi === undefined ? [] : [chezmoi.join("\n")]),
+    ...harnessInstallCommands(plan),
+    personLayoutCommands({ family, dockerService: false }).join(";\n"),
+    `usermod -s ${shellQuote(distroDefinitions[family].shellPaths[plan.customization.defaultShell])} root`,
+    ...(dotfiles === undefined ? [] : [dotfiles]),
+    ...imageProbeCommands({ require: true }),
+  ]
+    .map((command) => `(\n${command}\n)`)
+    .join("\n");
+  return { family, shell, bootEntries: staticBootEntries(plan) };
 };

@@ -1,0 +1,16 @@
+[Unit]
+Description=Sealant native session
+ConditionPathExists=/var/lib/sealant/control/launch.json
+
+[Service]
+Type=simple
+PrivateMounts=yes
+TemporaryFileSystem=/run:rw,nosuid,nodev
+BindPaths=/var/lib/sealant/control:/run/sealant
+InaccessiblePaths=-/var/run/dbus -/var/run/systemd -/var/lib/dbus/system_bus_socket
+ProtectControlGroups=yes
+KillMode=control-group
+TimeoutStopSec=5
+SendSIGKILL=yes
+Restart=no
+ExecStart=/usr/bin/unshare --mount --pid --fork --mount-proc --kill-child /usr/bin/python3 /usr/local/lib/sealant/workspace-launch.py
