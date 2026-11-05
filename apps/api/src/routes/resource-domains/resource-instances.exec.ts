@@ -98,7 +98,7 @@ export const ResourceInstanceExecRoute = HttpRouter.add(
         return refuse(
           409,
           "ResourceRuntimeUnsupportedError",
-          `resources run on Docker; this Sealant runs ${host.runtime}`,
+          `Resource instances require Docker or Kubernetes; this Sealant runs ${host.runtime}.`,
         );
       }
       const repo = yield* ResourceInstanceRepo;

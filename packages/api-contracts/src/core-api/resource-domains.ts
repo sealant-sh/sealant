@@ -1,9 +1,9 @@
 /**
- * Resource domains: an owner that is a project, not a person.
+ * Resource domains: application-owned project, organization or installation resources.
  *
  * An application (Mend) keeps one domain per project for the things the project owns rather than
- * any one person: its services, volumes and network. A domain outlives every person, and it never
- * holds a login or a provider credential and never runs a harness. Its id (`rdm:<uuid>`) can never
+ * any one person: its services, volumes and network. Organization and installation domains run
+ * caller-only services. A domain outlives every person and never runs a harness. Its id (`rdm:<uuid>`) can never
  * name a person: every person field of this API is a `PersonId`, which refuses it.
  *
  * `ensureResourceDomain` is idempotent on `key`, `<application>:<name>` (Mend:
@@ -117,8 +117,24 @@ export const setResourceDomainBudgetRequestSchema = Schema.Struct({
 });
 export type SetResourceDomainBudgetRequest = typeof setResourceDomainBudgetRequestSchema.Type;
 
+/** Application ownership of a scope; the application key identifies the owner. */
+export const resourceDomainOwnerKindSchema = Schema.Literals([
+  "project",
+  "organization",
+  "instance",
+]);
+export type ResourceDomainOwnerKind = typeof resourceDomainOwnerKindSchema.Type;
+
+/** Ensuring a key cannot change its owner kind. */
+export class ResourceDomainOwnerDiffersError extends Schema.TaggedError<ResourceDomainOwnerDiffersError>()(
+  "ResourceDomainOwnerDiffersError",
+  { message: Schema.String },
+  { httpApiStatus: 409 },
+) {}
+
 export const resourceDomainSchema = Schema.Struct({
   resourceDomainId: ResourceDomainId,
+  ownerKind: Schema.optional(resourceDomainOwnerKindSchema),
   key: ResourceDomainKey,
   createdAt: Schema.String,
 });
@@ -126,6 +142,7 @@ export type ResourceDomainWire = typeof resourceDomainSchema.Type;
 
 export const ensureResourceDomainRequestSchema = Schema.Struct({
   key: ResourceDomainKey,
+  ownerKind: Schema.optional(resourceDomainOwnerKindSchema),
   /** The budget a new domain starts with; none starts it at zero. */
   budget: Schema.optional(resourceDomainBudgetLimitsSchema),
 });
@@ -255,6 +272,7 @@ export const ResourceDomainsGroup = HttpApiGroup.make("resourceDomains")
       error: [
         ResourceDomainForbiddenError,
         ResourceDomainBudgetDiffersError,
+        ResourceDomainOwnerDiffersError,
         ResourceDomainInternalServerError,
       ],
     }),

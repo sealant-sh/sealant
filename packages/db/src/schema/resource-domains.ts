@@ -30,6 +30,9 @@ export const resourceDomains = pgTable(
     id: text().primaryKey(),
     /** `<application>:<name>`, unique across every application. */
     key: text().notNull(),
+    ownerKind: text({ enum: ["project", "organization", "instance"] })
+      .notNull()
+      .default("project"),
     /**
      * Only `active` admits new work. A `fenced` or `archived` domain still admits preservation (a
      * backup of a volume it holds), so fencing never stops a backup.
@@ -47,6 +50,10 @@ export const resourceDomains = pgTable(
     createdAt: timestamp({ mode: "date", withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    check(
+      "resource_domains_owner_kind",
+      sql`${table.ownerKind} in ('project', 'organization', 'instance')`,
+    ),
     uniqueIndex("resource_domains_key_idx").on(table.key),
     check("resource_domains_state", sql`${table.state} in ('active', 'fenced', 'archived')`),
     check(

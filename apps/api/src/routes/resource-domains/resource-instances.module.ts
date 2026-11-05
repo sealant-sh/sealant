@@ -4,13 +4,17 @@
  * runtime converge Docker to it, then records what the runtime observed: a repeat of any of them
  * finds nothing left to do.
  */
+import { randomUUID } from "node:crypto";
+
 import {
+  resourceInstanceSecretEnvSchema,
   decodeResourceInstanceSpec,
   ResourceDomainForbiddenError,
   ResourceDomainInternalServerError,
   ResourceDomainNotActiveError,
   ResourceDomainNotFoundError,
   ResourceInstanceAliasTakenError,
+  ResourceInstanceBudgetError,
   ResourceInstanceArchivedError,
   ResourceInstanceNotFoundError,
   ResourceInstanceSpecRefusedError,
@@ -25,19 +29,27 @@ import {
   type ResourceInstanceWire,
   type ResourceWorkspaceLinkWire,
 } from "@sealant/api-contracts";
+import { CredentialCipher } from "@sealant/credentials";
 import { ResourceDomainRepo, ResourceInstanceRepo, type ResourceInstanceRecord } from "@sealant/db";
 import {
   desiredAttachments,
   dockerFailureReason,
   instanceVolumeName,
+  callerInstanceName,
+  makeResourceAccounting,
   type ResourceRuntime,
 } from "@sealant/workspaces";
+import { Schema } from "effect";
 import { Effect } from "effect";
 
 import { ResourceRuntimeHost } from "../../services/resource-runtime.js";
 import { CurrentPrincipal } from "../../services/service-principals.js";
 
 const internal = (message: string) => () => new ResourceDomainInternalServerError({ message });
+const canonicalEnv = (env: Readonly<Record<string, string>>): string =>
+  JSON.stringify(
+    Object.fromEntries(Object.entries(env).toSorted(([a], [b]) => a.localeCompare(b))),
+  );
 
 const requireServiceKey = Effect.gen(function* () {
   const principal = yield* CurrentPrincipal;
@@ -48,25 +60,25 @@ const requireServiceKey = Effect.gen(function* () {
   }
 });
 
-/** The Docker runtime, or the refusal that names the runtime this Sealant runs instead. */
+/** The instance runtime, or a refusal naming this deployment's unsupported provider. */
 export const requireDockerRuntime = Effect.gen(function* () {
   const host = yield* ResourceRuntimeHost;
   if (host.kind === "unsupported") {
     return yield* new ResourceRuntimeUnsupportedError({
-      message: `resources run on Docker; this Sealant runs ${host.runtime}`,
+      message: `Resource instances require Docker or Kubernetes; this Sealant runs ${host.runtime}.`,
       runtime: host.runtime,
     });
   }
   return host.runtime;
 });
 
-/** A runtime call; its failure is Docker's, said without the request it carried. */
+/** Provider errors are sanitized before reaching persistent state or an HTTP reply. */
 const docker = <A>(what: string, call: () => Promise<A>) =>
   Effect.tryPromise({
     try: call,
     catch: (error) =>
       new ResourceDomainInternalServerError({
-        message: `Docker could not ${what}: ${dockerFailureReason(error)}`,
+        message: `The runtime could not ${what}: ${dockerFailureReason(error)}`,
       }),
   });
 
@@ -80,6 +92,7 @@ const requireDomain = (resourceDomainId: string) =>
     if (domain === undefined) {
       return yield* new ResourceDomainNotFoundError({ message: "No such resource domain." });
     }
+    return domain;
   });
 
 const requireInstance = (resourceDomainId: string, key: ResourceInstanceKey) =>
@@ -99,7 +112,19 @@ const requireInstance = (resourceDomainId: string, key: ResourceInstanceKey) =>
 
 const iso = (date: Date | null) => (date === null ? null : date.toISOString());
 
-export const toInstanceWire = (instance: ResourceInstanceRecord): ResourceInstanceWire => ({
+export const toInstanceWire = (
+  instance: ResourceInstanceRecord,
+  runtime?: ResourceRuntime,
+): ResourceInstanceWire => ({
+  ...(instance.spec.reach === undefined
+    ? {}
+    : {
+        endpoint: runtime?.endpoint?.(instance) ?? {
+          host: callerInstanceName(instance.id),
+          port: instance.spec.reach.port,
+          callbackHost: instance.spec.reach.caller,
+        },
+      }),
   resourceInstanceId: instance.id,
   key: instance.key,
   alias: instance.spec.alias,
@@ -112,7 +137,13 @@ export const toInstanceWire = (instance: ResourceInstanceRecord): ResourceInstan
   startedAt: iso(instance.startedAt),
   lastReachedAt: iso(instance.lastReachedAt),
   volumes: (instance.volumes.length > 0 ? instance.volumes : instance.spec.volumes).map(
-    (volume) => ({ name: volume.name, dockerName: instanceVolumeName(instance.id, volume.name) }),
+    (volume) => ({
+      name: volume.name,
+      dockerName:
+        instance.spec.reach?.kind === "caller"
+          ? `${callerInstanceName(instance.id)}-${volume.name}`
+          : instanceVolumeName(instance.id, volume.name),
+    }),
   ),
 });
 
@@ -133,9 +164,24 @@ export const startInstance = (runtime: ResourceRuntime, instance: ResourceInstan
     const executors = yield* repo
       .linkedExecutors(instance.resourceDomainId)
       .pipe(Effect.mapError(internal("Failed to read the domain's linked workspaces.")));
-    const started = yield* docker("start the instance", () =>
-      runtime.up(instance, desiredAttachments(executors, [instance])),
+    const budgets = yield* ResourceDomainRepo;
+    const accounting = makeResourceAccounting(repo, budgets);
+    const admitted = yield* accounting.admit(instance).pipe(
+      Effect.mapError((error) =>
+        error instanceof ResourceInstanceBudgetError
+          ? error
+          : new ResourceDomainInternalServerError({
+              message: "Failed to reserve the instance budget.",
+            }),
+      ),
     );
+    const started = yield* docker("start the instance", () =>
+      runtime.up(admitted, desiredAttachments(executors, [admitted])),
+    );
+    if (started.state.kind === "running")
+      yield* accounting
+        .created(admitted)
+        .pipe(Effect.mapError(internal("Failed to confirm the instance budget.")));
     yield* repo
       .recordObserved(instance.id, started.state, {
         ...(started.startedAt === undefined ? {} : { startedAt: started.startedAt }),
@@ -145,13 +191,17 @@ export const startInstance = (runtime: ResourceRuntime, instance: ResourceInstan
     return yield* reread(instance);
   });
 
-export const upResourceInstance = (
+const upResourceInstanceUnlocked = (
   resourceDomainId: string,
   key: ResourceInstanceKey,
-  input: { readonly spec: unknown; readonly cause: ResourceInstanceUpCause },
+  input: {
+    readonly spec: unknown;
+    readonly cause: ResourceInstanceUpCause;
+    readonly secretEnv?: Readonly<Record<string, string>> | undefined;
+  },
 ) =>
   Effect.gen(function* () {
-    yield* requireDomain(resourceDomainId);
+    const domain = yield* requireDomain(resourceDomainId);
     const runtime = yield* requireDockerRuntime;
     const decoded = decodeResourceInstanceSpec(input.spec);
     if (decoded.kind === "refused") {
@@ -160,10 +210,132 @@ export const upResourceInstance = (
         refusals: decoded.refusals,
       });
     }
+    const spec = decoded.spec;
+    if (((domain.ownerKind ?? "project") === "project") !== (spec.reach === undefined))
+      return yield* new ResourceInstanceSpecRefusedError({
+        message:
+          "Caller reach requires an organization or instance scope; project scopes use workspace reach.",
+        refusals: [{ field: "reach", reason: "scope owner and reach differ" }],
+      });
+    const host = yield* ResourceRuntimeHost;
+    if (host.kind === "kubernetes" && spec.reach === undefined)
+      return yield* new ResourceRuntimeUnsupportedError({
+        message: "Kubernetes supports caller-only instances; workspace instances require Docker.",
+        runtime: "kubernetes-workspace-reach",
+      });
+    if (spec.reach !== undefined)
+      yield* Effect.try({
+        try: () => runtime.validateCaller?.(spec),
+        catch: () =>
+          new ResourceInstanceSpecRefusedError({
+            message:
+              "The requested caller and callback port are not configured on this deployment.",
+            refusals: [{ field: "reach", reason: "caller is not configured" }],
+          }),
+      });
+    if (
+      input.secretEnv !== undefined &&
+      host.kind !== "unsupported" &&
+      host.secretEnvAvailable === false
+    )
+      return yield* new ResourceInstanceSpecRefusedError({
+        message: "Configure SEALANT_CREDENTIALS_KEY before supplying secret env.",
+        refusals: [{ field: "secretEnv", reason: "credential encryption is not configured" }],
+      });
+    if (input.secretEnv !== undefined && spec.reach === undefined)
+      return yield* new ResourceInstanceSpecRefusedError({
+        message: "Secret env requires a caller-only instance.",
+        refusals: [{ field: "secretEnv", reason: "caller reach required" }],
+      });
     const repo = yield* ResourceInstanceRepo;
+    const previous = yield* repo
+      .get(resourceDomainId, key)
+      .pipe(Effect.mapError(internal("Failed to load the previous instance.")));
+    if (
+      previous?.spec.reach !== undefined &&
+      spec.reach !== undefined &&
+      (previous.spec.reach.caller !== spec.reach.caller ||
+        previous.spec.reach.port !== spec.reach.port ||
+        previous.spec.reach.callbackPort !== spec.reach.callbackPort)
+    )
+      return yield* new ResourceInstanceSpecRefusedError({
+        message:
+          "An instance's caller, service port and callback port are immutable. Create another instance to change its network binding.",
+        refusals: [{ field: "reach", reason: "retained network binding changed" }],
+      });
+    if (
+      spec.reach !== undefined &&
+      previous !== undefined &&
+      previous.spec.volumes.some(
+        (volume) =>
+          !spec.volumes.some(
+            (next) =>
+              next.name === volume.name &&
+              next.mountPath === volume.mountPath &&
+              next.storageBytes === volume.storageBytes,
+          ),
+      )
+    )
+      return yield* new ResourceInstanceSpecRefusedError({
+        message: "Retained volumes cannot be removed, renamed, resized or remounted by up.",
+        refusals: [{ field: "volumes", reason: "retained volume mapping changed" }],
+      });
+    let secrets: { readonly sealed: string; readonly revision: string } | undefined;
+    if (input.secretEnv !== undefined || previous?.secretEnvSealed != null) {
+      const cipher = yield* CredentialCipher;
+      const old =
+        previous?.secretEnvSealed == null
+          ? undefined
+          : yield* cipher
+              .decrypt(previous.secretEnvSealed)
+              .pipe(Effect.mapError(internal("Failed to open retained secret env.")));
+      const parsed = yield* (
+        input.secretEnv === undefined
+          ? Schema.decodeUnknownEffect(Schema.fromJsonString(resourceInstanceSecretEnvSchema))(old)
+          : Schema.decodeUnknownEffect(resourceInstanceSecretEnvSchema)(input.secretEnv)
+      ).pipe(Effect.mapError(internal("Secret env was refused.")));
+      if (Object.keys(parsed).some((name) => Object.hasOwn(spec.env, name)))
+        return yield* new ResourceInstanceSpecRefusedError({
+          message: "Plain and secret env names must be distinct.",
+          refusals: [{ field: "secretEnv", reason: "duplicate env name" }],
+        });
+      const plaintext = canonicalEnv(parsed);
+      if (input.secretEnv !== undefined && old !== plaintext) {
+        const sealed = yield* cipher
+          .encrypt(plaintext)
+          .pipe(Effect.mapError(internal("Failed to seal secret env.")));
+        secrets = { sealed: sealed.sealed, revision: randomUUID() };
+      }
+    }
+    const budgets = yield* ResourceDomainRepo;
     const outcome = yield* repo
-      .up({ resourceDomainId, key, spec: decoded.spec, cause: input.cause })
-      .pipe(Effect.mapError(internal("Failed to write the resource instance.")));
+      .transaction(
+        Effect.gen(function* () {
+          const written = yield* repo
+            .up({
+              resourceDomainId,
+              key,
+              spec: decoded.spec,
+              cause: input.cause,
+              ...(secrets === undefined ? {} : { secrets }),
+            })
+            .pipe(Effect.mapError(internal("Failed to write the resource instance.")));
+          if (written.kind === "upserted" && written.instance.desired === "running") {
+            const admitted = yield* makeResourceAccounting(repo, budgets).admit(written.instance);
+            return { ...written, instance: admitted };
+          }
+          return written;
+        }),
+      )
+      .pipe(
+        Effect.mapError((error) =>
+          error instanceof ResourceInstanceBudgetError
+            ? error
+            : new ResourceDomainInternalServerError({
+                message: "Failed to commit the instance and its budget.",
+              }),
+        ),
+      );
     switch (outcome.kind) {
       case "no-such-domain":
         return yield* new ResourceDomainNotFoundError({ message: "No such resource domain." });
@@ -183,7 +355,7 @@ export const upResourceInstance = (
       case "upserted":
         // A person's stop holds against `use`: answer it stopped, as it stands.
         if (outcome.instance.desired !== "running") return toInstanceWire(outcome.instance);
-        return toInstanceWire(yield* startInstance(runtime, outcome.instance));
+        return toInstanceWire(yield* startInstance(runtime, outcome.instance), runtime);
     }
   });
 
@@ -194,13 +366,42 @@ export const listResourceInstances = (resourceDomainId: string, archived: boolea
     const instances = yield* repo
       .list(resourceDomainId, { archived })
       .pipe(Effect.mapError(internal("Failed to list the resource instances.")));
-    return { items: instances.map(toInstanceWire) };
+    const host = yield* ResourceRuntimeHost;
+    return {
+      items: instances.map((instance) =>
+        toInstanceWire(instance, host.kind === "unsupported" ? undefined : host.runtime),
+      ),
+    };
   });
 
-export const getResourceInstance = (resourceDomainId: string, key: ResourceInstanceKey) =>
-  Effect.map(requireInstance(resourceDomainId, key), toInstanceWire);
+const getResourceInstanceUnlocked = (resourceDomainId: string, key: ResourceInstanceKey) =>
+  Effect.gen(function* () {
+    const instance = yield* requireInstance(resourceDomainId, key);
+    if (instance.spec.reach === undefined) return toInstanceWire(instance);
+    const runtime = yield* requireDockerRuntime;
+    const repo = yield* ResourceInstanceRepo;
+    if (instance.desired === "running" && runtime.health !== undefined) {
+      const state = yield* docker(
+        "observe instance health",
+        () => runtime.health?.(instance) ?? Promise.resolve(instance.observed),
+      );
+      yield* repo
+        .recordObserved(
+          instance.id,
+          state.kind === "exited" && instance.observed.kind === "failed"
+            ? instance.observed
+            : state,
+        )
+        .pipe(Effect.mapError(internal("Failed to record health.")));
+    }
+    const current = yield* reread(instance);
+    return {
+      ...toInstanceWire(current),
+      ...(runtime.endpoint === undefined ? {} : { endpoint: runtime.endpoint(current) }),
+    };
+  });
 
-export const stopResourceInstance = (
+const stopResourceInstanceUnlocked = (
   resourceDomainId: string,
   key: ResourceInstanceKey,
   by: string,
@@ -217,6 +418,10 @@ export const stopResourceInstance = (
       .setDesired(instance.id, { kind: "stop", reason })
       .pipe(Effect.mapError(internal("Failed to record the stop.")));
     yield* docker("stop the instance", () => runtime.stop(instance));
+    const budgets = yield* ResourceDomainRepo;
+    yield* makeResourceAccounting(repo, budgets)
+      .stopped(instance)
+      .pipe(Effect.mapError(internal("Failed to release stopped compute.")));
     yield* repo
       .recordObserved(instance.id, { kind: "stopped", at: new Date().toISOString(), reason })
       .pipe(Effect.mapError(internal("Failed to record the instance's state.")));
@@ -231,6 +436,10 @@ export const archiveInstance = (runtime: ResourceRuntime, instance: ResourceInst
       .setDesired(instance.id, { kind: "archive" })
       .pipe(Effect.mapError(internal("Failed to record the archive.")));
     const volumes = yield* docker("archive the instance", () => runtime.archive(instance));
+    const budgets = yield* ResourceDomainRepo;
+    yield* makeResourceAccounting(repo, budgets)
+      .stopped(instance, true)
+      .pipe(Effect.mapError(internal("Failed to archive instance allocations.")));
     yield* repo
       .recordObserved(instance.id, { kind: "archived", at: new Date().toISOString() })
       .pipe(Effect.mapError(internal("Failed to record the instance's state.")));
@@ -242,7 +451,7 @@ export const archiveInstance = (runtime: ResourceRuntime, instance: ResourceInst
     };
   });
 
-export const archiveResourceInstance = (resourceDomainId: string, key: ResourceInstanceKey) =>
+const archiveResourceInstanceUnlocked = (resourceDomainId: string, key: ResourceInstanceKey) =>
   Effect.gen(function* () {
     const instance = yield* requireInstance(resourceDomainId, key);
     const runtime = yield* requireDockerRuntime;
@@ -270,6 +479,11 @@ export const linkResourceWorkspace = (
         return yield* new ResourceDomainNotActiveError({
           message: `This resource domain is ${outcome.state} and links no workspace.`,
           state: outcome.state,
+        });
+      case "caller-only":
+        return yield* new ResourceInstanceSpecRefusedError({
+          message: "Organization and instance scopes admit no workspace links.",
+          refusals: [{ field: "scope", reason: "caller-only scope" }],
         });
       case "no-such-workspace":
         return yield* new ResourceWorkspaceNotFoundError({ message: "No such workspace." });
@@ -320,7 +534,10 @@ export const archiveResourceDomain = (resourceDomainId: string) =>
     for (const instance of yield* repo
       .list(resourceDomainId, { archived: false })
       .pipe(Effect.mapError(failed))) {
-      volumes.push(...(yield* archiveInstance(runtime, instance)).volumes);
+      volumes.push(
+        ...(yield* locked(resourceDomainId, instance.key, archiveInstance(runtime, instance)))
+          .volumes,
+      );
     }
     for (const { executor } of yield* repo
       .linkedExecutors(resourceDomainId)
@@ -333,3 +550,35 @@ export const archiveResourceDomain = (resourceDomainId: string) =>
     yield* repo.setDomainState(resourceDomainId, "archived").pipe(Effect.mapError(failed));
     return { volumes };
   });
+
+/** API and reconciler operations use the same installation-wide instance lock. */
+const locked = <A, E, R>(
+  domain: string,
+  key: ResourceInstanceKey,
+  operation: Effect.Effect<A, E, R>,
+) =>
+  Effect.gen(function* () {
+    const repo = yield* ResourceInstanceRepo;
+    return yield* repo.withLock(`${domain}:${key}`, operation).pipe(
+      Effect.mapError((error) =>
+        typeof error === "object" &&
+        error !== null &&
+        "_tag" in error &&
+        error["_tag"] === "ResourceInstanceRepoError"
+          ? new ResourceDomainInternalServerError({
+              message: "Failed to coordinate the instance operation.",
+            })
+          : error,
+      ),
+    );
+  });
+export const upResourceInstance = (...args: Parameters<typeof upResourceInstanceUnlocked>) =>
+  locked(args[0], args[1], upResourceInstanceUnlocked(...args));
+export const stopResourceInstance = (...args: Parameters<typeof stopResourceInstanceUnlocked>) =>
+  locked(args[0], args[1], stopResourceInstanceUnlocked(...args));
+export const archiveResourceInstance = (
+  ...args: Parameters<typeof archiveResourceInstanceUnlocked>
+) => locked(args[0], args[1], archiveResourceInstanceUnlocked(...args));
+
+export const getResourceInstance = (...args: Parameters<typeof getResourceInstanceUnlocked>) =>
+  locked(args[0], args[1], getResourceInstanceUnlocked(...args));

@@ -23,6 +23,7 @@ export interface ReachAttachment {
  * replaces the project's there, and an alias it leaves out is not reached at all.
  */
 export const reaches = (link: ResourceWorkspaceLink, instance: ResourceInstanceRecord): boolean => {
+  if (instance.spec.reach?.kind === "caller") return false;
   if (link.resourceDomainId !== instance.resourceDomainId) return false;
   const worktree = instance.spec.worktreeKey;
   if (worktree !== null && worktree !== link.worktreeKey) return false;
@@ -63,6 +64,7 @@ export const idleVerdict = (
   reachedNow: boolean,
   now: Date,
 ): IdleVerdict => {
+  if (instance.spec.idleStopAfterSeconds === null) return { kind: "reached" };
   if (reachedNow) return { kind: "reached" };
   const since = Math.max(
     instance.startedAt?.getTime() ?? Number.NEGATIVE_INFINITY,

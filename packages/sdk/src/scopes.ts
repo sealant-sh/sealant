@@ -33,6 +33,8 @@ import {
 } from "./scope-instances.js";
 
 export interface ScopeInfo {
+  /** The application key identifies this owner. Older servers omit it and mean project. */
+  readonly ownerKind?: "project" | "organization" | "instance";
   /** `rdm:<uuid>`. No person field of the API accepts it. */
   readonly id: string;
   /** `<application>:<name>`, unique across every application. */
@@ -145,6 +147,7 @@ export interface ScopesNamespace {
    */
   ensure(options: {
     readonly key: string;
+    readonly ownerKind?: "project" | "organization" | "instance";
     readonly budget?: ScopeBudgetLimits;
   }): Promise<EnsuredScope>;
   get(scopeId: string): Promise<ScopeInfo>;
@@ -154,6 +157,7 @@ export interface ScopesNamespace {
 
 const toScope = (wire: ResourceDomainWire): ScopeInfo => ({
   id: wire.resourceDomainId,
+  ...(wire.ownerKind === undefined ? {} : { ownerKind: wire.ownerKind }),
   key: wire.key,
   createdAt: wire.createdAt,
 });
@@ -161,8 +165,8 @@ const toScope = (wire: ResourceDomainWire): ScopeInfo => ({
 export const makeScopes = (runtime: SdkRuntime, config: SealantInternalConfig): ScopesNamespace => {
   const get = async (scopeId: string) => toScope(await runtime.run(getResourceDomainOp(scopeId)));
   return {
-    ensure: async ({ key, budget }) => {
-      const wire = await runtime.run(ensureResourceDomainOp(key, budget));
+    ensure: async ({ key, budget, ownerKind }) => {
+      const wire = await runtime.run(ensureResourceDomainOp(key, budget, ownerKind));
       return { ...toScope(wire), created: wire.created };
     },
     get,

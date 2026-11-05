@@ -471,6 +471,13 @@ const IPV4_RANGE = /^(?:\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/u;
  * the tick): set the same values on both.
  */
 export const resourceInstancesEnvSchema = z.object({
+  /** Operator caller bindings, identical on the API and worker. */
+  SEALANT_RESOURCE_CALLERS: z.string().default("[]"),
+  SEALANT_RESOURCE_CALLER_GUARD_IMAGE: z.string().trim().min(1).optional(),
+  SEALANT_RESOURCE_K8S_NAMESPACE: z.string().trim().min(1).default("sealant-services"),
+  SEALANT_RESOURCE_K8S_KUBECONFIG: z.string().trim().min(1).optional(),
+  /** Explicit operator attestation that this namespace has a NetworkPolicy enforcing CNI. */
+  SEALANT_RESOURCE_K8S_NETWORK_POLICY: z.stringbool().or(z.boolean()).default(false),
   DOCKER_SOCKET_PATH: z.string().trim().min(1).default("/var/run/docker.sock"),
   SEALANT_DOCKER_NETWORK_GUARD_IMAGE: z.string().trim().min(1).optional(),
   SEALANT_RESOURCE_REACH_SUBNETS: z.string().trim().regex(IPV4_RANGE).default("10.231.0.0/16"),

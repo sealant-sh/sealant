@@ -1,0 +1,95 @@
+# Caller-owned services
+
+Mend can run an Executor gateway for each organization through `sealant.scopes`. Use an
+`organization` scope with an application key containing Mend's installation and organization IDs.
+Use `instance` for services owned by the entire installation. `project` remains the default and
+keeps workspace reach. See [the contract and SDK example](adr/0001-caller-owned-scope-instances.md).
+
+## Docker deployment
+
+Give API and worker the same `SEALANT_RESOURCE_CALLERS` configuration:
+
+```json
+[{ "kind": "docker", "name": "mend", "container": "mend", "callbackPorts": [4401] }]
+```
+
+`container` is the actual Docker container running Mend's server. In the packaged install, Core and
+Mend share this container. A service's `reach.caller` names this configured entry. It receives
+`endpoint.host` and `endpoint.port` in the SDK response. Reach this endpoint from Mend's server
+container, not from the Docker host. The callback URL uses `endpoint.callbackHost` and the requested
+callback port. Mend must bind that listener on its container interfaces, rather than loopback only.
+
+Core needs the Docker socket and permission to create bridge networks, named volumes and short-lived
+NET_ADMIN guard containers. The workload receives no NET_ADMIN or NET_RAW capability. There is no
+published host port. Core guards both the service's network namespace and Mend's callback port.
+Workspaces cannot link to these scopes or join their caller networks. The service can access public
+IPv4 integration endpoints, DNS and its one private callback port. Other private destinations and
+IPv6 are denied.
+
+Core pins its guard/probe/backup helper by digest. `SEALANT_RESOURCE_CALLER_GUARD_IMAGE` optionally
+selects an operator-maintained equivalent containing `iptables`, `ip6tables`, `nc`, `tar` and
+`sleep`. The normal resource subnet pools must have capacity for two /24 networks per instance.
+
+Run the worker: it restarts failed workloads from durable desired state, independently of workspace
+sessions. The API performs each requested start synchronously and returns its health result. The
+existing resource reconciliation interval bounds crash-restart delay. No idle timeout applies.
+
+## Kubernetes deployment
+
+Set `DEFAULT_RUNTIME_ADAPTER=k8s` or `k3s`, and configure both API and worker:
+
+```json
+[
+  {
+    "kind": "kubernetes",
+    "name": "mend",
+    "namespace": "mend",
+    "host": "signin.mend.svc.cluster.local",
+    "podLabels": { "app": "mend-api" },
+    "callbackPorts": [4401]
+  }
+]
+```
+
+Create `SEALANT_RESOURCE_K8S_NAMESPACE`, default `sealant-services`, with a default StorageClass.
+Grant Core read/write access to StatefulSets, PVCs, Services, Secrets, Pods, pod exec and
+NetworkPolicies in that namespace. It reads its standard Kubernetes configuration, or the explicit
+`SEALANT_RESOURCE_K8S_KUBECONFIG` path. Set `SEALANT_RESOURCE_K8S_NETWORK_POLICY=true` only with a
+policy-enforcing CNI. The namespace must have no broader policy admitting workspace traffic.
+
+Core creates one replica, stops it before changing its template, retains individually named PVCs,
+and returns a stable ClusterIP DNS endpoint. Ingress admits only the configured caller pods on the
+service port. Egress permits their callback port, kube-dns and public IPv4 destinations. The
+callback host must route to those caller pods on the same port. Mend's deployment must keep the
+callback listener private and restrict its own ingress. DNS rules assume the standard kube-dns
+labels in `kube-system`; adapt deployment labels if the cluster differs. IPv6-only clusters are
+unsupported. Kubernetes is covered by contract/manifest tests; a live cluster is still required for
+deployment acceptance of its CNI, storage, DNS and RBAC behavior.
+
+AWS MicroVM, Firecracker and other runtime adapters return `ResourceRuntimeUnsupportedError`. An
+external caller with no configured container or pod endpoint is refused.
+
+## Secrets, upgrades and backup
+
+Configure the same persistent `SEALANT_CREDENTIALS_KEY` on API and worker before passing `secretEnv`
+to `instances.up`. Its values are sealed in the database. Plain `spec.env` is durable configuration
+and must contain no secrets. Omitting `secretEnv` retains it; `{}` clears it. An env name cannot
+occur in both maps. Provider administrators can inspect container env or Kubernetes Secrets.
+
+`up` with the same key/spec/secrets reuses the workload. Changing the pinned image, command, env,
+secrets or limits replaces it while retaining named volumes. Existing volume names, paths and
+capacities, plus the caller/ports, cannot change. Declare every image VOLUME explicitly on Docker.
+Memory/CPU are enforced by the provider. Docker storage declarations reserve budget rather than
+enforce disk quotas; PVC requests reserve Kubernetes storage.
+
+`get` probes current health and includes `observedAt`. `stop` waits for provider confirmation,
+releases compute and retains storage. `backup(key, volume)` returns an uncompressed tar stream and
+holds the instance lock until completion or cancellation. Consume or cancel the stream before
+starting it again. Discard an incomplete tar if the stream fails, including a concurrent start
+winning the lock. Backups need an application-owned destination. `archive` removes the workload and
+networking while retaining every volume. This API has no volume deletion operation.
+
+Same-size upgrades reuse budget. Increases reserve the whole replacement before stopping the old
+workload; stop first if the scope lacks that headroom. Failed starts retain reservations. Archive
+retains declared storage, including after a failed start. Capacity decreases keep the old charge
+until stop. These choices keep existing resource-domain admission conservative after a crash.

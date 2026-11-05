@@ -5,10 +5,15 @@
  * instance a live executor reaches, stops one nobody reached for its idle time, and converges
  * every reach network. Each step reads what exists, so a tick after a crash finds what is left.
  */
-import type { ResourceInstanceRepoService, ResourceInstanceRecord } from "@sealant/db";
+import type {
+  ResourceDomainRepoService,
+  ResourceInstanceRepoService,
+  ResourceInstanceRecord,
+} from "@sealant/db";
 import { Effect } from "effect";
 
 import type { DockerExecutorNetworkHooks } from "../runtime/docker-runtime-adapter.js";
+import { makeResourceAccounting } from "./accounting.js";
 import type { ResourceRuntime } from "./docker-resource-runtime.js";
 import { desiredAttachments, idleVerdict, reaches } from "./reach.js";
 
@@ -36,14 +41,20 @@ const message = (error: unknown) =>
 
 export const makeResourceReconciler = (input: {
   readonly repo: ResourceInstanceRepoService;
+  readonly budgets?: ResourceDomainRepoService;
   readonly runtime: ResourceRuntime;
 }): ResourceReconciler => {
   const { repo, runtime } = input;
+  const accounting =
+    input.budgets === undefined ? undefined : makeResourceAccounting(repo, input.budgets);
 
   /** Start one instance and record what the runtime saw. */
   const start = async (instance: ResourceInstanceRecord) => {
     const executors = await run(repo.linkedExecutors(instance.resourceDomainId));
-    const result = await runtime.up(instance, desiredAttachments(executors, [instance]));
+    const admitted = accounting === undefined ? instance : await run(accounting.admit(instance));
+    const result = await runtime.up(admitted, desiredAttachments(executors, [admitted]));
+    if (result.state.kind === "running" && accounting !== undefined)
+      await run(accounting.created(admitted));
     await run(
       repo.recordObserved(instance.id, result.state, {
         ...(result.startedAt === undefined ? {} : { startedAt: result.startedAt }),
@@ -87,6 +98,41 @@ export const makeResourceReconciler = (input: {
     ]);
     const running: Array<ResourceInstanceRecord> = [];
     for (const instance of instances) {
+      if (instance.spec.reach?.kind === "caller") {
+        await attempt(`caller ${instance.key}`, () =>
+          run(
+            repo.withLock(
+              `${instance.resourceDomainId}:${instance.key}`,
+              Effect.promise(async () => {
+                const current = await run(repo.get(instance.resourceDomainId, instance.key));
+                if (current === undefined) return;
+                if (current.desired === "running") {
+                  await start(current);
+                  restarted.push(current.key);
+                } else if (current.desired === "stopped") {
+                  await runtime.stop(current);
+                  if (accounting !== undefined) await run(accounting.stopped(current));
+                  if (current.stopReason !== null)
+                    await run(
+                      repo.recordObserved(current.id, {
+                        kind: "stopped",
+                        at: now.toISOString(),
+                        reason: current.stopReason,
+                      }),
+                    );
+                } else {
+                  await runtime.archive(current);
+                  if (accounting !== undefined) await run(accounting.stopped(current, true));
+                  await run(
+                    repo.recordObserved(current.id, { kind: "archived", at: now.toISOString() }),
+                  );
+                }
+              }),
+            ),
+          ),
+        );
+        continue;
+      }
       const container = observed.get(instance.id);
       if (instance.desired === "running") {
         if (container?.running === true) {

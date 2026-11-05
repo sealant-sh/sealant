@@ -29,3 +29,14 @@ export {
   type ResourceReconciler,
   type ResourceTickReport,
 } from "./reconciler.js";
+
+export {
+  callerInstanceName,
+  parseResourceCallers,
+  type ResourceCallerConfig,
+} from "./caller-config.js";
+export { DockerCallerRuntime, CALLER_GUARD_IMAGE } from "./docker-caller-runtime.js";
+
+export { makeResourceAccounting } from "./accounting.js";
+
+export { KubernetesCallerRuntime, callerKubernetesObjects } from "./kubernetes-caller-runtime.js";

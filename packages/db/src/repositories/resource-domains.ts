@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   RESOURCE_DOMAIN_BUDGET_DIMENSIONS,
   type ResourceDomainBudgetDimension,
+  type ResourceDomainOwnerKind,
 } from "@sealant/api-contracts";
 import { and, asc, eq, gt, inArray, lt, ne, sql } from "drizzle-orm";
 import { Cause, Context, Effect, Layer, Schema } from "effect";
@@ -40,6 +41,7 @@ export class ResourceDomainRepoError extends Schema.TaggedError<ResourceDomainRe
 ) {}
 
 export interface ResourceDomainRecord {
+  readonly ownerKind?: ResourceDomainOwnerKind;
   readonly id: string;
   readonly key: string;
   readonly createdAt: Date;
@@ -104,7 +106,9 @@ export interface ResourceDomainRepoService {
   readonly ensure: (
     key: string,
     budget?: ResourceDomainBudget,
+    ownerKind?: ResourceDomainOwnerKind,
   ) => Effect.Effect<
+    | { readonly kind: "owner-differs"; readonly domain: ResourceDomainRecord }
     | { readonly kind: "ensured"; readonly domain: ResourceDomainRecord; readonly created: boolean }
     | {
         readonly kind: "budget-differs";
@@ -288,6 +292,7 @@ const withError = <A>(
   );
 
 const columns = {
+  ownerKind: resourceDomains.ownerKind,
   id: resourceDomains.id,
   key: resourceDomains.key,
   createdAt: resourceDomains.createdAt,
@@ -526,13 +531,13 @@ export const ResourceDomainRepoLive: Layer.Layer<ResourceDomainRepo, never, Seal
           return row?.state;
         });
       return {
-        ensure: (key, budget) =>
+        ensure: (key, budget, ownerKind = "project") =>
           withError(
             "ensure",
             Effect.gen(function* () {
               const [inserted] = yield* db
                 .insert(resourceDomains)
-                .values({ id: `rdm:${randomUUID()}`, key, ...budget })
+                .values({ id: `rdm:${randomUUID()}`, key, ownerKind, ...budget })
                 .onConflictDoNothing({ target: resourceDomains.key })
                 .returning(columns);
               if (inserted !== undefined) {
@@ -554,7 +559,14 @@ export const ResourceDomainRepoLive: Layer.Layer<ResourceDomainRepo, never, Seal
               if (existing === undefined) {
                 return yield* Effect.fail(new Error("The resource domain's key was not found."));
               }
-              const domain = { id: existing.id, key: existing.key, createdAt: existing.createdAt };
+              const domain = {
+                id: existing.id,
+                key: existing.key,
+                ownerKind: existing.ownerKind,
+                createdAt: existing.createdAt,
+              };
+              if (existing.ownerKind !== ownerKind)
+                return { kind: "owner-differs", domain } as const;
               return budget === undefined || sameBudget(existing, budget)
                 ? ({ kind: "ensured", domain, created: false } as const)
                 : ({ kind: "budget-differs", domain, revision: existing.revision } as const);

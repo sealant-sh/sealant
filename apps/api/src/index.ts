@@ -18,6 +18,7 @@ import { HttpMiddleware, HttpRouter, HttpServerResponse } from "effect/http";
 import { makeControlPlaneHttpApiLayer } from "./routes/control-plane.http-api.js";
 import { InferenceEngineLive } from "./routes/inference/claude-engine.js";
 import { CodexInferenceEngineLive } from "./routes/inference/codex-engine.js";
+import { ResourceInstanceBackupRoute } from "./routes/resource-domains/resource-instances.backup.js";
 import { ResourceInstanceExecRoute } from "./routes/resource-domains/resource-instances.exec.js";
 import { SessionOutputStreamRoute } from "./routes/sessions/sessions.sse.js";
 import { SessionAttachRoute } from "./routes/sessions/sessions.ws.js";
@@ -177,7 +178,7 @@ export const requestDependenciesLayer = Layer.mergeAll(
   // The codex engine is stateless (tool-less v1: every exchange settles in one spawn).
   CodexInferenceEngineLive,
   // Resource instances run on this process's Docker host (or refuse by the runtime's name).
-  ResourceRuntimeHostLive.pipe(Layer.provide(databaseLayer)),
+  ResourceRuntimeHostLive.pipe(Layer.provide([databaseLayer, credentialCipher])),
 ).pipe(Layer.provideMerge(databaseLayer));
 
 /**
@@ -286,7 +287,7 @@ const forwardLayer = Layer.mergeAll(WorkspaceForwardRoute, WorkspaceForwardV2Rou
 );
 
 /** The raw resource instance exec (resource-instances.exec.ts): stdin streamed into the instance. */
-const resourceExecLayer = ResourceInstanceExecRoute.pipe(
+const resourceExecLayer = Layer.merge(ResourceInstanceExecRoute, ResourceInstanceBackupRoute).pipe(
   HttpRouter.provideRequest(requestDependenciesLayer),
 );
 

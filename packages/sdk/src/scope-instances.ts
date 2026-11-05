@@ -1,11 +1,11 @@
 /**
  * A scope's long-running instances (a project's Postgres, Redis or any image), the workspaces that
- * reach them, and the scope's archive. Instances run on Docker only: on any other runtime every
- * call rejects with 409 `ResourceRuntimeUnsupportedError` (`resources run on Docker; this Sealant
- * runs <runtime>`).
+ * reach them, and the scope's archive. Organization and installation scopes use caller-only
+ * reach on Docker or Kubernetes. Other providers reject with `ResourceRuntimeUnsupportedError`.
  */
 import {
   RESOURCE_INSTANCE_EXEC,
+  RESOURCE_INSTANCE_BACKUP,
   type ResourceInstanceArchivedVolumeWire,
   type ResourceInstanceState,
   type ResourceInstanceWire,
@@ -31,6 +31,13 @@ import { toSealantError } from "./internal/map-error.js";
  * `ResourceInstanceSpecRefusedError`, naming each).
  */
 export interface ScopeInstanceSpec {
+  /** Caller-only reach requires an organization or instance scope, null idle stop and no worktree. */
+  readonly reach?: {
+    readonly kind: "caller";
+    readonly caller: string;
+    readonly port: number;
+    readonly callbackPort: number;
+  };
   /** The DNS name a linked workspace reaches it by (`db`). */
   readonly alias: string;
   /** Null: every linked workspace reaches it. Set: only workspaces linked with this worktree key. */
@@ -39,10 +46,14 @@ export interface ScopeInstanceSpec {
   readonly image: string;
   /** Replaces the image's CMD; its ENTRYPOINT always runs. */
   readonly command: ReadonlyArray<string> | null;
-  /** Plain env. Not for secrets: put a secret in an exec's stdin. */
+  /** Plain env. Caller instances receive secrets through up's write-only secretEnv option. */
   readonly env: Readonly<Record<string, string>>;
-  /** Named volumes; every image `VOLUME` gets one too. None is ever deleted by Sealant. */
-  readonly volumes: ReadonlyArray<{ readonly name: string; readonly mountPath: string }>;
+  /** Retained named volumes. Caller instances must declare every image VOLUME and storageBytes. */
+  readonly volumes: ReadonlyArray<{
+    readonly name: string;
+    readonly mountPath: string;
+    readonly storageBytes?: number;
+  }>;
   readonly limits: { readonly cpuMillicores: number; readonly memoryBytes: number };
   readonly ready:
     | { readonly kind: "tcp"; readonly port: number }
@@ -51,8 +62,8 @@ export interface ScopeInstanceSpec {
         readonly argv: ReadonlyArray<string>;
         readonly user: string | null;
       };
-  /** Seconds with no live linked workspace reaching it before Sealant stops it. */
-  readonly idleStopAfterSeconds: number;
+  /** Workspace idle timeout. Caller-only instances require null and never idle-stop. */
+  readonly idleStopAfterSeconds: number | null;
 }
 
 export type ScopeInstanceStopReason =
@@ -73,6 +84,12 @@ export type ScopeInstanceState =
   | { readonly kind: "archived"; readonly at: Date };
 
 export interface ScopeInstance {
+  /** Reachable only by the configured server caller. */
+  readonly endpoint?: {
+    readonly host: string;
+    readonly port: number;
+    readonly callbackHost: string;
+  };
   /** `rin:<uuid>`. */
   readonly id: string;
   readonly key: string;
@@ -119,8 +136,14 @@ export interface ScopeInstances {
   up(
     key: string,
     spec: ScopeInstanceSpec,
-    options: { readonly cause: "use" | "person" },
+    options: {
+      readonly cause: "use" | "person";
+      /** Omission retains secrets; an explicit map replaces them. Requires Core's credentials key. */
+      readonly secretEnv?: Readonly<Record<string, string>>;
+    },
   ): Promise<ScopeInstance>;
+  /** Download a stopped named volume as an uncompressed tar stream. No volume is deleted. */
+  backup(key: string, volume: string): Promise<ReadableStream<Uint8Array>>;
   /** Rejects with 404 `ResourceInstanceNotFoundError` when the scope has none by this key. */
   get(key: string): Promise<ScopeInstance>;
   /** The scope's instances; `archived: true` lists the archived ones, whose volumes are kept. */
@@ -198,6 +221,7 @@ const toState = (state: ResourceInstanceState): ScopeInstanceState => {
 
 const toInstance = (wire: ResourceInstanceWire): ScopeInstance => ({
   id: wire.resourceInstanceId,
+  ...(wire.endpoint === undefined ? {} : { endpoint: wire.endpoint }),
   key: wire.key,
   alias: wire.alias,
   worktreeKey: wire.worktreeKey,
@@ -325,10 +349,34 @@ export const makeScopeInstances = (
   readonly archive: () => Promise<{ readonly volumes: ReadonlyArray<ScopeArchivedVolume> }>;
 } => ({
   instances: {
-    up: async (key, spec, { cause }) =>
+    up: async (key, spec, { cause, secretEnv }) =>
       toInstance(
-        await runtime.run(upResourceInstanceOp(scopeId, key, { spec: { ...spec }, cause })),
+        await runtime.run(
+          upResourceInstanceOp(scopeId, key, {
+            spec: { ...spec },
+            cause,
+            ...(secretEnv === undefined ? {} : { secretEnv }),
+          }),
+        ),
       ),
+    backup: async (key, volume) => {
+      const path = RESOURCE_INSTANCE_BACKUP.path
+        .replace(":resourceDomainId", encodeURIComponent(scopeId))
+        .replace(":key", encodeURIComponent(key))
+        .replace(":volume", encodeURIComponent(volume));
+      const response = await (config.fetch ?? fetch)(new URL(path, config.baseUrl), {
+        headers: {
+          "x-sealant-request-priority": resolveRequestPriority(config.requestPriority),
+          ...(config.apiKey === undefined ? {} : { authorization: `Bearer ${config.apiKey}` }),
+        },
+      });
+      if (!response.ok)
+        throw new SealantApiError("The stopped-volume backup was refused.", {
+          status: response.status,
+        });
+      if (response.body === null) throw new SealantError("The backup response has no stream.");
+      return response.body;
+    },
     get: async (key) => toInstance(await runtime.run(getResourceInstanceOp(scopeId, key))),
     list: async (options) =>
       (await runtime.run(listResourceInstancesOp(scopeId, options?.archived === true))).items.map(
