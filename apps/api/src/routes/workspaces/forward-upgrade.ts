@@ -5,6 +5,7 @@ import {
   FORWARD_V2_MAX_FRAME_BYTES,
   FORWARD_V2_SUBPROTOCOL,
   type ForwardRefusalReason,
+  type BudgetExceededError,
   forwardRefusedFrame,
 } from "@sealant/api-contracts";
 import { Data, Duration, Effect } from "effect";
@@ -98,9 +99,15 @@ export const acceptForwardSocket = (request: IncomingMessage, head: Buffer) =>
 
 export const refuseForward = (
   socket: WebSocket,
-  refusal: { readonly reason: ForwardRefusalReason; readonly message: string },
+  refusal: {
+    readonly reason: ForwardRefusalReason;
+    readonly message: string;
+    readonly budget?: BudgetExceededError;
+  },
 ) =>
   Effect.suspend(() => {
-    socket.send(JSON.stringify(forwardRefusedFrame(refusal.reason, refusal.message)));
+    socket.send(
+      JSON.stringify(forwardRefusedFrame(refusal.reason, refusal.message, refusal.budget)),
+    );
     return closeWithinGrace(socket, FORWARD_REFUSED_CLOSE_CODE, "refused");
   });

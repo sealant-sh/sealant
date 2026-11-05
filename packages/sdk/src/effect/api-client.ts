@@ -14,17 +14,31 @@ import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { HttpApiClient } from "effect/http-api";
 
 import type { SealantInternalConfig } from "../internal/config.js";
+import type { RequestPriority } from "../types.js";
+
+/** A per-operation priority; providing it never changes concurrent requests. */
+export const CurrentRequestPriority = Context.Reference<RequestPriority | undefined>(
+  "@sealant/sdk/CurrentRequestPriority",
+  { defaultValue: () => undefined },
+);
 
 /** Builds the contract-derived client. Requires an `HttpClient` in context (provided by the layer). */
 const buildControlPlaneClient = (config: SealantInternalConfig) => {
-  const { apiKey } = config;
-  if (apiKey === undefined) {
-    return HttpApiClient.make(ControlPlaneAPI, { baseUrl: config.baseUrl });
-  }
   return HttpApiClient.make(ControlPlaneAPI, {
     baseUrl: config.baseUrl,
     transformClient: (client: HttpClient.HttpClient) =>
-      HttpClient.mapRequest(client, HttpClientRequest.bearerToken(apiKey)),
+      HttpClient.mapRequestEffect(client, (request) =>
+        Effect.map(CurrentRequestPriority, (priority) => {
+          const prioritized = HttpClientRequest.setHeader(
+            request,
+            "x-sealant-request-priority",
+            priority ?? config.requestPriority ?? "normal",
+          );
+          return config.apiKey === undefined
+            ? prioritized
+            : HttpClientRequest.bearerToken(prioritized, config.apiKey);
+        }),
+      ),
   });
 };
 

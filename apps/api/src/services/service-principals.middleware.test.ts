@@ -199,6 +199,34 @@ describe("service principal middleware", () => {
     });
   });
 
+  it("keeps non-service principal allowances unchanged when service keys reserve interactive capacity", async () => {
+    for (const [keys, url, headers] of [
+      ["k", "/v1/sessions/s", { authorization: "Bearer user-token" }],
+      ["k", "/v1/workspaces/w/ssh-target", { "x-sealant-gateway-token": "gateway-secret" }],
+      [undefined, "/v1/workspaces", {}],
+    ] as const) {
+      const gate = servicePrincipalMiddleware(makeServicePrincipals(keys), "gateway-secret", {
+        window: makeRateWindow(),
+        requestsPerMinute: 2,
+        interactiveReservePercent: 50,
+        now: () => 1000,
+      });
+      const send = () =>
+        Effect.runPromise(
+          gate(ok).pipe(
+            Effect.provideService(
+              HttpServerRequest.HttpServerRequest,
+              HttpServerRequest.fromWeb(new Request(`http://localhost${url}`, { headers })),
+            ),
+            Effect.map((r) => r.status),
+          ),
+        );
+      expect(await send()).toBe(200);
+      expect(await send()).toBe(200);
+      expect(await send()).toBe(429);
+    }
+  });
+
   it("budgets the gateway's key lookups apart, so spending them leaves connected people's checks", async () => {
     const gate = servicePrincipalMiddleware(makeServicePrincipals("k"), "gateway-secret", {
       window: makeRateWindow(),

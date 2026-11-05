@@ -22,6 +22,7 @@ export {
   type ForwardDialReason,
   ForwardResetError,
   SealantApiError,
+  SealantBudgetExceededError,
   SealantError,
   SealantNotImplementedError,
   SealantRuntimeError,

@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 
 import { NodeHttpServer } from "@effect/platform-node";
-import { ControlPlaneAPI, type RequestRefusal } from "@sealant/api-contracts";
+import { ControlPlaneAPI, type RequestRefusal, type RequestBudget } from "@sealant/api-contracts";
 import { Effect, Exit, Layer, Scope } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
 import { type HttpApi, HttpApiBuilder, type HttpApiGroup } from "effect/http-api";
@@ -12,6 +12,7 @@ import {
   servicePrincipalMiddleware,
   type RequestPrincipal,
 } from "../services/service-principals.js";
+import { RequestBudgetLive } from "./request-budget.js";
 import { RequestRefusalLive } from "./request-refusal.js";
 
 type ControlPlaneGroups =
@@ -23,7 +24,7 @@ interface ControlPlaneOptions<Tested extends ControlPlaneGroupName, Provided> {
   readonly handlers?: Layer.Layer<
     HttpApiGroup.Service<"sealantControlPlaneApi", Tested>,
     never,
-    RequestRefusal | HttpRouter.Request.From<"Requires", Provided>
+    RequestRefusal | RequestBudget | HttpRouter.Request.From<"Requires", Provided>
   >;
   /** What the handlers need for each request, as the API provides it (`provideRequest`). */
   readonly provides: Layer.Layer<Provided>;
@@ -58,11 +59,12 @@ const controlPlane = <Tested extends ControlPlaneGroupName, Provided>(
   const handlers: Layer.Layer<
     ControlPlaneHandlers,
     never,
-    RequestRefusal | HttpRouter.Request.From<"Requires", Provided>
+    RequestRefusal | RequestBudget | HttpRouter.Request.From<"Requires", Provided>
   > = Layer.mergeAll(Layer.empty, ...spies, options.handlers ?? Layer.empty);
   return HttpApiBuilder.layer(ControlPlaneAPI).pipe(
     Layer.provide(handlers),
     Layer.provide(RequestRefusalLive),
+    Layer.provide(RequestBudgetLive),
     HttpRouter.provideRequest(options.provides),
   );
 };

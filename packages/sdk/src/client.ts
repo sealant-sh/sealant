@@ -40,7 +40,7 @@ import {
 } from "./effect/operations.js";
 import { runHarness, startHarness } from "./effect/run-harness.js";
 import { makeSdkRuntime, type SdkRuntime } from "./effect/runtime.js";
-import { SealantError } from "./errors.js";
+import { SealantBudgetExceededError, SealantError } from "./errors.js";
 import type { SdkContext } from "./facade/context.js";
 import { makeRun } from "./facade/run.js";
 import {
@@ -190,7 +190,15 @@ export class Sealant {
           }
         })();
       }
-      return workspace.ready();
+      return workspace.ready().catch((error: unknown) => {
+        if (error instanceof SealantBudgetExceededError) {
+          throw new SealantError(
+            `Workspace ${created.workspaceId} was created, but a readiness request reached its budget. Resume this workspace instead of creating it again.`,
+            { code: "workspace_readiness_refused", cause: error },
+          );
+        }
+        throw error;
+      });
     },
 
     get: async (id: string): Promise<Workspace> => {

@@ -15,6 +15,8 @@
  */
 import { Option, Schema } from "effect";
 
+import { requestBudgetRefusalSchema, type BudgetExceededError } from "./budgets.js";
+
 export const FORWARD_V2_SUBPROTOCOL = "sealant.forward.v2";
 
 /** The largest binary frame either side may send. */
@@ -98,17 +100,30 @@ export const forwardRefusedFrameSchema = Schema.Struct({
   reason: Schema.String,
   message: Schema.String,
   status: Schema.Int,
+  budget: Schema.optional(Schema.String),
+  limit: Schema.optional(Schema.Number),
+  retryAfterSeconds: Schema.optional(Schema.Number),
+  refusal: Schema.optional(requestBudgetRefusalSchema),
 });
 export type ForwardRefusedFrame = typeof forwardRefusedFrameSchema.Type;
 
 export const forwardRefusedFrame = (
   reason: ForwardRefusalReason,
   message: string,
+  budget?: Pick<BudgetExceededError, "budget" | "limit" | "retryAfterSeconds" | "refusal">,
 ): ForwardRefusedFrame => ({
   t: "refused",
   reason,
   message,
   status: FORWARD_REFUSAL_STATUS[reason],
+  ...(budget === undefined
+    ? {}
+    : {
+        budget: budget.budget,
+        limit: budget.limit,
+        retryAfterSeconds: budget.retryAfterSeconds,
+        ...(budget.refusal === undefined ? {} : { refusal: budget.refusal }),
+      }),
 });
 
 /** The first frame the server sends on a v2 forward, as JSON text. */

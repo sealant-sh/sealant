@@ -1,4 +1,4 @@
-import type { ForwardRefusalReason } from "@sealant/api-contracts";
+import type { RequestBudgetRefusal, ForwardRefusalReason } from "@sealant/api-contracts";
 
 import type { ForwardResetCause } from "./types.js";
 
@@ -79,6 +79,40 @@ export class SealantApiError extends SealantError {
   }
 }
 
+/** A control-plane budget failure, with the server's retry delay and admission metadata. */
+export class SealantBudgetExceededError extends SealantApiError {
+  override readonly name = "SealantBudgetExceededError";
+  override readonly status = 429;
+  /** Which configured budget refused this request. */
+  readonly budget: string;
+  /** The applicable threshold, including any interactive reserve. */
+  readonly limit: number;
+  /** Seconds until this budget is expected to have room. */
+  readonly retryAfterSeconds: number;
+  /** Present only when this HTTP request was refused before its handler did work. */
+  readonly refusal?: RequestBudgetRefusal;
+  constructor(
+    message: string,
+    options: {
+      readonly budget: string;
+      readonly limit: number;
+      readonly retryAfterSeconds: number;
+      readonly refusal?: RequestBudgetRefusal;
+      readonly cause?: unknown;
+    },
+  ) {
+    super(message, {
+      code: "BudgetExceededError",
+      status: 429,
+      ...(options.cause === undefined ? {} : { cause: options.cause }),
+    });
+    this.budget = options.budget;
+    this.limit = options.limit;
+    this.retryAfterSeconds = options.retryAfterSeconds;
+    if (options.refusal !== undefined) this.refusal = options.refusal;
+  }
+}
+
 /**
  * Why a workspace forward did not open. Core names every refusal it sends. The SDK adds
  * `unrecognized-refusal` (Core sent a reason newer than this SDK; it is kept in `wireReason`),
@@ -91,7 +125,7 @@ export type ForwardDialReason =
   | "protocol-unsupported"
   | "transport-unavailable";
 
-export type ForwardDialFailure =
+export type ForwardDialFailure = (
   | {
       readonly reason: ForwardRefusalReason;
       readonly status: number;
@@ -106,7 +140,13 @@ export type ForwardDialFailure =
   | {
       readonly reason: "protocol-unsupported" | "transport-unavailable";
       readonly message: string;
-    };
+    }
+) & {
+  readonly budget?: string;
+  readonly limit?: number;
+  readonly retryAfterSeconds?: number;
+  readonly refusal?: RequestBudgetRefusal;
+};
 
 /** A workspace forward was refused before it opened. Branch on `reason`. */
 export class ForwardDialError extends SealantApiError {
@@ -114,6 +154,11 @@ export class ForwardDialError extends SealantApiError {
   override readonly reason: ForwardDialReason;
   /** The reason Core sent, when this SDK does not know it (`unrecognized-refusal`). */
   readonly wireReason?: string;
+  /** Budget metadata from a refusal after the WebSocket upgrade. */
+  readonly budget?: string;
+  readonly limit?: number;
+  readonly retryAfterSeconds?: number;
+  readonly refusal?: RequestBudgetRefusal;
   constructor(failure: ForwardDialFailure) {
     super(failure.message, {
       code: "ForwardDialError",
@@ -121,6 +166,10 @@ export class ForwardDialError extends SealantApiError {
       ...("status" in failure ? { status: failure.status } : {}),
     });
     this.reason = failure.reason;
+    if (failure.budget !== undefined) this.budget = failure.budget;
+    if (failure.limit !== undefined) this.limit = failure.limit;
+    if (failure.retryAfterSeconds !== undefined) this.retryAfterSeconds = failure.retryAfterSeconds;
+    if (failure.refusal !== undefined) this.refusal = failure.refusal;
     if ("wireReason" in failure) {
       this.wireReason = failure.wireReason;
     }

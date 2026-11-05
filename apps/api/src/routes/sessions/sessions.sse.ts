@@ -30,6 +30,7 @@ import { TelemetryQuery } from "@sealant/telemetry";
 import { Effect, Option, Stream } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 
+import { admitRawRequest } from "../../services/service-principals.js";
 import {
   authorize,
   reconcileSession,
@@ -112,6 +113,11 @@ export const SessionOutputStreamRoute = HttpRouter.add(
   "/v1/sessions/:sessionId/output/stream",
   (request) =>
     Effect.gen(function* () {
+      const budgetRefusal = yield* admitRawRequest(
+        new URL(request.url, "http://localhost").searchParams.get("ownerUserId") ?? undefined,
+      );
+      if (budgetRefusal !== undefined) return budgetRefusal;
+
       const params = yield* HttpRouter.params;
       const sessionId = params["sessionId"];
       if (sessionId === undefined) {

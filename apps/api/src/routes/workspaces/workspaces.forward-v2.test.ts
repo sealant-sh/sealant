@@ -551,9 +551,13 @@ describe("/forward/v2", () => {
       const error = await refusalOf(
         openForwardV2(asService(tight.baseUrl), "wks_ready", ECHO_PORT),
       );
-      expect({ reason: error.reason, status: error.status }).toEqual({
+      expect(error).toMatchObject({
         reason: "budget-exceeded",
         status: 429,
+        budget: "principalRequestsPerMinute",
+        limit: 1,
+        retryAfterSeconds: expect.any(Number),
+        refusal: { phase: "before-work", bucket: "key" },
       });
     } finally {
       await tight.close();

@@ -1,3 +1,5 @@
+import { timingSafeEqual } from "node:crypto";
+
 /**
  * Service principals — trusted products (Mend) that act on behalf of any owner.
  *
@@ -15,9 +17,8 @@
  *
  * Matching is constant-time per key; keys never appear in logs or responses.
  */
-import { timingSafeEqual } from "node:crypto";
-
-import { Context, Effect } from "effect";
+import { BudgetExceededError, PersonId } from "@sealant/api-contracts";
+import { Context, Effect, Schema } from "effect";
 import {
   HttpMiddleware,
   HttpServerRequest,
@@ -26,7 +27,13 @@ import {
 } from "effect/http";
 
 import { env } from "../runtime-env.js";
-import { bearerSubject, budgetMessage, rateDecision, type RateWindow } from "./budgets.js";
+import {
+  makeRateWindow,
+  bearerSubject,
+  budgetMessage,
+  rateDecision,
+  type RateWindow,
+} from "./budgets.js";
 
 export interface ServicePrincipals {
   /** True when the deployment requires authentication on the control plane. */
@@ -165,17 +172,41 @@ const refusesAfterUpgrade = (pathname: string): boolean =>
 export type Admission =
   | { readonly kind: "admitted"; readonly principal: RequestPrincipal }
   | { readonly kind: "unauthorized"; readonly message: string }
-  | { readonly kind: "budget-exceeded"; readonly message: string };
+  | {
+      readonly kind: "budget-exceeded";
+      readonly message: string;
+      readonly error: BudgetExceededError;
+    };
 
-export const ForwardAdmission = Context.Reference<(secret: string | undefined) => Admission>(
-  "@sealant/api/ForwardAdmission",
-  {
-    defaultValue: () => () => ({
-      kind: "unauthorized",
-      message: "This route is served only behind the authentication gate.",
-    }),
-  },
-);
+export const ForwardAdmission = Context.Reference<
+  (secret: string | undefined, ownerUserId?: string) => Admission
+>("@sealant/api/ForwardAdmission", {
+  defaultValue: () => () => ({
+    kind: "unauthorized",
+    message: "This route is served only behind the authentication gate.",
+  }),
+});
+
+/** Request-local service-key scope check, installed only after key admission. */
+export const RequestOwnerAdmission = Context.Reference<
+  (ownerUserId: string | undefined) => BudgetExceededError | undefined
+>("@sealant/api/RequestOwnerAdmission", { defaultValue: () => () => undefined });
+
+/** The same typed response for transport and raw-route admission. */
+export const requestBudgetResponse = (
+  error: BudgetExceededError,
+): HttpServerResponseType.HttpServerResponse =>
+  HttpServerResponse.jsonUnsafe(error, {
+    status: 429,
+    headers: { "retry-after": String(error.retryAfterSeconds) },
+  });
+
+/** Raw routes call this before lookups or reading a streaming body. */
+export const admitRawRequest = (ownerUserId?: string) =>
+  Effect.map(RequestOwnerAdmission, (admit) => {
+    const error = admit(ownerUserId);
+    return error === undefined ? undefined : requestBudgetResponse(error);
+  });
 
 /**
  * What the SSH gateway's shared secret reaches: key and target resolution (whose handlers check
@@ -205,56 +236,114 @@ export interface PrincipalRateLimit {
   readonly window: RateWindow;
   readonly requestsPerMinute: number;
   readonly now?: () => number;
+  readonly ownerRequestsPerMinute?: number;
+  readonly unownedRequestsPerMinute?: number;
+  readonly interactiveReservePercent?: number;
 }
+
+const budgetError = (
+  refused: Extract<ReturnType<typeof rateDecision>, { allowed: false }>,
+  bucket: "key" | "principal" | "owner" | "unowned",
+) =>
+  new BudgetExceededError({
+    message: budgetMessage(refused),
+    budget: refused.budget,
+    limit: refused.limit,
+    retryAfterSeconds: refused.retryAfterSeconds,
+    refusal: { phase: "before-work", bucket },
+  });
 
 export const servicePrincipalMiddleware = (
   principals: ServicePrincipals,
   /** `WORKSPACE_SSH_GATEWAY_TOKEN`; without one no request is a gateway's. */
   gatewayToken?: string,
   rateLimit?: PrincipalRateLimit,
-) =>
-  HttpMiddleware.make((app) =>
+) => {
+  // One bounded scoped map per configured key keeps overflow from coupling different keys.
+  const scopedWindows = new Map<number, { owners: RateWindow; unowned: RateWindow }>();
+  return HttpMiddleware.make((app) =>
     Effect.gen(function* () {
-      const refusedBudget = (subject: string) => {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const interactive = request.headers["x-sealant-request-priority"] === "interactive";
+      const effectiveLimit = (limit: number) =>
+        limit <= 0 || interactive
+          ? limit
+          : Math.max(
+              1,
+              Math.floor(limit * (1 - (rateLimit?.interactiveReservePercent ?? 0) / 100)),
+            );
+      const refusedBudget = (subject: string, keyIndex?: number) => {
         if (rateLimit === undefined) return undefined;
         const decision = rateDecision(
           rateLimit.window,
           "principalRequestsPerMinute",
           subject,
-          rateLimit.requestsPerMinute,
+          keyIndex === undefined
+            ? rateLimit.requestsPerMinute
+            : effectiveLimit(rateLimit.requestsPerMinute),
           (rateLimit.now ?? Date.now)(),
         );
         return decision.allowed ? undefined : decision;
       };
-      const as = (principal: RequestPrincipal, subject: string) => {
-        const refused = refusedBudget(subject);
-        if (refused !== undefined) {
-          const limited: HttpServerResponseType.HttpServerResponse = HttpServerResponse.jsonUnsafe(
-            {
-              _tag: "BudgetExceededError",
-              message: budgetMessage(refused),
-              budget: refused.budget,
-              limit: refused.limit,
-              retryAfterSeconds: refused.retryAfterSeconds,
-            },
-            { status: 429, headers: { "retry-after": String(refused.retryAfterSeconds) } },
-          );
-          return Effect.succeed(limited);
+      const ownerAdmission = (keyIndex: number) => (ownerUserId: string | undefined) => {
+        if (rateLimit === undefined) return undefined;
+        let windows = scopedWindows.get(keyIndex);
+        if (windows === undefined) {
+          windows = { owners: makeRateWindow(), unowned: makeRateWindow() };
+          scopedWindows.set(keyIndex, windows);
         }
-        return app.pipe(Effect.provideService(CurrentPrincipal, principal));
+        const owner = Schema.is(PersonId)(ownerUserId) ? ownerUserId : undefined;
+        const owned = owner !== undefined;
+        const decision = rateDecision(
+          owned ? windows.owners : windows.unowned,
+          owned ? "serviceOwnerRequestsPerMinute" : "serviceUnownedRequestsPerMinute",
+          owned ? `service:${keyIndex}:owner:${owner}` : `service:${keyIndex}:unowned`,
+          effectiveLimit(
+            (owned ? rateLimit.ownerRequestsPerMinute : rateLimit.unownedRequestsPerMinute) ?? 0,
+          ),
+          (rateLimit.now ?? Date.now)(),
+        );
+        return decision.allowed ? undefined : budgetError(decision, owned ? "owner" : "unowned");
       };
-      const admit = (principal: RequestPrincipal, subject: string): Admission => {
-        const refused = refusedBudget(subject);
-        return refused === undefined
+      const as = (principal: RequestPrincipal, subject: string, keyIndex?: number) => {
+        const refused = refusedBudget(subject, keyIndex);
+        if (refused !== undefined) {
+          return Effect.succeed(
+            requestBudgetResponse(
+              budgetError(refused, keyIndex === undefined ? "principal" : "key"),
+            ),
+          );
+        }
+        return app.pipe(
+          Effect.provideService(CurrentPrincipal, principal),
+          Effect.provideService(
+            RequestOwnerAdmission,
+            keyIndex === undefined ? () => undefined : ownerAdmission(keyIndex),
+          ),
+        );
+      };
+      const admit = (
+        principal: RequestPrincipal,
+        subject: string,
+        keyIndex?: number,
+        ownerUserId?: string,
+      ): Admission => {
+        const refused = refusedBudget(subject, keyIndex);
+        const error =
+          refused === undefined
+            ? keyIndex === undefined
+              ? undefined
+              : ownerAdmission(keyIndex)(ownerUserId)
+            : budgetError(refused, keyIndex === undefined ? "principal" : "key");
+        return error === undefined
           ? { kind: "admitted", principal }
-          : { kind: "budget-exceeded", message: budgetMessage(refused) };
+          : { kind: "budget-exceeded", message: error.message, error };
       };
-      const request = yield* HttpServerRequest.HttpServerRequest;
       const url = new URL(request.url, "http://localhost");
       const pathname = url.pathname;
       if (refusesAfterUpgrade(pathname)) {
         return yield* app.pipe(
-          Effect.provideService(ForwardAdmission, (secret) => {
+          Effect.provideService(ForwardAdmission, (secret, ownerUserId) => {
             if (!principals.enabled) return admit({ kind: "open" }, "open");
             if (secret === undefined) {
               return {
@@ -266,7 +355,7 @@ export const servicePrincipalMiddleware = (
             const keyIndex = principals.indexOf(secret);
             return keyIndex === undefined
               ? admit({ kind: "bearer" }, bearerSubject(secret))
-              : admit({ kind: "service" }, `service:${keyIndex}`);
+              : admit({ kind: "service" }, `service:${keyIndex}`, keyIndex, ownerUserId);
           }),
         );
       }
@@ -283,7 +372,8 @@ export const servicePrincipalMiddleware = (
         queryToken: isSessionSurface(pathname) ? url.searchParams.get("token") : null,
       });
       const keyIndex = secret === undefined ? undefined : principals.indexOf(secret);
-      if (keyIndex !== undefined) return yield* as({ kind: "service" }, `service:${keyIndex}`);
+      if (keyIndex !== undefined)
+        return yield* as({ kind: "service" }, `service:${keyIndex}`, keyIndex);
       // The gateway's secret is verified here, not merely noticed: its presence used to be enough
       // to pass the gate, which was sound only while every gateway route re-checked it.
       const presented = request.headers["x-sealant-gateway-token"];
@@ -318,6 +408,7 @@ export const servicePrincipalMiddleware = (
       return response;
     }),
   );
+};
 
 /** The deployment's service principals, resolved once from `SEALANT_SERVICE_KEYS`. */
 export const servicePrincipals: ServicePrincipals = makeServicePrincipals(env.SEALANT_SERVICE_KEYS);

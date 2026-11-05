@@ -4,6 +4,8 @@ import { makeRateWindow, type BudgetLimits } from "./budgets.js";
 /** This process's budgets, read once from the environment (CORE-04). */
 export const budgetLimits: BudgetLimits = {
   principalRequestsPerMinute: env.SEALANT_BUDGET_PRINCIPAL_REQUESTS_PER_MINUTE,
+  serviceOwnerRequestsPerMinute: env.SEALANT_BUDGET_SERVICE_OWNER_REQUESTS_PER_MINUTE,
+  serviceUnownedRequestsPerMinute: env.SEALANT_BUDGET_SERVICE_UNOWNED_REQUESTS_PER_MINUTE,
   ownerLaunchesPerMinute: env.SEALANT_BUDGET_OWNER_LAUNCHES_PER_MINUTE,
   ownerLiveWorkspaces: env.SEALANT_BUDGET_OWNER_LIVE_WORKSPACES,
   ownerActiveRuns: env.SEALANT_BUDGET_OWNER_ACTIVE_RUNS,

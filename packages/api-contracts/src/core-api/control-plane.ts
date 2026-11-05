@@ -1,6 +1,7 @@
 import { HttpApi, OpenApi } from "effect/http-api";
 
 import { AccessTokensGroup } from "./access-tokens.js";
+import { RequestBudget } from "./budgets.js";
 import { ConnectedAccountsGroup } from "./connected-accounts.js";
 import { GitHubGroup } from "./github.js";
 import { InferenceGroup } from "./inference.js";
@@ -35,6 +36,7 @@ export const ControlPlaneAPI = HttpApi.make("sealantControlPlaneApi")
   .add(ResourceInstancesGroup.prefix("/v1/resource-domains"))
   // Last, so it reaches every endpoint above (`HttpApi.middleware` skips endpoints added after it).
   .middleware(RequestRefusal)
+  .middleware(RequestBudget)
   .annotate(OpenApi.Title, "Sealant Control Plane API")
   .annotate(OpenApi.Version, "0.0.0")
   .annotate(OpenApi.Description, "Sealant control-plane HTTP API.");

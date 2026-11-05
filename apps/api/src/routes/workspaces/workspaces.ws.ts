@@ -34,6 +34,7 @@ import { Effect, Fiber } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 import { Socket } from "effect/socket";
 
+import { admitRawRequest } from "../../services/service-principals.js";
 import { resolveDaemonTarget } from "../sessions/sessions.module.js";
 import { checkForward, type ForwardCheck, type ForwardCheckFailed } from "./forward-checks.js";
 
@@ -61,6 +62,11 @@ export const WorkspaceForwardRoute = HttpRouter.add(
   "/v1/workspaces/:workspaceId/forward",
   (request) =>
     Effect.gen(function* () {
+      const budgetRefusal = yield* admitRawRequest(
+        new URL(request.url, "http://localhost").searchParams.get("ownerUserId") ?? undefined,
+      );
+      if (budgetRefusal !== undefined) return budgetRefusal;
+
       const params = yield* HttpRouter.params;
       const workspaceId = params["workspaceId"];
       if (workspaceId === undefined) {

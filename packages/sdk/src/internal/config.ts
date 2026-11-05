@@ -7,7 +7,7 @@
  * payloads. The owner comes from `SealantConfig.ownerUserId` when a product acts on behalf of a
  * specific user (one client per user), else from the environment with docker-compose defaults.
  */
-import type { SealantConfig } from "../types.js";
+import type { RequestPriority, SealantConfig } from "../types.js";
 
 export interface SealantHostLocalConfig {
   /** Owner principal the control plane attributes workspaces/runs to (pre-auth). */
@@ -17,6 +17,7 @@ export interface SealantHostLocalConfig {
 }
 
 export interface SealantInternalConfig {
+  readonly requestPriority?: RequestPriority;
   readonly baseUrl: string;
   readonly apiKey: string | undefined;
   readonly fetch: typeof fetch | undefined;
@@ -35,6 +36,7 @@ const env = (key: string): string | undefined => {
 /** Resolves the public config plus host-local needs (from env, with docker-compose defaults). */
 export const resolveInternalConfig = (config: SealantConfig): SealantInternalConfig => ({
   baseUrl: config.baseUrl,
+  ...(config.requestPriority === undefined ? {} : { requestPriority: config.requestPriority }),
   apiKey: config.apiKey,
   fetch: config.fetch,
   hostLocal: {

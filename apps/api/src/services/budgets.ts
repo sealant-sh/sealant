@@ -10,8 +10,12 @@
 import { createHash } from "node:crypto";
 
 export interface BudgetLimits {
-  /** Requests per minute for one principal (one service key, the gateway, one bearer). */
+  /** Hard request ceiling for one service key, or allowance for another principal. */
   readonly principalRequestsPerMinute: number;
+  /** Requests per minute for one owner of one service key. */
+  readonly serviceOwnerRequestsPerMinute: number;
+  /** Requests per minute without a declared owner for one service key. */
+  readonly serviceUnownedRequestsPerMinute: number;
   /** Launches per minute for one owner: workspace creates and restarts, run creates, inference. */
   readonly ownerLaunchesPerMinute: number;
   /** Workspaces one owner may hold queued, running or ready at once. */
@@ -50,13 +54,14 @@ export const OVERFLOW_SUBJECT = "overflow";
  * subjects then throttles itself and cannot grow the map or make each request scan it.
  */
 export const makeRateWindow = (windowMs = 60_000, maxSubjects = MAX_SUBJECTS) => {
-  const hits = new Map<string, Array<number>>();
+  const hits = new Map<string, { times: Array<number>; head: number }>();
   let sweptAt = 0;
   const sweep = (now: number) => {
     if (now - sweptAt < SWEEP_EVERY_MS) return;
     sweptAt = now;
-    for (const [subject, times] of hits) {
-      if (times.every((time) => now - time >= windowMs)) hits.delete(subject);
+    for (const [subject, { times }] of hits) {
+      const newest = times[times.length - 1];
+      if (newest === undefined || now - newest >= windowMs) hits.delete(subject);
     }
   };
   return {
@@ -64,14 +69,25 @@ export const makeRateWindow = (windowMs = 60_000, maxSubjects = MAX_SUBJECTS) =>
       if (limit <= 0) return null;
       sweep(now);
       const subject = hits.has(requested) || hits.size < maxSubjects ? requested : OVERFLOW_SUBJECT;
-      const live = (hits.get(subject) ?? []).filter((time) => now - time < windowMs);
-      if (live.length >= limit) {
-        hits.set(subject, live);
-        const oldest = live[0] ?? now;
-        return Math.max(1, Math.ceil((oldest + windowMs - now) / 1000));
+      const queue = hits.get(subject) ?? { times: [], head: 0 };
+      while (queue.head < queue.times.length) {
+        const time = queue.times[queue.head];
+        if (time !== undefined && now - time < windowMs) break;
+        queue.head += 1;
       }
-      live.push(now);
-      hits.set(subject, live);
+      if (queue.head > 1024 && queue.head * 2 >= queue.times.length) {
+        queue.times = queue.times.slice(queue.head);
+        queue.head = 0;
+      }
+      hits.set(subject, queue);
+      const count = queue.times.length - queue.head;
+      if (count >= limit) {
+        // Interactive traffic may have spent above the normal threshold. Enough hits must
+        // expire to leave fewer than that threshold, rather than just the oldest hit.
+        const expires = queue.times[queue.head + count - limit] ?? now;
+        return Math.max(1, Math.ceil((expires + windowMs - now) / 1000));
+      }
+      queue.times.push(now);
       return null;
     },
     subjects: () => hits.size,
@@ -108,6 +124,8 @@ export const bearerSubject = (secret: string): string =>
 
 const WORDS: Readonly<Record<keyof BudgetLimits, string>> = {
   principalRequestsPerMinute: "requests per minute for this credential",
+  serviceOwnerRequestsPerMinute: "requests per minute for this owner and service key",
+  serviceUnownedRequestsPerMinute: "requests per minute without an owner for this service key",
   ownerLaunchesPerMinute: "launches per minute for this owner",
   ownerLiveWorkspaces: "live workspaces for this owner",
   ownerActiveRuns: "active runs for this owner",

@@ -18,6 +18,8 @@ import {
   sendSessionInputOp,
   signalSessionOp,
 } from "../effect/operations.js";
+import { SealantBudgetExceededError } from "../errors.js";
+import { toSealantError } from "../internal/map-error.js";
 import type {
   InteractiveSession,
   InteractiveSessionStatus,
@@ -183,10 +185,16 @@ async function* streamOverSse(
   const response = await fetchImpl(url, {
     headers: {
       accept: "text/event-stream",
+      "x-sealant-request-priority": config.requestPriority ?? "normal",
       ...(config.apiKey === undefined ? {} : { authorization: `Bearer ${config.apiKey}` }),
     },
     ...(signal === undefined ? {} : { signal }),
   });
+  if (response.status === 429) {
+    const body: unknown = await response.json().catch(() => undefined);
+    const error = toSealantError(body);
+    if (error instanceof SealantBudgetExceededError) throw error;
+  }
   if (!response.ok || response.body === null) {
     throw new Error(`session output stream failed: HTTP ${response.status}`);
   }
@@ -287,6 +295,7 @@ export const makeInteractiveSession = (ctx: SdkContext, wire: SessionWire): Inte
           }
           return;
         } catch (error) {
+          if (error instanceof SealantBudgetExceededError) throw error;
           if (signal?.aborted === true) {
             return;
           }

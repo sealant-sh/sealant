@@ -4,7 +4,10 @@
  * errors, or schema decode errors; the runtime squashes the `Cause` to its failure value and hands it
  * here. This is the single funnel that keeps Effect internals out of the public, Promise-based API.
  */
-import { SealantApiError, SealantError } from "../errors.js";
+import { BudgetExceededError } from "@sealant/api-contracts";
+import { Option, Schema } from "effect";
+
+import { SealantApiError, SealantBudgetExceededError, SealantError } from "../errors.js";
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
@@ -41,6 +44,19 @@ export const toSealantError = (cause: unknown): SealantError => {
         : typeof cause === "string"
           ? cause
           : "Sealant operation failed.";
+
+  if (tag === "BudgetExceededError") {
+    const budget = Schema.decodeUnknownOption(BudgetExceededError)(cause);
+    if (Option.isSome(budget)) {
+      return new SealantBudgetExceededError(message, {
+        budget: budget.value.budget,
+        limit: budget.value.limit,
+        retryAfterSeconds: budget.value.retryAfterSeconds,
+        ...(budget.value.refusal === undefined ? {} : { refusal: budget.value.refusal }),
+        cause,
+      });
+    }
+  }
 
   if (typeof tag === "string") {
     const status = extractStatus(record);

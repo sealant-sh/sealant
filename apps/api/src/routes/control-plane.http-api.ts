@@ -9,6 +9,7 @@ import { InferenceHandlersLive } from "./inference/inference.http-api.js";
 import { PackagesHandlersLive } from "./packages/packages.http-api.js";
 import { ProfilesHandlersLive } from "./profiles/profiles.http-api.js";
 import { RegistriesHandlersLive } from "./registries/registries.http-api.js";
+import { RequestBudgetLive } from "./request-budget.js";
 import { RequestRefusalLive } from "./request-refusal.js";
 import { ResourceDomainsHandlersLive } from "./resource-domains/resource-domains.http-api.js";
 import { ResourceInstancesHandlersLive } from "./resource-domains/resource-instances.http-api.js";
@@ -41,5 +42,6 @@ export const makeControlPlaneHttpApiLayer = () => {
   return HttpApiBuilder.layer(ControlPlaneAPI, { openapiPath: "/openapi.json" }).pipe(
     Layer.provide(ControlPlaneHandlersLive),
     Layer.provide(RequestRefusalLive),
+    Layer.provide(RequestBudgetLive),
   );
 };

@@ -255,8 +255,14 @@ const corsMiddleware = HttpMiddleware.cors({
     return allowedOrigins.has(origin);
   },
   allowedMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["content-type", "authorization", "idempotency-key", "x-sealant-gateway-token"],
-  exposedHeaders: ["location"],
+  allowedHeaders: [
+    "content-type",
+    "authorization",
+    "idempotency-key",
+    "x-sealant-gateway-token",
+    "x-sealant-request-priority",
+  ],
+  exposedHeaders: ["location", "retry-after"],
   maxAge: 86_400,
 });
 
@@ -325,6 +331,9 @@ const authGate = servicePrincipalMiddleware(
   {
     window: makeRateWindow(),
     requestsPerMinute: budgetLimits.principalRequestsPerMinute,
+    ownerRequestsPerMinute: budgetLimits.serviceOwnerRequestsPerMinute,
+    unownedRequestsPerMinute: budgetLimits.serviceUnownedRequestsPerMinute,
+    interactiveReservePercent: env.SEALANT_BUDGET_REQUEST_INTERACTIVE_RESERVE_PERCENT,
   },
 );
 

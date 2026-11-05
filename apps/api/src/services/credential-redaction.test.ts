@@ -57,6 +57,7 @@ const GATEWAY_MARKER = "review347-gateway-credential-marker";
 process.env["SEALANT_SERVICE_KEYS"] = MARKER;
 process.env["WORKSPACE_SSH_GATEWAY_TOKEN"] = GATEWAY_MARKER;
 
+let requestBudget: typeof import("../routes/request-budget.js");
 let redaction: typeof import("./credential-redaction.js");
 let browserRoutes: Layer.Layer<never, never, HttpRouter.HttpRouter>;
 let sshKeysHandlers: Layer.Layer<never>;
@@ -111,6 +112,7 @@ beforeAll(async () => {
     import("../routes/workspaces/workspaces.ws.js"),
     import("../routes/ssh-keys/ssh-keys.http-api.js"),
   ]);
+  requestBudget = await import("../routes/request-budget.js");
   redaction = await import("./credential-redaction.js");
   browserRoutes = Layer.mergeAll(
     ws.SessionAttachRoute,
@@ -256,6 +258,7 @@ const sshApi = () =>
       >,
     ),
     Layer.provide(RequestRefusalLive),
+    Layer.provide(requestBudget.RequestBudgetLive),
     Layer.provide(HttpServer.layerServices),
   );
 

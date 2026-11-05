@@ -146,17 +146,27 @@ const FORWARD_V2_OPEN_DEADLINE_MS = 30_000;
 const decodeOpenFrame = Schema.decodeUnknownOption(Schema.fromJsonString(forwardOpenFrameSchema));
 const isKnownRefusal = Schema.is(forwardRefusalReasonSchema);
 
-const refusalError = (frame: ForwardRefusedFrame): ForwardDialError =>
-  new ForwardDialError(
+const refusalError = (frame: ForwardRefusedFrame): ForwardDialError => {
+  const budget = {
+    ...(frame.budget === undefined ? {} : { budget: frame.budget }),
+    ...(frame.limit === undefined ? {} : { limit: frame.limit }),
+    ...(frame.retryAfterSeconds === undefined
+      ? {}
+      : { retryAfterSeconds: frame.retryAfterSeconds }),
+    ...(frame.refusal === undefined ? {} : { refusal: frame.refusal }),
+  };
+  return new ForwardDialError(
     isKnownRefusal(frame.reason)
-      ? { reason: frame.reason, status: frame.status, message: frame.message }
+      ? { ...budget, reason: frame.reason, status: frame.status, message: frame.message }
       : {
+          ...budget,
           reason: "unrecognized-refusal",
           wireReason: frame.reason,
           status: frame.status,
           message: frame.message,
         },
   );
+};
 
 /** A gated Core before v2 answers the route 401, an open one 404. Core with v2 answers 426. */
 const answeredLikeCoreBeforeV2 = (status: number): boolean => status === 401 || status === 404;
