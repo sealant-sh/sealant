@@ -9,7 +9,6 @@ import { WebSocket, createWebSocketStream } from "ws";
 import { z } from "zod";
 
 import { BoatSnapshotBuilder, type NativeSnapshotArtifact } from "../src/images/boat/builder.js";
-import { NATIVE_SUBSTRATE } from "../src/images/boat/recipe.js";
 import {
   VerifiedRuntimeBundle,
   NativeBuildError,
@@ -272,6 +271,7 @@ try {
       from: artifact.identity.name,
     };
     await persist();
+    const coldStarted = performance.now();
     const id = await createClone();
     await poll(async () =>
       ["ready", "idle", "running"].includes(must(await api.get(id)).state) ? true : undefined,
@@ -320,22 +320,40 @@ install -d -m700 /home/user/sealant-dev-boat-stream-${state.clone.marker}
       },
     });
     must(await api.writeFile(id, stage + "/launch.json", descriptor));
-    const relayNode = family === "nix" ? "/nix/var/nix/profiles/default/bin/node" : "/usr/bin/node";
-    const relayUnit = `[Unit]\nDescription=Sealant proof relay\n[Service]\nExecStart=${relayNode} /usr/local/lib/sealant/control-relay.cjs --socket /var/lib/sealant/control/control.sock --token-file /var/lib/sealant/control/relay.token --port 8080\nKillMode=control-group\n`;
-    must(await api.writeFile(id, stage + "/relay.service", relayUnit));
     await command(
       id,
       `/usr/bin/sudo install -m600 '${stage}/relay.token' /var/lib/sealant/control/relay.token
 /usr/bin/sudo install -m600 '${stage}/launch.json' /var/lib/sealant/control/launch.json
-/usr/bin/sudo install -m644 '${stage}/relay.service' /etc/systemd/system/sealant-proof-relay.service
 /usr/bin/sudo systemctl daemon-reload
-/usr/bin/sudo systemctl start sealant-workspace.service sealant-proof-relay.service`,
+/usr/bin/sudo systemctl start sealant-workspace.service`,
+    );
+    const namespacePid = z
+      .string()
+      .regex(/^[1-9]\d*$/)
+      .parse(
+        (
+          await command(
+            id,
+            `/usr/bin/sudo sh -c 'pid=$(systemctl show sealant-workspace.service -p MainPID --value); test "$(cat /proc/$pid/comm)" = unshare; printf "%s\\n" "$pid"'`,
+          )
+        ).trim(),
+      );
+    const namespaceSocket = `/proc/${namespacePid}/root/run/sealant/control.sock`;
+    report.namespaceControl = { pid: namespacePid, socket: namespaceSocket };
+    const relayNode = family === "nix" ? "/nix/var/nix/profiles/default/bin/node" : "/usr/bin/node";
+    const relayUnit = `[Unit]\nDescription=Sealant proof relay\n[Service]\nExecStart=${relayNode} /usr/local/lib/sealant/control-relay.cjs --socket ${namespaceSocket} --token-file /var/lib/sealant/control/relay.token --port 8080\nKillMode=control-group\n`;
+    must(await api.writeFile(id, stage + "/relay.service", relayUnit));
+    await command(
+      id,
+      `/usr/bin/sudo install -m644 '${stage}/relay.service' /etc/systemd/system/sealant-proof-relay.service
+/usr/bin/sudo systemctl daemon-reload
+/usr/bin/sudo systemctl start sealant-proof-relay.service`,
     );
     await poll(
       async () => {
         const r = await command(
           id,
-          "if /usr/bin/sudo test -S /var/lib/sealant/control/control.sock; then echo ready; elif /usr/bin/sudo systemctl is-failed --quiet sealant-workspace.service; then /usr/bin/sudo journalctl -u sealant-workspace.service -n 30 --no-pager; echo failed; else echo waiting; fi",
+          `if /usr/bin/sudo test -S ${namespaceSocket}; then echo ready; elif /usr/bin/sudo systemctl is-failed --quiet sealant-workspace.service; then /usr/bin/sudo journalctl -u sealant-workspace.service -n 30 --no-pager; echo failed; else echo waiting; fi`,
         );
         if (r.trim().endsWith("failed")) {
           report.nativeBoot = r;
@@ -346,8 +364,52 @@ install -d -m700 /home/user/sealant-dev-boat-stream-${state.clone.marker}
       runAbort.signal,
       180,
     );
+    report.localRelay = await command(
+      id,
+      `/usr/bin/sudo python3 - <<'PY'
+import pathlib,time,urllib.request,urllib.error
+token=pathlib.Path('/var/lib/sealant/control/relay.token').read_text()
+opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+for attempt in range(30):
+ try:
+  request=urllib.request.Request('http://127.0.0.1:8080/sealant/health',headers={'Authorization':'Bearer '+token})
+  with opener.open(request,timeout=2) as response:
+   assert response.status==200
+   print('local-relay-control-socket-reachable')
+   break
+ except (OSError,urllib.error.URLError) as error:
+  print('local-relay-attempt',attempt,type(error).__name__,getattr(error,'code',None),flush=True)
+  if attempt==29: raise SystemExit('local relay did not become ready')
+  time.sleep(1)
+PY`,
+      90,
+    );
     const access = must(await api.hostControl(id));
     const connection = boatControlConnection(access, token);
+    const hostedStatuses: Array<number | "transport-error"> = [];
+    report.hostedReadiness = hostedStatuses;
+    await poll(
+      async () => {
+        let response: Response;
+        try {
+          response = await fetch(new URL("/sealant/health", access.origin), {
+            headers: (await connection.prepare()).headers ?? {},
+            signal: AbortSignal.timeout(5000),
+            redirect: "manual",
+          });
+        } catch {
+          hostedStatuses.push("transport-error");
+          return undefined;
+        }
+        await response.body?.cancel();
+        hostedStatuses.push(response.status);
+        if (response.status === 502 || response.status === 503) return undefined;
+        if (response.status !== 200) throw new Error(`hosted relay HTTP ${response.status}`);
+        return true;
+      },
+      runAbort.signal,
+      30,
+    );
     const socket = new WebSocket(connection.url, {
       headers: (await connection.prepare()).headers,
       handshakeTimeout: 10_000,
@@ -361,6 +423,7 @@ install -d -m700 /home/user/sealant-dev-boat-stream-${state.clone.marker}
     });
     client = SealantClient.fromStream(stream);
     const nativeHealth = await client.health();
+    report.coldCreateToHealthMs = Math.round(performance.now() - coldStarted);
     const nativeCapabilities = await client.getCapabilities();
     report.nativeControl = {
       cookieHosted: true,
@@ -374,7 +437,11 @@ install -d -m700 /home/user/sealant-dev-boat-stream-${state.clone.marker}
       )
     )
       throw new Error("native health or required capabilities unavailable");
-    const inside = `set -euo pipefail
+    process.stdout.write(
+      JSON.stringify({ family, gate: "hosted-control", result: "passed" }) + "\n",
+    );
+    const inside = `set -euxo pipefail
+trap 'status=$?; if [ "$status" -ne 0 ]; then ps -eo pid,ppid,stat,comm; for log in /workspace/xvnc.log /workspace/desktop.log /workspace/browser.log /workspace/nix-worker.log; do if [ -f "$log" ]; then echo "$log"; tail -n 60 "$log"; fi; done; fi' EXIT
 test "$(cat /proc/1/comm)" = sealantd
 grep '^NSpid:' /proc/1/status
 test ! -S /run/systemd/private
@@ -384,23 +451,48 @@ test ! -S /var/run/dbus/system_bus_socket
 if timeout 3 systemd-run --quiet --unit=sealant-escaped /bin/sleep 300; then exit 7; fi
 test -f /var/lib/sealant/setup-marker
 test -f /var/lib/sealant/startup-marker
+getent ahostsv4 github.com >/dev/null
 for cli in codex claude opencode pi; do env -i HOME=/tmp/fake-proof-home PATH="$PATH" OPENAI_API_KEY=fake ANTHROPIC_API_KEY=fake timeout 15 "$cli" --version; done
 env -i HOME=/root PATH="$PATH" zsh -c 'echo selected-shell-ok'
-setsid Xvnc :91 -geometry 800x600 -depth 24 -SecurityTypes None -localhost yes -rfbport 5991 >/workspace/xvnc.log 2>&1 &
+setsid Xvnc :91 -geometry 800x600 -depth 24 -SecurityTypes None -localhost -nolisten tcp -rfbport 5991 >/workspace/xvnc.log 2>&1 &
+xvnc=$!
 export DISPLAY=:91
-for n in $(seq 1 50); do if xdpyinfo >/dev/null 2>&1; then break; fi; sleep .2; done
-xdpyinfo >/dev/null
+deadline=$((SECONDS + 90))
+until xdpyinfo >/dev/null 2>&1; do
+  kill -0 "$xvnc"
+  test "$SECONDS" -lt "$deadline"
+  sleep .2
+done
 setsid ${family === "nix" ? "openbox" : "dbus-run-session -- xfce4-session"} >/workspace/desktop.log 2>&1 &
-setsid chromium --no-sandbox --disable-dev-shm-usage --user-data-dir=/tmp/native-proof-browser about:blank >/workspace/browser.log 2>&1 &
-sleep 3
-pgrep -f 'chrom.*native-proof-browser' >/dev/null
-pgrep -x ${family === "nix" ? "openbox" : "xfce4-session"} >/dev/null
+desktop=$!
+setsid chromium --no-sandbox --disable-dev-shm-usage --user-data-dir=/tmp/native-proof-browser --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 about:blank >/workspace/browser.log 2>&1 &
+browser=$!
+deadline=$((SECONDS + 90))
+until curl -fsS http://127.0.0.1:9222/json/version >/workspace/browser-version.json 2>/dev/null; do
+  kill -0 "$browser"
+  test "$SECONDS" -lt "$deadline"
+  sleep .2
+done
+cat /workspace/browser-version.json
+kill -0 "$desktop"
 ffmpeg -hide_banner -loglevel error -y -f x11grab -video_size 800x600 -framerate 5 -i :91 -t 2 -c:v libx264 /workspace/proof.mp4
 test -s /workspace/proof.mp4
 setsid /bin/sh -c 'while :; do echo writer >>/workspace/detached-writer; sleep .2; done' </dev/null >/dev/null 2>&1 &
 ${
   family === "nix"
-    ? `setpriv --reuid=41000 --regid=40000 --init-groups env HOME=/home/proof-person PATH="$PATH" NIX_REMOTE=daemon nix --extra-experimental-features 'nix-command flakes' build --no-link --expr 'let p = builtins.getFlake "github:NixOS/nixpkgs/${NATIVE_SUBSTRATE.nixpkgs}"; in p.legacyPackages.x86_64-linux.runCommand "native-worker-proof" {} "sleep 300; touch $out"' >/workspace/nix-worker.log 2>&1 &
+    ? `setpriv --reuid=41000 --regid=40000 --init-groups getent ahostsv4 github.com >/dev/null
+bashStore=$(dirname "$(dirname "$(readlink -f /nix/var/nix/profiles/default/bin/bash)")")
+coreStore=$(dirname "$(dirname "$(readlink -f /nix/var/nix/profiles/default/bin/sleep)")")
+cat >/workspace/native-worker.nix <<EOF
+let bash = builtins.storePath "$bashStore"; core = builtins.storePath "$coreStore";
+in builtins.derivation {
+  name = "native-worker-proof";
+  system = "x86_64-linux";
+  builder = bash + "/bin/bash";
+  args = [ "-c" ("exec " + core + "/bin/sleep 300") ];
+}
+EOF
+setpriv --reuid=41000 --regid=40000 --init-groups env HOME=/home/proof-person PATH="$PATH" NIX_REMOTE=daemon nix --extra-experimental-features nix-command build --impure --no-link --file /workspace/native-worker.nix >/workspace/nix-worker.log 2>&1 &
 for n in $(seq 1 200); do
   if ps -eo pid,user,args | awk '$2 ~ /^nixbld/ && /sleep 300/ {found=1} END {exit !found}'; then break; fi
   sleep .2
@@ -418,7 +510,7 @@ echo PROOF_INSIDE_COMPLETE
     const attached = await client.execAttached({
       executable: "/bin/bash",
       args: ["-c", inside],
-      timeoutMillis: 90_000,
+      timeoutMillis: 360_000,
     });
     const chunks: Uint8Array[] = [];
     for await (const chunk of attached.channel) chunks.push(chunk);
@@ -428,7 +520,7 @@ echo PROOF_INSIDE_COMPLETE
     const scope = await command(
       id,
       `/usr/bin/sudo systemctl show sealant-workspace.service -p ControlGroup -p MainPID
-/usr/bin/sudo systemd-cgls --unit sealant-workspace.service --no-pager
+/usr/bin/sudo systemd-cgls --unit sealant-workspace.service --no-pager --full
 /usr/bin/sudo systemctl is-active sealant-proof-sentinel.service
 /usr/bin/sudo journalctl -u sealant-workspace.service -n 8 --no-pager`,
     );
@@ -446,11 +538,19 @@ echo PROOF_INSIDE_COMPLETE
       throw new Error("Nix daemon did not remain in the session cgroup");
     const stopScript = `import pathlib,subprocess
 group=subprocess.check_output(["systemctl","show","sealant-workspace.service","-p","ControlGroup","--value"],text=True).strip()
-with open("/sys/fs/cgroup"+group+"/cgroup.events") as f:
- subprocess.run(["systemctl","stop","sealant-workspace.service"],check=True)
- f.seek(0); events=f.read(); print(events); assert "populated 0" in events
+scope=pathlib.Path("/sys/fs/cgroup"+group)
+assert "populated 1" in (scope/"cgroup.events").read_text()
+subprocess.run(["systemctl","stop","sealant-workspace.service"],check=True)
+try:
+ events=(scope/"cgroup.events").read_text()
+ print(events); assert "populated 0" in events
+except FileNotFoundError:
+ assert not scope.exists()
+ print("cgroup removed after stop; no populated scope remains")
+assert subprocess.check_output(["systemctl","show","sealant-workspace.service","-p","MainPID","--value"],text=True).strip()=="0"
 subprocess.run(["systemctl","is-active","--quiet","sealant-proof-sentinel.service"],check=True)
 subprocess.run(["systemctl","is-active","--quiet","sealant-proof-relay.service"],check=True)
+print("outer sentinel and relay survived")
 `;
     must(await api.writeFile(id, stage + "/stop.py", stopScript));
     report.afterStop = await command(id, `/usr/bin/sudo python3 '${stage}/stop.py'`);
@@ -478,10 +578,18 @@ subprocess.run(["systemctl","is-active","--quiet","sealant-proof-relay.service"]
 /usr/bin/sudo cmp /var/lib/sealant/setup-marker /var/lib/sealant/setup-before-resume
 /usr/bin/sudo cmp /var/lib/sealant/startup-marker /var/lib/sealant/startup-before-resume
 /usr/bin/sudo systemctl start sealant-workspace.service || true
-sleep 2
+for n in $(seq 1 90); do
+  if test "$(/usr/bin/sudo systemctl show sealant-workspace.service -p MainPID --value)" = 0 && /usr/bin/sudo journalctl -u sealant-workspace.service --no-pager | grep -F 'session admission held'; then break; fi
+  sleep 1
+done
 ! /usr/bin/sudo systemctl is-active --quiet sealant-workspace.service
+/usr/bin/sudo test "$(/usr/bin/sudo systemctl show sealant-workspace.service -p MainPID --value)" = 0
+/usr/bin/sudo test "$(/usr/bin/sudo systemctl show sealant-workspace.service -p ExecMainStatus --value)" = 1
 /usr/bin/sudo journalctl -u sealant-workspace.service --no-pager | grep -F 'session admission held'
+/usr/bin/sudo cmp /var/lib/sealant/setup-marker /var/lib/sealant/setup-before-resume
+/usr/bin/sudo cmp /var/lib/sealant/startup-marker /var/lib/sealant/startup-before-resume
 echo admission-held-lifecycle-unchanged`,
+      120,
     );
     report.result = "passed";
   }
@@ -496,7 +604,10 @@ echo admission-held-lifecycle-unchanged`,
     const diagnostics = await api.execute(
       state.clone.id,
       `set -u
-/usr/bin/sudo journalctl -u sealant-workspace.service -n 100 --no-pager
+/usr/bin/sudo journalctl -u sealant-workspace.service -u sealant-proof-relay.service -n 100 --no-pager
+/usr/bin/sudo systemctl show sealant-workspace.service -p ActiveState -p SubState -p Result -p MainPID -p ExecMainStatus -p ConditionResult
+/usr/bin/sudo systemctl show sealant-proof-relay.service -p ActiveState -p SubState -p ExecMainStatus
+ss -ltn 'sport = :8080'
 /usr/bin/sudo sh -c 'export PATH=/usr/local/bin:/nix/var/nix/profiles/default/bin:/usr/sbin:/usr/bin:/sbin:/bin
 command -v nix || true
 command -v nix-daemon || true

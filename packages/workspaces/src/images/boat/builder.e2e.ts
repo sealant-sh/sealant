@@ -272,6 +272,7 @@ describe.skipIf(!directory)(
         expect(f.deleted()).toBe(true);
         expect(result.value.artifact.identity.snapshotId).toBe("exact-provider-id");
         expect(result.value.artifact.identity.name.length).toBeLessThanOrEqual(63);
+        expect(result.value.artifact.identity.name).toMatch(/^sealant-dev-boat-stream-/);
         expect(f.posts()).toBe(1);
         const count = f.mutations.length;
         expect(

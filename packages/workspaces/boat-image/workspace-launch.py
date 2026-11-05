@@ -31,7 +31,8 @@ for socket_path in (
         pass
 
 boot = private_json("/etc/sealant/native-boot.json")
-launch = private_json("/run/sealant/launch.json")
+launch_path = "/var/lib/sealant/control/launch.json"
+launch = private_json(launch_path)
 if launch.get("admission") != "open":
     raise SystemExit("session admission held")
 dynamic = launch.get("env")
@@ -53,4 +54,6 @@ if boot["SEALANT_OS_FAMILY"] == "nix":
         ["timeout", "15", "nix", "--extra-experimental-features", "nix-command", "store", "info"],
         env={**env, "NIX_REMOTE": "daemon"}, check=True,
     )
+if private_json(launch_path) != launch:
+    raise SystemExit("session admission changed during boot")
 os.execve("/usr/local/bin/sealantd", ["/usr/local/bin/sealantd", "boot"], env)

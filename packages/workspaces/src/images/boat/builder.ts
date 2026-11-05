@@ -582,7 +582,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       const installed = await this.#install(recipe, attempt, signal);
       attempt.receiptHash = installed.receiptHash;
       const name = boatSnapshotNameSchema.parse(
-        `sealant-${attempt.owner.slice(0, 8)}-${build.replaceAll("-", "")}`,
+        `sealant-dev-boat-stream-${build.replaceAll("-", "")}`,
       );
       attempt.save = {
         state: "intent",

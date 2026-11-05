@@ -44,7 +44,8 @@ export interface NativeRecipe {
 }
 
 const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
-const NATIVE_NIX_DAEMON_READY_SECONDS = 10;
+const NATIVE_NIX_DAEMON_READY_SECONDS = 90;
+const NATIVE_NIX_PROBE_SECONDS = 15;
 const file = (
   path: string,
   bytes: Uint8Array | string,
@@ -97,8 +98,8 @@ export const createNativeRecipe = async (
         [
           "#!/bin/sh",
           "set -eu",
-          ...nixDaemonStartCommands(NATIVE_NIX_DAEMON_READY_SECONDS),
-          "if ! NIX_REMOTE=daemon timeout -k 1 2 nix --extra-experimental-features nix-command store info; then",
+          ...nixDaemonStartCommands(NATIVE_NIX_DAEMON_READY_SECONDS, NATIVE_NIX_PROBE_SECONDS),
+          `if ! NIX_REMOTE=daemon timeout -k 1 ${NATIVE_NIX_PROBE_SECONDS} nix --extra-experimental-features nix-command store info; then`,
           '  printf "nix=%s\\nnix-daemon=%s\\n" "$(command -v nix)" "$(command -v nix-daemon)" >&2',
           '  ps -o pid,ppid,stat,comm -p "$daemon" >&2 || true',
           '  readlink -f "/proc/$daemon/exe" >&2 || true',
@@ -131,6 +132,7 @@ export const createNativeRecipe = async (
         "install -d -m0700 /var/lib/sealant/control",
         "systemctl daemon-reload",
         "test ! -e /var/lib/sealant/control/launch.json",
+        "test ! -e /var/lib/sealant/control/control.sock",
         "test ! -e /run/sealant/control.sock",
         "! systemctl is-active --quiet sealant-workspace.service",
         'case "$(systemctl is-enabled sealant-workspace.service || true)" in static|disabled) ;; *) exit 1 ;; esac',

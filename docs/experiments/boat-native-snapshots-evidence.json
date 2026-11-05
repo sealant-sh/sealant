@@ -1,7 +1,7 @@
 {
   "date": "2026-11-05",
   "base": "03a1f14dbaaa8584fe9cf0c90f2078ac32f5d48c",
-  "status": "incomplete live gates; provider cleanup blocked",
+  "status": "complete internal Ubuntu/Nix native snapshot and containment gates passed; Boat unregistered",
   "runtime": {
     "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
     "index": "f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
@@ -403,185 +403,32 @@
   },
   "gates": {
     "runtimeProvenance": "passed exact next180 guest acquisition, manifest and extracted hashes",
-    "chromiumArchive": "passed guest checksum and complete 483-file release tree extraction; browser/screen gate incomplete",
+    "chromiumArchive": "passed verified Ubuntu archive and full live browser/screen recording; Nix Chromium also passed",
     "dockerParity": "passed 192 prior valid inputs",
-    "snapshotSaveSourceDeletionColdClone": "passed Ubuntu proofs 4/5/6 and Nix proof 4",
+    "snapshotSaveSourceDeletionColdClone": "passed complete normal Ubuntu and Nix proofs",
     "coldPersonSudo": "passed Ubuntu proof 6 and Nix proof 4 outside the clone-mode daemon",
     "lifecycleNotRunDuringBuild": "checked by installation/save and cold marker checks",
-    "basicNamespaceAndOuterMountPolicy": "passed diagnostic unshare PID1 and private-run/bind/protected-cgroup probe; actual Nix launcher entered namespace",
-    "nativeDaemonHealthCapabilitiesCookieRelay": "not reached",
-    "screensDetachedWritersNixWorkers": "not reached",
-    "emptyCgroupAndSentinelAfterStop": "not reached",
-    "heldAdmissionAfterResume": "not reached",
+    "basicNamespaceAndOuterMountPolicy": "passed actual next180 PID1 with private mount/PID namespaces, scoped proc, hidden manager sockets and working DNS",
+    "nativeDaemonHealthCapabilitiesCookieRelay": "passed Ubuntu and Nix through cookie-authenticated direct hosted WebSockets",
+    "screensDetachedWritersNixWorkers": "passed Ubuntu Xvnc/XFCE/Chromium/ffmpeg and Nix Xvnc/Openbox/Chromium/ffmpeg, detached writers in both, non-root Nix worker matching PID1 cgroup",
+    "emptyCgroupAndSentinelAfterStop": "passed both families: whole-unit stop removed cgroup, MainPID zero, outer sentinel and relay survived",
+    "heldAdmissionAfterResume": "passed both families: no automatic service launch; explicit start held with MainPID zero and status 1; lifecycle markers unchanged after settled admission",
     "realCancellationCleanup": "passed cancel-proof",
     "finalPreservation": "not claimed; empty scope is not FINAL authority",
     "registration": "Boat remains unregistered"
   },
   "finalOwnershipAudit": {
-    "checkedAt": "2026-11-05T01:22:39.896832+00:00",
-    "objects": [
-      {
-        "id": "bx_kykpps4g",
-        "deletion": "bdop_bdc19b8895644de5b8bb9d79330cf98a",
-        "state": "completed",
-        "stage": "completed",
-        "attemptCount": 1
-      },
-      {
-        "id": "bx_gn57emye",
-        "deletion": "bdop_3cce43ace0a44e82931ce9122fa50f9e",
-        "state": "completed",
-        "stage": "completed",
-        "attemptCount": 1
-      },
-      {
-        "id": "bx_xjmv26tx",
-        "deletion": "bdop_5b98742d8f114bec91a6158604807dc8",
-        "state": "completed",
-        "stage": "completed",
-        "attemptCount": 1
-      },
-      {
-        "id": "bx_zhfncamb",
-        "deletion": "bdop_f92aea6cd48a41ce93d82bb139b73c92",
-        "state": "completed",
-        "stage": "completed",
-        "attemptCount": 1
-      },
-      {
-        "id": "bx_69ydr6th",
-        "deletion": "bdop_b8d350a61b1c4ec5912ac672244cd18e",
-        "state": "completed",
-        "stage": "completed",
-        "attemptCount": 1
-      },
-      {
-        "id": "bx_ppf4nmhv",
-        "deletion": "bdop_37ab762ad71546ab9203ea355300d0c6",
-        "state": "completed",
-        "stage": "completed",
-        "attemptCount": 1
-      },
-      {
-        "id": "bx_xz7qjd9n",
-        "deletion": "bdop_815bc617ced44d81baffafff71d0a0c0",
-        "state": "completed",
-        "stage": "completed",
-        "attemptCount": 1
-      },
-      {
-        "name": "sealant-7eb07d57-65101bde1b7b46d98cf30c9a8892e933",
-        "state": "deleted",
-        "httpStatus": 404
-      },
-      {
-        "id": "bx_fzjeuy4w",
-        "deletion": "bdop_9dd30c9feb074851a9700745fc6c457c",
-        "state": "completed",
-        "stage": "completed",
-        "attemptCount": 1
-      },
-      {
-        "id": "bx_yc32mpdg",
-        "deletion": "bdop_dc084d4ecf834e8b82de6aba6d99689f",
-        "state": "completed",
-        "stage": "completed",
-        "attemptCount": 1
-      },
-      {
-        "name": "sealant-4bbd0724-cc497b8105e84682a1e8b277776aef3e",
-        "state": "deleted",
-        "httpStatus": 404
-      },
-      {
-        "id": "bx_b59bceag",
-        "deletion": "bdop_34b21179b1654b879bc5c8129b0e3937",
-        "state": "completed",
-        "stage": "completed",
-        "attemptCount": 1
-      },
-      {
-        "id": "bx_c8bmw7va",
-        "deletion": "bdop_c57f291984ab43019c108299ed3b09cb",
-        "state": "completed",
-        "stage": "completed",
-        "attemptCount": 1
-      },
-      {
-        "name": "sealant-c7ce7512-5f17bce960e04540858b3522d1ff95b1",
-        "state": "deleted",
-        "httpStatus": 404
-      },
-      {
-        "id": "bx_9wark222",
-        "deletion": "bdop_839d51c34ca8462aac948ecfc84cc9cf",
-        "state": "completed",
-        "stage": "completed",
-        "attemptCount": 1
-      },
-      {
-        "id": "bx_fpxafpty",
-        "deletion": "bdop_e2a34159289f4dbfae6bb23b451859ac",
-        "state": "completed",
-        "stage": "completed",
-        "attemptCount": 1
-      },
-      {
-        "id": "bx_qmz54khj",
-        "deletion": "bdop_98f8530dc439491b8d66c519a4aa3a6a",
-        "state": "completed",
-        "stage": "completed",
-        "attemptCount": 1
-      },
-      {
-        "id": "bx_ynyyz2sp",
-        "deletion": "bdop_018f2879aa1e444fb74b3db09d497147",
-        "state": "completed",
-        "stage": "completed",
-        "attemptCount": 1
-      },
-      {
-        "id": "bx_an9v8jnm",
-        "deletion": "bdop_3ecb366bd17b48bcb5782d3cf7ceb4a8",
-        "state": "completed",
-        "stage": "completed",
-        "attemptCount": 1
-      },
-      {
-        "id": "bx_9bw24v3h",
-        "deletion": "bdop_f13a1b5796234870a6b4929bc264fd1b",
-        "state": "completed",
-        "stage": "completed",
-        "attemptCount": 1
-      },
-      {
-        "name": "sealant-374fc5e6-0f8f64cc9a3b404f9e15333ca61ee491",
-        "state": "deleted",
-        "httpStatus": 404
-      },
-      {
-        "id": "bx_5fyw4fab",
-        "deletion": "bdop_875e15afda1345d4816722b06d3dc59f",
-        "state": "blocked",
-        "stage": "retrying",
-        "attemptCount": 8
-      }
-    ]
+    "checkedAt": "2026-11-05T04:08:41.111545+00:00",
+    "proofExitCode": 0,
+    "sandboxes": [],
+    "saved-snapshots": []
   },
-  "retainedCleanupObligations": [
-    {
-      "kind": "sandbox",
-      "purpose": "ubuntu-proof-7",
-      "id": "bx_5fyw4fab",
-      "deletion": "bdop_875e15afda1345d4816722b06d3dc59f",
-      "state": "blocked"
-    }
-  ],
+  "retainedCleanupObligations": [],
   "verification": {
     "focused": {
       "command": "pnpm --filter @sealant/workspaces exec vitest run src/images/boat/builder.test.ts src/images/boat/recipe.test.ts src/buildkit/docker-parity.test.ts src/buildkit/package-catalog.test.ts src/buildkit/person-layout.test.ts src/runtime/boat/api.test.ts src/package-standardization.test.ts src/buildkit/buildkit-builder.test.ts src/buildkit/platform.test.ts",
       "files": 9,
-      "tests": 162,
+      "tests": 165,
       "exitCode": 0
     },
     "httpIntegration": {
@@ -602,8 +449,8 @@
     "pythonSyntax": "ast.parse passed workspace-launch.py and acquire-runtime.py",
     "generatedShellSyntax": "bash -n passed generated Ubuntu and Nix recipes through recipe.test.ts",
     "format": "pnpm format:fix; unrelated baseline formatter churn restored",
-    "gitEnvironment": "All GIT_* variables stripped for final checks and commits",
-    "independentReviews": "Parent owns independent reviews; none claimed here"
+    "gitEnvironment": "All GIT_* variables stripped for final forced checks and the delivery commit",
+    "independentReviews": "Completed independent code and comments reviews; parent fixes and regression evidence recorded under parentReview"
   },
   "implementationFiles": [
     "docs/experiments/boat-native-snapshots-evidence.json",
@@ -632,11 +479,15 @@
     "packages/workspaces/src/runtime/boat/api.ts"
   ],
   "deviations": [
-    "InaccessiblePaths combined with private /run returned systemd 226/NAMESPACE in a real diagnostic. The unit uses private /run and the launcher refuses visible known manager socket aliases.",
-    "The unverified native Nix readiness increase to 90 seconds was reverted to the existing 10-second budget after review. The socket failure remains unresolved. Native failure diagnostics now retain binary paths, daemon state, cgroup, log tail, and available exit status. Docker output is unchanged.",
+    "InaccessiblePaths with private /run returned systemd 226/NAMESPACE. The unit keeps private /run and refuses visible known manager socket aliases. Only /etc/resolv.conf is bound read-only, preserving Ubuntu DNS without exposing manager sockets.",
+    "Native Nix cold readiness uses 90 seconds and 15-second client probes after measured disk waits and a successful query taking 3.14 seconds. Docker retains its original 10/2-second output.",
+    "Repeated full Nix cold clones disproved outer control socket bind aliases. The proof relay connects via /proc/<verified-systemd-unshare-MainPID>/root/run/sealant/control.sock. A registration owner must recreate that mapping for each supervised unit start.",
     "Person sudo passed outside the clone-mode daemon. Owner-map admission and per-person daemon sudo remain part of later registration.",
-    "Full daemon, screens, writer containment and resume gates did not complete. No support, registration or FINAL preservation claim is made.",
-    "The polished acquisition operator script was syntax checked; its extraction body and exact artifacts were verified by the preceding guest acquisition, not a rerun of the polished wrapper."
+    "Nix screen readiness exceeded Mend's current ten-second display wait. This Core proof uses bounded 90-second display and Chromium readiness. Mend must increase its boat readiness budget and request Nix ffmpeg later.",
+    "The saved-snapshot API has no labels field. Saved names include sealant-dev-boat-stream and the full attempt UUID; source/clone VMs have sealant-dev=boat-stream.",
+    "A removed cgroup proves emptiness after unit stop; rereading a removed cgroup.events fd returns ENODEV. The proof accepts populated 0 or absent scope, checks MainPID zero and verifies sentinel/relay survival.",
+    "Resumed Type=simple units can briefly be active before Python settles held admission. The proof waits for MainPID zero, status 1 and the exact admission message, then rechecks lifecycle markers.",
+    "The acquisition wrapper was syntax checked; its extraction body and exact artifacts were verified by the preceding guest acquisition, not a rerun of the polished wrapper."
   ],
   "finalJournalReconciliation": {
     "owner": "40013704-2df7-4ca2-b61a-8a593a6ce3b4",
@@ -647,26 +498,19 @@
   },
   "diagnosticHandling": "An earlier broad host-process diagnostic printed a temporary provider snapshot grant in tool output. That output was not copied into this evidence. Later host diagnostics use process names only. The Boat API key was never printed or persisted.",
   "lastCleanupObservation": {
-    "checkedAt": "2026-11-05T01:41:46.389957+00:00",
-    "id": "bdop_875e15afda1345d4816722b06d3dc59f",
-    "kind": "sandbox",
-    "targetId": "bx_5fyw4fab",
-    "reason": "explicit",
-    "status": "blocked",
-    "stage": "retrying",
-    "expectedBy": null,
-    "attemptCount": 10,
-    "requestedAt": "2026-11-05T01:17:53.029Z",
-    "completedAt": null
+    "checkedAt": "2026-11-05T04:08:41.111545+00:00",
+    "sandboxes": [],
+    "saved-snapshots": [],
+    "retainedObjects": []
   },
   "parentReview": {
     "implementationHead": "0ee41c0aefee6648329fa88cd8b91e1dc73359cf",
     "codeReview": "Independent read-only gpt-6-astra review identified lost-delete recovery and inline dotfiles credential leaks. Both corrected locally with HTTP/journal and recipe-boundary regressions.",
     "commentsReview": "Independent read-only comments review completed. Removed narration and unsupported Nix cause. Kept exported-symbol JSDoc required by coding-standards and the evidenced external constraints.",
-    "liveProofAfterCorrections": "Not run. Existing provider deletion obligation remains blocked. No new allocations.",
-    "deletionReplay": "Repeated DELETE of exact owned bx_5fyw4fab returned 202 and the existing bdop_875e15afda1345d4816722b06d3dc59f while sandbox GET was 404. Completion remains unconfirmed.",
+    "liveProofAfterCorrections": "Serial live proofs resumed after operator confirmed old deletion operation is resource-free. Per-proof results and account lists are recorded in resumedProofs.",
+    "deletionReplay": "Historical exact-ID retry was recorded before operator resolution. Yiannis confirmed the old operation holds no resource or cost. It was not queried or retried during resumed proofs.",
     "checks": {
-      "focusedTests": 170,
+      "focusedTests": 165,
       "focusedFiles": 9,
       "exactBundleHttpJournalCases": 5,
       "forcedTypecheckPackages": 20,
@@ -676,6 +520,1758 @@
       "generatedShellSyntax": "Ubuntu/Nix install scripts and native Nix helper passed",
       "redCapability": "Both confirmed bugs reproduced against 0ee41c0a source and pass after correction",
       "testRunner": "Run from @sealant/workspaces. Root vitest mixes @effect/vitest contexts for package-standardization.test.ts; package-local runner passes all 11 tests."
+    }
+  },
+  "operatorCleanupResolution": {
+    "recordedAt": "2026-11-05T01:44:32.744137+00:00",
+    "sandbox": "bx_5fyw4fab",
+    "staleOperation": "bdop_875e15afda1345d4816722b06d3dc59f",
+    "source": "Yiannis account audit in this thread",
+    "observed": "GET /sandboxes empty; GET /saved-snapshots empty; 0 of 10 included snapshots used",
+    "decision": "Operator confirmed no resource or cost; stop polling/retrying this stale operation and resume serial proofs. End each proof with both list calls."
+  },
+  "resumedProofs": [
+    {
+      "family": "nix",
+      "evidence": "/tmp/boat-native-proof.hmGAU6/nix/evidence.json",
+      "result": "failed",
+      "error": "Unexpected server response: 502",
+      "proof": {
+        "runnerHash": "a30087e0bded7e8cd56e93a110c71ab89856f1b86bc952b227b265daf56364d4",
+        "fixtureHash": "425185723b423772c8e853d6c59fac2041b7ca832008d189a795f7c4c5a7c796"
+      },
+      "artifact": {
+        "kind": "boat-saved-snapshot",
+        "owner": "a6a4b5ce-c9ae-4f32-a3ba-9d43886b4bb7",
+        "build": "0ad3650b-8e89-4c78-b434-6b3a975e7da0",
+        "recipeHash": "645544f79c1057797337732352038cd84a58445688d9a93182c4fa144b246921",
+        "receiptHash": "884a1d90ea4c54db21ebc161dee3a52367bc076fd7e8cecb2fe9bcbc23a8060f",
+        "runtime": {
+          "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+          "platform": "linux/amd64",
+          "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+          "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+          "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+          "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+        },
+        "identity": {
+          "name": "sealant-a6a4b5ce-0ad3650b8e894c78b4346b3a975e7da0",
+          "sourceSandboxId": "bx_tzpc5ebd",
+          "createdAt": "2026-11-05T01:48:20.960Z",
+          "snapshotId": "315f14da-f1f2-46b0-95cd-e43c2cd6b645"
+        }
+      },
+      "ownership": {
+        "owner": "a6a4b5ce-c9ae-4f32-a3ba-9d43886b4bb7",
+        "artifact": {
+          "kind": "boat-saved-snapshot",
+          "owner": "a6a4b5ce-c9ae-4f32-a3ba-9d43886b4bb7",
+          "build": "0ad3650b-8e89-4c78-b434-6b3a975e7da0",
+          "recipeHash": "645544f79c1057797337732352038cd84a58445688d9a93182c4fa144b246921",
+          "receiptHash": "884a1d90ea4c54db21ebc161dee3a52367bc076fd7e8cecb2fe9bcbc23a8060f",
+          "runtime": {
+            "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+            "platform": "linux/amd64",
+            "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+            "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+            "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+            "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+          },
+          "identity": {
+            "name": "sealant-a6a4b5ce-0ad3650b8e894c78b4346b3a975e7da0",
+            "sourceSandboxId": "bx_tzpc5ebd",
+            "createdAt": "2026-11-05T01:48:20.960Z",
+            "snapshotId": "315f14da-f1f2-46b0-95cd-e43c2cd6b645"
+          }
+        },
+        "artifactJournal": "/tmp/boat-native-proof.hmGAU6/nix/attempts/0ad3650b-8e89-4c78-b434-6b3a975e7da0.json",
+        "clone": {
+          "marker": "486f8578-bf8f-48ac-a4ec-5abc0e9e125e",
+          "key": "7f450ccd-f539-4855-9460-6ace3bb5f8a3",
+          "requestedAt": "2026-11-05T01:49:10.079Z",
+          "from": "sealant-a6a4b5ce-0ad3650b8e894c78b4346b3a975e7da0",
+          "id": "bx_y9fnrpa4",
+          "deletionIntent": true,
+          "deletion": "bdop_da5af74d1c6c486c9785b9fa6c230fe2",
+          "deleted": true
+        }
+      },
+      "deletions": [
+        {
+          "id": "bdop_ed3f483ce0734e2d832f091103b25c89",
+          "kind": "sandbox",
+          "targetId": "bx_tzpc5ebd",
+          "status": "completed"
+        },
+        {
+          "id": "bdop_da5af74d1c6c486c9785b9fa6c230fe2",
+          "kind": "sandbox",
+          "targetId": "bx_y9fnrpa4",
+          "status": "completed"
+        }
+      ],
+      "cleanup": {
+        "confirmed": true,
+        "errors": []
+      },
+      "accountLists": {
+        "checkedAt": "2026-11-05T01:50:10.683152+00:00",
+        "proofExitCode": 1,
+        "sandboxes": {
+          "keys": ["ok", "type", "sandboxes", "pageInfo"],
+          "items": {
+            "sandboxes": []
+          }
+        },
+        "saved-snapshots": {
+          "keys": ["ok", "type", "snapshots", "allowance"],
+          "items": {
+            "snapshots": []
+          }
+        }
+      },
+      "finding": "Nix daemon answered within the original 10-second readiness budget, remained in the workspace cgroup, and sealantd logged healthy with its control socket listening. Hosted WebSocket failed with 502. No socket-failure cause is established from this success; the next proof separates local relay and hosted readiness."
+    },
+    {
+      "family": "nix",
+      "evidence": "/tmp/boat-native-proof.6N4SE8/nix/evidence.json",
+      "result": "failed",
+      "error": "native unit failed before control admission",
+      "proof": {
+        "runnerHash": "9a540caf7113e9e6a92e1683bd89b7f6f51007ce3776dff6c9813afbb3bd4b73",
+        "fixtureHash": "425185723b423772c8e853d6c59fac2041b7ca832008d189a795f7c4c5a7c796"
+      },
+      "artifact": {
+        "kind": "boat-saved-snapshot",
+        "owner": "689037ef-ca2f-4daa-b0e5-c6000430f940",
+        "build": "7689e259-9178-4060-8c25-85ae95037bf1",
+        "recipeHash": "645544f79c1057797337732352038cd84a58445688d9a93182c4fa144b246921",
+        "receiptHash": "c8ffefd51e36827e5d29df8a1e34b7018a9eb0031ec7e2448c09ab01a770da0e",
+        "runtime": {
+          "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+          "platform": "linux/amd64",
+          "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+          "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+          "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+          "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+        },
+        "identity": {
+          "name": "sealant-dev-boat-stream-7689e259917840608c2585ae95037bf1",
+          "sourceSandboxId": "bx_uj9wub8h",
+          "createdAt": "2026-11-05T01:56:30.103Z",
+          "snapshotId": "3dfc73cc-b2a7-4462-b344-764f50c02f4e"
+        }
+      },
+      "ownership": {
+        "owner": "689037ef-ca2f-4daa-b0e5-c6000430f940",
+        "artifact": {
+          "kind": "boat-saved-snapshot",
+          "owner": "689037ef-ca2f-4daa-b0e5-c6000430f940",
+          "build": "7689e259-9178-4060-8c25-85ae95037bf1",
+          "recipeHash": "645544f79c1057797337732352038cd84a58445688d9a93182c4fa144b246921",
+          "receiptHash": "c8ffefd51e36827e5d29df8a1e34b7018a9eb0031ec7e2448c09ab01a770da0e",
+          "runtime": {
+            "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+            "platform": "linux/amd64",
+            "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+            "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+            "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+            "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+          },
+          "identity": {
+            "name": "sealant-dev-boat-stream-7689e259917840608c2585ae95037bf1",
+            "sourceSandboxId": "bx_uj9wub8h",
+            "createdAt": "2026-11-05T01:56:30.103Z",
+            "snapshotId": "3dfc73cc-b2a7-4462-b344-764f50c02f4e"
+          }
+        },
+        "artifactJournal": "/tmp/boat-native-proof.6N4SE8/nix/attempts/7689e259-9178-4060-8c25-85ae95037bf1.json",
+        "clone": {
+          "marker": "8b9d596a-d5dd-4697-94a6-262135a08e9d",
+          "key": "6310c698-66e9-4e58-b5ec-a47beee2ca21",
+          "requestedAt": "2026-11-05T01:59:24.033Z",
+          "from": "sealant-dev-boat-stream-7689e259917840608c2585ae95037bf1",
+          "id": "bx_4fphvhar",
+          "deletionIntent": true,
+          "deletion": "bdop_00651ed025054e95b3bcfc9eb40d7877",
+          "deleted": true
+        }
+      },
+      "deletions": [
+        {
+          "id": "bdop_6612dc440aac43518892287df7f000b9",
+          "kind": "sandbox",
+          "targetId": "bx_uj9wub8h",
+          "status": "completed"
+        },
+        {
+          "id": "bdop_00651ed025054e95b3bcfc9eb40d7877",
+          "kind": "sandbox",
+          "targetId": "bx_4fphvhar",
+          "status": "completed"
+        }
+      ],
+      "cleanup": {
+        "confirmed": true,
+        "errors": []
+      },
+      "accountLists": {
+        "checkedAt": "2026-11-05T02:00:35.683874+00:00",
+        "proofExitCode": 1,
+        "sandboxes": {
+          "keys": ["ok", "type", "sandboxes", "pageInfo"],
+          "items": {
+            "sandboxes": []
+          }
+        },
+        "saved-snapshots": {
+          "keys": ["ok", "type", "snapshots", "allowance"],
+          "items": {
+            "snapshots": []
+          }
+        }
+      },
+      "finding": "The 10-second helper failed again. Its diagnostics found nix-daemon still running, state R, in the workspace cgroup with an empty log. The relay service was also active without a listening port. The next run uses an explicit diagnostic-only observation window and samples process faults, CPU ticks, I/O and client duration."
+    },
+    {
+      "family": "nix",
+      "result": "failed",
+      "error": "guest proof failed; see guest-command-failure.json",
+      "proof": {
+        "runnerHash": "1aec8dda61c49e86755f862d8e2619fa9b4ab6078f3e51bfa05e80c242044d4f",
+        "fixtureHash": "425185723b423772c8e853d6c59fac2041b7ca832008d189a795f7c4c5a7c796"
+      },
+      "artifact": {
+        "kind": "boat-saved-snapshot",
+        "owner": "7d29141b-9876-4a11-97f4-2fa6b5ba5602",
+        "build": "407e6c8a-d8dd-4a5d-b051-75401700f85c",
+        "recipeHash": "645544f79c1057797337732352038cd84a58445688d9a93182c4fa144b246921",
+        "receiptHash": "115046f92691dbaa467dbfd8b363000b83f08fcf42e4794252618e7ae2e60ad0",
+        "runtime": {
+          "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+          "platform": "linux/amd64",
+          "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+          "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+          "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+          "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+        },
+        "identity": {
+          "name": "sealant-dev-boat-stream-407e6c8ad8dd4a5db05175401700f85c",
+          "sourceSandboxId": "bx_zqre3rdy",
+          "createdAt": "2026-11-05T02:06:11.526Z",
+          "snapshotId": "a27a0dac-1a76-43ca-9615-7c259018372b"
+        }
+      },
+      "ownership": {
+        "owner": "7d29141b-9876-4a11-97f4-2fa6b5ba5602",
+        "artifact": {
+          "kind": "boat-saved-snapshot",
+          "owner": "7d29141b-9876-4a11-97f4-2fa6b5ba5602",
+          "build": "407e6c8a-d8dd-4a5d-b051-75401700f85c",
+          "recipeHash": "645544f79c1057797337732352038cd84a58445688d9a93182c4fa144b246921",
+          "receiptHash": "115046f92691dbaa467dbfd8b363000b83f08fcf42e4794252618e7ae2e60ad0",
+          "runtime": {
+            "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+            "platform": "linux/amd64",
+            "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+            "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+            "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+            "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+          },
+          "identity": {
+            "name": "sealant-dev-boat-stream-407e6c8ad8dd4a5db05175401700f85c",
+            "sourceSandboxId": "bx_zqre3rdy",
+            "createdAt": "2026-11-05T02:06:11.526Z",
+            "snapshotId": "a27a0dac-1a76-43ca-9615-7c259018372b"
+          }
+        },
+        "artifactJournal": "/tmp/boat-native-proof.fHzK5c/nix/attempts/407e6c8a-d8dd-4a5d-b051-75401700f85c.json",
+        "clone": {
+          "marker": "baeb142a-ab04-45cc-9e1e-f115e8a6133e",
+          "key": "aefc6758-3a07-4cf9-b8da-58f8dbc015b0",
+          "requestedAt": "2026-11-05T02:07:03.743Z",
+          "from": "sealant-dev-boat-stream-407e6c8ad8dd4a5db05175401700f85c",
+          "id": "bx_rxbgqgp3",
+          "deletionIntent": true,
+          "deletion": "bdop_19ec00f7a9bd4a3aaf676e603fc1ea61",
+          "deleted": true
+        }
+      },
+      "cleanup": {
+        "confirmed": true,
+        "errors": []
+      },
+      "diagnosticOverride": "90-second helper observation window; not an unchanged-recipe pass",
+      "evidence": "/tmp/boat-native-proof.fHzK5c/nix/evidence.json",
+      "deletions": [
+        {
+          "id": "bdop_262f4e852f9f449998ad07bc714c6ce6",
+          "kind": "sandbox",
+          "targetId": "bx_zqre3rdy",
+          "status": "completed"
+        },
+        {
+          "id": "bdop_19ec00f7a9bd4a3aaf676e603fc1ea61",
+          "kind": "sandbox",
+          "targetId": "bx_rxbgqgp3",
+          "status": "completed"
+        }
+      ],
+      "accountLists": {
+        "checkedAt": "2026-11-05T02:09:07.153671+00:00",
+        "proofExitCode": 1,
+        "sandboxes": {
+          "keys": ["ok", "type", "sandboxes", "pageInfo"],
+          "items": {
+            "sandboxes": []
+          }
+        },
+        "saved-snapshots": {
+          "keys": ["ok", "type", "snapshots", "allowance"],
+          "items": {
+            "snapshots": []
+          }
+        }
+      },
+      "finding": "Diagnostic-only 90-second helper override, not a production recipe pass. Nix daemon was in D state with 50 major faults at 5 seconds, reached its socket by 10 seconds, and an independent successful client query took 3.14 seconds. sealantd logged healthy at about 19 seconds and the relay listened at about 26 seconds. Local HTTP readiness failed without recorded statuses; proxy interference was an untested hypothesis. Current native recipe uses 90 seconds for daemon startup and 15 seconds per query; Docker keeps its original defaults."
+    },
+    {
+      "family": "nix",
+      "result": "failed",
+      "error": "guest proof failed; see guest-command-failure.json",
+      "proof": {
+        "runnerHash": "f139f59d60d8534bef92cca307c705bb1948e1cbd547ee3516fb2be7f29cd91b",
+        "fixtureHash": "425185723b423772c8e853d6c59fac2041b7ca832008d189a795f7c4c5a7c796"
+      },
+      "artifact": {
+        "kind": "boat-saved-snapshot",
+        "owner": "ce6063b3-3b66-46db-bb2c-89c9209c032c",
+        "build": "94ee549a-434d-47b4-bded-ec9cdc9bd0aa",
+        "recipeHash": "fa4f15e3b2bca85e3545e621b2b2a14350b0f1353082d526db63fff103303606",
+        "receiptHash": "309a06a59e6b0edb3dcd16ee6e61ac60af5f3c77afb73d51b56c9107b3cda719",
+        "runtime": {
+          "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+          "platform": "linux/amd64",
+          "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+          "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+          "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+          "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+        },
+        "identity": {
+          "name": "sealant-dev-boat-stream-94ee549a434d47b4bdedec9cdc9bd0aa",
+          "sourceSandboxId": "bx_kfvqugye",
+          "createdAt": "2026-11-05T02:17:15.199Z",
+          "snapshotId": "a14be0e2-2668-4ece-a02e-cf3b63b46e92"
+        }
+      },
+      "ownership": {
+        "owner": "ce6063b3-3b66-46db-bb2c-89c9209c032c",
+        "artifact": {
+          "kind": "boat-saved-snapshot",
+          "owner": "ce6063b3-3b66-46db-bb2c-89c9209c032c",
+          "build": "94ee549a-434d-47b4-bded-ec9cdc9bd0aa",
+          "recipeHash": "fa4f15e3b2bca85e3545e621b2b2a14350b0f1353082d526db63fff103303606",
+          "receiptHash": "309a06a59e6b0edb3dcd16ee6e61ac60af5f3c77afb73d51b56c9107b3cda719",
+          "runtime": {
+            "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+            "platform": "linux/amd64",
+            "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+            "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+            "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+            "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+          },
+          "identity": {
+            "name": "sealant-dev-boat-stream-94ee549a434d47b4bdedec9cdc9bd0aa",
+            "sourceSandboxId": "bx_kfvqugye",
+            "createdAt": "2026-11-05T02:17:15.199Z",
+            "snapshotId": "a14be0e2-2668-4ece-a02e-cf3b63b46e92"
+          }
+        },
+        "artifactJournal": "/tmp/boat-native-proof.3mm4TR/nix/attempts/94ee549a-434d-47b4-bded-ec9cdc9bd0aa.json",
+        "clone": {
+          "marker": "79eb7808-0078-4240-890a-e561629108c2",
+          "key": "81ac9803-0d95-4b27-b30c-f6272fc0f93c",
+          "requestedAt": "2026-11-05T02:18:33.947Z",
+          "from": "sealant-dev-boat-stream-94ee549a434d47b4bdedec9cdc9bd0aa",
+          "id": "bx_n86hvv3p",
+          "deletionIntent": true,
+          "deletion": "bdop_db6cbb138e1547948ac36adbf0fb3d24",
+          "deleted": true
+        }
+      },
+      "cleanup": {
+        "confirmed": true,
+        "errors": []
+      },
+      "evidence": "/tmp/boat-native-proof.3mm4TR/nix/evidence.json",
+      "deletions": [
+        {
+          "id": "bdop_14f97df597f7402580955b99ff92c085",
+          "kind": "sandbox",
+          "targetId": "bx_kfvqugye",
+          "status": "completed"
+        },
+        {
+          "id": "bdop_db6cbb138e1547948ac36adbf0fb3d24",
+          "kind": "sandbox",
+          "targetId": "bx_n86hvv3p",
+          "status": "completed"
+        }
+      ],
+      "accountLists": {
+        "checkedAt": "2026-11-05T02:20:12.757977+00:00",
+        "proofExitCode": 1,
+        "sandboxes": {
+          "keys": ["ok", "type", "sandboxes", "pageInfo"],
+          "items": {
+            "sandboxes": []
+          }
+        },
+        "saved-snapshots": {
+          "keys": ["ok", "type", "snapshots", "allowance"],
+          "items": {
+            "snapshots": []
+          }
+        }
+      },
+      "finding": "Production 90/15-second Nix readiness passed. sealantd logged healthy and listening after 28 seconds; local relay health returned 503 for all 30 direct localhost attempts. Both workspace and relay remained active. No hosted control or later gates reached."
+    },
+    {
+      "family": "nix",
+      "result": "failed",
+      "error": "guest proof failed; see guest-command-failure.json",
+      "proof": {
+        "runnerHash": "3dfe3f940053b05096e52cfe772a9c3b3f0b9119a08fee2f159b7514569bee13",
+        "fixtureHash": "425185723b423772c8e853d6c59fac2041b7ca832008d189a795f7c4c5a7c796"
+      },
+      "artifact": {
+        "kind": "boat-saved-snapshot",
+        "owner": "3bbd0819-cb50-44e9-9337-7dad7f6f5b74",
+        "build": "19f3d609-39a0-46d6-bbbe-486354b744bf",
+        "recipeHash": "fa4f15e3b2bca85e3545e621b2b2a14350b0f1353082d526db63fff103303606",
+        "receiptHash": "c8e950452bcfa07dd00a8b7b42a219cc22b378af9e5d6e3e91052999e1b5ea19",
+        "runtime": {
+          "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+          "platform": "linux/amd64",
+          "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+          "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+          "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+          "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+        },
+        "identity": {
+          "name": "sealant-dev-boat-stream-19f3d60939a046d6bbbe486354b744bf",
+          "sourceSandboxId": "bx_2kmvq39j",
+          "createdAt": "2026-11-05T02:31:08.011Z",
+          "snapshotId": "8fc54d91-a6c5-48ec-b5ec-43ccb148876d"
+        }
+      },
+      "ownership": {
+        "owner": "3bbd0819-cb50-44e9-9337-7dad7f6f5b74",
+        "artifact": {
+          "kind": "boat-saved-snapshot",
+          "owner": "3bbd0819-cb50-44e9-9337-7dad7f6f5b74",
+          "build": "19f3d609-39a0-46d6-bbbe-486354b744bf",
+          "recipeHash": "fa4f15e3b2bca85e3545e621b2b2a14350b0f1353082d526db63fff103303606",
+          "receiptHash": "c8e950452bcfa07dd00a8b7b42a219cc22b378af9e5d6e3e91052999e1b5ea19",
+          "runtime": {
+            "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+            "platform": "linux/amd64",
+            "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+            "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+            "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+            "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+          },
+          "identity": {
+            "name": "sealant-dev-boat-stream-19f3d60939a046d6bbbe486354b744bf",
+            "sourceSandboxId": "bx_2kmvq39j",
+            "createdAt": "2026-11-05T02:31:08.011Z",
+            "snapshotId": "8fc54d91-a6c5-48ec-b5ec-43ccb148876d"
+          }
+        },
+        "artifactJournal": "/tmp/boat-native-proof.kR2Dev/nix/attempts/19f3d609-39a0-46d6-bbbe-486354b744bf.json",
+        "clone": {
+          "marker": "8431eba0-dd1b-41c3-afbf-fefb29ee1169",
+          "key": "afe1b1d1-43fc-4f8b-8c3f-1f4069f10894",
+          "requestedAt": "2026-11-05T02:31:35.272Z",
+          "from": "sealant-dev-boat-stream-19f3d60939a046d6bbbe486354b744bf",
+          "id": "bx_r4zqprtk",
+          "deletionIntent": true,
+          "deletion": "bdop_098750f2c0f44347bc07eaaa058a0b3c",
+          "deleted": true
+        }
+      },
+      "cleanup": {
+        "confirmed": true,
+        "errors": []
+      },
+      "evidence": "/tmp/boat-native-proof.kR2Dev/nix/evidence.json",
+      "deletions": [
+        {
+          "id": "bdop_2657de4b457145c1ad25addebd6a13f8",
+          "kind": "sandbox",
+          "targetId": "bx_2kmvq39j",
+          "status": "completed"
+        },
+        {
+          "id": "bdop_098750f2c0f44347bc07eaaa058a0b3c",
+          "kind": "sandbox",
+          "targetId": "bx_r4zqprtk",
+          "status": "completed"
+        }
+      ],
+      "accountLists": {
+        "checkedAt": "2026-11-05T02:33:01.997158+00:00",
+        "proofExitCode": 1,
+        "sandboxes": [],
+        "saved-snapshots": []
+      },
+      "finding": "Host control socket dev=64769 inode=1441513 refused with errno 111. Daemon namespace socket dev=71 inode=5087 accepted a direct connection. sealantd and relay remained active. This establishes a split control path, not a daemon or authorization failure."
+    },
+    {
+      "family": "nix",
+      "result": "failed",
+      "error": "guest proof failed; see guest-command-failure.json",
+      "proof": {
+        "runnerHash": "d924d0bbf50c7352ccc2d61d7057a9cbb027084df1e5bb27af85078c00bdccbd",
+        "fixtureHash": "425185723b423772c8e853d6c59fac2041b7ca832008d189a795f7c4c5a7c796"
+      },
+      "artifact": {
+        "kind": "boat-saved-snapshot",
+        "owner": "7a15caa8-15fd-4f42-8e34-05868d372b63",
+        "build": "1012aef2-2745-49a9-9800-cb006d0b385f",
+        "recipeHash": "4fb46bfb9a062483006147ad0f58c724728577d237b094558299da56ac9d1162",
+        "receiptHash": "59abbdc3da5488d0dc7ab109291593e2d8747d4cb47d96d7c522969f20a681d0",
+        "runtime": {
+          "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+          "platform": "linux/amd64",
+          "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+          "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+          "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+          "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+        },
+        "identity": {
+          "name": "sealant-dev-boat-stream-1012aef2274549a99800cb006d0b385f",
+          "sourceSandboxId": "bx_sass476b",
+          "createdAt": "2026-11-05T02:45:13.923Z",
+          "snapshotId": "3e01cd0f-66b7-442b-bc1a-df27c7feec32"
+        }
+      },
+      "ownership": {
+        "owner": "7a15caa8-15fd-4f42-8e34-05868d372b63",
+        "artifact": {
+          "kind": "boat-saved-snapshot",
+          "owner": "7a15caa8-15fd-4f42-8e34-05868d372b63",
+          "build": "1012aef2-2745-49a9-9800-cb006d0b385f",
+          "recipeHash": "4fb46bfb9a062483006147ad0f58c724728577d237b094558299da56ac9d1162",
+          "receiptHash": "59abbdc3da5488d0dc7ab109291593e2d8747d4cb47d96d7c522969f20a681d0",
+          "runtime": {
+            "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+            "platform": "linux/amd64",
+            "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+            "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+            "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+            "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+          },
+          "identity": {
+            "name": "sealant-dev-boat-stream-1012aef2274549a99800cb006d0b385f",
+            "sourceSandboxId": "bx_sass476b",
+            "createdAt": "2026-11-05T02:45:13.923Z",
+            "snapshotId": "3e01cd0f-66b7-442b-bc1a-df27c7feec32"
+          }
+        },
+        "artifactJournal": "/tmp/boat-native-proof.AZKJvg/nix/attempts/1012aef2-2745-49a9-9800-cb006d0b385f.json",
+        "clone": {
+          "marker": "542a0331-bc55-4931-aedd-ed49dd83cbb4",
+          "key": "13eab599-7dda-4951-80ce-372bccf0d4db",
+          "requestedAt": "2026-11-05T02:45:42.699Z",
+          "from": "sealant-dev-boat-stream-1012aef2274549a99800cb006d0b385f",
+          "id": "bx_3tysgawx",
+          "deletionIntent": true,
+          "deletion": "bdop_8633f45265964fb8a6f10e62441f0dae",
+          "deleted": true
+        }
+      },
+      "cleanup": {
+        "confirmed": true,
+        "errors": []
+      },
+      "evidence": "/tmp/boat-native-proof.AZKJvg/nix/evidence.json",
+      "deletions": [
+        {
+          "id": "bdop_c10ba649a7204e2db1a0e8a11231cd9e",
+          "kind": "sandbox",
+          "targetId": "bx_sass476b",
+          "status": "completed"
+        },
+        {
+          "id": "bdop_8633f45265964fb8a6f10e62441f0dae",
+          "kind": "sandbox",
+          "targetId": "bx_3tysgawx",
+          "status": "completed"
+        }
+      ],
+      "accountLists": {
+        "checkedAt": "2026-11-05T02:47:29.310849+00:00",
+        "proofExitCode": 1,
+        "sandboxes": [],
+        "saved-snapshots": []
+      },
+      "finding": "A PID1 directory samefile guard before admission and after Nix startup did not repair the socket split. No repair branch ran. Host socket dev=64769 inode=1422790 refused; inner socket dev=68 inode=4525 accepted. Rejected the mount-repair attempt. The next native recipe uses the canonical /var/lib/sealant/control/control.sock path for both daemon and relay, without a /run alias."
+    },
+    {
+      "family": "nix",
+      "result": "failed",
+      "error": "inside proof failed",
+      "proof": {
+        "runnerHash": "d924d0bbf50c7352ccc2d61d7057a9cbb027084df1e5bb27af85078c00bdccbd",
+        "fixtureHash": "425185723b423772c8e853d6c59fac2041b7ca832008d189a795f7c4c5a7c796"
+      },
+      "artifact": {
+        "kind": "boat-saved-snapshot",
+        "owner": "47409e8a-7bc7-49b5-a1f8-ff8c7951800d",
+        "build": "c70dd35d-ef31-4bd6-a55c-532257c41d33",
+        "recipeHash": "8a331d3c9d0a522e6feff955f770179ac49d9b59bb279f67944a242c8aeb136e",
+        "receiptHash": "5a951583556fee9faa6a5053c49415c51dc0217872c7ef847ea4bfefce0b7ffa",
+        "runtime": {
+          "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+          "platform": "linux/amd64",
+          "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+          "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+          "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+          "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+        },
+        "identity": {
+          "name": "sealant-dev-boat-stream-c70dd35def314bd6a55c532257c41d33",
+          "sourceSandboxId": "bx_nbjn6xch",
+          "createdAt": "2026-11-05T02:50:35.011Z",
+          "snapshotId": "96e73c7e-1d8e-43dc-a4e7-1825cacd2644"
+        }
+      },
+      "ownership": {
+        "owner": "47409e8a-7bc7-49b5-a1f8-ff8c7951800d",
+        "artifact": {
+          "kind": "boat-saved-snapshot",
+          "owner": "47409e8a-7bc7-49b5-a1f8-ff8c7951800d",
+          "build": "c70dd35d-ef31-4bd6-a55c-532257c41d33",
+          "recipeHash": "8a331d3c9d0a522e6feff955f770179ac49d9b59bb279f67944a242c8aeb136e",
+          "receiptHash": "5a951583556fee9faa6a5053c49415c51dc0217872c7ef847ea4bfefce0b7ffa",
+          "runtime": {
+            "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+            "platform": "linux/amd64",
+            "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+            "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+            "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+            "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+          },
+          "identity": {
+            "name": "sealant-dev-boat-stream-c70dd35def314bd6a55c532257c41d33",
+            "sourceSandboxId": "bx_nbjn6xch",
+            "createdAt": "2026-11-05T02:50:35.011Z",
+            "snapshotId": "96e73c7e-1d8e-43dc-a4e7-1825cacd2644"
+          }
+        },
+        "artifactJournal": "/tmp/boat-native-proof.7xYnrn/nix/attempts/c70dd35d-ef31-4bd6-a55c-532257c41d33.json",
+        "clone": {
+          "marker": "24e109a6-5f7b-4c2d-bb81-69239ee4f597",
+          "key": "8918eab5-ce36-4879-bc0c-75d9c04a5d5c",
+          "requestedAt": "2026-11-05T02:51:14.749Z",
+          "from": "sealant-dev-boat-stream-c70dd35def314bd6a55c532257c41d33",
+          "id": "bx_e34rnytf",
+          "deletionIntent": true,
+          "deletion": "bdop_9b6f967f7e8c4be2809590ef17c040ba",
+          "deleted": true
+        }
+      },
+      "cleanup": {
+        "confirmed": true,
+        "errors": []
+      },
+      "coldCreateToHealthMs": 85760,
+      "nativeControl": {
+        "cookieHosted": true,
+        "health": {
+          "$typeName": "sealant.v1.HealthReport",
+          "state": 2,
+          "runtimeId": "rt_4fce5d413dcef274",
+          "uptimeMillis": "1675",
+          "activeExecutions": 0,
+          "activeSessions": 0,
+          "activeProcesses": 1,
+          "queueDepth": "0",
+          "queueCapacity": "4096",
+          "spoolBytes": "0",
+          "spoolLimitBytes": "536870912",
+          "retryCount": "0",
+          "droppedEvents": "0",
+          "redactedEvents": "0",
+          "coalescedEvents": "0",
+          "truncatedEvents": "0",
+          "sinkConnected": true,
+          "featureStates": [
+            {
+              "$typeName": "sealant.v1.FeatureState",
+              "feature": 1,
+              "enabled": true
+            },
+            {
+              "$typeName": "sealant.v1.FeatureState",
+              "feature": 2,
+              "enabled": true
+            },
+            {
+              "$typeName": "sealant.v1.FeatureState",
+              "feature": 3,
+              "enabled": false
+            },
+            {
+              "$typeName": "sealant.v1.FeatureState",
+              "feature": 4,
+              "enabled": false
+            },
+            {
+              "$typeName": "sealant.v1.FeatureState",
+              "feature": 6,
+              "enabled": false
+            },
+            {
+              "$typeName": "sealant.v1.FeatureState",
+              "feature": 5,
+              "enabled": true
+            }
+          ],
+          "degradationReasons": []
+        },
+        "capabilities": {
+          "$typeName": "sealant.v1.Capabilities",
+          "schemaVersion": 1,
+          "runtimeId": "rt_4fce5d413dcef274",
+          "os": "linux",
+          "arch": "x86_64",
+          "daemonVersion": "0.0.0",
+          "supports": [
+            "dotfiles.user",
+            "exec.user",
+            "forward.owner",
+            "process.secret-env.v1",
+            "restore.owner_map",
+            "sftp.user"
+          ],
+          "personCapabilities": [],
+          "workspaceId": "proof-workspace",
+          "features": {
+            "$typeName": "sealant.v1.FeatureMatrix",
+            "ioCapture": true,
+            "pty": true,
+            "filesystem": true,
+            "network": 1,
+            "privileged": false,
+            "pidfd": true,
+            "subreaper": true,
+            "pipeSessions": true
+          },
+          "limits": {
+            "$typeName": "sealant.v1.Limits",
+            "maxFrameBytes": 8388608,
+            "maxProcesses": 256,
+            "maxSessions": 64,
+            "eventQueueCapacity": "4096",
+            "spoolLimitBytes": "536870912",
+            "maxInlinePayloadBytes": "262144",
+            "ioChunkBytes": 65536
+          },
+          "personCapabilitiesWithheld": "no-new-privileges is set: sudo cannot work, and CAP_FOWNER would amount to root",
+          "noNewPrivileges": true
+        }
+      },
+      "hostedReadiness": [200],
+      "evidence": "/tmp/boat-native-proof.7xYnrn/nix/evidence.json",
+      "deletions": [
+        {
+          "id": "bdop_9fcea8f997754e178c9a86e5bf206ea8",
+          "kind": "sandbox",
+          "targetId": "bx_nbjn6xch",
+          "status": "completed"
+        },
+        {
+          "id": "bdop_9b6f967f7e8c4be2809590ef17c040ba",
+          "kind": "sandbox",
+          "targetId": "bx_e34rnytf",
+          "status": "completed"
+        }
+      ],
+      "accountLists": {
+        "checkedAt": "2026-11-05T02:53:09.680982+00:00",
+        "proofExitCode": 1,
+        "sandboxes": [],
+        "saved-snapshots": []
+      },
+      "finding": "Canonical socket path passed direct local health and cookie-hosted health/capabilities; all four fake-environment CLI probes passed. Create-to-health was 85760 ms including cold receipt checks and proof setup. Xvnc readiness did not answer within the original ten seconds; no server log was retained in this run."
+    },
+    {
+      "family": "nix",
+      "result": "failed",
+      "error": "guest proof failed; see guest-command-failure.json",
+      "proof": {
+        "runnerHash": "ee1042b41cc70e708e196078bb5734647cea1457f6219345f43e35e673efef5e",
+        "fixtureHash": "425185723b423772c8e853d6c59fac2041b7ca832008d189a795f7c4c5a7c796"
+      },
+      "artifact": {
+        "kind": "boat-saved-snapshot",
+        "owner": "9e96aaa7-0bd6-4f1c-87af-3b90a4064e84",
+        "build": "02eb0fea-d3f5-4db8-a291-269e7b5c2d00",
+        "recipeHash": "8a331d3c9d0a522e6feff955f770179ac49d9b59bb279f67944a242c8aeb136e",
+        "receiptHash": "ac06af5ac4ab014af4c84057bb7ac52eb9308379c9e145f0b17182991e186209",
+        "runtime": {
+          "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+          "platform": "linux/amd64",
+          "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+          "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+          "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+          "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+        },
+        "identity": {
+          "name": "sealant-dev-boat-stream-02eb0fead3f54db8a291269e7b5c2d00",
+          "sourceSandboxId": "bx_vq7c3eq8",
+          "createdAt": "2026-11-05T02:56:50.912Z",
+          "snapshotId": "e29bc481-4dc8-4ace-88e0-dc5957e0dd83"
+        }
+      },
+      "ownership": {
+        "owner": "9e96aaa7-0bd6-4f1c-87af-3b90a4064e84",
+        "artifact": {
+          "kind": "boat-saved-snapshot",
+          "owner": "9e96aaa7-0bd6-4f1c-87af-3b90a4064e84",
+          "build": "02eb0fea-d3f5-4db8-a291-269e7b5c2d00",
+          "recipeHash": "8a331d3c9d0a522e6feff955f770179ac49d9b59bb279f67944a242c8aeb136e",
+          "receiptHash": "ac06af5ac4ab014af4c84057bb7ac52eb9308379c9e145f0b17182991e186209",
+          "runtime": {
+            "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+            "platform": "linux/amd64",
+            "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+            "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+            "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+            "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+          },
+          "identity": {
+            "name": "sealant-dev-boat-stream-02eb0fead3f54db8a291269e7b5c2d00",
+            "sourceSandboxId": "bx_vq7c3eq8",
+            "createdAt": "2026-11-05T02:56:50.912Z",
+            "snapshotId": "e29bc481-4dc8-4ace-88e0-dc5957e0dd83"
+          }
+        },
+        "artifactJournal": "/tmp/boat-native-proof.1mqtwU/nix/attempts/02eb0fea-d3f5-4db8-a291-269e7b5c2d00.json",
+        "clone": {
+          "marker": "55f9ed25-64c6-4606-ada9-75fe7a6c980c",
+          "key": "b589a8df-6c70-48dc-8790-0c5f6c2a9d53",
+          "requestedAt": "2026-11-05T02:57:26.198Z",
+          "from": "sealant-dev-boat-stream-02eb0fead3f54db8a291269e7b5c2d00",
+          "id": "bx_tjmxqv89",
+          "deletionIntent": true,
+          "deletion": "bdop_a46cfc231fa14ada9f8ddbfd2097d420",
+          "deleted": true
+        }
+      },
+      "cleanup": {
+        "confirmed": true,
+        "errors": []
+      },
+      "evidence": "/tmp/boat-native-proof.1mqtwU/nix/evidence.json",
+      "deletions": [
+        {
+          "id": "bdop_b31322f5c1a04caeb7b4a17aa2259dce",
+          "kind": "sandbox",
+          "targetId": "bx_vq7c3eq8",
+          "status": "completed"
+        },
+        {
+          "id": "bdop_a46cfc231fa14ada9f8ddbfd2097d420",
+          "kind": "sandbox",
+          "targetId": "bx_tjmxqv89",
+          "status": "completed"
+        }
+      ],
+      "accountLists": {
+        "checkedAt": "2026-11-05T02:58:54.409653+00:00",
+        "proofExitCode": 1,
+        "sandboxes": [],
+        "saved-snapshots": []
+      },
+      "finding": "Repeat of the canonical recipe reproduced the split socket before screens. Host canonical socket refused while the inner namespace socket accepted. The prior pass did not prove a stable fix. The next recipe removes the unused control bind into /run and captures mount/directory identities on failure."
+    },
+    {
+      "family": "nix",
+      "result": "failed",
+      "error": "Native snapshot failed: native-provider-transport_error; journal /tmp/boat-native-proof.r3IfTE/nix/attempts/c4e72741-97f6-4ba0-8be8-b28fde6236e2.json",
+      "proof": {
+        "runnerHash": "0f409ce176327be9b835349e6c40bb34365c84aa15d35607e668a29d1e299b09",
+        "fixtureHash": "425185723b423772c8e853d6c59fac2041b7ca832008d189a795f7c4c5a7c796"
+      },
+      "ownership": {
+        "owner": "b8306f61-0bd2-44f9-a997-400cdc69b7fd",
+        "artifactJournal": "/tmp/boat-native-proof.r3IfTE/nix/attempts/c4e72741-97f6-4ba0-8be8-b28fde6236e2.json"
+      },
+      "cleanup": {
+        "confirmed": true,
+        "errors": []
+      },
+      "evidence": "/tmp/boat-native-proof.r3IfTE/nix/evidence.json",
+      "deletions": [
+        {
+          "id": "bdop_bc0521a8ef33477a954a23d611d94660",
+          "kind": "sandbox",
+          "targetId": "bx_keb8trv3",
+          "status": "completed"
+        }
+      ],
+      "accountLists": {
+        "checkedAt": "2026-11-05T03:06:34.775289+00:00",
+        "proofExitCode": 1,
+        "sandboxes": [],
+        "saved-snapshots": []
+      },
+      "finding": "Provider execute response lost during installation. No snapshot was saved. Builder did not retry the command; exact source deletion completed and both account lists were empty."
+    },
+    {
+      "family": "nix",
+      "result": "failed",
+      "error": "inside proof failed",
+      "proof": {
+        "runnerHash": "d35e6c5a93f41db550e447bef87b91033675f7f09ba3ac6b56616b3f69259d0c",
+        "fixtureHash": "425185723b423772c8e853d6c59fac2041b7ca832008d189a795f7c4c5a7c796"
+      },
+      "ownership": {
+        "owner": "c4dd4eb3-9b1c-4477-a529-712f39c9a085",
+        "artifact": {
+          "kind": "boat-saved-snapshot",
+          "owner": "c4dd4eb3-9b1c-4477-a529-712f39c9a085",
+          "build": "0b4214a9-4fed-4253-886c-31ef2b01fa6d",
+          "recipeHash": "9191ae6831cb6cbcf50fcf1fe1e2947e7452b720bcfa1fa710c69a7d7865bc32",
+          "receiptHash": "d8ca18daa164e6477658469843d0643c895042c28a03264b1768dec31ea43596",
+          "runtime": {
+            "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+            "platform": "linux/amd64",
+            "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+            "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+            "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+            "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+          },
+          "identity": {
+            "name": "sealant-dev-boat-stream-0b4214a94fed4253886c31ef2b01fa6d",
+            "sourceSandboxId": "bx_fhk9ap4c",
+            "createdAt": "2026-11-05T03:14:21.662Z",
+            "snapshotId": "df2c2e92-b5a1-4d7e-8461-ee3055cb8d2c"
+          }
+        },
+        "artifactJournal": "/tmp/boat-native-proof.rBW2Fj/nix/attempts/0b4214a9-4fed-4253-886c-31ef2b01fa6d.json",
+        "clone": {
+          "marker": "123a742e-bbb4-4aeb-a40d-2bc9a4fff57c",
+          "key": "39fc66cf-29bf-4b56-8573-2d464a48c30f",
+          "requestedAt": "2026-11-05T03:14:55.125Z",
+          "from": "sealant-dev-boat-stream-0b4214a94fed4253886c31ef2b01fa6d",
+          "id": "bx_uk7s4eqc",
+          "deletionIntent": true,
+          "deletion": "bdop_cbaa5d9dc3fc4209b868e7fb39684f16",
+          "deleted": true
+        }
+      },
+      "cleanup": {
+        "confirmed": true,
+        "errors": []
+      },
+      "coldCreateToHealthMs": 84294,
+      "namespaceControl": {
+        "pid": "8193",
+        "socket": "/proc/8193/root/run/sealant/control.sock"
+      },
+      "evidence": "/tmp/boat-native-proof.rBW2Fj/nix/evidence.json",
+      "deletions": [
+        {
+          "id": "bdop_24d99a245933479db8731d50f7e07716",
+          "kind": "sandbox",
+          "targetId": "bx_fhk9ap4c",
+          "status": "completed"
+        },
+        {
+          "id": "bdop_cbaa5d9dc3fc4209b868e7fb39684f16",
+          "kind": "sandbox",
+          "targetId": "bx_uk7s4eqc",
+          "status": "completed"
+        }
+      ],
+      "accountLists": {
+        "checkedAt": "2026-11-05T03:17:14.227828+00:00",
+        "proofExitCode": 1,
+        "sandboxes": [],
+        "saved-snapshots": []
+      },
+      "finding": "Private /run with relay connected through the supervised unshare MainPID namespace root passed local and cookie-hosted health/capabilities. Xvnc became ready after about 46 seconds. The old pgrep -x openbox assertion falsely failed on Nix .openbox-wrappe; Chromium was still loading after three seconds. Remaining containment gates were not reached. Source/clone deletions completed, snapshot removed, both account lists empty."
+    },
+    {
+      "family": "nix",
+      "result": "failed",
+      "error": "inside proof failed",
+      "proof": {
+        "runnerHash": "571d834540520d7cb80de1f1c0facd70e56f5ad3e79612814365d1416861c82b",
+        "fixtureHash": "425185723b423772c8e853d6c59fac2041b7ca832008d189a795f7c4c5a7c796"
+      },
+      "ownership": {
+        "owner": "694cc233-5495-484a-9a21-4408cb658b30",
+        "artifact": {
+          "kind": "boat-saved-snapshot",
+          "owner": "694cc233-5495-484a-9a21-4408cb658b30",
+          "build": "caffe8aa-2508-4873-a375-b385035569a6",
+          "recipeHash": "9191ae6831cb6cbcf50fcf1fe1e2947e7452b720bcfa1fa710c69a7d7865bc32",
+          "receiptHash": "56ac62089801c2612dab016e8fba424af8e0d1d55f906d5fc812d319e97d84e6",
+          "runtime": {
+            "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+            "platform": "linux/amd64",
+            "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+            "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+            "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+            "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+          },
+          "identity": {
+            "name": "sealant-dev-boat-stream-caffe8aa25084873a375b385035569a6",
+            "sourceSandboxId": "bx_w4ztg6pf",
+            "createdAt": "2026-11-05T03:26:39.376Z",
+            "snapshotId": "d2ecd45e-eb07-4efe-b079-a6731370c256"
+          }
+        },
+        "artifactJournal": "/tmp/boat-native-proof.2o8vM9/nix/attempts/caffe8aa-2508-4873-a375-b385035569a6.json",
+        "clone": {
+          "marker": "f7ccccee-14f1-4358-9778-561b31bd44e5",
+          "key": "df93af9b-66e3-41f4-9c76-cb45e7ce9f1e",
+          "requestedAt": "2026-11-05T03:27:29.841Z",
+          "from": "sealant-dev-boat-stream-caffe8aa25084873a375b385035569a6",
+          "id": "bx_2ta72ge3",
+          "deletionIntent": true,
+          "deletion": "bdop_a8c5b16f44b34bb7a597e6a216367396",
+          "deleted": true
+        }
+      },
+      "cleanup": {
+        "confirmed": true,
+        "errors": []
+      },
+      "coldCreateToHealthMs": 65574,
+      "namespaceControl": {
+        "pid": "8351",
+        "socket": "/proc/8351/root/run/sealant/control.sock"
+      },
+      "evidence": "/tmp/boat-native-proof.2o8vM9/nix/evidence.json",
+      "deletions": [
+        {
+          "id": "bdop_0418e471a2b945688dd84f436caa25e6",
+          "kind": "sandbox",
+          "targetId": "bx_w4ztg6pf",
+          "status": "completed"
+        },
+        {
+          "id": "bdop_a8c5b16f44b34bb7a597e6a216367396",
+          "kind": "sandbox",
+          "targetId": "bx_2ta72ge3",
+          "status": "completed"
+        }
+      ],
+      "accountLists": {
+        "checkedAt": "2026-11-05T03:31:01.540642+00:00",
+        "proofExitCode": 1,
+        "sandboxes": [],
+        "saved-snapshots": []
+      },
+      "finding": "Hosted health/capabilities, fake CLI versions, Xvnc, Openbox, Chromium CDP readiness, ffmpeg recording and detached writer passed. Non-root Nix derivation failed to resolve github.com. A later minimal DNS probe proved private /run hid Ubuntu resolv.conf symlink target. Worker, empty cgroup and resume gates were not reached. All owned objects deleted; both account lists empty."
+    },
+    {
+      "family": "nix",
+      "result": "failed",
+      "error": "guest proof failed; see guest-command-failure.json",
+      "proof": {
+        "runnerHash": "4e63f559b5bf30487b9c3f66850ce1614f3fc638b33f78c46a9d09b5f0b8112a",
+        "fixtureHash": "425185723b423772c8e853d6c59fac2041b7ca832008d189a795f7c4c5a7c796"
+      },
+      "ownership": {
+        "owner": "7fef379e-d00b-4a77-baba-5edb4ad5c639",
+        "artifact": {
+          "kind": "boat-saved-snapshot",
+          "owner": "7fef379e-d00b-4a77-baba-5edb4ad5c639",
+          "build": "fcfaeda7-25c2-4f29-8d17-ac3d78c9dcbc",
+          "recipeHash": "337158c26ebf5dd17bdd96873bb96bcd6cbb7d6120dfbf8c8c1231ce1b617d50",
+          "receiptHash": "0a30ff598879fdc71d545681b068c1712cc615efbcbc01168c2482b43edcef5c",
+          "runtime": {
+            "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+            "platform": "linux/amd64",
+            "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+            "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+            "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+            "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+          },
+          "identity": {
+            "name": "sealant-dev-boat-stream-fcfaeda725c24f298d17ac3d78c9dcbc",
+            "sourceSandboxId": "bx_v6t2chub",
+            "createdAt": "2026-11-05T03:38:30.520Z",
+            "snapshotId": "083d92e4-1323-420e-a52c-00f6334e3821"
+          }
+        },
+        "artifactJournal": "/tmp/boat-native-proof.8oPV9D/nix/attempts/fcfaeda7-25c2-4f29-8d17-ac3d78c9dcbc.json",
+        "clone": {
+          "marker": "b6d298d8-7af4-40a9-bd7c-52bcdab69809",
+          "key": "c993deed-2668-43f7-ba48-8f05ea6790dc",
+          "requestedAt": "2026-11-05T03:39:05.479Z",
+          "from": "sealant-dev-boat-stream-fcfaeda725c24f298d17ac3d78c9dcbc",
+          "id": "bx_ktpx6g9a",
+          "deletionIntent": true,
+          "deletion": "bdop_557766afe6314eaa80034f7f40accaf7",
+          "deleted": true
+        }
+      },
+      "cleanup": {
+        "confirmed": true,
+        "errors": []
+      },
+      "coldCreateToHealthMs": 63517,
+      "namespaceControl": {
+        "pid": "11038",
+        "socket": "/proc/11038/root/run/sealant/control.sock"
+      },
+      "evidence": "/tmp/boat-native-proof.8oPV9D/nix/evidence.json",
+      "deletions": [
+        {
+          "id": "bdop_9af3af1a2ef443fe9598fa4e819177eb",
+          "kind": "sandbox",
+          "targetId": "bx_v6t2chub",
+          "status": "completed"
+        },
+        {
+          "id": "bdop_557766afe6314eaa80034f7f40accaf7",
+          "kind": "sandbox",
+          "targetId": "bx_ktpx6g9a",
+          "status": "completed"
+        }
+      ],
+      "accountLists": {
+        "checkedAt": "2026-11-05T03:42:04.226104+00:00",
+        "proofExitCode": 1,
+        "sandboxes": [],
+        "saved-snapshots": []
+      },
+      "finding": "Root/person DNS, hosted health/capabilities, screens/recording, detached writer and a non-root offline Nix worker passed. Worker cgroup matched PID1; full outer scope listed every expected writer. systemctl stop succeeded and removed the cgroup. The proof incorrectly reread an open cgroup.events fd after removal and received ENODEV, so sentinel-after-stop and resume assertions were not reached. All owned objects deleted; both account lists empty."
+    },
+    {
+      "family": "nix",
+      "result": "failed",
+      "error": "guest proof failed; see guest-command-failure.json",
+      "proof": {
+        "runnerHash": "773abf3f92994a2e93789eef1e6713263f8ab9e7bc12bf368f053f87a06d144b",
+        "fixtureHash": "425185723b423772c8e853d6c59fac2041b7ca832008d189a795f7c4c5a7c796"
+      },
+      "ownership": {
+        "owner": "92049064-bd04-4230-b605-a1cc93b9189c",
+        "artifact": {
+          "kind": "boat-saved-snapshot",
+          "owner": "92049064-bd04-4230-b605-a1cc93b9189c",
+          "build": "c6f48b8b-9f31-40ed-89b5-f21acb582713",
+          "recipeHash": "337158c26ebf5dd17bdd96873bb96bcd6cbb7d6120dfbf8c8c1231ce1b617d50",
+          "receiptHash": "053d56ec585d98a1f39817f79b854b190680c94c9e6dfce77c55073baa358b18",
+          "runtime": {
+            "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+            "platform": "linux/amd64",
+            "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+            "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+            "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+            "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+          },
+          "identity": {
+            "name": "sealant-dev-boat-stream-c6f48b8b9f3140ed89b5f21acb582713",
+            "sourceSandboxId": "bx_fk89erxc",
+            "createdAt": "2026-11-05T03:47:10.878Z",
+            "snapshotId": "99610681-00f5-4b3d-9d99-d59d126caa74"
+          }
+        },
+        "artifactJournal": "/tmp/boat-native-proof.YJ4k1v/nix/attempts/c6f48b8b-9f31-40ed-89b5-f21acb582713.json",
+        "clone": {
+          "marker": "89e42b26-1667-4300-be9c-10b9e1e1b30b",
+          "key": "5730c144-1a5f-4729-ae25-b6bc2e864f22",
+          "requestedAt": "2026-11-05T03:48:17.151Z",
+          "from": "sealant-dev-boat-stream-c6f48b8b9f3140ed89b5f21acb582713",
+          "id": "bx_7jc33hsx",
+          "deletionIntent": true,
+          "deletion": "bdop_34f8af2093ef4f9c8e720893a9b9cdc5",
+          "deleted": true
+        }
+      },
+      "cleanup": {
+        "confirmed": true,
+        "errors": []
+      },
+      "coldCreateToHealthMs": 78021,
+      "namespaceControl": {
+        "pid": "8713",
+        "socket": "/proc/8713/root/run/sealant/control.sock"
+      },
+      "afterStop": "cgroup removed after stop; no populated scope remains\nouter sentinel and relay survived\n",
+      "evidence": "/tmp/boat-native-proof.YJ4k1v/nix/evidence.json",
+      "deletions": [
+        {
+          "id": "bdop_5a0d1fb3964a42a3981abea77f314cfc",
+          "kind": "sandbox",
+          "targetId": "bx_fk89erxc",
+          "status": "completed"
+        },
+        {
+          "id": "bdop_34f8af2093ef4f9c8e720893a9b9cdc5",
+          "kind": "sandbox",
+          "targetId": "bx_7jc33hsx",
+          "status": "completed"
+        }
+      ],
+      "accountLists": {
+        "checkedAt": "2026-11-05T03:52:04.551682+00:00",
+        "proofExitCode": 1,
+        "sandboxes": [],
+        "saved-snapshots": []
+      },
+      "finding": "All inside gates, full scope writer census, cgroup removal with MainPID zero, and outer sentinel/relay survival passed. After provider stop/resume both lifecycle markers were unchanged and is-active did not report active. The final journal grep after a fixed two-second wait did not find session admission held; diagnostic journal showed only systemd Started. Admission result remains unconfirmed pending a minimized probe. All owned objects deleted; both account lists empty."
+    },
+    {
+      "family": "nix",
+      "result": "passed",
+      "proof": {
+        "runnerHash": "066d665e89d98035c88f1191616e1a2077c50fd5d9a9b7e682dd5a63fbf902d0",
+        "fixtureHash": "425185723b423772c8e853d6c59fac2041b7ca832008d189a795f7c4c5a7c796"
+      },
+      "ownership": {
+        "owner": "fd16728c-8873-4c19-a382-b44d9dd88e5e",
+        "artifact": {
+          "kind": "boat-saved-snapshot",
+          "owner": "fd16728c-8873-4c19-a382-b44d9dd88e5e",
+          "build": "f826baf0-c3a3-4409-aafb-e20f76795014",
+          "recipeHash": "337158c26ebf5dd17bdd96873bb96bcd6cbb7d6120dfbf8c8c1231ce1b617d50",
+          "receiptHash": "eb8bdfbd5cff7ed47d7b493161980880f9e046e159ae72c2639bf7044e59032d",
+          "runtime": {
+            "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+            "platform": "linux/amd64",
+            "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+            "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+            "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+            "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+          },
+          "identity": {
+            "name": "sealant-dev-boat-stream-f826baf0c3a34409aafbe20f76795014",
+            "sourceSandboxId": "bx_j5hv9bj9",
+            "createdAt": "2026-11-05T03:58:25.974Z",
+            "snapshotId": "6d897c88-a339-4776-ac7a-b76c41b059ef"
+          }
+        },
+        "artifactJournal": "/tmp/boat-native-proof.EtvYaT/nix/attempts/f826baf0-c3a3-4409-aafb-e20f76795014.json",
+        "clone": {
+          "marker": "77f4cd1d-83a6-4131-9b06-450b8bbd6c7d",
+          "key": "ace825e8-1ec1-412e-9614-a3634e1c7c26",
+          "requestedAt": "2026-11-05T03:59:14.967Z",
+          "from": "sealant-dev-boat-stream-f826baf0c3a34409aafbe20f76795014",
+          "id": "bx_gg64tkm9",
+          "deletionIntent": true,
+          "deletion": "bdop_4e9824e0fed742539ad4c76f7644a4d4",
+          "deleted": true
+        }
+      },
+      "cleanup": {
+        "confirmed": true,
+        "errors": []
+      },
+      "coldCreateToHealthMs": 129634,
+      "namespaceControl": {
+        "pid": "16174",
+        "socket": "/proc/16174/root/run/sealant/control.sock"
+      },
+      "afterStop": "cgroup removed after stop; no populated scope remains\nouter sentinel and relay survived\n",
+      "resume": "Nov 05 04:02:53 box-node-53720d6e17827724 unshare[7662]: session admission held\nNov 05 04:02:53 box-node-53720d6e17827724 unshare[7662]: session admission held\nadmission-held-lifecycle-unchanged\n",
+      "evidence": "/tmp/boat-native-proof.EtvYaT/nix/evidence.json",
+      "deletions": [
+        {
+          "id": "bdop_b5e62e5174d0429ca4e8cfdb7ac5da25",
+          "kind": "sandbox",
+          "targetId": "bx_j5hv9bj9",
+          "status": "completed"
+        },
+        {
+          "id": "bdop_4e9824e0fed742539ad4c76f7644a4d4",
+          "kind": "sandbox",
+          "targetId": "bx_gg64tkm9",
+          "status": "completed"
+        }
+      ],
+      "accountLists": {
+        "checkedAt": "2026-11-05T04:02:59.908553+00:00",
+        "proofExitCode": 0,
+        "sandboxes": [],
+        "saved-snapshots": []
+      },
+      "finding": "Complete normal Nix proof passed on the unchanged production image recipe: save, source deletion, cold receipt/runtime verification, explicit reuse, public dotfiles, person sudo outside clone mode, hidden outer manager sockets, root/person DNS, exact daemon PID1, cookie-hosted health/capabilities, fake CLI versions, Xvnc/Openbox/Chromium/ffmpeg, detached writer, non-root offline Nix worker matching PID1 cgroup, all writers in outer scope, whole-unit stop with cgroup removal/MainPID zero and surviving sentinel/relay, provider stop/resume, settled held admission and unchanged lifecycle markers. All owned objects deleted; both account lists empty.",
+      "control": {
+        "healthState": 2,
+        "supports": [
+          "dotfiles.user",
+          "exec.user",
+          "forward.owner",
+          "process.secret-env.v1",
+          "restore.owner_map",
+          "sftp.user"
+        ],
+        "cookieHosted": true
+      }
+    },
+    {
+      "family": "ubuntu",
+      "result": "passed",
+      "proof": {
+        "runnerHash": "066d665e89d98035c88f1191616e1a2077c50fd5d9a9b7e682dd5a63fbf902d0",
+        "fixtureHash": "425185723b423772c8e853d6c59fac2041b7ca832008d189a795f7c4c5a7c796"
+      },
+      "ownership": {
+        "owner": "4b1cfc45-22d0-474e-9b6f-34493ce637f2",
+        "artifact": {
+          "kind": "boat-saved-snapshot",
+          "owner": "4b1cfc45-22d0-474e-9b6f-34493ce637f2",
+          "build": "3a80c0fe-1dac-4998-beb2-b6be86cea351",
+          "recipeHash": "41301600a6deb2e8a83ac6d540350160f8e25aa98d9aced4b47d876cb55c7079",
+          "receiptHash": "2f3d4d6f2f1f7b86e7ca7cdb8dbaf886c979e8eec667fabda926741ace41ebf8",
+          "runtime": {
+            "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+            "platform": "linux/amd64",
+            "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+            "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+            "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+            "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+          },
+          "identity": {
+            "name": "sealant-dev-boat-stream-3a80c0fe1dac4998beb2b6be86cea351",
+            "sourceSandboxId": "bx_f9wy6534",
+            "createdAt": "2026-11-05T04:07:11.475Z",
+            "snapshotId": "d708c15e-9586-4d11-a180-e973ef704d53"
+          }
+        },
+        "artifactJournal": "/tmp/boat-native-proof.A5r7oV/ubuntu/attempts/3a80c0fe-1dac-4998-beb2-b6be86cea351.json",
+        "clone": {
+          "marker": "c4154cde-4a65-4571-bde1-56108f9a8dff",
+          "key": "2a86a918-b277-40d0-ae83-cfa35fc79350",
+          "requestedAt": "2026-11-05T04:07:29.281Z",
+          "from": "sealant-dev-boat-stream-3a80c0fe1dac4998beb2b6be86cea351",
+          "id": "bx_pma8e4fp",
+          "deletionIntent": true,
+          "deletion": "bdop_c5c9edbeb3a642dd8bd4627e91ce7918",
+          "deleted": true
+        }
+      },
+      "cleanup": {
+        "confirmed": true,
+        "errors": []
+      },
+      "coldCreateToHealthMs": 27659,
+      "namespaceControl": {
+        "pid": "8025",
+        "socket": "/proc/8025/root/run/sealant/control.sock"
+      },
+      "afterStop": "cgroup removed after stop; no populated scope remains\nouter sentinel and relay survived\n",
+      "resume": "Nov 05 04:08:35 box-node-1d1144e60ac9d5a8 unshare[6662]: session admission held\nNov 05 04:08:35 box-node-1d1144e60ac9d5a8 unshare[6662]: session admission held\nadmission-held-lifecycle-unchanged\n",
+      "evidence": "/tmp/boat-native-proof.A5r7oV/ubuntu/evidence.json",
+      "deletions": [
+        {
+          "id": "bdop_146898f513a4406b87a69eeb332bcd21",
+          "kind": "sandbox",
+          "targetId": "bx_f9wy6534",
+          "status": "completed"
+        },
+        {
+          "id": "bdop_c5c9edbeb3a642dd8bd4627e91ce7918",
+          "kind": "sandbox",
+          "targetId": "bx_pma8e4fp",
+          "status": "completed"
+        }
+      ],
+      "accountLists": {
+        "checkedAt": "2026-11-05T04:08:41.111545+00:00",
+        "proofExitCode": 0,
+        "sandboxes": [],
+        "saved-snapshots": []
+      },
+      "finding": "Complete normal Ubuntu proof passed: save, source deletion, cold receipt/runtime verification, explicit reuse, public dotfiles, person sudo outside clone mode, hidden outer manager sockets, DNS, exact daemon PID1, cookie-hosted health/capabilities, fake CLI versions, Xvnc/XFCE/Chromium/ffmpeg, detached writer, full writer scope, whole-unit stop with cgroup removal/MainPID zero and surviving sentinel/relay, provider stop/resume, settled held admission and unchanged lifecycle markers. All owned objects deleted; both account lists empty.",
+      "control": {
+        "healthState": 2,
+        "supports": [
+          "dotfiles.user",
+          "exec.user",
+          "forward.owner",
+          "process.secret-env.v1",
+          "restore.owner_map",
+          "sftp.user"
+        ],
+        "cookieHosted": true
+      }
+    }
+  ],
+  "socketDiagnostics": [
+    {
+      "evidence": "/tmp/boat-socket-proof.dzSs7t/evidence.json",
+      "id": "bx_a7tsb2ug",
+      "marker": "5a513427-3d4a-411b-9fde-e860e9a536d7",
+      "deletion": {
+        "id": "bdop_0858f28f823e4d369e743a1e459e8012",
+        "kind": "sandbox",
+        "targetId": "bx_a7tsb2ug",
+        "status": "completed"
+      },
+      "cleanup": true,
+      "finding": "Python PID1 Unix listener under the production namespace and bind policy: direct socket connect and relay health 200.",
+      "accountLists": {
+        "checkedAt": "2026-11-05T02:22:14.784783+00:00",
+        "proofExitCode": 0,
+        "sandboxes": [],
+        "saved-snapshots": []
+      }
+    },
+    {
+      "evidence": "/tmp/boat-daemon-socket.xE0Cgv/evidence.json",
+      "id": "bx_6zj4trrs",
+      "marker": "754cbab6-516a-4c10-a64d-11672e69dded",
+      "deletion": {
+        "id": "bdop_896be64192684d0c917b016046a85d12",
+        "kind": "sandbox",
+        "targetId": "bx_6zj4trrs",
+        "status": "completed"
+      },
+      "cleanup": true,
+      "finding": "Invalid minimal daemon fixture omitted required SEALANT_OS_FAMILY. Not a daemon pass.",
+      "accountLists": {
+        "checkedAt": "2026-11-05T02:24:36.582059+00:00",
+        "proofExitCode": 0,
+        "sandboxes": [],
+        "saved-snapshots": []
+      }
+    },
+    {
+      "evidence": "/tmp/boat-daemon-socket.JFWjwb/evidence.json",
+      "id": "bx_4sh7bf49",
+      "marker": "da6fb36c-0eee-4b86-bd9b-b44c2bbbf843",
+      "deletion": {
+        "id": "bdop_6c1729fdb6f147ab8d8bbd5da2bc5ade",
+        "kind": "sandbox",
+        "targetId": "bx_4sh7bf49",
+        "status": "completed"
+      },
+      "cleanup": true,
+      "finding": "Exact next180 daemon with minimal Ubuntu clone-mode boot: host and inner socket device/inode matched, direct socket connect passed, relay health 200.",
+      "accountLists": {
+        "checkedAt": "2026-11-05T02:25:36.004183+00:00",
+        "proofExitCode": 0,
+        "sandboxes": [],
+        "saved-snapshots": []
+      }
+    },
+    {
+      "id": "bx_ajzh35kx",
+      "source": "bx_ajzh35kx",
+      "snapshot": "sealant-dev-boat-stream-a45c88ccde4e411f926a9ee49a95b53a",
+      "deletion": {
+        "id": "bdop_83e7cba5548e4a5a813bbbec42c17f96",
+        "kind": "sandbox",
+        "targetId": "bx_ajzh35kx",
+        "status": "completed"
+      },
+      "cleanup": false,
+      "snapshotCleanupError": "not_found status=404",
+      "evidence": "/tmp/boat-cold-socket.jTMWY0/evidence.json",
+      "finding": "The minimal cold probe attempted save before source readiness and received HTTP 409. No snapshot was created. Sandbox deletion completed and both account lists were empty. The snapshot GET 404 was mistakenly recorded as a cleanup error by the throwaway runner.",
+      "accountLists": {
+        "checkedAt": "2026-11-05T02:35:22.558864+00:00",
+        "proofExitCode": 1,
+        "sandboxes": [],
+        "saved-snapshots": []
+      }
+    },
+    {
+      "id": "bx_vfpvz8hs",
+      "source": "bx_9czsey58",
+      "snapshot": "sealant-dev-boat-stream-e8e0ed5361fe4995bc6e53736e3e50c5",
+      "snapshotIdentity": {
+        "name": "sealant-dev-boat-stream-e8e0ed5361fe4995bc6e53736e3e50c5",
+        "status": "ready",
+        "sourceSandboxId": "bx_9czsey58",
+        "snapshotId": "62dba091-7e2e-45f8-af16-3198ea6eaa75",
+        "createdAt": "2026-11-05T02:36:36.767Z"
+      },
+      "deletions": [
+        {
+          "id": "bdop_db39c9dba42144ed8f5bbff7b1d7186e",
+          "kind": "sandbox",
+          "targetId": "bx_9czsey58",
+          "status": "pending"
+        },
+        {
+          "id": "bdop_db39c9dba42144ed8f5bbff7b1d7186e",
+          "kind": "sandbox",
+          "targetId": "bx_9czsey58",
+          "status": "completed"
+        }
+      ],
+      "deletion": {
+        "id": "bdop_e1a37944599f47e397235526102fd8bb",
+        "kind": "sandbox",
+        "targetId": "bx_vfpvz8hs",
+        "status": "completed"
+      },
+      "snapshotDeleted": true,
+      "cleanup": true,
+      "evidence": "/tmp/boat-cold-socket.cAIkAt/evidence.json",
+      "finding": "Minimal Ubuntu cold saved-snapshot clone with exact next180 daemon passed direct socket and relay health 200. Host and inner socket matched dev=64769 inode=141248. Source and clone deletions completed; snapshot removed and both account lists empty.",
+      "accountLists": {
+        "checkedAt": "2026-11-05T02:37:02.752595+00:00",
+        "proofExitCode": 0,
+        "sandboxes": [],
+        "saved-snapshots": []
+      }
+    }
+  ],
+  "dnsDiagnostic": {
+    "deletion": {
+      "id": "bdop_71d59689610c4d33b504b0281fd94689",
+      "kind": "sandbox",
+      "targetId": "bx_4bdx9bnu",
+      "reason": "explicit",
+      "status": "completed",
+      "stage": "completed",
+      "expectedBy": null,
+      "attemptCount": 1,
+      "requestedAt": "2026-11-05T03:32:40.540Z",
+      "completedAt": "2026-11-05T03:32:45.111Z"
+    },
+    "ownership": {
+      "marker": "03cfbad3-72ba-4a91-80c0-1d1897c93055",
+      "key": "251938bb-1911-4c99-b755-e58aa9225ed7",
+      "id": "bx_4bdx9bnu",
+      "deletionIntent": true,
+      "deletion": "bdop_71d59689610c4d33b504b0281fd94689"
+    },
+    "checkedAt": "2026-11-05T03:32:45.207865+00:00",
+    "sandboxes": [],
+    "saved-snapshots": [],
+    "evidence": "/tmp/boat-dns-proof.FjNaVo/evidence.json",
+    "finding": "Host resolved github.com. Private /run left /etc/resolv.conf -> ../run/systemd/resolve/stub-resolv.conf dangling and getent returned no addresses. Binding /etc/resolv.conf read-only restored the file and DNS while /run/systemd/private and /run/dbus/system_bus_socket remained absent. Binding the whole resolve directory also worked but was rejected as broader than necessary. A throwaway wrapper first misread the nested create response; its recorded idempotency key recovered the same VM, with no additional allocation."
+  },
+  "admissionDiagnostic": {
+    "deletion": {
+      "id": "bdop_cc9203c2415848b6b41dc11d0ec5ead1",
+      "kind": "sandbox",
+      "targetId": "bx_nqdh3u7m",
+      "reason": "explicit",
+      "status": "completed",
+      "stage": "completed",
+      "expectedBy": null,
+      "attemptCount": 1,
+      "requestedAt": "2026-11-05T03:54:04.400Z",
+      "completedAt": "2026-11-05T03:54:08.244Z"
+    },
+    "ownership": {
+      "marker": "ccf136b5-0e0d-4f1e-b2d5-1158faa735c9",
+      "key": "c52fea41-96b0-470e-a240-c66cd5eeef5a",
+      "id": "bx_nqdh3u7m",
+      "deletionIntent": true,
+      "deletion": "bdop_cc9203c2415848b6b41dc11d0ec5ead1"
+    },
+    "checkedAt": "2026-11-05T03:54:08.799595+00:00",
+    "sandboxes": [],
+    "saved-snapshots": [],
+    "evidence": "/tmp/boat-admission-proof.8Xmm42/evidence.json",
+    "result": "passed",
+    "finding": "The exact saved unit and launcher with a Nix boot family and held descriptor survived provider stop/resume. Explicit start initially reported active before Python admission settled, then logged session admission held and failed with status 1. Proof must wait for MainPID zero and the exact admission result rather than sleep two seconds. No daemon or Nix installation is needed for this early held branch. VM deleted and both account lists empty."
+  },
+  "completeLiveProofs": {
+    "nix": {
+      "family": "nix",
+      "result": "passed",
+      "proof": {
+        "runnerHash": "066d665e89d98035c88f1191616e1a2077c50fd5d9a9b7e682dd5a63fbf902d0",
+        "fixtureHash": "425185723b423772c8e853d6c59fac2041b7ca832008d189a795f7c4c5a7c796"
+      },
+      "ownership": {
+        "owner": "fd16728c-8873-4c19-a382-b44d9dd88e5e",
+        "artifact": {
+          "kind": "boat-saved-snapshot",
+          "owner": "fd16728c-8873-4c19-a382-b44d9dd88e5e",
+          "build": "f826baf0-c3a3-4409-aafb-e20f76795014",
+          "recipeHash": "337158c26ebf5dd17bdd96873bb96bcd6cbb7d6120dfbf8c8c1231ce1b617d50",
+          "receiptHash": "eb8bdfbd5cff7ed47d7b493161980880f9e046e159ae72c2639bf7044e59032d",
+          "runtime": {
+            "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+            "platform": "linux/amd64",
+            "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+            "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+            "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+            "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+          },
+          "identity": {
+            "name": "sealant-dev-boat-stream-f826baf0c3a34409aafbe20f76795014",
+            "sourceSandboxId": "bx_j5hv9bj9",
+            "createdAt": "2026-11-05T03:58:25.974Z",
+            "snapshotId": "6d897c88-a339-4776-ac7a-b76c41b059ef"
+          }
+        },
+        "artifactJournal": "/tmp/boat-native-proof.EtvYaT/nix/attempts/f826baf0-c3a3-4409-aafb-e20f76795014.json",
+        "clone": {
+          "marker": "77f4cd1d-83a6-4131-9b06-450b8bbd6c7d",
+          "key": "ace825e8-1ec1-412e-9614-a3634e1c7c26",
+          "requestedAt": "2026-11-05T03:59:14.967Z",
+          "from": "sealant-dev-boat-stream-f826baf0c3a34409aafbe20f76795014",
+          "id": "bx_gg64tkm9",
+          "deletionIntent": true,
+          "deletion": "bdop_4e9824e0fed742539ad4c76f7644a4d4",
+          "deleted": true
+        }
+      },
+      "cleanup": {
+        "confirmed": true,
+        "errors": []
+      },
+      "coldCreateToHealthMs": 129634,
+      "namespaceControl": {
+        "pid": "16174",
+        "socket": "/proc/16174/root/run/sealant/control.sock"
+      },
+      "afterStop": "cgroup removed after stop; no populated scope remains\nouter sentinel and relay survived\n",
+      "resume": "Nov 05 04:02:53 box-node-53720d6e17827724 unshare[7662]: session admission held\nNov 05 04:02:53 box-node-53720d6e17827724 unshare[7662]: session admission held\nadmission-held-lifecycle-unchanged\n",
+      "evidence": "/tmp/boat-native-proof.EtvYaT/nix/evidence.json",
+      "deletions": [
+        {
+          "id": "bdop_b5e62e5174d0429ca4e8cfdb7ac5da25",
+          "kind": "sandbox",
+          "targetId": "bx_j5hv9bj9",
+          "status": "completed"
+        },
+        {
+          "id": "bdop_4e9824e0fed742539ad4c76f7644a4d4",
+          "kind": "sandbox",
+          "targetId": "bx_gg64tkm9",
+          "status": "completed"
+        }
+      ],
+      "accountLists": {
+        "checkedAt": "2026-11-05T04:02:59.908553+00:00",
+        "proofExitCode": 0,
+        "sandboxes": [],
+        "saved-snapshots": []
+      },
+      "finding": "Complete normal Nix proof passed on the unchanged production image recipe: save, source deletion, cold receipt/runtime verification, explicit reuse, public dotfiles, person sudo outside clone mode, hidden outer manager sockets, root/person DNS, exact daemon PID1, cookie-hosted health/capabilities, fake CLI versions, Xvnc/Openbox/Chromium/ffmpeg, detached writer, non-root offline Nix worker matching PID1 cgroup, all writers in outer scope, whole-unit stop with cgroup removal/MainPID zero and surviving sentinel/relay, provider stop/resume, settled held admission and unchanged lifecycle markers. All owned objects deleted; both account lists empty.",
+      "control": {
+        "healthState": 2,
+        "supports": [
+          "dotfiles.user",
+          "exec.user",
+          "forward.owner",
+          "process.secret-env.v1",
+          "restore.owner_map",
+          "sftp.user"
+        ],
+        "cookieHosted": true
+      }
+    },
+    "ubuntu": {
+      "family": "ubuntu",
+      "result": "passed",
+      "proof": {
+        "runnerHash": "066d665e89d98035c88f1191616e1a2077c50fd5d9a9b7e682dd5a63fbf902d0",
+        "fixtureHash": "425185723b423772c8e853d6c59fac2041b7ca832008d189a795f7c4c5a7c796"
+      },
+      "ownership": {
+        "owner": "4b1cfc45-22d0-474e-9b6f-34493ce637f2",
+        "artifact": {
+          "kind": "boat-saved-snapshot",
+          "owner": "4b1cfc45-22d0-474e-9b6f-34493ce637f2",
+          "build": "3a80c0fe-1dac-4998-beb2-b6be86cea351",
+          "recipeHash": "41301600a6deb2e8a83ac6d540350160f8e25aa98d9aced4b47d876cb55c7079",
+          "receiptHash": "2f3d4d6f2f1f7b86e7ca7cdb8dbaf886c979e8eec667fabda926741ace41ebf8",
+          "runtime": {
+            "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+            "platform": "linux/amd64",
+            "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+            "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+            "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+            "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+          },
+          "identity": {
+            "name": "sealant-dev-boat-stream-3a80c0fe1dac4998beb2b6be86cea351",
+            "sourceSandboxId": "bx_f9wy6534",
+            "createdAt": "2026-11-05T04:07:11.475Z",
+            "snapshotId": "d708c15e-9586-4d11-a180-e973ef704d53"
+          }
+        },
+        "artifactJournal": "/tmp/boat-native-proof.A5r7oV/ubuntu/attempts/3a80c0fe-1dac-4998-beb2-b6be86cea351.json",
+        "clone": {
+          "marker": "c4154cde-4a65-4571-bde1-56108f9a8dff",
+          "key": "2a86a918-b277-40d0-ae83-cfa35fc79350",
+          "requestedAt": "2026-11-05T04:07:29.281Z",
+          "from": "sealant-dev-boat-stream-3a80c0fe1dac4998beb2b6be86cea351",
+          "id": "bx_pma8e4fp",
+          "deletionIntent": true,
+          "deletion": "bdop_c5c9edbeb3a642dd8bd4627e91ce7918",
+          "deleted": true
+        }
+      },
+      "cleanup": {
+        "confirmed": true,
+        "errors": []
+      },
+      "coldCreateToHealthMs": 27659,
+      "namespaceControl": {
+        "pid": "8025",
+        "socket": "/proc/8025/root/run/sealant/control.sock"
+      },
+      "afterStop": "cgroup removed after stop; no populated scope remains\nouter sentinel and relay survived\n",
+      "resume": "Nov 05 04:08:35 box-node-1d1144e60ac9d5a8 unshare[6662]: session admission held\nNov 05 04:08:35 box-node-1d1144e60ac9d5a8 unshare[6662]: session admission held\nadmission-held-lifecycle-unchanged\n",
+      "evidence": "/tmp/boat-native-proof.A5r7oV/ubuntu/evidence.json",
+      "deletions": [
+        {
+          "id": "bdop_146898f513a4406b87a69eeb332bcd21",
+          "kind": "sandbox",
+          "targetId": "bx_f9wy6534",
+          "status": "completed"
+        },
+        {
+          "id": "bdop_c5c9edbeb3a642dd8bd4627e91ce7918",
+          "kind": "sandbox",
+          "targetId": "bx_pma8e4fp",
+          "status": "completed"
+        }
+      ],
+      "accountLists": {
+        "checkedAt": "2026-11-05T04:08:41.111545+00:00",
+        "proofExitCode": 0,
+        "sandboxes": [],
+        "saved-snapshots": []
+      },
+      "finding": "Complete normal Ubuntu proof passed: save, source deletion, cold receipt/runtime verification, explicit reuse, public dotfiles, person sudo outside clone mode, hidden outer manager sockets, DNS, exact daemon PID1, cookie-hosted health/capabilities, fake CLI versions, Xvnc/XFCE/Chromium/ffmpeg, detached writer, full writer scope, whole-unit stop with cgroup removal/MainPID zero and surviving sentinel/relay, provider stop/resume, settled held admission and unchanged lifecycle markers. All owned objects deleted; both account lists empty.",
+      "control": {
+        "healthState": 2,
+        "supports": [
+          "dotfiles.user",
+          "exec.user",
+          "forward.owner",
+          "process.secret-env.v1",
+          "restore.owner_map",
+          "sftp.user"
+        ],
+        "cookieHosted": true
+      }
+    }
+  },
+  "coldStartObservations": {
+    "nix": {
+      "createToHealthMs": 129634,
+      "includes": "cold receipt/runtime checks, image probe, person/sentinel fixture setup, explicit admission and relay staging",
+      "evidence": "/tmp/boat-native-proof.EtvYaT/nix/evidence.json"
+    },
+    "ubuntu": {
+      "createToHealthMs": 27659,
+      "includes": "cold receipt/runtime checks, image probe, person/sentinel fixture setup, explicit admission and relay staging",
+      "evidence": "/tmp/boat-native-proof.A5r7oV/ubuntu/evidence.json"
     }
   }
 }
