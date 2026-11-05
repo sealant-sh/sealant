@@ -205,7 +205,6 @@ const make = (
         return yield* Effect.fail(built.failure);
       }
       const exact = publication(record.ownership, built.success);
-      // A failed catalog commit leaves the published journal and snapshot for fenced adoption.
       yield* repo.publish(claim, exact);
       return exact;
     });
@@ -394,7 +393,6 @@ const make = (
     });
   });
 
-/** Tests can replace dependencies without replacing catalog policy. */
 export const boatNativeCatalogLayerNoDeps = (
   options: BoatNativeCatalogOptions,
 ): Layer.Layer<BoatNativeCatalog, never, NativePublicationRepo> =>

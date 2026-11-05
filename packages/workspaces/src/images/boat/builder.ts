@@ -466,7 +466,11 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
   ): Promise<BoatSavedSnapshot | null> {
     const result = await awaitProviderResponse<BoatSavedSnapshot | null>(async () => {
       const found = await this.#options.api.getSnapshot(name);
-      return !found.ok && found.error.status === 404 ? { ok: true, value: null } : found;
+      return !found.ok &&
+        found.error.status === 404 &&
+        (found.error.code === "not_found" || found.error.code === "snapshot_not_found")
+        ? { ok: true, value: null }
+        : found;
     }, signal);
     if (result !== null && result.name !== name)
       throw new NativeBuildError("native-snapshot-identity-mismatch");

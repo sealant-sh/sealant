@@ -15,7 +15,7 @@ import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { nativeBuildOwnershipSchema } from "@sealant/validators";
+import { nativeBuildOwnershipSchema, nativeSnapshotArtifactSchema } from "@sealant/validators";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { HttpBoatApi, boatBuildOwnershipLabels } from "../../runtime/boat/api.js";
@@ -83,6 +83,7 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
   let deletionAccepted = false;
   let delayDelete = false;
   let finishDelete: (() => void) | undefined;
+  let snapshotReadFailure: "html" | "unexpected-code" | "wrong-resource" | undefined;
   let inventory: Array<{ id: string; state: string; labels: Record<string, string> }> = [];
   const server = http.createServer((request, response) => {
     const data: Buffer[] = [];
@@ -159,6 +160,18 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
         if (request.method === "DELETE") {
           snapshot = undefined;
           respond(response, { ok: true, name, status: "deleted" });
+        } else if (snapshotReadFailure === "html") {
+          response.writeHead(404, { "content-type": "text/html" }).end("<html>Not found</html>");
+        } else if (snapshotReadFailure !== undefined) {
+          respond(
+            response,
+            {
+              ok: false,
+              code:
+                snapshotReadFailure === "wrong-resource" ? "sandbox_not_found" : "unknown_route",
+            },
+            404,
+          );
         } else if (snapshot !== undefined) respond(response, { ok: true, snapshot });
         else respond(response, { ok: false, code: "not_found" }, 404);
       } else respond(response, { ok: false, code: "not_found" }, 404);
@@ -203,6 +216,9 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
     },
     snapshot: (value: typeof snapshot) => {
       snapshot = value;
+    },
+    failSnapshotRead: (value: typeof snapshotReadFailure) => {
+      snapshotReadFailure = value;
     },
     holdDelete: () => {
       delayDelete = true;
@@ -524,6 +540,53 @@ describe("attempt-owned durable native cleanup", () => {
     expect(f.requests.filter((r) => r.method === "POST")).toHaveLength(1);
     expect(await f.read()).toMatchObject({ phase: "complete", save: { state: "removed" } });
   });
+
+  for (const failure of ["html", "unexpected-code", "wrong-resource"] as const)
+    it(`keeps ${failure} snapshot 404 unresolved until a valid provider observation`, async () => {
+      const f = await fixture();
+      const artifact = nativeSnapshotArtifactSchema.parse({
+        kind: "boat-saved-snapshot",
+        owner,
+        build: f.journal.build,
+        recipeHash: f.journal.recipeHash,
+        receiptHash: "e".repeat(64),
+        runtime: f.journal.runtime,
+        identity: f.identity,
+      });
+      await f.write({
+        ...f.journal,
+        phase: "published",
+        receiptHash: artifact.receiptHash,
+        allocation: { ...f.journal.allocation, state: "deleted", id, deletion: operation },
+        save: {
+          state: "known",
+          name: f.identity.name,
+          sourceSandboxId: id,
+          requestedAt: f.identity.createdAt,
+          identity: f.identity,
+        },
+      });
+      f.failSnapshotRead(failure);
+      const code =
+        failure === "html"
+          ? "invalid_response"
+          : failure === "wrong-resource"
+            ? "sandbox_not_found"
+            : "provider_error";
+      expect(await f.builder.remove(artifact)).toMatchObject({
+        ok: false,
+        error: { code: `native-provider-${code}` },
+      });
+      expect(await f.read()).not.toHaveProperty("removal");
+      expect(f.requests.some((request) => request.method === "DELETE")).toBe(false);
+
+      const observations = f.requests.length;
+      f.failSnapshotRead(undefined);
+      f.snapshot({ ...f.identity, status: "ready" });
+      expect(await f.builder.remove(artifact)).toEqual({ ok: true, value: "deleted" });
+      expect(f.requests.length).toBeGreaterThan(observations);
+      expect(await f.read()).toMatchObject({ phase: "published", removal: "complete" });
+    });
 
   it("serializes only the same attempt across kernel locks", async () => {
     const f = await fixture();
