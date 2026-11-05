@@ -18,6 +18,20 @@ def private_json(path):
 if os.getpid() != 1:
     raise SystemExit("native daemon requires PID1")
 
+# Private /run also hides /var/run aliases. Refuse an unexpected outer socket alias.
+for socket_path in (
+    "/run/systemd/private",
+    "/var/run/systemd/private",
+    "/run/dbus/system_bus_socket",
+    "/var/run/dbus/system_bus_socket",
+    "/var/lib/dbus/system_bus_socket",
+):
+    try:
+        if stat.S_ISSOCK(os.stat(socket_path).st_mode):
+            raise SystemExit("outer service manager socket is visible")
+    except FileNotFoundError:
+        pass
+
 boot = private_json("/etc/sealant/native-boot.json")
 launch = private_json("/run/sealant/launch.json")
 if launch.get("admission") != "open":
@@ -38,7 +52,7 @@ if boot["SEALANT_OS_FAMILY"] == "nix":
         ["/bin/sh", "/usr/local/lib/sealant/native-nix-start"], env=env, check=True
     )
     subprocess.run(
-        ["nix", "--extra-experimental-features", "nix-command", "store", "info"],
+        ["timeout", "15", "nix", "--extra-experimental-features", "nix-command", "store", "info"],
         env={**env, "NIX_REMOTE": "daemon"}, check=True,
     )
 os.execve("/usr/local/bin/sealantd", ["/usr/local/bin/sealantd", "boot"], env)

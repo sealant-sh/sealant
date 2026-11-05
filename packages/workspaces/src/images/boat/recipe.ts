@@ -4,7 +4,7 @@ import type { WorkspaceBlueprint } from "@sealant/validators";
 import { z } from "zod";
 
 import { nativeWorkspaceInstallation } from "../../buildkit/buildkit-builder.js";
-import { NIX_DAEMON_START, NIX_PROFILE } from "../../buildkit/person-layout.js";
+import { nixDaemonStartCommands, NIX_PROFILE } from "../../buildkit/person-layout.js";
 import {
   NativeBuildError,
   sha256,
@@ -93,7 +93,8 @@ export const createNativeRecipe = async (
       ),
       file(
         "/usr/local/lib/sealant/native-nix-start",
-        ["#!/bin/sh", "set -eu", ...NIX_DAEMON_START].join("\n") + "\n",
+        // Cold Boat clones fault Nix's store pages on demand before the daemon can listen.
+        ["#!/bin/sh", "set -eu", ...nixDaemonStartCommands(90)].join("\n") + "\n",
         "0755",
       ),
     ];

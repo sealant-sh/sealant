@@ -486,18 +486,21 @@ export const NIX_BOOT_PATH = "/usr/local/bin/sealant-nix-boot";
  * How {@link NIX_BOOT_PATH} starts the daemon. A daemon that dies or does not answer is reported and
  * boot goes on: it fails only a person's nix, while root's nix and everything else work without it.
  */
-export const NIX_DAEMON_START: readonly string[] = [
+export const nixDaemonStartCommands = (readySeconds = 10): readonly string[] => [
   'rm -f "${NIX_STATE_DIR:-/nix/var/nix}/daemon-socket/socket"',
   'log="${NIX_LOG_DIR:-/nix/var/log/nix}/nix-daemon.log"',
   'nix-daemon >>"$log" 2>&1 &',
   "daemon=$!",
-  "deadline=$(($(date +%s) + 10))",
+  `deadline=$(($(date +%s) + ${String(readySeconds)}))`,
   "until NIX_REMOTE=daemon timeout -k 1 2 nix --extra-experimental-features nix-command store info >/dev/null 2>&1; do",
   '  if ! kill -0 "$daemon" 2>/dev/null; then echo "sealant: nix-daemon exited (see $log); nix works only for root" >&2; break; fi',
-  '  if [ "$(date +%s)" -ge "$deadline" ]; then echo "sealant: nix-daemon did not answer in 10 s (see $log); nix works only for root" >&2; break; fi',
+  `  if [ "$(date +%s)" -ge "$deadline" ]; then echo "sealant: nix-daemon did not answer in ${String(readySeconds)} s (see $log); nix works only for root" >&2; break; fi`,
   "  sleep 0.2",
   "done",
 ];
+
+/** Container readiness budget, kept byte-for-byte compatible with existing images. */
+export const NIX_DAEMON_START = nixDaemonStartCommands();
 
 export const NIX_BOOT_SCRIPT: readonly string[] = [
   "#!/bin/sh",

@@ -7,7 +7,6 @@ Type=simple
 PrivateMounts=yes
 TemporaryFileSystem=/run:rw,nosuid,nodev
 BindPaths=/var/lib/sealant/control:/run/sealant
-InaccessiblePaths=-/var/run/dbus -/var/run/systemd -/var/lib/dbus/system_bus_socket
 ProtectControlGroups=yes
 KillMode=control-group
 TimeoutStopSec=5
