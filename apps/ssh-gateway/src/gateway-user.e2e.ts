@@ -183,12 +183,17 @@ beforeAll(async () => {
         },
         target: { os: { family: "fedora" }, runtime: { family: "docker" } },
       },
-      publishedImage: {
-        repository: "sealant-workspace-fedora",
-        tag: "latest",
-        reference: IMAGE_REF,
-        digestReference: IMAGE_REF,
-        digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      publication: {
+        kind: "oci",
+        publicationId: "fixture-publication",
+        image: {
+          repository: "sealant-workspace-fedora",
+          tag: "latest",
+          reference: IMAGE_REF,
+          digestReference: IMAGE_REF,
+          digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        },
+        evidence: {},
       },
       runId: `ssh-user-e2e-${randomUUID()}`,
     }),

@@ -22,7 +22,7 @@ import {
   hostDirectoryLaunchMaterialStager,
   type LaunchMaterialStager,
 } from "../runtime/launch-material.js";
-import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
+import type { RuntimeAdapterLifecycle } from "../runtime/runtime-adapter.js";
 import { SealantRuntimeControlLive } from "../sealantd/runtime.js";
 import {
   sealantTargetForRuntimeInstance,
@@ -107,7 +107,7 @@ export interface ProcessWorkspaceStopEffectOptions {
   /** The attempt whose runtime instance is being stopped. */
   readonly runId: string;
   readonly stopReason: WorkspaceRuntimeInstanceStopReason;
-  readonly runtimeAdapters: readonly RuntimeAdapter[];
+  readonly runtimeAdapters: readonly RuntimeAdapterLifecycle[];
   /**
    * Enables the best-effort credential sync-back before the container is destroyed (rotated
    * claude/codex session files must not die with the runtime — interactive/PTY sessions rotate
@@ -154,7 +154,7 @@ const swallowingFailure = (operation: string) =>
  * keeps its chance and nothing is taken for gone.
  */
 const runtimeState = (
-  adapter: RuntimeAdapter,
+  adapter: RuntimeAdapterLifecycle,
   resourceId: string,
 ): Effect.Effect<"running" | "exited" | "missing"> => {
   const inspect = adapter.inspect;
@@ -281,7 +281,7 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
   // on a runtime that keeps remains, once it has ENDED under this removal and been recorded
   // stopped (its remains are slated, and the remains sweep takes them if this call cannot).
   const stopRuntime = (input: {
-    readonly adapter: RuntimeAdapter;
+    readonly adapter: RuntimeAdapterLifecycle;
     readonly resourceId: string;
     readonly reference: string | null;
     readonly fence: boolean;

@@ -1,5 +1,12 @@
-import type { NewWorkspace } from "@sealant/validators";
-import { and, asc, desc, eq, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
+import {
+  parsePersistedWorkspacePublication,
+  workspacePublicationSchema,
+  nativeImageScopeSchema,
+  type WorkspacePublication,
+  type NativePublicationKey,
+  type NewWorkspace,
+} from "@sealant/validators";
+import { and, asc, desc, eq, inArray, lte, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -16,12 +23,7 @@ export interface PublishedWorkspaceImage {
   readonly jobId: string;
   readonly runId: string | null;
   readonly registryId: string;
-  /** The `<repository>:<tag>` (or `<registry>/<repository>:<tag>`) the image was published as. */
-  readonly publishedReference: string;
-  /** The repository the client asked for; the fallback when the reference carries no tag. */
-  readonly repository: string;
-  readonly digest: string;
-  readonly planHash: string | null;
+  readonly publication: Exclude<WorkspacePublication, { kind: "boat-native" }>;
   readonly publishedAt: Date;
 }
 
@@ -32,6 +34,7 @@ export interface EnqueueWorkspaceBuildJobInput {
   readonly repository: string;
   readonly tag: string;
   readonly requestPayload: NewWorkspace;
+  readonly imageScope?: NativePublicationKey["scope"];
   /** Sealed (encrypted) `secretEnv` JSON; cleared by `clearSecretEnv` after launch. */
   readonly secretEnvSealed?: string;
   readonly idempotencyKey?: string;
@@ -80,9 +83,10 @@ export interface MarkWorkspaceBuildJobSucceededInput {
   readonly claim: WorkspaceBuildJobClaim;
   readonly builderId: string;
   readonly resultPayload?: NonNullable<WorkspaceBuildJob["resultPayload"]>;
-  readonly publishedReference: string;
-  readonly publishedDigestReference: string;
-  readonly publishedDigest: string;
+  readonly publication?: WorkspacePublication;
+  readonly publishedReference?: string;
+  readonly publishedDigestReference?: string;
+  readonly publishedDigest?: string;
   readonly finishedAt?: Date;
 }
 
@@ -113,6 +117,16 @@ export interface MarkWorkspaceBuildJobFailedInput {
   readonly errorCode?: string;
   readonly finishedAt?: Date;
 }
+
+const parseJob = (job: WorkspaceBuildJob) =>
+  Effect.try(() => ({
+    ...job,
+    imageScope: job.imageScope == null ? null : nativeImageScopeSchema.parse(job.imageScope),
+    publication: parsePersistedWorkspacePublication({
+      ...job,
+      evidence: job.resultPayload?.metadata ?? {},
+    }),
+  }));
 
 const requiredDate = (value: Date | undefined): Date => {
   return value ?? new Date();
@@ -217,6 +231,7 @@ export interface WorkspaceBuildJobRepoService {
   readonly getLatestSucceededJobByPlanHash: (input: {
     readonly registryId: string;
     readonly planHash: string;
+    readonly imageScope?: NativePublicationKey["scope"];
   }) => Effect.Effect<WorkspaceBuildJob | undefined, WorkspaceBuildJobRepoError>;
   readonly listLatestJobsByRunIds: (
     runIds: readonly string[],
@@ -296,6 +311,9 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
                 repository: input.repository,
                 tag: input.tag,
                 requestPayload: input.requestPayload,
+                ...(input.imageScope === undefined
+                  ? {}
+                  : { imageScope: nativeImageScopeSchema.parse(input.imageScope) }),
                 ...(input.secretEnvSealed === undefined
                   ? {}
                   : { secretEnvSealed: input.secretEnvSealed }),
@@ -314,7 +332,7 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
               });
             }
 
-            return job;
+            return yield* parseJob(job);
           }),
         ),
 
@@ -328,7 +346,7 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
               .where(eq(workspaceBuildJobs.id, id))
               .limit(1);
 
-            return job;
+            return job === undefined ? undefined : yield* parseJob(job);
           }),
         ),
 
@@ -342,7 +360,7 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
               .where(eq(workspaceBuildJobs.idempotencyKey, idempotencyKey))
               .limit(1);
 
-            return job;
+            return job === undefined ? undefined : yield* parseJob(job);
           }),
         ),
 
@@ -357,7 +375,7 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
               .orderBy(desc(workspaceBuildJobs.createdAt))
               .limit(1);
 
-            return job;
+            return job === undefined ? undefined : yield* parseJob(job);
           }),
         ),
 
@@ -372,13 +390,18 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
                 and(
                   eq(workspaceBuildJobs.status, "succeeded"),
                   eq(workspaceBuildJobs.registryId, input.registryId),
+                  ...(input.imageScope === undefined
+                    ? []
+                    : [
+                        sql`${workspaceBuildJobs.imageScope} = ${JSON.stringify(input.imageScope)}::jsonb`,
+                      ]),
                   sql`${workspaceBuildJobs.resultPayload} #>> '{metadata,planHash}' = ${input.planHash}`,
                 ),
               )
               .orderBy(desc(workspaceBuildJobs.finishedAt))
               .limit(1);
 
-            return job;
+            return job === undefined ? undefined : yield* parseJob(job);
           }),
         ),
 
@@ -403,7 +426,7 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
                 continue;
               }
 
-              latestJobsByRunId.set(job.runId, job);
+              latestJobsByRunId.set(job.runId, yield* parseJob(job));
             }
 
             return latestJobsByRunId;
@@ -419,55 +442,32 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
             .where(eq(workspaceBuildJobs.status, status))
             .orderBy(asc(workspaceBuildJobs.createdAt))
             .limit(limit)
-            .pipe(Effect.map((jobs) => [...jobs])),
+            .pipe(Effect.flatMap((jobs) => Effect.forEach(jobs, parseJob))),
         ),
 
       listPublishedImages: () =>
         withWorkspaceBuildJobRepoError(
           "listPublishedImages",
-          db
-            .select({
-              jobId: workspaceBuildJobs.id,
-              runId: workspaceBuildJobs.runId,
-              registryId: workspaceBuildJobs.registryId,
-              publishedReference: workspaceBuildJobs.publishedReference,
-              repository: workspaceBuildJobs.repository,
-              digest: workspaceBuildJobs.publishedDigest,
-              planHash: sql<
-                string | null
-              >`${workspaceBuildJobs.resultPayload} #>> '{metadata,planHash}'`,
-              finishedAt: workspaceBuildJobs.finishedAt,
-              updatedAt: workspaceBuildJobs.updatedAt,
-            })
-            .from(workspaceBuildJobs)
-            .where(
-              and(
-                eq(workspaceBuildJobs.status, "succeeded"),
-                isNotNull(workspaceBuildJobs.publishedDigest),
-                isNotNull(workspaceBuildJobs.publishedReference),
-              ),
-            )
-            .orderBy(desc(workspaceBuildJobs.finishedAt), desc(workspaceBuildJobs.createdAt))
-            .pipe(
-              Effect.map((rows) =>
-                rows.flatMap((row) =>
-                  row.digest === null || row.publishedReference === null
-                    ? []
-                    : [
-                        {
-                          jobId: row.jobId,
-                          runId: row.runId,
-                          registryId: row.registryId,
-                          publishedReference: row.publishedReference,
-                          repository: row.repository,
-                          digest: row.digest,
-                          planHash: row.planHash,
-                          publishedAt: row.finishedAt ?? row.updatedAt,
-                        },
-                      ],
-                ),
-              ),
-            ),
+          Effect.gen(function* () {
+            const rows = yield* db
+              .select()
+              .from(workspaceBuildJobs)
+              .where(eq(workspaceBuildJobs.status, "succeeded"))
+              .orderBy(desc(workspaceBuildJobs.finishedAt), desc(workspaceBuildJobs.createdAt));
+            const result: PublishedWorkspaceImage[] = [];
+            for (const row of rows) {
+              const job = yield* parseJob(row);
+              if (job.publication === null || job.publication.kind === "boat-native") continue;
+              result.push({
+                jobId: job.id,
+                runId: job.runId,
+                registryId: job.registryId,
+                publication: job.publication,
+                publishedAt: job.finishedAt ?? job.updatedAt,
+              });
+            }
+            return result;
+          }),
         ),
 
       claimNextQueuedJob: (input) =>
@@ -518,7 +518,7 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
                 .where(and(eq(workspaceBuildJobs.id, candidate.id), claimable))
                 .returning();
 
-              return claimed ?? null;
+              return claimed === undefined ? null : yield* parseJob(claimed);
             }),
           ),
         ),
@@ -557,7 +557,7 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
               )
               .returning();
 
-            return claimed ?? null;
+            return claimed === undefined ? null : yield* parseJob(claimed);
           }),
         ),
 
@@ -580,7 +580,7 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
               .where(eq(workspaceBuildJobs.id, input.id))
               .returning();
 
-            return job ?? null;
+            return job === undefined ? null : yield* parseJob(job);
           }),
         ),
 
@@ -596,9 +596,30 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
                 ...(input.resultPayload === undefined
                   ? {}
                   : { resultPayload: input.resultPayload }),
-                publishedReference: input.publishedReference,
-                publishedDigestReference: input.publishedDigestReference,
-                publishedDigest: input.publishedDigest,
+                ...(input.publication === undefined
+                  ? {}
+                  : {
+                      publication: workspacePublicationSchema.parse(input.publication),
+                      publicationId: input.publication.publicationId,
+                    }),
+                publishedReference:
+                  input.publication?.kind === "oci"
+                    ? input.publication.image.reference
+                    : input.publication === undefined
+                      ? (input.publishedReference ?? null)
+                      : null,
+                publishedDigestReference:
+                  input.publication?.kind === "oci"
+                    ? input.publication.image.digestReference
+                    : input.publication === undefined
+                      ? (input.publishedDigestReference ?? null)
+                      : null,
+                publishedDigest:
+                  input.publication?.kind === "oci"
+                    ? input.publication.image.digest
+                    : input.publication === undefined
+                      ? (input.publishedDigest ?? null)
+                      : null,
                 finishedAt: input.finishedAt ?? new Date(),
                 leaseExpiresAt: null,
                 errorCode: null,
@@ -614,7 +635,7 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
               )
               .returning();
 
-            return job ?? null;
+            return job === undefined ? null : yield* parseJob(job);
           }),
         ),
 
@@ -643,7 +664,7 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
               )
               .returning();
 
-            return job ?? null;
+            return job === undefined ? null : yield* parseJob(job);
           }),
         ),
 
@@ -691,7 +712,7 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
                 ),
               )
               .returning();
-            return job ?? null;
+            return job === undefined ? null : yield* parseJob(job);
           }),
         ),
 

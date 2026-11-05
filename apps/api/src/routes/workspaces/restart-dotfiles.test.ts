@@ -11,6 +11,7 @@ import type { CreateWorkspaceRequest } from "@sealant/api-contracts";
 import { CredentialCipher } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
+  ResourceDomainRepo,
   GitHubInstallationRepo,
   GitHubInstallationRepositoryCacheRepo,
   ProfileRepo,
@@ -80,6 +81,7 @@ interface Store {
   readonly attempts: Map<string, WorkspaceAttempt>;
   readonly snapshots: Map<string, NewWorkspace>;
   readonly jobs: Map<string, WorkspaceBuildJob>;
+  scopeAllowed?: boolean;
   readonly stops: string[];
 }
 
@@ -207,6 +209,9 @@ const makeLayer = (store: Store) => {
   const buildJobRepo: WorkspaceBuildJobRepoService = {
     insertQueuedJob: (input) => {
       const job: WorkspaceBuildJob = {
+        imageScope: input.imageScope ?? null,
+        publication: null,
+        publicationId: null,
         id: input.id,
         runId: input.runId ?? null,
         status: "queued",
@@ -279,6 +284,9 @@ const makeLayer = (store: Store) => {
     }),
     Layer.succeed(WorkspaceAttemptRepo, attemptRepo),
     Layer.succeed(WorkspaceBuildJobRepo, buildJobRepo),
+    Layer.mock(ResourceDomainRepo, {
+      canUseImages: () => Effect.sync(() => store.scopeAllowed === true),
+    }),
     // No capture drain is recorded: nothing is retained.
     Layer.mock(WorkspaceCaptureDrainRepo, { getByRunId: () => Effect.succeed(undefined) }),
     Layer.mock(WorkspaceRuntimeInstanceRepo, {}),
@@ -325,6 +333,38 @@ const expectedArchives = [
 ];
 
 describe("restartWorkspace dotfiles", () => {
+  it("preserves a selected image scope on restart and refuses its revocation before another job", async () => {
+    const store = newStore();
+    store.scopeAllowed = true;
+    const domainId = "rdm:00000000-0000-4000-8000-000000000001";
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const owner = "usr_scope_restart";
+        const created = yield* createWorkspace({
+          payload: { ...dotfilesPayload(owner), imageScopeId: domainId },
+          headers: {},
+        });
+        settle(store, store.workspace?.latestRunId ?? "");
+        const restarted = yield* restartWorkspace({
+          workspaceId: created.workspaceId,
+          payload: { ownerUserId: owner },
+        });
+        expect(store.jobs.get(restarted.runId)?.imageScope).toEqual({
+          kind: "resource-domain",
+          domainId,
+        });
+        settle(store, restarted.runId);
+        store.scopeAllowed = false;
+        const count = store.jobs.size;
+        const refused = yield* Effect.result(
+          restartWorkspace({ workspaceId: created.workspaceId, payload: { ownerUserId: owner } }),
+        );
+        expect(Result.isFailure(refused)).toBe(true);
+        expect(store.jobs.size).toBe(count);
+      }).pipe(Effect.provide(makeLayer(store))),
+    );
+  });
+
   it("keeps the archives out of the snapshot and in the build job on create", async () => {
     const store = newStore();
     await Effect.runPromise(

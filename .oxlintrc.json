@@ -18,6 +18,45 @@
     "typescript/no-floating-promises": "error",
     "typescript/no-misused-promises": "error",
     "unicorn/prefer-node-protocol": "error",
-    "no-underscore-dangle": ["error", { "allow": ["_splat", "_values"] }]
-  }
+    "no-underscore-dangle": [
+      "error",
+      {
+        "allow": ["_splat", "_values"]
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["apps/api/src/routes/**/*.ts", "packages/workspaces/src/worker/**/*.ts"],
+      "excludeFiles": ["**/*.test.ts", "**/*.fixture.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@sealant/db",
+                "importNames": ["NativePublicationRepo", "NativePublicationRepoLive"],
+                "message": "Native publication persistence belongs to BoatNativeCatalog."
+              }
+            ],
+            "patterns": [
+              {
+                "group": [
+                  "**/runtime/boat/api*",
+                  "**/runtime/boat/config*",
+                  "**/images/boat/builder*",
+                  "**/images/boat/journal*",
+                  "**/images/boat/recipe*",
+                  "**/images/boat/runtime-bundle*",
+                  "@sealant/db/testing/*"
+                ],
+                "message": "Use the native catalog or read-only inspection service. Provider and journal internals stay in their owners."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
 }

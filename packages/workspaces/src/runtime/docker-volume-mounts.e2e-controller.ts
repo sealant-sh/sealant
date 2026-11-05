@@ -254,7 +254,12 @@ const createLaunchInput = (
 ): RuntimeAdapterLaunchInput =>
   parseRuntimeAdapterLaunchInput({
     blueprint,
-    publishedImage: publishedImage(image),
+    publication: {
+      kind: "oci",
+      publicationId: "fixture-publication",
+      image: publishedImage(image),
+      evidence: {},
+    },
     runId,
     ...extras,
   });

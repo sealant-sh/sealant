@@ -29,10 +29,7 @@ import {
   type SealantTarget,
 } from "../../sealantd/runtime.js";
 import { execInWorkspace, sealantTargetForRuntimeInstance } from "../../sealantd/target.js";
-import {
-  parseRuntimeAdapterLaunchInput,
-  type RuntimeAdapterLaunchResult,
-} from "../runtime-adapter.js";
+import { parseMicrovmLaunchInput, type RuntimeAdapterLaunchResult } from "../runtime-adapter.js";
 import { MicrovmRuntimeAdapter } from "./adapter.js";
 import { createLiveMicrovmApi, type MicrovmApi } from "./api.js";
 import { microvmRuntimeConfigFromEnv, type MicrovmRuntimeConfig } from "./config.js";
@@ -47,7 +44,6 @@ import {
   safeErrorEvidence,
 } from "./docker-e2e-validation.js";
 import { MicrovmEndpointTokens } from "./endpoint-tokens.js";
-import { microvmImageReference } from "./image-reference.js";
 
 const E2E_ENABLED = process.env.SEALANT_MICROVM_DOCKER_E2E === "1";
 const FIXTURE_PREFIX = "sealant-microvm-docker-e2e";
@@ -469,7 +465,6 @@ const waitForDockerFailure = async (
 describe.skipIf(!E2E_ENABLED)("Lambda MicroVM guest-local Docker (live provider)", () => {
   it("runs Docker workflows and reports daemon loss through the authenticated control plane", async () => {
     const { config, candidateImage } = e2eConfig();
-    const candidateReference = microvmImageReference(candidateImage.arn, candidateImage.version);
     const fixtureId = `${FIXTURE_PREFIX}-${randomUUID().slice(0, 8)}`;
     let evidence: EvidenceRecorder;
     try {
@@ -544,7 +539,7 @@ describe.skipIf(!E2E_ENABLED)("Lambda MicroVM guest-local Docker (live provider)
         "launch one Docker-capable VM",
         () =>
           adapter.launch(
-            parseRuntimeAdapterLaunchInput({
+            parseMicrovmLaunchInput({
               runId: fixtureId,
               blueprint: {
                 version: "1",
@@ -589,12 +584,15 @@ describe.skipIf(!E2E_ENABLED)("Lambda MicroVM guest-local Docker (live provider)
                   runtime: { family: "microvm", mode: "require" },
                 },
               },
-              publishedImage: {
-                repository: FIXTURE_PREFIX,
-                tag: candidateImage.version,
-                reference: candidateReference,
-                digestReference: candidateReference,
-                digest: "sha256:e2e-fixture",
+              publication: {
+                kind: "microvm",
+                publicationId: fixtureId,
+                image: {
+                  imageArn: candidateImage.arn,
+                  imageVersion: candidateImage.version,
+                  planHash: "0".repeat(64),
+                },
+                evidence: {},
               },
             }),
           ),

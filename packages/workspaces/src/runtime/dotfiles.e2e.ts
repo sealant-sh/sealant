@@ -142,12 +142,17 @@ describe.skipIf(!E2E_ENABLED)(
         parseRuntimeAdapterLaunchInput({
           runId,
           blueprint,
-          publishedImage: {
-            repository: "sealant/dotfiles-e2e",
-            tag: "e2e",
-            reference: imageReference,
-            digestReference: imageReference,
-            digest: "sha256:dotfiles-e2e",
+          publication: {
+            kind: "oci",
+            publicationId: "fixture-publication",
+            image: {
+              repository: "sealant/dotfiles-e2e",
+              tag: "e2e",
+              reference: imageReference,
+              digestReference: imageReference,
+              digest: "sha256:dotfiles-e2e",
+            },
+            evidence: {},
           },
           ...(staged.dotfilesArchiveDir === undefined
             ? {}

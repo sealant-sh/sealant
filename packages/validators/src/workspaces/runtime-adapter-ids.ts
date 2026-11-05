@@ -1,9 +1,5 @@
-import { z } from "zod";
-
 /**
- * The closed set of runtime adapter families a workspace can target. This is the ONE home of the
- * list: every enum, literal union, or column type that names runtime families derives from it, so
- * adding a family is an edit here plus an adapter registration — never a hunt through the repo.
+ * Runtime families share the API contract list. Parsing a family does not register its adapter.
  *
  * A family in this list is a *valid request*, not a promise: a deployment registers only the
  * adapters it is configured for, and `selectRuntimeAdapter` answers an unregistered family with a
@@ -14,8 +10,11 @@ import { z } from "zod";
  * - `cloudflare`: Cloudflare Sandboxes driven through a bridge Worker (hosted deployments).
  * - `microvm`: AWS Lambda MicroVMs, one Firecracker VM per workspace, driven with the Lambda
  *   MicroVMs API and reached through the VM's authenticated inbound endpoint.
+ * - `boat`: native saved snapshots. The production adapter remains unregistered.
  */
-export const runtimeAdapterIds = ["docker", "k8s", "k3s", "cloudflare", "microvm"] as const;
+import { runtimeAdapterIds } from "@sealant/api-contracts";
+import { z } from "zod";
+export { runtimeAdapterIds } from "@sealant/api-contracts";
 
 export const runtimeAdapterIdSchema = z.enum(runtimeAdapterIds);
 

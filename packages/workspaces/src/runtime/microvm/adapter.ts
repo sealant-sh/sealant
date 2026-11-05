@@ -30,6 +30,8 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
+import type { MicrovmPublication } from "@sealant/validators";
+
 import { getHarnessIntegration } from "../../harness/integrations.js";
 import type { SealantTarget } from "../../sealantd/runtime.js";
 import {
@@ -49,7 +51,7 @@ import {
 import {
   nothingToSaveDetail,
   SEALANTD_EXIT_NOTHING_TO_SAVE,
-  parseRuntimeAdapterLaunchInput,
+  parseMicrovmLaunchInput,
   parseRuntimeAdapterStopInput,
   parseRuntimeAdapterSupportInput,
   removalRefused,
@@ -58,7 +60,7 @@ import {
   type RuntimeAdapterExitWatchInput,
   type RuntimeAdapterInspectInput,
   type RuntimeAdapterInspectResult,
-  type RuntimeAdapterLaunchInput,
+  type MicrovmLaunchInput,
   type RuntimeAdapterLaunchResult,
   type RuntimeAdapterRecoverInput,
   type RuntimeAdapterRecoverResult,
@@ -97,7 +99,6 @@ import {
 } from "./api.js";
 import type { MicrovmRuntimeConfig } from "./config.js";
 import { MicrovmEndpointTokens } from "./endpoint-tokens.js";
-import { parseMicrovmImageReference } from "./image-reference.js";
 
 export interface MicrovmRuntimeAdapterOptions {
   readonly config: MicrovmRuntimeConfig;
@@ -412,7 +413,7 @@ const toBootLifecycleStepJson = (step: {
  * image travel here instead. Pure; pinned by the golden test.
  */
 export const microvmBootEnv = (
-  input: RuntimeAdapterLaunchInput,
+  input: Omit<MicrovmLaunchInput, "publication">,
   options: {
     readonly secretEnvFile: boolean;
     readonly dotfiles: boolean;
@@ -561,7 +562,7 @@ const describeEnded = (vm: MicrovmDescription): string =>
     ? `${vm.state}: ${vm.stateReason.trim()}`
     : vm.state;
 
-export class MicrovmRuntimeAdapter implements RuntimeAdapter {
+export class MicrovmRuntimeAdapter implements RuntimeAdapter<MicrovmPublication> {
   readonly id = "microvm" as const;
   readonly removalFenceMs = MICROVM_REMOVAL_FENCE_MS;
 
@@ -606,10 +607,10 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
   }
 
   async launch(
-    input: RuntimeAdapterLaunchInput,
+    input: MicrovmLaunchInput,
     hooks?: RuntimeAdapterLaunchHooks,
   ): Promise<RuntimeAdapterLaunchResult> {
-    const parsed = parseRuntimeAdapterLaunchInput(input);
+    const parsed = parseMicrovmLaunchInput(input);
     const support = this.supports({ blueprint: parsed.blueprint });
     if (!support.supported) {
       throw createAdapterError(support.reason, support.message);
@@ -629,13 +630,7 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     }
     const config = this.#config;
     // Read before anything is staged: a launch that names no MicroVM image must cost nothing.
-    const image = parseMicrovmImageReference(parsed.publishedImage.digestReference);
-    if (image === undefined) {
-      throw createAdapterError(
-        "unsupported-runtime-requirement",
-        `The microvm adapter boots the MicroVM image built for the blueprint, and '${parsed.publishedImage.digestReference}' is not one. The build for this run was not made by the MicroVM image builder.`,
-      );
-    }
+    const image = parsed.publication.image;
 
     // Launch material: the sealed secret env (pass-through, or the host-staged boot file), and
     // any staged dotfiles, all inlined for one authenticated push. Read BEFORE RunMicrovm so a

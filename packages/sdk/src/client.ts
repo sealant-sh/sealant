@@ -237,11 +237,13 @@ export class Sealant {
           ownerUserId: payload.ownerUserId,
           registryId: payload.registryId,
           spec: payload.spec,
+          ...(payload.imageScopeId === undefined ? {} : { imageScopeId: payload.imageScopeId }),
         }),
       );
       return {
         imageKey: imageSpecKey(payload.spec),
         planHash: answered.planHash,
+        ...(answered.publication === undefined ? {} : { publication: answered.publication }),
         ...(answered.publishedImage === undefined
           ? {}
           : { image: toWorkspaceImage(answered.publishedImage) }),

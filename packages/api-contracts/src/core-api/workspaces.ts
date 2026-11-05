@@ -28,8 +28,11 @@ export const workspaceStatusSchema = Schema.Literals([
 ]);
 export type WorkspaceStatus = typeof workspaceStatusSchema.Type;
 
+/** Request families. A deployment registers only the adapters it can actually launch. */
+export const runtimeAdapterIds = ["docker", "k8s", "k3s", "cloudflare", "microvm", "boat"] as const;
+
 export const workspaceRuntimeSchema = Schema.Struct({
-  adapter: Schema.Literals(["docker", "k8s", "k3s", "cloudflare", "microvm"]),
+  adapter: Schema.Literals(runtimeAdapterIds),
   /**
    * The executor's identity on its runtime: the Docker container id, the Pod name, the MicroVM
    * id. This is the id a caller records at launch and names in a stop's `completion`.
@@ -57,7 +60,7 @@ export const workspaceSshTargetSchema = Schema.Struct({
   workspaceId: NonEmptyString,
   attemptId: NonEmptyString,
   runtime: Schema.Struct({
-    adapter: Schema.Literals(["docker", "k8s", "k3s", "cloudflare", "microvm"]),
+    adapter: Schema.Literals(runtimeAdapterIds),
     resourceId: NonEmptyString,
     reference: NonEmptyString,
     status: Schema.Literals(["pending", "running", "ready", "failed", "stopped"]),
@@ -130,6 +133,63 @@ export const workspacePublishedImageSchema = Schema.Struct({
   personLayout: Schema.optional(workspaceImagePersonLayoutSchema),
 });
 
+/** Public artifact facts. Native provenance remains readable without authorizing execution. */
+export const workspacePublicationSchema = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("oci"),
+    publicationId: NonEmptyString,
+    image: Schema.Struct({
+      repository: NonEmptyString,
+      tag: NonEmptyString,
+      reference: NonEmptyString,
+      digestReference: NonEmptyString,
+      digest: NonEmptyString,
+    }),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("microvm"),
+    publicationId: NonEmptyString,
+    image: Schema.Struct({
+      imageArn: NonEmptyString,
+      imageVersion: NonEmptyString,
+      planHash: NonEmptyString,
+    }),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("boat-native"),
+    publicationId: NonEmptyString,
+    snapshot: Schema.Struct({
+      kind: Schema.Literal("boat-saved-snapshot"),
+      owner: NonEmptyString,
+      build: NonEmptyString,
+      recipeHash: NonEmptyString,
+      receiptHash: NonEmptyString,
+      identity: Schema.Struct({
+        name: NonEmptyString,
+        sourceSandboxId: NonEmptyString,
+        createdAt: NonEmptyString,
+        snapshotId: Schema.optional(NonEmptyString),
+      }),
+    }),
+    evidence: Schema.Struct({
+      recipeHash: NonEmptyString,
+      receiptHash: NonEmptyString,
+      assetsHash: NonEmptyString,
+      runtime: Schema.Struct({
+        source: NonEmptyString,
+        platform: Schema.Literal("linux/amd64"),
+        manifest: NonEmptyString,
+        sealantd: NonEmptyString,
+        socat: NonEmptyString,
+        relay: NonEmptyString,
+      }),
+      daemonRecovery: Schema.Literals(["supported", "unsupported", "unknown"]),
+      executorRecovery: Schema.Literal("unverified"),
+    }),
+  }),
+]);
+export type WorkspacePublication = typeof workspacePublicationSchema.Type;
+
 export const workspaceErrorSchema = Schema.Struct({
   message: Schema.String,
   code: Schema.optional(NonEmptyString),
@@ -156,6 +216,8 @@ export const createWorkspaceCredentialsSchema = Schema.Struct({
 export type CreateWorkspaceCredentials = typeof createWorkspaceCredentialsSchema.Type;
 
 export const createWorkspaceRequestSchema = Schema.Struct({
+  /** Existing resource domain for image reuse only. Omitted selects the authenticated owner. */
+  imageScopeId: Schema.optional(NonEmptyString),
   ownerUserId: PersonId,
   registryId: NonEmptyString,
   repository: NonEmptyString,
@@ -734,6 +796,7 @@ export type RestartWorkspaceResponse = typeof restartWorkspaceResponseSchema.Typ
  * image published for that plan answers. Nothing is created, built or reserved.
  */
 export const inspectWorkspaceImageRequestSchema = Schema.Struct({
+  imageScopeId: Schema.optional(NonEmptyString),
   ownerUserId: PersonId,
   registryId: NonEmptyString,
   /** The spec a create would send (`CreateWorkspaceRequest.spec`). */
@@ -746,6 +809,7 @@ export const inspectWorkspaceImageResponseSchema = Schema.Struct({
   planHash: NonEmptyString,
   /** The latest image published for the plan; absent when none has been built yet. */
   publishedImage: Schema.optional(workspacePublishedImageSchema),
+  publication: Schema.optional(workspacePublicationSchema),
   /** The image's per-person capability (`unknown` when none has been built yet). */
   personLayout: workspaceImagePersonLayoutSchema,
 });
@@ -1123,6 +1187,7 @@ export const workspaceSummarySchema = Schema.Struct({
   tag: Schema.optional(NonEmptyString),
   runtime: Schema.optional(workspaceRuntimeSchema),
   publishedImage: Schema.optional(workspacePublishedImageSchema),
+  publication: Schema.optional(workspacePublicationSchema),
   /** See `workspaceProcessUserCapabilitySchema`. Absent from older control planes. */
   processUser: Schema.optional(workspaceProcessUserCapabilitySchema),
   error: Schema.optional(workspaceErrorSchema),
@@ -1233,6 +1298,7 @@ export const workspaceDetailsSchema = Schema.Struct({
   tag: Schema.optional(NonEmptyString),
   runtime: Schema.optional(workspaceRuntimeSchema),
   publishedImage: Schema.optional(workspacePublishedImageSchema),
+  publication: Schema.optional(workspacePublicationSchema),
   /** See `workspaceProcessUserCapabilitySchema`. Absent from older control planes. */
   processUser: Schema.optional(workspaceProcessUserCapabilitySchema),
   error: Schema.optional(workspaceErrorSchema),
@@ -1289,6 +1355,7 @@ export const workspaceAttemptSummarySchema = Schema.Struct({
   triggerRef: Schema.optional(NonEmptyString),
   runtime: Schema.optional(workspaceRuntimeSchema),
   publishedImage: Schema.optional(workspacePublishedImageSchema),
+  publication: Schema.optional(workspacePublicationSchema),
   error: Schema.optional(workspaceErrorSchema),
   spec: Schema.optional(Schema.Unknown),
   queuedAt: Schema.String,
@@ -1381,6 +1448,20 @@ export class WorkspaceRuntimeEnvReferencesUnsupportedError extends Schema.Tagged
   {
     message: Schema.String,
     code: Schema.Literals(["runtime-env-references-unsupported"]),
+  },
+  { httpApiStatus: 422 },
+) {}
+
+/** A native runtime requirement refused before any new create is reserved. */
+export class WorkspaceRuntimeRequirementUnsupportedError extends Schema.TaggedError<WorkspaceRuntimeRequirementUnsupportedError>()(
+  "WorkspaceRuntimeRequirementUnsupportedError",
+  {
+    message: Schema.String,
+    code: Schema.Literals([
+      "runtime-os-unsupported",
+      "runtime-requirement-unsupported",
+      "workspace-docker-unsupported",
+    ]),
   },
   { httpApiStatus: 422 },
 ) {}
@@ -1480,6 +1561,7 @@ export class WorkspaceServiceUnavailableError extends Schema.TaggedError<Workspa
   "WorkspaceServiceUnavailableError",
   {
     message: Schema.String,
+    code: Schema.optional(NonEmptyString),
   },
   { httpApiStatus: 503 },
 ) {}
@@ -1506,6 +1588,7 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         WorkspaceBadRequestError,
         WorkspaceRuntimeEnvReferencesUnsupportedError,
         WorkspaceDockerServiceUnsupportedError,
+        WorkspaceRuntimeRequirementUnsupportedError,
         WorkspaceForbiddenError,
         WorkspaceSshOwnerRefusedError,
         WorkspaceNotFoundError,
@@ -1706,6 +1789,8 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         // The workspace has never launched (no spec to relaunch from) or is mid-launch.
         WorkspaceConflictError,
         WorkspaceBadGatewayError,
+        WorkspaceServiceUnavailableError,
+        WorkspaceRuntimeRequirementUnsupportedError,
         WorkspaceInternalServerError,
       ],
     }),
@@ -1715,7 +1800,13 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
     HttpApiEndpoint.post("inspectWorkspaceImage", "/image", {
       payload: inspectWorkspaceImageRequestSchema,
       success: inspectWorkspaceImageResponseSchema,
-      error: [WorkspaceBadRequestError, WorkspaceNotFoundError, WorkspaceInternalServerError],
+      error: [
+        WorkspaceBadRequestError,
+        WorkspaceNotFoundError,
+        WorkspaceRuntimeRequirementUnsupportedError,
+        WorkspaceServiceUnavailableError,
+        WorkspaceInternalServerError,
+      ],
     }),
   )
   .add(

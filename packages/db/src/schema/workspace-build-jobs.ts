@@ -1,4 +1,10 @@
-import { runtimeAdapterIds, type NewWorkspace, type WorkspaceBuild } from "@sealant/validators";
+import {
+  type WorkspacePublication,
+  type NativePublicationKey,
+  runtimeAdapterIds,
+  type NewWorkspace,
+  type WorkspaceBuild,
+} from "@sealant/validators";
 import { sql } from "drizzle-orm";
 import {
   bigint,
@@ -75,6 +81,9 @@ export const ociImageBuildJobs = pgTable(
     registryId: text().notNull(),
     repository: text().notNull(),
     tag: text().notNull(),
+    imageScope: jsonb("image_scope").$type<NativePublicationKey["scope"]>(),
+    publicationId: text("publication_id"),
+    publication: jsonb("publication").$type<WorkspacePublication>(),
     requestPayload: jsonb("request_payload").$type<NewWorkspace>().notNull(),
     // The transient secret channel: `secretEnv` sealed with the credential cipher at create,
     // decrypted by the worker just before launch, and CLEARED once the launch phase settles —
@@ -185,6 +194,9 @@ export const workspaceRuntimeInstances = pgTable(
     launchCredentialInjections: jsonb("launch_credential_injections").$type<
       readonly WorkspaceLaunchCredentialInjection[]
     >(),
+    imageScope: jsonb("image_scope").$type<NativePublicationKey["scope"]>(),
+    publicationId: text("publication_id"),
+    publication: jsonb("publication").$type<WorkspacePublication>(),
     reference: text(),
     endpoint: text(),
     errorCode: text("error_code"),

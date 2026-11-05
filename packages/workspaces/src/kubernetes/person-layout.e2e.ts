@@ -490,7 +490,12 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
   ): Promise<{ podName: string; target: SealantTarget }> => {
     const input: RuntimeAdapterLaunchInput = {
       blueprint,
-      publishedImage,
+      publication: {
+        kind: "oci",
+        publicationId: "fixture-publication",
+        image: publishedImage,
+        evidence: {},
+      },
       runId,
       workspaceId: `ws-${runId}`,
       secretEnv: { SEALANT_CAPTURE_TOKEN: CAPTURE_TOKEN },
@@ -1006,7 +1011,12 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes per-person layout (runc)", () => {
           docker: true,
           ociRuntime: "runsc",
         }),
-        publishedImage,
+        publication: {
+          kind: "oci",
+          publicationId: "fixture-publication",
+          image: publishedImage,
+          evidence: {},
+        },
         runId: `run-e2e-person-gvisor-${SUFFIX}`,
         workspaceId: "ws-person-gvisor",
       }),

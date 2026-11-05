@@ -42,6 +42,9 @@ const MIN = 60_000;
 const NOW = Date.parse("2026-09-27T12:00:00.000Z");
 
 const instance = (deadlineInMs: number): WorkspaceRuntimeInstance => ({
+  imageScope: null,
+  publication: null,
+  publicationId: null,
   runId: "run_vm",
   status: "ready",
   adapter: "docker",

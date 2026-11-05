@@ -170,7 +170,12 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes cross-node workspace", () => {
 
   const launchInput = (): RuntimeAdapterLaunchInput => ({
     blueprint,
-    publishedImage,
+    publication: {
+      kind: "oci",
+      publicationId: "fixture-publication",
+      image: publishedImage,
+      evidence: {},
+    },
     runId: RUN_ID,
     workspaceId: "ws-e2e",
     credentialFiles: [

@@ -27,6 +27,7 @@ export class ResourceDomainRepoError extends Schema.TaggedError<ResourceDomainRe
     operation: Schema.Literals([
       "ensure",
       "get",
+      "canUseImages",
       "decideMember",
       "getMember",
       "listMembers",
@@ -97,6 +98,11 @@ export interface ResourceDomainBudgetRecord {
 }
 
 export interface ResourceDomainRepoService {
+  /** Read-only image reuse authorization. All missing or inactive cases are nondisclosing. */
+  readonly canUseImages: (
+    domainId: string,
+    ownerUserId: string,
+  ) => Effect.Effect<boolean, ResourceDomainRepoError>;
   /**
    * The domain with this key, created on the first call, with `budget` (none: all zero).
    * Concurrent calls with one key answer one domain: the unique key decides the race, and exactly
@@ -743,6 +749,35 @@ export const ResourceDomainRepoLive: Layer.Layer<ResourceDomainRepo, never, Seal
               }),
             ),
           ),
+        canUseImages: (domainId, ownerUserId) =>
+          db
+            .select({ id: resourceDomains.id })
+            .from(resourceDomains)
+            .innerJoin(
+              resourceDomainMembers,
+              eq(resourceDomainMembers.resourceDomainId, resourceDomains.id),
+            )
+            .where(
+              and(
+                eq(resourceDomains.id, domainId),
+                eq(resourceDomains.state, "active"),
+                eq(resourceDomainMembers.userId, ownerUserId),
+                eq(resourceDomainMembers.state, "member"),
+              ),
+            )
+            .limit(1)
+            .pipe(
+              Effect.map((rows) => rows.length === 1),
+              Effect.mapError(
+                (cause) =>
+                  new ResourceDomainRepoError({
+                    operation: "canUseImages",
+                    message: "Could not authorize image scope.",
+                    cause,
+                  }),
+              ),
+            ),
+
         get: (id) =>
           withError(
             "get",

@@ -133,12 +133,17 @@ const createBlueprint = (overrides: Record<string, unknown> = {}) => {
 const createLaunchInput = (overrides: Record<string, unknown> = {}) => {
   return parseRuntimeAdapterLaunchInput({
     blueprint: createBlueprint(overrides),
-    publishedImage: {
-      repository: "sealant/workspaces/demo",
-      tag: "opencode",
-      reference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
-      digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
-      digest: "sha256:test",
+    publication: {
+      kind: "oci",
+      publicationId: "fixture-publication",
+      image: {
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        reference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
+        digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
+        digest: "sha256:test",
+      },
+      evidence: {},
     },
   });
 };

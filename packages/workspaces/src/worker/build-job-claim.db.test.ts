@@ -208,6 +208,7 @@ describe.skipIf(DATABASE_URL === undefined)(
         workerId: "A",
         runtimes: [
           {
+            kind: "oci",
             adapter,
             imageBuilder: {
               isolation: "isolated",
@@ -228,6 +229,7 @@ describe.skipIf(DATABASE_URL === undefined)(
         workerId: "B",
         runtimes: [
           {
+            kind: "oci",
             adapter,
             imageBuilder: {
               isolation: "isolated",
@@ -240,7 +242,7 @@ describe.skipIf(DATABASE_URL === undefined)(
           },
         ],
       });
-      expect(b).toEqual(publishedImage);
+      expect(b).toMatchObject({ kind: "oci", image: publishedImage });
       const state = () =>
         run(
           Effect.gen(function* () {

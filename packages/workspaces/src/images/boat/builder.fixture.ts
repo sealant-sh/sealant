@@ -259,6 +259,7 @@ export const nativeBuilderFixture = async (
   });
   return {
     builder,
+    bundle: bundle.value,
     root,
     owner: builderOwner,
     spec,

@@ -642,6 +642,13 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
       return details.publishedImage === undefined ? null : toWorkspaceImage(details.publishedImage);
     },
 
+    publication: async () => {
+      const details = await ctx.runtime.run(
+        getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
+      );
+      return details.publication ?? null;
+    },
+
     processUser: async () => {
       const details: WorkspaceDetails = await ctx.runtime.run(
         getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
@@ -735,6 +742,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
               ...(details.publishedImage === undefined
                 ? {}
                 : { image: toWorkspaceImage(details.publishedImage) }),
+              ...(details.publication === undefined ? {} : { publication: details.publication }),
               ...(details.processUser === undefined ? {} : { processUser: details.processUser }),
             };
           }

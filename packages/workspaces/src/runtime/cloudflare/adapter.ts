@@ -192,7 +192,7 @@ export class CloudflareRuntimeAdapter implements RuntimeAdapter {
                   }
                 : {}),
             },
-      image: parsed.publishedImage,
+      image: parsed.publication.image,
       // Later wins, matching the docker adapter's -e ordering: blueprint env, then
       // worker-resolved platform env (must not be shadowed), then credential env.
       env: {

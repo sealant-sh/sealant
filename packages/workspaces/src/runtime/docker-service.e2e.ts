@@ -84,12 +84,17 @@ describe("workspace Docker service", () => {
             runtime: { family: "docker", mode: "require" },
           },
         },
-        publishedImage: {
-          repository: "sealant/docker-service-fixture",
-          tag: "e2e",
-          reference: image,
-          digestReference: image,
-          digest: "sha256:e2e-fixture",
+        publication: {
+          kind: "oci",
+          publicationId: "fixture-publication",
+          image: {
+            repository: "sealant/docker-service-fixture",
+            tag: "e2e",
+            reference: image,
+            digestReference: image,
+            digest: "sha256:e2e-fixture",
+          },
+          evidence: {},
         },
       }),
     );

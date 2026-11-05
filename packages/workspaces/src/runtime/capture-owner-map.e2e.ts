@@ -98,12 +98,17 @@ const launchInput = (input: {
       },
       target: { os: { family: "fedora" }, runtime: { family: "docker" } },
     },
-    publishedImage: {
-      repository: "sealant-workspace-fedora",
-      tag: "latest",
-      reference: input.image ?? IMAGE_REF,
-      digestReference: input.image ?? IMAGE_REF,
-      digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    publication: {
+      kind: "oci",
+      publicationId: "fixture-publication",
+      image: {
+        repository: "sealant-workspace-fedora",
+        tag: "latest",
+        reference: input.image ?? IMAGE_REF,
+        digestReference: input.image ?? IMAGE_REF,
+        digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      },
+      evidence: {},
     },
     runId: `owner-map-e2e-${randomUUID()}`,
     secretEnvDir: input.secretEnvDir,

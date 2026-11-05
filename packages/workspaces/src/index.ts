@@ -27,3 +27,5 @@ export * from "./worker/reap-workspace-images.js";
 export * from "./worker/reconcile-runtime-exits.js";
 export * from "./worker/recover-retained-executors.js";
 export * from "./git/working-tree-changes.js";
+
+export * from "./worker/reconcile-native-publications.js";

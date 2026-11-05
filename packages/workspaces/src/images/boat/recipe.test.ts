@@ -113,11 +113,25 @@ describe("native recipe boundary", () => {
   });
 
   it("refuses unsupported families, workspace Docker, and unproven authenticated build staging", async () => {
-    for (const family of ["arch", "fedora", "custom"] as const)
+    for (const family of ["arch", "fedora"] as const)
       expect(await createNativeRecipe(spec(family), serializationBundleFixture)).toMatchObject({
         ok: false,
         error: { code: "native-unsupported-os" },
       });
+    expect(await createNativeRecipe(spec("custom"), serializationBundleFixture)).toMatchObject({
+      ok: false,
+      error: { code: "native-custom-base-unsupported" },
+    });
+    const runsc = spec();
+    expect(
+      await createNativeRecipe(
+        { ...runsc, runtime: { ...runsc.runtime, ociRuntime: "runsc" } },
+        serializationBundleFixture,
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "native-oci-runtime-unsupported" },
+    });
     expect(
       await createNativeRecipe(
         { ...spec(), tooling: { packages: [], services: { docker: { enabled: true } } } },

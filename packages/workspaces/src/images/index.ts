@@ -43,6 +43,7 @@ export {
   MICROVM_IMAGE_PLAN_TAG,
   MicrovmImageBuildError,
   MicrovmWorkspaceImageBuilder,
+  planMicrovmWorkspaceImage,
   type MicrovmImageBuildConfig,
   type MicrovmWorkspaceImageBuilderOptions,
 } from "./microvm/builder.js";
@@ -80,3 +81,9 @@ export {
   microvmRecipe,
   mirroredBaseImage,
 } from "./microvm/recipe.js";
+
+export {
+  BoatImageInspection,
+  boatImageInspectionLayer,
+  type BoatImageInspectionService,
+} from "./boat/inspection.js";

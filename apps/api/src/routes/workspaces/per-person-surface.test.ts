@@ -27,8 +27,9 @@ import {
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
 import { TelemetryQuery } from "@sealant/telemetry";
-import { newWorkspaceSchema } from "@sealant/validators";
+import { nativePublicationSchema, newWorkspaceSchema } from "@sealant/validators";
 import {
+  BoatImageInspection,
   planWorkspaceImageBuild,
   processImagePlatform,
   SealantRuntime,
@@ -551,6 +552,11 @@ describe("inspectWorkspaceImage", () => {
   const job = (probe: unknown) =>
     ({
       id: "job_1",
+      publicationId: null,
+      publication: null,
+      imageScope: null,
+      repository: "sealant/workspaces/demo",
+      tag: "plan-abc",
       runId: "run_built",
       status: "succeeded",
       publishedReference: "registry/sealant/workspaces/demo:plan-abc",
@@ -628,9 +634,108 @@ describe("inspectWorkspaceImage", () => {
     expect(none.personLayout.status).toBe("unknown");
   });
 
+  it("inspects a native publication through its owner without exposing OCI coordinates or private receipts", async () => {
+    const hash = "e".repeat(64);
+    const runtime = {
+      source: `ghcr.io/sealant-sh/sealantd-next:test@sha256:${hash}`,
+      platform: "linux/amd64",
+      manifest: hash,
+      sealantd: hash,
+      socat: hash,
+      relay: hash,
+    };
+    const publication = nativePublicationSchema.parse({
+      kind: "boat-native",
+      publicationId: "00000000-0000-4000-8000-000000000001",
+      snapshot: {
+        kind: "boat-saved-snapshot",
+        owner: "00000000-0000-4000-8000-000000000002",
+        build: "00000000-0000-4000-8000-000000000003",
+        recipeHash: hash,
+        receiptHash: hash,
+        runtime,
+        identity: {
+          name: "saved-native",
+          sourceSandboxId: "bx_23456789",
+          createdAt: "2026-11-05T00:00:00.000Z",
+          snapshotId: "snapshot-exact",
+        },
+      },
+      evidence: {
+        recipeHash: hash,
+        receiptHash: hash,
+        assetsHash: hash,
+        runtime,
+        receipt: "private-installation-receipt",
+        imageProbe: capable,
+        daemonRecovery: "supported",
+        executorRecovery: "unverified",
+      },
+    });
+    const planned: unknown[] = [],
+      lookups: unknown[] = [];
+    const found = {
+      ...job(capable),
+      publication,
+      publicationId: publication.publicationId,
+      imageScope: { kind: "owner" as const, ownerUserId: OWNER },
+      publishedReference: null,
+      publishedDigestReference: null,
+      publishedDigest: null,
+    };
+    const answer = await Effect.runPromise(
+      workspacesModule
+        .inspectWorkspaceImage({
+          payload: {
+            ownerUserId: OWNER,
+            registryId: "default",
+            spec: {
+              ...spec,
+              target: { os: { family: "ubuntu" }, runtime: { family: "boat", mode: "require" } },
+            },
+          },
+        })
+        .pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Layer.succeed(BoatImageInspection, {
+                plan: (blueprint) => {
+                  planned.push(blueprint);
+                  return Effect.succeed({ planHash: hash });
+                },
+              }),
+              Layer.mock(WorkspaceBuildJobRepo, {
+                getLatestSucceededJobByPlanHash: (input) => {
+                  lookups.push(input);
+                  return Effect.succeed(found);
+                },
+              }),
+              Layer.mock(WorkspaceAttemptRepo, { getAttemptById: () => Effect.succeed(undefined) }),
+            ),
+          ),
+        ),
+    );
+    expect(planned).toHaveLength(1);
+    expect(lookups).toEqual([
+      { registryId: "default", planHash: hash, imageScope: { kind: "owner", ownerUserId: OWNER } },
+    ]);
+    expect(answer).toMatchObject({
+      planHash: hash,
+      publication: {
+        kind: "boat-native",
+        publicationId: publication.publicationId,
+        snapshot: { identity: publication.snapshot.identity },
+        evidence: { recipeHash: hash, executorRecovery: "unverified" },
+      },
+    });
+    expect(answer.publishedImage).toBeUndefined();
+    expect(answer.publication).not.toHaveProperty("evidence.receipt");
+    expect(answer.publication).not.toHaveProperty("evidence.imageProbe");
+  });
+
   it("names the image only to the owner who built it", async () => {
     const answer = await inspect(job(withoutSetpriv), "usr_bob");
     expect(answer.publishedImage).toBeUndefined();
-    expect(answer.personLayout.status).toBe("unsupported");
+    expect(answer.personLayout.status).toBe("unknown");
   });
 });

@@ -152,7 +152,12 @@ const createInput = (
 ) =>
   parseRuntimeAdapterLaunchInput({
     blueprint: baseBlueprint(blueprintOverrides),
-    publishedImage,
+    publication: {
+      kind: "oci",
+      publicationId: "fixture-publication",
+      image: publishedImage,
+      evidence: {},
+    },
     runId: "volume-1",
     ...launchOverrides,
   });

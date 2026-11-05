@@ -73,7 +73,7 @@ import {
 import { Deferred, Effect, Exit, Fiber, Layer, Option, Semaphore } from "effect";
 
 import type { LaunchMaterialStager } from "../runtime/launch-material.js";
-import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
+import type { RuntimeAdapterLifecycle } from "../runtime/runtime-adapter.js";
 import { SealantRuntimeControlLive, type CaptureFlushReport } from "../sealantd/runtime.js";
 import {
   sealantTargetForRuntimeInstance,
@@ -207,7 +207,7 @@ export const observeUploadThroughput = (input: {
 };
 
 export interface PreserveBeforeDeadlineOptions {
-  readonly runtimeAdapters: readonly RuntimeAdapter[];
+  readonly runtimeAdapters: readonly RuntimeAdapterLifecycle[];
   readonly credentialCipher?: CredentialCipherService;
   readonly targetOptions?: SealantTargetDerivationOptions;
   readonly captureDrain: {

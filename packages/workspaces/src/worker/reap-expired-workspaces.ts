@@ -11,7 +11,7 @@ import {
 } from "@sealant/db";
 import { Effect, Layer } from "effect";
 
-import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
+import type { RuntimeAdapterLifecycle } from "../runtime/runtime-adapter.js";
 import { SealantRuntimeControlLive } from "../sealantd/runtime.js";
 import type { SealantTargetDerivationOptions } from "../sealantd/target.js";
 import type { CaptureDrainLedger, CaptureDrainSettings } from "./capture-drain.js";
@@ -19,7 +19,7 @@ import { processWorkspaceStopEffect, type WorkspaceStopOutcome } from "./process
 
 export interface ReapExpiredWorkspacesOptions {
   readonly db: DB;
-  readonly runtimeAdapters: readonly RuntimeAdapter[];
+  readonly runtimeAdapters: readonly RuntimeAdapterLifecycle[];
   /** Upper bound on workspaces stopped per tick, so a sweep can't run unbounded. Defaults to 5. */
   readonly maxReapsPerTick?: number;
   /**

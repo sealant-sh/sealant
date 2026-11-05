@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
 import {
+  boatSupport,
   parseWorkspaceBlueprint,
   parseBuildkitOsBuilderCompileInput,
   parseBuildkitOsBuilderCompileResult,
@@ -1662,7 +1663,10 @@ export const removeBuildContext = async (
  */
 export const buildContextDirectoryOf = (
   build: {
-    readonly artifacts: ReadonlyArray<{ readonly path?: string | undefined }>;
+    readonly artifacts: ReadonlyArray<{
+      readonly name?: string;
+      readonly path?: string | undefined;
+    }>;
   },
   tmpDirectory: string = tmpdir(),
 ): string | undefined => {
@@ -2030,23 +2034,9 @@ export const nativeWorkspaceInstallation = (
   readonly shell: string;
   readonly bootEntries: ReadonlyArray<readonly [string, string]>;
 } => {
-  if (
-    blueprint.target.os.family !== "auto" &&
-    blueprint.target.os.family !== "ubuntu" &&
-    blueprint.target.os.family !== "nix"
-  ) {
-    throw createBuildkitCompilerError(
-      "native-unsupported-os",
-      "Native snapshots support Ubuntu and Nix only.",
-    );
-  }
+  const support = boatSupport(blueprint);
+  if (!support.supported) throw createBuildkitCompilerError(support.detail, support.message);
   const parsed = parseWorkspaceBlueprint(blueprint);
-  if (parsed.tooling.services?.docker?.enabled) {
-    throw createBuildkitCompilerError(
-      "native-workspace-docker-unsupported",
-      "Native snapshots cannot supply workspace Docker.",
-    );
-  }
   for (const source of parsed.sources.inputs) {
     if (source.purpose !== "dotfiles" || source.kind !== "git") continue;
     const url = new URL(source.url);
@@ -2063,7 +2053,11 @@ export const nativeWorkspaceInstallation = (
     }
   }
   const candidates: readonly ("ubuntu" | "nix")[] =
-    blueprint.target.os.family === "auto" ? ["ubuntu", "nix"] : [blueprint.target.os.family];
+    parsed.target.os.family === "nix"
+      ? ["nix"]
+      : parsed.target.os.family === "ubuntu"
+        ? ["ubuntu"]
+        : ["ubuntu", "nix"];
   const { family, plan } = (() => {
     let unsupported: unknown;
     for (const candidateFamily of candidates) {

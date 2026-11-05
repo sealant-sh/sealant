@@ -17,3 +17,7 @@ export * from "./workspaces/builder.js";
 export * from "./workspaces/native-publication.js";
 export * from "./workspaces/buildkit.js";
 export * from "./workspaces/payloads.js";
+
+export * from "./workspaces/workspace-publication.js";
+export * from "./workspaces/microvm-image-reference.js";
+export * from "./workspaces/boat-support.js";

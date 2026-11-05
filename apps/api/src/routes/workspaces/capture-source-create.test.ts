@@ -1,7 +1,14 @@
+import { randomUUID } from "node:crypto";
+
 import { WorkspaceSshOwnerRefusedError, type CreateWorkspaceRequest } from "@sealant/api-contracts";
 import { CredentialCipher } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
+  ResourceDomainRepo,
+  ResourceDomainRepoLive,
+  createSealantDB,
+  SealantDB,
+  user,
   GitHubInstallationRepo,
   GitHubInstallationRepositoryCacheRepo,
   ProfileRepo,
@@ -25,8 +32,13 @@ import {
   UserRepo,
   type PersonBinding,
 } from "@sealant/db";
+import {
+  seedImageScope,
+  revokeImageScope,
+  setImageScopeState,
+} from "@sealant/db/testing/workspace-publications";
 import { GitHubSourceIntegrationService } from "@sealant/source-integrations";
-import type { NewWorkspace } from "@sealant/validators";
+import type { NativePublicationKey, NewWorkspace } from "@sealant/validators";
 import {
   createPackageStandardizer,
   planWorkspaceImageBuild,
@@ -75,6 +87,9 @@ const capturePayload = (
 
 interface RecordingState {
   snapshot?: NewWorkspace;
+  imageScope?: NativePublicationKey["scope"] | undefined;
+  scopeAllowed?: boolean;
+  scopeChecks?: number;
   job?: NewWorkspace;
   sealedPlaintext?: string;
   publishedJobId?: string;
@@ -287,11 +302,15 @@ const makeRecordingLayer = (
 
   const buildJobRepo: WorkspaceBuildJobRepoService = {
     insertQueuedJob: (input) => {
+      state.imageScope = input.imageScope;
       state.job = input.requestPayload;
       state.onInsertJob?.();
       return Effect.succeed<WorkspaceBuildJob>({
         id: input.id,
         runId: input.runId ?? null,
+        imageScope: null,
+        publication: null,
+        publicationId: null,
         status: "queued",
         registryId: input.registryId,
         repository: input.repository,
@@ -332,6 +351,12 @@ const makeRecordingLayer = (
               registryId: "local",
               repository: "sealant/workspaces/capture",
               tag: "session",
+              imageScope: null,
+              publication: null,
+              publicationId: null,
+              publishedReference: null,
+              publishedDigestReference: null,
+              publishedDigest: null,
             } as unknown as WorkspaceBuildJob)
           : undefined,
       ),
@@ -375,6 +400,13 @@ const makeRecordingLayer = (
       getRuntimeInstanceByRunId: () => Effect.succeed(state.runtime),
     }),
     Layer.succeed(WorkspaceCreateReservationRepo, reservationRepo(state)),
+    Layer.mock(ResourceDomainRepo, {
+      canUseImages: () =>
+        Effect.sync(() => {
+          state.scopeChecks = (state.scopeChecks ?? 0) + 1;
+          return state.scopeAllowed === true;
+        }),
+    }),
     // The unit tests see the writes as they are made; rollback is proven against Postgres.
     Layer.succeed(DatabaseTransaction, { run: (effect) => effect }),
     Layer.succeed(PackageStandardizerService, packageStandardizer),
@@ -653,6 +685,9 @@ describe("createWorkspace · idempotency key", () => {
     sshUser: null,
   });
   const runtime = (): WorkspaceRuntimeInstance => ({
+    imageScope: null,
+    publication: null,
+    publicationId: null,
     runId: "run_first",
     status: "ready",
     adapter: "docker",
@@ -710,6 +745,35 @@ describe("createWorkspace · idempotency key", () => {
     expect(state.createdKeys).toBeUndefined();
     expect(state.publishedJobId).toBeUndefined();
     expect(state.sealedPlaintext).toBeUndefined();
+  });
+
+  it("replays before changed membership and unsupported current Boat settings without writes", async () => {
+    const state: RecordingState = {
+      existingByKey: existing(),
+      existingJobStatus: "queued",
+      scopeAllowed: false,
+    };
+    const response = await Effect.runPromise(
+      createWorkspace({
+        payload: {
+          ...capturePayload("/workspace/harness-home"),
+          idempotencyKey: "mend-exec-7",
+          imageScopeId: "rdm:00000000-0000-4000-8000-000000000001",
+          spec: {
+            harness: { id: "opencode" },
+            target: { os: { family: "arch" }, runtime: { family: "boat", mode: "require" } },
+          },
+        },
+        headers: {},
+      }).pipe(Effect.provide(makeRecordingLayer(state))),
+    );
+    expect(response.replayed).toBe(true);
+    expect(state.scopeChecks).toBeUndefined();
+    expect(state.reservations?.size).toBe(0);
+    expect(state.createdKeys).toBeUndefined();
+    expect(state.attempts).toBeUndefined();
+    expect(state.job).toBeUndefined();
+    expect(state.publishedJobId).toBeUndefined();
   });
 
   it("never returns another owner's workspace for the same key", async () => {
@@ -787,7 +851,7 @@ describe("createWorkspace · a create that never finished (review 3 #19)", () =>
     });
   });
 
-  it("publishes a committed create's launch job again while it is still queued", async () => {
+  it("replays a committed queued create without publishing or writing", async () => {
     // The process died between the commit and the queue publish: only a repeat moves it.
     const state: RecordingState = {
       existingByKey: { ...partial(), latestRunId: "run_first" },
@@ -800,7 +864,7 @@ describe("createWorkspace · a create that never finished (review 3 #19)", () =>
       }).pipe(Effect.provide(makeRecordingLayer(state))),
     );
     expect(answer).toMatchObject({ workspaceId: "ws_partial", replayed: true });
-    expect(state.publishedJobId).toBe("job_first");
+    expect(state.publishedJobId).toBeUndefined();
     expect(state.job).toBeUndefined();
   });
 });
@@ -1011,5 +1075,142 @@ describe("createWorkspace · the workspace's SSH user (Mend ADR 0016)", () => {
     const result = await run(state, plain);
     expect(Result.isSuccess(result)).toBe(true);
     expect(state.createdSshUsers).toEqual([undefined]);
+  });
+});
+
+const nativeCreateRequest = (spec: Record<string, unknown>): CreateWorkspaceRequest => ({
+  ownerUserId: "usr_capture",
+  registryId: "default",
+  repository: "test",
+  tag: "test",
+  idempotencyKey: "key_native",
+  spec: {
+    sources: {
+      workspace: { kind: "git", provider: "generic", url: "https://example.invalid/repo.git" },
+    },
+    ...spec,
+  },
+});
+const nativeRequirements = (family: string, extra: Record<string, unknown> = {}) => ({
+  harness: { id: "opencode" },
+  target: { os: { family }, runtime: { family: "boat", mode: "require" } },
+  ...extra,
+});
+
+describe("createWorkspace image scope and Boat admission", () => {
+  const domainId = "rdm:00000000-0000-4000-8000-000000000001";
+  for (const [name, spec, code] of [
+    ["Arch", nativeRequirements("arch"), "runtime-os-unsupported"],
+    ["Fedora", nativeRequirements("fedora"), "runtime-os-unsupported"],
+    [
+      "custom OCI",
+      {
+        harness: { id: "opencode" },
+        target: {
+          os: { family: "custom", baseImage: "ubuntu:24.04" },
+          runtime: { family: "boat", mode: "require" },
+        },
+      },
+      "runtime-requirement-unsupported",
+    ],
+    [
+      "host bind",
+      nativeRequirements("ubuntu", {
+        sources: { workspace: { kind: "mount", hostPath: "/tmp/native-owner" } },
+      }),
+      "runtime-requirement-unsupported",
+    ],
+    [
+      "Docker",
+      nativeRequirements("ubuntu", { tooling: { services: { docker: { enabled: true } } } }),
+      "workspace-docker-unsupported",
+    ],
+    ["Ubuntu registration", nativeRequirements("ubuntu"), "boat-production-capability-unverified"],
+    ["Nix registration", nativeRequirements("nix"), "boat-production-capability-unverified"],
+  ] as const) {
+    it(`refuses ${name} before reserving or creating anything`, async () => {
+      const state: RecordingState = {};
+      const result = await Effect.runPromise(
+        Effect.result(createWorkspace({ payload: nativeCreateRequest(spec), headers: {} })).pipe(
+          Effect.provide(makeRecordingLayer(state)),
+        ),
+      );
+      expect(Result.isFailure(result)).toBe(true);
+      if (Result.isFailure(result)) expect(result.failure).toMatchObject({ code });
+      expect(state.reservations?.size).toBe(0);
+      expect(state.createdKeys).toBeUndefined();
+      expect(state.attempts).toBeUndefined();
+      expect(state.snapshot).toBeUndefined();
+      expect(state.job).toBeUndefined();
+      expect(state.publishedJobId).toBeUndefined();
+    });
+  }
+  it.skipIf(process.env.SEALANT_TEST_DATABASE_URL === undefined)(
+    "refuses missing, fenced, archived, unauthorized and revoked scopes through the real authorization repository",
+    async () => {
+      const db = await createSealantDB(process.env.SEALANT_TEST_DATABASE_URL ?? "");
+      const owner = `usr_stage2b_scope_${randomUUID()}`;
+      const other = `usr_stage2b_other_${randomUUID()}`;
+      await Effect.runPromise(
+        db.insert(user).values([
+          { id: owner, name: "stage2b", email: `${owner}@example.invalid` },
+          { id: other, name: "other", email: `${other}@example.invalid` },
+        ]),
+      );
+      const authorization = ResourceDomainRepoLive.pipe(
+        Layer.provide(Layer.succeed(SealantDB, db)),
+      );
+      for (const kind of ["missing", "fenced", "archived", "unauthorized", "revoked"] as const) {
+        const selectedDomainId = `rdm:${randomUUID()}`;
+        if (kind !== "missing")
+          await Effect.runPromise(
+            seedImageScope(db, selectedDomainId, kind === "unauthorized" ? other : owner),
+          );
+        if (kind === "fenced" || kind === "archived")
+          await Effect.runPromise(setImageScopeState(db, selectedDomainId, kind));
+        if (kind === "revoked") await Effect.runPromise(revokeImageScope(db, selectedDomainId));
+        const state: RecordingState = {};
+        const result = await Effect.runPromise(
+          Effect.result(
+            createWorkspace({
+              payload: {
+                ...nativeCreateRequest({ harness: { id: "opencode" } }),
+                ownerUserId: owner,
+                imageScopeId: selectedDomainId,
+              },
+              headers: {},
+            }),
+          ).pipe(Effect.provide(Layer.mergeAll(makeRecordingLayer(state), authorization))),
+        );
+        expect(Result.isFailure(result), kind).toBe(true);
+        if (Result.isFailure(result))
+          expect(result.failure, kind).toMatchObject({ _tag: "WorkspaceNotFoundError" });
+        expect(state.reservations?.size, kind).toBe(0);
+        expect(state.createdKeys, kind).toBeUndefined();
+        expect(state.attempts, kind).toBeUndefined();
+        expect(state.job, kind).toBeUndefined();
+        expect(state.publishedJobId, kind).toBeUndefined();
+      }
+    },
+  );
+  it("stores an authorized image scope, and owner scope when omitted", async () => {
+    for (const imageScopeId of [domainId, undefined]) {
+      const state: RecordingState = { scopeAllowed: true };
+      await Effect.runPromise(
+        createWorkspace({
+          payload: {
+            ...nativeCreateRequest({ harness: { id: "opencode" } }),
+            ...(imageScopeId === undefined ? {} : { imageScopeId }),
+          },
+          headers: {},
+        }).pipe(Effect.provide(makeRecordingLayer(state))),
+      );
+      expect(state.imageScope).toEqual(
+        imageScopeId === undefined
+          ? { kind: "owner", ownerUserId: "usr_capture" }
+          : { kind: "resource-domain", domainId },
+      );
+      expect(state.scopeChecks).toBe(imageScopeId === undefined ? undefined : 1);
+    }
   });
 });

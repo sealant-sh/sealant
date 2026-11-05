@@ -19,11 +19,8 @@ import { inMemoryCaptureDrainLedger, removeUnderDeletion } from "../../worker/ca
 import { cases as goldenCases } from "../docker-runtime-adapter.golden-fixture.js";
 import type { ControlChannel } from "../kubernetes/adapter.js";
 import { LaunchRetainedError } from "../launch-retention.js";
-import {
-  isRemovalRefusal,
-  type CredentialFileInjection,
-  type PublishedImage,
-} from "../runtime-adapter.js";
+import type { RuntimeAdapterLaunchInput, MicrovmLaunchInput } from "../runtime-adapter.js";
+import { isRemovalRefusal, type CredentialFileInjection } from "../runtime-adapter.js";
 import {
   buildRunInput,
   microvmDeadline,
@@ -52,7 +49,6 @@ import type {
 } from "./api.js";
 import { createLiveMicrovmApi, isServiceRefusal } from "./api.js";
 import { microvmRuntimeConfigFromEnv, type MicrovmRuntimeConfig } from "./config.js";
-import { microvmImageReference } from "./image-reference.js";
 
 const config: MicrovmRuntimeConfig = (() => {
   const parsed = microvmRuntimeConfigFromEnv({
@@ -80,17 +76,15 @@ const builtImage = {
     "arn:aws:lambda:eu-central-1:123456789012:microvm-image:sealant-ws-0123456789abcdef01234567",
   imageVersion: "1.0",
 };
-const builtReference = microvmImageReference(builtImage.imageArn, builtImage.imageVersion);
-const builtPublishedImage: PublishedImage = {
-  repository: "sealant-ws-0123456789abcdef01234567",
-  tag: builtImage.imageVersion,
-  reference: builtReference,
-  digestReference: builtReference,
-  digest: `sha256:${"0".repeat(64)}`,
-};
-const withBuiltImage = <Launch extends { readonly publishedImage: PublishedImage }>(
-  launch: Launch,
-): Launch => ({ ...launch, publishedImage: builtPublishedImage });
+const withBuiltImage = (launch: RuntimeAdapterLaunchInput): MicrovmLaunchInput => ({
+  ...launch,
+  publication: {
+    kind: "microvm",
+    publicationId: "microvm-fixture",
+    image: { ...builtImage, planHash: "0".repeat(64) },
+    evidence: {},
+  },
+});
 const cases = {
   capture: withBuiltImage(goldenCases.capture),
   dind: withBuiltImage(goldenCases.dind),
@@ -1052,9 +1046,8 @@ describe("MicrovmRuntimeAdapter.launch", () => {
       }),
     ).rejects.toThrow(/file-ref/);
     // A container image reference, as the Docker and Kubernetes builders publish, is never booted.
-    await expect(adapter.launch(goldenCases.capture)).rejects.toThrow(
-      /not made by the MicroVM image builder/,
-    );
+    // @ts-expect-error OCI publications cannot be passed to the MicroVM adapter.
+    await expect(adapter.launch(goldenCases.capture)).rejects.toThrow(/microvm/);
     expect(api.runs).toEqual([]);
   });
 });

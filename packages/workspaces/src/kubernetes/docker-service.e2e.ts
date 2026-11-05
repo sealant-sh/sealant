@@ -159,7 +159,12 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes workspace-scoped Docker", () => {
       requireUserNamespaces(ctx);
       const result = await adapter.launch({
         blueprint,
-        publishedImage,
+        publication: {
+          kind: "oci",
+          publicationId: "fixture-publication",
+          image: publishedImage,
+          evidence: {},
+        },
         runId: RUN_ID,
         workspaceId: "ws-e2e-docker",
       });

@@ -236,3 +236,10 @@ export {
   type ProcessUserRefusal,
   type ProcessUserRefusalReason,
 } from "./process-user.js";
+
+export type {
+  RuntimeLaunch,
+  RuntimeAdapterLifecycle,
+  MicrovmLaunchInput,
+} from "./runtime-adapter.js";
+export { parseMicrovmLaunchInput } from "./runtime-adapter.js";

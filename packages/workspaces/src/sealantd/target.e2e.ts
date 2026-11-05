@@ -204,13 +204,18 @@ describe.skipIf(!imageAvailable)(
             userEnv: { WORKSPACE_ENV_PROOF: "canary-e2e-value" },
           },
         }),
-        publishedImage: {
-          repository: "sealant-workspace-fedora",
-          tag: "latest",
-          reference: DEFAULT_IMAGE_REF,
-          // `launch` runs `docker run ... <digestReference>`; the local tag resolves directly.
-          digestReference: DEFAULT_IMAGE_REF,
-          digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        publication: {
+          kind: "oci",
+          publicationId: "fixture-publication",
+          image: {
+            repository: "sealant-workspace-fedora",
+            tag: "latest",
+            reference: DEFAULT_IMAGE_REF,
+            // `launch` runs `docker run ... <digestReference>`; the local tag resolves directly.
+            digestReference: DEFAULT_IMAGE_REF,
+            digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          },
+          evidence: {},
         },
         secretEnvDir,
       });

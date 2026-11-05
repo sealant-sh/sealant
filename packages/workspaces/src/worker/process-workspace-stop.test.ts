@@ -36,6 +36,9 @@ const NO_CLAIM = { token: "no-recovery-claim" };
 const runtimeInstance = (
   overrides: Partial<WorkspaceRuntimeInstance> = {},
 ): WorkspaceRuntimeInstance => ({
+  imageScope: null,
+  publication: null,
+  publicationId: null,
   runId: "run_old",
   status: "ready",
   adapter: "docker",

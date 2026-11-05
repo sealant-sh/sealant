@@ -32,6 +32,7 @@
  */
 import { randomUUID } from "node:crypto";
 
+import { parseLegacyWorkspacePublication } from "@sealant/validators";
 import { newWorkspaceSchema, type NewWorkspace } from "@sealant/validators";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
@@ -48,7 +49,7 @@ import { createLiveMicrovmApi } from "../../runtime/microvm/api.js";
 import { microvmRuntimeConfigFromEnv } from "../../runtime/microvm/config.js";
 import { MicrovmEndpointTokens } from "../../runtime/microvm/endpoint-tokens.js";
 import { parseMicrovmImageReference } from "../../runtime/microvm/image-reference.js";
-import { parseRuntimeAdapterLaunchInput } from "../../runtime/runtime-adapter.js";
+import { parseMicrovmLaunchInput } from "../../runtime/runtime-adapter.js";
 import { SealantRuntimeControlLive } from "../../sealantd/runtime.js";
 import { execInWorkspace, sealantTargetForRuntimeInstance } from "../../sealantd/target.js";
 import { MicrovmWorkspaceImageBuilder } from "./builder.js";
@@ -285,10 +286,14 @@ describe.skipIf(!E2E_ENABLED)(
           });
           const launchStarted = Date.now();
           const launched = await adapter.launch(
-            parseRuntimeAdapterLaunchInput({
+            parseMicrovmLaunchInput({
               runId: fixtureId,
               blueprint: spec,
-              publishedImage: first.publishedImage,
+              publication: parseLegacyWorkspacePublication({
+                publicationId: fixtureId,
+                image: first.publishedImage,
+                evidence: { planHash: first.build.metadata?.planHash },
+              }),
               ...(staged.dotfilesArchiveDir === undefined
                 ? {}
                 : { dotfilesArchiveDir: staged.dotfilesArchiveDir }),

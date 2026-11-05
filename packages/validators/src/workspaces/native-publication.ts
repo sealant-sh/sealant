@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { workspaceImageProbeSchema } from "./builder.js";
+import { workspaceImageProbeSchema } from "./workspace-image-probe.js";
 
 /** Content hashes are lowercase SHA-256, without an OCI prefix. */
 export const nativeHashSchema = z.string().regex(/^[a-f0-9]{64}$/);
