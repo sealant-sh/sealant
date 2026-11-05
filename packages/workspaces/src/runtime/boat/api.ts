@@ -1,8 +1,11 @@
+import { createHash } from "node:crypto";
+
 import { z } from "zod";
 
 import {
   BoatApiError,
   BoatOwnership,
+  BoatBuildOwnership,
   BoatSecret,
   boatDeletionIdSchema,
   boatSandboxIdSchema,
@@ -139,11 +142,20 @@ export type BoatCreateInput = {
       readonly marker: string;
       readonly purpose?: "native-build";
     }
+  | {
+      readonly lifetime: Extract<BoatLifetime, { readonly kind: "bounded" }>;
+      readonly requestVersion: 3;
+      readonly buildOwnership: BoatBuildOwnership;
+    }
 );
 
 /** Positive adoption requires a complete inventory. No match never establishes absence. */
 export type BoatDiscovery =
-  | { readonly kind: "found"; readonly ownership: BoatOwnership; readonly sandbox: BoatSandbox }
+  | {
+      readonly kind: "found";
+      readonly ownership: BoatOwnership | BoatBuildOwnership;
+      readonly sandbox: BoatSandbox;
+    }
   | { readonly kind: "unknown"; readonly reason: "no-positive-evidence" }
   | {
       readonly kind: "unknown";
@@ -152,7 +164,7 @@ export type BoatDiscovery =
     }
   | {
       readonly kind: "conflict";
-      readonly ownership: BoatOwnership;
+      readonly ownership: BoatOwnership | BoatBuildOwnership;
       readonly matches: readonly BoatSandbox[];
     };
 
@@ -165,6 +177,26 @@ const ownershipLabels = (identity: BoatOwnership) => ({
   "sealant-attempt": identity.launchAttemptId,
   "sealant-source": identity.sourceId,
 });
+/** Version 3 labels bind the complete reservation, never a correlation tag alone. */
+export const boatBuildOwnershipLabels = (
+  identity: BoatBuildOwnership,
+): Readonly<Record<string, string>> => {
+  const { key, buildId, publicationId } = identity.reservation;
+  return {
+    "sealant-dev": "boat-stream",
+    "sealant-runtime": "boat",
+    "sealant-owner": identity.owner,
+    "sealant-build": buildId,
+    "sealant-publication": publicationId,
+    "sealant-deployment": key.deploymentId,
+    "sealant-scope-kind": key.scope.kind,
+    "sealant-scope": key.scope.kind === "owner" ? key.scope.ownerUserId : key.scope.domainId,
+    "sealant-recipe": key.recipeHash,
+    "sealant-assets": key.assetsHash,
+    "sealant-runtime-hash": createHash("sha256").update(JSON.stringify(key.runtime)).digest("hex"),
+    "sealant-platform": key.platform,
+  };
+};
 const inventoryResponse = successSchema.extend({
   sandboxes: z.array(sandboxSchema),
   pageInfo: z
@@ -179,7 +211,7 @@ const inventoryResponse = successSchema.extend({
 export interface BoatApi {
   create(input: BoatCreateInput): Promise<BoatResult<BoatSandbox>>;
   /** Reads all cursor pages and verifies every ownership label locally. Never issues create. */
-  discover(ownership: BoatOwnership): Promise<BoatDiscovery>;
+  discover(ownership: BoatOwnership | BoatBuildOwnership): Promise<BoatDiscovery>;
   get(id: BoatSandboxId): Promise<BoatResult<BoatSandbox>>;
   execute(
     id: BoatSandboxId,
@@ -250,14 +282,19 @@ export class HttpBoatApi implements BoatApi {
     const ttl = parseBoatLifetime(input.lifetime);
     if (!ttl.ok) return Promise.resolve(ttl);
     const production = "ownership" in input;
+    const build = "buildOwnership" in input;
     if (
       !z.uuid().safeParse(input.idempotencyKey).success ||
       (production
         ? !(input.ownership instanceof BoatOwnership) ||
           input.lifetime.kind !== "production-session"
-        : !z.uuid().safeParse(input.marker).success ||
-          input.lifetime.kind !== "bounded" ||
-          (input.requestVersion !== 1 && input.requestVersion !== 2))
+        : build
+          ? !(input.buildOwnership instanceof BoatBuildOwnership) ||
+            input.requestVersion !== 3 ||
+            input.lifetime.kind !== "bounded"
+          : !z.uuid().safeParse(input.marker).success ||
+            input.lifetime.kind !== "bounded" ||
+            (input.requestVersion !== 1 && input.requestVersion !== 2))
     ) {
       return Promise.resolve({
         ok: false,
@@ -274,15 +311,18 @@ export class HttpBoatApi implements BoatApi {
         ttlSeconds: ttl.value,
         noEnv: true,
         monitoring: false,
-        ...(production || input.requestVersion === 2
+        ...(production || build || input.requestVersion === 2
           ? { snapshots: true, visibility: "private" }
           : {}),
         labels: production
           ? ownershipLabels(input.ownership)
-          : {
-              "sealant-dev": "boat-stream",
-              [input.purpose === "native-build" ? "sealant-build" : "sealant-spike"]: input.marker,
-            },
+          : build
+            ? boatBuildOwnershipLabels(input.buildOwnership)
+            : {
+                "sealant-dev": "boat-stream",
+                [input.purpose === "native-build" ? "sealant-build" : "sealant-spike"]:
+                  input.marker,
+              },
         ...(input.from === undefined ? {} : { from: input.from }),
       },
       { "Idempotency-Key": input.idempotencyKey },
@@ -290,8 +330,11 @@ export class HttpBoatApi implements BoatApi {
   }
 
   /** A positive page cannot authorize adoption while any later page remains unavailable. */
-  async discover(ownership: BoatOwnership): Promise<BoatDiscovery> {
-    const expected = ownershipLabels(ownership);
+  async discover(ownership: BoatOwnership | BoatBuildOwnership): Promise<BoatDiscovery> {
+    const expected =
+      ownership instanceof BoatBuildOwnership
+        ? boatBuildOwnershipLabels(ownership)
+        : ownershipLabels(ownership);
     const matches = new Map<BoatSandboxId, BoatSandbox>();
     const seenCursors = new Set<string>();
     let cursor: string | null = null;

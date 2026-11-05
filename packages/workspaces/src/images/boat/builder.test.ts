@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile, symlink, readdir } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,6 +25,7 @@ const respond = (r: http.ServerResponse, value: unknown, status = 200) =>
 const fixture = async (cleanupTimeoutMs = 1000) => {
   const directory = await mkdtemp(join(tmpdir(), "boat-builder-test-"));
   resources.push(async () => {
+    await readdir(directory);
     await rm(directory, { recursive: true, force: true });
   });
   const build = randomUUID();
@@ -197,6 +198,45 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
 };
 
 describe("attempt-owned durable native cleanup", () => {
+  it("cleans a historical runtime identity without current-pin reuse authority or invented probe", async () => {
+    const f = await fixture();
+    await f.write({
+      ...f.journal,
+      runtime: {
+        ...f.journal.runtime,
+        source: f.journal.runtime.source.replace("next.180", "next.100"),
+        manifest: "d".repeat(64),
+        sealantd: "e".repeat(64),
+      },
+      allocation: { ...f.journal.allocation, state: "known", id },
+    });
+    expect(await f.builder.cleanup(f.path)).toEqual({ ok: true, value: undefined });
+    expect(await f.read()).toMatchObject({
+      phase: "complete",
+      runtime: { manifest: "d".repeat(64) },
+    });
+    expect(await f.read()).not.toHaveProperty("evidence");
+  });
+
+  it("rejects traversal and symlink journals without provider work", async () => {
+    const f = await fixture();
+    const alias = join(f.directory, randomUUID() + ".json");
+    await symlink(f.path, alias);
+    expect(await f.builder.cleanup(alias)).toMatchObject({ ok: false });
+    expect(await f.builder.cleanup(join(f.directory, "..", "unowned.json"))).toMatchObject({
+      ok: false,
+      error: { code: "native-invalid-journal-path" },
+    });
+    const inventory = await f.builder.journals({ limit: 10 });
+    expect(inventory).toMatchObject({
+      ok: true,
+      value: {
+        entries: [{ buildId: f.journal.build }],
+        failures: [{ name: alias.slice(f.directory.length + 1) }],
+      },
+    });
+    expect(f.requests).toEqual([]);
+  });
   it("keeps missing sandboxes unresolved without a validated deletion intent", async () => {
     const f = await fixture();
     await f.write({ ...f.journal, allocation: { ...f.journal.allocation, state: "known", id } });

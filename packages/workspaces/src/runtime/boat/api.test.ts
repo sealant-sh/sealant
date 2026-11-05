@@ -3,10 +3,12 @@ import { inspect } from "node:util";
 
 import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
 
+import { NATIVE_RUNTIME_PIN } from "../../images/boat/runtime-bundle.js";
 import { HttpBoatApi, type BoatCreateInput } from "./api.js";
 import {
   BoatSecret,
   BoatOwnership,
+  BoatBuildOwnership,
   parseBoatLifetime,
   boatDeletionIdSchema,
   boatSandboxIdSchema,
@@ -536,6 +538,92 @@ describe("Boat complete ownership discovery through HTTP", () => {
 });
 
 describe("Boat API boundary", () => {
+  it("binds build request version 3 and discovers only complete immutable ownership across every page", async () => {
+    const build = must(
+      BoatBuildOwnership.parse({
+        owner: marker,
+        reservation: {
+          publicationId: "17dc2f0c-6bef-4c88-91f5-65da969c5346",
+          buildId: marker,
+          key: {
+            deploymentId: "local-build",
+            scope: { kind: "owner", ownerUserId: "usr_build" },
+            recipeHash: "a".repeat(64),
+            assetsHash: "b".repeat(64),
+            platform: "linux/amd64",
+            runtime: {
+              source: NATIVE_RUNTIME_PIN.source,
+              platform: "linux/amd64",
+              manifest: NATIVE_RUNTIME_PIN.manifest,
+              sealantd: NATIVE_RUNTIME_PIN.sealantd,
+              socat: NATIVE_RUNTIME_PIN.socat,
+              relay: "c".repeat(64),
+            },
+          },
+        },
+      }),
+    );
+    let labels: Record<string, string> = {};
+    let pages = 0;
+    const api = await server((request, response) => {
+      if (request.method === "POST") {
+        const chunks: Buffer[] = [];
+        request.on("data", (chunk: Buffer) => chunks.push(chunk));
+        request.on("end", () => {
+          const body = JSON.parse(Buffer.concat(chunks).toString());
+          expect(body).toMatchObject({
+            type: "small",
+            noEnv: true,
+            monitoring: false,
+            snapshots: true,
+            visibility: "private",
+            ttlSeconds: 900,
+            labels: {
+              "sealant-owner": marker,
+              "sealant-build": marker,
+              "sealant-publication": build.reservation.publicationId,
+              "sealant-deployment": "local-build",
+              "sealant-scope-kind": "owner",
+              "sealant-scope": "usr_build",
+              "sealant-recipe": "a".repeat(64),
+              "sealant-assets": "b".repeat(64),
+              "sealant-platform": "linux/amd64",
+            },
+          });
+          labels = body.labels;
+          expect(labels).not.toHaveProperty("sealant-run");
+          respond(response, { ok: true, sandbox: { id, state: "ready", labels } });
+        });
+      } else {
+        pages++;
+        const url = new URL(request.url ?? "", "http://127.0.0.1");
+        expect(url.searchParams.getAll("label")).toHaveLength(12);
+        respond(
+          response,
+          url.searchParams.has("cursor")
+            ? page([{ id, state: "ready", labels }])
+            : page(
+                Object.keys(labels).map((key) => ({
+                  id,
+                  state: "ready",
+                  labels: { ...labels, [key]: "wrong" },
+                })),
+                "build-page-2",
+              ),
+        );
+      }
+    });
+    expect(
+      await api.create({
+        idempotencyKey: marker,
+        lifetime: { kind: "bounded", ttlSeconds: 900 },
+        requestVersion: 3,
+        buildOwnership: build,
+      }),
+    ).toMatchObject({ ok: true });
+    expect(await api.discover(build)).toMatchObject({ kind: "found", sandbox: { id } });
+    expect(pages).toBe(2);
+  });
   it("bounds native commands and lets cancellation stop waiting without retrying them", async () => {
     const bodies: unknown[] = [];
     const api = await server((request, response) => {

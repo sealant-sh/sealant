@@ -40,6 +40,7 @@ export interface NativeRecipe {
   readonly bootEntries: ReadonlyArray<readonly [string, string]>;
   readonly substrate: typeof NATIVE_SUBSTRATE;
   readonly runtime: NativeRuntimeIdentity;
+  readonly assetsHash: string;
   readonly hash: string;
 }
 
@@ -154,7 +155,15 @@ export const createNativeRecipe = async (
       runtime: bundle.identity,
       files: files.map((entry) => ({ path: entry.path, mode: entry.mode, sha256: entry.sha256 })),
     };
-    return { ok: true, value: { ...content, files, hash: sha256(JSON.stringify(content)) } };
+    return {
+      ok: true,
+      value: {
+        ...content,
+        files,
+        assetsHash: sha256(JSON.stringify(content.files)),
+        hash: sha256(JSON.stringify(content)),
+      },
+    };
   } catch (error) {
     const code = z.object({ code: z.string().regex(/^native-[a-z-]+$/) }).safeParse(error);
     return {

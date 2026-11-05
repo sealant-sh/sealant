@@ -1,5 +1,6 @@
 import { inspect } from "node:util";
 
+import { nativeBuildOwnershipSchema, type NativeBuildOwnership } from "@sealant/validators";
 import { z } from "zod";
 
 export class BoatApiError extends Error {
@@ -114,6 +115,24 @@ export class BoatOwnership {
     return parsed.success
       ? { ok: true, value: new BoatOwnership(parsed.data) }
       : { ok: false, error: new BoatApiError("ownership", null, "invalid_ownership") };
+  }
+}
+
+/** Immutable scratch ownership, without invented run or runtime-instance identities. */
+export class BoatBuildOwnership {
+  private constructor(
+    readonly owner: string,
+    readonly reservation: NativeBuildOwnership,
+  ) {}
+
+  /** Parse durable ownership before creating or discovering scratch allocations. */
+  static parse(input: unknown): BoatResult<BoatBuildOwnership> {
+    const parsed = z
+      .object({ owner: z.uuid(), reservation: nativeBuildOwnershipSchema })
+      .safeParse(input);
+    return parsed.success
+      ? { ok: true, value: new BoatBuildOwnership(parsed.data.owner, parsed.data.reservation) }
+      : { ok: false, error: new BoatApiError("ownership", null, "invalid_build_ownership") };
   }
 }
 
