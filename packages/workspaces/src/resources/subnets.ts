@@ -28,7 +28,7 @@ export const repositorySubnets = (
 ): ResourceSubnets => ({
   allocate: async ({ name, kind, owner }) => {
     const allocation = await Effect.runPromise(
-      repo.allocateNetwork({ name, kind, owner, pool: pools[kind] }),
+      repo.allocateNetwork({ name, kind, owner, pool: pools[kind === "caller" ? "reach" : kind] }),
     );
     if (allocation.kind === "pool-exhausted") {
       throw new Error(

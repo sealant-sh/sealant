@@ -390,10 +390,18 @@ export const archiveSshKeyOp = (sshKeyId: string, ownerUserId: string) =>
 
 // ---- resource domains (the SDK's scopes) ----
 
-export const ensureResourceDomainOp = (key: string, budget?: ResourceDomainBudgetLimits) =>
+export const ensureResourceDomainOp = (
+  key: string,
+  budget?: ResourceDomainBudgetLimits,
+  ownerKind?: "project" | "organization" | "instance",
+) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.resourceDomains.ensureResourceDomain({
-      payload: budget === undefined ? { key } : { key, budget },
+      payload: {
+        key,
+        ...(budget === undefined ? {} : { budget }),
+        ...(ownerKind === undefined ? {} : { ownerKind }),
+      },
     }),
   );
 

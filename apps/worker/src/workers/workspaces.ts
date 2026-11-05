@@ -11,6 +11,8 @@ import {
   CredentialPlacementRepoLive,
   ResourceInstanceRepo,
   ResourceInstanceRepoLive,
+  ResourceDomainRepo,
+  ResourceDomainRepoLive,
   WorkspaceCredentialHomeRepoLive,
   type DB,
 } from "@sealant/db";
@@ -20,6 +22,8 @@ import { deleteExpiredRunRecords } from "@sealant/telemetry";
 import type { WorkerEnv } from "@sealant/validators/env";
 import {
   DockerResourceRuntime,
+  KubernetesCallerRuntime,
+  parseResourceCallers,
   makeResourceReconciler,
   repositorySubnets,
   resourceSubnetPools,
@@ -305,29 +309,55 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       : parseDockerRegistryMirrors(env.SEALANT_DOCKER_REGISTRY_MIRRORS);
   // Resource instances (Mend ADR 0019) run on this Docker host: the adapter tells their reach
   // about every executor it launches and removes, and a tick below keeps them at their rows.
-  const resourceReconciler = !env.DOCKER_RUNTIME_ENABLED
+  const resourceReconciler = !(
+    (env.DEFAULT_RUNTIME_ADAPTER === "docker" && env.DOCKER_RUNTIME_ENABLED) ||
+    env.DEFAULT_RUNTIME_ADAPTER === "k8s" ||
+    env.DEFAULT_RUNTIME_ADAPTER === "k3s"
+  )
     ? undefined
     : await Effect.runPromise(
-        Effect.map(ResourceInstanceRepo, (repo) =>
-          makeResourceReconciler({
+        Effect.gen(function* () {
+          const repo = yield* ResourceInstanceRepo;
+          const budgets = yield* ResourceDomainRepo;
+          const callers = parseResourceCallers(env.SEALANT_RESOURCE_CALLERS);
+          return makeResourceReconciler({
             repo,
-            runtime: new DockerResourceRuntime({
-              subnets: repositorySubnets(
-                repo,
-                resourceSubnetPools({
-                  reach: env.SEALANT_RESOURCE_REACH_SUBNETS,
-                  egress: env.SEALANT_RESOURCE_EGRESS_SUBNETS,
-                }),
-              ),
-              dockerSocketPath: env.DOCKER_SOCKET_PATH,
-              ...(env.SEALANT_DOCKER_NETWORK_GUARD_IMAGE === undefined
-                ? {}
-                : { guardImage: env.SEALANT_DOCKER_NETWORK_GUARD_IMAGE }),
-            }),
-          }),
-        ).pipe(
+            budgets,
+            runtime:
+              env.DEFAULT_RUNTIME_ADAPTER === "k8s" || env.DEFAULT_RUNTIME_ADAPTER === "k3s"
+                ? new KubernetesCallerRuntime({
+                    namespace: env.SEALANT_RESOURCE_K8S_NAMESPACE,
+                    callers,
+                    networkPolicyEnforced: env.SEALANT_RESOURCE_K8S_NETWORK_POLICY,
+                    ...(credentialCipher === undefined ? {} : { cipher: credentialCipher }),
+                    ...(env.SEALANT_RESOURCE_K8S_KUBECONFIG === undefined
+                      ? {}
+                      : { kubeconfigPath: env.SEALANT_RESOURCE_K8S_KUBECONFIG }),
+                  })
+                : new DockerResourceRuntime({
+                    callers,
+                    ...(credentialCipher === undefined ? {} : { cipher: credentialCipher }),
+                    ...(env.SEALANT_RESOURCE_CALLER_GUARD_IMAGE === undefined
+                      ? {}
+                      : { callerGuardImage: env.SEALANT_RESOURCE_CALLER_GUARD_IMAGE }),
+                    subnets: repositorySubnets(
+                      repo,
+                      resourceSubnetPools({
+                        reach: env.SEALANT_RESOURCE_REACH_SUBNETS,
+                        egress: env.SEALANT_RESOURCE_EGRESS_SUBNETS,
+                      }),
+                    ),
+                    dockerSocketPath: env.DOCKER_SOCKET_PATH,
+                    ...(env.SEALANT_DOCKER_NETWORK_GUARD_IMAGE === undefined
+                      ? {}
+                      : { guardImage: env.SEALANT_DOCKER_NETWORK_GUARD_IMAGE }),
+                  }),
+          });
+        }).pipe(
           Effect.provide(
-            ResourceInstanceRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, db))),
+            Layer.merge(ResourceInstanceRepoLive, ResourceDomainRepoLive).pipe(
+              Layer.provide(Layer.succeed(SealantDB, db)),
+            ),
           ),
         ),
       );

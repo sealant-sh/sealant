@@ -530,3 +530,5 @@ export {
 
 export * from "./credential-placements.js";
 export * from "./repositories/workspace-credential-placements.js";
+
+export type { ResourceInstanceAllocation } from "./repositories/resource-instances.js";

@@ -104,6 +104,10 @@ const Port = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 }))
 export const resourceInstanceVolumeSchema = Schema.Struct({
   name: VolumeName,
   mountPath: MountPath,
+  /** Storage reserved in the scope budget; required for caller instances. */
+  storageBytes: Schema.optional(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
+  ),
 });
 export type ResourceInstanceVolume = typeof resourceInstanceVolumeSchema.Type;
 
@@ -125,8 +129,21 @@ const distinct =
   (items: ReadonlyArray<A>) =>
     new Set(items.map(by)).size === items.length ? undefined : message;
 
+/** A configured caller receives the service and exposes one private callback port. */
+export const resourceCallerReachSchema = Schema.Struct({
+  kind: Schema.Literal("caller"),
+  caller: ResourceInstanceAlias,
+  port: Port,
+  callbackPort: Port,
+});
+export type ResourceCallerReach = typeof resourceCallerReachSchema.Type;
+
+/** Write-only process env. Core seals it before persistence and never returns or records it. */
+export const resourceInstanceSecretEnvSchema = Schema.Record(EnvName, EnvValue);
+
 /** What an instance runs. Excess keys are refused; see the header for what has no field. */
 export const resourceInstanceSpecSchema = Schema.Struct({
+  reach: Schema.optional(resourceCallerReachSchema),
   alias: ResourceInstanceAlias,
   /** Null: every workspace linked to the domain reaches it. Set: only links with this key. */
   worktreeKey: Schema.NullOr(ResourceWorktreeKey),
@@ -148,8 +165,8 @@ export const resourceInstanceSpecSchema = Schema.Struct({
   }),
   ready: resourceInstanceReadySchema,
   /** Seconds with no live linked executor reaching it before Core stops it. */
-  idleStopAfterSeconds: Schema.Int.check(
-    Schema.isBetween({ minimum: 1, maximum: RESOURCE_INSTANCE_MAX_IDLE_SECONDS }),
+  idleStopAfterSeconds: Schema.NullOr(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: RESOURCE_INSTANCE_MAX_IDLE_SECONDS })),
   ),
 });
 export type ResourceInstanceSpec = typeof resourceInstanceSpecSchema.Type;
@@ -247,6 +264,22 @@ export const decodeResourceInstanceSpec = (input: unknown): ResourceInstanceSpec
       : [];
   if (forbidden.length > 0) return { kind: "refused", refusals: forbidden };
   const decoded = decodeSpec(input, { onExcessProperty: "error", errors: "all" });
+  if (Result.isSuccess(decoded)) {
+    const spec = decoded.success;
+    const reason =
+      spec.reach === undefined
+        ? spec.idleStopAfterSeconds === null
+          ? "workspace instances require an idle stop"
+          : undefined
+        : spec.worktreeKey !== null || spec.idleStopAfterSeconds !== null
+          ? "caller instances require no worktree key and no idle stop"
+          : spec.volumes.length === 0
+            ? "caller instances require at least one retained named volume"
+            : spec.volumes.some((volume) => volume.storageBytes === undefined)
+              ? "caller volumes require storageBytes for budget admission"
+              : undefined;
+    if (reason !== undefined) return { kind: "refused", refusals: [{ field: "spec", reason }] };
+  }
   return Result.isSuccess(decoded)
     ? { kind: "spec", spec: decoded.success }
     : {
@@ -271,6 +304,7 @@ export const upResourceInstanceRequestSchema = Schema.Struct({
   spec: Schema.Record(Schema.String, Schema.Unknown),
   /** `use`: a launch or a wake, which leaves a person's stop standing. `person`: a person's Start. */
   cause: resourceInstanceUpCauseSchema,
+  secretEnv: Schema.optional(resourceInstanceSecretEnvSchema),
 });
 export type UpResourceInstanceRequest = typeof upResourceInstanceRequestSchema.Type;
 
@@ -283,6 +317,10 @@ export type StopResourceInstanceRequest = typeof stopResourceInstanceRequestSche
 const Timestamp = Schema.String;
 
 export const resourceInstanceSchema = Schema.Struct({
+  /** Stable caller-only endpoint; absent on workspace instances. */
+  endpoint: Schema.optional(
+    Schema.Struct({ host: Schema.String, port: Port, callbackHost: Schema.String }),
+  ),
   resourceInstanceId: ResourceInstanceId,
   key: ResourceInstanceKey,
   alias: ResourceInstanceAlias,
@@ -399,6 +437,25 @@ export class ResourceWorkspaceLinkedElsewhereError extends Schema.TaggedError<Re
   { httpApiStatus: 409 },
 ) {}
 
+/** Another lifecycle operation holds the instance. Retry after it finishes. */
+export class ResourceInstanceBusyError extends Schema.TaggedError<ResourceInstanceBusyError>()(
+  "ResourceInstanceBusyError",
+  { message: Schema.String },
+  { httpApiStatus: 409 },
+) {}
+
+/** A scope budget refuses an increase; existing work and retained data remain. */
+export class ResourceInstanceBudgetError extends Schema.TaggedError<ResourceInstanceBudgetError>()(
+  "ResourceInstanceBudgetError",
+  { message: Schema.String },
+  { httpApiStatus: 409 },
+) {}
+
+/** A stopped, retained volume can be downloaded as a tar stream. */
+export const RESOURCE_INSTANCE_BACKUP = {
+  path: "/v1/resource-domains/:resourceDomainId/instances/:key/volumes/:volume/backup",
+} as const;
+
 const instanceParams = Schema.Struct({
   resourceDomainId: ResourceDomainId,
   key: ResourceInstanceKey,
@@ -408,6 +465,10 @@ const baseErrors = [
   ResourceDomainForbiddenError,
   ResourceDomainNotFoundError,
   ResourceDomainInternalServerError,
+  ResourceInstanceSpecRefusedError,
+  ResourceInstanceBusyError,
+  ResourceInstanceBudgetError,
+  ResourceRuntimeUnsupportedError,
 ] as const;
 
 export const ResourceInstancesGroup = HttpApiGroup.make("resourceInstances")

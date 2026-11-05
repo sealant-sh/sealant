@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   RESOURCE_INSTANCE_ID_PREFIX,
   ResourceInstanceId,
+  ResourceInstanceBusyError,
   ResourceInstanceKey,
   ResourceReachAliases,
   type ResourceReachLevel,
@@ -48,13 +49,27 @@ export class ResourceInstanceRepoError extends Schema.TaggedError<ResourceInstan
       "releaseNetwork",
       "networks",
       "setDomainState",
+      "lock",
     ]),
     message: Schema.String,
     cause: Schema.Defect(),
   },
 ) {}
 
+/** Reservations remain until a confirmed stop or explicit purge. */
+export interface ResourceInstanceAllocation {
+  readonly id: string;
+  readonly use: "compute" | "volume";
+  readonly name: string;
+  readonly cpuMillicores: number;
+  readonly memoryBytes: number;
+  readonly storageBytes: number;
+}
+
 export interface ResourceInstanceRecord {
+  readonly secretEnvSealed?: string | null;
+  readonly secretRevision?: string | null;
+  readonly allocations?: ReadonlyArray<ResourceInstanceAllocation>;
   readonly id: ResourceInstanceId;
   readonly resourceDomainId: string;
   readonly key: ResourceInstanceKey;
@@ -104,6 +119,7 @@ export interface LinkedExecutor extends ResourceWorkspaceLink {
 }
 
 export type ResourceWorkspaceLinkOutcome =
+  | { readonly kind: "caller-only" }
   | { readonly kind: "linked"; readonly link: ResourceWorkspaceLink }
   /** The workspace is linked to another domain; nothing changed. */
   | { readonly kind: "other-domain"; readonly resourceDomainId: string }
@@ -123,6 +139,15 @@ export type NetworkAllocation =
   | { readonly kind: "pool-exhausted" };
 
 export interface ResourceInstanceRepoService {
+  /** Session advisory lock across provider I/O, without holding a database transaction open. */
+  readonly withLock: <A, E, R>(
+    key: string,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | ResourceInstanceRepoError | ResourceInstanceBusyError, R>;
+  /** Commit admission ledger changes together with the instance accounting record. */
+  readonly transaction: <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | ResourceInstanceRepoError, R>;
   /**
    * Create the instance by key, or update its spec. `person` asks it to run and clears a stop;
    * `use` asks it to run unless a person stopped it. An archived key stays archived.
@@ -132,6 +157,7 @@ export interface ResourceInstanceRepoService {
     readonly key: ResourceInstanceKey;
     readonly spec: ResourceInstanceSpec;
     readonly cause: ResourceInstanceUpCause;
+    readonly secrets?: { readonly sealed: string; readonly revision: string };
   }) => Effect.Effect<ResourceInstanceUpOutcome, ResourceInstanceRepoError>;
   readonly get: (
     resourceDomainId: string,
@@ -159,6 +185,7 @@ export interface ResourceInstanceRepoService {
     extra?: {
       readonly startedAt?: Date;
       readonly volumes?: ReadonlyArray<ResourceInstanceVolume>;
+      readonly allocations?: ReadonlyArray<ResourceInstanceAllocation>;
     },
   ) => Effect.Effect<void, ResourceInstanceRepoError>;
   readonly touchReached: (
@@ -260,9 +287,12 @@ const canonical = (value: unknown): unknown =>
       : value;
 
 /** The spec's digest: sha256 of its JSON with keys sorted, so equal specs share it. */
-export const resourceInstanceSpecDigest = (spec: ResourceInstanceSpec): string =>
+export const resourceInstanceSpecDigest = (
+  spec: ResourceInstanceSpec,
+  secretRevision?: string | null,
+): string =>
   `sha256:${createHash("sha256")
-    .update(JSON.stringify(canonical(spec)))
+    .update(JSON.stringify(canonical(secretRevision == null ? spec : { spec, secretRevision })))
     .digest("hex")}`;
 
 const withError = <A>(
@@ -292,6 +322,9 @@ const namesConstraint = (error: unknown, constraint: string, depth = 0): boolean
 
 const toRecord = (row: ResourceInstanceRow): ResourceInstanceRecord => ({
   id: ResourceInstanceId.make(row.id),
+  secretEnvSealed: row.secretEnvSealed,
+  secretRevision: row.secretRevision,
+  allocations: row.allocations,
   resourceDomainId: row.resourceDomainId,
   key: ResourceInstanceKey.make(row.key),
   spec: row.spec,
@@ -362,19 +395,32 @@ export const ResourceInstanceRepoLive: Layer.Layer<ResourceInstanceRepo, never, 
           ([row]) => (row === undefined ? undefined : toRecord(row)),
         );
 
-      const up: ResourceInstanceRepoService["up"] = ({ resourceDomainId, key, spec, cause }) =>
+      const up: ResourceInstanceRepoService["up"] = ({
+        resourceDomainId,
+        key,
+        spec,
+        cause,
+        secrets,
+      }) =>
         withError(
           "up",
           Effect.gen(function* () {
             const state = yield* domainState(resourceDomainId);
             if (state === undefined) return { kind: "no-such-domain" } as const;
             if (state !== "active") return { kind: "domain-not-active", state } as const;
+            const previous = yield* selectInstance(resourceDomainId, key);
             const now = new Date();
             const written = {
+              ...(secrets === undefined
+                ? {}
+                : { secretEnvSealed: secrets.sealed, secretRevision: secrets.revision }),
               alias: spec.alias,
               worktreeKey: spec.worktreeKey,
               spec,
-              specDigest: resourceInstanceSpecDigest(spec),
+              specDigest: resourceInstanceSpecDigest(
+                spec,
+                secrets?.revision ?? previous?.secretRevision,
+              ),
             };
             const desire =
               cause === "person"
@@ -414,6 +460,59 @@ export const ResourceInstanceRepoLive: Layer.Layer<ResourceInstanceRepo, never, 
         );
 
       return {
+        withLock: (key, effect) =>
+          Effect.uninterruptible(
+            Effect.scoped(
+              Effect.gen(function* () {
+                const connection = yield* db.$client.reserve.pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ResourceInstanceRepoError({
+                        operation: "lock",
+                        message: "Could not reserve the instance lock connection.",
+                        cause,
+                      }),
+                  ),
+                );
+                const rows = yield* connection
+                  .executeValues("select pg_try_advisory_lock(hashtextextended($1, 0))", [key])
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new ResourceInstanceRepoError({
+                          operation: "lock",
+                          message: "Could not lock the instance.",
+                          cause,
+                        }),
+                    ),
+                  );
+                if (rows[0]?.[0] !== true)
+                  return yield* new ResourceInstanceBusyError({
+                    message: "Another operation holds this instance. Retry after it finishes.",
+                  });
+                yield* Effect.addFinalizer(() =>
+                  connection
+                    .executeValues("select pg_advisory_unlock(hashtextextended($1, 0))", [key])
+                    .pipe(Effect.orDie),
+                );
+                return yield* effect;
+              }),
+            ),
+          ),
+        transaction: (effect) =>
+          db
+            .transaction(() => effect)
+            .pipe(
+              Effect.mapError((error) =>
+                error instanceof Error && error.name === "SqlError"
+                  ? new ResourceInstanceRepoError({
+                      operation: "up",
+                      message: "Could not commit instance accounting.",
+                      cause: error,
+                    })
+                  : error,
+              ),
+            ),
         up,
         get: (resourceDomainId, key) => withError("get", selectInstance(resourceDomainId, key)),
         list: (resourceDomainId, { archived }) =>
@@ -442,7 +541,9 @@ export const ResourceInstanceRepoLive: Layer.Layer<ResourceInstanceRepo, never, 
               db
                 .select()
                 .from(resourceInstances)
-                .where(ne(resourceInstances.desired, "archived"))
+                .where(
+                  sql`${resourceInstances.desired} <> 'archived' or ${resourceInstances.observed}->>'kind' <> 'archived'`,
+                )
                 .orderBy(asc(resourceInstances.createdAt)),
               (rows) => rows.map(toRecord),
             ),
@@ -482,10 +583,11 @@ export const ResourceInstanceRepoLive: Layer.Layer<ResourceInstanceRepo, never, 
                   observedAt: new Date(),
                   ...(extra?.startedAt === undefined ? {} : { startedAt: extra.startedAt }),
                   ...(extra?.volumes === undefined ? {} : { volumes: extra.volumes }),
+                  ...(extra?.allocations === undefined ? {} : { allocations: extra.allocations }),
                 })
                 .where(
                   // Only the archive itself writes over an archived instance.
-                  observed.kind === "archived"
+                  observed.kind === "archived" || extra?.allocations !== undefined
                     ? eq(resourceInstances.id, id)
                     : and(eq(resourceInstances.id, id), ne(resourceInstances.desired, "archived")),
                 ),
@@ -510,6 +612,11 @@ export const ResourceInstanceRepoLive: Layer.Layer<ResourceInstanceRepo, never, 
               const state = yield* domainState(resourceDomainId);
               if (state === undefined) return { kind: "no-such-domain" } as const;
               if (state !== "active") return { kind: "domain-not-active", state } as const;
+              const [domain] = yield* db
+                .select({ ownerKind: resourceDomains.ownerKind })
+                .from(resourceDomains)
+                .where(eq(resourceDomains.id, resourceDomainId));
+              if (domain?.ownerKind !== "project") return { kind: "caller-only" } as const;
               const [workspace] = yield* db
                 .select({ id: workspaces.id })
                 .from(workspaces)

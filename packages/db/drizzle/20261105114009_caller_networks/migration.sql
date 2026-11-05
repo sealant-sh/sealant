@@ -1,0 +1,1 @@
+ALTER TABLE "resource_networks" DROP CONSTRAINT "resource_networks_kind", ADD CONSTRAINT "resource_networks_kind" CHECK ("kind" in ('reach', 'egress', 'caller'));

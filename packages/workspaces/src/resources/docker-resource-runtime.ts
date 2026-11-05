@@ -8,6 +8,7 @@
 import { spawn } from "node:child_process";
 
 import type { ResourceInstanceState, ResourceInstanceVolume } from "@sealant/api-contracts";
+import type { CredentialCipherService } from "@sealant/credentials";
 import type { ResourceInstanceRecord, ResourceNetworkKind } from "@sealant/db";
 
 import {
@@ -16,6 +17,8 @@ import {
   DEFAULT_NETWORK_GUARD_IMAGE,
   type DockerCommandRunner,
 } from "../runtime/docker-runtime-adapter.js";
+import { callerInstanceName, type ResourceCallerConfig } from "./caller-config.js";
+import { DockerCallerRuntime } from "./docker-caller-runtime.js";
 import {
   connectArgv,
   coverImageVolumes,
@@ -87,6 +90,20 @@ export interface ObservedContainer {
 }
 
 export interface ResourceRuntime {
+  /** False when this provider must leave legacy workspace-instance records untouched. */
+  readonly workspaceReach?: boolean;
+  /** Provider configuration checks performed before writing desired state. */
+  readonly validateCaller?: (spec: ResourceInstanceRecord["spec"]) => void;
+  readonly endpoint?: (instance: ResourceInstanceRecord) => {
+    readonly host: string;
+    readonly port: number;
+    readonly callbackHost: string;
+  };
+  readonly health?: (instance: ResourceInstanceRecord) => Promise<ResourceInstanceState>;
+  readonly backup?: (
+    instance: ResourceInstanceRecord,
+    volume: string,
+  ) => Promise<ReadableStream<Uint8Array>>;
   /**
    * Converge one instance to running and answered: its egress network, its volumes, its container
    * (a changed spec replaces the container and keeps every volume), the metadata guard on every
@@ -131,6 +148,9 @@ export interface ResourceRuntime {
 }
 
 export interface DockerResourceRuntimeOptions {
+  readonly callers?: ResourceCallerConfig;
+  readonly cipher?: CredentialCipherService;
+  readonly callerGuardImage?: string;
   readonly subnets: ResourceSubnets;
   readonly dockerSocketPath?: string;
   readonly guardImage?: string;
@@ -203,12 +223,23 @@ class Tail {
 
 export class DockerResourceRuntime implements ResourceRuntime {
   private readonly docker: DockerCommandRunner;
+  private readonly caller: DockerCallerRuntime;
   private readonly dockerSocketPath: string;
   private readonly guardImage: string;
   private readonly readyTimeoutMs: number;
   private readonly subnets: ResourceSubnets;
 
   public constructor(options: DockerResourceRuntimeOptions) {
+    this.caller = new DockerCallerRuntime({
+      subnets: options.subnets,
+      callers: options.callers ?? [],
+      ...(options.cipher === undefined ? {} : { cipher: options.cipher }),
+      ...(options.dockerSocketPath === undefined
+        ? {}
+        : { dockerSocketPath: options.dockerSocketPath }),
+      ...(options.readyTimeoutMs === undefined ? {} : { readyTimeoutMs: options.readyTimeoutMs }),
+      ...(options.callerGuardImage === undefined ? {} : { guardImage: options.callerGuardImage }),
+    });
     this.dockerSocketPath = options.dockerSocketPath ?? "/var/run/docker.sock";
     this.docker = options.commandRunner ?? createDockerCommandRunner(this.dockerSocketPath);
     this.guardImage = options.guardImage ?? DEFAULT_NETWORK_GUARD_IMAGE;
@@ -355,6 +386,7 @@ export class DockerResourceRuntime implements ResourceRuntime {
     instance: ResourceInstanceRecord,
     attachments: ReadonlyArray<ReachAttachment>,
   ): Promise<ResourceUpResult> {
+    if (instance.spec.reach?.kind === "caller") return this.caller.up(instance);
     const container = instanceContainerName(instance.id);
     let volumes: ReadonlyArray<ResourceInstanceVolume>;
     try {
@@ -409,6 +441,7 @@ export class DockerResourceRuntime implements ResourceRuntime {
   }
 
   public async stop(instance: ResourceInstanceRecord): Promise<void> {
+    if (instance.spec.reach?.kind === "caller") return this.caller.stop(instance);
     await this.runTolerating(
       ["stop", "-t", String(RESOURCE_STOP_TIMEOUT_SECONDS), instanceContainerName(instance.id)],
       isMissing,
@@ -416,6 +449,7 @@ export class DockerResourceRuntime implements ResourceRuntime {
   }
 
   public async archive(instance: ResourceInstanceRecord): Promise<ReadonlyArray<ArchivedVolume>> {
+    if (instance.spec.reach?.kind === "caller") return this.caller.archive(instance);
     await this.stop(instance);
     await this.runTolerating(["rm", instanceContainerName(instance.id)], isMissing);
     await this.removeNetwork(egressNetworkName(instance.id));
@@ -470,6 +504,30 @@ export class DockerResourceRuntime implements ResourceRuntime {
     }
   }
 
+  /** Confirm the caller is configured before admission. */
+  public validateCaller(spec: ResourceInstanceRecord["spec"]): void {
+    this.caller.validate({ spec });
+  }
+  /** Stable DNS endpoint on the configured caller's private network. */
+  public endpoint(instance: ResourceInstanceRecord): {
+    readonly host: string;
+    readonly port: number;
+    readonly callbackHost: string;
+  } {
+    return this.caller.endpoint(instance);
+  }
+  /** Fresh caller-only health observation. */
+  public health(instance: ResourceInstanceRecord): Promise<ResourceInstanceState> {
+    return this.caller.health(instance);
+  }
+  /** A stopped caller-only volume, streamed as tar. */
+  public backup(
+    instance: ResourceInstanceRecord,
+    volume: string,
+  ): Promise<ReadableStream<Uint8Array>> {
+    return this.caller.backup(instance, volume);
+  }
+
   public exec(
     instance: ResourceInstanceRecord,
     command: ResourceExecCommand,
@@ -477,10 +535,21 @@ export class DockerResourceRuntime implements ResourceRuntime {
   ): Promise<ResourceExecResult> {
     return new Promise((resolve, reject) => {
       // The streaming path: the buffered runner caps output at 10 MB and takes stdin as a string.
-      const child = spawn("docker", [...execArgv(instanceContainerName(instance.id), command)], {
-        env: { ...process.env, DOCKER_HOST: `unix://${this.dockerSocketPath}` },
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+      const child = spawn(
+        "docker",
+        [
+          ...execArgv(
+            instance.spec.reach?.kind === "caller"
+              ? `${callerInstanceName(instance.id)}-workload`
+              : instanceContainerName(instance.id),
+            command,
+          ),
+        ],
+        {
+          env: { ...process.env, DOCKER_HOST: `unix://${this.dockerSocketPath}` },
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      );
       const stdout = new Tail(RESOURCE_EXEC_OUTPUT_LIMIT);
       const stderr = new Tail(RESOURCE_EXEC_OUTPUT_LIMIT);
       let timedOut = false;

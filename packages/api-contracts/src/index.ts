@@ -23,3 +23,17 @@ export * from "./core-api/users.js";
 export * from "./workspace-environment.js";
 export * from "./capture-owner-map.js";
 export * from "./connected-account-selector.js";
+
+export {
+  resourceDomainOwnerKindSchema,
+  ResourceDomainOwnerDiffersError,
+  type ResourceDomainOwnerKind,
+} from "./core-api/resource-domains.js";
+export {
+  resourceCallerReachSchema,
+  resourceInstanceSecretEnvSchema,
+  ResourceInstanceBusyError,
+  ResourceInstanceBudgetError,
+  RESOURCE_INSTANCE_BACKUP,
+  type ResourceCallerReach,
+} from "./core-api/resource-instances.js";

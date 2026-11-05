@@ -44,6 +44,21 @@ export const resourceInstances = pgTable(
     worktreeKey: text(),
     spec: jsonb().$type<ResourceInstanceSpec>().notNull(),
     specDigest: text().notNull(),
+    secretEnvSealed: text(),
+    secretRevision: text(),
+    allocations: jsonb()
+      .$type<
+        ReadonlyArray<{
+          readonly id: string;
+          readonly use: "compute" | "volume";
+          readonly name: string;
+          readonly cpuMillicores: number;
+          readonly memoryBytes: number;
+          readonly storageBytes: number;
+        }>
+      >()
+      .notNull()
+      .default([]),
     desired: text({ enum: resourceInstanceDesiredValues }).notNull().default("running"),
     /** Why it is stopped, while `desired` is `stopped`. A person's stop holds against `use`. */
     stopReason: jsonb().$type<ResourceInstanceStopReason>(),
@@ -111,7 +126,7 @@ export const resourceWorkspaceLinks = pgTable(
   ],
 );
 
-export const resourceNetworkKindValues = ["reach", "egress"] as const;
+export const resourceNetworkKindValues = ["reach", "egress", "caller"] as const;
 export type ResourceNetworkKind = (typeof resourceNetworkKindValues)[number];
 
 /**
@@ -131,7 +146,7 @@ export const resourceNetworks = pgTable(
   },
   (table) => [
     uniqueIndex("resource_networks_subnet_idx").on(table.subnet),
-    check("resource_networks_kind", sql`${table.kind} in ('reach', 'egress')`),
+    check("resource_networks_kind", sql`${table.kind} in ('reach', 'egress', 'caller')`),
   ],
 );
 

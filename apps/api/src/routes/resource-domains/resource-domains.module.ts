@@ -9,6 +9,7 @@ import {
   RESOURCE_DOMAIN_BUDGET_DIMENSIONS,
   RESOURCE_DOMAIN_BUDGET_WARNINGS,
   ResourceDomainBudgetDiffersError,
+  ResourceDomainOwnerDiffersError,
   ResourceDomainBudgetRevisionConflictError,
   ResourceDomainForbiddenError,
   ResourceDomainInternalServerError,
@@ -47,6 +48,7 @@ const requireServiceKey = Effect.gen(function* () {
 
 const toWire = (domain: ResourceDomainRecord): ResourceDomainWire => ({
   resourceDomainId: domain.id,
+  ...(domain.ownerKind === undefined ? {} : { ownerKind: domain.ownerKind }),
   key: domain.key,
   createdAt: domain.createdAt.toISOString(),
 });
@@ -58,8 +60,12 @@ export const ensureResourceDomain = (payload: EnsureResourceDomainRequest) =>
     yield* requireServiceKey;
     const repo = yield* ResourceDomainRepo;
     const ensured = yield* repo
-      .ensure(payload.key, payload.budget)
+      .ensure(payload.key, payload.budget, payload.ownerKind)
       .pipe(Effect.mapError(internal("Failed to ensure the resource domain.")));
+    if (ensured.kind === "owner-differs")
+      return yield* new ResourceDomainOwnerDiffersError({
+        message: "This scope key belongs to another owner kind.",
+      });
     if (ensured.kind === "budget-differs") {
       return yield* new ResourceDomainBudgetDiffersError({
         message:

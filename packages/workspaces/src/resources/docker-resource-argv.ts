@@ -90,7 +90,7 @@ export const networkCreateArgv = (
   "create",
   "--driver",
   "bridge",
-  ...(kind === "reach" ? ["--internal"] : []),
+  ...(kind !== "egress" ? ["--internal"] : []),
   "--subnet",
   subnet,
   "--label",

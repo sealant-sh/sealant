@@ -1,11 +1,12 @@
+import { createHash, randomUUID } from "node:crypto";
+
 /**
  * A scope's `instances`, `workspaces` and `archive` through the SDK, against the API booted in this
  * process: the real contract, transport gate, handlers, raw exec route and repositories on
  * Postgres, with a runtime that records what it was asked instead of driving Docker (the Docker
  * side is `@sealant/workspaces`' e2e). Gated on SEALANT_TEST_DATABASE_URL.
  */
-import { createHash, randomUUID } from "node:crypto";
-
+import { credentialCipherLayer } from "@sealant/credentials";
 import {
   createSealantDB,
   ResourceDomainRepoLive,
@@ -125,6 +126,7 @@ describe.skipIf(DATABASE_URL === undefined)("a scope's instances through the SDK
 
   const boot = async (host: ResourceRuntimeHostShape) => {
     const provides = Layer.mergeAll(
+      credentialCipherLayer({ key: Buffer.alloc(32, 17).toString("base64") }).pipe(Layer.orDie),
       ResourceDomainRepoLive,
       ResourceInstanceRepoLive,
       Layer.succeed(ResourceRuntimeHost, host),
@@ -340,7 +342,32 @@ describe.skipIf(DATABASE_URL === undefined)("a scope's instances through the SDK
     expect(await scope.archive()).toEqual({ volumes: [] });
   });
 
-  it("refuses every instance on a runtime that is not Docker, by its name", async () => {
+  it("Kubernetes refuses legacy workspace mutations without changing desired state or calling the provider", async () => {
+    const scope = await newScope();
+    await scope.instances.up("db", postgres, { cause: "person" });
+    const k8s = await boot({ kind: "kubernetes", runtime: recorded.runtime });
+    const legacy = k8s.scopes.actAs(scope.id);
+    const before = {
+      stop: recorded.calls.stop.length,
+      archive: recorded.calls.archive.length,
+      attach: recorded.calls.attach.length,
+    };
+    for (const refused of [
+      () => legacy.instances.up("db", postgres, { cause: "person" }),
+      () => legacy.instances.stop("db", { kind: "person", by: "provider change" }),
+      () => legacy.instances.archive("db"),
+      () => legacy.instances.exec("db", { argv: ["true"] }),
+      () => legacy.workspaces.link("missing", { worktreeKey: "tree" }),
+      () => legacy.archive(),
+    ])
+      await expect(refused()).rejects.toMatchObject({ code: "ResourceRuntimeUnsupportedError" });
+    expect((await scope.instances.get("db")).desired).toBe("running");
+    expect(recorded.calls.stop).toHaveLength(before.stop);
+    expect(recorded.calls.archive).toHaveLength(before.archive);
+    expect(recorded.calls.attach).toHaveLength(before.attach);
+  });
+
+  it("refuses an unsupported runtime by its name", async () => {
     const scope = kubernetes.scopes.actAs(
       (await kubernetes.scopes.ensure({ key: `mend:test:project:${randomUUID()}` })).id,
     );
@@ -348,9 +375,11 @@ describe.skipIf(DATABASE_URL === undefined)("a scope's instances through the SDK
     await expect(refused).rejects.toMatchObject({
       code: "ResourceRuntimeUnsupportedError",
     });
-    await expect(refused).rejects.toThrow("resources run on Docker; this Sealant runs kubernetes");
+    await expect(refused).rejects.toThrow(
+      "Resource instances require Docker or Kubernetes; this Sealant runs kubernetes.",
+    );
     await expect(scope.instances.exec("db", { argv: ["true"] })).rejects.toThrow(
-      "resources run on Docker; this Sealant runs kubernetes",
+      "Resource instances require Docker or Kubernetes; this Sealant runs kubernetes.",
     );
   });
 });
