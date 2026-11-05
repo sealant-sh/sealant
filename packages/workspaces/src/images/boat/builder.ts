@@ -82,6 +82,10 @@ const journalSchema = z.object({
   recipeHash: hashSchema,
   runtime: nativeRuntimeIdentitySchema,
   receiptHash: hashSchema.optional(),
+  failureCode: z
+    .string()
+    .regex(/^native-[a-z_-]+$/)
+    .optional(),
   phase: z.enum(["running", "cleanup", "published", "complete"]),
   allocation: allocationSchema,
   save: saveSchema,
@@ -586,6 +590,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       if (journal !== undefined) {
         try {
           journal.phase = "cleanup";
+          journal.failureCode = failure(error).code;
           await persist(path, journal);
           await this.#cleanup(journal, path);
         } catch {

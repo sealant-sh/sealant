@@ -273,9 +273,15 @@ describe.skipIf(!directory)(
       });
     it("cleans failed saves without returning ordinary success", async () => {
       const f = await fixture("failed-save");
-      expect(await f.builder.build({ spec: f.spec })).toMatchObject({
+      const result = await f.builder.build({ spec: f.spec });
+      expect(result).toMatchObject({
         ok: false,
         error: { code: "native-save-failed" },
+      });
+      if (result.ok || result.error.journalPath === undefined) throw new Error("missing journal");
+      expect(JSON.parse(await readFile(result.error.journalPath, "utf8"))).toMatchObject({
+        failureCode: "native-save-failed",
+        phase: "complete",
       });
       expect(f.deleted()).toBe(true);
       expect(f.mutations.some((p) => p.startsWith("DELETE /api/v1/saved-snapshots/"))).toBe(true);
