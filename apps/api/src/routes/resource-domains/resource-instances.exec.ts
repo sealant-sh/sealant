@@ -16,7 +16,7 @@ import { Effect, Result, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 
 import { ResourceRuntimeHost } from "../../services/resource-runtime.js";
-import { CurrentPrincipal } from "../../services/service-principals.js";
+import { admitRawRequest, CurrentPrincipal } from "../../services/service-principals.js";
 
 export type ExecBody =
   | { readonly kind: "frame"; readonly frame: string; readonly stdin: AsyncIterable<Uint8Array> }
@@ -76,6 +76,9 @@ export const ResourceInstanceExecRoute = HttpRouter.add(
   RESOURCE_INSTANCE_EXEC.path,
   (request) =>
     Effect.gen(function* () {
+      const budgetRefusal = yield* admitRawRequest(undefined);
+      if (budgetRefusal !== undefined) return budgetRefusal;
+
       const principal = yield* CurrentPrincipal;
       if (principal.kind !== "service" && principal.kind !== "open") {
         return refuse(

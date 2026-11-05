@@ -21,8 +21,9 @@ import {
   upResourceInstanceOp,
 } from "./effect/operations.js";
 import type { SdkRuntime } from "./effect/runtime.js";
-import { SealantApiError, SealantError } from "./errors.js";
-import type { SealantInternalConfig } from "./internal/config.js";
+import { SealantApiError, SealantBudgetExceededError, SealantError } from "./errors.js";
+import { resolveRequestPriority, type SealantInternalConfig } from "./internal/config.js";
+import { toSealantError } from "./internal/map-error.js";
 
 /**
  * What an instance runs. It has no field for privileged mode, capabilities, host networking, host
@@ -285,6 +286,7 @@ const exec = async (
     method: "POST",
     headers: {
       "content-type": "application/octet-stream",
+      "x-sealant-request-priority": resolveRequestPriority(config.requestPriority),
       ...(config.apiKey === undefined ? {} : { authorization: `Bearer ${config.apiKey}` }),
     },
     body: execBody(frame, options.stdin),
@@ -293,6 +295,10 @@ const exec = async (
   const response = await (config.fetch ?? fetch)(new URL(path, config.baseUrl), init);
   const body: unknown = await response.json().catch(() => undefined);
   if (!response.ok) {
+    if (response.status === 429) {
+      const error = toSealantError(body);
+      if (error instanceof SealantBudgetExceededError) throw error;
+    }
     const tag = isRecord(body) && typeof body["_tag"] === "string" ? body["_tag"] : undefined;
     const message =
       isRecord(body) && typeof body["message"] === "string"

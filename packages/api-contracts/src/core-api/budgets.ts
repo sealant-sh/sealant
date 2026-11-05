@@ -1,4 +1,13 @@
 import { Schema } from "effect";
+import { HttpApiMiddleware } from "effect/http-api";
+
+/** Admission refused only this HTTP request before its handler did work. */
+export const requestBudgetRefusalSchema = Schema.Struct({
+  phase: Schema.Literal("before-work"),
+  bucket: Schema.Literals(["owner", "unowned", "key", "principal"]),
+});
+/** Admission metadata absent from older servers and non-admission budget errors. */
+export type RequestBudgetRefusal = typeof requestBudgetRefusalSchema.Type;
 
 /**
  * A budget refused new work (429). Nothing already running was stopped. `budget` names which
@@ -12,6 +21,13 @@ export class BudgetExceededError extends Schema.TaggedError<BudgetExceededError>
     budget: Schema.String,
     limit: Schema.Number,
     retryAfterSeconds: Schema.Number,
+    refusal: Schema.optional(requestBudgetRefusalSchema),
   },
   { httpApiStatus: 429 },
+) {}
+
+/** Declares request admission failures on every control-plane endpoint. */
+export class RequestBudget extends HttpApiMiddleware.Service<RequestBudget>()(
+  "@sealant/api-contracts/RequestBudget",
+  { error: BudgetExceededError },
 ) {}

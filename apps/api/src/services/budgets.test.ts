@@ -25,6 +25,8 @@ import {
 
 const limits: BudgetLimits = {
   principalRequestsPerMinute: 3,
+  serviceOwnerRequestsPerMinute: 3,
+  serviceUnownedRequestsPerMinute: 3,
   ownerLaunchesPerMinute: 2,
   ownerLiveWorkspaces: 2,
   ownerActiveRuns: 2,
@@ -42,6 +44,32 @@ describe("rate windows (CORE-04)", () => {
     // A refused request spends nothing: the window frees exactly when the oldest unit leaves.
     expect(take(59_999).allowed).toBe(false);
     expect(take(60_000).allowed).toBe(true);
+  });
+
+  it("waits for enough interactive hits to expire before admitting a lower normal threshold", () => {
+    const window = makeRateWindow();
+    for (const now of [0, 10_000, 20_000, 30_000, 40_000])
+      expect(window.take("key", 5, now)).toBeNull();
+    expect(window.take("key", 3, 50_000)).toBe(30);
+    expect(window.take("key", 3, 79_999)).toBe(1);
+    expect(window.take("key", 3, 80_000)).toBeNull();
+  });
+
+  it("matches an exact sliding window through expiration, threshold changes and compaction", () => {
+    const window = makeRateWindow(1000);
+    let expected: number[] = [];
+    for (let i = 0; i < 10_000; i++) {
+      const now = i * 2;
+      const limit = i % 13 === 0 ? 40 : 700;
+      expected = expected.filter((time) => now - time < 1000);
+      const expires = expected[expected.length - limit];
+      const retry =
+        expected.length >= limit && expires !== undefined
+          ? Math.max(1, Math.ceil((expires + 1000 - now) / 1000))
+          : null;
+      expect(window.take("key", limit, now)).toBe(retry);
+      if (retry === null) expected.push(now);
+    }
   });
 
   it("keeps subjects apart, and 0 turns a budget off", () => {

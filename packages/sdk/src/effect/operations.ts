@@ -60,7 +60,7 @@ import {
 } from "@sealant/api-contracts";
 import { Effect, Schema } from "effect";
 
-import { SealantApiClient } from "./api-client.js";
+import { CurrentRequestPriority, SealantApiClient } from "./api-client.js";
 
 // ---- workspaces ----
 
@@ -94,7 +94,7 @@ export const cancelWorkspaceCreateOp = (
 ) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.workspaces.cancelWorkspaceCreate({ params: { idempotencyKey }, payload }),
-  );
+  ).pipe(Effect.provideService(CurrentRequestPriority, "interactive"));
 
 export const listWorkspacesOp = (query: ListWorkspacesQuery) =>
   Effect.flatMap(SealantApiClient, (client) => client.workspaces.listWorkspaces({ query }));
@@ -150,17 +150,17 @@ export const replanWorkspaceCaptureOp = (
 export const stopWorkspaceOp = (workspaceId: string, payload: StopWorkspaceRequest) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.workspaces.stopWorkspace({ params: { workspaceId }, payload }),
-  );
+  ).pipe(Effect.provideService(CurrentRequestPriority, "interactive"));
 
 export const recoverWorkspaceOp = (workspaceId: string, payload: RecoverWorkspaceRequest) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.workspaces.recoverWorkspace({ params: { workspaceId }, payload }),
-  );
+  ).pipe(Effect.provideService(CurrentRequestPriority, "interactive"));
 
 export const restartWorkspaceOp = (workspaceId: string, payload: RestartWorkspaceRequest) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.workspaces.restartWorkspace({ params: { workspaceId }, payload }),
-  );
+  ).pipe(Effect.provideService(CurrentRequestPriority, "interactive"));
 
 export const inspectWorkspaceImageOp = (payload: InspectWorkspaceImageRequest) =>
   Effect.flatMap(SealantApiClient, (client) =>
@@ -203,7 +203,7 @@ export const listWorkspaceCredentialsOp = (
 export const expireWorkspaceOp = (workspaceId: string, payload: ExpireWorkspaceRequest) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.workspaces.expireWorkspace({ params: { workspaceId }, payload }),
-  );
+  ).pipe(Effect.provideService(CurrentRequestPriority, "interactive"));
 
 export const clearWorkspaceSshUserOp = (workspaceId: string, query: ClearWorkspaceSshUserQuery) =>
   Effect.flatMap(SealantApiClient, (client) =>
@@ -286,22 +286,22 @@ export const getSessionOutputOp = (sessionId: string, query: GetSessionOutputQue
 export const sendSessionInputOp = (sessionId: string, payload: SessionInputRequest) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.sessions.sendSessionInput({ params: { sessionId }, headers: {}, payload }),
-  );
+  ).pipe(Effect.provideService(CurrentRequestPriority, "interactive"));
 
 export const resizeSessionOp = (sessionId: string, payload: SessionResizeRequest) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.sessions.resizeSession({ params: { sessionId }, headers: {}, payload }),
-  );
+  ).pipe(Effect.provideService(CurrentRequestPriority, "interactive"));
 
 export const signalSessionOp = (sessionId: string, payload: SessionSignalRequest) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.sessions.signalSession({ params: { sessionId }, headers: {}, payload }),
-  );
+  ).pipe(Effect.provideService(CurrentRequestPriority, "interactive"));
 
 export const closeSessionOp = (sessionId: string, payload: CloseSessionRequest) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.sessions.closeSession({ params: { sessionId }, headers: {}, payload }),
-  );
+  ).pipe(Effect.provideService(CurrentRequestPriority, "interactive"));
 
 // ---- access tokens ----
 
@@ -488,7 +488,7 @@ export const stopResourceInstanceOp = (resourceDomainId: string, key: string, by
       params: { resourceDomainId, key: checked },
       payload: { by },
     }),
-  );
+  ).pipe(Effect.provideService(CurrentRequestPriority, "interactive"));
 
 export const archiveResourceInstanceOp = (resourceDomainId: string, key: string) =>
   Effect.flatMap(Effect.all([SealantApiClient, instanceKey(key)]), ([client, checked]) =>

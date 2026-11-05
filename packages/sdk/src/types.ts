@@ -31,6 +31,9 @@ import type {
 // Client construction
 // ---------------------------------------------------------------------------------------------
 
+/** A request hint. Interactive requests may use the server's reserved capacity. */
+export type RequestPriority = "normal" | "interactive";
+
 /**
  * Public client configuration. Intentionally minimal: a base URL and an API key. Host-local
  * concerns required by the current slice (owner identity, registry, direct database access) live in
@@ -38,6 +41,11 @@ import type {
  * when the Effect core lands.
  */
 export interface SealantConfig {
+  /**
+   * Request priority, resolved at each HTTP dispatch. A configured value or provider overrides
+   * operation defaults. When unset, requests use normal priority and controls use interactive.
+   */
+  readonly requestPriority?: RequestPriority | (() => RequestPriority);
   /** Base URL of the Sealant control-plane API (e.g. `http://localhost:8080`). */
   readonly baseUrl: string;
   /**

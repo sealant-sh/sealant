@@ -33,6 +33,7 @@ import { Effect, Fiber, FiberSet } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 import { Socket } from "effect/socket";
 
+import { admitRawRequest } from "../../services/service-principals.js";
 import { authorize, requireSession, resolveDaemonTarget } from "./sessions.module.js";
 
 /** Client → server control frames (text). Unknown shapes are ignored, not fatal. */
@@ -48,6 +49,11 @@ export const SessionAttachRoute = HttpRouter.add(
   "/v1/sessions/:sessionId/attach",
   (request) =>
     Effect.gen(function* () {
+      const budgetRefusal = yield* admitRawRequest(
+        new URL(request.url, "http://localhost").searchParams.get("ownerUserId") ?? undefined,
+      );
+      if (budgetRefusal !== undefined) return budgetRefusal;
+
       const params = yield* HttpRouter.params;
       const sessionId = params["sessionId"];
       if (sessionId === undefined) {

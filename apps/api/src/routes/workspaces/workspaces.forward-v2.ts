@@ -1,6 +1,7 @@
 import { NodeHttpServerRequest } from "@effect/platform-node";
 import {
   FORWARD_V2_SUBPROTOCOL,
+  type BudgetExceededError,
   type ForwardBinding,
   type ForwardRefusalReason,
   SessionNotFoundError,
@@ -39,6 +40,7 @@ import {
 } from "./forward-upgrade.js";
 
 class ForwardRefused extends Data.TaggedError("ForwardRefused")<{
+  readonly budget?: BudgetExceededError;
   readonly reason: ForwardRefusalReason;
   readonly message: string;
 }> {}
@@ -168,9 +170,14 @@ const openForward = (request: HttpServerRequest.HttpServerRequest, workspaceId: 
 
     const admission = (yield* ForwardAdmission)(
       bearerSecretOf({ authorization, queryToken: url.searchParams.get("token") }),
+      url.searchParams.get("ownerUserId") ?? undefined,
     );
     if (admission.kind !== "admitted") {
-      return yield* refused(admission.kind, admission.message);
+      return yield* new ForwardRefused({
+        reason: admission.kind,
+        message: admission.message,
+        ...(admission.kind === "budget-exceeded" ? { budget: admission.error } : {}),
+      });
     }
     const { target, principal } = yield* checkForward({ authorization, url, workspaceId }).pipe(
       Effect.mapError((failure) => refused(CHECK_REFUSAL[failure.check], failure.message)),

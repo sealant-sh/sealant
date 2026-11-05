@@ -18,9 +18,13 @@ import {
   sendSessionInputOp,
   signalSessionOp,
 } from "../effect/operations.js";
+import { SealantBudgetExceededError } from "../errors.js";
+import { resolveRequestPriority } from "../internal/config.js";
+import { toSealantError } from "../internal/map-error.js";
 import type {
   InteractiveSession,
   InteractiveSessionStatus,
+  RequestPriority,
   SessionAttachment,
   SessionAttachOptions,
   SessionOutputChunk,
@@ -173,6 +177,7 @@ async function* streamOverSse(
   sessionId: string,
   from: bigint,
   signal: AbortSignal | undefined,
+  priority: RequestPriority,
 ): AsyncGenerator<SessionOutputChunk> {
   const config = ctx.config;
   const fetchImpl = config.fetch ?? fetch;
@@ -183,10 +188,16 @@ async function* streamOverSse(
   const response = await fetchImpl(url, {
     headers: {
       accept: "text/event-stream",
+      "x-sealant-request-priority": priority,
       ...(config.apiKey === undefined ? {} : { authorization: `Bearer ${config.apiKey}` }),
     },
     ...(signal === undefined ? {} : { signal }),
   });
+  if (response.status === 429) {
+    const body: unknown = await response.json().catch(() => undefined);
+    const error = toSealantError(body);
+    if (error instanceof SealantBudgetExceededError) throw error;
+  }
   if (!response.ok || response.body === null) {
     throw new Error(`session output stream failed: HTTP ${response.status}`);
   }
@@ -280,13 +291,15 @@ export const makeInteractiveSession = (ctx: SdkContext, wire: SessionWire): Inte
       const signal = options?.signal;
       async function* iterate(): AsyncGenerator<SessionOutputChunk> {
         let cursor = from;
+        const priority = resolveRequestPriority(ctx.config.requestPriority);
         try {
-          for await (const chunk of streamOverSse(ctx, sessionId, cursor, signal)) {
+          for await (const chunk of streamOverSse(ctx, sessionId, cursor, signal, priority)) {
             yield chunk;
             cursor = chunk.sequence + 1n;
           }
           return;
         } catch (error) {
+          if (error instanceof SealantBudgetExceededError) throw error;
           if (signal?.aborted === true) {
             return;
           }

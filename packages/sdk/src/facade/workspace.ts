@@ -38,7 +38,12 @@ import {
   releaseWorkspaceCredentialsOp,
   stopWorkspaceOp,
 } from "../effect/operations.js";
-import { SealantApiError, SealantError, SealantNotImplementedError } from "../errors.js";
+import {
+  SealantApiError,
+  SealantBudgetExceededError,
+  SealantError,
+  SealantNotImplementedError,
+} from "../errors.js";
 import { elapsed } from "../internal/clock.js";
 import { mapAccountRef } from "../internal/credentials.js";
 import { parseTtlSeconds } from "../internal/duration.js";
@@ -456,6 +461,7 @@ const olderControlPlaneRefusal = (
 
 export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace => {
   const endpoint: ForwardEndpoint = {
+    requestPriority: ctx.config.requestPriority,
     baseUrl: ctx.config.baseUrl,
     apiKey: ctx.config.apiKey,
     ownerUserId: ctx.config.hostLocal.ownerUserId,
@@ -965,9 +971,17 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
 
       const deadline = elapsed() + STOP_TIMEOUT_MS;
       for (;;) {
-        const details: WorkspaceDetails = await ctx.runtime.run(
-          getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
-        );
+        const details: WorkspaceDetails = await ctx.runtime
+          .run(getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId))
+          .catch((error: unknown) => {
+            if (error instanceof SealantBudgetExceededError) {
+              throw new SealantError(
+                `A stop for workspace ${init.id} was accepted, but a follow-up request reached its budget. Read the workspace again to observe its status.`,
+                { code: "workspace_stop_observation_refused", cause: error },
+              );
+            }
+            throw error;
+          });
         // `cancelled`: a stop before the image was built cancelled the launch; `failed` with no
         // runtime: the build failed. Either way no runtime ever ran.
         if (

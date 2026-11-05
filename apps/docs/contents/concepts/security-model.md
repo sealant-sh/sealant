@@ -116,21 +116,37 @@ be removed once every caller is upgraded.
 
 ## Budgets
 
-Per-container CPU and memory limits bound one workspace. Budgets bound a caller and an owner: a
-request rate per credential, a launch rate per owner, ceilings on an owner's live workspaces and
-active runs, an optional daily inference-token ceiling per owner, and a cap on the output stored for
-one run. Reaching one answers `429` with a message naming the budget and `retryAfterSeconds` in the
-body; the request-rate refusal, which the transport gate answers, also sets `Retry-After`. It
-refuses new work and never stops work that is running. A run past its output cap keeps running and
-keeps its event rows; the record carries a loss span where stored content ends.
+Per-container CPU and memory limits bound one workspace. Each service key also has independent
+request budgets for each declared `ownerUserId`, a separate budget for requests without an owner,
+and a fixed ceiling for the whole key. The defaults are 2,400 requests per minute per owner, 6,000
+without an owner, and 12,000 for the key. The key ceiling counts authenticated attempts, including
+requests later refused by the owner's budget. It does not grow with active owners. Unknown routes
+count against the key ceiling.
 
-What they are not: request windows are held in each API process, so N replicas admit up to N times
-the rate; one service key is one credential however many people the product behind it serves, so its
-request budget is sized for the whole product; a ceiling is checked before the work is created, so
-creates that race can overshoot it by the number in flight; the output cap counts per ingest
-connection; and the inference ceiling counts tokens the engines report, which is not money. Each is
-set by a `SEALANT_BUDGET_*` variable ([reference](/docs/reference/environment-variables)), `0` turns
-one off, and the API logs at start which are off.
+The endpoint contract determines where an owner can be asserted. A declared body owner takes
+precedence, even when missing or invalid. An undeclared query parameter or header cannot select
+another bucket. Raw session streams, terminal attachments and forwards use their existing owner
+query. Resource exec has no owner field and uses the ownerless budget without reading stdin.
+
+Normal service-key requests leave 20% of each request allowance for interactive requests. The
+`x-sealant-request-priority` header accepts `normal` or `interactive`. An absent or unknown hint is
+normal. Interactive requests count toward the same hard ceiling and can exhaust it. Non-service
+principals retain their per-credential request allowance.
+
+A request admission refusal answers `429 BudgetExceededError`, sets `Retry-After`, and includes
+`budget`, `limit`, `retryAfterSeconds`, and `refusal` with `phase: "before-work"` and
+`bucket: "owner"`, `"unowned"`, `"key"`, or `"principal"`. The phase applies only to the refused
+HTTP request. Earlier requests in a composite SDK operation may already have done work. Forward v2
+sends the same metadata in its refusal frame after the WebSocket upgrade.
+
+Request windows deliberately live in each API process and reset on restart. N replicas can admit up
+to N times the configured rate. Launch budgets, live-workspace and active-run ceilings, and the
+optional daily inference-token budget retain their existing semantics. Concurrency and inference
+spend come from Postgres, but concurrent creates can overshoot a ceiling by the number in flight. A
+run past its output cap keeps running and keeps its event rows. Its record marks where stored
+content ends. Each budget has a `SEALANT_BUDGET_*` variable
+([reference](/docs/reference/environment-variables)), and `0` disables that budget. The reserve
+percentage uses `0` to disable reserved capacity.
 
 ## Credentials go where they were issued for
 

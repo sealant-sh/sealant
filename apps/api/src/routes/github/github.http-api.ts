@@ -2,6 +2,7 @@ import { ControlPlaneAPI } from "@sealant/api-contracts";
 import { Layer } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 
+import { RequestBudgetLive } from "../request-budget.js";
 import { RequestRefusalLive } from "../request-refusal.js";
 import {
   handleWebhook,
@@ -47,5 +48,6 @@ export const makeGitHubHttpApiLayer = () => {
   return HttpApiBuilder.layer(ControlPlaneAPI, { openapiPath: "/openapi.json" }).pipe(
     Layer.provide(GitHubHandlersLive),
     Layer.provide(RequestRefusalLive),
+    Layer.provide(RequestBudgetLive),
   );
 };

@@ -17,6 +17,7 @@ import { HttpRouter, HttpServer } from "effect/http";
 import { type HttpApi, HttpApiBuilder, type HttpApiGroup } from "effect/http-api";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { RequestBudgetLive } from "./request-budget.js";
 import { RequestRefusalLive } from "./request-refusal.js";
 
 const MARKER = "review347-secret-marker";
@@ -103,6 +104,7 @@ const serve = (refusal: Layer.Layer<RequestRefusal>) => {
       HttpApiBuilder.layer(ControlPlaneAPI).pipe(
         Layer.provide(stubs),
         Layer.provide(refusal),
+        Layer.provide(RequestBudgetLive),
         Layer.provide(HttpServer.layerServices),
       ),
       Logger.layer([logger]),

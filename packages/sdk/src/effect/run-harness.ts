@@ -8,6 +8,7 @@
  * settle via `run.wait()`). No Postgres pool, no docker-exec, no telemetry sink: this is what makes
  * @sealant/sdk a plain client that runs anywhere.
  */
+import { BudgetExceededError } from "@sealant/api-contracts";
 import { Effect } from "effect";
 
 import { SealantError } from "../errors.js";
@@ -15,6 +16,7 @@ import type { SdkContext } from "../facade/context.js";
 import { makeRun, toRunChangesData } from "../facade/run.js";
 import type { RunHarnessFn, WorkspaceInit } from "../facade/workspace.js";
 import { elapsed } from "../internal/clock.js";
+import { toSealantError } from "../internal/map-error.js";
 import type { Run } from "../types.js";
 import { createRunOp, getRunChangesOp, getRunOp, getWorkspaceOp } from "./operations.js";
 
@@ -82,27 +84,40 @@ const runHarnessEffect = (
   Effect.gen(function* () {
     const created = yield* createHarnessRunEffect(ctx, init, prompt, options);
     const runId = created.runId;
-
-    // Block until the run is terminal, polling the control plane.
-    const deadline = elapsed() + RUN_TIMEOUT_MS;
-    let wire = created;
-    while (!TERMINAL_STATUSES.has(wire.status)) {
-      if (elapsed() > deadline) {
-        return yield* Effect.fail(
-          new SealantError(`Timed out waiting for run ${runId} to complete.`, {
-            code: "run_timeout",
-          }),
-        );
+    return yield* Effect.gen(function* () {
+      // Block until the run is terminal, polling the control plane.
+      const deadline = elapsed() + RUN_TIMEOUT_MS;
+      let wire = created;
+      while (!TERMINAL_STATUSES.has(wire.status)) {
+        if (elapsed() > deadline) {
+          return yield* Effect.fail(
+            new SealantError(`Timed out waiting for run ${runId} to complete.`, {
+              code: "run_timeout",
+            }),
+          );
+        }
+        yield* Effect.sleep(POLL_INTERVAL);
+        wire = yield* getRunOp(runId, ctx.config.hostLocal.ownerUserId);
       }
-      yield* Effect.sleep(POLL_INTERVAL);
-      wire = yield* getRunOp(runId, ctx.config.hostLocal.ownerUserId);
-    }
 
-    // Read the changes the run produced (captured server-side).
-    const changes = toRunChangesData(
-      yield* getRunChangesOp(runId, ctx.config.hostLocal.ownerUserId),
+      // Read the changes the run produced (captured server-side).
+      const changes = toRunChangesData(
+        yield* getRunChangesOp(runId, ctx.config.hostLocal.ownerUserId),
+      );
+      return makeRun(ctx, { wire, changes });
+    }).pipe(
+      Effect.mapError((error) =>
+        error instanceof BudgetExceededError
+          ? new SealantError(
+              `Run ${runId} was created, but a follow-up request reached its budget. Resume this run instead of starting it again.`,
+              {
+                code: "run_followup_refused",
+                cause: toSealantError(error),
+              },
+            )
+          : error,
+      ),
     );
-    return makeRun(ctx, { wire, changes });
   });
 
 /** The BLOCKING `harness.run()` implementation, registered into the Workspace facade by the client. */
