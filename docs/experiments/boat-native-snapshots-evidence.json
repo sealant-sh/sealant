@@ -1,0 +1,659 @@
+{
+  "date": "2026-11-05",
+  "base": "03a1f14dbaaa8584fe9cf0c90f2078ac32f5d48c",
+  "status": "incomplete live gates; provider cleanup blocked",
+  "runtime": {
+    "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+    "index": "f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+    "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+    "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+    "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885"
+  },
+  "relaySha256": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f",
+  "localRawEvidence": "/tmp/boat-builder-impl.eQ4TkB",
+  "chromium": {
+    "revision": "1735811",
+    "url": "https://storage.googleapis.com/chromium-browser-snapshots/Linux_x64/1735811/chrome-linux.zip",
+    "sha256": "3bffe88b3d7456b103c403602e6a2cb449071f1b51ee98fed750625c436e9977",
+    "verifiedInGuest": "bx_gn57emye",
+    "files": 483,
+    "architecture": "linux/amd64"
+  },
+  "objects": [
+    {
+      "kind": "sandbox",
+      "purpose": "acquisition",
+      "id": "bx_kykpps4g",
+      "deletion": "bdop_bdc19b8895644de5b8bb9d79330cf98a",
+      "state": "completed"
+    },
+    {
+      "kind": "sandbox",
+      "purpose": "bundle",
+      "id": "bx_gn57emye",
+      "deletion": "bdop_3cce43ace0a44e82931ce9122fa50f9e",
+      "state": "completed"
+    },
+    {
+      "kind": "sandbox",
+      "purpose": "ubuntu-proof",
+      "id": "bx_xjmv26tx",
+      "deletion": "bdop_5b98742d8f114bec91a6158604807dc8",
+      "state": "completed"
+    },
+    {
+      "kind": "sandbox",
+      "purpose": "ubuntu-proof-2",
+      "id": "bx_zhfncamb",
+      "deletion": "bdop_f92aea6cd48a41ce93d82bb139b73c92",
+      "state": "completed"
+    },
+    {
+      "kind": "sandbox",
+      "purpose": "ubuntu-proof-3",
+      "id": "bx_69ydr6th",
+      "deletion": "bdop_b8d350a61b1c4ec5912ac672244cd18e",
+      "state": "completed"
+    },
+    {
+      "kind": "sandbox",
+      "purpose": "ubuntu-proof-4",
+      "id": "bx_ppf4nmhv",
+      "deletion": "bdop_37ab762ad71546ab9203ea355300d0c6",
+      "state": "completed"
+    },
+    {
+      "kind": "sandbox",
+      "purpose": "ubuntu-proof-4",
+      "id": "bx_xz7qjd9n",
+      "deletion": "bdop_815bc617ced44d81baffafff71d0a0c0",
+      "state": "completed"
+    },
+    {
+      "kind": "snapshot",
+      "purpose": "ubuntu-proof-4",
+      "name": "sealant-7eb07d57-65101bde1b7b46d98cf30c9a8892e933",
+      "sourceSandboxId": "bx_ppf4nmhv",
+      "createdAt": "2026-11-05T00:35:22.479Z",
+      "snapshotId": "b323de71-67e1-469c-b31b-ae1e9cefe499",
+      "state": "deleted"
+    },
+    {
+      "kind": "sandbox",
+      "purpose": "ubuntu-proof-5",
+      "id": "bx_fzjeuy4w",
+      "deletion": "bdop_9dd30c9feb074851a9700745fc6c457c",
+      "state": "completed"
+    },
+    {
+      "kind": "sandbox",
+      "purpose": "ubuntu-proof-5",
+      "id": "bx_yc32mpdg",
+      "deletion": "bdop_dc084d4ecf834e8b82de6aba6d99689f",
+      "state": "completed"
+    },
+    {
+      "kind": "snapshot",
+      "purpose": "ubuntu-proof-5",
+      "name": "sealant-4bbd0724-cc497b8105e84682a1e8b277776aef3e",
+      "sourceSandboxId": "bx_fzjeuy4w",
+      "createdAt": "2026-11-05T00:43:37.486Z",
+      "snapshotId": "b1102bc6-a6e7-46b2-86ec-3fdfa0cd8040",
+      "state": "deleted"
+    },
+    {
+      "kind": "sandbox",
+      "purpose": "ubuntu-proof-6",
+      "id": "bx_b59bceag",
+      "deletion": "bdop_34b21179b1654b879bc5c8129b0e3937",
+      "state": "completed"
+    },
+    {
+      "kind": "sandbox",
+      "purpose": "ubuntu-proof-6",
+      "id": "bx_c8bmw7va",
+      "deletion": "bdop_c57f291984ab43019c108299ed3b09cb",
+      "state": "completed"
+    },
+    {
+      "kind": "snapshot",
+      "purpose": "ubuntu-proof-6",
+      "name": "sealant-c7ce7512-5f17bce960e04540858b3522d1ff95b1",
+      "sourceSandboxId": "bx_b59bceag",
+      "createdAt": "2026-11-05T00:51:57.431Z",
+      "snapshotId": "0c5986c0-63fb-4302-8c1e-9a7effb01240",
+      "state": "deleted"
+    },
+    {
+      "kind": "sandbox",
+      "purpose": "nix-proof",
+      "id": "bx_9wark222",
+      "deletion": "bdop_839d51c34ca8462aac948ecfc84cc9cf",
+      "state": "completed"
+    },
+    {
+      "kind": "sandbox",
+      "purpose": "nix-proof-2",
+      "id": "bx_fpxafpty",
+      "deletion": "bdop_e2a34159289f4dbfae6bb23b451859ac",
+      "state": "completed"
+    },
+    {
+      "kind": "sandbox",
+      "purpose": "cancel-proof",
+      "id": "bx_qmz54khj",
+      "deletion": "bdop_98f8530dc439491b8d66c519a4aa3a6a",
+      "state": "completed"
+    },
+    {
+      "kind": "sandbox",
+      "purpose": "nix-proof-3",
+      "id": "bx_ynyyz2sp",
+      "deletion": "bdop_018f2879aa1e444fb74b3db09d497147",
+      "state": "completed"
+    },
+    {
+      "kind": "sandbox",
+      "purpose": "nix-proof-4",
+      "id": "bx_an9v8jnm",
+      "deletion": "bdop_3ecb366bd17b48bcb5782d3cf7ceb4a8",
+      "state": "completed"
+    },
+    {
+      "kind": "sandbox",
+      "purpose": "nix-proof-4",
+      "id": "bx_9bw24v3h",
+      "deletion": "bdop_f13a1b5796234870a6b4929bc264fd1b",
+      "state": "completed"
+    },
+    {
+      "kind": "snapshot",
+      "purpose": "nix-proof-4",
+      "name": "sealant-374fc5e6-0f8f64cc9a3b404f9e15333ca61ee491",
+      "sourceSandboxId": "bx_an9v8jnm",
+      "createdAt": "2026-11-05T01:08:29.146Z",
+      "snapshotId": "471f024b-a760-4840-bbde-11838b30b63d",
+      "state": "deleted"
+    },
+    {
+      "kind": "sandbox",
+      "purpose": "ubuntu-proof-7",
+      "id": "bx_5fyw4fab",
+      "deletion": "bdop_875e15afda1345d4816722b06d3dc59f",
+      "state": "blocked"
+    }
+  ],
+  "proofs": [
+    {
+      "case": "ubuntu-proof",
+      "family": "ubuntu",
+      "result": "failed",
+      "finding": "Boat NodeSource npm package conflict, fixed.",
+      "cleanup": {
+        "confirmed": true
+      }
+    },
+    {
+      "case": "ubuntu-proof-2",
+      "family": "ubuntu",
+      "result": "failed",
+      "finding": "Native shell command grouping syntax error, fixed.",
+      "cleanup": {
+        "confirmed": true
+      }
+    },
+    {
+      "case": "ubuntu-proof-3",
+      "family": "ubuntu",
+      "result": "failed",
+      "finding": "Static systemd unit is-enabled exit status, fixed.",
+      "cleanup": {
+        "confirmed": true
+      }
+    },
+    {
+      "case": "ubuntu-proof-4",
+      "family": "ubuntu",
+      "result": "failed",
+      "finding": "Cold person creation exceeded 30 seconds.",
+      "artifact": {
+        "kind": "boat-saved-snapshot",
+        "owner": "7eb07d57-9a6e-41ab-9a76-605720b58ede",
+        "build": "65101bde-1b7b-46d9-8cf3-0c9a8892e933",
+        "recipeHash": "1c4a4876f6a914353f67859a1308d31e7e6d6e7f9f5ba968a00956af392c20b9",
+        "receiptHash": "e290110e20dca434a7c31fd4391eeada6ff44158b3325ffcd17866669580abc3",
+        "runtime": {
+          "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+          "platform": "linux/amd64",
+          "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+          "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+          "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+          "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+        },
+        "identity": {
+          "name": "sealant-7eb07d57-65101bde1b7b46d98cf30c9a8892e933",
+          "sourceSandboxId": "bx_ppf4nmhv",
+          "createdAt": "2026-11-05T00:35:22.479Z",
+          "snapshotId": "b323de71-67e1-469c-b31b-ae1e9cefe499"
+        }
+      },
+      "coldClone": "bx_xz7qjd9n",
+      "removal": "deleted",
+      "cleanup": {
+        "confirmed": true
+      }
+    },
+    {
+      "case": "ubuntu-proof-5",
+      "family": "ubuntu",
+      "result": "failed",
+      "finding": "Tracing located the 30-second timeout at useradd -m.",
+      "artifact": {
+        "kind": "boat-saved-snapshot",
+        "owner": "4bbd0724-bf39-4497-9286-44b6466e4902",
+        "build": "cc497b81-05e8-4682-a1e8-b277776aef3e",
+        "recipeHash": "8c588bdc633ef361288fcfc8a673f2366117104af303b667740d0676627ac17c",
+        "receiptHash": "fa1b62ed173d774506e272f09e1f7f15b2304ef655bcadf10b7d7f83254ccba9",
+        "runtime": {
+          "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+          "platform": "linux/amd64",
+          "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+          "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+          "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+          "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+        },
+        "identity": {
+          "name": "sealant-4bbd0724-cc497b8105e84682a1e8b277776aef3e",
+          "sourceSandboxId": "bx_fzjeuy4w",
+          "createdAt": "2026-11-05T00:43:37.486Z",
+          "snapshotId": "b1102bc6-a6e7-46b2-86ec-3fdfa0cd8040"
+        }
+      },
+      "coldClone": "bx_yc32mpdg",
+      "removal": "deleted",
+      "cleanup": {
+        "confirmed": true
+      }
+    },
+    {
+      "case": "ubuntu-proof-6",
+      "family": "ubuntu",
+      "result": "failed",
+      "finding": "Cold person/sudo and image checks passed. Session unit exited 226/NAMESPACE before daemon startup. InaccessiblePaths reproduced the failure in transient unit probes.",
+      "artifact": {
+        "kind": "boat-saved-snapshot",
+        "owner": "c7ce7512-8916-4237-be22-7fd2dc173c14",
+        "build": "5f17bce9-60e0-4540-858b-3522d1ff95b1",
+        "recipeHash": "27d59742b88f37fc1bdf1fbdc17f68162ff8464f908442dc364078bb420fbb96",
+        "receiptHash": "67677e99faa9d030a0cf4b0c075f34245c0686c24dc52da3cd83bf360ff30b43",
+        "runtime": {
+          "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.180@sha256:f3a2855e210d7357a12c466fac1fc180a4b4d8ab021e4c6f9812b2b2755214fc",
+          "platform": "linux/amd64",
+          "manifest": "95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b",
+          "sealantd": "cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969",
+          "socat": "25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885",
+          "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f"
+        },
+        "identity": {
+          "name": "sealant-c7ce7512-5f17bce960e04540858b3522d1ff95b1",
+          "sourceSandboxId": "bx_b59bceag",
+          "createdAt": "2026-11-05T00:51:57.431Z",
+          "snapshotId": "0c5986c0-63fb-4302-8c1e-9a7effb01240"
+        }
+      },
+      "coldClone": "bx_c8bmw7va",
+      "coldInitial": "67677e99faa9d030a0cf4b0c075f34245c0686c24dc52da3cd83bf360ff30b43  /etc/sealant/native-receipt.json\ncea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969  /usr/local/bin/sealantd\n25cef84dce9303d1451c8e9b84dbfdbf944235541f883ef38cb3671273373885  /usr/local/bin/socat\n0\n",
+      "cleanup": {
+        "confirmed": true
+      },
+      "removal": "deleted"
+    },
+    {
+      "case": "nix-proof",
+      "family": "nix",
+      "result": "failed",
+      "finding": "Pinned Nixpkgs lacked the catalog xdpyinfo attribute; revised immutable pin.",
+      "cleanup": {
+        "confirmed": true
+      }
+    },
+    {
+      "case": "nix-proof-2",
+      "family": "nix",
+      "result": "failed",
+      "finding": "Screen packages installed. npm refused a preinstalled opencode link; native prefix/replacement fixed.",
+      "cleanup": {
+        "confirmed": true
+      }
+    },
+    {
+      "case": "cancel-proof",
+      "family": "ubuntu",
+      "result": "passed",
+      "finding": "Real cancellation after first guest command; independent exact-ID cleanup completed.",
+      "cancellation": {
+        "code": "native-interrupted",
+        "journalPath": "/tmp/boat-builder-impl.eQ4TkB/cancel-proof/attempts/d4809df7-fb46-4a88-838a-8c1404892d8d.json"
+      },
+      "cleanup": {
+        "confirmed": true
+      },
+      "namespaceDiagnostics": {
+        "ok": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "stdout": "namespace-pid1-ok\nProtectControlGroups=yes result=0\nInaccessiblePaths=-/var/run/dbus -/var/run/systemd -/var/lib/dbus/system_bus_socket result=226\n",
+        "stderr": "Running as unit: run-u116.service; invocation ID: 4ee1c45e36ec43e69b85f1e3119da16b\nFinished with result: success\nMain processes terminated with: code=exited/status=0\nService runtime: 8ms\nCPU time consumed: 3ms\nMemory peak: 256.0K\nMemory swap peak: 0B\nRunning as unit: run-u117.service; invocation ID: 1c56c19b8b784c95aed3cec9a8ef21fc\nFinished with result: exit-code\nMain processes terminated with: code=exited/status=226\nService runtime: 10ms\nCPU time consumed: 9ms\nMemory peak: 256.0K\nMemory swap peak: 0B\n"
+      }
+    },
+    {
+      "case": "nix-proof-3",
+      "family": "nix",
+      "result": "failed",
+      "finding": "Installed packages, then provider login PATH selected non-setuid Nix store sudo. Provider commands now use /usr/bin/sudo.",
+      "cleanup": {
+        "confirmed": true
+      }
+    },
+    {
+      "case": "nix-proof-4",
+      "family": "nix",
+      "result": "failed",
+      "finding": "Saved, source deleted, exact cold clone, matching receipt/runtime hashes and person sudo passed. Native namespace started, but Nix daemon socket remained unavailable. A manual restart request timed out during cleanup and is not pass evidence. Native readiness was extended from 10 to 90 seconds after this run and remains unproved live.",
+      "cleanup": {
+        "confirmed": true
+      },
+      "artifact": {
+        "recipeHash": "85e2961f3523996d0b764348261c4da1132f9cbd6918493288ee149d02c7f63d",
+        "receiptHash": "8dd8b38ab2ac63753b326177cab0053150e1dd5b4f0c7dd5fb61bbd297291508",
+        "identity": {
+          "name": "sealant-374fc5e6-0f8f64cc9a3b404f9e15333ca61ee491",
+          "sourceSandboxId": "bx_an9v8jnm",
+          "createdAt": "2026-11-05T01:08:29.146Z",
+          "snapshotId": "471f024b-a760-4840-bbde-11838b30b63d"
+        }
+      },
+      "nativeBoot": "Nov 05 01:09:56 box-node-76d5861a6461efee systemd[1]: Started sealant-workspace.service - Sealant native session.\nNov 05 01:10:09 box-node-76d5861a6461efee unshare[8848]: sealant: nix-daemon did not answer in 10 s (see /nix/var/log/nix/nix-daemon.log); nix works only for root\nNov 05 01:10:35 box-node-76d5861a6461efee unshare[10053]: Store URL: daemon\nNov 05 01:10:35 box-node-76d5861a6461efee unshare[10053]: error: cannot connect to socket at '/nix/var/nix/daemon-socket/socket': Connection refused\nNov 05 01:10:35 box-node-76d5861a6461efee unshare[8844]: Traceback (most recent call last):\nNov 05 01:10:35 box-node-76d5861a6461efee unshare[8844]:   File \"/usr/local/lib/sealant/workspace-launch.py\", line 54, in <module>\nNov 05 01:10:35 box-node-76d5861a6461efee unshare[8844]:     subprocess.run(\nNov 05 01:10:35 box-node-76d5861a6461efee unshare[8844]:   File \"/usr/lib/python3.12/subprocess.py\", line 571, in run\nNov 05 01:10:35 box-node-76d5861a6461efee unshare[8844]:     raise CalledProcessError(retcode, process.args,\nNov 05 01:10:35 box-node-76d5861a6461efee unshare[8844]: subprocess.CalledProcessError: Command '['nix', '--extra-experimental-features', 'nix-command', 'store', 'info']' returned non-zero exit status 1.\nNov 05 01:10:35 box-node-76d5861a6461efee systemd[1]: sealant-workspace.service: Main process exited, code=exited, status=1/FAILURE\nNov 05 01:10:35 box-node-76d5861a6461efee systemd[1]: sealant-workspace.service: Failed with result 'exit-code'.\nsystemd\n"
+    },
+    {
+      "case": "ubuntu-proof-7",
+      "family": "ubuntu",
+      "result": "failed",
+      "finding": "Installation did not reach save. No failed guest response was captured. Cleanup returned native-cleanup-pending. Exact deletion operation is blocked/retrying while sandbox GET is 404. No cold clone was created.",
+      "cleanup": {
+        "confirmed": false
+      },
+      "cleanupObservation": {
+        "id": "bdop_875e15afda1345d4816722b06d3dc59f",
+        "kind": "sandbox",
+        "targetId": "bx_5fyw4fab",
+        "status": "blocked",
+        "stage": "retrying",
+        "attemptCount": 7,
+        "completedAt": null
+      }
+    }
+  ],
+  "provenanceCorrection": {
+    "commit": "f0defb5753e6d489439be29f13e05ca585447900",
+    "gitBlob": "abc6af533dcb75d5d911ef767e8c4cdfb1fd95c0",
+    "file": "packages/domain/src/settings.ts",
+    "line": 118,
+    "note": "The screenPackageIds body was reverified from this real Mend commit and blob. Earlier proof reports attributed an unverified commit; that attribution is superseded."
+  },
+  "gates": {
+    "runtimeProvenance": "passed exact next180 guest acquisition, manifest and extracted hashes",
+    "chromiumArchive": "passed guest checksum and complete 483-file release tree extraction; browser/screen gate incomplete",
+    "dockerParity": "passed 192 prior valid inputs",
+    "snapshotSaveSourceDeletionColdClone": "passed Ubuntu proofs 4/5/6 and Nix proof 4",
+    "coldPersonSudo": "passed Ubuntu proof 6 and Nix proof 4 outside the clone-mode daemon",
+    "lifecycleNotRunDuringBuild": "checked by installation/save and cold marker checks",
+    "basicNamespaceAndOuterMountPolicy": "passed diagnostic unshare PID1 and private-run/bind/protected-cgroup probe; actual Nix launcher entered namespace",
+    "nativeDaemonHealthCapabilitiesCookieRelay": "not reached",
+    "screensDetachedWritersNixWorkers": "not reached",
+    "emptyCgroupAndSentinelAfterStop": "not reached",
+    "heldAdmissionAfterResume": "not reached",
+    "realCancellationCleanup": "passed cancel-proof",
+    "finalPreservation": "not claimed; empty scope is not FINAL authority",
+    "registration": "Boat remains unregistered"
+  },
+  "finalOwnershipAudit": {
+    "checkedAt": "2026-11-05T01:22:39.896832+00:00",
+    "objects": [
+      {
+        "id": "bx_kykpps4g",
+        "deletion": "bdop_bdc19b8895644de5b8bb9d79330cf98a",
+        "state": "completed",
+        "stage": "completed",
+        "attemptCount": 1
+      },
+      {
+        "id": "bx_gn57emye",
+        "deletion": "bdop_3cce43ace0a44e82931ce9122fa50f9e",
+        "state": "completed",
+        "stage": "completed",
+        "attemptCount": 1
+      },
+      {
+        "id": "bx_xjmv26tx",
+        "deletion": "bdop_5b98742d8f114bec91a6158604807dc8",
+        "state": "completed",
+        "stage": "completed",
+        "attemptCount": 1
+      },
+      {
+        "id": "bx_zhfncamb",
+        "deletion": "bdop_f92aea6cd48a41ce93d82bb139b73c92",
+        "state": "completed",
+        "stage": "completed",
+        "attemptCount": 1
+      },
+      {
+        "id": "bx_69ydr6th",
+        "deletion": "bdop_b8d350a61b1c4ec5912ac672244cd18e",
+        "state": "completed",
+        "stage": "completed",
+        "attemptCount": 1
+      },
+      {
+        "id": "bx_ppf4nmhv",
+        "deletion": "bdop_37ab762ad71546ab9203ea355300d0c6",
+        "state": "completed",
+        "stage": "completed",
+        "attemptCount": 1
+      },
+      {
+        "id": "bx_xz7qjd9n",
+        "deletion": "bdop_815bc617ced44d81baffafff71d0a0c0",
+        "state": "completed",
+        "stage": "completed",
+        "attemptCount": 1
+      },
+      {
+        "name": "sealant-7eb07d57-65101bde1b7b46d98cf30c9a8892e933",
+        "state": "deleted",
+        "httpStatus": 404
+      },
+      {
+        "id": "bx_fzjeuy4w",
+        "deletion": "bdop_9dd30c9feb074851a9700745fc6c457c",
+        "state": "completed",
+        "stage": "completed",
+        "attemptCount": 1
+      },
+      {
+        "id": "bx_yc32mpdg",
+        "deletion": "bdop_dc084d4ecf834e8b82de6aba6d99689f",
+        "state": "completed",
+        "stage": "completed",
+        "attemptCount": 1
+      },
+      {
+        "name": "sealant-4bbd0724-cc497b8105e84682a1e8b277776aef3e",
+        "state": "deleted",
+        "httpStatus": 404
+      },
+      {
+        "id": "bx_b59bceag",
+        "deletion": "bdop_34b21179b1654b879bc5c8129b0e3937",
+        "state": "completed",
+        "stage": "completed",
+        "attemptCount": 1
+      },
+      {
+        "id": "bx_c8bmw7va",
+        "deletion": "bdop_c57f291984ab43019c108299ed3b09cb",
+        "state": "completed",
+        "stage": "completed",
+        "attemptCount": 1
+      },
+      {
+        "name": "sealant-c7ce7512-5f17bce960e04540858b3522d1ff95b1",
+        "state": "deleted",
+        "httpStatus": 404
+      },
+      {
+        "id": "bx_9wark222",
+        "deletion": "bdop_839d51c34ca8462aac948ecfc84cc9cf",
+        "state": "completed",
+        "stage": "completed",
+        "attemptCount": 1
+      },
+      {
+        "id": "bx_fpxafpty",
+        "deletion": "bdop_e2a34159289f4dbfae6bb23b451859ac",
+        "state": "completed",
+        "stage": "completed",
+        "attemptCount": 1
+      },
+      {
+        "id": "bx_qmz54khj",
+        "deletion": "bdop_98f8530dc439491b8d66c519a4aa3a6a",
+        "state": "completed",
+        "stage": "completed",
+        "attemptCount": 1
+      },
+      {
+        "id": "bx_ynyyz2sp",
+        "deletion": "bdop_018f2879aa1e444fb74b3db09d497147",
+        "state": "completed",
+        "stage": "completed",
+        "attemptCount": 1
+      },
+      {
+        "id": "bx_an9v8jnm",
+        "deletion": "bdop_3ecb366bd17b48bcb5782d3cf7ceb4a8",
+        "state": "completed",
+        "stage": "completed",
+        "attemptCount": 1
+      },
+      {
+        "id": "bx_9bw24v3h",
+        "deletion": "bdop_f13a1b5796234870a6b4929bc264fd1b",
+        "state": "completed",
+        "stage": "completed",
+        "attemptCount": 1
+      },
+      {
+        "name": "sealant-374fc5e6-0f8f64cc9a3b404f9e15333ca61ee491",
+        "state": "deleted",
+        "httpStatus": 404
+      },
+      {
+        "id": "bx_5fyw4fab",
+        "deletion": "bdop_875e15afda1345d4816722b06d3dc59f",
+        "state": "blocked",
+        "stage": "retrying",
+        "attemptCount": 8
+      }
+    ]
+  },
+  "retainedCleanupObligations": [
+    {
+      "kind": "sandbox",
+      "purpose": "ubuntu-proof-7",
+      "id": "bx_5fyw4fab",
+      "deletion": "bdop_875e15afda1345d4816722b06d3dc59f",
+      "state": "blocked"
+    }
+  ],
+  "verification": {
+    "focused": {
+      "command": "pnpm --filter @sealant/workspaces exec vitest run src/images/boat/builder.test.ts src/images/boat/recipe.test.ts src/buildkit/docker-parity.test.ts src/buildkit/package-catalog.test.ts src/buildkit/person-layout.test.ts src/runtime/boat/api.test.ts src/package-standardization.test.ts src/buildkit/buildkit-builder.test.ts src/buildkit/platform.test.ts",
+      "files": 9,
+      "tests": 162,
+      "exitCode": 0
+    },
+    "httpIntegration": {
+      "command": "SEALANT_BOAT_RUNTIME_BUNDLE=/tmp/boat-builder-impl.eQ4TkB pnpm --filter @sealant/workspaces exec vitest run --config vitest.e2e.config.ts src/images/boat/builder.e2e.ts",
+      "tests": 5,
+      "exitCode": 0
+    },
+    "forcedTypecheck": {
+      "command": "pnpm exec turbo typecheck --force",
+      "packages": 20,
+      "exitCode": 0
+    },
+    "forcedLint": {
+      "command": "pnpm exec turbo lint --force",
+      "packages": 20,
+      "exitCode": 0
+    },
+    "pythonSyntax": "ast.parse passed workspace-launch.py and acquire-runtime.py",
+    "generatedShellSyntax": "bash -n passed generated Ubuntu and Nix recipes through recipe.test.ts",
+    "format": "pnpm format:fix; unrelated baseline formatter churn restored",
+    "gitEnvironment": "All GIT_* variables stripped for final checks and commits",
+    "independentReviews": "Parent owns independent reviews; none claimed here"
+  },
+  "implementationFiles": [
+    "docs/experiments/boat-native-snapshots-evidence.json",
+    "docs/experiments/boat-native-snapshots.md",
+    "packages/workspaces/boat-image/acquire-runtime.py",
+    "packages/workspaces/boat-image/fixtures/mend-screens.json",
+    "packages/workspaces/boat-image/native-proof.ts",
+    "packages/workspaces/boat-image/workspace-launch.py",
+    "packages/workspaces/boat-image/workspace.service",
+    "packages/workspaces/src/buildkit/buildkit-builder.ts",
+    "packages/workspaces/src/buildkit/docker-parity.fixture.ts",
+    "packages/workspaces/src/buildkit/docker-parity.json",
+    "packages/workspaces/src/buildkit/docker-parity.test.ts",
+    "packages/workspaces/src/buildkit/package-catalog.test.ts",
+    "packages/workspaces/src/buildkit/package-catalog.ts",
+    "packages/workspaces/src/buildkit/person-layout.ts",
+    "packages/workspaces/src/images/boat/builder.e2e.ts",
+    "packages/workspaces/src/images/boat/builder.test.ts",
+    "packages/workspaces/src/images/boat/builder.ts",
+    "packages/workspaces/src/images/boat/recipe.test.ts",
+    "packages/workspaces/src/images/boat/recipe.ts",
+    "packages/workspaces/src/images/boat/runtime-bundle.ts",
+    "packages/workspaces/src/images/boat/runtime-pin.json",
+    "packages/workspaces/src/package-standardization.test.ts",
+    "packages/workspaces/src/runtime/boat/api.test.ts",
+    "packages/workspaces/src/runtime/boat/api.ts"
+  ],
+  "deviations": [
+    "InaccessiblePaths combined with private /run returned systemd 226/NAMESPACE in a real diagnostic. The unit uses private /run and the launcher refuses visible known manager socket aliases.",
+    "Native Nix readiness was raised from 10 to 90 seconds after a cold socket failure. This adjustment has not passed its live gate. Docker keeps 10 seconds and byte parity.",
+    "Person sudo passed outside the clone-mode daemon. Owner-map admission and per-person daemon sudo remain part of later registration.",
+    "Full daemon, screens, writer containment and resume gates did not complete. No support, registration or FINAL preservation claim is made.",
+    "The polished acquisition operator script was syntax checked; its extraction body and exact artifacts were verified by the preceding guest acquisition, not a rerun of the polished wrapper."
+  ],
+  "finalJournalReconciliation": {
+    "owner": "40013704-2df7-4ca2-b61a-8a593a6ce3b4",
+    "journal": "/tmp/boat-builder-impl.eQ4TkB/ubuntu-proof-7/attempts/6f54a019-ee4b-4279-9a1c-ced58cb373bf.json",
+    "result": "native-deletion-blocked",
+    "newAllocations": 0,
+    "afterOwnershipAudit": true
+  },
+  "diagnosticHandling": "An earlier broad host-process diagnostic printed a temporary provider snapshot grant in tool output. That output was not copied into this evidence. Later host diagnostics use process names only. The Boat API key was never printed or persisted.",
+  "lastCleanupObservation": {
+    "checkedAt": "2026-11-05T01:25:33.823710+00:00",
+    "id": "bdop_875e15afda1345d4816722b06d3dc59f",
+    "kind": "sandbox",
+    "targetId": "bx_5fyw4fab",
+    "status": "blocked",
+    "stage": "retrying",
+    "attemptCount": 8,
+    "completedAt": null
+  }
+}
