@@ -81,7 +81,7 @@ each owned file before exiting.
 
 ```sh
 export SEALANT_TEST_DATABASE_URL='<owned isolated Postgres URL>'
-pnpm --filter @sealant/workspaces exec vitest run src/worker/capture-preservation.db.test.ts
+DATABASE_URL="$SEALANT_TEST_DATABASE_URL" pnpm --filter @sealant/db db:migrate
 pnpm --filter @sealant/workspaces exec vitest run \
   src/worker/capture-preservation.db.test.ts \
   src/worker/capture-drain.test.ts \
@@ -124,3 +124,19 @@ Target-specific guards and deferred relational constraints accompany that genera
 suite proves rollback before adoption, retention, intention and completion commits, concurrent
 claims, stale-owner rejection, immutable history, old-writer refusal, pin retention and late replay.
 Synthetic receipt IDs exercise database ordering; they are not guest custody or live provider proof.
+
+## Integration above merged main
+
+Parent integration uses merged Core `4e2e3b67c44c2836488e314ebbdacd57edac91d0`. Drizzle's
+`check --output json` returns `ok` for the resource and custody migration branches.
+`generate --explain --output json` returns `no_changes`. The generator validates their commutative
+snapshot ancestry, so integration preserves the generated snapshots without manual edits.
+
+On 2026-11-05, the parent applied all migrations to a fresh PostgreSQL 17 database, then passed the
+same 326 workspace tests, 36 API tests and six import probes with zero skips. The due selector used
+its partial index. The first combined invocation raced the legacy suite against schema creation and
+failed with `relation "user" does not exist`. The command above now explicitly migrates before
+starting any suite. No application change or timeout increase was needed. The owned container used
+tmpfs with no volume, and its deletion and absence were confirmed.
+
+Functional parking, public status projection and ordinary Boat admission remain unavailable.
