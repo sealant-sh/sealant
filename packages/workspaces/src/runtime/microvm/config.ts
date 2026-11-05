@@ -193,6 +193,23 @@ export class MicrovmRuntimeConfigError extends Error {
   override readonly name = "MicrovmRuntimeConfigError";
 }
 
+const microvmImagePlanConfigSchema = z.strictObject({
+  agentPort: microvmRuntimeConfigSchema.shape.agentPort,
+  memoryMiB: microvmRuntimeConfigSchema.shape.build.shape.memoryMiB,
+});
+
+/** Read-only recipe settings share worker defaults without requiring AWS roles or credentials. */
+export const microvmImagePlanConfigFromEnv = (
+  env: Pick<MicrovmRuntimeEnvLike, "SEALANT_MICROVM_AGENT_PORT" | "SEALANT_MICROVM_MEMORY_MIB">,
+): z.infer<typeof microvmImagePlanConfigSchema> => {
+  const parsed = microvmImagePlanConfigSchema.safeParse({
+    agentPort: env.SEALANT_MICROVM_AGENT_PORT ?? AGENT_DEFAULT_PORT,
+    memoryMiB: env.SEALANT_MICROVM_MEMORY_MIB ?? 4096,
+  });
+  if (!parsed.success) throw new MicrovmRuntimeConfigError(parsed.error.message);
+  return parsed.data;
+};
+
 /** Undefined when the deployment is not configured for MicroVMs; throws on a half-set contract. */
 export const microvmRuntimeConfigFromEnv = (
   env: MicrovmRuntimeEnvLike,
@@ -219,6 +236,7 @@ export const microvmRuntimeConfigFromEnv = (
     );
   };
   const region = env.SEALANT_MICROVM_REGION ?? missing("SEALANT_MICROVM_REGION");
+  const imagePlan = microvmImagePlanConfigFromEnv(env);
   const candidate = {
     region,
     build: {
@@ -228,8 +246,7 @@ export const microvmRuntimeConfigFromEnv = (
       artifactPrefix: env.SEALANT_MICROVM_ARTIFACT_PREFIX ?? "sealant/workspace-images",
       baseImageArn: env.SEALANT_MICROVM_BASE_IMAGE_ARN ?? managedBaseImageArn(region),
       imageNamePrefix: env.SEALANT_MICROVM_IMAGE_NAME_PREFIX ?? "sealant-ws",
-      // 4 GiB: 2 vCPU and a 16 GiB disk on the platform's tiers.
-      memoryMiB: env.SEALANT_MICROVM_MEMORY_MIB ?? 4096,
+      memoryMiB: imagePlan.memoryMiB,
       maxImages: env.SEALANT_MICROVM_MAX_IMAGES ?? 50,
       ...(env.SEALANT_MICROVM_BUILD_LOG_GROUP === undefined
         ? {}
@@ -250,7 +267,7 @@ export const microvmRuntimeConfigFromEnv = (
     ...(env.SEALANT_MICROVM_LOG_GROUP === undefined
       ? {}
       : { logGroup: env.SEALANT_MICROVM_LOG_GROUP }),
-    agentPort: env.SEALANT_MICROVM_AGENT_PORT ?? AGENT_DEFAULT_PORT,
+    agentPort: imagePlan.agentPort,
     readinessTimeoutMs: env.SEALANT_MICROVM_READINESS_TIMEOUT_MS ?? 300_000,
     terminateTimeoutMs: env.SEALANT_MICROVM_TERMINATE_TIMEOUT_MS ?? 90_000,
     exitPollIntervalMs: env.SEALANT_MICROVM_EXIT_POLL_INTERVAL_MS ?? 15_000,

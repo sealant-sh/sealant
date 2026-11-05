@@ -1045,9 +1045,18 @@ describe("MicrovmRuntimeAdapter.launch", () => {
         workspaceCloneAuth: { type: "file-ref", path: "/keys/deploy" },
       }),
     ).rejects.toThrow(/file-ref/);
-    // A container image reference, as the Docker and Kubernetes builders publish, is never booted.
-    // @ts-expect-error OCI publications cannot be passed to the MicroVM adapter.
-    await expect(adapter.launch(goldenCases.capture)).rejects.toThrow(/microvm/);
+    await expect(
+      adapter.launch({
+        ...captureLaunch,
+        publication: {
+          ...captureLaunch.publication,
+          image: {
+            ...captureLaunch.publication.image,
+            imageArn: goldenCases.capture.publication.image.digestReference,
+          },
+        },
+      }),
+    ).rejects.toThrow(/microvm/);
     expect(api.runs).toEqual([]);
   });
 });

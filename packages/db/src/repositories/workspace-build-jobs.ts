@@ -150,6 +150,7 @@ const workspaceBuildJobRepoOperationSchema = Schema.Literals([
   "getLatestSucceededJobByPlanHash",
   "insertQueuedJob",
   "listJobsByStatus",
+  "listRecoverableJobs",
   "listLatestJobsByRunIds",
   "listPublishedImages",
   "markJobFailed",
@@ -240,6 +241,10 @@ export interface WorkspaceBuildJobRepoService {
     status: WorkspaceBuildJobStatus,
     limit?: number,
   ) => Effect.Effect<Array<WorkspaceBuildJob>, WorkspaceBuildJobRepoError>;
+  readonly listRecoverableJobs: (input: {
+    readonly now: Date;
+    readonly limit: number;
+  }) => Effect.Effect<Array<WorkspaceBuildJob>, WorkspaceBuildJobRepoError>;
   readonly claimNextQueuedJob: (
     input: ClaimNextWorkspaceBuildJobInput,
   ) => Effect.Effect<WorkspaceBuildJob | null, WorkspaceBuildJobRepoError>;
@@ -441,6 +446,29 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
             .from(workspaceBuildJobs)
             .where(eq(workspaceBuildJobs.status, status))
             .orderBy(asc(workspaceBuildJobs.createdAt))
+            .limit(limit)
+            .pipe(Effect.flatMap((jobs) => Effect.forEach(jobs, parseJob))),
+        ),
+
+      listRecoverableJobs: ({ now, limit }) =>
+        withWorkspaceBuildJobRepoError(
+          "listRecoverableJobs",
+          db
+            .select()
+            .from(workspaceBuildJobs)
+            .where(
+              or(
+                and(
+                  eq(workspaceBuildJobs.status, "queued"),
+                  lte(workspaceBuildJobs.availableAt, now),
+                ),
+                and(
+                  eq(workspaceBuildJobs.status, "running"),
+                  lte(workspaceBuildJobs.leaseExpiresAt, now),
+                ),
+              ),
+            )
+            .orderBy(asc(workspaceBuildJobs.createdAt), asc(workspaceBuildJobs.id))
             .limit(limit)
             .pipe(Effect.flatMap((jobs) => Effect.forEach(jobs, parseJob))),
         ),

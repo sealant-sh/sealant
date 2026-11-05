@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { microvmRuntimeConfigFromEnv, MicrovmRuntimeConfigError } from "./config.js";
+import {
+  microvmImagePlanConfigFromEnv,
+  microvmRuntimeConfigFromEnv,
+  MicrovmRuntimeConfigError,
+} from "./config.js";
 
 const roleArn = "arn:aws:iam::123456789012:role/sealant-microvm-exec";
 const buildRoleArn = "arn:aws:iam::123456789012:role/sealant-microvm-build";
@@ -12,6 +16,31 @@ const full = {
   SEALANT_MICROVM_EXEC_ROLE_ARN: roleArn,
   SEALANT_CONTROL_BEARER_TOKEN: "control-token",
 };
+
+describe("microvmImagePlanConfigFromEnv", () => {
+  it("shares worker recipe settings without requiring deployment credentials", () => {
+    for (const env of [
+      {},
+      { SEALANT_MICROVM_AGENT_PORT: 9000, SEALANT_MICROVM_MEMORY_MIB: 8192 },
+    ]) {
+      const planned = microvmImagePlanConfigFromEnv(env);
+      const runtime = microvmRuntimeConfigFromEnv({ ...full, ...env });
+      expect(planned).toEqual({
+        agentPort: runtime?.agentPort,
+        memoryMiB: runtime?.build.memoryMiB,
+      });
+    }
+  });
+
+  it("enforces the worker's recipe constraints", () => {
+    for (const env of [{ SEALANT_MICROVM_AGENT_PORT: 0 }, { SEALANT_MICROVM_MEMORY_MIB: 1 }]) {
+      expect(() => microvmImagePlanConfigFromEnv(env)).toThrow(MicrovmRuntimeConfigError);
+      expect(() => microvmRuntimeConfigFromEnv({ ...full, ...env })).toThrow(
+        MicrovmRuntimeConfigError,
+      );
+    }
+  });
+});
 
 describe("microvmRuntimeConfigFromEnv", () => {
   it("is undefined until the build role is configured", () => {

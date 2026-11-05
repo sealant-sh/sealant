@@ -1196,6 +1196,20 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     // it), or its runtime's preservation start arrived before it settled. A pending launch never
     // holds an executor past the moment its work must start being saved (review 4 #6).
     const abandon = yield* Deferred.make<string>();
+    const abandonedLaunch = Deferred.await(abandon).pipe(
+      Effect.flatMap((reason) =>
+        Effect.fail(
+          toWorkspaceBuildJobProcessingError(
+            startedIdentity === undefined
+              ? new Error(`The launch was abandoned: ${reason}.`)
+              : new LaunchRetainedError(
+                  startedIdentity,
+                  new Error(`The launch was abandoned: ${reason}.`),
+                ),
+          ),
+        ),
+      ),
+    );
     // The executor's identity as soon as the adapter reports it (its deadline included).
     const started = yield* Deferred.make<RuntimeLaunchIdentity>();
     yield* Effect.forkScoped(
@@ -1391,6 +1405,16 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       };
 
     yield* authorizeScope(scope);
+    if (job.runId !== null) {
+      const held = yield* runtimeInstances
+        .renewLaunchLease({ runId: job.runId, owner: launchOwner, leaseMs: launchLeaseMs })
+        .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+      if (!held) {
+        launchOwnership.lost = true;
+        yield* Deferred.succeed(abandon, "its launch ownership was lost before dispatch");
+      }
+    }
+    if (yield* Deferred.isDone(abandon)) return yield* abandonedLaunch;
     const runtimeLaunchResult = yield* Effect.tryPromise({
       try: () =>
         prepared.launch(
@@ -1438,24 +1462,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       ),
       // Abandoned (see `abandon`): the launch stops waiting and fails; a started executor is kept
       // as a retained launch (never removed here), which the deadline sweep drains.
-      (launching) =>
-        Effect.raceFirst(
-          launching,
-          Deferred.await(abandon).pipe(
-            Effect.flatMap((reason) =>
-              Effect.fail(
-                toWorkspaceBuildJobProcessingError(
-                  startedIdentity === undefined
-                    ? new Error(`The launch was abandoned: ${reason}.`)
-                    : new LaunchRetainedError(
-                        startedIdentity,
-                        new Error(`The launch was abandoned: ${reason}.`),
-                      ),
-                ),
-              ),
-            ),
-          ),
-        ),
+      (launching) => Effect.raceFirst(launching, abandonedLaunch),
     );
 
     // Before the instance reads `ready`: nobody acts on the home (a put, a release) until then, so

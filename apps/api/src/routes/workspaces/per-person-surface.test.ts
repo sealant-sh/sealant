@@ -30,6 +30,8 @@ import { TelemetryQuery } from "@sealant/telemetry";
 import { nativePublicationSchema, newWorkspaceSchema } from "@sealant/validators";
 import {
   BoatImageInspection,
+  loadMicrovmContextFiles,
+  planMicrovmWorkspaceImage,
   planWorkspaceImageBuild,
   processImagePlatform,
   SealantRuntime,
@@ -543,6 +545,42 @@ describe("the control plane's features", () => {
 });
 
 describe("inspectWorkspaceImage", () => {
+  it("plans a MicroVM image without worker roles or artifact credentials", async () => {
+    const blueprint = newWorkspaceSchema.parse({
+      ...spec,
+      target: { runtime: { family: "microvm" } },
+    });
+    const context = await loadMicrovmContextFiles();
+    const planned = planMicrovmWorkspaceImage(blueprint, {
+      agentPort: 8080,
+      memoryMiB: 4096,
+      contextDigest: context.digest,
+    });
+    let lookedUp: string | undefined;
+    const result = await Effect.runPromise(
+      workspacesModule
+        .inspectWorkspaceImage({
+          payload: { ownerUserId: OWNER, registryId: "default", spec: blueprint },
+        })
+        .pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Layer.mock(WorkspaceBuildJobRepo, {
+                getLatestSucceededJobByPlanHash: (input) =>
+                  Effect.sync(() => {
+                    lookedUp = input.planHash;
+                    return undefined;
+                  }),
+              }),
+              Layer.mock(WorkspaceAttemptRepo, {}),
+            ),
+          ),
+        ),
+    );
+    expect(lookedUp).toBe(planned.planHash);
+    expect(result.planHash).toBe(planned.planHash);
+  });
+
   // The plan the build would make of this spec, on this machine's platform as the API plans it.
   const planHash = planWorkspaceImageBuild({
     platform: processImagePlatform(),

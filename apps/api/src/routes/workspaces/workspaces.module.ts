@@ -118,7 +118,7 @@ import {
   type ProcessUserChannel,
   planWorkspaceImageBuild,
   planMicrovmWorkspaceImage,
-  microvmRuntimeConfigFromEnv,
+  microvmImagePlanConfigFromEnv,
   loadMicrovmContextFiles,
   processImagePlatform,
   type PersonLayoutContext,
@@ -4105,13 +4105,11 @@ export const inspectWorkspaceImage = (input: { readonly payload: InspectWorkspac
       : family === "microvm"
         ? Effect.tryPromise({
             try: async () => {
-              const config = microvmRuntimeConfigFromEnv(env);
-              if (config === undefined)
-                throw new Error("MicroVM image planning is not configured.");
+              const config = microvmImagePlanConfigFromEnv(env);
               const context = await loadMicrovmContextFiles();
               return planMicrovmWorkspaceImage(spec, {
                 agentPort: config.agentPort,
-                memoryMiB: config.build.memoryMiB,
+                memoryMiB: config.memoryMiB,
                 contextDigest: context.digest,
               });
             },

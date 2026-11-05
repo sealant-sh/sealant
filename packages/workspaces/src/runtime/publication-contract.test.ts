@@ -6,31 +6,11 @@ import {
   type MicrovmPublication,
   type OciPublication,
 } from "@sealant/validators";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import type { BoatNativeCatalogService } from "../images/boat/catalog.js";
 import type { RegisteredRuntime } from "./registered-runtime.js";
 import type { RuntimeAdapter, RuntimeLaunch } from "./runtime-adapter.js";
-
-const correlation = (
-  oci: RuntimeAdapter<OciPublication>,
-  native: RuntimeAdapter<NativePublication>,
-  microvm: RuntimeAdapter<MicrovmPublication>,
-  nativeInput: RuntimeLaunch<NativePublication>,
-  ociInput: RuntimeLaunch<OciPublication>,
-  artifacts: BoatNativeCatalogService,
-) => {
-  // @ts-expect-error OCI launch cannot accept a native snapshot.
-  void oci.launch(nativeInput);
-  // @ts-expect-error Native launch cannot accept OCI coordinates.
-  void native.launch(ociInput);
-  // @ts-expect-error MicroVM launch cannot accept OCI coordinates.
-  void microvm.launch(ociInput);
-  // @ts-expect-error Registration cannot pair the native catalog with an OCI adapter.
-  const wrong: RegisteredRuntime = { kind: "boat-native", artifacts, adapter: oci };
-  return wrong;
-};
-void correlation;
 
 const hash = "a".repeat(64);
 const legacy = {
@@ -46,6 +26,23 @@ const legacy = {
 };
 
 describe("publication contracts", () => {
+  it("correlates launch and registration with the publication kind", () => {
+    expectTypeOf<RuntimeLaunch<NativePublication>>().not.toExtend<
+      Parameters<RuntimeAdapter<OciPublication>["launch"]>[0]
+    >();
+    expectTypeOf<RuntimeLaunch<OciPublication>>().not.toExtend<
+      Parameters<RuntimeAdapter<NativePublication>["launch"]>[0]
+    >();
+    expectTypeOf<RuntimeLaunch<OciPublication>>().not.toExtend<
+      Parameters<RuntimeAdapter<MicrovmPublication>["launch"]>[0]
+    >();
+    expectTypeOf<{
+      kind: "boat-native";
+      artifacts: BoatNativeCatalogService;
+      adapter: RuntimeAdapter<OciPublication>;
+    }>().not.toExtend<RegisteredRuntime>();
+  });
+
   it("reads a historical OCI record with actual registry coordinates", () => {
     expect(parseLegacyWorkspacePublication(legacy)).toMatchObject({
       kind: "oci",

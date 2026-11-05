@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 
 import { workspacePublicationSchema as publicPublicationSchema } from "@sealant/api-contracts";
+import { sha256Hex, type CredentialCipherService } from "@sealant/credentials";
 import {
+  ConnectedAccountRepo,
+  ConnectedAccountRepoLive,
+  CredentialPlacementRepo,
+  CredentialPlacementRepoLive,
   createSealantDB,
   SealantDB,
   user,
@@ -11,6 +16,10 @@ import {
   WorkspaceBuildJobRepoUnexpectedError,
   WorkspaceRuntimeInstanceRepo,
   WorkspaceRuntimeInstanceRepoLive,
+  WorkspaceRepo,
+  WorkspaceRepoLive,
+  WorkspaceCredentialHomeRepo,
+  WorkspaceCredentialHomeRepoLive,
 } from "@sealant/db";
 import { nativeConsumerRows } from "@sealant/db/testing/native-publications";
 import {
@@ -18,6 +27,7 @@ import {
   revokeImageScope,
   takeWorkspaceJobClaim,
   corruptWorkspacePublication,
+  withWorkspaceJobTestDatabase,
 } from "@sealant/db/testing/workspace-publications";
 import {
   nativeArtifactConsumerSchema,
@@ -39,11 +49,12 @@ import {
 import { BoatImageInspection, boatImageInspectionLayer } from "../images/boat/inspection.js";
 import type { RegistryClient } from "../registry/client.js";
 import { LaunchRetainedError } from "../runtime/launch-retention.js";
-import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
+import type { RuntimeAdapter, RuntimeLaunch } from "../runtime/runtime-adapter.js";
 import {
   processWorkspaceBuildJob,
   processWorkspaceBuildJobEffect,
 } from "./process-workspace-build-job.js";
+import { reapStaleWorkspaceBuildJobs } from "./reap-stale-workspace-build-jobs.js";
 
 const databaseUrl = process.env.SEALANT_TEST_DATABASE_URL;
 const enabled = databaseUrl !== undefined && process.env.SEALANT_BOAT_RUNTIME_BUNDLE !== undefined;
@@ -61,8 +72,12 @@ const registry: RegistryClient = {
   deleteImage: forbidden,
 };
 
-const setup = async (onBuild?: () => Promise<void>, waitBeforeBuild?: () => Promise<void>) => {
-  const db = await createSealantDB(databaseUrl ?? "");
+const setup = async (
+  onBuild?: () => Promise<void>,
+  waitBeforeBuild?: () => Promise<void>,
+  url: string = databaseUrl ?? "",
+) => {
+  const db = await createSealantDB(url);
   const owner = `usr_stage2b_${randomUUID()}`;
   await Effect.runPromise(
     db.insert(user).values({ id: owner, name: "stage2b", email: `${owner}@example.invalid` }),
@@ -92,12 +107,23 @@ const setup = async (onBuild?: () => Promise<void>, waitBeforeBuild?: () => Prom
     ),
   );
   const repoLayer = Layer.mergeAll(
+    ConnectedAccountRepoLive,
+    CredentialPlacementRepoLive,
     WorkspaceBuildJobRepoLive,
     WorkspaceRuntimeInstanceRepoLive,
+    WorkspaceRepoLive,
+    WorkspaceCredentialHomeRepoLive,
   ).pipe(Layer.provide(Layer.succeed(SealantDB, db)));
   const repos = await Effect.runPromise(
     Effect.gen(function* () {
-      return { jobs: yield* WorkspaceBuildJobRepo, instances: yield* WorkspaceRuntimeInstanceRepo };
+      return {
+        jobs: yield* WorkspaceBuildJobRepo,
+        instances: yield* WorkspaceRuntimeInstanceRepo,
+        workspaces: yield* WorkspaceRepo,
+        accounts: yield* ConnectedAccountRepo,
+        homes: yield* WorkspaceCredentialHomeRepo,
+        placements: yield* CredentialPlacementRepo,
+      };
     }).pipe(Effect.provide(repoLayer)),
   );
   const spec = newWorkspaceSchema.parse({
@@ -105,11 +131,13 @@ const setup = async (onBuild?: () => Promise<void>, waitBeforeBuild?: () => Prom
     target: { ...fixture.spec.target, runtime: { family: "boat", mode: "require" } },
   });
   const launches: NativePublication[] = [];
+  const launchInputs: RuntimeLaunch<NativePublication>[] = [];
   const adapter: RuntimeAdapter<NativePublication> = {
     id: "boat",
     supports: () => ({ supported: true }),
     launch: async (input, hooks) => {
       launches.push(input.publication);
+      launchInputs.push(input);
       const identity = {
         adapter: "boat" as const,
         resourceId: `test-${input.runId}`,
@@ -123,6 +151,7 @@ const setup = async (onBuild?: () => Promise<void>, waitBeforeBuild?: () => Prom
   };
   const enqueue = async (
     scope: NativePublicationKey["scope"] = { kind: "owner", ownerUserId: owner },
+    availableAt?: Date,
   ) => {
     const runId = `run_${randomUUID()}`,
       id = `job_${randomUUID()}`;
@@ -135,6 +164,7 @@ const setup = async (onBuild?: () => Promise<void>, waitBeforeBuild?: () => Prom
         repository: "stage2b",
         tag: "test",
         requestPayload: spec,
+        ...(availableAt === undefined ? {} : { availableAt }),
         imageScope: scope,
       }),
     );
@@ -159,12 +189,104 @@ const setup = async (onBuild?: () => Promise<void>, waitBeforeBuild?: () => Prom
       removeAll: async () => undefined,
     },
   });
-  return { db, owner, fixture, catalog, adapter, ...repos, spec, launches, enqueue, options };
+  return {
+    db,
+    owner,
+    fixture,
+    catalog,
+    adapter,
+    ...repos,
+    spec,
+    launches,
+    launchInputs,
+    enqueue,
+    options,
+  };
 };
 
 const noop = async () => {};
 
 describe.skipIf(!enabled)("native publication worker and persistence (disposable Postgres)", () => {
+  it("recovers a queued scoped job whose broker wakeup was lost", async () => {
+    await withWorkspaceJobTestDatabase(databaseUrl ?? "", async (url) => {
+      const s = await setup(undefined, undefined, url);
+      const domainId = `rdm:${randomUUID()}`;
+      await Effect.runPromise(seedImageScope(s.db, domainId, s.owner));
+      const scope = { kind: "resource-domain", domainId } as const;
+      const home = { path: "/home/m4lice000", uid: 40001, gid: 40000 };
+      const accountId = `cacc_${randomUUID()}`;
+      const payload = JSON.stringify({ token: "gho_FAKE_boat_queue" });
+      const cipher: CredentialCipherService = {
+        encrypt: (plaintext) => Effect.succeed({ sealed: `sealed:${plaintext}`, keyId: "test" }),
+        decrypt: (sealed) => Effect.succeed(sealed.slice("sealed:".length)),
+      };
+      await Effect.runPromise(
+        s.accounts.createConnectedAccount({
+          id: accountId,
+          ownerUserId: s.owner,
+          provider: "github",
+          name: "queue",
+          kind: "oauth-token",
+          encryptedPayload: `sealed:${payload}`,
+          encryptionKeyId: "test",
+          payloadSha256: sha256Hex(payload),
+          metadata: {},
+        }),
+      );
+      s.spec.runtime.credentialsHome = home;
+      s.spec.runtime.credentialRefs = [
+        { provider: "github", ref: `connected-account:${accountId}` },
+      ];
+      const later = await s.enqueue(scope, new Date(Date.now() + 3600000));
+      const job = await s.enqueue(scope);
+      const next = await s.enqueue(scope);
+      const workspaceId = `wks_${randomUUID()}`;
+      const binds = [{ mountPath: "/workspace", subpath: "retained" }];
+      await Effect.runPromise(
+        s.workspaces.createWorkspace({
+          id: workspaceId,
+          name: "queue",
+          ownerUserId: s.owner,
+        }),
+      );
+      await Effect.runPromise(
+        s.workspaces.linkWorkspaceAttempt({ workspaceId, attemptId: job.runId }),
+      );
+      await Effect.runPromise(s.workspaces.setWorkspaceBinds({ id: workspaceId, binds }));
+      expect(
+        await reapStaleWorkspaceBuildJobs({
+          ...s.options(job.id),
+          maxReapsPerTick: 1,
+          credentialCipher: cipher,
+        }),
+      ).toBe(1);
+      expect(s.launches).toHaveLength(1);
+      expect(s.launchInputs[0]).toMatchObject({
+        workspaceId,
+        binds,
+        credentialFiles: [
+          {
+            path: home.path,
+            home: { uid: home.uid, gid: home.gid, providers: ["github"] },
+          },
+        ],
+      });
+      expect(await Effect.runPromise(s.homes.listByRunId(job.runId))).toEqual([
+        expect.objectContaining({ home: home.path, onBehalfOfUserId: s.owner }),
+      ]);
+      expect(
+        (await Effect.runPromise(s.placements.state({ runId: job.runId, home: home.path })))
+          .placements,
+      ).toEqual([expect.objectContaining({ accountId, provider: "github", state: "ready" })]);
+      expect((await Effect.runPromise(s.jobs.getJobById(job.id)))?.status).toBe("succeeded");
+      expect((await Effect.runPromise(s.jobs.getJobById(later.id)))?.status).toBe("queued");
+      expect((await Effect.runPromise(s.jobs.getJobById(next.id)))?.status).toBe("queued");
+      expect(
+        (await Effect.runPromise(s.instances.getRuntimeInstanceByRunId(job.runId)))?.status,
+      ).toBe("ready");
+    });
+  });
+
   it("waits under the same two bindings, builds once, and persists exact native artifacts across restart", async () => {
     const entered = Promise.withResolvers<void>(),
       release = Promise.withResolvers<void>();
@@ -292,6 +414,38 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
     ]);
   });
 
+  it("does not launch after ownership changes during launch material staging", async () => {
+    const s = await setup();
+    const job = await s.enqueue();
+    const options = s.options(job.id);
+    await expect(
+      processWorkspaceBuildJob({
+        ...options,
+        launchMaterialStager: {
+          ...options.launchMaterialStager,
+          stage: async () => {
+            await Effect.runPromise(
+              s.instances.upsertRuntimeInstance({
+                runId: job.runId,
+                status: "pending",
+                launchOwner: "successor",
+                launchLeaseMs: 60000,
+              }),
+            );
+            return {};
+          },
+        },
+      }),
+    ).rejects.toMatchObject({ message: expect.stringContaining("The launch was abandoned") });
+    expect(s.launches).toHaveLength(0);
+    expect(
+      (await Effect.runPromise(s.instances.getRuntimeInstanceByRunId(job.runId)))?.launchOwner,
+    ).toBe("successor");
+    expect(await Effect.runPromise(nativeConsumerRows(s.db, job.runId))).toEqual([
+      expect.objectContaining({ state: "pending" }),
+    ]);
+  });
+
   it("keeps committed publication success and its pin when the success reply is lost", async () => {
     const s = await setup();
     const job = await s.enqueue();
@@ -314,12 +468,10 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
       WorkspaceRuntimeInstanceRepoLive,
       Layer.succeed(WorkspaceBuildJobRepo, lost),
     ).pipe(Layer.provide(Layer.succeed(SealantDB, s.db)));
-    // The Promise boundary supplies the complete live context; only its success boundary is faulted.
     const {
       WorkspaceAttemptRepoLive,
       GitHubInstallationRepoLive,
       GitHubInstallationRepositoryCacheRepoLive,
-      ConnectedAccountRepoLive,
     } = await import("@sealant/db");
     const context = Layer.mergeAll(
       layer,

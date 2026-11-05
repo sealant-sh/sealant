@@ -36,7 +36,12 @@
             "paths": [
               {
                 "name": "@sealant/db",
-                "importNames": ["NativePublicationRepo", "NativePublicationRepoLive"],
+                "importNames": [
+                  "NativePublicationRepo",
+                  "NativePublicationRepoLive",
+                  "nativePublications",
+                  "nativePublicationConsumers"
+                ],
                 "message": "Native publication persistence belongs to BoatNativeCatalog."
               }
             ],
@@ -49,6 +54,8 @@
                   "**/images/boat/journal*",
                   "**/images/boat/recipe*",
                   "**/images/boat/runtime-bundle*",
+                  "**/repositories/native-publications*",
+                  "**/schema/native-publications*",
                   "@sealant/db/testing/*"
                 ],
                 "message": "Use the native catalog or read-only inspection service. Provider and journal internals stay in their owners."

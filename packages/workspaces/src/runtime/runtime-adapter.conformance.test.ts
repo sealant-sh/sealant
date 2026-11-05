@@ -9,11 +9,6 @@
  *      and
  *   2. the launch boots the image that build published, and no other.
  *
- * The cases cover every registered runtime family. Boat remains unregistered. A case
- * that cannot say which image it boots fails here. A runtime that boots no container image
- * (MicroVM) builds with its own builder here, and is held to the same two facts. Live proof stays
- * with each runtime's e2e.
- *
  * A blueprint's dotfiles are part of what a project is too. Each adapter id is also held to a
  * third fact:
  *

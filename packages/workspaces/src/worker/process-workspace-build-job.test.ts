@@ -3081,16 +3081,25 @@ describe("a launch never waits past its runtime's preservation start (review 4 #
   it("stops waiting once its launch ownership was taken over (preempted by the deadline sweep)", async () => {
     const jobs = captureJob("job_preempted", "run_preempted");
     const attempts = workspaceAttemptRepoStub();
+    let started = false;
+    const waiting = neverReady(new Date(Date.now() + 3_600_000).toISOString());
+    const adapter: RuntimeAdapter = {
+      ...waiting,
+      launch: (input, hooks) => {
+        started = true;
+        return waiting.launch(input, hooks);
+      },
+    };
     const runtimeInstances = {
       ...workspaceRuntimeInstanceRepoStub(),
-      renewLaunchLease: vi.fn(() => Effect.succeed(false)),
+      renewLaunchLease: vi.fn(() => Effect.sync(() => !started)),
     };
     const exit = await Effect.runPromise(
       processWorkspaceBuildJobEffect(
         baseOptions({
           jobId: "job_preempted",
           credentialCipher: fakeCredentialCipher,
-          runtimeAdapters: [neverReady(new Date(Date.now() + 3_600_000).toISOString())],
+          runtimeAdapters: [adapter],
           compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
           launchLeaseMs: 1_000,
         }),

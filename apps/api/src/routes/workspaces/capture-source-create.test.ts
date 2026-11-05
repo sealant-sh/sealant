@@ -363,6 +363,7 @@ const makeRecordingLayer = (
     getLatestSucceededJobByPlanHash: () => Effect.die("unused"),
     listLatestJobsByRunIds: () => Effect.die("unused"),
     listJobsByStatus: () => Effect.die("unused"),
+    listRecoverableJobs: () => Effect.die("unused"),
     claimNextQueuedJob: () => Effect.die("unused"),
     claimJobById: () => Effect.die("unused"),
     markJobRunning: () => Effect.die("unused"),
