@@ -195,6 +195,7 @@ const fixture = async (
   const api = parsed.value;
   const provider: BoatApi = {
     create: api.create.bind(api),
+    discover: api.discover.bind(api),
     get: api.get.bind(api),
     execute: api.execute.bind(api),
     writeFile: api.writeFile.bind(api),

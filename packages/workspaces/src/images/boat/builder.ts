@@ -287,7 +287,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
               marker: journal.build,
               idempotencyKey: allocation.key,
               purpose: "native-build",
-              ttlSeconds: 900,
+              lifetime: { kind: "bounded", ttlSeconds: 900 },
             }),
           signal,
         );

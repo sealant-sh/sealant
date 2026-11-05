@@ -68,6 +68,86 @@ export const boatSnapshotNameSchema = z
   .brand<"BoatSnapshotName">();
 export type BoatSnapshotName = z.infer<typeof boatSnapshotNameSchema>;
 
+const ownershipValueSchema = z
+  .string()
+  .min(1)
+  .max(256)
+  .regex(/^[^\p{Cc}]+$/u)
+  .refine((value) => Buffer.byteLength(value, "utf8") <= 256);
+const ownershipSchema = z.object({
+  deploymentId: ownershipValueSchema.brand<"BoatDeploymentId">(),
+  workspaceId: ownershipValueSchema.brand<"BoatWorkspaceId">(),
+  runId: ownershipValueSchema.brand<"BoatRunId">(),
+  runtimeInstanceId: ownershipValueSchema.brand<"BoatRuntimeInstanceId">(),
+  launchAttemptId: ownershipValueSchema.brand<"BoatLaunchAttemptId">(),
+  sourceId: ownershipValueSchema.brand<"BoatSourceId">(),
+});
+
+/** Exact allocation identity. Parsing enforces Boat's 256-byte label value limit. */
+export class BoatOwnership {
+  /** Deployment that owns the allocation, independent of a reconciler claim. */
+  readonly deploymentId;
+  /** Workspace whose disk this allocation holds. */
+  readonly workspaceId;
+  /** Durable execution record, unchanged by provider retries. */
+  readonly runId;
+  /** Runtime instance reserved by the durable executor owner. */
+  readonly runtimeInstanceId;
+  /** Launch attempt reserved before issuing create. */
+  readonly launchAttemptId;
+  /** Exact source artifact identity recorded by the executor owner. */
+  readonly sourceId;
+
+  private constructor(identity: z.infer<typeof ownershipSchema>) {
+    this.deploymentId = identity.deploymentId;
+    this.workspaceId = identity.workspaceId;
+    this.runId = identity.runId;
+    this.runtimeInstanceId = identity.runtimeInstanceId;
+    this.launchAttemptId = identity.launchAttemptId;
+    this.sourceId = identity.sourceId;
+    Object.freeze(this);
+  }
+
+  /** Invalid identities fail before any provider request. */
+  static parse(input: unknown): BoatResult<BoatOwnership> {
+    const parsed = ownershipSchema.safeParse(input);
+    return parsed.success
+      ? { ok: true, value: new BoatOwnership(parsed.data) }
+      : { ok: false, error: new BoatApiError("ownership", null, "invalid_ownership") };
+  }
+}
+
+const lifetimeSchema = z
+  .discriminatedUnion("kind", [
+    z.object({ kind: z.literal("production-session") }).strict(),
+    z
+      .object({
+        kind: z.literal("bounded"),
+        ttlSeconds: z.number().int().min(60).max(1800).optional(),
+      })
+      .strict(),
+  ])
+  .readonly();
+
+/** Production never inherits the bounded caller's default of 900 seconds. */
+export type BoatLifetime = z.infer<typeof lifetimeSchema>;
+
+/** Bounded TTL limits are local build/proof policy, not Boat API limits. */
+export function parseBoatLifetime(input: unknown): BoatResult<number | null> {
+  const parsed = lifetimeSchema.safeParse(input);
+  if (!parsed.success)
+    return { ok: false, error: new BoatApiError("lifetime", null, "invalid_lifetime") };
+  return {
+    ok: true,
+    value:
+      parsed.data.kind === "production-session"
+        ? null
+        : parsed.data.ttlSeconds === undefined
+          ? 900
+          : parsed.data.ttlSeconds,
+  };
+}
+
 export const parseBoatUrl = (input: string): BoatResult<URL> => {
   try {
     const url = new URL(input);

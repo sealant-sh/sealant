@@ -64,6 +64,7 @@ const events: unknown[] = [];
 let cancellationProbe = false;
 const api: BoatApi = {
   create: httpApi.create.bind(httpApi),
+  discover: httpApi.discover.bind(httpApi),
   get: httpApi.get.bind(httpApi),
   writeFile: httpApi.writeFile.bind(httpApi),
   uploadFile: httpApi.uploadFile.bind(httpApi),
@@ -205,6 +206,7 @@ const createClone = async () => {
     throw new Error("unsafe clone reconciliation");
   const result = must(
     await api.create({
+      lifetime: { kind: "bounded" },
       marker: clone.marker,
       idempotencyKey: clone.key,
       from: clone.from,
@@ -568,7 +570,7 @@ print("outer sentinel and relay survived")
     );
     must(await api.stop(id));
     await poll(async () => (must(await api.get(id)).state === "archived" ? true : undefined));
-    must(await api.resume(id));
+    must(await api.resume(id, { kind: "bounded" }));
     await poll(async () =>
       ["ready", "idle", "running"].includes(must(await api.get(id)).state) ? true : undefined,
     );

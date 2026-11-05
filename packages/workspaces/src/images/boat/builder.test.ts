@@ -253,6 +253,14 @@ describe("attempt-owned durable native cleanup", () => {
     const creates = f.requests.filter((r) => r.method === "POST");
     expect(creates).toHaveLength(2);
     expect(creates[0]?.key).toBe(f.journal.allocation.key);
+    expect(creates[0]?.body).toEqual({
+      type: "small",
+      ttlSeconds: 900,
+      noEnv: true,
+      monitoring: false,
+      snapshots: true,
+      labels: { "sealant-dev": "boat-stream", "sealant-build": f.journal.build },
+    });
     expect(creates[1]).toEqual(creates[0]);
     expect(await f.read()).toMatchObject({
       phase: "complete",
