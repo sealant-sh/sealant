@@ -233,24 +233,33 @@ describe("attempt-owned durable native cleanup", () => {
     expect(f.requests).toEqual([]);
   });
 
-  it("never deletes a replaced snapshot after scratch cleanup", async () => {
-    const f = await fixture();
-    const save = {
-      state: "known",
-      ...f.identity,
-      requestedAt: f.identity.createdAt,
-      identity: f.identity,
-    };
-    await f.write({ ...f.journal, save });
-    f.snapshot({ ...f.identity, snapshotId: "unrelated", status: "ready" });
-    expect(await f.builder.cleanup(f.path)).toMatchObject({
-      ok: false,
-      error: { code: "native-snapshot-identity-mismatch" },
-    });
-    expect(f.requests.filter((r) => r.method === "DELETE").map((r) => r.path)).toEqual([
-      "/api/v1/sandboxes/" + id,
-    ]);
-  });
+  it.each(["name", "sourceSandboxId", "createdAt", "snapshotId"] as const)(
+    "never deletes a snapshot with replaced %s after scratch cleanup",
+    async (field) => {
+      const f = await fixture();
+      const save = {
+        state: "known",
+        ...f.identity,
+        requestedAt: f.identity.createdAt,
+        identity: f.identity,
+      };
+      await f.write({ ...f.journal, save });
+      const replacements = {
+        name: "unrelated-snapshot",
+        sourceSandboxId: "bx_87654322",
+        createdAt: "2020-01-01T00:00:00.000Z",
+        snapshotId: "unrelated",
+      };
+      f.snapshot({ ...f.identity, [field]: replacements[field], status: "ready" });
+      expect(await f.builder.cleanup(f.path)).toMatchObject({
+        ok: false,
+        error: { code: "native-snapshot-identity-mismatch" },
+      });
+      expect(f.requests.filter((r) => r.method === "DELETE").map((r) => r.path)).toEqual([
+        "/api/v1/sandboxes/" + id,
+      ]);
+    },
+  );
 
   it("retains ambiguous save intent after 404, then reconciles exactly that name on restart", async () => {
     const f = await fixture();

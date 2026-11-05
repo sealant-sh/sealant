@@ -308,6 +308,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
     if (allocation.deletion === undefined) {
       const vm = await call(() => this.#options.api.get(allocation.id), signal);
       if (
+        vm.id !== allocation.id ||
         vm.labels?.["sealant-build"] !== journal.build ||
         vm.labels["sealant-dev"] !== "boat-stream"
       )
@@ -520,6 +521,12 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       if (allocation.state !== "known") throw new NativeBuildError("native-allocation-missing");
       await this.#poll(async () => {
         const vm = await call(() => this.#options.api.get(allocation.id), signal);
+        if (
+          vm.id !== allocation.id ||
+          vm.labels?.["sealant-build"] !== attempt.build ||
+          vm.labels["sealant-dev"] !== "boat-stream"
+        )
+          throw new NativeBuildError("native-sandbox-identity-mismatch");
         if (["error", "cancelled", "archived"].includes(vm.state))
           throw new NativeBuildError("native-sandbox-failed");
         return ["ready", "idle", "running"].includes(vm.state) ? true : undefined;

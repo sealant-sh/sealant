@@ -19,7 +19,7 @@ export const NATIVE_SUBSTRATE = {
   nix: "2.31.2",
   nixArchive: "https://releases.nixos.org/nix/nix-2.31.2/nix-2.31.2-x86_64-linux.tar.xz",
   nixSha256: "d1f67c86eed016214864ba08bfb9529c307aea7e8fafb74853f96fcc3bfd8a60",
-  nixpkgs: "b6018f87da91d19d0ab4cf979885689b469cdd41",
+  nixpkgs: "1d060086d60cb76a40cf37109f979d88a5bd6396",
 } as const;
 
 /** Installed files carry their own bytes and checksum; no execution depends on an untracked file. */
@@ -103,6 +103,8 @@ export const createNativeRecipe = async (
         "set -euo pipefail",
         "umask 022",
         "export HOME=/root",
+        // Package upgrades must not restart Boat's outer services during preparation.
+        "export NEEDRESTART_MODE=l",
         'test "$(uname -m)" = x86_64',
         '. /etc/os-release; test "$ID" = ubuntu; test "$VERSION_ID" = 24.04',
         "export PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
