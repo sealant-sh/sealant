@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { request } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -784,7 +785,6 @@ describe("microvm agent guest-local Docker", () => {
     const phase = phaseTimes(signal, onTestFinished);
     const agent = await startAgent(phase, {
       SEALANT_MICROVM_DOCKER_PROBE_INTERVAL_MS: "200",
-      FAKE_DOCKER_PROBE_DELAY_MS: "80",
     });
     expect(await runV2(agent)).toMatchObject({ status: 200 });
     await writeFile(agent.readyFile, "ready");
@@ -802,11 +802,31 @@ describe("microvm agent guest-local Docker", () => {
     await writeFile(agent.probeSequenceFile, "F");
     await waitFor(async () => (await readLines(agent.probeRecord)).length > initialProbeCount);
     phase("missed probe recorded");
-    const resumes = [hook(agent, "resume"), hook(agent, "resume")];
+    const sendResume = () => {
+      const req = request(`http://127.0.0.1:${agent.port}${HOOK_ROUTE_PREFIX}/resume`, {
+        method: "POST",
+      });
+      const sent = new Promise<void>((resolve, reject) => {
+        req.once("finish", resolve);
+        req.once("error", reject);
+      });
+      const status = new Promise<number>((resolve, reject) => {
+        req.once("error", reject);
+        req.once("response", (response) => {
+          response.once("error", reject);
+          response.once("end", () => resolve(response.statusCode ?? 0));
+          response.resume();
+        });
+      });
+      req.end();
+      return { sent, status };
+    };
+    const resumes = [sendResume(), sendResume()];
+    await Promise.all(resumes.map(({ sent }) => sent));
     await writeFile(agent.probeGateFile, "open");
-    const concurrentResume = await Promise.all(resumes);
+    const concurrentResume = await Promise.all(resumes.map(({ status }) => status));
     phase("resumes answered");
-    expect(concurrentResume.map(({ status }) => status)).toEqual([503, 503]);
+    expect(concurrentResume).toEqual([503, 503]);
     expect(await readLines(agent.probeRecord)).toHaveLength(initialProbeCount + 1);
     expect(await health(agent)).toMatchObject({
       status: 200,
