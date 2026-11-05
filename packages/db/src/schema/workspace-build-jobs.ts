@@ -21,6 +21,7 @@ import {
   text,
   timestamp,
   uniqueIndex,
+  uuid,
 } from "drizzle-orm/pg-core";
 
 // Client-level `casing: "snake_case"` no longer exists, so re-apply snake_case at the
@@ -591,6 +592,26 @@ export const workspaceCaptureDrains = pgTable(
      * the executor is finally removed or found gone.
      */
     captureTokenSealed: text("capture_token_sealed"),
+    custodyContract: integer("custody_contract"),
+    preservationDesired: text("preservation_desired", { enum: ["preserve", "recover", "discard"] })
+      .notNull()
+      .default("preserve"),
+    preservationQuarantine: text("preservation_quarantine"),
+    custodyRevision: bigint("custody_revision", { mode: "number" }).notNull().default(0),
+    currentIncarnationId: uuid("current_incarnation_id"),
+    retentionEpisodeId: uuid("retention_episode_id"),
+    preservationClaimToken: uuid("preservation_claim_token"),
+    preservationClaimFence: bigint("preservation_claim_fence", { mode: "number" })
+      .notNull()
+      .default(0),
+    preservationClaimUntil: timestamp("preservation_claim_until", {
+      mode: "date",
+      withTimezone: true,
+    }),
+    nextPreservationActionAt: timestamp("next_preservation_action_at", {
+      mode: "date",
+      withTimezone: true,
+    }),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),
@@ -602,6 +623,13 @@ export const workspaceCaptureDrains = pgTable(
   (table) => [
     index("workspace_capture_drains_state_idx").on(table.state),
     index("workspace_capture_drains_retained_idx").on(table.retainedAt, table.nextRecoveryAt),
+    check(
+      "capture_preservation_desired",
+      sql`${table.preservationDesired} in ('preserve','recover','discard')`,
+    ),
+    index("workspace_capture_drains_preservation_due")
+      .on(table.nextPreservationActionAt, table.runId)
+      .where(sql`${table.custodyContract} = 3 and ${table.nextPreservationActionAt} is not null`),
   ],
 );
 
