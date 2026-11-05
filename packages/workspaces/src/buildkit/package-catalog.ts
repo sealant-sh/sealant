@@ -573,7 +573,7 @@ const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", `'
  * release's own directory). Nothing is unpacked before the checksum matches, and a machine of
  * another architecture fails the step.
  */
-export const renderReleaseInstall = (release: ReleaseInstall): string => {
+export const releaseInstallCommands = (release: ReleaseInstall): readonly string[] => {
   const branch = (arch: ReleaseArchitecture): string => {
     const archive = release.archives[arch];
     const members = release.members[arch];
@@ -588,9 +588,7 @@ export const renderReleaseInstall = (release: ReleaseInstall): string => {
   const archive = `$d/archive.${zip ? "zip" : "tar.gz"}`;
   const unpack = zip ? `unzip -q "${archive}" -d "$d"` : `tar -xzf "${archive}" -C "$d"`;
   return [
-    `# ${release.name} ${release.version}: the project's own release, pinned by checksum, since the`,
-    "# repositories of this family or this architecture have no package for it.",
-    "RUN set -eu; \\",
+    "set -eu; \\",
     `    case "$(uname -m)" in ${branch("x86_64")} ${branch("aarch64")} *) echo "${release.name}: no release for $(uname -m)" >&2; exit 1;; esac; \\`,
     '    d="$(mktemp -d)"; \\',
     `    curl -fsSL --retry 3 -o "${archive}" "$url"; \\`,
@@ -598,5 +596,13 @@ export const renderReleaseInstall = (release: ReleaseInstall): string => {
     `    ${unpack}; \\`,
     `    ${installAll}; \\`,
     '    rm -rf "$d"',
-  ].join("\n");
+  ];
 };
+
+/** Docker serialization of the shared checksum-verified release shell body. */
+export const renderReleaseInstall = (release: ReleaseInstall): string =>
+  [
+    `# ${release.name} ${release.version}: the project's own release, pinned by checksum, since the`,
+    "# repositories of this family or this architecture have no package for it.",
+    `RUN ${releaseInstallCommands(release).join("\n")}`,
+  ].join("\n");

@@ -974,14 +974,11 @@ const maskSshdUnits = [
   `for unit in ${SSHD_UNITS_MASKED.join(" ")}; do rm -f /etc/systemd/system/*.wants/"$unit" && ln -sfn /dev/null /etc/systemd/system/"$unit"; done`,
 ].join(" && ");
 
-const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
-  if (plan.osFamily === "custom") {
-    throw new Error("Custom-base plans render through renderCustomBasePackageInstallCommand.");
-  }
-
+const installPackageList = (plan: ResolvedImagePlan): readonly string[] => {
+  if (plan.osFamily === "custom") throw new Error("Custom bases have no shared package list.");
   const distro = distroDefinitions[plan.osFamily];
   const extras = catalogExtras(plan);
-  const packageList = normalizeInstallPackages([
+  return normalizeInstallPackages([
     ...distro.internalPackages,
     ...releaseInstallPackages(plan.osFamily, extras.releases),
     // `socat` (and any other relay deps) are always installed: `sealantd boot` is the mandatory
@@ -989,6 +986,14 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
     ...distro.sealantdPackages,
     ...plan.packages.flatMap((pkg) => pkg.installPackages),
   ]);
+};
+
+const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
+  if (plan.osFamily === "custom") {
+    throw new Error("Custom-base plans render through renderCustomBasePackageInstallCommand.");
+  }
+
+  const packageList = installPackageList(plan);
 
   if (plan.packageManager === "dnf") {
     return [
@@ -1059,21 +1064,24 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
  * relying on npm global locations that can be awkward in nix-based containers. A harness's native
  * binary needs the FHS loader link the package layer makes (see renderPackageInstallCommand).
  */
-const renderHarnessInstallCommand = (plan: ResolvedImagePlan): string => {
+const harnessInstallCommands = (plan: ResolvedImagePlan): readonly string[] => {
   const integrations = imageHarnessIntegrations(resolveHarnessIntegration(plan.blueprint));
-  return integrations
-    .map((integration) => {
-      if (plan.osFamily === "nix") {
-        const npmInstallGlobalPattern = /^npm\s+install\s+-g\s+(.+)$/;
-        const match = npmInstallGlobalPattern.exec(integration.installCommand);
-        if (match !== null) {
-          return `RUN npm install -g --prefix /usr/local ${match[1]}`;
-        }
+  return integrations.map((integration) => {
+    if (plan.osFamily === "nix") {
+      const npmInstallGlobalPattern = /^npm\s+install\s+-g\s+(.+)$/;
+      const match = npmInstallGlobalPattern.exec(integration.installCommand);
+      if (match !== null) {
+        return `npm install -g --prefix /usr/local ${match[1]}`;
       }
-      return `RUN ${integration.installCommand}`;
-    })
-    .join("\n");
+    }
+    return integration.installCommand;
+  });
 };
+
+const renderHarnessInstallCommand = (plan: ResolvedImagePlan): string =>
+  harnessInstallCommands(plan)
+    .map((command) => `RUN ${command}`)
+    .join("\n");
 
 /**
  * JSON encoding of a single lifecycle step for the `SEALANT_LIFECYCLE_*_JSON` / `SEALANT_FOREGROUND_RUN_JSON`
@@ -1133,7 +1141,7 @@ const renderEnvBlock = (entries: ReadonlyArray<readonly [string, string]>): stri
  *   chose runtime apply (GitHub-installation-backed dotfiles). Build-time dotfiles stay a `RUN`
  *   layer (see `renderDotfilesStep`) and emit no boot env.
  */
-const renderBootEnv = (plan: ResolvedImagePlan): string => {
+const staticBootEntries = (plan: ResolvedImagePlan): ReadonlyArray<readonly [string, string]> => {
   // Custom bases guarantee a POSIX shell and nothing more: every shell path degrades to /bin/sh
   // (support checks reject non-default shells), and the sshd path keeps the conventional
   // location for the env contract's sake.
@@ -1194,8 +1202,10 @@ const renderBootEnv = (plan: ResolvedImagePlan): string => {
     }
   }
 
-  return renderEnvBlock(entries);
+  return entries;
 };
+
+const renderBootEnv = (plan: ResolvedImagePlan): string => renderEnvBlock(staticBootEntries(plan));
 
 /**
  * Renders the optional Dockerfile layer that applies dotfiles during image build.
@@ -1203,7 +1213,7 @@ const renderBootEnv = (plan: ResolvedImagePlan): string => {
  * This is used only when `plan.dotfiles.applyAt === "build"`. Runtime apply uses entrypoint logic
  * instead so auth can be supplied at launch time.
  */
-const renderDotfilesStep = (plan: ResolvedImagePlan): string | undefined => {
+const dotfilesInstallCommand = (plan: ResolvedImagePlan): string | undefined => {
   if (plan.dotfiles === undefined || plan.dotfiles.applyAt !== "build") {
     return undefined;
   }
@@ -1279,6 +1289,12 @@ const renderDotfilesStep = (plan: ResolvedImagePlan): string | undefined => {
           `GIT_SSH_COMMAND='ssh -i /run/sealant/dotfiles_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no' git clone --depth=1 ${branchArguments}${shellQuote(plan.dotfiles.url)} ${shellQuote(sourceDirectory)}`,
           `/bin/bash -lc ${shellQuote(applyCommand)}`,
         ].join(" && ");
+  return cloneCommand;
+};
+
+const renderDotfilesStep = (plan: ResolvedImagePlan): string | undefined => {
+  const cloneCommand = dotfilesInstallCommand(plan);
+  if (cloneCommand === undefined || plan.dotfiles === undefined) return undefined;
   const mountPrefix =
     plan.dotfiles.authSecretId === undefined
       ? "RUN "
@@ -1322,13 +1338,13 @@ const planWantsChezmoi = (plan: ResolvedImagePlan): boolean => {
  * `chezmoi` packageMap entry on those distros installs the prerequisites (curl + CA roots), so
  * this step always runs after the package layer.
  */
-const renderChezmoiInstallStep = (plan: ResolvedImagePlan): string | undefined => {
+const chezmoiInstallCommands = (plan: ResolvedImagePlan): readonly string[] | undefined => {
   if (plan.osFamily !== "ubuntu" || !planWantsChezmoi(plan)) {
     return undefined;
   }
   const { version, sha256 } = chezmoiRelease;
   return [
-    "RUN set -e; \\",
+    "set -e; \\",
     '    arch="$(dpkg --print-architecture)"; \\',
     '    case "$arch" in \\',
     `      amd64) sha=${sha256.amd64} ;; \\`,
@@ -1340,7 +1356,12 @@ const renderChezmoiInstallStep = (plan: ResolvedImagePlan): string | undefined =
     "    tar -xzf /tmp/chezmoi.tar.gz -C /usr/local/bin chezmoi; \\",
     "    chmod 755 /usr/local/bin/chezmoi; \\",
     "    rm /tmp/chezmoi.tar.gz",
-  ].join("\n");
+  ];
+};
+
+const renderChezmoiInstallStep = (plan: ResolvedImagePlan): string | undefined => {
+  const commands = chezmoiInstallCommands(plan);
+  return commands === undefined ? undefined : `RUN ${commands.join("\n")}`;
 };
 
 /**

@@ -419,10 +419,10 @@ const LAYOUT_INSTALL: Readonly<
  * installs, for the group, `sudo`, the shared directories, `/etc/skel` and the person environment
  * file, and the packages they need. No `ENV`: the image's environment is what it was.
  */
-export const renderPersonLayoutSteps = (input: {
+export const personLayoutCommands = (input: {
   readonly family: PersonLayoutFamily;
   readonly dockerService: boolean;
-}): string => {
+}): readonly string[] => {
   const install = LAYOUT_INSTALL[input.family];
   const env = [...PERSON_ENV, ...(install.personEnv ?? [])];
   const dirs = [...PERSON_SHARED_DIRS, ...PERSON_SHARED_SUBDIRS];
@@ -461,6 +461,16 @@ export const renderPersonLayoutSteps = (input: {
     "if grep -q '^HOME_MODE' /etc/login.defs; then sed -i 's/^HOME_MODE.*/HOME_MODE\\t0700/' /etc/login.defs; else printf 'HOME_MODE\\t0700\\n' >> /etc/login.defs; fi",
     ...(install.checks ?? []),
   ];
+  return commands;
+};
+
+/** Container formatting of the shared person installation commands. */
+export const renderPersonLayoutSteps = (input: {
+  readonly family: PersonLayoutFamily;
+  readonly dockerService: boolean;
+}): string => {
+  const install = LAYOUT_INSTALL[input.family];
+  const commands = personLayoutCommands(input);
   return [
     "# Mend's person layout (ADR 0016): the mend group, sudo for it, shared toolchain directories",
     `# and ${PERSON_ENV_PATH} for processes run as a person. No ENV: root's environment is as before.`,
@@ -590,13 +600,16 @@ export const IMAGE_PROBE_SCRIPT: readonly string[] = [
  * layout; a custom base may build as a user who cannot write `/etc`, so its probe never fails the
  * build and an image without an answer reads as unknown.
  */
+export const imageProbeCommands = (input: { readonly require: boolean }): readonly string[] => [
+  "mkdir -p /usr/local/lib/sealant /etc/sealant",
+  writeLines(IMAGE_PROBE_SCRIPT_PATH, IMAGE_PROBE_SCRIPT),
+  `chmod 0755 ${IMAGE_PROBE_SCRIPT_PATH}`,
+  `${IMAGE_PROBE_SCRIPT_PATH}${input.require ? " --require" : ""} > ${IMAGE_PROBE_PATH}`,
+];
+
+/** Container formatting of the shared image probe installation. */
 export const renderImageProbeStep = (input: { readonly require: boolean }): string => {
-  const steps = [
-    "mkdir -p /usr/local/lib/sealant /etc/sealant",
-    writeLines(IMAGE_PROBE_SCRIPT_PATH, IMAGE_PROBE_SCRIPT),
-    `chmod 0755 ${IMAGE_PROBE_SCRIPT_PATH}`,
-    `${IMAGE_PROBE_SCRIPT_PATH}${input.require ? " --require" : ""} > ${IMAGE_PROBE_PATH}`,
-  ];
+  const steps = imageProbeCommands(input);
   return [
     "# The image probe: what this image offers the person layout, recorded in the image.",
     input.require
