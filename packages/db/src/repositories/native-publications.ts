@@ -55,10 +55,18 @@ export interface NativePublicationRepoService {
     purpose: NativeCatalogClaim["purpose"],
     ttlMs: number,
   ) => Effect.Effect<NativeCatalogClaim | undefined, NativeCatalogStoreError>;
+  readonly releaseClaim: (
+    claim: NativeCatalogClaim,
+  ) => Effect.Effect<void, NativeCatalogStoreError>;
   readonly publish: (
     claim: NativeCatalogClaim,
     publication: NativePublication,
   ) => Effect.Effect<NativeCatalogRecord, NativeCatalogStoreError>;
+  /** Fence a ready publication whose provider/journal evidence no longer agrees. */
+  readonly rejectReady: (
+    publication: NativePublication,
+    reason: string,
+  ) => Effect.Effect<void, NativeCatalogStoreError>;
   readonly quarantine: (
     claim: NativeCatalogClaim,
     reason: string,
@@ -244,7 +252,10 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
           const record = yield* parseRow(row);
           if (!isDeepStrictEqual(record.ownership.key, key))
             return yield* Effect.fail(new NativeCatalogStoreError("reserve", "malformed-state"));
-          if (record.state === "retiring")
+          if (
+            record.state === "retiring" ||
+            (record.state === "quarantined" && record.reason === "native-removal-pending")
+          )
             return yield* Effect.fail(new NativeCatalogStoreError("reserve", "consumer-conflict"));
           yield* db
             .insert(consumers)
@@ -279,7 +290,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
           ? sql`${publications.state} in ('reserved','building')`
           : purpose === "remove"
             ? eq(publications.state, "retiring")
-            : sql`${publications.state} in ('reserved','building','quarantined')`;
+            : sql`(${publications.state} in ('reserved','building') or (${publications.state} = 'quarantined' and ${publications.reason} <> 'native-removal-pending'))`;
       const [row] = yield* db
         .update(publications)
         .set({
@@ -309,6 +320,11 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
           if (row === undefined)
             return yield* Effect.fail(new NativeCatalogStoreError("publish", "stale-claim"));
           const record = yield* parseRow(row);
+          if (
+            record.reason === "native-removal-pending" ||
+            (record.publication !== null && !isDeepStrictEqual(record.publication, publication))
+          )
+            return yield* Effect.fail(new NativeCatalogStoreError("publish", "stale-claim"));
           yield* Effect.try({
             try: () => checkPublication(record.ownership, publication),
             catch: () => new NativeCatalogStoreError("publish", "malformed-state"),
@@ -333,6 +349,31 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
           if (updated === undefined)
             return yield* Effect.fail(new NativeCatalogStoreError("publish", "stale-claim"));
           return yield* parseRow(updated);
+        }),
+      );
+    });
+    const rejectReady = Effect.fn("NativePublicationRepo.rejectReady")(function* (
+      publication: NativePublication,
+      reason: string,
+    ) {
+      if (!/^[a-z][a-z0-9_-]{0,127}$/.test(reason))
+        return yield* Effect.fail(new NativeCatalogStoreError("rejectReady", "invalid-input"));
+      return yield* db.transaction(() =>
+        Effect.gen(function* () {
+          const [row] = yield* lock(publication.publicationId);
+          if (row === undefined) return;
+          const record = yield* parseRow(row);
+          if (record.state !== "ready" || !isDeepStrictEqual(record.publication, publication))
+            return;
+          yield* db
+            .update(publications)
+            .set({
+              state: "quarantined",
+              reason,
+              generation: sql`${publications.generation} + 1`,
+              ...clearClaim,
+            })
+            .where(eq(publications.id, row.id));
         }),
       );
     });
@@ -405,7 +446,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
             eq(publications.deploymentId, scope.deploymentId),
             eq(publications.scopeKind, scope.scope.kind),
             eq(publications.scopeId, scopeId(scope.scope)),
-            sql`${publications.state} in ('ready','retiring')`,
+            sql`(${publications.state} in ('ready','retiring') or (${publications.state} = 'quarantined' and ${publications.reason} = 'native-removal-pending'))`,
           ),
         )
         .orderBy(asc(publications.createdAt), asc(publications.id))
@@ -429,7 +470,24 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
           if (row === undefined) return undefined;
           const record = yield* parseRow(row);
           if (record.state === "retiring") return record;
-          if (record.state !== "ready" || (yield* pins(id)).length !== 0) return undefined;
+          const retryRemoval =
+            record.state === "quarantined" &&
+            record.reason === "native-removal-pending" &&
+            record.publication !== null;
+          if ((record.state !== "ready" && !retryRemoval) || (yield* pins(id)).length !== 0)
+            return undefined;
+          if (retryRemoval) {
+            const [updated] = yield* db
+              .update(publications)
+              .set({
+                state: "retiring",
+                generation: sql`${publications.generation} + 1`,
+                ...clearClaim,
+              })
+              .where(eq(publications.id, id))
+              .returning();
+            return updated === undefined ? undefined : yield* parseRow(updated);
+          }
           const recent = yield* db
             .select({ recipeHash: publications.recipeHash })
             .from(publications)
@@ -485,7 +543,14 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
       reserve: (key, consumer) => boundary("reserve", reserve(key, consumer)),
       get: (id) => boundary("get", get(id)),
       claim: (id, purpose, ttlMs) => boundary("claim", takeClaim(id, purpose, ttlMs)),
+      releaseClaim: (claim) =>
+        boundary(
+          "releaseClaim",
+          db.update(publications).set(clearClaim).where(fence(claim)).pipe(Effect.asVoid),
+        ),
       publish: (claim, publication) => boundary("publish", publish(claim, publication)),
+      rejectReady: (publication, reason) =>
+        boundary("rejectReady", rejectReady(publication, reason)),
       quarantine: (claim, reason) => boundary("quarantine", quarantine(claim, reason)),
       markConsumer: (consumer, id, state) =>
         boundary("markConsumer", changeConsumer(consumer, id, state)),

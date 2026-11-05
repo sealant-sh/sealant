@@ -124,13 +124,14 @@ export const nativeArtifactConsumerSchema = z
       .regex(/^run_[A-Za-z0-9_-]+$/)
       .brand<"NativeConsumerInstanceId">(),
   })
-  .refine((consumer) => consumer.runId.toString() === consumer.runtimeInstanceId.toString());
+  .refine((consumer) => String(consumer.runId) === String(consumer.runtimeInstanceId));
 
 /** A consumer remains pinned in every state except canonical explicit release. */
 export const nativeConsumerStateSchema = z.enum([
   "pending",
   "live",
   "retained",
+  "parked",
   "unknown",
   "released",
 ]);

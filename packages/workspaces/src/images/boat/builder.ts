@@ -96,6 +96,7 @@ const journalSchema = z.object({
   receiptHash: hashSchema.optional(),
   ownership: nativeBuildOwnershipSchema.optional(),
   evidence: nativePublicationEvidenceSchema.optional(),
+  removal: z.enum(["intent", "complete"]).optional(),
   failureCode: z
     .string()
     .regex(/^native-[a-z_-]+$/)
@@ -133,6 +134,7 @@ export interface IBoatSnapshotBuilder {
   findPublished(input: {
     readonly spec: WorkspaceBlueprint;
     readonly previous: NativeSnapshotArtifact;
+    readonly evidence?: NativePublicationEvidence;
   }): Promise<NativeResult<NativeSnapshotArtifact | null>>;
   remove(artifact: NativeSnapshotArtifact): Promise<NativeResult<"deleted" | "absent">>;
   cleanup(journalPath: string): Promise<NativeResult<void>>;
@@ -923,6 +925,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
 
   async #recover(journal: Journal, path: string): Promise<NativeBuildRecovery> {
     if (journal.phase === "published") {
+      if (journal.removal !== undefined) throw new NativeBuildError("native-publication-retiring");
       this.#checkEvidence(journal);
       if (
         journal.save.state !== "known" ||
@@ -981,7 +984,11 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
         !Number.isInteger(input.limit) ||
         input.limit < 1 ||
         input.limit > 200 ||
-        (input.after !== undefined && !/^[a-f0-9-]{36}\.json$/.test(input.after))
+        (input.after !== undefined &&
+          (input.after.length === 0 ||
+            input.after.length > 256 ||
+            /[/\\]/.test(input.after) ||
+            input.after.includes("\0")))
       )
         throw new NativeBuildError("native-invalid-journal-page");
       const names = (await readdir(this.#directory))
@@ -1028,7 +1035,11 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       if (artifact.owner !== this.#options.owner)
         throw new NativeBuildError("native-owner-mismatch");
       await this.#ownedArtifact(artifact);
-      await this.#evidence(artifact);
+      const evidence = await this.#evidence(artifact);
+      if (input.evidence !== undefined && !isDeepStrictEqual(input.evidence, evidence))
+        throw new NativeBuildError("native-publication-evidence-mismatch");
+      const journal = await this.#readJournal(join(this.#directory, artifact.build + ".json"));
+      if (journal?.removal !== undefined) throw new NativeBuildError("native-publication-retiring");
       const recipe = await createNativeRecipe(input.spec, this.#options.runtimeBundle);
       if (!recipe.ok) return recipe;
       if (
@@ -1056,12 +1067,22 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       await this.#directoryReady();
       unlock = await lockAttempt(join(this.#directory, artifact.build + ".json"));
       await this.#ownedArtifact(artifact);
+      const path = join(this.#directory, artifact.build + ".json");
+      const journal = await this.#readJournal(path);
+      if (journal === undefined) throw new NativeBuildError("native-journal-missing");
+      if (journal.removal === "complete") return { ok: true, value: "absent" };
       const signal = this.#signal(true);
       const found = await this.#getSnapshot(artifact.identity.name, signal);
-      if (found === null) return { ok: true, value: "absent" };
+      if (found === null) {
+        journal.removal = "complete";
+        await persist(path, journal);
+        return { ok: true, value: "absent" };
+      }
       if (!sameIdentity(artifact.identity, found))
         throw new NativeBuildError("native-snapshot-identity-mismatch");
       if (found.status === "saving") throw new NativeBuildError("native-save-pending");
+      journal.removal = "intent";
+      await persist(path, journal);
       await awaitProviderResponse(
         () => this.#options.api.deleteSnapshot(artifact.identity.name),
         signal,
@@ -1071,6 +1092,8 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
           (await this.#getSnapshot(artifact.identity.name, signal)) === null ? true : undefined,
         signal,
       );
+      journal.removal = "complete";
+      await persist(path, journal);
       return { ok: true, value: "deleted" };
     } catch (error) {
       return { ok: false, error: failure(error) };
