@@ -60,7 +60,7 @@ before starting its replacement over the same named volumes. Explicitly stopped 
 stopped against `cause: "use"`. Restart after failure has no workspace dependency. Observations
 include when health was checked. Backup streams a read-only tar of a named volume only after the
 provider confirms the instance stopped. Archive retains volumes. There is no implicit volume
-deletion and this contract adds no purge operation.
+deletion. Only the explicit caller-owned purge below deletes retained data.
 
 The caller binding, service port, callback port and existing volume mappings are immutable. New
 volumes may be added with additional storage admission. Changing a network binding needs a new
@@ -125,3 +125,35 @@ retains the declared storage charge. This avoids undercounting after ambiguous p
 
 The existing Docker workspace-instance path remains separate from caller reach. It is unsuitable for
 Mend because a workspace network would expose the gateway and tie its lifetime to sessions.
+
+## Explicit purge, 2026-11-05
+
+Mend must remove an organization's Executor OAuth tokens, including those in its retained data
+volume. Add `instances.purge(key, { expectedInstanceId: instance.id })`, backed by
+`POST /v1/resource-domains/:resourceDomainId/instances/:key/purge`. The result is
+`{ kind: "purged" | "already-purged" }`. This operation applies only to organization and instance
+scopes with caller reach. Project scope behavior stays unchanged.
+
+The instance must already be stopped or archived. Refuse a running desired state, a provider that
+still has a workload, and a different instance id before deleting data. Requiring the observed id
+prevents a delayed retry from deleting a new instance that reuses the application key. An absent key
+returns already-purged after scope authorization; no tombstone or old secret-bearing instance row is
+retained. The key can subsequently create a new instance with a new id.
+
+Use the same instance advisory lock as up, reconciliation and the entire backup stream. After a
+fresh stopped check, atomically fence the instance as archived and clear its sealed env and secret
+revision before provider deletion. A partial failure leaves that archived record and all storage
+charges for an explicit retry. It cannot be restarted. Delete exact provider objects idempotently,
+confirm removal, then release every recorded compute/storage allocation and delete the instance row
+in one transaction. No database transaction spans provider I/O. Repeated deletion accepts absent
+objects but never hides permission or provider errors.
+
+Docker removes the workload, namespace anchor, transient guard/probe/backup containers, callback
+allow rule, dedicated networks and retained named volumes. Kubernetes removes the StatefulSet,
+service pod, backup pod/policy, Service, Secret, NetworkPolicy and retained PVCs, waiting for
+termination/deletion before reporting success. No caller-owned volume backups are stored by Core:
+backup is a tar stream, and purge removes any abandoned helper. Copies downloaded by Mend or an
+operator, external snapshots and database/WAL backups are outside this operation. Provider removal
+is not a guarantee of physical media sanitization. Kubernetes storage must use Delete reclaim policy
+for its underlying data to be reclaimed; a Retain-bound claim is refused rather than leaving its
+volume behind. Live Kubernetes acceptance belongs to SLNT-544.

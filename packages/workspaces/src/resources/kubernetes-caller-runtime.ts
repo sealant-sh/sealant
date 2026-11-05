@@ -15,6 +15,7 @@ import {
 } from "@kubernetes/client-node";
 import {
   resourceInstanceSecretEnvSchema,
+  ResourceInstancePurgeRefusedError,
   type ResourceInstanceState,
 } from "@sealant/api-contracts";
 import type { CredentialCipherService } from "@sealant/credentials";
@@ -32,6 +33,12 @@ import type {
 } from "./docker-resource-runtime.js";
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+/** Exact deletion identity, stronger than an arbitrary Kubernetes API object. */
+type PurgeObject = {
+  readonly apiVersion: string;
+  readonly kind: string;
+  readonly metadata: { readonly name: string; readonly namespace: string };
+};
 const notFound = (error: unknown): boolean =>
   typeof error === "object" && error !== null && "code" in error && error.code === 404;
 const privateRanges = [
@@ -236,6 +243,103 @@ export class KubernetesCallerRuntime implements ResourceRuntime {
       // eslint-disable-next-line preserve-caught-error -- Provider request bodies stay private.
       throw new Error("The Kubernetes service pod could not be observed.");
     }
+  }
+  private purgeObject(instance: ResourceInstanceRecord, kind: string, suffix = ""): PurgeObject {
+    return {
+      apiVersion:
+        kind === "StatefulSet"
+          ? "apps/v1"
+          : kind === "NetworkPolicy"
+            ? "networking.k8s.io/v1"
+            : "v1",
+      kind,
+      metadata: {
+        name: `${callerInstanceName(instance.id)}${suffix}`,
+        namespace: this.options.namespace,
+      },
+    };
+  }
+  /** Claim refs survive PVC deletion, allowing a retry to find a volume still reclaiming. */
+  private async purgeVolumes(instance: ResourceInstanceRecord): Promise<ReadonlyArray<string>> {
+    const names = new Set(
+      [...instance.spec.volumes, ...instance.volumes].map(
+        (volume) => `${callerInstanceName(instance.id)}-${volume.name}`,
+      ),
+    );
+    const volumes = (await this.core.listPersistentVolume()).items.filter(
+      (volume) =>
+        volume.spec?.claimRef?.namespace === this.options.namespace &&
+        names.has(volume.spec.claimRef.name ?? ""),
+    );
+    if (volumes.some((volume) => volume.spec?.persistentVolumeReclaimPolicy !== "Delete"))
+      throw new ResourceInstancePurgeRefusedError({
+        message:
+          "Purge requires Delete reclaim policy on every bound PersistentVolume. A Retain volume would keep the service data.",
+      });
+    return volumes.flatMap((volume) =>
+      volume.metadata?.name === undefined ? [] : [volume.metadata.name],
+    );
+  }
+  private async removeConfirmed(object: PurgeObject): Promise<void> {
+    await this.remove(object);
+    const deadline = Date.now() + 120_000;
+    for (;;) {
+      try {
+        await this.objects.read(object);
+      } catch (error) {
+        if (notFound(error)) return;
+        // eslint-disable-next-line preserve-caught-error -- Provider responses may contain secrets.
+        throw new Error("The purged Kubernetes object could not be observed.");
+      }
+      if (Date.now() >= deadline)
+        throw new Error("A purged Kubernetes object is still terminating. Retry purge.");
+      await delay(1000);
+    }
+  }
+  /** A stopped database record is insufficient if a pod or active controller still exists. */
+  public async checkPurge(instance: ResourceInstanceRecord): Promise<void> {
+    if (
+      instance.spec.reach?.kind !== "caller" ||
+      instance.desired === "running" ||
+      (await this.pod(`${callerInstanceName(instance.id)}-0`)) !== undefined
+    )
+      throw new ResourceInstancePurgeRefusedError({
+        message: "Stop or archive the caller instance before purging it.",
+      });
+    try {
+      const controller = await this.objects.read<V1StatefulSet>(
+        this.purgeObject(instance, "StatefulSet"),
+      );
+      if (controller.spec?.replicas !== 0)
+        throw new ResourceInstancePurgeRefusedError({
+          message: "The caller StatefulSet must have zero replicas before purge.",
+        });
+    } catch (error) {
+      if (!notFound(error)) throw error;
+    }
+    await this.purgeVolumes(instance);
+  }
+  /** Confirm all owned objects and Delete-policy storage removed; missing objects are retries. */
+  public async purge(instance: ResourceInstanceRecord): Promise<void> {
+    await this.checkPurge(instance);
+    await this.removeConfirmed(this.purgeObject(instance, "StatefulSet"));
+    await this.removeConfirmed(this.purgeObject(instance, "Pod", "-0"));
+    await this.removeConfirmed(this.purgeObject(instance, "Pod", "-backup"));
+    await this.removeConfirmed(this.purgeObject(instance, "Secret"));
+    await this.removeConfirmed(this.purgeObject(instance, "Service"));
+    const volumes = new Set(
+      [...instance.spec.volumes, ...instance.volumes].map((volume) => volume.name),
+    );
+    for (const volume of volumes)
+      await this.removeConfirmed(this.purgeObject(instance, "PersistentVolumeClaim", `-${volume}`));
+    const deadline = Date.now() + 120_000;
+    while ((await this.purgeVolumes(instance)).length > 0) {
+      if (Date.now() >= deadline)
+        throw new Error("Purged storage is still reclaiming. Retry purge.");
+      await delay(1000);
+    }
+    await this.removeConfirmed(this.purgeObject(instance, "NetworkPolicy", "-backup"));
+    await this.removeConfirmed(this.purgeObject(instance, "NetworkPolicy"));
   }
   /** Refuses a missing binding or unenforced policy before writing desired state. */
   public validateCaller(spec: ResourceInstanceRecord["spec"]): void {

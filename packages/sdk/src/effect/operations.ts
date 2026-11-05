@@ -54,6 +54,7 @@ import type {
   UpResourceInstanceRequest,
 } from "@sealant/api-contracts";
 import {
+  ResourceInstanceId,
   ResourceInstanceKey,
   ResourceReachAliases,
   ResourceWorktreeKey,
@@ -504,6 +505,24 @@ export const archiveResourceInstanceOp = (resourceDomainId: string, key: string)
       params: { resourceDomainId, key: checked },
     }),
   );
+
+export const purgeResourceInstanceOp = (
+  resourceDomainId: string,
+  key: string,
+  expectedInstanceId: string,
+) =>
+  Effect.flatMap(
+    Effect.all([
+      SealantApiClient,
+      instanceKey(key),
+      Effect.try(() => ResourceInstanceId.make(expectedInstanceId)),
+    ]),
+    ([client, checked, id]) =>
+      client.resourceInstances.purgeResourceInstance({
+        params: { resourceDomainId, key: checked },
+        payload: { expectedInstanceId: id },
+      }),
+  ).pipe(Effect.provideService(CurrentRequestPriority, "interactive"));
 
 export const linkResourceWorkspaceOp = (
   resourceDomainId: string,

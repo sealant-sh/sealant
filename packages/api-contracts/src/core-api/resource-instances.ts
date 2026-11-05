@@ -314,6 +314,15 @@ export const stopResourceInstanceRequestSchema = Schema.Struct({
 });
 export type StopResourceInstanceRequest = typeof stopResourceInstanceRequestSchema.Type;
 
+/** Bind irreversible deletion to an observed instance, even if its application key is reused. */
+export const purgeResourceInstanceRequestSchema = Schema.Struct({
+  expectedInstanceId: ResourceInstanceId,
+});
+export const resourceInstancePurgeResultSchema = Schema.Struct({
+  kind: Schema.Literals(["purged", "already-purged"]),
+});
+export type ResourceInstancePurgeResult = typeof resourceInstancePurgeResultSchema.Type;
+
 const Timestamp = Schema.String;
 
 export const resourceInstanceSchema = Schema.Struct({
@@ -406,6 +415,13 @@ export class ResourceRuntimeUnsupportedError extends Schema.TaggedError<Resource
 /** The key names an archived instance: it stays archived, and its volumes are kept. */
 export class ResourceInstanceArchivedError extends Schema.TaggedError<ResourceInstanceArchivedError>()(
   "ResourceInstanceArchivedError",
+  { message: Schema.String },
+  { httpApiStatus: 409 },
+) {}
+
+/** Purge requires a caller-owned, stopped instance with the expected identity. */
+export class ResourceInstancePurgeRefusedError extends Schema.TaggedError<ResourceInstancePurgeRefusedError>()(
+  "ResourceInstancePurgeRefusedError",
   { message: Schema.String },
   { httpApiStatus: 409 },
 ) {}
@@ -523,6 +539,14 @@ export const ResourceInstancesGroup = HttpApiGroup.make("resourceInstances")
         volumes: Schema.Array(resourceInstanceArchivedVolumeSchema),
       }),
       error: [...baseErrors, ResourceInstanceNotFoundError, ResourceRuntimeUnsupportedError],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("purgeResourceInstance", "/:resourceDomainId/instances/:key/purge", {
+      params: instanceParams,
+      payload: purgeResourceInstanceRequestSchema,
+      success: resourceInstancePurgeResultSchema,
+      error: [...baseErrors, ResourceInstancePurgeRefusedError],
     }),
   )
   .add(

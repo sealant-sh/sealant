@@ -90,6 +90,10 @@ export interface ObservedContainer {
 }
 
 export interface ResourceRuntime {
+  /** Fresh stopped/provider-policy check before fencing an irreversible caller purge. */
+  readonly checkPurge?: (instance: ResourceInstanceRecord) => Promise<void>;
+  /** Delete caller resources and retained data, confirming absence. Never stops a running workload. */
+  readonly purge?: (instance: ResourceInstanceRecord) => Promise<void>;
   /** False when this provider must leave legacy workspace-instance records untouched. */
   readonly workspaceReach?: boolean;
   /** Provider configuration checks performed before writing desired state. */
@@ -526,6 +530,14 @@ export class DockerResourceRuntime implements ResourceRuntime {
     volume: string,
   ): Promise<ReadableStream<Uint8Array>> {
     return this.caller.backup(instance, volume);
+  }
+
+  public checkPurge(instance: ResourceInstanceRecord): Promise<void> {
+    return this.caller.checkPurge(instance);
+  }
+
+  public purge(instance: ResourceInstanceRecord): Promise<void> {
+    return this.caller.purge(instance);
   }
 
   public exec(

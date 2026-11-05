@@ -18,6 +18,8 @@ type AccountingError =
 
 /** Admission and confirmed provider outcomes share one ledger policy across API and worker. */
 export interface ResourceAccounting {
+  /** Confirm all provider data removed, before deleting the instance in the same transaction. */
+  readonly purged: (instance: ResourceInstanceRecord) => Effect.Effect<void, AccountingError>;
   readonly admit: (
     instance: ResourceInstanceRecord,
   ) => Effect.Effect<ResourceInstanceRecord, AccountingError>;
@@ -40,7 +42,7 @@ export const makeResourceAccounting = (
   const record = (
     instance: ResourceInstanceRecord,
     allocation: ResourceInstanceAllocation,
-    event: "created" | "stopped" | "archived",
+    event: "created" | "stopped" | "archived" | "purged",
   ) =>
     Effect.gen(function* () {
       let outcome = yield* budgets.record({
@@ -176,5 +178,13 @@ export const makeResourceAccounting = (
         );
       }),
     );
-  return { admit, created, stopped };
+  const purged = (instance: ResourceInstanceRecord) =>
+    repo.transaction(
+      Effect.gen(function* () {
+        for (const allocation of instance.allocations ?? [])
+          yield* record(instance, allocation, allocation.use === "compute" ? "stopped" : "purged");
+        yield* save(instance, []);
+      }),
+    );
+  return { admit, created, stopped, purged };
 };

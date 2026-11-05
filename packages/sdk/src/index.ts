@@ -50,6 +50,7 @@ export type {
   ScopeInstanceSpec,
   ScopeInstanceState,
   ScopeInstanceStopReason,
+  ScopeInstancePurgeResult,
   ScopeWorkspaces,
 } from "./scope-instances.js";
 // The workspace environment policy (`CreateOptions.env` validation) is public API: downstream

@@ -28,8 +28,8 @@ export type ResourceInstanceDesired = (typeof resourceInstanceDesiredValues)[num
 /**
  * A long-running container a resource domain runs (`@sealant/api-contracts`
  * `resource-instances.ts`). `desired` is what was asked of it and `observed` what Core last saw.
- * Its volumes outlive it: archiving removes the container and keeps every volume, and nothing in
- * Core deletes one.
+ * Archiving removes the container and retains every volume. Only an explicit caller-owned purge
+ * deletes retained data.
  */
 export const resourceInstances = pgTable(
   "resource_instances",

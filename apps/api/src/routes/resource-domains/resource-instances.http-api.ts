@@ -4,6 +4,7 @@ import { HttpApiBuilder } from "effect/http-api";
 import {
   archiveResourceDomain,
   archiveResourceInstance,
+  purgeResourceInstance,
   getResourceInstance,
   linkResourceWorkspace,
   listResourceInstances,
@@ -30,6 +31,9 @@ export const ResourceInstancesHandlersLive = HttpApiBuilder.group(
       )
       .handle("archiveResourceInstance", ({ params }) =>
         archiveResourceInstance(params.resourceDomainId, params.key),
+      )
+      .handle("purgeResourceInstance", ({ params, payload }) =>
+        purgeResourceInstance(params.resourceDomainId, params.key, payload.expectedInstanceId),
       )
       .handle("linkResourceWorkspace", ({ params, payload }) =>
         linkResourceWorkspace(

@@ -3,6 +3,7 @@ import { request } from "node:http";
 
 import {
   resourceInstanceSecretEnvSchema,
+  ResourceInstancePurgeRefusedError,
   type ResourceInstanceState,
 } from "@sealant/api-contracts";
 import type { CredentialCipherService } from "@sealant/credentials";
@@ -494,6 +495,35 @@ export class DockerCallerRuntime {
     const workload = `${callerInstanceName(instance.id)}-workload`;
     if (await this.exists("container", workload)) await this.run(["stop", "-t", "60", workload]);
     if (await this.running(workload)) throw new Error("The caller instance has not stopped.");
+  }
+  /** A desired stop alone cannot authorize deleting a workload still running in Docker. */
+  public async checkPurge(instance: ResourceInstanceRecord): Promise<void> {
+    if (
+      instance.spec.reach?.kind !== "caller" ||
+      instance.desired === "running" ||
+      (await this.running(`${callerInstanceName(instance.id)}-workload`))
+    )
+      throw new ResourceInstancePurgeRefusedError({
+        message: "Stop or archive the caller instance before purging it.",
+      });
+  }
+  /** Exact owned names only. Missing objects are successful retries; other errors keep the row. */
+  public async purge(instance: ResourceInstanceRecord): Promise<void> {
+    await this.checkPurge(instance);
+    const name = callerInstanceName(instance.id);
+    for (const suffix of ["backup", "probe", "guard", "caller-guard"]) {
+      const helper = `${name}-${suffix}`;
+      if (await this.exists("container", helper)) await this.run(["rm", "-f", helper]);
+    }
+    await this.archive(instance);
+    const volumes = new Set(
+      [...instance.spec.volumes, ...instance.volumes].map((volume) => volume.name),
+    );
+    for (const volume of volumes) {
+      const owned = `${name}-${volume}`;
+      if (await this.exists("volume", owned)) await this.run(["volume", "rm", owned]);
+      if (await this.exists("volume", owned)) throw new Error("The purged volume still exists.");
+    }
   }
   /** Removes only the workload and anchor; every retained named volume stays. */
   public async archive(instance: ResourceInstanceRecord): Promise<ReadonlyArray<ArchivedVolume>> {

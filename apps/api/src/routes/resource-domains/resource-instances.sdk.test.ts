@@ -60,8 +60,13 @@ const recordingRuntime = () => {
     exec: [] as Array<ResourceExecCommand>,
     attach: [] as Array<{ readonly executor: string; readonly aliases: ReadonlyArray<string> }>,
     detach: [] as Array<string>,
+    purge: [] as Array<string>,
   };
   const runtime: ResourceRuntime = {
+    checkPurge: async () => undefined,
+    purge: async (instance) => {
+      calls.purge.push(instance.id);
+    },
     up: async (instance, attachments) => {
       calls.up.push({ key: instance.key, attachments });
       const startedAt = new Date();
@@ -382,4 +387,86 @@ describe.skipIf(DATABASE_URL === undefined)("a scope's instances through the SDK
       "Resource instances require Docker or Kubernetes; this Sealant runs kubernetes.",
     );
   });
+
+  it("keeps project-owned scopes outside the irreversible purge contract", async () => {
+    const scope = await newScope();
+    const instance = await scope.instances.up("db", postgres, { cause: "person" });
+    await scope.instances.stop("db", { kind: "person", by: "test" });
+    await expect(
+      scope.instances.purge("db", { expectedInstanceId: instance.id }),
+    ).rejects.toMatchObject({
+      code: "ResourceInstancePurgeRefusedError",
+    });
+    expect((await scope.instances.get("db")).id).toBe(instance.id);
+  });
+
+  it.each(["organization", "instance"] as const)(
+    "purges %s scopes and commits budget release with row deletion",
+    async (ownerKind) => {
+      const scope = sealant.scopes.actAs(
+        (
+          await sealant.scopes.ensure({
+            key: `coresvc:purge:${randomUUID()}`,
+            ownerKind,
+            budget: { cpuMillicores: 1000, memoryBytes: 512 * 1024 * 1024, storageBytes: 4096 },
+          })
+        ).id,
+      );
+      const spec: ScopeInstanceSpec = {
+        ...postgres,
+        idleStopAfterSeconds: null,
+        reach: { kind: "caller", caller: "mend", port: 4400, callbackPort: 4401 },
+        volumes: [{ name: "data", mountPath: "/app/data", storageBytes: 4096 }],
+      };
+      const instance = await scope.instances.up("executor", spec, {
+        cause: "person",
+        secretEnv: { TOKEN: "synthetic-purge-token" },
+      });
+      await expect(
+        scope.instances.purge("executor", { expectedInstanceId: instance.id }),
+      ).rejects.toMatchObject({ code: "ResourceInstancePurgeRefusedError" });
+      await scope.instances.stop("executor", { kind: "person", by: "remove org" });
+      const name = `coresvc_purge_${randomUUID().replaceAll("-", "")}`;
+      const sql = (statement: string) => Effect.runPromise(db.$client.unsafe(statement));
+      await sql(
+        `create function ${name}() returns trigger language plpgsql as $$ begin raise exception 'synthetic purge delete failure'; end $$`,
+      );
+      try {
+        await sql(
+          `create trigger ${name} before delete on resource_instances for each row when (old.id = '${instance.id}') execute function ${name}()`,
+        );
+        try {
+          await expect(
+            scope.instances.purge("executor", { expectedInstanceId: instance.id }),
+          ).rejects.toMatchObject({ code: "ResourceDomainInternalServerError" });
+          expect((await scope.budget.get()).storageBytes.used).toBe(4096);
+          const rows = await sql(
+            `select secret_env_sealed, secret_revision, desired from resource_instances where id = '${instance.id}'`,
+          );
+          expect(rows).toEqual([
+            { secret_env_sealed: null, secret_revision: null, desired: "archived" },
+          ]);
+          await expect(
+            scope.instances.up("executor", spec, { cause: "person" }),
+          ).rejects.toMatchObject({ code: "ResourceInstanceArchivedError" });
+        } finally {
+          await sql(`drop trigger ${name} on resource_instances`);
+        }
+        expect(
+          await scope.instances.purge("executor", { expectedInstanceId: instance.id }),
+        ).toEqual({ kind: "purged" });
+        expect(
+          await scope.instances.purge("executor", { expectedInstanceId: instance.id }),
+        ).toEqual({ kind: "already-purged" });
+        expect((await scope.budget.get()).storageBytes.used).toBe(0);
+        expect((await scope.budget.get()).memoryBytes.used).toBe(0);
+        expect(await sql(`select id from resource_instances where id = '${instance.id}'`)).toEqual(
+          [],
+        );
+        expect(recorded.calls.purge.filter((id) => id === instance.id)).toHaveLength(2);
+      } finally {
+        await sql(`drop function ${name}()`);
+      }
+    },
+  );
 });

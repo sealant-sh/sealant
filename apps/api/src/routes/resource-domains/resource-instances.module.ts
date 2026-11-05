@@ -17,6 +17,7 @@ import {
   ResourceInstanceBudgetError,
   ResourceInstanceArchivedError,
   ResourceInstanceNotFoundError,
+  ResourceInstancePurgeRefusedError,
   ResourceInstanceSpecRefusedError,
   ResourceRuntimeUnsupportedError,
   ResourceWorkspaceLinkedElsewhereError,
@@ -25,6 +26,8 @@ import {
   ResourceWorktreeKey,
   type ResourceInstanceArchivedVolumeWire,
   type ResourceInstanceKey,
+  type ResourceInstanceId,
+  type ResourceInstancePurgeResult,
   type ResourceInstanceUpCause,
   type ResourceInstanceWire,
   type ResourceWorkspaceLinkWire,
@@ -92,6 +95,19 @@ const docker = <A>(what: string, call: () => Promise<A>) =>
       new ResourceDomainInternalServerError({
         message: `The runtime could not ${what}: ${dockerFailureReason(error)}`,
       }),
+  });
+
+// Provider errors can contain credentials. Only the typed, deliberately public refusal escapes.
+const purgeProvider = (call: () => Promise<void>) =>
+  Effect.tryPromise({
+    try: call,
+    catch: (error) =>
+      error instanceof ResourceInstancePurgeRefusedError
+        ? error
+        : new ResourceDomainInternalServerError({
+            message:
+              "The runtime could not finish the instance purge. Retry purge to finish cleanup.",
+          }),
   });
 
 const requireDomain = (resourceDomainId: string) =>
@@ -471,6 +487,65 @@ const archiveResourceInstanceUnlocked = (resourceDomainId: string, key: Resource
     return { instance: toInstanceWire(archived.instance), volumes: archived.volumes };
   });
 
+const purgeResourceInstanceUnlocked = (
+  resourceDomainId: string,
+  key: ResourceInstanceKey,
+  expectedInstanceId: ResourceInstanceId,
+) =>
+  Effect.gen(function* () {
+    const domain = yield* requireDomain(resourceDomainId);
+    if (domain.ownerKind === "project")
+      return yield* new ResourceInstancePurgeRefusedError({
+        message: "Purge is available only for organization and instance scopes.",
+      });
+    const repo = yield* ResourceInstanceRepo;
+    const instance = yield* repo
+      .get(resourceDomainId, key)
+      .pipe(Effect.mapError(internal("Failed to load the instance for purge.")));
+    if (instance === undefined)
+      return { kind: "already-purged" } satisfies ResourceInstancePurgeResult;
+    if (instance.id !== expectedInstanceId)
+      return yield* new ResourceInstancePurgeRefusedError({
+        message: "The instance identity changed. Observe the current instance before purging it.",
+      });
+    if (instance.desired === "running" || instance.spec.reach?.kind !== "caller")
+      return yield* new ResourceInstancePurgeRefusedError({
+        message: "Stop or archive the caller instance before purging it.",
+      });
+    const runtime = yield* requireDockerRuntime;
+    if (runtime.checkPurge === undefined || runtime.purge === undefined)
+      return yield* new ResourceRuntimeUnsupportedError({
+        message: "This runtime does not support caller-instance purge.",
+        runtime: "caller-purge",
+      });
+    const { checkPurge, purge } = runtime;
+    yield* purgeProvider(() => checkPurge.call(runtime, instance));
+    const prepared = yield* repo
+      .preparePurge(instance.id)
+      .pipe(Effect.mapError(internal("Failed to fence the instance and clear its sealed env.")));
+    if (prepared === undefined)
+      return yield* new ResourceInstancePurgeRefusedError({
+        message: "The instance is no longer stopped.",
+      });
+    yield* purgeProvider(() => purge.call(runtime, prepared));
+    const budgets = yield* ResourceDomainRepo;
+    yield* repo
+      .transaction(
+        Effect.gen(function* () {
+          yield* makeResourceAccounting(repo, budgets).purged(prepared);
+          yield* repo.delete(prepared.id);
+        }),
+      )
+      .pipe(
+        Effect.mapError(
+          internal(
+            "The provider data was removed, but purge accounting could not commit. Retry purge.",
+          ),
+        ),
+      );
+    return { kind: "purged" } satisfies ResourceInstancePurgeResult;
+  });
+
 export const linkResourceWorkspace = (
   resourceDomainId: string,
   workspaceId: string,
@@ -593,6 +668,9 @@ export const stopResourceInstance = (...args: Parameters<typeof stopResourceInst
 export const archiveResourceInstance = (
   ...args: Parameters<typeof archiveResourceInstanceUnlocked>
 ) => locked(args[0], args[1], archiveResourceInstanceUnlocked(...args));
+
+export const purgeResourceInstance = (...args: Parameters<typeof purgeResourceInstanceUnlocked>) =>
+  locked(args[0], args[1], purgeResourceInstanceUnlocked(...args));
 
 export const getResourceInstance = (...args: Parameters<typeof getResourceInstanceUnlocked>) =>
   locked(args[0], args[1], getResourceInstanceUnlocked(...args));
