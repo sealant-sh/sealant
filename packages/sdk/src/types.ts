@@ -41,8 +41,11 @@ export type RequestPriority = "normal" | "interactive";
  * when the Effect core lands.
  */
 export interface SealantConfig {
-  /** Default request priority. Session input and workspace stop use interactive priority. */
-  readonly requestPriority?: RequestPriority;
+  /**
+   * Request priority, resolved at each HTTP dispatch. A configured value or provider overrides
+   * operation defaults. When unset, requests use normal priority and controls use interactive.
+   */
+  readonly requestPriority?: RequestPriority | (() => RequestPriority);
   /** Base URL of the Sealant control-plane API (e.g. `http://localhost:8080`). */
   readonly baseUrl: string;
   /**

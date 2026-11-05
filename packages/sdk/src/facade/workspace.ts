@@ -461,6 +461,7 @@ const olderControlPlaneRefusal = (
 
 export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace => {
   const endpoint: ForwardEndpoint = {
+    requestPriority: ctx.config.requestPriority,
     baseUrl: ctx.config.baseUrl,
     apiKey: ctx.config.apiKey,
     ownerUserId: ctx.config.hostLocal.ownerUserId,

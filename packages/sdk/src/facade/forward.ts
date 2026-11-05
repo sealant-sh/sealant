@@ -8,16 +8,19 @@ import {
 import { Option, Schema } from "effect";
 
 import { ForwardDialError } from "../errors.js";
+import { resolveRequestPriority } from "../internal/config.js";
 import type {
   BoundedForwardTarget,
   BoundedWorkspaceForward,
   BoundedWorkspaceForwardOptions,
+  SealantConfig,
   WorkspaceForward,
   WorkspaceForwardOptions,
 } from "../types.js";
 import { boundedForward } from "./bounded-forward.js";
 
 export interface ForwardEndpoint {
+  readonly requestPriority?: SealantConfig["requestPriority"];
   readonly baseUrl: string;
   readonly apiKey: string | undefined;
   readonly ownerUserId: string;
@@ -175,6 +178,7 @@ const failedHandshakeError = async (
   url: URL,
   origin: string,
   signal: AbortSignal,
+  requestPriority: SealantConfig["requestPriority"],
 ): Promise<ForwardDialError> => {
   const probe = new URL(url.pathname, url);
   probe.protocol = url.protocol === "wss:" ? "https:" : "http:";
@@ -183,8 +187,9 @@ const failedHandshakeError = async (
       reason: "transport-unavailable",
       message: `The forward could not open a WebSocket to ${origin}; ${detail}.`,
     });
+  const headers = { "x-sealant-request-priority": resolveRequestPriority(requestPriority) };
   try {
-    const response = await fetch(probe, { signal });
+    const response = await fetch(probe, { signal, headers });
     await response.body?.cancel();
     if (answeredLikeCoreBeforeV2(response.status)) {
       return new ForwardDialError({
@@ -292,7 +297,10 @@ export const openForwardV2 = (
       }
       if (phase !== "handshake") return;
       phase = "probing";
-      void failedHandshakeError(url, origin, probing.signal).then(fail);
+      void failedHandshakeError(url, origin, probing.signal, endpoint.requestPriority).then(
+        fail,
+        fail,
+      );
     });
   });
 };

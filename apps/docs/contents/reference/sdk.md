@@ -26,8 +26,14 @@ workspace or run. Failures while observing a completed write retain that context
 budget failure as their cause. The SDK does not automatically retry mutations. An SSE budget refusal
 reaches the caller instead of triggering an immediate polling fallback.
 
-The SDK sends `x-sealant-request-priority: normal` by default. `requestPriority` in the client
-configuration changes that default. Session input, resize, signal and close, plus workspace stop,
+The SDK sends `x-sealant-request-priority: normal` by default. The client configuration accepts
+`requestPriority: "normal" | "interactive" | (() => "normal" | "interactive")`. A configured value
+or callback overrides operation defaults, including interactive controls. The SDK evaluates the
+callback at each HTTP request dispatch, including SSE, resource exec and forward HTTP probes.
+Retained workspace, session and scope handles use the callback's current result. A callback that
+throws fails the caller's request without reporting a budget refusal.
+
+When `requestPriority` is unset, session input, resize, signal and close, plus workspace stop,
 restart, recovery, expiry and create cancellation, and resource instance stop use request-local
 interactive priority. Concurrent background requests keep their own priority. Browser WebSocket
 transports cannot set this header. Interactive requests can use the server's reserved capacity but

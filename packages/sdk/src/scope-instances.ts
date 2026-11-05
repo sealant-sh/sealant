@@ -22,7 +22,7 @@ import {
 } from "./effect/operations.js";
 import type { SdkRuntime } from "./effect/runtime.js";
 import { SealantApiError, SealantBudgetExceededError, SealantError } from "./errors.js";
-import type { SealantInternalConfig } from "./internal/config.js";
+import { resolveRequestPriority, type SealantInternalConfig } from "./internal/config.js";
 import { toSealantError } from "./internal/map-error.js";
 
 /**
@@ -286,7 +286,7 @@ const exec = async (
     method: "POST",
     headers: {
       "content-type": "application/octet-stream",
-      "x-sealant-request-priority": config.requestPriority ?? "normal",
+      "x-sealant-request-priority": resolveRequestPriority(config.requestPriority),
       ...(config.apiKey === undefined ? {} : { authorization: `Bearer ${config.apiKey}` }),
     },
     body: execBody(frame, options.stdin),

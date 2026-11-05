@@ -17,7 +17,7 @@ export interface SealantHostLocalConfig {
 }
 
 export interface SealantInternalConfig {
-  readonly requestPriority?: RequestPriority;
+  readonly requestPriority?: SealantConfig["requestPriority"];
   readonly baseUrl: string;
   readonly apiKey: string | undefined;
   readonly fetch: typeof fetch | undefined;
@@ -27,6 +27,13 @@ export interface SealantInternalConfig {
 const DEFAULT_OWNER_USER_ID = "usr_local";
 // Must match the control-plane's REGISTRY_NAME (defaults to "default"); the API 404s otherwise.
 const DEFAULT_REGISTRY_ID = "default";
+
+/** Resolve the caller's priority at dispatch, before falling back to the operation default. */
+export const resolveRequestPriority = (
+  configured: SealantConfig["requestPriority"],
+  operationDefault: RequestPriority = "normal",
+): RequestPriority =>
+  typeof configured === "function" ? configured() : (configured ?? operationDefault);
 
 const env = (key: string): string | undefined => {
   const value = process.env[key];

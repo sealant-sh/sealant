@@ -13,7 +13,7 @@ import { Context, Effect, Layer } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { HttpApiClient } from "effect/http-api";
 
-import type { SealantInternalConfig } from "../internal/config.js";
+import { resolveRequestPriority, type SealantInternalConfig } from "../internal/config.js";
 import type { RequestPriority } from "../types.js";
 
 /** A per-operation priority; providing it never changes concurrent requests. */
@@ -32,7 +32,7 @@ const buildControlPlaneClient = (config: SealantInternalConfig) => {
           const prioritized = HttpClientRequest.setHeader(
             request,
             "x-sealant-request-priority",
-            priority ?? config.requestPriority ?? "normal",
+            resolveRequestPriority(config.requestPriority, priority),
           );
           return config.apiKey === undefined
             ? prioritized
