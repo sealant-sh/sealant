@@ -21,3 +21,5 @@ export * from "./workspaces/payloads.js";
 export * from "./workspaces/workspace-publication.js";
 export * from "./workspaces/microvm-image-reference.js";
 export * from "./workspaces/boat-support.js";
+
+export * from "./workspaces/boat-execution.js";

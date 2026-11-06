@@ -72,7 +72,8 @@ installed or externalized built-ins available. No guard exception was introduced
 ## Private installation
 
 `GET /sealant/bootstrap/status` returns identity, boot, accepted epoch and stage, always with
-`admission: held` and `execution: unavailable`. It returns no file contents or fingerprints.
+`admission: held`. Before invocation it reports `execution: unavailable`; the invocation owner can
+also report issued, running, ended or unresolved. It returns no file contents or fingerprints.
 
 `POST /sealant/bootstrap/stage` accepts authenticated JSON with exactly `format`, `identity`,
 `boot_id`, `epoch`, `operation_id` and `files`. Its format is `sealant-admission-stage-v1`. Each
@@ -90,9 +91,10 @@ processes verify does the durable stage become `installed`.
 
 An exact same-boot replay converges. Any different payload, operation or epoch refuses after the
 first acceptance, even if the earlier request lost its response. A reboot cannot clear this disk
-barrier or restore missing tmpfs files under a new identity. There is no generic reset, start or
-close endpoint. Canonical close, preservation, recovery and a whole-daemon-invocation receipt must
-be implemented before a new writer is possible. Installation proves no scripts ran.
+barrier or restore missing tmpfs files under a new identity. There is no generic reset or close
+endpoint. The separate [whole-invocation owner](boat-worker-invocations.md) adds an authenticated
+start route gated by a current isolation permit; no production permit producer ships yet.
+Installation proves no scripts ran.
 
 ## Verification and remaining gates
 
@@ -101,8 +103,9 @@ replays, RSA encryption/decryption and the relay as source and bundled bytes. So
 packaging must include every new helper and reject modified assets. These checks establish local
 contracts, not live hosted transport or an end-to-end Boat session.
 
-Before registration, the executor still needs durable sealed exchange and allocation ownership,
-whole-invocation adoption, authenticated daemon readiness, resource isolation and the tunnel, FINAL
-settlement and writer exclusion, recovery and executable parking. Parking will run plain `sync`
-before stop as hygiene. User-work durability was established separately; sync is not a fix for
-Boat's handling of its own base systemd executable.
+The [worker exchange and invocation layer](boat-worker-invocations.md) owns sealed delivery and
+whole-invocation adoption. Before registration, the executor still needs allocation integration,
+authenticated daemon readiness, resource isolation and the tunnel, FINAL settlement and writer
+exclusion, recovery and executable parking. Parking will run plain `sync` before stop as hygiene.
+User-work durability was established separately; sync is not a fix for Boat's handling of its own
+base systemd executable.

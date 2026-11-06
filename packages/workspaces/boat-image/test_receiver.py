@@ -161,7 +161,7 @@ class ReceiverTests(unittest.TestCase):
                                          headers={'Content-Type': 'text/plain', 'Content-Length': '2'})[0], 409)
                 self.assertEqual(request('POST', '/sealant/bootstrap/stage',
                                          headers={'Content-Type': 'application/json', 'Content-Length': str(receiver.MAX_BODY + 1)})[0], 409)
-                self.assertEqual(request('POST', '/sealant/bootstrap/start')[0], 404)
+                self.assertEqual(request('POST', '/sealant/bootstrap/start')[0], 409)
         finally:
             server.shutdown()
             thread.join()
@@ -241,7 +241,10 @@ Buffer.from(v.ciphertext,'base64')))}catch{process.exitCode=2}});
             self.assertEqual(unit['Service']['NotifyAccess'], 'none')
         unit = configparser.ConfigParser(interpolation=None)
         unit.read(Path(__file__).with_name('workspace.service'))
-        self.assertEqual(unit['Service']['ExecStart'], '/bin/false')
+        self.assertIn('guest_invocation.py', unit['Service']['ExecStart'])
+        self.assertEqual(unit['Service']['Restart'], 'no')
+        self.assertEqual(unit['Unit']['ConditionPathExists'], '/run/sealant-bootstrap/execution-permit.json')
+        self.assertNotIn('Install', unit)
 
     def test_a_previous_inspection_cannot_return_to_unbound_wait_or_reset_deadline(self):
         guest.save(self.root / 'manifest.json', {})

@@ -538,3 +538,10 @@ export {
   NativeCatalogStoreError,
   type NativePublicationRepoService,
 } from "./repositories/native-publications.js";
+
+export {
+  BoatExecutionRepo,
+  BoatExecutionRepoLive,
+  BoatExecutionStoreError,
+  type BoatExecutionRepoService,
+} from "./repositories/boat-executions.js";

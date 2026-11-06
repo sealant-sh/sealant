@@ -202,11 +202,12 @@ def parse_stage(value):
 
 
 def status():
+    from guest_invocation import observe
     control = current_control()
     state = disk_state()
     admission = state['admission']
     return {'format': 'sealant-receiver-status-v1', 'identity': state['identity'],
-            'boot_id': control['boot_id'], 'admission': 'held', 'execution': 'unavailable',
+            'boot_id': control['boot_id'], 'admission': 'held', 'execution': observe(),
             'epoch': admission['epoch'] if admission else None,
             'operation_id': admission['operation_id'] if admission else None,
             'stage': ('previous-boot' if admission['boot_id'] != control['boot_id'] else admission['status']) if admission else 'empty'}
@@ -257,6 +258,7 @@ def stage(value):
                 os.replace(temporary, path)
         for process in held:
             process.verify()
+        guest.save(RUNTIME / ('manifest-' + str(manifest['epoch']) + '.json'), manifest)
         guest.save(guest.ROOT / 'receiver.json', {**state, 'admission': {**admission, 'status': 'installed'}})
         return status()
     finally:
@@ -282,7 +284,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.command == 'GET' and self.path == '/sealant/bootstrap/status':
                     self.reply(200, status())
                     return
-                if self.command != 'POST' or self.path != '/sealant/bootstrap/stage':
+                if self.command != 'POST' or self.path not in ('/sealant/bootstrap/stage', '/sealant/bootstrap/start'):
                     self.reply(404, {'error': 'unknown-route'})
                     return
                 lengths = self.headers.get_all('Content-Length', [])
@@ -293,7 +295,11 @@ class Handler(BaseHTTPRequestHandler):
                 raw = self.rfile.read(int(lengths[0]))
                 if len(raw) != int(lengths[0]):
                     raise Refusal('incomplete-body')
-                self.reply(200, stage(json.loads(raw)))
+                if self.path == '/sealant/bootstrap/start':
+                    from guest_invocation import start
+                    self.reply(200, start(json.loads(raw)))
+                else:
+                    self.reply(200, stage(json.loads(raw)))
         except Refusal as error:
             self.reply(409, {'error': str(error)})
         except (ValueError, KeyError, TypeError, RecursionError):

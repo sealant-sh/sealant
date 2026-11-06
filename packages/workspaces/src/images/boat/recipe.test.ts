@@ -249,7 +249,9 @@ describe("native recipe boundary", () => {
       new URL("../../../boat-image/workspace.service", import.meta.url),
       "utf8",
     );
-    expect(unit).toContain("ExecStart=/bin/false");
+    expect(unit).toContain("guest_invocation.py");
+    expect(unit).toContain("ConditionPathExists=/run/sealant-bootstrap/execution-permit.json");
+    expect(unit).toContain("Restart=no");
     expect(unit).toContain("NotifyAccess=none");
     expect(unit).not.toContain("[Install]");
   });

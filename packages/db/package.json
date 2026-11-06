@@ -14,7 +14,8 @@
     "./testing/capture-preservation": "./src/testing/capture-preservation.ts",
     "./testing/credential-homes": "./src/testing/credential-homes.ts",
     "./testing/native-publications": "./src/testing/native-publications.ts",
-    "./testing/workspace-publications": "./src/testing/workspace-publications.ts"
+    "./testing/workspace-publications": "./src/testing/workspace-publications.ts",
+    "./testing/boat-executions": "./src/testing/boat-executions.ts"
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",

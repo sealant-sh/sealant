@@ -243,3 +243,14 @@ export type {
   MicrovmLaunchInput,
 } from "./runtime-adapter.js";
 export { parseMicrovmLaunchInput } from "./runtime-adapter.js";
+
+export {
+  BoatExecution,
+  BoatExecutionError,
+  BoatGuestTransportService,
+  boatExecutionLayer,
+  boatExecutionLayerNoDeps,
+  createBoatGuestTransport,
+  type BoatExecutionService,
+  type BoatGuestTransport,
+} from "./boat/execution.js";
