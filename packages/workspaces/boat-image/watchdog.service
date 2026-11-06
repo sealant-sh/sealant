@@ -1,0 +1,9 @@
+[Unit]
+Description=Sealant held boot deadline
+After=local-fs.target sealant-held.service
+
+[Service]
+Type=oneshot
+NotifyAccess=none
+UMask=0077
+ExecStart=/var/lib/sealant/guest/bundle/lib64/ld-linux-x86-64.so.2 --inhibit-cache --library-path /var/lib/sealant/guest/bundle/lib/x86_64-linux-gnu:/var/lib/sealant/guest/bundle/usr/lib/x86_64-linux-gnu:/var/lib/sealant/guest/bundle/usr/lib/x86_64-linux-gnu/systemd /var/lib/sealant/guest/bundle/usr/bin/python3 -I -S -B /var/lib/sealant/guest/guest_boot.py watchdog

@@ -1,15 +1,8 @@
 [Unit]
-Description=Sealant native session
-ConditionPathExists=/var/lib/sealant/control/launch.json
+Description=Sealant ordinary admission unavailable pending authenticated receiver
 
 [Service]
-Type=simple
-PrivateMounts=yes
-TemporaryFileSystem=/run:rw,nosuid,nodev
-BindReadOnlyPaths=/etc/resolv.conf
-ProtectControlGroups=yes
-KillMode=control-group
-TimeoutStopSec=5
-SendSIGKILL=yes
+Type=oneshot
+NotifyAccess=none
 Restart=no
-ExecStart=/usr/bin/unshare --mount --pid --fork --mount-proc --kill-child /usr/bin/python3 /usr/local/lib/sealant/workspace-launch.py
+ExecStart=/bin/false
