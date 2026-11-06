@@ -129,6 +129,12 @@ describe.skipIf(!directory)(
       });
       expect(f.mutations).toEqual(mutations);
     });
+    it("refuses an old base-image approval before save and removes its scratch VM", async () => {
+      const f = await fixture("legacy-guest-approval");
+      expect(await f.builder.build({ spec: f.spec })).toMatchObject({ ok: false });
+      expect(f.deleted()).toBe(true);
+      expect(f.posts()).toBe(0);
+    });
     it("cancels installation with an independent cleanup finalizer", async () => {
       const f = await fixture("cancel");
       expect(await f.builder.build({ spec: f.spec, signal: f.cancellation.signal })).toMatchObject({

@@ -40,6 +40,57 @@ import {
 } from "./runtime-bundle.js";
 
 const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
+const guestEvidenceSchema = z.object({
+  manifest: z.string().min(1),
+  manifestDigest: hashSchema,
+  constructionInputs: z.string().min(1),
+  constructionInputsDigest: hashSchema,
+  approval: z.object({
+    format: z.literal("sealant-source-profile-approval-v2"),
+    profile: z.literal("sealant-shipped-guest-v1"),
+    manifest_digest: hashSchema,
+    policy_digest: hashSchema,
+    semantic_checks: z.literal("passed-with-shipped-assets"),
+    semantic_receipt_digest: hashSchema,
+    source_boot_id: z.string().min(1),
+  }),
+});
+const checkGuestEvidence = (guest: z.infer<typeof guestEvidenceSchema>) => {
+  if (
+    sha256(guest.manifest) !== guest.manifestDigest ||
+    sha256(guest.constructionInputs) !== guest.constructionInputsDigest ||
+    guest.manifestDigest !== guest.approval.manifest_digest
+  )
+    throw new NativeBuildError("native-guest-manifest-mismatch");
+  z.object({
+    format: z.literal("sealant-guest-manifest-v1"),
+    files: z.record(
+      z.string(),
+      z.object({
+        sha256: hashSchema,
+        device: z.number().int(),
+        inode: z.number().int(),
+        uid: z.literal(0),
+        gid: z.literal(0),
+        mode: z.number().int(),
+      }),
+    ),
+    inputs: z.record(z.string(), hashSchema),
+    bundle_paths: z.array(z.string()).min(1),
+  }).parse(JSON.parse(guest.manifest));
+  z.object({
+    format: z.literal("sealant-bundle-inputs-v1"),
+    source_files: z.record(
+      z.string(),
+      z.object({
+        sha256: hashSchema,
+        mode: z.number().int(),
+      }),
+    ),
+    cache_policy: z.literal("source-only-zip-no-bytecode"),
+    stdlib: z.string(),
+  }).parse(JSON.parse(guest.constructionInputs));
+};
 const identitySchema = z.object({
   name: boatSnapshotNameSchema,
   sourceSandboxId: boatSandboxIdSchema,
@@ -600,6 +651,9 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       signal,
     );
     await command(
+      `/usr/bin/sudo python3 -I -S -B -c ${quote(`import json,os,pathlib; r=pathlib.Path('${recipe.guestRoot}'); r.mkdir(mode=0o700,parents=True,exist_ok=True); os.chmod(r,0o700); p=r/'instance.json'; p.write_text(json.dumps({'instance_id':'${id}','disk_lineage':'build:${journal.build}','boot_id':pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip()})); p.chmod(0o600)`)}`,
+    );
+    await command(
       `echo '${sha256(recipe.installScript)}  '${quote(stage + "/install.sh")} | sha256sum -c - >/dev/null\n/usr/bin/sudo /bin/bash ${quote(stage + "/install.sh")}`,
       600,
     );
@@ -611,13 +665,21 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
         .join("\n"),
     );
     const probe = parseWorkspaceImageProbe(
-      JSON.parse(await command(`/usr/bin/sudo cat ${IMAGE_PROBE_PATH}`)),
+      JSON.parse(await command(`/usr/bin/sudo cat ${recipe.mappedRoot}${IMAGE_PROBE_PATH}`)),
     );
     if (imagePersonLayoutSupport(probe).status !== "supported")
       throw new NativeBuildError("native-person-capabilities-unsupported");
+    const guest = guestEvidenceSchema.parse(
+      JSON.parse(
+        await command(
+          `/usr/bin/sudo python3 -I -S -B -c ${quote(`import hashlib,json,pathlib; r=pathlib.Path('${recipe.guestRoot}'); m=(r/'manifest.json').read_text().strip(); c=(r/'bundle-inputs.json').read_text(); h=lambda s:hashlib.sha256(s.encode()).hexdigest(); print(json.dumps({'manifest':m,'manifestDigest':h(m),'constructionInputs':c,'constructionInputsDigest':h(c),'approval':json.loads((r/'source-approval.json').read_text())}))`)}`,
+        ),
+      ),
+    );
+    checkGuestEvidence(guest);
     const receipt =
       JSON.stringify({
-        version: 2,
+        version: 3,
         ownership: journal.ownership,
         assetsHash: recipe.assetsHash,
         owner: journal.owner,
@@ -625,6 +687,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
         recipeHash: recipe.hash,
         runtime: recipe.runtime,
         substrate: recipe.substrate,
+        guest,
         probe,
       }) + "\n";
     await awaitProviderResponse(
@@ -633,7 +696,10 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
     );
     const receiptHash = sha256(receipt);
     await command(
-      `/usr/bin/sudo install -m600 ${quote(stage + "/receipt.json")} /etc/sealant/native-receipt.json\necho '${receiptHash}  /etc/sealant/native-receipt.json' | /usr/bin/sudo sha256sum -c - >/dev/null\nls -d ${quote(stage)}\nrm -rf ${quote(stage)}`,
+      `/usr/bin/sudo install -D -m600 ${quote(stage + "/receipt.json")} /etc/sealant/native-receipt.json\necho '${receiptHash}  /etc/sealant/native-receipt.json' | /usr/bin/sudo sha256sum -c - >/dev/null\nls -d ${quote(stage)}\nrm -rf ${quote(stage)}`,
+    );
+    await command(
+      `/usr/bin/sudo python3 -I -S -B -c ${quote(`import pathlib; r=pathlib.Path('${recipe.guestRoot}'); names=['instance.json','build-operation.json']; paths=[r/n for n in names]+list(r.glob('operation-*.json')); print('owned construction records',*[str(p) for p in paths]); [(p.unlink()) for p in paths if p.exists()]`)}`,
     );
     const capabilities = z
       .object({ supports: z.array(z.string()), daemonVersion: z.string().optional() })
@@ -873,7 +939,8 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       throw new NativeBuildError("native-publication-evidence-mismatch");
     const receipt = z
       .object({
-        version: z.literal(2),
+        version: z.union([z.literal(2), z.literal(3)]),
+        guest: guestEvidenceSchema.optional(),
         owner: z.uuid(),
         build: z.uuid(),
         recipeHash: hashSchema,
@@ -883,6 +950,10 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
         ownership: nativeBuildOwnershipSchema.optional(),
       })
       .parse(JSON.parse(evidence.receipt));
+    if (receipt.version === 3) {
+      if (receipt.guest === undefined) throw new NativeBuildError("native-guest-evidence-missing");
+      checkGuestEvidence(receipt.guest);
+    }
     if (
       receipt.owner !== journal.owner ||
       receipt.build !== journal.build ||

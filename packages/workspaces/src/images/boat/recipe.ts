@@ -1,10 +1,9 @@
-import { readFile } from "node:fs/promises";
-
 import type { WorkspaceBlueprint } from "@sealant/validators";
 import { z } from "zod";
 
 import { nativeWorkspaceInstallation } from "../../buildkit/buildkit-builder.js";
 import { nixDaemonStartCommands, NIX_PROFILE } from "../../buildkit/person-layout.js";
+import { readNativeAssets } from "./assets.js";
 import {
   NativeBuildError,
   sha256,
@@ -20,6 +19,14 @@ export const NATIVE_SUBSTRATE = {
   nixArchive: "https://releases.nixos.org/nix/nix-2.31.2/nix-2.31.2-x86_64-linux.tar.xz",
   nixSha256: "d1f67c86eed016214864ba08bfb9529c307aea7e8fafb74853f96fcc3bfd8a60",
   nixpkgs: "1d060086d60cb76a40cf37109f979d88a5bd6396",
+  systemd: {
+    version: "255.4-1ubuntu8.16",
+    snapshot: "https://snapshot.ubuntu.com/ubuntu/20260731T000000Z/",
+    index: "dists/noble-updates/main/binary-amd64/Packages.gz",
+    indexSha256: "f5272e19da9bf902d3e6ccb9878261086bad3cfbb4937f060984cfdc33b71b22",
+    package: "pool/main/s/systemd/systemd-container_255.4-1ubuntu8.16_amd64.deb",
+    sha256: "7ab146ac98bf9c6095935b37a906d589795105c301626f2fd5db6d0e77bd9472",
+  },
 } as const;
 
 /** Installed files carry their own bytes and checksum; no execution depends on an untracked file. */
@@ -42,9 +49,45 @@ export interface NativeRecipe {
   readonly runtime: NativeRuntimeIdentity;
   readonly assetsHash: string;
   readonly hash: string;
+  readonly mappedRoot: "/var/lib/sealant/workspace-root";
+  readonly guestRoot: "/var/lib/sealant/guest";
 }
 
 const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
+// Boat restores its base systemd executable. Keep its outer libraries at the same version.
+const systemdSnapshotDownload = `import gzip,hashlib,json,pathlib,sys,urllib.request
+pin=json.loads(sys.argv[1])
+def fetch(path, expected):
+    with urllib.request.urlopen(pin['snapshot']+path,timeout=60) as response:
+        raw=response.read(20_000_001)
+    if len(raw)>20_000_000 or hashlib.sha256(raw).hexdigest()!=expected:
+        raise ValueError('native-systemd-snapshot-digest-mismatch')
+    return raw
+index=gzip.decompress(fetch(pin['index'],pin['indexSha256'])).decode()
+entries=[dict(line.split(': ',1) for line in block.splitlines() if ': ' in line and not line.startswith(' ')) for block in index.split('\\n\\n') if block.startswith('Package: systemd-container\\n')]
+if len(entries)!=1 or any(entries[0].get(key)!=value for key,value in {'Version':pin['version'],'Filename':pin['package'],'SHA256':pin['sha256']}.items()):
+    raise ValueError('native-systemd-snapshot-package-mismatch')
+pathlib.Path(sys.argv[2]).write_bytes(fetch(pin['package'],entries[0]['SHA256']))
+`;
+const systemdBaseSetup = [
+  "mapfile -t systemd_packages < <(dpkg-query -W -f='${binary:Package} ${source:Package} ${db:Status-Status}\\n' | awk '$2 == \"systemd\" && $3 == \"installed\" {print $1}')",
+  'test "${#systemd_packages[@]}" -gt 0',
+  "systemd_versions=$(dpkg-query -W -f='${binary:Package}=${Version}\\n' \"${systemd_packages[@]}\")",
+  `test "$(printf '%s\\n' "$systemd_versions" | cut -d= -f2 | sort -u)" = ${quote(NATIVE_SUBSTRATE.systemd.version)}`,
+  ...["systemd", "systemd-sysv", "libsystemd0", "libsystemd-shared", "libudev1"].map(
+    (name) =>
+      `test "$(dpkg-query -W -f='\${Version}' ${name})" = ${quote(NATIVE_SUBSTRATE.systemd.version)}`,
+  ),
+  'apt-mark hold "${systemd_packages[@]}"',
+  "snapshot_directory=$(mktemp -d -t sealant-systemd.XXXXXX)",
+  'trap \'ls -la "$snapshot_directory"; rm -rf "$snapshot_directory"\' EXIT',
+  `python3 -I -S -B -c ${quote(systemdSnapshotDownload)} ${quote(JSON.stringify(NATIVE_SUBSTRATE.systemd))} "$snapshot_directory/systemd-container.deb"`,
+  "apt-get update",
+  'DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends debootstrap python3 uidmap "$snapshot_directory/systemd-container.deb"',
+  `test "$(dpkg-query -W -f='\${Version}' systemd-container)" = ${quote(NATIVE_SUBSTRATE.systemd.version)}`,
+  "apt-mark hold systemd-container",
+  'test "$systemd_versions" = "$(dpkg-query -W -f=\'${binary:Package}=${Version}\\n\' "${systemd_packages[@]}")"',
+];
 const NATIVE_NIX_DAEMON_READY_SECONDS = 90;
 const NATIVE_NIX_PROBE_SECONDS = 15;
 const file = (
@@ -63,8 +106,9 @@ const nixBootstrap = [
   `echo '${NATIVE_SUBSTRATE.nixSha256}  '"$d/nix.tar.xz" | sha256sum -c -`,
   'tar -xJf "$d/nix.tar.xz" -C "$d"',
   `"$d/nix-${NATIVE_SUBSTRATE.nix}-x86_64-linux/install" --daemon --yes --no-channel-add`,
-  "systemctl disable --now nix-daemon.socket nix-daemon.service",
-  "systemctl mask nix-daemon.socket nix-daemon.service",
+  "install -d /etc/systemd/system",
+  "ln -sfn /dev/null /etc/systemd/system/nix-daemon.socket",
+  "ln -sfn /dev/null /etc/systemd/system/nix-daemon.service",
   "! pgrep -x nix-daemon",
   'ls -d "$d"',
   'rm -rf "$d"',
@@ -76,80 +120,126 @@ const nixBootstrap = [
 export const createNativeRecipe = async (
   spec: WorkspaceBlueprint,
   bundle: Pick<VerifiedRuntimeBundle, "identity" | "files">,
+  options: { readonly assetsDirectory?: string } = {},
 ): Promise<NativeResult<NativeRecipe>> => {
   try {
     const shared = nativeWorkspaceInstallation(spec);
     const path = `/usr/local/bin:${shared.family === "nix" ? `${NIX_PROFILE}/bin:` : ""}/usr/sbin:/usr/bin:/sbin:/bin`;
     const bootEntries = [...shared.bootEntries, ["PATH", path] as const];
-    const [launcher, unit] = await Promise.all([
-      readFile(new URL("../../../boat-image/workspace-launch.py", import.meta.url)),
-      readFile(new URL("../../../boat-image/workspace.service", import.meta.url)),
-    ]);
+    const loaded = await readNativeAssets(options.assetsDirectory);
+    if (!loaded.ok) return loaded;
+    const asset = (name: string): Uint8Array => {
+      const bytes = loaded.value.get(name);
+      if (bytes === undefined) throw new NativeBuildError("native-packaged-asset-missing");
+      return bytes;
+    };
+    const guestRoot = "/var/lib/sealant/guest" as const;
+    const mappedRoot = "/var/lib/sealant/workspace-root" as const;
+    const guestCommand = `${guestRoot}/bundle/lib64/ld-linux-x86-64.so.2 --inhibit-cache --library-path ${guestRoot}/bundle/lib/x86_64-linux-gnu:${guestRoot}/bundle/usr/lib/x86_64-linux-gnu:${guestRoot}/bundle/usr/lib/x86_64-linux-gnu/systemd ${guestRoot}/bundle/usr/bin/python3 -I -S -B`;
+    const projectScript =
+      [
+        "#!/bin/bash",
+        "set -euo pipefail",
+        "umask 022",
+        "export HOME=/root",
+        "export NEEDRESTART_MODE=l",
+        "export PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "apt-get update",
+        "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl xz-utils ca-certificates procps",
+        ...(shared.family === "nix" ? nixBootstrap : []),
+        `export PATH=${quote(path)}`,
+        shared.shell,
+      ].join("\n") + "\n";
     const files = [
-      ...bundle.files().map((f) => file(f.path, f.bytes, "0755")),
-      file("/usr/local/lib/sealant/workspace-launch.py", launcher, "0755"),
-      file("/etc/systemd/system/sealant-workspace.service", unit, "0644"),
+      ...bundle
+        .files()
+        .map((entry) =>
+          file(
+            entry.path.endsWith("control-relay.cjs") ? entry.path : mappedRoot + entry.path,
+            entry.bytes,
+            "0755",
+          ),
+        ),
+      ...[
+        "guest_boot.py",
+        "guest_contract.py",
+        "build_guest.py",
+        "workspace-launch.py",
+        "boot-policy.json",
+      ].map((name) =>
+        file(`${guestRoot}/${name}`, asset(name), name === "workspace-launch.py" ? "0644" : "0600"),
+      ),
+      file("/etc/systemd/system/sealant-workspace.service", asset("workspace.service"), "0644"),
+      file("/etc/systemd/system/sealant-held.service", asset("held.service"), "0644"),
+      file("/etc/systemd/system/sealant-held-watchdog.service", asset("watchdog.service"), "0644"),
+      file("/etc/systemd/system/sealant-held-watchdog.timer", asset("watchdog.timer"), "0644"),
+      file(`${guestRoot}/project-install.sh`, projectScript, "0644"),
       file(
-        "/etc/sealant/native-boot.json",
+        `${mappedRoot}/etc/sealant/native-boot.json`,
         JSON.stringify(Object.fromEntries(bootEntries)) + "\n",
         "0600",
       ),
       file(
-        "/usr/local/lib/sealant/native-nix-start",
+        `${mappedRoot}/usr/local/lib/sealant/native-nix-start`,
         [
           "#!/bin/sh",
           "set -eu",
           ...nixDaemonStartCommands(NATIVE_NIX_DAEMON_READY_SECONDS, NATIVE_NIX_PROBE_SECONDS),
-          `if ! NIX_REMOTE=daemon timeout -k 1 ${NATIVE_NIX_PROBE_SECONDS} nix --extra-experimental-features nix-command store info; then`,
-          '  printf "nix=%s\\nnix-daemon=%s\\n" "$(command -v nix)" "$(command -v nix-daemon)" >&2',
-          '  ps -o pid,ppid,stat,comm -p "$daemon" >&2 || true',
-          '  readlink -f "/proc/$daemon/exe" >&2 || true',
-          '  cat "/proc/$daemon/cgroup" >&2 || true',
-          '  tail -n 60 "$log" >&2 || true',
-          '  state=$(ps -o stat= -p "$daemon" || true)',
-          '  case "$state" in ""|Z*) status=0; wait "$daemon" || status=$?; echo "nix-daemon exit=$status" >&2 ;; esac',
-          "  exit 1",
-          "fi",
         ].join("\n") + "\n",
         "0755",
       ),
     ];
+    files.push(
+      file(
+        `${guestRoot}/native-inputs.json`,
+        JSON.stringify({
+          assets: sha256(
+            JSON.stringify(
+              files.map((entry) => ({ path: entry.path, mode: entry.mode, sha256: entry.sha256 })),
+            ),
+          ),
+          project: sha256(projectScript),
+          runtime: sha256(JSON.stringify(bundle.identity)),
+          policy: sha256(asset("boot-policy.json")),
+        }) + "\n",
+        "0600",
+      ),
+    );
     const installScript =
       [
         "#!/bin/bash",
         "set -euo pipefail",
         "umask 022",
         "export HOME=/root",
-        // Package upgrades must not restart Boat's outer services during preparation.
         "export NEEDRESTART_MODE=l",
+        "export PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         'test "$(uname -m)" = x86_64',
         '. /etc/os-release; test "$ID" = ubuntu; test "$VERSION_ID" = 24.04',
-        "export PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        "apt-get update",
-        "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 util-linux curl xz-utils ca-certificates",
-        ...(shared.family === "nix" ? nixBootstrap : []),
-        `export PATH=${quote(path)}`,
-        shared.shell,
-        "install -d -m0700 /var/lib/sealant/control",
+        ...systemdBaseSetup,
+        `install -d -m0700 ${guestRoot}`,
+        `install -d -m0755 ${mappedRoot}`,
+        `test ! -e ${mappedRoot}/etc/os-release`,
+        `debootstrap --variant=minbase --include=systemd,sudo,python3,util-linux,procps,iproute2,ca-certificates,git,libcap2-bin noble ${mappedRoot} http://archive.ubuntu.com/ubuntu`,
         "systemctl daemon-reload",
-        "test ! -e /var/lib/sealant/control/launch.json",
-        "test ! -e /var/lib/sealant/control/control.sock",
-        "test ! -e /run/sealant/control.sock",
+        `python3 -I -S -B ${guestRoot}/build_guest.py bundle`,
+        `${guestCommand} ${guestRoot}/build_guest.py approve-source`,
+        `${guestCommand} ${guestRoot}/guest_boot.py boot`,
+        `python3 -I -S -B -c ${quote(`import json,pathlib; r=pathlib.Path('${guestRoot}'); b=pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip(); (r/'build-operation.json').write_text(json.dumps({'mode':'build','boot_id':b,'script':str(r/'project-install.sh'),'sha256':'${sha256(projectScript)}'}))`)}`,
+        `chmod 0600 ${guestRoot}/build-operation.json`,
+        `${guestCommand} ${guestRoot}/guest_boot.py build ${guestRoot}/build-operation.json`,
+        `test -f ${mappedRoot}/etc/sealant/image-probe.json`,
+        `test ! -e ${mappedRoot}/var/lib/sealant/control/launch.json`,
         "! systemctl is-active --quiet sealant-workspace.service",
-        'case "$(systemctl is-enabled sealant-workspace.service || true)" in static|disabled) ;; *) exit 1 ;; esac',
-        ...(shared.family === "nix"
-          ? [
-              "! systemctl is-active --quiet nix-daemon.service",
-              'test "$(systemctl is-enabled nix-daemon.socket)" = masked',
-              "! pgrep -x nix-daemon",
-            ]
-          : []),
+        "systemctl enable sealant-held.service sealant-held-watchdog.timer",
+        'test "$systemd_versions" = "$(dpkg-query -W -f=\'${binary:Package}=${Version}\\n\' "${systemd_packages[@]}")"',
       ].join("\n") + "\n";
     const content = {
       format: "sealant-native-recipe-v1" as const,
       family: shared.family,
       platform: "linux/amd64" as const,
       installScript,
+      mappedRoot,
+      guestRoot,
       bootEntries,
       substrate: NATIVE_SUBSTRATE,
       runtime: bundle.identity,

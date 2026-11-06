@@ -1,0 +1,42 @@
+{
+  "format": "sealant-native-assets-v1",
+  "relay": "b43aa5df3cbb6d6d4c99b969061ba2aa2d54262c82b9df05568dfcb7f9aaf43f",
+  "files": [
+    {
+      "name": "guest_boot.py",
+      "sha256": "cdd901c83c092c1df5a096474bb75008b66823f97b804f2893d5c5229a2bff00"
+    },
+    {
+      "name": "guest_contract.py",
+      "sha256": "2607a22028d890dab8dc9835489eaa0cb35e8385b74cc12e1004721b313585b3"
+    },
+    {
+      "name": "build_guest.py",
+      "sha256": "ba169ff62d548c5e44ae107ad5c544e5018711ea79a5d74574822469e397edd0"
+    },
+    {
+      "name": "workspace-launch.py",
+      "sha256": "6eb37715e6ca89c3ed62a0342af91c107b8ee0c17fde12d19fd5a09d76a8afbb"
+    },
+    {
+      "name": "workspace.service",
+      "sha256": "0ed327757b2a2d07f76c83c454c6b13eda2fbfc5ef300ba19435d42b571b197b"
+    },
+    {
+      "name": "held.service",
+      "sha256": "b3a990b4aee86ce9329759aee714b29d8d5f8a7ae12ba1ed5a90d770b721fb42"
+    },
+    {
+      "name": "watchdog.service",
+      "sha256": "193b8193354987385577387b0910d8bca72ff56990cc1c571500c26d383999d4"
+    },
+    {
+      "name": "watchdog.timer",
+      "sha256": "022a73ff19b25a51f3c421dd386b78a97294f59fc9b08c0af76d041e7e016a3c"
+    },
+    {
+      "name": "boot-policy.json",
+      "sha256": "f02d79763ab0af43d00259b38f1e1d2a1349337ea5c7fe49e9c9361de01317ef"
+    }
+  ]
+}

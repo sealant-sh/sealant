@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { nativeRuntimeIdentitySchema } from "@sealant/validators";
 import { z } from "zod";
 
+import assetLock from "../../../boat-image/asset-lock.json" with { type: "json" };
+
 export { nativeRuntimeIdentitySchema } from "@sealant/validators";
 
 import runtimePin from "./runtime-pin.json" with { type: "json" };
@@ -85,7 +87,7 @@ export class VerifiedRuntimeBundle {
         amd64[0]?.digest !== `sha256:${NATIVE_RUNTIME_PIN.manifest}` ||
         sha256(input.sealantd) !== NATIVE_RUNTIME_PIN.sealantd ||
         sha256(input.socat) !== NATIVE_RUNTIME_PIN.socat ||
-        input.relay.length === 0
+        sha256(input.relay) !== assetLock.relay
       )
         return { ok: false, error: new NativeBuildError("native-runtime-provenance-mismatch") };
       return {

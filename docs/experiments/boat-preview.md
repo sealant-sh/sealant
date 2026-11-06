@@ -1,7 +1,7 @@
 # Build the separate Boat preview
 
-Build Core from `feat/boat-registration`, pinned to the pushed commit in its pull request. This
-branch provides the provider and publication groundwork. Boat admission is disabled. No setting
+Build Core from `feat/boat-native-guest`, pinned to the pushed commit in its pull request. This
+branch packages the held native guest above the merged provider and publication groundwork. Boat admission is disabled. No setting
 enables Boat sessions in this version. A preview can check migrations, existing runtimes, image
 scope authorization and public publication responses now. It cannot pass the Boat session check.
 
@@ -35,13 +35,12 @@ Set `SEALANT_DOCKER_NETWORK_GUARD_IMAGE` to
 existing Docker resource/metadata guard, not a WireGuard gateway image. A resource tunnel gateway
 has not been packaged or implemented in this head.
 
-The worker does not yet contain `/app/boat-assets`. Do not mount prototype files there or treat the
-checkout's old shared-root launcher as the production guest. The running guest implementation adds
-the mapped root, protected interpreter/loader/library closure, launcher, held bootstrap, complete
-manifest and matching recipe identity. The later receiver/control unit must add current epoch
-admission and safe control resolution. The exact relay, daemon and `socat` inputs must match
-`packages/workspaces/src/images/boat/runtime-pin.json` and publication evidence. No production guest
-asset digest is available until that unit passes its cold-clone test.
+The worker ships `/app/boat-assets` beside its compiled application and verifies the packaged
+Ubuntu and Nix recipes during the image build. The assets include the mapped root launcher, private
+interpreter and dependency closure, units, held bootstrap and manifest. The exact relay, daemon and
+`socat` inputs match `packages/workspaces/src/images/boat/runtime-pin.json`. Held-8.16 cold startup
+has not passed; see `boat-native-guest-startup.md`. Authenticated current-boot binding delivery and
+ordinary Boat admission remain unavailable.
 
 Mend has no Boat companion PR or public SDK release from this work yet. Keep the preview's current
 Mend version pinned separately. Do not import Core workspace internals into Mend or invent an SDK

@@ -25,6 +25,7 @@ RUN node tooling/scripts/stage-agent-cli.mjs apps/worker /staged
 # (`app-server`), which resolves its @openai/codex-{platform}-{arch} vendored binary next to the
 # bundle — mirrors apps/api/Dockerfile.
 RUN node tooling/scripts/stage-codex-cli.mjs apps/worker /staged
+RUN node packages/workspaces/boat-image/stage-assets.mjs /staged/boat-assets
 
 # Docker 27 carries CLI/API support for named-volume subpaths (API >= 1.45). Copy the official,
 # version-pinned CLI instead of relying on Debian's older docker.io package.
@@ -41,6 +42,9 @@ COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/
 RUN docker buildx version
 WORKDIR /app
 COPY --from=builder /app/apps/worker/dist ./dist
+COPY --from=builder /staged/boat-assets ./boat-assets
+COPY --from=builder /staged/dist/boat-assets-check.mjs ./dist/boat-assets-check.mjs
+RUN node dist/boat-assets-check.mjs
 # What a MicroVM workspace image's recipe copies in: the in-VM agent and the guest-local Docker
 # installer. The MicroVM image builder reads them from beside dist/ and sends them with each build.
 COPY --from=builder /app/packages/workspaces/microvm-image/ ./microvm-image/
