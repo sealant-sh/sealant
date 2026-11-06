@@ -42,13 +42,14 @@ def build_bundle():
     BUNDLE.mkdir(mode=0o755)
     sources = {}
     binaries = [Path('/usr/bin/python3'), Path('/usr/bin/systemd-nspawn'),
-                Path('/usr/bin/systemd-run'), Path('/usr/bin/systemctl')]
+                Path('/usr/bin/systemd-run'), Path('/usr/bin/systemctl'), Path('/usr/bin/node')]
     stdlib = Path(sysconfig.get_path('stdlib'))
     for program in [*binaries, *sorted((stdlib / 'lib-dynload').glob('*.so'))]:
         target = BUNDLE / str(program).lstrip('/')
-        copy_dependency(program, target)
-        sources[str(program)] = asdict(file_identity(program.resolve()))
-        for source in dependencies(program):
+        source_program = ROOT / 'native-node' if program == Path('/usr/bin/node') else program
+        copy_dependency(source_program, target)
+        sources[str(source_program)] = asdict(file_identity(source_program.resolve()))
+        for source in dependencies(source_program):
             destination = BUNDLE / str(source).lstrip('/')
             if not destination.exists():
                 copy_dependency(source, destination)
@@ -56,7 +57,7 @@ def build_bundle():
     archive = BUNDLE / f'usr/lib/python{sys.version_info.major}{sys.version_info.minor}.zip'
     archive.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_STORED) as output:
-        for name in ('guest_boot.py', 'guest_contract.py'):
+        for name in ('guest_boot.py', 'guest_contract.py', 'guest_receiver.py'):
             source = ROOT / name
             output.writestr(name, source.read_bytes())
             sources[str(source)] = {'sha256': digest(source.read_bytes()), 'mode': source.stat().st_mode & 0o777}
@@ -76,10 +77,13 @@ def build_bundle():
 def manifest():
     files = [path for path in BUNDLE.rglob('*') if path.is_file()]
     files += [ROOT / name for name in ('guest_boot.py', 'guest_contract.py', 'build_guest.py',
-                                      'workspace-launch.py', 'boot-policy.json', 'bundle-inputs.json',
+                                      'workspace-launch.py', 'guest_receiver.py', 'bootstrap-crypto.mjs',
+                                      'boot-policy.json', 'bundle-inputs.json',
                                       'project-install.sh', 'native-inputs.json')]
     files += [Path('/etc/systemd/system') / name for name in (
-        'sealant-held.service', 'sealant-held-watchdog.service', 'sealant-held-watchdog.timer', 'sealant-workspace.service')]
+        'sealant-held.service', 'sealant-held-watchdog.service', 'sealant-held-watchdog.timer', 'sealant-workspace.service',
+        'sealant-bootstrap.service', 'sealant-control-relay.service')]
+    files += [Path('/usr/local/lib/sealant/control-relay.cjs')]
     value = ProtectedManifest('sealant-guest-manifest-v1', {str(path): file_identity(path) for path in files},
                               private_json(ROOT / 'native-inputs.json'),
                               tuple(sorted(str(path) for path in BUNDLE.rglob('*') if path.is_file())))

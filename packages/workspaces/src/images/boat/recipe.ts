@@ -19,6 +19,11 @@ export const NATIVE_SUBSTRATE = {
   nixArchive: "https://releases.nixos.org/nix/nix-2.31.2/nix-2.31.2-x86_64-linux.tar.xz",
   nixSha256: "d1f67c86eed016214864ba08bfb9529c307aea7e8fafb74853f96fcc3bfd8a60",
   nixpkgs: "1d060086d60cb76a40cf37109f979d88a5bd6396",
+  node: {
+    version: "24.22.2",
+    archive: "https://nodejs.org/dist/v24.22.2/node-v24.22.2-linux-x64.tar.xz",
+    sha256: "48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb9697aaf75",
+  },
   systemd: {
     version: "255.4-1ubuntu8.16",
     snapshot: "https://snapshot.ubuntu.com/ubuntu/20260731T000000Z/",
@@ -69,6 +74,14 @@ if len(entries)!=1 or any(entries[0].get(key)!=value for key,value in {'Version'
     raise ValueError('native-systemd-snapshot-package-mismatch')
 pathlib.Path(sys.argv[2]).write_bytes(fetch(pin['package'],entries[0]['SHA256']))
 `;
+const nativeNodeDownload = `import hashlib,json,pathlib,sys,urllib.request
+pin=json.loads(sys.argv[1])
+with urllib.request.urlopen(pin['archive'],timeout=60) as response:
+    data=response.read(100_000_001)
+if len(data)>100_000_000 or hashlib.sha256(data).hexdigest()!=pin['sha256']:
+    raise ValueError('native-node-archive-digest-mismatch')
+pathlib.Path(sys.argv[2]).write_bytes(data)
+`;
 const systemdBaseSetup = [
   "mapfile -t systemd_packages < <(dpkg-query -W -f='${binary:Package} ${source:Package} ${db:Status-Status}\\n' | awk '$2 == \"systemd\" && $3 == \"installed\" {print $1}')",
   'test "${#systemd_packages[@]}" -gt 0',
@@ -83,7 +96,7 @@ const systemdBaseSetup = [
   'trap \'ls -la "$snapshot_directory"; rm -rf "$snapshot_directory"\' EXIT',
   `python3 -I -S -B -c ${quote(systemdSnapshotDownload)} ${quote(JSON.stringify(NATIVE_SUBSTRATE.systemd))} "$snapshot_directory/systemd-container.deb"`,
   "apt-get update",
-  'DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends debootstrap python3 uidmap "$snapshot_directory/systemd-container.deb"',
+  'DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends debootstrap python3 xz-utils libstdc++6 uidmap "$snapshot_directory/systemd-container.deb"',
   `test "$(dpkg-query -W -f='\${Version}' systemd-container)" = ${quote(NATIVE_SUBSTRATE.systemd.version)}`,
   "apt-mark hold systemd-container",
   'test "$systemd_versions" = "$(dpkg-query -W -f=\'${binary:Package}=${Version}\\n\' "${systemd_packages[@]}")"',
@@ -163,12 +176,16 @@ export const createNativeRecipe = async (
       ...[
         "guest_boot.py",
         "guest_contract.py",
+        "guest_receiver.py",
+        "bootstrap-crypto.mjs",
         "build_guest.py",
         "workspace-launch.py",
         "boot-policy.json",
       ].map((name) =>
         file(`${guestRoot}/${name}`, asset(name), name === "workspace-launch.py" ? "0644" : "0600"),
       ),
+      file("/etc/systemd/system/sealant-bootstrap.service", asset("bootstrap.service"), "0644"),
+      file("/etc/systemd/system/sealant-control-relay.service", asset("relay.service"), "0644"),
       file("/etc/systemd/system/sealant-workspace.service", asset("workspace.service"), "0644"),
       file("/etc/systemd/system/sealant-held.service", asset("held.service"), "0644"),
       file("/etc/systemd/system/sealant-held-watchdog.service", asset("watchdog.service"), "0644"),
@@ -217,6 +234,13 @@ export const createNativeRecipe = async (
         '. /etc/os-release; test "$ID" = ubuntu; test "$VERSION_ID" = 24.04',
         ...systemdBaseSetup,
         `install -d -m0700 ${guestRoot}`,
+        "(",
+        "node_directory=$(mktemp -d -t sealant-native-node.XXXXXX)",
+        'trap \'ls -la "$node_directory"; rm -rf "$node_directory"\' EXIT',
+        `python3 -I -S -B -c ${quote(nativeNodeDownload)} ${quote(JSON.stringify(NATIVE_SUBSTRATE.node))} "$node_directory/node.tar.xz"`,
+        `tar -xJf "$node_directory/node.tar.xz" --to-stdout node-v${NATIVE_SUBSTRATE.node.version}-linux-x64/bin/node > ${guestRoot}/native-node`,
+        `chmod 0755 ${guestRoot}/native-node`,
+        ")",
         `install -d -m0755 ${mappedRoot}`,
         `test ! -e ${mappedRoot}/etc/os-release`,
         `debootstrap --variant=minbase --include=systemd,sudo,python3,util-linux,procps,iproute2,ca-certificates,git,libcap2-bin noble ${mappedRoot} http://archive.ubuntu.com/ubuntu`,
@@ -230,6 +254,10 @@ export const createNativeRecipe = async (
         `test -f ${mappedRoot}/etc/sealant/image-probe.json`,
         `test ! -e ${mappedRoot}/var/lib/sealant/control/launch.json`,
         "! systemctl is-active --quiet sealant-workspace.service",
+        `test ! -e ${guestRoot}/receiver.json`,
+        "test ! -e /run/sealant-bootstrap",
+        'test "$(systemctl is-enabled sealant-bootstrap.service 2>/dev/null || true)" = static',
+        'test "$(systemctl is-enabled sealant-control-relay.service 2>/dev/null || true)" = static',
         "systemctl enable sealant-held.service sealant-held-watchdog.timer",
         'test "$systemd_versions" = "$(dpkg-query -W -f=\'${binary:Package}=${Version}\\n\' "${systemd_packages[@]}")"',
       ].join("\n") + "\n";

@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import http from "node:http";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -53,6 +54,7 @@ const fixture = async (
   behavior: (socket: net.Socket) => void = (socket) => {
     socket.pipe(socket);
   },
+  bootstrapSocket?: string,
 ) => {
   const path = await mkdtemp(join(directory, "case-"));
   const socketPath = join(path, "control.sock");
@@ -85,7 +87,16 @@ const fixture = async (
   await new Promise<void>((done) => listener.close(() => done()));
   const child = spawn(
     process.execPath,
-    [entry, "--token-file", tokenPath, "--socket", socketPath, "--port", String(address.port)],
+    [
+      entry,
+      "--token-file",
+      tokenPath,
+      "--socket",
+      socketPath,
+      "--port",
+      String(address.port),
+      ...(bootstrapSocket ? ["--bootstrap-socket", bootstrapSocket] : []),
+    ],
     { env: { PATH: process.env.PATH ?? "/usr/bin:/bin" }, stdio: ["ignore", "pipe", "pipe"] },
   );
   resources.push(() => stopChild(child));
@@ -115,6 +126,70 @@ const connect = async (
 };
 
 describe("standalone Boat relay", () => {
+  it.each(["source", "bundle"])(
+    "bounds and authenticates private bootstrap forwarding with %s",
+    async (kind) => {
+      const path = await mkdtemp(join(directory, "case-bootstrap-"));
+      const bootstrapSocket = join(path, "bootstrap.sock");
+      const received: Array<{
+        path: string | undefined;
+        authorization: string | undefined;
+        body: string;
+      }> = [];
+      const upstream = http.createServer((request, response) => {
+        let body = "";
+        request.on("data", (chunk) => {
+          body += chunk.toString();
+        });
+        request.on("end", () => {
+          received.push({ path: request.url, authorization: request.headers.authorization, body });
+          response
+            .writeHead(200, { "content-type": "application/json" })
+            .end(JSON.stringify({ admission: "held" }));
+        });
+      });
+      await new Promise<void>((done) => upstream.listen(bootstrapSocket, done));
+      resources.push(async () => {
+        upstream.closeAllConnections();
+        await new Promise<void>((done) => upstream.close(() => done()));
+      });
+      const relay = await fixture(kind === "bundle" ? bundled : source, undefined, bootstrapSocket);
+      const route = `${relay.origin}/sealant/bootstrap/stage`;
+      const body = JSON.stringify({ privatePayload: "not-a-real-secret" });
+      expect((await fetch(route, { method: "POST", body })).status).toBe(401);
+      const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+      const response = await fetch(route, { method: "POST", headers, body });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ admission: "held" });
+      expect(received).toEqual([
+        { path: "/sealant/bootstrap/stage", authorization: `Bearer ${token}`, body },
+      ]);
+      expect(
+        (
+          await fetch(route, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}` },
+            body,
+          })
+        ).status,
+      ).toBe(400);
+      expect((await fetch(route, { method: "GET", headers })).status).toBe(404);
+      expect(
+        (await fetch(`${relay.origin}/sealant/bootstrap/start`, { method: "POST", headers, body }))
+          .status,
+      ).toBe(404);
+      expect((await fetch(`${relay.origin}/sealant/bootstrap/status`, { headers })).status).toBe(
+        200,
+      );
+      expect(received).toHaveLength(2);
+      expect(relay.sockets.size).toBe(0);
+      await new Promise<void>((done) => upstream.close(() => done()));
+      expect((await fetch(`${relay.origin}/sealant/bootstrap/status`, { headers })).status).toBe(
+        503,
+      );
+    },
+  );
+
   it.each(["source", "bundle"])(
     "authenticates both routes and forwards binary bytes with %s artifact",
     async (kind) => {
