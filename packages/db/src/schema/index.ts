@@ -239,3 +239,5 @@ export {
 } from "./telemetry.js";
 
 export { nativePublications, nativePublicationConsumers } from "./native-publications.js";
+
+export { boatExecutions } from "./boat-executions.js";

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +24,25 @@ afterEach(async () => {
 });
 
 describe("native packaged assets", () => {
+  it("builds the pinned relay bytes from any working directory", async () => {
+    const root = await mkdtemp(join(tmpdir(), "boat-relay-build-test-"));
+    roots.push(root);
+    const script = fileURLToPath(new URL("../../../boat-image/build-relay.mjs", import.meta.url));
+    const repository = fileURLToPath(new URL("../../../../../", import.meta.url));
+    const lock = JSON.parse(
+      await readFile(new URL("../../../boat-image/asset-lock.json", import.meta.url), "utf8"),
+    );
+    for (const [index, cwd] of [root, repository].entries()) {
+      const output = join(root, `relay-${index}.cjs`);
+      execFileSync(process.execPath, [script, output], { cwd, stdio: "pipe" });
+      expect(
+        createHash("sha256")
+          .update(await readFile(output))
+          .digest("hex"),
+      ).toBe(lock.relay);
+    }
+  });
+
   it("refuses a manifest whose packaged files are missing", async () => {
     const root = await mkdtemp(join(tmpdir(), "boat-assets-test-"));
     roots.push(root);

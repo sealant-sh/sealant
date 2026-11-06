@@ -177,11 +177,11 @@ describe("standalone Boat relay", () => {
       expect(
         (await fetch(`${relay.origin}/sealant/bootstrap/start`, { method: "POST", headers, body }))
           .status,
-      ).toBe(404);
+      ).toBe(200);
       expect((await fetch(`${relay.origin}/sealant/bootstrap/status`, { headers })).status).toBe(
         200,
       );
-      expect(received).toHaveLength(2);
+      expect(received).toHaveLength(3);
       expect(relay.sockets.size).toBe(0);
       await new Promise<void>((done) => upstream.close(() => done()));
       expect((await fetch(`${relay.origin}/sealant/bootstrap/status`, { headers })).status).toBe(

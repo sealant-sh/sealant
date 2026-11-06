@@ -173,10 +173,15 @@ export const createNativeRecipe = async (
             "0755",
           ),
         ),
+      ...bundle
+        .files()
+        .filter((entry) => entry.path === "/usr/local/bin/sealantd")
+        .map((entry) => file(`${guestRoot}/sealantd`, entry.bytes, "0755")),
       ...[
         "guest_boot.py",
         "guest_contract.py",
         "guest_receiver.py",
+        "guest_invocation.py",
         "bootstrap-crypto.mjs",
         "build_guest.py",
         "workspace-launch.py",
@@ -255,6 +260,7 @@ export const createNativeRecipe = async (
         `test ! -e ${mappedRoot}/var/lib/sealant/control/launch.json`,
         "! systemctl is-active --quiet sealant-workspace.service",
         `test ! -e ${guestRoot}/receiver.json`,
+        `test ! -e ${guestRoot}/invocation.json`,
         "test ! -e /run/sealant-bootstrap",
         'test "$(systemctl is-enabled sealant-bootstrap.service 2>/dev/null || true)" = static',
         'test "$(systemctl is-enabled sealant-control-relay.service 2>/dev/null || true)" = static',

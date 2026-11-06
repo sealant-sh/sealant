@@ -27,7 +27,7 @@ LIBRARIES = ':'.join(str(BUNDLE / path) for path in (
 NS_GET_PARENT = 0xB702
 OWNED_UNITS = frozenset(('sealant-held.service', 'sealant-held-watchdog.service',
                          'sealant-workspace.service', 'sealant-native-build.service',
-                         'sealant-native-probe.service', 'sealant-bootstrap.service',
+                         'sealant-native-probe.service', 'sealant-native-workspace.service', 'sealant-bootstrap.service',
                          'sealant-control-relay.service'))
 
 
@@ -479,6 +479,8 @@ def held_boot():
 def restart_owned(unit):
     if unit not in OWNED_UNITS:
         raise ValueError('restart-unit-not-owned')
+    if unit in ('sealant-workspace.service', 'sealant-native-workspace.service'):
+        raise ValueError('ordinary-invocation-restart-requires-canonical-recovery')
     if owned_units().get(os.getpid()) == unit:
         os.execve(str(BUNDLE / 'lib64/ld-linux-x86-64.so.2'),
                   invoke('/usr/bin/python3', '-I', '-S', '-B', str(ROOT / 'guest_boot.py'), 'boot'), ENV)
@@ -563,7 +565,7 @@ def mapped_gates(candidates, root, owner):
                     for namespace in ('pid_namespace', 'mount_namespace', 'user_namespace'))]
 
 
-def launch_mapped(mode, script, manifest, held, observations, receipt, operation):
+def launch_mapped(mode, script, manifest, held, observations, receipt, operation, verified=None):
     argv = invoke('/usr/bin/systemd-nspawn', '--quiet', '--settings=no', '--register=no', '--keep-unit',
                   '--machine=sealant-native', '--directory=' + str(MAPPED_ROOT), '--private-users=131072:65536',
                   '--private-users-ownership=chown', '--notify-ready=no', '--console=pipe', '--link-journal=no',
@@ -571,13 +573,15 @@ def launch_mapped(mode, script, manifest, held, observations, receipt, operation
                   '--bind-ro=' + str(ROOT / 'workspace-launch.py') + ':/run/sealant-entry.py',
                   '--bind-ro=' + str(script) + ':/run/sealant-operation',
                   *(['--private-network'] if mode == 'probe' else []),
+                  *(['--bind-ro=' + str(script.parent) + ':/run/sealant-inputs',
+                     '--bind-ro=' + str(ROOT / 'sealantd') + ':/usr/local/bin/sealantd'] if mode == 'workspace' else []),
                   '/run/sealant-runtime/lib64/ld-linux-x86-64.so.2', '--inhibit-cache', '--library-path',
                   '/run/sealant-runtime/lib/x86_64-linux-gnu:/run/sealant-runtime/usr/lib/x86_64-linux-gnu',
                   '/run/sealant-runtime/usr/bin/python3', '-I', '-S', '-B', '/run/sealant-entry.py')
     process = subprocess.Popen(invoke('/usr/bin/systemd-run', '--quiet', '--wait', '--pipe', '--collect',
                                '--unit=sealant-native-' + mode, '--service-type=exec', '-p', 'KillMode=control-group',
                                '-p', 'Restart=no', '-p', 'Delegate=no', '-p', 'NotifyAccess=none',
-                               '-p', 'RuntimeMaxSec=600', *argv), env=ENV, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+                               *(['-p', 'RuntimeMaxSec=600'] if mode != 'workspace' else ['-p', 'BindsTo=sealant-workspace.service']), *argv), env=ENV, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     launcher = None
     gate = None
     mappings = []
@@ -623,13 +627,21 @@ def launch_mapped(mode, script, manifest, held, observations, receipt, operation
         save(receipt, {'operation': operation, 'status': 'verified-launcher', 'launcher': asdict(launcher.identity),
                        'mappings': [asdict(mapping) for mapping in mappings], 'gate': asdict(gate.identity),
                        'gate_mappings': [asdict(mapping) for mapping in gate_mappings], 'revalidation': observations})
+        if verified is not None:
+            verified(launcher, gate)
         process.stdin.write(canonical({'mode': mode}) + b'\n')
         process.stdin.flush()
         process.stdin.close()
         process.stdin = None
-        output, _ = process.communicate(timeout=610)
-        sys.stdout.buffer.write(output)
-        sys.stdout.buffer.flush()
+        if mode == 'workspace':
+            while chunk := process.stdout.read(65536):
+                sys.stdout.buffer.write(chunk)
+                sys.stdout.buffer.flush()
+            process.wait()
+        else:
+            output, _ = process.communicate(timeout=610)
+            sys.stdout.buffer.write(output)
+            sys.stdout.buffer.flush()
         result = process.returncode
         save(receipt, {'operation': operation, 'status': 'ended', 'exit_code': result,
                        'launcher': asdict(launcher.identity), 'gate': asdict(gate.identity),
