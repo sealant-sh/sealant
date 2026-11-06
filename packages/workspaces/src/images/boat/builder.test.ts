@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { nativeBuildOwnershipSchema, nativeSnapshotArtifactSchema } from "@sealant/validators";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HttpBoatApi, boatBuildOwnershipLabels } from "../../runtime/boat/api.js";
 import { BoatSecret, BoatBuildOwnership } from "../../runtime/boat/config.js";
@@ -83,6 +83,7 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
   let deletionAccepted = false;
   let delayDelete = false;
   let finishDelete: (() => void) | undefined;
+  const deletionReceived = Promise.withResolvers<void>();
   let snapshotReadFailure: "html" | "unexpected-code" | "wrong-resource" | undefined;
   let inventory: Array<{ id: string; state: string; labels: Record<string, string> }> = [];
   const server = http.createServer((request, response) => {
@@ -144,8 +145,10 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
             ok: true,
             operation: { id: operation, targetId: id, kind: "sandbox", status: "pending" },
           });
-        if (delayDelete) finishDelete = send;
-        else send();
+        if (delayDelete) {
+          finishDelete = send;
+          deletionReceived.resolve();
+        } else send();
       } else if (request.url === "/api/v1/deletion-operations/" + operation)
         respond(response, {
           ok: true,
@@ -223,6 +226,7 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
     holdDelete: () => {
       delayDelete = true;
     },
+    deletionReceived: deletionReceived.promise,
     hideSandbox: () => {
       deletionAccepted = true;
     },
@@ -354,8 +358,20 @@ describe("attempt-owned durable native cleanup", () => {
 
   it("bounds a lost deletion response and leaves an exact retryable obligation", async () => {
     const f = await fixture(40);
+    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    let cleanupDeadline = new AbortController();
+    const timeout = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementation((ms) => (ms === 40 ? cleanupDeadline.signal : nativeTimeout(ms)));
+    resources.push(async () => {
+      cleanupDeadline.abort();
+      timeout.mockRestore();
+    });
     f.holdDelete();
-    expect(await f.builder.cleanup(f.path)).toMatchObject({
+    const cleanup = f.builder.cleanup(f.path);
+    await f.deletionReceived;
+    cleanupDeadline.abort();
+    expect(await cleanup).toMatchObject({
       ok: false,
       error: { code: "native-interrupted" },
     });
@@ -363,6 +379,7 @@ describe("attempt-owned durable native cleanup", () => {
       phase: "running",
       allocation: { state: "deleting", id },
     });
+    cleanupDeadline = new AbortController();
     f.releaseDelete();
     expect(await f.builder.cleanup(f.path)).toEqual({ ok: true, value: undefined });
     expect(await f.read()).toMatchObject({
@@ -371,6 +388,7 @@ describe("attempt-owned durable native cleanup", () => {
     });
     expect(f.requests.filter((r) => r.method === "GET" && r.path.endsWith(id))).toHaveLength(1);
     expect(f.requests.filter((r) => r.method === "DELETE" && r.path.endsWith(id))).toHaveLength(2);
+    expect(timeout.mock.calls.filter(([ms]) => ms === 40)).toHaveLength(2);
   });
 
   it("reconciles a lost allocation response with exactly the recorded key and confirms deletion", async () => {
