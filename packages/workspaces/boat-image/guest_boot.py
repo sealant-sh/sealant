@@ -27,7 +27,8 @@ LIBRARIES = ':'.join(str(BUNDLE / path) for path in (
 NS_GET_PARENT = 0xB702
 OWNED_UNITS = frozenset(('sealant-held.service', 'sealant-held-watchdog.service',
                          'sealant-workspace.service', 'sealant-native-build.service',
-                         'sealant-native-probe.service'))
+                         'sealant-native-probe.service', 'sealant-bootstrap.service',
+                         'sealant-control-relay.service'))
 
 
 def save(path, value, exclusive=False):
@@ -424,7 +425,19 @@ def run_checks(state, journal, inspect, retry, clock=time.monotonic, sleep=time.
     return state
 
 
+def awaiting_binding():
+    # Publications contain no runtime identity. Begin the bounded inspection only after delivery.
+    if not (ROOT / 'manifest.json').exists() or not (ROOT / 'source-approval.json').exists():
+        return False
+    events = ROOT / 'boots' / boot_id()
+    if events.exists() and any(events.glob('*.json')):
+        return False
+    return binding_for('unavailable', None).instance_id == 'unbound'
+
+
 def held_boot():
+    if awaiting_binding():
+        return {'status': 'held', 'admission': 'held', 'reason': 'awaiting-current-boot-binding'}
     started = time.monotonic()
     binding = BootBinding(boot_id(), 'unbound', 'unbound', 'unavailable', 'unapproved')
     journal = BootJournal(ROOT, binding)
@@ -484,6 +497,8 @@ def watchdog_state(current, actual_boot, now):
 
 
 def watchdog():
+    if awaiting_binding():
+        return {'status': 'held', 'admission': 'held', 'reason': 'awaiting-current-boot-binding'}
     binding = BootBinding(boot_id(), 'unbound', 'unbound', 'unavailable', 'unapproved')
     journal = BootJournal(ROOT, binding)
     current = journal.current()
@@ -647,6 +662,13 @@ def main():
             result = held_boot()
         elif action == 'watchdog':
             result = watchdog()
+        elif action == 'bind':
+            from guest_receiver import bind
+            if len(sys.argv) != 3 or len(sys.argv[2]) > 8192:
+                raise ValueError('invalid-bootstrap-request')
+            result = bind(json.loads(sys.argv[2]))
+            result['boot'] = held_boot()
+            run('/usr/bin/systemctl', 'start', 'sealant-bootstrap.service', 'sealant-control-relay.service', timeout=15)
         elif action in ('build', 'probe'):
             result = owner_operation(action, Path(sys.argv[2]))
         else:

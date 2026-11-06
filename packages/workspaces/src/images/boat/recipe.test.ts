@@ -56,7 +56,9 @@ describe("native recipe boundary", () => {
       expect(script).toContain("native-systemd-snapshot-package-mismatch");
       expect(script).toContain(NATIVE_SUBSTRATE.systemd.indexSha256);
       expect(script).toContain(NATIVE_SUBSTRATE.systemd.sha256);
-      expect(script).toContain('uidmap "$snapshot_directory/systemd-container.deb"');
+      expect(script).toContain(
+        'xz-utils libstdc++6 uidmap "$snapshot_directory/systemd-container.deb"',
+      );
       expect(script).toContain("apt-mark hold systemd-container");
       const unchanged =
         'test "$systemd_versions" = "$(dpkg-query -W -f=\'${binary:Package}=${Version}\\n\' "${systemd_packages[@]}")"';
@@ -65,6 +67,16 @@ describe("native recipe boundary", () => {
       expect(script).not.toContain("--allow-change-held-packages");
       expect(script).not.toContain("--allow-downgrades");
     }
+  });
+  it("pins the self-contained Node binary instead of relying on Ubuntu's externalized builtins", async () => {
+    const recipe = await createNativeRecipe(spec(), serializationBundleFixture);
+    if (!recipe.ok) throw recipe.error;
+    expect(recipe.value.substrate.node.version).toBe("24.22.2");
+    expect(recipe.value.installScript).toContain(NATIVE_SUBSTRATE.node.archive);
+    expect(recipe.value.installScript).toContain(NATIVE_SUBSTRATE.node.sha256);
+    expect(recipe.value.installScript).toContain("native-node-archive-digest-mismatch");
+    expect(recipe.value.installScript).toContain("--to-stdout node-v24.22.2-linux-x64/bin/node");
+    expect(recipe.value.installScript).not.toContain("python3 nodejs");
   });
   it("refuses inline dotfiles credentials before build or runtime serialization", async () => {
     const base = spec();

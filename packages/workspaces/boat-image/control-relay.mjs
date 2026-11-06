@@ -10,7 +10,11 @@ const args = process.argv.slice(2);
 for (let index = 0; index < args.length; index += 2) {
   const name = args[index];
   const value = args[index + 1];
-  if (!["--socket", "--token-file", "--port"].includes(name) || !value || options.has(name)) {
+  if (
+    !["--socket", "--token-file", "--port", "--bootstrap-socket"].includes(name) ||
+    !value ||
+    options.has(name)
+  ) {
     process.stderr.write("Invalid relay configuration\n");
     process.exit(2);
   }
@@ -18,12 +22,14 @@ for (let index = 0; index < args.length; index += 2) {
 }
 const socketPath = options.get("--socket");
 const tokenPath = options.get("--token-file");
+const bootstrapSocket = options.get("--bootstrap-socket");
 const port = Number(options.get("--port"));
 let expected;
 try {
   if (
     !socketPath?.startsWith("/") ||
     !tokenPath?.startsWith("/") ||
+    (bootstrapSocket !== undefined && !bootstrapSocket.startsWith("/")) ||
     !Number.isInteger(port) ||
     port < 1 ||
     port > 65535
@@ -62,11 +68,73 @@ const pathname = (request) => {
 };
 const pending = new Set();
 const bridges = new Set();
+const bootstrapRequests = new Set();
 const server = http.createServer(
   { maxHeaderSize: 8192, requestTimeout: 5000, headersTimeout: 5000 },
   (request, response) => {
     if (!authorized(request)) {
       response.writeHead(401).end();
+      return;
+    }
+    if (
+      bootstrapSocket &&
+      ["/sealant/bootstrap/status", "/sealant/bootstrap/stage"].includes(request.url)
+    ) {
+      const length = request.headers["content-length"];
+      const isStatus = request.method === "GET" && request.url === "/sealant/bootstrap/status";
+      const isStage = request.method === "POST" && request.url === "/sealant/bootstrap/stage";
+      if (!isStatus && !isStage) {
+        response.writeHead(404).end();
+        return;
+      }
+      if (bootstrapRequests.size >= 4) {
+        response.writeHead(503).end();
+        return;
+      }
+      if (
+        request.headers["transfer-encoding"] ||
+        (isStage &&
+          (typeof length !== "string" ||
+            !/^[0-9]+$/.test(length) ||
+            Number(length) < 1 ||
+            Number(length) > 4 * 1024 * 1024 ||
+            request.headers["content-type"] !== "application/json")) ||
+        (isStatus && length !== undefined && length !== "0")
+      ) {
+        response.writeHead(400).end();
+        return;
+      }
+      const upstream = http.request({
+        socketPath: bootstrapSocket,
+        path: request.url,
+        method: request.method,
+        headers: {
+          authorization: request.headers.authorization,
+          ...(isStage ? { "content-type": "application/json", "content-length": length } : {}),
+        },
+        timeout: 15000,
+      });
+      bootstrapRequests.add(upstream);
+      const teardown = () => {
+        bootstrapRequests.delete(upstream);
+        upstream.destroy();
+      };
+      response.once("close", teardown);
+      upstream.once("timeout", () => upstream.destroy());
+      upstream.once("error", () => {
+        bootstrapRequests.delete(upstream);
+        if (!response.headersSent) response.writeHead(503).end();
+        else response.destroy();
+      });
+      upstream.once("response", (reply) => {
+        response.writeHead(reply.statusCode ?? 503, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+        });
+        reply.once("error", () => response.destroy());
+        reply.pipe(response);
+      });
+      request.pipe(upstream);
       return;
     }
     if (request.method !== "GET" || pathname(request) !== "/sealant/health") {
@@ -173,6 +241,7 @@ server.on("upgrade", (request, socket, head) => {
 });
 
 const close = (exitCode = 0) => {
+  for (const upstream of bootstrapRequests) upstream.destroy();
   for (const unix of pending) unix.destroy();
   for (const teardown of bridges) teardown();
   server.closeAllConnections();
