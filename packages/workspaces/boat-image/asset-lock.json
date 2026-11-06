@@ -1,6 +1,6 @@
 {
   "format": "sealant-native-assets-v1",
-  "relay": "265bcc813928eefb39d82976f0ae521f9684a7b89bb397c6af598e37e66e1f5c",
+  "relay": "53c596f848fd4a2e7d19eb3a5d3fcffe8171e080272c4d37dbb46795205a5192",
   "files": [
     {
       "name": "guest_boot.py",

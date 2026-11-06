@@ -10,6 +10,7 @@ if (!output) {
   process.exit(2);
 }
 await build({
+  absWorkingDir: fileURLToPath(new URL("../../../", import.meta.url)),
   entryPoints: [fileURLToPath(new URL("./control-relay.mjs", import.meta.url))],
   outfile: resolve(output),
   bundle: true,

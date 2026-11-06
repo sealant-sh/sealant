@@ -11,7 +11,11 @@ import {
 } from "@sealant/db";
 import { corruptBoatExecution } from "@sealant/db/testing/boat-executions";
 import { withWorkspaceJobTestDatabase } from "@sealant/db/testing/workspace-publications";
-import { boatExecutionTargetSchema, type BoatExecutionTarget } from "@sealant/validators";
+import {
+  boatExecutionRecordSchema,
+  boatExecutionTargetSchema,
+  type BoatExecutionTarget,
+} from "@sealant/validators";
 import { Effect, Layer, Redacted } from "effect";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -365,20 +369,64 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       await execute(corruptBoatExecution(db, target.runId, { ...record, phase: "nonsense" }));
       await expect(execute(repo.get(target.runId))).rejects.toThrow("invalid-record");
     }));
-  it("fences stale transitions and keeps the original reservation under contention", () =>
-    test(async ({ executor, repo, target }) => {
+  it("fences conflicting transitions from the same prior record and adopts an exact replay", () =>
+    test(async ({ executor, repo, target, cipher, guest }) => {
       await execute(executor.exchange(target));
       const before = await execute(repo.get(target.runId));
       if (before === undefined) throw new Error("no reservation");
+      const proposals = await Promise.all(
+        ["one", "two"].map(async (value) =>
+          boatExecutionRecordSchema.parse({
+            ...before,
+            phase: "prepared",
+            admission: {
+              epoch: 1,
+              operationId: randomUUID(),
+              digest: createHash("sha256").update(value).digest("hex"),
+              sealedEnvelope: (await execute(cipher.encrypt(value))).sealed,
+            },
+          }),
+        ),
+      );
+      const results = await Promise.allSettled(
+        proposals.map((proposal) => execute(repo.advance(before, proposal))),
+      );
+      const winners = results.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
+      );
+      expect(winners).toHaveLength(1);
+      const winner = winners[0];
+      if (winner === undefined) throw new Error("no winner");
+      const loser = proposals.find(
+        (proposal) => proposal.admission?.operationId !== winner.admission?.operationId,
+      );
+      if (loser === undefined) throw new Error("no loser");
+      expect(await execute(repo.get(target.runId))).toEqual(winner);
+      expect(await execute(repo.advance(before, winner))).toEqual(winner);
+      await expect(execute(repo.advance(before, loser))).rejects.toThrow("stale-transition");
+      await expect(execute(repo.advance(before, { ...before, phase: "held" }))).rejects.toThrow(
+        "invalid-record",
+      );
+      expect(guest.stageBodies).toHaveLength(0);
+    }));
+  it("keeps one frozen payload when concurrent or later callers stage newer material", () =>
+    test(async ({ executor, repo, target, guest }) => {
+      await execute(executor.exchange(target));
       const results = await Promise.allSettled([
         execute(executor.stage(target.runId, payload("one"))),
         execute(executor.stage(target.runId, payload("two"))),
       ]);
-      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-      expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
-      await expect(execute(repo.advance(before, { ...before, phase: "held" }))).rejects.toThrow(
-        "invalid-record",
-      );
-      expect((await execute(repo.get(target.runId)))?.phase).toBe("installed");
+      expect(results.some((result) => result.status === "fulfilled")).toBe(true);
+      for (const result of results)
+        if (result.status === "rejected")
+          expect(String(result.reason)).toContain("stale-transition");
+      expect(guest.stageBodies.length).toBeGreaterThan(0);
+      expect(new Set(guest.stageBodies).size).toBe(1);
+      const installed = await execute(repo.get(target.runId));
+      expect(installed?.phase).toBe("installed");
+      const deliveries = guest.stageBodies.length;
+      await execute(executor.stage(target.runId, payload("three")));
+      expect(guest.stageBodies).toHaveLength(deliveries);
+      expect(await execute(repo.get(target.runId))).toEqual(installed);
     }));
 });

@@ -83,6 +83,7 @@ if (bundleDirectory) {
     }
   }
   await build({
+    absWorkingDir: fileURLToPath(new URL("../../../", import.meta.url)),
     entryPoints: [resolve(source, "control-relay.mjs")],
     outfile: resolve(output, "control-relay.cjs"),
     bundle: true,
