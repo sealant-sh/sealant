@@ -59,7 +59,7 @@ def build_bundle():
     archive = BUNDLE / f'usr/lib/python{sys.version_info.major}{sys.version_info.minor}.zip'
     archive.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_STORED) as output:
-        for name in ('guest_boot.py', 'guest_contract.py', 'guest_receiver.py', 'guest_invocation.py', 'guest_network.py', 'guest_readiness.py', 'guest_control.py'):
+        for name in ('guest_boot.py', 'guest_contract.py', 'guest_receiver.py', 'guest_invocation.py', 'guest_network.py', 'guest_readiness.py', 'guest_control.py', 'guest_recovery.py'):
             source = ROOT / name
             output.writestr(name, source.read_bytes())
             sources[str(source)] = {'sha256': digest(source.read_bytes()), 'mode': source.stat().st_mode & 0o777}
@@ -79,12 +79,12 @@ def build_bundle():
 def manifest():
     files = [path for path in BUNDLE.rglob('*') if path.is_file()]
     files += [ROOT / name for name in ('guest_boot.py', 'guest_contract.py', 'build_guest.py',
-                                      'workspace-launch.py', 'guest_receiver.py', 'guest_invocation.py', 'guest_network.py', 'guest_readiness.py', 'guest_control.py', 'sealantd', 'bootstrap-crypto.mjs',
+                                      'workspace-launch.py', 'guest_receiver.py', 'guest_invocation.py', 'guest_network.py', 'guest_readiness.py', 'guest_control.py', 'guest_recovery.py', 'sealantd', 'bootstrap-crypto.mjs',
                                       'boot-policy.json', 'bundle-inputs.json',
                                       'project-install.sh', 'native-inputs.json')]
     files += [Path('/etc/systemd/system') / name for name in (
         'sealant-held.service', 'sealant-held-watchdog.service', 'sealant-held-watchdog.timer', 'sealant-workspace.service', 'sealant-workspace.slice',
-        'sealant-bootstrap.service', 'sealant-control-relay.service')]
+        'sealant-bootstrap.service', 'sealant-control-relay.service', 'sealant-recovery.service')]
     files += [Path('/usr/local/lib/sealant/control-relay.cjs')]
     value = ProtectedManifest('sealant-guest-manifest-v1', {str(path): file_identity(path) for path in files},
                               private_json(ROOT / 'native-inputs.json'),

@@ -59,7 +59,7 @@ export const boatReadinessWorkerLayer: Layer.Layer<
   SealantDB | CredentialCipher | BoatAllocationProvider | BoatResourcesHost
 > = boatReadinessLayer.pipe(Layer.provide(Layer.merge(Resources, boatWorkerExecutionLayer)));
 
-/** Explicit canonical close, sharing execution custody. No scanner or generic stop invokes it. */
+/** Canonical stopped-run reconciliation, sharing the original sealed execution custody. */
 export const boatFinalCloseWorkerLayer: Layer.Layer<
   BoatFinalClose,
   never,

@@ -37,13 +37,25 @@ export class BoatFinalCloseError extends Error {
     super(`Boat FINAL close: ${code}`);
   }
 }
-/** Explicit FINAL close of a stopped run. Capture-only recovery and enrolled parking remain separate. */
+/** One bounded page; the worker carries its cursor independently of allocation and resources. */
+export interface BoatCloseSweep {
+  readonly entries: readonly {
+    readonly runId: string;
+    readonly outcome: "closed" | "retained" | "pending" | "skipped" | "held" | "unavailable";
+  }[];
+  readonly next?: string;
+}
+/** FINAL close and original-boot capture recovery. Enrolled parking uses its incarnation owner. */
 export class BoatFinalClose extends Context.Service<
   BoatFinalClose,
   {
     readonly close: (
       target: BoatExecutionTarget,
     ) => Effect.Effect<"closed" | "retained" | "pending", BoatFinalCloseError>;
+    readonly reconcile: (input: {
+      readonly limit: number;
+      readonly after?: string;
+    }) => Effect.Effect<BoatCloseSweep, BoatFinalCloseError>;
   }
 >()("@sealant/workspaces/boat/BoatFinalClose") {}
 /** The root supplies the allocation account; this service never discovers credentials. */
@@ -191,6 +203,8 @@ const make: Effect.Effect<
       reservation.closeId ?? randomUUID(),
     );
     if (root?.deletionState !== "deleting-issued") {
+      const available = yield* execution.recover(target);
+      if (available !== "running") return "retained" as const;
       const control = yield* execution.control(target);
       const outcome = yield* drainCaptureBeforeStop({
         runId: target.runId,
@@ -240,10 +254,59 @@ const make: Effect.Effect<
     if (!removed.removed) return yield* Effect.fail(new BoatFinalCloseError("held"));
     return yield* finish(target);
   });
+  const boundedClose = (target: BoatExecutionTarget) =>
+    close(target).pipe(
+      Effect.timeout(120_000),
+      Effect.mapError((error) =>
+        error instanceof BoatFinalCloseError ? error : new BoatFinalCloseError("unavailable"),
+      ),
+    );
+  const reconcile = Effect.fn("BoatFinalClose.reconcile")(function* (
+    input: Parameters<BoatFinalClose["Service"]["reconcile"]>[0],
+  ) {
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 20)
+      return yield* Effect.fail(new BoatFinalCloseError("held"));
+    const ids = yield* allocations.list({ deploymentId: host.deploymentId, ...input });
+    const entries = yield* Effect.forEach(
+      ids,
+      (id) =>
+        Effect.gen(function* () {
+          const allocation = yield* allocations.get(id);
+          if (allocation?.phase !== "bound" || allocation.target === null)
+            return { runId: id, outcome: "skipped" as const };
+          const target = allocation.target;
+          const instance = yield* runtimes.getRuntimeInstanceByRunId(target.runId);
+          if (
+            instance?.adapter !== "boat" ||
+            instance.resourceId !== target.sandboxId ||
+            instance.stopReason === null ||
+            instance.removedAt !== null
+          )
+            return { runId: id, outcome: "skipped" as const };
+          const reservation = yield* tunnels.get(id);
+          if (reservation?.binding.gatewayHostId !== host.gatewayHostId)
+            return { runId: id, outcome: "skipped" as const };
+          return { runId: id, outcome: yield* boundedClose(target) };
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.succeed({
+              runId: id,
+              outcome:
+                error instanceof BoatFinalCloseError && error.code === "held"
+                  ? ("held" as const)
+                  : ("unavailable" as const),
+            }),
+          ),
+        ),
+      { concurrency: 4 },
+    );
+    const last = ids.at(-1);
+    return { entries, ...(ids.length === input.limit && last !== undefined ? { next: last } : {}) };
+  });
   return BoatFinalClose.of({
-    close: (target) =>
-      close(target).pipe(
-        Effect.timeout(120_000),
+    close: boundedClose,
+    reconcile: (input) =>
+      reconcile(input).pipe(
         Effect.mapError((error) =>
           error instanceof BoatFinalCloseError ? error : new BoatFinalCloseError("unavailable"),
         ),

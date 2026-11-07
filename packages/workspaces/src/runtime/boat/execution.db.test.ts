@@ -142,10 +142,20 @@ class GuestFixture implements BoatGuestTransport {
   async call(
     _host: unknown,
     bearer: BoatSecret,
-    route: "status" | "stage" | "start" | "isolate" | "permit" | "readiness",
+    route: Parameters<BoatGuestTransport["call"]>[2],
     body?: Redacted.Redacted<string>,
   ) {
     expect(bearer.reveal()).toBe(this.token);
+    if (route === "recover") {
+      if (body === undefined) throw new Error("missing recovery body");
+      const request = z.object({ binding: z.unknown() }).parse(JSON.parse(Redacted.value(body)));
+      return {
+        format: "sealant-capture-recovery-status-v1",
+        binding: request.binding,
+        execution: this.terminal ? "issued" : "running",
+        mode: this.terminal ? "recovery" : "original",
+      };
+    }
     if (route === "stage") {
       if (body === undefined) throw new Error("no body");
       const raw = Redacted.value(body);
@@ -308,6 +318,29 @@ const test = async (
 const execute = Effect.runPromise;
 
 describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () => {
+  it("allows only terminally held original identities to request capture-only recovery", () =>
+    test(async ({ executor, repo, target, guest }) => {
+      await execute(executor.exchange(target));
+      await expect(execute(executor.recover(target))).rejects.toThrow("invocation-held");
+      await execute(executor.stage(target.runId, payload()));
+      await execute(
+        executor.permit(target, { resourceReceipt: "e".repeat(64), tunnelReceipt: "f".repeat(64) }),
+      );
+      await execute(executor.start(target.runId));
+      await expect(execute(executor.recover(target))).rejects.toThrow("invocation-held");
+      await execute(executor.hold(target));
+      const held = await execute(repo.get(target.runId));
+      expect(await execute(executor.recover(target))).toBe("running");
+      guest.terminal = true;
+      expect(await execute(executor.recover(target))).toBe("pending");
+      expect(await execute(executor.recover(target))).toBe("pending");
+      await expect(execute(executor.recover({ ...target, bootId: randomUUID() }))).rejects.toThrow(
+        "target-mismatch",
+      );
+      expect(await execute(repo.get(target.runId))).toEqual(held);
+      await expect(execute(executor.start(target.runId))).rejects.toThrow("invocation-held");
+      expect(guest.starts).toBe(1);
+    }));
   it("freezes permit receipts before lost delivery, adopts replay and requires fresh authenticated health", () =>
     test(async ({ executor, repo, target, guest }) => {
       await execute(executor.exchange(target));

@@ -1042,6 +1042,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         runtime.runPromise(Effect.flatMap(BoatResources, (resources) => resources.reach()));
       return {
         runtime,
+        reconcileCloses: (input: { limit: number; after?: string }) =>
+          runtime.runPromise(Effect.flatMap(BoatFinalClose, (close) => close.reconcile(input))),
         reconcileResources: (input: { limit: number; after?: string }) =>
           runtime.runPromise(
             Effect.flatMap(BoatResources, (resources) => resources.reconcile(input)),
@@ -1051,13 +1053,18 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     const WorkerLayer: Layer.Layer<BoatAllocation> = boatAllocationWorkerLayer.pipe(
       Layer.provide(Infra),
     );
-    return { runtime: ManagedRuntime.make(WorkerLayer), reconcileResources: undefined };
+    return {
+      runtime: ManagedRuntime.make(WorkerLayer),
+      reconcileResources: undefined,
+      reconcileCloses: undefined,
+    };
   })();
   const boatRuntime = boatAssembly?.runtime;
   resourceTick();
   const resourceTickTimer = setInterval(resourceTick, env.SEALANT_RESOURCE_TICK_MS);
   let boatCursor: string | undefined;
   let boatResourceCursor: string | undefined;
+  let boatCloseCursor: string | undefined;
   let boatSweepRunning = false;
   const runBoatSweep = async () => {
     if (boatRuntime === undefined || boatSweepRunning) return;
@@ -1073,6 +1080,17 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         }),
       );
       boatCursor = report.next;
+      if (boatAssembly?.reconcileCloses !== undefined) {
+        const closed = await boatAssembly.reconcileCloses({
+          limit: 20,
+          ...(boatCloseCursor === undefined ? {} : { after: boatCloseCursor }),
+        });
+        boatCloseCursor = closed.next;
+        const held = closed.entries.filter(
+          (entry) => !["closed", "skipped"].includes(entry.outcome),
+        );
+        if (held.length > 0) console.warn("Boat close obligations remain", { entries: held });
+      }
       if (boatAssembly?.reconcileResources !== undefined) {
         const resources = await boatAssembly.reconcileResources({
           limit: 20,

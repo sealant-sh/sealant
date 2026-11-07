@@ -16,9 +16,11 @@ OWNER_UID = 131072
 
 def connect():
     with receiver.locked():
-        if invocation.observe() != 'running':
+        import guest_recovery as recovery
+        recovering = recovery.path().exists()
+        if (recovery.observe() if recovering else invocation.observe()) != 'running':
             raise receiver.Refusal('control-invocation-not-running')
-        expected = invocation.state()['gate']
+        expected = invocation.state(recovery.invocation_path())['gate'] if recovering else invocation.state()['gate']
         held = guest.HeldProcess(expected['pid'])
         descriptors = []
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

@@ -361,6 +361,8 @@ const canonical = (value: unknown): string => {
   return JSON.stringify(value) ?? "null";
 };
 class GuestFixture implements BoatGuestTransport {
+  recovery: "running" | "issued" | "ended" | "unresolved" = "running";
+  wrongRecoveryBinding = false;
   starts = 0;
   permitCount = 0;
   readonly actions: string[] = [];
@@ -427,6 +429,18 @@ class GuestFixture implements BoatGuestTransport {
   }
   async call(_host: unknown, bearer: BoatSecret, route: string, body?: Redacted.Redacted<string>) {
     this.actions.push(route);
+    if (route === "recover") {
+      const request = z
+        .object({ binding: z.unknown() })
+        .parse(JSON.parse(Redacted.value(body ?? Redacted.make(""))));
+      return {
+        format: "sealant-capture-recovery-status-v1",
+        binding: request.binding,
+        execution: this.recovery,
+        mode: this.recovery === "running" ? "original" : "recovery",
+        ...(this.wrongRecoveryBinding ? { binding: {} } : {}),
+      };
+    }
     if (route === "stage")
       this.admission = z
         .object({ epoch: z.number(), operation_id: z.string() })
@@ -801,6 +815,51 @@ const tunnelRecord = async (s: AllocationFixture, target: BoatExecutionTarget) =
 };
 
 describe.runIf(databaseUrl !== undefined)("Boat canonical FINAL close", () => {
+  it("reconciles only stopped current runtimes on this gateway host and resumes after the page cursor", () =>
+    test(async (s) => {
+      const target = await launched(s);
+      const { owner, daemon } = await execute(s.final([savedStatus()]));
+      expect((await execute(owner.reconcile({ limit: 1 }))).entries).toEqual([
+        { runId: target.runId, outcome: "skipped" },
+      ]);
+      expect(daemon.calls).toEqual([]);
+      expect(s.provider.deleteCalls).toBe(0);
+      await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+      s.gateway.allowRemoval = true;
+      const result = await execute(owner.reconcile({ limit: 1 }));
+      expect(result).toEqual({
+        entries: [{ runId: target.runId, outcome: "closed" }],
+        next: target.runId,
+      });
+      expect(await execute(owner.reconcile({ limit: 1, after: target.runId }))).toEqual({
+        entries: [],
+      });
+      expect((await execute(owner.reconcile({ limit: 1 }))).entries).toEqual([
+        { runId: target.runId, outcome: "skipped" },
+      ]);
+      expect(s.provider.deleteCalls).toBe(1);
+      for (const limit of [0, -1, 21, 1.5])
+        await expect(execute(owner.reconcile({ limit }))).rejects.toThrow("held");
+    }));
+  it("keeps pending, ended and unresolved capture-only recovery in custody without FINAL or deletion", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const { owner, daemon } = await execute(s.final([savedStatus()]));
+      for (const state of ["issued", "ended", "unresolved"] as const) {
+        s.guest.recovery = state;
+        expect(await execute(owner.close(target))).toBe("retained");
+        expect(daemon.calls).toEqual([]);
+        expect(s.provider.deleteCalls).toBe(0);
+        expect((await tunnelRecord(s, target)).released).toBeUndefined();
+      }
+      s.guest.recovery = "running";
+      s.guest.wrongRecoveryBinding = true;
+      await expect(execute(owner.close(target))).rejects.toThrow("unavailable");
+      expect(daemon.calls).toEqual([]);
+      s.guest.wrongRecoveryBinding = false;
+      expect(await execute(owner.close(target))).toBe("closed");
+      expect(s.guest.starts).toBe(1);
+    }));
   it("drains authenticated FINAL, proves exact provider and host cleanup, then reuses only the released port", () =>
     test(async (s) => {
       const target = await stopLaunched(s);

@@ -155,7 +155,7 @@ class ReceiverTests(unittest.TestCase):
                 self.assertEqual(request('GET', '/anything')[0], 404)
                 self.assertEqual(request('POST', '/sealant/bootstrap/isolate', '{}', auth='wrong', headers={'Content-Type': 'application/json'})[0], 401)
                 self.assertEqual(request('POST', '/sealant/bootstrap/isolate', '{}', headers={'Content-Type': 'application/json'})[0], 409)
-                for route in ('permit', 'readiness'):
+                for route in ('permit', 'readiness', 'recover'):
                     url = '/sealant/bootstrap/' + route
                     self.assertEqual(request('POST', url, '{}', auth='wrong', headers={'Content-Type': 'application/json'})[0], 401)
                     self.assertEqual(request('POST', url, '{}', headers={'Content-Type': 'application/json'})[0], 409)

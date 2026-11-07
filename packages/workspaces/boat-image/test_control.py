@@ -13,6 +13,7 @@ import guest_boot as guest
 import guest_control as control
 import guest_invocation as invocation
 import guest_receiver as receiver
+import guest_recovery as recovery
 
 
 class ControlTests(unittest.TestCase):
@@ -51,6 +52,23 @@ class ControlTests(unittest.TestCase):
                 stream.sendall(b'exact daemon')
                 self.assertEqual(peer.recv(64), b'exact daemon')
         held.close()
+
+    def test_capture_recovery_proxy_uses_the_recovery_gate_and_still_checks_real_peer_credentials(self):
+        marker = self.root / 'recovery.json'
+        marker.write_bytes(b'{}')
+        def observe(path=None, unit=invocation.UNIT):
+            self.assertEqual((path, unit), (recovery.invocation_path(), recovery.UNIT))
+            return 'running'
+        with patch.object(recovery, 'path', return_value=marker), patch.object(invocation, 'observe', side_effect=observe):
+            stream, held = control.connect()
+            with stream:
+                peer, _ = self.listener.accept()
+                with peer:
+                    stream.sendall(b'recovery only')
+                    self.assertEqual(peer.recv(64), b'recovery only')
+            held.close()
+        with patch.object(recovery, 'path', return_value=marker), patch.object(invocation, 'observe', return_value='ended'), self.assertRaises(receiver.Refusal):
+            control.connect()
 
     def test_replaced_or_symlinked_socket_and_parent_refuse(self):
         socket_path = self.root / 'run/sealant/control.sock'

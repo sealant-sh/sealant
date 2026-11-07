@@ -313,7 +313,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.command == 'GET' and self.path == '/sealant/bootstrap/status':
                     self.reply(200, status())
                     return
-                if self.command != 'POST' or self.path not in ('/sealant/bootstrap/stage', '/sealant/bootstrap/start', '/sealant/bootstrap/isolate', '/sealant/bootstrap/permit', '/sealant/bootstrap/readiness'):
+                if self.command != 'POST' or self.path not in ('/sealant/bootstrap/stage', '/sealant/bootstrap/start', '/sealant/bootstrap/isolate', '/sealant/bootstrap/permit', '/sealant/bootstrap/readiness', '/sealant/bootstrap/recover'):
                     self.reply(404, {'error': 'unknown-route'})
                     return
                 lengths = self.headers.get_all('Content-Length', [])
@@ -324,7 +324,10 @@ class Handler(BaseHTTPRequestHandler):
                 raw = self.rfile.read(int(lengths[0]))
                 if len(raw) != int(lengths[0]):
                     raise Refusal('incomplete-body')
-                if self.path in ('/sealant/bootstrap/permit', '/sealant/bootstrap/readiness'):
+                if self.path == '/sealant/bootstrap/recover':
+                    import guest_recovery
+                    self.reply(200, guest_recovery.start(json.loads(raw)))
+                elif self.path in ('/sealant/bootstrap/permit', '/sealant/bootstrap/readiness'):
                     import guest_readiness
                     action = guest_readiness.permit if self.path.endswith('/permit') else guest_readiness.readiness
                     self.reply(200, action(json.loads(raw)))

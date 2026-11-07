@@ -31,6 +31,23 @@ const spec = (family: "ubuntu" | "nix" | "auto" | "arch" | "fedora" | "custom" =
   });
 
 describe("native recipe boundary", () => {
+  it("packages the isolated capture-only recovery unit and its protected interpreter module", async () => {
+    const planned = await createNativeRecipe(spec(), serializationBundleFixture);
+    if (!planned.ok) throw planned.error;
+    const files = planned.value.files;
+    const unit = files.find((file) => file.path === "/etc/systemd/system/sealant-recovery.service");
+    expect(unit?.mode).toBe("0644");
+    expect(Buffer.from(unit?.bytes ?? []).toString()).toContain("guest_recovery.py");
+    expect(Buffer.from(unit?.bytes ?? []).toString()).toContain("Restart=no");
+    expect(files.some((file) => file.path === "/var/lib/sealant/guest/guest_recovery.py")).toBe(
+      true,
+    );
+    const builder = Buffer.from(
+      files.find((file) => file.path.endsWith("/build_guest.py"))?.bytes ?? [],
+    ).toString();
+    expect(builder).toContain("'guest_recovery.py'");
+    expect(builder).toContain("'sealant-recovery.service'");
+  });
   it("preserves Boat's base systemd family while installing the matching nspawn package", async () => {
     for (const family of ["ubuntu", "nix"] as const) {
       const recipe = await createNativeRecipe(spec(family), serializationBundleFixture);

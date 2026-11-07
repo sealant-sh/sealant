@@ -132,7 +132,7 @@ export interface BoatGuestTransport {
   readonly call: (
     access: BoatHostedControl,
     bearer: BoatSecret,
-    route: "status" | "stage" | "start" | "isolate" | "permit" | "readiness",
+    route: "status" | "stage" | "start" | "isolate" | "permit" | "readiness" | "recover",
     body?: Redacted.Redacted<string>,
   ) => Promise<unknown>;
   /** Round-trips daemon health and capabilities through the authenticated relay. */
@@ -292,6 +292,10 @@ export interface BoatExecutionService {
   ) => Effect.Effect<Redacted.Redacted<SealantTarget>, Failure>;
   /** Irreversibly prevents new worker starts without disturbing the daemon needed for FINAL. */
   readonly hold: (target: BoatExecutionTarget) => Effect.Effect<void, Failure>;
+  /** Capture-only restart on the original boot. Missing original tmpfs remains held. */
+  readonly recover: (
+    target: BoatExecutionTarget,
+  ) => Effect.Effect<"running" | "pending" | "held", Failure>;
   /** Freezes isolation receipts before authenticated, replay-safe permit issuance. */
   readonly permit: (
     target: BoatExecutionTarget,
@@ -868,7 +872,67 @@ const make: Effect.Effect<
       admission: { ...record.admission, sealedEnvelope: null },
     });
   });
-  return BoatExecution.of({ exchange, stage, start, isolate, permit, readiness, control, hold });
+  const recover = Effect.fn("BoatExecution.recover")(function* (target: BoatExecutionTarget) {
+    const record = yield* load(target.runtimeInstanceId);
+    if (!isDeepStrictEqual(record.target, target))
+      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    if (record.phase !== "held" || record.admission === null || record.isolation === undefined)
+      return yield* Effect.fail(new BoatExecutionError("invocation-held"));
+    const binding = {
+      identity: identity(target),
+      boot_id: target.bootId,
+      epoch: record.admission.epoch,
+      operation_id: record.admission.operationId,
+    };
+    const connection = yield* access(record);
+    const result = yield* io(() =>
+      transport.call(
+        connection.hosted,
+        connection.bearer,
+        "recover",
+        Redacted.make(
+          JSON.stringify({
+            format: "sealant-capture-recovery-v1",
+            binding,
+          }),
+        ),
+      ),
+    );
+    const reply = yield* attempt("invalid-reply", () => {
+      const parsed = z
+        .strictObject({
+          format: z.literal("sealant-capture-recovery-status-v1"),
+          binding: z.unknown(),
+          execution: z.enum(["unavailable", "issued", "running", "ended", "unresolved"]),
+          mode: z.enum(["original", "recovery"]),
+        })
+        .parse(result);
+      if (
+        !isDeepStrictEqual(parsed.binding, binding) ||
+        (parsed.mode === "original" && parsed.execution !== "running")
+      )
+        throw new Error();
+      return parsed;
+    });
+    if (!isDeepStrictEqual(yield* load(target.runtimeInstanceId), record))
+      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    return reply.execution === "running"
+      ? "running"
+      : reply.execution === "issued"
+        ? "pending"
+        : "held";
+  });
+  return BoatExecution.of({
+    exchange,
+    stage,
+    start,
+    isolate,
+    permit,
+    readiness,
+    control,
+    hold,
+    recover,
+  });
 });
 /** Open assembly for worker infrastructure and faithful test transports. */
 export const boatExecutionLayerNoDeps: Layer.Layer<

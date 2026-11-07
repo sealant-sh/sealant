@@ -1,10 +1,10 @@
 # Boat FINAL close and tunnel release
 
-`BoatFinalClose.close` is an explicit worker capability for an existing Boat allocation whose stop
-was requested. The runtime stays unregistered. Neither a scanner nor generic Docker cleanup calls
-this capability, and it does not admit a session. Capture-only recovery and executable parking are
-still separate work. Roots already enrolled in custody contract 3 are refused until the
-incarnation-aware executor exists.
+`BoatFinalClose.close` closes an existing Boat allocation whose stop was requested. A bounded worker
+sweep visits stopped current runtimes on its own gateway host, with its own cursor and four calls at
+a time. Active, already removed and other-host runtimes are skipped. The runtime stays unregistered.
+Generic Docker cleanup does not call this capability, and it does not admit a session. Roots already
+enrolled in custody contract 3 are refused until the incarnation-aware parking executor exists.
 
 ## Before removal
 
@@ -28,7 +28,31 @@ The canonical capture drain sends FINAL through authenticated control and record
 in `workspace_capture_drains`. Empty queues do not count as FINAL completion. Incomplete,
 unreadable, contradictory or unrecorded evidence retains the VM and its tunnel. The drain has a
 60-second budget; the complete close call has a 120-second bound. A retry can drain the same held
-daemon. It never restages launch inputs or starts ordinary setup again.
+daemon.
+
+## Capture-only recovery
+
+Before FINAL, the authenticated receiver observes the original invocation. If it is still running,
+it returns that observation without stopping or starting anything. Otherwise it can issue one
+capture-only recovery on the same disk and boot. Its immutable original admission must still be
+present on protected tmpfs, including the exact launch and secret files. Every file is opened
+without following symlinks, must be private and root-owned, and must match its admitted size and
+hash. A missing file, changed boot, changed epoch or non-capture source refuses before closure.
+
+The receiver durably closes ordinary launch replay before stopping the original service and its
+mapped native child. It requires an empty workspace process census, the same isolation permit and
+network, and a fresh shipped-code check. The separate `sealant-recovery.service` is static, has
+`Restart=no`, uses the same resource slice and peer, and runs only `sealantd boot --recovery`. The
+pinned daemon's recovery mode excludes materialization, dotfiles, lifecycle steps and harness
+execution. No fresh launch payload is accepted. The original invocation record stays unchanged.
+
+Recovery intent and invocation issuance are durable before dispatch. A lost start reply is
+observe-only; neither a new request nor a new service invocation can replay it. A crash in the
+pre-dispatch gap can retain an issued intent rather than infer that no start happened. Recovery
+status and the control proxy pin the separate recovery process identities. Pending, ended,
+unresolved or unreadable recovery retains the VM, native pin and port. FINAL proceeds only through
+the exact running original or recovery daemon. A cold boot cannot reconstruct tmpfs through this
+path. Snapshot hydration and fresh-epoch recovery belong to the canonical parking owner.
 
 ## Exact cleanup and retry
 
@@ -64,10 +88,13 @@ concurrent closes. The real Docker/WireGuard proof exercises linked-resource and
 cross-project and host refusal, replay, and exact gateway/reach/egress cleanup. These are separate
 local proofs; the HTTP fixture is not a real Boat deletion or a complete live close.
 
-Issue #465 remains an admission blocker until stop dispatch, incarnation-aware recovery/parking and
-the live end-to-end proof are integrated. Readiness PR #468 also requires VM 131 networking approval
-and live proof before merge. This layer does not claim either gate. No provider allocation, actual
-Boat key read, box action or Boat contact is needed for its local verification.
+Issue #465 remains an admission blocker until incarnation-aware recovery/parking and the live
+end-to-end proof are integrated. Executable automatic parking is also a hard admission gate: an idle
+session must be saved, its VM positively removed, and resume must restore its work intact. A local
+close proof does not establish that gate. Readiness PR #468 requires the approved VM 131 networking
+to be live and its real end-to-end proof before merge. This layer does not claim either gate. No
+provider allocation, actual Boat key read, box action or Boat contact is needed for its local
+verification.
 
 Parking will run plain `sync` before stop as hygiene. The durability investigation found
 user-created, edited, renamed and git files survived with or without it, so sync is not a lost-work
