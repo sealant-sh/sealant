@@ -545,3 +545,10 @@ export {
   BoatExecutionStoreError,
   type BoatExecutionRepoService,
 } from "./repositories/boat-executions.js";
+
+export {
+  BoatAllocationRepo,
+  BoatAllocationRepoLive,
+  BoatAllocationStoreError,
+  type BoatAllocationRepoService,
+} from "./repositories/boat-allocations.js";

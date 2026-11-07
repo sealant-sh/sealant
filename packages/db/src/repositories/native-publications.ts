@@ -19,6 +19,7 @@ import { and, asc, eq, gt, ne, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
+import { boatAllocations } from "../schema/boat-allocations.js";
 import {
   nativePublicationConsumers as consumers,
   nativePublications as publications,
@@ -426,6 +427,17 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
           if (pin.state === "released") {
             if (state === "released") return;
             return yield* Effect.fail(new NativeCatalogStoreError("consumer", "consumer-released"));
+          }
+          if (state === "released") {
+            const [allocation] = yield* db
+              .select({ id: boatAllocations.runtimeInstanceId })
+              .from(boatAllocations)
+              .where(eq(boatAllocations.runtimeInstanceId, consumer.runtimeInstanceId))
+              .limit(1);
+            if (allocation !== undefined)
+              return yield* Effect.fail(
+                new NativeCatalogStoreError("consumer", "consumer-conflict"),
+              );
           }
           yield* db
             .update(consumers)

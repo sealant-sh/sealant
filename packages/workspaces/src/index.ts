@@ -29,3 +29,5 @@ export * from "./worker/recover-retained-executors.js";
 export * from "./git/working-tree-changes.js";
 
 export * from "./worker/reconcile-native-publications.js";
+
+export { boatAllocationWorkerLayer } from "./worker/boat-allocation.js";

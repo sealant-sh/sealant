@@ -762,9 +762,35 @@ export const workerServerEnvSchema = databaseEnvSchema
   .merge(cloudflareRuntimeEnvSchema)
   .merge(microvmRuntimeEnvSchema)
   .merge(workspaceImagePlatformEnvSchema)
-  .merge(resourceInstancesEnvSchema);
+  .merge(resourceInstancesEnvSchema)
+  .extend({
+    /** Reconciliation only. These settings never register Boat for session admission. */
+    SEALANT_BOAT_API_KEY: z
+      .string()
+      .regex(/^[A-Za-z0-9._~-]{16,4096}$/)
+      .optional(),
+    SEALANT_BOAT_DEPLOYMENT_ID: z
+      .string()
+      .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/)
+      .optional(),
+  });
 
 export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) => {
+  if (input.SEALANT_BOAT_API_KEY !== undefined || input.SEALANT_BOAT_DEPLOYMENT_ID !== undefined) {
+    for (const key of [
+      "SEALANT_BOAT_API_KEY",
+      "SEALANT_BOAT_DEPLOYMENT_ID",
+      "SEALANT_CREDENTIALS_KEY",
+    ] as const) {
+      if (input[key] === undefined)
+        ctx.addIssue({
+          code: "custom",
+          path: [key],
+          message:
+            "Boat reconciliation requires provider, deployment and credential-cipher settings.",
+        });
+    }
+  }
   addControlClientTlsIssue(input, ctx);
   addRetiredMicrovmImageIssues(input, ctx);
   if (
