@@ -12,6 +12,7 @@ from unittest.mock import patch
 import guest_boot as guest
 import guest_receiver as receiver
 import guest_invocation as invocation
+import guest_network as network
 from guest_contract import canonical, digest
 
 
@@ -48,13 +49,19 @@ class InvocationTests(unittest.TestCase):
             if fail:
                 raise OSError('lost reply')
             return ''
-        with patch.object(guest, 'revalidate', return_value=(None, [], {})), patch.object(guest, 'run', side_effect=run) as systemd:
+        with patch.object(network, 'verify'), patch.object(guest, 'revalidate', return_value=(None, [], {})), patch.object(guest, 'run', side_effect=run) as systemd:
             yield systemd
 
     def test_no_producer_no_admission(self):
         with self.starting() as systemd, self.assertRaisesRegex(receiver.Refusal, 'isolation-permit-unavailable'):
             invocation.start(self.request)
         systemd.assert_not_called()
+        self.assertFalse(invocation.path().exists())
+
+    def test_permit_cannot_bypass_missing_network_setup(self):
+        self.permit()
+        with self.assertRaises(FileNotFoundError):
+            invocation.start(self.request)
         self.assertFalse(invocation.path().exists())
 
     def test_boolean_and_unbounded_epochs_refuse_before_intent(self):
@@ -101,7 +108,7 @@ class InvocationTests(unittest.TestCase):
                       'owner': owner, 'launcher': asdict(guest.identity(os.getpid())),
                       'gate': asdict(guest.identity(child.pid)), 'exit_code': None}
             guest.save(invocation.path(), record)
-            with patch.object(invocation, 'unit_identity', return_value=owner):
+            with patch.object(network, 'verify'), patch.object(invocation, 'unit_identity', return_value=owner):
                 self.assertEqual(invocation.observe(), 'running')
                 self.assertEqual(invocation.observe(), 'running')
                 child.terminate()
@@ -120,7 +127,7 @@ class InvocationTests(unittest.TestCase):
         owner = {'systemd_invocation': 'd' * 32, 'process': asdict(guest.identity(os.getpid()))}
         guest.save(invocation.path(), {'format': 'sealant-invocation-v1', 'binding': self.binding,
                    'status': 'launching', 'owner': owner, 'launcher': None, 'gate': None, 'exit_code': None})
-        with patch.object(invocation, 'unit_identity', return_value={**owner, 'systemd_invocation': 'e' * 32}):
+        with patch.object(network, 'verify'), patch.object(invocation, 'unit_identity', return_value={**owner, 'systemd_invocation': 'e' * 32}):
             self.assertEqual(invocation.observe(), 'unresolved')
 
     def test_wrapper_cannot_replay_even_under_a_fresh_service_invocation(self):

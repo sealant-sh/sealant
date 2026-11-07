@@ -82,13 +82,18 @@ const server = http.createServer(
         "/sealant/bootstrap/status",
         "/sealant/bootstrap/stage",
         "/sealant/bootstrap/start",
+        "/sealant/bootstrap/isolate",
       ].includes(request.url)
     ) {
       const length = request.headers["content-length"];
       const isStatus = request.method === "GET" && request.url === "/sealant/bootstrap/status";
       const isStage =
         request.method === "POST" &&
-        ["/sealant/bootstrap/stage", "/sealant/bootstrap/start"].includes(request.url);
+        [
+          "/sealant/bootstrap/stage",
+          "/sealant/bootstrap/start",
+          "/sealant/bootstrap/isolate",
+        ].includes(request.url);
       if (!isStatus && !isStage) {
         response.writeHead(404).end();
         return;

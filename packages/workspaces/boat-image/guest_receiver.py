@@ -266,6 +266,24 @@ def stage(value):
             process.close()
 
 
+def isolate(value):
+    from guest_invocation import binding
+    import guest_network as network
+    expected = binding()
+    require_tmpfs()
+    held = guest.revalidate()[1]
+    try:
+        result = network.configure(value, expected)
+        for process in held:
+            process.verify()
+        return result
+    except network.Refusal as error:
+        raise Refusal(str(error)) from None
+    finally:
+        for process in held:
+            process.close()
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.0'
 
@@ -284,7 +302,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.command == 'GET' and self.path == '/sealant/bootstrap/status':
                     self.reply(200, status())
                     return
-                if self.command != 'POST' or self.path not in ('/sealant/bootstrap/stage', '/sealant/bootstrap/start'):
+                if self.command != 'POST' or self.path not in ('/sealant/bootstrap/stage', '/sealant/bootstrap/start', '/sealant/bootstrap/isolate'):
                     self.reply(404, {'error': 'unknown-route'})
                     return
                 lengths = self.headers.get_all('Content-Length', [])
@@ -298,6 +316,8 @@ class Handler(BaseHTTPRequestHandler):
                 if self.path == '/sealant/bootstrap/start':
                     from guest_invocation import start
                     self.reply(200, start(json.loads(raw)))
+                elif self.path == '/sealant/bootstrap/isolate':
+                    self.reply(200, isolate(json.loads(raw)))
                 else:
                     self.reply(200, stage(json.loads(raw)))
         except Refusal as error:

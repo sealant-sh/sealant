@@ -565,7 +565,9 @@ def mapped_gates(candidates, root, owner):
                     for namespace in ('pid_namespace', 'mount_namespace', 'user_namespace'))]
 
 
-def launch_mapped(mode, script, manifest, held, observations, receipt, operation, verified=None):
+def mapped_argv(mode, script):
+    if mode == 'workspace':
+        import guest_network as network
     argv = invoke('/usr/bin/systemd-nspawn', '--quiet', '--settings=no', '--register=no', '--keep-unit',
                   '--machine=sealant-native', '--directory=' + str(MAPPED_ROOT), '--private-users=131072:65536',
                   '--private-users-ownership=chown', '--notify-ready=no', '--console=pipe', '--link-journal=no',
@@ -574,10 +576,22 @@ def launch_mapped(mode, script, manifest, held, observations, receipt, operation
                   '--bind-ro=' + str(script) + ':/run/sealant-operation',
                   *(['--private-network'] if mode == 'probe' else []),
                   *(['--bind-ro=' + str(script.parent) + ':/run/sealant-inputs',
-                     '--bind-ro=' + str(ROOT / 'sealantd') + ':/usr/local/bin/sealantd'] if mode == 'workspace' else []),
+                     '--bind-ro=' + str(ROOT / 'sealantd') + ':/usr/local/bin/sealantd',
+                     '--resolv-conf=off',
+                     '--bind-ro=' + str(network.resolver_path()) + ':/etc/resolv.conf'] if mode == 'workspace' else []),
                   '/run/sealant-runtime/lib64/ld-linux-x86-64.so.2', '--inhibit-cache', '--library-path',
                   '/run/sealant-runtime/lib/x86_64-linux-gnu:/run/sealant-runtime/usr/lib/x86_64-linux-gnu',
                   '/run/sealant-runtime/usr/bin/python3', '-I', '-S', '-B', '/run/sealant-entry.py')
+    # Join while still outer root. nspawn cannot setns into an outer-owned network after UID mapping.
+    return invoke('/usr/bin/nsenter', '--net=' + str(network.NAMESPACE), '--', *argv) if mode == 'workspace' else argv
+
+
+def launch_mapped(mode, script, manifest, held, observations, receipt, operation, verified=None):
+    network = None
+    if mode == 'workspace':
+        import guest_network as network
+        network.verify(operation)
+    argv = mapped_argv(mode, script)
     process = subprocess.Popen(invoke('/usr/bin/systemd-run', '--quiet', '--wait', '--pipe', '--collect',
                                '--unit=sealant-native-' + mode, '--service-type=exec', '-p', 'KillMode=control-group',
                                '-p', 'Restart=no', '-p', 'Delegate=no', '-p', 'NotifyAccess=none',
@@ -618,6 +632,8 @@ def launch_mapped(mode, script, manifest, held, observations, receipt, operation
         failures.extend(mapping_failures(manifest.files, gate_mappings, gate.identity, identity(gate.identity.pid)))
         if str(BUNDLE / 'usr/bin/python3') not in {mapping.path for mapping in gate_mappings}:
             failures.append('owned-gate-interpreter-mapping-missing')
+        if network is not None:
+            network.verify(operation, gate.identity.pid)
         if failures:
             raise ValueError(','.join(failures))
         if launcher is None:

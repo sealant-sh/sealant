@@ -57,7 +57,7 @@ describe("native recipe boundary", () => {
       expect(script).toContain(NATIVE_SUBSTRATE.systemd.indexSha256);
       expect(script).toContain(NATIVE_SUBSTRATE.systemd.sha256);
       expect(script).toContain(
-        'xz-utils libstdc++6 uidmap "$snapshot_directory/systemd-container.deb"',
+        'xz-utils libstdc++6 uidmap iproute2 nftables wireguard-tools procps util-linux "$snapshot_directory/systemd-container.deb"',
       );
       expect(script).toContain("apt-mark hold systemd-container");
       const unchanged =
