@@ -25,3 +25,4 @@ export * from "./workspaces/boat-support.js";
 export * from "./workspaces/boat-execution.js";
 
 export * from "./workspaces/boat-allocation.js";
+export * from "./workspaces/boat-tunnel.js";

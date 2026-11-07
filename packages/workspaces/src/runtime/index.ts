@@ -267,3 +267,11 @@ export {
 
 export { HttpBoatApi } from "./boat/api.js";
 export { BoatSecret } from "./boat/config.js";
+export {
+  BoatTunnelCredentialsOwner,
+  BoatTunnelCredentialsError,
+  boatTunnelCredentialsLayer,
+  boatTunnelCredentialsLayerNoDeps,
+  type BoatTunnelCredentials,
+  type BoatTunnelCredentialsService,
+} from "./boat/tunnel-credentials.js";

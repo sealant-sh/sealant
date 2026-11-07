@@ -13,6 +13,7 @@ export default defineConfig({
     "./src/schema/native-publications.ts",
     "./src/schema/boat-executions.ts",
     "./src/schema/boat-allocations.ts",
+    "./src/schema/boat-tunnels.ts",
     "./src/schema/capture-preservation.ts",
     "./src/schema/telemetry.ts",
   ],
