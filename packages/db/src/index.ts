@@ -552,3 +552,9 @@ export {
   BoatAllocationStoreError,
   type BoatAllocationRepoService,
 } from "./repositories/boat-allocations.js";
+export {
+  BoatTunnelRepo,
+  BoatTunnelStoreError,
+  boatTunnelRepoLayer,
+  type BoatTunnelRepoService,
+} from "./repositories/boat-tunnels.js";

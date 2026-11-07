@@ -16,7 +16,8 @@
     "./testing/native-publications": "./src/testing/native-publications.ts",
     "./testing/workspace-publications": "./src/testing/workspace-publications.ts",
     "./testing/boat-executions": "./src/testing/boat-executions.ts",
-    "./testing/boat-allocations": "./src/testing/boat-allocations.ts"
+    "./testing/boat-allocations": "./src/testing/boat-allocations.ts",
+    "./testing/boat-tunnels": "./src/testing/boat-tunnels.ts"
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",
