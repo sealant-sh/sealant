@@ -27,6 +27,9 @@ import {
   BoatResources,
   BoatResourcesHost,
   BoatReadiness,
+  BoatFinalClose,
+  BoatFinalCloseProvider,
+  boatFinalCloseWorkerLayer,
   boatReadinessWorkerLayer,
   boatResourcesLayer,
   boatWorkerExecutionLayer,
@@ -1022,10 +1025,18 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         }),
       });
       const Resources = boatResourcesLayer.pipe(Layer.provide(boatWorkerExecutionLayer));
-      const WorkerLayer: Layer.Layer<BoatAllocation | BoatResources | BoatReadiness> =
-        Layer.mergeAll(boatAllocationWorkerLayer, Resources, boatReadinessWorkerLayer).pipe(
-          Layer.provide(Layer.merge(Infra, Host)),
-        );
+      const WorkerLayer: Layer.Layer<
+        BoatAllocation | BoatResources | BoatReadiness | BoatFinalClose
+      > = Layer.mergeAll(
+        boatAllocationWorkerLayer,
+        Resources,
+        boatReadinessWorkerLayer,
+        boatFinalCloseWorkerLayer,
+      ).pipe(
+        Layer.provide(
+          Layer.mergeAll(Infra, Host, Layer.succeed(BoatFinalCloseProvider, { api: api.value })),
+        ),
+      );
       const runtime = ManagedRuntime.make(WorkerLayer);
       boatResourceReach = () =>
         runtime.runPromise(Effect.flatMap(BoatResources, (resources) => resources.reach()));

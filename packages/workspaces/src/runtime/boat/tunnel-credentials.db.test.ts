@@ -214,6 +214,64 @@ describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
         );
       expect(await execute(repo.get(binding.target.runId))).toEqual(saved);
     }));
+  it("tracks each dispatched host mutation and freezes only after all have positively returned", () =>
+    test(async ({ seed, owner, repo, executions }) => {
+      const binding = await seed();
+      await execute(owner.prepare(binding));
+      const control = await execute(executions.get(binding.target.runId));
+      if (control === undefined) throw new Error("missing execution");
+      const admission = {
+        epoch: 1,
+        operationId: randomUUID(),
+        digest: "a".repeat(64),
+        sealedEnvelope: "sealed",
+      };
+      const prepared = await execute(
+        executions.advance(control, { ...control, phase: "prepared", admission }),
+      );
+      await execute(executions.advance(prepared, { ...prepared, phase: "installed" }));
+      const network = {
+        epoch: admission.epoch,
+        operationId: admission.operationId,
+        endpoint: "10.0.0.41",
+        subnet: "10.98.0.32/27",
+      };
+      const initial = await execute(
+        repo.configure(requireRecord(await execute(repo.get(binding.target.runId))), network),
+      );
+      const first = randomUUID(),
+        second = randomUUID(),
+        close = randomUUID();
+      expect(await execute(repo.beginUpdate(initial, first))).toBe("issued");
+      expect(await execute(repo.beginUpdate(initial, first))).toBe("observe-only");
+      await expect(execute(repo.freeze(initial, close))).rejects.toThrow("stale-transition");
+      let current = requireRecord(await execute(repo.get(binding.target.runId)));
+      await expect(execute(repo.freeze(current, close))).rejects.toThrow("operation-held");
+      expect(await execute(repo.beginUpdate(current, second))).toBe("issued");
+      await execute(repo.endUpdate(binding, second));
+      current = requireRecord(await execute(repo.get(binding.target.runId)));
+      expect(current.updates).toEqual([first]);
+      await expect(execute(repo.freeze(current, close))).rejects.toThrow("operation-held");
+      await expect(
+        execute(repo.endUpdate({ ...binding, gatewayHostId: randomUUID() }, first)),
+      ).rejects.toThrow("binding-conflict");
+      await execute(repo.endUpdate(binding, first));
+      await execute(repo.endUpdate(binding, first));
+      current = requireRecord(await execute(repo.get(binding.target.runId)));
+      const frozen = await execute(repo.freeze(current, close));
+      expect(await execute(repo.freeze(current, close))).toEqual(frozen);
+      await expect(execute(repo.beginUpdate(current, randomUUID()))).rejects.toThrow(
+        "stale-transition",
+      );
+      await expect(execute(repo.beginUpdate(frozen, randomUUID()))).rejects.toThrow(
+        "operation-held",
+      );
+      await expect(execute(repo.configure(frozen, network))).rejects.toThrow("operation-held");
+      await expect(execute(repo.freeze(frozen, randomUUID()))).rejects.toThrow("binding-conflict");
+      expect(requireRecord(await execute(repo.get(binding.target.runId))).listenPort).toBe(
+        initial.listenPort,
+      );
+    }));
   it("reopens exact keys and port through a freshly built production service", () =>
     test(async ({ owner, repo, seed, reopen }) => {
       const binding = await seed();

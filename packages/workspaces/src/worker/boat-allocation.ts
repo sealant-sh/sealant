@@ -13,6 +13,11 @@ import {
   boatExecutionLayer,
   createBoatGuestTransport,
 } from "../runtime/boat/execution.js";
+import {
+  BoatFinalClose,
+  BoatFinalCloseProvider,
+  boatFinalCloseLayer,
+} from "../runtime/boat/final-close.js";
 import { SealantRuntime, SealantRuntimeControlLive } from "../sealantd/runtime.js";
 import { BoatReadiness, boatReadinessLayer } from "./boat-readiness.js";
 import { BoatResourcesHost, boatResourcesLayer } from "./boat-resources.js";
@@ -53,3 +58,10 @@ export const boatReadinessWorkerLayer: Layer.Layer<
   never,
   SealantDB | CredentialCipher | BoatAllocationProvider | BoatResourcesHost
 > = boatReadinessLayer.pipe(Layer.provide(Layer.merge(Resources, boatWorkerExecutionLayer)));
+
+/** Explicit canonical close, sharing execution custody. No scanner or generic stop invokes it. */
+export const boatFinalCloseWorkerLayer: Layer.Layer<
+  BoatFinalClose,
+  never,
+  SealantDB | CredentialCipher | BoatAllocationProvider | BoatFinalCloseProvider | BoatResourcesHost
+> = boatFinalCloseLayer.pipe(Layer.provide(boatWorkerExecutionLayer));

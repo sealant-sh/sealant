@@ -29,7 +29,7 @@ import {
 import { Context, Effect, Layer, Redacted } from "effect";
 import { z } from "zod";
 
-import type { SealantRuntimeService } from "../../sealantd/runtime.js";
+import type { SealantRuntimeService, SealantTarget } from "../../sealantd/runtime.js";
 import type { BoatApi } from "./api.js";
 import { BoatSecret, boatSandboxIdSchema, parseBoatUrl } from "./config.js";
 import { boatControlConnection, type BoatHostedControl } from "./connection.js";
@@ -285,6 +285,13 @@ export interface BoatExecutionService {
     target: BoatExecutionTarget,
     input: BoatGuestNetworkInput,
   ) => Effect.Effect<BoatGuestNetworkReceipt, Failure>;
+
+  /** Authenticated capture control for the original running or terminally held invocation. */
+  readonly control: (
+    target: BoatExecutionTarget,
+  ) => Effect.Effect<Redacted.Redacted<SealantTarget>, Failure>;
+  /** Irreversibly prevents new worker starts without disturbing the daemon needed for FINAL. */
+  readonly hold: (target: BoatExecutionTarget) => Effect.Effect<void, Failure>;
   /** Freezes isolation receipts before authenticated, replay-safe permit issuance. */
   readonly permit: (
     target: BoatExecutionTarget,
@@ -834,7 +841,34 @@ const make: Effect.Effect<
       admission: after.admission,
     };
   });
-  return BoatExecution.of({ exchange, stage, start, isolate, permit, readiness });
+
+  const control = Effect.fn("BoatExecution.control")(function* (target: BoatExecutionTarget) {
+    const record = yield* load(target.runtimeInstanceId);
+    if (!isDeepStrictEqual(record.target, target))
+      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    if (record.phase !== "running" && record.phase !== "held")
+      return yield* Effect.fail(new BoatExecutionError("invocation-held"));
+    const connection = yield* access(record);
+    return Redacted.make<SealantTarget>({
+      kind: "websocket",
+      ...boatControlConnection(connection.hosted, connection.bearer),
+      auth: { bearerToken: connection.bearer.reveal() },
+    });
+  });
+  const hold = Effect.fn("BoatExecution.hold")(function* (target: BoatExecutionTarget) {
+    const record = yield* load(target.runtimeInstanceId);
+    if (!isDeepStrictEqual(record.target, target))
+      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    if (record.phase === "held") return;
+    if (record.phase !== "running" || record.admission === null)
+      return yield* Effect.fail(new BoatExecutionError("invocation-held"));
+    yield* repo.advance(record, {
+      ...record,
+      phase: "held",
+      admission: { ...record.admission, sealedEnvelope: null },
+    });
+  });
+  return BoatExecution.of({ exchange, stage, start, isolate, permit, readiness, control, hold });
 });
 /** Open assembly for worker infrastructure and faithful test transports. */
 export const boatExecutionLayerNoDeps: Layer.Layer<
