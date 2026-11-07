@@ -595,7 +595,7 @@ def launch_mapped(mode, script, manifest, held, observations, receipt, operation
     process = subprocess.Popen(invoke('/usr/bin/systemd-run', '--quiet', '--wait', '--pipe', '--collect',
                                '--unit=sealant-native-' + mode, '--service-type=exec', '-p', 'KillMode=control-group',
                                '-p', 'Restart=no', '-p', 'Delegate=no', '-p', 'NotifyAccess=none',
-                               *(['-p', 'RuntimeMaxSec=600'] if mode != 'workspace' else ['-p', 'BindsTo=sealant-workspace.service']), *argv), env=ENV, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+                               *(['-p', 'RuntimeMaxSec=600'] if mode != 'workspace' else ['-p', 'BindsTo=sealant-workspace.service', '-p', 'Slice=sealant-workspace.slice']), *argv), env=ENV, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     launcher = None
     gate = None
     mappings = []

@@ -5,6 +5,7 @@ ConditionPathExists=/run/sealant-bootstrap/execution-permit.json
 
 [Service]
 Type=exec
+Slice=sealant-workspace.slice
 NotifyAccess=none
 KillMode=control-group
 Restart=no

@@ -168,6 +168,11 @@ jobs:
           REQUIRE_SEALANTD: "1"
         run: pnpm --filter @sealant/ssh-gateway exec vitest run daemon.test --reporter=verbose
 
+      - name: Boat readiness authenticates real daemon health through its relay
+        env:
+          SEALANTD_BIN: ${{ runner.temp }}/sealantd
+        run: pnpm --filter @sealant/workspaces test:e2e src/runtime/boat/readiness.e2e.ts
+
       # A workspace's Docker service is rootless dind, which needs unprivileged user namespaces.
       # GitHub's Ubuntu 24.04 image keeps Ubuntu's AppArmor default that refuses them, so the
       # service exits at start ("fork/exec /proc/self/exe: operation not permitted"; #373). Allow

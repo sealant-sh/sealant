@@ -1,10 +1,10 @@
 {
   "format": "sealant-native-assets-v1",
-  "relay": "491d22ae57e1e4462498b7dde2c1d052d6dd2a6067eb1547a079d8e24fd28f62",
+  "relay": "75dfda24eb4a1a30ecde5359121e69469a295b518e3966ab45ac1a7628a889c9",
   "files": [
     {
       "name": "guest_boot.py",
-      "sha256": "e7c3b2cc93a257cbb444872e6535a747aa5b4973e61eb8a257c19055687bd62b"
+      "sha256": "9d37b3414067ce98a8f34f6aef6dd36afaf9af0414c4c9caa2f530d1389d383f"
     },
     {
       "name": "guest_contract.py",
@@ -12,15 +12,15 @@
     },
     {
       "name": "build_guest.py",
-      "sha256": "8411e27b0e00c63340e7821d0a299584326429ed1b6105bd73501d39a2e473f1"
+      "sha256": "c58b68b5e8345c1c479d73f132c57eb1a7600583001dbf762d3602427fe9e3ee"
     },
     {
       "name": "workspace-launch.py",
-      "sha256": "c770bf9ae54e467c36cb38fc40eff463f11d4cb8753763441e55a3d2fc179ac0"
+      "sha256": "a1b059d33f2f975281081bde969760f4514b2dfb7939cc0e66d8f61f4be5f7de"
     },
     {
       "name": "workspace.service",
-      "sha256": "894d3138940915d44f59e139f6cb58e4d15141078dd01d59c946d3ca9db7f2ff"
+      "sha256": "1ddd7cf4ba0d662e3f891de8166ca7041c51db941180eda8f39c9e741253193a"
     },
     {
       "name": "held.service",
@@ -40,7 +40,7 @@
     },
     {
       "name": "guest_receiver.py",
-      "sha256": "571d6e27bd3dcfe3c165319faba5ff4b0e1d12b8bc7154f22300afa3dc98d51d"
+      "sha256": "a98d5656c3a685be2a5560c8f987d298522a75757247c1487ed7a66a73812613"
     },
     {
       "name": "bootstrap-crypto.mjs",
@@ -52,15 +52,27 @@
     },
     {
       "name": "relay.service",
-      "sha256": "414964afe2e8ef6bc2ad623b15162979945579dc4e8e77d5827d0c0761573070"
+      "sha256": "ef2b0b5c58bc1fb8036848b2506b961a177d2212610c67df3d1a71dfbb9d46a9"
     },
     {
       "name": "guest_invocation.py",
-      "sha256": "f427aa5848db0b0e3214bed4798cc33b39fde3eac011657fc5786a7eaa1e7ddd"
+      "sha256": "931bb0304689044e9ea65123bffe01bedbe2d8e868989f1e604adb1314bd7acf"
     },
     {
       "name": "guest_network.py",
       "sha256": "9f8d04b5c8a532dcb228cc67f5f2e03ec3747a86bc92579fe9fd570b3cc3f708"
+    },
+    {
+      "name": "guest_readiness.py",
+      "sha256": "85257e36665c62a77205550533e29905d72e6a0c41137f36c907dd67396aeb4e"
+    },
+    {
+      "name": "guest_control.py",
+      "sha256": "64c3ef7741f46e0eeb46afb928f64ed9b18e0834672ce166900821120a5f578d"
+    },
+    {
+      "name": "workspace.slice",
+      "sha256": "fa55621871ad78a1a2a06c9afb171fbe38da3dfab93ea910b99a03bf04c7f74b"
     }
   ]
 }

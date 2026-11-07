@@ -271,7 +271,7 @@ def isolate(value):
     import guest_network as network
     expected = binding()
     require_tmpfs()
-    held = guest.revalidate()[1]
+    held = revalidate_execution()
     try:
         result = network.configure(value, expected)
         for process in held:
@@ -282,6 +282,17 @@ def isolate(value):
     finally:
         for process in held:
             process.close()
+
+
+def revalidate_execution():
+    import guest_invocation as invocation
+    if not invocation.path().exists():
+        return guest.revalidate()[1]
+    if invocation.state()['binding'] != invocation.binding() or invocation.observe() not in ('issued', 'running'):
+        raise Refusal('invocation-held')
+    manifest = ProtectedManifest.parse(guest.private_json(guest.ROOT / 'manifest.json'))
+    guest.verify_protected(manifest, guest.BUNDLE)
+    return [guest.HeldProcess(os.getpid())]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -302,7 +313,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.command == 'GET' and self.path == '/sealant/bootstrap/status':
                     self.reply(200, status())
                     return
-                if self.command != 'POST' or self.path not in ('/sealant/bootstrap/stage', '/sealant/bootstrap/start', '/sealant/bootstrap/isolate'):
+                if self.command != 'POST' or self.path not in ('/sealant/bootstrap/stage', '/sealant/bootstrap/start', '/sealant/bootstrap/isolate', '/sealant/bootstrap/permit', '/sealant/bootstrap/readiness'):
                     self.reply(404, {'error': 'unknown-route'})
                     return
                 lengths = self.headers.get_all('Content-Length', [])
@@ -313,7 +324,11 @@ class Handler(BaseHTTPRequestHandler):
                 raw = self.rfile.read(int(lengths[0]))
                 if len(raw) != int(lengths[0]):
                     raise Refusal('incomplete-body')
-                if self.path == '/sealant/bootstrap/start':
+                if self.path in ('/sealant/bootstrap/permit', '/sealant/bootstrap/readiness'):
+                    import guest_readiness
+                    action = guest_readiness.permit if self.path.endswith('/permit') else guest_readiness.readiness
+                    self.reply(200, action(json.loads(raw)))
+                elif self.path == '/sealant/bootstrap/start':
                     from guest_invocation import start
                     self.reply(200, start(json.loads(raw)))
                 elif self.path == '/sealant/bootstrap/isolate':
@@ -361,8 +376,14 @@ def serve():
         if not stat.S_ISSOCK(path.lstat().st_mode):
             raise Refusal('unexpected-receiver-socket')
         path.unlink()
-    with UnixServer(str(path), Handler) as server:
-        server.serve_forever()
+    import guest_control
+    import threading
+    with guest_control.server() as control, UnixServer(str(path), Handler) as server:
+        threading.Thread(target=control.serve_forever, daemon=True).start()
+        try:
+            server.serve_forever()
+        finally:
+            control.shutdown()
 
 
 if __name__ == '__main__':

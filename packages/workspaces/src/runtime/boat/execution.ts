@@ -15,6 +15,7 @@ import {
   type BoatExecutionStoreError,
   type SealantDB,
 } from "@sealant/db";
+import { RuntimeState } from "@sealant/runtime-protocol";
 import {
   boatAdmissionPinsSchema,
   boatNetworkIntentSchema,
@@ -28,9 +29,10 @@ import {
 import { Context, Effect, Layer, Redacted } from "effect";
 import { z } from "zod";
 
+import type { SealantRuntimeService } from "../../sealantd/runtime.js";
 import type { BoatApi } from "./api.js";
 import { BoatSecret, boatSandboxIdSchema, parseBoatUrl } from "./config.js";
-import type { BoatHostedControl } from "./connection.js";
+import { boatControlConnection, type BoatHostedControl } from "./connection.js";
 
 const name = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/);
 const identitySchema = z.strictObject({
@@ -130,14 +132,24 @@ export interface BoatGuestTransport {
   readonly call: (
     access: BoatHostedControl,
     bearer: BoatSecret,
-    route: "status" | "stage" | "start" | "isolate",
+    route: "status" | "stage" | "start" | "isolate" | "permit" | "readiness",
     body?: Redacted.Redacted<string>,
   ) => Promise<unknown>;
+  /** Round-trips daemon health and capabilities through the authenticated relay. */
+  readonly probe: (access: BoatHostedControl, bearer: BoatSecret) => Promise<BoatDaemonReady>;
+}
+
+/** Safe daemon observation. The generated runtime ID is correlated by the surrounding invocation reads. */
+export interface BoatDaemonReady {
+  readonly runtimeId: string;
+  readonly healthy: boolean;
+  readonly supports: readonly string[];
 }
 
 /** The only production transport: no provider upload or command receives launch secrets. */
 export const createBoatGuestTransport = (
   api: Pick<BoatApi, "get" | "execute" | "hostControl">,
+  runtime: SealantRuntimeService,
 ): BoatGuestTransport => {
   const verify = async (target: BoatExecutionTarget) => {
     const id = boatSandboxIdSchema.parse(target.sandboxId);
@@ -160,6 +172,26 @@ export const createBoatGuestTransport = (
     return id;
   };
   return {
+    probe: (access, bearer) =>
+      Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const connection = boatControlConnection(access, bearer);
+            const session = yield* runtime.connect({
+              kind: "websocket",
+              ...connection,
+              auth: { bearerToken: bearer.reveal() },
+            });
+            const health = yield* session.health;
+            const capabilities = yield* session.capabilities;
+            return {
+              runtimeId: health.runtimeId,
+              healthy: health.state === RuntimeState.HEALTHY,
+              supports: capabilities.supports,
+            };
+          }),
+        ).pipe(Effect.timeout(15_000)),
+      ),
     bind: async (target, request) => {
       const id = await verify(target);
       const publicRequest = bootstrapSchema.safeParse(request);
@@ -253,6 +285,21 @@ export interface BoatExecutionService {
     target: BoatExecutionTarget,
     input: BoatGuestNetworkInput,
   ) => Effect.Effect<BoatGuestNetworkReceipt, Failure>;
+  /** Freezes isolation receipts before authenticated, replay-safe permit issuance. */
+  readonly permit: (
+    target: BoatExecutionTarget,
+    receipts: NonNullable<BoatExecutionRecord["isolation"]>,
+  ) => Effect.Effect<void, Failure>;
+  /** Fresh observation only. Never starts, grants a permit or publishes a runtime row. */
+  readonly readiness: (target: BoatExecutionTarget) => Effect.Effect<BoatReadyReceipt, Failure>;
+}
+/** A current observation, never durable authority to admit a later request. */
+export interface BoatReadyReceipt {
+  readonly invocation: string;
+  readonly runtimeId: string;
+  readonly permitReceipt: string;
+  readonly handshake: "verified";
+  readonly admission: "held";
 }
 /** Private key stays redacted until the authenticated HTTPS body is serialized. */
 export interface BoatGuestNetworkInput {
@@ -555,6 +602,8 @@ const make: Effect.Effect<
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
     if (record.phase !== "installed" && record.phase !== "issued" && record.phase !== "running")
       return yield* Effect.fail(new BoatExecutionError("invalid-input"));
+    if (record.isolation === undefined)
+      return yield* Effect.fail(new BoatExecutionError("invocation-held"));
     if (record.phase === "installed")
       record = yield* repo.advance(record, { ...record, phase: "issued" });
     const connection = yield* access(record);
@@ -664,7 +713,128 @@ const make: Effect.Effect<
       return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
     return receipt;
   });
-  return BoatExecution.of({ exchange, stage, start, isolate });
+  const permitWire = (record: BoatExecutionRecord) => ({
+    format: "sealant-execution-permit-v2",
+    binding: {
+      identity: identity(record.target),
+      boot_id: record.target.bootId,
+      epoch: record.admission?.epoch,
+      operation_id: record.admission?.operationId,
+    },
+    resource_receipt: record.isolation?.resourceReceipt,
+    tunnel_receipt: record.isolation?.tunnelReceipt,
+    limits: { memory_bytes: 2147483648, cpu_millicores: 1000, tasks: 512 },
+  });
+  const permit = Effect.fn("BoatExecution.permit")(function* (
+    target: BoatExecutionTarget,
+    receipts: NonNullable<BoatExecutionRecord["isolation"]>,
+  ) {
+    let record = yield* load(target.runtimeInstanceId);
+    if (!isDeepStrictEqual(record.target, target))
+      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    record = yield* repo.isolate(record, receipts);
+    const wire = permitWire(record);
+    const connection = yield* access(record);
+    const result = yield* io(() =>
+      transport.call(
+        connection.hosted,
+        connection.bearer,
+        "permit",
+        Redacted.make(JSON.stringify(wire)),
+      ),
+    );
+    yield* attempt("invalid-reply", () => {
+      const parsed = z
+        .strictObject({
+          format: z.literal("sealant-execution-permitted-v1"),
+          binding: z.unknown(),
+          receipt: z.string(),
+          handshake: z.literal("verified"),
+          dns: z.literal("udp-and-tcp"),
+          admission: z.literal("held"),
+        })
+        .parse(result);
+      if (
+        !isDeepStrictEqual(parsed.binding, wire.binding) ||
+        parsed.receipt !== sha256(canonical(wire))
+      )
+        throw new Error();
+    });
+    if (!isDeepStrictEqual(yield* load(target.runtimeInstanceId), record))
+      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+  });
+  const readiness = Effect.fn("BoatExecution.readiness")(function* (target: BoatExecutionTarget) {
+    const record = yield* load(target.runtimeInstanceId);
+    if (!isDeepStrictEqual(record.target, target))
+      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    if (record.phase !== "running" || record.isolation === undefined)
+      return yield* Effect.fail(new BoatExecutionError("invocation-held"));
+    const wire = permitWire(record);
+    const receipt = sha256(canonical(wire));
+    const connection = yield* access(record);
+    const observe = () =>
+      io(() =>
+        transport.call(
+          connection.hosted,
+          connection.bearer,
+          "readiness",
+          Redacted.make(
+            JSON.stringify({
+              format: "sealant-readiness-v1",
+              binding: wire.binding,
+              permit_receipt: receipt,
+            }),
+          ),
+        ),
+      ).pipe(
+        Effect.flatMap((result) =>
+          attempt("invalid-reply", () => {
+            const parsed = z
+              .strictObject({
+                format: z.literal("sealant-readiness-status-v1"),
+                binding: z.unknown(),
+                permit_receipt: z.literal(receipt),
+                invocation: z.string().regex(/^[a-f0-9]{32}$/),
+                handshake: z.literal("verified"),
+                dns: z.literal("udp-and-tcp"),
+                limits: z.unknown(),
+                admission: z.literal("held"),
+              })
+              .parse(result);
+            if (
+              !isDeepStrictEqual(parsed.binding, wire.binding) ||
+              !isDeepStrictEqual(parsed.limits, wire.limits)
+            )
+              throw new Error();
+            return parsed;
+          }),
+        ),
+      );
+    const before = yield* observe();
+    const daemon = yield* io(() => transport.probe(connection.hosted, connection.bearer));
+    if (
+      !daemon.healthy ||
+      !/^rt_[a-zA-Z0-9_-]+$/.test(daemon.runtimeId) ||
+      !["exec.user", "dotfiles.user", "restore.owner_map", "process.secret-env.v1"].every(
+        (capability) => daemon.supports.includes(capability),
+      )
+    )
+      return yield* Effect.fail(new BoatExecutionError("invalid-reply"));
+    const after = yield* observe();
+    if (
+      !isDeepStrictEqual(before, after) ||
+      !isDeepStrictEqual(yield* load(target.runtimeInstanceId), record)
+    )
+      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    return {
+      invocation: after.invocation,
+      runtimeId: daemon.runtimeId,
+      permitReceipt: receipt,
+      handshake: after.handshake,
+      admission: after.admission,
+    };
+  });
+  return BoatExecution.of({ exchange, stage, start, isolate, permit, readiness });
 });
 /** Open assembly for worker infrastructure and faithful test transports. */
 export const boatExecutionLayerNoDeps: Layer.Layer<

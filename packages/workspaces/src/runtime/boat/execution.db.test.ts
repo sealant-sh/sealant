@@ -46,7 +46,37 @@ const requestSchema = z.object({
   manifest_digest: z.string(),
   public_key: z.string(),
 });
+const canonical = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value !== null && typeof value === "object")
+    return (
+      "{" +
+      Object.entries(value)
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([k, v]) => JSON.stringify(k) + ":" + canonical(v))
+        .join(",") +
+      "}"
+    );
+  return JSON.stringify(value) ?? "null";
+};
+const digestCanonical = (value: unknown) =>
+  createHash("sha256").update(canonical(value)).digest("hex");
 class GuestFixture implements BoatGuestTransport {
+  healthy = true;
+  badCapabilities = false;
+  changedInvocation = false;
+  permitLost = false;
+  readonly permitBodies: string[] = [];
+  readinessCalls = 0;
+  async probe() {
+    return {
+      runtimeId: "rt_fixture",
+      healthy: this.healthy,
+      supports: this.badCapabilities
+        ? []
+        : ["exec.user", "dotfiles.user", "restore.owner_map", "process.secret-env.v1"],
+    };
+  }
   readonly token = "a".repeat(64);
   readonly requests: string[] = [];
   bindLost = false;
@@ -112,7 +142,7 @@ class GuestFixture implements BoatGuestTransport {
   async call(
     _host: unknown,
     bearer: BoatSecret,
-    route: "status" | "stage" | "start" | "isolate",
+    route: "status" | "stage" | "start" | "isolate" | "permit" | "readiness",
     body?: Redacted.Redacted<string>,
   ) {
     expect(bearer.reveal()).toBe(this.token);
@@ -145,6 +175,40 @@ class GuestFixture implements BoatGuestTransport {
         receipt: "e".repeat(64),
         configured: true,
         handshake: "unverified",
+        admission: "held",
+      };
+    }
+    if (route === "permit" || route === "readiness") {
+      if (body === undefined) throw new Error("missing permit body");
+      const raw = Redacted.value(body);
+      const value = z
+        .object({ binding: z.unknown(), permit_receipt: z.string().optional() })
+        .parse(JSON.parse(raw));
+      if (route === "permit") {
+        this.permitBodies.push(raw);
+        if (this.permitLost) {
+          this.permitLost = false;
+          throw new Error("lost permit response");
+        }
+        return {
+          format: "sealant-execution-permitted-v1",
+          binding: value.binding,
+          receipt: digestCanonical(JSON.parse(raw)),
+          handshake: "verified",
+          dns: "udp-and-tcp",
+          admission: "held",
+        };
+      }
+      this.readinessCalls++;
+      return {
+        format: "sealant-readiness-status-v1",
+        binding: value.binding,
+        permit_receipt: value.permit_receipt,
+        invocation:
+          this.changedInvocation && this.readinessCalls % 2 === 0 ? "f".repeat(32) : "d".repeat(32),
+        handshake: "verified",
+        dns: "udp-and-tcp",
+        limits: { memory_bytes: 2147483648, cpu_millicores: 1000, tasks: 512 },
         admission: "held",
       };
     }
@@ -244,6 +308,42 @@ const test = async (
 const execute = Effect.runPromise;
 
 describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () => {
+  it("freezes permit receipts before lost delivery, adopts replay and requires fresh authenticated health", () =>
+    test(async ({ executor, repo, target, guest }) => {
+      await execute(executor.exchange(target));
+      await execute(executor.stage(target.runId, payload()));
+      const receipts = { resourceReceipt: "e".repeat(64), tunnelReceipt: "f".repeat(64) };
+      guest.permitLost = true;
+      await expect(execute(executor.permit(target, receipts))).rejects.toThrow(
+        "transport-unavailable",
+      );
+      expect((await execute(repo.get(target.runId)))?.isolation).toEqual(receipts);
+      await execute(executor.permit(target, receipts));
+      expect(new Set(guest.permitBodies).size).toBe(1);
+      await expect(
+        execute(executor.permit(target, { ...receipts, tunnelReceipt: "a".repeat(64) })),
+      ).rejects.toThrow("stale-transition");
+      await expect(execute(executor.readiness(target))).rejects.toThrow("invocation-held");
+      await execute(executor.start(target.runId));
+      expect(await execute(executor.readiness(target))).toMatchObject({
+        runtimeId: "rt_fixture",
+        handshake: "verified",
+        admission: "held",
+      });
+      guest.healthy = false;
+      await expect(execute(executor.readiness(target))).rejects.toThrow("invalid-reply");
+      guest.healthy = true;
+      guest.badCapabilities = true;
+      await expect(execute(executor.readiness(target))).rejects.toThrow("invalid-reply");
+      guest.badCapabilities = false;
+      guest.changedInvocation = true;
+      guest.readinessCalls = 0;
+      await expect(execute(executor.readiness(target))).rejects.toThrow("target-mismatch");
+      expect(guest.starts).toBe(1);
+      await expect(
+        execute(executor.readiness({ ...target, bootId: randomUUID() })),
+      ).rejects.toThrow("target-mismatch");
+    }));
   it("delivers the same authenticated network intent after reply loss and refuses stale epochs, boots and replies", () =>
     test(async ({ executor, repo, target, guest }) => {
       await execute(executor.exchange(target));
@@ -385,6 +485,11 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
     test(async ({ executor, repo, target, guest }) => {
       await execute(executor.exchange(target));
       await execute(executor.stage(target.runId, payload()));
+      await expect(execute(executor.start(target.runId))).rejects.toThrow("invocation-held");
+      expect((await execute(repo.get(target.runId)))?.phase).toBe("installed");
+      await execute(
+        executor.permit(target, { resourceReceipt: "e".repeat(64), tunnelReceipt: "f".repeat(64) }),
+      );
       guest.startLost = true;
       await expect(execute(executor.start(target.runId))).rejects.toThrow("transport-unavailable");
       expect((await execute(repo.get(target.runId)))?.phase).toBe("issued");
@@ -403,6 +508,9 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
     test(async ({ executor, repo, target, guest }) => {
       await execute(executor.exchange(target));
       await execute(executor.stage(target.runId, payload()));
+      await execute(
+        executor.permit(target, { resourceReceipt: "e".repeat(64), tunnelReceipt: "f".repeat(64) }),
+      );
       guest.terminal = true;
       await expect(execute(executor.start(target.runId))).rejects.toThrow("invocation-held");
       expect((await execute(repo.get(target.runId)))?.admission?.sealedEnvelope).toBeNull();

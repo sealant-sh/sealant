@@ -33,6 +33,11 @@ export interface BoatExecutionRepoService {
     previous: BoatExecutionRecord,
     next: BoatExecutionRecord,
   ) => Effect.Effect<BoatExecutionRecord, BoatExecutionStoreError>;
+  /** Freezes current isolation receipts before permit delivery. Changed receipts never replace them. */
+  readonly isolate: (
+    previous: BoatExecutionRecord,
+    isolation: NonNullable<BoatExecutionRecord["isolation"]>,
+  ) => Effect.Effect<BoatExecutionRecord, BoatExecutionStoreError>;
 }
 /** Durable singleton per run and owned disk; it has no reset or replacement method. */
 export class BoatExecutionRepo extends Context.Service<
@@ -109,6 +114,7 @@ const make: Effect.Effect<BoatExecutionRepo["Service"], never, SealantDB> = Effe
         !sameTarget(before.target, next.target) ||
         before.exchangeId !== next.exchangeId ||
         before.publicKey !== next.publicKey ||
+        !isDeepStrictEqual(before.isolation, next.isolation) ||
         !transitions[before.phase].includes(next.phase) ||
         (before.phase !== "exchange" && before.sealedControl !== next.sealedControl) ||
         (before.admission !== null &&
@@ -138,7 +144,37 @@ const make: Effect.Effect<BoatExecutionRepo["Service"], never, SealantDB> = Effe
       if (saved !== undefined && isDeepStrictEqual(saved, next)) return saved;
       return yield* Effect.fail(new BoatExecutionStoreError("stale-transition"));
     });
-    return BoatExecutionRepo.of({ get, reserve, advance });
+    const isolate = Effect.fn("BoatExecutionRepo.isolate")(function* (
+      previous: BoatExecutionRecord,
+      isolation: NonNullable<BoatExecutionRecord["isolation"]>,
+    ) {
+      const next = yield* parse({ ...previous, isolation });
+      if (!["installed", "issued", "running"].includes(previous.phase))
+        return yield* Effect.fail(new BoatExecutionStoreError("stale-transition"));
+      if (previous.isolation !== undefined) {
+        if (!isDeepStrictEqual(previous.isolation, next.isolation))
+          return yield* Effect.fail(new BoatExecutionStoreError("stale-transition"));
+        const saved = yield* get(previous.target.runtimeInstanceId);
+        if (isDeepStrictEqual(saved, next)) return next;
+        return yield* Effect.fail(new BoatExecutionStoreError("stale-transition"));
+      }
+      const rows = yield* db
+        .update(boatExecutions)
+        .set({ record: next })
+        .where(
+          and(
+            eq(boatExecutions.runtimeInstanceId, previous.target.runtimeInstanceId),
+            sql`${boatExecutions.record} = ${JSON.stringify(previous)}::jsonb`,
+          ),
+        )
+        .returning()
+        .pipe(Effect.mapError(() => new BoatExecutionStoreError("unavailable")));
+      if (rows.length !== 0) return next;
+      const saved = yield* get(previous.target.runtimeInstanceId);
+      if (isDeepStrictEqual(saved, next)) return next;
+      return yield* Effect.fail(new BoatExecutionStoreError("stale-transition"));
+    });
+    return BoatExecutionRepo.of({ get, reserve, advance, isolate });
   },
 );
 /** All transitions use a single database compare-and-set and perform no external I/O. */

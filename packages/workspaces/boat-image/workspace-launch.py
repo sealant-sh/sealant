@@ -15,6 +15,7 @@ if operation == {'mode': 'workspace'}:
     os.execve('/usr/local/bin/sealantd', ['/usr/local/bin/sealantd', 'boot'], {
         **launch['boot_env'], 'PATH': '/usr/local/bin:/nix/var/nix/profiles/default/bin:/usr/sbin:/usr/bin:/sbin:/bin',
         'HOME': '/root', 'LANG': 'C.UTF-8',
+        'SEALANT_CONTROL_SOCKET': '/run/sealant/control.sock',
     })
 if operation not in ({'mode': 'build'}, {'mode': 'probe'}):
     raise SystemExit('ordinary admission unavailable')
