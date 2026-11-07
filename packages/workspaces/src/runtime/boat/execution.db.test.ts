@@ -56,6 +56,9 @@ class GuestFixture implements BoatGuestTransport {
   terminal = false;
   starts = 0;
   hosts = 0;
+  isolationLost = false;
+  wrongNetworkBinding = false;
+  readonly networkBodies: string[] = [];
   stageBodies: string[] = [];
   stageRequest: { operation_id: string; epoch: number } | undefined;
   target: BoatExecutionTarget | undefined;
@@ -109,7 +112,7 @@ class GuestFixture implements BoatGuestTransport {
   async call(
     _host: unknown,
     bearer: BoatSecret,
-    route: "status" | "stage" | "start",
+    route: "status" | "stage" | "start" | "isolate",
     body?: Redacted.Redacted<string>,
   ) {
     expect(bearer.reveal()).toBe(this.token);
@@ -126,6 +129,24 @@ class GuestFixture implements BoatGuestTransport {
         this.stageLost = false;
         throw new Error("lost");
       }
+    }
+    if (route === "isolate") {
+      if (body === undefined) throw new Error("no network body");
+      const raw = Redacted.value(body);
+      this.networkBodies.push(raw);
+      const value = z.object({ binding: z.unknown() }).parse(JSON.parse(raw));
+      if (this.isolationLost) {
+        this.isolationLost = false;
+        throw new Error("lost network reply");
+      }
+      return {
+        format: "sealant-guest-network-status-v1",
+        binding: this.wrongNetworkBinding ? {} : value.binding,
+        receipt: "e".repeat(64),
+        configured: true,
+        handshake: "unverified",
+        admission: "held",
+      };
     }
     if (route === "start") {
       if (this.starts === 0) this.starts++;
@@ -223,6 +244,51 @@ const test = async (
 const execute = Effect.runPromise;
 
 describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () => {
+  it("delivers the same authenticated network intent after reply loss and refuses stale epochs, boots and replies", () =>
+    test(async ({ executor, repo, target, guest }) => {
+      await execute(executor.exchange(target));
+      const input = {
+        network: {
+          epoch: 1,
+          operationId: String(randomUUID()),
+          endpoint: "10.0.0.41",
+          subnet: "10.98.0.32/27",
+        },
+        privateKey: Redacted.make(Buffer.alloc(32, 4).toString("base64")),
+        publicKey: Buffer.alloc(32, 5).toString("base64"),
+        gatewayKey: Buffer.alloc(32, 6).toString("base64"),
+        port: 40000,
+      };
+      await expect(execute(executor.isolate(target, input))).rejects.toThrow("invocation-held");
+      await execute(executor.stage(target.runId, payload()));
+      const installed = await execute(repo.get(target.runId));
+      if (installed?.admission === null || installed === undefined) throw new Error("no admission");
+      input.network.operationId = installed.admission.operationId;
+      guest.isolationLost = true;
+      await expect(execute(executor.isolate(target, input))).rejects.toThrow(
+        "transport-unavailable",
+      );
+      expect(await execute(executor.isolate(target, input))).toEqual({
+        receipt: "e".repeat(64),
+        handshake: "unverified",
+        admission: "held",
+      });
+      expect(new Set(guest.networkBodies).size).toBe(1);
+      expect(await execute(repo.get(target.runId))).toEqual(installed);
+      for (const changed of [{ epoch: 2 }, { operationId: randomUUID() }])
+        await expect(
+          execute(
+            executor.isolate(target, { ...input, network: { ...input.network, ...changed } }),
+          ),
+        ).rejects.toThrow("target-mismatch");
+      await expect(
+        execute(executor.isolate({ ...target, bootId: randomUUID() }, input)),
+      ).rejects.toThrow("target-mismatch");
+      guest.wrongNetworkBinding = true;
+      await expect(execute(executor.isolate(target, input))).rejects.toThrow("invalid-reply");
+      expect(guest.starts).toBe(0);
+      expect(JSON.stringify(installed)).not.toContain(Redacted.value(input.privateKey));
+    }));
   it("refuses another run claiming either the owned sandbox or disk before provider delivery", () =>
     test(async ({ executor, target, db, guest }) => {
       await execute(executor.exchange(target));

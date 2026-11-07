@@ -9,6 +9,7 @@ import type {
   ResourceDomainRepoService,
   ResourceInstanceRepoService,
   ResourceInstanceRecord,
+  ResourceWorkspaceLink,
 } from "@sealant/db";
 import { Effect } from "effect";
 
@@ -43,6 +44,8 @@ export const makeResourceReconciler = (input: {
   readonly repo: ResourceInstanceRepoService;
   readonly budgets?: ResourceDomainRepoService;
   readonly runtime: ResourceRuntime;
+  /** External executors count as reached, but keep ownership of their network convergence. */
+  readonly externalReach?: () => Promise<readonly ResourceWorkspaceLink[]>;
 }): ResourceReconciler => {
   const { repo, runtime } = input;
   const accounting =
@@ -96,6 +99,7 @@ export const makeResourceReconciler = (input: {
       run(repo.linkedExecutors()),
       runtime.observe(),
     ]);
+    const external = (await input.externalReach?.()) ?? [];
     const running: Array<ResourceInstanceRecord> = [];
     for (const instance of instances) {
       if (runtime.workspaceReach === false && instance.spec.reach === undefined) continue;
@@ -168,7 +172,7 @@ export const makeResourceReconciler = (input: {
     }
 
     const reached = running.filter((instance) =>
-      executors.some((executor) => reaches(executor, instance)),
+      [...executors, ...external].some((executor) => reaches(executor, instance)),
     );
     await attempt("touch reached", () =>
       run(

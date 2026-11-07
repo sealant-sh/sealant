@@ -773,9 +773,41 @@ export const workerServerEnvSchema = databaseEnvSchema
       .string()
       .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/)
       .optional(),
+    SEALANT_BOAT_GATEWAY_HOST_ID: z.uuid().optional(),
+    SEALANT_BOAT_GATEWAY_ENDPOINT: z.ipv4().optional(),
+    SEALANT_BOAT_GATEWAY_IMAGE: z
+      .string()
+      .regex(/^(?:[a-z0-9./:_-]+@)?sha256:[a-f0-9]{64}$/)
+      .optional(),
   });
 
 export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) => {
+  const gatewayKeys = [
+    "SEALANT_BOAT_GATEWAY_HOST_ID",
+    "SEALANT_BOAT_GATEWAY_ENDPOINT",
+    "SEALANT_BOAT_GATEWAY_IMAGE",
+  ] as const;
+  if (gatewayKeys.some((key) => input[key] !== undefined)) {
+    for (const key of [
+      ...gatewayKeys,
+      "SEALANT_BOAT_API_KEY",
+      "SEALANT_BOAT_DEPLOYMENT_ID",
+      "SEALANT_CREDENTIALS_KEY",
+    ] as const) {
+      if (input[key] === undefined)
+        ctx.addIssue({
+          code: "custom",
+          path: [key],
+          message:
+            "Boat resource reconciliation requires the complete gateway and provider configuration.",
+        });
+    }
+    if (!input.DOCKER_RUNTIME_ENABLED || input.DEFAULT_RUNTIME_ADAPTER !== "docker")
+      ctx.addIssue({
+        code: "custom",
+        message: "Boat resource reconciliation requires the Docker resource host.",
+      });
+  }
   if (input.SEALANT_BOAT_API_KEY !== undefined || input.SEALANT_BOAT_DEPLOYMENT_ID !== undefined) {
     for (const key of [
       "SEALANT_BOAT_API_KEY",

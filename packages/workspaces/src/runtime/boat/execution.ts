@@ -17,10 +17,13 @@ import {
 } from "@sealant/db";
 import {
   boatAdmissionPinsSchema,
+  boatNetworkIntentSchema,
+  boatWireGuardKeySchema,
   boatExecutionTargetSchema,
   type BoatAdmissionPins,
   type BoatExecutionRecord,
   type BoatExecutionTarget,
+  type BoatNetworkIntent,
 } from "@sealant/validators";
 import { Context, Effect, Layer, Redacted } from "effect";
 import { z } from "zod";
@@ -127,7 +130,7 @@ export interface BoatGuestTransport {
   readonly call: (
     access: BoatHostedControl,
     bearer: BoatSecret,
-    route: "status" | "stage" | "start",
+    route: "status" | "stage" | "start" | "isolate",
     body?: Redacted.Redacted<string>,
   ) => Promise<unknown>;
 }
@@ -245,6 +248,25 @@ export interface BoatExecutionService {
   ) => Effect.Effect<void, Failure>;
   /** A lost reply may adopt the exact running invocation. Ended or ambiguous disks remain held. */
   readonly start: (id: string) => Effect.Effect<"running", Failure>;
+  /** Authenticated network setup for the installed epoch only. It never issues an execution permit. */
+  readonly isolate: (
+    target: BoatExecutionTarget,
+    input: BoatGuestNetworkInput,
+  ) => Effect.Effect<BoatGuestNetworkReceipt, Failure>;
+}
+/** Private key stays redacted until the authenticated HTTPS body is serialized. */
+export interface BoatGuestNetworkInput {
+  readonly network: BoatNetworkIntent;
+  readonly privateKey: Redacted.Redacted<string>;
+  readonly publicKey: string;
+  readonly gatewayKey: string;
+  readonly port: number;
+}
+/** This acknowledgement proves configuration, not a handshake, resource reach or daemon health. */
+export interface BoatGuestNetworkReceipt {
+  readonly receipt: string;
+  readonly handshake: "unverified";
+  readonly admission: "held";
 }
 /** Ordinary runtime registration does not provide this service until all activation gates pass. */
 export class BoatExecution extends Context.Service<BoatExecution, BoatExecutionService>()(
@@ -572,7 +594,77 @@ const make: Effect.Effect<
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
     return "running" as const;
   });
-  return BoatExecution.of({ exchange, stage, start });
+  const isolate = Effect.fn("BoatExecution.isolate")(function* (
+    target: BoatExecutionTarget,
+    input: BoatGuestNetworkInput,
+  ) {
+    const record = yield* load(target.runtimeInstanceId);
+    if (!isDeepStrictEqual(record.target, target))
+      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    if (!["installed", "issued", "running"].includes(record.phase) || record.admission === null)
+      return yield* Effect.fail(new BoatExecutionError("invocation-held"));
+    const network = yield* attempt("invalid-input", () =>
+      boatNetworkIntentSchema.parse(input.network),
+    );
+    if (
+      network.epoch !== record.admission.epoch ||
+      network.operationId !== record.admission.operationId
+    )
+      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    const binding = {
+      identity: identity(target),
+      boot_id: target.bootId,
+      epoch: network.epoch,
+      operation_id: network.operationId,
+    };
+    const body = yield* attempt("invalid-input", () =>
+      Redacted.make(
+        JSON.stringify({
+          format: "sealant-guest-network-v1",
+          binding,
+          private_key: boatWireGuardKeySchema.parse(Redacted.value(input.privateKey)),
+          public_key: boatWireGuardKeySchema.parse(input.publicKey),
+          gateway_key: boatWireGuardKeySchema.parse(input.gatewayKey),
+          endpoint: network.endpoint,
+          port: z.number().int().min(40000).max(40015).parse(input.port),
+          subnet: network.subnet,
+        }),
+      ),
+    );
+    const connection = yield* access(record);
+    const current = yield* checkStatus(
+      record,
+      yield* io(() => transport.call(connection.hosted, connection.bearer, "status")),
+      true,
+    );
+    if (
+      current.stage !== "installed" ||
+      current.execution === "ended" ||
+      current.execution === "unresolved"
+    )
+      return yield* Effect.fail(new BoatExecutionError("invocation-held"));
+    const result = yield* io(() =>
+      transport.call(connection.hosted, connection.bearer, "isolate", body),
+    );
+    const receipt = yield* attempt("invalid-reply", () => {
+      const parsed = z
+        .strictObject({
+          format: z.literal("sealant-guest-network-status-v1"),
+          binding: z.unknown(),
+          receipt: z.string().regex(/^[a-f0-9]{64}$/),
+          configured: z.literal(true),
+          handshake: z.literal("unverified"),
+          admission: z.literal("held"),
+        })
+        .parse(result);
+      if (!isDeepStrictEqual(parsed.binding, binding)) throw new Error();
+      return { receipt: parsed.receipt, handshake: parsed.handshake, admission: parsed.admission };
+    });
+    if (!isDeepStrictEqual(yield* load(target.runtimeInstanceId), record))
+      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    return receipt;
+  });
+  return BoatExecution.of({ exchange, stage, start, isolate });
 });
 /** Open assembly for worker infrastructure and faithful test transports. */
 export const boatExecutionLayerNoDeps: Layer.Layer<

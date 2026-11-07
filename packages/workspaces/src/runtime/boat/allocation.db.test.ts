@@ -1,12 +1,24 @@
-import { constants, createHash, publicEncrypt, randomUUID } from "node:crypto";
+import {
+  constants,
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  publicEncrypt,
+  randomUUID,
+} from "node:crypto";
 import http from "node:http";
 
+import { ResourceWorktreeKey, ResourceInstanceKey } from "@sealant/api-contracts";
 import { credentialCipherLayer, type CredentialCipherError } from "@sealant/credentials";
 import {
   BoatAllocationRepo,
   BoatAllocationRepoLive,
   BoatExecutionRepo,
   BoatExecutionRepoLive,
+  BoatTunnelRepo,
+  boatTunnelRepoLayer,
+  ResourceInstanceRepo,
+  ResourceInstanceRepoLive,
   NativePublicationRepo,
   NativePublicationRepoLive,
   SealantDB,
@@ -16,6 +28,7 @@ import {
   makeSealantDBLayer,
   user,
   workspaceAttempts,
+  schema,
   type DB,
 } from "@sealant/db";
 import { corruptBoatAllocation } from "@sealant/db/testing/boat-allocations";
@@ -30,17 +43,34 @@ import {
   type BoatAllocationRecord,
   type BoatExecutionTarget,
 } from "@sealant/validators";
-import { Context, Effect, Fiber, Layer } from "effect";
+import { Context, Effect, Fiber, Layer, Redacted } from "effect";
 import * as TestClock from "effect/testing/TestClock";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
+import {
+  BoatTunnelError,
+  boatTunnelName,
+  type BoatTunnelInput,
+  type BoatTunnelEndpoint,
+} from "../../resources/boat-tunnel.js";
+import { makeResourceReconciler } from "../../resources/reconciler.js";
+import { postgresSpec } from "../../resources/resource.fixture.js";
 import { adoptStrandedLaunchesEffect } from "../../worker/adopt-stranded-launches.js";
-import { boatAllocationWorkerLayer } from "../../worker/boat-allocation.js";
+import {
+  boatAllocationWorkerLayer,
+  boatWorkerExecutionLayer,
+} from "../../worker/boat-allocation.js";
+import {
+  BoatResources,
+  BoatResourcesHost,
+  boatResourcesLayer,
+} from "../../worker/boat-resources.js";
 import { BoatAllocation, BoatAllocationProvider, boatAllocationLayer } from "./allocation.js";
 import { HttpBoatApi } from "./api.js";
 import { BoatSecret } from "./config.js";
 import {
+  BoatExecution,
   BoatGuestTransportService,
   boatExecutionLayer,
   type BoatGuestTransport,
@@ -260,6 +290,10 @@ class GuestFixture implements BoatGuestTransport {
   readonly targets: BoatExecutionTarget[] = [];
   fail = false;
   target: BoatExecutionTarget | undefined;
+  admission: { epoch: number; operation_id: string } | undefined;
+  readonly networkBodies: string[] = [];
+  lostIsolation = false;
+  beforeIsolate: () => Promise<void> = async () => {};
   async bind(target: BoatExecutionTarget, raw: unknown) {
     if (this.fail) throw new Error("lost bind");
     this.targets.push(target);
@@ -304,8 +338,29 @@ class GuestFixture implements BoatGuestTransport {
   async host() {
     return { origin: "https://fixture-8080.on.boat.dev", cookie: secret("test-cookie-local-only") };
   }
-  async call(_host: unknown, bearer: BoatSecret, route: string) {
-    expect(route).toBe("status");
+  async call(_host: unknown, bearer: BoatSecret, route: string, body?: Redacted.Redacted<string>) {
+    if (route === "stage")
+      this.admission = z
+        .object({ epoch: z.number(), operation_id: z.string() })
+        .parse(JSON.parse(Redacted.value(body ?? Redacted.make(""))));
+    if (route === "isolate") {
+      await this.beforeIsolate();
+      const raw = Redacted.value(body ?? Redacted.make(""));
+      this.networkBodies.push(raw);
+      if (this.lostIsolation) {
+        this.lostIsolation = false;
+        throw new Error("lost");
+      }
+      return {
+        format: "sealant-guest-network-status-v1",
+        binding: z.object({ binding: z.unknown() }).parse(JSON.parse(raw)).binding,
+        receipt: "e".repeat(64),
+        configured: true,
+        handshake: "unverified",
+        admission: "held",
+      };
+    }
+    expect(["status", "stage"]).toContain(route);
     expect(bearer.reveal()).toBe("a".repeat(64));
     if (this.target === undefined) throw new Error("missing target");
     return {
@@ -318,10 +373,50 @@ class GuestFixture implements BoatGuestTransport {
       boot_id: this.target.bootId,
       admission: "held",
       execution: "unavailable",
-      epoch: null,
-      operation_id: null,
-      stage: "empty",
+      epoch: this.admission?.epoch ?? null,
+      operation_id: this.admission?.operation_id ?? null,
+      stage: this.admission === undefined ? "empty" : "installed",
     };
+  }
+}
+class GatewayFixture {
+  readonly requests: BoatTunnelInput[] = [];
+  unavailable = false;
+  beforeReply: () => Promise<void> = async () => {};
+  async ensure(input: BoatTunnelInput): Promise<BoatTunnelEndpoint> {
+    this.requests.push(input);
+    await this.beforeReply();
+    if (this.unavailable) throw new Error("unknown gateway outcome");
+    const publicKey = createPublicKey(
+      createPrivateKey({
+        key: Buffer.concat([
+          Buffer.from("302e020100300506032b656e04220420", "hex"),
+          Buffer.from(Redacted.value(input.privateKey), "base64"),
+        ]),
+        type: "pkcs8",
+        format: "der",
+      }),
+    )
+      .export({ type: "spki", format: "der" })
+      .subarray(-32)
+      .toString("base64");
+    return {
+      container: boatTunnelName(input.target),
+      containerId: "a".repeat(64),
+      gatewayEpoch: "epoch",
+      binding: "b".repeat(64),
+      publicKey,
+      peerKey: input.peerKey,
+      listenPort: input.listenPort,
+      reachSubnet: "10.98.0.32/27",
+      gateway: "100.127.255.253",
+      client: "100.127.255.254",
+      receipt: "c".repeat(64),
+      peerHandshake: "unverified",
+    };
+  }
+  remove() {
+    return Effect.die("reconciliation must not remove custody");
   }
 }
 const test = async (
@@ -329,6 +424,15 @@ const test = async (
     db: DB;
     input: BoatAllocationInput;
     allocations: BoatAllocation["Service"];
+    executor: BoatExecution["Service"];
+    resourceOwner: BoatResources["Service"];
+    reopenResources: (
+      endpoint?: string,
+      gatewayHostId?: string,
+    ) => Effect.Effect<BoatResources["Service"], CredentialCipherError>;
+    tunnels: BoatTunnelRepo["Service"];
+    resources: ResourceInstanceRepo["Service"];
+    gateway: GatewayFixture;
     repo: BoatAllocationRepo["Service"];
     catalog: NativePublicationRepo["Service"];
     runtimes: WorkspaceRuntimeInstanceRepo["Service"];
@@ -345,6 +449,7 @@ const test = async (
       BoatAllocationRepoLive,
       WorkspaceRuntimeInstanceRepoLive,
       BoatExecutionRepoLive,
+      boatTunnelRepoLayer,
     ).pipe(Layer.provideMerge(DBLayer));
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -353,6 +458,7 @@ const test = async (
         const repo = yield* BoatAllocationRepo;
         const runtimes = yield* WorkspaceRuntimeInstanceRepo;
         const executions = yield* BoatExecutionRepo;
+        const tunnels = yield* BoatTunnelRepo;
         const input = yield* seed(db, catalog);
         const provider = new ProviderFixture(input);
         const guest = new GuestFixture();
@@ -401,11 +507,70 @@ const test = async (
         const Exchange = boatExecutionLayer.pipe(
           Layer.provide(Layer.succeed(BoatGuestTransportService, guest)),
         );
-        const Test = boatAllocationLayer.pipe(Layer.provide(Exchange), Layer.provide(Infra));
+        const gateway = new GatewayFixture();
+        const gatewayHostId = randomUUID();
+        const hostLayer = (endpoint = "10.0.0.41", hostId: string = gatewayHostId) =>
+          Layer.succeed(BoatResourcesHost, {
+            deploymentId: "test",
+            gatewayHostId: hostId,
+            endpoint,
+            subnets: {
+              allocate: async () => "10.98.0.32/27",
+              release: async () => {
+                throw new Error("must retain subnet");
+              },
+            },
+            tunnel: {
+              ensure: (request) =>
+                Effect.tryPromise({
+                  try: () => gateway.ensure(request),
+                  catch: () => new BoatTunnelError("gateway-unavailable"),
+                }),
+              remove: () => gateway.remove(),
+            },
+          });
+        const ResourceLayer = boatResourcesLayer.pipe(Layer.provide(Exchange));
+        const ResourceRoot: Layer.Layer<BoatAllocation | BoatResources, CredentialCipherError> =
+          Layer.merge(
+            boatAllocationWorkerLayer,
+            boatResourcesLayer.pipe(Layer.provide(boatWorkerExecutionLayer)),
+          ).pipe(Layer.provide(Layer.merge(Infra, hostLayer())));
+        yield* Layer.build(ResourceRoot);
+        const Test = Layer.mergeAll(
+          boatAllocationLayer.pipe(Layer.provide(Exchange)),
+          ResourceLayer,
+          Exchange,
+          ResourceInstanceRepoLive,
+        ).pipe(Layer.provide(Layer.merge(Infra, hostLayer())));
         const context = yield* Layer.build(Test);
         const allocations = Context.get(context, BoatAllocation);
+        const executor = Context.get(context, BoatExecution);
+        const resourceOwner = Context.get(context, BoatResources);
+        const resources = Context.get(context, ResourceInstanceRepo);
+        const scope = yield* Effect.scope;
+        const reopenResources = (endpoint = "10.0.0.41", hostId: string = gatewayHostId) =>
+          Layer.buildWithScope(
+            ResourceLayer.pipe(Layer.provide(Layer.merge(Infra, hostLayer(endpoint, hostId)))),
+            scope,
+          ).pipe(Effect.map((ctx) => Context.get(ctx, BoatResources)));
         yield* Effect.promise(() =>
-          run({ db, input, allocations, repo, catalog, runtimes, executions, provider, guest }),
+          run({
+            db,
+            input,
+            allocations,
+            executor,
+            resourceOwner,
+            reopenResources,
+            tunnels,
+            resources,
+            gateway,
+            repo,
+            catalog,
+            runtimes,
+            executions,
+            provider,
+            guest,
+          }),
         );
       }).pipe(Effect.provide(Repos), Effect.scoped),
     );
@@ -435,6 +600,236 @@ const reservation = (input: BoatAllocationInput): BoatAllocationRecord =>
 describe.runIf(databaseUrl !== undefined)(
   "Boat allocation through PostgreSQL and provider HTTP",
   () => {
+    it("reconciles installed network custody after reply loss through rebuilt production assemblies", () =>
+      test(async (s) => {
+        const target = await execute(s.allocations.prepare(s.input));
+        expect((await execute(s.resourceOwner.reconcile({ limit: 20 }))).entries).toEqual([
+          { runId: target.runId, outcome: "pending" },
+        ]);
+        expect(s.gateway.requests).toHaveLength(0);
+        await execute(
+          s.executor.stage(
+            target.runId,
+            Redacted.make({
+              files: [{ name: "launch", bytes: Buffer.from("launch") }],
+              pins: { credentialVersions: [], dotfiles: [] },
+            }),
+          ),
+        );
+        s.guest.lostIsolation = true;
+        expect((await execute(s.resourceOwner.reconcile({ limit: 20 }))).entries[0]?.outcome).toBe(
+          "unavailable",
+        );
+        const frozen = await execute(s.tunnels.get(target.runId));
+        expect(frozen?.network).toMatchObject({
+          endpoint: "10.0.0.41",
+          subnet: "10.98.0.32/27",
+          epoch: 1,
+        });
+        const reopened = await execute(s.reopenResources());
+        const result = await execute(reopened.prepare(target));
+        expect(result.guest).toMatchObject({ handshake: "unverified", admission: "held" });
+        expect(await execute(s.tunnels.get(target.runId))).toEqual(frozen);
+        expect(s.gateway.requests[0]?.listenPort).toBe(s.gateway.requests[1]?.listenPort);
+        expect(new Set(s.guest.networkBodies).size).toBe(1);
+        expect(s.provider.creates).toHaveLength(1);
+        expect((await execute(s.executions.get(target.runId)))?.phase).toBe("installed");
+        for (const key of [s.gateway.requests[0]?.privateKey])
+          if (key !== undefined) expect(JSON.stringify(frozen)).not.toContain(Redacted.value(key));
+        for (const changed of [{ bootId: randomUUID() }, { diskLineage: "foreign" }])
+          await expect(execute(reopened.prepare({ ...target, ...changed }))).rejects.toThrow(
+            "binding-conflict",
+          );
+        const moved = await execute(s.reopenResources("10.0.0.42"));
+        await expect(execute(moved.prepare(target))).rejects.toThrow("binding-conflict");
+        const foreignHost = await execute(s.reopenResources("10.0.0.41", randomUUID()));
+        await expect(execute(foreignHost.prepare(target))).rejects.toThrow("binding-conflict");
+        expect(s.gateway.requests).toHaveLength(2);
+      }));
+    it("bounds a stalled gateway and retries only the same durable network intent", () =>
+      test(async (s) => {
+        const target = await execute(s.allocations.prepare(s.input));
+        await execute(
+          s.executor.stage(
+            target.runId,
+            Redacted.make({
+              files: [{ name: "launch", bytes: Buffer.from("launch") }],
+              pins: { credentialVersions: [], dotfiles: [] },
+            }),
+          ),
+        );
+        const entered = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        s.gateway.beforeReply = async () => {
+          entered.resolve();
+          await release.promise;
+        };
+        try {
+          const sweep = await execute(
+            Effect.gen(function* () {
+              const fiber = yield* Effect.forkChild(s.resourceOwner.reconcile({ limit: 20 }));
+              yield* Effect.promise(() => entered.promise);
+              yield* TestClock.adjust(120001);
+              return yield* Fiber.join(fiber);
+            }).pipe(Effect.provide(TestClock.layer())),
+          );
+          expect(sweep.entries).toEqual([{ runId: target.runId, outcome: "unavailable" }]);
+          expect((await execute(s.tunnels.get(target.runId)))?.network).toBeDefined();
+        } finally {
+          release.resolve();
+        }
+        s.gateway.beforeReply = async () => {};
+        expect((await execute(s.resourceOwner.reconcile({ limit: 20 }))).entries).toEqual([
+          { runId: target.runId, outcome: "configured" },
+        ]);
+        expect(s.gateway.requests[0]?.listenPort).toBe(s.gateway.requests[1]?.listenPort);
+        expect(s.guest.networkBodies).toHaveLength(1);
+      }));
+    it("advances the resource cursor past malformed and pending entries without allocating or issuing", () =>
+      test(async (s) => {
+        const reserved = await execute(s.repo.reserve(reservation(s.input)));
+        await execute(
+          corruptBoatAllocation(s.db, s.input.consumer.runId, { ...reserved, phase: "broken" }),
+        );
+        const second = await execute(seed(s.db, s.catalog));
+        await execute(s.repo.reserve(reservation(second)));
+        const sweep = await execute(s.resourceOwner.reconcile({ limit: 2 }));
+        expect(sweep.entries).toContainEqual({
+          runId: s.input.consumer.runId,
+          outcome: "unavailable",
+        });
+        expect(sweep.entries).toContainEqual({ runId: second.consumer.runId, outcome: "pending" });
+        expect(sweep.next).toBe([s.input.consumer.runId, second.consumer.runId].toSorted().at(-1));
+        if (sweep.next === undefined) throw new Error("missing cursor");
+        expect(await execute(s.resourceOwner.reconcile({ limit: 2, after: sweep.next }))).toEqual({
+          entries: [],
+        });
+        expect(s.provider.creates).toHaveLength(0);
+        expect(s.gateway.requests).toHaveLength(0);
+        expect(s.guest.networkBodies).toHaveLength(0);
+      }));
+    it("keeps current linked resources reached and applies unlinks without releasing the gateway", () =>
+      test(async (s) => {
+        const target = await execute(s.allocations.prepare(s.input));
+        await execute(
+          s.executor.stage(
+            target.runId,
+            Redacted.make({
+              files: [{ name: "launch", bytes: Buffer.from("launch") }],
+              pins: { credentialVersions: [], dotfiles: [] },
+            }),
+          ),
+        );
+        if (s.input.scope.kind !== "owner") throw new Error("expected owner scope");
+        const domainId = `rdm:${randomUUID()}`;
+        await execute(
+          s.db
+            .insert(schema.workspaces)
+            .values({ id: target.workspaceId, ownerUserId: s.input.scope.ownerUserId }),
+        );
+        await execute(
+          s.db
+            .insert(schema.workspaceRunLinks)
+            .values({ workspaceId: target.workspaceId, runId: target.runId }),
+        );
+        await execute(s.db.insert(schema.resourceDomains).values({ id: domainId, key: domainId }));
+        const link = {
+          workspaceId: target.workspaceId,
+          resourceDomainId: domainId,
+          worktreeKey: ResourceWorktreeKey.make("tree"),
+          aliases: null,
+        };
+        await execute(s.resources.link(link));
+        const outcome = await execute(
+          s.resources.up({
+            resourceDomainId: domainId,
+            key: ResourceInstanceKey.make("db"),
+            spec: postgresSpec({ idleStopAfterSeconds: 1 }),
+            cause: "use",
+          }),
+        );
+        if (outcome.kind !== "upserted") throw new Error("resource missing");
+        await execute(s.resourceOwner.prepare(target));
+        expect(s.gateway.requests.at(-1)?.link).toEqual(link);
+        expect(s.gateway.requests.at(-1)?.instances.map((value) => value.id)).toEqual([
+          outcome.instance.id,
+        ]);
+        expect(await execute(s.resourceOwner.reach())).toEqual([link]);
+        await execute(
+          s.resources.recordObserved(
+            outcome.instance.id,
+            { kind: "running", since: "2026-01-01T00:00:00Z" },
+            { startedAt: new Date("2026-01-01T00:00:00Z") },
+          ),
+        );
+        const stopped: string[] = [];
+        const tick = makeResourceReconciler({
+          repo: s.resources,
+          externalReach: () => execute(s.resourceOwner.reach()),
+          runtime: {
+            observe: async () =>
+              new Map([[outcome.instance.id, { running: true, exitCode: null }]]),
+            up: async () => {
+              throw new Error("already running");
+            },
+            stop: async (instance) => {
+              stopped.push(instance.id);
+            },
+            archive: async () => [],
+            exec: async () => {
+              throw new Error("unused");
+            },
+            attachExecutor: async () => {
+              throw new Error("Boat owns attachments");
+            },
+            detachExecutor: async () => {
+              throw new Error("Boat owns cleanup");
+            },
+            converge: async ({ liveExecutors, desired }) => {
+              expect(liveExecutors).toEqual([]);
+              expect(desired).toEqual([]);
+            },
+          },
+        });
+        expect(await tick.tick(new Date("2030-01-01T00:00:00Z"))).toMatchObject({
+          reached: 1,
+          idleStopped: [],
+          problems: [],
+        });
+        expect(stopped).toEqual([]);
+        await execute(s.resources.unlink(target.workspaceId));
+        await execute(s.resourceOwner.prepare(target));
+        expect(s.gateway.requests.at(-1)?.link).toBeUndefined();
+        expect(s.gateway.requests.at(-1)?.instances).toEqual([]);
+        expect(await execute(s.resourceOwner.reach())).toEqual([]);
+        expect((await execute(s.tunnels.get(target.runId)))?.network).toBeDefined();
+      }));
+    it("retains exact gateway obligations after unknown outcomes and refuses a stop before guest delivery", () =>
+      test(async (s) => {
+        const target = await execute(s.allocations.prepare(s.input));
+        await execute(
+          s.executor.stage(
+            target.runId,
+            Redacted.make({
+              files: [{ name: "launch", bytes: Buffer.from("launch") }],
+              pins: { credentialVersions: [], dotfiles: [] },
+            }),
+          ),
+        );
+        s.gateway.unavailable = true;
+        await expect(execute(s.resourceOwner.prepare(target))).rejects.toThrow("unavailable");
+        const frozen = await execute(s.tunnels.get(target.runId));
+        expect(frozen?.network).toBeDefined();
+        expect(s.guest.networkBodies).toHaveLength(0);
+        s.gateway.unavailable = false;
+        s.gateway.beforeReply = async () => {
+          await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+        };
+        await expect(execute(s.resourceOwner.prepare(target))).rejects.toThrow("held");
+        expect(s.guest.networkBodies).toHaveLength(0);
+        expect(await execute(s.tunnels.get(target.runId))).toEqual(frozen);
+        expect(await execute(s.resourceOwner.reach())).toEqual([]);
+      }));
     it("reserves the actual run, exact source, pending runtime and sealed exchange without starting work", () =>
       test(async (s) => {
         const target = await execute(s.allocations.prepare(s.input));

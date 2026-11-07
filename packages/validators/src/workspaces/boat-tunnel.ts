@@ -27,12 +27,38 @@ export const boatTunnelMaterialSchema = z
 /** Private persisted key custody, never a public API projection. */
 export type BoatTunnelMaterial = z.infer<typeof boatTunnelMaterialSchema>;
 
+/** Public immutable setup intent. Reconciliation must not silently change a guest's network. */
+export const boatNetworkIntentSchema = z.strictObject({
+  epoch: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  operationId: z.uuid(),
+  endpoint: z.ipv4(),
+  subnet: z
+    .string()
+    .regex(/^[0-9.]+\/27$/)
+    .refine((value) => {
+      const [address, prefix] = value.split("/");
+      return (
+        prefix === "27" &&
+        z.ipv4().safeParse(address).success &&
+        Number(address?.split(".").at(-1)) % 32 === 0 &&
+        (address?.startsWith("10.") ||
+          address?.startsWith("192.168.") ||
+          (address?.startsWith("172.") &&
+            Number(address.split(".")[1]) >= 16 &&
+            Number(address.split(".")[1]) <= 31))
+      );
+    }),
+});
+/** Frozen before the first gateway or guest setup request. */
+export type BoatNetworkIntent = z.infer<typeof boatNetworkIntentSchema>;
+
 /** One port and key pair per exact execution, with no automatic expiry or recycling. */
 export const boatTunnelReservationSchema = z.strictObject({
   binding: boatTunnelBindingSchema,
   reservationId: z.uuid().transform((value) => value.toLowerCase()),
   listenPort: z.number().int().min(40000).max(40015),
   material: boatTunnelMaterialSchema.nullable(),
+  network: boatNetworkIntentSchema.optional(),
 });
 /** Parsed durable reservation. Null material holds its port until key installation resumes. */
 export type BoatTunnelReservation = z.infer<typeof boatTunnelReservationSchema>;

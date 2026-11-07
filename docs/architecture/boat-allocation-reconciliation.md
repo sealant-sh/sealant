@@ -73,7 +73,8 @@ exact snapshot and scope bindings, complete inventory adoption, pin protection, 
 persistence, changed boot refusal and pagination. The worker assembly builds against local
 infrastructure. These checks make no new live-provider claim.
 
-Continue with isolation and tunnel enforcement, authenticated readiness, FINAL close/exclusion and
-held recovery, then executable parking. Parking will run plain `sync` before stop as hygiene.
-Yiannis's 2026-11-06 shipped-only hash policy, timestamp decision, own-process mapping checks, fresh
-clone binding and base-matching systemd holds remain unchanged.
+[Worker/resource reconciliation](boat-resource-reconciliation.md) now connects the held execution to
+host and guest network setup. Continue with authenticated readiness, FINAL close/exclusion and held
+recovery, then executable parking. Parking will run plain `sync` before stop as hygiene. Yiannis's
+2026-11-06 shipped-only hash policy, timestamp decision, own-process mapping checks, fresh clone
+binding and base-matching systemd holds remain unchanged.

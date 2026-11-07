@@ -104,7 +104,7 @@ export interface BoatTunnelInput {
   readonly privateKey: Redacted.Redacted<string>;
   readonly peerKey: string;
   readonly listenPort: number;
-  readonly link: ResourceWorkspaceLink;
+  readonly link: ResourceWorkspaceLink | undefined;
   readonly instances: readonly ResourceInstanceRecord[];
 }
 
@@ -244,7 +244,8 @@ export class DockerBoatTunnel implements BoatTunnel {
         let gatewayImage: string;
         try {
           target = boatExecutionTargetSchema.parse(input.target);
-          if (target.workspaceId !== input.link.workspaceId) throw new Error();
+          if (input.link !== undefined && target.workspaceId !== input.link.workspaceId)
+            throw new Error();
           privateKey = key.parse(Redacted.value(input.privateKey));
           peerKey = key.parse(input.peerKey);
           listenPort = port.parse(input.listenPort);
@@ -366,10 +367,10 @@ export class DockerBoatTunnel implements BoatTunnel {
         )
           throw new BoatTunnelError("ownership-conflict");
         if (!container.State.Running) await this.run(["start", name]);
-        const attachments = desiredAttachments(
-          [{ ...input.link, executor: name }],
-          input.instances,
-        );
+        const attachments =
+          input.link === undefined
+            ? []
+            : desiredAttachments([{ ...input.link, executor: name }], input.instances);
         await this.options.resources.attachExecutor(name, attachments);
         const attached = await this.ownedContainer(name, binding, configDigest);
         if (

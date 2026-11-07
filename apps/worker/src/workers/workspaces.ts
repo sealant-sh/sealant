@@ -9,6 +9,7 @@ import {
   createSealantDB,
   SealantDB,
   CredentialPlacementRepoLive,
+  type ResourceWorkspaceLink,
   ResourceInstanceRepo,
   ResourceInstanceRepoLive,
   ResourceDomainRepo,
@@ -23,6 +24,11 @@ import type { WorkerEnv } from "@sealant/validators/env";
 import {
   BoatAllocation,
   BoatAllocationProvider,
+  BoatResources,
+  BoatResourcesHost,
+  boatResourcesLayer,
+  boatWorkerExecutionLayer,
+  DockerBoatTunnel,
   BoatSecret,
   HttpBoatApi,
   boatAllocationWorkerLayer,
@@ -315,7 +321,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       : parseDockerRegistryMirrors(env.SEALANT_DOCKER_REGISTRY_MIRRORS);
   // Resource instances (Mend ADR 0019) run on this Docker host: the adapter tells their reach
   // about every executor it launches and removes, and a tick below keeps them at their rows.
-  const resourceReconciler = !(
+  let boatResourceReach: (() => Promise<readonly ResourceWorkspaceLink[]>) | undefined;
+  const resourceAssembly = !(
     (env.DEFAULT_RUNTIME_ADAPTER === "docker" && env.DOCKER_RUNTIME_ENABLED) ||
     env.DEFAULT_RUNTIME_ADAPTER === "k8s" ||
     env.DEFAULT_RUNTIME_ADAPTER === "k3s"
@@ -326,39 +333,47 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           const repo = yield* ResourceInstanceRepo;
           const budgets = yield* ResourceDomainRepo;
           const callers = parseResourceCallers(env.SEALANT_RESOURCE_CALLERS);
-          return makeResourceReconciler({
+          const subnets = repositorySubnets(
             repo,
-            budgets,
-            runtime:
-              env.DEFAULT_RUNTIME_ADAPTER === "k8s" || env.DEFAULT_RUNTIME_ADAPTER === "k3s"
-                ? new KubernetesCallerRuntime({
-                    namespace: env.SEALANT_RESOURCE_K8S_NAMESPACE,
-                    callers,
-                    networkPolicyEnforced: env.SEALANT_RESOURCE_K8S_NETWORK_POLICY,
-                    ...(credentialCipher === undefined ? {} : { cipher: credentialCipher }),
-                    ...(env.SEALANT_RESOURCE_K8S_KUBECONFIG === undefined
-                      ? {}
-                      : { kubeconfigPath: env.SEALANT_RESOURCE_K8S_KUBECONFIG }),
-                  })
-                : new DockerResourceRuntime({
-                    callers,
-                    ...(credentialCipher === undefined ? {} : { cipher: credentialCipher }),
-                    ...(env.SEALANT_RESOURCE_CALLER_GUARD_IMAGE === undefined
-                      ? {}
-                      : { callerGuardImage: env.SEALANT_RESOURCE_CALLER_GUARD_IMAGE }),
-                    subnets: repositorySubnets(
-                      repo,
-                      resourceSubnetPools({
-                        reach: env.SEALANT_RESOURCE_REACH_SUBNETS,
-                        egress: env.SEALANT_RESOURCE_EGRESS_SUBNETS,
-                      }),
-                    ),
-                    dockerSocketPath: env.DOCKER_SOCKET_PATH,
-                    ...(env.SEALANT_DOCKER_NETWORK_GUARD_IMAGE === undefined
-                      ? {}
-                      : { guardImage: env.SEALANT_DOCKER_NETWORK_GUARD_IMAGE }),
-                  }),
-          });
+            resourceSubnetPools({
+              reach: env.SEALANT_RESOURCE_REACH_SUBNETS,
+              egress: env.SEALANT_RESOURCE_EGRESS_SUBNETS,
+            }),
+          );
+          const runtime =
+            env.DEFAULT_RUNTIME_ADAPTER === "k8s" || env.DEFAULT_RUNTIME_ADAPTER === "k3s"
+              ? new KubernetesCallerRuntime({
+                  namespace: env.SEALANT_RESOURCE_K8S_NAMESPACE,
+                  callers,
+                  networkPolicyEnforced: env.SEALANT_RESOURCE_K8S_NETWORK_POLICY,
+                  ...(credentialCipher === undefined ? {} : { cipher: credentialCipher }),
+                  ...(env.SEALANT_RESOURCE_K8S_KUBECONFIG === undefined
+                    ? {}
+                    : { kubeconfigPath: env.SEALANT_RESOURCE_K8S_KUBECONFIG }),
+                })
+              : new DockerResourceRuntime({
+                  callers,
+                  subnets,
+                  dockerSocketPath: env.DOCKER_SOCKET_PATH,
+                  ...(credentialCipher === undefined ? {} : { cipher: credentialCipher }),
+                  ...(env.SEALANT_RESOURCE_CALLER_GUARD_IMAGE === undefined
+                    ? {}
+                    : { callerGuardImage: env.SEALANT_RESOURCE_CALLER_GUARD_IMAGE }),
+                  ...(env.SEALANT_DOCKER_NETWORK_GUARD_IMAGE === undefined
+                    ? {}
+                    : { guardImage: env.SEALANT_DOCKER_NETWORK_GUARD_IMAGE }),
+                });
+          return {
+            runtime,
+            subnets,
+            reconciler: makeResourceReconciler({
+              repo,
+              budgets,
+              runtime,
+              externalReach: async () =>
+                boatResourceReach === undefined ? [] : boatResourceReach(),
+            }),
+          };
         }).pipe(
           Effect.provide(
             Layer.merge(ResourceInstanceRepoLive, ResourceDomainRepoLive).pipe(
@@ -367,6 +382,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           ),
         ),
       );
+  const resourceReconciler = resourceAssembly?.reconciler;
   const dockerAdapters = !env.DOCKER_RUNTIME_ENABLED
     ? []
     : [
@@ -955,10 +971,9 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         resourceTickRunning = false;
       });
   };
-  resourceTick();
-  const resourceTickTimer = setInterval(resourceTick, env.SEALANT_RESOURCE_TICK_MS);
+
   // This resumes existing allocation obligations only. Boat is deliberately absent from runtimes.
-  const boatRuntime = (() => {
+  const boatAssembly = (() => {
     if (env.SEALANT_BOAT_API_KEY === undefined) return undefined;
     if (env.SEALANT_BOAT_DEPLOYMENT_ID === undefined || credentialCipher === undefined)
       throw new Error("Boat reconciliation configuration is incomplete.");
@@ -974,12 +989,51 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         api: api.value,
       }),
     );
+    if (env.SEALANT_BOAT_GATEWAY_HOST_ID !== undefined) {
+      if (
+        env.SEALANT_BOAT_GATEWAY_ENDPOINT === undefined ||
+        env.SEALANT_BOAT_GATEWAY_IMAGE === undefined ||
+        resourceAssembly === undefined
+      )
+        throw new Error("Boat resource reconciliation configuration is incomplete.");
+      const Host = Layer.succeed(BoatResourcesHost, {
+        deploymentId: env.SEALANT_BOAT_DEPLOYMENT_ID,
+        gatewayHostId: env.SEALANT_BOAT_GATEWAY_HOST_ID,
+        endpoint: env.SEALANT_BOAT_GATEWAY_ENDPOINT,
+        subnets: resourceAssembly.subnets,
+        tunnel: new DockerBoatTunnel({
+          gatewayImage: env.SEALANT_BOAT_GATEWAY_IMAGE,
+          subnets: resourceAssembly.subnets,
+          resources: resourceAssembly.runtime,
+          dockerSocketPath: env.DOCKER_SOCKET_PATH,
+        }),
+      });
+      const Resources = boatResourcesLayer.pipe(Layer.provide(boatWorkerExecutionLayer));
+      const WorkerLayer: Layer.Layer<BoatAllocation | BoatResources> = Layer.merge(
+        boatAllocationWorkerLayer,
+        Resources,
+      ).pipe(Layer.provide(Layer.merge(Infra, Host)));
+      const runtime = ManagedRuntime.make(WorkerLayer);
+      boatResourceReach = () =>
+        runtime.runPromise(Effect.flatMap(BoatResources, (resources) => resources.reach()));
+      return {
+        runtime,
+        reconcileResources: (input: { limit: number; after?: string }) =>
+          runtime.runPromise(
+            Effect.flatMap(BoatResources, (resources) => resources.reconcile(input)),
+          ),
+      };
+    }
     const WorkerLayer: Layer.Layer<BoatAllocation> = boatAllocationWorkerLayer.pipe(
       Layer.provide(Infra),
     );
-    return ManagedRuntime.make(WorkerLayer);
+    return { runtime: ManagedRuntime.make(WorkerLayer), reconcileResources: undefined };
   })();
+  const boatRuntime = boatAssembly?.runtime;
+  resourceTick();
+  const resourceTickTimer = setInterval(resourceTick, env.SEALANT_RESOURCE_TICK_MS);
   let boatCursor: string | undefined;
+  let boatResourceCursor: string | undefined;
   let boatSweepRunning = false;
   const runBoatSweep = async () => {
     if (boatRuntime === undefined || boatSweepRunning) return;
@@ -995,6 +1049,17 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         }),
       );
       boatCursor = report.next;
+      if (boatAssembly?.reconcileResources !== undefined) {
+        const resources = await boatAssembly.reconcileResources({
+          limit: 20,
+          ...(boatResourceCursor === undefined ? {} : { after: boatResourceCursor }),
+        });
+        boatResourceCursor = resources.next;
+        const held = resources.entries.filter(
+          (entry) => entry.outcome !== "configured" && entry.outcome !== "pending",
+        );
+        if (held.length > 0) console.warn("Boat resource obligations remain", { entries: held });
+      }
       const unresolved = report.entries.filter((entry) => entry.outcome !== "bound");
       if (unresolved.length > 0)
         console.warn("Boat allocation obligations remain", { entries: unresolved });

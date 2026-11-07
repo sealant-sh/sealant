@@ -1,6 +1,6 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 
-import { boatExecutionTargetSchema } from "@sealant/validators";
+import { boatExecutionTargetSchema, boatNetworkIntentSchema } from "@sealant/validators";
 import { describe, expect, it } from "vitest";
 
 import type { BoatSandbox } from "./api.js";
@@ -31,6 +31,28 @@ const labels = {
 const unavailable = async (): Promise<never> => {
   throw new Error("must not call");
 };
+describe("Boat network intent boundary", () => {
+  it("accepts canonical private /27 networks and rejects public, misaligned and trailing representations", () => {
+    const intent = {
+      epoch: 1,
+      operationId: randomUUID(),
+      endpoint: "10.0.0.41",
+      subnet: "10.98.0.32/27",
+    };
+    for (const subnet of ["10.0.0.0/27", "172.16.0.32/27", "172.31.255.224/27", "192.168.4.64/27"])
+      expect(boatNetworkIntentSchema.safeParse({ ...intent, subnet }).success).toBe(true);
+    for (const subnet of [
+      "8.8.8.0/27",
+      "172.15.0.32/27",
+      "172.32.0.32/27",
+      "10.0.0.1/27",
+      "10.0.0.0/28",
+      "10.0.0.0/27/extra",
+      "10.0.0.0/27\n",
+    ])
+      expect(boatNetworkIntentSchema.safeParse({ ...intent, subnet }).success).toBe(false);
+  });
+});
 describe("Boat worker public bootstrap transport", () => {
   it("checks every provider target label before issuing a command", async () => {
     for (const key of Object.keys(labels)) {

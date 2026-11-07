@@ -28,8 +28,10 @@ replay verifies the saved state without mutating it. Partial setup, policy chang
 namespace or a new boot refuse adoption and retain the original obligation. This layer does not
 repair or remove uncertain setup, rebind restored networking, or release host UDP reservations.
 
-Admission remains disabled. Worker dispatch of this setup contract, authenticated readiness,
-resource limits, FINAL close/recovery and executable parking remain separate work. In particular,
+Admission remains disabled. The
+[worker resource reconciler](../../../docs/architecture/boat-resource-reconciliation.md) now
+dispatches this setup contract. Authenticated readiness, resource limits, FINAL close/recovery and
+executable parking remain separate work. In particular,
 [#465](https://github.com/sealant-sh/sealant/issues/465) blocks admission until canonical close
 proves both guest peer and host gateway cleanup before releasing the reserved slot. Parking keeps a
 plain `sync` before stop as hygiene.

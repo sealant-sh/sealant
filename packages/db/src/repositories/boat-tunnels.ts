@@ -2,12 +2,14 @@ import { isDeepStrictEqual } from "node:util";
 
 import {
   boatExecutionRecordSchema,
+  boatNetworkIntentSchema,
   boatTunnelBindingSchema,
   boatTunnelMaterialSchema,
   boatTunnelReservationSchema,
   type BoatTunnelBinding,
   type BoatTunnelMaterial,
   type BoatTunnelReservation,
+  type BoatNetworkIntent,
 } from "@sealant/validators";
 import { and, eq, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
@@ -44,6 +46,11 @@ export interface BoatTunnelRepoService {
   readonly install: (
     previous: BoatTunnelReservation,
     material: BoatTunnelMaterial,
+  ) => Effect.Effect<BoatTunnelReservation, BoatTunnelStoreError>;
+  /** Freeze setup before external effects. Changed boots, epochs and endpoints require canonical recovery. */
+  readonly configure: (
+    previous: BoatTunnelReservation,
+    network: BoatNetworkIntent,
   ) => Effect.Effect<BoatTunnelReservation, BoatTunnelStoreError>;
 }
 /** No release operation exists until canonical close can prove both peer and host cleanup. */
@@ -168,6 +175,55 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, SealantDB> = Effect.
     get: (id) => boundary(get(id)),
     reserve: (binding, id) => boundary(reserve(binding, id)),
     install: (previous, material) => boundary(install(previous, material)),
+    configure: (previous, input) =>
+      boundary(
+        Effect.gen(function* () {
+          const before = yield* parse(() => boatTunnelReservationSchema.parse(previous));
+          const network = yield* parse(() => boatNetworkIntentSchema.parse(input));
+          if (before.material === null)
+            return yield* Effect.fail(new BoatTunnelStoreError("invalid-record"));
+          const [row] = yield* db
+            .select()
+            .from(boatExecutions)
+            .where(eq(boatExecutions.runtimeInstanceId, before.binding.target.runtimeInstanceId));
+          const execution = yield* parse(() =>
+            row === undefined ? undefined : boatExecutionRecordSchema.parse(row.record),
+          );
+          if (
+            execution === undefined ||
+            !["installed", "issued", "running"].includes(execution.phase) ||
+            execution.admission === null
+          )
+            return yield* Effect.fail(new BoatTunnelStoreError("execution-unavailable"));
+          if (
+            !isDeepStrictEqual(execution.target, before.binding.target) ||
+            execution.target.runtimeInstanceId !== row?.runtimeInstanceId ||
+            execution.target.deploymentId !== row.deploymentId ||
+            execution.target.sandboxId !== row.sandboxId ||
+            execution.target.diskLineage !== row.diskLineage ||
+            execution.admission.epoch !== network.epoch ||
+            execution.admission.operationId !== network.operationId
+          )
+            return yield* Effect.fail(new BoatTunnelStoreError("binding-conflict"));
+          const next = { ...before, network };
+          if (before.network !== undefined && !isDeepStrictEqual(before.network, network))
+            return yield* Effect.fail(new BoatTunnelStoreError("binding-conflict"));
+          const rows = yield* db
+            .update(boatTunnels)
+            .set({ record: next })
+            .where(
+              and(
+                eq(boatTunnels.runtimeInstanceId, before.binding.target.runtimeInstanceId),
+                sql`${boatTunnels.record} = ${JSON.stringify(before)}::jsonb`,
+              ),
+            )
+            .returning();
+          if (rows.length !== 0) return next;
+          const saved = yield* get(before.binding.target.runtimeInstanceId);
+          if (isDeepStrictEqual(saved, next)) return next;
+          return yield* Effect.fail(new BoatTunnelStoreError("stale-transition"));
+        }),
+      ),
   });
 });
 
