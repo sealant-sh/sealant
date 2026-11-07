@@ -153,6 +153,8 @@ class ReceiverTests(unittest.TestCase):
             with self.validated():
                 self.assertEqual(request('GET', '/sealant/bootstrap/status', auth='wrong')[0], 401)
                 self.assertEqual(request('GET', '/anything')[0], 404)
+                self.assertEqual(request('POST', '/sealant/bootstrap/isolate', '{}', auth='wrong', headers={'Content-Type': 'application/json'})[0], 401)
+                self.assertEqual(request('POST', '/sealant/bootstrap/isolate', '{}', headers={'Content-Type': 'application/json'})[0], 409)
                 self.assertEqual(request('GET', '/sealant/bootstrap/status')[1]['execution'], 'unavailable')
                 code, body = request('POST', '/sealant/bootstrap/stage', json.dumps(self.value),
                                      headers={'Content-Type': 'application/json'})
@@ -162,6 +164,8 @@ class ReceiverTests(unittest.TestCase):
                 self.assertEqual(request('POST', '/sealant/bootstrap/stage',
                                          headers={'Content-Type': 'application/json', 'Content-Length': str(receiver.MAX_BODY + 1)})[0], 409)
                 self.assertEqual(request('POST', '/sealant/bootstrap/start')[0], 409)
+                # After staging, the route reaches the strict network parser, never arbitrary exec.
+                self.assertEqual(request('POST', '/sealant/bootstrap/isolate', '{}', headers={'Content-Type': 'application/json'}), (409, {'error': 'invalid-network-config'}))
         finally:
             server.shutdown()
             thread.join()
