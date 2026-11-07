@@ -193,6 +193,14 @@ export class DockerBoatTunnel implements BoatTunnel {
     binding: string,
   ): Promise<void> {
     const subnet = await this.options.subnets.allocate({ name, kind, owner });
+    const [address, prefix] = z
+      .tuple([z.ipv4(), z.literal(kind === "reach" ? "27" : "28")])
+      .parse(subnet.split("/"));
+    const octets = address.split(".");
+    const lastOctet = Number(octets.pop());
+    if (lastOctet % 2 ** (32 - Number(prefix)) !== 0) throw new BoatTunnelError("invalid-input");
+    // Docker 28 omits an automatically chosen gateway from network inspection.
+    const gateway = [...octets, lastOctet + 1].join(".");
     if (!(await this.exists("network", name))) {
       try {
         await this.run([
@@ -203,6 +211,8 @@ export class DockerBoatTunnel implements BoatTunnel {
           ...(kind === "reach" ? ["--internal"] : []),
           "--subnet",
           subnet,
+          "--gateway",
+          gateway,
           "--label",
           `${OWNER}=${binding}`,
           "--label",
@@ -217,7 +227,8 @@ export class DockerBoatTunnel implements BoatTunnel {
     if (
       value.Internal !== (kind === "reach") ||
       value.Labels[OWNER] !== binding ||
-      value.IPAM.Config[0]?.Subnet !== subnet
+      value.IPAM.Config[0]?.Subnet !== subnet ||
+      value.IPAM.Config[0]?.Gateway !== gateway
     )
       throw new BoatTunnelError("ownership-conflict");
   }

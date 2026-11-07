@@ -73,6 +73,17 @@ SEALANT_BOAT_TUNNEL_TEST_IMAGE_FILE=/tmp/boat-tunnel-image-id \
   pnpm --filter @sealant/workspaces test:e2e src/resources/boat-tunnel.e2e.ts
 ```
 
+Docker 28.0.4 omits automatically selected gateways from `network inspect`, including after
+attachment. The adapter explicitly requests the first host address in each allocated subnet and
+verifies that address on replay. This fixes the pre-start `gateway-unavailable` failure from
+run 42381587638. The unchanged encrypted-traffic assertions reproduced that failure on Docker 28.0.4
+before the fix. The proof also runs on Docker 29.9.1.
+
+The test first creates a WireGuard interface with only NET_ADMIN. Missing kernel or capability
+support fails with an explicit message. It then exercises actual encrypted UDP traffic; no
+unsupported-host skip exists. The positive host listener runs in the Docker host's network
+namespace, so the same isolation assertions work against an isolated Docker-in-Docker daemon.
+
 The test sends encrypted DNS over UDP and TCP and connects to actual linked resources. It checks
 wrong-key refusal, cross-session denial, a live host listener, project/worktree relinking, restart
 and reconnection, foreign-container refusal, changed limits, extra network membership and changed

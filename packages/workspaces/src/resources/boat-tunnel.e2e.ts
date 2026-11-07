@@ -2,7 +2,6 @@ import { execFile, spawn } from "node:child_process";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import dgram from "node:dgram";
 import { readFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import { promisify } from "node:util";
 
 import { boatExecutionTargetSchema } from "@sealant/validators";
@@ -112,6 +111,13 @@ else:
  except OSError: result='denied'
 print(json.dumps({'result':result}))
 `;
+const startHostService = `
+import json,socket,subprocess
+s=socket.socket();s.bind(('0.0.0.0',0));s.listen()
+script="import socket; s=socket.socket(fileno="+str(s.fileno())+");\\nwhile True:\\n c,_=s.accept(); c.sendall(b'host-service\\\\n'); c.close()"
+subprocess.Popen(['python3','-c',script],pass_fds=[s.fileno()],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+print(json.dumps({'result':str(s.getsockname()[1])}))
+`;
 
 it("one WireGuard peer reaches only its linked resources and DNS, with replay and exact cleanup", async () => {
   if (imagePath === undefined)
@@ -125,7 +131,7 @@ it("one WireGuard peer reaches only its linked resources and DNS, with replay an
     allocate: async ({ name, kind }) => {
       let held = networks.get(name);
       if (held === undefined) {
-        held = `10.${subnetByte}.${index++}.0/${kind === "reach" ? 27 : 28}`;
+        held = `10.${subnetByte}.${index++}.${kind === "reach" ? "32/27" : "16/28"}`;
         networks.set(name, held);
       }
       return held;
@@ -180,13 +186,36 @@ it("one WireGuard peer reaches only its linked resources and DNS, with replay an
     link,
     instances: [project, other, tree],
   };
-  const hostService = createServer((socket) => socket.end("host-service\n"));
-  await new Promise<void>((resolve) => hostService.listen(0, "0.0.0.0", resolve));
-  const hostAddress = hostService.address();
-  if (hostAddress === null || typeof hostAddress === "string")
-    throw new Error("Owned host listener is unavailable");
   let complete = false;
   try {
+    const preflight = `${boatTunnelName(first)}-preflight`;
+    containers.add(preflight);
+    try {
+      await docker(
+        "run",
+        "--rm",
+        "--name",
+        preflight,
+        "--network",
+        "none",
+        "--cap-drop",
+        "ALL",
+        "--cap-add",
+        "NET_ADMIN",
+        "--entrypoint",
+        "ip",
+        image,
+        "link",
+        "add",
+        "wg0",
+        "type",
+        "wireguard",
+      );
+    } catch (cause) {
+      throw new Error("Boat tunnel proof requires kernel WireGuard and Docker NET_ADMIN support", {
+        cause,
+      });
+    }
     for (const instance of [project, other, tree]) {
       containers.add(instanceContainerName(instance.id));
       const ready = await resources.up(instance, []);
@@ -294,22 +323,27 @@ it("one WireGuard peer reaches only its linked resources and DNS, with replay an
       image,
       "infinity",
     );
+    const hostPort = z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(65535)
+      .parse((await command(hostControl, startHostService, {})).result);
     expect(
       (
         await command(hostControl, query, {
           kind: "tcp",
           host: "127.0.0.1",
-          port: hostAddress.port,
+          port: hostPort,
         })
       ).result,
     ).toBe("host-service");
     await docker("exec", client, "ip", "route", "replace", `${defaultBridge}/32`, "dev", "wg0");
     expect(
-      (await command(client, query, { kind: "tcp", host: defaultBridge, port: hostAddress.port }))
-        .result,
+      (await command(client, query, { kind: "tcp", host: defaultBridge, port: hostPort })).result,
     ).toBe("denied");
     expect(
-      (await command(client, query, { kind: "tcp", host: hostIp, port: hostAddress.port })).result,
+      (await command(client, query, { kind: "tcp", host: hostIp, port: hostPort })).result,
     ).toBe("denied");
     expect((await command(wrong, query, { kind: "dns-udp", host: "db" })).result).toBe("denied");
     expect(
@@ -430,15 +464,6 @@ it("one WireGuard peer reaches only its linked resources and DNS, with replay an
     );
     complete = true;
   } finally {
-    await new Promise<void>((resolve, reject) =>
-      hostService.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve();
-      }),
-    );
     for (const target of complete ? [] : [first, second]) {
       const name = boatTunnelName(target);
       const logs = await promisify(execFile)("docker", ["logs", name], { timeout: 5000 }).catch(
