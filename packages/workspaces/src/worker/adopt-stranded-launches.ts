@@ -77,6 +77,8 @@ const identifyUnrecordedExecutors = (
       unownedGraceMs,
     });
     for (const instance of unrecorded) {
+      // Native inventory absence cannot settle an issued allocation. Its durable owner reconciles it.
+      if (instance.adapter === "boat") continue;
       const runId = instance.runId;
       yield* Effect.gen(function* () {
         let found: RuntimeLaunchIdentity | undefined;
@@ -177,7 +179,9 @@ export const adoptStrandedLaunchesEffect = Effect.fn("adoptStrandedLaunches")(fu
 
   const stranded = (yield* runtimeInstances.listStrandedLaunches({ unownedGraceMs })).filter(
     (instance) =>
-      instance.resourceId !== null && (wanted === undefined || wanted.has(instance.resourceId)),
+      instance.adapter !== "boat" &&
+      instance.resourceId !== null &&
+      (wanted === undefined || wanted.has(instance.resourceId)),
   );
 
   const adopted: string[] = [];

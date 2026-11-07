@@ -5,9 +5,10 @@ whole-daemon invocation owner. It does not establish resource isolation, a worki
 FINAL settlement, recovery, parking or an end-to-end Boat session.
 
 `BoatExecution` uses the existing credential cipher and `BoatExecutionRepo`. The native publication
-catalog continues to own reusable images. Allocation is still a separate missing executor layer;
-this service receives an already reserved, verified provider target and never allocates a VM. The
-worker composition root deliberately does not provide or call it yet.
+catalog continues to own reusable images.
+[Allocation reconciliation](boat-allocation-reconciliation.md) now supplies the reserved, verified
+provider target and composes this service for held bootstrap. Ordinary runtime registration remains
+disabled.
 
 ## Exchange and delivery
 
@@ -90,8 +91,7 @@ generic job claims cannot fence already-issued guest work, and the publication c
 run secrets or invocation state. The worker layer centralizes the encryption/delivery order so
 callers cannot accidentally send a new payload under a retried operation.
 
-Continue with allocation/reconciliation integration, isolation and tunnel enforcement, authenticated
-daemon readiness, FINAL close/exclusion and held recovery, then executable parking. Parking will run
-plain `sync` before stop as hygiene. The 2026-11-06 shipped-only guard, timestamp decision, fresh
-clone binding and held base-systemd versions remain unchanged. No provider allocation or live proof
-is claimed for this PR.
+Continue with isolation and tunnel enforcement, authenticated daemon readiness, FINAL
+close/exclusion and held recovery, then executable parking. Parking will run plain `sync` before
+stop as hygiene. The 2026-11-06 shipped-only guard, timestamp decision, fresh clone binding and held
+base-systemd versions remain unchanged. No provider allocation or live proof is claimed for this PR.

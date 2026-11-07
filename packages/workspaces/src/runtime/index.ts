@@ -254,3 +254,16 @@ export {
   type BoatExecutionService,
   type BoatGuestTransport,
 } from "./boat/execution.js";
+
+export {
+  BoatAllocation,
+  BoatAllocationError,
+  BoatAllocationProvider,
+  boatAllocationLayer,
+  boatAllocationLayerNoDeps,
+  type BoatAllocationService,
+  type BoatAllocationSweep,
+} from "./boat/allocation.js";
+
+export { HttpBoatApi } from "./boat/api.js";
+export { BoatSecret } from "./boat/config.js";

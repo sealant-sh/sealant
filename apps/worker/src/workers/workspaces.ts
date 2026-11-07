@@ -21,6 +21,11 @@ import { createGitHubSourceIntegration } from "@sealant/source-integrations";
 import { deleteExpiredRunRecords } from "@sealant/telemetry";
 import type { WorkerEnv } from "@sealant/validators/env";
 import {
+  BoatAllocation,
+  BoatAllocationProvider,
+  BoatSecret,
+  HttpBoatApi,
+  boatAllocationWorkerLayer,
   DockerResourceRuntime,
   KubernetesCallerRuntime,
   parseResourceCallers,
@@ -79,7 +84,7 @@ import {
   type CaptureDrainSettings,
   type RegistryClient,
 } from "@sealant/workspaces";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, ManagedRuntime } from "effect";
 
 import { processRunExecJob } from "./process-run-exec-job.js";
 import {
@@ -952,6 +957,56 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   };
   resourceTick();
   const resourceTickTimer = setInterval(resourceTick, env.SEALANT_RESOURCE_TICK_MS);
+  // This resumes existing allocation obligations only. Boat is deliberately absent from runtimes.
+  const boatRuntime = (() => {
+    if (env.SEALANT_BOAT_API_KEY === undefined) return undefined;
+    if (env.SEALANT_BOAT_DEPLOYMENT_ID === undefined || credentialCipher === undefined)
+      throw new Error("Boat reconciliation configuration is incomplete.");
+    const credential = BoatSecret.parse(env.SEALANT_BOAT_API_KEY);
+    if (!credential.ok) throw credential.error;
+    const api = HttpBoatApi.create({ credential: credential.value });
+    if (!api.ok) throw api.error;
+    const Infra = Layer.mergeAll(
+      Layer.succeed(SealantDB, db),
+      Layer.succeed(CredentialCipher, credentialCipher),
+      Layer.succeed(BoatAllocationProvider, {
+        deploymentId: env.SEALANT_BOAT_DEPLOYMENT_ID,
+        api: api.value,
+      }),
+    );
+    const WorkerLayer: Layer.Layer<BoatAllocation> = boatAllocationWorkerLayer.pipe(
+      Layer.provide(Infra),
+    );
+    return ManagedRuntime.make(WorkerLayer);
+  })();
+  let boatCursor: string | undefined;
+  let boatSweepRunning = false;
+  const runBoatSweep = async () => {
+    if (boatRuntime === undefined || boatSweepRunning) return;
+    boatSweepRunning = true;
+    try {
+      const report = await boatRuntime.runPromise(
+        Effect.gen(function* () {
+          const allocations = yield* BoatAllocation;
+          return yield* allocations.reconcile({
+            limit: 20,
+            ...(boatCursor === undefined ? {} : { after: boatCursor }),
+          });
+        }),
+      );
+      boatCursor = report.next;
+      const unresolved = report.entries.filter((entry) => entry.outcome !== "bound");
+      if (unresolved.length > 0)
+        console.warn("Boat allocation obligations remain", { entries: unresolved });
+    } catch {
+      console.error("Boat allocation reconciliation tick failed");
+    } finally {
+      boatSweepRunning = false;
+    }
+  };
+  const boatSweepTimer = boatRuntime === undefined ? undefined : setInterval(runBoatSweep, 30_000);
+  void runBoatSweep();
+
   resourceTickTimer.unref();
 
   return {
@@ -963,6 +1018,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       clearInterval(deadlineSweepTimer);
       clearInterval(recoverySweepTimer);
       clearInterval(exitReconcilerTimer);
+      if (boatSweepTimer !== undefined) clearInterval(boatSweepTimer);
+      await boatRuntime?.dispose();
       exitWatch.close();
       if (imageRetentionBootTimer !== undefined) clearTimeout(imageRetentionBootTimer);
       if (imageRetentionTimer !== undefined) clearInterval(imageRetentionTimer);

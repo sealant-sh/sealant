@@ -6,6 +6,22 @@ import { parseWorkerEnv } from "@sealant/validators/env";
 import { describe, expect, it } from "vitest";
 
 describe("parseWorkerEnv", () => {
+  it("requires the complete reconciliation contract without changing runtime selection", () => {
+    expect(parseWorkerEnv({}).SEALANT_BOAT_API_KEY).toBeUndefined();
+    for (const values of [
+      { SEALANT_BOAT_API_KEY: "test-key-for-local-only" },
+      { SEALANT_BOAT_DEPLOYMENT_ID: "test" },
+    ]) {
+      expect(() => parseWorkerEnv(values)).toThrow("Boat reconciliation requires");
+    }
+    expect(
+      parseWorkerEnv({
+        SEALANT_BOAT_API_KEY: "test-key-for-local-only",
+        SEALANT_BOAT_DEPLOYMENT_ID: "test",
+        SEALANT_CREDENTIALS_KEY: Buffer.alloc(32, 7).toString("base64"),
+      }),
+    ).toMatchObject({ DEFAULT_RUNTIME_ADAPTER: "docker", SEALANT_BOAT_DEPLOYMENT_ID: "test" });
+  });
   it("keeps legacy bind mode when Compose interpolates an unset mapping as empty", () => {
     const env = parseWorkerEnv({ SEALANT_DOCKER_VOLUME_MAPPINGS: "" });
 
