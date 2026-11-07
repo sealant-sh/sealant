@@ -9,6 +9,7 @@ import { Effect, Redacted } from "effect";
 import { expect, it } from "vitest";
 import { z } from "zod";
 
+import { createDockerCommandRunner } from "../runtime/docker-runtime-adapter.js";
 import { boatTunnelName, DockerBoatTunnel } from "./boat-tunnel.js";
 import { CALLER_GUARD_IMAGE } from "./docker-caller-runtime.js";
 import { instanceContainerName, reachNetworkName } from "./docker-resource-argv.js";
@@ -221,11 +222,43 @@ it("one WireGuard peer reaches only its linked resources and DNS, with replay an
       const ready = await resources.up(instance, []);
       expect(ready.state).toMatchObject({ kind: "running" });
     }
-    const empty = await Effect.runPromise(runtime.ensure({ ...input, instances: [] }));
+    const empty = await Effect.runPromise(
+      runtime.ensure({ ...input, link: undefined, instances: [] }),
+    );
     const endpoint = await Effect.runPromise(runtime.ensure(input));
     expect(endpoint.containerId).toBe(empty.containerId);
     expect(endpoint.receipt).not.toBe(empty.receipt);
     expect(endpoint.peerHandshake).toBe("unverified");
+    const released: string[] = [];
+    const nativeRunner = createDockerCommandRunner("/var/run/docker.sock");
+    const reserved = boatTunnelName(executionTarget(randomUUID()));
+    const ordinary = new DockerResourceRuntime({
+      subnets: {
+        ...subnets,
+        release: async (name) => {
+          released.push(name);
+        },
+      },
+      commandRunner: async (binary, args, options) => {
+        const result = await nativeRunner(binary, args, options);
+        // The shared daemon may hold unrelated workspaces. This proof inventories only its own reach network.
+        if (args[0] === "network" && args[1] === "ls")
+          return {
+            ...result,
+            stdout: result.stdout
+              .split("\n")
+              .filter((name) => name === reachNetworkName(endpoint.container))
+              .join("\n"),
+          };
+        return result;
+      },
+    });
+    await ordinary.converge({
+      desired: [],
+      liveExecutors: [],
+      knownExecutors: [endpoint.container, reserved],
+    });
+    expect(released).toEqual([]);
     const replay = await Effect.runPromise(runtime.ensure(input));
     expect(replay).toEqual(endpoint);
     await expect(

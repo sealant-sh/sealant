@@ -8,6 +8,7 @@ import {
   boatAllocationLayer,
 } from "../runtime/boat/allocation.js";
 import {
+  BoatExecution,
   BoatGuestTransportService,
   boatExecutionLayer,
   createBoatGuestTransport,
@@ -21,11 +22,16 @@ const TransportLayer: Layer.Layer<BoatGuestTransportService, never, BoatAllocati
       return createBoatGuestTransport(provider.api);
     }),
   );
-const ExecutionLayer = boatExecutionLayer.pipe(Layer.provide(TransportLayer));
+/** Shared sealed execution owner for allocation and resource reconciliation in one worker graph. */
+export const boatWorkerExecutionLayer: Layer.Layer<
+  BoatExecution,
+  never,
+  SealantDB | CredentialCipher | BoatAllocationProvider
+> = boatExecutionLayer.pipe(Layer.provide(TransportLayer));
 
 /** Worker assembly for allocation through authenticated held bootstrap. Ordinary registration remains disabled. */
 export const boatAllocationWorkerLayer: Layer.Layer<
   BoatAllocation,
   never,
   SealantDB | CredentialCipher | BoatAllocationProvider
-> = boatAllocationLayer.pipe(Layer.provide(ExecutionLayer));
+> = boatAllocationLayer.pipe(Layer.provide(boatWorkerExecutionLayer));

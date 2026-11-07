@@ -650,6 +650,27 @@ export class DockerResourceRuntime implements ResourceRuntime {
       ...present.map((network) => network.slice(0, -"-reach".length)),
       ...input.knownExecutors,
     ]);
+    // Boat's exact-target reconciler owns these networks through uncertain stops and FINAL cleanup.
+    const external = new Set(
+      [...gone, ...live].filter((executor) => /^boat-tunnel-[a-f0-9]{32}$/.test(executor)),
+    );
+    for (const executor of new Set([...gone, ...live])) {
+      if (external.has(executor) || !(await this.networkExists(reachNetworkName(executor))))
+        continue;
+      const labels = await this.run([
+        "network",
+        "inspect",
+        "--format",
+        '{{index .Labels "sealant.boat-tunnel"}}',
+        reachNetworkName(executor),
+      ]);
+      if (labels.stdout.trim() !== "" && labels.stdout.trim() !== "<no value>")
+        external.add(executor);
+    }
+    for (const executor of external) {
+      gone.delete(executor);
+      live.delete(executor);
+    }
     // An executor its row calls live but Docker no longer has is gone too.
     for (const executor of live) {
       if ((await this.inspectContainer(executor)) === undefined) live.delete(executor);

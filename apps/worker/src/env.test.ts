@@ -22,6 +22,27 @@ describe("parseWorkerEnv", () => {
       }),
     ).toMatchObject({ DEFAULT_RUNTIME_ADAPTER: "docker", SEALANT_BOAT_DEPLOYMENT_ID: "test" });
   });
+  it("requires an immutable and complete optional Docker gateway configuration", () => {
+    const base = {
+      SEALANT_BOAT_API_KEY: "test-key-for-local-only",
+      SEALANT_BOAT_DEPLOYMENT_ID: "test",
+      SEALANT_CREDENTIALS_KEY: Buffer.alloc(32, 7).toString("base64"),
+    };
+    const gateway = {
+      SEALANT_BOAT_GATEWAY_HOST_ID: "11111111-2222-4333-8444-555555555555",
+      SEALANT_BOAT_GATEWAY_ENDPOINT: "10.0.0.41",
+      SEALANT_BOAT_GATEWAY_IMAGE: `sha256:${"a".repeat(64)}`,
+    };
+    expect(parseWorkerEnv({ ...base, ...gateway })).toMatchObject(gateway);
+    for (const [key, value] of Object.entries(gateway))
+      expect(() => parseWorkerEnv({ ...base, [key]: value })).toThrow("complete gateway");
+    expect(() =>
+      parseWorkerEnv({ ...base, ...gateway, SEALANT_BOAT_GATEWAY_IMAGE: "gateway:latest" }),
+    ).toThrow();
+    expect(() => parseWorkerEnv({ ...base, ...gateway, DOCKER_RUNTIME_ENABLED: "false" })).toThrow(
+      "Docker resource host",
+    );
+  });
   it("keeps legacy bind mode when Compose interpolates an unset mapping as empty", () => {
     const env = parseWorkerEnv({ SEALANT_DOCKER_VOLUME_MAPPINGS: "" });
 

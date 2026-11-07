@@ -30,4 +30,14 @@ export * from "./git/working-tree-changes.js";
 
 export * from "./worker/reconcile-native-publications.js";
 
-export { boatAllocationWorkerLayer } from "./worker/boat-allocation.js";
+export { boatAllocationWorkerLayer, boatWorkerExecutionLayer } from "./worker/boat-allocation.js";
+
+export {
+  BoatResources,
+  BoatResourcesHost,
+  BoatResourcesError,
+  boatResourcesLayer,
+  boatResourcesLayerNoDeps,
+  type BoatResourcesReceipt,
+  type BoatResourcesSweep,
+} from "./worker/boat-resources.js";

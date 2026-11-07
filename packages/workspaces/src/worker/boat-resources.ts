@@ -1,0 +1,300 @@
+import { isDeepStrictEqual } from "node:util";
+
+import type { CredentialCipher } from "@sealant/credentials";
+import {
+  BoatAllocationRepo,
+  BoatAllocationRepoLive,
+  BoatExecutionRepo,
+  BoatExecutionRepoLive,
+  BoatTunnelRepo,
+  BoatTunnelStoreError,
+  boatTunnelRepoLayer,
+  ResourceInstanceRepo,
+  ResourceInstanceRepoLive,
+  type ResourceWorkspaceLink,
+  type SealantDB,
+} from "@sealant/db";
+import type { BoatExecutionTarget } from "@sealant/validators";
+import { Context, Effect, Layer } from "effect";
+
+import {
+  boatTunnelName,
+  type BoatTunnel,
+  type BoatTunnelEndpoint,
+} from "../resources/boat-tunnel.js";
+import { reachNetworkName } from "../resources/docker-resource-argv.js";
+import type { ResourceSubnets } from "../resources/docker-resource-runtime.js";
+import {
+  BoatExecution,
+  BoatExecutionError,
+  type BoatGuestNetworkReceipt,
+} from "../runtime/boat/execution.js";
+import {
+  BoatTunnelCredentialsOwner,
+  boatTunnelCredentialsLayer,
+} from "../runtime/boat/tunnel-credentials.js";
+
+/** Safe per-entry failures retain every reservation; they never carry transport or key data. */
+export class BoatResourcesError extends Error {
+  readonly _tag = "BoatResourcesError";
+  constructor(readonly code: "pending" | "held" | "binding-conflict" | "unavailable") {
+    super(`Boat resource reconciliation: ${code}`);
+  }
+}
+/** Current configuration acknowledgement only. No execution permit or readiness is produced. */
+export interface BoatResourcesReceipt {
+  readonly gateway: BoatTunnelEndpoint;
+  readonly guest: BoatGuestNetworkReceipt;
+}
+/** One bounded page; failures advance the cursor without resetting any durable intent. */
+export interface BoatResourcesSweep {
+  readonly entries: readonly {
+    readonly runId: string;
+    readonly outcome: "configured" | "pending" | "held" | "unavailable";
+  }[];
+  readonly next?: string;
+}
+/** Reconciles existing installed executions only, never allocation, staging or launch. */
+export class BoatResources extends Context.Service<
+  BoatResources,
+  {
+    readonly prepare: (
+      target: BoatExecutionTarget,
+    ) => Effect.Effect<BoatResourcesReceipt, BoatResourcesError>;
+    readonly reconcile: (input: {
+      readonly limit: number;
+      readonly after?: string;
+    }) => Effect.Effect<BoatResourcesSweep, BoatResourcesError>;
+    /** Used only for resource idle accounting. Generic Docker convergence must not own Boat networks. */
+    readonly reach: () => Effect.Effect<readonly ResourceWorkspaceLink[], BoatResourcesError>;
+  }
+>()("@sealant/workspaces/boat/BoatResources") {}
+/** Stable operator host identity and reachable numeric endpoint, never inferred from a container. */
+export class BoatResourcesHost extends Context.Service<
+  BoatResourcesHost,
+  {
+    readonly deploymentId: string;
+    readonly gatewayHostId: string;
+    readonly endpoint: string;
+    readonly tunnel: BoatTunnel;
+    readonly subnets: ResourceSubnets;
+  }
+>()("@sealant/workspaces/boat/BoatResourcesHost") {}
+
+const boundary = <A>(effect: Effect.Effect<A, unknown>): Effect.Effect<A, BoatResourcesError> =>
+  effect.pipe(
+    Effect.mapError((error) => {
+      if (error instanceof BoatResourcesError) return error;
+      if (error instanceof BoatTunnelStoreError && error.code === "binding-conflict")
+        return new BoatResourcesError("binding-conflict");
+      if (error instanceof BoatExecutionError && error.code === "invocation-held")
+        return new BoatResourcesError("held");
+      return new BoatResourcesError("unavailable");
+    }),
+  );
+const make: Effect.Effect<
+  BoatResources["Service"],
+  never,
+  | BoatAllocationRepo
+  | BoatExecutionRepo
+  | BoatTunnelRepo
+  | ResourceInstanceRepo
+  | BoatTunnelCredentialsOwner
+  | BoatExecution
+  | BoatResourcesHost
+> = Effect.gen(function* () {
+  const allocations = yield* BoatAllocationRepo;
+  const executions = yield* BoatExecutionRepo;
+  const tunnels = yield* BoatTunnelRepo;
+  const resources = yield* ResourceInstanceRepo;
+  const credentials = yield* BoatTunnelCredentialsOwner;
+  const guest = yield* BoatExecution;
+  const host = yield* BoatResourcesHost;
+  const current = (target: BoatExecutionTarget) =>
+    Effect.gen(function* () {
+      const allocation = yield* allocations.get(target.runtimeInstanceId);
+      const execution = yield* executions.get(target.runtimeInstanceId);
+      if (
+        target.deploymentId !== host.deploymentId ||
+        allocation?.phase !== "bound" ||
+        !isDeepStrictEqual(allocation.target, target) ||
+        !isDeepStrictEqual(execution?.target, target)
+      )
+        return yield* Effect.fail(new BoatResourcesError("binding-conflict"));
+      if (
+        !(yield* allocations.isActive(target.runId)) ||
+        execution === undefined ||
+        execution.phase === "held"
+      )
+        return yield* Effect.fail(new BoatResourcesError("held"));
+      if (
+        execution.admission === null ||
+        !["installed", "issued", "running"].includes(execution.phase)
+      )
+        return yield* Effect.fail(new BoatResourcesError("pending"));
+      return execution.admission;
+    });
+  const prepare = Effect.fn("BoatResources.prepare")(function* (target: BoatExecutionTarget) {
+    const admission = yield* current(target);
+    const keys = yield* credentials.prepare({ target, gatewayHostId: host.gatewayHostId });
+    const subnet = yield* Effect.tryPromise({
+      try: () =>
+        host.subnets.allocate({
+          name: reachNetworkName(boatTunnelName(target)),
+          kind: "reach",
+          owner: boatTunnelName(target),
+        }),
+      catch: () => new BoatResourcesError("unavailable"),
+    });
+    const reservation = yield* tunnels.get(target.runtimeInstanceId);
+    if (reservation === undefined)
+      return yield* Effect.fail(new BoatResourcesError("binding-conflict"));
+    yield* tunnels.configure(reservation, {
+      epoch: admission.epoch,
+      operationId: admission.operationId,
+      endpoint: host.endpoint,
+      subnet,
+    });
+    const link = yield* resources.linkOfRun(target.runId);
+    const instances =
+      link === undefined ? [] : yield* resources.list(link.resourceDomainId, { archived: false });
+    const recheck = Effect.gen(function* () {
+      if (
+        !isDeepStrictEqual(yield* current(target), admission) ||
+        !isDeepStrictEqual(yield* resources.linkOfRun(target.runId), link)
+      )
+        return yield* Effect.fail(new BoatResourcesError("binding-conflict"));
+    });
+    yield* recheck;
+    const gateway = yield* host.tunnel.ensure({
+      target,
+      privateKey: keys.gateway.privateKey,
+      peerKey: keys.guest.publicKey,
+      listenPort: keys.listenPort,
+      link,
+      instances,
+    });
+    if (
+      gateway.reachSubnet !== subnet ||
+      gateway.publicKey !== keys.gateway.publicKey ||
+      gateway.peerKey !== keys.guest.publicKey ||
+      gateway.listenPort !== keys.listenPort
+    )
+      return yield* Effect.fail(new BoatResourcesError("binding-conflict"));
+    yield* recheck;
+    const receipt = yield* guest.isolate(target, {
+      network: {
+        epoch: admission.epoch,
+        operationId: admission.operationId,
+        endpoint: host.endpoint,
+        subnet,
+      },
+      privateKey: keys.guest.privateKey,
+      publicKey: keys.guest.publicKey,
+      gatewayKey: keys.gateway.publicKey,
+      port: keys.listenPort,
+    });
+    yield* recheck;
+    return { gateway, guest: receipt };
+  });
+  const reconcile = Effect.fn("BoatResources.reconcile")(function* (
+    input: Parameters<BoatResources["Service"]["reconcile"]>[0],
+  ) {
+    const ids = yield* allocations.list({ deploymentId: host.deploymentId, ...input });
+    const entries = yield* Effect.forEach(
+      ids,
+      (id) =>
+        Effect.gen(function* () {
+          const record = yield* allocations.get(id);
+          if (record?.phase === "held") return "held" as const;
+          if (record?.target === null || record === undefined) return "pending" as const;
+          yield* boundary(prepare(record.target));
+          return "configured" as const;
+        }).pipe(
+          Effect.timeout(120_000),
+          Effect.catch((error) =>
+            Effect.succeed(
+              error instanceof BoatResourcesError
+                ? error.code === "pending"
+                  ? ("pending" as const)
+                  : error.code === "held" || error.code === "binding-conflict"
+                    ? ("held" as const)
+                    : ("unavailable" as const)
+                : ("unavailable" as const),
+            ),
+          ),
+          Effect.map((outcome) => ({ runId: id, outcome })),
+        ),
+      { concurrency: 4 },
+    );
+    const last = ids.at(-1);
+    return { entries, ...(ids.length === input.limit && last !== undefined ? { next: last } : {}) };
+  });
+  const reach = Effect.fn("BoatResources.reach")(function* () {
+    const links: ResourceWorkspaceLink[] = [];
+    let after: string | undefined;
+    do {
+      const ids = yield* allocations.list({
+        deploymentId: host.deploymentId,
+        limit: 100,
+        ...(after === undefined ? {} : { after }),
+      });
+      for (const id of ids) {
+        const reservation = yield* tunnels.get(id);
+        if (
+          reservation?.network === undefined ||
+          reservation.binding.gatewayHostId !== host.gatewayHostId
+        )
+          continue;
+        const execution = yield* executions.get(id);
+        if (
+          execution?.admission === null ||
+          execution === undefined ||
+          execution.phase === "held" ||
+          !isDeepStrictEqual(execution.target, reservation.binding.target) ||
+          execution.admission.epoch !== reservation.network.epoch ||
+          execution.admission.operationId !== reservation.network.operationId ||
+          !(yield* allocations.isActive(id))
+        )
+          continue;
+        const link = yield* resources.linkOfRun(id);
+        if (link !== undefined) links.push(link);
+      }
+      after = ids.length === 100 ? ids.at(-1) : undefined;
+    } while (after !== undefined);
+    return links;
+  });
+  return BoatResources.of({
+    prepare: (target) => boundary(prepare(target)),
+    reconcile: (input) => boundary(reconcile(input)),
+    reach: () => boundary(reach()),
+  });
+});
+/** Open assembly for faithful infrastructure and failure controls. */
+export const boatResourcesLayerNoDeps: Layer.Layer<
+  BoatResources,
+  never,
+  | BoatAllocationRepo
+  | BoatExecutionRepo
+  | BoatTunnelRepo
+  | ResourceInstanceRepo
+  | BoatTunnelCredentialsOwner
+  | BoatExecution
+  | BoatResourcesHost
+> = Layer.effect(BoatResources, make);
+/** Owns its stores and sealed tunnel credentials. The worker supplies authenticated exchange and host I/O. */
+export const boatResourcesLayer: Layer.Layer<
+  BoatResources,
+  never,
+  SealantDB | CredentialCipher | BoatExecution | BoatResourcesHost
+> = boatResourcesLayerNoDeps.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      BoatAllocationRepoLive,
+      BoatExecutionRepoLive,
+      boatTunnelRepoLayer,
+      ResourceInstanceRepoLive,
+      boatTunnelCredentialsLayer,
+    ),
+  ),
+);

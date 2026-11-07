@@ -1,9 +1,9 @@
 # Boat tunnel key and UDP custody
 
 Boat remains unregistered. This layer supplies durable credentials for the host resource tunnel from
-#462. It does not configure the guest peer, create an isolation permit, start the daemon or report
-readiness. The allocation tick does not call it yet. No live Boat session is needed to validate this
-layer.
+#462. The [resource reconciler](boat-resource-reconciliation.md) now consumes these credentials for
+host and guest setup. It does not create an isolation permit, start the daemon or report readiness.
+No live Boat session is needed to validate this layer.
 
 `BoatTunnelCredentialsOwner.prepare` takes the exact authenticated execution target and a stable
 operator-owned `gatewayHostId` for the physical Docker host. The execution must already have

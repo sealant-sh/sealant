@@ -167,6 +167,53 @@ describe("WireGuard key boundary", () => {
 });
 
 describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
+  it("freezes setup on legacy reservations and rejects every changed network field without releasing custody", () =>
+    test(async ({ seed, owner, repo, executions }) => {
+      const binding = await seed();
+      await execute(owner.prepare(binding));
+      const before = requireRecord(await execute(repo.get(binding.target.runId)));
+      expect(before.network).toBeUndefined();
+      const network = {
+        epoch: 1,
+        operationId: randomUUID(),
+        endpoint: "10.0.0.41",
+        subnet: "10.98.0.32/27",
+      };
+      await expect(execute(repo.configure(before, network))).rejects.toThrow(
+        "execution-unavailable",
+      );
+      const control = await execute(executions.get(binding.target.runId));
+      if (control === undefined) throw new Error("missing control");
+      const prepared = await execute(
+        executions.advance(control, {
+          ...control,
+          phase: "prepared",
+          admission: {
+            epoch: network.epoch,
+            operationId: network.operationId,
+            digest: "a".repeat(64),
+            sealedEnvelope: "test-envelope",
+          },
+        }),
+      );
+      await execute(executions.advance(prepared, { ...prepared, phase: "installed" }));
+      const saved = await execute(repo.configure(before, network));
+      expect(await execute(repo.configure(before, network))).toEqual(saved);
+      expect(await execute(owner.prepare(binding))).toMatchObject({
+        reservationId: before.reservationId,
+        listenPort: before.listenPort,
+      });
+      for (const changed of [
+        { epoch: 2 },
+        { operationId: randomUUID() },
+        { endpoint: "10.0.0.42" },
+        { subnet: "10.98.0.64/27" },
+      ])
+        await expect(execute(repo.configure(saved, { ...network, ...changed }))).rejects.toThrow(
+          "binding-conflict",
+        );
+      expect(await execute(repo.get(binding.target.runId))).toEqual(saved);
+    }));
   it("reopens exact keys and port through a freshly built production service", () =>
     test(async ({ owner, repo, seed, reopen }) => {
       const binding = await seed();
