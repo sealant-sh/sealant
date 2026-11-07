@@ -40,3 +40,11 @@ export { DockerCallerRuntime, CALLER_GUARD_IMAGE } from "./docker-caller-runtime
 export { makeResourceAccounting } from "./accounting.js";
 
 export { KubernetesCallerRuntime, callerKubernetesObjects } from "./kubernetes-caller-runtime.js";
+export {
+  DockerBoatTunnel,
+  BoatTunnelError,
+  boatTunnelName,
+  type BoatTunnel,
+  type BoatTunnelInput,
+  type BoatTunnelEndpoint,
+} from "./boat-tunnel.js";

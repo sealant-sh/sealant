@@ -196,6 +196,14 @@ jobs:
           Caller DNS forwards to configured private resolvers while other private traffic is denied
         run: pnpm --filter @sealant/workspaces test:e2e src/resources/caller-dns.e2e.ts
 
+      - name: Build the Boat resource gateway and test real encrypted reach isolation
+        env:
+          SEALANT_BOAT_TUNNEL_TEST_IMAGE_FILE: ${{ runner.temp }}/boat-tunnel-image-id
+        run: |
+          docker build --iidfile "$SEALANT_BOAT_TUNNEL_TEST_IMAGE_FILE" -f packages/workspaces/boat-tunnel/Dockerfile packages/workspaces/boat-tunnel
+          python3 -B -m unittest discover -s packages/workspaces/boat-tunnel -p 'test_*.py'
+          pnpm --filter @sealant/workspaces test:e2e src/resources/boat-tunnel.e2e.ts
+
       - name: Caller-owned services through SDK, isolated from workspaces, with retained backup
         env:
           SEALANT_CALLER_DOCKER_E2E: "1"
