@@ -333,36 +333,46 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           const repo = yield* ResourceInstanceRepo;
           const budgets = yield* ResourceDomainRepo;
           const callers = parseResourceCallers(env.SEALANT_RESOURCE_CALLERS);
-          const subnets = repositorySubnets(
-            repo,
-            resourceSubnetPools({
-              reach: env.SEALANT_RESOURCE_REACH_SUBNETS,
-              egress: env.SEALANT_RESOURCE_EGRESS_SUBNETS,
-            }),
-          );
-          const runtime =
+          const dockerResources = () => {
+            const subnets = repositorySubnets(
+              repo,
+              resourceSubnetPools({
+                reach: env.SEALANT_RESOURCE_REACH_SUBNETS,
+                egress: env.SEALANT_RESOURCE_EGRESS_SUBNETS,
+              }),
+            );
+            return {
+              subnets,
+              runtime: new DockerResourceRuntime({
+                callers,
+                subnets,
+                dockerSocketPath: env.DOCKER_SOCKET_PATH,
+                ...(credentialCipher === undefined ? {} : { cipher: credentialCipher }),
+                ...(env.SEALANT_RESOURCE_CALLER_GUARD_IMAGE === undefined
+                  ? {}
+                  : { callerGuardImage: env.SEALANT_RESOURCE_CALLER_GUARD_IMAGE }),
+                ...(env.SEALANT_DOCKER_NETWORK_GUARD_IMAGE === undefined
+                  ? {}
+                  : { guardImage: env.SEALANT_DOCKER_NETWORK_GUARD_IMAGE }),
+              }),
+            };
+          };
+          const host =
             env.DEFAULT_RUNTIME_ADAPTER === "k8s" || env.DEFAULT_RUNTIME_ADAPTER === "k3s"
-              ? new KubernetesCallerRuntime({
-                  namespace: env.SEALANT_RESOURCE_K8S_NAMESPACE,
-                  callers,
-                  networkPolicyEnforced: env.SEALANT_RESOURCE_K8S_NETWORK_POLICY,
-                  ...(credentialCipher === undefined ? {} : { cipher: credentialCipher }),
-                  ...(env.SEALANT_RESOURCE_K8S_KUBECONFIG === undefined
-                    ? {}
-                    : { kubeconfigPath: env.SEALANT_RESOURCE_K8S_KUBECONFIG }),
-                })
-              : new DockerResourceRuntime({
-                  callers,
-                  subnets,
-                  dockerSocketPath: env.DOCKER_SOCKET_PATH,
-                  ...(credentialCipher === undefined ? {} : { cipher: credentialCipher }),
-                  ...(env.SEALANT_RESOURCE_CALLER_GUARD_IMAGE === undefined
-                    ? {}
-                    : { callerGuardImage: env.SEALANT_RESOURCE_CALLER_GUARD_IMAGE }),
-                  ...(env.SEALANT_DOCKER_NETWORK_GUARD_IMAGE === undefined
-                    ? {}
-                    : { guardImage: env.SEALANT_DOCKER_NETWORK_GUARD_IMAGE }),
-                });
+              ? {
+                  runtime: new KubernetesCallerRuntime({
+                    namespace: env.SEALANT_RESOURCE_K8S_NAMESPACE,
+                    callers,
+                    networkPolicyEnforced: env.SEALANT_RESOURCE_K8S_NETWORK_POLICY,
+                    ...(credentialCipher === undefined ? {} : { cipher: credentialCipher }),
+                    ...(env.SEALANT_RESOURCE_K8S_KUBECONFIG === undefined
+                      ? {}
+                      : { kubeconfigPath: env.SEALANT_RESOURCE_K8S_KUBECONFIG }),
+                  }),
+                  subnets: undefined,
+                }
+              : dockerResources();
+          const { runtime, subnets } = host;
           return {
             runtime,
             subnets,
@@ -993,7 +1003,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       if (
         env.SEALANT_BOAT_GATEWAY_ENDPOINT === undefined ||
         env.SEALANT_BOAT_GATEWAY_IMAGE === undefined ||
-        resourceAssembly === undefined
+        resourceAssembly === undefined ||
+        resourceAssembly.subnets === undefined
       )
         throw new Error("Boat resource reconciliation configuration is incomplete.");
       const Host = Layer.succeed(BoatResourcesHost, {
