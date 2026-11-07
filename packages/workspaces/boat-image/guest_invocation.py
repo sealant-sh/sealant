@@ -47,6 +47,8 @@ def observe():
         # Intent may still be queued in systemd. Never issue it a second time.
         return 'issued'
     try:
+        import guest_network
+        guest_network.verify(record['binding'], record['gate']['pid'] if record['status'] == 'running' else None)
         current = unit_identity()
         if current != record['owner']:
             raise ValueError('invocation-owner-changed')
@@ -124,6 +126,8 @@ def start(request):
     receiver.fields(permit, {'format', 'binding', 'resource_receipt', 'tunnel_receipt'})
     if any(not isinstance(permit[key], str) or not re.fullmatch('[a-f0-9]{64}', permit[key]) for key in ('resource_receipt', 'tunnel_receipt')):
         raise receiver.Refusal('invalid-isolation-permit')
+    import guest_network
+    guest_network.verify(expected)
     manifest, held, _ = guest.revalidate()
     try:
         for process in held:

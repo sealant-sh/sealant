@@ -42,6 +42,8 @@ def build_bundle():
     BUNDLE.mkdir(mode=0o755)
     sources = {}
     binaries = [Path('/usr/bin/python3'), Path('/usr/bin/systemd-nspawn'),
+                Path('/usr/sbin/ip'), Path('/usr/sbin/nft'), Path('/usr/sbin/sysctl'),
+                Path('/usr/bin/nsenter'), Path('/usr/bin/wg'), Path('/usr/bin/cat'),
                 Path('/usr/bin/systemd-run'), Path('/usr/bin/systemctl'), Path('/usr/bin/node')]
     stdlib = Path(sysconfig.get_path('stdlib'))
     for program in [*binaries, *sorted((stdlib / 'lib-dynload').glob('*.so'))]:
@@ -57,7 +59,7 @@ def build_bundle():
     archive = BUNDLE / f'usr/lib/python{sys.version_info.major}{sys.version_info.minor}.zip'
     archive.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_STORED) as output:
-        for name in ('guest_boot.py', 'guest_contract.py', 'guest_receiver.py', 'guest_invocation.py'):
+        for name in ('guest_boot.py', 'guest_contract.py', 'guest_receiver.py', 'guest_invocation.py', 'guest_network.py'):
             source = ROOT / name
             output.writestr(name, source.read_bytes())
             sources[str(source)] = {'sha256': digest(source.read_bytes()), 'mode': source.stat().st_mode & 0o777}
@@ -77,7 +79,7 @@ def build_bundle():
 def manifest():
     files = [path for path in BUNDLE.rglob('*') if path.is_file()]
     files += [ROOT / name for name in ('guest_boot.py', 'guest_contract.py', 'build_guest.py',
-                                      'workspace-launch.py', 'guest_receiver.py', 'guest_invocation.py', 'sealantd', 'bootstrap-crypto.mjs',
+                                      'workspace-launch.py', 'guest_receiver.py', 'guest_invocation.py', 'guest_network.py', 'sealantd', 'bootstrap-crypto.mjs',
                                       'boot-policy.json', 'bundle-inputs.json',
                                       'project-install.sh', 'native-inputs.json')]
     files += [Path('/etc/systemd/system') / name for name in (
