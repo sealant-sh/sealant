@@ -18,6 +18,7 @@ import {
   BoatFinalCloseProvider,
   boatFinalCloseLayer,
 } from "../runtime/boat/final-close.js";
+import { BoatParking, BoatParkingProvider, boatParkingLayer } from "../runtime/boat/parking.js";
 import { SealantRuntime, SealantRuntimeControlLive } from "../sealantd/runtime.js";
 import { BoatReadiness, boatReadinessLayer } from "./boat-readiness.js";
 import { BoatResourcesHost, boatResourcesLayer } from "./boat-resources.js";
@@ -65,3 +66,14 @@ export const boatFinalCloseWorkerLayer: Layer.Layer<
   never,
   SealantDB | CredentialCipher | BoatAllocationProvider | BoatFinalCloseProvider | BoatResourcesHost
 > = boatFinalCloseLayer.pipe(Layer.provide(boatWorkerExecutionLayer));
+
+/** Parking shares the exact exchange, resource and readiness owners used by ordinary held launch. */
+export const boatParkingWorkerLayer: Layer.Layer<
+  BoatParking,
+  never,
+  SealantDB | CredentialCipher | BoatAllocationProvider | BoatResourcesHost | BoatParkingProvider
+> = boatParkingLayer.pipe(
+  Layer.provide(
+    Layer.mergeAll(boatWorkerExecutionLayer, boatReadinessWorkerLayer, SealantRuntimeControlLive),
+  ),
+);

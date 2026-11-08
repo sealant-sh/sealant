@@ -1,18 +1,5 @@
 import { posix } from "node:path";
 
-/**
- * A person's logins in one home of a running workspace (docs/connected-accounts-design.md §6c).
- *
- * `POST /v1/workspaces/:id/credentials` puts one person's Claude, Codex and GitHub logins into one
- * home: copies written the way a launch writes them (no Claude refresh token, a placeholder Codex
- * one, GitHub as the CLI's `hosts.yml`), owned by the home's owner, mode 0600, and kept refreshed
- * there. pi's and opencode's ChatGPT logins are made from the person's Codex account and merged
- * into each tool's `auth.json` as one entry, leaving the person's own logins there alone. A home
- * holds one person's logins for as long as it is held: a put naming anyone else is refused
- * (`home-held`), never written over. `DELETE` releases the home (its files are removed and its
- * record deleted), after which the home can be taken again. `GET` lists the homes, and `prune`
- * removes the logins no running process holds.
- */
 import {
   WorkspaceBadGatewayError,
   WorkspaceBadRequestError,
@@ -87,6 +74,20 @@ import { Duration, Effect, Option, Result, Semaphore } from "effect";
 import { env } from "../../runtime-env.js";
 import { CurrentPrincipal } from "../../services/service-principals.js";
 import { resolveSelectedConnectedAccount } from "./connected-account-selection.js";
+/**
+ * A person's logins in one home of a running workspace (docs/connected-accounts-design.md §6c).
+ *
+ * `POST /v1/workspaces/:id/credentials` puts one person's Claude, Codex and GitHub logins into one
+ * home: copies written the way a launch writes them (no Claude refresh token, a placeholder Codex
+ * one, GitHub as the CLI's `hosts.yml`), owned by the home's owner, mode 0600, and kept refreshed
+ * there. pi's and opencode's ChatGPT logins are made from the person's Codex account and merged
+ * into each tool's `auth.json` as one entry, leaving the person's own logins there alone. A home
+ * holds one person's logins for as long as it is held: a put naming anyone else is refused
+ * (`home-held`), never written over. `DELETE` releases the home (its files are removed and its
+ * record deleted), after which the home can be taken again. `GET` lists the homes, and `prune`
+ * removes the logins no running process holds.
+ */
+import { currentWorkspaceRuntime } from "./current-runtime.js";
 
 /**
  * Locked home writes run at most two at a time per workspace run in this process, each holding a
@@ -191,7 +192,9 @@ export const loadInstance = (input: {
       runId === null
         ? undefined
         : yield* withInternalError(
-            (yield* WorkspaceRuntimeInstanceRepo).getRuntimeInstanceByRunId(runId),
+            (yield* WorkspaceRuntimeInstanceRepo)
+              .getRuntimeInstanceByRunId(runId)
+              .pipe(Effect.flatMap(currentWorkspaceRuntime)),
             "Failed to load the workspace runtime.",
           );
     return { workspace, instance };

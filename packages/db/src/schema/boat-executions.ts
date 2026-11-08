@@ -7,8 +7,9 @@ import { workspaceAttempts } from "./control-plane.js";
 export const boatExecutions = snakeCase.table(
   "boat_executions",
   {
-    runtimeInstanceId: text()
-      .primaryKey()
+    runtimeInstanceId: text().primaryKey(),
+    runId: text()
+      .notNull()
       .references(() => workspaceAttempts.id, { onDelete: "restrict" }),
     deploymentId: text().notNull(),
     sandboxId: text().notNull(),
@@ -17,6 +18,7 @@ export const boatExecutions = snakeCase.table(
     createdAt: timestamp({ mode: "date", withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    check("boat_execution_run_binding", sql`${table.record}->'target'->>'runId' = ${table.runId}`),
     uniqueIndex("boat_executions_sandbox").on(table.deploymentId, table.sandboxId),
     uniqueIndex("boat_executions_disk").on(table.deploymentId, table.diskLineage),
     check(

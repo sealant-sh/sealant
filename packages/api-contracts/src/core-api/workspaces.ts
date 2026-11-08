@@ -1221,7 +1221,90 @@ export type WorkspaceSummary = typeof workspaceSummarySchema.Type;
  * `preservationStartsAt` is when the control plane starts that drain on its own ahead of the
  * runtime's deadline (`runtime.deadline`), once it has planned one.
  */
+const preservationComputeObservation = Schema.Struct({
+  state: Schema.Literals(["running", "not-running"]),
+  observedAt: Schema.String,
+  basis: Schema.Literals(["provider-running", "provider-stopped"]),
+});
+/** Current custody and dated provider facts. Snapshot custody never implies a running VM. */
+export const workspacePreservationSchema = Schema.Struct({
+  version: Schema.Literal(1),
+  runId: NonEmptyString,
+  revision: Schema.Int,
+  desired: Schema.Literals(["preserve", "recover", "discard"]),
+  state: Schema.Literals([
+    "active",
+    "retained",
+    "parking",
+    "parked",
+    "recovering",
+    "closed",
+    "unknown",
+  ]),
+  snapshotOnly: Schema.Boolean,
+  retainedSince: Schema.String,
+  parkingEligibleAt: Schema.String,
+  parkingDelaySeconds: Schema.Int,
+  policyRevision: NonEmptyString,
+  currentIncarnationId: NonEmptyString,
+  vms: Schema.Array(
+    Schema.Struct({
+      id: NonEmptyString,
+      incarnationId: NonEmptyString,
+      runtimeInstanceId: NonEmptyString,
+      role: Schema.Literals(["source", "recovery"]),
+      compute: Schema.Union([
+        preservationComputeObservation,
+        Schema.Struct({
+          state: Schema.Literal("not-running"),
+          observedAt: Schema.String,
+          basis: Schema.Literal("completed-removal"),
+        }),
+        Schema.Struct({
+          state: Schema.Literal("unknown"),
+          reason: Schema.Literals(["not-observed", "stale", "removal-unresolved"]),
+          lastObserved: Schema.optional(preservationComputeObservation),
+        }),
+      ]),
+      removal: Schema.Literals(["not-issued", "unresolved", "completed"]),
+    }),
+  ),
+  snapshots: Schema.Array(
+    Schema.Struct({
+      name: NonEmptyString,
+      snapshotId: Schema.optional(NonEmptyString),
+      sourceVmId: NonEmptyString,
+      state: Schema.Literals(["reserved", "saving", "verified", "retiring", "removed", "unknown"]),
+      privacy: Schema.Literals(["verified-private", "unknown"]),
+    }),
+  ),
+  operations: Schema.Array(
+    Schema.Struct({
+      id: NonEmptyString,
+      kind: NonEmptyString,
+      state: Schema.Literals(["prepared", "issued", "unknown", "settled"]),
+    }),
+  ),
+  allowance: Schema.Struct({
+    state: Schema.Literals(["observed", "unknown"]),
+    reason: Schema.optional(Schema.Literals(["not-observed", "stale"])),
+    lastObserved: Schema.optional(
+      Schema.Struct({
+        scope: NonEmptyString,
+        included: Schema.Int,
+        used: Schema.Int,
+        extra: Schema.Int,
+        extraDailyDollars: Schema.Number,
+        observedAt: Schema.String,
+      }),
+    ),
+  }),
+  blockers: Schema.Array(Schema.String),
+});
+export type WorkspacePreservation = typeof workspacePreservationSchema.Type;
+
 export const workspaceCaptureDrainSchema = Schema.Struct({
+  preservation: Schema.optional(workspacePreservationSchema),
   state: Schema.Literals([
     "draining",
     "kept",

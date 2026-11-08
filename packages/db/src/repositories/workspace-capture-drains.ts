@@ -664,6 +664,7 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
           "openObservation",
           db.transaction((tx) =>
             Effect.gen(function* () {
+              yield* markCurrentWriter(tx);
               yield* tx
                 .insert(workspaceCaptureDrains)
                 .values({ runId: input.runId } satisfies NewWorkspaceCaptureDrain)
@@ -718,32 +719,42 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
       closeObservation: (input) =>
         withRepoError(
           "closeObservation",
-          db
-            .update(workspaceCaptureDrains)
-            .set({
-              observationFences: sql`${workspaceCaptureDrains.observationFences} - ${input.token}::text`,
-              evidenceVersion: sql`${workspaceCaptureDrains.evidenceVersion} + 1`,
-            })
-            .where(eq(workspaceCaptureDrains.runId, input.runId))
-            .pipe(Effect.asVoid),
+          db.transaction((tx) =>
+            Effect.gen(function* () {
+              yield* markCurrentWriter(tx);
+              yield* tx
+                .update(workspaceCaptureDrains)
+                .set({
+                  observationFences: sql`${workspaceCaptureDrains.observationFences} - ${input.token}::text`,
+                  evidenceVersion: sql`${workspaceCaptureDrains.evidenceVersion} + 1`,
+                })
+                .where(eq(workspaceCaptureDrains.runId, input.runId))
+                .pipe(Effect.asVoid);
+            }),
+          ),
         ),
 
       endObservation: (input) =>
         withRepoError(
           "endObservation",
-          db
-            .update(workspaceCaptureDrains)
-            .set({
-              observationFences: sql`jsonb_set(${workspaceCaptureDrains.observationFences}, ARRAY[${input.token}::text, 'expiresAt'], to_jsonb(least((${workspaceCaptureDrains.observationFences} -> ${input.token}::text ->> 'expiresAt')::timestamptz, now())))`,
-              evidenceVersion: sql`${workspaceCaptureDrains.evidenceVersion} + 1`,
-            })
-            .where(
-              and(
-                eq(workspaceCaptureDrains.runId, input.runId),
-                sql`${workspaceCaptureDrains.observationFences} -> ${input.token}::text IS NOT NULL`,
-              ),
-            )
-            .pipe(Effect.asVoid),
+          db.transaction((tx) =>
+            Effect.gen(function* () {
+              yield* markCurrentWriter(tx);
+              yield* tx
+                .update(workspaceCaptureDrains)
+                .set({
+                  observationFences: sql`jsonb_set(${workspaceCaptureDrains.observationFences}, ARRAY[${input.token}::text, 'expiresAt'], to_jsonb(least((${workspaceCaptureDrains.observationFences} -> ${input.token}::text ->> 'expiresAt')::timestamptz, now())))`,
+                  evidenceVersion: sql`${workspaceCaptureDrains.evidenceVersion} + 1`,
+                })
+                .where(
+                  and(
+                    eq(workspaceCaptureDrains.runId, input.runId),
+                    sql`${workspaceCaptureDrains.observationFences} -> ${input.token}::text IS NOT NULL`,
+                  ),
+                )
+                .pipe(Effect.asVoid);
+            }),
+          ),
         ),
 
       recordStatus: (input) =>
@@ -1279,6 +1290,7 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
             .where(
               and(
                 isNotNull(workspaceCaptureDrains.retainedAt),
+                isNull(workspaceCaptureDrains.custodyContract),
                 or(
                   isNull(workspaceCaptureDrains.nextRecoveryAt),
                   lte(workspaceCaptureDrains.nextRecoveryAt, sql`now()`),
@@ -1406,6 +1418,7 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                 .update(workspaceCaptureDrains)
                 .set({
                   nextRecoveryAt: sql`greatest(now(), ${workspaceCaptureDrains.recoveryLeaseUntil})`,
+                  nextPreservationActionAt: sql`case when ${workspaceCaptureDrains.custodyContract} = 3 then now() else ${workspaceCaptureDrains.nextPreservationActionAt} end`,
                   preservationDesired: sql`case when ${workspaceCaptureDrains.custodyContract} = 3 and ${workspaceCaptureDrains.discardRequestedAt} is null then 'recover' else ${workspaceCaptureDrains.preservationDesired} end`,
                   custodyRevision: sql`${workspaceCaptureDrains.custodyRevision} + case when ${workspaceCaptureDrains.custodyContract} = 3 then 1 else 0 end`,
                 })
@@ -1413,6 +1426,8 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                   and(
                     eq(workspaceCaptureDrains.runId, runId),
                     isNotNull(workspaceCaptureDrains.retainedAt),
+                    sql`(${workspaceCaptureDrains.custodyContract} is null or ${workspaceCaptureDrains.retainedReason} is not null)`,
+                    sql`not exists(select 1 from capture_preservation_evidence e where e.run_id = ${workspaceCaptureDrains.runId} and e.kind = 'lineage-discharged')`,
                   ),
                 )
                 .returning();
@@ -1440,6 +1455,7 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                     discardRequestedAt: sql`coalesce(${workspaceCaptureDrains.discardRequestedAt}, now())`,
                     discardRequestedBy: sql`coalesce(${workspaceCaptureDrains.discardRequestedBy}, ${input.requestedBy})`,
                     preservationDesired: sql`case when ${workspaceCaptureDrains.custodyContract} = 3 then 'discard' else ${workspaceCaptureDrains.preservationDesired} end`,
+                    nextPreservationActionAt: sql`case when ${workspaceCaptureDrains.custodyContract} = 3 then now() else ${workspaceCaptureDrains.nextPreservationActionAt} end`,
                     custodyRevision: sql`${workspaceCaptureDrains.custodyRevision} + case when ${workspaceCaptureDrains.custodyContract} = 3 then 1 else 0 end`,
                   },
                 })

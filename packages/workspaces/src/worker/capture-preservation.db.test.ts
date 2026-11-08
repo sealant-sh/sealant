@@ -31,6 +31,7 @@ import {
   resetIssuedParkingOperation,
   rejectsUnenrolledParkingPointer,
   seedUnattributedParkingReceipt,
+  recordSettledParkingBoundary,
 } from "@sealant/db/testing/capture-preservation";
 import { Arbitrary, Context, Effect, Exit, Layer, Schema, Scope } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -245,7 +246,7 @@ describe("canonical Boat custody in migrated Postgres", () => {
     expect((await Effect.runPromise(parkingRows(dbA, runId))).episode).toEqual(before.episode);
   });
 
-  it("reserves only eligible close intentions and never grants dispatch", async () => {
+  it("reserves only eligible close intentions and refuses dispatch without a settled FINAL boundary", async () => {
     const early = await retained();
     const earlyClaim = await repo(dbA, (r) => r.preservation.claim(early.runId));
     if (earlyClaim === undefined) throw new Error("missing claim");
@@ -265,7 +266,7 @@ describe("canonical Boat custody in migrated Postgres", () => {
     if (result.kind !== "reserved") throw new Error("missing reservation");
     expect(await repo(dbA, (r) => r.preservation.issue(claim, result.operationId))).toEqual({
       kind: "blocked",
-      reason: "executor-unavailable",
+      reason: "final-boundary-unavailable",
     });
     const rows = await Effect.runPromise(parkingRows(dbA, s.runId));
     expect(rows.effects).toHaveLength(1);
@@ -279,6 +280,120 @@ describe("canonical Boat custody in migrated Postgres", () => {
       ),
     ).toEqual(result);
     expect((await Effect.runPromise(parkingRows(dbB, s.runId))).effects).toHaveLength(1);
+  });
+
+  it("executes canonical custody from settled close through exact artifact verification and positive deletion", async () => {
+    const s = await retained(past);
+    await Effect.runPromise(recordSettledParkingBoundary(dbA, s.runId));
+    const claim = await repo(dbA, (r) => r.preservation.claim(s.runId));
+    if (claim === undefined) throw new Error("missing claim");
+    const reserved = await repo(dbA, (r) => r.preservation.reserveClose(claim));
+    if (reserved.kind !== "reserved") throw new Error("missing close");
+    expect(await repo(dbA, (r) => r.preservation.issue(claim, reserved.operationId))).toEqual({
+      kind: "issued",
+    });
+    expect(await repo(dbB, (r) => r.preservation.issue(claim, reserved.operationId))).toEqual({
+      kind: "observe-only",
+    });
+    const capsule = {
+      operationId: reserved.operationId,
+      capsuleHash: "a".repeat(64),
+      archiveHash: "b".repeat(64),
+      contentBytes: 0,
+      storedBytes: 320,
+      entries: 0,
+    };
+    await repo(dbA, (r) => r.preservation.recordWriterClosed(claim, capsule));
+    await repo(dbB, (r) => r.preservation.recordWriterClosed(claim, capsule));
+    await expect(
+      repo(dbB, (r) =>
+        r.preservation.recordWriterClosed(claim, { ...capsule, archiveHash: "c".repeat(64) }),
+      ),
+    ).rejects.toThrow();
+    await repo(dbA, (r) => r.preservation.prepareParkingSave(claim));
+    await repo(dbB, (r) => r.preservation.prepareParkingSave(claim));
+    const save = await repo(dbA, (r) => r.preservation.parkingWork(claim));
+    if (save?.kind !== "save-snapshot") throw new Error("missing save");
+    expect(save.capsule).toEqual(capsule);
+    await expect(repo(dbA, (r) => r.preservation.issue(claim, save.operationId))).rejects.toThrow();
+    const allowance = { org: null, included: 10, used: 2, extra: 0, extraDailyDollars: 0 };
+    await repo(dbA, (r) =>
+      r.preservation.recordParkingScope(claim, save.operationId, {
+        ...allowance,
+        name: save.name,
+        sourceSandboxId: s.sandboxId,
+        absent: true,
+      }),
+    );
+    expect(await repo(dbA, (r) => r.preservation.issue(claim, save.operationId))).toEqual({
+      kind: "issued",
+    });
+    expect(await repo(dbB, (r) => r.preservation.issue(claim, save.operationId))).toEqual({
+      kind: "observe-only",
+    });
+    const identity = {
+      name: save.name,
+      snapshotId: "immutable-parking-test",
+      sourceSandboxId: s.sandboxId,
+      createdAt: "2026-11-08T00:00:00Z",
+    };
+    await repo(dbA, (r) => r.preservation.recordParkingSnapshot(claim, save.operationId, identity));
+    const file = {
+      snapshotId: identity.snapshotId,
+      path: `/var/lib/sealant/guest/capsules/${reserved.operationId}/capsule.pack`,
+      sha256: capsule.archiveHash,
+      bytes: capsule.storedBytes,
+    };
+    await expect(
+      repo(dbB, (r) =>
+        r.preservation.verifyParkingSnapshot(claim, save.operationId, {
+          ...file,
+          snapshotId: "changed",
+        }),
+      ),
+    ).rejects.toThrow();
+    expect((await repo(dbA, (r) => r.preservation.read(s.runId)))?.snapshotOnly).toBe(false);
+    await repo(dbA, (r) => r.preservation.verifyParkingSnapshot(claim, save.operationId, file));
+    await repo(dbB, (r) => r.preservation.verifyParkingSnapshot(claim, save.operationId, file));
+    expect((await repo(dbA, (r) => r.preservation.parkingWork(claim)))?.kind).toBe(
+      "revoke-resources",
+    );
+    await repo(dbA, (r) => r.preservation.prepareParkingRemoval(claim, "d".repeat(64)));
+    const removal = await repo(dbA, (r) => r.preservation.parkingWork(claim));
+    if (removal?.kind !== "remove-sandbox") throw new Error("missing removal");
+    expect(await repo(dbA, (r) => r.preservation.issue(claim, removal.operationId))).toEqual({
+      kind: "issued",
+    });
+    await repo(dbA, (r) =>
+      r.preservation.recordParkingDeletion(claim, removal.operationId, "bdop_positive"),
+    );
+    await expect(
+      repo(dbB, (r) =>
+        r.preservation.recordParkingDeletion(claim, removal.operationId, "bdop_changed"),
+      ),
+    ).rejects.toThrow();
+    await repo(dbA, (r) =>
+      r.preservation.observe({
+        runId: s.runId,
+        operationId: removal.operationId,
+        receiptId: randomUUID(),
+        kind: "removal-completed",
+        sandboxId: s.sandboxId,
+        providerOperationId: "bdop_positive",
+        observedAt: new Date(),
+      }),
+    );
+    expect(await repo(dbB, (r) => r.preservation.read(s.runId))).toMatchObject({
+      state: "parked",
+      snapshotOnly: true,
+      vms: [
+        {
+          id: s.sandboxId,
+          removal: "completed",
+          compute: { state: "not-running", basis: "completed-removal" },
+        },
+      ],
+    });
   });
 
   it("admits one concurrent claimant and refuses an expired owner before and after takeover", async () => {
@@ -329,7 +444,9 @@ describe("canonical Boat custody in migrated Postgres", () => {
       Array.from({ length: 10 }, () => retained(new Date("2020-01-01T00:00:00Z"))),
     );
     for (const s of blocked)
-      await repo(dbA, (r) => r.requestDiscard({ runId: s.runId, requestedBy: owner }));
+      await repo(dbA, (r) =>
+        r.openObservation({ runId: s.runId, token: randomUUID(), ttlMs: 60000 }),
+      );
     const eligible = await retained(new Date("2021-01-01T00:00:00Z"));
     const first = await repo(dbA, (r) => r.preservation.claimDue(10));
     expect(first.map((claim) => claim.runId).toSorted()).toEqual(
@@ -338,7 +455,7 @@ describe("canonical Boat custody in migrated Postgres", () => {
     for (const claim of first) {
       expect(await repo(dbA, (r) => r.preservation.reserveClose(claim))).toEqual({
         kind: "blocked",
-        reason: "discard-requested",
+        reason: "final-unresolved",
       });
       await repo(dbA, (r) => r.preservation.release(claim));
       const after = await Effect.runPromise(parkingRows(dbA, claim.runId));
@@ -706,9 +823,12 @@ describe("canonical Boat custody in migrated Postgres", () => {
     expect(await Effect.runPromise(ledger.claimRecovery(s.runId, 60000))).toBeUndefined();
     const claim = await repo(dbA, (r) => r.preservation.claim(s.runId));
     if (claim === undefined) throw new Error("missing claim");
-    expect(await repo(dbA, (r) => r.preservation.reserveClose(claim))).toEqual({
+    const reserved = await repo(dbA, (r) => r.preservation.reserveClose(claim));
+    expect(reserved.kind).toBe("reserved");
+    if (reserved.kind !== "reserved") throw new Error("missing discard close reservation");
+    expect(await repo(dbA, (r) => r.preservation.issue(claim, reserved.operationId))).toEqual({
       kind: "blocked",
-      reason: "discard-requested",
+      reason: "final-boundary-unavailable",
     });
   });
 

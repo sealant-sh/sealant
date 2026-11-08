@@ -6,6 +6,19 @@ import { parseWorkerEnv } from "@sealant/validators/env";
 import { describe, expect, it } from "vitest";
 
 describe("parseWorkerEnv", () => {
+  it.each([
+    { input: undefined, expected: true },
+    { input: "true", expected: true },
+    { input: "false", expected: false },
+  ])("preserves automatic parking $input through worker startup", ({ input, expected }) => {
+    const env = parseWorkerEnv({ SEALANT_BOAT_AUTOMATIC_PARKING: input });
+    expect(env.SEALANT_BOAT_AUTOMATIC_PARKING).toBe(expected);
+  });
+
+  it.each(["1", "0", "yes", "FALSE"])("refuses invalid automatic parking value %s", (value) => {
+    expect(() => parseWorkerEnv({ SEALANT_BOAT_AUTOMATIC_PARKING: value })).toThrow();
+  });
+
   it("requires the complete reconciliation contract without changing runtime selection", () => {
     expect(parseWorkerEnv({}).SEALANT_BOAT_API_KEY).toBeUndefined();
     for (const values of [

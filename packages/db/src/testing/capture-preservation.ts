@@ -26,6 +26,27 @@ import {
 
 const hash = "a".repeat(64);
 
+export const recordSettledParkingBoundary = (db: DB, runId: string) =>
+  db.transaction((tx) =>
+    Effect.gen(function* () {
+      yield* markCurrentWriter(tx);
+      yield* tx
+        .update(roots)
+        .set({
+          lastStatus: {
+            complete: false,
+            incompleteReason: "ship-failed",
+            pending: 1,
+            fenced: false,
+          },
+          lastStatusAt: sql`now()`,
+          lastStatusRecordedAt: sql`now()`,
+          unreachableSince: null,
+        })
+        .where(eq(roots.runId, runId));
+    }),
+  );
+
 export const seedUnattributedParkingReceipt = (
   db: DB,
   runId: string,
@@ -190,6 +211,12 @@ export const resetIssuedParkingOperation = (db: DB, operationId: string) =>
         .where(eq(operations.id, operationId));
     }),
   );
+
+export const backdateUnenrolledParkingRetention = (db: DB, runId: string) =>
+  db
+    .update(roots)
+    .set({ retainedAt: sql`now() - interval '301 seconds'` })
+    .where(sql`${roots.runId} = ${runId} and ${roots.custodyContract} is null`);
 
 export const makeParkingActionDue = (db: DB, runId: string) =>
   db.transaction((tx) =>

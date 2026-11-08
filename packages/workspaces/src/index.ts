@@ -35,6 +35,7 @@ export {
   boatWorkerExecutionLayer,
   boatReadinessWorkerLayer,
   boatFinalCloseWorkerLayer,
+  boatParkingWorkerLayer,
 } from "./worker/boat-allocation.js";
 
 export {
@@ -62,3 +63,11 @@ export {
   boatFinalCloseLayer,
   boatFinalCloseLayerNoDeps,
 } from "./runtime/boat/final-close.js";
+
+export {
+  BoatParking,
+  BoatParkingProvider,
+  BoatParkingError,
+  boatParkingLayer,
+  boatParkingLayerNoDeps,
+} from "./runtime/boat/parking.js";

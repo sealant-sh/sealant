@@ -111,6 +111,8 @@ def stage_payload(files):
 
 
 def start(request):
+    if (guest.ROOT / 'parking.json').exists():
+        raise receiver.Refusal('parking-closes-recovery')
     receiver.fields(request, {'format', 'binding'})
     expected = invocation.binding()
     if request != request_for(expected):
@@ -163,6 +165,8 @@ def run():
     if os.geteuid() != 0:
         raise receiver.Refusal('outer-owner-required')
     with receiver.locked():
+        if (guest.ROOT / 'parking.json').exists():
+            raise receiver.Refusal('parking-closes-recovery')
         record = invocation.state(invocation_path())
         if (guest.private_json(path()) != {'format': 'sealant-capture-recovery-state-v1',
                 'request': request_for(invocation.binding()), 'phase': 'issued'}

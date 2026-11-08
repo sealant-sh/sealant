@@ -18,6 +18,40 @@ from guest_contract import canonical, digest
 
 
 class InvocationTests(unittest.TestCase):
+    def test_namespace_holder_is_running_only_with_its_exact_daemon_and_survives_its_exit(self):
+        import sys
+        shutil.copyfile(shutil.which('sleep'), self.root / 'sealantd')
+        (self.root / 'sealantd').chmod(0o700)
+        holder = subprocess.Popen([sys.executable, '-c',
+            'import subprocess,sys,os,time; p=subprocess.Popen(["sleep","60"],executable=sys.argv[1]); '
+            'deadline=time.monotonic()+2\n'
+            'while os.stat("/proc/"+str(p.pid)+"/exe").st_ino != os.stat(sys.argv[1]).st_ino:\n'
+            ' if time.monotonic()>deadline: raise RuntimeError("child did not exec")\n'
+            ' time.sleep(0.001)\n'
+            'print(p.pid,flush=True); p.wait(); input()',
+            str(self.root / 'sealantd')], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        try:
+            pid = int(holder.stdout.readline())
+            owner = {'systemd_invocation': 'd' * 32, 'process': asdict(guest.identity(os.getpid()))}
+            guest.save(invocation.path(), {'format': 'sealant-invocation-v1', 'binding': self.binding,
+                       'status': 'running', 'owner': owner, 'launcher': asdict(guest.identity(os.getpid())),
+                       'gate': asdict(guest.identity(holder.pid)), 'exit_code': None})
+            with patch.object(network, 'verify'), patch.object(invocation, 'unit_identity', return_value=owner):
+                self.assertEqual(invocation.observe(), 'running')
+                os.kill(pid, 15)
+                import time
+                for _ in range(100):
+                    if not Path('/proc/' + str(pid)).exists():
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(invocation.observe(), 'ended')
+                self.assertIsNone(holder.poll())
+        finally:
+            holder.kill()
+            holder.wait()
+            holder.stdin.close()
+            holder.stdout.close()
+
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix='boat-invocation-'))
         self.runtime = Path(tempfile.mkdtemp(prefix='boat-invocation-', dir='/dev/shm'))

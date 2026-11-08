@@ -4,7 +4,7 @@
   "files": [
     {
       "name": "guest_boot.py",
-      "sha256": "e0a50218b7e9bf9bb323f6cbc7fc4da3b0a4114cbbcc8b71d0b449050abe196d"
+      "sha256": "1ca8897c0ecfdc8ca4e76d23cbefff09dc3b14b9f3855e6ec7507d74fc5d3399"
     },
     {
       "name": "guest_contract.py",
@@ -12,11 +12,11 @@
     },
     {
       "name": "build_guest.py",
-      "sha256": "d7c4d7b9067610ef77ee52bbfbda34e61adf241cf745da1e6c81aa2a16eda689"
+      "sha256": "f53e376918c8f10f14adce0020ab198028f04b352efd50a2de7b4b28bae7d697"
     },
     {
       "name": "workspace-launch.py",
-      "sha256": "2a45392ade77e693584559db66e0fa03e3ce3a402185967607587809e7a18ae7"
+      "sha256": "a219e82d8bf56392f07fd45ae9e07455633db61a56c588308ae00e77cf63ae4e"
     },
     {
       "name": "workspace.service",
@@ -40,7 +40,7 @@
     },
     {
       "name": "guest_receiver.py",
-      "sha256": "3417e20b2e1ca39aa5010adfb7358bc7a00d10fecea937f9d12c789f3b0dbecc"
+      "sha256": "217e0787e08dfb50ff1aee2f0d89f96a6fb5ae8b8112c5ad5b2d0b1eeea2ca74"
     },
     {
       "name": "bootstrap-crypto.mjs",
@@ -56,7 +56,7 @@
     },
     {
       "name": "guest_invocation.py",
-      "sha256": "371d3fa5946c85bdfbf4c5a3daba484ab8c46fca612f63ce4f5ecda993e929be"
+      "sha256": "9983222b0ae55629afa5b411871f48014ff91002bb8a8a98bd7674c0bd722993"
     },
     {
       "name": "guest_network.py",
@@ -76,11 +76,23 @@
     },
     {
       "name": "guest_recovery.py",
-      "sha256": "790de36f680a772d6171ee01b805fae7d047479bf6eb827a7ea535f55b681c8a"
+      "sha256": "9253b3c0bb0ad29b521e0db8aeec02304221518e94d0e33838b215a46d340c8b"
     },
     {
       "name": "recovery.service",
       "sha256": "c14013536e06a0b31c616a61d3441c6a275cec39447c32b8b7e4b38b1c0f4388"
+    },
+    {
+      "name": "guest_capsule.py",
+      "sha256": "a2161694ac0e61d0828c9a5cbb8fc6a09737c3c4b208556aa75d38b18d207d2b"
+    },
+    {
+      "name": "guest_parking.py",
+      "sha256": "a8d74ca5c8cacd092c02e66b905b52b2c94e2e7a779efc27352e43a3a964dba2"
+    },
+    {
+      "name": "guest_resume.py",
+      "sha256": "323286fbaf93bef586a88825709c7c2fa9cbe37e383b12f6dac485758b8f2db8"
     }
   ]
 }

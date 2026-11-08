@@ -569,6 +569,10 @@ def mapped_gates(candidates, root, owner):
 def mapped_argv(mode, script):
     if mode in ('workspace', 'recovery'):
         import guest_network as network
+    resume_mounts = []
+    if mode == 'workspace' and (ROOT / 'resume.json').exists():
+        import guest_resume
+        resume_mounts = ['--bind=' + entry['source'] + ':' + entry['path'] for entry in guest_resume.mounts()]
     argv = invoke('/usr/bin/systemd-nspawn', '--quiet', '--settings=no', '--register=no', '--keep-unit',
                   '--machine=sealant-native', '--directory=' + str(MAPPED_ROOT), '--private-users=131072:65536',
                   '--private-users-ownership=chown', '--notify-ready=no', '--console=pipe', '--link-journal=no',
@@ -580,6 +584,7 @@ def mapped_argv(mode, script):
                      '--bind-ro=' + str(ROOT / 'sealantd') + ':/usr/local/bin/sealantd',
                      '--resolv-conf=off',
                      '--bind-ro=' + str(network.resolver_path()) + ':/etc/resolv.conf'] if mode in ('workspace', 'recovery') else []),
+                  *resume_mounts,
                   '/run/sealant-runtime/lib64/ld-linux-x86-64.so.2', '--inhibit-cache', '--library-path',
                   '/run/sealant-runtime/lib/x86_64-linux-gnu:/run/sealant-runtime/usr/lib/x86_64-linux-gnu',
                   '/run/sealant-runtime/usr/bin/python3', '-I', '-S', '-B', '/run/sealant-entry.py')
@@ -691,6 +696,13 @@ def main():
             result = held_boot()
         elif action == 'watchdog':
             result = watchdog()
+        elif action == 'resume':
+            import guest_resume
+            if len(sys.argv) != 3 or len(sys.argv[2]) > 8192:
+                raise ValueError('invalid-resume-request')
+            import guest_capsule
+            with guest_capsule.deadline():
+                result = guest_resume.rebind(json.loads(sys.argv[2]))
         elif action == 'bind':
             from guest_receiver import bind
             if len(sys.argv) != 3 or len(sys.argv[2]) > 8192:

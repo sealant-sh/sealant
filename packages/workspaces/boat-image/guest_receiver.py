@@ -214,6 +214,8 @@ def status():
 
 
 def stage(value):
+    if (guest.ROOT / 'parking.json').exists():
+        raise Refusal('parking-closes-staging')
     manifest, files = parse_stage(value)
     require_tmpfs()
     current_control()
@@ -313,7 +315,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.command == 'GET' and self.path == '/sealant/bootstrap/status':
                     self.reply(200, status())
                     return
-                if self.command != 'POST' or self.path not in ('/sealant/bootstrap/stage', '/sealant/bootstrap/start', '/sealant/bootstrap/isolate', '/sealant/bootstrap/permit', '/sealant/bootstrap/readiness', '/sealant/bootstrap/recover'):
+                if self.command != 'POST' or self.path not in ('/sealant/bootstrap/stage', '/sealant/bootstrap/start', '/sealant/bootstrap/isolate', '/sealant/bootstrap/permit', '/sealant/bootstrap/readiness', '/sealant/bootstrap/recover', '/sealant/bootstrap/park'):
                     self.reply(404, {'error': 'unknown-route'})
                     return
                 lengths = self.headers.get_all('Content-Length', [])
@@ -324,7 +326,10 @@ class Handler(BaseHTTPRequestHandler):
                 raw = self.rfile.read(int(lengths[0]))
                 if len(raw) != int(lengths[0]):
                     raise Refusal('incomplete-body')
-                if self.path == '/sealant/bootstrap/recover':
+                if self.path == '/sealant/bootstrap/park':
+                    import guest_parking
+                    self.reply(200, guest_parking.close(json.loads(raw)))
+                elif self.path == '/sealant/bootstrap/recover':
                     import guest_recovery
                     self.reply(200, guest_recovery.start(json.loads(raw)))
                 elif self.path in ('/sealant/bootstrap/permit', '/sealant/bootstrap/readiness'):

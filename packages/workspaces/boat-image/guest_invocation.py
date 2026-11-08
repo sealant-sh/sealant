@@ -70,7 +70,37 @@ def observe(record_path=None, unit=UNIT):
                         current_executable = executable.stat()
                         shipped_executable = shipped.stat()
                         if (current_executable.st_dev, current_executable.st_ino) != (shipped_executable.st_dev, shipped_executable.st_ino):
-                            return 'issued'
+                            # The verified Python PID1 keeps tmpfs alive after the daemon exits.
+                            # Its only direct child is the one daemon it starts, never a restart.
+                            daemon_path = record_path.with_name(record_path.stem + '-daemon.json')
+                            children = Path('/proc/' + str(expected['pid']) + '/task/' + str(expected['pid']) + '/children').read_text().split()
+                            matches = []
+                            for pid in children:
+                                try:
+                                    child_exe = Path('/proc') / pid / 'exe'
+                                    info = child_exe.stat()
+                                    if ((info.st_dev, info.st_ino) == (shipped_executable.st_dev, shipped_executable.st_ino)
+                                            and not os.readlink(child_exe).endswith(' (deleted)')):
+                                        matches.append(int(pid))
+                                except FileNotFoundError:
+                                    continue
+                            if not matches:
+                                return 'ended' if daemon_path.exists() else 'issued'
+                            if len(matches) != 1:
+                                raise ValueError('invocation-daemon-ambiguous')
+                            daemon = guest.HeldProcess(matches[0])
+                            held.append(daemon)
+                            identity = {'binding': record['binding'], 'identity': asdict(daemon.identity)}
+                            if daemon_path.exists():
+                                if guest.private_json(daemon_path) != identity:
+                                    raise ValueError('invocation-daemon-replaced')
+                            else:
+                                guest.save(daemon_path, identity, exclusive=True)
+                            daemon.verify()
+                            if actual != expected:
+                                raise ValueError('invocation-holder-changed')
+                            process.verify()
+                            continue
                     if os.readlink(executable).endswith(' (deleted)'):
                         raise ValueError('invocation-deleted-daemon')
                     expected_file = guest.file_identity(shipped)
@@ -107,7 +137,7 @@ def unit_identity(unit=UNIT):
 
 
 def start(request):
-    if (guest.ROOT / 'recovery.json').exists():
+    if (guest.ROOT / 'recovery.json').exists() or (guest.ROOT / 'parking.json').exists():
         raise receiver.Refusal('ordinary-invocation-closed')
     receiver.fields(request, {'format', 'identity', 'boot_id', 'epoch', 'operation_id'})
     receiver.fields(request['identity'], receiver.IDENTITY_KEYS)
@@ -177,6 +207,9 @@ def payload(record):
             isinstance(key, str) and re.fullmatch('[A-Za-z_][A-Za-z0-9_]*', key) and isinstance(value, str)
             and '\x00' not in value for key, value in launch['boot_env'].items()):
         raise receiver.Refusal('invalid-daemon-launch')
+    if (guest.ROOT / 'resume.json').exists():
+        import guest_resume
+        guest_resume.validate_launch(launch)
     return destination
 
 
@@ -185,7 +218,7 @@ def run():
         raise receiver.Refusal('outer-owner-required')
     held = []
     with receiver.locked():
-        if (guest.ROOT / 'recovery.json').exists():
+        if (guest.ROOT / 'recovery.json').exists() or (guest.ROOT / 'parking.json').exists():
             raise receiver.Refusal('ordinary-invocation-closed')
         record = state()
         if record['status'] != 'issued' or record['binding'] != binding():

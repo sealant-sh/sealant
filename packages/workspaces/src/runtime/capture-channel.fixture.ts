@@ -41,6 +41,8 @@ export interface CaptureChannelState {
   readonly errors: Array<unknown>;
   head: CaptureHead | undefined;
   planRequests: number;
+  epoch: number;
+  executor: string | undefined;
 }
 
 export interface CaptureChannel {
@@ -85,12 +87,15 @@ export const startCaptureChannel = async (options: {
   readonly worktreeId: string;
   /** The host the endpoint and object URLs name; `127.0.0.1` when absent. */
   readonly advertiseHost?: string;
+  readonly executor?: string;
 }): Promise<CaptureChannel> => {
   const state: CaptureChannelState = {
     objects: new Map(),
     errors: [],
     head: undefined,
     planRequests: 0,
+    epoch: 1,
+    executor: options.executor,
   };
   let endpoint: string | undefined;
 
@@ -155,7 +160,8 @@ export const startCaptureChannel = async (options: {
         );
         writeJson(response, 200, {
           worktree_id: options.worktreeId,
-          epoch: 1,
+          epoch: state.epoch,
+          ...(state.executor === undefined ? {} : { executor: state.executor }),
           head: state.head ?? null,
           get_urls: getUrls,
           ...(asked.manifest_format === undefined

@@ -68,6 +68,9 @@ class GuestFixture implements BoatGuestTransport {
   permitLost = false;
   readonly permitBodies: string[] = [];
   readinessCalls = 0;
+  parkingLost = false;
+  parkingConflict = false;
+  readonly parkingBodies: string[] = [];
   async probe() {
     return {
       runtimeId: "rt_fixture",
@@ -146,6 +149,29 @@ class GuestFixture implements BoatGuestTransport {
     body?: Redacted.Redacted<string>,
   ) {
     expect(bearer.reveal()).toBe(this.token);
+    if (route === "park") {
+      if (body === undefined) throw new Error("missing parking body");
+      const raw = Redacted.value(body);
+      this.parkingBodies.push(raw);
+      const request: unknown = JSON.parse(raw);
+      if (this.parkingLost) {
+        this.parkingLost = false;
+        throw new Error("lost parking reply");
+      }
+      return {
+        format: "sealant-parking-status-v1",
+        request: this.parkingConflict ? {} : request,
+        phase: "closed",
+        writers: "closed",
+        capsule: {
+          sha256: "d".repeat(64),
+          archive_sha256: "c".repeat(64),
+          bytes: 8,
+          stored_bytes: 500,
+          entries: 3,
+        },
+      };
+    }
     if (route === "recover") {
       if (body === undefined) throw new Error("missing recovery body");
       const request = z.object({ binding: z.unknown() }).parse(JSON.parse(Redacted.value(body)));
@@ -635,5 +661,39 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       await execute(executor.stage(target.runId, payload("three")));
       expect(guest.stageBodies).toHaveLength(deliveries);
       expect(await execute(repo.get(target.runId))).toEqual(installed);
+    }));
+  it("requires a held invocation and correlates the exact parking operation across reply loss", () =>
+    test(async ({ executor, target, guest }) => {
+      await execute(executor.exchange(target));
+      await execute(executor.stage(target.runId, payload()));
+      await execute(
+        executor.permit(target, { resourceReceipt: "e".repeat(64), tunnelReceipt: "f".repeat(64) }),
+      );
+      await execute(executor.start(target.runId));
+      const operationId = randomUUID();
+      await expect(execute(executor.park(target, operationId))).rejects.toThrow("invocation-held");
+      expect(guest.parkingBodies).toEqual([]);
+      await execute(executor.hold(target));
+      guest.parkingLost = true;
+      await expect(execute(executor.park(target, operationId))).rejects.toThrow(
+        "transport-unavailable",
+      );
+      expect(await execute(executor.park(target, operationId))).toEqual({
+        operationId,
+        capsuleHash: "d".repeat(64),
+        archiveHash: "c".repeat(64),
+        contentBytes: 8,
+        storedBytes: 500,
+        entries: 3,
+      });
+      expect(guest.parkingBodies).toHaveLength(2);
+      expect(guest.parkingBodies[0]).toBe(guest.parkingBodies[1]);
+      guest.parkingConflict = true;
+      await expect(execute(executor.park(target, operationId))).rejects.toThrow("invalid-reply");
+      await expect(
+        execute(executor.park({ ...target, bootId: randomUUID() }, operationId)),
+      ).rejects.toThrow("target-mismatch");
+      await expect(execute(executor.park(target, "invalid"))).rejects.toThrow("invalid-input");
+      expect(guest.starts).toBe(1);
     }));
 });

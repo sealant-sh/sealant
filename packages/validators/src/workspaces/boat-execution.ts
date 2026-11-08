@@ -4,20 +4,18 @@ const name = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 
 /** Immutable provider target, publication and run identity, reserved before bootstrap delivery. */
-export const boatExecutionTargetSchema = z
-  .strictObject({
-    deploymentId: name,
-    workspaceId: name,
-    runId: name,
-    runtimeInstanceId: name,
-    launchAttemptId: name,
-    sourceId: name,
-    sandboxId: z.string().regex(/^bx_[23456789abcdefghjkmnpqrstuvwxyz]{8}$/),
-    diskLineage: name,
-    bootId: z.uuid(),
-    manifestDigest: hash,
-  })
-  .refine((target) => target.runId === target.runtimeInstanceId);
+export const boatExecutionTargetSchema = z.strictObject({
+  deploymentId: name,
+  workspaceId: name,
+  runId: name,
+  runtimeInstanceId: name,
+  launchAttemptId: name,
+  sourceId: name,
+  sandboxId: z.string().regex(/^bx_[23456789abcdefghjkmnpqrstuvwxyz]{8}$/),
+  diskLineage: name,
+  bootId: z.uuid(),
+  manifestDigest: hash,
+});
 /** Parsed execution identity. Parsing does not authorize allocation or resource access. */
 export type BoatExecutionTarget = z.infer<typeof boatExecutionTargetSchema>;
 
@@ -43,6 +41,7 @@ export const boatExecutionRecordSchema = z
         epoch: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
         digest: hash,
         sealedEnvelope: z.string().min(1).nullable(),
+        sealedResumeEnvelope: z.string().min(1).optional(),
       })
       .nullable(),
     isolation: z.strictObject({ resourceReceipt: hash, tunnelReceipt: hash }).optional(),
