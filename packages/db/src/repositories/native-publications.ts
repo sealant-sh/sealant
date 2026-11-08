@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import {
   boatAllocationRecordSchema,
+  boatExecutionRecordSchema,
   boatTunnelReservationSchema,
   nativeArtifactConsumerSchema,
   nativeCatalogRecordSchema,
@@ -557,21 +558,30 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
                 .select()
                 .from(boatExecutions)
                 .where(eq(boatExecutions.runtimeInstanceId, consumer.runtimeInstanceId));
-              const deletedUnbound =
+              const aborted = boatExecutionRecordSchema.safeParse(execution?.record);
+              const deletedUnused =
                 bound.success &&
                 bound.data.phase === "deleted" &&
-                bound.data.target === null &&
                 bound.data.removal !== undefined &&
                 bound.data.removal.kind !== "issued" &&
                 bound.data.removal.completed &&
-                execution === undefined &&
                 capture?.custodyContract !== 3 &&
-                tunnel === undefined;
+                (bound.data.target === null
+                  ? execution === undefined && tunnel === undefined
+                  : aborted.success &&
+                    aborted.data.phase === "aborted" &&
+                    isDeepStrictEqual(aborted.data.target, bound.data.target) &&
+                    (tunnel === undefined ||
+                      (reservation.success &&
+                        reservation.data.released === true &&
+                        reservation.data.aborted === true &&
+                        tunnel.releasedAt !== null &&
+                        isDeepStrictEqual(reservation.data.binding.target, bound.data.target))));
               // The immutable allocation remains as an audit record after canonical FINAL.
               // Parking custody still needs its root publication for recovery.
               if (
                 !bound.success ||
-                (!deletedUnbound && (bound.data.phase !== "bound" || bound.data.target === null)) ||
+                (!deletedUnused && (bound.data.phase !== "bound" || bound.data.target === null)) ||
                 !isDeepStrictEqual(bound.data.input.consumer, consumer) ||
                 bound.data.input.publication.publicationId !== publicationId ||
                 allocation.publicationId !== publicationId ||
@@ -581,7 +591,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
                 runtime.resourceId !== bound.data.sandboxId ||
                 runtime.removedAt === null ||
                 runtime.publicationId !== publicationId ||
-                (!deletedUnbound &&
+                (!deletedUnused &&
                   (capture?.deletionState !== "deleted" ||
                     capture.custodyContract === 3 ||
                     !reservation.success ||

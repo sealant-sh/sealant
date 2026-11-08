@@ -207,6 +207,15 @@ const make: Effect.Effect<
     return "closed" as const;
   });
   const close = Effect.fn("BoatFinalClose.close")(function* (target: BoatExecutionTarget) {
+    const stored = yield* allocations.get(target.runtimeInstanceId);
+    const state = yield* exchanges.get(target.runtimeInstanceId);
+    if (
+      stored !== undefined &&
+      isDeepStrictEqual(stored.target, target) &&
+      (state === undefined ||
+        ["exchange", "control", "prepared", "installed", "aborted"].includes(state.phase))
+    )
+      return yield* closeUnused(target.runId, target.sandboxId, target);
     let { reservation } = yield* current(target);
     const root = yield* canonical.getByRunId(target.runId);
     if (root?.custodyContract === 3) return yield* Effect.fail(new BoatFinalCloseError("held"));
@@ -286,16 +295,21 @@ const make: Effect.Effect<
         error instanceof BoatFinalCloseError ? error : new BoatFinalCloseError("unavailable"),
       ),
     );
-  const closeUnbound = Effect.fn("BoatFinalClose.closeUnbound")(function* (
+  const closeUnused = Effect.fn("BoatFinalClose.closeUnused")(function* (
     runId: string,
     sandboxId: string,
+    target: BoatExecutionTarget | null = null,
   ) {
     let allocation = yield* allocations.get(runId);
     const instance = yield* runtimes.getRuntimeInstanceByRunId(runId);
     if (
       allocation === undefined ||
-      allocation.target !== null ||
-      !["allocated", "held", "deleting", "deleted"].includes(allocation.phase) ||
+      !isDeepStrictEqual(allocation.target, target) ||
+      !(
+        target === null
+          ? ["allocated", "held", "deleting", "deleted"]
+          : ["bound", "deleting", "deleted"]
+      ).includes(allocation.phase) ||
       allocation.input.deploymentId !== host.deploymentId ||
       allocation.sandboxId !== sandboxId ||
       instance?.adapter !== "boat" ||
@@ -304,30 +318,49 @@ const make: Effect.Effect<
       (instance.stopReason === null && instance.status !== "failed")
     )
       return yield* Effect.fail(new BoatFinalCloseError("held"));
-    // A pre-launch capture-token row is normal. Any exchange, tunnel or parking custody is not.
+    // A pre-launch capture-token row is normal. Unbound guests cannot own an exchange or tunnel.
+    // Snapshot parking always retains its independent custody contract.
     const root = yield* canonical.getByRunId(runId);
     if (
-      (yield* exchanges.get(runId)) !== undefined ||
-      (yield* tunnels.get(runId)) !== undefined ||
+      (target === null &&
+        ((yield* exchanges.get(runId)) !== undefined ||
+          (yield* tunnels.get(runId)) !== undefined)) ||
       root?.custodyContract === 3
     )
       return yield* Effect.fail(new BoatFinalCloseError("held"));
+    // The aborted row is a durable fence against reserve, exchange, stage and installed -> issued.
+    // Issued/running/held executions refuse this path, even if readiness never succeeded.
+    if (target !== null) yield* exchanges.abort(target);
+    let reservation = yield* tunnels.get(runId);
+    if (reservation !== undefined) {
+      if (
+        target === null ||
+        !isDeepStrictEqual(reservation.binding, { target, gatewayHostId: host.gatewayHostId })
+      )
+        return yield* Effect.fail(new BoatFinalCloseError("held"));
+      reservation = yield* tunnels.freeze(reservation, reservation.closeId ?? randomUUID());
+    }
     // A failed launch may predate the stop worker. Recording stop also prevents future issuance.
     if (instance.stopReason === null)
       yield* runtimes.markStopRequested({ runId, stopReason: "user" });
     const stopped = yield* runtimes.getRuntimeInstanceByRunId(runId);
     if (stopped?.stopReason == null) return yield* Effect.fail(new BoatFinalCloseError("held"));
     const stopReason = stopped.stopReason;
-    const finishUnbound = (terminal: BoatAllocationRecord) =>
+    const finishUnused = (terminal: BoatAllocationRecord) =>
       Effect.gen(function* () {
         if (terminal.phase !== "deleted")
           return yield* Effect.fail(new BoatFinalCloseError("held"));
+        if (reservation !== undefined && reservation.released !== true) {
+          if (target === null) return yield* Effect.fail(new BoatFinalCloseError("held"));
+          yield* host.tunnel.remove(target);
+          yield* tunnels.releaseAborted(reservation);
+        }
         yield* runtimes.markStopped({ runId, stopReason });
         yield* runtimes.markRemoved({ runId, resourceId: sandboxId });
         yield* catalog.release(terminal.input.consumer, terminal.input.publication.publicationId);
         return "closed" as const;
       });
-    if (allocation.phase === "deleted") return yield* finishUnbound(allocation);
+    if (allocation.phase === "deleted") return yield* finishUnused(allocation);
     const now = yield* Clock.currentTimeMillis;
     let claimed = false;
     if (allocation.phase !== "deleting") {
@@ -349,13 +382,13 @@ const make: Effect.Effect<
       observation.error.status === 404 &&
       ["not_found", "sandbox_not_found"].includes(observation.error.code)
     ) {
-      // No exchange was ever authorized. Exact authenticated absence proves this empty guest gone.
+      // Issuance is durably fenced. Exact authenticated absence proves this unused guest gone.
       allocation = yield* allocations.advance(allocation, {
         ...allocation,
         phase: "deleted",
         removal: { kind: "absent", targetId: id, completed: true },
       });
-      return yield* finishUnbound(allocation);
+      return yield* finishUnused(allocation);
     }
     if (!observation.ok) return yield* Effect.fail(new BoatFinalCloseError("unavailable"));
     const expected = allocation.input;
@@ -409,10 +442,10 @@ const make: Effect.Effect<
         completed: operation.status === "completed",
       },
     });
-    return allocation.phase === "deleted" ? yield* finishUnbound(allocation) : ("pending" as const);
+    return allocation.phase === "deleted" ? yield* finishUnused(allocation) : ("pending" as const);
   });
   const boundedUnbound = (runId: string, sandboxId: string) =>
-    closeUnbound(runId, sandboxId).pipe(
+    closeUnused(runId, sandboxId).pipe(
       Effect.timeout(120_000),
       Effect.mapError((error) =>
         error instanceof BoatFinalCloseError ? error : new BoatFinalCloseError("unavailable"),
@@ -434,18 +467,18 @@ const make: Effect.Effect<
             if (instance?.stopReason !== null || instance?.status === "failed")
               return { runId: id, outcome: yield* boundedUnbound(id, allocation.sandboxId) };
           }
-          if (allocation?.phase !== "bound" || allocation.target === null)
+          if (
+            allocation?.target == null ||
+            !["bound", "deleting", "deleted"].includes(allocation.phase)
+          )
             return { runId: id, outcome: "skipped" as const };
           const target = allocation.target;
           const instance = yield* runtimes.getRuntimeInstanceByRunId(target.runId);
           if (
             instance?.adapter !== "boat" ||
             instance.resourceId !== target.sandboxId ||
-            instance.stopReason === null
+            (instance.stopReason === null && instance.status !== "failed")
           )
-            return { runId: id, outcome: "skipped" as const };
-          const reservation = yield* tunnels.get(id);
-          if (reservation?.binding.gatewayHostId !== host.gatewayHostId)
             return { runId: id, outcome: "skipped" as const };
           return { runId: id, outcome: yield* boundedClose(target) };
         }).pipe(

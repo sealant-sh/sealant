@@ -29,6 +29,7 @@ import {
 import { Context, Effect, Layer, Redacted } from "effect";
 import { z } from "zod";
 
+import { safeCommandTail } from "../../images/boat/command-diagnostics.js";
 import type { SealantRuntimeService, SealantTarget } from "../../sealantd/runtime.js";
 import type { BoatApi } from "./api.js";
 import { BoatSecret, boatSandboxIdSchema, parseBoatUrl } from "./config.js";
@@ -90,9 +91,10 @@ const controlSchema = z.strictObject({
 });
 const exchangeSchema = z.strictObject({ privateKey: z.string() });
 
-/** Failure summaries never incorporate guest output or secret-bearing request data. */
+/** Failure summaries contain only classified metadata and bounded, redacted command tails. */
 export class BoatExecutionError extends Error {
   readonly _tag = "BoatExecutionError";
+  readonly diagnostic: BoatLaunchDiagnostic | undefined;
   constructor(
     readonly code:
       | "invalid-input"
@@ -101,9 +103,12 @@ export class BoatExecutionError extends Error {
       | "invalid-reply"
       | "seal-context-mismatch"
       | "invocation-held",
-    readonly diagnostic?: BoatLaunchDiagnostic,
+    diagnostic?: BoatLaunchDiagnostic,
   ) {
-    super(`Boat execution: ${code}${boatLaunchSummary(diagnostic)}`);
+    const safe =
+      diagnostic === undefined ? undefined : boatLaunchDiagnostic({ diagnostic }, diagnostic.step);
+    super(`Boat execution: ${code}${boatLaunchSummary(safe)}`);
+    this.diagnostic = safe;
   }
 }
 type Failure = BoatExecutionError | BoatExecutionStoreError | CredentialCipherError;
@@ -163,7 +168,7 @@ export const boatGuestPublicCommand = (action: "bind" | "resume", request: unkno
   const raw = JSON.stringify(request);
   if (raw.length > 8192) throw new BoatExecutionError("invalid-input");
   const root = "/var/lib/sealant/guest";
-  return `${root}/bundle/lib64/ld-linux-x86-64.so.2 --inhibit-cache --library-path ${root}/bundle/lib/x86_64-linux-gnu:${root}/bundle/usr/lib/x86_64-linux-gnu:${root}/bundle/usr/lib/x86_64-linux-gnu/systemd ${root}/bundle/usr/bin/python3 -I -S -B ${root}/guest_boot.py ${action} '${raw.replaceAll("'", "'\\''")}'`;
+  return `/usr/bin/sudo -n -- ${root}/bundle/lib64/ld-linux-x86-64.so.2 --inhibit-cache --library-path ${root}/bundle/lib/x86_64-linux-gnu:${root}/bundle/usr/lib/x86_64-linux-gnu:${root}/bundle/usr/lib/x86_64-linux-gnu/systemd ${root}/bundle/usr/bin/python3 -I -S -B ${root}/guest_boot.py ${action} '${raw.replaceAll("'", "'\\''")}'`;
 };
 
 /** The only production transport: no provider upload or command receives launch secrets. */
@@ -244,7 +249,12 @@ export const createBoatGuestTransport = (
         throw new BoatExecutionError("transport-unavailable", {
           step: "bind-exchange",
           errorClass: "BoatExecutionError",
-          command: { exitCode: result.value.exitCode, timedOut: result.value.timedOut },
+          command: {
+            exitCode: result.value.exitCode,
+            timedOut: result.value.timedOut,
+            stdoutTail: safeCommandTail(result.value.stdout),
+            stderrTail: safeCommandTail(result.value.stderr),
+          },
         });
       return JSON.parse(result.value.stdout);
     },
@@ -507,6 +517,8 @@ const make: Effect.Effect<
         phase: "exchange",
       });
     }
+    if (record.phase === "aborted")
+      return yield* Effect.fail(new BoatExecutionError("invocation-held"));
     if (record.phase !== "exchange") return;
     if (record.sealedExchange === null)
       return yield* Effect.fail(new BoatExecutionError("invalid-input"));
@@ -587,7 +599,7 @@ const make: Effect.Effect<
     payload: Parameters<BoatExecutionService["stage"]>[1],
   ) {
     let record = yield* load(id);
-    if (record.phase === "exchange")
+    if (record.phase === "exchange" || record.phase === "aborted")
       return yield* Effect.fail(new BoatExecutionError("invalid-input"));
     if (record.phase === "control") {
       const wire = yield* attempt("invalid-input", () => {

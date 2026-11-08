@@ -17,6 +17,7 @@ import {
 import { Cause, Context, Effect, Layer, Schedule } from "effect";
 import { z } from "zod";
 
+import { safeCommandTail } from "../../images/boat/command-diagnostics.js";
 import type { BoatApi, BoatSandbox } from "./api.js";
 import { BoatOwnership, boatSandboxIdSchema, type BoatResult } from "./config.js";
 import { BoatExecution, type BoatExecutionService } from "./execution.js";
@@ -50,7 +51,7 @@ type Failure =
 export interface BoatAllocationSweep {
   readonly entries: readonly {
     readonly runId: string;
-    readonly outcome: "bound" | "pending" | "held" | "unavailable";
+    readonly outcome: "bound" | "pending" | "held" | "unavailable" | "deleted";
   }[];
   readonly next?: string;
 }
@@ -298,7 +299,12 @@ const make: Effect.Effect<
         catch: (error) =>
           new BoatAllocationError("invalid-input", {
             ...boatLaunchDiagnostic(error, "read-boot-id"),
-            command: { exitCode: reply.exitCode, timedOut: reply.timedOut },
+            command: {
+              exitCode: reply.exitCode,
+              timedOut: reply.timedOut,
+              stdoutTail: safeCommandTail(reply.stdout),
+              stderrTail: safeCommandTail(reply.stderr),
+            },
           }),
       });
       if (record.target !== null && record.target.bootId !== bootId)
@@ -386,9 +392,12 @@ const make: Effect.Effect<
       ids,
       (id) =>
         load(id).pipe(
-          Effect.flatMap(drive),
+          Effect.flatMap((record) =>
+            record.phase === "deleted"
+              ? Effect.succeed("deleted" as const)
+              : drive(record).pipe(Effect.as("bound" as const)),
+          ),
           Effect.timeout(120_000),
-          Effect.as("bound" as const),
           Effect.catch((error) =>
             Effect.succeed(
               error instanceof BoatAllocationError

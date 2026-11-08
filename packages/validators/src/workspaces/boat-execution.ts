@@ -32,7 +32,7 @@ export const boatExecutionRecordSchema = z
   .strictObject({
     target: boatExecutionTargetSchema,
     exchangeId: z.uuid(),
-    publicKey: z.string().min(100).max(4096),
+    publicKey: z.union([z.literal(""), z.string().min(100).max(4096)]),
     sealedExchange: z.string().min(1).nullable(),
     sealedControl: z.string().min(1).nullable(),
     admission: z
@@ -45,22 +45,37 @@ export const boatExecutionRecordSchema = z
       })
       .nullable(),
     isolation: z.strictObject({ resourceReceipt: hash, tunnelReceipt: hash }).optional(),
-    phase: z.enum(["exchange", "control", "prepared", "installed", "issued", "running", "held"]),
+    phase: z.enum([
+      "exchange",
+      "control",
+      "prepared",
+      "installed",
+      "issued",
+      "running",
+      "held",
+      "aborted",
+    ]),
   })
   .superRefine((record, context) => {
     const valid =
-      record.phase === "exchange"
-        ? record.sealedExchange !== null &&
+      record.phase === "aborted"
+        ? record.sealedExchange === null &&
           record.sealedControl === null &&
-          record.admission === null
-        : record.sealedExchange === null &&
-          record.sealedControl !== null &&
-          (record.phase === "control"
-            ? record.admission === null
-            : record.admission !== null &&
-              (record.phase === "running" || record.phase === "held"
-                ? record.admission.sealedEnvelope === null
-                : record.admission.sealedEnvelope !== null));
+          record.admission === null &&
+          record.isolation === undefined
+        : record.publicKey.length >= 100 &&
+          (record.phase === "exchange"
+            ? record.sealedExchange !== null &&
+              record.sealedControl === null &&
+              record.admission === null
+            : record.sealedExchange === null &&
+              record.sealedControl !== null &&
+              (record.phase === "control"
+                ? record.admission === null
+                : record.admission !== null &&
+                  (record.phase === "running" || record.phase === "held"
+                    ? record.admission.sealedEnvelope === null
+                    : record.admission.sealedEnvelope !== null)));
     if (
       !valid ||
       (record.isolation !== undefined &&

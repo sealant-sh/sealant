@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import {
   boatAllocationRecordSchema,
+  boatExecutionRecordSchema,
   nativePublicationKeySchema,
   nativeConsumerStateSchema,
   nativePublicationSchema,
@@ -12,6 +13,7 @@ import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
 import { boatAllocations } from "../schema/boat-allocations.js";
+import { boatExecutions } from "../schema/boat-executions.js";
 import { nativePublications, nativePublicationConsumers } from "../schema/native-publications.js";
 import { workspaceRuntimeInstances } from "../schema/workspace-build-jobs.js";
 
@@ -65,7 +67,7 @@ const transitions: Readonly<
   reserved: ["issued", "held"],
   issued: ["allocated", "held"],
   allocated: ["bound", "held", "deleting"],
-  bound: [],
+  bound: ["deleting"],
   held: ["deleting"],
   deleting: ["deleting", "deleted"],
   deleted: [],
@@ -214,6 +216,8 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
         !transitions[previous.phase].includes(next.phase) ||
         (previous.sandboxId !== null && previous.sandboxId !== next.sandboxId) ||
         (next.phase === "deleting" && previous.sandboxId === null) ||
+        ((previous.phase !== "allocated" || next.phase !== "bound") &&
+          !isDeepStrictEqual(previous.target, next.target)) ||
         (next.removal?.kind !== "absent" &&
           previous.removal !== undefined &&
           previous.removal.kind !== "issued" &&
@@ -225,6 +229,20 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
         return yield* Effect.fail(new BoatAllocationStoreError("stale-transition"));
       return yield* db.transaction(() =>
         Effect.gen(function* () {
+          if (next.phase === "deleting" && next.target !== null) {
+            const [row] = yield* db
+              .select()
+              .from(boatExecutions)
+              .where(eq(boatExecutions.runtimeInstanceId, next.target.runtimeInstanceId))
+              .for("update");
+            const execution = boatExecutionRecordSchema.safeParse(row?.record);
+            if (
+              !execution.success ||
+              execution.data.phase !== "aborted" ||
+              !isDeepStrictEqual(execution.data.target, next.target)
+            )
+              return yield* Effect.fail(new BoatAllocationStoreError("binding-conflict"));
+          }
           if (next.phase === "issued") {
             const [source] = yield* db
               .select()

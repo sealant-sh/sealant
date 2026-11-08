@@ -105,8 +105,8 @@ describe("Boat worker public bootstrap transport", () => {
             value: {
               exitCode: null,
               timedOut: true,
-              stdout: "untrusted-output",
-              stderr: "untrusted-output",
+              stdout: "x".repeat(9000) + "token=do-not-record-me\n",
+              stderr: "Bearer do-not-record-me\nValueError: stale-bootstrap-boot",
             },
           };
         },
@@ -128,7 +128,7 @@ describe("Boat worker public bootstrap transport", () => {
         operation_id: randomUUID(),
         public_key: key.publicKey.export({ type: "spki", format: "pem" }),
       }),
-    ).rejects.toThrow("transport-unavailable");
+    ).rejects.toThrow(/stderrTail.*REDACTED_AUTH.*stale-bootstrap-boot/);
     expect(count).toBe(1);
   });
 });

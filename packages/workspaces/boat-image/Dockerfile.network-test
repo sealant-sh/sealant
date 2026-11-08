@@ -1,7 +1,8 @@
 FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    python3 iproute2 nftables wireguard-tools procps util-linux systemd-container nodejs \
+    sudo python3 iproute2 nftables wireguard-tools procps util-linux systemd-container nodejs \
     && rm -rf /var/lib/apt/lists/*
+RUN printf '%s\n' 'ubuntu ALL=(root) NOPASSWD: ALL' > /etc/sudoers.d/boat-default-user && chmod 0440 /etc/sudoers.d/boat-default-user
 COPY *.py /opt/source/
 RUN mkdir -p /var/lib/sealant/guest && cp /opt/source/*.py /var/lib/sealant/guest/ \
     && cp /usr/bin/node /var/lib/sealant/guest/native-node \

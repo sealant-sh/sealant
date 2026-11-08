@@ -1233,7 +1233,9 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         if (held.length > 0) console.warn("Boat resource obligations remain", { entries: held });
       }
       if (boatAssembly?.admission !== undefined) await boatAssembly.reconcileCatalog?.();
-      const unresolved = report.entries.filter((entry) => entry.outcome !== "bound");
+      const unresolved = report.entries.filter(
+        (entry) => !["bound", "deleted"].includes(entry.outcome),
+      );
       if (unresolved.length > 0)
         console.warn("Boat allocation obligations remain", { entries: unresolved });
     } catch {
