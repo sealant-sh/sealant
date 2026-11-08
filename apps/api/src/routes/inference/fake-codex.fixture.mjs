@@ -1,19 +1,22 @@
 #!/usr/bin/env node
 /**
  * Fake Codex CLI for codex-engine tests: emits canned `--json` JSONL shapes (captured from the
- * real CLI's `codex exec --json` output) per FAKE_CODEX_MODE. The "echo" mode reports its argv and
- * env back through the agent message so tests can assert the spawn contract without a network.
+ * real CLI's `codex exec --json` output) per its first argument, `--fake-mode=<mode>` (the engine
+ * passes the CLI no ambient environment to carry it). The "echo" mode reports its argv and env back
+ * through the agent message so tests can assert the spawn contract without a network.
  */
-const mode = process.env.FAKE_CODEX_MODE ?? "echo";
+const [, , modeArgument, ...argv] = process.argv;
+const mode = modeArgument?.replace(/^--fake-mode=/, "") ?? "echo";
 const emit = (event) => process.stdout.write(`${JSON.stringify(event)}\n`);
 
 if (mode === "echo") {
   emit({ type: "thread.started", thread_id: "thread_fixture" });
   emit({ type: "turn.started" });
   const payload = {
-    argv: process.argv.slice(2),
+    argv,
     codexHome: process.env.CODEX_HOME ?? null,
-    openaiApiKey: process.env.OPENAI_API_KEY ?? null,
+    home: process.env.HOME ?? null,
+    env: Object.keys(process.env),
   };
   emit({
     type: "item.completed",
@@ -41,6 +44,17 @@ if (mode === "auth") {
   process.stderr.write(
     "ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized\n",
   );
+  process.exit(1);
+}
+
+if (mode === "turn-failed") {
+  emit({ type: "thread.started", thread_id: "thread_fixture" });
+  emit({ type: "turn.started" });
+  emit({
+    type: "turn.failed",
+    error: { message: "stream disconnected before completion: quota for sk-secret-token-value" },
+  });
+  process.stderr.write("ERROR codex_exec: turn failed\n");
   process.exit(1);
 }
 

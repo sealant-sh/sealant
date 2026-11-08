@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { extractJson, isAuthFailureMessage, redactSecret, redactSecrets } from "./support.js";
+import { extractJson, soundsLikeAuthFailure, redactSecret, redactSecrets } from "./support.js";
 
 describe("redactSecret", () => {
   it("strips every occurrence of the secret", () => {
@@ -31,16 +31,22 @@ describe("redactSecrets", () => {
   });
 });
 
-describe("isAuthFailureMessage", () => {
+describe("soundsLikeAuthFailure", () => {
   it("matches the agent SDK's typed auth failure and provider 401 shapes", () => {
-    expect(isAuthFailureMessage("Inference failed: authentication_failed")).toBe(true);
-    expect(isAuthFailureMessage("API returned 401 Unauthorized")).toBe(true);
-    expect(isAuthFailureMessage("OAuth token has expired")).toBe(true);
+    expect(soundsLikeAuthFailure("Inference failed: authentication_failed")).toBe(true);
+    expect(soundsLikeAuthFailure("API returned 401 Unauthorized")).toBe(true);
+    expect(soundsLikeAuthFailure("OAuth token has expired")).toBe(true);
   });
 
   it("does not match unrelated failures", () => {
-    expect(isAuthFailureMessage("model overloaded, retry later")).toBe(false);
-    expect(isAuthFailureMessage("max turns exceeded")).toBe(false);
+    expect(soundsLikeAuthFailure("model overloaded, retry later")).toBe(false);
+    expect(soundsLikeAuthFailure("max turns exceeded")).toBe(false);
+  });
+
+  it("reads 401 as a word, never inside a number or an id", () => {
+    expect(soundsLikeAuthFailure("prompt is too long: 64010 tokens")).toBe(false);
+    expect(soundsLikeAuthFailure("request req_401abc failed")).toBe(false);
+    expect(soundsLikeAuthFailure("upstream answered HTTP 401")).toBe(true);
   });
 });
 
