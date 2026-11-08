@@ -486,6 +486,23 @@ export const resourceInstancesEnvSchema = z.object({
   SEALANT_RESOURCE_TICK_MS: z.coerce.number().int().positive().default(30_000),
 });
 
+/** Test-box routing uses the owner asserted by an authenticated service, not person authentication. */
+export const boatAdmissionEnvSchema = z.object({
+  SEALANT_BOAT_ADMISSION_OWNER_IDS: z
+    .union([
+      z
+        .string()
+        .transform((value) => (value === "" ? [] : value.split(",").map((id) => id.trim()))),
+      z.array(z.string()),
+    ])
+    .default([])
+    .pipe(
+      z
+        .array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,255}$/))
+        .refine((ids) => new Set(ids).size === ids.length),
+    ),
+});
+
 export const appServerEnvSchema = databaseEnvSchema
   .merge(jobQueueEnvSchema)
   .merge(appCoreEnvSchema)
@@ -496,9 +513,19 @@ export const appServerEnvSchema = databaseEnvSchema
   .merge(defaultRuntimeAdapterEnvSchema)
   .merge(microvmRuntimeEnvSchema)
   .merge(workspaceImagePlatformEnvSchema)
-  .merge(resourceInstancesEnvSchema);
+  .merge(resourceInstancesEnvSchema)
+  .merge(boatAdmissionEnvSchema);
 
 export const appEnvSchema = appServerEnvSchema.superRefine((input, ctx) => {
+  if (
+    input.SEALANT_BOAT_ADMISSION_OWNER_IDS.length > 0 &&
+    input.SEALANT_CREDENTIALS_KEY === undefined
+  )
+    ctx.addIssue({
+      code: "custom",
+      path: ["SEALANT_CREDENTIALS_KEY"],
+      message: "Boat interactive control requires the deployment credential cipher.",
+    });
   addControlClientTlsIssue(input, ctx);
   addRetiredMicrovmImageIssues(input, ctx);
   addRegistryCredentialsIssue(input.REGISTRY_USERNAME, input.REGISTRY_PASSWORD, ctx);
@@ -763,11 +790,17 @@ export const workerServerEnvSchema = databaseEnvSchema
   .merge(microvmRuntimeEnvSchema)
   .merge(workspaceImagePlatformEnvSchema)
   .merge(resourceInstancesEnvSchema)
+  .merge(boatAdmissionEnvSchema)
   .extend({
-    /** Reconciliation only. These settings never register Boat for session admission. */
+    /** Provider access stays in the worker. Admission additionally requires an explicit owner list. */
     SEALANT_BOAT_API_KEY: z
       .string()
       .regex(/^[A-Za-z0-9._~-]{16,4096}$/)
+      .optional(),
+    SEALANT_BOAT_API_KEY_FILE: z
+      .string()
+      .startsWith("/")
+      .refine((value) => !value.includes("\0") && !value.endsWith("/"))
       .optional(),
     SEALANT_BOAT_DEPLOYMENT_ID: z
       .string()
@@ -778,6 +811,12 @@ export const workerServerEnvSchema = databaseEnvSchema
       .default("true")
       .transform((value) => value === true || value === "true"),
     SEALANT_BOAT_PARKING_DELAY_SECONDS: z.coerce.number().int().min(300).max(604800).default(3600),
+    SEALANT_BOAT_BUILDER_OWNER: z.uuid().optional(),
+    SEALANT_BOAT_STATE_DIRECTORY: z
+      .string()
+      .startsWith("/")
+      .refine((value) => !value.includes("\0") && !value.endsWith("/"))
+      .optional(),
     SEALANT_BOAT_GATEWAY_HOST_ID: z.uuid().optional(),
     SEALANT_BOAT_GATEWAY_ENDPOINT: z.ipv4().optional(),
     SEALANT_BOAT_GATEWAY_IMAGE: z
@@ -787,6 +826,15 @@ export const workerServerEnvSchema = databaseEnvSchema
   });
 
 export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) => {
+  const hasBoatCredential =
+    input.SEALANT_BOAT_API_KEY !== undefined || input.SEALANT_BOAT_API_KEY_FILE !== undefined;
+  if (input.SEALANT_BOAT_API_KEY !== undefined && input.SEALANT_BOAT_API_KEY_FILE !== undefined)
+    ctx.addIssue({
+      code: "custom",
+      path: ["SEALANT_BOAT_API_KEY_FILE"],
+      message:
+        "Boat credentials require exactly one of SEALANT_BOAT_API_KEY and SEALANT_BOAT_API_KEY_FILE.",
+    });
   const gatewayKeys = [
     "SEALANT_BOAT_GATEWAY_HOST_ID",
     "SEALANT_BOAT_GATEWAY_ENDPOINT",
@@ -795,7 +843,6 @@ export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) =>
   if (gatewayKeys.some((key) => input[key] !== undefined)) {
     for (const key of [
       ...gatewayKeys,
-      "SEALANT_BOAT_API_KEY",
       "SEALANT_BOAT_DEPLOYMENT_ID",
       "SEALANT_CREDENTIALS_KEY",
     ] as const) {
@@ -807,18 +854,28 @@ export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) =>
             "Boat resource reconciliation requires the complete gateway and provider configuration.",
         });
     }
+    if (!hasBoatCredential)
+      ctx.addIssue({
+        code: "custom",
+        path: ["SEALANT_BOAT_API_KEY_FILE"],
+        message:
+          "Boat resource reconciliation requires the complete gateway and provider configuration.",
+      });
     if (!input.DOCKER_RUNTIME_ENABLED || input.DEFAULT_RUNTIME_ADAPTER !== "docker")
       ctx.addIssue({
         code: "custom",
         message: "Boat resource reconciliation requires the Docker resource host.",
       });
   }
-  if (input.SEALANT_BOAT_API_KEY !== undefined || input.SEALANT_BOAT_DEPLOYMENT_ID !== undefined) {
-    for (const key of [
-      "SEALANT_BOAT_API_KEY",
-      "SEALANT_BOAT_DEPLOYMENT_ID",
-      "SEALANT_CREDENTIALS_KEY",
-    ] as const) {
+  if (hasBoatCredential || input.SEALANT_BOAT_DEPLOYMENT_ID !== undefined) {
+    if (!hasBoatCredential)
+      ctx.addIssue({
+        code: "custom",
+        path: ["SEALANT_BOAT_API_KEY_FILE"],
+        message:
+          "Boat reconciliation requires provider, deployment and credential-cipher settings.",
+      });
+    for (const key of ["SEALANT_BOAT_DEPLOYMENT_ID", "SEALANT_CREDENTIALS_KEY"] as const) {
       if (input[key] === undefined)
         ctx.addIssue({
           code: "custom",
@@ -827,6 +884,31 @@ export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) =>
             "Boat reconciliation requires provider, deployment and credential-cipher settings.",
         });
     }
+  }
+  if (input.SEALANT_BOAT_ADMISSION_OWNER_IDS.length > 0) {
+    for (const key of [
+      "SEALANT_BOAT_DEPLOYMENT_ID",
+      "SEALANT_BOAT_GATEWAY_HOST_ID",
+      "SEALANT_BOAT_GATEWAY_ENDPOINT",
+      "SEALANT_BOAT_GATEWAY_IMAGE",
+      "SEALANT_BOAT_BUILDER_OWNER",
+      "SEALANT_BOAT_STATE_DIRECTORY",
+      "SEALANT_CREDENTIALS_KEY",
+    ] as const) {
+      if (input[key] === undefined)
+        ctx.addIssue({
+          code: "custom",
+          path: [key],
+          message:
+            "Boat admission requires durable construction, FINAL close and parking infrastructure.",
+        });
+    }
+    if (!hasBoatCredential)
+      ctx.addIssue({
+        code: "custom",
+        path: ["SEALANT_BOAT_API_KEY_FILE"],
+        message: "Boat admission requires provider access.",
+      });
   }
   addControlClientTlsIssue(input, ctx);
   addRetiredMicrovmImageIssues(input, ctx);

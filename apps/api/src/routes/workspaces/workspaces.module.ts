@@ -158,6 +158,7 @@ import { z } from "zod";
 
 import { resolveWorkspaceSshGatewayConfig } from "../../lib/workspace-ssh-gateway.js";
 import { env } from "../../runtime-env.js";
+import { boatOwnerAdmitted, routeBoatOwner } from "../../services/boat-admission.js";
 import {
   RunExecPublisherService,
   WorkspaceBuildJobPublisherService,
@@ -165,6 +166,7 @@ import {
 } from "../../services/control-plane-capabilities.js";
 import { requireLiveWorkspaceRoom, spendOwnerLaunch } from "../../services/owner-budgets.js";
 import { OWNER_REQUIRED_HINT, resolveOwnerScope, scopeAdmits } from "../../services/owner-scope.js";
+import { CurrentPrincipal } from "../../services/service-principals.js";
 import {
   checkProcessUser,
   processUserNameRefusal,
@@ -1641,7 +1643,8 @@ export const createWorkspace = (input: {
       });
     }
 
-    const parsedSpec = yield* parseWorkspaceSpec(body.spec);
+    const admittedOwner = yield* boatOwnerAdmitted(body.ownerUserId);
+    const parsedSpec = routeBoatOwner(yield* parseWorkspaceSpec(body.spec), admittedOwner);
     const imageScope = yield* authorizeImageScope(body);
     const runtimeFamily =
       parsedSpec.target.runtime.family === "auto"
@@ -1654,10 +1657,11 @@ export const createWorkspace = (input: {
           message: support.message,
           code: support.reason,
         });
-      return yield* new WorkspaceServiceUnavailableError({
-        message: "Boat execution is not available on this deployment.",
-        code: "boat-production-capability-unverified",
-      });
+      if (!admittedOwner)
+        return yield* new WorkspaceServiceUnavailableError({
+          message: "Boat execution is not available on this deployment.",
+          code: "boat-production-capability-unverified",
+        });
     }
     if (idempotencyKey !== undefined) {
       const reservation = yield* withInternalError(
@@ -3987,10 +3991,14 @@ export const restartWorkspace = (input: {
           message: support.message,
           code: support.reason,
         });
-      return yield* new WorkspaceServiceUnavailableError({
-        message: "Boat execution is not available on this deployment.",
-        code: "boat-production-capability-unverified",
-      });
+      if (
+        (yield* CurrentPrincipal).kind !== "service" ||
+        !env.SEALANT_BOAT_ADMISSION_OWNER_IDS.includes(input.payload.ownerUserId)
+      )
+        return yield* new WorkspaceServiceUnavailableError({
+          message: "Boat execution is not available on this deployment.",
+          code: "boat-production-capability-unverified",
+        });
     }
 
     // The snapshot never carries the dotfiles archive payloads (`snapshotSpecOf`); the previous
@@ -4190,7 +4198,8 @@ export const inspectWorkspaceImage = (input: { readonly payload: InspectWorkspac
     if (body.registryId !== env.REGISTRY_NAME) {
       return yield* new WorkspaceNotFoundError({ message: `Unknown registry: ${body.registryId}` });
     }
-    const spec = yield* parseWorkspaceSpec(body.spec);
+    const admittedOwner = yield* boatOwnerAdmitted(body.ownerUserId);
+    const spec = routeBoatOwner(yield* parseWorkspaceSpec(body.spec), admittedOwner);
     const family =
       spec.target.runtime.family === "auto"
         ? env.DEFAULT_RUNTIME_ADAPTER

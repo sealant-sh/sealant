@@ -212,6 +212,52 @@ const makeHarness = (input: {
 };
 
 describe("processWorkspaceStopEffect", () => {
+  it.each(["closed", "retained", "pending"] as const)(
+    "leaves %s canonical capture closure to its runtime owner",
+    async (outcome) => {
+      const harness = makeHarness({
+        workspace: workspaceRow(),
+        instance: runtimeInstance({ adapter: "boat", sourceKind: "capture" }),
+        captureSourced: true,
+      });
+      const calls: string[] = [];
+      const adapter: RuntimeAdapter = {
+        id: "boat",
+        supports: () => ({ supported: true }),
+        launch: async () => {
+          throw new Error("unused");
+        },
+        stop: async () => {
+          throw new Error("generic stop must not own Boat deletion");
+        },
+        closeCapture: async (input, runId) => {
+          expect(harness.markStopRequested).toHaveBeenCalledWith({
+            runId: "run_old",
+            stopReason: "user",
+          });
+          expect(input.resourceId).toBe("container-1");
+          calls.push(runId);
+          return outcome;
+        },
+      };
+      const result = await Effect.runPromise(
+        processWorkspaceStopEffect({
+          workspaceId: "ws_1",
+          runId: "run_old",
+          stopReason: "user",
+          runtimeAdapters: [adapter],
+        }).pipe(Effect.provide(harness.layer)),
+      );
+      expect(calls).toEqual(["run_old"]);
+      expect(result).toBe(
+        outcome === "closed" ? "stopped" : outcome === "retained" ? "kept" : "draining",
+      );
+      expect(harness.markStopped).not.toHaveBeenCalled();
+      expect(harness.markRemoved).not.toHaveBeenCalled();
+      expect(harness.setWorkspaceStatus).toHaveBeenCalledTimes(outcome === "closed" ? 1 : 0);
+    },
+  );
+
   it("removes the container, marks the instance stopped, and settles the CURRENT runtime's workspace", async () => {
     const harness = makeHarness({
       // A git-sourced run: no captures, so a plain stop removes it.

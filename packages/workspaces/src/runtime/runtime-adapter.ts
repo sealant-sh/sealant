@@ -2,6 +2,8 @@ import {
   workspaceBindSchema,
   ociPublicationSchema,
   microvmPublicationSchema,
+  nativePublicationSchema,
+  boatAdmissionPinsSchema,
   type WorkspacePublication,
   type OciPublication,
   type MicrovmPublication,
@@ -86,6 +88,8 @@ export const credentialFileInjectionSchema = z.strictObject({
 
 const runtimeLaunchFields = {
   blueprint: runtimeAdapterBlueprintSchema,
+  /** Exact worker-resolved credential revisions for sealed native admission. */
+  admissionPins: boatAdmissionPinsSchema.optional(),
 
   workspaceCloneAuth: workspaceCloneAuthSchema.optional(),
   // Connected-account env injections (e.g. CLAUDE_CODE_OAUTH_TOKEN); they join the existing `-e`
@@ -145,6 +149,11 @@ export const runtimeAdapterLaunchInputSchema = z.strictObject({
 export const microvmLaunchInputSchema = z.strictObject({
   ...runtimeLaunchFields,
   publication: microvmPublicationSchema,
+});
+/** Native publications are parsed at the Boat adapter boundary. */
+export const boatLaunchInputSchema = z.strictObject({
+  ...runtimeLaunchFields,
+  publication: nativePublicationSchema,
 });
 
 export const runtimeAdapterLaunchResultSchema = z.strictObject({
@@ -446,6 +455,11 @@ export interface RuntimeAdapter<P extends WorkspacePublication = OciPublication>
     hooks?: RuntimeAdapterLaunchHooks,
   ) => Promise<RuntimeAdapterLaunchResult>;
   stop(input: RuntimeAdapterStopInput): Promise<RuntimeAdapterStopResult>;
+  /** A runtime with its own durable FINAL/deletion owner must not enter the generic removal ledger. */
+  closeCapture?(
+    input: RuntimeAdapterStopInput,
+    runId: string,
+  ): Promise<"closed" | "retained" | "pending">;
   /**
    * Optional: what the runtime knows about a launched executor right now. Adapters that cannot
    * answer cheaply leave it undefined; callers treat an absent method as "no liveness signal

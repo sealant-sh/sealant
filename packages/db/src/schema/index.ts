@@ -241,6 +241,7 @@ export {
 export { nativePublications, nativePublicationConsumers } from "./native-publications.js";
 
 export { boatExecutions } from "./boat-executions.js";
+export { boatControlRequests } from "./boat-control-requests.js";
 
 export { boatAllocations } from "./boat-allocations.js";
 export { boatTunnels } from "./boat-tunnels.js";

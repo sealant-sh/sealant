@@ -176,6 +176,7 @@ const setup = async (
     };
   };
   const options = (id: string) => ({
+    boatAdmissionOwnerIds: [owner],
     db,
     jobId: id,
     workerId: "stage2b",
@@ -207,6 +208,17 @@ const setup = async (
 const noop = async () => {};
 
 describe.skipIf(!enabled)("native publication worker and persistence (disposable Postgres)", () => {
+  it("refuses an owner outside the operator allowlist before native construction or reservation", async () => {
+    const s = await setup();
+    const job = await s.enqueue();
+    await expect(
+      processWorkspaceBuildJob({ ...s.options(job.id), boatAdmissionOwnerIds: [] }),
+    ).rejects.toMatchObject({ errorCode: "boat-admission-refused" });
+    expect(s.fixture.posts()).toBe(0);
+    expect(s.launches).toHaveLength(0);
+    expect(await Effect.runPromise(nativeConsumerRows(s.db, job.runId))).toEqual([]);
+  });
+
   it("recovers a queued scoped job whose broker wakeup was lost", async () => {
     await withWorkspaceJobTestDatabase(databaseUrl ?? "", async (url) => {
       const s = await setup(undefined, undefined, url);

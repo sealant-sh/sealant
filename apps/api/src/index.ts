@@ -3,7 +3,12 @@ import { createServer } from "node:http";
 import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import { credentialCipherLayer } from "@sealant/credentials";
-import { ControlPlaneDataAccessLive, SealantDBLive } from "@sealant/db";
+import {
+  ControlPlaneDataAccessLive,
+  SealantDBLive,
+  BoatAllocationRepoLive,
+  boatControlRequestRepoLayer,
+} from "@sealant/db";
 import { gitHubSourceIntegrationLayer } from "@sealant/source-integrations";
 import {
   InlineByteaArtifactStoreLive,
@@ -11,7 +16,7 @@ import {
   TelemetryQueryLive,
 } from "@sealant/telemetry";
 import { urlForDisplay } from "@sealant/validators/url-for-display";
-import { SealantRuntimeControlLive } from "@sealant/workspaces";
+import { SealantRuntimeControlLive, boatInteractiveControlLayer } from "@sealant/workspaces";
 import { Effect, Layer, Redacted } from "effect";
 import { HttpMiddleware, HttpRouter, HttpServerResponse } from "effect/http";
 
@@ -168,6 +173,17 @@ export const requestDependenciesLayer = Layer.mergeAll(
   telemetryQueryLayer,
   telemetrySinkLayer,
   credentialCipher,
+  boatInteractiveControlLayer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        databaseLayer,
+        databaseClientLayer,
+        credentialCipher,
+        BoatAllocationRepoLive.pipe(Layer.provide(databaseClientLayer)),
+        boatControlRequestRepoLayer.pipe(Layer.provide(databaseClientLayer)),
+      ),
+    ),
+  ),
   // Daemon control-channel access for the interactive-session verbs: each request opens a
   // short-lived docker-exec bridge to the workspace daemon (sessions are daemon-owned, so no
   // connection registry is needed API-side).

@@ -37,6 +37,7 @@ export interface ResolvedCodexAccount {
 }
 
 export interface ResolvedCredentialInjections {
+  readonly credentialVersions: readonly { readonly id: string; readonly version: string }[];
   readonly injections: readonly CredentialInjection[];
   readonly codexAccounts: readonly ResolvedCodexAccount[];
   /**
@@ -154,6 +155,7 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
 
   if (credentialRefs.length === 0) {
     const empty: ResolvedCredentialInjections = {
+      credentialVersions: [],
       injections: [],
       codexAccounts: [],
       launchCredentialInjections: [],
@@ -173,6 +175,7 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
   const injections: CredentialInjection[] = [];
   const codexAccounts: ResolvedCodexAccount[] = [];
   const launchCredentialInjections: WorkspaceLaunchCredentialInjection[] = [];
+  const credentialVersions: { id: string; version: string }[] = [];
 
   for (const credentialRef of credentialRefs) {
     const connectedAccountId = parseConnectedAccountRef(credentialRef.ref);
@@ -239,6 +242,7 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
     const planned = plan.injections;
 
     injections.push(...planned);
+    credentialVersions.push({ id: account.id, version: String(account.credentialRevision) });
     const login = loginClassOf(...credential);
     const fileInjected = planned.some((injection) => injection.kind === "file");
     const entry = {
@@ -282,6 +286,7 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
   }
 
   const resolved: ResolvedCredentialInjections = {
+    credentialVersions,
     injections,
     codexAccounts,
     launchCredentialInjections,

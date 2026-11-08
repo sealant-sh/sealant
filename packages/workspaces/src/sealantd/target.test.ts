@@ -68,6 +68,41 @@ describe("sealantTargetForDockerContainer", () => {
 });
 
 describe("sealantTargetForRuntimeInstance", () => {
+  it("requires exact Boat run and sandbox identities and requests worker authority per connection", async () => {
+    const calls: string[][] = [];
+    const options = {
+      boatConnectMaterial: async (runId: string, sandboxId: string) => {
+        calls.push([runId, sandboxId]);
+        return { url: "wss://fresh.example/control", auth: { bearerToken: "current" } };
+      },
+    };
+    const instance = runtimeInstance({
+      adapter: "boat",
+      resourceId: "bx_23456789",
+      endpoint: "wss://old.example/control",
+    });
+    expect(sealantTargetForRuntimeInstance(instance)).toBeUndefined();
+    expect(
+      sealantTargetForRuntimeInstance(
+        { adapter: instance.adapter, resourceId: instance.resourceId, endpoint: instance.endpoint },
+        options,
+      ),
+    ).toBeUndefined();
+    expect(
+      sealantTargetForRuntimeInstance({ ...instance, endpoint: null }, options),
+    ).toBeUndefined();
+    const target = sealantTargetForRuntimeInstance(instance, options);
+    expect(target?.kind).toBe("websocket");
+    expect(calls).toEqual([]);
+    if (target?.kind !== "websocket") throw new Error("missing target");
+    expect(await target.prepare?.()).toMatchObject({ auth: { bearerToken: "current" } });
+    await target.prepare?.();
+    expect(calls).toEqual([
+      [instance.runId, "bx_23456789"],
+      [instance.runId, "bx_23456789"],
+    ]);
+  });
+
   it("uses the persisted Unix control endpoint when the runtime exposes one", () => {
     const target = sealantTargetForRuntimeInstance(
       runtimeInstance({ endpoint: "unix:///run/sealant/sockets/workspace-123/control.sock" }),

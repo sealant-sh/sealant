@@ -120,6 +120,8 @@ export type ProcessWorkspaceBuildJobRequirements =
   | ConnectedAccountRepo;
 
 export interface ProcessWorkspaceBuildJobOptions {
+  /** Rechecked before any Boat construction, including explicit-runtime requests and redelivery. */
+  readonly boatAdmissionOwnerIds?: readonly string[];
   readonly jobId: string;
   readonly workerId: string;
   readonly leaseDurationMs: number;
@@ -863,6 +865,17 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     const scope = job.imageScope ?? null;
     yield* authorizeScope(scope);
     if (runtime.kind === "boat-native") {
+      const owner =
+        job.runId === null
+          ? undefined
+          : yield* attempts
+              .getAttemptById(job.runId)
+              .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+      if (owner === undefined || !options.boatAdmissionOwnerIds?.includes(owner.ownerUserId))
+        return yield* workspaceBuildJobProcessingError({
+          errorCode: "boat-admission-refused",
+          message: "Boat admission is unavailable for this service-asserted owner.",
+        });
       if (job.runId === null || scope === null)
         return yield* workspaceBuildJobProcessingError({
           errorCode: "native-consumer-missing",
@@ -1420,6 +1433,10 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
         prepared.launch(
           {
             blueprint: spec,
+            admissionPins: {
+              credentialVersions: [...resolvedCredentials.credentialVersions],
+              dotfiles: [],
+            },
             ...(workspaceCloneAuth === undefined ? {} : { workspaceCloneAuth }),
             // Worker-resolved dotfiles clone auth rides the TRANSIENT platform launch field, never a
             // blueprint env map: the blueprint is the persisted restart source and must stay free of

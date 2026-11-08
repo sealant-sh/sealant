@@ -46,11 +46,14 @@ import {
 } from "@sealant/workspaces";
 import { Effect, Layer, Result } from "effect";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
+import { BoatAdmissionOwners } from "../../services/boat-admission.js";
 import {
   PackageStandardizerService,
   WorkspaceBuildJobPublisherService,
 } from "../../services/control-plane-capabilities.js";
+import { CurrentPrincipal, type RequestPrincipal } from "../../services/service-principals.js";
 import { cancelWorkspaceCreate, createWorkspace, getWorkspaceCreate } from "./workspaces.module.js";
 
 const now = new Date("2026-09-16T12:00:00.000Z");
@@ -1213,5 +1216,71 @@ describe("createWorkspace image scope and Boat admission", () => {
       );
       expect(state.scopeChecks).toBe(imageScopeId === undefined ? undefined : 1);
     }
+  });
+});
+
+describe("operator Boat owner routing", () => {
+  const create = (
+    principal: RequestPrincipal,
+    owners: readonly string[],
+    explicit?: "docker" | "boat",
+  ) => {
+    const state: RecordingState = {};
+    const payload = capturePayload("/workspace/harness-home");
+    return Effect.runPromise(
+      createWorkspace({
+        payload: {
+          ...payload,
+          spec: {
+            ...z.record(z.string(), z.unknown()).parse(payload.spec),
+            ...(explicit === undefined
+              ? {}
+              : {
+                  target: {
+                    os: { family: "ubuntu" },
+                    runtime: { family: explicit, mode: "require" },
+                  },
+                }),
+          },
+        },
+        headers: {},
+      }).pipe(
+        Effect.result,
+        Effect.provide(makeRecordingLayer(state)),
+        Effect.provideService(CurrentPrincipal, principal),
+        Effect.provideService(BoatAdmissionOwners, owners),
+      ),
+    ).then((result) => ({ state, result }));
+  };
+  it("queues a native create only for the exact service-asserted owner", async () => {
+    const { state, result } = await create({ kind: "service" }, ["usr_capture"]);
+    expect(Result.isSuccess(result)).toBe(true);
+    expect(state.job).toMatchObject({ target: { runtime: { family: "boat", mode: "require" } } });
+    expect(state.imageScope).toEqual({ kind: "owner", ownerUserId: "usr_capture" });
+  });
+  it("keeps Docker for an empty list, another owner and every non-service principal", async () => {
+    const cases: readonly (readonly [RequestPrincipal, readonly string[]])[] = [
+      [{ kind: "service" }, []],
+      [{ kind: "service" }, ["usr_capture_other"]],
+      [{ kind: "none" }, ["usr_capture"]],
+      [{ kind: "open" }, ["usr_capture"]],
+      [{ kind: "bearer" }, ["usr_capture"]],
+      [{ kind: "gateway" }, ["usr_capture"]],
+    ];
+    for (const [principal, owners] of cases) {
+      const { state, result } = await create(principal, owners);
+      expect(Result.isSuccess(result)).toBe(true);
+      expect(state.job).not.toMatchObject({ target: { runtime: { family: "boat" } } });
+    }
+  });
+  it("preserves explicit Docker, and refuses explicit Boat without the admitted owner", async () => {
+    const docker = await create({ kind: "service" }, ["usr_capture"], "docker");
+    expect(Result.isSuccess(docker.result)).toBe(true);
+    expect(docker.state.job).toMatchObject({ target: { runtime: { family: "docker" } } });
+    const denied = await create({ kind: "service" }, [], "boat");
+    expect(Result.isFailure(denied.result) && denied.result.failure).toMatchObject({
+      code: "boat-production-capability-unverified",
+    });
+    expect(denied.state.job).toBeUndefined();
   });
 });

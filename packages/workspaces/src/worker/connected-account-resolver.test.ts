@@ -75,6 +75,7 @@ describe("resolveCredentialInjections", () => {
       });
 
       expect(resolved).toEqual({
+        credentialVersions: [],
         injections: [],
         codexAccounts: [],
         launchCredentialInjections: [],

@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import {
+  NativePublicationRepo,
+  NativePublicationRepoLive,
   BoatAllocationRepo,
   BoatAllocationRepoLive,
   BoatTunnelRepo,
@@ -12,7 +14,11 @@ import {
   WorkspaceRuntimeInstanceRepoLive,
   SealantDB,
 } from "@sealant/db";
-import type { BoatExecutionTarget, BoatTunnelReservation } from "@sealant/validators";
+import {
+  nativeArtifactConsumerSchema,
+  type BoatExecutionTarget,
+  type BoatTunnelReservation,
+} from "@sealant/validators";
 import { Context, Effect, Layer, Redacted } from "effect";
 
 import { SealantRuntime, SealantRuntimeControlLive } from "../../sealantd/runtime.js";
@@ -77,6 +83,7 @@ const make: Effect.Effect<
   BoatFinalClose["Service"],
   never,
   | SealantDB
+  | NativePublicationRepo
   | BoatAllocationRepo
   | BoatTunnelRepo
   | WorkspaceCaptureDrainRepo
@@ -88,6 +95,7 @@ const make: Effect.Effect<
 > = Effect.gen(function* () {
   const db = yield* SealantDB;
   const allocations = yield* BoatAllocationRepo;
+  const catalog = yield* NativePublicationRepo;
   const tunnels = yield* BoatTunnelRepo;
   const canonical = yield* WorkspaceCaptureDrainRepo;
   const runtimes = yield* WorkspaceRuntimeInstanceRepo;
@@ -179,6 +187,13 @@ const make: Effect.Effect<
     }
     yield* runtimes.markStopped({ runId: target.runId, stopReason });
     yield* runtimes.markRemoved({ runId: target.runId, resourceId: target.sandboxId });
+    yield* catalog.release(
+      nativeArtifactConsumerSchema.parse({
+        runId: target.runId,
+        runtimeInstanceId: target.runtimeInstanceId,
+      }),
+      target.sourceId,
+    );
     return "closed" as const;
   });
   const close = Effect.fn("BoatFinalClose.close")(function* (target: BoatExecutionTarget) {
@@ -279,8 +294,7 @@ const make: Effect.Effect<
           if (
             instance?.adapter !== "boat" ||
             instance.resourceId !== target.sandboxId ||
-            instance.stopReason === null ||
-            instance.removedAt !== null
+            instance.stopReason === null
           )
             return { runId: id, outcome: "skipped" as const };
           const reservation = yield* tunnels.get(id);
@@ -318,6 +332,7 @@ export const boatFinalCloseLayerNoDeps: Layer.Layer<
   BoatFinalClose,
   never,
   | SealantDB
+  | NativePublicationRepo
   | BoatAllocationRepo
   | BoatTunnelRepo
   | WorkspaceCaptureDrainRepo
@@ -335,6 +350,7 @@ export const boatFinalCloseLayer: Layer.Layer<
 > = boatFinalCloseLayerNoDeps.pipe(
   Layer.provide(
     Layer.mergeAll(
+      NativePublicationRepoLive,
       BoatAllocationRepoLive,
       boatTunnelRepoLayer,
       WorkspaceCaptureDrainRepoLive,

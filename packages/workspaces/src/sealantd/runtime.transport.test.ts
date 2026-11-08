@@ -5,7 +5,12 @@ import { tmpdir } from "node:os";
 import { Cause, Effect, Exit, Option } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { ControlTransportLive, SealantTransport, TransportError } from "./runtime.js";
+import {
+  createControlWebSocket,
+  ControlTransportLive,
+  SealantTransport,
+  TransportError,
+} from "./runtime.js";
 
 const listen = (server: ReturnType<typeof createServer>, socketPath: string): Promise<void> =>
   new Promise((resolve, reject) => {
@@ -157,7 +162,74 @@ describe("websocket control transport auth", () => {
   });
 });
 
+const echo = (stream: import("node:stream").Duplex) =>
+  new Promise<string>((resolve, reject) => {
+    stream.once("data", (chunk: Buffer) => resolve(chunk.toString()));
+    stream.once("error", reject);
+    stream.write("fresh");
+  });
+
 describe("websocket control transport prepare", () => {
+  it("requires explicit daemon authority even with prepared headers, and accepts fresh authority on both openers", async () => {
+    expect(() =>
+      createControlWebSocket(
+        { kind: "websocket", url: "wss://unused.invalid" },
+        { headers: { authorization: "Bearer header-only" } },
+      ),
+    ).toThrow("unauthenticated");
+    const { createServer: createHttpServer } = await import("node:http");
+    const { WebSocketServer, createWebSocketStream } = await import("ws");
+    const { openControlTransport } = await import("./plain-transport.js");
+    const seen: Array<{ auth: string | undefined; cookie: string | undefined }> = [];
+    const server = createHttpServer();
+    const wss = new WebSocketServer({ server });
+    wss.on("connection", (socket, request) => {
+      seen.push({ auth: request.headers.authorization, cookie: request.headers.cookie });
+      const stream = createWebSocketStream(socket);
+      stream.on("data", (chunk: Buffer) => stream.write(chunk));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (address === null || typeof address === "string") throw new Error("no address");
+    const target = {
+      kind: "websocket" as const,
+      url: "wss://stale.invalid/control",
+      prepare: async () => ({
+        url: `ws://127.0.0.1:${address.port}/control`,
+        auth: { bearerToken: "current-daemon" },
+        headers: { Cookie: "current-hosted", authorization: "cannot-override" },
+      }),
+    };
+    try {
+      expect(
+        await Effect.runPromise(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const transport = yield* SealantTransport;
+              const stream = yield* transport.open(target);
+              return yield* Effect.promise(() => echo(stream));
+            }),
+          ).pipe(Effect.provide(ControlTransportLive)),
+        ),
+      ).toBe("fresh");
+      const plain = openControlTransport(target);
+      try {
+        expect(await echo(plain.stream)).toBe("fresh");
+      } finally {
+        plain.close();
+      }
+      expect(seen).toEqual(
+        Array.from({ length: 2 }, () => ({
+          auth: "Bearer current-daemon",
+          cookie: "current-hosted",
+        })),
+      );
+    } finally {
+      wss.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("mints per-connection headers and subprotocols on both openers", async () => {
     const { createServer: createHttpServer } = await import("node:http");
     const { WebSocketServer, createWebSocketStream } = await import("ws");

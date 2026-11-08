@@ -69,6 +69,8 @@ export interface BoatNativeCatalogService {
     consumer: NativeArtifactConsumer,
     publicationId: string,
   ) => Effect.Effect<void, NativeCatalogStoreError>;
+  /** Operator withdrawal is exact, refuses every live pin, and uses the original build journal. */
+  readonly withdraw: (ownership: NativeBuildOwnership) => Effect.Effect<void, NativeCatalogFailure>;
   readonly reap: (input: {
     readonly scope: NativePublicationKey["scope"];
     readonly limit: number;
@@ -228,6 +230,20 @@ const make = (
       }
       yield* repo.removed(claim);
       return "removed";
+    });
+    const withdraw = Effect.fn("BoatNativeCatalog.withdraw")(function* (
+      ownership: NativeBuildOwnership,
+    ) {
+      if (ownership.key.deploymentId !== options.deploymentId)
+        return yield* Effect.fail(new NativeCatalogError("invalid-input"));
+      const record = yield* repo.withdraw(ownership);
+      if (record === undefined) return yield* Effect.fail(new NativeCatalogError("invalid-input"));
+      if (record.state === "removed") return;
+      const result = yield* remove(record);
+      if (result !== "removed")
+        return yield* Effect.fail(
+          new NativeCatalogError("publication-pending", ownership.publicationId),
+        );
     });
     const reap = Effect.fn("BoatNativeCatalog.reap")(function* (
       input: Parameters<BoatNativeCatalogService["reap"]>[0],
@@ -389,6 +405,7 @@ const make = (
       markConsumer: repo.markConsumer,
       release: repo.release,
       reap,
+      withdraw,
       reconcile,
     });
   });

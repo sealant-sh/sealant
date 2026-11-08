@@ -65,13 +65,13 @@ import {
   removeLeftovers,
   runHomeScript,
   sealantTargetForRuntimeInstance,
-  targetDerivationOptionsFromEnv,
   writeIntoHome,
   type HomeCredentialChannel,
 } from "@sealant/workspaces";
 import { Duration, Effect, Option, Result, Semaphore } from "effect";
 
 import { env } from "../../runtime-env.js";
+import { requestTargetOptions } from "../../services/boat-control.js";
 import { CurrentPrincipal } from "../../services/service-principals.js";
 import { resolveSelectedConnectedAccount } from "./connected-account-selection.js";
 /**
@@ -206,16 +206,17 @@ export const notRunning = (workspaceId: string) =>
     code: "workspace-not-running",
   });
 
-export const targetFor = (workspaceId: string, instance: WorkspaceRuntimeInstance) => {
-  const target = sealantTargetForRuntimeInstance(instance, targetDerivationOptionsFromEnv(env));
-  return target === undefined
-    ? Effect.fail(
-        new WorkspaceServiceUnavailableError({
-          message: `Core has no way to reach workspace ${workspaceId}'s executor from here (its control client is not configured for this runtime).`,
-        }),
-      )
-    : Effect.succeed(target);
-};
+export const targetFor = (workspaceId: string, instance: WorkspaceRuntimeInstance) =>
+  Effect.gen(function* () {
+    const target = sealantTargetForRuntimeInstance(instance, yield* requestTargetOptions);
+    return yield* target === undefined
+      ? Effect.fail(
+          new WorkspaceServiceUnavailableError({
+            message: `Core has no way to reach workspace ${workspaceId}'s executor from here (its control client is not configured for this runtime).`,
+          }),
+        )
+      : Effect.succeed(target);
+  });
 
 /**
  * A launch that named no home wrote its own logins at `$HOME`, root's home: that home is the

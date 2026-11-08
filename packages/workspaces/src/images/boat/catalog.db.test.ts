@@ -115,6 +115,34 @@ const throughCatalog = <A, E>(
   );
 
 describe.skipIf(!enabled)("native publication ownership in migrated disposable Postgres", () => {
+  it.live("withdraws only the exact unused build and removes it through its journal", () =>
+    test((repo, db) =>
+      Effect.gen(function* () {
+        const f = yield* published(repo, db);
+        {
+          const ready = yield* repo.publish(f.claim, f.publication);
+          const withdraw = (ownership: typeof ready.ownership) =>
+            throughCatalog(db, f, (catalog) => catalog.withdraw(ownership));
+          expect(Result.isFailure(yield* Effect.result(withdraw(ready.ownership)))).toBe(true);
+          yield* repo.release(f.pin, f.publication.publicationId);
+          expect(yield* repo.retire(f.publication.publicationId)).toBeUndefined();
+          expect(
+            Result.isFailure(
+              yield* Effect.result(withdraw({ ...ready.ownership, buildId: randomUUID() })),
+            ),
+          ).toBe(true);
+          yield* repo.withdraw(ready.ownership);
+          const held = yield* repo.claim(f.publication.publicationId, "remove", 60000);
+          expect(held).toBeDefined();
+          expect(Result.isFailure(yield* Effect.result(withdraw(ready.ownership)))).toBe(true);
+          yield* expireNativeClaim(db, f.publication.publicationId);
+          yield* withdraw(ready.ownership);
+          expect((yield* repo.get(f.publication.publicationId))?.state).toBe("removed");
+          yield* withdraw(ready.ownership);
+        }
+      }),
+    ),
+  );
   beforeAll(async () => {
     if (
       databaseUrl === undefined ||

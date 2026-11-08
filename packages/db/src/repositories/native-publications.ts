@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import {
+  boatAllocationRecordSchema,
+  boatTunnelReservationSchema,
   nativeArtifactConsumerSchema,
   nativeCatalogRecordSchema,
   nativePublicationKeySchema,
@@ -20,10 +22,15 @@ import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
 import { boatAllocations } from "../schema/boat-allocations.js";
+import { boatTunnels } from "../schema/boat-tunnels.js";
 import {
   nativePublicationConsumers as consumers,
   nativePublications as publications,
 } from "../schema/native-publications.js";
+import {
+  workspaceRuntimeInstances,
+  workspaceCaptureDrains,
+} from "../schema/workspace-build-jobs.js";
 
 /** Persistence failures never imply a publication was absent or a consumer was released. */
 export class NativeCatalogStoreError extends Error {
@@ -89,6 +96,10 @@ export interface NativePublicationRepoService {
   readonly retire: (
     publicationId: string,
     policy?: { readonly keepRecent: number; readonly minAgeMs: number },
+  ) => Effect.Effect<NativeCatalogRecord | undefined, NativeCatalogStoreError>;
+  /** Explicit operator withdrawal of an exact unused build, independent of cache retention. */
+  readonly withdraw: (
+    ownership: NativeBuildOwnership,
   ) => Effect.Effect<NativeCatalogRecord | undefined, NativeCatalogStoreError>;
   readonly removed: (claim: NativeCatalogClaim) => Effect.Effect<void, NativeCatalogStoreError>;
 }
@@ -430,14 +441,52 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
           }
           if (state === "released") {
             const [allocation] = yield* db
-              .select({ id: boatAllocations.runtimeInstanceId })
+              .select()
               .from(boatAllocations)
               .where(eq(boatAllocations.runtimeInstanceId, consumer.runtimeInstanceId))
               .limit(1);
-            if (allocation !== undefined)
-              return yield* Effect.fail(
-                new NativeCatalogStoreError("consumer", "consumer-conflict"),
-              );
+            if (allocation !== undefined) {
+              const bound = boatAllocationRecordSchema.safeParse(allocation.record);
+              const [runtime] = yield* db
+                .select()
+                .from(workspaceRuntimeInstances)
+                .where(eq(workspaceRuntimeInstances.runId, consumer.runId));
+              const [capture] = yield* db
+                .select()
+                .from(workspaceCaptureDrains)
+                .where(eq(workspaceCaptureDrains.runId, consumer.runId));
+              const [tunnel] = yield* db
+                .select()
+                .from(boatTunnels)
+                .where(eq(boatTunnels.runtimeInstanceId, consumer.runtimeInstanceId));
+              const reservation = boatTunnelReservationSchema.safeParse(tunnel?.record);
+              // The immutable allocation remains as an audit record after canonical FINAL.
+              // Parking custody still needs its root publication for recovery.
+              if (
+                !bound.success ||
+                bound.data.phase !== "bound" ||
+                bound.data.target === null ||
+                !isDeepStrictEqual(bound.data.input.consumer, consumer) ||
+                bound.data.input.publication.publicationId !== publicationId ||
+                allocation.publicationId !== publicationId ||
+                allocation.sandboxId !== bound.data.target.sandboxId ||
+                runtime?.adapter !== "boat" ||
+                runtime.status !== "stopped" ||
+                runtime.resourceId !== bound.data.target.sandboxId ||
+                runtime.removedAt === null ||
+                runtime.publicationId !== publicationId ||
+                capture?.deletionState !== "deleted" ||
+                capture.custodyContract === 3 ||
+                !reservation.success ||
+                reservation.data.released !== true ||
+                tunnel?.releasedAt === null ||
+                reservation.data.removal?.completed !== true ||
+                !isDeepStrictEqual(reservation.data.binding.target, bound.data.target)
+              )
+                return yield* Effect.fail(
+                  new NativeCatalogStoreError("consumer", "consumer-conflict"),
+                );
+            }
           }
           yield* db
             .update(consumers)
@@ -542,6 +591,40 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
         }),
       );
     });
+    const withdraw = Effect.fn("NativePublicationRepo.withdraw")(function* (
+      ownership: NativeBuildOwnership,
+    ) {
+      return yield* db.transaction(() =>
+        Effect.gen(function* () {
+          const [row] = yield* lock(ownership.publicationId);
+          if (row === undefined) return undefined;
+          const record = yield* parseRow(row);
+          if (
+            !isDeepStrictEqual(record.ownership, ownership) ||
+            (!["ready", "retiring", "removed"].includes(record.state) &&
+              !(record.state === "quarantined" && record.reason === "native-removal-pending")) ||
+            (yield* pins(ownership.publicationId)).length !== 0
+          )
+            return yield* Effect.fail(new NativeCatalogStoreError("withdraw", "consumer-conflict"));
+          if (record.state === "removed" || record.state === "retiring") return record;
+          const [updated] = yield* db
+            .update(publications)
+            .set({
+              state: "retiring",
+              generation: sql`${publications.generation} + 1`,
+              ...clearClaim,
+            })
+            .where(
+              and(
+                eq(publications.id, row.id),
+                sql`(${publications.claimUntil} is null or ${publications.claimUntil} <= now())`,
+              ),
+            )
+            .returning();
+          return updated === undefined ? undefined : yield* parseRow(updated);
+        }),
+      );
+    });
     const removed = Effect.fn("NativePublicationRepo.removed")(function* (
       claim: NativeCatalogClaim,
     ) {
@@ -578,6 +661,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
       release: (consumer, id) => boundary("release", changeConsumer(consumer, id, "released")),
       candidates: (scope, limit, after) => boundary("candidates", candidates(scope, limit, after)),
       retire: (id, policy) => boundary("retire", retire(id, policy)),
+      withdraw: (ownership) => boundary("withdraw", withdraw(ownership)),
       removed: (claim) => boundary("removed", removed(claim)),
     });
   },
