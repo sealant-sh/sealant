@@ -6,6 +6,8 @@ import {
   NativePublicationRepoLive,
   BoatAllocationRepo,
   BoatAllocationRepoLive,
+  BoatExecutionRepo,
+  BoatExecutionRepoLive,
   BoatTunnelRepo,
   boatTunnelRepoLayer,
   WorkspaceCaptureDrainRepo,
@@ -18,8 +20,9 @@ import {
   nativeArtifactConsumerSchema,
   type BoatExecutionTarget,
   type BoatTunnelReservation,
+  type BoatAllocationRecord,
 } from "@sealant/validators";
-import { Context, Effect, Layer, Redacted } from "effect";
+import { Clock, Context, Effect, Layer, Redacted } from "effect";
 
 import { SealantRuntime, SealantRuntimeControlLive } from "../../sealantd/runtime.js";
 import { BoatResourcesHost } from "../../worker/boat-resources.js";
@@ -58,6 +61,11 @@ export class BoatFinalClose extends Context.Service<
     readonly close: (
       target: BoatExecutionTarget,
     ) => Effect.Effect<"closed" | "retained" | "pending", BoatFinalCloseError>;
+    /** Only a never-bound guest can be deleted without FINAL. CAS fences any concurrent binder. */
+    readonly closeUnbound: (
+      runId: string,
+      sandboxId: string,
+    ) => Effect.Effect<"closed" | "pending", BoatFinalCloseError>;
     readonly reconcile: (input: {
       readonly limit: number;
       readonly after?: string;
@@ -85,6 +93,7 @@ const make: Effect.Effect<
   | SealantDB
   | NativePublicationRepo
   | BoatAllocationRepo
+  | BoatExecutionRepo
   | BoatTunnelRepo
   | WorkspaceCaptureDrainRepo
   | WorkspaceRuntimeInstanceRepo
@@ -95,6 +104,7 @@ const make: Effect.Effect<
 > = Effect.gen(function* () {
   const db = yield* SealantDB;
   const allocations = yield* BoatAllocationRepo;
+  const exchanges = yield* BoatExecutionRepo;
   const catalog = yield* NativePublicationRepo;
   const tunnels = yield* BoatTunnelRepo;
   const canonical = yield* WorkspaceCaptureDrainRepo;
@@ -276,6 +286,138 @@ const make: Effect.Effect<
         error instanceof BoatFinalCloseError ? error : new BoatFinalCloseError("unavailable"),
       ),
     );
+  const closeUnbound = Effect.fn("BoatFinalClose.closeUnbound")(function* (
+    runId: string,
+    sandboxId: string,
+  ) {
+    let allocation = yield* allocations.get(runId);
+    const instance = yield* runtimes.getRuntimeInstanceByRunId(runId);
+    if (
+      allocation === undefined ||
+      allocation.target !== null ||
+      !["allocated", "held", "deleting", "deleted"].includes(allocation.phase) ||
+      allocation.input.deploymentId !== host.deploymentId ||
+      allocation.sandboxId !== sandboxId ||
+      instance?.adapter !== "boat" ||
+      instance.resourceId !== sandboxId ||
+      instance.publicationId !== allocation.input.publication.publicationId ||
+      (instance.stopReason === null && instance.status !== "failed")
+    )
+      return yield* Effect.fail(new BoatFinalCloseError("held"));
+    // A pre-launch capture-token row is normal. Any exchange, tunnel or parking custody is not.
+    const root = yield* canonical.getByRunId(runId);
+    if (
+      (yield* exchanges.get(runId)) !== undefined ||
+      (yield* tunnels.get(runId)) !== undefined ||
+      root?.custodyContract === 3
+    )
+      return yield* Effect.fail(new BoatFinalCloseError("held"));
+    // A failed launch may predate the stop worker. Recording stop also prevents future issuance.
+    if (instance.stopReason === null)
+      yield* runtimes.markStopRequested({ runId, stopReason: "user" });
+    const stopped = yield* runtimes.getRuntimeInstanceByRunId(runId);
+    if (stopped?.stopReason == null) return yield* Effect.fail(new BoatFinalCloseError("held"));
+    const stopReason = stopped.stopReason;
+    const finishUnbound = (terminal: BoatAllocationRecord) =>
+      Effect.gen(function* () {
+        if (terminal.phase !== "deleted")
+          return yield* Effect.fail(new BoatFinalCloseError("held"));
+        yield* runtimes.markStopped({ runId, stopReason });
+        yield* runtimes.markRemoved({ runId, resourceId: sandboxId });
+        yield* catalog.release(terminal.input.consumer, terminal.input.publication.publicationId);
+        return "closed" as const;
+      });
+    if (allocation.phase === "deleted") return yield* finishUnbound(allocation);
+    const now = yield* Clock.currentTimeMillis;
+    let claimed = false;
+    if (allocation.phase !== "deleting") {
+      allocation = yield* allocations.advance(allocation, {
+        ...allocation,
+        phase: "deleting",
+        reason: null,
+        removal: { kind: "issued", token: randomUUID(), at: new Date(now).toISOString() },
+      });
+      claimed = true;
+    }
+    const id = yield* parse(() => boatSandboxIdSchema.parse(sandboxId));
+    const observation = yield* Effect.tryPromise({
+      try: () => provider.api.get(id),
+      catch: () => new BoatFinalCloseError("unavailable"),
+    });
+    if (
+      !observation.ok &&
+      observation.error.status === 404 &&
+      ["not_found", "sandbox_not_found"].includes(observation.error.code)
+    ) {
+      // No exchange was ever authorized. Exact authenticated absence proves this empty guest gone.
+      allocation = yield* allocations.advance(allocation, {
+        ...allocation,
+        phase: "deleted",
+        removal: { kind: "absent", targetId: id, completed: true },
+      });
+      return yield* finishUnbound(allocation);
+    }
+    if (!observation.ok) return yield* Effect.fail(new BoatFinalCloseError("unavailable"));
+    const expected = allocation.input;
+    const labels = {
+      "sealant-runtime": "boat",
+      "sealant-deployment": host.deploymentId,
+      "sealant-workspace": expected.workspaceId,
+      "sealant-run": runId,
+      "sealant-instance": expected.consumer.runtimeInstanceId,
+      "sealant-attempt": expected.launchAttemptId,
+      "sealant-source": expected.publication.publicationId,
+    };
+    if (
+      observation.value.id !== id ||
+      !Object.entries(labels).every(([key, value]) => observation.value.labels?.[key] === value)
+    )
+      return yield* Effect.fail(new BoatFinalCloseError("held"));
+    let operation: BoatDeletion;
+    if (allocation.removal?.kind === "operation") {
+      const operationId = yield* parse(() =>
+        boatDeletionIdSchema.parse(
+          allocation?.removal?.kind === "operation" ? allocation.removal.id : undefined,
+        ),
+      );
+      operation = yield* call(() => provider.api.getDeletion(operationId));
+    } else {
+      if (allocation.removal?.kind !== "issued")
+        return yield* Effect.fail(new BoatFinalCloseError("held"));
+      // Unknown DELETE retains a bounded lease. Accepted operations are polled, never reissued.
+      if (!claimed && now - Date.parse(allocation.removal.at) < 180_000) return "pending" as const;
+      if (!claimed)
+        allocation = yield* allocations.advance(allocation, {
+          ...allocation,
+          removal: { kind: "issued", token: randomUUID(), at: new Date(now).toISOString() },
+        });
+      operation = yield* call(() => provider.api.deleteSandbox(id));
+    }
+    if (
+      operation.kind !== "sandbox" ||
+      operation.targetId !== id ||
+      (allocation.removal?.kind === "operation" && allocation.removal.id !== operation.id)
+    )
+      return yield* Effect.fail(new BoatFinalCloseError("held"));
+    allocation = yield* allocations.advance(allocation, {
+      ...allocation,
+      phase: operation.status === "completed" ? "deleted" : "deleting",
+      removal: {
+        kind: "operation",
+        id: operation.id,
+        targetId: id,
+        completed: operation.status === "completed",
+      },
+    });
+    return allocation.phase === "deleted" ? yield* finishUnbound(allocation) : ("pending" as const);
+  });
+  const boundedUnbound = (runId: string, sandboxId: string) =>
+    closeUnbound(runId, sandboxId).pipe(
+      Effect.timeout(120_000),
+      Effect.mapError((error) =>
+        error instanceof BoatFinalCloseError ? error : new BoatFinalCloseError("unavailable"),
+      ),
+    );
   const reconcile = Effect.fn("BoatFinalClose.reconcile")(function* (
     input: Parameters<BoatFinalClose["Service"]["reconcile"]>[0],
   ) {
@@ -287,6 +429,11 @@ const make: Effect.Effect<
       (id) =>
         Effect.gen(function* () {
           const allocation = yield* allocations.get(id);
+          if (allocation?.target === null && allocation.sandboxId !== null) {
+            const instance = yield* runtimes.getRuntimeInstanceByRunId(id);
+            if (instance?.stopReason !== null || instance?.status === "failed")
+              return { runId: id, outcome: yield* boundedUnbound(id, allocation.sandboxId) };
+          }
           if (allocation?.phase !== "bound" || allocation.target === null)
             return { runId: id, outcome: "skipped" as const };
           const target = allocation.target;
@@ -319,6 +466,7 @@ const make: Effect.Effect<
   });
   return BoatFinalClose.of({
     close: boundedClose,
+    closeUnbound: boundedUnbound,
     reconcile: (input) =>
       reconcile(input).pipe(
         Effect.mapError((error) =>
@@ -334,6 +482,7 @@ export const boatFinalCloseLayerNoDeps: Layer.Layer<
   | SealantDB
   | NativePublicationRepo
   | BoatAllocationRepo
+  | BoatExecutionRepo
   | BoatTunnelRepo
   | WorkspaceCaptureDrainRepo
   | WorkspaceRuntimeInstanceRepo
@@ -352,6 +501,7 @@ export const boatFinalCloseLayer: Layer.Layer<
     Layer.mergeAll(
       NativePublicationRepoLive,
       BoatAllocationRepoLive,
+      BoatExecutionRepoLive,
       boatTunnelRepoLayer,
       WorkspaceCaptureDrainRepoLive,
       WorkspaceRuntimeInstanceRepoLive,

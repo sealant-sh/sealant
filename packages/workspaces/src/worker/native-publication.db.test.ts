@@ -60,7 +60,9 @@ import { boatProofConfigSchema } from "../operator/boat-live-check.js";
 import { makeBoatProofCore } from "../operator/boat-proof-core.js";
 import type { RegistryClient } from "../registry/client.js";
 import { BoatRuntimeAdapter, BoatAdapterError } from "../runtime/boat/adapter.js";
+import { BoatApiError } from "../runtime/boat/config.js";
 import { BoatFinalClose } from "../runtime/boat/final-close.js";
+import { boatLaunchDiagnostic } from "../runtime/boat/launch-diagnostics.js";
 import { boatSessionDaemon } from "../runtime/boat/session-daemon.fixture.js";
 import { boatSessionFixture } from "../runtime/boat/session.fixture.js";
 import { startCaptureChannel } from "../runtime/capture-channel.fixture.js";
@@ -932,7 +934,23 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
           reference: "uncertain-allocation",
         };
         await hooks?.onStarted?.(identity);
-        throw new LaunchRetainedError(identity, new Error("readiness reply lost"));
+        throw new LaunchRetainedError(
+          identity,
+          new BoatAdapterError(
+            "launch-held",
+            boatLaunchDiagnostic(
+              new BoatApiError(
+                "execute",
+                503,
+                "transport_error",
+                new Error("Bearer private-launch-credential", {
+                  cause: { code: "UND_ERR_SOCKET" },
+                }),
+              ),
+              "read-boot-id",
+            ),
+          ),
+        );
       },
     };
     await expect(
@@ -943,6 +961,12 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
     ).rejects.toMatchObject({ errorCode: "launch-retained" });
     const saved = await Effect.runPromise(s.jobs.getJobById(job.id));
     expect(saved?.status).toBe("succeeded");
+    const failedRuntime = await Effect.runPromise(s.instances.getRuntimeInstanceByRunId(job.runId));
+    expect(failedRuntime).toMatchObject({ status: "failed", errorCode: "launch-retained" });
+    expect(failedRuntime?.errorMessage).toMatch(
+      /read-boot-id.*BoatApiError.*execute.*503.*UND_ERR_SOCKET/,
+    );
+    expect(failedRuntime?.errorMessage).not.toContain("private-launch-credential");
     expect(
       (await Effect.runPromise(s.instances.getRuntimeInstanceByRunId(job.runId)))?.publication,
     ).toEqual(saved?.publication);

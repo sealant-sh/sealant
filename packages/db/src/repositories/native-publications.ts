@@ -23,6 +23,7 @@ import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
 import { boatAllocations } from "../schema/boat-allocations.js";
+import { boatExecutions } from "../schema/boat-executions.js";
 import { boatTunnels } from "../schema/boat-tunnels.js";
 import {
   nativePublicationConsumers as consumers,
@@ -552,28 +553,42 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
                 .from(boatTunnels)
                 .where(eq(boatTunnels.runtimeInstanceId, consumer.runtimeInstanceId));
               const reservation = boatTunnelReservationSchema.safeParse(tunnel?.record);
+              const [execution] = yield* db
+                .select()
+                .from(boatExecutions)
+                .where(eq(boatExecutions.runtimeInstanceId, consumer.runtimeInstanceId));
+              const deletedUnbound =
+                bound.success &&
+                bound.data.phase === "deleted" &&
+                bound.data.target === null &&
+                bound.data.removal !== undefined &&
+                bound.data.removal.kind !== "issued" &&
+                bound.data.removal.completed &&
+                execution === undefined &&
+                capture?.custodyContract !== 3 &&
+                tunnel === undefined;
               // The immutable allocation remains as an audit record after canonical FINAL.
               // Parking custody still needs its root publication for recovery.
               if (
                 !bound.success ||
-                bound.data.phase !== "bound" ||
-                bound.data.target === null ||
+                (!deletedUnbound && (bound.data.phase !== "bound" || bound.data.target === null)) ||
                 !isDeepStrictEqual(bound.data.input.consumer, consumer) ||
                 bound.data.input.publication.publicationId !== publicationId ||
                 allocation.publicationId !== publicationId ||
-                allocation.sandboxId !== bound.data.target.sandboxId ||
+                allocation.sandboxId !== bound.data.sandboxId ||
                 runtime?.adapter !== "boat" ||
                 runtime.status !== "stopped" ||
-                runtime.resourceId !== bound.data.target.sandboxId ||
+                runtime.resourceId !== bound.data.sandboxId ||
                 runtime.removedAt === null ||
                 runtime.publicationId !== publicationId ||
-                capture?.deletionState !== "deleted" ||
-                capture.custodyContract === 3 ||
-                !reservation.success ||
-                reservation.data.released !== true ||
-                tunnel?.releasedAt === null ||
-                reservation.data.removal?.completed !== true ||
-                !isDeepStrictEqual(reservation.data.binding.target, bound.data.target)
+                (!deletedUnbound &&
+                  (capture?.deletionState !== "deleted" ||
+                    capture.custodyContract === 3 ||
+                    !reservation.success ||
+                    reservation.data.released !== true ||
+                    tunnel?.releasedAt === null ||
+                    reservation.data.removal?.completed !== true ||
+                    !isDeepStrictEqual(reservation.data.binding.target, bound.data.target)))
               )
                 return yield* Effect.fail(
                   new NativeCatalogStoreError("consumer", "consumer-conflict"),

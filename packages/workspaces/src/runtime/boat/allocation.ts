@@ -14,12 +14,17 @@ import {
   type BoatAllocationRecord,
   type BoatExecutionTarget,
 } from "@sealant/validators";
-import { Context, Effect, Layer } from "effect";
+import { Cause, Context, Effect, Layer, Schedule } from "effect";
 import { z } from "zod";
 
 import type { BoatApi, BoatSandbox } from "./api.js";
 import { BoatOwnership, boatSandboxIdSchema, type BoatResult } from "./config.js";
 import { BoatExecution, type BoatExecutionService } from "./execution.js";
+import {
+  boatLaunchDiagnostic,
+  boatLaunchSummary,
+  type BoatLaunchDiagnostic,
+} from "./launch-diagnostics.js";
 
 /** No provider response text crosses this failure boundary. Uncertain allocations remain pinned. */
 export class BoatAllocationError extends Error {
@@ -32,8 +37,9 @@ export class BoatAllocationError extends Error {
       | "allocation-held"
       | "source-mismatch"
       | "target-mismatch",
+    readonly diagnostic?: BoatLaunchDiagnostic,
   ) {
-    super(`Boat allocation: ${code}`);
+    super(`Boat allocation: ${code}${boatLaunchSummary(diagnostic)}`);
   }
 }
 type Failure =
@@ -74,15 +80,21 @@ export class BoatAllocationProvider extends Context.Service<
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const attempt = <A>(run: () => A) =>
   Effect.try({ try: run, catch: () => new BoatAllocationError("invalid-input") });
-const provider = <A>(run: () => Promise<BoatResult<A>>) =>
+const provider = <A>(step: BoatLaunchDiagnostic["step"], run: () => Promise<BoatResult<A>>) =>
   Effect.tryPromise({
     try: run,
-    catch: () => new BoatAllocationError("provider-unavailable"),
+    catch: (error) =>
+      new BoatAllocationError("provider-unavailable", boatLaunchDiagnostic(error, step)),
   }).pipe(
     Effect.flatMap((result) =>
       result.ok
         ? Effect.succeed(result.value)
-        : Effect.fail(new BoatAllocationError("provider-unavailable")),
+        : Effect.fail(
+            new BoatAllocationError(
+              "provider-unavailable",
+              boatLaunchDiagnostic(result.error, step),
+            ),
+          ),
     ),
   );
 const labelsFor = (record: BoatAllocationRecord) => ({
@@ -138,7 +150,7 @@ const make: Effect.Effect<
     const runId = record.input.consumer.runId;
     if (record.input.deploymentId !== deploymentId)
       return yield* Effect.fail(new BoatAllocationError("target-mismatch"));
-    if (record.phase === "held")
+    if (["held", "deleting", "deleted"].includes(record.phase))
       return yield* Effect.fail(new BoatAllocationError("allocation-held"));
     if (record.phase === "reserved" && !(yield* repo.isActive(runId))) {
       yield* repo.advance(record, { ...record, phase: "held", reason: "run-stopped" });
@@ -155,7 +167,7 @@ const make: Effect.Effect<
     });
     if (record.phase === "reserved") {
       const expected = record.input.publication.snapshot.identity;
-      const snapshot = yield* provider(() => api.getSnapshot(expected.name));
+      const snapshot = yield* provider("read-source", () => api.getSnapshot(expected.name));
       if (
         snapshot.status !== "ready" ||
         snapshot.name !== expected.name ||
@@ -166,7 +178,7 @@ const make: Effect.Effect<
         return yield* Effect.fail(new BoatAllocationError("source-mismatch"));
       // Only the winner of this transition may issue create. Redelivery after it only discovers.
       record = yield* repo.advance(record, { ...record, phase: "issued" });
-      const sandbox = yield* provider(() =>
+      const sandbox = yield* provider("create", () =>
         api.create({
           idempotencyKey: record.idempotencyKey,
           ownership,
@@ -184,7 +196,8 @@ const make: Effect.Effect<
     } else if (record.phase === "issued") {
       const discovered = yield* Effect.tryPromise({
         try: () => api.discover(ownership),
-        catch: () => new BoatAllocationError("provider-unavailable"),
+        catch: (error) =>
+          new BoatAllocationError("provider-unavailable", boatLaunchDiagnostic(error, "discover")),
       });
       if (discovered.kind === "conflict") {
         const conflictingSandboxes = [
@@ -223,9 +236,20 @@ const make: Effect.Effect<
     if (record.sandboxId === null)
       return yield* Effect.fail(new BoatAllocationError("allocation-pending"));
     const sandboxId = boatSandboxIdSchema.parse(record.sandboxId);
-    const observed = yield* provider(() => api.get(sandboxId));
+    const observed = yield* provider("observe-sandbox", () => api.get(sandboxId));
+    const observationDiagnostic: BoatLaunchDiagnostic = {
+      step: "observe-sandbox",
+      errorClass: "BoatAllocationError",
+      sandboxState: observed.state,
+      ...(observed.hydrated === undefined ? {} : { hydrated: observed.hydrated }),
+    };
     if (observed.id !== sandboxId || !matches(record, observed))
-      return yield* Effect.fail(new BoatAllocationError("target-mismatch"));
+      return yield* Effect.fail(
+        new BoatAllocationError("target-mismatch", {
+          ...observationDiagnostic,
+          code: "target-mismatch",
+        }),
+      );
     if (
       observed.autoStop.kind !== "disabled" ||
       observed.snapshots !== true ||
@@ -233,27 +257,49 @@ const make: Effect.Effect<
     ) {
       if (record.phase === "allocated")
         yield* repo.advance(record, { ...record, phase: "held", reason: "lifetime-unverified" });
-      return yield* Effect.fail(new BoatAllocationError("allocation-held"));
+      return yield* Effect.fail(
+        new BoatAllocationError("allocation-held", {
+          ...observationDiagnostic,
+          code: "allocation-held",
+        }),
+      );
     }
-    if (!["ready", "idle", "running"].includes(observed.state))
-      return yield* Effect.fail(new BoatAllocationError("allocation-pending"));
+    if (!["ready", "idle", "running"].includes(observed.state) || observed.hydrated === false)
+      return yield* Effect.fail(
+        new BoatAllocationError("allocation-pending", {
+          ...observationDiagnostic,
+          code: "allocation-pending",
+        }),
+      );
     if (!(yield* repo.isActive(runId)))
-      return yield* Effect.fail(new BoatAllocationError("allocation-held"));
+      return yield* Effect.fail(
+        new BoatAllocationError("allocation-held", {
+          ...observationDiagnostic,
+          code: "run-stopped",
+        }),
+      );
     {
-      const reply = yield* provider(() =>
+      const reply = yield* provider("read-boot-id", () =>
         api.execute(sandboxId, "/usr/bin/cat /proc/sys/kernel/random/boot_id", {
           timeoutSeconds: 10,
         }),
       );
-      const bootId = yield* attempt(() => {
-        if (
-          reply.exitCode !== 0 ||
-          reply.timedOut ||
-          reply.stdout.length > 64 ||
-          reply.stderr !== ""
-        )
-          throw new Error();
-        return z.uuid().parse(reply.stdout.trim());
+      const bootId = yield* Effect.try({
+        try: () => {
+          if (
+            reply.exitCode !== 0 ||
+            reply.timedOut ||
+            reply.stdout.length > 64 ||
+            reply.stderr !== ""
+          )
+            throw new Error();
+          return z.uuid().parse(reply.stdout.trim());
+        },
+        catch: (error) =>
+          new BoatAllocationError("invalid-input", {
+            ...boatLaunchDiagnostic(error, "read-boot-id"),
+            command: { exitCode: reply.exitCode, timedOut: reply.timedOut },
+          }),
       });
       if (record.target !== null && record.target.bootId !== bootId)
         return yield* Effect.fail(new BoatAllocationError("target-mismatch"));
@@ -277,6 +323,33 @@ const make: Effect.Effect<
     yield* execution.exchange(record.target);
     return record.target;
   });
+  // Create is an asynchronous acceptance (202). Re-read durable ownership on each observation;
+  // retrying drive(savedReserved) would replay issuance from an obsolete pre-create record.
+  const prepared = (id: string) =>
+    load(id).pipe(
+      Effect.flatMap(drive),
+      Effect.retry({
+        times: 119,
+        schedule: Schedule.spaced("1 second"),
+        while: (error) =>
+          error instanceof BoatAllocationError &&
+          error.code === "allocation-pending" &&
+          error.diagnostic?.step === "observe-sandbox" &&
+          (["init", "provisioning", "provisioned", "cloning"].includes(
+            error.diagnostic.sandboxState ?? "",
+          ) ||
+            error.diagnostic.hydrated === false),
+      }),
+      Effect.timeout(120_000),
+      Effect.mapError((error) =>
+        Cause.isTimeoutError(error)
+          ? new BoatAllocationError(
+              "allocation-pending",
+              boatLaunchDiagnostic(error, "observe-sandbox"),
+            )
+          : error,
+      ),
+    );
   const prepare = Effect.fn("BoatAllocation.prepare")(function* (raw: BoatAllocationInput) {
     const input = yield* attempt(() => boatAllocationInputSchema.parse(raw));
     if (input.deploymentId !== deploymentId)
@@ -286,7 +359,7 @@ const make: Effect.Effect<
     if (existing !== undefined) {
       if (!isDeepStrictEqual(existing.input, input) || existing.manifestDigest !== manifestDigest)
         return yield* Effect.fail(new BoatAllocationError("target-mismatch"));
-      return yield* drive(existing);
+      return yield* prepared(input.consumer.runtimeInstanceId);
     }
     const saved = yield* repo.reserve({
       input,
@@ -299,7 +372,7 @@ const make: Effect.Effect<
       target: null,
       reason: null,
     });
-    return yield* drive(saved);
+    return yield* prepared(saved.input.consumer.runtimeInstanceId);
   });
   const reconcile = Effect.fn("BoatAllocation.reconcile")(function* (
     input: Parameters<BoatAllocationService["reconcile"]>[0],

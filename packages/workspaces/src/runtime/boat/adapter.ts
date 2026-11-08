@@ -31,14 +31,20 @@ import {
 import { BoatAllocation } from "./allocation.js";
 import { BoatExecution } from "./execution.js";
 import { BoatFinalClose } from "./final-close.js";
+import {
+  boatLaunchDiagnostic,
+  boatLaunchSummary,
+  type BoatLaunchDiagnostic,
+} from "./launch-diagnostics.js";
 
 /** Public failures never carry guest responses, credentials or sealed launch material. */
 export class BoatAdapterError extends Error {
   readonly _tag = "BoatAdapterError";
   constructor(
     readonly code: "admission-refused" | "launch-held" | "close-pending" | "target-mismatch",
+    readonly diagnostic?: BoatLaunchDiagnostic,
   ) {
-    super(`Boat runtime: ${code}`);
+    super(`Boat runtime: ${code}${boatLaunchSummary(diagnostic)}`);
   }
 }
 
@@ -80,6 +86,7 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
 
   async launch(raw: RuntimeLaunch<NativePublication>, hooks?: RuntimeAdapterLaunchHooks) {
     let identity: RuntimeLaunchIdentity | undefined;
+    let step: BoatLaunchDiagnostic["step"] = "prepare-launch";
     try {
       const input = boatLaunchInputSchema.parse(raw);
       const { runId, workspaceId, principalId } = input;
@@ -124,6 +131,7 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
         pins: input.admissionPins,
       });
       const deploymentId = this.options.deploymentId;
+      step = "prepare-allocation";
       const target = await this.options.runtime.runPromise(
         Effect.gen(function* () {
           const instances = yield* WorkspaceRuntimeInstanceRepo;
@@ -148,10 +156,13 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
         }),
       );
       identity = { adapter: "boat", resourceId: target.sandboxId, reference: runId };
+      step = "report-started";
       await hooks?.onStarted?.(identity);
+      step = "readiness";
       await this.options.runtime.runPromise(
         Effect.flatMap(BoatReadiness, (ready) => ready.launch(target, payload)),
       );
+      step = "control";
       const control = Redacted.value(
         await this.options.runtime.runPromise(
           Effect.flatMap(BoatExecution, (execution) => execution.control(target)),
@@ -160,11 +171,13 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
       if (control.kind !== "websocket") throw new BoatAdapterError("target-mismatch");
       identity = { ...identity, endpoint: control.url };
       const readyIdentity = identity;
+      step = "report-ready";
       return await completeReadyLaunch({
         blueprint: input.blueprint,
         identity: readyIdentity,
         hooks,
         steps: async () => {
+          step = "credentials";
           if (input.credentialFiles !== undefined && input.credentialFiles.length > 0)
             await (this.options.control ?? liveControlChannel).writeCredentialFiles(
               control,
@@ -185,7 +198,10 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
         blueprint: raw.blueprint,
         identity,
         runtime: "running",
-        error: error instanceof BoatAdapterError ? error : new BoatAdapterError("launch-held"),
+        error: new BoatAdapterError(
+          error instanceof BoatAdapterError ? error.code : "launch-held",
+          boatLaunchDiagnostic(error, step),
+        ),
       });
     }
   }
@@ -205,13 +221,15 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
       Effect.gen(function* () {
         const allocation = yield* (yield* BoatAllocationRepo).get(runId);
         if (
-          allocation?.phase !== "bound" ||
-          allocation.target === null ||
-          allocation.target.deploymentId !== deploymentId ||
-          allocation.target.sandboxId !== input.resourceId
+          allocation === undefined ||
+          allocation.input.deploymentId !== deploymentId ||
+          allocation.sandboxId !== input.resourceId
         )
           return yield* Effect.fail(new BoatAdapterError("target-mismatch"));
-        return yield* (yield* BoatFinalClose).close(allocation.target);
+        const owner = yield* BoatFinalClose;
+        return allocation.phase === "bound" && allocation.target !== null
+          ? yield* owner.close(allocation.target)
+          : yield* owner.closeUnbound(runId, input.resourceId);
       }),
     );
   }

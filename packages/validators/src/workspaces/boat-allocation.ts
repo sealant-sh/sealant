@@ -30,24 +30,51 @@ export const boatAllocationRecordSchema = z
     idempotencyKey: z.uuid(),
     diskLineage: z.uuid(),
     manifestDigest: z.string().regex(/^[a-f0-9]{64}$/),
-    phase: z.enum(["reserved", "issued", "allocated", "bound", "held"]),
+    phase: z.enum(["reserved", "issued", "allocated", "bound", "held", "deleting", "deleted"]),
     sandboxId: sandbox.nullable(),
     conflictingSandboxes: z.array(sandbox).max(200),
     target: boatExecutionTargetSchema.nullable(),
     reason: z.enum(["allocation-conflict", "lifetime-unverified", "run-stopped"]).nullable(),
+    // Optional for old allocations. Only never-bound guests use this deletion ledger.
+    removal: z
+      .discriminatedUnion("kind", [
+        z.strictObject({ kind: z.literal("issued"), token: z.uuid(), at: z.iso.datetime() }),
+        z.strictObject({
+          kind: z.literal("operation"),
+          id: z.string().regex(/^bdop_[a-f0-9]{32}$/),
+          targetId: sandbox,
+          completed: z.boolean(),
+        }),
+        z.strictObject({
+          kind: z.literal("absent"),
+          targetId: sandbox,
+          completed: z.literal(true),
+        }),
+      ])
+      .optional(),
   })
   .superRefine((record, context) => {
     const { phase, sandboxId, target, input, reason } = record;
-    const valid =
-      phase === "reserved" || phase === "issued"
-        ? sandboxId === null && target === null && reason === null
-        : phase === "held"
-          ? target === null &&
-            reason !== null &&
-            (reason === "lifetime-unverified" ? sandboxId !== null : sandboxId === null)
-          : sandboxId !== null &&
-            reason === null &&
-            (phase === "allocated" ? target === null : target !== null);
+    const closing = phase === "deleting" || phase === "deleted";
+    const valid = closing
+      ? sandboxId !== null &&
+        target === null &&
+        reason === null &&
+        record.removal !== undefined &&
+        (record.removal.kind === "issued"
+          ? phase === "deleting"
+          : record.removal.targetId === sandboxId &&
+            (phase !== "deleted" || record.removal.completed))
+      : record.removal === undefined &&
+        (phase === "reserved" || phase === "issued"
+          ? sandboxId === null && target === null && reason === null
+          : phase === "held"
+            ? target === null &&
+              reason !== null &&
+              (reason === "lifetime-unverified" ? sandboxId !== null : sandboxId === null)
+            : sandboxId !== null &&
+              reason === null &&
+              (phase === "allocated" ? target === null : target !== null));
     if (
       !valid ||
       (reason === "allocation-conflict"

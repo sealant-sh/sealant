@@ -152,7 +152,7 @@ export const boatSessionFixture = async (
   const api = HttpBoatApi.create({
     credential: secret("local-provider-only"),
     baseUrl: `${origin}/api/v1`,
-    timeoutMs: 1000,
+    // Includes real Docker shutdown/removal. Use the production transport budget.
   });
   if (!api.ok) throw api.error;
   const Infra = Layer.mergeAll(
@@ -189,6 +189,7 @@ export const boatSessionFixture = async (
             Exchange,
             NativePublicationRepoLive,
             BoatAllocationRepoLive,
+            BoatExecutionRepoLive,
             boatTunnelRepoLayer,
             WorkspaceCaptureDrainRepoLive,
             WorkspaceRuntimeInstanceRepoLive,
