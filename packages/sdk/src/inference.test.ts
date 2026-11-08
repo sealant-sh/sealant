@@ -118,4 +118,28 @@ describe("inference.respond", () => {
     expect(error).toMatchObject({ reason: "login-not-allowed", receipt });
     await sealant.close();
   });
+
+  it("reads the receipt on a budget's refusal", async () => {
+    answering(
+      429,
+      {
+        _tag: "BudgetExceededError",
+        message: "Budget reached",
+        budget: "ownerLaunchesPerMinute",
+        limit: 1,
+        retryAfterSeconds: 60,
+        receipt,
+      },
+      { processUser: false },
+    );
+    const sealant = client();
+
+    const error = await sealant.inference
+      .respond({ prompt: "name it", credentials: { claude: true } })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(SealantApiError);
+    expect(error).toMatchObject({ code: "BudgetExceededError", receipt });
+    await sealant.close();
+  });
 });

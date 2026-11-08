@@ -61,11 +61,13 @@ export const toSealantError = (cause: unknown): SealantError => {
   if (tag === "BudgetExceededError") {
     const budget = Schema.decodeUnknownOption(BudgetExceededError)(cause);
     if (Option.isSome(budget)) {
+      const receipt = toReceipt(record?.["receipt"]);
       return new SealantBudgetExceededError(message, {
         budget: budget.value.budget,
         limit: budget.value.limit,
         retryAfterSeconds: budget.value.retryAfterSeconds,
         ...(budget.value.refusal === undefined ? {} : { refusal: budget.value.refusal }),
+        ...(receipt === undefined ? {} : { receipt }),
         cause,
       });
     }

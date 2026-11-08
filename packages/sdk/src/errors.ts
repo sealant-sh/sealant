@@ -104,12 +104,14 @@ export class SealantBudgetExceededError extends SealantApiError {
       readonly limit: number;
       readonly retryAfterSeconds: number;
       readonly refusal?: RequestBudgetRefusal;
+      readonly receipt?: InferenceReceipt;
       readonly cause?: unknown;
     },
   ) {
     super(message, {
       code: "BudgetExceededError",
       status: 429,
+      ...(options.receipt === undefined ? {} : { receipt: options.receipt }),
       ...(options.cause === undefined ? {} : { cause: options.cause }),
     });
     this.budget = options.budget;

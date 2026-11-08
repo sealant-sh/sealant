@@ -53,10 +53,15 @@ process.env["SEALANT_CREDENTIALS_KEY"] = Buffer.alloc(32, 7).toString("base64");
 
 let respond: (typeof import("./inference.module.js"))["respond"];
 let ownerLaunchWindow: (typeof import("../../services/budget-limits.js"))["ownerLaunchWindow"];
+let budgetLimits: (typeof import("../../services/budget-limits.js"))["budgetLimits"];
+let InferenceHandlersLive: (typeof import("./inference.http-api.js"))["InferenceHandlersLive"];
+let serveControlPlane: (typeof import("../control-plane.fixture.js"))["serveControlPlane"];
 
 beforeAll(async () => {
   ({ respond } = await import("./inference.module.js"));
-  ({ ownerLaunchWindow } = await import("../../services/budget-limits.js"));
+  ({ ownerLaunchWindow, budgetLimits } = await import("../../services/budget-limits.js"));
+  ({ InferenceHandlersLive } = await import("./inference.http-api.js"));
+  ({ serveControlPlane } = await import("../control-plane.fixture.js"));
 });
 
 const fakeCipher: CredentialCipherService = {
@@ -689,6 +694,60 @@ describe("inference.module receipts", () => {
     ).toMatchObject({
       receipt: { accountId: "cacc_codex_key", revision: 1, login: "api-key" },
     });
+  });
+
+  it("carries the receipt on the 429 of an owner whose launches are spent, over the control plane", async () => {
+    const owner = "usr_launches_spent";
+    const legacy = account({
+      provider: "codex",
+      id: "cacc_codex_legacy",
+      ownerUserId: owner,
+      encryptedPayload: `sealed:${JSON.stringify({
+        authJson: JSON.stringify({
+          OPENAI_API_KEY: "sk-proj-FAKElegacykeybesidearefresh0000000",
+          tokens: { access_token: "at-codex", refresh_token: "rt-codex", id_token: "idt-codex" },
+        }),
+      })}`,
+    });
+    const { layer } = makeLayers({
+      accounts: accountsStub({ byName: { "codex:legacy": legacy } }),
+    });
+    const { handler, dispose } = serveControlPlane({
+      groups: ["inference"],
+      handlers: InferenceHandlersLive,
+      provides: layer,
+    });
+    const send = async (allowedLogin: "subscription" | "any") => {
+      const response = await handler(
+        new Request("http://localhost/v1/inference/respond", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(
+            newExchange({ ownerUserId: owner, credentials: { codex: "legacy" }, allowedLogin }),
+          ),
+        }),
+      );
+      return { status: response.status, body: await response.json() };
+    };
+    const receipt = { accountId: "cacc_codex_legacy", revision: 1, login: "api-key" };
+
+    try {
+      expect(await send("subscription")).toMatchObject({
+        status: 409,
+        body: { code: "login-not-allowed", receipt },
+      });
+      const launches = budgetLimits.ownerLaunchesPerMinute;
+      expect(launches).toBeGreaterThan(0);
+      for (let launch = 0; launch < launches; launch++) {
+        expect(await send("any")).toMatchObject({ status: 200, body: { receipt } });
+      }
+      expect(await send("any")).toMatchObject({
+        status: 429,
+        body: { _tag: "BudgetExceededError", budget: "ownerLaunchesPerMinute", receipt },
+      });
+    } finally {
+      await dispose();
+    }
   });
 
   it("continues on the start's receipt after a reconnect, without resolving again", async () => {

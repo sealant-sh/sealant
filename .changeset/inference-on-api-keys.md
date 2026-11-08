@@ -19,7 +19,8 @@ does anyway.
 
 An exchange keeps one `receipt`, `{ accountId, revision, login }`, from its start. Every
 continuation runs on it, even after the account is reconnected. `InferenceResponse.receipt` carries
-it, and so does `SealantApiError.receipt` on an error after the account was resolved.
+it, and so does `SealantApiError.receipt` on an error after the account was resolved, the owner's
+launch budget's 429 (`SealantBudgetExceededError`) included.
 
 A key turns invalid only when the provider answers with an HTTP 401 status, never on an error's
 words: `reason` `connected-account-refused` ("Your Claude API key ····a1b2 was refused by Anthropic.

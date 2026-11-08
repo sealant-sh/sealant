@@ -10,6 +10,7 @@
 import {
   BudgetExceededError,
   InferenceBadRequestError,
+  InferenceBudgetExceededError,
   InferenceConflictError,
   InferenceInternalServerError,
   InferenceNotFoundError,
@@ -408,42 +409,57 @@ const redacting =
 
 type RespondFailure =
   | BudgetExceededError
+  | InferenceBudgetExceededError
   | InferenceBadRequestError
   | InferenceNotFoundError
   | InferenceConflictError
   | InferenceUnavailableError
   | InferenceInternalServerError;
 
+/** A failure leaves redacted, with `receipt` when it has none of its own. */
 const redactFailure =
-  (redact: (text: string) => string) =>
+  (redact: (text: string) => string, receipt?: InferenceReceipt) =>
   (failure: RespondFailure): RespondFailure => {
     const message = redact(failure.message);
+    const answered = receiptField(
+      failure instanceof BudgetExceededError || failure instanceof InferenceUnavailableError
+        ? receipt
+        : (failure.receipt ?? receipt),
+    );
     if (failure instanceof InferenceConflictError) {
       return new InferenceConflictError({
         message,
-        ...receiptField(failure.receipt),
+        ...answered,
         ...(failure.code === undefined ? {} : { code: failure.code }),
       });
     }
     if (failure instanceof InferenceBadRequestError) {
-      return new InferenceBadRequestError({ message, ...receiptField(failure.receipt) });
+      return new InferenceBadRequestError({ message, ...answered });
     }
     if (failure instanceof InferenceNotFoundError) {
-      return new InferenceNotFoundError({ message, ...receiptField(failure.receipt) });
+      return new InferenceNotFoundError({ message, ...answered });
     }
     if (failure instanceof InferenceInternalServerError) {
-      return new InferenceInternalServerError({ message, ...receiptField(failure.receipt) });
+      return new InferenceInternalServerError({ message, ...answered });
     }
     if (failure instanceof InferenceUnavailableError) {
       return new InferenceUnavailableError({ message });
     }
-    const budget: BudgetExceededError = failure;
-    return budget;
+    return new InferenceBudgetExceededError({
+      message,
+      budget: failure.budget,
+      limit: failure.limit,
+      retryAfterSeconds: failure.retryAfterSeconds,
+      ...answered,
+    });
   };
 
-/** Everything an exchange answers, success or failure, leaves with its login's secrets redacted. */
+/**
+ * Everything an exchange answers, success or failure, leaves with its login's secrets redacted,
+ * and every failure carries the exchange's receipt.
+ */
 const withinExchange = <A, R>(exchange: Exchange, effect: Effect.Effect<A, RespondFailure, R>) =>
-  effect.pipe(Effect.mapError(redactFailure(redacting(exchange))));
+  effect.pipe(Effect.mapError(redactFailure(redacting(exchange), exchange.receipt)));
 
 const answerTurn = (
   exchange: Exchange,
@@ -669,7 +685,7 @@ export const respond = (payload: InferenceRespondRequest) =>
           secondsUntilUtcMidnight(now),
         );
         if (!decision.allowed) {
-          return yield* new BudgetExceededError({
+          return yield* new InferenceBudgetExceededError({
             message: budgetMessage(decision),
             budget: decision.budget,
             limit: decision.limit,

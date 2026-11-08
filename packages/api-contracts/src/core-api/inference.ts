@@ -22,7 +22,7 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
-import { BudgetExceededError } from "./budgets.js";
+import { budgetExceededFields } from "./budgets.js";
 import { connectedAccountLoginClassSchema } from "./connected-accounts.js";
 import { PersonId } from "./person-id.js";
 
@@ -157,6 +157,19 @@ export type InferenceRespondResponse = typeof inferenceRespondResponseSchema.Typ
 /** On an error after the account was resolved: the exchange's login. */
 const errorReceipt = Schema.optional(inferenceReceiptSchema);
 
+/**
+ * A budget refused the exchange (429): the same `BudgetExceededError` every other route answers,
+ * plus the exchange's login when the refusal came after the account was resolved (the owner's
+ * launch budget). The daily token budget refuses before any account is read, so it has none.
+ */
+export class InferenceBudgetExceededError extends Schema.TaggedError<InferenceBudgetExceededError>(
+  "InferenceBudgetExceededError",
+)(
+  "BudgetExceededError",
+  { ...budgetExceededFields, receipt: errorReceipt },
+  { httpApiStatus: 429 },
+) {}
+
 export class InferenceBadRequestError extends Schema.TaggedError<InferenceBadRequestError>()(
   "InferenceBadRequestError",
   { message: Schema.String, receipt: errorReceipt },
@@ -222,7 +235,7 @@ export const InferenceGroup = HttpApiGroup.make("inference")
       payload: inferenceRespondRequestSchema,
       success: inferenceRespondResponseSchema.pipe(HttpApiSchema.status(200)),
       error: [
-        BudgetExceededError,
+        InferenceBudgetExceededError,
         InferenceBadRequestError,
         InferenceNotFoundError,
         InferenceConflictError,
