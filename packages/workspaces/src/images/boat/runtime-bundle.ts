@@ -7,6 +7,7 @@ import assetLock from "../../../boat-image/asset-lock.json" with { type: "json" 
 
 export { nativeRuntimeIdentitySchema } from "@sealant/validators";
 
+import { nativeCommandFailureSchema, type NativeCommandFailure } from "./command-diagnostics.js";
 import runtimePin from "./runtime-pin.json" with { type: "json" };
 
 /** Exact distribution verified by the guest acquisition proof, never a development override. */
@@ -19,14 +20,19 @@ export const sha256 = (bytes: Uint8Array | string): string =>
 /** Safe failures at the internal native builder boundary. */
 export class NativeBuildError extends Error {
   readonly _tag = "NativeBuildError";
+  readonly commandFailure: NativeCommandFailure | undefined;
 
   constructor(
     readonly code: string,
     readonly journalPath?: string,
+    commandFailure?: NativeCommandFailure,
   ) {
+    const diagnostic =
+      commandFailure === undefined ? undefined : nativeCommandFailureSchema.parse(commandFailure);
     super(
-      `Native snapshot failed: ${code}${journalPath === undefined ? "" : `; journal ${journalPath}`}`,
+      `Native snapshot failed: ${code}${journalPath === undefined ? "" : `; journal ${journalPath}`}${diagnostic === undefined ? "" : `; command ${JSON.stringify(diagnostic)}`}`,
     );
+    this.commandFailure = diagnostic;
   }
 }
 

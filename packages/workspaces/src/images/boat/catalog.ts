@@ -20,11 +20,13 @@ import {
 import { Context, Effect, Layer, Result } from "effect";
 
 import type { IBoatSnapshotBuilder } from "./builder.js";
+import { nativeCommandFailureSchema, type NativeCommandFailure } from "./command-diagnostics.js";
 import type { NativeResult } from "./runtime-bundle.js";
 
 /** A pending or failed acquisition keeps its exact durable reservation and consumer pin. */
 export class NativeCatalogError extends Error {
   readonly _tag = "NativeCatalogError";
+  readonly commandFailure: NativeCommandFailure | undefined;
   constructor(
     readonly code:
       | "publication-pending"
@@ -33,8 +35,14 @@ export class NativeCatalogError extends Error {
       | "invalid-input",
     readonly publicationId?: string,
     readonly detail?: string,
+    commandFailure?: NativeCommandFailure,
   ) {
-    super(`Native catalog: ${code}${detail === undefined ? "" : ` (${detail})`}`);
+    const diagnostic =
+      commandFailure === undefined ? undefined : nativeCommandFailureSchema.parse(commandFailure);
+    super(
+      `Native catalog: ${code}${detail === undefined ? "" : ` (${detail})`}${diagnostic === undefined ? "" : `; command ${JSON.stringify(diagnostic)}`}`,
+    );
+    this.commandFailure = diagnostic;
   }
 }
 
@@ -106,7 +114,14 @@ const mechanism = <A>(
     Effect.flatMap((result) =>
       result.ok
         ? Effect.succeed(result.value)
-        : Effect.fail(new NativeCatalogError("mechanism-failed", id, result.error.code)),
+        : Effect.fail(
+            new NativeCatalogError(
+              "mechanism-failed",
+              id,
+              result.error.code,
+              result.error.commandFailure,
+            ),
+          ),
     ),
   );
 const publication = (

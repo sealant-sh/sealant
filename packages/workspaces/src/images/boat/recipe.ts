@@ -239,7 +239,8 @@ export const createNativeRecipe = async (
     const installScript =
       [
         "#!/bin/bash",
-        "set -euo pipefail",
+        "set -Eeuo pipefail",
+        `trap 'code=$?; printf "native recipe line %s exited %s\\n" "$LINENO" "$code" >&2' ERR`,
         "umask 022",
         "export HOME=/root",
         "export NEEDRESTART_MODE=l",

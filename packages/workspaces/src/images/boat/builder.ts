@@ -30,6 +30,11 @@ import {
   type BoatResult,
 } from "../../runtime/boat/config.js";
 import { sealantdHasRecoveryBoot } from "../../runtime/daemon-recovery.js";
+import {
+  nativeCommandFailure,
+  nativeCommandFailureSchema,
+  type NativeCommandFailure,
+} from "./command-diagnostics.js";
 import { createNativeRecipe, type NativeRecipe } from "./recipe.js";
 import {
   NativeBuildError,
@@ -152,6 +157,7 @@ const journalSchema = z.object({
     .string()
     .regex(/^native-[a-z_-]+$/)
     .optional(),
+  commandFailure: nativeCommandFailureSchema.optional(),
   phase: z.enum(["running", "cleanup", "published", "complete"]),
   allocation: allocationSchema,
   save: saveSchema,
@@ -238,7 +244,7 @@ export interface BoatSnapshotBuilderOptions {
 const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
 const failure = (error: unknown, path?: string) =>
   error instanceof NativeBuildError
-    ? new NativeBuildError(error.code, path ?? error.journalPath)
+    ? new NativeBuildError(error.code, path ?? error.journalPath, error.commandFailure)
     : new NativeBuildError("native-local-io-failed", path);
 
 const noop = () => undefined;
@@ -619,21 +625,30 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
     recipe: NativeRecipe,
     journal: Journal,
     signal: AbortSignal,
+    redactions: readonly string[],
   ): Promise<NativePublicationEvidence> {
     const allocation = journal.allocation;
     if (allocation.state !== "known") throw new NativeBuildError("native-allocation-missing");
     const id = allocation.id;
     const stage = `/home/user/sealant-dev-boat-stream-${journal.build}`;
-    const command = async (script: string, timeoutSeconds = 30) => {
+    const command = async (
+      step: NativeCommandFailure["step"],
+      script: string,
+      timeoutSeconds = 30,
+    ) => {
       const output = await awaitProviderResponse(
         () => this.#options.api.execute(id, `set -eu\n${script}`, { timeoutSeconds, signal }),
         signal,
       );
       if (output.exitCode !== 0 || output.timedOut)
-        throw new NativeBuildError("native-guest-command-failed");
+        throw new NativeBuildError(
+          "native-guest-command-failed",
+          undefined,
+          nativeCommandFailure(step, output, redactions),
+        );
       return output.stdout;
     };
-    await command(`install -d -m700 ${quote(stage)}`);
+    await command("stage-directory", `install -d -m700 ${quote(stage)}`);
     for (let i = 0; i < recipe.files.length; i++) {
       const file = recipe.files[i];
       if (file === undefined) throw new NativeBuildError("native-file-missing");
@@ -643,6 +658,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
         signal,
       );
       await command(
+        "install-asset",
         `echo '${file.sha256}  '${quote(staged)} | sha256sum -c - >/dev/null\n/usr/bin/sudo install -D -m${file.mode} ${quote(staged)} ${quote(file.path)}`,
       );
     }
@@ -651,13 +667,16 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       signal,
     );
     await command(
+      "bind-source",
       `/usr/bin/sudo python3 -I -S -B -c ${quote(`import json,os,pathlib; r=pathlib.Path('${recipe.guestRoot}'); r.mkdir(mode=0o700,parents=True,exist_ok=True); os.chmod(r,0o700); p=r/'instance.json'; p.write_text(json.dumps({'instance_id':'${id}','disk_lineage':'build:${journal.build}','boot_id':pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip()})); p.chmod(0o600)`)}`,
     );
     await command(
+      "install-recipe",
       `echo '${sha256(recipe.installScript)}  '${quote(stage + "/install.sh")} | sha256sum -c - >/dev/null\n/usr/bin/sudo /bin/bash ${quote(stage + "/install.sh")}`,
       600,
     );
     await command(
+      "verify-assets",
       recipe.files
         .map(
           (file) => `echo '${file.sha256}  ${file.path}' | /usr/bin/sudo sha256sum -c - >/dev/null`,
@@ -665,13 +684,19 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
         .join("\n"),
     );
     const probe = parseWorkspaceImageProbe(
-      JSON.parse(await command(`/usr/bin/sudo cat ${recipe.mappedRoot}${IMAGE_PROBE_PATH}`)),
+      JSON.parse(
+        await command(
+          "read-image-probe",
+          `/usr/bin/sudo cat ${recipe.mappedRoot}${IMAGE_PROBE_PATH}`,
+        ),
+      ),
     );
     if (imagePersonLayoutSupport(probe).status !== "supported")
       throw new NativeBuildError("native-person-capabilities-unsupported");
     const guest = guestEvidenceSchema.parse(
       JSON.parse(
         await command(
+          "read-guest-evidence",
           `/usr/bin/sudo python3 -I -S -B -c ${quote(`import hashlib,json,pathlib; r=pathlib.Path('${recipe.guestRoot}'); m=(r/'manifest.json').read_text().strip(); c=(r/'bundle-inputs.json').read_text(); h=lambda s:hashlib.sha256(s.encode()).hexdigest(); print(json.dumps({'manifest':m,'manifestDigest':h(m),'constructionInputs':c,'constructionInputsDigest':h(c),'approval':json.loads((r/'source-approval.json').read_text())}))`)}`,
         ),
       ),
@@ -696,9 +721,11 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
     );
     const receiptHash = sha256(receipt);
     await command(
+      "install-receipt",
       `/usr/bin/sudo install -D -m600 ${quote(stage + "/receipt.json")} /etc/sealant/native-receipt.json\necho '${receiptHash}  /etc/sealant/native-receipt.json' | /usr/bin/sudo sha256sum -c - >/dev/null\nls -d ${quote(stage)}\nrm -rf ${quote(stage)}`,
     );
     await command(
+      "remove-build-records",
       `/usr/bin/sudo python3 -I -S -B -c ${quote(`import pathlib; r=pathlib.Path('${recipe.guestRoot}'); names=['instance.json','build-operation.json']; paths=[r/n for n in names]+list(r.glob('operation-*.json')); print('owned construction records',*[str(p) for p in paths]); [(p.unlink()) for p in paths if p.exists()]`)}`,
     );
     const capabilities = z
@@ -840,7 +867,10 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
         return ["ready", "idle", "running"].includes(vm.state) ? true : undefined;
       }, signal);
       input.onProgress?.("installing");
-      const installed = await this.#install(recipe, attempt, signal);
+      const installed = await this.#install(recipe, attempt, signal, [
+        ...Object.values(input.spec.runtime.env),
+        ...Object.values(input.spec.runtime.userEnv),
+      ]);
       attempt.receiptHash = installed.receiptHash;
       attempt.evidence = installed;
       const name = boatSnapshotNameSchema.parse(
@@ -888,10 +918,18 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
             };
           journal.phase = "cleanup";
           journal.failureCode = failure(error).code;
+          journal.commandFailure = failure(error).commandFailure;
           await persist(path, journal);
           await this.#cleanup(journal, path);
         } catch {
-          return { ok: false, error: new NativeBuildError("native-cleanup-pending", path) };
+          return {
+            ok: false,
+            error: new NativeBuildError(
+              "native-cleanup-pending",
+              path,
+              failure(error).commandFailure,
+            ),
+          };
         }
       }
       return { ok: false, error: failure(error, journal === undefined ? undefined : path) };

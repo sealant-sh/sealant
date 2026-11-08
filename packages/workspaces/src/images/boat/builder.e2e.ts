@@ -8,6 +8,48 @@ const directory = process.env.SEALANT_BOAT_RUNTIME_BUNDLE;
 describe.skipIf(!directory)(
   "native builder through HTTP and durable journals with the exact bundle",
   () => {
+    for (const mode of ["command-failed", "command-timeout"] as const)
+      it(`retains bounded safe command diagnostics through ${mode} and exact cleanup`, async () => {
+        const f = await fixture(mode);
+        const result = await f.builder.build({ spec: f.spec });
+        expect(result).toMatchObject({
+          ok: false,
+          error: {
+            code: "native-guest-command-failed",
+            commandFailure: {
+              step: "install-recipe",
+              exitCode: mode === "command-timeout" ? null : 42,
+              timedOut: mode === "command-timeout",
+              stdoutTail: "installer progress\n",
+            },
+          },
+        });
+        if (result.ok || result.error.journalPath === undefined)
+          throw new Error("missing failure journal");
+        const journal: unknown = JSON.parse(await readFile(result.error.journalPath, "utf8"));
+        expect(journal).toMatchObject({
+          phase: "complete",
+          failureCode: "native-guest-command-failed",
+          commandFailure: {
+            step: "install-recipe",
+            stderrTail: expect.stringContaining("installer refused package"),
+          },
+          allocation: { state: "deleted" },
+          save: { state: "none" },
+        });
+        for (const serialized of [result.error.message, JSON.stringify(journal)]) {
+          expect(serialized).toContain("installer refused package");
+          expect(serialized).not.toContain("fixture-private-token");
+          expect(serialized).not.toContain("user:password");
+          expect(serialized).not.toContain("token=secret");
+        }
+        expect(f.deleted()).toBe(true);
+        expect(f.posts()).toBe(0);
+        expect(await f.builder.cleanup(result.error.journalPath)).toEqual({
+          ok: true,
+          value: undefined,
+        });
+      });
     for (const mode of ["normal", "lost-save"] as const)
       it(mode + " requires scratch deletion and exact reuse/removal", async () => {
         const f = await fixture(mode);
