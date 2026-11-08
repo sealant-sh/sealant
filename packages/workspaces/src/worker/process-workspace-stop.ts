@@ -399,6 +399,31 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
     }
 
     const target = sealantTargetForRuntimeInstance(instance, options.targetOptions ?? {});
+    if (adapter.closeCapture !== undefined) {
+      const closeCapture = adapter.closeCapture.bind(adapter);
+      if (instance.sourceKind !== "capture")
+        return yield* Effect.fail(
+          new WorkspaceStopProcessingError("Canonical capture close requires a capture workspace."),
+        );
+      if (target !== undefined && instance.stopReason === null)
+        yield* syncBackWorkspaceCredentials({
+          attemptId: options.runId,
+          target,
+          launchCredentialInjections: instance.launchCredentialInjections ?? [],
+          credentialCipher: options.credentialCipher,
+        });
+      yield* runtimeInstances
+        .markStopRequested({ runId: options.runId, stopReason: options.stopReason })
+        .pipe(Effect.mapError(toWorkspaceStopProcessingError));
+      const outcome = yield* Effect.tryPromise({
+        try: () =>
+          closeCapture({ resourceId, ...(reference === null ? {} : { reference }) }, options.runId),
+        catch: toWorkspaceStopProcessingError,
+      });
+      if (outcome !== "closed") return stopOutcome(outcome === "retained" ? "kept" : "draining");
+      yield* finishStop;
+      return stopOutcome("stopped");
+    }
     const drain = options.captureDrain;
     // No drain ledger (a caller that passed no `captureDrain`) is NOT "no evidence needed": nothing
     // of a completion, attestation or discard is known, exactly as an unreadable record.

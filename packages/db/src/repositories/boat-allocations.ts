@@ -7,7 +7,7 @@ import {
   nativePublicationSchema,
   type BoatAllocationRecord,
 } from "@sealant/validators";
-import { and, asc, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -274,7 +274,7 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
           and(
             eq(workspaceRuntimeInstances.runId, id),
             eq(workspaceRuntimeInstances.adapter, "boat"),
-            eq(workspaceRuntimeInstances.status, "pending"),
+            inArray(workspaceRuntimeInstances.status, ["pending", "running", "ready"]),
             isNull(workspaceRuntimeInstances.stopReason),
           ),
         );

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 
 import {
   CredentialCipher,
@@ -15,6 +16,12 @@ import {
   ResourceDomainRepo,
   ResourceDomainRepoLive,
   WorkspaceCredentialHomeRepoLive,
+  BoatAllocationRepoLive,
+  WorkspaceRuntimeInstanceRepoLive,
+  WorkspaceCaptureDrainRepoLive,
+  boatControlRequestRepoLayer,
+  type BoatControlRequestRepo,
+  type WorkspaceCaptureDrainRepo,
   type DB,
 } from "@sealant/db";
 import { createJobQueueService } from "@sealant/jobs";
@@ -23,10 +30,18 @@ import { deleteExpiredRunRecords } from "@sealant/telemetry";
 import type { WorkerEnv } from "@sealant/validators/env";
 import {
   BoatAllocation,
+  BoatRuntimeAdapter,
+  type BoatAdapterServices,
+  BoatSnapshotBuilder,
+  BoatNativeCatalog,
+  boatNativeCatalogLayer,
+  loadPackagedRuntime,
+  boatInteractiveControlLayer,
+  BoatInteractiveControl,
+  serveBoatControlRequests,
   BoatAllocationProvider,
   BoatResources,
   BoatResourcesHost,
-  BoatReadiness,
   BoatFinalClose,
   BoatFinalCloseProvider,
   boatFinalCloseWorkerLayer,
@@ -37,7 +52,7 @@ import {
   boatResourcesLayer,
   boatWorkerExecutionLayer,
   DockerBoatTunnel,
-  BoatSecret,
+  loadBoatCredential,
   HttpBoatApi,
   boatAllocationWorkerLayer,
   DockerResourceRuntime,
@@ -269,13 +284,13 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   // How this worker reaches each runtime family: nothing extra for Docker, client mTLS for
   // Kubernetes (sealantd's secure WebSocket frontend), a bearer token for Cloudflare, and the
   // bearer token plus minted endpoint tokens for MicroVMs.
-  const targetOptions = targetDerivationOptionsFromEnv(env, microvmTokens);
+  const baseTargetOptions = targetDerivationOptionsFromEnv(env, microvmTokens);
 
   // Kubernetes adapters exist only when the worker is configured for a cluster; a Docker worker
   // registers neither, so a blueprint asking for k8s gets a readable "unsupported-runtime".
   const kubernetesConfig = kubernetesRuntimeConfigFromEnv(env);
   const kubernetesAdapters =
-    kubernetesConfig === undefined || targetOptions.websocketTls === undefined
+    kubernetesConfig === undefined || baseTargetOptions.websocketTls === undefined
       ? []
       : (() => {
           const api = createLiveKubernetesApi({
@@ -284,7 +299,11 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
               ? {}
               : { kubeconfigPath: kubernetesConfig.kubeconfigPath }),
           });
-          const shared = { config: kubernetesConfig, api, clientTls: targetOptions.websocketTls };
+          const shared = {
+            config: kubernetesConfig,
+            api,
+            clientTls: baseTargetOptions.websocketTls,
+          };
           return [new K8sRuntimeAdapter(shared), new K3sRuntimeAdapter(shared)];
         })();
   const launchMaterialStager =
@@ -401,6 +420,179 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         ),
       );
   const resourceReconciler = resourceAssembly?.reconciler;
+  // Admission is registered only beside the actual FINAL close and parking owners.
+  const boatAssembly = await (async () => {
+    if (env.SEALANT_BOAT_API_KEY === undefined && env.SEALANT_BOAT_API_KEY_FILE === undefined)
+      return undefined;
+    if (env.SEALANT_BOAT_DEPLOYMENT_ID === undefined || credentialCipher === undefined)
+      throw new Error("Boat reconciliation configuration is incomplete.");
+    const credential = loadBoatCredential({
+      value: env.SEALANT_BOAT_API_KEY,
+      file: env.SEALANT_BOAT_API_KEY_FILE,
+    });
+    if (!credential.ok) throw credential.error;
+    const api = HttpBoatApi.create({ credential: credential.value });
+    if (!api.ok) throw api.error;
+    const Infra = Layer.mergeAll(
+      Layer.succeed(SealantDB, db),
+      Layer.succeed(CredentialCipher, credentialCipher),
+      Layer.succeed(BoatAllocationProvider, {
+        deploymentId: env.SEALANT_BOAT_DEPLOYMENT_ID,
+        api: api.value,
+      }),
+    );
+    if (env.SEALANT_BOAT_GATEWAY_HOST_ID !== undefined) {
+      if (
+        env.SEALANT_BOAT_GATEWAY_ENDPOINT === undefined ||
+        env.SEALANT_BOAT_GATEWAY_IMAGE === undefined ||
+        resourceAssembly === undefined ||
+        resourceAssembly.subnets === undefined
+      )
+        throw new Error("Boat resource reconciliation configuration is incomplete.");
+      const Host = Layer.succeed(BoatResourcesHost, {
+        deploymentId: env.SEALANT_BOAT_DEPLOYMENT_ID,
+        gatewayHostId: env.SEALANT_BOAT_GATEWAY_HOST_ID,
+        endpoint: env.SEALANT_BOAT_GATEWAY_ENDPOINT,
+        subnets: resourceAssembly.subnets,
+        tunnel: new DockerBoatTunnel({
+          gatewayImage: env.SEALANT_BOAT_GATEWAY_IMAGE,
+          subnets: resourceAssembly.subnets,
+          resources: resourceAssembly.runtime,
+          dockerSocketPath: env.DOCKER_SOCKET_PATH,
+        }),
+      });
+      const Resources = boatResourcesLayer.pipe(Layer.provide(boatWorkerExecutionLayer));
+      const Repos = Layer.mergeAll(
+        BoatAllocationRepoLive,
+        WorkspaceRuntimeInstanceRepoLive,
+        WorkspaceCaptureDrainRepoLive,
+        boatControlRequestRepoLayer,
+      ).pipe(Layer.provide(Infra));
+      const bundle =
+        env.SEALANT_BOAT_ADMISSION_OWNER_IDS.length === 0 ? undefined : await loadPackagedRuntime();
+      if (bundle !== undefined && !bundle.ok) throw bundle.error;
+      const catalogRuntime =
+        bundle === undefined
+          ? undefined
+          : (() => {
+              if (
+                env.SEALANT_BOAT_STATE_DIRECTORY === undefined ||
+                env.SEALANT_BOAT_BUILDER_OWNER === undefined
+              )
+                throw new Error("Boat construction custody is not configured.");
+              return ManagedRuntime.make(
+                boatNativeCatalogLayer({
+                  deploymentId: env.SEALANT_BOAT_DEPLOYMENT_ID,
+                  builder: new BoatSnapshotBuilder({
+                    api: api.value,
+                    runtimeBundle: bundle.value,
+                    journalDirectory: join(env.SEALANT_BOAT_STATE_DIRECTORY, "native-builds"),
+                    owner: env.SEALANT_BOAT_BUILDER_OWNER,
+                  }),
+                }).pipe(Layer.provide(Infra)),
+              );
+            })();
+      const WorkerLayer: Layer.Layer<
+        | BoatAdapterServices
+        | BoatResources
+        | BoatParking
+        | BoatInteractiveControl
+        | BoatControlRequestRepo
+        | WorkspaceCaptureDrainRepo
+        | CredentialCipher
+      > = Layer.mergeAll(
+        boatAllocationWorkerLayer,
+        Resources,
+        boatReadinessWorkerLayer,
+        boatFinalCloseWorkerLayer,
+        boatParkingWorkerLayer,
+        boatWorkerExecutionLayer,
+        boatInteractiveControlLayer.pipe(Layer.provide(Repos)),
+      ).pipe(
+        Layer.provideMerge(Repos),
+        Layer.provideMerge(
+          Layer.mergeAll(
+            Infra,
+            Host,
+            Layer.succeed(BoatFinalCloseProvider, { api: api.value }),
+            Layer.succeed(BoatParkingProvider, {
+              api: api.value,
+              automaticParkingEnabled: env.SEALANT_BOAT_AUTOMATIC_PARKING,
+              retainedParkingDelaySeconds: env.SEALANT_BOAT_PARKING_DELAY_SECONDS,
+            }),
+          ),
+        ),
+      );
+      const runtime = ManagedRuntime.make(WorkerLayer);
+      const admission =
+        catalogRuntime === undefined
+          ? undefined
+          : {
+              kind: "boat-native" as const,
+              adapter: new BoatRuntimeAdapter({
+                deploymentId: env.SEALANT_BOAT_DEPLOYMENT_ID,
+                ownerIds: env.SEALANT_BOAT_ADMISSION_OWNER_IDS,
+                runtime,
+              }),
+              artifacts: await catalogRuntime.runPromise(BoatNativeCatalog),
+            };
+      let catalogCursor: string | undefined;
+      const control = await runtime.runPromise(BoatInteractiveControl);
+      boatResourceReach = () =>
+        runtime.runPromise(Effect.flatMap(BoatResources, (resources) => resources.reach()));
+      return {
+        runtime,
+        admission,
+        control,
+        serveControl: () => runtime.runPromise(serveBoatControlRequests),
+        reconcileCatalog:
+          catalogRuntime === undefined
+            ? undefined
+            : async () => {
+                const report = await catalogRuntime.runPromise(
+                  Effect.flatMap(BoatNativeCatalog, (catalog) =>
+                    catalog.reconcile({
+                      limit: 20,
+                      ...(catalogCursor === undefined ? {} : { after: catalogCursor }),
+                    }),
+                  ),
+                );
+                catalogCursor = report.next;
+                return report;
+              },
+        disposeCatalog: () => catalogRuntime?.dispose(),
+        reconcileParking: () =>
+          runtime.runPromise(Effect.flatMap(BoatParking, (parking) => parking.reconcile())),
+        reconcileCloses: (input: { limit: number; after?: string }) =>
+          runtime.runPromise(Effect.flatMap(BoatFinalClose, (close) => close.reconcile(input))),
+        reconcileResources: (input: { limit: number; after?: string }) =>
+          runtime.runPromise(
+            Effect.flatMap(BoatResources, (resources) => resources.reconcile(input)),
+          ),
+      };
+    }
+    const WorkerLayer: Layer.Layer<BoatAllocation> = boatAllocationWorkerLayer.pipe(
+      Layer.provide(Infra),
+    );
+    return {
+      runtime: ManagedRuntime.make(WorkerLayer),
+      admission: undefined,
+      control: undefined,
+      serveControl: undefined,
+      reconcileCatalog: undefined,
+      disposeCatalog: undefined,
+      reconcileResources: undefined,
+      reconcileCloses: undefined,
+      reconcileParking: undefined,
+    };
+  })();
+  const boatRuntime = boatAssembly?.runtime;
+  const targetOptions = {
+    ...baseTargetOptions,
+    ...(boatAssembly?.control === undefined
+      ? {}
+      : { boatConnectMaterial: boatAssembly.control.connectMaterial }),
+  };
   const dockerAdapters = !env.DOCKER_RUNTIME_ENABLED
     ? []
     : [
@@ -493,6 +685,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           imageBuilder: containerImageBuilder,
         }))),
     ...microvmRuntimes,
+    ...(boatAssembly?.admission === undefined ? [] : [boatAssembly.admission]),
   ];
   const runtimeAdapters = runtimes.map((runtime) => runtime.adapter);
 
@@ -544,6 +737,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           db,
           runtimes,
           defaultRuntimeAdapterId: env.DEFAULT_RUNTIME_ADAPTER,
+          boatAdmissionOwnerIds: env.SEALANT_BOAT_ADMISSION_OWNER_IDS,
           gitHubSourceIntegration,
           registryClient,
           ...(credentialCipher === undefined ? {} : { credentialCipher }),
@@ -647,6 +841,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       // runtimes: a reaped job builds with the same builder a first delivery would.
       runtimes,
       defaultRuntimeAdapterId: env.DEFAULT_RUNTIME_ADAPTER,
+      boatAdmissionOwnerIds: env.SEALANT_BOAT_ADMISSION_OWNER_IDS,
       gitHubSourceIntegration,
       registryClient,
       ...(credentialCipher === undefined ? {} : { credentialCipher }),
@@ -990,92 +1185,6 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       });
   };
 
-  // This resumes existing allocation obligations only. Boat is deliberately absent from runtimes.
-  const boatAssembly = (() => {
-    if (env.SEALANT_BOAT_API_KEY === undefined) return undefined;
-    if (env.SEALANT_BOAT_DEPLOYMENT_ID === undefined || credentialCipher === undefined)
-      throw new Error("Boat reconciliation configuration is incomplete.");
-    const credential = BoatSecret.parse(env.SEALANT_BOAT_API_KEY);
-    if (!credential.ok) throw credential.error;
-    const api = HttpBoatApi.create({ credential: credential.value });
-    if (!api.ok) throw api.error;
-    const Infra = Layer.mergeAll(
-      Layer.succeed(SealantDB, db),
-      Layer.succeed(CredentialCipher, credentialCipher),
-      Layer.succeed(BoatAllocationProvider, {
-        deploymentId: env.SEALANT_BOAT_DEPLOYMENT_ID,
-        api: api.value,
-      }),
-    );
-    if (env.SEALANT_BOAT_GATEWAY_HOST_ID !== undefined) {
-      if (
-        env.SEALANT_BOAT_GATEWAY_ENDPOINT === undefined ||
-        env.SEALANT_BOAT_GATEWAY_IMAGE === undefined ||
-        resourceAssembly === undefined ||
-        resourceAssembly.subnets === undefined
-      )
-        throw new Error("Boat resource reconciliation configuration is incomplete.");
-      const Host = Layer.succeed(BoatResourcesHost, {
-        deploymentId: env.SEALANT_BOAT_DEPLOYMENT_ID,
-        gatewayHostId: env.SEALANT_BOAT_GATEWAY_HOST_ID,
-        endpoint: env.SEALANT_BOAT_GATEWAY_ENDPOINT,
-        subnets: resourceAssembly.subnets,
-        tunnel: new DockerBoatTunnel({
-          gatewayImage: env.SEALANT_BOAT_GATEWAY_IMAGE,
-          subnets: resourceAssembly.subnets,
-          resources: resourceAssembly.runtime,
-          dockerSocketPath: env.DOCKER_SOCKET_PATH,
-        }),
-      });
-      const Resources = boatResourcesLayer.pipe(Layer.provide(boatWorkerExecutionLayer));
-      const WorkerLayer: Layer.Layer<
-        BoatAllocation | BoatResources | BoatReadiness | BoatFinalClose | BoatParking
-      > = Layer.mergeAll(
-        boatAllocationWorkerLayer,
-        Resources,
-        boatReadinessWorkerLayer,
-        boatFinalCloseWorkerLayer,
-        boatParkingWorkerLayer,
-      ).pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            Infra,
-            Host,
-            Layer.succeed(BoatFinalCloseProvider, { api: api.value }),
-            Layer.succeed(BoatParkingProvider, {
-              api: api.value,
-              automaticParkingEnabled: env.SEALANT_BOAT_AUTOMATIC_PARKING,
-              retainedParkingDelaySeconds: env.SEALANT_BOAT_PARKING_DELAY_SECONDS,
-            }),
-          ),
-        ),
-      );
-      const runtime = ManagedRuntime.make(WorkerLayer);
-      boatResourceReach = () =>
-        runtime.runPromise(Effect.flatMap(BoatResources, (resources) => resources.reach()));
-      return {
-        runtime,
-        reconcileParking: () =>
-          runtime.runPromise(Effect.flatMap(BoatParking, (parking) => parking.reconcile())),
-        reconcileCloses: (input: { limit: number; after?: string }) =>
-          runtime.runPromise(Effect.flatMap(BoatFinalClose, (close) => close.reconcile(input))),
-        reconcileResources: (input: { limit: number; after?: string }) =>
-          runtime.runPromise(
-            Effect.flatMap(BoatResources, (resources) => resources.reconcile(input)),
-          ),
-      };
-    }
-    const WorkerLayer: Layer.Layer<BoatAllocation> = boatAllocationWorkerLayer.pipe(
-      Layer.provide(Infra),
-    );
-    return {
-      runtime: ManagedRuntime.make(WorkerLayer),
-      reconcileResources: undefined,
-      reconcileCloses: undefined,
-      reconcileParking: undefined,
-    };
-  })();
-  const boatRuntime = boatAssembly?.runtime;
   resourceTick();
   const resourceTickTimer = setInterval(resourceTick, env.SEALANT_RESOURCE_TICK_MS);
   let boatCursor: string | undefined;
@@ -1123,6 +1232,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         );
         if (held.length > 0) console.warn("Boat resource obligations remain", { entries: held });
       }
+      if (boatAssembly?.admission !== undefined) await boatAssembly.reconcileCatalog?.();
       const unresolved = report.entries.filter((entry) => entry.outcome !== "bound");
       if (unresolved.length > 0)
         console.warn("Boat allocation obligations remain", { entries: unresolved });
@@ -1132,7 +1242,25 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       boatSweepRunning = false;
     }
   };
+  let controlTickRunning = false;
+  const controlTick = async () => {
+    if (controlTickRunning || boatAssembly?.serveControl === undefined) return;
+    controlTickRunning = true;
+    try {
+      await boatAssembly.serveControl();
+    } catch {
+      console.error("Boat control access tick failed");
+    } finally {
+      controlTickRunning = false;
+    }
+  };
+  const boatControlTimer =
+    boatAssembly?.serveControl === undefined
+      ? undefined
+      : setInterval(() => void controlTick(), 250);
   const boatSweepTimer = boatRuntime === undefined ? undefined : setInterval(runBoatSweep, 30_000);
+  boatControlTimer?.unref();
+  boatSweepTimer?.unref();
   void runBoatSweep();
 
   resourceTickTimer.unref();
@@ -1147,7 +1275,9 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       clearInterval(recoverySweepTimer);
       clearInterval(exitReconcilerTimer);
       if (boatSweepTimer !== undefined) clearInterval(boatSweepTimer);
+      if (boatControlTimer !== undefined) clearInterval(boatControlTimer);
       await boatRuntime?.dispose();
+      await boatAssembly?.disposeCatalog?.();
       exitWatch.close();
       if (imageRetentionBootTimer !== undefined) clearTimeout(imageRetentionBootTimer);
       if (imageRetentionTimer !== undefined) clearInterval(imageRetentionTimer);

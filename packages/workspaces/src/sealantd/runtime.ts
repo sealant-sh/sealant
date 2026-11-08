@@ -99,14 +99,17 @@ export type SealantTarget =
        * Per-connection material minted at open time, for endpoints fronted by a platform proxy
        * that authenticates every connection with a short-lived credential of its own (AWS Lambda
        * MicroVMs: a ≤ 60-minute endpoint token carried as WebSocket subprotocols). Called once per
-       * `open`; a rejection fails the open. Never a substitute for `tls` / `auth` — those
-       * authenticate the control plane to the daemon side, this authenticates it to the proxy.
+       * `open`; a rejection fails the open. Runtime owners may also return explicit daemon
+       * `auth` and a refreshed URL. Extra headers alone never authorize a connection.
        */
       readonly prepare?: (() => Promise<WebSocketConnectMaterial>) | undefined;
     };
 
-/** What `prepare` adds to one WebSocket upgrade: extra headers and/or subprotocols. */
+/** Runtime-owned connection material, refreshed for one WebSocket upgrade. */
 export interface WebSocketConnectMaterial {
+  /** A refreshed hosted endpoint and explicit daemon authority supplied by its runtime owner. */
+  readonly url?: string;
+  readonly auth?: { readonly bearerToken: string };
   readonly headers?: Readonly<Record<string, string>> | undefined;
   readonly protocols?: readonly string[] | undefined;
 }
@@ -891,7 +894,8 @@ export const createControlWebSocket = (
   target: Extract<SealantTarget, { readonly kind: "websocket" }>,
   material: WebSocketConnectMaterial | undefined,
 ): WebSocket => {
-  if (target.tls === undefined && target.auth === undefined) {
+  const auth = material?.auth ?? target.auth;
+  if (target.tls === undefined && auth === undefined) {
     throw new Error(
       "Refusing an unauthenticated websocket control connection: the target carries neither client TLS material nor a bearer token.",
     );
@@ -899,10 +903,10 @@ export const createControlWebSocket = (
   const tls = target.tls;
   const headers = {
     ...material?.headers,
-    ...(target.auth === undefined ? {} : { authorization: `Bearer ${target.auth.bearerToken}` }),
+    ...(auth === undefined ? {} : { authorization: `Bearer ${auth.bearerToken}` }),
   };
   const protocols = material?.protocols === undefined ? [] : [...material.protocols];
-  return new WebSocket(target.url, protocols, {
+  return new WebSocket(material?.url ?? target.url, protocols, {
     ...(tls === undefined
       ? {}
       : {

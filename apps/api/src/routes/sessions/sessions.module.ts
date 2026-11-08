@@ -39,7 +39,6 @@ import {
   SealantControlError,
   SealantRuntime,
   sealantTargetForRuntimeInstance,
-  targetDerivationOptionsFromEnv,
   PROCESS_USER_CAPABILITY,
   type ProcessUserChannel,
   type SealantSession as DaemonConnection,
@@ -47,7 +46,7 @@ import {
 } from "@sealant/workspaces";
 import { Effect, Stream } from "effect";
 
-import { env } from "../../runtime-env.js";
+import { requestTargetOptions } from "../../services/boat-control.js";
 import { authPosture, servicePrincipals } from "../../services/service-principals.js";
 import {
   checkProcessUser,
@@ -248,7 +247,7 @@ export const resolveDaemonInstance = (workspaceId: string) =>
     }
     return {
       instance,
-      target: sealantTargetForRuntimeInstance(instance, targetDerivationOptionsFromEnv(env)),
+      target: sealantTargetForRuntimeInstance(instance, yield* requestTargetOptions),
     };
   });
 

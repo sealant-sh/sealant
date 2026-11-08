@@ -9,9 +9,15 @@ import {
 import http from "node:http";
 
 import { ResourceWorktreeKey, ResourceInstanceKey } from "@sealant/api-contracts";
-import { credentialCipherLayer, type CredentialCipherError } from "@sealant/credentials";
+import {
+  CredentialCipher,
+  credentialCipherLayer,
+  type CredentialCipherError,
+} from "@sealant/credentials";
 import {
   BoatAllocationRepo,
+  BoatControlRequestRepo,
+  boatControlRequestRepoLayer,
   BoatAllocationRepoLive,
   BoatExecutionRepo,
   BoatExecutionRepoLive,
@@ -50,7 +56,7 @@ import {
   type BoatAllocationRecord,
   type BoatExecutionTarget,
 } from "@sealant/validators";
-import { Context, Deferred, Effect, Fiber, Layer, Redacted } from "effect";
+import { Context, Deferred, Effect, Fiber, Layer, Redacted, ManagedRuntime } from "effect";
 import * as TestClock from "effect/testing/TestClock";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -83,6 +89,9 @@ import {
   captureStatus,
   type CaptureDaemonScriptEntry,
 } from "../../worker/capture-daemon.fixture.js";
+import { cases as launchCases } from "../docker-runtime-adapter.golden-fixture.js";
+import { LaunchRetainedError } from "../launch-retention.js";
+import { BoatRuntimeAdapter } from "./adapter.js";
 import { BoatAllocation, BoatAllocationProvider, boatAllocationLayer } from "./allocation.js";
 import { HttpBoatApi } from "./api.js";
 import { BoatSecret } from "./config.js";
@@ -97,6 +106,11 @@ import {
   BoatFinalCloseProvider,
   boatFinalCloseLayerNoDeps,
 } from "./final-close.js";
+import {
+  BoatInteractiveControl,
+  boatInteractiveControlLayerNoDeps,
+  serveBoatControlRequests,
+} from "./interactive-control.js";
 
 const databaseUrl = process.env.SEALANT_TEST_DATABASE_URL;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -527,6 +541,7 @@ class GuestFixture implements BoatGuestTransport {
       supports: ["exec.user", "dotfiles.user", "restore.owner_map", "process.secret-env.v1"],
     };
   }
+  readonly stageBodies: string[] = [];
   readonly targets: BoatExecutionTarget[] = [];
   fail = false;
   target: BoatExecutionTarget | undefined;
@@ -577,7 +592,9 @@ class GuestFixture implements BoatGuestTransport {
       ).toString("base64"),
     };
   }
+  beforeHost: () => Promise<void> = async () => {};
   async host() {
+    await this.beforeHost();
     return { origin: "https://fixture-8080.on.boat.dev", cookie: secret("test-cookie-local-only") };
   }
   async call(_host: unknown, bearer: BoatSecret, route: string, body?: Redacted.Redacted<string>) {
@@ -610,10 +627,12 @@ class GuestFixture implements BoatGuestTransport {
         ...(this.wrongRecoveryBinding ? { binding: {} } : {}),
       };
     }
-    if (route === "stage")
+    if (route === "stage") {
+      this.stageBodies.push(Redacted.value(body ?? Redacted.make("")));
       this.admission = z
         .object({ epoch: z.number(), operation_id: z.string() })
         .parse(JSON.parse(Redacted.value(body ?? Redacted.make(""))));
+    }
     if (route === "isolate") {
       await this.beforeIsolate();
       const raw = Redacted.value(body ?? Redacted.make(""));
@@ -927,6 +946,7 @@ const test = async (
                 const layer = boatFinalCloseLayerNoDeps.pipe(
                   Layer.provide(
                     Layer.mergeAll(
+                      Layer.succeed(NativePublicationRepo, catalog),
                       Layer.succeed(BoatAllocationRepo, repo),
                       Layer.succeed(BoatTunnelRepo, tunnels),
                       Layer.succeed(WorkspaceCaptureDrainRepo, captureRepo),
@@ -1005,7 +1025,349 @@ const tunnelRecord = async (s: AllocationFixture, target: BoatExecutionTarget) =
   return value;
 };
 
+const adapterFixture = async (s: AllocationFixture) => {
+  const close = await execute(s.final([savedStatus()]));
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      Layer.succeed(BoatAllocation, s.allocations),
+      Layer.succeed(BoatReadiness, s.readiness),
+      Layer.succeed(BoatExecution, s.executor),
+      Layer.succeed(BoatFinalClose, close.owner),
+      Layer.succeed(BoatAllocationRepo, s.repo),
+      Layer.succeed(WorkspaceRuntimeInstanceRepo, s.runtimes),
+    ),
+  );
+  if (s.input.scope.kind !== "owner") throw new Error("expected owned fixture");
+  const input = {
+    ...launchCases.capture,
+    secretEnvDir: undefined,
+    runId: s.input.consumer.runId,
+    workspaceId: s.input.workspaceId,
+    principalId: s.input.scope.ownerUserId,
+    launchId: s.input.launchAttemptId,
+    publication: s.input.publication,
+    admissionPins: { credentialVersions: [], dotfiles: [] },
+  };
+  await execute(
+    s.runtimes.upsertRuntimeInstance({
+      runId: input.runId,
+      adapter: "boat",
+      status: "pending",
+      sourceKind: "capture",
+      publication: input.publication,
+      imageScope: s.input.scope,
+    }),
+  );
+  const adapter = new BoatRuntimeAdapter({
+    deploymentId: "test",
+    ownerIds: [input.principalId],
+    runtime,
+  });
+  return { runtime, adapter, input, close };
+};
+
+describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () => {
+  it("launches through the durable owners with complete boot facts, then FINAL closes and releases its slot", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      const hooks: string[] = [];
+      try {
+        const result = await f.adapter.launch(f.input, {
+          onStarted: async (identity) => {
+            hooks.push("started");
+            expect(s.guest.starts).toBe(0);
+            await execute(
+              s.runtimes.upsertRuntimeInstance({
+                runId: f.input.runId,
+                ...identity,
+                status: "running",
+              }),
+            );
+          },
+          onReady: async (identity) => {
+            hooks.push("ready");
+            await execute(
+              s.runtimes.upsertRuntimeInstance({
+                runId: f.input.runId,
+                ...identity,
+                status: "ready",
+              }),
+            );
+          },
+        });
+        expect(result).toMatchObject({
+          adapter: "boat",
+          resourceId: "bx_23456789",
+          reference: f.input.runId,
+          status: "ready",
+        });
+        expect(hooks).toEqual(["started", "ready"]);
+        const stage = z
+          .object({ files: z.array(z.object({ name: z.string(), data: z.string() })) })
+          .parse(JSON.parse(s.guest.stageBodies[0] ?? ""));
+        const launch = stage.files.find((file) => file.name === "launch");
+        const boot = z
+          .object({ boot_env: z.record(z.string(), z.string()) })
+          .parse(JSON.parse(Buffer.from(launch?.data ?? "", "base64").toString("utf8")));
+        expect(boot.boot_env).toMatchObject({
+          SEALANT_OS_FAMILY: "ubuntu",
+          SEALANT_LOGIN_SHELL_PATH: "/bin/bash",
+          SEALANT_BASH_SHELL_PATH: "/bin/bash",
+          SEALANT_WORKSPACE_SOURCE: "capture",
+          SEALANT_SECRET_ENV_FILE: "/run/sealant-inputs/secret-env",
+        });
+        expect(s.provider.creates).toHaveLength(1);
+        await execute(s.runtimes.markStopRequested({ runId: f.input.runId, stopReason: "user" }));
+        s.gateway.allowRemoval = true;
+        expect(await f.adapter.closeCapture(result, f.input.runId)).toBe("closed");
+        expect(s.provider.deleteCalls).toBe(1);
+        expect(s.gateway.removeCalls).toBe(1);
+        expect(await execute(s.tunnels.get(f.input.runId))).toMatchObject({ released: true });
+        expect(await execute(s.runtimes.getRuntimeInstanceByRunId(f.input.runId))).toMatchObject({
+          status: "stopped",
+        });
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+  it("refuses a different owner before allocation and leaves unknown boot outcomes in exact custody", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      try {
+        await expect(
+          f.adapter.launch({ ...f.input, principalId: "not-allowlisted" }),
+        ).rejects.toThrow("admission-refused");
+        expect(s.provider.creates).toHaveLength(0);
+        s.guest.fail = true;
+        await expect(f.adapter.launch(f.input)).rejects.toBeInstanceOf(LaunchRetainedError);
+        expect(await f.adapter.locate({ runId: f.input.runId })).toMatchObject({
+          resourceId: "bx_23456789",
+          reference: f.input.runId,
+        });
+        expect(s.provider.creates).toHaveLength(1);
+        expect(s.provider.deleteCalls).toBe(0);
+        await expect(
+          f.adapter.closeCapture({ resourceId: "bx_3456789a" }, f.input.runId),
+        ).rejects.toThrow("target-mismatch");
+        expect(s.provider.deleteCalls).toBe(0);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+  it("retains a created VM if a launch hook fails, without replaying user execution", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      try {
+        await expect(
+          f.adapter.launch(f.input, {
+            onStarted: async () => {
+              throw new Error("local persistence failed");
+            },
+          }),
+        ).rejects.toBeInstanceOf(LaunchRetainedError);
+        expect(s.provider.creates).toHaveLength(1);
+        expect(s.guest.starts).toBe(0);
+        expect(s.provider.deleteCalls).toBe(0);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+});
+
+const interactiveFixture = async (s: AllocationFixture) => {
+  const target = await launched(s);
+  await execute(
+    s.runtimes.upsertRuntimeInstance({
+      runId: target.runId,
+      adapter: "boat",
+      status: "ready",
+      resourceId: target.sandboxId,
+    }),
+  );
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      boatInteractiveControlLayerNoDeps,
+      Layer.succeed(BoatExecution, s.executor),
+    ).pipe(
+      Layer.provideMerge(
+        Layer.mergeAll(
+          Layer.succeed(BoatAllocationRepo, s.repo),
+          Layer.succeed(WorkspaceRuntimeInstanceRepo, s.runtimes),
+          Layer.succeed(WorkspaceCaptureDrainRepo, s.canonical),
+          credentialCipherLayer({ key: Buffer.alloc(32, 7).toString("base64") }).pipe(Layer.orDie),
+          boatControlRequestRepoLayer.pipe(Layer.provide(Layer.succeed(SealantDB, s.db))),
+        ),
+      ),
+    ),
+  );
+  return {
+    runtime,
+    target,
+    control: await runtime.runPromise(BoatInteractiveControl),
+    requests: await runtime.runPromise(BoatControlRequestRepo),
+    cipher: await runtime.runPromise(CredentialCipher),
+  };
+};
+const pendingRequests = async (requests: BoatControlRequestRepo["Service"], count: number) => {
+  await expect.poll(async () => (await execute(requests.pending())).length).toBe(count);
+  return execute(requests.pending());
+};
+
+describe.runIf(databaseUrl !== undefined)("Boat interactive control fencing", () => {
+  it("rejects swapped and corrupt encrypted replies and removes both callers' requests", () =>
+    test(async (s) => {
+      const f = await interactiveFixture(s);
+      try {
+        const first = f.control.connectMaterial(f.target.runId, f.target.sandboxId).then(
+          () => "accepted",
+          () => "refused",
+        );
+        const second = f.control.connectMaterial(f.target.runId, f.target.sandboxId).then(
+          () => "accepted",
+          () => "refused",
+        );
+        const rows = await pendingRequests(f.requests, 2);
+        const a = rows[0],
+          b = rows[1];
+        if (a === undefined || b === undefined) throw new Error("missing requests");
+        const sealed = await execute(
+          f.cipher.encrypt(
+            JSON.stringify({
+              context: { id: b.id, target: b.target, purpose: "interactive-control" },
+              value: {
+                url: "wss://fixture.example/control",
+                auth: { bearerToken: "a".repeat(64) },
+                headers: {},
+              },
+            }),
+          ),
+        );
+        await execute(f.requests.complete(a, sealed.sealed));
+        await execute(f.requests.complete(b, "corrupt"));
+        expect(await Promise.all([first, second])).toEqual(["refused", "refused"]);
+        expect(await execute(f.requests.get(a.id))).toBeUndefined();
+        expect(await execute(f.requests.get(b.id))).toBeUndefined();
+        expect(s.provider.creates).toHaveLength(1);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+  it("does not publish refreshed hosted access if Stop wins during the refresh", () =>
+    test(async (s) => {
+      const f = await interactiveFixture(s);
+      try {
+        const result = f.control.connectMaterial(f.target.runId, f.target.sandboxId).then(
+          () => "accepted",
+          () => "refused",
+        );
+        const rows = await pendingRequests(f.requests, 1);
+        const request = rows[0];
+        if (request === undefined) throw new Error("missing request");
+        s.guest.beforeHost = () =>
+          execute(s.runtimes.markStopRequested({ runId: f.target.runId, stopReason: "user" }));
+        await f.runtime.runPromise(serveBoatControlRequests);
+        expect((await execute(f.requests.get(request.id)))?.sealedAccess).toBeNull();
+        await execute(f.requests.remove(request.id));
+        expect(await result).toBe("refused");
+        await expect(f.control.connectMaterial(f.target.runId, "bx_3456789a")).rejects.toThrow(
+          "unavailable",
+        );
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+  it("refuses a changed runtime and an expired request instead of using historical authority", () =>
+    test(async (s) => {
+      const f = await interactiveFixture(s);
+      try {
+        const result = f.control.connectMaterial(f.target.runId, f.target.sandboxId).then(
+          () => "accepted",
+          () => "refused",
+        );
+        const rows = await pendingRequests(f.requests, 1);
+        const request = rows[0];
+        if (request === undefined) throw new Error("missing request");
+        await execute(s.db.update(schema.boatControlRequests).set({ expiresAt: new Date(0) }));
+        expect(await result).toBe("refused");
+        expect(await execute(f.requests.get(request.id))).toBeUndefined();
+        await execute(
+          s.runtimes.upsertRuntimeInstance({
+            runId: f.target.runId,
+            adapter: "boat",
+            status: "ready",
+            resourceId: "bx_3456789a",
+          }),
+        );
+        await expect(f.control.connectMaterial(f.target.runId, f.target.sandboxId)).rejects.toThrow(
+          "unavailable",
+        );
+        expect(await execute(f.requests.pending())).toEqual([]);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+});
+
 describe.runIf(databaseUrl !== undefined)("Boat canonical FINAL close", () => {
+  it("keeps ready allocations current and serves fresh sealed interactive access without exposing the provider key", () =>
+    test(async (s) => {
+      const target = await launched(s);
+      await execute(
+        s.runtimes.upsertRuntimeInstance({
+          runId: target.runId,
+          adapter: "boat",
+          status: "ready",
+          resourceId: target.sandboxId,
+        }),
+      );
+      expect(await execute(s.repo.isActive(target.runId))).toBe(true);
+      const runtime = ManagedRuntime.make(
+        Layer.mergeAll(
+          boatInteractiveControlLayerNoDeps,
+          Layer.succeed(BoatExecution, s.executor),
+        ).pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              Layer.succeed(BoatAllocationRepo, s.repo),
+              Layer.succeed(WorkspaceRuntimeInstanceRepo, s.runtimes),
+              Layer.succeed(WorkspaceCaptureDrainRepo, s.canonical),
+              credentialCipherLayer({ key: Buffer.alloc(32, 7).toString("base64") }).pipe(
+                Layer.orDie,
+              ),
+              boatControlRequestRepoLayer.pipe(Layer.provide(Layer.succeed(SealantDB, s.db))),
+            ),
+          ),
+        ),
+      );
+      try {
+        const control = await runtime.runPromise(BoatInteractiveControl);
+        const pending = control.connectMaterial(target.runId, target.sandboxId);
+        const requests = await runtime.runPromise(BoatControlRequestRepo);
+        const rows = await pendingRequests(requests, 1);
+        expect(rows).toHaveLength(1);
+        await runtime.runPromise(serveBoatControlRequests);
+        const stored = await execute(requests.get(rows[0]?.id ?? ""));
+        expect(stored?.sealedAccess).toBeTypeOf("string");
+        expect(stored?.sealedAccess).not.toContain("test-cookie-local-only");
+        const material = await pending;
+        expect(material).toMatchObject({
+          url: "wss://fixture-8080.on.boat.dev/sealant/control",
+          auth: { bearerToken: "a".repeat(64) },
+          headers: { Cookie: "_port_auth=test-cookie-local-only" },
+        });
+        expect(await execute(requests.get(rows[0]?.id ?? ""))).toBeUndefined();
+        await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+        expect(await execute(s.repo.isActive(target.runId))).toBe(false);
+        await expect(control.connectMaterial(target.runId, target.sandboxId)).rejects.toThrow(
+          "unavailable",
+        );
+        expect(await execute(requests.pending())).toEqual([]);
+        expect(s.provider.creates).toHaveLength(1);
+      } finally {
+        await runtime.dispose();
+      }
+    }));
+
   it("reconciles only stopped current runtimes on this gateway host and resumes after the page cursor", () =>
     test(async (s) => {
       const target = await launched(s);
@@ -1026,7 +1388,7 @@ describe.runIf(databaseUrl !== undefined)("Boat canonical FINAL close", () => {
         entries: [],
       });
       expect((await execute(owner.reconcile({ limit: 1 }))).entries).toEqual([
-        { runId: target.runId, outcome: "skipped" },
+        { runId: target.runId, outcome: "closed" },
       ]);
       expect(s.provider.deleteCalls).toBe(1);
       for (const limit of [0, -1, 21, 1.5])
@@ -1066,7 +1428,14 @@ describe.runIf(databaseUrl !== undefined)("Boat canonical FINAL close", () => {
           }),
         ),
       ).rejects.toThrow("binding-conflict");
+      await expect(execute(s.catalog.release(s.input.consumer, target.sourceId))).rejects.toThrow(
+        "consumer-conflict",
+      );
       expect(await execute(owner.close(target))).toBe("closed");
+      await execute(s.catalog.release(s.input.consumer, target.sourceId));
+      await expect(
+        execute(s.catalog.markConsumer(s.input.consumer, target.sourceId, "live")),
+      ).rejects.toThrow("consumer-released");
       expect(daemon.flushRequests[0]?.kind).toBe("final");
       expect(s.provider.deleteCalls).toBe(1);
       expect(s.gateway.removeCalls).toBe(1);
@@ -1140,6 +1509,24 @@ describe.runIf(databaseUrl !== undefined)("Boat canonical FINAL close", () => {
       await expect(execute(owner.close(target))).rejects.toThrow("held");
       expect(daemon.calls).toEqual([]);
       expect(s.provider.deleteCalls).toBe(0);
+    }));
+  it("reconciles publication release after a crash between terminal runtime writes and pin release", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const { owner } = await execute(s.final([savedStatus()]));
+      expect(await execute(owner.close(target))).toBe("closed");
+      // Reconstruct the durable boundary immediately before catalog.release.
+      await execute(
+        s.db.update(schema.nativePublicationConsumers).set({ state: "live", releasedAt: null }),
+      );
+      expect((await execute(nativeConsumerRows(s.db, target.runId)))[0]?.state).toBe("live");
+      expect((await execute(owner.reconcile({ limit: 20 }))).entries).toContainEqual({
+        runId: target.runId,
+        outcome: "closed",
+      });
+      expect((await execute(nativeConsumerRows(s.db, target.runId)))[0]?.state).toBe("released");
+      expect(s.provider.deleteCalls).toBe(1);
+      expect(s.gateway.removeCalls).toBe(1);
     }));
   it("retains empty but incomplete FINAL and later retries the same held VM without launching again", () =>
     test(async (s) => {

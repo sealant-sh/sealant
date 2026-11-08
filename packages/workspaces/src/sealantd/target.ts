@@ -38,6 +38,7 @@ export const DEFAULT_CONTROL_SOCKET_PATH = "/run/sealant/control.sock";
  * it (`adapter` and `resourceId` are both nullable on the row).
  */
 export interface RuntimeInstanceTargetSource {
+  readonly runId?: string;
   readonly adapter: RuntimeAdapterId | null;
   readonly resourceId: string | null;
   readonly endpoint: string | null;
@@ -45,6 +46,11 @@ export interface RuntimeInstanceTargetSource {
 
 /** How a consumer reaches each runtime family; everything optional so Docker needs nothing. */
 export interface SealantTargetDerivationOptions {
+  /** Worker-owned refresh of exact current Boat control authority, once per connection. */
+  readonly boatConnectMaterial?: (
+    runId: string,
+    sandboxId: string,
+  ) => Promise<WebSocketConnectMaterial>;
   /** Control socket path inside a Docker container (docker-exec fallback). */
   readonly socketPath?: string;
   /**
@@ -105,6 +111,20 @@ export const sealantTargetForRuntimeInstance = (
   const endpoint = instance.endpoint?.trim();
 
   switch (instance.adapter) {
+    case "boat": {
+      if (
+        endpoint === undefined ||
+        !endpoint.startsWith(WSS_ENDPOINT_PREFIX) ||
+        instance.runId === undefined ||
+        !instance.resourceId ||
+        resolved.boatConnectMaterial === undefined
+      )
+        return undefined;
+      const connect = resolved.boatConnectMaterial;
+      const runId = instance.runId;
+      const sandboxId = instance.resourceId;
+      return { kind: "websocket", url: endpoint, prepare: () => connect(runId, sandboxId) };
+    }
     case "docker": {
       if (endpoint?.startsWith(UNIX_ENDPOINT_PREFIX)) {
         const endpointSocketPath = endpoint.slice(UNIX_ENDPOINT_PREFIX.length);
@@ -182,6 +202,8 @@ export const describeUnaddressableRuntimeInstance = (
   if (instance.adapter === "docker") {
     return "the docker instance has neither a unix:// endpoint nor a container id";
   }
+  if (instance.adapter === "boat")
+    return "the Boat instance needs current worker-owned control access and a hosted endpoint";
   if (instance.adapter === "cloudflare") {
     return options.controlBearerToken === undefined
       ? "the cloudflare instance needs a control bearer token (SEALANT_CONTROL_BEARER_TOKEN) which is not configured"

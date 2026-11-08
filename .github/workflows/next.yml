@@ -243,6 +243,14 @@ jobs:
         env:
           DATABASE_URL: ${{ env.SEALANT_TEST_DATABASE_URL }}
 
+      # The credential-file tests need a private root-mapped user namespace, which
+      # Ubuntu 24.04's AppArmor default refuses on GitHub's hosted runners.
+      - name: Allow unprivileged user namespaces for credential-file tests
+        if: runner.environment == 'github-hosted'
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          unshare -Urn true
+
       - name: Unit and integration tests
         run: pnpm exec turbo test --force
       # Telemetry only: it never turns the job's result red, and says so when it has nothing.

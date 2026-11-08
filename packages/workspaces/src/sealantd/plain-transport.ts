@@ -189,12 +189,8 @@ const openWebSocket = (
   if (prepare === undefined) {
     return connectWebSocket(target, undefined);
   }
-  // Validate auth before the async hop so a misconfigured target still fails synchronously.
-  if (target.tls === undefined && target.auth === undefined) {
-    throw new Error(
-      "Refusing an unauthenticated websocket control connection: the target carries neither client TLS material nor a bearer token.",
-    );
-  }
+  // The runtime owner may refresh explicit daemon authority. The shared opener validates it
+  // after preparation and still refuses headers alone before any socket is created.
   return deferredTransport(prepare().then((material) => connectWebSocket(target, material)));
 };
 

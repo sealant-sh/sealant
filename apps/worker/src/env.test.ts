@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { parseWorkerEnv } from "@sealant/validators/env";
+import { boatAdmissionEnvSchema, parseWorkerEnv, appEnvSchema } from "@sealant/validators/env";
 import { describe, expect, it } from "vitest";
 
 describe("parseWorkerEnv", () => {
@@ -56,6 +56,72 @@ describe("parseWorkerEnv", () => {
       "Docker resource host",
     );
   });
+  it("requires one credential source with deployment and cipher, including file-only gateway configuration", () => {
+    const base = {
+      SEALANT_BOAT_API_KEY_FILE: "/run/secrets/boat-api-key",
+      SEALANT_BOAT_DEPLOYMENT_ID: "proof",
+      SEALANT_CREDENTIALS_KEY: Buffer.alloc(32, 7).toString("base64"),
+    };
+    expect(parseWorkerEnv(base).SEALANT_BOAT_API_KEY_FILE).toBe(base.SEALANT_BOAT_API_KEY_FILE);
+    expect(parseWorkerEnv(base).SEALANT_BOAT_API_KEY).toBeUndefined();
+    expect(() =>
+      parseWorkerEnv({ ...base, SEALANT_BOAT_API_KEY: "test-key-for-local-only" }),
+    ).toThrow("exactly one");
+    for (const key of Object.keys(base)) {
+      expect(() =>
+        parseWorkerEnv(Object.fromEntries(Object.entries(base).filter(([name]) => name !== key))),
+      ).toThrow("Boat reconciliation requires");
+    }
+    expect(() => parseWorkerEnv({ ...base, SEALANT_BOAT_API_KEY_FILE: "relative" })).toThrow();
+    expect(
+      parseWorkerEnv({
+        ...base,
+        SEALANT_BOAT_GATEWAY_HOST_ID: "11111111-2222-4333-8444-555555555555",
+        SEALANT_BOAT_GATEWAY_ENDPOINT: "49.12.133.97",
+        SEALANT_BOAT_GATEWAY_IMAGE: `sha256:${"a".repeat(64)}`,
+      }).DEFAULT_RUNTIME_ADAPTER,
+    ).toBe("docker");
+  });
+  it("keeps admission off by default and preserves exact asserted owners through both parses", () => {
+    expect(parseWorkerEnv({}).SEALANT_BOAT_ADMISSION_OWNER_IDS).toEqual([]);
+    const base = {
+      SEALANT_BOAT_ADMISSION_OWNER_IDS: "usr_proof,usr_second",
+      SEALANT_BOAT_API_KEY_FILE: "/run/secrets/boat-api-key",
+      SEALANT_BOAT_DEPLOYMENT_ID: "proof",
+      SEALANT_BOAT_GATEWAY_HOST_ID: "11111111-2222-4333-8444-555555555555",
+      SEALANT_BOAT_GATEWAY_ENDPOINT: "49.12.133.97",
+      SEALANT_BOAT_GATEWAY_IMAGE: `sha256:${"a".repeat(64)}`,
+      SEALANT_BOAT_BUILDER_OWNER: "11111111-2222-4333-8444-555555555555",
+      SEALANT_BOAT_STATE_DIRECTORY: "/var/lib/sealant/boat",
+      SEALANT_CREDENTIALS_KEY: Buffer.alloc(32, 7).toString("base64"),
+    };
+    expect(parseWorkerEnv(base).SEALANT_BOAT_ADMISSION_OWNER_IDS).toEqual([
+      "usr_proof",
+      "usr_second",
+    ]);
+    const parsed = boatAdmissionEnvSchema.parse(base);
+    expect(boatAdmissionEnvSchema.parse(parsed)).toEqual(parsed);
+    for (const key of Object.keys(base).filter(
+      (name) => name !== "SEALANT_BOAT_ADMISSION_OWNER_IDS",
+    ))
+      expect(() =>
+        parseWorkerEnv(Object.fromEntries(Object.entries(base).filter(([name]) => name !== key))),
+      ).toThrow();
+    for (const value of [
+      "usr_proof,usr_proof",
+      "*",
+      "usr_proof,",
+      "usr_ proof",
+      "usr_proof\nother",
+    ])
+      expect(
+        boatAdmissionEnvSchema.safeParse({ SEALANT_BOAT_ADMISSION_OWNER_IDS: value }).success,
+      ).toBe(false);
+    expect(appEnvSchema.safeParse({ SEALANT_BOAT_ADMISSION_OWNER_IDS: "usr_proof" }).success).toBe(
+      false,
+    );
+  });
+
   it("keeps legacy bind mode when Compose interpolates an unset mapping as empty", () => {
     const env = parseWorkerEnv({ SEALANT_DOCKER_VOLUME_MAPPINGS: "" });
 
