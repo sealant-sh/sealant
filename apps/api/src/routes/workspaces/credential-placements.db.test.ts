@@ -8,7 +8,12 @@ import type {
   PutWorkspaceCredentialsRequest,
   WorkspaceCredentialPlacementReceipt,
 } from "@sealant/api-contracts";
-import { CredentialCipher, sha256Hex, type CredentialCipherService } from "@sealant/credentials";
+import {
+  CredentialCipher,
+  credentialCipherLayer,
+  sha256Hex,
+  type CredentialCipherService,
+} from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
   ControlPlaneDataAccessLive,
@@ -31,7 +36,7 @@ import {
   sweepCredentialPlacements,
   type HomeCredentialChannel,
 } from "@sealant/workspaces";
-import { Deferred, Effect, Fiber, Layer, Result } from "effect";
+import { Deferred, Effect, Fiber, Layer, Result, Schema } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 let CurrentPrincipal: (typeof import("../../services/service-principals.js"))["CurrentPrincipal"];
@@ -126,14 +131,16 @@ describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", 
     routes = await import("./workspace-credentials.js");
     db = await createSealantDB(DATABASE_URL ?? "");
   });
-  const layer = () =>
+  const layer = (using: CredentialCipherService = cipher) =>
     ControlPlaneDataAccessLive.pipe(
       Layer.provideMerge(Layer.succeed(SealantDB, db)),
-      Layer.provideMerge(Layer.succeed(CredentialCipher, cipher)),
+      Layer.provideMerge(Layer.succeed(CredentialCipher, using)),
       Layer.provideMerge(Layer.succeed(CurrentPrincipal, { kind: "service" })),
     );
-  const run = <A, E>(effect: Effect.Effect<A, E, Layer.Success<ReturnType<typeof layer>>>) =>
-    Effect.runPromise(effect.pipe(Effect.provide(layer())));
+  const run = <A, E>(
+    effect: Effect.Effect<A, E, Layer.Success<ReturnType<typeof layer>>>,
+    using?: CredentialCipherService,
+  ) => Effect.runPromise(effect.pipe(Effect.provide(layer(using))));
   const fixture = () =>
     run(
       Effect.gen(function* () {
@@ -220,7 +227,13 @@ describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", 
   const CLAUDE_KEY = "sk-ant-api03-FAKE-claude-key-for-the-placement-tests-k1";
   const CLAUDE_KEY_2 = "sk-ant-api03-FAKE-claude-key-for-the-placement-tests-k2";
   const CODEX_KEY = "sk-proj-FAKE-codex-key-for-the-placement-tests-cx";
-  const keyAccount = (f: Fixture, provider: "claude" | "codex", name: string, apiKey: string) =>
+  const keyAccount = (
+    f: Fixture,
+    provider: "claude" | "codex",
+    name: string,
+    apiKey: string,
+    baseUrl?: string,
+  ) =>
     run(
       Effect.flatMap(ConnectedAccountRepo, (repo) =>
         repo.createConnectedAccount({
@@ -229,7 +242,7 @@ describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", 
           provider,
           name,
           kind: "api-key",
-          encryptedPayload: `sealed:${JSON.stringify({ apiKey })}`,
+          encryptedPayload: `sealed:${JSON.stringify({ apiKey, ...(baseUrl === undefined ? {} : { baseUrl }) })}`,
           encryptionKeyId: "fake",
           payloadSha256: sha256Hex(apiKey),
           metadata: { tokenSuffix: apiKey.slice(-4) },
@@ -704,6 +717,164 @@ describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", 
     );
     expect(ex.files.size).toBe(0);
     expect(await rows(f)).toEqual([]);
+  });
+
+  it("a key's receipt carries its endpoint's URL, which no file in the home holds", async () => {
+    const f = await fixture();
+    const ex = executor();
+    const codex = await keyAccount(f, "codex", "key", CODEX_KEY, "https://gateway.example.test/v1");
+    const claude = await keyAccount(
+      f,
+      "claude",
+      "key",
+      "placeholder",
+      "http://10.0.0.9:8080/anthropic",
+    );
+    const placed = (await run(put(f, ex.channel, { claude: claude.id, codex: codex.id }))).home
+      .placements;
+    expect(placed?.map((row) => [row.provider, row.login]).toSorted()).toEqual([
+      [
+        "claude",
+        {
+          kind: "api-key",
+          suffix: "lder",
+          keyPath: pathOf(placed?.find((row) => row.provider === "claude")),
+          baseUrl: "http://10.0.0.9:8080/anthropic",
+        },
+      ],
+      [
+        "codex",
+        {
+          kind: "api-key",
+          suffix: CODEX_KEY.slice(-4),
+          baseUrl: "https://gateway.example.test/v1",
+        },
+      ],
+    ]);
+    const held = [...ex.files.values()].join("\n");
+    expect(held).toContain(CODEX_KEY);
+    expect(held).not.toContain("gateway.example.test");
+    expect(held).not.toContain("10.0.0.9");
+
+    const plain = await fixture();
+    const bare = await keyAccount(plain, "codex", "key", CODEX_KEY);
+    const receipts = (await run(put(plain, executor().channel, { claude: null, codex: bare.id })))
+      .home.placements;
+    expect(receipts?.map((row) => row.login)).toEqual([
+      { kind: "api-key", suffix: CODEX_KEY.slice(-4) },
+    ]);
+  });
+
+  it("a placement keeps a key's endpoint sealed: its row shows the host, never the URL", async () => {
+    const sealing = await Effect.runPromise(
+      Effect.provide(
+        Effect.gen(function* () {
+          return yield* CredentialCipher;
+        }),
+        credentialCipherLayer({ key: process.env["SEALANT_CREDENTIALS_KEY"] ?? "" }),
+      ),
+    );
+    const f = await fixture();
+    const sealedKeyAccount = async (
+      provider: "claude" | "codex",
+      apiKey: string,
+      baseUrl: string,
+    ) => {
+      const sealed = await Effect.runPromise(sealing.encrypt(JSON.stringify({ apiKey, baseUrl })));
+      return run(
+        Effect.flatMap(ConnectedAccountRepo, (repo) =>
+          repo.createConnectedAccount({
+            id: `cacc_${randomUUID()}`,
+            ownerUserId: f.owner,
+            provider,
+            name: "key",
+            kind: "api-key",
+            encryptedPayload: sealed.sealed,
+            encryptionKeyId: sealed.keyId,
+            payloadSha256: sha256Hex(apiKey),
+            metadata: { tokenSuffix: apiKey.slice(-4) },
+          }),
+        ),
+      );
+    };
+    const claudeUrl = "http://10.0.0.9:8080/private-company/tenant-5678";
+    const codexUrl = "https://gateway.example.test/team-x41/v1";
+    const claude = await sealedKeyAccount("claude", "placeholder", claudeUrl);
+    const codex = await sealedKeyAccount("codex", CODEX_KEY, codexUrl);
+    const ex = executor();
+    const placed = await run(put(f, ex.channel, { claude: claude.id, codex: codex.id }), sealing);
+    expect(
+      placed.home.placements
+        ?.map((row) => [row.provider, row.login.kind === "api-key" ? row.login.baseUrl : ""])
+        .toSorted(),
+    ).toEqual([
+      ["claude", claudeUrl],
+      ["codex", codexUrl],
+    ]);
+    const listed = await run(
+      routes.listWorkspaceCredentials({
+        workspaceId: f.workspaceId,
+        query: { ownerUserId: f.owner },
+      }),
+      sealing,
+    );
+    expect(
+      listed.homes
+        .flatMap((home) => home.placements ?? [])
+        .map((row) => (row.login.kind === "api-key" ? row.login.baseUrl : ""))
+        .toSorted(),
+    ).toEqual([claudeUrl, codexUrl]);
+
+    const { rows: stored } = Schema.decodeUnknownSync(
+      Schema.Struct({
+        rows: Schema.Array(
+          Schema.Struct({ provider: Schema.String, row: Schema.String, login: Schema.Unknown }),
+        ),
+      }),
+    )(
+      await Effect.runPromise(
+        db.execute(
+          `SELECT provider, row_to_json(p)::text AS row, login FROM workspace_credential_placements p WHERE run_id = '${f.runId}' ORDER BY provider`,
+        ),
+      ),
+    );
+    expect(stored.map((row) => row.provider)).toEqual(["claude", "codex"]);
+    const text = stored.map((row) => row.row).join("\n");
+    for (const leaked of [
+      claudeUrl,
+      codexUrl,
+      "/private-company/tenant-5678",
+      "/team-x41/v1",
+      "private-company",
+      "team-x41",
+    ]) {
+      expect(text).not.toContain(leaked);
+    }
+    expect(stored.map((row) => row.login)).toEqual([
+      {
+        kind: "api-key",
+        suffix: "lder",
+        endpoint: { host: "10.0.0.9:8080", sealed: expect.stringMatching(/^v1\./) },
+      },
+      {
+        kind: "api-key",
+        suffix: CODEX_KEY.slice(-4),
+        endpoint: { host: "gateway.example.test", sealed: expect.stringMatching(/^v1\./) },
+      },
+    ]);
+  });
+
+  it("a placement row holding an endpoint's URL in the clear is refused when read, never trusted", async () => {
+    const f = await fixture();
+    await run(put(f, executor().channel));
+    await Effect.runPromise(
+      db.execute(
+        `UPDATE workspace_credential_placements SET login = '{"kind":"api-key","suffix":"wxyz","baseUrl":"https://gateway.example.test/team-x41"}'::jsonb WHERE run_id = '${f.runId}'`,
+      ),
+    );
+    expect(
+      await run(Effect.flip(Effect.flatMap(CredentialPlacementRepo, (repo) => repo.state(f)))),
+    ).toMatchObject({ _tag: "CredentialPlacementRepoError" });
   });
 
   it("a Codex key's placement reads api-key, and the refresh push leaves key placements alone", async () => {

@@ -76,6 +76,13 @@ export const systemIndexResponseSchema = Schema.Struct({
        */
       connectedAccountApiKeys: Schema.optional(Schema.Boolean),
       /**
+       * A Claude or Codex API key connects with an `endpoint`, the base URL of a compatible
+       * endpoint its requests go to: the summary's `login` carries its `endpointHost`, a placement
+       * receipt its `baseUrl`, and inference sends the exchange there. Without it, `endpoint` on
+       * a connect is dropped unread.
+       */
+      connectedAccountEndpoints: Schema.optional(Schema.Boolean),
+      /**
        * Inference takes `allowedLogin` and refuses a key when it says `subscription`, answers and
        * errors carry the exchange's `receipt`, and a Claude API key runs inference. Without it,
        * `allowedLogin` is dropped unread.

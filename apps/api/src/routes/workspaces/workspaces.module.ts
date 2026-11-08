@@ -74,7 +74,7 @@ import {
   connectedAccountProviders,
   createConnectedAccountRef,
   CredentialCipher,
-  loginClassOf,
+  endpointKeyUnsupported,
   parseStoredCredential,
 } from "@sealant/credentials";
 import {
@@ -1047,16 +1047,24 @@ type WorkspaceCredentialRef = NewWorkspace["runtime"]["credentialRefs"][number];
  * Whether a Claude account holds an API key, read from its payload. One that cannot be read is
  * left to the launch, which refuses it with its own words.
  */
-const holdsClaudeApiKey = (account: ConnectedAccount) =>
+/**
+ * Why a launch cannot carry this account's login: a Claude API key, or a key whose requests go to
+ * an endpoint, which a launch would write without it. `undefined` when it can.
+ */
+const launchRefusal = (account: ConnectedAccount) =>
   Effect.gen(function* () {
-    if (account.provider !== "claude") return false;
+    if (account.provider === "github") return undefined;
     const cipher = yield* CredentialCipher;
     return yield* cipher.decrypt(account.encryptedPayload).pipe(
       Effect.flatMap((plaintext) =>
-        Effect.try(() => loginClassOf(...parseStoredCredential("claude", plaintext))),
+        Effect.try(() => {
+          const [, payload] = parseStoredCredential(account.provider, plaintext);
+          if (!("apiKey" in payload)) return undefined;
+          if (account.provider === "claude") return claudeApiKeyUnsupported(account.name);
+          return payload.baseUrl === undefined ? undefined : endpointKeyUnsupported(account.name);
+        }),
       ),
-      Effect.map((login) => login === "api-key"),
-      Effect.orElseSucceed(() => false),
+      Effect.orElseSucceed(() => undefined),
     );
   });
 
@@ -1064,8 +1072,8 @@ const holdsClaudeApiKey = (account: ConnectedAccount) =>
  * Resolve the connected-account selection into opaque blueprint `credentialRefs`
  * (`connected-account:<id>`). Explicit per-provider entries win over the profile's bindings.
  * Values starting with "cacc_" are account ids; anything else is a per-provider account name.
- * Nothing is placed here — the worker decrypts just before launch; a Claude account is read only
- * to refuse an API key early.
+ * Nothing is placed here — the worker decrypts just before launch; a Claude or Codex account is
+ * read only to refuse early a key a launch cannot carry.
  */
 export const resolveWorkspaceCredentialRefs = (input: {
   readonly ownerUserId: string;
@@ -1114,15 +1122,15 @@ export const resolveWorkspaceCredentialRefs = (input: {
       if (explicit === undefined) {
         const bound = profileBound.get(provider);
 
-        // A binding pointing at an unusable account (archived, invalidated by a 401, or a Claude
-        // API key, which cannot be placed yet) is effectively disconnected — skip it rather than
-        // fail every launch that uses this profile (surfaces show it as "needs reconnect"). Only
-        // an explicitly-named account hard-fails.
+        // A binding pointing at an unusable account (archived, invalidated by a 401, or a key a
+        // launch cannot carry) is effectively disconnected — skip it rather than fail every launch
+        // that uses this profile (surfaces show it as "needs reconnect"). Only an explicitly-named
+        // account hard-fails.
         if (
           bound === undefined ||
           bound.archivedAt !== null ||
           bound.status !== "active" ||
-          (yield* holdsClaudeApiKey(bound))
+          (yield* launchRefusal(bound)) !== undefined
         ) {
           continue;
         }
@@ -1138,9 +1146,10 @@ export const resolveWorkspaceCredentialRefs = (input: {
         });
       }
 
-      if (explicit !== undefined && (yield* holdsClaudeApiKey(account))) {
+      const refusal = explicit === undefined ? undefined : yield* launchRefusal(account);
+      if (refusal !== undefined) {
         return yield* new WorkspaceConflictError({
-          message: claudeApiKeyUnsupported(account.name),
+          message: refusal,
           code: "connected-account-unsupported",
           provider,
         });

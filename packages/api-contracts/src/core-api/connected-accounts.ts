@@ -51,10 +51,17 @@ export type ConnectedAccountCredential = typeof connectedAccountCredentialSchema
 export const connectedAccountLoginClassSchema = Schema.Literals(["subscription", "api-key"]);
 export type ConnectedAccountLoginClass = typeof connectedAccountLoginClassSchema.Type;
 
-/** A Claude or Codex account's login class; a key with its last four characters. */
+/**
+ * A Claude or Codex account's login class; a key with its last four characters, and the host of the
+ * endpoint it sends its requests to when it has one (the endpoint's full URL is never in a summary).
+ */
 export const connectedAccountLoginSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("subscription") }),
-  Schema.Struct({ kind: Schema.Literal("api-key"), suffix: NonEmptyString }),
+  Schema.Struct({
+    kind: Schema.Literal("api-key"),
+    suffix: NonEmptyString,
+    endpointHost: Schema.optional(NonEmptyString),
+  }),
 ]);
 export type ConnectedAccountLogin = typeof connectedAccountLoginSchema.Type;
 
@@ -114,6 +121,13 @@ export const createConnectedAccountRequestSchema = Schema.Struct({
   // never stored or echoed back as-is. Not trimmed here — pasted credential files are stored
   // verbatim.
   secret: Schema.String.check(Schema.isNonEmpty()),
+  /**
+   * Claude and Codex API keys only: the base URL of a compatible endpoint to send this login's
+   * requests to, such as a company gateway (an `EndpointUrl`; anything else is refused with a
+   * `400`). With one, the key may be any value without spaces, for an endpoint that takes no real
+   * key. A reconnect without it stores the login without an endpoint.
+   */
+  endpoint: Schema.optional(Schema.String),
 });
 export type CreateConnectedAccountRequest = typeof createConnectedAccountRequestSchema.Type;
 

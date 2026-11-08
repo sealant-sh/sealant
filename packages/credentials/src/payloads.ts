@@ -1,4 +1,8 @@
-import type { ConnectedAccountLogin, ConnectedAccountLoginClass } from "@sealant/api-contracts";
+import {
+  EndpointUrl,
+  endpointHostOf,
+  type ConnectedAccountLoginClass,
+} from "@sealant/api-contracts";
 import { Schema } from "effect";
 
 /*
@@ -30,8 +34,13 @@ export const OPENAI_API_KEY_PREFIX = "sk-";
 const OPENAI_ADMIN_KEY_PREFIX = "sk-admin-";
 const API_KEY_MAX_LENGTH = 512;
 
+/**
+ * A key, and the endpoint its requests go to when it is not the provider's own: sealed together, so
+ * the endpoint is as private as the key.
+ */
 export const apiKeyPayloadSchema = Schema.Struct({
   apiKey: Schema.String.check(Schema.isNonEmpty()),
+  baseUrl: Schema.optionalKey(EndpointUrl),
 });
 export type ApiKeyPayload = typeof apiKeyPayloadSchema.Type;
 
@@ -39,7 +48,15 @@ export type ParseApiKeyResult =
   | { readonly valid: true; readonly apiKey: string }
   | { readonly valid: false; readonly reason: string };
 
-export const parseApiKey = (provider: "claude" | "codex", raw: string): ParseApiKeyResult => {
+/**
+ * A pasted key, trimmed. With an `endpoint`, any value without spaces that is not an Admin key is
+ * taken, since an endpoint may take no real key; without one, it must look like the provider's key.
+ */
+export const parseApiKey = (
+  provider: "claude" | "codex",
+  raw: string,
+  endpoint?: EndpointUrl,
+): ParseApiKeyResult => {
   const apiKey = raw.trim();
   const label = provider === "claude" ? "Claude" : "Codex";
   if (
@@ -47,6 +64,18 @@ export const parseApiKey = (provider: "claude" | "codex", raw: string): ParseApi
     (provider === "codex" && apiKey.startsWith(OPENAI_ADMIN_KEY_PREFIX))
   ) {
     return { valid: false, reason: "An Admin API key cannot run a model." };
+  }
+  if (endpoint !== undefined) {
+    if (apiKey === "") return { valid: false, reason: `A ${label} API key cannot be empty.` };
+    if (/\s/.test(apiKey)) {
+      return { valid: false, reason: `A ${label} API key has no spaces or line breaks in it.` };
+    }
+    return apiKey.length > API_KEY_MAX_LENGTH
+      ? {
+          valid: false,
+          reason: `A ${label} API key is at most ${String(API_KEY_MAX_LENGTH)} characters long.`,
+        }
+      : { valid: true, apiKey };
   }
   if (provider === "codex" && apiKey.startsWith("sk-ant-")) {
     return { valid: false, reason: "That is an Anthropic key; connect it as a Claude account." };
@@ -68,8 +97,12 @@ export const parseApiKey = (provider: "claude" | "codex", raw: string): ParseApi
   return { valid: true, apiKey };
 };
 
-export const apiKeyMetadata = (payload: ApiKeyPayload): { readonly tokenSuffix: string } => ({
+/** What a summary shows of a key: its last four characters and its endpoint's host, never the URL. */
+export const apiKeyMetadata = (
+  payload: ApiKeyPayload,
+): { readonly tokenSuffix: string; readonly endpointHost?: string } => ({
   tokenSuffix: payload.apiKey.slice(-4),
+  ...(payload.baseUrl === undefined ? {} : { endpointHost: endpointHostOf(payload.baseUrl) }),
 });
 
 // ---------------------------------------------------------------------------
@@ -95,9 +128,14 @@ export const claudeCredentialsFilePayloadSchema = Schema.Struct({
 });
 export type ClaudeCredentialsFilePayload = typeof claudeCredentialsFilePayloadSchema.Type;
 
-export const claudeApiKeyPayloadSchema = Schema.Struct({
-  apiKey: Schema.String.check(Schema.isStartingWith(CLAUDE_API_KEY_PREFIX)),
-});
+/** An Anthropic key, or with an endpoint whatever key that endpoint takes. */
+export const claudeApiKeyPayloadSchema = apiKeyPayloadSchema.check(
+  Schema.makeFilter(({ apiKey, baseUrl }) =>
+    baseUrl !== undefined || apiKey.startsWith(CLAUDE_API_KEY_PREFIX)
+      ? undefined
+      : `a Claude API key without an endpoint starts with "${CLAUDE_API_KEY_PREFIX}"`,
+  ),
+);
 
 /**
  * Any claude shape; consumers dispatch on the payload SHAPE (`"token" in payload`), never on the
@@ -587,10 +625,24 @@ export const loginClassOf = (
   return codexAuthJsonLogin(payload.authJson)?.login ?? "subscription";
 };
 
-export const placedLoginOf = (...credential: ProviderCredentialPayload): ConnectedAccountLogin => {
+/**
+ * What a placed login spends: a key carries its suffix, and its endpoint's URL when it has one. A
+ * placement row never keeps that URL as it is here: it is sealed before it is stored.
+ */
+export type PlacedLogin =
+  | { readonly kind: "subscription" }
+  | { readonly kind: "api-key"; readonly suffix: string; readonly baseUrl?: EndpointUrl };
+
+export const placedLoginOf = (...credential: ProviderCredentialPayload): PlacedLogin => {
   const [provider, payload] = credential;
   if (provider === "github") return { kind: "subscription" };
-  if ("apiKey" in payload) return { kind: "api-key", suffix: apiKeyMetadata(payload).tokenSuffix };
+  if ("apiKey" in payload) {
+    return {
+      kind: "api-key",
+      suffix: apiKeyMetadata(payload).tokenSuffix,
+      ...(payload.baseUrl === undefined ? {} : { baseUrl: payload.baseUrl }),
+    };
+  }
   if (provider === "claude") return { kind: "subscription" };
   const login = codexAuthJsonLogin(payload.authJson);
   if (login?.login !== "api-key") return { kind: "subscription" };

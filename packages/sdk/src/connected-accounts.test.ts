@@ -288,3 +288,48 @@ describe("connectedAccounts against a control plane from before chosen defaults"
     await sealant.close();
   });
 });
+
+describe("connectedAccounts with an endpoint", () => {
+  const endpointControlPlane = { ...currentControlPlane, connectedAccountEndpoints: true };
+
+  it("sends the endpoint beside the key, and reads back only its host", async () => {
+    answering(
+      201,
+      summary({
+        kind: "api-key",
+        login: { kind: "api-key", suffix: "-key", endpointHost: "gateway.example.test" },
+      }),
+      endpointControlPlane,
+    );
+    const sealant = client();
+    const account = await sealant.connectedAccounts.connect({
+      provider: "claude",
+      secret: "placeholder-key",
+      endpoint: "https://gateway.example.test/anthropic",
+    });
+    expect(seen[0]?.body).toMatchObject({
+      secret: "placeholder-key",
+      endpoint: "https://gateway.example.test/anthropic",
+    });
+    expect(account.login).toEqual({
+      kind: "api-key",
+      suffix: "-key",
+      endpointHost: "gateway.example.test",
+    });
+    await sealant.close();
+  });
+
+  it("sends nothing to a control plane that would drop the endpoint and keep the key", async () => {
+    answering(201, summary(), currentControlPlane);
+    const sealant = client();
+    await expect(
+      sealant.connectedAccounts.connect({
+        provider: "codex",
+        secret: "placeholder-key",
+        endpoint: "https://gateway.example.test/v1",
+      }),
+    ).rejects.toMatchObject({ code: "connected-account-endpoints-unsupported" });
+    expect(seen).toEqual([]);
+    await sealant.close();
+  });
+});

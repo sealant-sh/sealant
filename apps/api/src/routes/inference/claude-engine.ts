@@ -32,6 +32,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import type { EndpointUrl } from "@sealant/api-contracts";
 import { Context, Effect, Layer } from "effect";
 
 import type { Exchange } from "./exchange.js";
@@ -41,7 +42,7 @@ import {
   type SessionTurn,
   type ToolResultInput,
 } from "./session-state.js";
-import { extractJson, providerCliEnv, redactSecrets, soundsLikeAuthFailure } from "./support.js";
+import { extractJson, providerCliEnv, soundsLikeAuthFailure } from "./support.js";
 
 const CALLER_SERVER_NAME = "caller";
 const DEFAULT_MAX_TURNS = 16;
@@ -88,10 +89,12 @@ export type InferenceAuth =
       readonly kind: "api-key";
       readonly configDir: string;
       readonly keyPath: string;
+      /** The endpoint the key's requests go to, instead of Anthropic's. */
+      readonly baseUrl?: EndpointUrl;
     };
 
 export interface InferenceStartInput {
-  /** Held by the live session until it ends; its secrets are redacted from engine errors. */
+  /** Held by the live session until it ends; what it redacts is stripped from engine errors. */
   readonly exchange: Exchange;
   readonly auth: InferenceAuth;
   readonly prompt: string;
@@ -196,16 +199,22 @@ const buildCallerToolServer = (
   return server;
 };
 
-const buildEnv = (auth: InferenceAuth, anthropicBaseUrl: string | undefined) =>
-  providerCliEnv({
+/** A key's own endpoint wins over the engine's: its key is never sent anywhere else. */
+const baseUrlOf = (auth: InferenceAuth, anthropicBaseUrl: string | undefined) =>
+  (auth.kind === "api-key" ? auth.baseUrl : undefined) ?? anthropicBaseUrl;
+
+const buildEnv = (auth: InferenceAuth, anthropicBaseUrl: string | undefined) => {
+  const baseUrl = baseUrlOf(auth, anthropicBaseUrl);
+  return providerCliEnv({
     CLAUDE_CONFIG_DIR: auth.configDir,
     HOME: auth.configDir,
     DISABLE_AUTOUPDATER: "1",
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     CLAUDE_AGENT_SDK_CLIENT_APP: "sealant-control-plane",
     ...(auth.kind === "oauth-token" ? { CLAUDE_CODE_OAUTH_TOKEN: auth.oauthToken } : {}),
-    ...(anthropicBaseUrl === undefined ? {} : { ANTHROPIC_BASE_URL: anthropicBaseUrl }),
+    ...(baseUrl === undefined ? {} : { ANTHROPIC_BASE_URL: baseUrl }),
   });
+};
 
 const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
 
@@ -220,7 +229,7 @@ const turnFailure = (
   status: number | null | undefined,
   assistantError: SDKAssistantMessageError | undefined,
   detail: string,
-  secrets: readonly string[],
+  redact: (text: string) => string,
 ): InferenceEngineError => {
   if (status === 401) {
     return new InferenceEngineError("auth-401", "Inference failed: the provider answered 401.");
@@ -228,15 +237,15 @@ const turnFailure = (
   if (assistantError === "authentication_failed") {
     return new InferenceEngineError(
       "auth-words",
-      detail.length > 0 ? redactSecrets(detail, secrets) : "authentication_failed",
+      detail.length > 0 ? redact(detail) : "authentication_failed",
     );
   }
   return assistantError === undefined
-    ? toEngineError(new Error(detail), secrets)
+    ? toEngineError(new Error(detail), redact)
     : new InferenceEngineError("engine", `Inference failed: ${assistantError}`);
 };
 
-const toEngineError = (error: unknown, secrets: readonly string[]): InferenceEngineError => {
+const toEngineError = (error: unknown, redact: (text: string) => string): InferenceEngineError => {
   if (error instanceof InferenceEngineError) {
     return error;
   }
@@ -244,7 +253,7 @@ const toEngineError = (error: unknown, secrets: readonly string[]): InferenceEng
     return new InferenceEngineError("timeout", error.message);
   }
   const raw = error instanceof Error ? error.message : String(error);
-  const message = redactSecrets(raw, secrets);
+  const message = redact(raw);
   return soundsLikeAuthFailure(message)
     ? new InferenceEngineError("auth-words", message, { cause: error })
     : new InferenceEngineError("engine", message, { cause: error });
@@ -267,7 +276,7 @@ const runSessionEnd = (onSessionEnd: (() => Promise<void>) | undefined): void =>
 
 export interface ClaudeEngineOptions {
   readonly query?: typeof query;
-  /** Tests only: the fake Anthropic API the CLI is sent to. */
+  /** Tests only: the fake Anthropic API the CLI is sent to, unless the login has an endpoint. */
   readonly anthropicBaseUrl?: string;
   readonly turnTimeoutMs?: number;
   readonly sessionIdleTtlMs?: number;
@@ -381,7 +390,7 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
       });
     } catch (error) {
       runSessionEnd(input.onSessionEnd);
-      throw toEngineError(error, input.exchange.secrets);
+      throw toEngineError(error, input.exchange.redact);
     }
 
     sessions.set(sessionId, {
@@ -406,7 +415,7 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
             message.subtype === "api_retry" &&
             message.error_status === 401
           ) {
-            state.fail(turnFailure(401, assistantError, "", input.exchange.secrets));
+            state.fail(turnFailure(401, assistantError, "", input.exchange.redact));
           }
           if (message.type === "assistant" && message.error !== undefined) {
             assistantError = message.error;
@@ -434,12 +443,12 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
                 message.api_error_status,
                 assistantError,
                 message.result,
-                input.exchange.secrets,
+                input.exchange.redact,
               ),
             );
           } else {
             const detail = message.errors.length > 0 ? message.errors.join("; ") : message.subtype;
-            state.fail(turnFailure(undefined, assistantError, detail, input.exchange.secrets));
+            state.fail(turnFailure(undefined, assistantError, detail, input.exchange.redact));
           }
         }
         if (!state.isSettled) {
@@ -448,17 +457,17 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
           );
         }
       } catch (error) {
-        state.fail(toEngineError(error, input.exchange.secrets));
+        state.fail(toEngineError(error, input.exchange.redact));
       }
     })();
 
-    return awaitTurn(sessionId, state, input.exchange.secrets);
+    return awaitTurn(sessionId, state, input.exchange.redact);
   };
 
   const awaitTurn = async (
     sessionId: string,
     state: InferenceSessionState,
-    secrets: readonly string[],
+    redact: (text: string) => string,
   ): Promise<InferenceEngineTurn> => {
     try {
       const turn = await state.nextTurn(turnTimeoutMs);
@@ -469,7 +478,7 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
     } catch (error) {
       state.expire("Inference exchange failed.");
       dropSession(sessionId);
-      throw toEngineError(error, secrets);
+      throw toEngineError(error, redact);
     }
   };
 
@@ -493,7 +502,7 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
         `Unknown, repeated or already-settled toolCallId: ${refused.join(", ")}. No result was delivered.`,
       );
     }
-    return awaitTurn(input.sessionId, session.state, session.exchange.secrets);
+    return awaitTurn(input.sessionId, session.state, session.exchange.redact);
   };
 
   return {
@@ -501,12 +510,16 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
     start: (input) =>
       Effect.tryPromise({
         try: () => startExchange(input),
-        catch: (error) => toEngineError(error, input.exchange.secrets),
+        catch: (error) => toEngineError(error, input.exchange.redact),
       }),
     continueSession: (input) =>
       Effect.tryPromise({
         try: () => continueExchange(input),
-        catch: (error) => toEngineError(error, []),
+        catch: (error) =>
+          toEngineError(
+            error,
+            sessions.get(input.sessionId)?.exchange.redact ?? ((text: string) => text),
+          ),
       }),
   };
 };

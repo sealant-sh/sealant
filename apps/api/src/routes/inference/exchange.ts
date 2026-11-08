@@ -1,9 +1,14 @@
-import type { InferenceReceipt } from "@sealant/api-contracts";
+import type { EndpointUrl, InferenceReceipt } from "@sealant/api-contracts";
 import { extractCodexSecrets } from "@sealant/credentials";
 
-/** The decrypted login, in the shape its engine is wired for. */
+import { exchangeRedaction } from "./support.js";
+
+/**
+ * The decrypted login, in the shape its engine is wired for. A key with a `baseUrl` is sent there
+ * and nowhere else.
+ */
 export type ExchangeLogin =
-  | { readonly shape: "claude-key"; readonly apiKey: string }
+  | { readonly shape: "claude-key"; readonly apiKey: string; readonly baseUrl?: EndpointUrl }
   | { readonly shape: "claude-setup-token"; readonly token: string }
   | {
       readonly shape: "claude-session";
@@ -11,7 +16,7 @@ export type ExchangeLogin =
       readonly accessToken: string;
       readonly refreshToken: string | undefined;
     }
-  | { readonly shape: "codex-key"; readonly apiKey: string }
+  | { readonly shape: "codex-key"; readonly apiKey: string; readonly baseUrl?: EndpointUrl }
   | { readonly shape: "codex-auth-json"; readonly authJson: string };
 
 /**
@@ -22,8 +27,11 @@ export interface Exchange {
   readonly ownerUserId: string;
   readonly receipt: InferenceReceipt;
   readonly login: ExchangeLogin;
-  /** The login's literal secrets, read once, for redaction. */
-  readonly secrets: readonly string[];
+  /**
+   * Strips from text what must never leave the exchange: the login's secrets, and its endpoint's
+   * URL and path. Built once from the login.
+   */
+  readonly redact: (text: string) => string;
 }
 
 const secretsOf = (login: ExchangeLogin): readonly string[] => {
@@ -50,4 +58,10 @@ export const openExchange = (input: {
   readonly ownerUserId: string;
   readonly receipt: InferenceReceipt;
   readonly login: ExchangeLogin;
-}): Exchange => ({ ...input, secrets: secretsOf(input.login) });
+}): Exchange => ({
+  ...input,
+  redact: exchangeRedaction(
+    secretsOf(input.login),
+    "baseUrl" in input.login ? input.login.baseUrl : undefined,
+  ),
+});

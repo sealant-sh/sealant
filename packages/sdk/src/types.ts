@@ -24,6 +24,7 @@ import type {
   WorkspacePublication as WireWorkspacePublication,
   ConnectedAccountLogin,
   ConnectedAccountLoginClass,
+  EndpointUrl,
   ForwardBinding,
   ForwardResetReason,
 } from "@sealant/api-contracts";
@@ -1456,11 +1457,18 @@ export interface CredentialPlacementReceipt {
 
 /**
  * What a placed login spends. A key carries its last four characters; a Claude key also the
- * absolute path of its file in the home, for an `apiKeyHelper` such as `cat <keyPath>`.
+ * absolute path of its file in the home, for an `apiKeyHelper` such as `cat <keyPath>`. A key with
+ * an endpoint carries its `baseUrl`, which nothing in the home holds: the harness's launch sets it
+ * (Claude's `ANTHROPIC_BASE_URL`, a Codex model provider).
  */
 export type CredentialPlacementLogin =
   | { readonly kind: "subscription" }
-  | { readonly kind: "api-key"; readonly suffix: string; readonly keyPath?: string };
+  | {
+      readonly kind: "api-key";
+      readonly suffix: string;
+      readonly keyPath?: string;
+      readonly baseUrl?: EndpointUrl;
+    };
 
 /** A receipt associated with the provider slot it occupies in this home. */
 export interface WorkspaceCredentialPlacementReceipt extends CredentialPlacementReceipt {
@@ -1582,6 +1590,11 @@ export interface SealantFeatures {
    * file an `apiKeyHelper` reads. A launch at `$HOME` still refuses a Claude key.
    */
   readonly connectedAccountApiKeys: boolean;
+  /**
+   * A Claude or Codex API key connects with an `endpoint`: `login.endpointHost` names its host, a
+   * placement receipt carries its `baseUrl`, and inference sends the exchange there.
+   */
+  readonly connectedAccountEndpoints: boolean;
   /**
    * `allowedLogin` on `inference.respond()` (a key is refused when it says `subscription`),
    * `receipt` on its answers and errors, and inference on a Claude API key.
@@ -2452,7 +2465,7 @@ export interface ConnectedAccountCredential {
   readonly lastRefreshOutcome: "refreshed" | "fresh" | "failed" | null;
 }
 
-export type { ConnectedAccountLogin, ConnectedAccountLoginClass };
+export type { ConnectedAccountLogin, ConnectedAccountLoginClass, EndpointUrl };
 
 export interface ConnectedAccount {
   readonly connectedAccountId: string;
@@ -2514,6 +2527,14 @@ interface ConnectConnectedAccountBase {
    * without it. Needs `features().connectedAccountDefaults`.
    */
   readonly makeDefault?: boolean;
+  /**
+   * Claude and Codex API keys: the base URL of a compatible endpoint to send this login's requests
+   * to, such as a company gateway. An absolute `http:` or `https:` URL with no user name, password,
+   * query string or fragment; a trailing slash is dropped. With one, `secret` may be any key without
+   * spaces. Refused with any other login. A reconnect without it removes the endpoint. Needs
+   * `features().connectedAccountEndpoints`.
+   */
+  readonly endpoint?: string;
 }
 
 /**

@@ -23,6 +23,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import { Schema } from "effect";
 
 // Client-level `casing: "snake_case"` no longer exists, so re-apply snake_case at the
 // table level to keep implicit column names mapping to snake_case db columns.
@@ -138,9 +139,21 @@ export const ociImageBuildJobs = pgTable(
  * account reconnected token→session-file mid-run must NOT have this env-injected workspace's
  * harness-written credentials file synced back over the fresh paste.
  */
-export type WorkspaceCredentialPlacementLogin =
-  | { readonly kind: "subscription" }
-  | { readonly kind: "api-key"; readonly suffix: string };
+export const workspaceCredentialPlacementLoginSchema = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("subscription") }),
+  Schema.Struct({
+    kind: Schema.Literal("api-key"),
+    suffix: Schema.String,
+    /**
+     * The endpoint a key's requests go to, as the row keeps it: its URL sealed with the credential
+     * key, as the account's payload is, and its host in the clear.
+     */
+    endpoint: Schema.optionalKey(Schema.Struct({ host: Schema.String, sealed: Schema.String })),
+    /** A row never holds an endpoint's URL in the clear; one that does is refused when read. */
+    baseUrl: Schema.optionalKey(Schema.Never),
+  }),
+]);
+export type WorkspaceCredentialPlacementLogin = typeof workspaceCredentialPlacementLoginSchema.Type;
 
 interface WorkspaceLaunchCredentialInjectionBase {
   readonly provider: string;

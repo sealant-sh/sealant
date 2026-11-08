@@ -40,6 +40,7 @@ export const toFeatures = (index: SystemIndexResponse): SealantFeatures => {
     connectedAccountLoginClass: features?.connectedAccountLoginClass === true,
     kubernetesPersonLayout: features?.kubernetesPersonLayout === true,
     connectedAccountApiKeys: features?.connectedAccountApiKeys === true,
+    connectedAccountEndpoints: features?.connectedAccountEndpoints === true,
     inferenceAllowedLogin: features?.inferenceAllowedLogin === true,
   };
 };
@@ -86,6 +87,19 @@ export const requireConnectedAccountLoginClass = async (ctx: SdkContext): Promis
     throw new SealantError(
       "This control plane cannot check a connect's login class (it does not report the feature, or could not be asked), and would store the secret whatever it is; nothing was sent.",
       { code: "connected-account-login-class-unsupported" },
+    );
+  }
+};
+
+export const requireConnectedAccountEndpoints = async (ctx: SdkContext): Promise<void> => {
+  const supported = await readFeatures(ctx).then(
+    (features) => features.connectedAccountEndpoints,
+    () => false,
+  );
+  if (!supported) {
+    throw new SealantError(
+      "This control plane cannot keep an endpoint with a key (it does not report the feature, or could not be asked), and would send the key's requests to the provider; nothing was sent.",
+      { code: "connected-account-endpoints-unsupported" },
     );
   }
 };

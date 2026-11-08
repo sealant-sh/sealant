@@ -55,6 +55,7 @@ import { parseTtlSeconds } from "./internal/duration.js";
 import {
   readFeatures,
   requireConnectedAccountDefaults,
+  requireConnectedAccountEndpoints,
   requireConnectedAccountLoginClass,
   requireInferenceAllowedLogin,
 } from "./internal/features.js";
@@ -393,6 +394,9 @@ export class Sealant {
       if (options.login !== undefined) {
         await requireConnectedAccountLoginClass(this.#ctx);
       }
+      if (options.endpoint !== undefined) {
+        await requireConnectedAccountEndpoints(this.#ctx);
+      }
       const wire = await this.#runtime.run(
         createConnectedAccountOp({
           ownerUserId: this.#ctx.config.hostLocal.ownerUserId,
@@ -402,6 +406,7 @@ export class Sealant {
           ...(options.accountId === undefined ? {} : { accountId: options.accountId }),
           ...(options.makeDefault === undefined ? {} : { makeDefault: options.makeDefault }),
           ...(options.login === undefined ? {} : { login: options.login }),
+          ...(options.endpoint === undefined ? {} : { endpoint: options.endpoint }),
         }),
       );
       return mapConnectedAccount(wire);

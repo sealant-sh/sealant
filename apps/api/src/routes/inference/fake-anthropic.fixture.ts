@@ -84,7 +84,11 @@ const messageEvents = (
   ];
 };
 
-export const startFakeAnthropic = async (): Promise<FakeAnthropic> => {
+/** `path` is where the fake's Messages API sits, as an endpoint behind a gateway does. */
+export const startFakeAnthropic = async (
+  options: { readonly path?: string } = {},
+): Promise<FakeAnthropic> => {
+  const path = options.path ?? "";
   const apiKeys: (string | undefined)[] = [];
   const authorizations: (string | undefined)[] = [];
   const queue: FakeAnthropicReply[] = [];
@@ -93,7 +97,7 @@ export const startFakeAnthropic = async (): Promise<FakeAnthropic> => {
   const server = createServer((req, res) => {
     req.resume();
     req.on("end", () => {
-      if (req.method !== "POST" || req.url?.startsWith("/v1/messages") !== true) {
+      if (req.method !== "POST" || req.url?.startsWith(`${path}/v1/messages`) !== true) {
         res.writeHead(404, { "content-type": "application/json" });
         res.end("{}");
         return;
@@ -131,7 +135,7 @@ export const startFakeAnthropic = async (): Promise<FakeAnthropic> => {
   const port = address.port;
 
   return {
-    baseUrl: `http://127.0.0.1:${String(port)}`,
+    baseUrl: `http://127.0.0.1:${String(port)}${path}`,
     apiKeys,
     authorizations,
     reply: (...replies) => {

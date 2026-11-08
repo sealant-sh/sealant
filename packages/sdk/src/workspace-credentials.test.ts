@@ -11,7 +11,8 @@ import type {
   WorkspaceCredentialHome,
   ReleaseWorkspaceCredentialsQuery,
 } from "@sealant/api-contracts";
-import { Effect } from "effect";
+import { EndpointUrl } from "@sealant/api-contracts";
+import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { type ControlPlaneClient, SealantApiClient } from "./effect/api-client.js";
@@ -273,7 +274,11 @@ describe("workspace.credentials", () => {
         placementId: "cpl_3",
         accountId: "cacc_maria_codex_key",
         revision: 1,
-        login: { kind: "api-key" as const, suffix: "abcd" },
+        login: {
+          kind: "api-key" as const,
+          suffix: "abcd",
+          baseUrl: Schema.decodeSync(EndpointUrl)("https://gateway.example.test/v1"),
+        },
         pinned: false,
       },
     ];

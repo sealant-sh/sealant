@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
 
+import { EndpointUrl } from "@sealant/api-contracts";
 import { provisionClaudeKeyDir, removeClaudeConfigDir } from "@sealant/credentials";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -31,17 +32,24 @@ afterEach(async () => {
   await fake.close();
 });
 
-const keyStart = (): InferenceStartInput & { readonly configDir: string } => {
-  const provisioned = provisionClaudeKeyDir({ apiKey });
+const keyStart = (
+  key: { readonly apiKey: string; readonly baseUrl?: EndpointUrl } = { apiKey },
+): InferenceStartInput & { readonly configDir: string } => {
+  const provisioned = provisionClaudeKeyDir({ apiKey: key.apiKey });
   configDirs.push(provisioned.configDir);
   return {
     configDir: provisioned.configDir,
     exchange: openExchange({
       ownerUserId: "usr_1",
       receipt: { accountId: "cacc_key", revision: 1, login: "api-key" },
-      login: { shape: "claude-key", apiKey },
+      login: { shape: "claude-key", ...key },
     }),
-    auth: { kind: "api-key", configDir: provisioned.configDir, keyPath: provisioned.keyPath },
+    auth: {
+      kind: "api-key",
+      configDir: provisioned.configDir,
+      keyPath: provisioned.keyPath,
+      ...(key.baseUrl === undefined ? {} : { baseUrl: key.baseUrl }),
+    },
     onSessionEnd: () => Promise.resolve(removeClaudeConfigDir(provisioned.configDir)),
     prompt: "hello",
     tools: [],
@@ -70,6 +78,27 @@ describe("claude engine on an API key", () => {
     expect(turn.turn).toMatchObject({ type: "done", text: "answered on a key" });
     expect(fake.apiKeys.length).toBeGreaterThan(0);
     expect(new Set(fake.apiKeys)).toEqual(new Set([apiKey]));
+  }, 60_000);
+});
+
+describe("claude engine on a key with an endpoint", () => {
+  it("sends the key to the endpoint alone, over the engine's own base URL", async () => {
+    const gateway = await startFakeAnthropic({ path: "/anthropic" });
+    try {
+      gateway.reply({ type: "text", text: "answered by the gateway" });
+      const placeholder = "placeholder-key-for-the-gateway";
+
+      const turn = await start(
+        keyStart({ apiKey: placeholder, baseUrl: Schema.decodeSync(EndpointUrl)(gateway.baseUrl) }),
+      );
+
+      expect(turn.turn).toMatchObject({ type: "done", text: "answered by the gateway" });
+      expect(gateway.apiKeys.length).toBeGreaterThan(0);
+      expect(new Set(gateway.apiKeys)).toEqual(new Set([placeholder]));
+      expect(fake.apiKeys).toEqual([]);
+    } finally {
+      await gateway.close();
+    }
   }, 60_000);
 });
 

@@ -15,6 +15,7 @@ import {
   InferenceInternalServerError,
   InferenceNotFoundError,
   InferenceUnavailableError,
+  endpointHostOf,
   type InferenceReceipt,
   type InferenceRespondRequest,
   type InferenceRespondResponse,
@@ -61,7 +62,7 @@ import {
 } from "./claude-engine.js";
 import { CodexInferenceEngine } from "./codex-engine.js";
 import { openExchange, type Exchange, type ExchangeLogin } from "./exchange.js";
-import { redactSecrets, redactStrings } from "./support.js";
+import { redactStrings } from "./support.js";
 
 const toErrorMessage = (error: unknown, fallback: string): string =>
   error instanceof Error ? error.message : fallback;
@@ -178,11 +179,11 @@ const exchangeLoginOf = (...credential: ProviderCredentialPayload): ExchangeLogi
   switch (provider) {
     case "codex": {
       return "apiKey" in payload
-        ? { shape: "codex-key", apiKey: payload.apiKey }
+        ? { shape: "codex-key", ...payload }
         : { shape: "codex-auth-json", authJson: payload.authJson };
     }
     case "claude": {
-      if ("apiKey" in payload) return { shape: "claude-key", apiKey: payload.apiKey };
+      if ("apiKey" in payload) return { shape: "claude-key", ...payload };
       if ("token" in payload) return { shape: "claude-setup-token", token: payload.token };
       const extracted = extractClaudeOauthCredentials(payload.credentialsJson);
       if (extracted === undefined) throw new Error("credentials.json payload is unusable");
@@ -259,7 +260,15 @@ const startEngine = (exchange: Exchange, payload: InferenceRespondRequest) =>
           }).codexHome,
         removeCodexHome,
         (codexHome, onSessionEnd) =>
-          engine.start({ ...common, codexHome, secrets: exchange.secrets, onSessionEnd }),
+          engine.start({
+            ...common,
+            codexHome,
+            ...(login.shape === "codex-key" && login.baseUrl !== undefined
+              ? { endpoint: login.baseUrl }
+              : {}),
+            redact: exchange.redact,
+            onSessionEnd,
+          }),
       );
     }
 
@@ -308,7 +317,12 @@ const startEngine = (exchange: Exchange, payload: InferenceRespondRequest) =>
           ({ configDir, keyPath }, onSessionEnd) =>
             engine.start({
               ...claudeCommon,
-              auth: { kind: "api-key", configDir, keyPath },
+              auth: {
+                kind: "api-key",
+                configDir,
+                keyPath,
+                ...(login.baseUrl === undefined ? {} : { baseUrl: login.baseUrl }),
+              },
               onSessionEnd,
             }),
         );
@@ -347,7 +361,12 @@ const invalidate = (exchange: Exchange, reason: AuthReason) =>
     : Effect.succeed<Invalidation>("unmarked");
 
 const keyRefusal = (login: KeyLogin, invalidation: Invalidation, detail: string) => {
-  const provider = login.shape === "claude-key" ? "Anthropic" : "OpenAI";
+  const provider =
+    login.baseUrl !== undefined
+      ? `the endpoint at ${endpointHostOf(login.baseUrl)}`
+      : login.shape === "claude-key"
+        ? "Anthropic"
+        : "OpenAI";
   const key = `Your ${login.shape === "claude-key" ? "Claude" : "Codex"} API key ····${login.apiKey.slice(-4)}`;
   switch (invalidation) {
     case "marked": {
@@ -405,7 +424,7 @@ const authFailure = (exchange: Exchange, reason: AuthReason, detail: string) =>
 const redacting =
   (exchange: Exchange) =>
   (text: string): string =>
-    redactProviderKeys(redactSecrets(text, exchange.secrets));
+    redactProviderKeys(exchange.redact(text));
 
 type RespondFailure =
   | BudgetExceededError
@@ -455,8 +474,8 @@ const redactFailure =
   };
 
 /**
- * Everything an exchange answers, success or failure, leaves with its login's secrets redacted,
- * and every failure carries the exchange's receipt.
+ * Everything an exchange answers, success or failure, leaves with its login's secrets and its
+ * endpoint's URL redacted, and every failure carries the exchange's receipt.
  */
 const withinExchange = <A, R>(exchange: Exchange, effect: Effect.Effect<A, RespondFailure, R>) =>
   effect.pipe(Effect.mapError(redactFailure(redacting(exchange), exchange.receipt)));
