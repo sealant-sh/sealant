@@ -314,6 +314,9 @@ jobs:
           SEALANT_E2E_REQUIRE_IMAGE: "1"
         run: pnpm --filter @sealant/workspaces test:e2e src/sealantd
 
+      - name: Native Ubuntu root resolves the project catalog packages
+        run: pnpm --filter @sealant/workspaces test:e2e src/images/boat/recipe.e2e.ts
+
       - name: Containerized launcher and real workspace volume test
         run: >-
           pnpm --filter @sealant/workspaces test:e2e src/runtime/docker-volume-mounts.e2e.ts

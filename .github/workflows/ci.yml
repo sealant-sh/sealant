@@ -177,6 +177,9 @@ jobs:
           REQUIRE_SEALANTD: "1"
         run: pnpm --filter @sealant/ssh-gateway exec vitest run daemon.test --reporter=verbose
 
+      - name: Native Ubuntu root resolves the project catalog packages
+        run: pnpm --filter @sealant/workspaces test:e2e src/images/boat/recipe.e2e.ts
+
       - name: Boat readiness authenticates real daemon health through its relay
         env:
           SEALANTD_BIN: ${{ runner.temp }}/sealantd

@@ -258,7 +258,7 @@ export const createNativeRecipe = async (
         ")",
         `install -d -m0755 ${mappedRoot}`,
         `test ! -e ${mappedRoot}/etc/os-release`,
-        `debootstrap --variant=minbase --include=systemd,sudo,python3,util-linux,procps,iproute2,ca-certificates,git,libcap2-bin noble ${mappedRoot} http://archive.ubuntu.com/ubuntu`,
+        `debootstrap --variant=minbase --components=main,universe --include=systemd,sudo,python3,util-linux,procps,iproute2,ca-certificates,git,libcap2-bin noble ${mappedRoot} http://archive.ubuntu.com/ubuntu`,
         "systemctl daemon-reload",
         `python3 -I -S -B ${guestRoot}/build_guest.py bundle`,
         `${guestCommand} ${guestRoot}/build_guest.py approve-source`,

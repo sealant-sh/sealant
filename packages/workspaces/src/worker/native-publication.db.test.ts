@@ -77,13 +77,14 @@ const setup = async (
   onBuild?: () => Promise<void>,
   waitBeforeBuild?: () => Promise<void>,
   url: string = databaseUrl ?? "",
+  mode: Parameters<typeof nativeBuilderFixture>[0] = "normal",
 ) => {
   const db = await createSealantDB(url);
   const owner = `usr_stage2b_${randomUUID()}`;
   await Effect.runPromise(
     db.insert(user).values({ id: owner, name: "stage2b", email: `${owner}@example.invalid` }),
   );
-  const fixture = await nativeBuilderFixture("normal");
+  const fixture = await nativeBuilderFixture(mode);
   const builder: IBoatSnapshotBuilder = {
     plan: fixture.builder.plan.bind(fixture.builder),
     build: async (input) => {
@@ -213,6 +214,28 @@ const setup = async (
 const noop = async () => {};
 
 describe.skipIf(!enabled)("native publication worker and persistence (disposable Postgres)", () => {
+  it("logs safe guest command diagnostics through the real failed build job", async () => {
+    await withWorkspaceJobTestDatabase(databaseUrl ?? "", async (url) => {
+      const s = await setup(undefined, undefined, url, "command-failed");
+      const job = await s.enqueue();
+      await expect(processWorkspaceBuildJob(s.options(job.id))).rejects.toMatchObject({
+        _tag: "WorkspaceBuildJobProcessingError",
+        message: expect.stringContaining("installer refused package"),
+        cause: {
+          _tag: "NativeCatalogError",
+          commandFailure: { step: "install-recipe", exitCode: 42, timedOut: false },
+        },
+      });
+      const stored = await Effect.runPromise(s.jobs.getJobById(job.id));
+      expect(stored?.status).toBe("failed");
+      expect(stored?.errorMessage).toContain("installer refused package");
+      expect(JSON.stringify(stored)).not.toContain("fixture-private-token");
+      expect(s.launches).toEqual([]);
+      expect(s.fixture.deleted()).toBe(true);
+      expect(s.fixture.posts()).toBe(0);
+    });
+  });
+
   it("launches a repository-created UUID attempt through the real build job and reloads its consumer", async () => {
     const s = await setup();
     const job = await s.enqueue();
