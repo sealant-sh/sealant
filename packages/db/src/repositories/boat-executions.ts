@@ -76,6 +76,7 @@ const make: Effect.Effect<BoatExecutionRepo["Service"], never, SealantDB> = Effe
       if (row === undefined) return undefined;
       const record = yield* parse(row.record);
       if (
+        record.target.runId !== row.runId ||
         record.target.runtimeInstanceId !== row.runtimeInstanceId ||
         record.target.deploymentId !== row.deploymentId ||
         record.target.sandboxId !== row.sandboxId ||
@@ -92,6 +93,7 @@ const make: Effect.Effect<BoatExecutionRepo["Service"], never, SealantDB> = Effe
         .insert(boatExecutions)
         .values({
           runtimeInstanceId: record.target.runtimeInstanceId,
+          runId: record.target.runId,
           deploymentId: record.target.deploymentId,
           sandboxId: record.target.sandboxId,
           diskLineage: record.target.diskLineage,

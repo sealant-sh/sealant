@@ -185,6 +185,11 @@ jobs:
         run: >-
           pnpm --filter @sealant/workspaces test:e2e src/runtime/docker-volume-mounts.e2e.ts
 
+      - name: Boat parking resumes pinned daemon staging without replaying user hooks
+        env:
+          SEALANTD_BIN: ${{ runner.temp }}/sealantd
+        run: pnpm --filter @sealant/workspaces test:e2e src/runtime/boat/parking-daemon.e2e.ts
+
       - name: Cloud metadata address refused from workspaces, reached when opted in
         run: >-
           pnpm --filter @sealant/workspaces test:e2e src/runtime/cloud-metadata.e2e.ts
@@ -215,7 +220,7 @@ jobs:
           SEALANT_BOAT_GUEST_TEST_IMAGE_FILE: ${{ runner.temp }}/boat-guest-image-id
         run: |
           docker build --iidfile "$SEALANT_BOAT_GUEST_TEST_IMAGE_FILE" -f packages/workspaces/boat-image/Dockerfile.network-test packages/workspaces/boat-image
-          unshare -Ur python3 -B -m unittest discover -s packages/workspaces/boat-image -p 'test_*.py'
+          unshare -Urm python3 -B -m unittest discover -s packages/workspaces/boat-image -p 'test_*.py'
           python3 -B packages/workspaces/boat-image/network_proof.py
 
       - name: Caller-owned services through SDK, isolated from workspaces, with retained backup

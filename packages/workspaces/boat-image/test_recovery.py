@@ -218,7 +218,7 @@ class RecoveryTests(unittest.TestCase):
         stream = type('Stream', (), {'buffer': io.BytesIO(canonical({'mode': 'recovery'}) + b'\n')})()
         with patch('builtins.open', side_effect=opened), patch.object(os, 'getpid', return_value=1), \
                 patch.object(os, 'execve', side_effect=execve), patch('sys.stdin', stream), self.assertRaises(ExecCalled):
-            runpy.run_path(str(Path(__file__).with_name('workspace-launch.py')))
+            runpy.run_path(str(Path(__file__).with_name('workspace-launch.py')), run_name='__main__')
         self.assertEqual(observed[0][1], ['/usr/local/bin/sealantd', 'boot', '--recovery'])
         self.assertEqual(observed[0][2]['SEALANT_CONTROL_SOCKET'], '/run/sealant/control.sock')
 

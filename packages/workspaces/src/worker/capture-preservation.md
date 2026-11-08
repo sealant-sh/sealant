@@ -1,182 +1,111 @@
-# Parking ledger, activation unavailable
+# Automatic Boat parking
 
-This layer extends `WorkspaceCaptureDrainRepo` above Core parent
-`1e0a00ea7c504507da8aaad3a35a3ebaede7d3db`. It does not implement functional parking. No production
-Boat executor or receiver exists at that parent. This layer performs no provider save, stop, delete,
-recovery create, admission or snapshot retirement.
+The canonical capture ledger now executes parking and resume. A retained, idle capture session keeps
+its original VM during a frozen retention delay, then transfers custody to a named personal saved
+snapshot before positively deleting that VM. Resume allocates a fresh child, restores the capsule,
+and starts the pinned daemon against its original capture staging. It preserves unsent work and does
+not replay setup, startup, dotfiles or the original harness.
 
-## Canonical ownership
+Boat remains unregistered. Ordinary admission stays off. These local proofs do not satisfy the
+required live preview proof of readiness, automatic parking, positive deletion and resume.
 
-The capture drain remains the sole authority. Its private relational children store immutable
-incarnations, one frozen retention episode, recovery artifacts, typed operation details,
-observations and consumers. Recovery artifacts remain separate from the image catalog. The current
-incarnation pointer cannot yet advance. Episodes, source identity, sealed capture material,
-publication consumers and artifact consumers cannot yet be discharged or released.
+## Scheduling
 
-Writer contract `3` preserves the previous evidence and issued-removal safeguards. Contract `2`
-cannot mutate enrolled custody. Generic terminal observations, drain/recovery claims and deletion
-cannot complete an enrolled lineage. The ticketless deletion path also refuses an unreadable
-supplied ledger. Unenrolled Docker and MicroVM behavior keeps its existing meaning.
+The worker sweeps every 30 seconds. It enrolls retained original allocations in rotating batches of
+100 and claims at most ten due roots. One broken enrollment cannot occupy the entire due queue. The
+existing capture stop/exit path records retention; this does not infer user inactivity from network
+traffic or park an actively used workspace.
 
-Enrollment checks the existing Boat runtime, native publication and unreleased consumer. It is
-idempotent for the same identity and rejects a replacement identity. Adoption of an already-retained
-source creates the episode in the same transaction. A first retention records database time.
-Historical adoption uses only the existing retained timestamp and records that provenance.
+`SEALANT_BOAT_AUTOMATIC_PARKING` defaults to true. False prevents new close intents while issued
+operations keep reconciling. `SEALANT_BOAT_PARKING_DELAY_SECONDS` defaults to 3600 and accepts 300
+through 604800. The first episode freezes its policy. A resumed incarnation gets a new delay under
+that same policy when it is retained again. API stop addresses canonical custody before the legacy
+stopped-workspace no-op. The legacy recovery sweep excludes enrolled roots.
 
-The policy accepts integer delays from `300` through `604800` seconds and defaults to `3600`. Each
-episode freezes its delay, policy digest and eligibility timestamp. Repeated failures, reloads and
-descendants do not reset it. `automaticParkingEnabled` defaults to true and blocks new close
-intentions when false. Prepared and issued obligations remain recorded. No shared Boat runtime
-configuration parser exists at this parent, so this layer adds no environment setting or file
-parser. The canonical retention method accepts the policy for a future composition owner.
+## Custody transfer
 
-Claims last 120 seconds of database time, carry a monotonic fence and refuse expired owners. The
-indexed due selector takes at most ten roots with `FOR UPDATE SKIP LOCKED`. An eligible close
-reservation persists its immutable target details and request digest. `issue` always refuses
-prepared work with `executor-unavailable`; issued work is observe-only. A claim is no dispatch
-permit. There is no issuance callback or provider dependency. Fenced release schedules a retry
-within 300 seconds, preserving any earlier future root action or outstanding operation observation.
-Blocked roots and expired prepared reservations therefore yield the next batch to later due work.
-This retry schedule does not move the frozen episode eligibility time.
+An authenticated FINAL observation must settle before a close can issue. An unanswered or active
+FINAL remains a fence. The receiver records the exact source binding and close UUID before closing
+all normal and capture-recovery start paths. A namespace holder survives daemon exit. The outer
+receiver pins that holder, freezes the complete writer cgroup, exports volatile mounts, verifies the
+durable capsule, kills the cgroup and proves it empty. Plain `sync` runs before provider stop as
+hygiene; the earlier durability investigation found no user-work loss that it needs to fix.
 
-Observation replay can reconcile synthetic preexisting issued work. Exact completed removal
-observations must match the sandbox and recorded provider operation. Snapshot readiness alone cannot
-produce `parked`. Unknown outcomes retain their occupied operation and pins across claim expiry and
-restart. An attributable pending or unknown reply observed no later than the completed removal is
-recorded as `superseded` without changing settlement. Its exact replay is `duplicate`; a reused
-receipt ID with changed contents, wrong sandbox or mismatched provider operation remains a conflict.
-Observation times must fall between operation issuance and database `clock_timestamp()`, inclusive
-at JavaScript millisecond precision. No additional clock skew is accepted. Impossible times return
-typed `invalid-input` without settling the obligation. Removal settlement does not clear run
-retention or sealed recovery material.
+The capsule uses no-follow, descriptor-relative traversal and records ownership, modes, xattrs,
+hardlinks, timestamps, directories, regular files, symlinks and FIFOs. Sockets are recorded but not
+recreated. Unsupported devices and external hardlinks refuse. Limits are 16 GiB, 200000 entries and
+a 60-second guest operation deadline. A failed export retains its source and never authorizes source
+deletion. Hydrated mounts remain included in subsequent parking even though their backing filesystem
+is now persistent.
 
-The internal serializable view distinguishes retained, parking, parked, recovering and unknown
-facts. It names known VMs and snapshots. Compute observations retain their timestamp and become
-unknown after two minutes or while removal is unresolved. Allowance is a dated account aggregate
-against ten included snapshots, never a per-artifact allocation. After five minutes it reports
-unknown with its last observation. Public API and SDK projection await the incarnation-aware
-executor owner.
+The worker records a unique save intent before sending it once. It verifies the personal-wallet
+inventory, the exact ready artifact identity, and the bounded raw capsule file stream by immutable
+snapshot ID, length and SHA-256. Only then does it revoke resources and issue source deletion. Only
+the exact completed provider deletion operation ends compute custody. Gateway cleanup is rechecked
+before the tunnel reservation is released, including after a worker restart.
 
-## Activation contracts still required
+Lost save and create replies observe the original intent. A 404 never permits a replacement. A lost
+deletion reply without an operation ID remains owned and unresolved. Snapshot retirement requires an
+acknowledged exact deletion, so absence alone does not release an artifact or pin.
 
-1. Registration must enroll identities from actual allocation, guest and publication evidence. Every
-   control, session, credential, drain, recovery and cleanup consumer must resolve the current
-   incarnation before a child can become current. No production enrollment caller is added here.
-2. The guest must prove settled FINAL, writer exclusion, durable export of volatile filesystem bytes
-   and terminal closure before namespace teardown. Capsule verification must use immutable
-   saved-artifact identity. Receipt ID columns currently reserve these contracts; their presence
-   does not prove the guest or provider evidence. Tests seed synthetic verified history only.
-3. The executor must persist frozen provider packets, enforce one-shot dispatch and reconcile exact
-   positive observations. It must prove private personal scope, exclusive snapshot names and exact
-   deletion completion. Missing objects and timeouts cannot discharge obligations. This layer
-   supplies no constructors for verified custody or dispatch authority.
-4. Recovery must create one held child with fresh control identities, prove trusted boot before
-   restored startup, wait for hydration and rebind the capture lineage through the pinned daemon's
-   proven protocol. Ordinary restore, setup and harness execution must remain excluded.
-5. Canonical completion/discard must settle all effects and descendants before episode discharge,
-   artifact retirement or native publication release. Current database guards deliberately block
-   these transitions, including ordinary FINAL/discard removal for an enrolled source.
-6. The composition owner must wire the shared configuration and indexed reconciler. API/SDK
-   projection must consume actual canonical facts. Independent parent review and the remaining live
-   proofs precede activation. SLNT-539 remains incomplete.
+## Resume and current identity
 
-## Reproduction and evidence
+A recovery intent reserves the child runtime, guest binding, allocation key and artifact consumer.
+The child must be hydrated with automatic stop disabled. A provider-authenticated public command
+verifies the closed source capsule, hydrates private backing directories and replaces the old
+receiver and invocation identities. It leaves admission held. The worker then establishes fresh
+exchange keys, isolation, tunnel, invocation ownership and authenticated readiness.
 
-Use a dedicated disposable Postgres 17 database. The parking suite applies all committed migrations
-and fails if `SEALANT_TEST_DATABASE_URL` is absent. It never silently skips. No provider credential,
-Docker daemon, runtime bundle or external service is needed. Run the import probes serially with
-lint and typecheck. They create forbidden imports temporarily at the actual caller paths and remove
-each owned file before exiting.
+The launch retains its capture launch ID and worktree ID. It preserves the original sealed inputs
+until canonical terminal release. The worker waits at least 31 seconds after positive writer
+closure, matching Mend's current 30-second capture lease, and requires a strictly newer capture
+epoch before promotion. A changed lease contract or stale epoch refuses. Local daemon evidence
+advances a fixture epoch; it does not exercise the real Mend lease service.
+
+Promotion moves one canonical current pointer. Historical runtime rows remain unchanged. Resource
+reconciliation, readiness, workspace reads, stop, credentials and interactive lookup resolve the
+current child. A parked session exposes no removed source as an interactive runtime. Boat's general
+API/SSH transport remains unavailable while admission is off.
+
+Complete authenticated FINAL or owner discard can discharge the lineage only after all known VMs are
+positively removed, tunnel slots are released and non-retirement effects are settled. The canonical
+owner then releases artifact consumers, retires every saved ancestor, releases the publication pin
+and clears retained resume envelopes. Unresolved descendants prevent release. A discard racing an
+issued child create remains held until that obligation is reconciled; it cannot justify deleting the
+source artifact or starting another child.
+
+## Provider and live limits
+
+The adapter selects `org=personal` for inventory and save. The allowance is an observed aggregate,
+with included, used and extra counts and a database timestamp. It never assigns a particular
+snapshot a free slot. The selected account is scoped by deployment configuration, not an
+independently measured provider account ID. Public privacy remains `unknown`; wallet membership is
+not independent proof of private visibility. Personal scope, privacy, immutable-file access and
+hydration must be confirmed in the live proof before admission.
+
+This layer introduces no Boat calls during local verification. The PostgreSQL/HTTP fixture proves
+durable ordering, lost replies, stale claims, repeated parking and descendant retirement. It does
+not prove Boat's deletion or snapshot semantics. The real kernel proof proves freeze/export/kill,
+namespace retention, tmpfs loss and hydration. The real pinned daemon proof proves staging transfer
+and unchanged unsent bytes on copied disk with no hook replay. These proofs are deliberately
+separate from a provider end-to-end claim.
+
+## Reproduction
+
+Apply migrations to an owned PostgreSQL 17 database before testing. With its URL in
+`SEALANT_TEST_DATABASE_URL`, run:
 
 ```sh
-export SEALANT_TEST_DATABASE_URL='<owned isolated Postgres URL>'
-DATABASE_URL="$SEALANT_TEST_DATABASE_URL" pnpm --filter @sealant/db db:migrate
 pnpm --filter @sealant/workspaces exec vitest run \
-  src/worker/capture-preservation.db.test.ts \
-  src/worker/capture-drain.test.ts \
-  src/worker/capture-drain-ledger.db.test.ts \
-  src/worker/preserve-before-deadline.test.ts \
-  src/worker/recover-retained-executors.test.ts \
-  src/runtime/executor-preservation.test.ts \
-  src/runtime/docker-runtime-adapter.test.ts \
-  src/runtime/microvm/adapter.test.ts
-pnpm --filter @sealant/api exec vitest run \
-  src/routes/workspaces/capture-evidence.db.test.ts \
-  src/routes/workspaces/stop-discard.test.ts \
-  src/routes/workspaces/retained-status.test.ts
-node packages/db/src/testing/capture-preservation-imports.mjs
-psql "$SEALANT_TEST_DATABASE_URL" -X -f packages/workspaces/src/worker/capture-preservation.plan.sql
-pnpm typecheck
-pnpm --filter @sealant/db lint
-pnpm --filter @sealant/workspaces lint
-pnpm format:fix
-git diff --check
+  src/runtime/boat/allocation.db.test.ts src/runtime/boat/execution.db.test.ts \
+  src/runtime/boat/api.test.ts src/worker/capture-preservation.db.test.ts \
+  src/worker/capture-drain-ledger.db.test.ts
+unshare -Urm env PYTHONPATH=packages/workspaces/boat-image \
+  python3 -B -m unittest discover -s packages/workspaces/boat-image -p 'test_*.py'
 ```
 
-On 2026-11-05, PostgreSQL 17.10 passed 326 workspace tests across eight files, including 33 parking
-cases and 16 generated retry/owner schedules. The three API files passed all 36 tests. Every test
-ran with zero skips. Six lint probes rejected direct custody imports, including same-directory
-relative imports. All 20 monorepo typecheck tasks passed. The affected package lints passed.
-
-The query diagnostic adds 25,000 completed generic roots inside a transaction, analyzes the table,
-runs the actual bounded due selector and single-root claim update, then rolls everything back. One
-local run had 25,200 roots, including 153 custody roots and 126 scheduled roots. The selector used
-`workspace_capture_drains_preservation_due`, examined 25 index candidates, filtered 15 and returned
-ten. Its execution took 0.074 ms with 39 shared-buffer hits. The claim update used the primary key,
-updated one row and took 0.503 ms including triggers. These are diagnostic observations on a warm
-local database. The shared 32-core host had load 48.58; unrelated ffmpeg processes were observed
-during this verification. This establishes the observed indexed plan and bounded result, with no
-production capacity or speedup claim. The script requires due fixtures from the parking suite.
-
-The migration's table definitions and snapshot came from the repository's Drizzle generator.
-Target-specific guards and deferred relational constraints accompany that generated migration. The
-suite proves rollback before adoption, retention, intention and completion commits, concurrent
-claims, stale-owner rejection, immutable history, old-writer refusal, pin retention and late replay.
-Synthetic receipt IDs exercise database ordering; they are not guest custody or live provider proof.
-
-## Integration above merged main
-
-Parent integration uses merged Core `4e2e3b67c44c2836488e314ebbdacd57edac91d0`. Drizzle's
-`check --output json` returns `ok` for the resource and custody migration branches.
-`generate --explain --output json` returns `no_changes`. The generator validates their commutative
-snapshot ancestry, so integration preserves the generated snapshots without manual edits.
-
-On 2026-11-05, the parent applied all migrations to a fresh PostgreSQL 17 database, then passed the
-same 326 workspace tests, 36 API tests and six import probes with zero skips. The due selector used
-its partial index. The first combined invocation raced the legacy suite against schema creation and
-failed with `relation "user" does not exist`. The command above now explicitly migrates before
-starting any suite. No application change or timeout increase was needed. The owned container used
-tmpfs with no volume, and its deletion and absence were confirmed.
-
-Functional parking, public status projection and ordinary Boat admission remain unavailable.
-
-## Independent review fixes
-
-The review reproduced a rolling-deployment recovery overlap, permanent quarantine after a delayed
-nonterminal reply, due-batch starvation and impossible permanent removal times. Regression tests
-failed on each original path before the fixes. The current writer now clamps requested generic
-recovery to the active lease, preserving exclusion for old recovery workers. The replay, release and
-time contracts above cover the custody fixes.
-
-On 2026-11-05, the fixed implementation passed 332 workspace tests across eight files and 36 API
-tests across three files, with zero skips, on migrated local PostgreSQL 17. The parking suite has 39
-cases, including both nonterminal reply kinds, changed receipt bodies, queue progress after ten
-blocked roots, prepared replay, earlier observation obligations and rejected removal times. The
-existing 16 generated schedules continue to pass. These are canonical repository proofs using
-synthetic issued history. They do not establish provider dispatch, guest custody or functional
-parking.
-
-## Shared-database fixture verification
-
-CI found that the parking source fixture stored its publication JSON without the matching scalar
-publication ID. Runtime discovery rejected those rows and prevented unrelated exit and recovery
-suites from reading the shared database. The fixture now writes both identities. A regression reads
-an enrolled source through the actual runtime repository.
-
-The four affected PostgreSQL suites passed all 48 tests together. A broader serial workspace run
-passed 1,409 tests with 31 skips, excluding the two host-dependent home-credential and MicroVM agent
-files. The API suite passed 726 tests with 11 skips. The broad parallel run exposed the separate
-unscoped launch-crash/stranded-launch fixture race tracked in
-[SLNT-552](https://linear.app/sealant/issue/SLNT-552/core-tests-unscoped-launch-crash-sweep-races-stranded-launch-fixtures).
-Those tests and their adoption implementation match merged main. CI concurrency and timeouts remain
-unchanged.
+The Docker CI job runs the real encrypted network proof and its parking kernel tests without skips.
+`parking-daemon.e2e.ts` requires the exact pinned `SEALANTD_BIN` or `SEALANT_BOAT_RUNTIME_BUNDLE`.
+`assets.test.ts` exercises packaging with the latter variable set, including a checker run with
+source files unavailable. CI also runs forced typecheck and lint through the standard monorepo
+tasks.

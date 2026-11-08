@@ -5,6 +5,8 @@ import type { CredentialCipher } from "@sealant/credentials";
 import {
   BoatAllocationRepo,
   BoatAllocationRepoLive,
+  WorkspaceCaptureDrainRepo,
+  WorkspaceCaptureDrainRepoLive,
   BoatExecutionRepo,
   BoatExecutionRepoLive,
   BoatTunnelRepo,
@@ -34,6 +36,7 @@ import {
   BoatTunnelCredentialsOwner,
   boatTunnelCredentialsLayer,
 } from "../runtime/boat/tunnel-credentials.js";
+import { boatTargetIsCurrent } from "./boat-current.js";
 
 /** Safe per-entry failures retain every reservation; they never carry transport or key data. */
 export class BoatResourcesError extends Error {
@@ -97,6 +100,7 @@ const make: Effect.Effect<
   BoatResources["Service"],
   never,
   | BoatAllocationRepo
+  | WorkspaceCaptureDrainRepo
   | BoatExecutionRepo
   | BoatTunnelRepo
   | ResourceInstanceRepo
@@ -111,22 +115,22 @@ const make: Effect.Effect<
   const credentials = yield* BoatTunnelCredentialsOwner;
   const guest = yield* BoatExecution;
   const host = yield* BoatResourcesHost;
+  const canonical = yield* WorkspaceCaptureDrainRepo;
+  const allocationRepo = yield* BoatAllocationRepo;
+  const isCurrent = (target: BoatExecutionTarget) =>
+    boatTargetIsCurrent(target, true).pipe(
+      Effect.provideService(WorkspaceCaptureDrainRepo, canonical),
+      Effect.provideService(BoatAllocationRepo, allocationRepo),
+    );
   const current = (target: BoatExecutionTarget) =>
     Effect.gen(function* () {
-      const allocation = yield* allocations.get(target.runtimeInstanceId);
       const execution = yield* executions.get(target.runtimeInstanceId);
       if (
         target.deploymentId !== host.deploymentId ||
-        allocation?.phase !== "bound" ||
-        !isDeepStrictEqual(allocation.target, target) ||
         !isDeepStrictEqual(execution?.target, target)
       )
         return yield* Effect.fail(new BoatResourcesError("binding-conflict"));
-      if (
-        !(yield* allocations.isActive(target.runId)) ||
-        execution === undefined ||
-        execution.phase === "held"
-      )
+      if (!(yield* isCurrent(target)) || execution === undefined || execution.phase === "held")
         return yield* Effect.fail(new BoatResourcesError("held"));
       if (
         execution.admission === null ||
@@ -214,7 +218,14 @@ const make: Effect.Effect<
           const record = yield* allocations.get(id);
           if (record?.phase === "held") return "held" as const;
           if (record?.target === null || record === undefined) return "pending" as const;
-          yield* boundary(prepare(record.target));
+          const root = yield* canonical.getByRunId(record.target.runId);
+          const preservation = yield* canonical.preservation;
+          const target =
+            root?.custodyContract === 3
+              ? yield* preservation.resolveExecution(record.target.runId)
+              : record.target;
+          if (target === undefined) return "held" as const;
+          yield* boundary(prepare(target));
           return "configured" as const;
         }).pipe(
           Effect.timeout(120_000),
@@ -246,13 +257,21 @@ const make: Effect.Effect<
         ...(after === undefined ? {} : { after }),
       });
       for (const id of ids) {
-        const reservation = yield* tunnels.get(id);
+        const root = yield* canonical.getByRunId(id);
+        const preservation = yield* canonical.preservation;
+        const allocation = yield* allocations.get(id);
+        const target =
+          root?.custodyContract === 3
+            ? yield* preservation.resolveExecution(id)
+            : (allocation?.target ?? undefined);
+        if (target === undefined) continue;
+        const reservation = yield* tunnels.get(target.runtimeInstanceId);
         if (
           reservation?.network === undefined ||
           reservation.binding.gatewayHostId !== host.gatewayHostId
         )
           continue;
-        const execution = yield* executions.get(id);
+        const execution = yield* executions.get(target.runtimeInstanceId);
         if (
           execution?.admission === null ||
           execution === undefined ||
@@ -260,7 +279,10 @@ const make: Effect.Effect<
           !isDeepStrictEqual(execution.target, reservation.binding.target) ||
           execution.admission.epoch !== reservation.network.epoch ||
           execution.admission.operationId !== reservation.network.operationId ||
-          !(yield* allocations.isActive(id))
+          !(yield* boatTargetIsCurrent(target).pipe(
+            Effect.provideService(BoatAllocationRepo, allocations),
+            Effect.provideService(WorkspaceCaptureDrainRepo, canonical),
+          ))
         )
           continue;
         const link = yield* resources.linkOfRun(id);
@@ -281,6 +303,7 @@ export const boatResourcesLayerNoDeps: Layer.Layer<
   BoatResources,
   never,
   | BoatAllocationRepo
+  | WorkspaceCaptureDrainRepo
   | BoatExecutionRepo
   | BoatTunnelRepo
   | ResourceInstanceRepo
@@ -297,6 +320,7 @@ export const boatResourcesLayer: Layer.Layer<
   Layer.provide(
     Layer.mergeAll(
       BoatAllocationRepoLive,
+      WorkspaceCaptureDrainRepoLive,
       BoatExecutionRepoLive,
       boatTunnelRepoLayer,
       ResourceInstanceRepoLive,

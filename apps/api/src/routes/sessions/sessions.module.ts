@@ -1,22 +1,3 @@
-/**
- * Sessions route handlers — first-class interactive PTY sessions.
- *
- * ARCHITECTURE: daemon PTY sessions are DAEMON-OWNED (they survive control-connection drops; only
- * stream attachments are connection-scoped), so every verb here rides a SHORT-LIVED per-request
- * daemon connection — the API stays stateless and any instance can serve any session. Output is
- * never read from the daemon: the telemetry ingester (worker) records the PTY byte stream into the
- * run record (redacted upstream, sequence-keyed, byte-exact), and the output endpoints serve THAT,
- * which is what makes detach/reattach with byte-exact history work.
- *
- * HEAD-LOSS: the daemon telemetry protocol is live-tail (no replay), so `createSession` creates
- * the interactive run FIRST, waits for the worker's ingester to open its epoch (the "recorder is
- * rolling" signal), and only then opens the PTY — recording starts at byte zero.
- *
- * AUTHORIZATION: three scopes, enforced when a bearer token is presented — `session:read`
- * (status/output), `session:input` (input/resize/signal), `workspace:exec` (create/close).
- * With a SERVICE KEY (services/service-principals.ts) — the owner model
- * applies (ownerUserId in payload/query), matching the rest of the control plane.
- */
 import { createHash, randomUUID } from "node:crypto";
 
 import {
@@ -74,6 +55,26 @@ import {
   processUserOnLegacyRoute,
   processUserRefusalMessage,
 } from "../process-user.js";
+/**
+ * Sessions route handlers — first-class interactive PTY sessions.
+ *
+ * ARCHITECTURE: daemon PTY sessions are DAEMON-OWNED (they survive control-connection drops; only
+ * stream attachments are connection-scoped), so every verb here rides a SHORT-LIVED per-request
+ * daemon connection — the API stays stateless and any instance can serve any session. Output is
+ * never read from the daemon: the telemetry ingester (worker) records the PTY byte stream into the
+ * run record (redacted upstream, sequence-keyed, byte-exact), and the output endpoints serve THAT,
+ * which is what makes detach/reattach with byte-exact history work.
+ *
+ * HEAD-LOSS: the daemon telemetry protocol is live-tail (no replay), so `createSession` creates
+ * the interactive run FIRST, waits for the worker's ingester to open its epoch (the "recorder is
+ * rolling" signal), and only then opens the PTY — recording starts at byte zero.
+ *
+ * AUTHORIZATION: three scopes, enforced when a bearer token is presented — `session:read`
+ * (status/output), `session:input` (input/resize/signal), `workspace:exec` (create/close).
+ * With a SERVICE KEY (services/service-principals.ts) — the owner model
+ * applies (ownerUserId in payload/query), matching the rest of the control plane.
+ */
+import { currentWorkspaceRuntime } from "../workspaces/current-runtime.js";
 
 // StreamKind numerics from the runtime protocol (avoid a runtime dep for constants).
 const STREAM_KIND_STDOUT = 2;
@@ -237,7 +238,9 @@ export const resolveDaemonInstance = (workspaceId: string) =>
       return undefined;
     }
     const instance = yield* withInternalError(
-      instances.getRuntimeInstanceByRunId(workspace.latestRunId),
+      instances
+        .getRuntimeInstanceByRunId(workspace.latestRunId)
+        .pipe(Effect.flatMap(currentWorkspaceRuntime)),
       "Failed to load workspace runtime.",
     );
     if (instance === undefined || instance.status !== "ready") {

@@ -28,6 +28,7 @@ export type BoatAutoStop =
 
 const sandboxSchema = z
   .object({
+    hydrated: z.boolean().optional(),
     labels: z.record(z.string(), z.string()).optional(),
     id: boatSandboxIdSchema,
     state: z.enum([
@@ -87,6 +88,14 @@ const snapshotSchema = z.object({
 });
 export type BoatSavedSnapshot = z.infer<typeof snapshotSchema>;
 
+/** The immutable saved artifact is read without retaining any user bytes in Core. */
+export interface BoatSnapshotFileReceipt {
+  readonly snapshotId: string;
+  readonly path: string;
+  readonly bytes: number;
+  readonly sha256: string;
+}
+
 const commandSchema = z.object({
   exitCode: z.number().int().nullable(),
   timedOut: z.boolean(),
@@ -96,6 +105,45 @@ const commandSchema = z.object({
 export type BoatCommand = z.infer<typeof commandSchema>;
 
 const successSchema = z.object({ ok: z.literal(true) });
+const personalSnapshotsResponse = successSchema.extend({
+  snapshots: z.array(snapshotSchema).max(10000),
+  allowance: z
+    .object({
+      org: z.null(),
+      included: z.number().int().min(10),
+      used: z.number().int().nonnegative(),
+      extra: z.number().int().nonnegative(),
+      extraDailyDollars: z.number().nonnegative(),
+    })
+    .refine((value) => value.extra === Math.max(0, value.used - value.included)),
+});
+/** The exact personal-wallet observation is an aggregate, never a per-snapshot included slot. */
+export type BoatPersonalSnapshots = Pick<
+  z.infer<typeof personalSnapshotsResponse>,
+  "snapshots" | "allowance"
+>;
+
+/** Parking adds immutable custody reads without widening every disposable builder fixture. */
+export interface BoatParkingApi extends Pick<
+  BoatApi,
+  | "get"
+  | "stop"
+  | "saveSnapshot"
+  | "getSnapshot"
+  | "deleteSandbox"
+  | "getDeletion"
+  | "create"
+  | "discover"
+  | "execute"
+  | "deleteSnapshot"
+> {
+  personalSnapshots(): Promise<BoatResult<BoatPersonalSnapshots>>;
+  verifyRecoveryFile(input: BoatSnapshotFileReceipt): Promise<BoatResult<BoatSnapshotFileReceipt>>;
+  savePersonalSnapshot(
+    id: BoatSandboxId,
+    name: BoatSnapshotName,
+  ): Promise<BoatResult<BoatSavedSnapshot>>;
+}
 const sandboxResponse = successSchema
   .extend({ sandbox: sandboxSchema })
   .transform((value) => value.sandbox);
@@ -509,6 +557,101 @@ export class HttpBoatApi implements BoatApi {
 
   getSnapshot(name: BoatSnapshotName): Promise<BoatResult<BoatSavedSnapshot>> {
     return this.#request("getSnapshot", "GET", `/saved-snapshots/${name}`, snapshotResponse);
+  }
+
+  personalSnapshots(): Promise<BoatResult<BoatPersonalSnapshots>> {
+    return this.#request(
+      "personalSnapshots",
+      "GET",
+      "/saved-snapshots?org=personal",
+      personalSnapshotsResponse,
+    );
+  }
+
+  /** One send only; the canonical owner must reserve a never-reused name before calling. */
+  savePersonalSnapshot(
+    id: BoatSandboxId,
+    name: BoatSnapshotName,
+  ): Promise<BoatResult<BoatSavedSnapshot>> {
+    return this.#request(
+      "savePersonalSnapshot",
+      "POST",
+      "/saved-snapshots?org=personal",
+      snapshotResponse,
+      { sandboxId: id, name },
+    );
+  }
+
+  /** Streams an exact recovery pack by immutable snapshot ID, refusing redirects and mismatched bytes. */
+  async verifyRecoveryFile(
+    input: BoatSnapshotFileReceipt,
+  ): Promise<BoatResult<BoatSnapshotFileReceipt>> {
+    const parsed = z
+      .strictObject({
+        snapshotId: z.string().regex(/^[A-Za-z0-9_-]{1,256}$/),
+        path: z
+          .string()
+          .regex(/^\/var\/lib\/sealant\/guest\/capsules\/[a-f0-9-]{36}\/capsule\.pack$/),
+        bytes: z
+          .number()
+          .int()
+          .positive()
+          .max(16 * 1024 ** 3 + 64 * 1024 ** 2),
+        sha256: z.string().regex(/^[a-f0-9]{64}$/),
+      })
+      .safeParse(input);
+    if (!parsed.success)
+      return { ok: false, error: new BoatApiError("verifyRecoveryFile", null, "invalid_input") };
+    let status: number | null = null;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
+      const query = new URLSearchParams({ path: parsed.data.path });
+      const response = await fetch(
+        `${this.#base}/snapshots/${parsed.data.snapshotId}/files?${query}`,
+        {
+          method: "GET",
+          redirect: "error",
+          signal: AbortSignal.timeout(this.#timeout),
+          headers: {
+            Authorization: `Bearer ${this.#credential.reveal()}`,
+            "Accept-Encoding": "identity",
+          },
+        },
+      );
+      status = response.status;
+      reader = response.body?.getReader();
+      if (response.status !== 200 || reader === undefined)
+        return {
+          ok: false,
+          error: new BoatApiError("verifyRecoveryFile", status, "invalid_response"),
+        };
+      const hash = createHash("sha256");
+      let bytes = 0;
+      for (;;) {
+        const part = await reader.read();
+        if (part.done) break;
+        bytes += part.value.byteLength;
+        if (bytes > parsed.data.bytes)
+          return {
+            ok: false,
+            error: new BoatApiError("verifyRecoveryFile", status, "content_mismatch"),
+          };
+        hash.update(part.value);
+      }
+      if (bytes !== parsed.data.bytes || hash.digest("hex") !== parsed.data.sha256)
+        return {
+          ok: false,
+          error: new BoatApiError("verifyRecoveryFile", status, "content_mismatch"),
+        };
+      return { ok: true, value: parsed.data };
+    } catch {
+      return {
+        ok: false,
+        error: new BoatApiError("verifyRecoveryFile", status, "transport_error"),
+      };
+    } finally {
+      await reader?.cancel().catch(() => undefined);
+    }
   }
 
   async deleteSnapshot(name: BoatSnapshotName): Promise<BoatResult<void>> {

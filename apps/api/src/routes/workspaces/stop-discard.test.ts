@@ -33,6 +33,7 @@ const now = new Date("2026-09-27T12:00:00.000Z");
 const harness = (
   status: Workspace["status"],
   options: {
+    readonly canonicalState?: "active" | "parked" | "closed";
     readonly observedEpoch?: number;
     /** More of Core's last observation than its epoch (`last_status`), and when it was read. */
     readonly observedStatus?: Record<string, unknown>;
@@ -58,6 +59,7 @@ const harness = (
   const recoveries: string[] = [];
   const stops: string[] = [];
   const statuses: string[] = [];
+  const retained: string[] = [];
   const workspace = {
     id: "ws_1",
     ownerUserId: "user_owner",
@@ -111,19 +113,28 @@ const harness = (
         ),
     } as unknown as WorkspaceRuntimeInstanceRepoService),
     Layer.succeed(WorkspaceCaptureDrainRepo, {
+      preservation: Effect.succeed({
+        read: () => Effect.succeed({ state: options.canonicalState }),
+      }),
+      markRetained: (input: { runId: string }) => {
+        retained.push(input.runId);
+        return Effect.void;
+      },
       requestDiscard: (input: { runId: string; requestedBy: string }) => {
         discards.push(input);
         return Effect.succeed({} as WorkspaceCaptureDrain);
       },
       getByRunId: () =>
         Effect.succeed(
-          options.observedEpoch === undefined
-            ? undefined
-            : ({
-                runId: "run_1",
-                lastStatus: { epoch: options.observedEpoch, ...options.observedStatus },
-                lastStatusAt: options.observedAt ?? null,
-              } as unknown as WorkspaceCaptureDrain),
+          options.canonicalState !== undefined
+            ? { runId: "run_1", custodyContract: 3 }
+            : options.observedEpoch === undefined
+              ? undefined
+              : ({
+                  runId: "run_1",
+                  lastStatus: { epoch: options.observedEpoch, ...options.observedStatus },
+                  lastStatusAt: options.observedAt ?? null,
+                } as unknown as WorkspaceCaptureDrain),
         ),
       attestCompletion: (input: { runId: string; executorId: string; epoch: number }) => {
         attestations.push(input);
@@ -174,6 +185,7 @@ const harness = (
     stop,
     recover,
     discards,
+    retained,
     attestations,
     recoveries,
     stops,
@@ -182,6 +194,24 @@ const harness = (
     cancelledAttempts,
   };
 };
+
+describe("canonical Boat stop", () => {
+  it("retains the current incarnation without enqueueing a stop of the historical source", async () => {
+    const h = harness("stopped", { canonicalState: "active" });
+    expect(await h.stop({ ownerUserId: "user_owner", discardUnsaved: true })).toMatchObject({
+      status: "retained",
+    });
+    expect(h.retained).toEqual(["run_1"]);
+    expect(h.discards).toEqual([{ runId: "run_1", requestedBy: "user_owner" }]);
+    expect(h.stops).toEqual([]);
+  });
+  it("reports completed lineage without reopening retention", async () => {
+    const h = harness("stopped", { canonicalState: "closed" });
+    expect(await h.stop({ ownerUserId: "user_owner" })).toMatchObject({ status: "stopped" });
+    expect(h.retained).toEqual([]);
+    expect(h.stops).toEqual([]);
+  });
+});
 
 describe("stopWorkspace · before the image is built", () => {
   it("cancels a launch still building its image: nothing launches, and the run ends cancelled", async () => {

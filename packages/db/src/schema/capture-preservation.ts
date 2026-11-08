@@ -6,6 +6,7 @@ import {
   foreignKey,
   index,
   integer,
+  jsonb,
   primaryKey,
   snakeCase,
   text,
@@ -445,7 +446,42 @@ export const boatSnapshotAllowanceObservations = snakeCase.table(
   (t) => [
     check(
       "boat_allowance_counts",
-      sql`${t.included} = 10 and ${t.used} >= 0 and ${t.extra} = greatest(0, ${t.used} - ${t.included}) and ${t.extraDailyDollars} >= 0`,
+      sql`${t.included} >= 10 and ${t.used} >= 0 and ${t.extra} = greatest(0, ${t.used} - ${t.included}) and ${t.extraDailyDollars} >= 0`,
     ),
+  ],
+);
+
+/** Immutable positive observations beneath the canonical capture root, never dispatch authority. */
+export const capturePreservationEvidence = snakeCase.table(
+  "capture_preservation_evidence",
+  {
+    runId: text().notNull(),
+    id: uuid().notNull(),
+    operationId: uuid().notNull(),
+    kind: text({
+      enum: [
+        "writer-closed",
+        "personal-scope",
+        "snapshot-ready",
+        "capsule-verified",
+        "resources-revoked",
+        "recovery-hydrated",
+        "recovery-rebound",
+        "lineage-discharged",
+        "snapshot-deleted",
+      ],
+    }).notNull(),
+    digest: text().notNull(),
+    value: jsonb().$type<unknown>().notNull(),
+    recordedAt: instant().notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.runId, t.id] }),
+    unique("capture_evidence_operation_kind").on(t.runId, t.operationId, t.kind),
+    foreignKey({
+      columns: [t.runId, t.operationId],
+      foreignColumns: [capturePreservationOperations.runId, capturePreservationOperations.id],
+    }),
+    check("capture_evidence_digest", sql`${t.digest} ~ '^[0-9a-f]{64}$'`),
   ],
 );

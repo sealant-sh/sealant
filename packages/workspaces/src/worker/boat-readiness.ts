@@ -1,6 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 
-import { BoatAllocationRepo, BoatAllocationRepoLive, type SealantDB } from "@sealant/db";
+import {
+  BoatAllocationRepo,
+  BoatAllocationRepoLive,
+  WorkspaceCaptureDrainRepo,
+  WorkspaceCaptureDrainRepoLive,
+  type SealantDB,
+} from "@sealant/db";
 import type { BoatExecutionTarget } from "@sealant/validators";
 import { Context, Effect, Layer, Schedule } from "effect";
 
@@ -9,6 +15,7 @@ import {
   BoatExecutionError,
   type BoatReadyReceipt,
 } from "../runtime/boat/execution.js";
+import { boatTargetIsCurrent } from "./boat-current.js";
 import { BoatResources } from "./boat-resources.js";
 
 /** Refusal leaves the original invocation and reservations in custody. No output or secrets escape. */
@@ -38,20 +45,20 @@ export class BoatReadiness extends Context.Service<BoatReadiness, BoatReadinessS
 const make: Effect.Effect<
   BoatReadinessService,
   never,
-  BoatAllocationRepo | BoatExecution | BoatResources
+  BoatAllocationRepo | WorkspaceCaptureDrainRepo | BoatExecution | BoatResources
 > = Effect.gen(function* () {
-  const allocations = yield* BoatAllocationRepo;
   const execution = yield* BoatExecution;
   const resources = yield* BoatResources;
+  const canonical = yield* WorkspaceCaptureDrainRepo;
+  const allocationRepo = yield* BoatAllocationRepo;
+  const isCurrent = (target: BoatExecutionTarget) =>
+    boatTargetIsCurrent(target, true).pipe(
+      Effect.provideService(WorkspaceCaptureDrainRepo, canonical),
+      Effect.provideService(BoatAllocationRepo, allocationRepo),
+    );
   const current = (target: BoatExecutionTarget) =>
     Effect.gen(function* () {
-      const record = yield* allocations.get(target.runtimeInstanceId);
-      if (
-        record?.phase !== "bound" ||
-        !isDeepStrictEqual(record.target, target) ||
-        !(yield* allocations.isActive(target.runId))
-      )
-        return yield* Effect.fail(new BoatReadinessError("held"));
+      if (!(yield* isCurrent(target))) return yield* Effect.fail(new BoatReadinessError("held"));
     });
   const observe = Effect.fn("BoatReadiness.observe")(function* (target: BoatExecutionTarget) {
     yield* current(target);
@@ -116,11 +123,13 @@ const make: Effect.Effect<
 export const boatReadinessLayerNoDeps: Layer.Layer<
   BoatReadiness,
   never,
-  BoatAllocationRepo | BoatExecution | BoatResources
+  BoatAllocationRepo | WorkspaceCaptureDrainRepo | BoatExecution | BoatResources
 > = Layer.effect(BoatReadiness, make);
 /** Owns allocation reads; the worker shares its existing execution and resource owners. */
 export const boatReadinessLayer: Layer.Layer<
   BoatReadiness,
   never,
   SealantDB | BoatExecution | BoatResources
-> = boatReadinessLayerNoDeps.pipe(Layer.provide(BoatAllocationRepoLive));
+> = boatReadinessLayerNoDeps.pipe(
+  Layer.provide(Layer.merge(BoatAllocationRepoLive, WorkspaceCaptureDrainRepoLive)),
+);

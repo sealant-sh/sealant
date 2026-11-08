@@ -44,7 +44,7 @@ class NetworkProof(unittest.TestCase):
         for name in (self.guest, self.gateway):
             self.names.append(name)
         try:
-            self.docker('run', '-d', '--name', self.guest, '--privileged', '--network', self.networks[0],
+            self.docker('run', '-d', '--name', self.guest, '--privileged', '--cgroupns', 'private', '--network', self.networks[0],
                         '--ip', self.base + '4', self.guest_image)
             self.docker('exec', self.guest, 'ip', 'link', 'add', 'preflight', 'type', 'wireguard')
             self.docker('exec', self.guest, 'ip', 'link', 'delete', 'preflight')
@@ -202,6 +202,11 @@ print({})''', self.config)
         self.assertEqual(partial, {})
         self.assertIn('network-setup-unresolved', self.execute(self.guest, self.configure_script, self.config)['error'])
         self.assertEqual(self.docker('exec', self.guest, 'ip', 'netns', 'list'), '')
+
+    def test_real_parking_writer_closure_and_volatile_hydration(self):
+        self.docker('exec', self.guest, 'mount', '-o', 'remount,rw', '/sys/fs/cgroup')
+        result = self.docker('exec', self.guest, 'python3', '-B', '/var/lib/sealant/guest/parking_kernel_proof.py')
+        self.assertIn('real-cgroup-freeze-export-kill-hydrate', result)
 
     def test_replaced_namespace_cannot_adopt_or_recreate(self):
         self.assertNotIn('error', self.execute(self.guest, self.configure_script, self.config))

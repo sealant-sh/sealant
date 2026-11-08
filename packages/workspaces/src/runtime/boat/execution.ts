@@ -132,7 +132,7 @@ export interface BoatGuestTransport {
   readonly call: (
     access: BoatHostedControl,
     bearer: BoatSecret,
-    route: "status" | "stage" | "start" | "isolate" | "permit" | "readiness" | "recover",
+    route: "status" | "stage" | "start" | "isolate" | "permit" | "readiness" | "recover" | "park",
     body?: Redacted.Redacted<string>,
   ) => Promise<unknown>;
   /** Round-trips daemon health and capabilities through the authenticated relay. */
@@ -145,6 +145,14 @@ export interface BoatDaemonReady {
   readonly healthy: boolean;
   readonly supports: readonly string[];
 }
+
+/** Only public identity requests use the provider command channel. Launch secrets use hosted HTTPS. */
+export const boatGuestPublicCommand = (action: "bind" | "resume", request: unknown) => {
+  const raw = JSON.stringify(request);
+  if (raw.length > 8192) throw new BoatExecutionError("invalid-input");
+  const root = "/var/lib/sealant/guest";
+  return `${root}/bundle/lib64/ld-linux-x86-64.so.2 --inhibit-cache --library-path ${root}/bundle/lib/x86_64-linux-gnu:${root}/bundle/usr/lib/x86_64-linux-gnu:${root}/bundle/usr/lib/x86_64-linux-gnu/systemd ${root}/bundle/usr/bin/python3 -I -S -B ${root}/guest_boot.py ${action} '${raw.replaceAll("'", "'\\''")}'`;
+};
 
 /** The only production transport: no provider upload or command receives launch secrets. */
 export const createBoatGuestTransport = (
@@ -205,10 +213,7 @@ export const createBoatGuestTransport = (
       const key = createPublicKey(publicRequest.data.public_key);
       if (key.asymmetricKeyType !== "rsa" || key.asymmetricKeyDetails?.modulusLength !== 3072)
         throw new BoatExecutionError("invalid-input");
-      const raw = JSON.stringify(publicRequest.data);
-      if (raw.length > 8192) throw new BoatExecutionError("invalid-input");
-      const root = "/var/lib/sealant/guest";
-      const command = `${root}/bundle/lib64/ld-linux-x86-64.so.2 --inhibit-cache --library-path ${root}/bundle/lib/x86_64-linux-gnu:${root}/bundle/usr/lib/x86_64-linux-gnu:${root}/bundle/usr/lib/x86_64-linux-gnu/systemd ${root}/bundle/usr/bin/python3 -I -S -B ${root}/guest_boot.py bind '${raw.replaceAll("'", "'\\''")}'`;
+      const command = boatGuestPublicCommand("bind", publicRequest.data);
       const result = await api.execute(id, command, { timeoutSeconds: 90 });
       if (
         !result.ok ||
@@ -268,6 +273,14 @@ export class BoatGuestTransportService extends Context.Service<
 >()("@sealant/workspaces/boat/BoatGuestTransport") {}
 /** Owns sealed bootstrap and one frozen admission. Running acknowledges an invocation, not daemon readiness. */
 export interface BoatExecutionService {
+  /** Reopens only the original encrypted payload for its canonical custody owner. Never reads guest disk secrets. */
+  readonly parkingMaterial: (target: BoatExecutionTarget) => Effect.Effect<
+    Redacted.Redacted<{
+      readonly files: readonly { readonly name: string; readonly bytes: Uint8Array }[];
+      readonly pins: BoatAdmissionPins;
+    }>,
+    Failure
+  >;
   /** Replays only the reserved exchange; a different target or boot refuses. */
   readonly exchange: (target: BoatExecutionTarget) => Effect.Effect<void, Failure>;
   /** The payload is used only on first preparation. Later calls deliver the original sealed envelope. */
@@ -296,6 +309,11 @@ export interface BoatExecutionService {
   readonly recover: (
     target: BoatExecutionTarget,
   ) => Effect.Effect<"running" | "pending" | "held", Failure>;
+  /** Closes the held invocation's writers and returns its durable volatile-data capsule. */
+  readonly park: (
+    target: BoatExecutionTarget,
+    operationId: string,
+  ) => Effect.Effect<BoatParkingReceipt, Failure>;
   /** Freezes isolation receipts before authenticated, replay-safe permit issuance. */
   readonly permit: (
     target: BoatExecutionTarget,
@@ -303,6 +321,15 @@ export interface BoatExecutionService {
   ) => Effect.Effect<void, Failure>;
   /** Fresh observation only. Never starts, grants a permit or publishes a runtime row. */
   readonly readiness: (target: BoatExecutionTarget) => Effect.Effect<BoatReadyReceipt, Failure>;
+}
+/** Correlated guest evidence only. Provider stop, snapshot custody and deletion are separate. */
+export interface BoatParkingReceipt {
+  readonly operationId: string;
+  readonly capsuleHash: string;
+  readonly archiveHash: string;
+  readonly contentBytes: number;
+  readonly storedBytes: number;
+  readonly entries: number;
 }
 /** A current observation, never durable authority to admit a later request. */
 export interface BoatReadyReceipt {
@@ -560,7 +587,10 @@ const make: Effect.Effect<
             identity: identity(record.target),
             boot_id: record.target.bootId,
             epoch: 1,
-            operation_id: randomUUID(),
+            operation_id:
+              record.target.runtimeInstanceId === record.target.runId
+                ? randomUUID()
+                : record.target.launchAttemptId,
             files,
           },
           pins,
@@ -575,6 +605,7 @@ const make: Effect.Effect<
           operationId: wire.wire.operation_id,
           digest: sha256(canonical(wire)),
           sealedEnvelope,
+          sealedResumeEnvelope: sealedEnvelope,
         },
       });
     }
@@ -922,7 +953,98 @@ const make: Effect.Effect<
         ? "pending"
         : "held";
   });
+  const park = Effect.fn("BoatExecution.park")(function* (
+    target: BoatExecutionTarget,
+    operationId: string,
+  ) {
+    const record = yield* load(target.runtimeInstanceId);
+    if (!isDeepStrictEqual(record.target, target))
+      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    if (record.phase !== "held" || record.admission === null || record.isolation === undefined)
+      return yield* Effect.fail(new BoatExecutionError("invocation-held"));
+    const request = yield* attempt("invalid-input", () => ({
+      format: "sealant-parking-close-v1",
+      binding: {
+        identity: identity(target),
+        boot_id: target.bootId,
+        epoch: record.admission?.epoch,
+        operation_id: record.admission?.operationId,
+      },
+      operation_id: z.uuid().parse(operationId),
+    }));
+    const connection = yield* access(record);
+    const result = yield* io(() =>
+      transport.call(
+        connection.hosted,
+        connection.bearer,
+        "park",
+        Redacted.make(JSON.stringify(request)),
+      ),
+    );
+    const receipt = yield* attempt("invalid-reply", () => {
+      const parsed = z
+        .strictObject({
+          format: z.literal("sealant-parking-status-v1"),
+          request: z.unknown(),
+          phase: z.literal("closed"),
+          writers: z.literal("closed"),
+          capsule: z.strictObject({
+            sha256: z.string().regex(/^[a-f0-9]{64}$/),
+            archive_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+            bytes: z
+              .number()
+              .int()
+              .nonnegative()
+              .max(16 * 1024 ** 3),
+            stored_bytes: z
+              .number()
+              .int()
+              .positive()
+              .max(16 * 1024 ** 3 + 64 * 1024 ** 2),
+            entries: z.number().int().nonnegative().max(200_000),
+          }),
+        })
+        .parse(result);
+      if (!isDeepStrictEqual(parsed.request, request)) throw new Error();
+      return {
+        operationId,
+        capsuleHash: parsed.capsule.sha256,
+        archiveHash: parsed.capsule.archive_sha256,
+        contentBytes: parsed.capsule.bytes,
+        storedBytes: parsed.capsule.stored_bytes,
+        entries: parsed.capsule.entries,
+      };
+    });
+    if (!isDeepStrictEqual(yield* load(target.runtimeInstanceId), record))
+      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    return receipt;
+  });
   return BoatExecution.of({
+    parkingMaterial: (target) =>
+      Effect.gen(function* () {
+        const record = yield* load(target.runtimeInstanceId);
+        if (
+          !isDeepStrictEqual(record.target, target) ||
+          record.admission?.sealedResumeEnvelope == null
+        )
+          return yield* Effect.fail(new BoatExecutionError("invocation-held"));
+        const envelope = yield* open(
+          record,
+          "admission",
+          record.admission.sealedResumeEnvelope,
+          envelopeSchema,
+        );
+        const value = Redacted.value(envelope);
+        if (sha256(canonical(value)) !== record.admission.digest)
+          return yield* Effect.fail(new BoatExecutionError("seal-context-mismatch"));
+        return Redacted.make({
+          pins: value.pins,
+          files: value.wire.files.map((file) => ({
+            name: file.name,
+            bytes: Buffer.from(file.data, "base64"),
+          })),
+        });
+      }),
     exchange,
     stage,
     start,
@@ -932,6 +1054,7 @@ const make: Effect.Effect<
     control,
     hold,
     recover,
+    park,
   });
 });
 /** Open assembly for worker infrastructure and faithful test transports. */
