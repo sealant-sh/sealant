@@ -167,7 +167,7 @@ describe.skipIf(!directory)(
       const mutations = [...f.mutations];
       expect(await f.builder.build({ spec: f.spec, ownership })).toMatchObject({
         ok: false,
-        error: { code: "native-build-abandoned" },
+        error: { code: "native-save-failed" },
       });
       expect(f.mutations).toEqual(mutations);
     });

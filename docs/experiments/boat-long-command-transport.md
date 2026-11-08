@@ -2,16 +2,16 @@
 
 ## Result
 
-The one authorized native build did not produce a saved publication. With NDJSON streaming and
-transport timers covering the full command budget, `install-recipe` ran 478.215 seconds before an
-HTTP 200 stream lost its socket. The safe cause was `UND_ERR_SOCKET`, not a headers/body timeout.
-There was no terminal command result, so there is no exit code, timeout flag or stderr result to
-report.
+The final detached implementation passed the separately authorized full 22-package Ubuntu native
+build. `install-recipe` returned exit code 0 after 416.114 seconds and 380 status reads. The build
+produced a ready saved publication after 465.794 seconds. Its scratch VM was positively deleted, the
+saved artifact was deleted through its original journal, same-journal cleanup succeeded, and
+complete final inventories contained no sandboxes or snapshots. No third build was made.
 
-The final implementation uses Boat's documented detached command start and status reads for commands
-longer than 30 seconds. Local proofs pass. That implementation has not had a live native build. The
-allocation authorization was consumed by the streaming attempt, and no second allocation was made. A
-successful saved-publication build remains required before claiming native-build acceptance.
+The earlier streaming attempt failed after 478.215 seconds with an HTTP 200 `UND_ERR_SOCKET` and no
+terminal result. That failure remains recorded below. It does not identify who closed the socket.
+Native-build acceptance is now proven; the real Mend create/stop/resume proof remains for VM 131
+session 5.
 
 ## Diagnosis and API contract
 
@@ -113,10 +113,31 @@ production file loader in a mapped-root namespace. Its mode was temporarily tigh
 restored to 0600. Its bytes were never printed, copied, or passed in an environment variable or
 argument. No VM 131 writes occurred.
 
-A new Mend preview must bundle the changed Core worker. No database migration or sealantd pin change
-is needed. End-to-end session acceptance remains unproved.
+## Detached live acceptance
 
-The transport change does not change the recipe key. VM 131's run-4 publication `34aa66fd` remains
-quarantined for that same key, so an ordinary retry will refuse rather than rebuild it. A deliberate
-failed-reservation retry/replacement is needed before another session proof; no automatic reset or
-VM 131 database write was made.
+Source: `05ce0e85`, with the final detached implementation from `ac891ddb`. Subsequent #477 changes
+only rename a test-local PID. The recovery layer changes failed-journal metadata, not this
+successful construction path. The runner used the same 22-package Ubuntu recipe and pinned sealantd
+next.180. It counted actual HTTP status requests with Node's undici diagnostics channel, without
+recording headers, arguments, output or key bytes.
+
+- Scratch VM: `bx_rg2a773m`, labelled `sealant-dev=boat-stream`.
+- Build: `6c15cf4b-5974-4955-9f47-9719b41da71b`.
+- Reserved publication: `5b3765e5-80be-402c-8039-ebff95a4e790`.
+- `install-recipe`: 416.114 seconds, 380 status polls, exit code 0, `timedOut: false`.
+- Build through ready saved publication: 465.794 seconds.
+- Saved snapshot: `585ea12b-dc09-4b2e-aa09-4040c8be54b5`, subsequently deleted.
+- Positive scratch deletion: `bdop_f2444f335d4c4ab1ab978467ab160706`.
+- Final journal: phase `published`, allocation `deleted`, exact artifact removal `complete`.
+- Artifact deletion and same-journal cleanup: success.
+- Complete final inventories: `sandboxes: []`, `snapshots: []`, `pages: 1`.
+
+Safe evidence is retained locally under `.audit/boat-detached-acceptance-20261108/live/`. The key
+was read only by the production file loader, never printed, copied, or passed in an environment
+variable or argument. Its original mode was restored. No VM 131 access, writes or third build.
+
+A new Mend preview must bundle the changed Core worker. The transport layer alone needs no
+migration. The stacked [failed-build recovery](boat-failed-build-recovery.md) layer adds a migration
+and restores ordinary acquisition for run 4's quarantined recipe without a manual DB reset. The real
+session proof still gates admission; a successful native build adds no claim for readiness, resource
+reach, stop/resume, or parking.

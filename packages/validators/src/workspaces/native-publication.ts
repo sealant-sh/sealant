@@ -141,7 +141,18 @@ export const nativeCatalogClaimSchema = z.object({
   purpose: z.enum(["build", "reconcile", "remove"]),
   expiresAt: z.date(),
 });
+/** Only completed construction failures may spend one fresh reservation. Integrity and cleanup stay closed. */
+export const nativeBuildRetryReasonSchema = z.enum([
+  "native-provider-transport_error",
+  "native-provider-provider_error",
+  "native-guest-command-failed",
+  "native-sandbox-failed",
+  "native-save-failed",
+  "native-interrupted",
+]);
 const reservation = z.object({
+  buildAttempt: z.number().int().min(1).max(2).default(1),
+  replacesPublicationId: z.uuid().nullable().default(null),
   ownership: nativeBuildOwnershipSchema,
   generation: z.number().int().nonnegative(),
   claim: nativeCatalogClaimSchema.nullable(),
@@ -150,17 +161,28 @@ const reservation = z.object({
   reason: z.string().nullable(),
 });
 /** Parsed lifecycle states keep incomplete publications out of ready/removal paths. */
-export const nativeCatalogRecordSchema = z.discriminatedUnion("state", [
-  reservation.extend({ state: z.literal("reserved"), publication: z.null() }),
-  reservation.extend({ state: z.literal("building"), publication: z.null() }),
-  reservation.extend({ state: z.literal("ready"), publication: nativePublicationSchema }),
-  reservation.extend({ state: z.literal("retiring"), publication: nativePublicationSchema }),
-  reservation.extend({ state: z.literal("removed"), publication: nativePublicationSchema }),
-  reservation.extend({
-    state: z.literal("quarantined"),
-    publication: nativePublicationSchema.nullable(),
-  }),
-]);
+export const nativeCatalogRecordSchema = z
+  .discriminatedUnion("state", [
+    reservation.extend({ state: z.literal("reserved"), publication: z.null() }),
+    reservation.extend({ state: z.literal("building"), publication: z.null() }),
+    reservation.extend({
+      state: z.literal("superseded"),
+      publication: z.null(),
+      claim: z.null(),
+      reason: nativeBuildRetryReasonSchema,
+      buildAttempt: z.literal(1),
+    }),
+    reservation.extend({ state: z.literal("ready"), publication: nativePublicationSchema }),
+    reservation.extend({ state: z.literal("retiring"), publication: nativePublicationSchema }),
+    reservation.extend({ state: z.literal("removed"), publication: nativePublicationSchema }),
+    reservation.extend({
+      state: z.literal("quarantined"),
+      publication: nativePublicationSchema.nullable(),
+    }),
+  ])
+  .refine((record) => (record.buildAttempt === 1) === (record.replacesPublicationId === null), {
+    message: "Replacement builds require their exact predecessor",
+  });
 /** Exact durable consumer binding, unchanged by retries. */
 export type NativeArtifactConsumer = z.infer<typeof nativeArtifactConsumerSchema>;
 /** Parsed reservation; editable ORM rows never leave the repository. */

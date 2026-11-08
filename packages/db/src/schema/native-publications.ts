@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   check,
   index,
+  foreignKey,
   integer,
   jsonb,
   primaryKey,
@@ -20,6 +21,8 @@ export const nativePublications = snakeCase.table(
   {
     id: uuid().primaryKey(),
     buildId: uuid().notNull().unique(),
+    buildAttempt: integer().notNull().default(1),
+    replacesPublicationId: uuid().unique(),
     keyHash: text().notNull(),
     keyPayload: jsonb().$type<unknown>().notNull(),
     deploymentId: text().notNull(),
@@ -39,7 +42,7 @@ export const nativePublications = snakeCase.table(
   (table) => [
     uniqueIndex("native_publications_key_active")
       .on(table.keyHash)
-      .where(sql`${table.state} <> 'removed'`),
+      .where(sql`${table.state} not in ('removed','superseded')`),
     index("native_publications_scope_retention").on(
       table.deploymentId,
       table.scopeKind,
@@ -50,7 +53,12 @@ export const nativePublications = snakeCase.table(
     index("native_publications_reconcile").on(table.state, table.claimUntil),
     check(
       "native_publications_state",
-      sql`${table.state} in ('reserved','building','ready','retiring','removed','quarantined')`,
+      sql`${table.state} in ('reserved','building','ready','retiring','removed','quarantined','superseded')`,
+    ),
+    foreignKey({ columns: [table.replacesPublicationId], foreignColumns: [table.id] }),
+    check(
+      "native_publications_build_attempt",
+      sql`(${table.buildAttempt} = 1 and ${table.replacesPublicationId} is null) or (${table.buildAttempt} = 2 and ${table.replacesPublicationId} is not null and ${table.replacesPublicationId} <> ${table.id})`,
     ),
     check("native_publications_generation", sql`${table.generation} >= 0`),
     check(
@@ -60,7 +68,7 @@ export const nativePublications = snakeCase.table(
     check("native_publications_scope", sql`${table.scopeKind} in ('owner','resource-domain')`),
     check(
       "native_publications_payload",
-      sql`(${table.state} in ('reserved','building') and ${table.publication} is null) or (${table.state} in ('ready','retiring','removed') and ${table.publication} is not null) or ${table.state} = 'quarantined'`,
+      sql`(${table.state} in ('reserved','building','superseded') and ${table.publication} is null) or (${table.state} in ('ready','retiring','removed') and ${table.publication} is not null) or ${table.state} = 'quarantined'`,
     ),
   ],
 );
