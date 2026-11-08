@@ -1,6 +1,7 @@
 import {
   claudeApiKeyUnsupported,
   claudeCredentialsFile,
+  endpointKeyUnsupported,
   githubHostsYml,
   loginClassOf,
   parseConnectedAccountRef,
@@ -106,6 +107,9 @@ const planLogin = (
       };
     }
     case "codex": {
+      if ("apiKey" in payload && payload.baseUrl !== undefined) {
+        return { kind: "unsupported", message: endpointKeyUnsupported(account.name) };
+      }
       const planned = planCredentialInjections(provider, payload);
       if (home === undefined) return { kind: "planned", injections: planned };
       return {

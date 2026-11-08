@@ -124,6 +124,40 @@ describe.skipIf(DATABASE_URL === undefined)("a workspace's logins at create (Pos
     ]);
   });
 
+  it("refuses a Codex key on an endpoint with words, and skips one a profile binds", async () => {
+    const onEndpoint = {
+      apiKey: "sk-proj-FAKEcodexkeyforthetests0000wxyz",
+      baseUrl: "https://gateway.example.test/v1",
+    };
+    const owner = await personWith("codex", "api-key", onEndpoint);
+    expect(
+      await run(
+        Effect.flip(
+          workspaces.resolveWorkspaceCredentialRefs({
+            ownerUserId: owner,
+            credentials: { codex: "default" },
+          }),
+        ),
+      ),
+    ).toMatchObject({
+      _tag: "WorkspaceConflictError",
+      code: "connected-account-unsupported",
+      provider: "codex",
+      message: expect.stringContaining("custom endpoint"),
+    });
+
+    const profileId = `prof_${randomUUID()}`;
+    const bound = await personWith("codex", "api-key", onEndpoint, profileId);
+    expect(
+      await run(
+        workspaces.resolveWorkspaceCredentialRefs({
+          ownerUserId: bound,
+          credentials: { profileId },
+        }),
+      ),
+    ).toEqual([]);
+  });
+
   it("skips a profile's Claude key as it skips any unusable binding, and creates", async () => {
     const profileId = `prof_${randomUUID()}`;
     const owner = await personWith(

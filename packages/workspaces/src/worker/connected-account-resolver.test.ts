@@ -478,6 +478,20 @@ describe("resolveCredentialInjections with an API key", () => {
     }),
   );
 
+  it.effect("refuses a Codex key on an endpoint, at $HOME and in a home, with words", () =>
+    Effect.gen(function* () {
+      const onEndpoint = codexKeyAccount({
+        apiKey: codexKey,
+        baseUrl: "https://gateway.example.test/v1",
+      });
+      for (const credentialsHome of [undefined, home]) {
+        const error = yield* launch(onEndpoint, "codex", credentialsHome).pipe(Effect.flip);
+        expect(error.errorCode).toBe("connected-account-unsupported");
+        expect(error.message).toContain("custom endpoint");
+      }
+    }),
+  );
+
   it.effect("refuses a Claude key, at $HOME and in a home, with words", () =>
     Effect.gen(function* () {
       const claudeKey = createAccount({
