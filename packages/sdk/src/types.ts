@@ -856,6 +856,12 @@ export interface WorkspaceEnvFromSource {
 }
 
 export interface CreateOptions {
+  /**
+   * Require this runtime for the new workspace. Omitted, use the deployment's default.
+   * An unavailable runtime is refused; it never falls back to another runtime. Boat still
+   * requires the deployment's operator admission and supported source/image settings.
+   */
+  readonly runtime?: WorkspaceRuntimeInfo["kind"];
   /** Reuse images within this existing resource domain, subject to current owner membership. */
   readonly imageScopeId?: string;
   /**

@@ -6,8 +6,7 @@
  * job's own records — the worker publishes the image under plan-keyed coordinates (one repository
  * per OS family, one tag per plan hash), so this name never reaches the registry — and
  * we derive. `customization.enableSealantd` is forced on (it bakes + launches the daemon the run path
- * connects to), the runtime target is `auto` (the deployment's default adapter — Docker on self-host, Kubernetes
- * when the worker is configured for a cluster), and the
+ * connects to), the runtime target defaults to `auto`; an explicit selection requires that runtime. The
  * foreground is a keepalive so the workspace idles with the daemon up and the harness is exec'd on
  * demand by `run()` rather than launched at boot. `options.credentials`, if present, is lowered via
  * `mapWorkspaceCredentials` (see `./credentials.js`) and folded into `spec.credentials`; the control
@@ -44,6 +43,14 @@ export const buildCreateWorkspaceRequest = (
   options: CreateOptions,
   config: SealantInternalConfig,
 ): { readonly payload: CreateWorkspaceRequest } => {
+  if (
+    options.runtime !== undefined &&
+    !["docker", "k8s", "k3s", "cloudflare", "microvm", "boat"].includes(options.runtime)
+  ) {
+    throw new SealantError("workspaces.create runtime must name a supported runtime family.", {
+      code: "invalid_create_options",
+    });
+  }
   if ((options.repository === undefined) === (options.source === undefined)) {
     throw new SealantError(
       "workspaces.create requires exactly one of `repository` (a git remote to clone) or `source` (a caller-owned mount).",
@@ -306,9 +313,10 @@ export const buildCreateWorkspaceRequest = (
         options.baseImage !== undefined
           ? { family: "custom", mode: "require", baseImage: options.baseImage }
           : { family: options.os ?? "fedora", mode: "prefer" },
-      // `auto` = the deployment's DEFAULT_RUNTIME_ADAPTER. SDK callers don't know (and must not
-      // care) whether the control plane runs workspaces as containers or Pods.
-      runtime: { family: "auto", mode: "prefer" },
+      runtime:
+        options.runtime === undefined
+          ? { family: "auto", mode: "prefer" }
+          : { family: options.runtime, mode: "require" },
     },
     lifecycle: {
       startup: { foreground: { kind: "command", run: "sleep infinity", shell: "bash" } },

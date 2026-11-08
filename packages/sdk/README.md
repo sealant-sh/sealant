@@ -44,6 +44,17 @@ await run.record.replay();
 - **Harness-neutral.** `opencode()`, `codex()`, `claudeCode()`, and `customHarness()` are thin
   client values describing how to invoke a harness one-shot.
 
+## Choose a runtime
+
+`workspaces.create({ repository, harness, runtime: "docker" })` requires Docker. The same option
+accepts `boat`, `k8s`, `k3s`, `cloudflare` or `microvm`. An unavailable or unsupported choice is
+refused rather than replaced with another runtime. Omit `runtime` to keep the deployment's default.
+The choice applies to this new workspace; it does not move an existing workspace.
+
+Boat still requires the operator's admission settings, a supported image and a capture source.
+Selecting it through the SDK grants no admission. The SDK returns the control plane's refusal in
+`SealantApiError.reason` when those requirements are unmet.
+
 ## Deterministic exec
 
 Run a command in the workspace with no agent in the loop — recorded into a run record like any other
