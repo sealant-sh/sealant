@@ -236,6 +236,34 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
     });
   });
 
+  it.each(["transport-failed", "provider-http-failed", "status-http-failed"] as const)(
+    "logs safe provider failure through the real build job: %s",
+    async (mode) => {
+      await withWorkspaceJobTestDatabase(databaseUrl ?? "", async (url) => {
+        const s = await setup(undefined, undefined, url, mode);
+        const job = await s.enqueue();
+        const providerFailure = {
+          operation: mode === "status-http-failed" ? "commandStatus" : "execute",
+          status: mode === "transport-failed" ? null : 503,
+          causeClass: mode === "transport-failed" ? "UND_ERR_SOCKET" : null,
+          step: "install-recipe",
+        };
+        await expect(processWorkspaceBuildJob(s.options(job.id))).rejects.toMatchObject({
+          _tag: "WorkspaceBuildJobProcessingError",
+          message: expect.stringContaining(JSON.stringify(providerFailure)),
+          cause: { _tag: "NativeCatalogError", providerFailure },
+        });
+        const stored = await Effect.runPromise(s.jobs.getJobById(job.id));
+        expect(stored?.status).toBe("failed");
+        expect(stored?.errorMessage).toContain(JSON.stringify(providerFailure));
+        expect(JSON.stringify(stored)).not.toContain("private-token");
+        expect(s.launches).toEqual([]);
+        expect(s.fixture.deleted()).toBe(true);
+        expect(s.fixture.posts()).toBe(0);
+      });
+    },
+  );
+
   it("launches a repository-created UUID attempt through the real build job and reloads its consumer", async () => {
     const s = await setup();
     const job = await s.enqueue();

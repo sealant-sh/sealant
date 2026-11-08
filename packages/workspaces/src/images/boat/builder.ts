@@ -33,6 +33,7 @@ import { sealantdHasRecoveryBoot } from "../../runtime/daemon-recovery.js";
 import {
   nativeCommandFailure,
   nativeCommandFailureSchema,
+  nativeProviderFailureSchema,
   type NativeCommandFailure,
 } from "./command-diagnostics.js";
 import { createNativeRecipe, type NativeRecipe } from "./recipe.js";
@@ -158,6 +159,7 @@ const journalSchema = z.object({
     .regex(/^native-[a-z_-]+$/)
     .optional(),
   commandFailure: nativeCommandFailureSchema.optional(),
+  providerFailure: nativeProviderFailureSchema.optional(),
   phase: z.enum(["running", "cleanup", "published", "complete"]),
   allocation: allocationSchema,
   save: saveSchema,
@@ -244,7 +246,12 @@ export interface BoatSnapshotBuilderOptions {
 const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
 const failure = (error: unknown, path?: string) =>
   error instanceof NativeBuildError
-    ? new NativeBuildError(error.code, path ?? error.journalPath, error.commandFailure)
+    ? new NativeBuildError(
+        error.code,
+        path ?? error.journalPath,
+        error.commandFailure,
+        error.providerFailure,
+      )
     : new NativeBuildError("native-local-io-failed", path);
 
 const noop = () => undefined;
@@ -257,7 +264,13 @@ const awaitProviderResponse = async <T>(
   try {
     return await Promise.race([
       request().then((r) => {
-        if (!r.ok) throw new NativeBuildError(`native-provider-${r.error.code}`);
+        if (!r.ok)
+          throw new NativeBuildError(
+            `native-provider-${r.error.code}`,
+            undefined,
+            undefined,
+            nativeProviderFailureSchema.parse(r.error),
+          );
         return r.value;
       }),
       new Promise<never>((_, reject) => {
@@ -639,7 +652,14 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       const output = await awaitProviderResponse(
         () => this.#options.api.execute(id, `set -eu\n${script}`, { timeoutSeconds, signal }),
         signal,
-      );
+      ).catch((error: unknown) => {
+        if (error instanceof NativeBuildError && error.providerFailure !== undefined)
+          throw new NativeBuildError(error.code, error.journalPath, error.commandFailure, {
+            ...error.providerFailure,
+            step,
+          });
+        throw error;
+      });
       if (output.exitCode !== 0 || output.timedOut)
         throw new NativeBuildError(
           "native-guest-command-failed",
@@ -919,6 +939,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
           journal.phase = "cleanup";
           journal.failureCode = failure(error).code;
           journal.commandFailure = failure(error).commandFailure;
+          journal.providerFailure = failure(error).providerFailure;
           await persist(path, journal);
           await this.#cleanup(journal, path);
         } catch {
@@ -928,6 +949,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
               "native-cleanup-pending",
               path,
               failure(error).commandFailure,
+              failure(error).providerFailure,
             ),
           };
         }

@@ -94,6 +94,9 @@ export const nativeBuilderFixture = async (
     | "cancel-cleaning"
     | "command-failed"
     | "command-timeout"
+    | "transport-failed"
+    | "provider-http-failed"
+    | "status-http-failed"
     | "legacy-guest-approval",
 ) => {
   if (!directory) throw new Error("exact runtime bundle required");
@@ -121,6 +124,7 @@ export const nativeBuilderFixture = async (
     deleted = false,
     polls = 0,
     removalFailures = 0;
+  let detachedOutput = { exitCode: 0, stdout: "", stderr: "" };
   const cancellation = new AbortController();
   const server = http.createServer((request, response) => {
     const chunks: Buffer[] = [];
@@ -177,6 +181,19 @@ export const nativeBuilderFixture = async (
             labels: allocationLabels,
           },
         });
+      } else if (path.includes("/commands/1234")) {
+        if (request.method === "DELETE")
+          respond({ ok: true, processId: 1234, running: false, signaled: true });
+        else if (mode === "status-http-failed")
+          respond({ code: "provider_error", message: "Bearer private-token" }, 503);
+        else
+          respond({
+            ok: true,
+            processId: 1234,
+            status: "exited",
+            running: false,
+            ...detachedOutput,
+          });
       } else if (path.endsWith("/commands")) {
         if (
           typeof body !== "object" ||
@@ -189,18 +206,37 @@ export const nativeBuilderFixture = async (
           cancellation.abort();
           return;
         }
-        if (
-          (mode === "command-failed" || mode === "command-timeout") &&
-          body.command.includes("sudo /bin/bash")
-        ) {
+        if (body.command.includes("sudo /bin/bash")) {
+          if (mode === "transport-failed") {
+            response.destroy();
+            return;
+          }
+          if (mode === "provider-http-failed") {
+            respond({ code: "provider_error", message: "Bearer private-token" }, 503);
+            return;
+          }
+        }
+        if (mode === "command-timeout" && body.command.includes("install -d -m700")) {
           respond({
             ok: true,
-            exitCode: mode === "command-timeout" ? null : 42,
-            timedOut: mode === "command-timeout",
+            exitCode: null,
+            timedOut: true,
             stdout: "installer progress\n",
-            stderr:
-              "installer refused package\nAuthorization: Bearer fixture-private-token\nhttps://user:password@example.invalid/install?token=secret\n",
+            stderr: "installer refused package\n",
           });
+          return;
+        }
+        if ("detached" in body && body.detached === true) {
+          detachedOutput =
+            mode === "command-failed"
+              ? {
+                  exitCode: 42,
+                  stdout: "installer progress\n",
+                  stderr:
+                    "installer refused package\nAuthorization: Bearer fixture-private-token\nhttps://user:password@example.invalid/install?token=secret\n",
+                }
+              : { exitCode: 0, stdout: "", stderr: "" };
+          respond({ ok: true, processId: 1234 });
           return;
         }
         respond({

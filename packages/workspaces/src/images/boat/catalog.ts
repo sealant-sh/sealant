@@ -20,13 +20,19 @@ import {
 import { Context, Effect, Layer, Result } from "effect";
 
 import type { IBoatSnapshotBuilder } from "./builder.js";
-import { nativeCommandFailureSchema, type NativeCommandFailure } from "./command-diagnostics.js";
+import {
+  nativeCommandFailureSchema,
+  nativeProviderFailureSchema,
+  type NativeCommandFailure,
+  type NativeProviderFailure,
+} from "./command-diagnostics.js";
 import type { NativeResult } from "./runtime-bundle.js";
 
 /** A pending or failed acquisition keeps its exact durable reservation and consumer pin. */
 export class NativeCatalogError extends Error {
   readonly _tag = "NativeCatalogError";
   readonly commandFailure: NativeCommandFailure | undefined;
+  readonly providerFailure: NativeProviderFailure | undefined;
   constructor(
     readonly code:
       | "publication-pending"
@@ -36,13 +42,19 @@ export class NativeCatalogError extends Error {
     readonly publicationId?: string,
     readonly detail?: string,
     commandFailure?: NativeCommandFailure,
+    providerFailure?: NativeProviderFailure,
   ) {
+    const provider =
+      providerFailure === undefined
+        ? undefined
+        : nativeProviderFailureSchema.parse(providerFailure);
     const diagnostic =
       commandFailure === undefined ? undefined : nativeCommandFailureSchema.parse(commandFailure);
     super(
-      `Native catalog: ${code}${detail === undefined ? "" : ` (${detail})`}${diagnostic === undefined ? "" : `; command ${JSON.stringify(diagnostic)}`}`,
+      `Native catalog: ${code}${detail === undefined ? "" : ` (${detail})`}${diagnostic === undefined ? "" : `; command ${JSON.stringify(diagnostic)}`}${provider === undefined ? "" : `; provider ${JSON.stringify(provider)}`}`,
     );
     this.commandFailure = diagnostic;
+    this.providerFailure = provider;
   }
 }
 
@@ -120,6 +132,7 @@ const mechanism = <A>(
               id,
               result.error.code,
               result.error.commandFailure,
+              result.error.providerFailure,
             ),
           ),
     ),

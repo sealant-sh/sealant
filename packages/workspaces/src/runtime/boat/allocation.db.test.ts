@@ -280,6 +280,7 @@ class ProviderFixture {
 
   readonly creates: Array<{ key: string | undefined; body: Record<string, unknown> }> = [];
   readonly commands: string[] = [];
+  readonly commandResults = new Map<number, { exitCode: number; stdout: string; stderr: string }>();
   readonly reads: string[] = [];
   labels: Record<string, string> | undefined;
   lostCreate = false;
@@ -336,6 +337,17 @@ class ProviderFixture {
       return;
     }
     this.reads.push(url.pathname);
+    const processId = Number(url.pathname.match(/\/commands\/(\d+)$/)?.[1]);
+    if (request.method === "GET" && this.commandResults.has(processId)) {
+      send({
+        ok: true,
+        processId,
+        status: "exited",
+        running: false,
+        ...this.commandResults.get(processId),
+      });
+      return;
+    }
     if (this.parking) {
       if (url.pathname === "/api/v1/saved-snapshots") {
         if (request.method === "POST") {
@@ -471,7 +483,22 @@ class ProviderFixture {
       return;
     }
     if (url.pathname.endsWith("/commands")) {
-      const command = z.object({ command: z.string() }).parse(JSON.parse(raw)).command;
+      const { command, detached } = z
+        .object({ command: z.string(), detached: z.boolean().optional() })
+        .parse(JSON.parse(raw));
+      const reply = (result: {
+        ok: boolean;
+        exitCode: number;
+        timedOut: boolean;
+        stdout: string;
+        stderr: string;
+      }) => {
+        if (detached) {
+          const startedPid = 1234 + this.commandResults.size;
+          this.commandResults.set(startedPid, result);
+          send({ ok: true, processId: startedPid });
+        } else send(result);
+      };
       this.commands.push(command);
       if (command.includes("guest_boot.py resume ")) {
         this.rebinds++;
@@ -483,7 +510,7 @@ class ProviderFixture {
             capsule: z.unknown(),
           })
           .parse(JSON.parse(command.slice(command.indexOf(" resume '") + 9, -1)));
-        send({
+        reply({
           ok: true,
           exitCode: 0,
           timedOut: false,
@@ -499,7 +526,7 @@ class ProviderFixture {
         });
         return;
       }
-      send({
+      reply({
         ok: true,
         exitCode: 0,
         timedOut: false,

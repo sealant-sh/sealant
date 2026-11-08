@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import http from "node:http";
 import { inspect } from "node:util";
 
+import { Agent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
 
 import { NATIVE_RUNTIME_PIN } from "../../images/boat/runtime-bundle.js";
@@ -48,7 +49,7 @@ const close: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const stop of close.splice(0)) await stop();
 });
-const server = async (handler: http.RequestListener) => {
+const server = async (handler: http.RequestListener, timeoutMs = 1000) => {
   const listener = http.createServer(handler);
   await new Promise<void>((done) => listener.listen(0, "127.0.0.1", done));
   close.push(async () => {
@@ -69,7 +70,7 @@ const server = async (handler: http.RequestListener) => {
     HttpBoatApi.create({
       credential,
       baseUrl: `http://127.0.0.1:${address.port}/api/v1`,
-      timeoutMs: 1000,
+      timeoutMs,
     }),
   );
 };
@@ -81,6 +82,227 @@ const page = (sandboxes: readonly unknown[], nextCursor: string | null = null) =
   ok: true,
   sandboxes,
   pageInfo: { nextCursor, hasMore: nextCursor !== null, limit: 200 },
+});
+
+describe("long command transport", () => {
+  it("finishes a detached command when a long-lived stream would lose its socket", async () => {
+    let starts = 0,
+      polls = 0;
+    const api = await server((request, response) => {
+      if (request.method === "POST") {
+        starts++;
+        let text = "";
+        request.setEncoding("utf8").on("data", (chunk) => (text += chunk));
+        request.on("end", () => {
+          const body: unknown = JSON.parse(text);
+          if (
+            typeof body === "object" &&
+            body !== null &&
+            "detached" in body &&
+            body.detached === true
+          )
+            respond(response, { ok: true, processId: 1234 });
+          else {
+            response.writeHead(200, { "content-type": "application/x-ndjson" });
+            response.write('{"type":"started"}\n');
+            setImmediate(() => response.destroy());
+          }
+        });
+      } else {
+        polls++;
+        respond(response, {
+          ok: true,
+          processId: 1234,
+          status: polls === 1 ? "running" : "exited",
+          running: polls === 1,
+          exitCode: polls === 1 ? null : 0,
+          stdout: "build complete",
+          stderr: "",
+        });
+      }
+    });
+    expect(await api.execute(id, "fixture long build", { timeoutSeconds: 600 })).toMatchObject({
+      ok: true,
+      value: { exitCode: 0, timedOut: false, stdout: "build complete" },
+    });
+    expect(starts).toBe(1);
+    expect(polls).toBe(2);
+  });
+
+  it.each(["headers", "body"] as const)(
+    "outlives a short ambient undici %s timeout",
+    async (phase) => {
+      const previous = getGlobalDispatcher();
+      const short = new Agent({ headersTimeout: 20, bodyTimeout: 20 });
+      setGlobalDispatcher(short);
+      let starts = 0;
+      const api = await server((request, response) => {
+        if (request.method === "POST") {
+          starts++;
+          if (phase === "headers") {
+            const timer = setTimeout(() => respond(response, { ok: true, processId: 1234 }), 1600);
+            response.once("close", () => clearTimeout(timer));
+          } else respond(response, { ok: true, processId: 1234 });
+        } else {
+          const body = JSON.stringify({
+            ok: true,
+            processId: 1234,
+            status: "exited",
+            running: false,
+            exitCode: 0,
+            stdout: "é complete",
+            stderr: "",
+          });
+          if (phase === "body") {
+            response.writeHead(200, { "content-type": "application/json" });
+            const bytes = Buffer.from(body),
+              at = bytes.indexOf(Buffer.from("é")) + 1;
+            response.write(bytes.subarray(0, at));
+            const timer = setTimeout(() => response.end(bytes.subarray(at)), 1600);
+            response.once("close", () => clearTimeout(timer));
+          } else respond(response, JSON.parse(body));
+        }
+      }, 3000);
+      try {
+        expect(await api.execute(id, "fixture", { timeoutSeconds: 600 })).toMatchObject({
+          ok: true,
+          value: { exitCode: 0, stdout: "é complete" },
+        });
+        expect(starts).toBe(1);
+      } finally {
+        setGlobalDispatcher(previous);
+        await short.destroy();
+      }
+    },
+  );
+
+  it("repeats a lost status read and preserves nonzero exit without replaying start", async () => {
+    let starts = 0,
+      polls = 0;
+    const api = await server((request, response) => {
+      if (request.method === "POST") {
+        starts++;
+        respond(response, { ok: true, processId: 1234 });
+      } else if (++polls === 1) response.destroy();
+      else
+        respond(response, {
+          ok: true,
+          processId: 1234,
+          status: "exited",
+          running: false,
+          exitCode: 42,
+          stdout: "progress",
+          stderr: "installer refused",
+        });
+    });
+    expect(await api.execute(id, "fixture", { timeoutSeconds: 600 })).toMatchObject({
+      ok: true,
+      value: { exitCode: 42, timedOut: false, stderr: "installer refused" },
+    });
+    expect(starts).toBe(1);
+    expect(polls).toBe(2);
+  });
+
+  it.each([
+    { processId: 9999 },
+    { status: "lost" },
+    { known: false },
+    { running: true, status: "exited" },
+    { stdoutTruncated: true },
+    { stdout: "x".repeat(8 * 1024 ** 2 + 1) },
+  ])("refuses unproved command status %# without a second start", async (override) => {
+    let starts = 0;
+    const api = await server((request, response) => {
+      if (request.method === "POST") {
+        starts++;
+        respond(response, { ok: true, processId: 1234 });
+      } else if (request.method === "DELETE")
+        respond(response, { ok: true, processId: 1234, running: false, signaled: true });
+      else
+        respond(response, {
+          ok: true,
+          processId: 1234,
+          status: "exited",
+          running: false,
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          ...override,
+        });
+    });
+    expect(await api.execute(id, "fixture", { timeoutSeconds: 600 })).toMatchObject({
+      ok: false,
+      error: { operation: "commandStatus", status: 200 },
+    });
+    expect(starts).toBe(1);
+  });
+
+  it("keeps a lost start ambiguous without discovering, stopping or replaying it", async () => {
+    const methods: string[] = [];
+    const api = await server((request, response) => {
+      methods.push(request.method ?? "");
+      response.destroy();
+    });
+    expect(await api.execute(id, "fixture", { timeoutSeconds: 600 })).toMatchObject({
+      ok: false,
+      error: { operation: "execute", status: null, causeClass: "UND_ERR_SOCKET" },
+    });
+    expect(methods).toEqual(["POST"]);
+  });
+
+  it.each([false, true])(
+    "stops only the known process on cancellation without retrying a lost stop=%s",
+    async (lostStop) => {
+      const paths: string[] = [];
+      const abort = new AbortController();
+      const api = await server((request, response) => {
+        paths.push(request.method + " " + request.url);
+        if (request.method === "POST") respond(response, { ok: true, processId: 1234 });
+        else if (request.method === "DELETE") {
+          if (lostStop) response.destroy();
+          else respond(response, { ok: true, processId: 1234, running: false, signaled: true });
+        } else {
+          abort.abort();
+        }
+      });
+      expect(
+        await api.execute(id, "fixture", { timeoutSeconds: 600, signal: abort.signal }),
+      ).toMatchObject({
+        ok: false,
+        error: { operation: "commandStatus", causeClass: "AbortError" },
+      });
+      expect(paths).toEqual([
+        `POST /api/v1/sandboxes/${id}/commands`,
+        `GET /api/v1/sandboxes/${id}/commands/1234?tailBytes=8388608`,
+        `DELETE /api/v1/sandboxes/${id}/commands/1234`,
+      ]);
+    },
+  );
+
+  it("enforces the command deadline and independently stops its exact process", async () => {
+    let stops = 0;
+    const api = await server((request, response) => {
+      if (request.method === "POST") respond(response, { ok: true, processId: 1234 });
+      else if (request.method === "DELETE") {
+        stops++;
+        respond(response, { ok: true, processId: 1234, running: false, signaled: true });
+      } else
+        respond(response, {
+          ok: true,
+          processId: 1234,
+          status: "running",
+          running: true,
+          exitCode: null,
+          stdout: "",
+          stderr: "",
+        });
+    });
+    expect(await api.execute(id, "fixture", { timeoutSeconds: 31 })).toMatchObject({
+      ok: false,
+      error: { operation: "commandStatus", causeClass: "TimeoutError" },
+    });
+    expect(stops).toBe(1);
+  }, 40_000);
 });
 
 describe("personal snapshot custody", () => {
@@ -745,9 +967,20 @@ describe("Boat API boundary", () => {
       const chunks: Buffer[] = [];
       request.on("data", (chunk: Buffer) => chunks.push(chunk));
       request.on("end", () => {
+        if (request.method === "GET") {
+          respond(response, {
+            ok: true,
+            processId: 1234,
+            status: "exited",
+            running: false,
+            exitCode: 0,
+            stdout: "done",
+            stderr: "",
+          });
+          return;
+        }
         bodies.push(JSON.parse(Buffer.concat(chunks).toString()));
-        if (bodies.length === 1)
-          respond(response, { ok: true, exitCode: 0, timedOut: false, stdout: "done", stderr: "" });
+        if (bodies.length === 1) respond(response, { ok: true, processId: 1234 });
       });
     });
     expect(await api.execute(id, "public-install", { timeoutSeconds: 600 })).toMatchObject({
@@ -762,8 +995,8 @@ describe("Boat API boundary", () => {
     setTimeout(() => abort.abort(), 20);
     expect(await pending).toMatchObject({ ok: false, error: { code: "transport_error" } });
     expect(bodies).toEqual([
-      { command: "public-install", timeoutSeconds: 600 },
-      { command: "long-install", timeoutSeconds: 600 },
+      { command: "public-install", timeoutSeconds: 600, detached: true },
+      { command: "long-install", timeoutSeconds: 600, detached: true },
     ]);
   });
 

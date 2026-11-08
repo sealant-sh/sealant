@@ -135,6 +135,9 @@ catalogs:
     typescript:
       specifier: ^7.0.2
       version: 7.0.2
+    undici:
+      specifier: 7.28.0
+      version: 7.28.0
     vite:
       specifier: ^8.3.4
       version: 8.3.4
@@ -1058,6 +1061,9 @@ importers:
       effect:
         specifier: 'catalog:'
         version: 4.0.5
+      undici:
+        specifier: 'catalog:'
+        version: 7.28.0
       ws:
         specifier: 'catalog:'
         version: 8.22.0
