@@ -171,6 +171,28 @@ describe.skipIf(!directory)(
       });
       expect(f.mutations).toEqual(mutations);
     });
+    it.each(["transport-failed", "provider-http-failed"] as const)(
+      "retains provider diagnostics and exact cleanup for %s",
+      async (mode) => {
+        const f = await fixture(mode);
+        const result = await f.builder.build({ spec: f.spec });
+        const providerFailure = {
+          operation: "execute",
+          status: mode === "transport-failed" ? null : 503,
+          causeClass: mode === "transport-failed" ? "UND_ERR_SOCKET" : null,
+          step: "install-recipe",
+        };
+        expect(result).toMatchObject({ ok: false, error: { providerFailure } });
+        if (result.ok || result.error.journalPath === undefined) throw new Error("missing journal");
+        expect(result.error.message).toContain(JSON.stringify(providerFailure));
+        expect(JSON.parse(await readFile(result.error.journalPath, "utf8"))).toMatchObject({
+          providerFailure,
+          phase: "complete",
+        });
+        expect(f.deleted()).toBe(true);
+        expect(f.posts()).toBe(0);
+      },
+    );
     it("refuses an old base-image approval before save and removes its scratch VM", async () => {
       const f = await fixture("legacy-guest-approval");
       expect(await f.builder.build({ spec: f.spec })).toMatchObject({ ok: false });

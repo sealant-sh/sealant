@@ -94,6 +94,8 @@ export const nativeBuilderFixture = async (
     | "cancel-cleaning"
     | "command-failed"
     | "command-timeout"
+    | "transport-failed"
+    | "provider-http-failed"
     | "legacy-guest-approval",
 ) => {
   if (!directory) throw new Error("exact runtime bundle required");
@@ -188,6 +190,16 @@ export const nativeBuilderFixture = async (
         if (mode === "cancel" && body.command.includes("sudo /bin/bash")) {
           cancellation.abort();
           return;
+        }
+        if (body.command.includes("sudo /bin/bash")) {
+          if (mode === "transport-failed") {
+            response.destroy();
+            return;
+          }
+          if (mode === "provider-http-failed") {
+            respond({ code: "provider_error", message: "Bearer private-token" }, 503);
+            return;
+          }
         }
         if (
           (mode === "command-failed" || mode === "command-timeout") &&

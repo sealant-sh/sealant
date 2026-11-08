@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import http from "node:http";
 import { inspect } from "node:util";
 
+import { Agent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
 
 import { NATIVE_RUNTIME_PIN } from "../../images/boat/runtime-bundle.js";
@@ -81,6 +82,174 @@ const page = (sandboxes: readonly unknown[], nextCursor: string | null = null) =
   ok: true,
   sandboxes,
   pageInfo: { nextCursor, hasMore: nextCursor !== null, limit: 200 },
+});
+
+describe("long command transport", () => {
+  it("outlives a short ambient undici headers timeout without replaying the command", async () => {
+    const previous = getGlobalDispatcher();
+    const short = new Agent({ headersTimeout: 20, bodyTimeout: 20 });
+    setGlobalDispatcher(short);
+    let commands = 0;
+    const api = await server((request, response) => {
+      commands++;
+      let body = "";
+      request.setEncoding("utf8").on("data", (chunk) => (body += chunk));
+      request.on("end", () => {
+        const input: unknown = JSON.parse(body);
+        const streaming =
+          typeof input === "object" && input !== null && "stream" in input && input.stream === true;
+        const timer = setTimeout(() => {
+          if (streaming)
+            response
+              .writeHead(200, { "content-type": "application/x-ndjson" })
+              .end(
+                [
+                  { type: "started" },
+                  { type: "stdout", data: "build complete" },
+                  { type: "exit", ok: true, exitCode: 0, timedOut: false },
+                ]
+                  .map((frame) => JSON.stringify(frame))
+                  .join("\n") + "\n",
+              );
+          else
+            respond(response, {
+              ok: true,
+              stdout: "build complete",
+              stderr: "",
+              exitCode: 0,
+              timedOut: false,
+            });
+        }, 1600);
+        response.once("close", () => clearTimeout(timer));
+      });
+    });
+    try {
+      expect(await api.execute(id, "fixture long build", { timeoutSeconds: 600 })).toMatchObject({
+        ok: true,
+        value: { stdout: "build complete", stderr: "", exitCode: 0, timedOut: false },
+      });
+      expect(commands).toBe(1);
+    } finally {
+      setGlobalDispatcher(previous);
+      await short.destroy();
+    }
+  });
+  it("outlives an ambient body timeout and decodes split UTF-8 frames", async () => {
+    const previous = getGlobalDispatcher();
+    const short = new Agent({ headersTimeout: 20, bodyTimeout: 20 });
+    setGlobalDispatcher(short);
+    const api = await server((_request, response) => {
+      response.writeHead(200, { "content-type": "application/x-ndjson" });
+      const start = Buffer.from('{"type":"started"}\n{"type":"stdout","data":"é');
+      response.write(start.subarray(0, start.length - 1));
+      const timer = setTimeout(() => {
+        response.write(start.subarray(start.length - 1));
+        response.end(
+          '"}\n{"type":"stderr","data":"warning"}\n{"type":"exit","exitCode":42,"timedOut":false}',
+        );
+      }, 1600);
+      response.once("close", () => clearTimeout(timer));
+    });
+    try {
+      expect(
+        await api.execute(id, "fixture delayed output", { timeoutSeconds: 600 }),
+      ).toMatchObject({
+        ok: true,
+        value: { stdout: "é", stderr: "warning", exitCode: 42, timedOut: false },
+      });
+    } finally {
+      setGlobalDispatcher(previous);
+      await short.destroy();
+    }
+  });
+
+  it("bounds streamed output and preserves a timed-out terminal result", async () => {
+    let commands = 0;
+    const api = await server((_request, response) => {
+      commands++;
+      response.writeHead(200, { "content-type": "application/x-ndjson" });
+      response.write('{"type":"started"}\n');
+      if (commands === 1) response.end('{"type":"exit","exitCode":null,"timedOut":true}\n');
+      else
+        response.end(
+          JSON.stringify({ type: "stdout", data: "x".repeat(8 * 1024 ** 2 + 1) }) + "\n",
+        );
+    });
+    expect(await api.execute(id, "timeout fixture", { timeoutSeconds: 60 })).toMatchObject({
+      ok: true,
+      value: { exitCode: null, timedOut: true, stdout: "", stderr: "" },
+    });
+    expect(await api.execute(id, "oversized fixture", { timeoutSeconds: 60 })).toMatchObject({
+      ok: false,
+      error: { code: "invalid_response", causeClass: "RangeError" },
+    });
+    expect(commands).toBe(2);
+  });
+
+  it("cancels a silent stream without replaying its command", async () => {
+    let commands = 0;
+    const abort = new AbortController();
+    const api = await server((_request, response) => {
+      commands++;
+      response.writeHead(200, { "content-type": "application/x-ndjson" });
+      response.write('{"type":"started"}\n');
+      setImmediate(() => abort.abort());
+    });
+    expect(
+      await api.execute(id, "silent fixture", { timeoutSeconds: 600, signal: abort.signal }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "transport_error", causeClass: "AbortError" },
+    });
+    expect(commands).toBe(1);
+  });
+
+  it.each([
+    '{"type":"started"}\n{"type":"stdout","data":"partial"}\n',
+    '{"type":"started"}\n{"type":"error","message":"Bearer private-token"}\n',
+    '{"type":"stdout","data":"unordered"}\n',
+    '{"type":"started"}\n{"type":"started"}\n',
+    '{"type":"unknown","message":"private-token"}\n',
+    "{broken json}\n",
+  ])("refuses incomplete or malformed streams without replay: %s", async (wire) => {
+    let commands = 0;
+    const api = await server((_request, response) => {
+      commands++;
+      response.writeHead(200, { "content-type": "application/x-ndjson" }).end(wire);
+    });
+    const result = await api.execute(id, "fixture", { timeoutSeconds: 60 });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { operation: "execute", status: 200, code: "invalid_response" },
+    });
+    expect(inspect(result)).not.toContain("private-token");
+    expect(commands).toBe(1);
+  });
+
+  it.each([false, true])(
+    "keeps safe socket causes and HTTP status after headers=%s",
+    async (headers) => {
+      let commands = 0;
+      const api = await server((_request, response) => {
+        commands++;
+        if (headers) {
+          response.writeHead(200, { "content-type": "application/x-ndjson" });
+          response.write('{"type":"started"}\n');
+          setImmediate(() => response.destroy());
+        } else response.destroy();
+      });
+      expect(await api.execute(id, "fixture", { timeoutSeconds: 60 })).toMatchObject({
+        ok: false,
+        error: {
+          operation: "execute",
+          status: headers ? 200 : null,
+          code: "transport_error",
+          causeClass: "UND_ERR_SOCKET",
+        },
+      });
+      expect(commands).toBe(1);
+    },
+  );
 });
 
 describe("personal snapshot custody", () => {
@@ -762,8 +931,8 @@ describe("Boat API boundary", () => {
     setTimeout(() => abort.abort(), 20);
     expect(await pending).toMatchObject({ ok: false, error: { code: "transport_error" } });
     expect(bodies).toEqual([
-      { command: "public-install", timeoutSeconds: 600 },
-      { command: "long-install", timeoutSeconds: 600 },
+      { command: "public-install", timeoutSeconds: 600, stream: true },
+      { command: "long-install", timeoutSeconds: 600, stream: true },
     ]);
   });
 

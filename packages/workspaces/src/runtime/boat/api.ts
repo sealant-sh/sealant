@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { fetch as undiciFetch, getGlobalDispatcher, type RequestInit, type Response } from "undici";
 import { z } from "zod";
 
 import {
@@ -103,6 +104,97 @@ const commandSchema = z.object({
   stderr: z.string(),
 });
 export type BoatCommand = z.infer<typeof commandSchema>;
+
+// Streaming still permits silent commands. Undici's default 300s timers must not preempt
+// the command's 600s budget. Borrow the pool without changing any other caller's timers.
+const boatFetch = (url: string | URL, options: RequestInit, timeoutMs: number) =>
+  undiciFetch(url, {
+    ...options,
+    dispatcher: getGlobalDispatcher().compose(
+      (dispatch) => (input, handler) =>
+        dispatch(
+          {
+            ...input,
+            headersTimeout: timeoutMs,
+            bodyTimeout: timeoutMs,
+          },
+          handler,
+        ),
+    ),
+  });
+
+const commandFrameSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("started") }),
+  z.object({ type: z.literal("stdout"), data: z.string() }),
+  z.object({ type: z.literal("stderr"), data: z.string() }),
+  z.object({
+    type: z.literal("exit"),
+    exitCode: z.number().int().nullable(),
+    timedOut: z.boolean(),
+  }),
+  z.object({ type: z.literal("error") }),
+]);
+const readCommandStream = async (response: Response): Promise<BoatCommand & { ok: true }> => {
+  const reader = response.body?.getReader();
+  if (reader === undefined) throw new Error("command-stream-missing");
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let pending = "",
+    stdout = "",
+    stderr = "",
+    started = false,
+    stdoutBytes = 0,
+    stderrBytes = 0;
+  const frame = (line: string): (BoatCommand & { ok: true }) | undefined => {
+    const parsed = commandFrameSchema.parse(JSON.parse(line));
+    if (parsed.type === "started") {
+      if (started) throw new Error("command-stream-order");
+      started = true;
+    } else {
+      if (!started || parsed.type === "error") throw new Error("command-stream-refused");
+      if (parsed.type === "exit")
+        return {
+          ok: true,
+          stdout,
+          stderr,
+          exitCode: parsed.exitCode,
+          timedOut: parsed.timedOut,
+        };
+      if (parsed.type === "stdout") {
+        stdoutBytes += Buffer.byteLength(parsed.data);
+        stdout += parsed.data;
+      } else {
+        stderrBytes += Buffer.byteLength(parsed.data);
+        stderr += parsed.data;
+      }
+      if (stdoutBytes > 8 * 1024 ** 2 || stderrBytes > 8 * 1024 ** 2)
+        throw new RangeError("command-output-limit");
+    }
+  };
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      pending += chunk.done ? decoder.decode() : decoder.decode(chunk.value, { stream: true });
+      let newline: number;
+      while ((newline = pending.indexOf("\n")) !== -1) {
+        const line = pending.slice(0, newline);
+        pending = pending.slice(newline + 1);
+        if (!line.trim()) continue;
+        const done = frame(line);
+        if (done !== undefined) return done;
+      }
+      if (Buffer.byteLength(pending) > 48 * 1024 ** 2) throw new RangeError("command-frame-limit");
+      if (chunk.done) {
+        if (pending.trim()) {
+          const done = frame(pending);
+          if (done !== undefined) return done;
+        }
+        throw new Error("command-stream-incomplete");
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+};
 
 const successSchema = z.object({ ok: z.literal(true) });
 const personalSnapshotsResponse = successSchema.extend({
@@ -444,10 +536,11 @@ export class HttpBoatApi implements BoatApi {
       "POST",
       `/sandboxes/${id}/commands`,
       successSchema.extend(commandSchema.shape),
-      { command, timeoutSeconds: seconds },
+      { command, timeoutSeconds: seconds, ...(seconds > 30 ? { stream: true } : {}) },
       undefined,
       {
         timeoutMs: Math.max(this.#timeout, seconds * 1000 + 15_000),
+        ...(seconds > 30 ? { commandStream: true } : {}),
         ...(options?.signal === undefined ? {} : { signal: options.signal }),
       },
     );
@@ -488,19 +581,25 @@ export class HttpBoatApi implements BoatApi {
     const url = parseBoatUrl(signed.value.url);
     if (!url.ok || signed.value.path !== path)
       return { ok: false, error: new BoatApiError("uploadFile", null, "invalid_provider_url") };
+    let status: number | null = null;
     try {
-      const response = await fetch(url.value, {
-        method: "PUT",
-        body: Buffer.from(bytes),
-        redirect: "error",
-        signal: AbortSignal.timeout(this.#timeout),
-      });
+      const response = await boatFetch(
+        url.value,
+        {
+          method: "PUT",
+          body: Buffer.from(bytes),
+          redirect: "error",
+          signal: AbortSignal.timeout(this.#timeout),
+        },
+        this.#timeout,
+      );
+      status = response.status;
       await response.body?.cancel();
       return response.ok
         ? { ok: true, value: undefined }
         : { ok: false, error: new BoatApiError("uploadFile", response.status, "upload_failed") };
-    } catch {
-      return { ok: false, error: new BoatApiError("uploadFile", null, "transport_error") };
+    } catch (error) {
+      return { ok: false, error: new BoatApiError("uploadFile", status, "transport_error", error) };
     }
   }
 
@@ -606,7 +705,7 @@ export class HttpBoatApi implements BoatApi {
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
       const query = new URLSearchParams({ path: parsed.data.path });
-      const response = await fetch(
+      const response = await boatFetch(
         `${this.#base}/snapshots/${parsed.data.snapshotId}/files?${query}`,
         {
           method: "GET",
@@ -617,6 +716,7 @@ export class HttpBoatApi implements BoatApi {
             "Accept-Encoding": "identity",
           },
         },
+        this.#timeout,
       );
       status = response.status;
       reader = response.body?.getReader();
@@ -644,10 +744,10 @@ export class HttpBoatApi implements BoatApi {
           error: new BoatApiError("verifyRecoveryFile", status, "content_mismatch"),
         };
       return { ok: true, value: parsed.data };
-    } catch {
+    } catch (error) {
       return {
         ok: false,
-        error: new BoatApiError("verifyRecoveryFile", status, "transport_error"),
+        error: new BoatApiError("verifyRecoveryFile", status, "transport_error", error),
       };
     } finally {
       await reader?.cancel().catch(() => undefined);
@@ -671,26 +771,39 @@ export class HttpBoatApi implements BoatApi {
     schema: z.ZodType<T>,
     body?: unknown,
     extra?: Record<string, string>,
-    options?: { readonly timeoutMs: number; readonly signal?: AbortSignal },
+    options?: {
+      readonly timeoutMs: number;
+      readonly signal?: AbortSignal;
+      readonly commandStream?: boolean;
+    },
   ): Promise<BoatResult<T>> {
     let status: number | null = null;
     try {
-      const response = await fetch(`${this.#base}${path}`, {
-        method,
-        headers: {
-          Authorization: `Bearer ${this.#credential.reveal()}`,
-          "Content-Type": "application/json",
-          ...extra,
+      const response = await boatFetch(
+        `${this.#base}${path}`,
+        {
+          method,
+          headers: {
+            Authorization: `Bearer ${this.#credential.reveal()}`,
+            "Content-Type": "application/json",
+            ...extra,
+          },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          signal:
+            options?.signal === undefined
+              ? AbortSignal.timeout(options?.timeoutMs ?? this.#timeout)
+              : AbortSignal.any([options.signal, AbortSignal.timeout(options.timeoutMs)]),
+          redirect: "error",
         },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        signal:
-          options?.signal === undefined
-            ? AbortSignal.timeout(options?.timeoutMs ?? this.#timeout)
-            : AbortSignal.any([options.signal, AbortSignal.timeout(options.timeoutMs)]),
-        redirect: "error",
-      });
+        options?.timeoutMs ?? this.#timeout,
+      );
       status = response.status;
-      const data: unknown = await response.json();
+      const data: unknown =
+        response.ok &&
+        options?.commandStream &&
+        response.headers.get("content-type")?.startsWith("application/x-ndjson")
+          ? await readCommandStream(response)
+          : await response.json();
       if (!response.ok) {
         const parsed = codeSchema.safeParse(data);
         const code =
@@ -701,14 +814,15 @@ export class HttpBoatApi implements BoatApi {
       return parsed.success
         ? { ok: true, value: parsed.data }
         : { ok: false, error: new BoatApiError(operation, status, "invalid_response") };
-    } catch {
+    } catch (error) {
+      const transport = new BoatApiError(operation, status, "transport_error", error);
+      const malformed = new Set(["unknown", "Error", "SyntaxError", "RangeError"]);
       return {
         ok: false,
-        error: new BoatApiError(
-          operation,
-          status,
-          status === null ? "transport_error" : "invalid_response",
-        ),
+        error:
+          status === null || (transport.causeClass !== null && !malformed.has(transport.causeClass))
+            ? transport
+            : new BoatApiError(operation, status, "invalid_response", error),
       };
     }
   }

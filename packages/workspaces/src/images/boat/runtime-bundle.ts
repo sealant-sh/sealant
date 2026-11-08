@@ -7,7 +7,12 @@ import assetLock from "../../../boat-image/asset-lock.json" with { type: "json" 
 
 export { nativeRuntimeIdentitySchema } from "@sealant/validators";
 
-import { nativeCommandFailureSchema, type NativeCommandFailure } from "./command-diagnostics.js";
+import {
+  nativeCommandFailureSchema,
+  nativeProviderFailureSchema,
+  type NativeCommandFailure,
+  type NativeProviderFailure,
+} from "./command-diagnostics.js";
 import runtimePin from "./runtime-pin.json" with { type: "json" };
 
 /** Exact distribution verified by the guest acquisition proof, never a development override. */
@@ -21,18 +26,25 @@ export const sha256 = (bytes: Uint8Array | string): string =>
 export class NativeBuildError extends Error {
   readonly _tag = "NativeBuildError";
   readonly commandFailure: NativeCommandFailure | undefined;
+  readonly providerFailure: NativeProviderFailure | undefined;
 
   constructor(
     readonly code: string,
     readonly journalPath?: string,
     commandFailure?: NativeCommandFailure,
+    providerFailure?: NativeProviderFailure,
   ) {
+    const provider =
+      providerFailure === undefined
+        ? undefined
+        : nativeProviderFailureSchema.parse(providerFailure);
     const diagnostic =
       commandFailure === undefined ? undefined : nativeCommandFailureSchema.parse(commandFailure);
     super(
-      `Native snapshot failed: ${code}${journalPath === undefined ? "" : `; journal ${journalPath}`}${diagnostic === undefined ? "" : `; command ${JSON.stringify(diagnostic)}`}`,
+      `Native snapshot failed: ${code}${journalPath === undefined ? "" : `; journal ${journalPath}`}${diagnostic === undefined ? "" : `; command ${JSON.stringify(diagnostic)}`}${provider === undefined ? "" : `; provider ${JSON.stringify(provider)}`}`,
     );
     this.commandFailure = diagnostic;
+    this.providerFailure = provider;
   }
 }
 
