@@ -93,7 +93,7 @@ const test = async (run: (context: TestContext) => Promise<void>) => {
           .insert(user)
           .values({ id: userId, name: "tunnel custody", email: `${userId}@example.invalid` });
         const seed = async (host: string = randomUUID(), deployment = "test") => {
-          const runId = `run_${randomUUID()}`;
+          const runId = randomUUID();
           await execute(db.insert(workspaceAttempts).values({ id: runId, ownerUserId: userId }));
           const target = boatExecutionTargetSchema.parse({
             deploymentId: deployment,

@@ -112,17 +112,14 @@ export type NativePublication = z.infer<typeof nativePublicationSchema>;
 /** Probe, receipt and measured runtime provenance preserved through reuse. */
 export type NativePublicationEvidence = z.infer<typeof nativePublicationEvidenceSchema>;
 
-/** Runtime-instance rows are currently keyed by run_id, not a second invented UUID. */
+/**
+ * runId is the workspace_attempts UUID, not a runs-table conversation key.
+ * The initial runtime-instance row uses that same attempt UUID; keep the equality fence.
+ */
 export const nativeArtifactConsumerSchema = z
   .object({
-    runId: z
-      .string()
-      .regex(/^run_[A-Za-z0-9_-]+$/)
-      .brand<"NativeConsumerRunId">(),
-    runtimeInstanceId: z
-      .string()
-      .regex(/^run_[A-Za-z0-9_-]+$/)
-      .brand<"NativeConsumerInstanceId">(),
+    runId: z.uuid().brand<"NativeConsumerAttemptId">(),
+    runtimeInstanceId: z.uuid().brand<"NativeConsumerRuntimeInstanceId">(),
   })
   .refine((consumer) => String(consumer.runId) === String(consumer.runtimeInstanceId));
 

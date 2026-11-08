@@ -143,7 +143,7 @@ const probe = {
 const seed = (db: DB, catalog: NativePublicationRepo["Service"]) =>
   Effect.gen(function* () {
     const owner = `usr_${randomUUID()}`;
-    const runId = `run_${randomUUID()}`;
+    const runId = randomUUID();
     yield* db
       .insert(user)
       .values({ id: owner, email: `${owner}@example.invalid`, name: "allocation test" });
@@ -1456,7 +1456,7 @@ describe.runIf(databaseUrl !== undefined)("Boat canonical FINAL close", () => {
       await expect(execute(s.resourceOwner.prepare(target))).rejects.toThrow("held");
       const prior = await execute(s.executions.get(target.runId));
       if (prior === undefined) throw new Error("missing execution");
-      const nextId = `run_${randomUUID()}`;
+      const nextId = randomUUID();
       const [attempt] = await execute(s.db.select().from(workspaceAttempts));
       if (attempt === undefined) throw new Error("missing attempt");
       await execute(

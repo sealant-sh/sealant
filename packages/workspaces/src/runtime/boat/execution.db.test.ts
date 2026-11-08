@@ -318,7 +318,7 @@ const test = async (
         const repo = yield* BoatExecutionRepo;
         const cipher = yield* CredentialCipher;
         const db = yield* SealantDB;
-        const runId = `run_${randomUUID()}`;
+        const runId = randomUUID();
         const owner = `usr_${randomUUID()}`;
         yield* db
           .insert(user)
@@ -455,7 +455,7 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         { sandboxId: "bx_3456789a", diskLineage: target.diskLineage },
         { sandboxId: target.sandboxId, diskLineage: "another-disk" },
       ]) {
-        const runId = `run_${randomUUID()}`;
+        const runId = randomUUID();
         const owner = `usr_${randomUUID()}`;
         await execute(
           db
