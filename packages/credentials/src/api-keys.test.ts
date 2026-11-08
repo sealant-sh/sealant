@@ -1,3 +1,5 @@
+import { EndpointUrl } from "@sealant/api-contracts";
+import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { codexLoginFile } from "./copies.js";
@@ -10,12 +12,14 @@ import {
   parseApiKey,
   parseClaudeCredentialPayload,
   parseCodexCredentialPayload,
+  parseStoredCredential,
   placedLoginOf,
 } from "./payloads.js";
 
 const claudeKey = "sk-ant-api03-FAKEclaudekeyforthetests000000wxyz";
 const codexKey = "sk-proj-FAKEcodexkeyforthetests0000wxyz";
 const chatgptTokens = { access_token: "at-fake", refresh_token: "rt-fake", account_id: "acct" };
+const endpoint = Schema.decodeSync(EndpointUrl)("https://gateway.example.test/v1");
 
 describe("parseApiKey", () => {
   it("takes a trimmed key of its provider's shape", () => {
@@ -173,5 +177,53 @@ describe("placedLoginOf", () => {
     expect(() =>
       placedLoginOf("codex", { authJson: JSON.stringify({ auth_mode: "apikey" }) }),
     ).toThrow(/holds none/);
+  });
+});
+
+describe("a key on an endpoint", () => {
+  it("takes any key without spaces that is not an Admin key", () => {
+    expect(parseApiKey("claude", " placeholder\n", endpoint)).toEqual({
+      valid: true,
+      apiKey: "placeholder",
+    });
+    expect(parseApiKey("codex", "x", endpoint)).toEqual({ valid: true, apiKey: "x" });
+    expect(parseApiKey("claude", "two words", endpoint)).toMatchObject({ valid: false });
+    expect(parseApiKey("codex", "   ", endpoint)).toMatchObject({ valid: false });
+    expect(
+      parseApiKey("claude", "sk-ant-admin01-FAKEadminkeyforthetests0000000", endpoint),
+    ).toMatchObject({ valid: false, reason: "An Admin API key cannot run a model." });
+    expect(parseApiKey("codex", "sk-admin-FAKEadminkeyforthetests00000", endpoint)).toMatchObject({
+      valid: false,
+      reason: "An Admin API key cannot run a model.",
+    });
+    expect(parseApiKey("claude", "placeholder")).toMatchObject({ valid: false });
+  });
+
+  it("is stored with its endpoint, and a Claude placeholder only beside one", () => {
+    const stored = JSON.stringify({ apiKey: "placeholder", baseUrl: endpoint });
+    expect(parseStoredCredential("claude", stored)).toEqual([
+      "claude",
+      { apiKey: "placeholder", baseUrl: endpoint },
+    ]);
+    expect(parseStoredCredential("codex", stored)).toEqual([
+      "codex",
+      { apiKey: "placeholder", baseUrl: endpoint },
+    ]);
+    expect(() =>
+      parseStoredCredential("claude", JSON.stringify({ apiKey: "placeholder" })),
+    ).toThrow();
+  });
+
+  it("places its endpoint's URL with the key", () => {
+    expect(placedLoginOf("claude", { apiKey: "placeholder", baseUrl: endpoint })).toEqual({
+      kind: "api-key",
+      suffix: "lder",
+      baseUrl: "https://gateway.example.test/v1",
+    });
+    expect(placedLoginOf("codex", { apiKey: codexKey, baseUrl: endpoint })).toEqual({
+      kind: "api-key",
+      suffix: "wxyz",
+      baseUrl: "https://gateway.example.test/v1",
+    });
   });
 });

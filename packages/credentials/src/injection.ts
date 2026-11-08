@@ -26,13 +26,11 @@ export const CLAUDE_CREDENTIALS_JSON_PATH = "$HOME/.claude/.credentials.json";
 export const CODEX_AUTH_JSON_PATH = "$HOME/.codex/auth.json";
 export const GITHUB_TOKEN_ENV_KEYS = ["GITHUB_TOKEN", "GH_TOKEN"] as const;
 
-/**
- * The words a create, a launch and inference refuse a Claude API key with: a key is placed only by
- * a credentials put into a person's home, never at `$HOME` or in a launch, and inference does not
- * run on one yet.
- */
 export const claudeApiKeyUnsupported = (accountName: string): string =>
-  `Connected claude account "${accountName}" holds an API key. Sealant places a Claude API key only through a credentials put into a person's home, never at $HOME or in a launch, and runs no inference on one yet: choose a Claude subscription login here. Nothing was written.`;
+  `Connected claude account "${accountName}" holds an API key. Sealant places a Claude API key only through a credentials put into a person's home, never at $HOME or in a launch: choose a Claude subscription login here. Nothing was written.`;
+
+export const endpointKeyUnsupported = (accountName: string): string =>
+  `Connected codex account "${accountName}" holds an API key whose requests go to a custom endpoint. A launch writes only the key, so the key would reach the provider's own endpoint instead: Sealant places it only through a credentials put into a person's home, whose receipt carries the endpoint. Nothing was written.`;
 
 type PlanCredentialInjectionsArgs =
   | readonly ["claude", ClaudeSubscriptionPayload]

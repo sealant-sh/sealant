@@ -25,8 +25,12 @@ describe("InferenceSessionState", () => {
 
     // The caller executes both and posts results — the parked handlers resolve with them.
     const [a, b] = turn.calls;
-    expect(state.resolveToolResult(a!.toolCallId, { content: "ra", isError: false })).toBe(true);
-    expect(state.resolveToolResult(b!.toolCallId, { content: "rb", isError: true })).toBe(true);
+    expect(
+      state.resolveToolResults([
+        { toolCallId: a!.toolCallId, result: { content: "ra", isError: false } },
+        { toolCallId: b!.toolCallId, result: { content: "rb", isError: true } },
+      ]),
+    ).toEqual([]);
     await expect(handlerA).resolves.toEqual({ content: "ra", isError: false });
     await expect(handlerB).resolves.toEqual({ content: "rb", isError: true });
   });
@@ -55,7 +59,35 @@ describe("InferenceSessionState", () => {
 
   it("rejects unknown tool-call ids", () => {
     const state = new InferenceSessionState("inf_4", quiet);
-    expect(state.resolveToolResult("tc_nope", { content: "", isError: false })).toBe(false);
+    expect(
+      state.resolveToolResults([
+        { toolCallId: "tc_nope", result: { content: "", isError: false } },
+      ]),
+    ).toEqual(["tc_nope"]);
+  });
+
+  it("resolves none of a batch that holds one bad id", async () => {
+    const state = new InferenceSessionState("inf_8", quiet);
+    const handler = state.park("search", {});
+    const turn = await state.nextTurn(1_000);
+    if (turn.type !== "toolCalls") throw new Error("expected a tool round");
+    const good = turn.calls[0]!.toolCallId;
+    const ok = { content: "found", isError: false };
+
+    const unknown = state.resolveToolResults([
+      { toolCallId: good, result: ok },
+      { toolCallId: "tc_nope", result: ok },
+    ]);
+    const twice = state.resolveToolResults([
+      { toolCallId: good, result: ok },
+      { toolCallId: good, result: ok },
+    ]);
+    const pending = new Promise((resolve) => setTimeout(() => resolve("pending"), 20));
+
+    expect(unknown).toEqual(["tc_nope"]);
+    expect(twice).toEqual([good]);
+    expect(await Promise.race([handler, pending])).toBe("pending");
+    expect(state.pendingCallIds).toEqual([good]);
   });
 
   it("times out a turn wait when nothing arrives", async () => {

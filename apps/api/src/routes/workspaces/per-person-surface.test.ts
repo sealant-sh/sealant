@@ -540,6 +540,8 @@ describe("the control plane's features", () => {
       kubernetesPersonLayout: true,
       credentialPlacements: true,
       connectedAccountApiKeys: true,
+      connectedAccountEndpoints: true,
+      inferenceAllowedLogin: true,
     });
   });
 });

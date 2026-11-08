@@ -341,6 +341,7 @@ const toPlacementLogin = (
         kind: "api-key",
         suffix: login.suffix,
         ...(login.keyPath === undefined ? {} : { keyPath: login.keyPath }),
+        ...(login.baseUrl === undefined ? {} : { baseUrl: login.baseUrl }),
       };
 
 /** Wire → public credential home. */

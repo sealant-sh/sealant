@@ -13,16 +13,20 @@ export {
 } from "./cipher.js";
 
 export {
+  CLAUDE_API_KEY_FILE_NAME,
   CLAUDE_CONFIG_DIR_ENV_KEY,
   CLAUDE_CREDENTIALS_FILE_NAME,
   isNewerClaudeCredentials,
   isPlausibleClaudeExpiry,
   MAX_PLAUSIBLE_CLAUDE_EXPIRY_AHEAD_MS,
   provisionClaudeConfigDir,
+  provisionClaudeKeyDir,
+  provisionClaudeTokenDir,
   readClaudeConfigDirCredentials,
   readStoredClaudeExpiresAt,
   removeClaudeConfigDir,
   type ProvisionedClaudeConfigDir,
+  type ProvisionedClaudeKeyDir,
 } from "./claude-session.js";
 
 export {
@@ -51,6 +55,7 @@ export {
 
 export {
   claudeApiKeyUnsupported,
+  endpointKeyUnsupported,
   claudeCredentialsFile,
   CLAUDE_CREDENTIALS_JSON_PATH,
   CLAUDE_OAUTH_TOKEN_ENV_KEY,
@@ -114,6 +119,7 @@ export {
   type ConnectedAccountProvider,
   type GitHubCredentialPayload,
   type ParseApiKeyResult,
+  type PlacedLogin,
   type ParseClaudeCredentialsJsonResult,
   type ParseCodexAuthJsonResult,
   type ProviderCredentialPayload,

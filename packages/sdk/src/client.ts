@@ -55,7 +55,9 @@ import { parseTtlSeconds } from "./internal/duration.js";
 import {
   readFeatures,
   requireConnectedAccountDefaults,
+  requireConnectedAccountEndpoints,
   requireConnectedAccountLoginClass,
+  requireInferenceAllowedLogin,
 } from "./internal/features.js";
 import { imageSpecKey } from "./internal/image-key.js";
 import { buildInferenceRespondRequest, mapInferenceResponse } from "./internal/inference.js";
@@ -323,6 +325,9 @@ export class Sealant {
    */
   readonly inference: InferenceNamespace = {
     respond: async (options) => {
+      if ("allowedLogin" in options && options.allowedLogin === "subscription") {
+        await requireInferenceAllowedLogin(this.#ctx);
+      }
       const payload = buildInferenceRespondRequest(options, this.#ctx.config.hostLocal.ownerUserId);
       const wire = await this.#runtime.run(inferenceRespondOp(payload));
       return mapInferenceResponse(wire);
@@ -389,6 +394,9 @@ export class Sealant {
       if (options.login !== undefined) {
         await requireConnectedAccountLoginClass(this.#ctx);
       }
+      if (options.endpoint !== undefined) {
+        await requireConnectedAccountEndpoints(this.#ctx);
+      }
       const wire = await this.#runtime.run(
         createConnectedAccountOp({
           ownerUserId: this.#ctx.config.hostLocal.ownerUserId,
@@ -398,6 +406,7 @@ export class Sealant {
           ...(options.accountId === undefined ? {} : { accountId: options.accountId }),
           ...(options.makeDefault === undefined ? {} : { makeDefault: options.makeDefault }),
           ...(options.login === undefined ? {} : { login: options.login }),
+          ...(options.endpoint === undefined ? {} : { endpoint: options.endpoint }),
         }),
       );
       return mapConnectedAccount(wire);

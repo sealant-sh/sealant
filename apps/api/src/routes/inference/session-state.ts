@@ -93,16 +93,28 @@ export class InferenceSessionState {
     return promise;
   }
 
-  /** The caller posted a result for a parked call. Returns false for an unknown/settled id. */
-  resolveToolResult(toolCallId: string, result: ToolResultInput): boolean {
+  /**
+   * The caller posted results for parked calls. All or none: a batch naming an unknown, settled or
+   * repeated id resolves nothing and answers the ids it refused.
+   */
+  resolveToolResults(
+    results: readonly { readonly toolCallId: string; readonly result: ToolResultInput }[],
+  ): readonly string[] {
     this.lastActivityAt = Date.now();
-    const pending = this.#pending.get(toolCallId);
-    if (pending === undefined) {
-      return false;
+    const seen = new Set<string>();
+    const refused = results.flatMap(({ toolCallId }) => {
+      const ok = this.#pending.has(toolCallId) && !seen.has(toolCallId);
+      seen.add(toolCallId);
+      return ok ? [] : [toolCallId];
+    });
+    if (refused.length > 0) {
+      return refused;
     }
-    this.#pending.delete(toolCallId);
-    pending.resolve(result);
-    return true;
+    for (const { toolCallId, result } of results) {
+      this.#pending.get(toolCallId)?.resolve(result);
+      this.#pending.delete(toolCallId);
+    }
+    return [];
   }
 
   /** The exchange produced its final answer. */

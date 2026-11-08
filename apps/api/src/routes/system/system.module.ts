@@ -37,6 +37,8 @@ export const getIndex = () => {
       kubernetesPersonLayout: true,
       credentialPlacements: true,
       connectedAccountApiKeys: true,
+      connectedAccountEndpoints: true,
+      inferenceAllowedLogin: true,
     },
   } satisfies SystemIndexResponse);
 };

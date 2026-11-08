@@ -9,6 +9,15 @@ export const requestBudgetRefusalSchema = Schema.Struct({
 /** Admission metadata absent from older servers and non-admission budget errors. */
 export type RequestBudgetRefusal = typeof requestBudgetRefusalSchema.Type;
 
+/** What every budget refusal says: which limit, and when there is room again. */
+export const budgetExceededFields = {
+  message: Schema.String,
+  budget: Schema.String,
+  limit: Schema.Number,
+  retryAfterSeconds: Schema.Number,
+  refusal: Schema.optional(requestBudgetRefusalSchema),
+};
+
 /**
  * A budget refused new work (429). Nothing already running was stopped. `budget` names which
  * limit, `retryAfterSeconds` when there is room again: the rest of a rate window, or an estimate
@@ -16,13 +25,7 @@ export type RequestBudgetRefusal = typeof requestBudgetRefusalSchema.Type;
  */
 export class BudgetExceededError extends Schema.TaggedError<BudgetExceededError>()(
   "BudgetExceededError",
-  {
-    message: Schema.String,
-    budget: Schema.String,
-    limit: Schema.Number,
-    retryAfterSeconds: Schema.Number,
-    refusal: Schema.optional(requestBudgetRefusalSchema),
-  },
+  budgetExceededFields,
   { httpApiStatus: 429 },
 ) {}
 

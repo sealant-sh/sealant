@@ -4,12 +4,14 @@
  * so one exchange asserts the whole spawn contract: flags, sandbox, model passthrough, schema
  * file, CODEX_HOME injection, and ambient-identity stripping.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { Effect } from "effect";
+import { EndpointUrl } from "@sealant/api-contracts";
+import { codexApiKeyAuthJson } from "@sealant/credentials";
+import { Effect, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { InferenceEngineError, type InferenceEngineTurn } from "./claude-engine.js";
@@ -18,25 +20,33 @@ import {
   codexEngineLayer,
   type CodexInferenceStartInput,
 } from "./codex-engine.js";
+import { startFakeOpenAi } from "./fake-openai.fixture.js";
+import { exchangeRedaction } from "./support.js";
 
 const fixturePath = fileURLToPath(new URL("./fake-codex.fixture.mjs", import.meta.url));
-const fixtureCommand = [process.execPath, fixturePath];
+type FakeMode = "echo" | "fail" | "auth" | "turn-failed" | "hang";
 
 let codexHome: string;
 
+const hostOnly = {
+  OPENAI_API_KEY: "sk-proj-FAKEambientkeythatmustnotleak0000",
+  OPENAI_BASE_URL: "http://elsewhere.invalid",
+  SEALANT_CREDENTIALS_KEY: "FAKEhostcipherkey",
+  AWS_ACCESS_KEY_ID: "AKIAFAKEHOSTCLOUDKEY",
+};
+
 beforeEach(() => {
   codexHome = mkdtempSync(join(tmpdir(), "codex-engine-test-"));
-  // The engine passes ambient env through minus OpenAI identities; the fixture reads both.
-  process.env["OPENAI_API_KEY"] = "ambient-key-must-not-leak";
+  Object.assign(process.env, hostOnly);
 });
 
 afterEach(() => {
   rmSync(codexHome, { recursive: true, force: true });
-  delete process.env["FAKE_CODEX_MODE"];
-  delete process.env["OPENAI_API_KEY"];
+  for (const name of Object.keys(hostOnly)) delete process.env[name];
 });
 
 const start = (
+  mode: FakeMode,
   input: Partial<CodexInferenceStartInput>,
   options?: { readonly timeoutMs?: number },
 ): Promise<InferenceEngineTurn> =>
@@ -45,14 +55,14 @@ const start = (
       const engine = yield* CodexInferenceEngine;
       return yield* engine.start({
         codexHome,
-        secrets: [],
+        redact: (text) => text,
         prompt: "name this session",
         ...input,
       });
     }).pipe(
       Effect.provide(
         codexEngineLayer({
-          command: fixtureCommand,
+          command: [process.execPath, fixturePath, `--fake-mode=${mode}`],
           ...(options?.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
         }),
       ),
@@ -60,10 +70,11 @@ const start = (
   );
 
 const startExpectingFailure = (
+  mode: FakeMode,
   input: Partial<CodexInferenceStartInput>,
   options?: { readonly timeoutMs?: number },
 ): Promise<InferenceEngineError> =>
-  start(input, options).then(
+  start(mode, input, options).then(
     (turn) => {
       throw new Error(`expected a failure, got turn ${JSON.stringify(turn.turn.type)}`);
     },
@@ -85,10 +96,9 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
 
 describe("codex engine", () => {
   it("maps a successful exchange to a done turn with text, json, and usage", async () => {
-    process.env["FAKE_CODEX_MODE"] = "echo";
     let sessionEnds = 0;
 
-    const result = await start({
+    const result = await start("echo", {
       model: "lunna",
       system: "You name coding sessions.",
       responseFormat: {
@@ -112,11 +122,14 @@ describe("codex engine", () => {
     const echoed = result.turn.json as {
       argv: string[];
       codexHome: string | null;
-      openaiApiKey: string | null;
+      home: string | null;
+      env: string[];
     };
     expect(echoed.codexHome).toBe(codexHome);
-    // Ambient OpenAI identity is stripped — the exchange may only bill the provisioned account.
-    expect(echoed.openaiApiKey).toBeNull();
+    expect(echoed.home).toBe(codexHome);
+    for (const name of Object.keys(hostOnly)) {
+      expect(echoed.env).not.toContain(name);
+    }
     for (const flag of [
       "exec",
       "--json",
@@ -141,11 +154,10 @@ describe("codex engine", () => {
   });
 
   it("fails with reason 'engine' and redacts secrets on a nonzero exit", async () => {
-    process.env["FAKE_CODEX_MODE"] = "fail";
     let sessionEnds = 0;
 
-    const error = await startExpectingFailure({
-      secrets: ["sk-secret-token-value"],
+    const error = await startExpectingFailure("fail", {
+      redact: exchangeRedaction(["sk-secret-token-value"]),
       onSessionEnd: () => {
         sessionEnds += 1;
         return Promise.resolve();
@@ -162,15 +174,52 @@ describe("codex engine", () => {
     expect(sessionEnds).toBe(1);
   });
 
-  it("classifies a 401-shaped stderr as an auth failure", async () => {
-    process.env["FAKE_CODEX_MODE"] = "auth";
-    const error = await startExpectingFailure({});
-    expect(error.reason).toBe("auth");
+  it("answers a failed turn with its own words, redacted", async () => {
+    const error = await startExpectingFailure("turn-failed", {
+      redact: exchangeRedaction(["sk-secret-token-value"]),
+    });
+
+    expect(error).toMatchObject({
+      reason: "engine",
+      message:
+        "Codex inference failed: stream disconnected before completion: quota for [redacted]",
+    });
+  });
+
+  it("classifies a 401-shaped stderr as auth words, with no status", async () => {
+    const error = await startExpectingFailure("auth", {});
+    expect(error.reason).toBe("auth-words");
   });
 
   it("kills the subprocess and fails with reason 'timeout' past the deadline", async () => {
-    process.env["FAKE_CODEX_MODE"] = "hang";
-    const error = await startExpectingFailure({}, { timeoutMs: 300 });
+    const error = await startExpectingFailure("hang", {}, { timeoutMs: 300 });
     expect(error.reason).toBe("timeout");
   });
+});
+
+describe("codex engine on a key with an endpoint", () => {
+  it("sends the key to the endpoint alone, as a bearer token", async () => {
+    const gateway = await startFakeOpenAi({ path: "/v1", text: "answered by the gateway" });
+    const placeholder = "placeholder-key-for-the-gateway";
+    writeFileSync(join(codexHome, "auth.json"), codexApiKeyAuthJson(placeholder), { mode: 0o600 });
+    try {
+      const turn = await Effect.runPromise(
+        Effect.gen(function* () {
+          const engine = yield* CodexInferenceEngine;
+          return yield* engine.start({
+            codexHome,
+            endpoint: Schema.decodeSync(EndpointUrl)(gateway.baseUrl),
+            redact: exchangeRedaction([placeholder]),
+            prompt: "say hello",
+          });
+        }).pipe(Effect.provide(codexEngineLayer({ timeoutMs: 60_000 }))),
+      );
+
+      expect(turn.turn).toMatchObject({ type: "done", text: "answered by the gateway" });
+      expect(gateway.requests).toContain("POST /v1/responses");
+      expect(new Set(gateway.authorizations)).toEqual(new Set([`Bearer ${placeholder}`]));
+    } finally {
+      await gateway.close();
+    }
+  }, 90_000);
 });

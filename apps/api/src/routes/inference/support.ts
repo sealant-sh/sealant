@@ -1,13 +1,17 @@
 /**
  * Pure helpers for the inference route — separated for unit tests.
  */
+import type { EndpointUrl } from "@sealant/api-contracts";
+
+const REDACTED = "[redacted]";
+const escapedForRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
  * Strips secret material from text that might flow into logs or error responses. Applied to every
  * engine error message: token values must never leave the process, even inside diagnostics.
  */
 export const redactSecret = (text: string, secret: string): string =>
-  secret.length === 0 ? text : text.split(secret).join("[redacted]");
+  secret.length === 0 ? text : text.split(secret).join(REDACTED);
 
 /** {@link redactSecret} over several secrets (e.g. a session file's access AND refresh tokens). */
 export const redactSecrets = (text: string, secrets: readonly (string | undefined)[]): string =>
@@ -17,9 +21,78 @@ export const redactSecrets = (text: string, secrets: readonly (string | undefine
     text,
   );
 
-/** Auth-shaped engine failures mark the connected account invalid (401-feedback, design doc §2). */
-export const isAuthFailureMessage = (message: string): boolean =>
-  /authentication_failed|invalid api key|oauth token|401|unauthorized|token.*(expired|revoked)/i.test(
+/**
+ * What one exchange's text must never show. The login's secrets; the endpoint's URL and anything
+ * that continues it, such as `/responses` after it; and the URL's path, which names the tenant
+ * behind a shared host. The endpoint's host stays, so a refusal can name where it came from.
+ */
+export const exchangeRedaction = (
+  secrets: readonly string[],
+  endpoint?: EndpointUrl,
+): ((text: string) => string) => {
+  const path = endpoint === undefined ? "/" : new URL(endpoint).pathname;
+  const patterns =
+    endpoint === undefined
+      ? []
+      : [
+          new RegExp(`${escapedForRegExp(endpoint)}[^\\s"'<>]*`, "g"),
+          ...(path === "/" ? [] : [new RegExp(escapedForRegExp(path), "g")]),
+        ];
+  return (text) =>
+    patterns.reduce(
+      (accumulated, pattern) => accumulated.replace(pattern, REDACTED),
+      redactSecrets(text, secrets),
+    );
+};
+
+/** Every string in a JSON value redacted, an object's property names included. */
+export const redactStrings = (value: unknown, redact: (text: string) => string): unknown => {
+  if (typeof value === "string") return redact(value);
+  if (Array.isArray(value)) return value.map((item) => redactStrings(item, redact));
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [redact(key), redactStrings(item, redact)]),
+    );
+  }
+  return value;
+};
+
+const HOST_SETTINGS = new Set([
+  "PATH",
+  "TMPDIR",
+  "LANG",
+  "LANGUAGE",
+  "TZ",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
+  "all_proxy",
+  "NODE_EXTRA_CA_CERTS",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+]);
+
+/**
+ * A provider CLI's environment, built from nothing: the host's path, temp dir, locale and proxy
+ * settings, then `own`. Nothing else the API process holds reaches the CLI: not its secrets, not a
+ * switch to a cloud provider's identity, not another base URL or header.
+ */
+export const providerCliEnv = (own: Readonly<Record<string, string>>): Record<string, string> => {
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries(process.env)) {
+    if (value !== undefined && (HOST_SETTINGS.has(name) || name.startsWith("LC_"))) {
+      env[name] = value;
+    }
+  }
+  return { ...env, ...own };
+};
+
+export const soundsLikeAuthFailure = (message: string): boolean =>
+  /authentication_failed|invalid api key|oauth token|\b401\b|unauthorized|token.*(expired|revoked)/i.test(
     message,
   );
 

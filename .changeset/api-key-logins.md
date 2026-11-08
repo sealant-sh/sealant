@@ -24,11 +24,10 @@ sending anything.
 
 A Codex key runs as the file `codex login --with-api-key` writes, at the Codex slot of a home, a
 launch and inference, where a key-only `auth.json` went before; Codex accounts stored as such an
-`auth.json` are stored again as the key when the control plane starts. A Claude key cannot be placed
-yet: workspace create, a launch, a credentials put and inference refuse it with
-`connected-account-unsupported` ("Claude API keys are not supported by this Sealant yet"), which
-`InferenceConflictError` now carries as its `code`; a profile bound to one skips it at create, as it
-skips an account that needs reconnecting. Nothing refreshes a key, writes a login read back from a
-workspace over one, or pushes a refreshed subscription into a workspace that was launched with a
-key. The control plane's traces, logs and error reports replace a provider key by its shape, in a
-request's URL too; the worker's logs are not covered.
+`auth.json` are stored again as the key when the control plane starts. Workspace create and a launch
+refuse a Claude key with `connected-account-unsupported`; a profile bound to one skips it at create,
+as it skips an account that needs reconnecting. `InferenceConflictError` now carries a `code`.
+Nothing refreshes a key, writes a login read back from a workspace over one, or pushes a refreshed
+subscription into a workspace that was launched with a key. The control plane's traces, logs and
+error reports replace a provider key by its shape, in a request's URL too; the worker's logs are not
+covered.

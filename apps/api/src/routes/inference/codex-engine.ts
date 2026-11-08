@@ -6,9 +6,12 @@
  * Codex runtime, pointed at a control-plane-provisioned private CODEX_HOME holding the decrypted
  * auth.json (0700 dir / 0600 file). The CLI reads the file itself AND can rotate the session with
  * its refresh token — the control plane never calls OpenAI's token endpoint. This module NEVER
- * calls a model API directly, never logs token material, and strips any ambient OPENAI_API_KEY
- * from the subprocess env so the exchange cannot silently bill a different identity than the
- * resolved connected account.
+ * calls a model API directly, never logs token material, and builds the subprocess env from an
+ * allowlist ({@link providerCliEnv}), so no ambient key or base URL can make the exchange bill a
+ * different identity than the resolved connected account.
+ *
+ * `codex exec --json` reports a failed turn in words only (`turn.failed` carries `error.message`,
+ * no status), so an auth failure here is at most `auth-words`: it never marks a key invalid.
  *
  * Differences from the claude engine, both deliberate:
  * - Tool-less v1: codex has no in-process MCP transport, so caller-defined tools are rejected at
@@ -18,7 +21,8 @@
  * - The claude engine disables built-in tools wholesale (`tools: []`); codex's shell tool cannot
  *   be disabled outright, so the compensations are `--sandbox read-only`, an empty scratch cwd,
  *   `--ephemeral` (no session files persisted), and `--ignore-user-config` (auth still comes from
- *   CODEX_HOME; nothing else does).
+ *   CODEX_HOME; nothing else does). A key on an endpoint instead runs on the one config.toml this
+ *   engine writes into CODEX_HOME, naming that endpoint.
  */
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -27,11 +31,11 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { providerLoginEnvNames } from "@sealant/api-contracts";
+import type { EndpointUrl } from "@sealant/api-contracts";
 import { Context, Effect, Layer } from "effect";
 
 import { InferenceEngineError, type InferenceEngineTurn } from "./claude-engine.js";
-import { extractJson, isAuthFailureMessage, redactSecrets } from "./support.js";
+import { extractJson, providerCliEnv, soundsLikeAuthFailure } from "./support.js";
 
 /** How long one exchange waits for the CLI to settle before the subprocess is killed. */
 const EXCHANGE_TIMEOUT_MS = 5 * 60 * 1_000;
@@ -45,8 +49,13 @@ const STDERR_TAIL_LIMIT = 4_000;
 export interface CodexInferenceStartInput {
   /** A provisioned private home dir holding the decrypted auth.json (see @sealant/credentials). */
   readonly codexHome: string;
-  /** Token material to strip from any outbound error text (from `extractCodexSecrets`). */
-  readonly secrets: readonly string[];
+  /**
+   * The endpoint an API key's requests go to, instead of OpenAI's. Only beside an auth.json that
+   * holds a key: the CLI sends that key to it as a bearer token.
+   */
+  readonly endpoint?: EndpointUrl;
+  /** Strips the login's secrets and its endpoint's URL from any outbound error text. */
+  readonly redact: (text: string) => string;
   readonly prompt: string;
   readonly system?: string;
   /** Passed verbatim to `-m` — an opaque model id, never validated here. */
@@ -85,16 +94,28 @@ const defaultCommand = (): readonly string[] => {
   return [process.execPath, require.resolve("@openai/codex/bin/codex.js")];
 };
 
-/** Subprocess env: ambient OpenAI identities stripped, the provisioned home injected. */
-const buildEnv = (codexHome: string): Record<string, string | undefined> => {
-  const env: Record<string, string | undefined> = { ...process.env };
-  // An ambient key would shadow the auth.json and bill a different identity; an ambient base URL
-  // would point the official runtime somewhere other than OpenAI. Both are stripped.
-  for (const name of providerLoginEnvNames.codex) delete env[name];
-  delete env["OPENAI_BASE_URL"];
-  env["CODEX_HOME"] = codexHome;
-  return env;
-};
+const buildEnv = (codexHome: string) => providerCliEnv({ CODEX_HOME: codexHome, HOME: codexHome });
+
+/**
+ * The CLI's config for an endpoint, observed on 0.148.0 and 0.160.1. `requires_openai_auth` makes a
+ * custom provider send the auth.json key as its bearer token (without it, no Authorization header);
+ * the provider must not be named "OpenAI", and `OPENAI_BASE_URL` is not read. A dead endpoint
+ * otherwise retries forever.
+ */
+export const codexEndpointConfig = (endpoint: EndpointUrl): string =>
+  [
+    `model_provider = "custom-endpoint"`,
+    `[model_providers.custom-endpoint]`,
+    `name = "Custom endpoint"`,
+    `base_url = ${JSON.stringify(endpoint)}`,
+    `wire_api = "responses"`,
+    `requires_openai_auth = true`,
+    `[features]`,
+    `unbounded_connection_retries = false`,
+    `[analytics]`,
+    `enabled = false`,
+    ``,
+  ].join("\n");
 
 interface ParsedExchange {
   text: string | undefined;
@@ -139,12 +160,21 @@ const foldEventLine = (state: ParsedExchange, line: string): void => {
     return;
   }
 
-  // Failure-shaped events carry a message; capture the last one for the error text.
-  if (
-    (record.type === "turn.failed" || record.type === "error") &&
-    typeof record.message === "string"
-  ) {
+  if (record.type === "error" && typeof record.message === "string") {
     state.errorDetail = record.message;
+    return;
+  }
+
+  if (record.type === "turn.failed") {
+    const error = record.error;
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "message" in error &&
+      typeof error.message === "string"
+    ) {
+      state.errorDetail = error.message;
+    }
   }
 };
 
@@ -193,7 +223,8 @@ const startExchange = async (
     "--json",
     "--ephemeral",
     "--skip-git-repo-check",
-    "--ignore-user-config",
+    // The home holds no config but an endpoint's, which the CLI must read.
+    ...(input.endpoint === undefined ? ["--ignore-user-config"] : []),
     "--sandbox",
     "read-only",
     "--color",
@@ -206,6 +237,11 @@ const startExchange = async (
   ];
 
   try {
+    if (input.endpoint !== undefined) {
+      writeFileSync(join(input.codexHome, "config.toml"), codexEndpointConfig(input.endpoint), {
+        mode: 0o600,
+      });
+    }
     return await new Promise<InferenceEngineTurn>((resolve, reject) => {
       const state: ParsedExchange = { text: undefined, usage: undefined, errorDetail: undefined };
       let stderrTail = "";
@@ -301,9 +337,12 @@ const startExchange = async (
           (stderrTail.trim().length > 0
             ? stderrTail.trim()
             : `Codex CLI exited with code ${code ?? "unknown"} without producing a result.`);
-        const message = redactSecrets(`Codex inference failed: ${detail}`, input.secrets);
+        const message = input.redact(`Codex inference failed: ${detail}`);
         reject(
-          new InferenceEngineError(isAuthFailureMessage(message) ? "auth" : "engine", message),
+          new InferenceEngineError(
+            soundsLikeAuthFailure(message) ? "auth-words" : "engine",
+            message,
+          ),
         );
       });
     });
@@ -330,14 +369,14 @@ const safeParseJson = (text: string): unknown => {
   }
 };
 
-const toEngineError = (error: unknown, secrets: readonly string[]): InferenceEngineError => {
+const toEngineError = (error: unknown, redact: (text: string) => string): InferenceEngineError => {
   if (error instanceof InferenceEngineError) {
     return error;
   }
   const raw = error instanceof Error ? error.message : String(error);
-  const message = redactSecrets(raw, secrets);
-  return isAuthFailureMessage(message)
-    ? new InferenceEngineError("auth", message, { cause: error })
+  const message = redact(raw);
+  return soundsLikeAuthFailure(message)
+    ? new InferenceEngineError("auth-words", message, { cause: error })
     : new InferenceEngineError("engine", message, { cause: error });
 };
 
@@ -359,7 +398,7 @@ export const codexEngineLayer = (options?: {
             options?.command ?? defaultCommand(),
             options?.timeoutMs ?? EXCHANGE_TIMEOUT_MS,
           ),
-        catch: (error) => toEngineError(error, input.secrets),
+        catch: (error) => toEngineError(error, input.redact),
       }),
   });
 

@@ -3,6 +3,7 @@ import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/ht
 
 import { BudgetExceededError } from "./budgets.js";
 import { connectedAccountProviderSchema } from "./connected-accounts.js";
+import { EndpointUrl } from "./endpoint-url.js";
 import { PersonId } from "./person-id.js";
 import { runCommandSchema, runSchema } from "./runs.js";
 import { workspaceProcessUserSchema } from "./sessions.js";
@@ -911,7 +912,8 @@ export type PutWorkspaceCredentialsRequest = typeof putWorkspaceCredentialsReque
 
 /**
  * What a placed login spends. A key carries its last four characters; a Claude key also its file's
- * absolute path, which Claude reads through an `apiKeyHelper` such as `cat <keyPath>`.
+ * absolute path, which Claude reads through an `apiKeyHelper` such as `cat <keyPath>`. A key with an
+ * endpoint carries its `baseUrl`, which nothing in the home holds: the harness's launch sets it.
  */
 export const credentialPlacementLoginSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("subscription") }),
@@ -919,6 +921,7 @@ export const credentialPlacementLoginSchema = Schema.Union([
     kind: Schema.Literal("api-key"),
     suffix: NonEmptyString,
     keyPath: Schema.optional(NonEmptyString),
+    baseUrl: Schema.optional(EndpointUrl),
   }),
 ]);
 export type CredentialPlacementLogin = typeof credentialPlacementLoginSchema.Type;
