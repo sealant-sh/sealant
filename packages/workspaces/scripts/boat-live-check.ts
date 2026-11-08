@@ -14,6 +14,7 @@ import { z } from "zod";
 import {
   boatProofConfigSchema,
   BoatProofError,
+  cleanupBoatLiveCheck,
   MendProofClient,
   runBoatLiveCheck,
 } from "../src/operator/boat-live-check.js";
@@ -87,46 +88,16 @@ const main = async () => {
     api: api.value,
   });
   try {
+    const services = {
+      ...core,
+      record,
+      inventory: () => provider.inventory(),
+      privacy: async (id: string) => provider.privacy(await core.snapshotName(id)),
+    };
     if (mode === "run") {
-      await runBoatLiveCheck(config, mend, {
-        ...core,
-        record,
-        inventory: () => provider.inventory(),
-        privacy: async (id) => provider.privacy(await core.snapshotName(id)),
-      });
+      await runBoatLiveCheck(config, mend, services);
     } else {
-      const intent = z
-        .object({
-          event: z.literal("create-intent"),
-          name: z.string(),
-          ...boatProofConfigSchema.shape,
-        })
-        .parse(previous.find((e) => e.event === "create-intent"));
-      if (JSON.stringify(boatProofConfigSchema.strip().parse(intent)) !== JSON.stringify(config))
-        throw new BoatProofError("ledger-context-mismatch");
-      const saved = previous.find((e) => e.event === "session");
-      const session =
-        saved === undefined
-          ? await mend.find(config.projectId, intent.name)
-          : await mend.session(z.string().parse(saved.id));
-      const publications = new Set(
-        previous.filter((e) => e.event === "runtime").map((e) => z.uuid().parse(e.publicationId)),
-      );
-      if (session !== undefined) {
-        if (session.projectId !== config.projectId || session.name !== intent.name)
-          throw new BoatProofError("cleanup-project");
-        const observed = await core.runtime(session);
-        if (observed !== undefined) publications.add(observed.publicationId);
-        await mend.request("POST", `/sessions/${session.id}/stop`);
-        const terminal = await core.runtime(session);
-        if (terminal !== undefined && !terminal.closed)
-          throw new BoatProofError("cleanup-pending; rerun cleanup in same ledger");
-      }
-      for (const id of publications) await core.withdraw(id);
-      const inventory = await provider.inventory();
-      record({ event: "cleanup-inventory", ...inventory });
-      if (inventory.sandboxes.length !== 0 || inventory.snapshots.length !== 0)
-        throw new BoatProofError("cleanup-inventory-not-empty");
+      await cleanupBoatLiveCheck(config, mend, services, previous);
     }
     record({ event: "completed", mode });
     process.stdout.write(`Boat proof ${mode} completed. Ledger: ${path}\n`);
