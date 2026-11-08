@@ -219,6 +219,26 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
     expect(await Effect.runPromise(nativeConsumerRows(s.db, job.runId))).toEqual([]);
   });
 
+  it("rechecks the explicit owner allowlist when recovering a lost delivery", async () => {
+    await withWorkspaceJobTestDatabase(databaseUrl ?? "", async (url) => {
+      const s = await setup(undefined, undefined, url);
+      const job = await s.enqueue();
+      expect(
+        await reapStaleWorkspaceBuildJobs({
+          ...s.options(job.id),
+          boatAdmissionOwnerIds: [],
+          maxReapsPerTick: 1,
+        }),
+      ).toBe(0);
+      expect(s.fixture.posts()).toBe(0);
+      expect(s.launches).toHaveLength(0);
+      expect(await Effect.runPromise(nativeConsumerRows(s.db, job.runId))).toEqual([]);
+      expect((await Effect.runPromise(s.jobs.getJobById(job.id)))?.errorCode).toBe(
+        "boat-admission-refused",
+      );
+    });
+  });
+
   it("recovers a queued scoped job whose broker wakeup was lost", async () => {
     await withWorkspaceJobTestDatabase(databaseUrl ?? "", async (url) => {
       const s = await setup(undefined, undefined, url);

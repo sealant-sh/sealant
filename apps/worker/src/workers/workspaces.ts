@@ -841,6 +841,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       // runtimes: a reaped job builds with the same builder a first delivery would.
       runtimes,
       defaultRuntimeAdapterId: env.DEFAULT_RUNTIME_ADAPTER,
+      boatAdmissionOwnerIds: env.SEALANT_BOAT_ADMISSION_OWNER_IDS,
       gitHubSourceIntegration,
       registryClient,
       ...(credentialCipher === undefined ? {} : { credentialCipher }),
@@ -1258,6 +1259,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       ? undefined
       : setInterval(() => void controlTick(), 250);
   const boatSweepTimer = boatRuntime === undefined ? undefined : setInterval(runBoatSweep, 30_000);
+  boatControlTimer?.unref();
+  boatSweepTimer?.unref();
   void runBoatSweep();
 
   resourceTickTimer.unref();
