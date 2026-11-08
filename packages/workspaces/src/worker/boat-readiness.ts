@@ -15,14 +15,22 @@ import {
   BoatExecutionError,
   type BoatReadyReceipt,
 } from "../runtime/boat/execution.js";
+import {
+  boatLaunchDiagnostic,
+  boatLaunchSummary,
+  type BoatLaunchDiagnostic,
+} from "../runtime/boat/launch-diagnostics.js";
 import { boatTargetIsCurrent } from "./boat-current.js";
 import { BoatResources } from "./boat-resources.js";
 
 /** Refusal leaves the original invocation and reservations in custody. No output or secrets escape. */
 export class BoatReadinessError extends Error {
   readonly _tag = "BoatReadinessError";
-  constructor(readonly code: "held" | "unavailable") {
-    super(`Boat readiness: ${code}`);
+  constructor(
+    readonly code: "held" | "unavailable",
+    readonly diagnostic?: BoatLaunchDiagnostic,
+  ) {
+    super(`Boat readiness: ${code}${boatLaunchSummary(diagnostic)}`);
   }
 }
 /** Explicit launch and fresh observation. Neither method publishes readiness or enables runtime registration. */
@@ -111,7 +119,9 @@ const make: Effect.Effect<
     effect.pipe(
       Effect.timeout(120_000),
       Effect.mapError((error) =>
-        error instanceof BoatReadinessError ? error : new BoatReadinessError("unavailable"),
+        error instanceof BoatReadinessError
+          ? error
+          : new BoatReadinessError("unavailable", boatLaunchDiagnostic(error, "readiness")),
       ),
     );
   return BoatReadiness.of({

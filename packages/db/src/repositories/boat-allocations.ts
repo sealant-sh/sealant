@@ -64,9 +64,11 @@ const transitions: Readonly<
 > = {
   reserved: ["issued", "held"],
   issued: ["allocated", "held"],
-  allocated: ["bound", "held"],
+  allocated: ["bound", "held", "deleting"],
   bound: [],
-  held: [],
+  held: ["deleting"],
+  deleting: ["deleting", "deleted"],
+  deleted: [],
 };
 const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Effect.gen(
   function* () {
@@ -210,7 +212,15 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
         previous.diskLineage !== next.diskLineage ||
         previous.manifestDigest !== next.manifestDigest ||
         !transitions[previous.phase].includes(next.phase) ||
-        (previous.sandboxId !== null && previous.sandboxId !== next.sandboxId)
+        (previous.sandboxId !== null && previous.sandboxId !== next.sandboxId) ||
+        (next.phase === "deleting" && previous.sandboxId === null) ||
+        (next.removal?.kind !== "absent" &&
+          previous.removal !== undefined &&
+          previous.removal.kind !== "issued" &&
+          (next.removal?.kind !== previous.removal.kind ||
+            (previous.removal.kind === "operation" &&
+              (next.removal.kind !== "operation" || previous.removal.id !== next.removal.id)) ||
+            (previous.removal.completed && !next.removal.completed)))
       )
         return yield* Effect.fail(new BoatAllocationStoreError("stale-transition"));
       return yield* db.transaction(() =>
@@ -258,6 +268,9 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
                   : undefined,
                 eq(workspaceRuntimeInstances.publicationId, next.input.publication.publicationId),
                 next.phase === "issued" ? isNull(workspaceRuntimeInstances.stopReason) : undefined,
+                next.phase === "deleting" || next.phase === "deleted"
+                  ? sql`(${workspaceRuntimeInstances.stopReason} is not null or ${workspaceRuntimeInstances.status} = 'failed')`
+                  : undefined,
                 sql`${workspaceRuntimeInstances.resourceId} is not distinct from ${previous.sandboxId}`,
               ),
             )

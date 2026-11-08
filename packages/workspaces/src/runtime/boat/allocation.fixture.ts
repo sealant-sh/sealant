@@ -19,6 +19,7 @@ import {
   type BoatTunnelInput,
   type BoatTunnelEndpoint,
 } from "../../resources/boat-tunnel.js";
+import type { BoatSandbox } from "./api.js";
 import { BoatSecret } from "./config.js";
 import type { BoatGuestTransport } from "./execution.js";
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -28,6 +29,8 @@ const secret = (value: string) => {
   return result.value;
 };
 export class ProviderFixture {
+  state: BoatSandbox["state"] = "running";
+  hydrated = true;
   bootId = randomUUID();
   childBootId = randomUUID();
   parking = false;
@@ -87,18 +90,19 @@ export class ProviderFixture {
   foreign = false;
   inventoryUnavailable = false;
   snapshotMismatch = false;
+  bootReadUnavailable = false;
   beforeCreateReply: () => Promise<void> = async () => {};
   constructor(readonly input: BoatAllocationInput) {}
   sandbox(id = "bx_23456789") {
     return {
       id,
-      state: "running",
+      state: this.state,
       labels: this.foreign ? { ...this.labels, "sealant-run": "foreign" } : this.labels,
       archiveAfter: this.scheduled ? "2026-11-07T00:00:00Z" : null,
       ttlSeconds: this.scheduled ? 900 : null,
       snapshots: true,
       monitoring: false,
-      hydrated: true,
+      hydrated: this.hydrated,
       ...(this.stopped ? { stop: { status: "completed" } } : {}),
       ...(id === "bx_3456789a" ? { labels: this.childLabels } : {}),
     };
@@ -280,6 +284,10 @@ export class ProviderFixture {
       return;
     }
     if (url.pathname.endsWith("/commands")) {
+      if (this.bootReadUnavailable) {
+        send({ code: "unavailable" }, 503);
+        return;
+      }
       const { command, detached } = z
         .object({ command: z.string(), detached: z.boolean().optional() })
         .parse(JSON.parse(raw));

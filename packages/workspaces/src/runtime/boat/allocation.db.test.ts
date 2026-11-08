@@ -408,6 +408,7 @@ const test = async (
                     Layer.mergeAll(
                       Layer.succeed(NativePublicationRepo, catalog),
                       Layer.succeed(BoatAllocationRepo, repo),
+                      Layer.succeed(BoatExecutionRepo, executions),
                       Layer.succeed(BoatTunnelRepo, tunnels),
                       Layer.succeed(WorkspaceCaptureDrainRepo, captureRepo),
                       Layer.succeed(WorkspaceRuntimeInstanceRepo, runtimes),
@@ -527,6 +528,249 @@ const adapterFixture = async (s: AllocationFixture) => {
 };
 
 describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () => {
+  it("waits for an accepted clone to finish provisioning without issuing another create", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      let observations = 0;
+      s.provider.state = "cloning";
+      s.provider.hydrated = false;
+      s.provider.beforeSandboxRead = async () => {
+        if (++observations >= 3) {
+          s.provider.state = "idle";
+          s.provider.hydrated = true;
+        }
+      };
+      try {
+        expect(await f.adapter.launch(f.input)).toMatchObject({ status: "ready" });
+        expect(s.provider.creates).toHaveLength(1);
+        expect(s.provider.commands).toHaveLength(1);
+        expect(observations).toBeGreaterThanOrEqual(3);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+  it("keeps the exact observed state and failure code on a terminal pre-bind refusal", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      s.provider.state = "error";
+      try {
+        await expect(f.adapter.launch(f.input)).rejects.toThrow(
+          /observe-sandbox.*allocation-pending.*error/,
+        );
+        expect(s.provider.commands).toHaveLength(0);
+        expect(s.provider.creates).toHaveLength(1);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+  it("closes a created but unbound allocation and preserves the launch failure", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      try {
+        s.provider.bootReadUnavailable = true;
+        await expect(f.adapter.launch(f.input)).rejects.toThrow(/read-boot-id.*execute.*503/);
+        expect(await execute(s.repo.get(f.input.runId))).toMatchObject({
+          phase: "allocated",
+          target: null,
+          sandboxId: "bx_23456789",
+        });
+        await execute(s.runtimes.markStopRequested({ runId: f.input.runId, stopReason: "user" }));
+        expect(await f.adapter.closeCapture({ resourceId: "bx_23456789" }, f.input.runId)).toBe(
+          "closed",
+        );
+        expect(await f.adapter.closeCapture({ resourceId: "bx_23456789" }, f.input.runId)).toBe(
+          "closed",
+        );
+        expect(s.provider.deleteCalls).toBe(1);
+        expect(s.guest.starts).toBe(0);
+        expect(await execute(s.repo.get(f.input.runId))).toMatchObject({
+          phase: "deleted",
+          target: null,
+        });
+        expect(await execute(s.runtimes.getRuntimeInstanceByRunId(f.input.runId))).toMatchObject({
+          status: "stopped",
+          removedAt: expect.any(Date),
+        });
+        expect(await execute(nativeConsumerRows(s.db, f.input.runId))).toMatchObject([
+          { state: "released" },
+        ]);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+  it("reconciles an unbound VM already removed by the operator", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      try {
+        const token = await execute(
+          Effect.flatMap(CredentialCipher, (cipher) => cipher.encrypt("local-capture-only")).pipe(
+            Effect.provide(credentialCipherLayer({ key: Buffer.alloc(32, 7).toString("base64") })),
+          ),
+        );
+        await execute(
+          s.canonical.storeCaptureToken({ runId: f.input.runId, sealed: token.sealed }),
+        );
+        s.provider.bootReadUnavailable = true;
+        await expect(f.adapter.launch(f.input)).rejects.toBeInstanceOf(LaunchRetainedError);
+        await execute(s.runtimes.markStopRequested({ runId: f.input.runId, stopReason: "user" }));
+        s.provider.sandboxMissing = true;
+        expect(await execute(f.close.owner.reconcile({ limit: 10 }))).toMatchObject({
+          entries: [{ runId: f.input.runId, outcome: "closed" }],
+        });
+        expect(s.provider.deleteCalls).toBe(0);
+        expect(await execute(s.repo.get(f.input.runId))).toMatchObject({ phase: "deleted" });
+        expect((await execute(nativeConsumerRows(s.db, f.input.runId)))[0]?.state).toBe("released");
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+  it("polls an accepted unbound deletion across restarts without another DELETE", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      try {
+        s.provider.bootReadUnavailable = true;
+        await expect(f.adapter.launch(f.input)).rejects.toBeInstanceOf(LaunchRetainedError);
+        await execute(s.runtimes.markStopRequested({ runId: f.input.runId, stopReason: "user" }));
+        s.provider.deletionCompleted = false;
+        expect(await f.adapter.closeCapture({ resourceId: "bx_23456789" }, f.input.runId)).toBe(
+          "pending",
+        );
+        expect((await execute(nativeConsumerRows(s.db, f.input.runId)))[0]?.state).toBe("pending");
+        const restarted = await execute(s.final([]));
+        s.provider.deletionUnavailable = true;
+        await expect(
+          execute(restarted.owner.closeUnbound(f.input.runId, "bx_23456789")),
+        ).rejects.toThrow("unavailable");
+        expect(s.provider.deleteCalls).toBe(1);
+        s.provider.deletionUnavailable = false;
+        s.provider.deletionCompleted = true;
+        expect(await execute(restarted.owner.closeUnbound(f.input.runId, "bx_23456789"))).toBe(
+          "closed",
+        );
+        expect(s.provider.deleteCalls).toBe(1);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+  it("retains a lost unbound DELETE response and recovers from exact absence", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      try {
+        s.provider.bootReadUnavailable = true;
+        await expect(f.adapter.launch(f.input)).rejects.toBeInstanceOf(LaunchRetainedError);
+        await execute(s.runtimes.markStopRequested({ runId: f.input.runId, stopReason: "user" }));
+        s.provider.deleteLost = true;
+        await expect(
+          f.adapter.closeCapture({ resourceId: "bx_23456789" }, f.input.runId),
+        ).rejects.toThrow("unavailable");
+        expect(await f.adapter.closeCapture({ resourceId: "bx_23456789" }, f.input.runId)).toBe(
+          "pending",
+        );
+        expect(s.provider.deleteCalls).toBe(1);
+        expect((await execute(nativeConsumerRows(s.db, f.input.runId)))[0]?.state).toBe("pending");
+        s.provider.sandboxMissing = true;
+        expect(await execute(f.close.owner.reconcile({ limit: 10 }))).toMatchObject({
+          entries: [{ outcome: "closed" }],
+        });
+        expect(s.provider.deleteCalls).toBe(1);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+  it("refuses active or foreign unbound guests, and fences stale binding before deleting", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      try {
+        s.provider.bootReadUnavailable = true;
+        await expect(f.adapter.launch(f.input)).rejects.toBeInstanceOf(LaunchRetainedError);
+        const previous = await execute(s.repo.get(f.input.runId));
+        if (previous === undefined) throw new Error("missing allocation");
+        await expect(
+          execute(f.close.owner.closeUnbound(f.input.runId, "bx_23456789")),
+        ).rejects.toThrow("held");
+        expect(s.provider.deleteCalls).toBe(0);
+        // Reconciliation must also find failed launches whose stop worker has not run.
+        await execute(s.runtimes.upsertRuntimeInstance({ runId: f.input.runId, status: "failed" }));
+        s.provider.foreign = true;
+        expect(await execute(f.close.owner.reconcile({ limit: 10 }))).toMatchObject({
+          entries: [{ outcome: "held" }],
+        });
+        expect(s.provider.deleteCalls).toBe(0);
+        await expect(
+          execute(s.catalog.release(s.input.consumer, s.input.publication.publicationId)),
+        ).rejects.toThrow("consumer-conflict");
+        s.provider.foreign = false;
+        s.provider.bootReadUnavailable = false;
+        await expect(execute(s.allocations.prepare(s.input))).rejects.toThrow("allocation-held");
+        await expect(
+          execute(
+            s.repo.advance(previous, { ...previous, phase: "held", reason: "lifetime-unverified" }),
+          ),
+        ).rejects.toThrow("stale-transition");
+        expect(await execute(f.close.owner.closeUnbound(f.input.runId, "bx_23456789"))).toBe(
+          "pending",
+        );
+        expect(s.guest.starts).toBe(0);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+  it("retries an unknown unbound DELETE only after its lease and a fresh ownership observation", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      try {
+        s.provider.bootReadUnavailable = true;
+        await expect(f.adapter.launch(f.input)).rejects.toBeInstanceOf(LaunchRetainedError);
+        await execute(s.runtimes.markStopRequested({ runId: f.input.runId, stopReason: "user" }));
+        s.provider.deleteLost = true;
+        await expect(
+          execute(f.close.owner.closeUnbound(f.input.runId, "bx_23456789")),
+        ).rejects.toThrow("unavailable");
+        const issued = await execute(s.repo.get(f.input.runId));
+        if (issued?.removal?.kind !== "issued") throw new Error("missing deletion lease");
+        const retryAt = Date.parse(issued.removal.at) + 180_001;
+        s.provider.deleteLost = false;
+        s.provider.foreign = true;
+        const retry = () =>
+          Effect.gen(function* () {
+            yield* TestClock.setTime(retryAt);
+            return yield* f.close.owner.closeUnbound(f.input.runId, "bx_23456789");
+          }).pipe(Effect.provide(TestClock.layer()));
+        await expect(execute(retry())).rejects.toThrow("held");
+        expect(s.provider.deleteCalls).toBe(1);
+        s.provider.foreign = false;
+        expect(await execute(retry())).toBe("closed");
+        expect(s.provider.deleteCalls).toBe(2);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+  it("shares one unbound deletion between concurrent stop and reconciliation", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      try {
+        s.provider.bootReadUnavailable = true;
+        await expect(f.adapter.launch(f.input)).rejects.toBeInstanceOf(LaunchRetainedError);
+        await execute(s.runtimes.markStopRequested({ runId: f.input.runId, stopReason: "user" }));
+        s.provider.beforeDeletion = async () => {
+          entered.resolve();
+          await release.promise;
+        };
+        const first = f.adapter.closeCapture({ resourceId: "bx_23456789" }, f.input.runId);
+        await entered.promise;
+        expect(await execute(f.close.owner.reconcile({ limit: 10 }))).toMatchObject({
+          entries: [{ outcome: "pending" }],
+        });
+        release.resolve();
+        expect(await first).toBe("closed");
+        expect(s.provider.deleteCalls).toBe(1);
+      } finally {
+        release.resolve();
+        await f.runtime.dispose();
+      }
+    }));
   it("launches through the durable owners with complete boot facts, then FINAL closes and releases its slot", () =>
     test(async (s) => {
       const f = await adapterFixture(s);

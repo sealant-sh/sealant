@@ -33,6 +33,11 @@ import type { SealantRuntimeService, SealantTarget } from "../../sealantd/runtim
 import type { BoatApi } from "./api.js";
 import { BoatSecret, boatSandboxIdSchema, parseBoatUrl } from "./config.js";
 import { boatControlConnection, type BoatHostedControl } from "./connection.js";
+import {
+  boatLaunchDiagnostic,
+  boatLaunchSummary,
+  type BoatLaunchDiagnostic,
+} from "./launch-diagnostics.js";
 
 const name = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/);
 const identitySchema = z.strictObject({
@@ -96,15 +101,22 @@ export class BoatExecutionError extends Error {
       | "invalid-reply"
       | "seal-context-mismatch"
       | "invocation-held",
+    readonly diagnostic?: BoatLaunchDiagnostic,
   ) {
-    super(`Boat execution: ${code}`);
+    super(`Boat execution: ${code}${boatLaunchSummary(diagnostic)}`);
   }
 }
 type Failure = BoatExecutionError | BoatExecutionStoreError | CredentialCipherError;
 const attempt = <A>(code: BoatExecutionError["code"], run: () => A) =>
   Effect.try({ try: run, catch: () => new BoatExecutionError(code) });
-const io = <A>(run: () => Promise<A>) =>
-  Effect.tryPromise({ try: run, catch: () => new BoatExecutionError("transport-unavailable") });
+const io = <A>(run: () => Promise<A>, step: BoatLaunchDiagnostic["step"] = "receiver-request") =>
+  Effect.tryPromise({
+    try: run,
+    catch: (error) =>
+      error instanceof BoatExecutionError
+        ? error
+        : new BoatExecutionError("transport-unavailable", boatLaunchDiagnostic(error, step)),
+  });
 const identity = (target: BoatExecutionTarget) => ({
   deployment_id: target.deploymentId,
   instance_id: target.sandboxId,
@@ -162,6 +174,11 @@ export const createBoatGuestTransport = (
   const verify = async (target: BoatExecutionTarget) => {
     const id = boatSandboxIdSchema.parse(target.sandboxId);
     const found = await api.get(id);
+    if (!found.ok)
+      throw new BoatExecutionError(
+        "transport-unavailable",
+        boatLaunchDiagnostic(found.error, "observe-sandbox"),
+      );
     const expected = {
       "sealant-runtime": "boat",
       "sealant-deployment": target.deploymentId,
@@ -172,7 +189,6 @@ export const createBoatGuestTransport = (
       "sealant-source": target.sourceId,
     };
     if (
-      !found.ok ||
       found.value.id !== id ||
       !Object.entries(expected).every(([key, value]) => found.value.labels?.[key] === value)
     )
@@ -215,18 +231,30 @@ export const createBoatGuestTransport = (
         throw new BoatExecutionError("invalid-input");
       const command = boatGuestPublicCommand("bind", publicRequest.data);
       const result = await api.execute(id, command, { timeoutSeconds: 90 });
+      if (!result.ok)
+        throw new BoatExecutionError(
+          "transport-unavailable",
+          boatLaunchDiagnostic(result.error, "bind-exchange"),
+        );
       if (
-        !result.ok ||
         result.value.timedOut ||
         result.value.exitCode !== 0 ||
         result.value.stdout.length > 65536
       )
-        throw new BoatExecutionError("transport-unavailable");
+        throw new BoatExecutionError("transport-unavailable", {
+          step: "bind-exchange",
+          errorClass: "BoatExecutionError",
+          command: { exitCode: result.value.exitCode, timedOut: result.value.timedOut },
+        });
       return JSON.parse(result.value.stdout);
     },
     host: async (target) => {
       const result = await api.hostControl(await verify(target));
-      if (!result.ok) throw new BoatExecutionError("transport-unavailable");
+      if (!result.ok)
+        throw new BoatExecutionError(
+          "transport-unavailable",
+          boatLaunchDiagnostic(result.error, "host-receiver"),
+        );
       return result.value;
     },
     call: async (access, bearer, route, body) => {
@@ -246,7 +274,11 @@ export const createBoatGuestTransport = (
       });
       if (!response.ok) {
         await response.body?.cancel();
-        throw new BoatExecutionError("transport-unavailable");
+        throw new BoatExecutionError("transport-unavailable", {
+          step: "receiver-request",
+          errorClass: "BoatExecutionError",
+          provider: { operation: "unknown", status: response.status, causeClass: null },
+        });
       }
       const reader = response.body?.getReader();
       if (reader === undefined) throw new BoatExecutionError("invalid-reply");
@@ -439,7 +471,7 @@ const make: Effect.Effect<
       const opened = yield* open(record, "control", record.sealedControl, controlSchema);
       const stored = Redacted.value(opened);
       // Hosted cookies may expire; each request refreshes access without repeating bootstrap.
-      const hosted = yield* io(() => transport.host(record.target));
+      const hosted = yield* io(() => transport.host(record.target), "host-receiver");
       const bearer = yield* attempt("seal-context-mismatch", () => {
         const parsed = BoatSecret.parse(stored.bearer);
         if (!parsed.ok) throw new Error();
@@ -486,7 +518,7 @@ const make: Effect.Effect<
       operation_id: record.exchangeId,
       public_key: record.publicKey,
     };
-    const raw = yield* io(() => transport.bind(target, request));
+    const raw = yield* io(() => transport.bind(target, request), "bind-exchange");
     const reply = yield* attempt("invalid-reply", () => {
       const parsed = z
         .object({
@@ -532,7 +564,7 @@ const make: Effect.Effect<
       if (!parsed.ok) throw new Error();
       return parsed.value;
     });
-    const hosted = yield* io(() => transport.host(target));
+    const hosted = yield* io(() => transport.host(target), "host-receiver");
     yield* checkStatus(record, yield* io(() => transport.call(hosted, bearer, "status")), false);
     const sealedControl = yield* seal(
       record,
@@ -853,7 +885,10 @@ const make: Effect.Effect<
         ),
       );
     const before = yield* observe();
-    const daemon = yield* io(() => transport.probe(connection.hosted, connection.bearer));
+    const daemon = yield* io(
+      () => transport.probe(connection.hosted, connection.bearer),
+      "readiness",
+    );
     if (
       !daemon.healthy ||
       !/^rt_[a-zA-Z0-9_-]+$/.test(daemon.runtimeId) ||
