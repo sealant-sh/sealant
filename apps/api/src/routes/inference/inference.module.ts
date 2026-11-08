@@ -62,7 +62,7 @@ import {
 } from "./claude-engine.js";
 import { CodexInferenceEngine } from "./codex-engine.js";
 import { openExchange, type Exchange, type ExchangeLogin } from "./exchange.js";
-import { redactSecrets, redactStrings } from "./support.js";
+import { redactStrings } from "./support.js";
 
 const toErrorMessage = (error: unknown, fallback: string): string =>
   error instanceof Error ? error.message : fallback;
@@ -266,7 +266,7 @@ const startEngine = (exchange: Exchange, payload: InferenceRespondRequest) =>
             ...(login.shape === "codex-key" && login.baseUrl !== undefined
               ? { endpoint: login.baseUrl }
               : {}),
-            secrets: exchange.secrets,
+            redact: exchange.redact,
             onSessionEnd,
           }),
       );
@@ -424,7 +424,7 @@ const authFailure = (exchange: Exchange, reason: AuthReason, detail: string) =>
 const redacting =
   (exchange: Exchange) =>
   (text: string): string =>
-    redactProviderKeys(redactSecrets(text, exchange.secrets));
+    redactProviderKeys(exchange.redact(text));
 
 type RespondFailure =
   | BudgetExceededError
@@ -474,8 +474,8 @@ const redactFailure =
   };
 
 /**
- * Everything an exchange answers, success or failure, leaves with its login's secrets redacted,
- * and every failure carries the exchange's receipt.
+ * Everything an exchange answers, success or failure, leaves with its login's secrets and its
+ * endpoint's URL redacted, and every failure carries the exchange's receipt.
  */
 const withinExchange = <A, R>(exchange: Exchange, effect: Effect.Effect<A, RespondFailure, R>) =>
   effect.pipe(Effect.mapError(redactFailure(redacting(exchange), exchange.receipt)));

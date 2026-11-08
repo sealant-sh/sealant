@@ -1,6 +1,9 @@
 import { createServer, type ServerResponse } from "node:http";
 
-/** An OpenAI-compatible endpoint that answers every Responses request with one text message. */
+/**
+ * An OpenAI-compatible endpoint that answers every Responses request with one text message, or
+ * with `refuseWith`'s status when it is set.
+ */
 export interface FakeOpenAi {
   readonly baseUrl: string;
   /** Each request's method and path, in order. */
@@ -56,7 +59,7 @@ const responseEvents = (model: unknown, text: string): Record<string, unknown>[]
 
 /** `path` is where the fake's API sits, as an endpoint behind a gateway does. */
 export const startFakeOpenAi = async (
-  options: { readonly path?: string; readonly text?: string } = {},
+  options: { readonly path?: string; readonly text?: string; readonly refuseWith?: number } = {},
 ): Promise<FakeOpenAi> => {
   const path = options.path ?? "";
   const requests: string[] = [];
@@ -72,6 +75,15 @@ export const startFakeOpenAi = async (
       const url = (req.url ?? "").split("?")[0] ?? "";
       requests.push(`${req.method ?? ""} ${url}`);
       authorizations.push(req.headers.authorization);
+      if (
+        req.method === "POST" &&
+        url === `${path}/responses` &&
+        options.refuseWith !== undefined
+      ) {
+        res.writeHead(options.refuseWith, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "forbidden", type: "permission_error" } }));
+        return;
+      }
       if (req.method === "POST" && url === `${path}/responses`) {
         let request: unknown;
         try {

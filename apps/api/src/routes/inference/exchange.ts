@@ -1,6 +1,8 @@
 import type { EndpointUrl, InferenceReceipt } from "@sealant/api-contracts";
 import { extractCodexSecrets } from "@sealant/credentials";
 
+import { exchangeRedaction } from "./support.js";
+
 /**
  * The decrypted login, in the shape its engine is wired for. A key with a `baseUrl` is sent there
  * and nowhere else.
@@ -25,8 +27,11 @@ export interface Exchange {
   readonly ownerUserId: string;
   readonly receipt: InferenceReceipt;
   readonly login: ExchangeLogin;
-  /** The login's literal secrets, read once, for redaction. */
-  readonly secrets: readonly string[];
+  /**
+   * Strips from text what must never leave the exchange: the login's secrets, and its endpoint's
+   * URL and path. Built once from the login.
+   */
+  readonly redact: (text: string) => string;
 }
 
 const secretsOf = (login: ExchangeLogin): readonly string[] => {
@@ -53,4 +58,10 @@ export const openExchange = (input: {
   readonly ownerUserId: string;
   readonly receipt: InferenceReceipt;
   readonly login: ExchangeLogin;
-}): Exchange => ({ ...input, secrets: secretsOf(input.login) });
+}): Exchange => ({
+  ...input,
+  redact: exchangeRedaction(
+    secretsOf(input.login),
+    "baseUrl" in input.login ? input.login.baseUrl : undefined,
+  ),
+});

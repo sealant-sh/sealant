@@ -35,7 +35,7 @@ import type { EndpointUrl } from "@sealant/api-contracts";
 import { Context, Effect, Layer } from "effect";
 
 import { InferenceEngineError, type InferenceEngineTurn } from "./claude-engine.js";
-import { extractJson, providerCliEnv, redactSecrets, soundsLikeAuthFailure } from "./support.js";
+import { extractJson, providerCliEnv, soundsLikeAuthFailure } from "./support.js";
 
 /** How long one exchange waits for the CLI to settle before the subprocess is killed. */
 const EXCHANGE_TIMEOUT_MS = 5 * 60 * 1_000;
@@ -54,8 +54,8 @@ export interface CodexInferenceStartInput {
    * holds a key: the CLI sends that key to it as a bearer token.
    */
   readonly endpoint?: EndpointUrl;
-  /** Token material to strip from any outbound error text (from `extractCodexSecrets`). */
-  readonly secrets: readonly string[];
+  /** Strips the login's secrets and its endpoint's URL from any outbound error text. */
+  readonly redact: (text: string) => string;
   readonly prompt: string;
   readonly system?: string;
   /** Passed verbatim to `-m` — an opaque model id, never validated here. */
@@ -337,7 +337,7 @@ const startExchange = async (
           (stderrTail.trim().length > 0
             ? stderrTail.trim()
             : `Codex CLI exited with code ${code ?? "unknown"} without producing a result.`);
-        const message = redactSecrets(`Codex inference failed: ${detail}`, input.secrets);
+        const message = input.redact(`Codex inference failed: ${detail}`);
         reject(
           new InferenceEngineError(
             soundsLikeAuthFailure(message) ? "auth-words" : "engine",
@@ -369,12 +369,12 @@ const safeParseJson = (text: string): unknown => {
   }
 };
 
-const toEngineError = (error: unknown, secrets: readonly string[]): InferenceEngineError => {
+const toEngineError = (error: unknown, redact: (text: string) => string): InferenceEngineError => {
   if (error instanceof InferenceEngineError) {
     return error;
   }
   const raw = error instanceof Error ? error.message : String(error);
-  const message = redactSecrets(raw, secrets);
+  const message = redact(raw);
   return soundsLikeAuthFailure(message)
     ? new InferenceEngineError("auth-words", message, { cause: error })
     : new InferenceEngineError("engine", message, { cause: error });
@@ -398,7 +398,7 @@ export const codexEngineLayer = (options?: {
             options?.command ?? defaultCommand(),
             options?.timeoutMs ?? EXCHANGE_TIMEOUT_MS,
           ),
-        catch: (error) => toEngineError(error, input.secrets),
+        catch: (error) => toEngineError(error, input.redact),
       }),
   });
 

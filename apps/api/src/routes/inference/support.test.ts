@@ -1,6 +1,14 @@
+import { EndpointUrl } from "@sealant/api-contracts";
+import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { extractJson, soundsLikeAuthFailure, redactSecret, redactSecrets } from "./support.js";
+import {
+  exchangeRedaction,
+  extractJson,
+  soundsLikeAuthFailure,
+  redactSecret,
+  redactSecrets,
+} from "./support.js";
 
 describe("redactSecret", () => {
   it("strips every occurrence of the secret", () => {
@@ -27,6 +35,37 @@ describe("redactSecrets", () => {
   it("skips undefined entries (token-kind accounts have no refresh token)", () => {
     expect(redactSecrets("bad sk-ant-oat01-a", ["sk-ant-oat01-a", undefined])).toBe(
       "bad [redacted]",
+    );
+  });
+});
+
+describe("exchangeRedaction", () => {
+  const endpoint = Schema.decodeSync(EndpointUrl)(
+    "http://10.0.0.9:8080/private-company/tenant-5678",
+  );
+
+  it("strips the endpoint's URL with what follows it, and its path, and keeps its host", () => {
+    const redact = exchangeRedaction(["placeholder-key"], endpoint);
+    expect(
+      redact(
+        "unexpected status 403 Forbidden: forbidden, url: http://10.0.0.9:8080/private-company/tenant-5678/v1/responses (key placeholder-key)",
+      ),
+    ).toBe("unexpected status 403 Forbidden: forbidden, url: [redacted] (key [redacted])");
+    expect(redact("POST /private-company/tenant-5678/v1/messages on 10.0.0.9:8080")).toBe(
+      "POST [redacted]/v1/messages on 10.0.0.9:8080",
+    );
+  });
+
+  it("strips a URL at the endpoint's host alone when its path is the root", () => {
+    const redact = exchangeRedaction([], Schema.decodeSync(EndpointUrl)("https://gateway.test/"));
+    expect(redact("refused at https://gateway.test/v1/responses by gateway.test")).toBe(
+      "refused at [redacted] by gateway.test",
+    );
+  });
+
+  it("strips only the secrets without an endpoint", () => {
+    expect(exchangeRedaction(["sk-a"])("bad sk-a at /v1/responses")).toBe(
+      "bad [redacted] at /v1/responses",
     );
   });
 });

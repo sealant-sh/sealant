@@ -1,13 +1,17 @@
 /**
  * Pure helpers for the inference route — separated for unit tests.
  */
+import type { EndpointUrl } from "@sealant/api-contracts";
+
+const REDACTED = "[redacted]";
+const escapedForRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
  * Strips secret material from text that might flow into logs or error responses. Applied to every
  * engine error message: token values must never leave the process, even inside diagnostics.
  */
 export const redactSecret = (text: string, secret: string): string =>
-  secret.length === 0 ? text : text.split(secret).join("[redacted]");
+  secret.length === 0 ? text : text.split(secret).join(REDACTED);
 
 /** {@link redactSecret} over several secrets (e.g. a session file's access AND refresh tokens). */
 export const redactSecrets = (text: string, secrets: readonly (string | undefined)[]): string =>
@@ -16,6 +20,30 @@ export const redactSecrets = (text: string, secrets: readonly (string | undefine
       secret === undefined ? accumulated : redactSecret(accumulated, secret),
     text,
   );
+
+/**
+ * What one exchange's text must never show. The login's secrets; the endpoint's URL and anything
+ * that continues it, such as `/responses` after it; and the URL's path, which names the tenant
+ * behind a shared host. The endpoint's host stays, so a refusal can name where it came from.
+ */
+export const exchangeRedaction = (
+  secrets: readonly string[],
+  endpoint?: EndpointUrl,
+): ((text: string) => string) => {
+  const path = endpoint === undefined ? "/" : new URL(endpoint).pathname;
+  const patterns =
+    endpoint === undefined
+      ? []
+      : [
+          new RegExp(`${escapedForRegExp(endpoint)}[^\\s"'<>]*`, "g"),
+          ...(path === "/" ? [] : [new RegExp(escapedForRegExp(path), "g")]),
+        ];
+  return (text) =>
+    patterns.reduce(
+      (accumulated, pattern) => accumulated.replace(pattern, REDACTED),
+      redactSecrets(text, secrets),
+    );
+};
 
 /** Every string in a JSON value redacted, an object's property names included. */
 export const redactStrings = (value: unknown, redact: (text: string) => string): unknown => {

@@ -288,8 +288,10 @@ describe("inference.module provider routing", () => {
     expect(startInput.model).toBe("lunna");
     expect(startInput.system).toBe("sys");
     expect(startInput.prompt).toBe("name this session");
-    // Every token-like value from auth.json rides along for redaction.
-    expect(startInput.secrets).toEqual(["at-codex", "rt-codex", "idt-codex"]);
+    // Every token-like value from auth.json is stripped from what the engine reports.
+    expect(startInput.redact("at-codex rt-codex idt-codex")).toBe(
+      "[redacted] [redacted] [redacted]",
+    );
     // The use was attributed exactly like workspace injection.
     expect(accounts.updateSyncState).toHaveBeenCalledWith(
       expect.objectContaining({ id: "cacc_codex", lastUsedAt: expect.any(Date) }),
@@ -1371,6 +1373,59 @@ describe("inference.module on a key with an endpoint, against the real CLIs", ()
       });
       expect(gateway.requests).toContain("POST /v1/responses");
       expect(new Set(gateway.authorizations)).toEqual(new Set([`Bearer ${placeholder}`]));
+    } finally {
+      await gateway.close();
+    }
+  }, 90_000);
+
+  const privatePath = "/private-company/tenant-5678";
+  const leaksOf = (baseUrl: string) => [baseUrl, privatePath, "private-company", "tenant-5678"];
+
+  it("a Claude endpoint's refusal never shows the endpoint's URL or its path", async () => {
+    const anthropic = await startFakeAnthropic();
+    const gateway = await startFakeAnthropic({ path: privatePath });
+    try {
+      const layer = Layer.mergeAll(
+        makeLayers({ accounts: gatewayAccounts(onEndpoint("claude", gateway.baseUrl)) }).layer,
+        claudeEngineLayer({ anthropicBaseUrl: anthropic.baseUrl }),
+      );
+      gateway.reply({
+        type: "status",
+        status: 403,
+        errorType: "permission_error",
+        message: `forbidden: ${gateway.baseUrl}/v1/messages is closed to this key`,
+      });
+
+      const refused = await runFlipped(
+        respond(newExchange({ credentials: { claude: "gateway" } })).pipe(Effect.provide(layer)),
+      );
+
+      expect(refused).toMatchObject({ message: expect.stringContaining("forbidden") });
+      const body = JSON.stringify(refused);
+      for (const leaked of leaksOf(gateway.baseUrl)) expect(body).not.toContain(leaked);
+      expect(new Set(gateway.apiKeys)).toEqual(new Set([placeholder]));
+    } finally {
+      await gateway.close();
+      await anthropic.close();
+    }
+  }, 90_000);
+
+  it("a Codex endpoint's refusal never shows the endpoint's URL or its path", async () => {
+    const gateway = await startFakeOpenAi({ path: `${privatePath}/v1`, refuseWith: 403 });
+    try {
+      const layer = Layer.mergeAll(
+        makeLayers({ accounts: gatewayAccounts(onEndpoint("codex", gateway.baseUrl)) }).layer,
+        codexEngineLayer({ timeoutMs: 60_000 }),
+      );
+
+      const refused = await runFlipped(
+        respond(newExchange({ credentials: { codex: "gateway" } })).pipe(Effect.provide(layer)),
+      );
+
+      expect(refused).toMatchObject({ message: expect.stringContaining("403") });
+      const body = JSON.stringify(refused);
+      for (const leaked of leaksOf(gateway.baseUrl)) expect(body).not.toContain(leaked);
+      expect(gateway.requests).toContain(`POST ${privatePath}/v1/responses`);
     } finally {
       await gateway.close();
     }

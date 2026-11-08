@@ -21,6 +21,7 @@ import {
   type CodexInferenceStartInput,
 } from "./codex-engine.js";
 import { startFakeOpenAi } from "./fake-openai.fixture.js";
+import { exchangeRedaction } from "./support.js";
 
 const fixturePath = fileURLToPath(new URL("./fake-codex.fixture.mjs", import.meta.url));
 type FakeMode = "echo" | "fail" | "auth" | "turn-failed" | "hang";
@@ -54,7 +55,7 @@ const start = (
       const engine = yield* CodexInferenceEngine;
       return yield* engine.start({
         codexHome,
-        secrets: [],
+        redact: (text) => text,
         prompt: "name this session",
         ...input,
       });
@@ -156,7 +157,7 @@ describe("codex engine", () => {
     let sessionEnds = 0;
 
     const error = await startExpectingFailure("fail", {
-      secrets: ["sk-secret-token-value"],
+      redact: exchangeRedaction(["sk-secret-token-value"]),
       onSessionEnd: () => {
         sessionEnds += 1;
         return Promise.resolve();
@@ -175,7 +176,7 @@ describe("codex engine", () => {
 
   it("answers a failed turn with its own words, redacted", async () => {
     const error = await startExpectingFailure("turn-failed", {
-      secrets: ["sk-secret-token-value"],
+      redact: exchangeRedaction(["sk-secret-token-value"]),
     });
 
     expect(error).toMatchObject({
@@ -208,7 +209,7 @@ describe("codex engine on a key with an endpoint", () => {
           return yield* engine.start({
             codexHome,
             endpoint: Schema.decodeSync(EndpointUrl)(gateway.baseUrl),
-            secrets: [placeholder],
+            redact: exchangeRedaction([placeholder]),
             prompt: "say hello",
           });
         }).pipe(Effect.provide(codexEngineLayer({ timeoutMs: 60_000 }))),
