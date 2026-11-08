@@ -21,7 +21,8 @@
  * - The claude engine disables built-in tools wholesale (`tools: []`); codex's shell tool cannot
  *   be disabled outright, so the compensations are `--sandbox read-only`, an empty scratch cwd,
  *   `--ephemeral` (no session files persisted), and `--ignore-user-config` (auth still comes from
- *   CODEX_HOME; nothing else does).
+ *   CODEX_HOME; nothing else does). A key on an endpoint instead runs on the one config.toml this
+ *   engine writes into CODEX_HOME, naming that endpoint.
  */
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -30,6 +31,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { EndpointUrl } from "@sealant/api-contracts";
 import { Context, Effect, Layer } from "effect";
 
 import { InferenceEngineError, type InferenceEngineTurn } from "./claude-engine.js";
@@ -47,6 +49,11 @@ const STDERR_TAIL_LIMIT = 4_000;
 export interface CodexInferenceStartInput {
   /** A provisioned private home dir holding the decrypted auth.json (see @sealant/credentials). */
   readonly codexHome: string;
+  /**
+   * The endpoint an API key's requests go to, instead of OpenAI's. Only beside an auth.json that
+   * holds a key: the CLI sends that key to it as a bearer token.
+   */
+  readonly endpoint?: EndpointUrl;
   /** Token material to strip from any outbound error text (from `extractCodexSecrets`). */
   readonly secrets: readonly string[];
   readonly prompt: string;
@@ -88,6 +95,27 @@ const defaultCommand = (): readonly string[] => {
 };
 
 const buildEnv = (codexHome: string) => providerCliEnv({ CODEX_HOME: codexHome, HOME: codexHome });
+
+/**
+ * The CLI's config for an endpoint, observed on 0.148.0 and 0.160.1. `requires_openai_auth` makes a
+ * custom provider send the auth.json key as its bearer token (without it, no Authorization header);
+ * the provider must not be named "OpenAI", and `OPENAI_BASE_URL` is not read. A dead endpoint
+ * otherwise retries forever.
+ */
+export const codexEndpointConfig = (endpoint: EndpointUrl): string =>
+  [
+    `model_provider = "custom-endpoint"`,
+    `[model_providers.custom-endpoint]`,
+    `name = "Custom endpoint"`,
+    `base_url = ${JSON.stringify(endpoint)}`,
+    `wire_api = "responses"`,
+    `requires_openai_auth = true`,
+    `[features]`,
+    `unbounded_connection_retries = false`,
+    `[analytics]`,
+    `enabled = false`,
+    ``,
+  ].join("\n");
 
 interface ParsedExchange {
   text: string | undefined;
@@ -195,7 +223,8 @@ const startExchange = async (
     "--json",
     "--ephemeral",
     "--skip-git-repo-check",
-    "--ignore-user-config",
+    // The home holds no config but an endpoint's, which the CLI must read.
+    ...(input.endpoint === undefined ? ["--ignore-user-config"] : []),
     "--sandbox",
     "read-only",
     "--color",
@@ -208,6 +237,11 @@ const startExchange = async (
   ];
 
   try {
+    if (input.endpoint !== undefined) {
+      writeFileSync(join(input.codexHome, "config.toml"), codexEndpointConfig(input.endpoint), {
+        mode: 0o600,
+      });
+    }
     return await new Promise<InferenceEngineTurn>((resolve, reject) => {
       const state: ParsedExchange = { text: undefined, usage: undefined, errorDetail: undefined };
       let stderrTail = "";

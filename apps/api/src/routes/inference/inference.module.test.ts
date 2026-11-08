@@ -45,9 +45,14 @@ import type {
   InferenceStartInput,
 } from "./claude-engine.js";
 import { claudeEngineLayer, InferenceEngine, InferenceEngineError } from "./claude-engine.js";
-import { CodexInferenceEngine, type CodexInferenceStartInput } from "./codex-engine.js";
+import {
+  CodexInferenceEngine,
+  codexEngineLayer,
+  type CodexInferenceStartInput,
+} from "./codex-engine.js";
 import type { Exchange } from "./exchange.js";
 import { startFakeAnthropic, type FakeAnthropic } from "./fake-anthropic.fixture.js";
+import { startFakeOpenAi } from "./fake-openai.fixture.js";
 
 process.env["SEALANT_CREDENTIALS_KEY"] = Buffer.alloc(32, 7).toString("base64");
 
@@ -1297,4 +1302,77 @@ describe("inference.module on a Claude key, against the real CLI", () => {
     });
     expect(accounts.markInvalid).toHaveBeenCalledWith({ id: "cacc_claude_key", revision: 1 });
   }, 60_000);
+});
+
+describe("inference.module on a key with an endpoint, against the real CLIs", () => {
+  const placeholder = "placeholder-key-for-the-gateway";
+  const onEndpoint = (provider: "claude" | "codex", baseUrl: string) =>
+    account({
+      provider,
+      id: `cacc_${provider}_gateway`,
+      name: "gateway",
+      kind: "api-key",
+      encryptedPayload: `sealed:${JSON.stringify({ apiKey: placeholder, baseUrl })}`,
+      metadata: { tokenSuffix: placeholder.slice(-4) },
+    });
+  const gatewayAccounts = (gateway: ConnectedAccount) =>
+    accountsStub({ byName: { [`${gateway.provider}:gateway`]: gateway } });
+
+  it("runs a Claude exchange on the endpoint, and names it when it refuses the key", async () => {
+    const anthropic = await startFakeAnthropic();
+    const gateway = await startFakeAnthropic({ path: "/anthropic" });
+    try {
+      const accounts = gatewayAccounts(onEndpoint("claude", gateway.baseUrl));
+      const layer = Layer.mergeAll(
+        makeLayers({ accounts }).layer,
+        claudeEngineLayer({ anthropicBaseUrl: anthropic.baseUrl }),
+      );
+      gateway.reply({ type: "text", text: "answered by the gateway" });
+
+      const answer = await run(
+        respond(newExchange({ credentials: { claude: "gateway" } })).pipe(Effect.provide(layer)),
+      );
+      expect(answer.turn).toMatchObject({ type: "text", text: "answered by the gateway" });
+
+      gateway.reply({ type: "status", status: 401, errorType: "authentication_error" });
+      const refused = await runFlipped(
+        respond(newExchange({ credentials: { claude: "gateway" } })).pipe(Effect.provide(layer)),
+      );
+      expect(refused).toMatchObject({
+        message: expect.stringContaining(
+          `was refused by the endpoint at ${new URL(gateway.baseUrl).host}`,
+        ),
+      });
+
+      expect(new Set(gateway.apiKeys)).toEqual(new Set([placeholder]));
+      expect(anthropic.apiKeys).toEqual([]);
+    } finally {
+      await gateway.close();
+      await anthropic.close();
+    }
+  }, 90_000);
+
+  it("runs a Codex exchange on the endpoint with the key as its bearer token", async () => {
+    const gateway = await startFakeOpenAi({ path: "/v1", text: "answered by the gateway" });
+    try {
+      const accounts = gatewayAccounts(onEndpoint("codex", gateway.baseUrl));
+      const layer = Layer.mergeAll(
+        makeLayers({ accounts }).layer,
+        codexEngineLayer({ timeoutMs: 60_000 }),
+      );
+
+      const answer = await run(
+        respond(newExchange({ credentials: { codex: "gateway" } })).pipe(Effect.provide(layer)),
+      );
+
+      expect(answer).toMatchObject({
+        turn: { type: "text", text: "answered by the gateway" },
+        receipt: { accountId: "cacc_codex_gateway", login: "api-key" },
+      });
+      expect(gateway.requests).toContain("POST /v1/responses");
+      expect(new Set(gateway.authorizations)).toEqual(new Set([`Bearer ${placeholder}`]));
+    } finally {
+      await gateway.close();
+    }
+  }, 90_000);
 });

@@ -32,6 +32,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import type { EndpointUrl } from "@sealant/api-contracts";
 import { Context, Effect, Layer } from "effect";
 
 import type { Exchange } from "./exchange.js";
@@ -88,6 +89,8 @@ export type InferenceAuth =
       readonly kind: "api-key";
       readonly configDir: string;
       readonly keyPath: string;
+      /** The endpoint the key's requests go to, instead of Anthropic's. */
+      readonly baseUrl?: EndpointUrl;
     };
 
 export interface InferenceStartInput {
@@ -196,16 +199,22 @@ const buildCallerToolServer = (
   return server;
 };
 
-const buildEnv = (auth: InferenceAuth, anthropicBaseUrl: string | undefined) =>
-  providerCliEnv({
+/** A key's own endpoint wins over the engine's: its key is never sent anywhere else. */
+const baseUrlOf = (auth: InferenceAuth, anthropicBaseUrl: string | undefined) =>
+  (auth.kind === "api-key" ? auth.baseUrl : undefined) ?? anthropicBaseUrl;
+
+const buildEnv = (auth: InferenceAuth, anthropicBaseUrl: string | undefined) => {
+  const baseUrl = baseUrlOf(auth, anthropicBaseUrl);
+  return providerCliEnv({
     CLAUDE_CONFIG_DIR: auth.configDir,
     HOME: auth.configDir,
     DISABLE_AUTOUPDATER: "1",
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     CLAUDE_AGENT_SDK_CLIENT_APP: "sealant-control-plane",
     ...(auth.kind === "oauth-token" ? { CLAUDE_CODE_OAUTH_TOKEN: auth.oauthToken } : {}),
-    ...(anthropicBaseUrl === undefined ? {} : { ANTHROPIC_BASE_URL: anthropicBaseUrl }),
+    ...(baseUrl === undefined ? {} : { ANTHROPIC_BASE_URL: baseUrl }),
   });
+};
 
 const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
 
@@ -267,7 +276,7 @@ const runSessionEnd = (onSessionEnd: (() => Promise<void>) | undefined): void =>
 
 export interface ClaudeEngineOptions {
   readonly query?: typeof query;
-  /** Tests only: the fake Anthropic API the CLI is sent to. */
+  /** Tests only: the fake Anthropic API the CLI is sent to, unless the login has an endpoint. */
   readonly anthropicBaseUrl?: string;
   readonly turnTimeoutMs?: number;
   readonly sessionIdleTtlMs?: number;

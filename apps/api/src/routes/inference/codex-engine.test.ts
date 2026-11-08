@@ -4,12 +4,14 @@
  * so one exchange asserts the whole spawn contract: flags, sandbox, model passthrough, schema
  * file, CODEX_HOME injection, and ambient-identity stripping.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { Effect } from "effect";
+import { EndpointUrl } from "@sealant/api-contracts";
+import { codexApiKeyAuthJson } from "@sealant/credentials";
+import { Effect, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { InferenceEngineError, type InferenceEngineTurn } from "./claude-engine.js";
@@ -18,6 +20,7 @@ import {
   codexEngineLayer,
   type CodexInferenceStartInput,
 } from "./codex-engine.js";
+import { startFakeOpenAi } from "./fake-openai.fixture.js";
 
 const fixturePath = fileURLToPath(new URL("./fake-codex.fixture.mjs", import.meta.url));
 type FakeMode = "echo" | "fail" | "auth" | "turn-failed" | "hang";
@@ -191,4 +194,31 @@ describe("codex engine", () => {
     const error = await startExpectingFailure("hang", {}, { timeoutMs: 300 });
     expect(error.reason).toBe("timeout");
   });
+});
+
+describe("codex engine on a key with an endpoint", () => {
+  it("sends the key to the endpoint alone, as a bearer token", async () => {
+    const gateway = await startFakeOpenAi({ path: "/v1", text: "answered by the gateway" });
+    const placeholder = "placeholder-key-for-the-gateway";
+    writeFileSync(join(codexHome, "auth.json"), codexApiKeyAuthJson(placeholder), { mode: 0o600 });
+    try {
+      const turn = await Effect.runPromise(
+        Effect.gen(function* () {
+          const engine = yield* CodexInferenceEngine;
+          return yield* engine.start({
+            codexHome,
+            endpoint: Schema.decodeSync(EndpointUrl)(gateway.baseUrl),
+            secrets: [placeholder],
+            prompt: "say hello",
+          });
+        }).pipe(Effect.provide(codexEngineLayer({ timeoutMs: 60_000 }))),
+      );
+
+      expect(turn.turn).toMatchObject({ type: "done", text: "answered by the gateway" });
+      expect(gateway.requests).toContain("POST /v1/responses");
+      expect(new Set(gateway.authorizations)).toEqual(new Set([`Bearer ${placeholder}`]));
+    } finally {
+      await gateway.close();
+    }
+  }, 90_000);
 });

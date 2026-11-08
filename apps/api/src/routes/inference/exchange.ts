@@ -1,9 +1,12 @@
-import type { InferenceReceipt } from "@sealant/api-contracts";
+import type { EndpointUrl, InferenceReceipt } from "@sealant/api-contracts";
 import { extractCodexSecrets } from "@sealant/credentials";
 
-/** The decrypted login, in the shape its engine is wired for. */
+/**
+ * The decrypted login, in the shape its engine is wired for. A key with a `baseUrl` is sent there
+ * and nowhere else.
+ */
 export type ExchangeLogin =
-  | { readonly shape: "claude-key"; readonly apiKey: string }
+  | { readonly shape: "claude-key"; readonly apiKey: string; readonly baseUrl?: EndpointUrl }
   | { readonly shape: "claude-setup-token"; readonly token: string }
   | {
       readonly shape: "claude-session";
@@ -11,7 +14,7 @@ export type ExchangeLogin =
       readonly accessToken: string;
       readonly refreshToken: string | undefined;
     }
-  | { readonly shape: "codex-key"; readonly apiKey: string }
+  | { readonly shape: "codex-key"; readonly apiKey: string; readonly baseUrl?: EndpointUrl }
   | { readonly shape: "codex-auth-json"; readonly authJson: string };
 
 /**
