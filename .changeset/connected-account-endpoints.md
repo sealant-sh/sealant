@@ -13,9 +13,11 @@ endpoint with any other login is refused with a `400`, and a reconnect without o
 
 `ConnectedAccount.login` names the endpoint's host as `endpointHost`, never its URL. A placement
 receipt's `login` carries the URL as `baseUrl`; nothing in the home holds it, so the harness's
-launch sets it. A launch refuses a Codex key with an endpoint with `connected-account-unsupported`,
-since it would write the key alone, and workspace create skips one a profile binds. Inference sends
-an exchange on such a key to its endpoint and nowhere else, and a key the endpoint refuses is
-reported as refused by the endpoint at its host. A control plane reports all of this as
-`features().connectedAccountEndpoints`; the SDK sends `endpoint` only to one that does, and
-otherwise throws `connected-account-endpoints-unsupported` before sending anything.
+launch sets it. The placement's own record keeps the URL sealed, beside its host. A launch refuses a
+Codex key with an endpoint with `connected-account-unsupported`, since it would write the key alone,
+and workspace create skips one a profile binds. Inference sends an exchange on such a key to its
+endpoint and nowhere else, and a key the endpoint refuses is reported as refused by the endpoint at
+its host. No answer or refusal of an exchange shows the endpoint's URL or its path; its host stays.
+A control plane reports all of this as `features().connectedAccountEndpoints`; the SDK sends
+`endpoint` only to one that does, and otherwise throws `connected-account-endpoints-unsupported`
+before sending anything.
