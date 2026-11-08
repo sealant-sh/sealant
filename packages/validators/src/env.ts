@@ -774,9 +774,9 @@ export const workerServerEnvSchema = databaseEnvSchema
       .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/)
       .optional(),
     SEALANT_BOAT_AUTOMATIC_PARKING: z
-      .enum(["true", "false"])
+      .union([z.boolean(), z.enum(["true", "false"])])
       .default("true")
-      .transform((value) => value === "true"),
+      .transform((value) => value === true || value === "true"),
     SEALANT_BOAT_PARKING_DELAY_SECONDS: z.coerce.number().int().min(300).max(604800).default(3600),
     SEALANT_BOAT_GATEWAY_HOST_ID: z.uuid().optional(),
     SEALANT_BOAT_GATEWAY_ENDPOINT: z.ipv4().optional(),
