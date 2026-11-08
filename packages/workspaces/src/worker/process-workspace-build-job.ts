@@ -267,6 +267,7 @@ export type ProcessWorkspaceBuildJobEffectOptions = Omit<ProcessWorkspaceBuildJo
 
 type LaunchFields = Omit<RuntimeLaunch<WorkspacePublication>, "publication">;
 interface PreparedPublication {
+  readonly adapterId: RuntimeAdapterId;
   readonly publication: WorkspacePublication;
   readonly launch: (
     input: LaunchFields,
@@ -277,6 +278,7 @@ const preparedPublication = <P extends WorkspacePublication>(
   adapter: RuntimeAdapter<P>,
   publication: P,
 ): PreparedPublication => ({
+  adapterId: adapter.id,
   publication,
   launch: (input, hooks) => adapter.launch({ ...input, publication }, hooks),
 });
@@ -1250,6 +1252,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
         .upsertRuntimeInstance({
           runId,
           status: "pending",
+          adapter: prepared.adapterId,
           publication,
           ...(scope === null ? {} : { imageScope: scope }),
           sourceKind,

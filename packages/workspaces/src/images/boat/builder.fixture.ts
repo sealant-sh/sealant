@@ -370,6 +370,7 @@ export const nativeBuilderFixture = async (
   });
   return {
     builder,
+    api: provider,
     bundle: bundle.value,
     root,
     owner: builderOwner,

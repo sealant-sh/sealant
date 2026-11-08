@@ -185,6 +185,14 @@ jobs:
           SEALANTD_BIN: ${{ runner.temp }}/sealantd
         run: pnpm --filter @sealant/workspaces test:e2e src/runtime/boat/readiness.e2e.ts
 
+      - name: Boat worker publication, readiness, shell, FINAL and fresh resume
+        env:
+          SEALANT_BOAT_RUNTIME_BUNDLE: ${{ runner.temp }}/boat-session-proof/boat-assets
+        run: |
+          mkdir -p "$RUNNER_TEMP/boat-session-proof"
+          node packages/workspaces/boat-image/stage-assets.mjs "$SEALANT_BOAT_RUNTIME_BUNDLE"
+          pnpm --filter @sealant/workspaces exec vitest run src/worker/native-publication.db.test.ts
+
       - name: Containerized launcher and real workspace volume test
         run: >-
           pnpm --filter @sealant/workspaces test:e2e src/runtime/docker-volume-mounts.e2e.ts

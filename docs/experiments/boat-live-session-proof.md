@@ -103,15 +103,18 @@ idle-stop setting to fit the selected budget; do not edit session timestamps.
 
 For interrupted cleanup, repeat the same container command with `cleanup /proof/session-1` instead
 of `run /proof/session-1`. It reuses only the recorded session, exact publication and original
-native build journal; it does not allocate or resume. Unknown effects remain obligations. A fresh
-run never adopts a nonempty provider account. Complete final census reads every sandbox cursor page
-and the documented unpaginated personal saved-snapshot list. Objects outside the proof are never
-deleted.
+native build journal; it does not allocate or resume. Unknown effects remain obligations. Complete
+baseline and final census reads every sandbox cursor page and the documented unpaginated personal
+saved-snapshot list. Every VM must be absent. A snapshot may remain only when a ready publication
+for the configured deployment and owner records the exact same immutable provider identity and
+builder owner. The ledger records those retained publication IDs and snapshot names separately.
+Changed, unexplained or unready snapshots still refuse the census. Objects outside the proof are
+never deleted.
 
-The checker explicitly withdraws the exact unused proof publication after all runs close. This
-operator operation refuses active consumers, changed build identity or active claims. It uses the
-original builder journal and positive cleanup. Normal seven-day/ten-plan cache retention remains
-unchanged. A failure records the final census and keeps cleanup obligations visible.
+The checker preserves ready catalog publications so another session can reuse them. Other recorded
+proof publications use the existing withdrawal path, which refuses active consumers, changed build
+identity or active claims. Normal seven-day/ten-plan cache retention remains unchanged. A failure
+records the final census and keeps cleanup obligations visible.
 
 The snapshot probe separately requests the saved-snapshot list and exact saved snapshot without
 credentials and with an invalid key. It records HTTP status and only explicit visibility fields from
@@ -122,7 +125,22 @@ credentials, terminal tickets, signed URLs, shell output or user file bytes in t
 ## Proof limits
 
 Local tests execute the emitted Python through a real HTTP/WebSocket Mend-protocol fixture and real
-TCP listener. PostgreSQL tests cover launch, readiness, admission refusal, stale/corrupt interactive
-requests, canonical FINAL deletion and post-crash publication release. These establish local
-behavior only. The real Mend/Boat proof has not run for this layer and gates admission. No VM 131
-writes, key reads, provider calls or allocations were made to prepare this PR.
+TCP listener. The worker regression starts with repository-created queued attempts and build jobs in
+disposable PostgreSQL. It builds a publication, launches through the real Boat adapter and
+allocation owner, reaches authenticated readiness, writes an edit through interactive control,
+completes FINAL with positive deletion and slot release, then restores the edit into a fresh VM and
+closes it. Boat's API, guest receiver and resource gateway are local fixtures. The pinned daemon and
+its control relay run in owned Docker containers, and capture data crosses the local session
+channel. CI stages the exact pinned bundle and runs this proof explicitly.
+
+Run 5's pending consumer pin does not block another attempt from reusing its ready publication. The
+regression creates that state through a failed launch and verifies reuse. The old pin still blocks
+publication retirement; this fix does not release it or add a sweep. Both successfully closed runs
+release their own pins. The pending runtime now records the chosen adapter before dispatch, and
+allocation keeps the existing matching row and launch lease. A foreign runtime binding still fails
+before a provider create.
+
+These establish local behavior only. Session 6 still needs the deployed Mend worker and real Boat
+proof. This fix requires a new Core pin in the Mend preview and a checker image rebuilt from the
+same revision. It adds no migration. No VM 131 writes, key reads, provider calls or allocations were
+made for this fix.
