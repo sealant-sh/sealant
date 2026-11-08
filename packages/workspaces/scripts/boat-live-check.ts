@@ -91,7 +91,7 @@ const main = async () => {
     const services = {
       ...core,
       record,
-      inventory: () => provider.inventory(),
+      inventory: async () => core.accountInventory(await provider.inventory()),
       privacy: async (id: string) => provider.privacy(await core.snapshotName(id)),
     };
     if (mode === "run") {

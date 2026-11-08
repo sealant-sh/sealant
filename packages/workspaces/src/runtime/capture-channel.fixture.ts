@@ -189,7 +189,21 @@ export const startCaptureChannel = async (options: {
           manifest_key: parsed.manifest_key,
           manifest: parsed.manifest,
         };
+        const seal = z
+          .object({
+            final_seal: z
+              .object({ complete: z.boolean(), epoch: z.number(), executor: z.string() })
+              .optional(),
+          })
+          .parse(parsed.manifest).final_seal;
+        const recorded =
+          seal?.complete === true && seal.epoch === state.epoch && seal.executor === state.executor;
         writeJson(response, 200, {
+          ...(seal === undefined
+            ? {}
+            : {
+                seal: recorded ? { state: "recorded" } : { state: "refused", reason: "executor" },
+              }),
           head_n: parsed.n,
           head_capture_id: parsed.capture_id,
         });

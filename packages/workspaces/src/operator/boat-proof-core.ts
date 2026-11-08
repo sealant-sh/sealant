@@ -22,7 +22,12 @@ import { Effect, Layer, ManagedRuntime } from "effect";
 import { BoatSnapshotBuilder } from "../images/boat/builder.js";
 import { BoatNativeCatalog, boatNativeCatalogLayer } from "../images/boat/catalog.js";
 import type { BoatApi } from "../runtime/boat/api.js";
-import { BoatProofError, type BoatProofConfig, type ProofSession } from "./boat-live-check.js";
+import {
+  BoatProofError,
+  type BoatProofConfig,
+  type ProofSession,
+  type BoatProofInventory,
+} from "./boat-live-check.js";
 
 /** A separate operator process, without a queue consumer or a guest-launch capability. */
 export const makeBoatProofCore = (input: {
@@ -110,6 +115,46 @@ export const makeBoatProofCore = (input: {
               tunnel.removal?.completed === true &&
               isDeepStrictEqual(tunnel.binding.target, target),
           };
+        }),
+      ),
+    accountInventory: (inventory: BoatProofInventory): Promise<BoatProofInventory> =>
+      runtime.runPromise(
+        Effect.gen(function* () {
+          const repo = yield* NativePublicationRepo;
+          const retainedSnapshots: { publicationId: string; name: string }[] = [];
+          let after: string | undefined;
+          for (let page = 0; page < 100; page++) {
+            const records = yield* repo.candidates(
+              {
+                deploymentId: input.config.deploymentId,
+                scope: { kind: "owner", ownerUserId: input.config.ownerId },
+              },
+              200,
+              after,
+            );
+            for (const record of records) {
+              const saved = record.publication?.snapshot;
+              if (
+                record.state !== "ready" ||
+                saved?.owner !== input.builderOwner ||
+                !inventory.snapshots.includes(saved.identity.name)
+              )
+                continue;
+              const observed = yield* Effect.promise(() =>
+                input.api.getSnapshot(saved.identity.name),
+              );
+              if (!observed.ok || observed.value.status !== "ready") continue;
+              const { status: _status, ...identity } = observed.value;
+              if (isDeepStrictEqual(identity, saved.identity))
+                retainedSnapshots.push({
+                  publicationId: record.ownership.publicationId,
+                  name: saved.identity.name,
+                });
+            }
+            if (records.length < 200) return { ...inventory, retainedSnapshots };
+            after = records.at(-1)?.ownership.publicationId;
+          }
+          return yield* Effect.fail(new BoatProofError("publication-inventory-pagination"));
         }),
       ),
     snapshotName: (id: string) =>
