@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { Effect, Redacted } from "effect";
-import { expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import { z } from "zod";
 
 import { docker } from "../../sealantd/boot.js";
@@ -23,6 +23,31 @@ import { SealantRuntime, SealantRuntimeControlLive } from "../../sealantd/runtim
 import { sealantTargetForDockerContainer } from "../../sealantd/target.js";
 import { startCaptureChannel } from "../capture-channel.fixture.js";
 import { parkingResumeLaunch } from "./parking-launch.js";
+
+const image = `sealant-boat-parking-daemon-e2e:${randomUUID()}`;
+let fixtureDirectory: string | undefined;
+let imageBuilt = false;
+
+beforeAll(async () => {
+  fixtureDirectory = await mkdtemp(join(tmpdir(), "boat-parking-daemon-image-"));
+  await writeFile(
+    join(fixtureDirectory, "Dockerfile"),
+    `FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git socat \\
+    && rm -rf /var/lib/apt/lists/*
+`,
+  );
+  await docker(["build", "-t", image, fixtureDirectory]);
+  imageBuilt = true;
+});
+
+afterAll(async () => {
+  try {
+    if (imageBuilt) await docker(["image", "rm", image]);
+  } finally {
+    if (fixtureDirectory !== undefined) await rm(fixtureDirectory, { recursive: true });
+  }
+});
 
 const logs = async (name: string) => {
   const result = await promisify(execFile)("docker", ["logs", name], { timeout: 5000 });
@@ -90,7 +115,7 @@ it("the pinned daemon continues copied staging with a fresh epoch and unchanged 
       ...Object.entries(environment).flatMap(([key, value]) => ["-e", `${key}=${value}`]),
       "--entrypoint",
       "/usr/local/bin/sealantd",
-      "sealant-workspace-ubuntu:latest",
+      image,
       "boot",
     ]);
     for (let attempt = 0; attempt < 100; attempt += 1) {
