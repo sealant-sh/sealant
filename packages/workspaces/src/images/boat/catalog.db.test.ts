@@ -61,7 +61,7 @@ const seed = (db: DB) =>
   });
 const consumer = (db: DB, owner: string) =>
   Effect.gen(function* () {
-    const runId = `run_${randomUUID()}`;
+    const runId = randomUUID();
     yield* db.insert(workspaceAttempts).values({ id: runId, ownerUserId: owner });
     return nativeArtifactConsumerSchema.parse({ runId, runtimeInstanceId: runId });
   });

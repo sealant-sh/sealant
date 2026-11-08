@@ -10,7 +10,8 @@ import {
   createSealantDB,
   SealantDB,
   user,
-  workspaceAttempts,
+  WorkspaceAttemptRepo,
+  WorkspaceAttemptRepoLive,
   WorkspaceBuildJobRepo,
   WorkspaceBuildJobRepoLive,
   WorkspaceBuildJobRepoUnexpectedError,
@@ -108,6 +109,7 @@ const setup = async (
   );
   const repoLayer = Layer.mergeAll(
     ConnectedAccountRepoLive,
+    WorkspaceAttemptRepoLive,
     CredentialPlacementRepoLive,
     WorkspaceBuildJobRepoLive,
     WorkspaceRuntimeInstanceRepoLive,
@@ -118,6 +120,7 @@ const setup = async (
     Effect.gen(function* () {
       return {
         jobs: yield* WorkspaceBuildJobRepo,
+        attempts: yield* WorkspaceAttemptRepo,
         instances: yield* WorkspaceRuntimeInstanceRepo,
         workspaces: yield* WorkspaceRepo,
         accounts: yield* ConnectedAccountRepo,
@@ -153,9 +156,11 @@ const setup = async (
     scope: NativePublicationKey["scope"] = { kind: "owner", ownerUserId: owner },
     availableAt?: Date,
   ) => {
-    const runId = `run_${randomUUID()}`,
-      id = `job_${randomUUID()}`;
-    await Effect.runPromise(db.insert(workspaceAttempts).values({ id: runId, ownerUserId: owner }));
+    const attempt = await Effect.runPromise(
+      repos.attempts.createQueuedAttempt({ id: randomUUID(), ownerUserId: owner }),
+    );
+    const runId = attempt.id,
+      id = randomUUID();
     await Effect.runPromise(
       repos.jobs.insertQueuedJob({
         id,
@@ -172,7 +177,7 @@ const setup = async (
       id,
       runId,
       scope,
-      consumer: nativeArtifactConsumerSchema.parse({ runId, runtimeInstanceId: runId }),
+      consumer: () => nativeArtifactConsumerSchema.parse({ runId, runtimeInstanceId: runId }),
     };
   };
   const options = (id: string) => ({
@@ -208,6 +213,37 @@ const setup = async (
 const noop = async () => {};
 
 describe.skipIf(!enabled)("native publication worker and persistence (disposable Postgres)", () => {
+  it("launches a repository-created UUID attempt through the real build job and reloads its consumer", async () => {
+    const s = await setup();
+    const job = await s.enqueue();
+    expect(job.runId).toMatch(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/);
+    expect((await Effect.runPromise(s.attempts.getAttemptById(job.runId)))?.ownerUserId).toBe(
+      s.owner,
+    );
+    const publication = await processWorkspaceBuildJob(s.options(job.id));
+    expect(publication?.kind).toBe("boat-native");
+    expect(s.launchInputs).toMatchObject([{ runId: job.runId }]);
+    expect(await Effect.runPromise(s.instances.getRuntimeInstanceByRunId(job.runId))).toMatchObject(
+      {
+        runId: job.runId,
+        status: "ready",
+        publicationId: publication?.publicationId,
+      },
+    );
+    expect(await Effect.runPromise(nativeConsumerRows(s.db, job.runId))).toEqual([
+      { state: "pending", publicationId: publication?.publicationId },
+    ]);
+    expect(
+      await Effect.runPromise(
+        s.catalog.acquire({
+          spec: s.spec,
+          scope: job.scope,
+          consumer: job.consumer(),
+        }),
+      ),
+    ).toEqual(publication);
+    expect(s.fixture.posts()).toBe(1);
+  });
   it("refuses an owner outside the operator allowlist before native construction or reservation", async () => {
     const s = await setup();
     const job = await s.enqueue();
@@ -371,7 +407,7 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
       Schema.decodeUnknownSync(publicPublicationSchema)(resolveWorkspacePublication(job)),
     ).toMatchObject({ kind: "boat-native", publicationId: pa?.publicationId });
     const restarted = await Effect.runPromise(
-      s.catalog.acquire({ spec: s.spec, scope: a.scope, consumer: a.consumer }),
+      s.catalog.acquire({ spec: s.spec, scope: a.scope, consumer: a.consumer() }),
     );
     expect(restarted).toEqual(pa);
     expect(s.fixture.posts()).toBe(1);
@@ -500,11 +536,8 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
       WorkspaceRuntimeInstanceRepoLive,
       Layer.succeed(WorkspaceBuildJobRepo, lost),
     ).pipe(Layer.provide(Layer.succeed(SealantDB, s.db)));
-    const {
-      WorkspaceAttemptRepoLive,
-      GitHubInstallationRepoLive,
-      GitHubInstallationRepositoryCacheRepoLive,
-    } = await import("@sealant/db");
+    const { GitHubInstallationRepoLive, GitHubInstallationRepositoryCacheRepoLive } =
+      await import("@sealant/db");
     const context = Layer.mergeAll(
       layer,
       WorkspaceAttemptRepoLive,
@@ -522,7 +555,7 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
     expect(s.launches).toHaveLength(0);
     expect(
       await Effect.runPromise(
-        s.catalog.acquire({ spec: s.spec, scope: job.scope, consumer: job.consumer }),
+        s.catalog.acquire({ spec: s.spec, scope: job.scope, consumer: job.consumer() }),
       ),
     ).toEqual(saved?.publication);
     expect(await Effect.runPromise(nativeConsumerRows(s.db, job.runId))).toEqual([
