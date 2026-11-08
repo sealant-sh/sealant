@@ -141,6 +141,15 @@ jobs:
         env:
           DATABASE_URL: ${{ env.SEALANT_TEST_DATABASE_URL }}
 
+      # The credential-file tests map their user to root in a private namespace. Rootless
+      # workspace Docker needs these namespaces too. Ubuntu 24.04's AppArmor default refuses
+      # the uid_map write, so allow and verify them before either test group runs.
+      - name: Allow unprivileged user namespaces, as a Docker host must
+        if: runner.environment == 'github-hosted'
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          unshare -Urn true
+
       - name: Unit and integration tests
         run: pnpm exec turbo test --force
 
@@ -172,14 +181,6 @@ jobs:
         env:
           SEALANTD_BIN: ${{ runner.temp }}/sealantd
         run: pnpm --filter @sealant/workspaces test:e2e src/runtime/boat/readiness.e2e.ts
-
-      # A workspace's Docker service is rootless dind, which needs unprivileged user namespaces.
-      # GitHub's Ubuntu 24.04 image keeps Ubuntu's AppArmor default that refuses them, so the
-      # service exits at start ("fork/exec /proc/self/exe: operation not permitted"; #373). Allow
-      # them the way an operator of a stock Ubuntu 24.04 Docker host must.
-      - name: Allow unprivileged user namespaces, as a Docker host must
-        if: runner.environment == 'github-hosted'
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Containerized launcher and real workspace volume test
         run: >-
