@@ -46,11 +46,11 @@ The authenticated relay adds `POST /sealant/bootstrap/start`. Its request names 
 identity, boot, epoch and operation, with format `sealant-invocation-start-v1`.
 
 Start requires `/run/sealant-bootstrap/execution-permit.json`, root-private and bound to that same
-identity, boot, epoch and operation. Its format is `sealant-execution-permit-v1`, with `binding`,
-`resource_receipt` and `tunnel_receipt` fields. The latter two are SHA-256 receipt identities. No
-production permit writer ships in this layer. They are an activation contract, not evidence that
-resource or tunnel policy has been applied. The next layer must own validating those policies and
-issuing the permit from current acknowledgements. A missing permit refuses before invocation intent.
+identity, boot, epoch and operation. The current `sealant-execution-permit-v2` also freezes resource
+and tunnel receipts and the workload limits.
+[Authenticated readiness](boat-authenticated-readiness.md) owns policy validation, delivery and
+fresh daemon observations. A missing permit refuses before invocation intent. The earlier v1
+activation contract is no longer accepted.
 
 The receiver revalidates held boot and persists `issued` before its single nonblocking systemd
 start. An unknown start result never issues start again. The static workspace service has

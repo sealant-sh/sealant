@@ -60,7 +60,9 @@ import { adoptStrandedLaunchesEffect } from "../../worker/adopt-stranded-launche
 import {
   boatAllocationWorkerLayer,
   boatWorkerExecutionLayer,
+  boatReadinessWorkerLayer,
 } from "../../worker/boat-allocation.js";
+import { BoatReadiness, boatReadinessLayer } from "../../worker/boat-readiness.js";
 import {
   BoatResources,
   BoatResourcesHost,
@@ -286,7 +288,33 @@ class ProviderFixture {
     send({ code: "not_found" }, 404);
   }
 }
+const canonical = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value !== null && typeof value === "object")
+    return (
+      "{" +
+      Object.entries(value)
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([key, v]) => JSON.stringify(key) + ":" + canonical(v))
+        .join(",") +
+      "}"
+    );
+  return JSON.stringify(value) ?? "null";
+};
 class GuestFixture implements BoatGuestTransport {
+  starts = 0;
+  permitCount = 0;
+  readonly actions: string[] = [];
+  beforePermit: () => Promise<void> = async () => {};
+  beforeReady: () => Promise<void> = async () => {};
+
+  async probe() {
+    return {
+      runtimeId: "rt_fixture",
+      healthy: true,
+      supports: ["exec.user", "dotfiles.user", "restore.owner_map", "process.secret-env.v1"],
+    };
+  }
   readonly targets: BoatExecutionTarget[] = [];
   fail = false;
   target: BoatExecutionTarget | undefined;
@@ -339,6 +367,7 @@ class GuestFixture implements BoatGuestTransport {
     return { origin: "https://fixture-8080.on.boat.dev", cookie: secret("test-cookie-local-only") };
   }
   async call(_host: unknown, bearer: BoatSecret, route: string, body?: Redacted.Redacted<string>) {
+    this.actions.push(route);
     if (route === "stage")
       this.admission = z
         .object({ epoch: z.number(), operation_id: z.string() })
@@ -360,7 +389,37 @@ class GuestFixture implements BoatGuestTransport {
         admission: "held",
       };
     }
-    expect(["status", "stage"]).toContain(route);
+    if (route === "permit" || route === "readiness") {
+      const raw = Redacted.value(body ?? Redacted.make(""));
+      const value = z
+        .object({ binding: z.unknown(), permit_receipt: z.string().optional() })
+        .parse(JSON.parse(raw));
+      if (route === "permit") {
+        this.permitCount++;
+        await this.beforePermit();
+        return {
+          format: "sealant-execution-permitted-v1",
+          binding: value.binding,
+          receipt: hash(canonical(JSON.parse(raw))),
+          handshake: "verified",
+          dns: "udp-and-tcp",
+          admission: "held",
+        };
+      }
+      await this.beforeReady();
+      return {
+        format: "sealant-readiness-status-v1",
+        binding: value.binding,
+        permit_receipt: value.permit_receipt,
+        invocation: "d".repeat(32),
+        limits: { memory_bytes: 2147483648, cpu_millicores: 1000, tasks: 512 },
+        handshake: "verified",
+        dns: "udp-and-tcp",
+        admission: "held",
+      };
+    }
+    if (route === "start") this.starts = 1;
+    expect(["status", "stage", "start"]).toContain(route);
     expect(bearer.reveal()).toBe("a".repeat(64));
     if (this.target === undefined) throw new Error("missing target");
     return {
@@ -372,7 +431,7 @@ class GuestFixture implements BoatGuestTransport {
       },
       boot_id: this.target.bootId,
       admission: "held",
-      execution: "unavailable",
+      execution: this.starts > 0 ? "running" : "unavailable",
       epoch: this.admission?.epoch ?? null,
       operation_id: this.admission?.operation_id ?? null,
       stage: this.admission === undefined ? "empty" : "installed",
@@ -380,6 +439,7 @@ class GuestFixture implements BoatGuestTransport {
   }
 }
 class GatewayFixture {
+  receipt = "c".repeat(64);
   readonly requests: BoatTunnelInput[] = [];
   unavailable = false;
   beforeReply: () => Promise<void> = async () => {};
@@ -411,7 +471,7 @@ class GatewayFixture {
       reachSubnet: "10.98.0.32/27",
       gateway: "100.127.255.253",
       client: "100.127.255.254",
-      receipt: "c".repeat(64),
+      receipt: this.receipt,
       peerHandshake: "unverified",
     };
   }
@@ -426,6 +486,7 @@ const test = async (
     allocations: BoatAllocation["Service"];
     executor: BoatExecution["Service"];
     resourceOwner: BoatResources["Service"];
+    readiness: BoatReadiness["Service"];
     reopenResources: (
       endpoint?: string,
       gatewayHostId?: string,
@@ -530,15 +591,19 @@ const test = async (
             },
           });
         const ResourceLayer = boatResourcesLayer.pipe(Layer.provide(Exchange));
-        const ResourceRoot: Layer.Layer<BoatAllocation | BoatResources, CredentialCipherError> =
-          Layer.merge(
-            boatAllocationWorkerLayer,
-            boatResourcesLayer.pipe(Layer.provide(boatWorkerExecutionLayer)),
-          ).pipe(Layer.provide(Layer.merge(Infra, hostLayer())));
+        const ResourceRoot: Layer.Layer<
+          BoatAllocation | BoatResources | BoatReadiness,
+          CredentialCipherError
+        > = Layer.mergeAll(
+          boatReadinessWorkerLayer,
+          boatAllocationWorkerLayer,
+          boatResourcesLayer.pipe(Layer.provide(boatWorkerExecutionLayer)),
+        ).pipe(Layer.provide(Layer.merge(Infra, hostLayer())));
         yield* Layer.build(ResourceRoot);
         const Test = Layer.mergeAll(
           boatAllocationLayer.pipe(Layer.provide(Exchange)),
           ResourceLayer,
+          boatReadinessLayer.pipe(Layer.provide(Layer.merge(ResourceLayer, Exchange))),
           Exchange,
           ResourceInstanceRepoLive,
         ).pipe(Layer.provide(Layer.merge(Infra, hostLayer())));
@@ -560,6 +625,7 @@ const test = async (
             allocations,
             executor,
             resourceOwner,
+            readiness: Context.get(context, BoatReadiness),
             reopenResources,
             tunnels,
             resources,
@@ -645,6 +711,92 @@ describe.runIf(databaseUrl !== undefined)(
         const foreignHost = await execute(s.reopenResources("10.0.0.41", randomUUID()));
         await expect(execute(foreignHost.prepare(target))).rejects.toThrow("binding-conflict");
         expect(s.gateway.requests).toHaveLength(2);
+      }));
+    it("launches only after current isolation and observes authenticated readiness without another invocation", () =>
+      test(async (s) => {
+        const target = await execute(s.allocations.prepare(s.input));
+        const payload = Redacted.make({
+          files: [{ name: "launch", bytes: Buffer.from("launch") }],
+          pins: { credentialVersions: [], dotfiles: [] },
+        });
+        expect(await execute(s.readiness.launch(target, payload))).toMatchObject({
+          runtimeId: "rt_fixture",
+          handshake: "verified",
+          admission: "held",
+        });
+        expect(await execute(s.readiness.observe(target))).toMatchObject({
+          invocation: "d".repeat(32),
+        });
+        expect(s.guest.actions.indexOf("stage")).toBeLessThan(s.guest.actions.indexOf("isolate"));
+        expect(s.guest.actions.indexOf("isolate")).toBeLessThan(s.guest.actions.indexOf("permit"));
+        expect(s.guest.actions.indexOf("permit")).toBeLessThan(s.guest.actions.indexOf("start"));
+        expect(s.guest.starts).toBe(1);
+        const before = s.guest.actions.length;
+        await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+        await expect(execute(s.readiness.observe(target))).rejects.toThrow("held");
+        await expect(execute(s.readiness.launch(target, payload))).rejects.toThrow("held");
+        expect(s.guest.actions).toHaveLength(before);
+      }));
+    it("changed gateway custody during readiness refuses the observation", () =>
+      test(async (s) => {
+        const target = await execute(s.allocations.prepare(s.input));
+        s.guest.beforeReady = async () => {
+          s.gateway.receipt = "d".repeat(64);
+        };
+        await expect(
+          execute(
+            s.readiness.launch(
+              target,
+              Redacted.make({
+                files: [{ name: "launch", bytes: Buffer.from("launch") }],
+                pins: { credentialVersions: [], dotfiles: [] },
+              }),
+            ),
+          ),
+        ).rejects.toThrow("held");
+        expect(s.guest.starts).toBe(1);
+        expect(s.guest.permitCount).toBe(1);
+      }));
+    it("a stop accepted during authenticated readiness keeps the result held", () =>
+      test(async (s) => {
+        const target = await execute(s.allocations.prepare(s.input));
+        s.guest.beforeReady = () =>
+          execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" })).then(
+            () => undefined,
+          );
+        await expect(
+          execute(
+            s.readiness.launch(
+              target,
+              Redacted.make({
+                files: [{ name: "launch", bytes: Buffer.from("launch") }],
+                pins: { credentialVersions: [], dotfiles: [] },
+              }),
+            ),
+          ),
+        ).rejects.toThrow("held");
+        expect(s.guest.starts).toBe(1);
+      }));
+    it("a stop accepted during permit delivery prevents invocation issuance", () =>
+      test(async (s) => {
+        const target = await execute(s.allocations.prepare(s.input));
+        s.guest.beforePermit = () =>
+          execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" })).then(
+            () => undefined,
+          );
+        await expect(
+          execute(
+            s.readiness.launch(
+              target,
+              Redacted.make({
+                files: [{ name: "launch", bytes: Buffer.from("launch") }],
+                pins: { credentialVersions: [], dotfiles: [] },
+              }),
+            ),
+          ),
+        ).rejects.toThrow("held");
+        expect(s.guest.permitCount).toBe(1);
+        expect(s.guest.starts).toBe(0);
       }));
     it("bounds a stalled gateway and retries only the same durable network intent", () =>
       test(async (s) => {

@@ -45,6 +45,7 @@ export const boatExecutionRecordSchema = z
         sealedEnvelope: z.string().min(1).nullable(),
       })
       .nullable(),
+    isolation: z.strictObject({ resourceReceipt: hash, tunnelReceipt: hash }).optional(),
     phase: z.enum(["exchange", "control", "prepared", "installed", "issued", "running", "held"]),
   })
   .superRefine((record, context) => {
@@ -61,7 +62,12 @@ export const boatExecutionRecordSchema = z
               (record.phase === "running" || record.phase === "held"
                 ? record.admission.sealedEnvelope === null
                 : record.admission.sealedEnvelope !== null));
-    if (!valid) context.addIssue({ code: "custom", message: "Invalid execution phase" });
+    if (
+      !valid ||
+      (record.isolation !== undefined &&
+        !["installed", "issued", "running", "held"].includes(record.phase))
+    )
+      context.addIssue({ code: "custom", message: "Invalid execution phase" });
   });
 /** Private persisted ownership, including ciphertext only for secret-bearing values. */
 export type BoatExecutionRecord = z.infer<typeof boatExecutionRecordSchema>;

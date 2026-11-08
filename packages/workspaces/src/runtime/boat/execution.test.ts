@@ -1,8 +1,10 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 
 import { boatExecutionTargetSchema, boatNetworkIntentSchema } from "@sealant/validators";
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
+import type { SealantRuntimeService } from "../../sealantd/runtime.js";
 import type { BoatSandbox } from "./api.js";
 import { boatSandboxIdSchema } from "./config.js";
 import { createBoatGuestTransport } from "./execution.js";
@@ -27,6 +29,10 @@ const labels = {
   "sealant-instance": target.runtimeInstanceId,
   "sealant-attempt": target.launchAttemptId,
   "sealant-source": target.sourceId,
+};
+const runtime: SealantRuntimeService = {
+  connect: () => Effect.die("unexpected control connection"),
+  openForwardConnection: () => Effect.die("unexpected forward connection"),
 };
 const unavailable = async (): Promise<never> => {
   throw new Error("must not call");
@@ -62,46 +68,52 @@ describe("Boat worker public bootstrap transport", () => {
         labels: { ...labels, [key]: "foreign" },
         autoStop: { kind: "disabled" },
       };
-      const transport = createBoatGuestTransport({
-        get: async () => ({ ok: true, value: actual }),
-        execute: unavailable,
-        hostControl: unavailable,
-      });
+      const transport = createBoatGuestTransport(
+        {
+          get: async () => ({ ok: true, value: actual }),
+          execute: unavailable,
+          hostControl: unavailable,
+        },
+        runtime,
+      );
       await expect(transport.bind(target, {})).rejects.toThrow("target-mismatch");
       await expect(transport.host(target)).rejects.toThrow("target-mismatch");
     }
   });
   it("sends only the public fixed-helper command and refuses unknown command outcomes", async () => {
     let count = 0;
-    const transport = createBoatGuestTransport({
-      get: async () => ({
-        ok: true,
-        value: {
-          id: boatSandboxIdSchema.parse(target.sandboxId),
-          state: "running",
-          labels,
-          autoStop: { kind: "disabled" },
-        },
-      }),
-      execute: async (id, command) => {
-        count++;
-        expect(id).toBe(target.sandboxId);
-        expect(command).toContain(
-          "/bundle/usr/bin/python3 -I -S -B /var/lib/sealant/guest/guest_boot.py bind '",
-        );
-        expect(command).toContain("public_key");
-        return {
+    const transport = createBoatGuestTransport(
+      {
+        get: async () => ({
           ok: true,
           value: {
-            exitCode: null,
-            timedOut: true,
-            stdout: "untrusted-output",
-            stderr: "untrusted-output",
+            id: boatSandboxIdSchema.parse(target.sandboxId),
+            state: "running",
+            labels,
+            autoStop: { kind: "disabled" },
           },
-        };
+        }),
+        execute: async (id, command) => {
+          count++;
+          expect(id).toBe(target.sandboxId);
+          expect(command).toContain(
+            "/bundle/usr/bin/python3 -I -S -B /var/lib/sealant/guest/guest_boot.py bind '",
+          );
+          expect(command).toContain("public_key");
+          return {
+            ok: true,
+            value: {
+              exitCode: null,
+              timedOut: true,
+              stdout: "untrusted-output",
+              stderr: "untrusted-output",
+            },
+          };
+        },
+        hostControl: unavailable,
       },
-      hostControl: unavailable,
-    });
+      runtime,
+    );
     const key = generateKeyPairSync("rsa", { modulusLength: 3072 });
     await expect(
       transport.bind(target, {

@@ -119,14 +119,16 @@ def start(request):
         if state()['binding'] != expected:
             raise receiver.Refusal('disk-invocation-conflict')
         return receiver.status()
-    # The isolation layer must write this root-private, current-epoch permit. No producer ships yet.
+    # Only the authenticated isolation owner may install the current-epoch permit.
     permit = guest.private_json(receiver.RUNTIME / 'execution-permit.json') if (receiver.RUNTIME / 'execution-permit.json').exists() else None
-    if not isinstance(permit, dict) or permit.get('binding') != expected or permit.get('format') != 'sealant-execution-permit-v1':
+    if not isinstance(permit, dict) or permit.get('binding') != expected or permit.get('format') != 'sealant-execution-permit-v2':
         raise receiver.Refusal('isolation-permit-unavailable')
-    receiver.fields(permit, {'format', 'binding', 'resource_receipt', 'tunnel_receipt'})
+    receiver.fields(permit, {'format', 'binding', 'resource_receipt', 'tunnel_receipt', 'limits'})
     if any(not isinstance(permit[key], str) or not re.fullmatch('[a-f0-9]{64}', permit[key]) for key in ('resource_receipt', 'tunnel_receipt')):
         raise receiver.Refusal('invalid-isolation-permit')
     import guest_network
+    import guest_readiness
+    guest_readiness.verify_permit(expected)
     guest_network.verify(expected)
     manifest, held, _ = guest.revalidate()
     try:

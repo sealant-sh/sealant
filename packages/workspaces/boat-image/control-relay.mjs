@@ -83,6 +83,8 @@ const server = http.createServer(
         "/sealant/bootstrap/stage",
         "/sealant/bootstrap/start",
         "/sealant/bootstrap/isolate",
+        "/sealant/bootstrap/permit",
+        "/sealant/bootstrap/readiness",
       ].includes(request.url)
     ) {
       const length = request.headers["content-length"];
@@ -93,6 +95,8 @@ const server = http.createServer(
           "/sealant/bootstrap/stage",
           "/sealant/bootstrap/start",
           "/sealant/bootstrap/isolate",
+          "/sealant/bootstrap/permit",
+          "/sealant/bootstrap/readiness",
         ].includes(request.url);
       if (!isStatus && !isStage) {
         response.writeHead(404).end();

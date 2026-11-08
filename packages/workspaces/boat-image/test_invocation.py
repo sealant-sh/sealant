@@ -13,6 +13,7 @@ import guest_boot as guest
 import guest_receiver as receiver
 import guest_invocation as invocation
 import guest_network as network
+import guest_readiness as readiness
 from guest_contract import canonical, digest
 
 
@@ -38,8 +39,8 @@ class InvocationTests(unittest.TestCase):
             self.assertFalse(path.exists())
 
     def permit(self):
-        guest.save(self.runtime / 'execution-permit.json', {'format': 'sealant-execution-permit-v1',
-                   'binding': self.binding, 'resource_receipt': 'b' * 64, 'tunnel_receipt': 'c' * 64})
+        guest.save(self.runtime / 'execution-permit.json', {'format': 'sealant-execution-permit-v2',
+                   'binding': self.binding, 'resource_receipt': 'b' * 64, 'tunnel_receipt': 'c' * 64, 'limits': readiness.LIMITS})
 
     @contextmanager
     def starting(self, fail=False):
@@ -49,7 +50,7 @@ class InvocationTests(unittest.TestCase):
             if fail:
                 raise OSError('lost reply')
             return ''
-        with patch.object(network, 'verify'), patch.object(guest, 'revalidate', return_value=(None, [], {})), patch.object(guest, 'run', side_effect=run) as systemd:
+        with patch.object(readiness, 'verify_permit'), patch.object(network, 'verify'), patch.object(guest, 'revalidate', return_value=(None, [], {})), patch.object(guest, 'run', side_effect=run) as systemd:
             yield systemd
 
     def test_no_producer_no_admission(self):

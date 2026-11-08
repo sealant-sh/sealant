@@ -26,6 +26,8 @@ import {
   BoatAllocationProvider,
   BoatResources,
   BoatResourcesHost,
+  BoatReadiness,
+  boatReadinessWorkerLayer,
   boatResourcesLayer,
   boatWorkerExecutionLayer,
   DockerBoatTunnel,
@@ -1020,10 +1022,10 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         }),
       });
       const Resources = boatResourcesLayer.pipe(Layer.provide(boatWorkerExecutionLayer));
-      const WorkerLayer: Layer.Layer<BoatAllocation | BoatResources> = Layer.merge(
-        boatAllocationWorkerLayer,
-        Resources,
-      ).pipe(Layer.provide(Layer.merge(Infra, Host)));
+      const WorkerLayer: Layer.Layer<BoatAllocation | BoatResources | BoatReadiness> =
+        Layer.mergeAll(boatAllocationWorkerLayer, Resources, boatReadinessWorkerLayer).pipe(
+          Layer.provide(Layer.merge(Infra, Host)),
+        );
       const runtime = ManagedRuntime.make(WorkerLayer);
       boatResourceReach = () =>
         runtime.runPromise(Effect.flatMap(BoatResources, (resources) => resources.reach()));

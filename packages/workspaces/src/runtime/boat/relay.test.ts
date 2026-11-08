@@ -193,7 +193,17 @@ describe("standalone Boat relay", () => {
       expect(
         (await fetch(`${relay.origin}/sealant/bootstrap/isolate`, { method: "POST", body })).status,
       ).toBe(401);
-      expect(received).toHaveLength(4);
+      for (const name of ["permit", "readiness"]) {
+        const target = `${relay.origin}/sealant/bootstrap/${name}`;
+        expect((await fetch(target, { method: "POST", body })).status).toBe(401);
+        expect((await fetch(target, { method: "POST", headers, body })).status).toBe(200);
+        expect(received.at(-1)).toEqual({
+          path: `/sealant/bootstrap/${name}`,
+          authorization: `Bearer ${token}`,
+          body,
+        });
+      }
+      expect(received).toHaveLength(6);
       expect(relay.sockets.size).toBe(0);
       await new Promise<void>((done) => upstream.close(() => done()));
       expect((await fetch(`${relay.origin}/sealant/bootstrap/status`, { headers })).status).toBe(
