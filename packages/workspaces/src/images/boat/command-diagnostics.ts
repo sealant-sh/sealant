@@ -3,6 +3,7 @@ import { stripVTControlCharacters } from "node:util";
 import { z } from "zod";
 
 import type { BoatCommand } from "../../runtime/boat/api.js";
+import { boatProviderFailureSchema } from "../../runtime/boat/config.js";
 
 const outputBytes = 4096;
 const printable = (raw: string): string =>
@@ -71,3 +72,9 @@ export const nativeCommandFailure = (
     stderrTail: redact(output.stderr),
   });
 };
+
+/** Transport failures have no command result. Retain safe provider context and the known local step. */
+export const nativeProviderFailureSchema = boatProviderFailureSchema.extend({
+  step: nativeCommandFailureSchema.shape.step.optional(),
+});
+export type NativeProviderFailure = z.infer<typeof nativeProviderFailureSchema>;

@@ -28,6 +28,7 @@
     "@sealant/source-integrations": "workspace:*",
     "@sealant/validators": "workspace:*",
     "effect": "catalog:",
+    "undici": "catalog:",
     "ws": "catalog:",
     "zod": "catalog:"
   },

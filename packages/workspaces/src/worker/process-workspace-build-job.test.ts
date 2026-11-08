@@ -1690,6 +1690,7 @@ describe("processWorkspaceBuildJobEffect", () => {
             {
               runId: "run_job_retained",
               status: "pending",
+              adapter: "docker",
               publication: expect.objectContaining({ kind: "oci" }),
               sourceKind: "capture",
               launchOwner: expect.stringMatching(/^worker-test:job_retained:/),

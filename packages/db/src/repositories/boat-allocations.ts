@@ -163,6 +163,8 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
             saved.manifestDigest !== record.manifestDigest
           )
             return yield* Effect.fail(new BoatAllocationStoreError("binding-conflict"));
+          // The worker records its selected adapter before dispatch. A matching pending row is
+          // deliberately a no-op here: never overwrite its launch lease or repair a foreign binding.
           yield* db
             .insert(workspaceRuntimeInstances)
             .values({

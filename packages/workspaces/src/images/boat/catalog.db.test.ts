@@ -34,6 +34,7 @@ import { z } from "zod";
 import { nativeBuilderFixture } from "./builder.fixture.js";
 import {
   BoatNativeCatalog,
+  NativeCatalogError,
   boatNativeCatalogLayer,
   type BoatNativeCatalogService,
 } from "./catalog.js";
@@ -115,6 +116,246 @@ const throughCatalog = <A, E>(
   );
 
 describe.skipIf(!enabled)("native publication ownership in migrated disposable Postgres", () => {
+  it.live(
+    "replaces one failed build for a new consumer, preserves redelivery and refuses exhausted attempts",
+    () =>
+      test((repo, db) =>
+        Effect.gen(function* () {
+          const owner = yield* seed(db);
+          const f = yield* Effect.promise(() => nativeBuilderFixture("command-failed"));
+          const first = yield* consumer(db, owner);
+          const second = yield* consumer(db, owner);
+          const third = yield* consumer(db, owner);
+          yield* throughCatalog(db, f, (catalog) =>
+            Effect.gen(function* () {
+              const input = { scope: { kind: "owner" as const, ownerUserId: owner }, spec: f.spec };
+              const failed = yield* Effect.flip(catalog.acquire({ ...input, consumer: first }));
+              expect(failed).toMatchObject({
+                code: "mechanism-failed",
+                detail: "native-guest-command-failed",
+              });
+              const oldPin = (yield* nativeConsumerRows(db, first.runId))[0];
+              if (oldPin === undefined) throw new Error("missing original pin");
+              const firstFailure = yield* repo.get(oldPin.publicationId);
+              expect((yield* catalog.reconcile({ limit: 20 })).entries).toContainEqual({
+                id: firstFailure?.ownership.buildId,
+                outcome: "skipped",
+                code: "failed-build",
+              });
+              expect((yield* repo.get(oldPin.publicationId))?.reason).toBe(
+                "native-guest-command-failed",
+              );
+              const before = f.mutations.length;
+              expect(
+                yield* Effect.flip(catalog.acquire({ ...input, consumer: first })),
+              ).toMatchObject({ code: "publication-quarantined" });
+              expect(f.mutations).toHaveLength(before);
+              expect(
+                yield* Effect.flip(catalog.acquire({ ...input, consumer: second })),
+              ).toMatchObject({ code: "mechanism-failed", detail: "native-guest-command-failed" });
+              const replacementPin = (yield* nativeConsumerRows(db, second.runId))[0];
+              if (replacementPin === undefined) throw new Error("missing replacement pin");
+              expect(replacementPin.publicationId).not.toBe(oldPin.publicationId);
+              expect(yield* repo.get(oldPin.publicationId)).toMatchObject({
+                state: "superseded",
+                buildAttempt: 1,
+                reason: "native-guest-command-failed",
+              });
+              expect(yield* repo.get(replacementPin.publicationId)).toMatchObject({
+                state: "quarantined",
+                buildAttempt: 2,
+                replacesPublicationId: oldPin.publicationId,
+              });
+              const sweep = yield* catalog.reconcile({ limit: 20 });
+              expect(sweep.entries).toContainEqual({
+                id: firstFailure?.ownership.buildId,
+                outcome: "skipped",
+                code: "superseded",
+              });
+              expect((yield* repo.get(replacementPin.publicationId))?.reason).toBe(
+                "native-guest-command-failed",
+              );
+              const spent = f.mutations.length;
+              const refusal = yield* Effect.flip(catalog.acquire({ ...input, consumer: third }));
+              expect(refusal).toMatchObject({
+                code: "publication-build-attempts-exhausted",
+                detail: "native-guest-command-failed",
+              });
+              expect(refusal.message).toContain("failed twice");
+              expect(f.mutations).toHaveLength(spent);
+              expect(
+                yield* Effect.flip(catalog.acquire({ ...input, consumer: first })),
+              ).toMatchObject({
+                code: "publication-build-replaced",
+                detail: "native-guest-command-failed",
+              });
+              expect(yield* nativeConsumerRows(db, first.runId)).toEqual([oldPin]);
+            }),
+          );
+        }),
+      ),
+  );
+
+  it.live(
+    "recovers a legacy transport failure once and shares the replacement under concurrent acquires",
+    () =>
+      test((repo, db) =>
+        Effect.gen(function* () {
+          const f = yield* prepare(db);
+          const original = yield* consumer(db, f.owner);
+          const failed = yield* repo.reserve(f.key, original);
+          const claim = yield* repo.claim(failed.ownership.publicationId, "build", 60000);
+          if (claim === undefined) throw new Error("missing original claim");
+          // Run 4 has this reason and no published snapshot. Migration defaults make it attempt one.
+          yield* repo.quarantine(claim, "native-provider-transport_error");
+          const pins = yield* Effect.all(Array.from({ length: 6 }, () => consumer(db, f.owner)));
+          const reservations = yield* Effect.all(
+            pins.map((pin) => repo.reserve(f.key, pin)),
+            { concurrency: "unbounded" },
+          );
+          expect(new Set(reservations.map((r) => r.ownership.publicationId)).size).toBe(1);
+          const next = reservations[0],
+            pin = pins[0];
+          if (next === undefined || pin === undefined) throw new Error("missing replacement");
+          expect(next).toMatchObject({
+            state: "reserved",
+            buildAttempt: 2,
+            replacesPublicationId: failed.ownership.publicationId,
+          });
+          expect(next.ownership.buildId).not.toBe(failed.ownership.buildId);
+          expect(
+            yield* repo.claim(failed.ownership.publicationId, "reconcile", 60000),
+          ).toBeUndefined();
+          yield* throughCatalog(db, f, (catalog) =>
+            Effect.gen(function* () {
+              const ready = yield* catalog.acquire({
+                scope: f.key.scope,
+                spec: f.spec,
+                consumer: pin,
+              });
+              expect(ready.publicationId).toBe(next.ownership.publicationId);
+              expect((yield* repo.get(ready.publicationId))?.state).toBe("ready");
+              expect(f.mutations.filter((m) => m === "POST /api/v1/sandboxes")).toHaveLength(1);
+              // A ready artifact rejected on a transport read is an integrity quarantine,
+              // even when its reason is otherwise eligible for construction retry.
+              yield* repo.rejectReady(ready, "native-provider-transport_error");
+              const calls = f.mutations.length;
+              expect(
+                yield* Effect.flip(
+                  catalog.acquire({
+                    scope: f.key.scope,
+                    spec: f.spec,
+                    consumer: yield* consumer(db, f.owner),
+                  }),
+                ),
+              ).toMatchObject({ code: "publication-quarantined" });
+              expect(f.mutations).toHaveLength(calls);
+              expect(yield* repo.get(failed.ownership.publicationId)).toMatchObject({
+                state: "superseded",
+                reason: "native-provider-transport_error",
+              });
+            }),
+          );
+        }),
+      ),
+  );
+
+  it.live("repairs a legacy swept build cause from its exact journal before replacing it", () =>
+    test((repo, db) =>
+      Effect.gen(function* () {
+        const owner = yield* seed(db);
+        const f = yield* Effect.promise(() => nativeBuilderFixture("command-failed"));
+        const original = yield* consumer(db, owner);
+        yield* throughCatalog(db, f, (catalog) =>
+          Effect.gen(function* () {
+            const input = { scope: { kind: "owner" as const, ownerUserId: owner }, spec: f.spec };
+            expect(
+              yield* Effect.flip(catalog.acquire({ ...input, consumer: original })),
+            ).toMatchObject({ detail: "native-guest-command-failed" });
+            const pin = (yield* nativeConsumerRows(db, original.runId))[0];
+            if (pin === undefined) throw new Error("missing pin");
+            const claim = yield* repo.claim(pin.publicationId, "reconcile", 60000);
+            if (claim === undefined) throw new Error("missing claim");
+            // Reproduce the old sweeper losing the original cause.
+            yield* repo.quarantine(claim, "native-build-abandoned");
+            const next = yield* consumer(db, owner);
+            expect(yield* Effect.flip(catalog.acquire({ ...input, consumer: next }))).toMatchObject(
+              { code: "mechanism-failed", detail: "native-guest-command-failed" },
+            );
+            expect(yield* repo.get(pin.publicationId)).toMatchObject({
+              state: "superseded",
+              reason: "native-guest-command-failed",
+            });
+            const replacement = (yield* nativeConsumerRows(db, next.runId))[0];
+            expect(replacement?.publicationId).not.toBe(pin.publicationId);
+            expect(f.mutations.filter((m) => m === "POST /api/v1/sandboxes")).toHaveLength(2);
+          }),
+        );
+      }),
+    ),
+  );
+
+  it.live(
+    "keeps a legacy swept integrity failure closed after recovering its original journal cause",
+    () =>
+      test((repo, db) =>
+        Effect.gen(function* () {
+          const owner = yield* seed(db);
+          const f = yield* Effect.promise(() => nativeBuilderFixture("legacy-guest-approval"));
+          const original = yield* consumer(db, owner);
+          yield* throughCatalog(db, f, (catalog) =>
+            Effect.gen(function* () {
+              const input = { scope: { kind: "owner" as const, ownerUserId: owner }, spec: f.spec };
+              const failed = yield* Effect.flip(catalog.acquire({ ...input, consumer: original }));
+              if (!(failed instanceof NativeCatalogError)) throw failed;
+              const pin = (yield* nativeConsumerRows(db, original.runId))[0];
+              if (pin === undefined) throw new Error("missing pin");
+              const claim = yield* repo.claim(pin.publicationId, "reconcile", 60000);
+              if (claim === undefined) throw new Error("missing claim");
+              yield* repo.quarantine(claim, "native-build-abandoned");
+              const calls = f.mutations.length,
+                next = yield* consumer(db, owner);
+              expect(
+                yield* Effect.flip(catalog.acquire({ ...input, consumer: next })),
+              ).toMatchObject({ code: "publication-quarantined", detail: failed.detail });
+              expect(yield* repo.get(pin.publicationId)).toMatchObject({
+                state: "quarantined",
+                reason: failed.detail,
+                buildAttempt: 1,
+              });
+              expect(yield* nativeConsumerRows(db, next.runId)).toEqual([]);
+              expect(f.mutations).toHaveLength(calls);
+            }),
+          );
+        }),
+      ),
+  );
+
+  it.live("keeps integrity, unknown-journal and cleanup quarantine closed to new sessions", () =>
+    test((repo, db) =>
+      Effect.gen(function* () {
+        const f = yield* prepare(db);
+        for (const reason of [
+          "native-publication-evidence-mismatch",
+          "native-snapshot-identity-mismatch",
+          "native-journal-missing",
+          "native-cleanup-pending",
+        ]) {
+          const key = { ...f.key, deploymentId: reason };
+          const original = yield* consumer(db, f.owner);
+          const failed = yield* repo.reserve(key, original);
+          const claim = yield* repo.claim(failed.ownership.publicationId, "build", 60000);
+          if (claim === undefined) throw new Error("missing claim");
+          yield* repo.quarantine(claim, reason);
+          const unchanged = yield* repo.reserve(key, yield* consumer(db, f.owner));
+          expect(unchanged).toMatchObject({ state: "quarantined", buildAttempt: 1, reason });
+          expect(unchanged.ownership).toEqual(failed.ownership);
+        }
+        expect(f.mutations).toEqual([]);
+      }),
+    ),
+  );
+
   it.live("withdraws only the exact unused build and removes it through its journal", () =>
     test((repo, db) =>
       Effect.gen(function* () {

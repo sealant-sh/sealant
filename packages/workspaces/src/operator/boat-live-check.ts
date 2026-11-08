@@ -76,6 +76,8 @@ export interface BoatProofInventory {
   readonly sandboxes: readonly string[];
   readonly snapshots: readonly string[];
   readonly pages: number;
+  /** Exact ready catalog artifacts, independently matched to the provider. Never VM allocations. */
+  readonly retainedSnapshots?: readonly { readonly publicationId: string; readonly name: string }[];
 }
 /** The checker reads canonical facts; it cannot manufacture a launch, readiness or deletion receipt. */
 export interface BoatProofServices {
@@ -87,7 +89,10 @@ export interface BoatProofServices {
 }
 const pause = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 const empty = (inventory: BoatProofInventory) =>
-  inventory.sandboxes.length === 0 && inventory.snapshots.length === 0;
+  inventory.sandboxes.length === 0 &&
+  inventory.snapshots.every(
+    (name) => inventory.retainedSnapshots?.some((saved) => saved.name === name) === true,
+  );
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 /** Mend issues every token and terminal ticket through its ordinary authenticated API. */
@@ -322,6 +327,18 @@ const trackProofSession = (input: {
   return { created, remember, close };
 };
 
+// A ready publication is a reusable catalog artifact, including one retained by another consumer.
+// Only unexplained snapshots fail the census; the checker never deletes a retained publication.
+const withdrawProofPublication = async (io: BoatProofServices, publication: string) => {
+  const inventory = await io.inventory();
+  if (inventory.retainedSnapshots?.some((saved) => saved.publicationId === publication)) {
+    io.record({ event: "publication-retained", publication });
+    return;
+  }
+  await io.withdraw(publication);
+  io.record({ event: "publication-withdrawn", publication });
+};
+
 /** Recover a prior create using its journaled ID, or its exact project/worktree if no ID was saved. */
 export const cleanupBoatLiveCheck = async (
   config: BoatProofConfig,
@@ -352,7 +369,7 @@ export const cleanupBoatLiveCheck = async (
     ...(saved === undefined ? {} : { sessionId: id.parse(saved.id) }),
   });
   await owned.close();
-  for (const publication of publications) await io.withdraw(publication);
+  for (const publication of publications) await withdrawProofPublication(io, publication);
   const inventory = await io.inventory();
   io.record({ event: "cleanup-inventory", ...inventory });
   if (!empty(inventory)) throw new BoatProofError("cleanup-inventory-not-empty");
@@ -446,8 +463,7 @@ export const runBoatLiveCheck = async (
     }
     for (const publication of publications) {
       try {
-        await io.withdraw(publication);
-        io.record({ event: "publication-withdrawn", publication });
+        await withdrawProofPublication(io, publication);
       } catch {
         cleanupHeld = true;
         io.record({ event: "cleanup-held", operation: "publication", publication });

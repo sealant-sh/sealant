@@ -6,6 +6,7 @@ import {
   boatTunnelReservationSchema,
   nativeArtifactConsumerSchema,
   nativeCatalogRecordSchema,
+  nativeBuildRetryReasonSchema,
   nativePublicationKeySchema,
   nativePublicationSchema,
   nativeConsumerStateSchema,
@@ -51,10 +52,15 @@ export class NativeCatalogStoreError extends Error {
 
 /** Transactional ownership; provider and filesystem operations belong outside these methods. */
 export interface NativePublicationRepoService {
+  /** A new consumer may replace one completed failed build; redelivery never changes its pin. */
   readonly reserve: (
     key: NativePublicationKey,
     consumer: NativeArtifactConsumer,
   ) => Effect.Effect<NativeCatalogRecord, NativeCatalogStoreError>;
+  /** Observe the active recipe reservation before repairing a legacy failed-build cause. */
+  readonly getActive: (
+    key: NativePublicationKey,
+  ) => Effect.Effect<NativeCatalogRecord | undefined, NativeCatalogStoreError>;
   readonly get: (
     publicationId: string,
   ) => Effect.Effect<NativeCatalogRecord | undefined, NativeCatalogStoreError>;
@@ -138,6 +144,8 @@ const parseRow = (
         createdAt: row.createdAt,
         readyAt: row.readyAt,
         reason: row.reason,
+        buildAttempt: row.buildAttempt,
+        replacesPublicationId: row.replacesPublicationId,
       });
       const key = record.ownership.key;
       if (
@@ -220,6 +228,28 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
       const [row] = yield* db.select().from(publications).where(eq(publications.id, id));
       return row === undefined ? undefined : yield* parseRow(row);
     });
+    const getActive = Effect.fn("NativePublicationRepo.getActive")(function* (
+      input: NativePublicationKey,
+    ) {
+      const key = yield* Effect.try({
+        try: () => nativePublicationKeySchema.parse(input),
+        catch: () => new NativeCatalogStoreError("getActive", "invalid-input"),
+      });
+      const [row] = yield* db
+        .select()
+        .from(publications)
+        .where(
+          and(
+            eq(publications.keyHash, digest(key)),
+            sql`${publications.state} not in ('removed','superseded')`,
+          ),
+        );
+      if (row === undefined) return undefined;
+      const record = yield* parseRow(row);
+      if (!isDeepStrictEqual(record.ownership.key, key))
+        return yield* Effect.fail(new NativeCatalogStoreError("getActive", "malformed-state"));
+      return record;
+    });
     const lock = (id: string) =>
       db.select().from(publications).where(eq(publications.id, id)).for("update");
     const pins = (id: string) =>
@@ -242,28 +272,90 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
       const { key, consumer } = parsed;
       return yield* db.transaction(() =>
         Effect.gen(function* () {
-          yield* db
-            .insert(publications)
-            .values({
-              id: randomUUID(),
-              buildId: randomUUID(),
-              keyHash: digest(key),
-              keyPayload: key,
-              deploymentId: key.deploymentId,
-              scopeKind: key.scope.kind,
-              scopeId: scopeId(key.scope),
-              recipeHash: key.recipeHash,
-            })
-            .onConflictDoNothing();
-          const [row] = yield* db
+          // Serialize only this recipe. Publication locks still precede consumer locks,
+          // as they do in release/retirement. Redelivery keeps its original binding.
+          yield* db.execute(
+            sql`select pg_advisory_xact_lock(hashtextextended(${"native-publication:" + digest(key)}, 0))`,
+          );
+          const [existingPin] = yield* db.select().from(consumers).where(consumerWhere(consumer));
+          if (existingPin !== undefined) {
+            const [owned] = yield* lock(existingPin.publicationId);
+            const [pin] = yield* db
+              .select()
+              .from(consumers)
+              .where(consumerWhere(consumer))
+              .for("update");
+            if (
+              owned === undefined ||
+              pin === undefined ||
+              pin.publicationId !== owned.id ||
+              !nativeConsumerStateSchema.safeParse(pin.state).success
+            )
+              return yield* Effect.fail(
+                new NativeCatalogStoreError("reserve", "consumer-conflict"),
+              );
+            const record = yield* parseRow(owned);
+            if (!isDeepStrictEqual(record.ownership.key, key))
+              return yield* Effect.fail(
+                new NativeCatalogStoreError("reserve", "consumer-conflict"),
+              );
+            if (pin.state === "released")
+              return yield* Effect.fail(
+                new NativeCatalogStoreError("reserve", "consumer-released"),
+              );
+            return record;
+          }
+          const [active] = yield* db
             .select()
             .from(publications)
-            .where(and(eq(publications.keyHash, digest(key)), ne(publications.state, "removed")))
+            .where(
+              and(
+                eq(publications.keyHash, digest(key)),
+                sql`${publications.state} not in ('removed','superseded')`,
+              ),
+            )
             .for("update");
-          if (row === undefined)
+          let row = active;
+          let record = row === undefined ? undefined : yield* parseRow(row);
+          if (record !== undefined && !isDeepStrictEqual(record.ownership.key, key))
             return yield* Effect.fail(new NativeCatalogStoreError("reserve", "malformed-state"));
-          const record = yield* parseRow(row);
-          if (!isDeepStrictEqual(record.ownership.key, key))
+          const replace =
+            record?.state === "quarantined" &&
+            record.publication === null &&
+            record.claim === null &&
+            record.buildAttempt === 1 &&
+            nativeBuildRetryReasonSchema.safeParse(record.reason).success;
+          if (row === undefined || replace) {
+            const predecessor = replace ? row : undefined;
+            if (predecessor !== undefined) {
+              yield* db
+                .update(publications)
+                .set({
+                  state: "superseded",
+                  generation: sql`${publications.generation} + 1`,
+                  ...clearClaim,
+                })
+                .where(eq(publications.id, predecessor.id));
+            }
+            const [fresh] = yield* db
+              .insert(publications)
+              .values({
+                id: randomUUID(),
+                buildId: randomUUID(),
+                keyHash: digest(key),
+                keyPayload: key,
+                deploymentId: key.deploymentId,
+                scopeKind: key.scope.kind,
+                scopeId: scopeId(key.scope),
+                recipeHash: key.recipeHash,
+                buildAttempt: predecessor === undefined ? 1 : 2,
+                replacesPublicationId: predecessor?.id ?? null,
+              })
+              .returning();
+            row = fresh;
+            record = row === undefined ? undefined : yield* parseRow(row);
+          }
+          if (row === undefined || record === undefined)
             return yield* Effect.fail(new NativeCatalogStoreError("reserve", "malformed-state"));
           if (
             record.state === "retiring" ||
@@ -645,6 +737,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
     });
     return NativePublicationRepo.of({
       reserve: (key, consumer) => boundary("reserve", reserve(key, consumer)),
+      getActive: (key) => boundary("getActive", getActive(key)),
       get: (id) => boundary("get", get(id)),
       claim: (id, purpose, ttlMs) => boundary("claim", takeClaim(id, purpose, ttlMs)),
       releaseClaim: (claim) =>

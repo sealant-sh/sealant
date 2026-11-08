@@ -1,0 +1,9 @@
+ALTER TABLE "native_publications" ADD COLUMN "build_attempt" integer DEFAULT 1 NOT NULL;--> statement-breakpoint
+ALTER TABLE "native_publications" ADD COLUMN "replaces_publication_id" uuid;--> statement-breakpoint
+DROP INDEX "native_publications_key_active";--> statement-breakpoint
+CREATE UNIQUE INDEX "native_publications_key_active" ON "native_publications" ("key_hash") WHERE "state" not in ('removed','superseded');--> statement-breakpoint
+ALTER TABLE "native_publications" ADD CONSTRAINT "native_publications_replaces_publication_id_key" UNIQUE("replaces_publication_id");--> statement-breakpoint
+ALTER TABLE "native_publications" ADD CONSTRAINT "native_publications_njIRpdgESEEC_fkey" FOREIGN KEY ("replaces_publication_id") REFERENCES "native_publications"("id");--> statement-breakpoint
+ALTER TABLE "native_publications" ADD CONSTRAINT "native_publications_build_attempt" CHECK (("build_attempt" = 1 and "replaces_publication_id" is null) or ("build_attempt" = 2 and "replaces_publication_id" is not null and "replaces_publication_id" <> "id"));--> statement-breakpoint
+ALTER TABLE "native_publications" DROP CONSTRAINT "native_publications_state", ADD CONSTRAINT "native_publications_state" CHECK ("state" in ('reserved','building','ready','retiring','removed','quarantined','superseded'));--> statement-breakpoint
+ALTER TABLE "native_publications" DROP CONSTRAINT "native_publications_payload", ADD CONSTRAINT "native_publications_payload" CHECK (("state" in ('reserved','building','superseded') and "publication" is null) or ("state" in ('ready','retiring','removed') and "publication" is not null) or "state" = 'quarantined');

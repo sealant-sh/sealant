@@ -1,6 +1,7 @@
 import { Arbitrary, Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
+import { BoatApiError, boatProviderFailureSchema } from "../../runtime/boat/config.js";
 import { toWorkspaceBuildJobProcessingError } from "../../worker/errors.js";
 import { NativeCatalogError } from "./catalog.js";
 import { nativeCommandFailure, nativeCommandFailureSchema } from "./command-diagnostics.js";
@@ -95,5 +96,35 @@ describe("native command failure diagnostics", () => {
     expect(worker.message).toContain("apt: package refused");
     expect(worker.message).toContain('"step":"install-recipe"');
     expect(worker.cause).toBe(catalog);
+  });
+});
+
+describe("native provider failure diagnostics", () => {
+  it("keeps only approved cause classes through nested fetch errors and serialization", async () => {
+    const checked = await Effect.runPromise(
+      Arbitrary.checkEffect(Arbitrary.schema(Schema.String), (privateText) => {
+        const error = new BoatApiError("execute", 200, "transport_error", {
+          name: "TypeError",
+          message: privateText,
+          cause: { name: privateText, code: "UND_ERR_BODY_TIMEOUT", message: privateText },
+        });
+        expect(boatProviderFailureSchema.parse(JSON.parse(JSON.stringify(error)))).toEqual({
+          operation: "execute",
+          status: 200,
+          causeClass: "UND_ERR_BODY_TIMEOUT",
+        });
+        expect(error.message).toBe(
+          "Boat request failed during execute: transport_error (HTTP 200); cause UND_ERR_BODY_TIMEOUT",
+        );
+        const unknown = new BoatApiError("execute", null, "transport_error", {
+          name: privateText,
+          code: privateText,
+        });
+        expect(boatProviderFailureSchema.safeParse(unknown).success).toBe(true);
+        expect(Object.hasOwn(unknown, "cause")).toBe(false);
+        return true;
+      }),
+    );
+    expect(Arbitrary.formatCheckFailure(checked)).toBeUndefined();
   });
 });

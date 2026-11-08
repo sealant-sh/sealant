@@ -8,6 +8,7 @@ import {
 } from "@sealant/db";
 import {
   nativeImageScopeSchema,
+  nativeBuildRetryReasonSchema,
   nativePublicationKeySchema,
   type NativeArtifactConsumer,
   type NativeBuildOwnership,
@@ -20,29 +21,43 @@ import {
 import { Context, Effect, Layer, Result } from "effect";
 
 import type { IBoatSnapshotBuilder } from "./builder.js";
-import { nativeCommandFailureSchema, type NativeCommandFailure } from "./command-diagnostics.js";
+import {
+  nativeCommandFailureSchema,
+  nativeProviderFailureSchema,
+  type NativeCommandFailure,
+  type NativeProviderFailure,
+} from "./command-diagnostics.js";
 import type { NativeResult } from "./runtime-bundle.js";
 
 /** A pending or failed acquisition keeps its exact durable reservation and consumer pin. */
 export class NativeCatalogError extends Error {
   readonly _tag = "NativeCatalogError";
   readonly commandFailure: NativeCommandFailure | undefined;
+  readonly providerFailure: NativeProviderFailure | undefined;
   constructor(
     readonly code:
       | "publication-pending"
       | "publication-quarantined"
+      | "publication-build-attempts-exhausted"
+      | "publication-build-replaced"
       | "mechanism-failed"
       | "invalid-input",
     readonly publicationId?: string,
     readonly detail?: string,
     commandFailure?: NativeCommandFailure,
+    providerFailure?: NativeProviderFailure,
   ) {
+    const provider =
+      providerFailure === undefined
+        ? undefined
+        : nativeProviderFailureSchema.parse(providerFailure);
     const diagnostic =
       commandFailure === undefined ? undefined : nativeCommandFailureSchema.parse(commandFailure);
     super(
-      `Native catalog: ${code}${detail === undefined ? "" : ` (${detail})`}${diagnostic === undefined ? "" : `; command ${JSON.stringify(diagnostic)}`}`,
+      `Native catalog: ${code}${code === "publication-build-attempts-exhausted" ? "; this environment build failed twice. Fix the recorded cause before trying a changed environment" : ""}${detail === undefined ? "" : ` (${detail})`}${diagnostic === undefined ? "" : `; command ${JSON.stringify(diagnostic)}`}${provider === undefined ? "" : `; provider ${JSON.stringify(provider)}`}`,
     );
     this.commandFailure = diagnostic;
+    this.providerFailure = provider;
   }
 }
 
@@ -120,6 +135,7 @@ const mechanism = <A>(
               id,
               result.error.code,
               result.error.commandFailure,
+              result.error.providerFailure,
             ),
           ),
     ),
@@ -156,6 +172,28 @@ const make = (
           }),
         catch: () => new NativeCatalogError("invalid-input"),
       });
+      const legacy = yield* repo.getActive(key);
+      if (
+        legacy?.state === "quarantined" &&
+        legacy.publication === null &&
+        legacy.reason === "native-build-abandoned"
+      ) {
+        // Older sweeps replaced the build cause with "abandoned". Recover the cause
+        // from the exact private journal before pinning this new consumer.
+        const repaired = yield* Effect.result(reconcileRecord(legacy.ownership));
+        if (Result.isFailure(repaired)) {
+          if (
+            !(repaired.failure instanceof NativeCatalogError) ||
+            repaired.failure.code !== "publication-quarantined" ||
+            !nativeBuildRetryReasonSchema.safeParse(repaired.failure.detail).success
+          )
+            return yield* Effect.fail(repaired.failure);
+        } else if (repaired.success === "active-claim" || repaired.success === "active-attempt") {
+          return yield* Effect.fail(
+            new NativeCatalogError("publication-pending", legacy.ownership.publicationId),
+          );
+        }
+      }
       const record = yield* repo.reserve(key, input.consumer);
       const id = record.ownership.publicationId;
       if (record.state === "ready") {
@@ -179,6 +217,23 @@ const make = (
         }
         return record.publication;
       }
+      if (record.state === "superseded")
+        return yield* Effect.fail(
+          new NativeCatalogError("publication-build-replaced", id, record.reason ?? undefined),
+        );
+      if (
+        record.state === "quarantined" &&
+        record.publication === null &&
+        record.buildAttempt === 2 &&
+        nativeBuildRetryReasonSchema.safeParse(record.reason).success
+      )
+        return yield* Effect.fail(
+          new NativeCatalogError(
+            "publication-build-attempts-exhausted",
+            id,
+            record.reason ?? undefined,
+          ),
+        );
       if (record.state === "quarantined")
         return yield* Effect.fail(
           new NativeCatalogError("publication-quarantined", id, record.reason ?? undefined),
@@ -207,7 +262,7 @@ const make = (
                       id,
                       recovered.kind === "missing"
                         ? "native-journal-missing"
-                        : "native-build-abandoned",
+                        : (recovered.failureCode ?? "native-build-abandoned"),
                     ),
                   ),
             ),
@@ -308,6 +363,13 @@ const make = (
           new NativeCatalogError("mechanism-failed", id, "native-journal-ownership-unresolved"),
         );
       if (record.state === "removed") return "removed";
+      if (record.state === "superseded") return "superseded";
+      if (
+        record.state === "quarantined" &&
+        record.publication === null &&
+        nativeBuildRetryReasonSchema.safeParse(record.reason).success
+      )
+        return "failed-build";
       if (
         record.state === "retiring" ||
         (record.state === "quarantined" && record.reason === "native-removal-pending")
@@ -365,7 +427,7 @@ const make = (
         const reason =
           recovered.success.kind === "missing"
             ? "native-journal-missing"
-            : "native-build-abandoned";
+            : (recovered.success.failureCode ?? "native-build-abandoned");
         yield* repo.quarantine(claim, reason);
         return yield* Effect.fail(new NativeCatalogError("publication-quarantined", id, reason));
       }

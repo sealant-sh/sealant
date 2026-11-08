@@ -3,17 +3,93 @@ import { inspect } from "node:util";
 import { nativeBuildOwnershipSchema, type NativeBuildOwnership } from "@sealant/validators";
 import { z } from "zod";
 
+const causeClassSchema = z.enum([
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_SOCKET",
+  "UND_ERR_ABORTED",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ABORT_ERR",
+  "AbortError",
+  "TimeoutError",
+  "TypeError",
+  "SyntaxError",
+  "RangeError",
+  "Error",
+  "unknown",
+]);
+const providerCauseClass = (error: unknown): z.infer<typeof causeClassSchema> => {
+  let current = error;
+  let name: z.infer<typeof causeClassSchema> = "unknown";
+  for (let depth = 0; depth < 8 && current !== undefined; depth++) {
+    const parsed = z
+      .object({
+        code: z.unknown().optional(),
+        name: z.unknown().optional(),
+        cause: z.unknown().optional(),
+      })
+      .safeParse(current);
+    if (!parsed.success) break;
+    const code = causeClassSchema.safeParse(parsed.data.code);
+    if (code.success) return code.data;
+    const classified = causeClassSchema.safeParse(parsed.data.name);
+    if (classified.success) name = classified.data;
+    current = parsed.data.cause;
+  }
+  return name;
+};
+
+/** Only approved operation/status/class fields may leave the HTTP boundary, never exception text. */
+export const boatProviderFailureSchema = z.object({
+  operation: z
+    .enum([
+      "create",
+      "discover",
+      "get",
+      "execute",
+      "commandStatus",
+      "stopCommand",
+      "writeFile",
+      "uploadUrl",
+      "uploadFile",
+      "host",
+      "stop",
+      "resume",
+      "deleteSandbox",
+      "getDeletion",
+      "saveSnapshot",
+      "getSnapshot",
+      "deleteSnapshot",
+      "verifyRecoveryFile",
+      "personalSnapshots",
+      "savePersonalSnapshot",
+      "unknown",
+    ])
+    .catch("unknown"),
+  status: z.number().int().min(100).max(599).nullable(),
+  causeClass: causeClassSchema.nullable(),
+});
+export type BoatProviderFailure = z.infer<typeof boatProviderFailureSchema>;
+
 export class BoatApiError extends Error {
   readonly _tag = "BoatApiError";
+  readonly causeClass;
 
   constructor(
     readonly operation: string,
     readonly status: number | null,
     readonly code: string,
+    cause?: unknown,
   ) {
+    const classified = cause === undefined ? null : providerCauseClass(cause);
     super(
-      `Boat request failed during ${operation}: ${code}${status === null ? "" : ` (HTTP ${status})`}`,
+      `Boat request failed during ${operation}: ${code}${status === null ? "" : ` (HTTP ${status})`}${classified === null ? "" : `; cause ${classified}`}`,
     );
+    this.causeClass = classified;
   }
 }
 

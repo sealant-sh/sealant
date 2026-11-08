@@ -33,6 +33,8 @@ const listen = async (server: net.Server) => {
 };
 const fixture = async (
   options: {
+    retainedPublication?: boolean;
+    unknownSnapshot?: boolean;
     corruptResume?: boolean;
     echoOnly?: boolean;
     malformedCreate?: boolean;
@@ -200,7 +202,15 @@ const fixture = async (
     runtime: async (s) => (s.sealantRunId === null ? undefined : runtimes.get(s.sealantRunId)),
     inventory: async () => ({
       sandboxes: [...runtimes.values()].filter((r) => !r.closed).map((r) => r.sandboxId),
-      snapshots: generation > 0 && !withdrawn ? ["proof-snapshot"] : [],
+      snapshots: [
+        ...(options.retainedPublication || (generation > 0 && !withdrawn)
+          ? ["proof-snapshot"]
+          : []),
+        ...(options.unknownSnapshot ? ["unexplained"] : []),
+      ],
+      ...(options.retainedPublication
+        ? { retainedSnapshots: [{ publicationId, name: "proof-snapshot" }] }
+        : {}),
       pages: 1,
     }),
     privacy: async () => ({ conclusion: "fixture-only" }),
@@ -239,6 +249,25 @@ describe("operator checker against Mend HTTP and terminal protocol", () => {
       sandboxes: [],
       snapshots: [],
     });
+  });
+  it("permits and records an exactly accounted ready publication without withdrawing it", async () => {
+    const f = await fixture({ retainedPublication: true });
+    await f.run();
+    expect(f.events).toContainEqual({
+      event: "publication-retained",
+      publication: f.publicationId,
+    });
+    expect(f.events.at(-1)).toMatchObject({
+      event: "final-inventory",
+      sandboxes: [],
+      snapshots: ["proof-snapshot"],
+      retainedSnapshots: [{ publicationId: f.publicationId, name: "proof-snapshot" }],
+    });
+  });
+  it("an accounted ready publication does not excuse an unexplained snapshot", async () => {
+    const f = await fixture({ retainedPublication: true, unknownSnapshot: true });
+    await expect(f.run()).rejects.toThrow("baseline-not-empty");
+    expect(f.routes.some((route) => route.endsWith("/launch"))).toBe(false);
   });
   it("refuses lost resumed bytes, then closes only its session and removes its publication", async () => {
     const f = await fixture({ corruptResume: true });
