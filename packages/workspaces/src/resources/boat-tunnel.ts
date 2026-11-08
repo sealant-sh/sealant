@@ -485,6 +485,12 @@ export class DockerBoatTunnel implements BoatTunnel {
           await this.run(["network", "rm", egress]);
         }
         await this.options.subnets.release(egress);
+        if (
+          (await this.ownedContainer(name, binding)) !== undefined ||
+          (await this.exists("network", reach)) ||
+          (await this.exists("network", egress))
+        )
+          throw new BoatTunnelError("ownership-conflict");
       },
       catch: (error) =>
         error instanceof BoatTunnelError ? error : new BoatTunnelError("gateway-unavailable"),

@@ -1,0 +1,13 @@
+[Unit]
+Description=Sealant capture-only recovery on the original disk
+After=local-fs.target
+ConditionPathExists=/run/sealant-bootstrap/execution-permit.json
+
+[Service]
+Type=exec
+Slice=sealant-workspace.slice
+NotifyAccess=none
+KillMode=control-group
+Restart=no
+UMask=0077
+ExecStart=/var/lib/sealant/guest/bundle/lib64/ld-linux-x86-64.so.2 --inhibit-cache --library-path /var/lib/sealant/guest/bundle/lib/x86_64-linux-gnu:/var/lib/sealant/guest/bundle/usr/lib/x86_64-linux-gnu:/var/lib/sealant/guest/bundle/usr/lib/x86_64-linux-gnu/systemd /var/lib/sealant/guest/bundle/usr/bin/python3 -I -S -B /var/lib/sealant/guest/guest_recovery.py

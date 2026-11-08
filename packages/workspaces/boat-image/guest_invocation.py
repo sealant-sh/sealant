@@ -17,8 +17,8 @@ def path():
     return guest.ROOT / 'invocation.json'
 
 
-def state():
-    value = guest.private_json(path())
+def state(record_path=None):
+    value = guest.private_json(path() if record_path is None else record_path)
     receiver.fields(value, {'format', 'binding', 'status', 'owner', 'launcher', 'gate', 'exit_code'})
     if value['format'] != 'sealant-invocation-v1' or value['status'] not in ('issued', 'launching', 'running', 'ended', 'unresolved'):
         raise receiver.Refusal('invalid-invocation-record')
@@ -34,14 +34,15 @@ def binding():
             'operation_id': admission['operation_id']}
 
 
-def observe():
-    if not path().exists():
+def observe(record_path=None, unit=UNIT):
+    record_path = path() if record_path is None else record_path
+    if not record_path.exists():
         return 'unavailable'
-    record = state()
+    record = state(record_path)
     if record['status'] in ('ended', 'unresolved'):
         return record['status']
     if record['binding']['boot_id'] != guest.boot_id():
-        guest.save(path(), {**record, 'status': 'unresolved'})
+        guest.save(record_path, {**record, 'status': 'unresolved'})
         return 'unresolved'
     if record['status'] == 'issued':
         # Intent may still be queued in systemd. Never issue it a second time.
@@ -49,7 +50,7 @@ def observe():
     try:
         import guest_network
         guest_network.verify(record['binding'], record['gate']['pid'] if record['status'] == 'running' else None)
-        current = unit_identity()
+        current = unit_identity(unit)
         if current != record['owner']:
             raise ValueError('invocation-owner-changed')
         if record['status'] == 'launching':
@@ -92,12 +93,12 @@ def observe():
                 process.close()
         return 'running'
     except (OSError, ValueError, KeyError, TypeError):
-        guest.save(path(), {**record, 'status': 'unresolved'})
+        guest.save(record_path, {**record, 'status': 'unresolved'})
         return 'unresolved'
 
 
-def unit_identity():
-    raw = guest.run('/usr/bin/systemctl', 'show', UNIT, '-p', 'InvocationID', '-p', 'MainPID')
+def unit_identity(unit=UNIT):
+    raw = guest.run('/usr/bin/systemctl', 'show', unit, '-p', 'InvocationID', '-p', 'MainPID')
     properties = dict(line.split('=', 1) for line in raw.splitlines())
     invocation = properties.get('InvocationID', '')
     if not re.fullmatch(r'[a-f0-9]{32}', invocation):
@@ -106,6 +107,8 @@ def unit_identity():
 
 
 def start(request):
+    if (guest.ROOT / 'recovery.json').exists():
+        raise receiver.Refusal('ordinary-invocation-closed')
     receiver.fields(request, {'format', 'identity', 'boot_id', 'epoch', 'operation_id'})
     receiver.fields(request['identity'], receiver.IDENTITY_KEYS)
     if type(request['epoch']) is not int or not 1 <= request['epoch'] <= 9007199254740991:
@@ -182,6 +185,8 @@ def run():
         raise receiver.Refusal('outer-owner-required')
     held = []
     with receiver.locked():
+        if (guest.ROOT / 'recovery.json').exists():
+            raise receiver.Refusal('ordinary-invocation-closed')
         record = state()
         if record['status'] != 'issued' or record['binding'] != binding():
             raise receiver.Refusal('invocation-replay-refused')

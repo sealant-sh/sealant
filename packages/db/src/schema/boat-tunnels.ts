@@ -23,10 +23,17 @@ export const boatTunnels = snakeCase.table(
     listenPort: integer().notNull(),
     reservationId: uuid().notNull().unique(),
     record: jsonb().$type<unknown>().notNull(),
+    releasedAt: timestamp({ mode: "date", withTimezone: true }),
     createdAt: timestamp({ mode: "date", withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("boat_tunnels_host_port").on(table.gatewayHostId, table.listenPort),
+    uniqueIndex("boat_tunnels_host_port")
+      .on(table.gatewayHostId, table.listenPort)
+      .where(sql`${table.releasedAt} is null`),
+    check(
+      "boat_tunnels_release",
+      sql`coalesce(${table.record}->'released', 'false'::jsonb) = to_jsonb(${table.releasedAt} is not null)`,
+    ),
     check("boat_tunnels_port", sql`${table.listenPort} between 40000 and 40015`),
     check(
       "boat_tunnels_identity",

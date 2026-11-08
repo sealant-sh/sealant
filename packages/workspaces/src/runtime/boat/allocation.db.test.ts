@@ -16,6 +16,8 @@ import {
   BoatExecutionRepo,
   BoatExecutionRepoLive,
   BoatTunnelRepo,
+  WorkspaceCaptureDrainRepo,
+  WorkspaceCaptureDrainRepoLive,
   boatTunnelRepoLayer,
   ResourceInstanceRepo,
   ResourceInstanceRepoLive,
@@ -35,6 +37,7 @@ import { corruptBoatAllocation } from "@sealant/db/testing/boat-allocations";
 import { nativeConsumerRows } from "@sealant/db/testing/native-publications";
 import { withWorkspaceJobTestDatabase } from "@sealant/db/testing/workspace-publications";
 import {
+  boatExecutionRecordSchema,
   boatAllocationInputSchema,
   boatAllocationRecordSchema,
   nativePublicationKeySchema,
@@ -43,7 +46,7 @@ import {
   type BoatAllocationRecord,
   type BoatExecutionTarget,
 } from "@sealant/validators";
-import { Context, Effect, Fiber, Layer, Redacted } from "effect";
+import { Context, Deferred, Effect, Fiber, Layer, Redacted } from "effect";
 import * as TestClock from "effect/testing/TestClock";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -61,6 +64,7 @@ import {
   boatAllocationWorkerLayer,
   boatWorkerExecutionLayer,
   boatReadinessWorkerLayer,
+  boatFinalCloseWorkerLayer,
 } from "../../worker/boat-allocation.js";
 import { BoatReadiness, boatReadinessLayer } from "../../worker/boat-readiness.js";
 import {
@@ -68,6 +72,12 @@ import {
   BoatResourcesHost,
   boatResourcesLayer,
 } from "../../worker/boat-resources.js";
+import {
+  fakeCaptureDaemon,
+  savedStatus,
+  captureStatus,
+  type CaptureDaemonScriptEntry,
+} from "../../worker/capture-daemon.fixture.js";
 import { BoatAllocation, BoatAllocationProvider, boatAllocationLayer } from "./allocation.js";
 import { HttpBoatApi } from "./api.js";
 import { BoatSecret } from "./config.js";
@@ -77,6 +87,11 @@ import {
   boatExecutionLayer,
   type BoatGuestTransport,
 } from "./execution.js";
+import {
+  BoatFinalClose,
+  BoatFinalCloseProvider,
+  boatFinalCloseLayerNoDeps,
+} from "./final-close.js";
 
 const databaseUrl = process.env.SEALANT_TEST_DATABASE_URL;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -198,6 +213,26 @@ const seed = (db: DB, catalog: NativePublicationRepo["Service"]) =>
 
 class ProviderFixture {
   bootId = randomUUID();
+  sandboxMissing = false;
+  beforeSandboxRead: () => Promise<void> = async () => {};
+  deleteCalls = 0;
+  deletionReads = 0;
+  deletionCompleted = true;
+  deletionForeign = false;
+  deletionWrongId = false;
+  deleteLost = false;
+  deletionUnavailable = false;
+  readonly deletionId = `bdop_${randomUUID().replaceAll("-", "")}`;
+  beforeDeletion: () => Promise<void> = async () => {};
+  deletion() {
+    return {
+      id: this.deletionWrongId ? "bdop_00000000000000000000000000000000" : this.deletionId,
+      kind: "sandbox",
+      targetId: this.deletionForeign ? "bx_3456789a" : "bx_23456789",
+      status: this.deletionCompleted ? "completed" : "processing",
+    };
+  }
+
   readonly creates: Array<{ key: string | undefined; body: Record<string, unknown> }> = [];
   readonly commands: string[] = [];
   readonly reads: string[] = [];
@@ -275,7 +310,31 @@ class ProviderFixture {
       });
       return;
     }
+    if (request.method === "DELETE" && url.pathname === "/api/v1/sandboxes/bx_23456789") {
+      this.deleteCalls++;
+      await this.beforeDeletion();
+      if (this.deleteLost) {
+        response.destroy();
+        return;
+      }
+      send({ ok: true, operation: this.deletion() });
+      return;
+    }
+    if (url.pathname.startsWith("/api/v1/deletion-operations/")) {
+      this.deletionReads++;
+      if (this.deletionUnavailable) {
+        send({ code: "unavailable" }, 503);
+        return;
+      }
+      send({ ok: true, operation: this.deletion() });
+      return;
+    }
     if (url.pathname === "/api/v1/sandboxes/bx_23456789") {
+      await this.beforeSandboxRead();
+      if (this.sandboxMissing) {
+        send({ code: "not_found" }, 404);
+        return;
+      }
       send({ ok: true, sandbox: this.sandbox() });
       return;
     }
@@ -302,6 +361,8 @@ const canonical = (value: unknown): string => {
   return JSON.stringify(value) ?? "null";
 };
 class GuestFixture implements BoatGuestTransport {
+  recovery: "running" | "issued" | "ended" | "unresolved" = "running";
+  wrongRecoveryBinding = false;
   starts = 0;
   permitCount = 0;
   readonly actions: string[] = [];
@@ -368,6 +429,18 @@ class GuestFixture implements BoatGuestTransport {
   }
   async call(_host: unknown, bearer: BoatSecret, route: string, body?: Redacted.Redacted<string>) {
     this.actions.push(route);
+    if (route === "recover") {
+      const request = z
+        .object({ binding: z.unknown() })
+        .parse(JSON.parse(Redacted.value(body ?? Redacted.make(""))));
+      return {
+        format: "sealant-capture-recovery-status-v1",
+        binding: request.binding,
+        execution: this.recovery,
+        mode: this.recovery === "running" ? "original" : "recovery",
+        ...(this.wrongRecoveryBinding ? { binding: {} } : {}),
+      };
+    }
     if (route === "stage")
       this.admission = z
         .object({ epoch: z.number(), operation_id: z.string() })
@@ -439,6 +512,10 @@ class GuestFixture implements BoatGuestTransport {
   }
 }
 class GatewayFixture {
+  allowRemoval = false;
+  removalUnavailable = false;
+  removeCalls = 0;
+  beforeRemove: () => Promise<void> = async () => {};
   receipt = "c".repeat(64);
   readonly requests: BoatTunnelInput[] = [];
   unavailable = false;
@@ -476,7 +553,17 @@ class GatewayFixture {
     };
   }
   remove() {
-    return Effect.die("reconciliation must not remove custody");
+    return Effect.suspend(() => {
+      if (!this.allowRemoval) return Effect.die("reconciliation must not remove custody");
+      this.removeCalls++;
+      return Effect.promise(() => this.beforeRemove()).pipe(
+        Effect.andThen(() =>
+          this.removalUnavailable
+            ? Effect.fail(new BoatTunnelError("gateway-unavailable"))
+            : Effect.void,
+        ),
+      );
+    });
   }
 }
 const test = async (
@@ -487,6 +574,11 @@ const test = async (
     executor: BoatExecution["Service"];
     resourceOwner: BoatResources["Service"];
     readiness: BoatReadiness["Service"];
+    canonical: WorkspaceCaptureDrainRepo["Service"];
+    final: (script: readonly CaptureDaemonScriptEntry[]) => Effect.Effect<{
+      owner: BoatFinalClose["Service"];
+      daemon: ReturnType<typeof fakeCaptureDaemon>;
+    }>;
     reopenResources: (
       endpoint?: string,
       gatewayHostId?: string,
@@ -511,6 +603,7 @@ const test = async (
       WorkspaceRuntimeInstanceRepoLive,
       BoatExecutionRepoLive,
       boatTunnelRepoLayer,
+      WorkspaceCaptureDrainRepoLive,
     ).pipe(Layer.provideMerge(DBLayer));
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -520,6 +613,7 @@ const test = async (
         const runtimes = yield* WorkspaceRuntimeInstanceRepo;
         const executions = yield* BoatExecutionRepo;
         const tunnels = yield* BoatTunnelRepo;
+        const captureRepo = yield* WorkspaceCaptureDrainRepo;
         const input = yield* seed(db, catalog);
         const provider = new ProviderFixture(input);
         const guest = new GuestFixture();
@@ -592,13 +686,22 @@ const test = async (
           });
         const ResourceLayer = boatResourcesLayer.pipe(Layer.provide(Exchange));
         const ResourceRoot: Layer.Layer<
-          BoatAllocation | BoatResources | BoatReadiness,
+          BoatAllocation | BoatResources | BoatReadiness | BoatFinalClose,
           CredentialCipherError
         > = Layer.mergeAll(
           boatReadinessWorkerLayer,
+          boatFinalCloseWorkerLayer,
           boatAllocationWorkerLayer,
           boatResourcesLayer.pipe(Layer.provide(boatWorkerExecutionLayer)),
-        ).pipe(Layer.provide(Layer.merge(Infra, hostLayer())));
+        ).pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Infra,
+              hostLayer(),
+              Layer.succeed(BoatFinalCloseProvider, { api: api.value }),
+            ),
+          ),
+        );
         yield* Layer.build(ResourceRoot);
         const Test = Layer.mergeAll(
           boatAllocationLayer.pipe(Layer.provide(Exchange)),
@@ -626,6 +729,28 @@ const test = async (
             executor,
             resourceOwner,
             readiness: Context.get(context, BoatReadiness),
+            canonical: captureRepo,
+            final: (script) =>
+              Effect.gen(function* () {
+                const daemon = fakeCaptureDaemon(script);
+                const layer = boatFinalCloseLayerNoDeps.pipe(
+                  Layer.provide(
+                    Layer.mergeAll(
+                      Layer.succeed(BoatAllocationRepo, repo),
+                      Layer.succeed(BoatTunnelRepo, tunnels),
+                      Layer.succeed(WorkspaceCaptureDrainRepo, captureRepo),
+                      Layer.succeed(WorkspaceRuntimeInstanceRepo, runtimes),
+                      Layer.succeed(BoatExecution, executor),
+                      Layer.succeed(SealantDB, db),
+                      hostLayer(),
+                      Layer.succeed(BoatFinalCloseProvider, { api: api.value }),
+                      daemon.layer,
+                    ),
+                  ),
+                );
+                const built = yield* Layer.buildWithScope(layer, scope);
+                return { owner: Context.get(built, BoatFinalClose), daemon };
+              }),
             reopenResources,
             tunnels,
             resources,
@@ -662,6 +787,322 @@ const reservation = (input: BoatAllocationInput): BoatAllocationRecord =>
     target: null,
     reason: null,
   });
+
+type AllocationFixture = Parameters<Parameters<typeof test>[0]>[0];
+const launched = async (s: AllocationFixture) => {
+  const target = await execute(s.allocations.prepare(s.input));
+  await execute(
+    s.readiness.launch(
+      target,
+      Redacted.make({
+        files: [{ name: "launch", bytes: Buffer.from("launch") }],
+        pins: { credentialVersions: [], dotfiles: [] },
+      }),
+    ),
+  );
+  return target;
+};
+const stopLaunched = async (s: AllocationFixture) => {
+  const target = await launched(s);
+  await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+  s.gateway.allowRemoval = true;
+  return target;
+};
+const tunnelRecord = async (s: AllocationFixture, target: BoatExecutionTarget) => {
+  const value = await execute(s.tunnels.get(target.runId));
+  if (value === undefined) throw new Error("missing tunnel");
+  return value;
+};
+
+describe.runIf(databaseUrl !== undefined)("Boat canonical FINAL close", () => {
+  it("reconciles only stopped current runtimes on this gateway host and resumes after the page cursor", () =>
+    test(async (s) => {
+      const target = await launched(s);
+      const { owner, daemon } = await execute(s.final([savedStatus()]));
+      expect((await execute(owner.reconcile({ limit: 1 }))).entries).toEqual([
+        { runId: target.runId, outcome: "skipped" },
+      ]);
+      expect(daemon.calls).toEqual([]);
+      expect(s.provider.deleteCalls).toBe(0);
+      await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+      s.gateway.allowRemoval = true;
+      const result = await execute(owner.reconcile({ limit: 1 }));
+      expect(result).toEqual({
+        entries: [{ runId: target.runId, outcome: "closed" }],
+        next: target.runId,
+      });
+      expect(await execute(owner.reconcile({ limit: 1, after: target.runId }))).toEqual({
+        entries: [],
+      });
+      expect((await execute(owner.reconcile({ limit: 1 }))).entries).toEqual([
+        { runId: target.runId, outcome: "skipped" },
+      ]);
+      expect(s.provider.deleteCalls).toBe(1);
+      for (const limit of [0, -1, 21, 1.5])
+        await expect(execute(owner.reconcile({ limit }))).rejects.toThrow("held");
+    }));
+  it("keeps pending, ended and unresolved capture-only recovery in custody without FINAL or deletion", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const { owner, daemon } = await execute(s.final([savedStatus()]));
+      for (const state of ["issued", "ended", "unresolved"] as const) {
+        s.guest.recovery = state;
+        expect(await execute(owner.close(target))).toBe("retained");
+        expect(daemon.calls).toEqual([]);
+        expect(s.provider.deleteCalls).toBe(0);
+        expect((await tunnelRecord(s, target)).released).toBeUndefined();
+      }
+      s.guest.recovery = "running";
+      s.guest.wrongRecoveryBinding = true;
+      await expect(execute(owner.close(target))).rejects.toThrow("unavailable");
+      expect(daemon.calls).toEqual([]);
+      s.guest.wrongRecoveryBinding = false;
+      expect(await execute(owner.close(target))).toBe("closed");
+      expect(s.guest.starts).toBe(1);
+    }));
+  it("drains authenticated FINAL, proves exact provider and host cleanup, then reuses only the released port", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const { owner, daemon } = await execute(s.final([savedStatus()]));
+      const beforeClose = await tunnelRecord(s, target);
+      await expect(execute(s.tunnels.release(beforeClose))).rejects.toThrow("operation-held");
+      await expect(
+        execute(
+          s.tunnels.recordRemoval(beforeClose, {
+            id: s.provider.deletionId,
+            targetId: target.sandboxId,
+            completed: true,
+          }),
+        ),
+      ).rejects.toThrow("binding-conflict");
+      expect(await execute(owner.close(target))).toBe("closed");
+      expect(daemon.flushRequests[0]?.kind).toBe("final");
+      expect(s.provider.deleteCalls).toBe(1);
+      expect(s.gateway.removeCalls).toBe(1);
+      expect((await execute(s.canonical.getByRunId(target.runId)))?.deletionState).toBe("deleted");
+      const terminal = await tunnelRecord(s, target);
+      expect(terminal).toMatchObject({
+        released: true,
+        removal: { id: s.provider.deletionId, completed: true },
+        updates: [],
+      });
+      expect((await execute(s.executions.get(target.runId)))?.phase).toBe("held");
+      expect(
+        (await execute(s.runtimes.getRuntimeInstanceByRunId(target.runId)))?.removedAt,
+      ).not.toBeNull();
+      expect(await execute(owner.close(target))).toBe("closed");
+      expect(s.provider.deleteCalls).toBe(1);
+      expect(s.gateway.removeCalls).toBe(1);
+      await expect(execute(s.resourceOwner.prepare(target))).rejects.toThrow("held");
+      const prior = await execute(s.executions.get(target.runId));
+      if (prior === undefined) throw new Error("missing execution");
+      const nextId = `run_${randomUUID()}`;
+      const [attempt] = await execute(s.db.select().from(workspaceAttempts));
+      if (attempt === undefined) throw new Error("missing attempt");
+      await execute(
+        s.db.insert(workspaceAttempts).values({ id: nextId, ownerUserId: attempt.ownerUserId }),
+      );
+      const nextTarget = {
+        ...target,
+        runId: nextId,
+        runtimeInstanceId: nextId,
+        sandboxId: "bx_3456789a",
+        diskLineage: randomUUID(),
+        bootId: randomUUID(),
+      };
+      const exchange = await execute(
+        s.executions.reserve(
+          boatExecutionRecordSchema.parse({
+            ...prior,
+            target: nextTarget,
+            phase: "exchange",
+            sealedExchange: "test-exchange",
+            sealedControl: null,
+            admission: null,
+            isolation: undefined,
+          }),
+        ),
+      );
+      await execute(
+        s.executions.advance(exchange, {
+          ...exchange,
+          phase: "control",
+          sealedExchange: null,
+          sealedControl: "test-control",
+        }),
+      );
+      const next = await execute(
+        s.tunnels.reserve(
+          { target: nextTarget, gatewayHostId: terminal.binding.gatewayHostId },
+          randomUUID(),
+        ),
+      );
+      expect(next.listenPort).toBe(terminal.listenPort);
+      expect(await tunnelRecord(s, target)).toEqual(terminal);
+    }));
+  it("refuses an active run and a stopped run whose invocation was never positively running", () =>
+    test(async (s) => {
+      const target = await s.allocations.prepare(s.input).pipe(execute);
+      const { owner, daemon } = await execute(s.final([savedStatus()]));
+      await expect(execute(owner.close(target))).rejects.toThrow("held");
+      await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+      await expect(execute(owner.close(target))).rejects.toThrow("held");
+      expect(daemon.calls).toEqual([]);
+      expect(s.provider.deleteCalls).toBe(0);
+    }));
+  it("retains empty but incomplete FINAL and later retries the same held VM without launching again", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const first = await execute(s.final([captureStatus({ complete: false })]));
+      expect(await execute(first.owner.close(target))).toBe("retained");
+      expect((await tunnelRecord(s, target)).released).toBeUndefined();
+      expect(s.provider.deleteCalls).toBe(0);
+      expect((await execute(s.executions.get(target.runId)))?.phase).toBe("held");
+      const second = await execute(s.final([savedStatus()]));
+      expect(await execute(second.owner.close(target))).toBe("closed");
+      expect(s.guest.starts).toBe(1);
+    }));
+  it("an outstanding host mutation holds custody until that exact request positively returns", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const before = await tunnelRecord(s, target);
+      const id = randomUUID();
+      expect(await execute(s.tunnels.beginUpdate(before, id))).toBe("issued");
+      const { owner, daemon } = await execute(s.final([savedStatus()]));
+      await expect(execute(owner.close(target))).rejects.toThrow("unavailable");
+      expect(daemon.calls).toEqual([]);
+      expect(s.provider.deleteCalls).toBe(0);
+      await execute(s.tunnels.endUpdate(before.binding, id));
+      expect(await execute(owner.close(target))).toBe("closed");
+    }));
+  it("a pending deletion keeps its exact operation and port, then resumes by observation without another DELETE", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      s.provider.deletionCompleted = false;
+      const { owner } = await execute(s.final([savedStatus()]));
+      await expect(execute(owner.close(target))).rejects.toThrow("pending");
+      expect((await execute(s.canonical.getByRunId(target.runId)))?.deletionState).toBe(
+        "deleting-issued",
+      );
+      expect((await tunnelRecord(s, target)).removal).toEqual({
+        id: s.provider.deletionId,
+        completed: false,
+      });
+      expect(s.gateway.removeCalls).toBe(0);
+      s.provider.deletionUnavailable = true;
+      await expect(execute(owner.close(target))).rejects.toThrow("unavailable");
+      s.provider.deletionUnavailable = false;
+      s.provider.deletionWrongId = true;
+      await expect(execute(owner.close(target))).rejects.toThrow("unavailable");
+      s.provider.deletionWrongId = false;
+      expect((await tunnelRecord(s, target)).removal?.id).toBe(s.provider.deletionId);
+      expect(await execute(owner.close(target))).toBe("pending");
+      s.provider.deletionCompleted = true;
+      const restarted = await execute(s.final(["unreachable"]));
+      expect(await execute(restarted.owner.close(target))).toBe("closed");
+      expect(restarted.daemon.calls).toEqual([]);
+      expect(s.provider.deleteCalls).toBe(1);
+      const completed = await tunnelRecord(s, target);
+      expect(
+        await execute(
+          s.tunnels.recordRemoval(completed, {
+            id: s.provider.deletionId,
+            targetId: target.sandboxId,
+            completed: false,
+          }),
+        ),
+      ).toEqual(completed);
+    }));
+  it("a lost DELETE response is retried only against the same positively owned sandbox and unchanged evidence", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      s.provider.deleteLost = true;
+      const { owner } = await execute(s.final([savedStatus()]));
+      await expect(execute(owner.close(target))).rejects.toThrow("unavailable");
+      expect((await tunnelRecord(s, target)).removal).toBeUndefined();
+      expect((await execute(s.canonical.getByRunId(target.runId)))?.deletionState).toBe(
+        "deleting-issued",
+      );
+      s.provider.deleteLost = false;
+      const restarted = await execute(s.final(["unreachable"]));
+      expect(await execute(restarted.owner.close(target))).toBe("closed");
+      expect(s.provider.deleteCalls).toBe(2);
+      expect(restarted.daemon.calls).toEqual([]);
+    }));
+  it("absence after a lost response never substitutes for exact deletion completion", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      s.provider.deleteLost = true;
+      const { owner } = await execute(s.final([savedStatus()]));
+      await expect(execute(owner.close(target))).rejects.toThrow("unavailable");
+      s.provider.sandboxMissing = true;
+      await expect(execute(owner.close(target))).rejects.toThrow("unavailable");
+      expect(s.provider.deleteCalls).toBe(1);
+      expect(s.gateway.removeCalls).toBe(0);
+      expect((await tunnelRecord(s, target)).released).toBeUndefined();
+    }));
+  it("refuses a foreign deletion target without removing host custody", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      s.provider.deletionForeign = true;
+      const { owner } = await execute(s.final([savedStatus()]));
+      await expect(execute(owner.close(target))).rejects.toThrow("held");
+      expect(s.gateway.removeCalls).toBe(0);
+      expect((await tunnelRecord(s, target)).removal).toBeUndefined();
+    }));
+  it("refuses provider label changes and a newer unsaved observation before issuance", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const { owner } = await execute(s.final([savedStatus()]));
+      s.provider.foreign = true;
+      await expect(execute(owner.close(target))).rejects.toThrow("held");
+      expect(s.provider.deleteCalls).toBe(0);
+      s.provider.foreign = false;
+      s.provider.beforeSandboxRead = async () => {
+        await execute(
+          s.canonical.recordStatus({
+            runId: target.runId,
+            status: { ...captureStatus({ complete: false }) },
+            observedAt: new Date(),
+          }),
+        );
+      };
+      await expect(execute(owner.close(target))).rejects.toThrow("held");
+      expect(s.provider.deleteCalls).toBe(0);
+      expect((await tunnelRecord(s, target)).released).toBeUndefined();
+    }));
+  it("host cleanup failure retains the slot after positive VM deletion and resumes without another FINAL or DELETE", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      s.gateway.removalUnavailable = true;
+      const { owner } = await execute(s.final([savedStatus()]));
+      await expect(execute(owner.close(target))).rejects.toThrow("unavailable");
+      expect((await tunnelRecord(s, target)).released).toBeUndefined();
+      expect((await execute(s.canonical.getByRunId(target.runId)))?.deletionState).toBe("deleted");
+      s.gateway.removalUnavailable = false;
+      const restarted = await execute(s.final(["unreachable"]));
+      expect(await execute(restarted.owner.close(target))).toBe("closed");
+      expect(restarted.daemon.calls).toEqual([]);
+      expect(s.provider.deleteCalls).toBe(1);
+      expect(s.gateway.removeCalls).toBe(2);
+    }));
+  it("concurrent closes cannot drain or delete twice while the first FINAL is in flight", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const reached = await execute(Deferred.make<void>()),
+        open = await execute(Deferred.make<void>());
+      const { owner } = await execute(s.final([{ gated: savedStatus(), reached, open }]));
+      const first = execute(owner.close(target));
+      await execute(Deferred.await(reached));
+      try {
+        expect(await execute(owner.close(target))).toBe("retained");
+      } finally {
+        await execute(Deferred.succeed(open, undefined));
+      }
+      expect(await first).toBe("closed");
+      expect(s.provider.deleteCalls).toBe(1);
+    }));
+});
 
 describe.runIf(databaseUrl !== undefined)(
   "Boat allocation through PostgreSQL and provider HTTP",

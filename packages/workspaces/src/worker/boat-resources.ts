@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import type { CredentialCipher } from "@sealant/credentials";
@@ -137,6 +138,10 @@ const make: Effect.Effect<
   const prepare = Effect.fn("BoatResources.prepare")(function* (target: BoatExecutionTarget) {
     const admission = yield* current(target);
     const keys = yield* credentials.prepare({ target, gatewayHostId: host.gatewayHostId });
+    const updateId = randomUUID();
+    const owned = yield* tunnels.get(target.runtimeInstanceId);
+    if (owned === undefined || (yield* tunnels.beginUpdate(owned, updateId)) !== "issued")
+      return yield* Effect.fail(new BoatResourcesError("held"));
     const subnet = yield* Effect.tryPromise({
       try: () =>
         host.subnets.allocate({
@@ -181,6 +186,7 @@ const make: Effect.Effect<
       gateway.listenPort !== keys.listenPort
     )
       return yield* Effect.fail(new BoatResourcesError("binding-conflict"));
+    yield* tunnels.endUpdate(owned.binding, updateId);
     yield* recheck;
     const receipt = yield* guest.isolate(target, {
       network: {

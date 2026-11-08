@@ -4,7 +4,7 @@
   "files": [
     {
       "name": "guest_boot.py",
-      "sha256": "9d37b3414067ce98a8f34f6aef6dd36afaf9af0414c4c9caa2f530d1389d383f"
+      "sha256": "e0a50218b7e9bf9bb323f6cbc7fc4da3b0a4114cbbcc8b71d0b449050abe196d"
     },
     {
       "name": "guest_contract.py",
@@ -12,11 +12,11 @@
     },
     {
       "name": "build_guest.py",
-      "sha256": "c58b68b5e8345c1c479d73f132c57eb1a7600583001dbf762d3602427fe9e3ee"
+      "sha256": "d7c4d7b9067610ef77ee52bbfbda34e61adf241cf745da1e6c81aa2a16eda689"
     },
     {
       "name": "workspace-launch.py",
-      "sha256": "a1b059d33f2f975281081bde969760f4514b2dfb7939cc0e66d8f61f4be5f7de"
+      "sha256": "2a45392ade77e693584559db66e0fa03e3ce3a402185967607587809e7a18ae7"
     },
     {
       "name": "workspace.service",
@@ -40,7 +40,7 @@
     },
     {
       "name": "guest_receiver.py",
-      "sha256": "a98d5656c3a685be2a5560c8f987d298522a75757247c1487ed7a66a73812613"
+      "sha256": "3417e20b2e1ca39aa5010adfb7358bc7a00d10fecea937f9d12c789f3b0dbecc"
     },
     {
       "name": "bootstrap-crypto.mjs",
@@ -56,7 +56,7 @@
     },
     {
       "name": "guest_invocation.py",
-      "sha256": "931bb0304689044e9ea65123bffe01bedbe2d8e868989f1e604adb1314bd7acf"
+      "sha256": "371d3fa5946c85bdfbf4c5a3daba484ab8c46fca612f63ce4f5ecda993e929be"
     },
     {
       "name": "guest_network.py",
@@ -68,11 +68,19 @@
     },
     {
       "name": "guest_control.py",
-      "sha256": "64c3ef7741f46e0eeb46afb928f64ed9b18e0834672ce166900821120a5f578d"
+      "sha256": "f3b28d1fd4265d9e1e7dfd12fad51669c4ea270eaaab9fa6b596f30672efa2b2"
     },
     {
       "name": "workspace.slice",
       "sha256": "fa55621871ad78a1a2a06c9afb171fbe38da3dfab93ea910b99a03bf04c7f74b"
+    },
+    {
+      "name": "guest_recovery.py",
+      "sha256": "790de36f680a772d6171ee01b805fae7d047479bf6eb827a7ea535f55b681c8a"
+    },
+    {
+      "name": "recovery.service",
+      "sha256": "c14013536e06a0b31c616a61d3441c6a275cec39447c32b8b7e4b38b1c0f4388"
     }
   ]
 }

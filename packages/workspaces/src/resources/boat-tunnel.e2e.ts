@@ -480,6 +480,37 @@ it("one WireGuard peer reaches only its linked resources and DNS, with replay an
       await docker("inspect", "--format", "{{.State.Running}}", instanceContainerName(project.id)),
     ).toBe("true");
     await Effect.runPromise(runtime.remove(first));
+    await Effect.runPromise(runtime.remove(second));
+    const reusedInput = { ...otherInput, listenPort: input.listenPort };
+    const reused = await Effect.runPromise(runtime.ensure(reusedInput));
+    await Effect.runPromise(runtime.remove(first));
+    expect(await Effect.runPromise(runtime.ensure(reusedInput))).toEqual(reused);
+    const reusedBridge = await docker(
+      "network",
+      "inspect",
+      "--format",
+      "{{(index .IPAM.Config 0).Gateway}}",
+      `${reused.container}-egress`,
+    );
+    await command(wrong, connectPeer, {
+      private: otherPeer.private,
+      public: reused.publicKey,
+      endpoint: `${reusedBridge}:${input.listenPort}`,
+      routes: [reused.reachSubnet],
+    });
+    const reusedResource = (await command(wrong, query, { kind: "dns-udp", host: "db" })).result;
+    expect(reusedResource).not.toBe("denied");
+    expect(reusedResource).not.toBe("missing");
+    expect(
+      (await command(wrong, query, { kind: "tcp", host: reusedResource, port: 31000 })).result,
+    ).toBe("project");
+    await command(client, connectPeer, {
+      private: peer.private,
+      public: own.public,
+      endpoint: `${reusedBridge}:${input.listenPort}`,
+      routes: [reused.reachSubnet],
+    });
+    expect((await command(client, query, { kind: "dns-udp", host: "db" })).result).toBe("denied");
     containers.add(endpoint.container);
     await docker(
       "create",

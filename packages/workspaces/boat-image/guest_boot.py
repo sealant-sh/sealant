@@ -27,7 +27,8 @@ LIBRARIES = ':'.join(str(BUNDLE / path) for path in (
 NS_GET_PARENT = 0xB702
 OWNED_UNITS = frozenset(('sealant-held.service', 'sealant-held-watchdog.service',
                          'sealant-workspace.service', 'sealant-native-build.service',
-                         'sealant-native-probe.service', 'sealant-native-workspace.service', 'sealant-bootstrap.service',
+                         'sealant-native-probe.service', 'sealant-native-workspace.service', 'sealant-recovery.service',
+                         'sealant-native-recovery.service', 'sealant-bootstrap.service',
                          'sealant-control-relay.service'))
 
 
@@ -479,7 +480,7 @@ def held_boot():
 def restart_owned(unit):
     if unit not in OWNED_UNITS:
         raise ValueError('restart-unit-not-owned')
-    if unit in ('sealant-workspace.service', 'sealant-native-workspace.service'):
+    if unit in ('sealant-workspace.service', 'sealant-native-workspace.service', 'sealant-recovery.service', 'sealant-native-recovery.service'):
         raise ValueError('ordinary-invocation-restart-requires-canonical-recovery')
     if owned_units().get(os.getpid()) == unit:
         os.execve(str(BUNDLE / 'lib64/ld-linux-x86-64.so.2'),
@@ -566,7 +567,7 @@ def mapped_gates(candidates, root, owner):
 
 
 def mapped_argv(mode, script):
-    if mode == 'workspace':
+    if mode in ('workspace', 'recovery'):
         import guest_network as network
     argv = invoke('/usr/bin/systemd-nspawn', '--quiet', '--settings=no', '--register=no', '--keep-unit',
                   '--machine=sealant-native', '--directory=' + str(MAPPED_ROOT), '--private-users=131072:65536',
@@ -578,24 +579,24 @@ def mapped_argv(mode, script):
                   *(['--bind-ro=' + str(script.parent) + ':/run/sealant-inputs',
                      '--bind-ro=' + str(ROOT / 'sealantd') + ':/usr/local/bin/sealantd',
                      '--resolv-conf=off',
-                     '--bind-ro=' + str(network.resolver_path()) + ':/etc/resolv.conf'] if mode == 'workspace' else []),
+                     '--bind-ro=' + str(network.resolver_path()) + ':/etc/resolv.conf'] if mode in ('workspace', 'recovery') else []),
                   '/run/sealant-runtime/lib64/ld-linux-x86-64.so.2', '--inhibit-cache', '--library-path',
                   '/run/sealant-runtime/lib/x86_64-linux-gnu:/run/sealant-runtime/usr/lib/x86_64-linux-gnu',
                   '/run/sealant-runtime/usr/bin/python3', '-I', '-S', '-B', '/run/sealant-entry.py')
     # Join while still outer root. nspawn cannot setns into an outer-owned network after UID mapping.
-    return invoke('/usr/bin/nsenter', '--net=' + str(network.NAMESPACE), '--', *argv) if mode == 'workspace' else argv
+    return invoke('/usr/bin/nsenter', '--net=' + str(network.NAMESPACE), '--', *argv) if mode in ('workspace', 'recovery') else argv
 
 
 def launch_mapped(mode, script, manifest, held, observations, receipt, operation, verified=None):
     network = None
-    if mode == 'workspace':
+    if mode in ('workspace', 'recovery'):
         import guest_network as network
         network.verify(operation)
     argv = mapped_argv(mode, script)
     process = subprocess.Popen(invoke('/usr/bin/systemd-run', '--quiet', '--wait', '--pipe', '--collect',
                                '--unit=sealant-native-' + mode, '--service-type=exec', '-p', 'KillMode=control-group',
                                '-p', 'Restart=no', '-p', 'Delegate=no', '-p', 'NotifyAccess=none',
-                               *(['-p', 'RuntimeMaxSec=600'] if mode != 'workspace' else ['-p', 'BindsTo=sealant-workspace.service', '-p', 'Slice=sealant-workspace.slice']), *argv), env=ENV, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+                               *(['-p', 'BindsTo=sealant-' + mode + '.service', '-p', 'Slice=sealant-workspace.slice'] if mode in ('workspace', 'recovery') else ['-p', 'RuntimeMaxSec=600']), *argv), env=ENV, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     launcher = None
     gate = None
     mappings = []
@@ -649,7 +650,7 @@ def launch_mapped(mode, script, manifest, held, observations, receipt, operation
         process.stdin.flush()
         process.stdin.close()
         process.stdin = None
-        if mode == 'workspace':
+        if mode in ('workspace', 'recovery'):
             while chunk := process.stdout.read(65536):
                 sys.stdout.buffer.write(chunk)
                 sys.stdout.buffer.flush()

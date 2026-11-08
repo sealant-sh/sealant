@@ -52,13 +52,32 @@ export const boatNetworkIntentSchema = z.strictObject({
 /** Frozen before the first gateway or guest setup request. */
 export type BoatNetworkIntent = z.infer<typeof boatNetworkIntentSchema>;
 
-/** One port and key pair per exact execution, with no automatic expiry or recycling. */
-export const boatTunnelReservationSchema = z.strictObject({
-  binding: boatTunnelBindingSchema,
-  reservationId: z.uuid().transform((value) => value.toLowerCase()),
-  listenPort: z.number().int().min(40000).max(40015),
-  material: boatTunnelMaterialSchema.nullable(),
-  network: boatNetworkIntentSchema.optional(),
-});
+/** One port and key pair per execution. Only positively completed canonical close releases it. */
+export const boatTunnelReservationSchema = z
+  .strictObject({
+    binding: boatTunnelBindingSchema,
+    reservationId: z.uuid().transform((value) => value.toLowerCase()),
+    listenPort: z.number().int().min(40000).max(40015),
+    material: boatTunnelMaterialSchema.nullable(),
+    network: boatNetworkIntentSchema.optional(),
+    updates: z
+      .array(z.uuid())
+      .max(16)
+      .refine((ids) => new Set(ids).size === ids.length)
+      .optional(),
+    closeId: z.uuid().optional(),
+    removal: z
+      .strictObject({ id: z.string().regex(/^bdop_[a-f0-9]{32}$/), completed: z.boolean() })
+      .optional(),
+    released: z.literal(true).optional(),
+  })
+  .superRefine((record, context) => {
+    if (
+      (record.closeId !== undefined && (record.updates?.length ?? 0) !== 0) ||
+      (record.removal !== undefined && record.closeId === undefined) ||
+      (record.released === true && record.removal?.completed !== true)
+    )
+      context.addIssue({ code: "custom", message: "Invalid tunnel close state" });
+  });
 /** Parsed durable reservation. Null material holds its port until key installation resumes. */
 export type BoatTunnelReservation = z.infer<typeof boatTunnelReservationSchema>;
