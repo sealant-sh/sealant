@@ -17,7 +17,7 @@ describe.skipIf(!directory)(
           error: {
             code: "native-guest-command-failed",
             commandFailure: {
-              step: "install-recipe",
+              step: mode === "command-timeout" ? "stage-directory" : "install-recipe",
               exitCode: mode === "command-timeout" ? null : 42,
               timedOut: mode === "command-timeout",
               stdoutTail: "installer progress\n",
@@ -31,7 +31,7 @@ describe.skipIf(!directory)(
           phase: "complete",
           failureCode: "native-guest-command-failed",
           commandFailure: {
-            step: "install-recipe",
+            step: mode === "command-timeout" ? "stage-directory" : "install-recipe",
             stderrTail: expect.stringContaining("installer refused package"),
           },
           allocation: { state: "deleted" },
@@ -171,13 +171,13 @@ describe.skipIf(!directory)(
       });
       expect(f.mutations).toEqual(mutations);
     });
-    it.each(["transport-failed", "provider-http-failed"] as const)(
+    it.each(["transport-failed", "provider-http-failed", "status-http-failed"] as const)(
       "retains provider diagnostics and exact cleanup for %s",
       async (mode) => {
         const f = await fixture(mode);
         const result = await f.builder.build({ spec: f.spec });
         const providerFailure = {
-          operation: "execute",
+          operation: mode === "status-http-failed" ? "commandStatus" : "execute",
           status: mode === "transport-failed" ? null : 503,
           causeClass: mode === "transport-failed" ? "UND_ERR_SOCKET" : null,
           step: "install-recipe",

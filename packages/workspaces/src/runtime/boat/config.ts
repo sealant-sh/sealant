@@ -51,6 +51,8 @@ export const boatProviderFailureSchema = z.object({
       "discover",
       "get",
       "execute",
+      "commandStatus",
+      "stopCommand",
       "writeFile",
       "uploadUrl",
       "uploadFile",

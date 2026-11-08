@@ -236,14 +236,14 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
     });
   });
 
-  it.each(["transport-failed", "provider-http-failed"] as const)(
+  it.each(["transport-failed", "provider-http-failed", "status-http-failed"] as const)(
     "logs safe provider failure through the real build job: %s",
     async (mode) => {
       await withWorkspaceJobTestDatabase(databaseUrl ?? "", async (url) => {
         const s = await setup(undefined, undefined, url, mode);
         const job = await s.enqueue();
         const providerFailure = {
-          operation: "execute",
+          operation: mode === "status-http-failed" ? "commandStatus" : "execute",
           status: mode === "transport-failed" ? null : 503,
           causeClass: mode === "transport-failed" ? "UND_ERR_SOCKET" : null,
           step: "install-recipe",

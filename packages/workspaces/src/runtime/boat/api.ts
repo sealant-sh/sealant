@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 
-import { fetch as undiciFetch, getGlobalDispatcher, type RequestInit, type Response } from "undici";
+import { fetch as undiciFetch, getGlobalDispatcher, type RequestInit } from "undici";
 import { z } from "zod";
 
 import {
@@ -105,8 +106,8 @@ const commandSchema = z.object({
 });
 export type BoatCommand = z.infer<typeof commandSchema>;
 
-// Streaming still permits silent commands. Undici's default 300s timers must not preempt
-// the command's 600s budget. Borrow the pool without changing any other caller's timers.
+// Undici's transport timers must not preempt the request budget. Borrow the pool
+// without changing any other caller's timers.
 const boatFetch = (url: string | URL, options: RequestInit, timeoutMs: number) =>
   undiciFetch(url, {
     ...options,
@@ -122,79 +123,6 @@ const boatFetch = (url: string | URL, options: RequestInit, timeoutMs: number) =
         ),
     ),
   });
-
-const commandFrameSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("started") }),
-  z.object({ type: z.literal("stdout"), data: z.string() }),
-  z.object({ type: z.literal("stderr"), data: z.string() }),
-  z.object({
-    type: z.literal("exit"),
-    exitCode: z.number().int().nullable(),
-    timedOut: z.boolean(),
-  }),
-  z.object({ type: z.literal("error") }),
-]);
-const readCommandStream = async (response: Response): Promise<BoatCommand & { ok: true }> => {
-  const reader = response.body?.getReader();
-  if (reader === undefined) throw new Error("command-stream-missing");
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  let pending = "",
-    stdout = "",
-    stderr = "",
-    started = false,
-    stdoutBytes = 0,
-    stderrBytes = 0;
-  const frame = (line: string): (BoatCommand & { ok: true }) | undefined => {
-    const parsed = commandFrameSchema.parse(JSON.parse(line));
-    if (parsed.type === "started") {
-      if (started) throw new Error("command-stream-order");
-      started = true;
-    } else {
-      if (!started || parsed.type === "error") throw new Error("command-stream-refused");
-      if (parsed.type === "exit")
-        return {
-          ok: true,
-          stdout,
-          stderr,
-          exitCode: parsed.exitCode,
-          timedOut: parsed.timedOut,
-        };
-      if (parsed.type === "stdout") {
-        stdoutBytes += Buffer.byteLength(parsed.data);
-        stdout += parsed.data;
-      } else {
-        stderrBytes += Buffer.byteLength(parsed.data);
-        stderr += parsed.data;
-      }
-      if (stdoutBytes > 8 * 1024 ** 2 || stderrBytes > 8 * 1024 ** 2)
-        throw new RangeError("command-output-limit");
-    }
-  };
-  try {
-    for (;;) {
-      const chunk = await reader.read();
-      pending += chunk.done ? decoder.decode() : decoder.decode(chunk.value, { stream: true });
-      let newline: number;
-      while ((newline = pending.indexOf("\n")) !== -1) {
-        const line = pending.slice(0, newline);
-        pending = pending.slice(newline + 1);
-        if (!line.trim()) continue;
-        const done = frame(line);
-        if (done !== undefined) return done;
-      }
-      if (Buffer.byteLength(pending) > 48 * 1024 ** 2) throw new RangeError("command-frame-limit");
-      if (chunk.done) {
-        if (pending.trim()) {
-          const done = frame(pending);
-          if (done !== undefined) return done;
-        }
-        throw new Error("command-stream-incomplete");
-      }
-    }
-  } finally {
-    await reader.cancel().catch(() => undefined);
-  }
-};
 
 const successSchema = z.object({ ok: z.literal(true) });
 const personalSnapshotsResponse = successSchema.extend({
@@ -531,19 +459,113 @@ export class HttpBoatApi implements BoatApi {
         error: new BoatApiError("execute", null, "invalid_timeout"),
       });
     }
+    if (seconds > 30) return this.#executeDetached(id, command, seconds, options?.signal);
     return this.#request(
       "execute",
       "POST",
       `/sandboxes/${id}/commands`,
       successSchema.extend(commandSchema.shape),
-      { command, timeoutSeconds: seconds, ...(seconds > 30 ? { stream: true } : {}) },
+      { command, timeoutSeconds: seconds },
       undefined,
       {
         timeoutMs: Math.max(this.#timeout, seconds * 1000 + 15_000),
-        ...(seconds > 30 ? { commandStream: true } : {}),
         ...(options?.signal === undefined ? {} : { signal: options.signal }),
       },
     );
+  }
+
+  async #executeDetached(
+    id: BoatSandboxId,
+    command: string,
+    seconds: number,
+    cancellation?: AbortSignal,
+  ): Promise<BoatResult<BoatCommand>> {
+    const deadline = AbortSignal.timeout(seconds * 1000);
+    const signal =
+      cancellation === undefined ? deadline : AbortSignal.any([deadline, cancellation]);
+    const started = await this.#request(
+      "execute",
+      "POST",
+      `/sandboxes/${id}/commands`,
+      successSchema.extend({ processId: z.number().int().positive().safe() }),
+      { command, detached: true, timeoutSeconds: seconds },
+      undefined,
+      { timeoutMs: this.#timeout, signal },
+    );
+    // A lost start has no safe process handle. Never replay it; the caller owns VM reconciliation.
+    if (!started.ok) return started;
+    const processId = started.value.processId;
+    const path = `/sandboxes/${id}/commands/${processId}`;
+    const output = z.string().refine((value) => Buffer.byteLength(value) <= 8 * 1024 ** 2);
+    const statusSchema = successSchema.extend({
+      processId: z.literal(processId),
+      status: z.enum(["running", "exited", "lost"]),
+      known: z.boolean().optional(),
+      running: z.boolean(),
+      exitCode: z.number().int().nullable(),
+      stdout: output,
+      stderr: output,
+      stdoutTruncated: z.literal(false).optional(),
+      stderrTruncated: z.literal(false).optional(),
+    });
+    let finished = false;
+    let tracked = true;
+    try {
+      for (;;) {
+        const result = await this.#request(
+          "commandStatus",
+          "GET",
+          path + "?tailBytes=8388608",
+          statusSchema,
+          undefined,
+          undefined,
+          { timeoutMs: Math.min(this.#timeout, 15_000), signal },
+        );
+        if (!result.ok) {
+          // A status read may be repeated. Starting the command may not.
+          if (result.error.code !== "transport_error" || signal.aborted) return result;
+        } else {
+          const status = result.value;
+          if (status.status === "lost" || status.known === false) {
+            tracked = false;
+            return { ok: false, error: new BoatApiError("commandStatus", 200, "command_lost") };
+          }
+          if (!status.running && status.status === "exited") {
+            finished = true;
+            return {
+              ok: true,
+              value: {
+                exitCode: status.exitCode,
+                timedOut: false,
+                stdout: status.stdout,
+                stderr: status.stderr,
+              },
+            };
+          }
+          if (status.status !== "running" || !status.running || status.exitCode !== null)
+            return { ok: false, error: new BoatApiError("commandStatus", 200, "invalid_response") };
+        }
+        await delay(1000, undefined, { signal }).catch(() => undefined);
+      }
+    } finally {
+      if (!finished && tracked) {
+        // Cancellation gets its own bounded stop attempt. A missing receipt remains ambiguous;
+        // the failure still reaches the caller's canonical exact VM cleanup. Never retry DELETE.
+        await this.#request(
+          "stopCommand",
+          "DELETE",
+          path,
+          successSchema.extend({
+            processId: z.literal(processId),
+            running: z.literal(false),
+            signaled: z.boolean(),
+          }),
+          undefined,
+          undefined,
+          { timeoutMs: 15_000 },
+        );
+      }
+    }
   }
 
   async writeFile(
@@ -774,7 +796,6 @@ export class HttpBoatApi implements BoatApi {
     options?: {
       readonly timeoutMs: number;
       readonly signal?: AbortSignal;
-      readonly commandStream?: boolean;
     },
   ): Promise<BoatResult<T>> {
     let status: number | null = null;
@@ -798,12 +819,7 @@ export class HttpBoatApi implements BoatApi {
         options?.timeoutMs ?? this.#timeout,
       );
       status = response.status;
-      const data: unknown =
-        response.ok &&
-        options?.commandStream &&
-        response.headers.get("content-type")?.startsWith("application/x-ndjson")
-          ? await readCommandStream(response)
-          : await response.json();
+      const data: unknown = await response.json();
       if (!response.ok) {
         const parsed = codeSchema.safeParse(data);
         const code =
