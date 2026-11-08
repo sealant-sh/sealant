@@ -6,8 +6,13 @@ import { z } from "zod";
 /** Safe phase only: neither endpoint responses nor credentials belong in proof errors. */
 export class BoatProofError extends Error {
   readonly _tag = "BoatProofError";
-  constructor(readonly phase: string) {
-    super(`Boat live proof refused: ${phase}`);
+  constructor(
+    readonly phase: string,
+    readonly cleanupHeld = false,
+  ) {
+    super(
+      `Boat live proof refused: ${phase}${cleanupHeld ? "; cleanup-held; use cleanup with this ledger" : ""}`,
+    );
   }
 }
 const id = z
@@ -41,12 +46,23 @@ export const boatProofConfigSchema = z.strictObject({
 export type BoatProofConfig = z.infer<typeof boatProofConfigSchema>;
 const sessionSchema = z.object({
   id,
-  name: z.string().nullable(),
+  worktree: z.string(),
   projectId: id,
   sealantRunId: id.nullable(),
-  worktreeId: id.nullable(),
+  worktreeId: id,
   idleStoppedAt: z.string().nullable(),
+  status: z.enum([
+    "starting",
+    "running",
+    "waiting",
+    "idle",
+    "stopping",
+    "completed",
+    "failed",
+    "stopped",
+  ]),
 });
+/** The Mend Session fields used by the proof, parsed from create, detail and list responses. */
 export type ProofSession = z.infer<typeof sessionSchema>;
 export interface ProofRuntime {
   readonly runId: string;
@@ -95,28 +111,58 @@ export class MendProofClient {
     const text = await response.text();
     return text === "" ? null : JSON.parse(text);
   }
+  /** Read one Session without accepting a response for another ID. */
   async session(sessionId: string): Promise<ProofSession> {
-    return z
+    const result = z
       .object({ session: sessionSchema })
-      .parse(await this.request("GET", `/sessions/${sessionId}`)).session;
+      .safeParse(await this.request("GET", `/sessions/${sessionId}`));
+    if (!result.success) throw new BoatProofError("mend-session-response");
+    if (result.data.session.id !== sessionId) throw new BoatProofError("session-identity");
+    return result.data.session;
   }
-  async create(projectId: string, name: string): Promise<ProofSession> {
-    return sessionSchema.parse(
-      await this.request("POST", `/projects/${projectId}/sessions`, {
-        harness: "codex",
-        label: null,
-        name,
-        base: null,
-      }),
-    );
+  /** Persist the returned ID before parsing fields that could prevent recovery. */
+  async create(
+    projectId: string,
+    name: string,
+    recordCreated: (sessionId: string) => void,
+  ): Promise<ProofSession> {
+    const response = await this.request("POST", `/projects/${projectId}/sessions`, {
+      harness: "codex",
+      label: null,
+      name,
+      base: null,
+    });
+    const identity = z.object({ id }).safeParse(response);
+    if (!identity.success) throw new BoatProofError("mend-create-identity");
+    recordCreated(identity.data.id);
+    const session = sessionSchema.safeParse(response);
+    if (!session.success) throw new BoatProofError("mend-session-response");
+    if (session.data.projectId !== projectId || session.data.worktree !== name)
+      throw new BoatProofError("session-ownership");
+    return session.data;
   }
-  async find(projectId: string, name: string): Promise<ProofSession | undefined> {
-    const sessions = z
-      .array(sessionSchema.extend({ name: z.string().nullable() }))
-      .parse(await this.request("GET", "/sessions?retained=1"))
-      .filter((s) => s.name === name && s.projectId === projectId);
-    if (sessions.length > 1) throw new BoatProofError("ambiguous-session");
-    return sessions[0];
+  /** Resolve the same exact project/worktree for observation and interrupted cleanup. */
+  async find(
+    projectId: string,
+    worktree: string,
+    sessionId?: string,
+  ): Promise<ProofSession | undefined> {
+    if (sessionId === undefined) {
+      const listed = z
+        .array(z.object({ id, projectId: id, worktree: z.string() }))
+        .safeParse(await this.request("GET", "/sessions?retained=1"));
+      if (!listed.success) throw new BoatProofError("mend-session-list-response");
+      const sessions = listed.data.filter(
+        (s) => s.worktree === worktree && s.projectId === projectId,
+      );
+      if (sessions.length > 1) throw new BoatProofError("ambiguous-session");
+      sessionId = sessions[0]?.id;
+      if (sessionId === undefined) return undefined;
+    }
+    const session = await this.session(sessionId);
+    if (session.projectId !== projectId || session.worktree !== worktree)
+      throw new BoatProofError("session-ownership");
+    return session;
   }
   async captured(worktreeId: string, path: string, expected: string) {
     const response = await fetch(
@@ -233,50 +279,105 @@ const waitFor = async <A>(
   throw new BoatProofError(phase);
 };
 
+const trackProofSession = (input: {
+  config: BoatProofConfig;
+  mend: MendProofClient;
+  io: BoatProofServices;
+  worktree: string;
+  publications: Set<string>;
+  sessionId?: string;
+}) => {
+  let sessionId = input.sessionId;
+  const created = (createdId: string) => {
+    sessionId = createdId;
+    input.io.record({ event: "session", id: createdId, name: input.worktree });
+  };
+  const remember = async () => {
+    const session = await input.mend.find(input.config.projectId, input.worktree, sessionId);
+    if (session === undefined) return undefined;
+    if (sessionId === undefined) created(session.id);
+    const runtime = await input.io.runtime(session);
+    if (runtime !== undefined) {
+      input.publications.add(runtime.publicationId);
+      input.io.record({ event: "runtime", ...runtime });
+    }
+    return { session, runtime };
+  };
+  const close = async () => {
+    const current = await remember();
+    if (current === undefined) return;
+    await input.mend.request("POST", `/sessions/${current.session.id}/stop`);
+    await waitFor("FINAL-cleanup", 5 * 60_000, async () => {
+      const observed = await remember();
+      if (observed === undefined) return undefined;
+      if (observed.runtime?.closed) return true;
+      // A create that never launched has no Core runtime or provider deletion to await.
+      return observed.runtime === undefined &&
+        observed.session.sealantRunId === null &&
+        ["stopped", "completed", "failed"].includes(observed.session.status)
+        ? true
+        : undefined;
+    });
+  };
+  return { created, remember, close };
+};
+
+/** Recover a prior create using its journaled ID, or its exact project/worktree if no ID was saved. */
+export const cleanupBoatLiveCheck = async (
+  config: BoatProofConfig,
+  mend: MendProofClient,
+  io: BoatProofServices,
+  previous: readonly Readonly<Record<string, unknown>>[],
+): Promise<void> => {
+  const intent = z
+    .object({
+      event: z.literal("create-intent"),
+      // Keep the historical ledger key: Mend's create input names the worktree.
+      name: z.string(),
+      ...boatProofConfigSchema.shape,
+    })
+    .parse(previous.find((e) => e.event === "create-intent"));
+  if (JSON.stringify(boatProofConfigSchema.strip().parse(intent)) !== JSON.stringify(config))
+    throw new BoatProofError("ledger-context-mismatch");
+  const saved = previous.find((e) => e.event === "session");
+  const publications = new Set(
+    previous.filter((e) => e.event === "runtime").map((e) => z.uuid().parse(e.publicationId)),
+  );
+  const owned = trackProofSession({
+    config,
+    mend,
+    io,
+    worktree: intent.name,
+    publications,
+    ...(saved === undefined ? {} : { sessionId: id.parse(saved.id) }),
+  });
+  await owned.close();
+  for (const publication of publications) await io.withdraw(publication);
+  const inventory = await io.inventory();
+  io.record({ event: "cleanup-inventory", ...inventory });
+  if (!empty(inventory)) throw new BoatProofError("cleanup-inventory-not-empty");
+};
+
 /** No retries of create/launch/resume; cleanup reuses the original session and durable owners. */
 export const runBoatLiveCheck = async (
   config: BoatProofConfig,
   mend: MendProofClient,
   io: BoatProofServices,
-) => {
+): Promise<void> => {
   const name = `boat-proof-${randomUUID()}`;
-  let session: ProofSession | undefined;
   const publications = new Set<string>();
-  const remember = async (value: ProofSession) => {
-    session = value;
-    if (value.projectId !== config.projectId || value.name !== name)
-      throw new BoatProofError("project-mismatch");
-    const runtime = await io.runtime(value);
-    if (runtime !== undefined) {
-      publications.add(runtime.publicationId);
-      io.record({ event: "runtime", ...runtime });
-    }
-    return runtime;
-  };
-  const close = async () => {
-    if (session === undefined) session = await mend.find(config.projectId, name);
-    if (session === undefined) return;
-    const currentSession = await mend.session(session.id);
-    await remember(currentSession);
-    await mend.request("POST", `/sessions/${session.id}/stop`);
-    await waitFor("FINAL-cleanup", 5 * 60_000, async () => {
-      const runtime = await io.runtime(currentSession);
-      return runtime?.closed ? runtime : undefined;
-    });
-  };
-  let failed: unknown;
+  const owned = trackProofSession({ config, mend, io, worktree: name, publications });
+  let failed: BoatProofError | undefined;
   try {
     const baseline = await io.inventory();
     io.record({ event: "baseline", ...baseline });
     if (!empty(baseline)) throw new BoatProofError("baseline-not-empty");
     io.record({ event: "create-intent", name, ...config });
-    session = await mend.create(config.projectId, name);
-    io.record({ event: "session", id: session.id, name });
+    const session = await mend.create(config.projectId, name, owned.created);
     const started = Date.now();
     await mend.request("POST", `/sessions/${session.id}/launch`, { mode: "protocol" });
     const first = await waitFor("authenticated-readiness", 12 * 60_000, async () => {
-      if (session === undefined) throw new BoatProofError("missing-session");
-      const runtime = await remember(await mend.session(session.id));
+      const runtime = (await owned.remember())?.runtime;
       return runtime?.ready ? runtime : undefined;
     });
     io.record({ event: "ready", elapsedMs: Date.now() - started, ...first });
@@ -302,19 +403,18 @@ export const runBoatLiveCheck = async (
       sha256: createHash("sha256").update(bytes).digest("hex"),
     });
     const stopped = await waitFor("actual-Mend-idle-stop", config.idleBudgetMs, async () => {
-      if (session === undefined) throw new BoatProofError("missing-session");
-      const observed = await mend.session(session.id);
-      return observed.idleStoppedAt !== null && (await io.runtime(observed))?.closed === true
-        ? observed
+      const observed = await owned.remember();
+      return observed !== undefined &&
+        observed.session.idleStoppedAt !== null &&
+        observed.runtime?.closed === true
+        ? observed.session
         : undefined;
     });
     io.record({ event: "idle-stopped", runId: first.runId, sandboxId: first.sandboxId });
-    if (stopped.worktreeId === null) throw new BoatProofError("missing-worktree");
     await mend.captured(stopped.worktreeId, file, bytes);
     await mend.request("POST", `/sessions/${session.id}/resume`, { harness: null });
     const resumed = await waitFor("fresh-resume", 12 * 60_000, async () => {
-      if (session === undefined) throw new BoatProofError("missing-session");
-      const runtime = await remember(await mend.session(session.id));
+      const runtime = (await owned.remember())?.runtime;
       return runtime?.ready && runtime.runId !== first.runId ? runtime : undefined;
     });
     if (resumed.sandboxId === first.sandboxId) throw new BoatProofError("resume-reused-vm");
@@ -333,12 +433,13 @@ export const runBoatLiveCheck = async (
     io.record({ event: "resumed-edits-intact", ...resumed });
     io.record({ event: "flow-passed" });
   } catch (error) {
-    failed = error;
+    failed = error instanceof BoatProofError ? error : new BoatProofError("unexpected-error");
+    io.record({ event: "failed", phase: failed.phase });
   }
   {
     let cleanupHeld = false;
     try {
-      await close();
+      await owned.close();
     } catch {
       cleanupHeld = true;
       io.record({ event: "cleanup-held", operation: "FINAL" });
@@ -360,7 +461,7 @@ export const runBoatLiveCheck = async (
       cleanupHeld = true;
       io.record({ event: "inventory-unavailable" });
     }
-    if (cleanupHeld) throw new BoatProofError("cleanup-held; use cleanup with this ledger");
+    if (cleanupHeld) throw new BoatProofError(failed?.phase ?? "cleanup", true);
   }
   if (failed !== undefined) throw failed;
 };

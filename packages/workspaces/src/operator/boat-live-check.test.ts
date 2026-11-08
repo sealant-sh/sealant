@@ -12,9 +12,11 @@ import { WebSocketServer } from "ws";
 import { BoatSecret } from "../runtime/boat/config.js";
 import {
   boatProofConfigSchema,
+  cleanupBoatLiveCheck,
   MendProofClient,
   runBoatLiveCheck,
   type ProofRuntime,
+  type BoatProofServices,
 } from "./boat-live-check.js";
 import { BoatProofProvider } from "./boat-proof-provider.js";
 
@@ -30,7 +32,16 @@ const listen = async (server: net.Server) => {
   return address.port;
 };
 const fixture = async (
-  options: { corruptResume?: boolean; holdCleanup?: boolean; echoOnly?: boolean } = {},
+  options: {
+    corruptResume?: boolean;
+    echoOnly?: boolean;
+    malformedCreate?: boolean;
+    stopFailure?: boolean;
+    listFailure?: boolean;
+    initialWorktree?: string;
+    extraSessions?: readonly unknown[];
+    detailOverrides?: Readonly<Record<string, unknown>>;
+  } = {},
 ) => {
   const source = await mkdtemp(join(tmpdir(), "boat-check-source-"));
   const child = await mkdtemp(join(tmpdir(), "boat-check-child-"));
@@ -42,7 +53,8 @@ const fixture = async (
   const port = await listen(reach);
   let generation = 0;
   let projectId = "project_test";
-  let name = "";
+  let name = options.initialWorktree ?? "";
+  let sessionStopped = false;
   const publicationId = randomUUID();
   const runtimes = new Map<string, ProofRuntime>();
   let idleStoppedAt: string | null = null;
@@ -53,12 +65,18 @@ const fixture = async (
   const session = () => ({
     id: "session_test",
     projectId,
-    name,
+    // Contract-derived, not a captured response: Mend main b09a9491 Session has no name.
+    worktree: name,
+    label: null,
+    harness: "codex",
+    status: sessionStopped ? "stopped" : generation === 0 ? "starting" : "running",
     worktreeId: "worktree_test",
     sealantRunId: generation === 0 ? null : `run_${generation}`,
     idleStoppedAt,
   });
-  const setRuntime = (closed: boolean) =>
+  const setRuntime = (closed: boolean) => {
+    sessionStopped = closed;
+    if (generation === 0) return;
     runtimes.set(`run_${generation}`, {
       runId: `run_${generation}`,
       sandboxId: generation === 1 ? "bx_23456789" : "bx_3456789a",
@@ -67,6 +85,7 @@ const fixture = async (
       ready: !closed,
       closed,
     });
+  };
   const server = http.createServer((request, response) => {
     void (async () => {
       if (request.headers.authorization !== "Bearer synthetic-mend-token") {
@@ -86,13 +105,22 @@ const fixture = async (
         const payload = z.object({ name: z.string(), harness: z.literal("codex") }).parse(body);
         name = payload.name;
         projectId = "project_test";
-        result = session();
+        result = options.malformedCreate
+          ? { ...session(), sealantRunId: 42, privateData: "synthetic-sensitive-response" }
+          : session();
       } else if (path === "/api/sessions/session_test/launch") {
         generation = 1;
         setRuntime(false);
-      } else if (path === "/api/sessions/session_test") result = { session: session() };
-      else if (path === "/api/sessions") result = [session()];
-      else if (path === "/api/sessions/session_test/resume") {
+      } else if (path === "/api/sessions/session_test")
+        result = { session: { ...session(), ...options.detailOverrides } };
+      else if (path === "/api/sessions") {
+        if (options.listFailure) {
+          response.writeHead(503);
+          response.end();
+          return;
+        }
+        result = [session(), ...(options.extraSessions ?? [])];
+      } else if (path === "/api/sessions/session_test/resume") {
         generation = 2;
         idleStoppedAt = null;
         setRuntime(false);
@@ -114,7 +142,12 @@ const fixture = async (
         response.end(captured);
         return;
       } else if (path === "/api/sessions/session_test/stop") {
-        if (!options.holdCleanup) setRuntime(true);
+        if (options.stopFailure) {
+          response.writeHead(503);
+          response.end();
+          return;
+        }
+        setRuntime(true);
       } else {
         response.writeHead(404);
         response.end();
@@ -161,6 +194,21 @@ const fixture = async (
     resourceHost: "localhost",
     resourcePort: port,
   });
+  const mend = new MendProofClient(origin, "synthetic-mend-token");
+  const services: BoatProofServices = {
+    record: (event) => events.push(event),
+    runtime: async (s) => (s.sealantRunId === null ? undefined : runtimes.get(s.sealantRunId)),
+    inventory: async () => ({
+      sandboxes: [...runtimes.values()].filter((r) => !r.closed).map((r) => r.sandboxId),
+      snapshots: generation > 0 && !withdrawn ? ["proof-snapshot"] : [],
+      pages: 1,
+    }),
+    privacy: async () => ({ conclusion: "fixture-only" }),
+    withdraw: async () => {
+      if ([...runtimes.values()].some((r) => !r.closed)) throw new Error("live pin");
+      withdrawn = true;
+    },
+  };
   return {
     config,
     routes,
@@ -169,21 +217,9 @@ const fixture = async (
     publicationId,
     source,
     child,
-    run: () =>
-      runBoatLiveCheck(config, new MendProofClient(origin, "synthetic-mend-token"), {
-        record: (event) => events.push(event),
-        runtime: async (s) => (s.sealantRunId === null ? undefined : runtimes.get(s.sealantRunId)),
-        inventory: async () => ({
-          sandboxes: [...runtimes.values()].filter((r) => !r.closed).map((r) => r.sandboxId),
-          snapshots: generation > 0 && !withdrawn ? ["proof-snapshot"] : [],
-          pages: 1,
-        }),
-        privacy: async () => ({ conclusion: "fixture-only" }),
-        withdraw: async () => {
-          if ([...runtimes.values()].some((r) => !r.closed)) throw new Error("live pin");
-          withdrawn = true;
-        },
-      }),
+    run: () => runBoatLiveCheck(config, mend, services),
+    cleanup: (previous: readonly Readonly<Record<string, unknown>>[]) =>
+      cleanupBoatLiveCheck(config, mend, services, previous),
   };
 };
 
@@ -217,6 +253,109 @@ describe("operator checker against Mend HTTP and terminal protocol", () => {
   it("terminal echo cannot forge the marker", async () => {
     const f = await fixture({ echoOnly: true });
     await expect(f.run()).rejects.toThrow("shell-proof-missing");
+  });
+  it("records the create ID before rejecting later fields and cleans it without a list lookup", async () => {
+    const f = await fixture({ malformedCreate: true, listFailure: true });
+    await expect(f.run()).rejects.toThrow("mend-session-response");
+    expect(f.events[2]).toMatchObject({ event: "session", id: "session_test" });
+    expect(f.events[3]).toEqual({ event: "failed", phase: "mend-session-response" });
+    expect(f.routes).toContain("POST /api/sessions/session_test/stop");
+    expect(f.routes).not.toContain("GET /api/sessions");
+    expect(f.routes.some((r) => r.endsWith("/launch"))).toBe(false);
+    expect(f.events.at(-1)).toMatchObject({
+      event: "final-inventory",
+      sandboxes: [],
+      snapshots: [],
+    });
+    expect(JSON.stringify(f.events)).not.toContain("synthetic-sensitive-response");
+  });
+  it("reports the first failure together with held cleanup, without exporting response data", async () => {
+    const f = await fixture({ malformedCreate: true, stopFailure: true });
+    await expect(f.run()).rejects.toMatchObject({
+      phase: "mend-session-response",
+      cleanupHeld: true,
+    });
+    expect(f.events).toContainEqual({ event: "failed", phase: "mend-session-response" });
+    expect(f.events).toContainEqual({ event: "cleanup-held", operation: "FINAL" });
+    expect(JSON.stringify(f.events)).not.toContain("synthetic-sensitive-response");
+  });
+  it("preserves a shell refusal when FINAL also refuses", async () => {
+    const f = await fixture({ echoOnly: true, stopFailure: true });
+    await expect(f.run()).rejects.toThrow(/shell-proof-missing; cleanup-held/);
+    expect(f.events).toContainEqual({ event: "failed", phase: "shell-proof-missing" });
+    expect(f.events).toContainEqual({ event: "cleanup-held", operation: "FINAL" });
+  });
+  it("recovers the original no-ID journal by exact worktree and closes a starting session with no run", async () => {
+    const worktree = "boat-proof-interrupted";
+    const f = await fixture({
+      initialWorktree: worktree,
+      extraSessions: [{ id: "foreign_session", projectId: "other_project", worktree }],
+    });
+    await f.cleanup([
+      { event: "baseline", sandboxes: [], snapshots: [], pages: 1 },
+      { event: "create-intent", name: worktree, ...f.config },
+      { event: "cleanup-held", operation: "FINAL" },
+      { event: "final-inventory", sandboxes: [], snapshots: [], pages: 1 },
+    ]);
+    expect(f.events).toContainEqual({ event: "session", id: "session_test", name: worktree });
+    expect(f.routes).toEqual([
+      "GET /api/sessions",
+      "GET /api/sessions/session_test",
+      "POST /api/sessions/session_test/stop",
+      "GET /api/sessions/session_test",
+    ]);
+    expect(f.events.at(-1)).toMatchObject({
+      event: "cleanup-inventory",
+      sandboxes: [],
+      snapshots: [],
+    });
+    expect(f.runtimes.size).toBe(0);
+  });
+  it("uses a saved ID during cleanup after a failed create parse", async () => {
+    const f = await fixture({ malformedCreate: true, listFailure: true });
+    await expect(f.run()).rejects.toThrow("mend-session-response");
+    await f.cleanup([...f.events]);
+    expect(f.routes).not.toContain("GET /api/sessions");
+    expect(f.events.at(-1)).toMatchObject({
+      event: "cleanup-inventory",
+      sandboxes: [],
+      snapshots: [],
+    });
+  });
+  it.each([
+    { id: "different_session" },
+    { projectId: "different_project" },
+    { worktree: "different_worktree" },
+  ])("refuses a changed session target before Stop: %j", async (detailOverrides) => {
+    const worktree = "boat-proof-owned";
+    const f = await fixture({ initialWorktree: worktree, detailOverrides });
+    await expect(
+      f.cleanup([
+        { event: "create-intent", name: worktree, ...f.config },
+        { event: "session", id: "session_test", name: worktree },
+      ]),
+    ).rejects.toThrow(/session-(identity|ownership)/);
+    expect(f.routes.some((r) => r.endsWith("/stop"))).toBe(false);
+  });
+  it("refuses ambiguous worktree recovery without stopping either session", async () => {
+    const worktree = "boat-proof-owned";
+    const f = await fixture({
+      initialWorktree: worktree,
+      extraSessions: [{ id: "other_session", projectId: "project_test", worktree }],
+    });
+    await expect(
+      f.cleanup([{ event: "create-intent", name: worktree, ...f.config }]),
+    ).rejects.toThrow("ambiguous-session");
+    expect(f.routes).toEqual(["GET /api/sessions"]);
+  });
+  it("refuses cleanup with changed ledger context before issuing HTTP requests", async () => {
+    const f = await fixture();
+    await expect(
+      f.cleanup([
+        { event: "create-intent", name: "boat-proof-owned", ...f.config, ownerId: "another_owner" },
+      ]),
+    ).rejects.toThrow("ledger-context-mismatch");
+    expect(f.routes).toEqual([]);
   });
 });
 
