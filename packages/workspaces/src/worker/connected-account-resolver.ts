@@ -21,6 +21,7 @@ import type { NewWorkspace, WorkspaceCredentialsHome } from "@sealant/validators
 import { Effect } from "effect";
 
 import { workspaceBuildJobProcessingError, toWorkspaceBuildJobProcessingError } from "./errors.js";
+import { sealPlacedLogin } from "./placement-login.js";
 
 /*
 Connected-account credential resolution (design doc §6), sibling of
@@ -221,13 +222,13 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
       .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
 
     const credentialsHome = input.blueprint.runtime.credentialsHome;
-    const { credential, plan, homeLogin } = yield* Effect.try({
+    const { credential, plan, placedLogin } = yield* Effect.try({
       try: () => {
         const stored = parseStoredCredential(credentialRef.provider, plaintext);
         return {
           credential: stored,
           plan: planLogin(stored, account, credentialsHome),
-          homeLogin: credentialsHome === undefined ? undefined : placedLoginOf(...stored),
+          placedLogin: credentialsHome === undefined ? undefined : placedLoginOf(...stored),
         };
       },
       catch: (cause) =>
@@ -243,6 +244,12 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
         message: plan.message,
       });
     }
+    const homeLogin =
+      placedLogin === undefined
+        ? undefined
+        : yield* sealPlacedLogin(input.credentialCipher, placedLogin).pipe(
+            Effect.mapError(toWorkspaceBuildJobProcessingError),
+          );
     const planned = plan.injections;
 
     injections.push(...planned);

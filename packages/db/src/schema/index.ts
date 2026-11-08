@@ -36,6 +36,7 @@ export {
   workspaceCredentialPlacements,
   type WorkspaceCredentialPlacement,
   type WorkspaceCredentialPlacementLogin,
+  workspaceCredentialPlacementLoginSchema,
   workspaceCredentialHomeFences,
   workspaceCredentialHomeProviderValues,
   type WorkspaceCredentialHome,

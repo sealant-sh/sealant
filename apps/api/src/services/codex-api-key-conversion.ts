@@ -7,6 +7,7 @@ import {
   sha256Hex,
 } from "@sealant/credentials";
 import { ConnectedAccountRepo, CredentialPlacementRepo, type ConnectedAccount } from "@sealant/db";
+import { sealPlacedLogin } from "@sealant/workspaces";
 import { Effect, Layer } from "effect";
 
 import { env } from "../runtime-env.js";
@@ -33,6 +34,7 @@ const convertOne = (account: ConnectedAccount) =>
     );
     const login = "authJson" in stored ? codexAuthJsonLogin(stored.authJson) : undefined;
     const placed = yield* Effect.try(() => placedLoginOf("codex", stored)).pipe(
+      Effect.flatMap((placedLogin) => sealPlacedLogin(cipher, placedLogin)),
       Effect.orElseSucceed(() => undefined),
     );
     if (placed?.kind === "api-key") {

@@ -625,7 +625,10 @@ export const loginClassOf = (
   return codexAuthJsonLogin(payload.authJson)?.login ?? "subscription";
 };
 
-/** What a placed login spends: a key carries its suffix, and its endpoint's URL when it has one. */
+/**
+ * What a placed login spends: a key carries its suffix, and its endpoint's URL when it has one. A
+ * placement row never keeps that URL as it is here: it is sealed before it is stored.
+ */
 export type PlacedLogin =
   | { readonly kind: "subscription" }
   | { readonly kind: "api-key"; readonly suffix: string; readonly baseUrl?: EndpointUrl };

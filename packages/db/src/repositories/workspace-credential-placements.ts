@@ -17,6 +17,7 @@ import {
   type WorkspaceCredentialHome,
   type WorkspaceCredentialPlacementLogin,
   type WorkspaceRuntimeInstance,
+  workspaceCredentialPlacementLoginSchema,
 } from "../schema.js";
 
 export class CredentialPlacementRepoError extends Schema.TaggedError<CredentialPlacementRepoError>()(
@@ -76,6 +77,7 @@ const orderedForReadySlotIndex = <Row extends { readonly state: string }>(
   ...rows.filter((row) => row.state !== "ready"),
   ...rows.filter((row) => row.state === "ready"),
 ];
+const decodeLogin = Schema.decodeUnknownEffect(workspaceCredentialPlacementLoginSchema);
 const safe = <A>(effect: Effect.Effect<A, unknown>) =>
   effect.pipe(
     Effect.mapError(
@@ -90,7 +92,13 @@ export const CredentialPlacementRepoLive = Layer.effect(
     const db = yield* SealantDB;
 
     const rowsOf = (home: CredentialPlacementHome) =>
-      db.select().from(placements).where(key(home)).orderBy(placements.createdAt, placements.id);
+      Effect.flatMap(
+        db.select().from(placements).where(key(home)).orderBy(placements.createdAt, placements.id),
+        (rows) =>
+          Effect.forEach(rows, (row) =>
+            decodeLogin(row.login).pipe(Effect.map((login) => ({ ...row, login }))),
+          ),
+      );
 
     const homesWhere = (where: SQL | undefined) =>
       db

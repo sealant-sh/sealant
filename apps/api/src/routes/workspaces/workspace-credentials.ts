@@ -62,9 +62,11 @@ import {
   HOME_SCRIPT_EXIT,
   liveHomeCredentialChannel,
   newHomeGeneration,
+  receiptLoginOf,
   removeLeftovers,
   runHomeScript,
   sealantTargetForRuntimeInstance,
+  sealPlacedLogin,
   writeIntoHome,
   type HomeCredentialChannel,
 } from "@sealant/workspaces";
@@ -330,7 +332,16 @@ const homeLoginFor = <E, R>(
     const login = yield* Effect.try({
       try: () => placedLoginOf(...credential),
       catch: () => unusable,
-    });
+    }).pipe(
+      Effect.flatMap((placed) => sealPlacedLogin(cipher, placed)),
+      Effect.mapError((error) =>
+        error instanceof WorkspaceConflictError
+          ? error
+          : new WorkspaceInternalServerError({
+              message: `Connected ${accountProvider} account "${account.name}" could not be sealed for its placement: ${error.message}`,
+            }),
+      ),
+    );
     if (isClaudeKey({ provider, login })) {
       const problem = yield* keyHomeProblem;
       if (problem !== undefined) {
@@ -375,30 +386,50 @@ const accountRefusalOf = (failure: unknown): ConnectedAccountRefusalCode | undef
   return connectedAccountRefusalCodes.find((code) => code === failure.code);
 };
 
+/** A home as its caller reads it; a key's endpoint URL is unsealed here, for the receipt alone. */
 const toHomeView = (
   held: { readonly home: string; readonly onBehalfOfUserId: string },
   state: HomeState,
   pinned: readonly string[] = [],
-): WorkspaceCredentialHome => {
-  const accounts: Partial<Record<WorkspaceCredentialHomeProvider, WorkspaceHomeAccount>> = {};
-  const placements: WorkspaceCredentialPlacementReceipt[] = [];
-  for (const row of state.placements) {
-    if (row.state !== "ready") continue;
-    const account = state.accounts.get(row.accountId);
-    if (account !== undefined && !isClaudeKey(row)) {
-      accounts[row.provider] = { connectedAccountId: account.id, name: account.name };
+) =>
+  Effect.gen(function* () {
+    const cipher = yield* CredentialCipher;
+    const accounts: Partial<Record<WorkspaceCredentialHomeProvider, WorkspaceHomeAccount>> = {};
+    const placements: WorkspaceCredentialPlacementReceipt[] = [];
+    for (const row of state.placements) {
+      if (row.state !== "ready") continue;
+      const account = state.accounts.get(row.accountId);
+      if (account !== undefined && !isClaudeKey(row)) {
+        accounts[row.provider] = { connectedAccountId: account.id, name: account.name };
+      }
+      const login = yield* receiptLoginOf(
+        cipher,
+        row.login,
+        isClaudeKey(row) ? row.path : undefined,
+      ).pipe(
+        Effect.mapError(
+          (error) =>
+            new WorkspaceInternalServerError({
+              message: `The endpoint of placement ${row.id} in ${held.home} could not be unsealed: ${error.message}`,
+            }),
+        ),
+      );
+      placements.push({
+        provider: row.provider,
+        placementId: row.id,
+        accountId: row.accountId,
+        revision: row.revision,
+        login,
+        pinned: pinned.includes(row.id),
+      });
     }
-    placements.push({
-      provider: row.provider,
-      placementId: row.id,
-      accountId: row.accountId,
-      revision: row.revision,
-      login: isClaudeKey(row) ? { ...row.login, keyPath: row.path } : row.login,
-      pinned: pinned.includes(row.id),
-    });
-  }
-  return { home: held.home, onBehalfOfUserId: held.onBehalfOfUserId, accounts, placements };
-};
+    return {
+      home: held.home,
+      onBehalfOfUserId: held.onBehalfOfUserId,
+      accounts,
+      placements,
+    } satisfies WorkspaceCredentialHome;
+  });
 
 /**
  * Refusals the owner's half answers, after a first take has made its marker: a login directory
@@ -639,7 +670,7 @@ export const putWorkspaceCredentials = (input: {
             return putWritten({
               generation,
               skipped,
-              home: toHomeView(
+              home: yield* toHomeView(
                 { home: payload.home, onBehalfOfUserId: person },
                 yield* placements.state(homeKey),
                 plan.pinned,
@@ -829,7 +860,7 @@ export const listWorkspaceCredentials = (input: {
         placements.state(row),
         "Failed to load the home's logins.",
       );
-      homes.push(toHomeView(row, state));
+      homes.push(yield* toHomeView(row, state));
     }
     return {
       workspaceId: workspace.id,
@@ -884,7 +915,7 @@ export const pruneWorkspaceCredentials = (input: {
           return removal.kind === "home-emptied"
             ? { result: undefined, outcome: { kind: "release" as const } }
             : {
-                result: toHomeView(held, yield* placements.state(key)),
+                result: yield* toHomeView(held, yield* placements.state(key)),
                 outcome: { kind: "keep" as const },
               };
         }),
