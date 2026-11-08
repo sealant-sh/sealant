@@ -8,6 +8,7 @@ import {
 } from "@sealant/db";
 import {
   nativeImageScopeSchema,
+  nativeBuildRetryReasonSchema,
   nativePublicationKeySchema,
   type NativeArtifactConsumer,
   type NativeBuildOwnership,
@@ -37,6 +38,8 @@ export class NativeCatalogError extends Error {
     readonly code:
       | "publication-pending"
       | "publication-quarantined"
+      | "publication-build-attempts-exhausted"
+      | "publication-build-replaced"
       | "mechanism-failed"
       | "invalid-input",
     readonly publicationId?: string,
@@ -51,7 +54,7 @@ export class NativeCatalogError extends Error {
     const diagnostic =
       commandFailure === undefined ? undefined : nativeCommandFailureSchema.parse(commandFailure);
     super(
-      `Native catalog: ${code}${detail === undefined ? "" : ` (${detail})`}${diagnostic === undefined ? "" : `; command ${JSON.stringify(diagnostic)}`}${provider === undefined ? "" : `; provider ${JSON.stringify(provider)}`}`,
+      `Native catalog: ${code}${code === "publication-build-attempts-exhausted" ? "; this environment build failed twice. Fix the recorded cause before trying a changed environment" : ""}${detail === undefined ? "" : ` (${detail})`}${diagnostic === undefined ? "" : `; command ${JSON.stringify(diagnostic)}`}${provider === undefined ? "" : `; provider ${JSON.stringify(provider)}`}`,
     );
     this.commandFailure = diagnostic;
     this.providerFailure = provider;
@@ -169,6 +172,28 @@ const make = (
           }),
         catch: () => new NativeCatalogError("invalid-input"),
       });
+      const legacy = yield* repo.getActive(key);
+      if (
+        legacy?.state === "quarantined" &&
+        legacy.publication === null &&
+        legacy.reason === "native-build-abandoned"
+      ) {
+        // Older sweeps replaced the build cause with "abandoned". Recover the cause
+        // from the exact private journal before pinning this new consumer.
+        const repaired = yield* Effect.result(reconcileRecord(legacy.ownership));
+        if (Result.isFailure(repaired)) {
+          if (
+            !(repaired.failure instanceof NativeCatalogError) ||
+            repaired.failure.code !== "publication-quarantined" ||
+            !nativeBuildRetryReasonSchema.safeParse(repaired.failure.detail).success
+          )
+            return yield* Effect.fail(repaired.failure);
+        } else if (repaired.success === "active-claim" || repaired.success === "active-attempt") {
+          return yield* Effect.fail(
+            new NativeCatalogError("publication-pending", legacy.ownership.publicationId),
+          );
+        }
+      }
       const record = yield* repo.reserve(key, input.consumer);
       const id = record.ownership.publicationId;
       if (record.state === "ready") {
@@ -192,6 +217,23 @@ const make = (
         }
         return record.publication;
       }
+      if (record.state === "superseded")
+        return yield* Effect.fail(
+          new NativeCatalogError("publication-build-replaced", id, record.reason ?? undefined),
+        );
+      if (
+        record.state === "quarantined" &&
+        record.publication === null &&
+        record.buildAttempt === 2 &&
+        nativeBuildRetryReasonSchema.safeParse(record.reason).success
+      )
+        return yield* Effect.fail(
+          new NativeCatalogError(
+            "publication-build-attempts-exhausted",
+            id,
+            record.reason ?? undefined,
+          ),
+        );
       if (record.state === "quarantined")
         return yield* Effect.fail(
           new NativeCatalogError("publication-quarantined", id, record.reason ?? undefined),
@@ -220,7 +262,7 @@ const make = (
                       id,
                       recovered.kind === "missing"
                         ? "native-journal-missing"
-                        : "native-build-abandoned",
+                        : (recovered.failureCode ?? "native-build-abandoned"),
                     ),
                   ),
             ),
@@ -321,6 +363,13 @@ const make = (
           new NativeCatalogError("mechanism-failed", id, "native-journal-ownership-unresolved"),
         );
       if (record.state === "removed") return "removed";
+      if (record.state === "superseded") return "superseded";
+      if (
+        record.state === "quarantined" &&
+        record.publication === null &&
+        nativeBuildRetryReasonSchema.safeParse(record.reason).success
+      )
+        return "failed-build";
       if (
         record.state === "retiring" ||
         (record.state === "quarantined" && record.reason === "native-removal-pending")
@@ -378,7 +427,7 @@ const make = (
         const reason =
           recovered.success.kind === "missing"
             ? "native-journal-missing"
-            : "native-build-abandoned";
+            : (recovered.success.failureCode ?? "native-build-abandoned");
         yield* repo.quarantine(claim, reason);
         return yield* Effect.fail(new NativeCatalogError("publication-quarantined", id, reason));
       }

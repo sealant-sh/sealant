@@ -264,6 +264,33 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
     },
   );
 
+  it("records exhausted native build recovery as failed jobs and runtimes instead of starting forever", async () => {
+    await withWorkspaceJobTestDatabase(databaseUrl ?? "", async (url) => {
+      const s = await setup(undefined, undefined, url, "command-failed");
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const job = await s.enqueue();
+        const code = attempt === 3 ? "publication-build-attempts-exhausted" : "mechanism-failed";
+        await expect(processWorkspaceBuildJob(s.options(job.id))).rejects.toMatchObject({
+          errorCode: code,
+        });
+        expect(await Effect.runPromise(s.jobs.getJobById(job.id))).toMatchObject({
+          status: "failed",
+          errorCode: code,
+        });
+        expect(
+          await Effect.runPromise(s.instances.getRuntimeInstanceByRunId(job.runId)),
+        ).toMatchObject({ status: "failed", errorCode: code });
+        if (attempt === 3) {
+          const stored = await Effect.runPromise(s.jobs.getJobById(job.id));
+          expect(stored?.errorMessage).toContain("failed twice");
+          expect(stored?.errorMessage).toContain("native-guest-command-failed");
+        }
+      }
+      expect(s.fixture.mutations.filter((m) => m === "POST /api/v1/sandboxes")).toHaveLength(2);
+      expect(s.launches).toEqual([]);
+    });
+  });
+
   it("launches a repository-created UUID attempt through the real build job and reloads its consumer", async () => {
     const s = await setup();
     const job = await s.enqueue();

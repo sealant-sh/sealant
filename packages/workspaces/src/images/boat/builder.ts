@@ -219,7 +219,7 @@ export type NativeBuildRecovery =
       readonly artifact: NativeSnapshotArtifact;
       readonly evidence: NativePublicationEvidence;
     }
-  | { readonly kind: "abandoned" }
+  | { readonly kind: "abandoned"; readonly failureCode?: string }
   | { readonly kind: "missing" };
 /** Private journal inventory, bounded by caller-supplied page size. */
 export interface NativeJournalPage {
@@ -851,7 +851,15 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
               journalPath: path,
             },
           };
-        return { ok: false, error: new NativeBuildError("native-build-abandoned", path) };
+        return {
+          ok: false,
+          error: new NativeBuildError(
+            existing.failureCode ?? "native-build-abandoned",
+            path,
+            existing.commandFailure,
+            existing.providerFailure,
+          ),
+        };
       }
       const bound = this.#signal();
       const signal = input.signal === undefined ? bound : AbortSignal.any([bound, input.signal]);
@@ -1089,7 +1097,10 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
       return { kind: "published", artifact, evidence: journal.evidence };
     }
     await this.#cleanup(journal, path);
-    return { kind: "abandoned" };
+    return {
+      kind: "abandoned",
+      ...(journal.failureCode === undefined ? {} : { failureCode: journal.failureCode }),
+    };
   }
 
   /** Adoption is an observation under the same kernel lock as build and cleanup. */
