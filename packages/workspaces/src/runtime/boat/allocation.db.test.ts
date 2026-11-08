@@ -494,9 +494,9 @@ class ProviderFixture {
         stderr: string;
       }) => {
         if (detached) {
-          const processId = 1234 + this.commandResults.size;
-          this.commandResults.set(processId, result);
-          send({ ok: true, processId });
+          const startedPid = 1234 + this.commandResults.size;
+          this.commandResults.set(startedPid, result);
+          send({ ok: true, processId: startedPid });
         } else send(result);
       };
       this.commands.push(command);
