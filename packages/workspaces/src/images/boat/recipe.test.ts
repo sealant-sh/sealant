@@ -95,6 +95,26 @@ describe("native recipe boundary", () => {
     expect(recipe.value.installScript).toContain("--to-stdout node-v24.22.2-linux-x64/bin/node");
     expect(recipe.value.installScript).not.toContain("python3 nodejs");
   });
+  it("does not install dotfiles without a source when applyDotfiles is enabled", async () => {
+    const base = spec();
+    const disabled = { ...base, customization: { ...base.customization, applyDotfiles: false } };
+    const enabled = { ...base, customization: { ...base.customization, applyDotfiles: true } };
+    expect(base.sources.inputs).toEqual([]);
+    expect(base.runtime.dotfilesArchives).toEqual([]);
+    expect(nativeWorkspaceInstallation(enabled).shell).toBe(
+      nativeWorkspaceInstallation(disabled).shell,
+    );
+    const recipes = await Promise.all(
+      [enabled, disabled].map((input) => createNativeRecipe(input, serializationBundleFixture)),
+    );
+    const projects = recipes.map((recipe) => {
+      if (!recipe.ok) throw recipe.error;
+      return recipe.value.files.find((file) => file.path.endsWith("project-install.sh"))?.sha256;
+    });
+    expect(projects[0]).toBeDefined();
+    expect(projects[0]).toBe(projects[1]);
+  });
+
   it("refuses inline dotfiles credentials before build or runtime serialization", async () => {
     const base = spec();
     for (const authRef of [undefined, "github-installation-repository:gh_installation_repo_1"]) {

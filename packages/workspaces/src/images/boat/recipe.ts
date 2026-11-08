@@ -239,7 +239,8 @@ export const createNativeRecipe = async (
     const installScript =
       [
         "#!/bin/bash",
-        "set -euo pipefail",
+        "set -Eeuo pipefail",
+        `trap 'code=$?; printf "native recipe line %s exited %s\\n" "$LINENO" "$code" >&2' ERR`,
         "umask 022",
         "export HOME=/root",
         "export NEEDRESTART_MODE=l",
@@ -257,7 +258,7 @@ export const createNativeRecipe = async (
         ")",
         `install -d -m0755 ${mappedRoot}`,
         `test ! -e ${mappedRoot}/etc/os-release`,
-        `debootstrap --variant=minbase --include=systemd,sudo,python3,util-linux,procps,iproute2,ca-certificates,git,libcap2-bin noble ${mappedRoot} http://archive.ubuntu.com/ubuntu`,
+        `debootstrap --variant=minbase --components=main,universe --include=systemd,sudo,python3,util-linux,procps,iproute2,ca-certificates,git,libcap2-bin noble ${mappedRoot} http://archive.ubuntu.com/ubuntu`,
         "systemctl daemon-reload",
         `python3 -I -S -B ${guestRoot}/build_guest.py bundle`,
         `${guestCommand} ${guestRoot}/build_guest.py approve-source`,

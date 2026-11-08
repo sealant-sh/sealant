@@ -92,6 +92,8 @@ export const nativeBuilderFixture = async (
     | "failed-save"
     | "cancel"
     | "cancel-cleaning"
+    | "command-failed"
+    | "command-timeout"
     | "legacy-guest-approval",
 ) => {
   if (!directory) throw new Error("exact runtime bundle required");
@@ -185,6 +187,20 @@ export const nativeBuilderFixture = async (
           throw new Error("invalid command");
         if (mode === "cancel" && body.command.includes("sudo /bin/bash")) {
           cancellation.abort();
+          return;
+        }
+        if (
+          (mode === "command-failed" || mode === "command-timeout") &&
+          body.command.includes("sudo /bin/bash")
+        ) {
+          respond({
+            ok: true,
+            exitCode: mode === "command-timeout" ? null : 42,
+            timedOut: mode === "command-timeout",
+            stdout: "installer progress\n",
+            stderr:
+              "installer refused package\nAuthorization: Bearer fixture-private-token\nhttps://user:password@example.invalid/install?token=secret\n",
+          });
           return;
         }
         respond({
