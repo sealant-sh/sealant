@@ -55,6 +55,7 @@ export {
 
 export {
   claudeApiKeyUnsupported,
+  endpointKeyUnsupported,
   claudeCredentialsFile,
   CLAUDE_CREDENTIALS_JSON_PATH,
   CLAUDE_OAUTH_TOKEN_ENV_KEY,
@@ -118,6 +119,7 @@ export {
   type ConnectedAccountProvider,
   type GitHubCredentialPayload,
   type ParseApiKeyResult,
+  type PlacedLogin,
   type ParseClaudeCredentialsJsonResult,
   type ParseCodexAuthJsonResult,
   type ProviderCredentialPayload,

@@ -220,7 +220,13 @@ describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", 
   const CLAUDE_KEY = "sk-ant-api03-FAKE-claude-key-for-the-placement-tests-k1";
   const CLAUDE_KEY_2 = "sk-ant-api03-FAKE-claude-key-for-the-placement-tests-k2";
   const CODEX_KEY = "sk-proj-FAKE-codex-key-for-the-placement-tests-cx";
-  const keyAccount = (f: Fixture, provider: "claude" | "codex", name: string, apiKey: string) =>
+  const keyAccount = (
+    f: Fixture,
+    provider: "claude" | "codex",
+    name: string,
+    apiKey: string,
+    baseUrl?: string,
+  ) =>
     run(
       Effect.flatMap(ConnectedAccountRepo, (repo) =>
         repo.createConnectedAccount({
@@ -229,7 +235,7 @@ describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", 
           provider,
           name,
           kind: "api-key",
-          encryptedPayload: `sealed:${JSON.stringify({ apiKey })}`,
+          encryptedPayload: `sealed:${JSON.stringify({ apiKey, ...(baseUrl === undefined ? {} : { baseUrl }) })}`,
           encryptionKeyId: "fake",
           payloadSha256: sha256Hex(apiKey),
           metadata: { tokenSuffix: apiKey.slice(-4) },
@@ -704,6 +710,52 @@ describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", 
     );
     expect(ex.files.size).toBe(0);
     expect(await rows(f)).toEqual([]);
+  });
+
+  it("a key's receipt carries its endpoint's URL, which no file in the home holds", async () => {
+    const f = await fixture();
+    const ex = executor();
+    const codex = await keyAccount(f, "codex", "key", CODEX_KEY, "https://gateway.example.test/v1");
+    const claude = await keyAccount(
+      f,
+      "claude",
+      "key",
+      "placeholder",
+      "http://10.0.0.9:8080/anthropic",
+    );
+    const placed = (await run(put(f, ex.channel, { claude: claude.id, codex: codex.id }))).home
+      .placements;
+    expect(placed?.map((row) => [row.provider, row.login]).toSorted()).toEqual([
+      [
+        "claude",
+        {
+          kind: "api-key",
+          suffix: "lder",
+          keyPath: pathOf(placed?.find((row) => row.provider === "claude")),
+          baseUrl: "http://10.0.0.9:8080/anthropic",
+        },
+      ],
+      [
+        "codex",
+        {
+          kind: "api-key",
+          suffix: CODEX_KEY.slice(-4),
+          baseUrl: "https://gateway.example.test/v1",
+        },
+      ],
+    ]);
+    const held = [...ex.files.values()].join("\n");
+    expect(held).toContain(CODEX_KEY);
+    expect(held).not.toContain("gateway.example.test");
+    expect(held).not.toContain("10.0.0.9");
+
+    const plain = await fixture();
+    const bare = await keyAccount(plain, "codex", "key", CODEX_KEY);
+    const receipts = (await run(put(plain, executor().channel, { claude: null, codex: bare.id })))
+      .home.placements;
+    expect(receipts?.map((row) => row.login)).toEqual([
+      { kind: "api-key", suffix: CODEX_KEY.slice(-4) },
+    ]);
   });
 
   it("a Codex key's placement reads api-key, and the refresh push leaves key placements alone", async () => {

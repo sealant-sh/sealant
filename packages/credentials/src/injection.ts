@@ -29,6 +29,9 @@ export const GITHUB_TOKEN_ENV_KEYS = ["GITHUB_TOKEN", "GH_TOKEN"] as const;
 export const claudeApiKeyUnsupported = (accountName: string): string =>
   `Connected claude account "${accountName}" holds an API key. Sealant places a Claude API key only through a credentials put into a person's home, never at $HOME or in a launch: choose a Claude subscription login here. Nothing was written.`;
 
+export const endpointKeyUnsupported = (accountName: string): string =>
+  `Connected codex account "${accountName}" holds an API key whose requests go to a custom endpoint. A launch writes only the key, so the key would reach the provider's own endpoint instead: Sealant places it only through a credentials put into a person's home, whose receipt carries the endpoint. Nothing was written.`;
+
 type PlanCredentialInjectionsArgs =
   | readonly ["claude", ClaudeSubscriptionPayload]
   | readonly ["codex", CodexCredentialPayload]

@@ -1,3 +1,4 @@
+import type { EndpointUrl } from "@sealant/api-contracts";
 import {
   type WorkspacePublication,
   type NativePublicationKey,
@@ -140,7 +141,7 @@ export const ociImageBuildJobs = pgTable(
  */
 export type WorkspaceCredentialPlacementLogin =
   | { readonly kind: "subscription" }
-  | { readonly kind: "api-key"; readonly suffix: string };
+  | { readonly kind: "api-key"; readonly suffix: string; readonly baseUrl?: EndpointUrl };
 
 interface WorkspaceLaunchCredentialInjectionBase {
   readonly provider: string;

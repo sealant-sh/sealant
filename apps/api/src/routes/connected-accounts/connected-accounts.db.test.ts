@@ -578,3 +578,166 @@ describe.skipIf(DATABASE_URL === undefined)("API-key logins (Postgres)", () => {
     expect(after.hasApiKeyHistory).toBe(true);
   });
 });
+
+describe.skipIf(DATABASE_URL === undefined)("API keys on an endpoint (Postgres)", () => {
+  let db: DB;
+
+  beforeAll(async () => {
+    accounts = await import("./connected-accounts.module.js");
+    db = await createSealantDB(DATABASE_URL ?? "");
+  });
+
+  const person = async () => {
+    const id = `user_endpoint_${randomUUID()}`;
+    await Effect.runPromise(
+      db.insert(user).values({ id, name: "person", email: `${id}@example.test` }),
+    );
+    return id;
+  };
+
+  const layer = () =>
+    Layer.mergeAll(ConnectedAccountRepoLive, ProfileRepoLive, DatabaseTransactionLive).pipe(
+      Layer.provideMerge(Layer.succeed(SealantDB, db)),
+      Layer.provideMerge(Layer.succeed(CredentialCipher, fakeCipher)),
+    );
+  const run = <A, E>(effect: Effect.Effect<A, E, Layer.Success<ReturnType<typeof layer>>>) =>
+    Effect.runPromise(effect.pipe(Effect.provide(layer())));
+  const refusal = <A, E>(effect: Effect.Effect<A, E, Layer.Success<ReturnType<typeof layer>>>) =>
+    run(Effect.flip(effect));
+
+  const connect = (
+    ownerUserId: string,
+    provider: "claude" | "codex" | "github",
+    secret: string,
+    options: { readonly endpoint?: string; readonly login?: "subscription" | "api-key" } = {},
+  ) => accounts.createConnectedAccount({ payload: { ownerUserId, provider, secret, ...options } });
+  const list = (ownerUserId: string) => run(accounts.listConnectedAccounts({ ownerUserId }));
+  const sealed = async (connectedAccountId: string): Promise<unknown> => {
+    const [row] = await Effect.runPromise(
+      db.execute<{ readonly encrypted_payload: string }>(
+        `select encrypted_payload from connected_accounts where id = '${connectedAccountId}'`,
+        "objects",
+      ),
+    );
+    return JSON.parse((row?.encrypted_payload ?? "").slice("sealed:".length));
+  };
+
+  it("seals the endpoint with the key, and the summary names only its host", async () => {
+    const owner = await person();
+    const claude = await run(
+      connect(owner, "claude", claudeKey("gw"), {
+        endpoint: "https://gateway.example.test:8443/anthropic/",
+      }),
+    );
+    expect(claude).toMatchObject({
+      kind: "api-key",
+      login: {
+        kind: "api-key",
+        suffix: claudeKey("gw").slice(-4),
+        endpointHost: "gateway.example.test:8443",
+      },
+    });
+    expect(await sealed(claude.connectedAccountId)).toEqual({
+      apiKey: claudeKey("gw"),
+      baseUrl: "https://gateway.example.test:8443/anthropic",
+    });
+
+    const codex = await run(
+      connect(owner, "codex", codexKey("gw"), { endpoint: "http://10.0.0.9/v1" }),
+    );
+    expect(codex.login).toEqual({
+      kind: "api-key",
+      suffix: codexKey("gw").slice(-4),
+      endpointHost: "10.0.0.9",
+    });
+    expect(await sealed(codex.connectedAccountId)).toEqual({
+      apiKey: codexKey("gw"),
+      baseUrl: "http://10.0.0.9/v1",
+    });
+
+    const listed = JSON.stringify(await list(owner));
+    expect(listed).not.toContain("/anthropic");
+    expect(listed).not.toContain("http://10.0.0.9");
+  });
+
+  it("takes a placeholder key only with an endpoint, and never an Admin key", async () => {
+    const owner = await person();
+    for (const provider of ["claude", "codex"] as const) {
+      const account = await run(
+        connect(owner, provider, " not-a-real-key\n", {
+          endpoint: "https://gateway.example.test",
+        }),
+      );
+      expect(account.login).toMatchObject({ kind: "api-key", suffix: "-key" });
+      expect(await sealed(account.connectedAccountId)).toEqual({
+        apiKey: "not-a-real-key",
+        baseUrl: "https://gateway.example.test",
+      });
+    }
+
+    const refused: ReadonlyArray<readonly ["claude" | "codex", string, string | undefined]> = [
+      ["claude", "not-a-real-key", undefined],
+      ["codex", "not-a-real-key", undefined],
+      ["claude", "two words", "https://gateway.example.test"],
+      ["claude", "sk-ant-admin01-FAKEadminkeyforthetests0000000", "https://gateway.example.test"],
+      ["codex", "sk-admin-FAKEadminkeyforthetests00000", "https://gateway.example.test"],
+    ];
+    for (const [provider, secret, endpoint] of refused) {
+      const fresh = await person();
+      expect(
+        await refusal(connect(fresh, provider, secret, endpoint === undefined ? {} : { endpoint })),
+      ).toMatchObject({ _tag: "ConnectedAccountBadRequestError" });
+      expect((await list(fresh)).items).toEqual([]);
+    }
+  });
+
+  it("refuses an endpoint that is not an absolute http or https base URL, storing nothing", async () => {
+    const endpoints = [
+      ["ftp://gateway.example.test/v1", "absolute http: or https: URL"],
+      ["https://user:secret@gateway.example.test/v1", "user name or password"],
+      ["https://gateway.example.test/v1#top", "fragment"],
+      ["https://gateway.example.test/v1?team=a", "query string"],
+      ["/v1/messages", "absolute http: or https: URL"],
+      ["http://", "absolute http: or https: URL"],
+    ] as const;
+    for (const [endpoint, says] of endpoints) {
+      const owner = await person();
+      expect(await refusal(connect(owner, "claude", claudeKey("x"), { endpoint }))).toMatchObject({
+        _tag: "ConnectedAccountBadRequestError",
+        message: expect.stringContaining(says),
+      });
+      expect((await list(owner)).items).toEqual([]);
+    }
+  });
+
+  it("refuses an endpoint with any login that is not an API key, storing nothing", async () => {
+    const endpoint = "https://gateway.example.test";
+    const owner = await person();
+    expect(await refusal(connect(owner, "claude", token("sub"), { endpoint }))).toMatchObject({
+      _tag: "ConnectedAccountBadRequestError",
+      message: expect.stringContaining("only for an API key login"),
+    });
+    expect(await refusal(connect(owner, "codex", chatgptLogin("sub"), { endpoint }))).toMatchObject(
+      { message: expect.stringContaining("only for an API key login") },
+    );
+    expect(
+      await refusal(connect(owner, "claude", claudeKey("x"), { endpoint, login: "subscription" })),
+    ).toMatchObject({ message: expect.stringContaining("only for an API key login") });
+    expect(await refusal(connect(owner, "github", "gho_fake", { endpoint }))).toMatchObject({
+      _tag: "ConnectedAccountBadRequestError",
+    });
+    expect((await list(owner)).items).toEqual([]);
+  });
+
+  it("clears the endpoint on a reconnect without one", async () => {
+    const owner = await person();
+    const first = await run(
+      connect(owner, "codex", codexKey("one"), { endpoint: "https://gateway.example.test/v1" }),
+    );
+    const again = await run(connect(owner, "codex", codexKey("two")));
+    expect(again.connectedAccountId).toBe(first.connectedAccountId);
+    expect(again.login).toEqual({ kind: "api-key", suffix: codexKey("two").slice(-4) });
+    expect(again.metadata).not.toHaveProperty("endpointHost");
+    expect(await sealed(again.connectedAccountId)).toEqual({ apiKey: codexKey("two") });
+  });
+});

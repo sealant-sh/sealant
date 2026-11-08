@@ -7,11 +7,13 @@ import {
   ConnectedAccountNotFoundError,
   ConnectedAccountServiceUnavailableError,
   DEFAULT_ACCOUNT_SELECTOR,
+  parseEndpointUrl,
   type ConnectedAccountCredential,
   type ConnectedAccountLogin,
   type ConnectedAccountLoginClass,
   type ConnectedAccountSummary,
   type CreateConnectedAccountRequest,
+  type EndpointUrl,
   type ListConnectedAccountsResponse,
   type MarkConnectedAccountInvalidResponse,
 } from "@sealant/api-contracts";
@@ -117,7 +119,11 @@ const toConnectedAccountLogin = (account: ConnectedAccount): ConnectedAccountLog
   const login = kind === undefined ? undefined : loginClassOfKind(kind);
   if (login !== "api-key") return login === undefined ? undefined : { kind: login };
   const suffix = account.metadata["tokenSuffix"];
-  return typeof suffix === "string" && suffix.length > 0 ? { kind: "api-key", suffix } : undefined;
+  const endpointHost = account.metadata["endpointHost"];
+  if (typeof suffix !== "string" || suffix.length === 0) return undefined;
+  return typeof endpointHost === "string" && endpointHost.length > 0
+    ? { kind: "api-key", suffix, endpointHost }
+    : { kind: "api-key", suffix };
 };
 
 export const toConnectedAccountSummary = (
@@ -164,11 +170,17 @@ const credentialOf = (
   metadata,
 });
 
-const apiKeyCredential = (provider: "claude" | "codex", apiKey: string): NormalizedCredential =>
-  credentialOf(provider === "claude" ? ["claude", { apiKey }] : ["codex", { apiKey }], {
-    ...apiKeyMetadata({ apiKey }),
+const apiKeyCredential = (
+  provider: "claude" | "codex",
+  apiKey: string,
+  baseUrl: EndpointUrl | undefined,
+): NormalizedCredential => {
+  const payload = { apiKey, ...(baseUrl === undefined ? {} : { baseUrl }) };
+  return credentialOf(provider === "claude" ? ["claude", payload] : ["codex", payload], {
+    ...apiKeyMetadata(payload),
     connectedVia: "paste",
   });
+};
 
 type GitHubTokenVerification =
   | { readonly outcome: "verified"; readonly login?: string; readonly scopes: readonly string[] }
@@ -234,11 +246,13 @@ const verifyGitHubToken = (token: string): Effect.Effect<GitHubTokenVerification
 
 /**
  * Validate and shape a pasted credential for storage. Exported for tests: what this returns is
- * what gets sealed, so the narrowing below is worth pinning without a route.
+ * what gets sealed, so the narrowing below is worth pinning without a route. With an `endpoint`,
+ * a Claude or Codex secret is read as a key for that endpoint unless it is another kind of login.
  */
 export const normalizeSecret = (
   provider: ConnectedAccountProvider,
   secret: string,
+  endpoint?: EndpointUrl,
 ): Effect.Effect<NormalizedCredential, ConnectedAccountBadRequestError> => {
   return Effect.gen(function* () {
     switch (provider) {
@@ -268,39 +282,43 @@ export const normalizeSecret = (
           });
         }
 
-        if (token.startsWith(CLAUDE_API_KEY_PREFIX) || token.startsWith(CLAUDE_ADMIN_KEY_PREFIX)) {
-          const key = parseApiKey("claude", token);
-          if (!key.valid) {
-            return yield* new ConnectedAccountBadRequestError({ message: key.reason });
-          }
-          return apiKeyCredential("claude", key.apiKey);
-        }
-
-        if (!token.startsWith(CLAUDE_TOKEN_PREFIX)) {
-          return yield* new ConnectedAccountBadRequestError({
-            message: `Claude credential must be a \`claude setup-token\` value (starts with "${CLAUDE_TOKEN_PREFIX}"), an Anthropic API key (starts with "${CLAUDE_API_KEY_PREFIX}"), or the JSON contents of a Claude Code .credentials.json session file.`,
+        if (token.startsWith(CLAUDE_TOKEN_PREFIX)) {
+          return credentialOf(["claude", { token }], {
+            tokenSuffix: token.slice(-4),
+            connectedVia: "paste",
           });
         }
 
-        return credentialOf(["claude", { token }], {
-          tokenSuffix: token.slice(-4),
-          connectedVia: "paste",
+        if (
+          endpoint !== undefined ||
+          token.startsWith(CLAUDE_API_KEY_PREFIX) ||
+          token.startsWith(CLAUDE_ADMIN_KEY_PREFIX)
+        ) {
+          const key = parseApiKey("claude", token, endpoint);
+          if (!key.valid) {
+            return yield* new ConnectedAccountBadRequestError({ message: key.reason });
+          }
+          return apiKeyCredential("claude", key.apiKey, endpoint);
+        }
+
+        return yield* new ConnectedAccountBadRequestError({
+          message: `Claude credential must be a \`claude setup-token\` value (starts with "${CLAUDE_TOKEN_PREFIX}"), an Anthropic API key (starts with "${CLAUDE_API_KEY_PREFIX}"), or the JSON contents of a Claude Code .credentials.json session file.`,
         });
       }
       case "codex": {
         const trimmed = secret.trim();
 
         if (!trimmed.startsWith("{")) {
-          if (!trimmed.startsWith(OPENAI_API_KEY_PREFIX)) {
+          if (endpoint === undefined && !trimmed.startsWith(OPENAI_API_KEY_PREFIX)) {
             return yield* new ConnectedAccountBadRequestError({
               message: `Codex credential must be the JSON contents of ~/.codex/auth.json or an OpenAI API key (starts with "${OPENAI_API_KEY_PREFIX}").`,
             });
           }
-          const key = parseApiKey("codex", trimmed);
+          const key = parseApiKey("codex", trimmed, endpoint);
           if (!key.valid) {
             return yield* new ConnectedAccountBadRequestError({ message: key.reason });
           }
-          return apiKeyCredential("codex", key.apiKey);
+          return apiKeyCredential("codex", key.apiKey, endpoint);
         }
 
         const parsed = parseCodexAuthJson(secret);
@@ -314,7 +332,7 @@ export const normalizeSecret = (
           if (!login.key.valid) {
             return yield* new ConnectedAccountBadRequestError({ message: login.key.reason });
           }
-          return apiKeyCredential("codex", login.key.apiKey);
+          return apiKeyCredential("codex", login.key.apiKey, endpoint);
         }
 
         // Stored verbatim so the exact file can be re-materialized in the workspace.
@@ -456,6 +474,34 @@ const connectTarget = (
   );
 };
 
+/**
+ * The request's endpoint as the URL a key's requests go to. Only a Claude or Codex API key has one,
+ * so an endpoint asked for with any other login is refused.
+ */
+const parseConnectEndpoint = (
+  request: CreateConnectedAccountRequest,
+): Effect.Effect<EndpointUrl | undefined, ConnectedAccountBadRequestError> => {
+  if (request.endpoint === undefined) return Effect.succeed(undefined);
+  if (request.provider === "github") {
+    return Effect.fail(
+      new ConnectedAccountBadRequestError({
+        message: "A GitHub token has no endpoint; connect it without one.",
+      }),
+    );
+  }
+  if (request.login === "subscription") {
+    return Effect.fail(
+      new ConnectedAccountBadRequestError({
+        message: "An endpoint is only for an API key login.",
+      }),
+    );
+  }
+  const parsed = parseEndpointUrl(request.endpoint);
+  return parsed.valid
+    ? Effect.succeed(parsed.url)
+    : Effect.fail(new ConnectedAccountBadRequestError({ message: parsed.reason }));
+};
+
 const loginMismatch = (
   provider: "claude" | "codex",
   expected: ConnectedAccountLoginClass,
@@ -508,7 +554,13 @@ export const createConnectedAccount = (input: {
       });
     }
 
-    const normalized = yield* normalizeSecret(request.provider, request.secret);
+    const endpoint = yield* parseConnectEndpoint(request);
+    const normalized = yield* normalizeSecret(request.provider, request.secret, endpoint);
+    if (endpoint !== undefined && normalized.login !== "api-key") {
+      return yield* new ConnectedAccountBadRequestError({
+        message: `An endpoint is only for an API key login, and that ${providerLabel[request.provider]} login is not an API key.`,
+      });
+    }
     if (
       request.provider !== "github" &&
       request.login !== undefined &&

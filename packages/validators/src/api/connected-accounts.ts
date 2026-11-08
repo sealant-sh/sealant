@@ -14,7 +14,11 @@ export const connectedAccountLoginClassSchema = z.enum(["subscription", "api-key
 
 export const connectedAccountLoginSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("subscription") }),
-  z.object({ kind: z.literal("api-key"), suffix: z.string().min(1) }),
+  z.object({
+    kind: z.literal("api-key"),
+    suffix: z.string().min(1),
+    endpointHost: z.string().min(1).optional(),
+  }),
 ]);
 
 export const connectedAccountSummarySchema = z.object({
