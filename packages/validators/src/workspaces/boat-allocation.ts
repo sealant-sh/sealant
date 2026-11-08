@@ -35,7 +35,7 @@ export const boatAllocationRecordSchema = z
     conflictingSandboxes: z.array(sandbox).max(200),
     target: boatExecutionTargetSchema.nullable(),
     reason: z.enum(["allocation-conflict", "lifetime-unverified", "run-stopped"]).nullable(),
-    // Optional for old allocations. Only never-bound guests use this deletion ledger.
+    // Positive removal of guests whose invocation was never issued. Exact target is retained if bound.
     removal: z
       .discriminatedUnion("kind", [
         z.strictObject({ kind: z.literal("issued"), token: z.uuid(), at: z.iso.datetime() }),
@@ -58,7 +58,6 @@ export const boatAllocationRecordSchema = z
     const closing = phase === "deleting" || phase === "deleted";
     const valid = closing
       ? sandboxId !== null &&
-        target === null &&
         reason === null &&
         record.removal !== undefined &&
         (record.removal.kind === "issued"

@@ -10,7 +10,7 @@ const printable = (raw: string): string =>
   stripVTControlCharacters(raw).replace(/[\p{Cc}\p{Cf}]/gu, (character) =>
     character === "\n" || character === "\t" ? character : "",
   );
-const safeTail = (raw: string): string => {
+export const safeCommandTail = (raw: string): string => {
   const text = printable(raw)
     .replace(
       /-----BEGIN [^-\n]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-\n]*PRIVATE KEY-----|$)/g,
@@ -43,8 +43,8 @@ export const nativeCommandFailureSchema = z.object({
   ]),
   exitCode: z.number().int().nullable(),
   timedOut: z.boolean(),
-  stdoutTail: z.string().transform(safeTail),
-  stderrTail: z.string().transform(safeTail),
+  stdoutTail: z.string().transform(safeCommandTail),
+  stderrTail: z.string().transform(safeCommandTail),
 });
 export type NativeCommandFailure = z.infer<typeof nativeCommandFailureSchema>;
 

@@ -624,6 +624,134 @@ describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () =>
         await f.runtime.dispose();
       }
     }));
+  it("fences exchange failures, deletes the bound guest and releases its pin, including exact operator absence", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      try {
+        s.guest.fail = true;
+        await expect(f.adapter.launch(f.input)).rejects.toBeInstanceOf(LaunchRetainedError);
+        const allocation = await execute(s.repo.get(f.input.runId));
+        expect(allocation?.phase).toBe("bound");
+        const target = allocation?.target;
+        if (target == null) throw new Error("missing target");
+        expect((await execute(s.executions.get(f.input.runId)))?.phase).toBe("exchange");
+        await execute(s.runtimes.markStopRequested({ runId: f.input.runId, stopReason: "user" }));
+        if (allocation === undefined) throw new Error("missing allocation");
+        await expect(
+          execute(
+            s.repo.advance(allocation, {
+              ...allocation,
+              phase: "deleting",
+              removal: { kind: "issued", token: randomUUID(), at: new Date().toISOString() },
+            }),
+          ),
+        ).rejects.toThrow("binding-conflict");
+        // Run 7: operator already deleted the exact VM. Reconcile must settle without DELETE.
+        s.provider.sandboxMissing = true;
+        expect(await execute(f.close.owner.reconcile({ limit: 10 }))).toMatchObject({
+          entries: [{ outcome: "closed" }],
+        });
+        expect(await execute(s.executions.get(f.input.runId))).toMatchObject({
+          phase: "aborted",
+          target,
+        });
+        expect(s.provider.deleteCalls).toBe(0);
+        expect(await f.adapter.closeCapture({ resourceId: target.sandboxId }, f.input.runId)).toBe(
+          "closed",
+        );
+        expect((await execute(nativeConsumerRows(s.db, f.input.runId)))[0]?.state).toBe("released");
+        expect(await execute(s.allocations.reconcile({ limit: 10 }))).toMatchObject({
+          entries: [{ outcome: "deleted" }],
+        });
+        s.guest.fail = false;
+        await expect(execute(s.executor.exchange(target))).rejects.toThrow("invocation-held");
+        await expect(execute(s.executor.start(target.runtimeInstanceId))).rejects.toThrow();
+        expect(s.guest.starts).toBe(0);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+  it("positively deletes a pre-issued guest, then retries host cleanup before releasing the slot and pin", () =>
+    test(async (s) => {
+      const target = await execute(s.allocations.prepare(s.input));
+      await execute(
+        s.executor.stage(
+          target.runtimeInstanceId,
+          Redacted.make({
+            files: [{ name: "test", bytes: Buffer.from("payload") }],
+            pins: { credentialVersions: [], dotfiles: [] },
+          }),
+        ),
+      );
+      await execute(s.resourceOwner.prepare(target));
+      expect((await execute(s.executions.get(target.runId)))?.phase).toBe("installed");
+      const { owner, daemon } = await execute(s.final([]));
+      await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+      s.gateway.allowRemoval = true;
+      s.gateway.removalUnavailable = true;
+      await expect(execute(owner.close(target))).rejects.toThrow("unavailable");
+      expect((await execute(s.repo.get(target.runId)))?.phase).toBe("deleted");
+      expect((await execute(s.tunnels.get(target.runId)))?.released).toBeUndefined();
+      expect((await execute(nativeConsumerRows(s.db, target.runId)))[0]?.state).toBe("pending");
+      s.gateway.removalUnavailable = false;
+      expect(await execute(owner.close(target))).toBe("closed");
+      expect(s.provider.deleteCalls).toBe(1);
+      expect((await execute(s.tunnels.get(target.runId)))?.released).toBe(true);
+      expect((await execute(nativeConsumerRows(s.db, target.runId)))[0]?.state).toBe("released");
+      expect(daemon.calls).toEqual([]);
+      expect(s.guest.starts).toBe(0);
+    }));
+  it("fences a delayed exchange reply and refuses deletion when invocation issuance already won", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      const { promise: reachedHost, resolve: observeHost } = Promise.withResolvers<void>();
+      const { promise: hostReply, resolve: releaseHost } = Promise.withResolvers<void>();
+      s.guest.beforeHost = async () => {
+        observeHost();
+        await hostReply;
+      };
+      const launch = f.adapter.launch(f.input).catch((error: unknown) => error);
+      try {
+        await reachedHost;
+        const record = await execute(s.executions.get(f.input.runId));
+        if (record === undefined) throw new Error("missing execution");
+        await execute(s.runtimes.markStopRequested({ runId: f.input.runId, stopReason: "user" }));
+        expect(
+          await f.adapter.closeCapture({ resourceId: record.target.sandboxId }, f.input.runId),
+        ).toBe("closed");
+        releaseHost();
+        expect(await launch).toBeInstanceOf(LaunchRetainedError);
+        expect((await execute(s.executions.get(f.input.runId)))?.phase).toBe("aborted");
+        expect(s.guest.starts).toBe(0);
+      } finally {
+        releaseHost();
+        await launch;
+        await f.runtime.dispose();
+      }
+    }));
+  it("keeps a durably issued invocation in custody even before readiness", () =>
+    test(async (s) => {
+      const target = await execute(s.allocations.prepare(s.input));
+      await execute(
+        s.executor.stage(
+          target.runtimeInstanceId,
+          Redacted.make({
+            files: [{ name: "test", bytes: Buffer.from("payload") }],
+            pins: { credentialVersions: [], dotfiles: [] },
+          }),
+        ),
+      );
+      const stored = await execute(s.executions.get(target.runId));
+      if (stored === undefined) throw new Error("missing execution");
+      // Models the durable issuance boundary before its network response, using the real repository CAS.
+      await execute(s.executions.advance(stored, { ...stored, phase: "issued" }));
+      await expect(execute(s.executions.abort(target))).rejects.toThrow("stale-transition");
+      await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+      const { owner } = await execute(s.final([]));
+      await expect(execute(owner.close(target))).rejects.toThrow();
+      expect(s.provider.deleteCalls).toBe(0);
+      expect((await execute(nativeConsumerRows(s.db, target.runId)))[0]?.state).toBe("pending");
+    }));
   it("polls an accepted unbound deletion across restarts without another DELETE", () =>
     test(async (s) => {
       const f = await adapterFixture(s);
@@ -1204,15 +1332,15 @@ describe.runIf(databaseUrl !== undefined)("Boat canonical FINAL close", () => {
       expect(next.listenPort).toBe(terminal.listenPort);
       expect(await tunnelRecord(s, target)).toEqual(terminal);
     }));
-  it("refuses an active run and a stopped run whose invocation was never positively running", () =>
+  it("refuses an active run and closes its stopped guest when no invocation was issued", () =>
     test(async (s) => {
       const target = await s.allocations.prepare(s.input).pipe(execute);
       const { owner, daemon } = await execute(s.final([savedStatus()]));
       await expect(execute(owner.close(target))).rejects.toThrow("held");
       await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
-      await expect(execute(owner.close(target))).rejects.toThrow("held");
+      expect(await execute(owner.close(target))).toBe("closed");
       expect(daemon.calls).toEqual([]);
-      expect(s.provider.deleteCalls).toBe(0);
+      expect(s.provider.deleteCalls).toBe(1);
     }));
   it("reconciles publication release after a crash between terminal runtime writes and pin release", () =>
     test(async (s) => {

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import {
@@ -26,6 +27,8 @@ export interface BoatExecutionRepoService {
   readonly get: (
     id: string,
   ) => Effect.Effect<BoatExecutionRecord | undefined, BoatExecutionStoreError>;
+  /** Irreversible fence. Refuses once an invocation may have been issued. Inserts a tombstone if absent. */
+  readonly abort: (target: BoatExecutionTarget) => Effect.Effect<void, BoatExecutionStoreError>;
   readonly reserve: (
     record: BoatExecutionRecord,
   ) => Effect.Effect<BoatExecutionRecord, BoatExecutionStoreError>;
@@ -61,6 +64,7 @@ const transitions: Readonly<
   issued: ["running", "held"],
   running: ["held"],
   held: [],
+  aborted: [],
 };
 
 const make: Effect.Effect<BoatExecutionRepo["Service"], never, SealantDB> = Effect.gen(
@@ -176,7 +180,54 @@ const make: Effect.Effect<BoatExecutionRepo["Service"], never, SealantDB> = Effe
       if (isDeepStrictEqual(saved, next)) return next;
       return yield* Effect.fail(new BoatExecutionStoreError("stale-transition"));
     });
-    return BoatExecutionRepo.of({ get, reserve, advance, isolate });
+    const abort = Effect.fn("BoatExecutionRepo.abort")(function* (target: BoatExecutionTarget) {
+      const before = yield* get(target.runtimeInstanceId);
+      if (
+        before !== undefined &&
+        (!sameTarget(before.target, target) ||
+          !["exchange", "control", "prepared", "installed", "aborted"].includes(before.phase))
+      )
+        return yield* Effect.fail(new BoatExecutionStoreError("stale-transition"));
+      if (before?.phase === "aborted") return;
+      const next = yield* parse({
+        target,
+        exchangeId: before?.exchangeId ?? randomUUID(),
+        publicKey: before?.publicKey ?? "",
+        sealedExchange: null,
+        sealedControl: null,
+        admission: null,
+        phase: "aborted",
+      });
+      if (before === undefined) {
+        yield* db
+          .insert(boatExecutions)
+          .values({
+            runtimeInstanceId: target.runtimeInstanceId,
+            runId: target.runId,
+            deploymentId: target.deploymentId,
+            sandboxId: target.sandboxId,
+            diskLineage: target.diskLineage,
+            record: next,
+          })
+          .onConflictDoNothing()
+          .pipe(Effect.mapError(() => new BoatExecutionStoreError("unavailable")));
+      } else {
+        yield* db
+          .update(boatExecutions)
+          .set({ record: next })
+          .where(
+            and(
+              eq(boatExecutions.runtimeInstanceId, target.runtimeInstanceId),
+              sql`${boatExecutions.record} = ${JSON.stringify(before)}::jsonb`,
+            ),
+          )
+          .pipe(Effect.mapError(() => new BoatExecutionStoreError("unavailable")));
+      }
+      const saved = yield* get(target.runtimeInstanceId);
+      if (saved?.phase !== "aborted" || !sameTarget(saved.target, target))
+        return yield* Effect.fail(new BoatExecutionStoreError("stale-transition"));
+    });
+    return BoatExecutionRepo.of({ get, reserve, advance, isolate, abort });
   },
 );
 /** All transitions use a single database compare-and-set and perform no external I/O. */

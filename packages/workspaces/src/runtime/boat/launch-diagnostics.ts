@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { safeCommandTail } from "../../images/boat/command-diagnostics.js";
 import { BoatApiError, boatProviderFailureSchema } from "./config.js";
 
 /** Fixed names only. Exception messages, request bodies and bootstrap replies can contain secrets. */
@@ -79,7 +80,14 @@ const diagnosticSchema = z.object({
     .optional(),
   hydrated: z.boolean().optional(),
   provider: boatProviderFailureSchema.optional(),
-  command: z.object({ exitCode: z.number().int().nullable(), timedOut: z.boolean() }).optional(),
+  command: z
+    .object({
+      exitCode: z.number().int().nullable(),
+      timedOut: z.boolean(),
+      stdoutTail: z.string().transform(safeCommandTail).optional(),
+      stderrTail: z.string().transform(safeCommandTail).optional(),
+    })
+    .optional(),
 });
 export type BoatLaunchDiagnostic = z.infer<typeof diagnosticSchema>;
 

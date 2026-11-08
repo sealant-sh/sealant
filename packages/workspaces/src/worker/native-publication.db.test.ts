@@ -61,6 +61,7 @@ import { makeBoatProofCore } from "../operator/boat-proof-core.js";
 import type { RegistryClient } from "../registry/client.js";
 import { BoatRuntimeAdapter, BoatAdapterError } from "../runtime/boat/adapter.js";
 import { BoatApiError } from "../runtime/boat/config.js";
+import { BoatExecutionError } from "../runtime/boat/execution.js";
 import { BoatFinalClose } from "../runtime/boat/final-close.js";
 import { boatLaunchDiagnostic } from "../runtime/boat/launch-diagnostics.js";
 import { boatSessionDaemon } from "../runtime/boat/session-daemon.fixture.js";
@@ -922,58 +923,78 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
     expect(s.fixture.mutations).toEqual([]);
   });
 
-  it("keeps exact publication identity and its pin after an uncertain allocated launch", async () => {
-    const s = await setup();
-    const job = await s.enqueue();
-    const adapter: RuntimeAdapter<NativePublication> = {
-      ...s.adapter,
-      launch: async (_input, hooks) => {
-        const identity = {
-          adapter: "boat" as const,
-          resourceId: "uncertain-allocation",
-          reference: "uncertain-allocation",
-        };
-        await hooks?.onStarted?.(identity);
-        throw new LaunchRetainedError(
-          identity,
-          new BoatAdapterError(
-            "launch-held",
-            boatLaunchDiagnostic(
-              new BoatApiError(
-                "execute",
-                503,
-                "transport_error",
-                new Error("Bearer private-launch-credential", {
-                  cause: { code: "UND_ERR_SOCKET" },
-                }),
+  it.each(["provider", "command"])(
+    "keeps exact publication identity and its pin after an uncertain allocated launch: %s",
+    async (failure) => {
+      const s = await setup();
+      const job = await s.enqueue();
+      const adapter: RuntimeAdapter<NativePublication> = {
+        ...s.adapter,
+        launch: async (_input, hooks) => {
+          const identity = {
+            adapter: "boat" as const,
+            resourceId: "uncertain-allocation",
+            reference: "uncertain-allocation",
+          };
+          await hooks?.onStarted?.(identity);
+          throw new LaunchRetainedError(
+            identity,
+            new BoatAdapterError(
+              "launch-held",
+              boatLaunchDiagnostic(
+                failure === "command"
+                  ? new BoatExecutionError("transport-unavailable", {
+                      step: "bind-exchange",
+                      errorClass: "BoatExecutionError",
+                      command: {
+                        exitCode: 1,
+                        timedOut: false,
+                        stdoutTail: "token=private-launch-credential",
+                        stderrTail:
+                          "Bearer private-launch-credential\nValueError: outer-owner-required",
+                      },
+                    })
+                  : new BoatApiError(
+                      "execute",
+                      503,
+                      "transport_error",
+                      new Error("Bearer private-launch-credential", {
+                        cause: { code: "UND_ERR_SOCKET" },
+                      }),
+                    ),
+                "read-boot-id",
               ),
-              "read-boot-id",
             ),
-          ),
-        );
-      },
-    };
-    await expect(
-      processWorkspaceBuildJob({
-        ...s.options(job.id),
-        runtimes: [{ kind: "boat-native", artifacts: s.catalog, adapter }],
-      }),
-    ).rejects.toMatchObject({ errorCode: "launch-retained" });
-    const saved = await Effect.runPromise(s.jobs.getJobById(job.id));
-    expect(saved?.status).toBe("succeeded");
-    const failedRuntime = await Effect.runPromise(s.instances.getRuntimeInstanceByRunId(job.runId));
-    expect(failedRuntime).toMatchObject({ status: "failed", errorCode: "launch-retained" });
-    expect(failedRuntime?.errorMessage).toMatch(
-      /read-boot-id.*BoatApiError.*execute.*503.*UND_ERR_SOCKET/,
-    );
-    expect(failedRuntime?.errorMessage).not.toContain("private-launch-credential");
-    expect(
-      (await Effect.runPromise(s.instances.getRuntimeInstanceByRunId(job.runId)))?.publication,
-    ).toEqual(saved?.publication);
-    expect(await Effect.runPromise(nativeConsumerRows(s.db, job.runId))).toEqual([
-      { state: "pending", publicationId: saved?.publicationId },
-    ]);
-  });
+          );
+        },
+      };
+      await expect(
+        processWorkspaceBuildJob({
+          ...s.options(job.id),
+          runtimes: [{ kind: "boat-native", artifacts: s.catalog, adapter }],
+        }),
+      ).rejects.toMatchObject({ errorCode: "launch-retained" });
+      const saved = await Effect.runPromise(s.jobs.getJobById(job.id));
+      expect(saved?.status).toBe("succeeded");
+      const failedRuntime = await Effect.runPromise(
+        s.instances.getRuntimeInstanceByRunId(job.runId),
+      );
+      expect(failedRuntime).toMatchObject({ status: "failed", errorCode: "launch-retained" });
+      expect(failedRuntime?.errorMessage).toMatch(
+        failure === "provider"
+          ? /read-boot-id.*BoatApiError.*execute.*503.*UND_ERR_SOCKET/
+          : /bind-exchange.*BoatExecutionError.*exitCode.*stderrTail.*outer-owner-required/,
+      );
+      if (failure === "command") expect(failedRuntime?.errorMessage).toContain("REDACTED");
+      expect(failedRuntime?.errorMessage).not.toContain("private-launch-credential");
+      expect(
+        (await Effect.runPromise(s.instances.getRuntimeInstanceByRunId(job.runId)))?.publication,
+      ).toEqual(saved?.publication);
+      expect(await Effect.runPromise(nativeConsumerRows(s.db, job.runId))).toEqual([
+        { state: "pending", publicationId: saved?.publicationId },
+      ]);
+    },
+  );
 
   it("parses legacy OCI and MicroVM jobs and preserves tagged MicroVM history without OCI columns", async () => {
     const s = await setup();

@@ -5,6 +5,28 @@ import { BoatApiError } from "./config.js";
 import { boatLaunchDiagnostic, boatLaunchSummary } from "./launch-diagnostics.js";
 
 describe("Boat launch diagnostics", () => {
+  it("bounds and redacts command tails across worker and runtime wrappers", () => {
+    const diagnostic = boatLaunchDiagnostic(
+      {
+        diagnostic: {
+          step: "bind-exchange",
+          errorClass: "BoatExecutionError",
+          command: {
+            exitCode: 1,
+            timedOut: false,
+            stdoutTail: "a".repeat(10000) + " secret=do-not-record-me",
+            stderrTail:
+              "Bearer hidden-value\nhttps://secret.invalid/path\nValueError: guard-refused",
+          },
+        },
+      },
+      "prepare-launch",
+    );
+    expect(Buffer.byteLength(diagnostic.command?.stdoutTail ?? "")).toBeLessThanOrEqual(4096);
+    expect(boatLaunchSummary(diagnostic)).toContain("guard-refused");
+    for (const forbidden of ["hidden-value", "secret.invalid", "do-not-record-me"])
+      expect(boatLaunchSummary(diagnostic)).not.toContain(forbidden);
+  });
   it("retains a provider's class, step, operation, status and classified transport cause across wrappers", () => {
     const original = new BoatApiError(
       "execute",

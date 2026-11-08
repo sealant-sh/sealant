@@ -232,6 +232,7 @@ jobs:
           SEALANT_BOAT_GUEST_TEST_IMAGE_FILE: ${{ runner.temp }}/boat-guest-image-id
         run: |
           docker build --iidfile "$SEALANT_BOAT_GUEST_TEST_IMAGE_FILE" -f packages/workspaces/boat-image/Dockerfile.network-test packages/workspaces/boat-image
+          pnpm --filter @sealant/workspaces test:e2e src/runtime/boat/public-command.e2e.ts
           unshare -Urm python3 -B -m unittest discover -s packages/workspaces/boat-image -p 'test_*.py'
           python3 -B packages/workspaces/boat-image/network_proof.py
 

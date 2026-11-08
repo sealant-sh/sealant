@@ -70,12 +70,14 @@ export const boatTunnelReservationSchema = z
       .strictObject({ id: z.string().regex(/^bdop_[a-f0-9]{32}$/), completed: z.boolean() })
       .optional(),
     released: z.literal(true).optional(),
+    aborted: z.literal(true).optional(),
   })
   .superRefine((record, context) => {
     if (
       (record.closeId !== undefined && (record.updates?.length ?? 0) !== 0) ||
       (record.removal !== undefined && record.closeId === undefined) ||
-      (record.released === true && record.removal?.completed !== true)
+      (record.aborted === true && (record.closeId === undefined || record.removal !== undefined)) ||
+      (record.released === true && record.removal?.completed !== true && record.aborted !== true)
     )
       context.addIssue({ code: "custom", message: "Invalid tunnel close state" });
   });

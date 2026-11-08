@@ -227,7 +227,7 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
         )
           return yield* Effect.fail(new BoatAdapterError("target-mismatch"));
         const owner = yield* BoatFinalClose;
-        return allocation.phase === "bound" && allocation.target !== null
+        return allocation.target !== null
           ? yield* owner.close(allocation.target)
           : yield* owner.closeUnbound(runId, input.resourceId);
       }),
