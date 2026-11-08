@@ -6,6 +6,7 @@ import {
   privateDecrypt,
   randomUUID,
 } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 
 import { CredentialCipher, type CredentialCipherError } from "@sealant/credentials";
@@ -32,7 +33,7 @@ import { z } from "zod";
 import { safeCommandTail } from "../../images/boat/command-diagnostics.js";
 import type { SealantRuntimeService, SealantTarget } from "../../sealantd/runtime.js";
 import type { BoatApi } from "./api.js";
-import { BoatSecret, boatSandboxIdSchema, parseBoatUrl } from "./config.js";
+import { BoatApiError, BoatSecret, boatSandboxIdSchema, parseBoatUrl } from "./config.js";
 import { boatControlConnection, type BoatHostedControl } from "./connection.js";
 import {
   boatLaunchDiagnostic,
@@ -114,7 +115,10 @@ export class BoatExecutionError extends Error {
 type Failure = BoatExecutionError | BoatExecutionStoreError | CredentialCipherError;
 const attempt = <A>(code: BoatExecutionError["code"], run: () => A) =>
   Effect.try({ try: run, catch: () => new BoatExecutionError(code) });
-const io = <A>(run: () => Promise<A>, step: BoatLaunchDiagnostic["step"] = "receiver-request") =>
+const io = <A>(
+  run: (signal: AbortSignal) => Promise<A>,
+  step: BoatLaunchDiagnostic["step"] = "receiver-request",
+) =>
   Effect.tryPromise({
     try: run,
     catch: (error) =>
@@ -142,15 +146,65 @@ const canonical = (value: unknown): string => {
 };
 const sha256 = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 
+/** Read a bounded failure prefix; cancel even an infinite or oversized response. */
+const receiverFailureTail = async (
+  response: Response,
+  redactions: readonly string[],
+  body: Redacted.Redacted<string> | undefined,
+) => {
+  const reader = response.body?.getReader();
+  if (reader === undefined) return "";
+  const chunks: Buffer[] = [];
+  let size = 0;
+  try {
+    while (size < 16_384) {
+      const part = await reader.read();
+      if (part.done) break;
+      const bytes = Buffer.from(part.value).subarray(0, 16_384 - size);
+      chunks.push(bytes);
+      size += bytes.length;
+    }
+  } catch {
+    // An interrupted failure body must not erase its HTTP status or the bytes already received.
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  let text = Buffer.concat(chunks).toString("utf8");
+  if (size === 16_384) {
+    // Do not emit a token prefix cut in half by the byte bound.
+    text = text.slice(0, Math.max(0, text.lastIndexOf("\n"))) + "\n[TRUNCATED_RESPONSE]";
+  }
+  const scrub = (value: unknown): void => {
+    if (typeof value === "string" && value.length >= 8) text = text.split(value).join("[REDACTED]");
+    else if (Array.isArray(value)) value.forEach(scrub);
+    else if (value !== null && typeof value === "object") Object.values(value).forEach(scrub);
+  };
+  redactions.forEach(scrub);
+  if (body !== undefined) {
+    const raw = Redacted.value(body);
+    scrub(raw);
+    try {
+      // A failed upstream may echo staging data, including base64 files and credential values.
+      const request: unknown = JSON.parse(raw);
+      scrub(request);
+    } catch {
+      // No raw request or parse error leaves this boundary.
+    }
+  }
+  return safeCommandTail(text);
+};
+
 /** Public commands and hosted HTTPS only. Implementations must authenticate the exact provider target. */
 export interface BoatGuestTransport {
   readonly bind: (target: BoatExecutionTarget, request: unknown) => Promise<unknown>;
   readonly host: (target: BoatExecutionTarget) => Promise<BoatHostedControl>;
+  /** Only read-only status probes retry transient startup failures: at most 20 reads / 20 seconds. */
   readonly call: (
     access: BoatHostedControl,
     bearer: BoatSecret,
     route: "status" | "stage" | "start" | "isolate" | "permit" | "readiness" | "recover" | "park",
     body?: Redacted.Redacted<string>,
+    signal?: AbortSignal,
   ) => Promise<unknown>;
   /** Round-trips daemon health and capabilities through the authenticated relay. */
   readonly probe: (access: BoatHostedControl, bearer: BoatSecret) => Promise<BoatDaemonReady>;
@@ -199,6 +253,76 @@ export const createBoatGuestTransport = (
     )
       throw new BoatExecutionError("target-mismatch");
     return id;
+  };
+  const receiverRequest: BoatGuestTransport["call"] = async (
+    access,
+    bearer,
+    route,
+    body,
+    signal,
+  ) => {
+    const origin = parseBoatUrl(access.origin);
+    if (!origin.ok || origin.value.href !== `${access.origin}/`)
+      throw new BoatExecutionError("invalid-input");
+    const pathClass = `/sealant/bootstrap/${route}` as const;
+    let response: Response;
+    try {
+      response = await fetch(`${access.origin}${pathClass}`, {
+        method: route === "status" ? "GET" : "POST",
+        redirect: "error",
+        signal: signal ?? AbortSignal.timeout(90_000),
+        headers: {
+          Cookie: `_port_auth=${access.cookie.reveal()}`,
+          Authorization: `Bearer ${bearer.reveal()}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        },
+        ...(body === undefined ? {} : { body: Redacted.value(body) }),
+      });
+    } catch (error) {
+      throw new BoatExecutionError("transport-unavailable", {
+        ...boatLaunchDiagnostic(
+          new BoatApiError(`receiver-${route}`, null, "transport_error", error),
+          "receiver-request",
+        ),
+        receiver: { pathClass, responseTail: "" },
+      });
+    }
+    if (!response.ok) {
+      const responseTail = await receiverFailureTail(
+        response,
+        [access.cookie.reveal(), bearer.reveal()],
+        body,
+      );
+      throw new BoatExecutionError("transport-unavailable", {
+        step: "receiver-request",
+        errorClass: "BoatExecutionError",
+        provider: { operation: `receiver-${route}`, status: response.status, causeClass: null },
+        receiver: { pathClass, responseTail },
+      });
+    }
+    const reader = response.body?.getReader();
+    if (reader === undefined) throw new BoatExecutionError("invalid-reply");
+    let raw = "";
+    try {
+      while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        raw += Buffer.from(part.value).toString("utf8");
+        if (raw.length > 65536) throw new BoatExecutionError("invalid-reply");
+      }
+      return JSON.parse(raw);
+    } catch (error) {
+      if (error instanceof BoatExecutionError) throw error;
+      throw new BoatExecutionError("invalid-reply", {
+        ...boatLaunchDiagnostic(
+          new BoatApiError(`receiver-${route}`, response.status, "invalid_reply", error),
+          "receiver-request",
+        ),
+        receiver: { pathClass, responseTail: "" },
+      });
+    } finally {
+      await reader.cancel().catch(() => {});
+    }
   };
   return {
     probe: (access, bearer) =>
@@ -267,43 +391,43 @@ export const createBoatGuestTransport = (
         );
       return result.value;
     },
-    call: async (access, bearer, route, body) => {
-      const origin = parseBoatUrl(access.origin);
-      if (!origin.ok || origin.value.href !== `${access.origin}/`)
-        throw new BoatExecutionError("invalid-input");
-      const response = await fetch(`${access.origin}/sealant/bootstrap/${route}`, {
-        method: route === "status" ? "GET" : "POST",
-        redirect: "error",
-        signal: AbortSignal.timeout(90_000),
-        headers: {
-          Cookie: `_port_auth=${access.cookie.reveal()}`,
-          Authorization: `Bearer ${bearer.reveal()}`,
-          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-        },
-        ...(body === undefined ? {} : { body: Redacted.value(body) }),
-      });
-      if (!response.ok) {
-        await response.body?.cancel();
-        throw new BoatExecutionError("transport-unavailable", {
-          step: "receiver-request",
-          errorClass: "BoatExecutionError",
-          provider: { operation: "unknown", status: response.status, causeClass: null },
-        });
-      }
-      const reader = response.body?.getReader();
-      if (reader === undefined) throw new BoatExecutionError("invalid-reply");
-      let raw = "";
-      try {
-        while (true) {
-          const part = await reader.read();
-          if (part.done) break;
-          raw += Buffer.from(part.value).toString("utf8");
-          if (raw.length > 65536) throw new BoatExecutionError("invalid-reply");
+    call: async (access, bearer, route, body, signal) => {
+      if (route !== "status") return receiverRequest(access, bearer, route, body, signal);
+      // Only this read-only authenticated probe may retry. No POST is replayed by the transport.
+      const budget = AbortSignal.any([
+        AbortSignal.timeout(20_000),
+        ...(signal === undefined ? [] : [signal]),
+      ]);
+      let last: BoatExecutionError | undefined;
+      for (let count = 0; count < 20; count++) {
+        try {
+          return await receiverRequest(
+            access,
+            bearer,
+            route,
+            body,
+            AbortSignal.any([budget, AbortSignal.timeout(5_000)]),
+          );
+        } catch (error) {
+          const provider =
+            error instanceof BoatExecutionError ? error.diagnostic?.provider : undefined;
+          if (
+            !(error instanceof BoatExecutionError) ||
+            !provider ||
+            provider.operation !== "receiver-status" ||
+            !(provider.status === null || [502, 503, 504].includes(provider.status))
+          )
+            throw error;
+          last = error;
+          if (budget.aborted || count === 19) throw error;
+          try {
+            await delay(500, undefined, { signal: budget });
+          } catch {
+            throw error;
+          }
         }
-        return JSON.parse(raw);
-      } finally {
-        await reader.cancel();
       }
+      throw last ?? new BoatExecutionError("transport-unavailable");
     },
   };
 };
@@ -577,7 +701,11 @@ const make: Effect.Effect<
       return parsed.value;
     });
     const hosted = yield* io(() => transport.host(target), "host-receiver");
-    yield* checkStatus(record, yield* io(() => transport.call(hosted, bearer, "status")), false);
+    yield* checkStatus(
+      record,
+      yield* io((signal) => transport.call(hosted, bearer, "status", undefined, signal)),
+      false,
+    );
     const sealedControl = yield* seal(
       record,
       "control",

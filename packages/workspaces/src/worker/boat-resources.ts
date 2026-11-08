@@ -54,7 +54,7 @@ export interface BoatResourcesReceipt {
 export interface BoatResourcesSweep {
   readonly entries: readonly {
     readonly runId: string;
-    readonly outcome: "configured" | "pending" | "held" | "unavailable";
+    readonly outcome: "configured" | "closed" | "pending" | "held" | "unavailable";
   }[];
   readonly next?: string;
 }
@@ -142,10 +142,6 @@ const make: Effect.Effect<
   const prepare = Effect.fn("BoatResources.prepare")(function* (target: BoatExecutionTarget) {
     const admission = yield* current(target);
     const keys = yield* credentials.prepare({ target, gatewayHostId: host.gatewayHostId });
-    const updateId = randomUUID();
-    const owned = yield* tunnels.get(target.runtimeInstanceId);
-    if (owned === undefined || (yield* tunnels.beginUpdate(owned, updateId)) !== "issued")
-      return yield* Effect.fail(new BoatResourcesError("held"));
     const subnet = yield* Effect.tryPromise({
       try: () =>
         host.subnets.allocate({
@@ -175,6 +171,12 @@ const make: Effect.Effect<
         return yield* Effect.fail(new BoatResourcesError("binding-conflict"));
     });
     yield* recheck;
+    // Only a configured reservation can dispatch a gateway mutation. Allocation failures have
+    // no host effect to await, and a close racing this CAS prevents the dispatch entirely.
+    const updateId = randomUUID();
+    const owned = yield* tunnels.get(target.runtimeInstanceId);
+    if (owned === undefined || (yield* tunnels.beginUpdate(owned, updateId)) !== "issued")
+      return yield* Effect.fail(new BoatResourcesError("held"));
     const gateway = yield* host.tunnel.ensure({
       target,
       privateKey: keys.gateway.privateKey,
@@ -183,6 +185,8 @@ const make: Effect.Effect<
       link,
       instances,
     });
+    // A positive response settles dispatch even if its receipt subsequently refuses admission.
+    yield* tunnels.endUpdate(owned.binding, updateId);
     if (
       gateway.reachSubnet !== subnet ||
       gateway.publicKey !== keys.gateway.publicKey ||
@@ -190,7 +194,6 @@ const make: Effect.Effect<
       gateway.listenPort !== keys.listenPort
     )
       return yield* Effect.fail(new BoatResourcesError("binding-conflict"));
-    yield* tunnels.endUpdate(owned.binding, updateId);
     yield* recheck;
     const receipt = yield* guest.isolate(target, {
       network: {
@@ -216,6 +219,14 @@ const make: Effect.Effect<
       (id) =>
         Effect.gen(function* () {
           const record = yield* allocations.get(id);
+          if (record?.phase === "deleted") {
+            // Deletion retains its immutable target. Never try to configure that retired guest.
+            // Host cleanup is a separate obligation until canonical FINAL releases its reservation.
+            const tunnel = yield* tunnels.get(record.target?.runtimeInstanceId ?? id);
+            return tunnel === undefined || tunnel.released === true
+              ? ("closed" as const)
+              : ("held" as const);
+          }
           if (record?.phase === "held") return "held" as const;
           if (record?.target === null || record === undefined) return "pending" as const;
           const root = yield* canonical.getByRunId(record.target.runId);

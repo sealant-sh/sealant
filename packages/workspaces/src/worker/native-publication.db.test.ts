@@ -923,7 +923,7 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
     expect(s.fixture.mutations).toEqual([]);
   });
 
-  it.each(["provider", "command"])(
+  it.each(["provider", "command", "receiver"])(
     "keeps exact publication identity and its pin after an uncertain allocated launch: %s",
     async (failure) => {
       const s = await setup();
@@ -954,14 +954,24 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
                           "Bearer private-launch-credential\nValueError: outer-owner-required",
                       },
                     })
-                  : new BoatApiError(
-                      "execute",
-                      503,
-                      "transport_error",
-                      new Error("Bearer private-launch-credential", {
-                        cause: { code: "UND_ERR_SOCKET" },
-                      }),
-                    ),
+                  : failure === "receiver"
+                    ? new BoatExecutionError("transport-unavailable", {
+                        step: "receiver-request",
+                        errorClass: "BoatExecutionError",
+                        provider: { operation: "receiver-status", status: 503, causeClass: null },
+                        receiver: {
+                          pathClass: "/sealant/bootstrap/status",
+                          responseTail: "token=private-launch-credential receiver-unavailable",
+                        },
+                      })
+                    : new BoatApiError(
+                        "execute",
+                        503,
+                        "transport_error",
+                        new Error("Bearer private-launch-credential", {
+                          cause: { code: "UND_ERR_SOCKET" },
+                        }),
+                      ),
                 "read-boot-id",
               ),
             ),
@@ -983,7 +993,9 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
       expect(failedRuntime?.errorMessage).toMatch(
         failure === "provider"
           ? /read-boot-id.*BoatApiError.*execute.*503.*UND_ERR_SOCKET/
-          : /bind-exchange.*BoatExecutionError.*exitCode.*stderrTail.*outer-owner-required/,
+          : failure === "command"
+            ? /bind-exchange.*BoatExecutionError.*exitCode.*stderrTail.*outer-owner-required/
+            : /receiver-request.*BoatExecutionError.*receiver-status.*503.*receiver-unavailable/,
       );
       if (failure === "command") expect(failedRuntime?.errorMessage).toContain("REDACTED");
       expect(failedRuntime?.errorMessage).not.toContain("private-launch-credential");

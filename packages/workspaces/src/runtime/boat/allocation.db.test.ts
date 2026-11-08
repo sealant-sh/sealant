@@ -321,7 +321,11 @@ const test = async (
             gatewayHostId: hostId,
             endpoint,
             subnets: {
-              allocate: async () => "10.98.0.32/27",
+              allocate: async () => {
+                await gateway.beforeSubnet();
+                if (gateway.subnetUnavailable) throw new Error("subnet allocator unavailable");
+                return "10.98.0.32/27";
+              },
               release: async () => {
                 throw new Error("must retain subnet");
               },
@@ -528,6 +532,103 @@ const adapterFixture = async (s: AllocationFixture) => {
 };
 
 describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () => {
+  it("closes an allocator failure before gateway dispatch with positive deletion, slot and pin release", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      s.gateway.subnetUnavailable = true;
+      s.gateway.allowRemoval = true;
+      try {
+        await expect(f.adapter.launch(f.input)).rejects.toBeInstanceOf(LaunchRetainedError);
+        expect(s.gateway.requests).toEqual([]);
+        const target = (await execute(s.repo.get(f.input.runId)))?.target;
+        if (target == null) throw new Error("missing bound target");
+        await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+        expect(await f.adapter.closeCapture({ resourceId: target.sandboxId }, target.runId)).toBe(
+          "closed",
+        );
+        expect(await execute(s.repo.get(target.runId))).toMatchObject({
+          phase: "deleted",
+          removal: { kind: "operation", completed: true },
+        });
+        expect(await execute(s.tunnels.get(target.runId))).toMatchObject({ released: true });
+        expect((await execute(nativeConsumerRows(s.db, target.runId)))[0]?.state).toBe("released");
+        expect(s.provider.deleteCalls).toBe(1);
+        expect(s.guest.starts).toBe(0);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+  it("fences a legacy undispatched update while its allocator is still pending", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      const entered = Promise.withResolvers<void>(),
+        release = Promise.withResolvers<void>();
+      s.gateway.allowRemoval = true;
+      s.gateway.beforeSubnet = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+      const launching = f.adapter.launch(f.input).catch((error: unknown) => error);
+      try {
+        await entered.promise;
+        const target = (await execute(s.repo.get(f.input.runId)))?.target;
+        if (target == null) throw new Error("missing bound target");
+        const before = await tunnelRecord(s, target);
+        // The previous worker issued an update before allocating/configuring its subnet.
+        await execute(s.tunnels.beginUpdate(before, randomUUID()));
+        expect((await tunnelRecord(s, target)).network).toBeUndefined();
+        await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+        expect(await f.adapter.closeCapture({ resourceId: target.sandboxId }, target.runId)).toBe(
+          "closed",
+        );
+        release.resolve();
+        expect(await launching).toBeInstanceOf(LaunchRetainedError);
+        expect(s.gateway.requests).toEqual([]);
+        expect(await tunnelRecord(s, target)).toMatchObject({ updates: [], released: true });
+        expect((await execute(nativeConsumerRows(s.db, target.runId)))[0]?.state).toBe("released");
+        expect(s.provider.deleteCalls).toBe(1);
+      } finally {
+        release.resolve();
+        await launching;
+        await f.runtime.dispose();
+      }
+    }));
+  it("waits for the exact dispatched gateway setup before removing it and releasing custody", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      const entered = Promise.withResolvers<void>(),
+        release = Promise.withResolvers<void>();
+      s.gateway.allowRemoval = true;
+      s.gateway.beforeReply = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+      const launching = f.adapter.launch(f.input).catch((error: unknown) => error);
+      try {
+        await entered.promise;
+        const target = (await execute(s.repo.get(f.input.runId)))?.target;
+        if (target == null) throw new Error("missing bound target");
+        await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+        await expect(
+          f.adapter.closeCapture({ resourceId: target.sandboxId }, target.runId),
+        ).rejects.toThrow("unavailable");
+        expect(s.gateway.removeCalls).toBe(0);
+        expect(s.provider.deleteCalls).toBe(0);
+        release.resolve();
+        expect(await launching).toBeInstanceOf(LaunchRetainedError);
+        expect(await f.adapter.closeCapture({ resourceId: target.sandboxId }, target.runId)).toBe(
+          "closed",
+        );
+        expect(s.gateway.removeCalls).toBe(1);
+        expect(s.provider.deleteCalls).toBe(1);
+        expect(await tunnelRecord(s, target)).toMatchObject({ updates: [], released: true });
+        expect((await execute(nativeConsumerRows(s.db, target.runId)))[0]?.state).toBe("released");
+      } finally {
+        release.resolve();
+        await launching;
+        await f.runtime.dispose();
+      }
+    }));
   it("waits for an accepted clone to finish provisioning without issuing another create", () =>
     test(async (s) => {
       const f = await adapterFixture(s);
@@ -663,6 +764,9 @@ describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () =>
         expect(await execute(s.allocations.reconcile({ limit: 10 }))).toMatchObject({
           entries: [{ outcome: "deleted" }],
         });
+        expect(await execute(s.resourceOwner.reconcile({ limit: 10 }))).toMatchObject({
+          entries: [{ outcome: "closed" }],
+        });
         s.guest.fail = false;
         await expect(execute(s.executor.exchange(target))).rejects.toThrow("invocation-held");
         await expect(execute(s.executor.start(target.runtimeInstanceId))).rejects.toThrow();
@@ -692,11 +796,17 @@ describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () =>
       await expect(execute(owner.close(target))).rejects.toThrow("unavailable");
       expect((await execute(s.repo.get(target.runId)))?.phase).toBe("deleted");
       expect((await execute(s.tunnels.get(target.runId)))?.released).toBeUndefined();
+      expect(await execute(s.resourceOwner.reconcile({ limit: 10 }))).toMatchObject({
+        entries: [{ outcome: "held" }],
+      });
       expect((await execute(nativeConsumerRows(s.db, target.runId)))[0]?.state).toBe("pending");
       s.gateway.removalUnavailable = false;
       expect(await execute(owner.close(target))).toBe("closed");
       expect(s.provider.deleteCalls).toBe(1);
       expect((await execute(s.tunnels.get(target.runId)))?.released).toBe(true);
+      expect(await execute(s.resourceOwner.reconcile({ limit: 10 }))).toMatchObject({
+        entries: [{ outcome: "closed" }],
+      });
       expect((await execute(nativeConsumerRows(s.db, target.runId)))[0]?.state).toBe("released");
       expect(daemon.calls).toEqual([]);
       expect(s.guest.starts).toBe(0);
