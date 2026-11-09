@@ -289,6 +289,7 @@ describe.skipIf(DATABASE_URL === undefined)("a person's default login (Postgres)
 });
 
 const claudeKey = (label: string) => `sk-ant-api03-FAKE${label.padEnd(40, "0")}`;
+const claudeUserKey = (label: string) => `sk-ant-usr-FAKE${label.padEnd(40, "0")}`;
 const codexKey = (label: string) => `sk-proj-FAKE${label.padEnd(30, "0")}`;
 const chatgptLogin = (label: string, extra: Record<string, unknown> = {}) =>
   JSON.stringify({
@@ -348,6 +349,7 @@ describe.skipIf(DATABASE_URL === undefined)("API-key logins (Postgres)", () => {
   it("connects each key shape as an api-key account holding the key alone", async () => {
     const shapes = [
       { provider: "claude", secret: `  ${claudeKey("claude")}\n`, key: claudeKey("claude") },
+      { provider: "claude", secret: claudeUserKey("user"), key: claudeUserKey("user") },
       { provider: "codex", secret: codexKey("bare"), key: codexKey("bare") },
       {
         provider: "codex",
@@ -407,6 +409,7 @@ describe.skipIf(DATABASE_URL === undefined)("API-key logins (Postgres)", () => {
         says: "An Admin API key cannot run a model.",
       },
       { provider: "codex", secret: claudeKey("wrong"), says: "Anthropic key" },
+      { provider: "codex", secret: claudeUserKey("wrong"), says: "Anthropic key" },
       { provider: "codex", secret: "not a key", says: "OpenAI API key" },
       ...(
         [
@@ -494,6 +497,9 @@ describe.skipIf(DATABASE_URL === undefined)("API-key logins (Postgres)", () => {
       await refusal(connect(owner, "claude", token("sub"), { login: "api-key" })),
     ).toMatchObject({ message: "That is a Claude subscription login, not an API key." });
     expect(
+      await refusal(connect(owner, "claude", claudeUserKey("sub"), { login: "subscription" })),
+    ).toMatchObject({ message: "That is a Claude API key, not a subscription login." });
+    expect(
       await refusal(connect(owner, "codex", codexKey("key"), { login: "subscription" })),
     ).toMatchObject({ message: "That is a Codex API key, not a subscription login." });
     expect(
@@ -504,6 +510,11 @@ describe.skipIf(DATABASE_URL === undefined)("API-key logins (Postgres)", () => {
     expect(
       await run(connect(owner, "claude", claudeKey("key"), { login: "api-key" })),
     ).toMatchObject({ kind: "api-key" });
+    expect(
+      await run(
+        connect(owner, "claude", claudeUserKey("key"), { name: "linked", login: "api-key" }),
+      ),
+    ).toMatchObject({ kind: "api-key", login: { kind: "api-key" } });
   });
 
   it("never lets a subscription replace a key stored before keys had a kind", async () => {

@@ -50,6 +50,13 @@ describe("claude payload", () => {
     expect(() => parseClaudeCredentialPayload({ token: "sk-ant-api03-nope" })).toThrow();
   });
 
+  it("reads a stored key of either Anthropic API key shape, and no other without an endpoint", () => {
+    for (const apiKey of ["sk-ant-api03-FAKEstored", "sk-ant-usr-FAKEstored"]) {
+      expect(parseClaudeCredentialPayload({ apiKey })).toEqual({ apiKey });
+    }
+    expect(() => parseClaudeCredentialPayload({ apiKey: "sk-ant-admin01-FAKEstored" })).toThrow();
+  });
+
   it("accepts the credentials-file shape through the union parser", () => {
     const credentialsJson = makeClaudeCredentialsJson();
 
