@@ -1,6 +1,6 @@
 {
   "format": "sealant-native-assets-v1",
-  "relay": "4b35fc69a0e6ea2c776b439877be978183b8c43bde95fa016da072506f9454ea",
+  "relay": "4702feb2b541f4af9afd2a67e7cf28fdbdf378c7fb706cb311d831f5213e4869",
   "files": [
     {
       "name": "guest_boot.py",
@@ -40,11 +40,11 @@
     },
     {
       "name": "guest_receiver.py",
-      "sha256": "ce26a8a6fce46da1ca44df2b1184a158f9d43cd607d32e54c0da77cae4d55970"
+      "sha256": "6e83cb81af45febda0064bb95e8ab7dcdb3d837387a45b14dff33627e3853a9b"
     },
     {
       "name": "receiver-routes.json",
-      "sha256": "2c1bbf4482410f45e829139a56d6b5f7e00f4f1641ba0eb6c68a710af87d3edf"
+      "sha256": "5b18ecc17803275e9f1b8dd825a8fd13ad9abdc0b243fac1855f91265b7edbeb"
     },
     {
       "name": "bootstrap-crypto.mjs",
@@ -68,7 +68,7 @@
     },
     {
       "name": "guest_readiness.py",
-      "sha256": "85257e36665c62a77205550533e29905d72e6a0c41137f36c907dd67396aeb4e"
+      "sha256": "988f5fa6ec987ebb20e30ac027995c9057304a000b7eec1f781db26d276a85fb"
     },
     {
       "name": "guest_control.py",

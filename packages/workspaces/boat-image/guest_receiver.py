@@ -33,14 +33,16 @@ class Refusal(ValueError):
     pass
 
 
-def load_routes():
+def load_contract():
     """The relay and Core read the same file. It ships beside this module, in the ZIP and on disk."""
     directory = os.path.dirname(__file__)
     path = os.path.join(directory, 'receiver-routes.json')
     # The isolated guest interpreter imports this module from the bundle ZIP.
     raw = Path(path).read_bytes() if os.path.isdir(directory) else __loader__.get_data(path)
     value = json.loads(raw)
-    if not isinstance(value, dict) or value.get('format') != 'sealant-receiver-routes-v1':
+    if (not isinstance(value, dict) or set(value) != {'format', 'routes', 'transientReasons'}
+            or value['format'] != 'sealant-receiver-routes-v1'
+            or not all(isinstance(reason, str) and REASON.fullmatch(reason) for reason in value['transientReasons'])):
         raise ValueError('invalid-receiver-routes')
     routes = {}
     for route in value['routes']:
@@ -48,10 +50,11 @@ def load_routes():
                 or route['path'] != '/sealant/bootstrap/' + route['name'] or route['path'] in routes):
             raise ValueError('invalid-receiver-routes')
         routes[route['path']] = route
-    return routes
+    return routes, frozenset(value['transientReasons'])
 
 
-ROUTES = load_routes()
+# Transient reasons are observations that may change on retry; every other refusal is final.
+ROUTES, TRANSIENT = load_contract()
 
 
 def fields(value, keys):
@@ -381,6 +384,8 @@ def failure(error):
         body['detail'] = detail
     if code != 409:
         body['class'] = type(error).__name__
+    if reason in TRANSIENT:
+        body['retryable'] = True
     return code, body
 
 

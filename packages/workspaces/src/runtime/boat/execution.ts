@@ -104,24 +104,31 @@ const receiverRouteNames = [
   "park",
 ] as const;
 export type BoatReceiverRoute = (typeof receiverRouteNames)[number];
+const reasonCode = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
+const receiverContract = z
+  .strictObject({
+    format: z.literal("sealant-receiver-routes-v1"),
+    routes: z.array(
+      z.strictObject({
+        name: z.enum(receiverRouteNames),
+        path: z.string(),
+        method: z.enum(["GET", "POST"]),
+        budgetMs: z.number().int().positive(),
+      }),
+    ),
+    transientReasons: z.array(reasonCode),
+  })
+  .parse(receiverRoutes);
+/** Receiver reasons that report an observation which may change on retry, not a policy refusal. */
+export const boatReceiverTransientReasons: ReadonlySet<string> = new Set(
+  receiverContract.transientReasons,
+);
 /** Budgets come from the route list the relay and the guest receiver also read. */
 export const boatReceiverRoutes: ReadonlyMap<
   BoatReceiverRoute,
   { readonly method: "GET" | "POST"; readonly budgetMs: number }
 > = (() => {
-  const routes = z
-    .strictObject({
-      format: z.literal("sealant-receiver-routes-v1"),
-      routes: z.array(
-        z.strictObject({
-          name: z.enum(receiverRouteNames),
-          path: z.string(),
-          method: z.enum(["GET", "POST"]),
-          budgetMs: z.number().int().positive(),
-        }),
-      ),
-    })
-    .parse(receiverRoutes).routes;
+  const routes = receiverContract.routes;
   const table = new Map(routes.map((route) => [route.name, route]));
   if (
     table.size !== routes.length ||
@@ -137,32 +144,44 @@ const receiverRoute = (route: BoatReceiverRoute) => {
   return found;
 };
 
-/** Receiver refusals are permanent answers, not lost transport. Only 5xx and no reply stay retryable. */
+/**
+ * The receiver's reason decides, not its status alone: a transient observation such as a lost DNS
+ * answer stays retryable, a policy refusal is final. No reply and 5xx stay transport failures.
+ */
 export type BoatReceiverFailureCode =
   | "receiver-rejected"
   | "receiver-unauthorized"
   | "receiver-route-missing"
   | "receiver-refused"
+  | "receiver-not-ready"
   | "transport-unavailable";
-export const boatReceiverFailureCode = (status: number): BoatReceiverFailureCode =>
-  status === 400
-    ? "receiver-rejected"
-    : status === 401 || status === 403
-      ? "receiver-unauthorized"
-      : status === 404
-        ? "receiver-route-missing"
-        : status === 409
-          ? "receiver-refused"
-          : "transport-unavailable";
+export const boatReceiverFailureCode = (status: number, reason?: string): BoatReceiverFailureCode =>
+  (status === 400 || status === 409) &&
+  reason !== undefined &&
+  boatReceiverTransientReasons.has(reason)
+    ? "receiver-not-ready"
+    : status === 400
+      ? "receiver-rejected"
+      : status === 401 || status === 403
+        ? "receiver-unauthorized"
+        : status === 404
+          ? "receiver-route-missing"
+          : status === 409
+            ? "receiver-refused"
+            : "transport-unavailable";
+/** The one retry rule for guest work: lost transport or a receiver that is not ready yet. */
+export const boatExecutionRetryable = (error: unknown): boolean =>
+  error instanceof BoatExecutionError &&
+  (error.code === "transport-unavailable" || error.code === "receiver-not-ready");
 const receiverReasonSchema = z.object({
-  error: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
+  error: reasonCode,
   detail: z
     .string()
     .regex(/^[A-Za-z0-9_./,=+-]{1,256}$/)
     .optional(),
 });
 /** The receiver's classified reason code, never its free text. */
-const receiverReason = (tail: string) => {
+const receiverReason = (tail: string): { reason?: string; detail?: string } => {
   try {
     const parsed = receiverReasonSchema.safeParse(JSON.parse(tail));
     return parsed.success
@@ -379,13 +398,14 @@ export const createBoatGuestTransport = (
         [access.cookie.reveal(), bearer.reveal()],
         body,
       );
-      const code = boatReceiverFailureCode(response.status);
+      const reason = receiverReason(responseTail);
+      const code = boatReceiverFailureCode(response.status, reason.reason);
       throw new BoatExecutionError(code, {
         step: "receiver-request",
         errorClass: "BoatExecutionError",
         code,
         provider: { operation: `receiver-${route}`, status: response.status, causeClass: null },
-        receiver: { pathClass, responseTail, ...receiverReason(responseTail) },
+        receiver: { pathClass, responseTail, ...reason },
       });
     }
     const reader = response.body?.getReader();

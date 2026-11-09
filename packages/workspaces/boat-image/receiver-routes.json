@@ -24,5 +24,11 @@
       "budgetMs": 90000
     },
     { "name": "park", "path": "/sealant/bootstrap/park", "method": "POST", "budgetMs": 90000 }
+  ],
+  "transientReasons": [
+    "receiver-unavailable",
+    "tunnel-dns-unavailable",
+    "tunnel-handshake-unavailable",
+    "tunnel-probe-unavailable"
   ]
 }

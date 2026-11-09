@@ -182,6 +182,13 @@ describe("hosted Boat receiver HTTP", () => {
       reason: "workspace-limits-unavailable",
     },
     {
+      // Same status, transient reason: a lost DNS answer is retried, a policy refusal is not.
+      status: 409,
+      body: '{"error":"tunnel-dns-unavailable","retryable":true}',
+      code: "receiver-not-ready",
+      reason: "tunnel-dns-unavailable",
+    },
+    {
       status: 503,
       body: '{"class":"OSError","error":"receiver-unavailable"}',
       code: "transport-unavailable",

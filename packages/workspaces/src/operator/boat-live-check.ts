@@ -94,6 +94,51 @@ export interface ProofFailure {
   readonly errorCode: string | null;
   readonly errorMessage: string | null;
 }
+/** The rows the failure lookup reads. The proof core passes Core's repositories. */
+export interface ProofFailureReads {
+  readonly workspace: (
+    id: string,
+  ) => Promise<{ readonly ownerUserId: string; readonly latestRunId: string | null } | undefined>;
+  readonly attempt: (
+    id: string,
+  ) => Promise<{ readonly ownerUserId: string; readonly status: string } | undefined>;
+  readonly runtime: (runId: string) => Promise<
+    | {
+        readonly status: string;
+        readonly errorCode: string | null;
+        readonly errorMessage: string | null;
+      }
+    | undefined
+  >;
+}
+/**
+ * Core's verdict on the workspace's current attempt. Mend sets sealantRunId only once the agent
+ * starts, so a launch that fails earlier is found through the workspace, as publication() does.
+ */
+export const findProofFailure = async (
+  session: ProofSession,
+  ownerId: string,
+  reads: ProofFailureReads,
+): Promise<ProofFailure | undefined> => {
+  if (session.sealantWorkspaceId === null) return undefined;
+  const workspace = await reads.workspace(session.sealantWorkspaceId);
+  if (workspace === undefined) return undefined;
+  if (workspace.ownerUserId !== ownerId) throw new BoatProofError("owner-mismatch");
+  if (workspace.latestRunId === null) return undefined;
+  const attempt = await reads.attempt(workspace.latestRunId);
+  if (attempt === undefined) return undefined;
+  if (attempt.ownerUserId !== ownerId) throw new BoatProofError("owner-mismatch");
+  const instance = await reads.runtime(workspace.latestRunId);
+  if (!["failed", "cancelled"].includes(attempt.status) && instance?.status !== "failed")
+    return undefined;
+  return {
+    runId: workspace.latestRunId,
+    attemptStatus: attempt.status,
+    runtimeStatus: instance?.status ?? null,
+    errorCode: instance?.errorCode ?? null,
+    errorMessage: instance?.errorMessage ?? null,
+  };
+};
 /** The checker reads canonical facts; it cannot manufacture a launch, readiness or deletion receipt. */
 export interface BoatProofServices {
   readonly runtime: (session: ProofSession) => Promise<ProofRuntime | undefined>;

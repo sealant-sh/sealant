@@ -63,11 +63,19 @@ def limits():
 
 def peer(binding):
     record = network.verify(binding)
-    result = json.loads(network.command('/usr/bin/python3', '-I', '-S', '-B', '-c', DNS_PROBE, inside=True))
+    # A lost DNS answer or a peer that has not handshaken yet is an observation, not a policy
+    # refusal. These reasons are listed as transient in receiver-routes.json, so Core retries them.
+    try:
+        result = json.loads(network.command('/usr/bin/python3', '-I', '-S', '-B', '-c', DNS_PROBE, inside=True))
+    except network.Refusal:
+        raise receiver.Refusal('tunnel-dns-unavailable') from None
     if (set(result) != {'dns', 'nonce'} or result['dns'] != 'udp-and-tcp'
             or not isinstance(result['nonce'], str) or not re.fullmatch('[a-f0-9]{32}', result['nonce'])):
         raise receiver.Refusal('tunnel-probe-unavailable')
-    handshake = network.command('/usr/bin/wg', 'show', network.WIRE, 'latest-handshakes', inside=True).split()
+    try:
+        handshake = network.command('/usr/bin/wg', 'show', network.WIRE, 'latest-handshakes', inside=True).split()
+    except network.Refusal:
+        raise receiver.Refusal('tunnel-handshake-unavailable') from None
     if len(handshake) != 2 or handshake[0] != record['config']['gateway_key'] or not handshake[1].isdecimal() or int(handshake[1]) <= 0:
         raise receiver.Refusal('tunnel-handshake-unavailable')
     network.verify(binding)

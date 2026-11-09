@@ -119,8 +119,9 @@ const server = http.createServer(
         },
         timeout: route.budgetMs + RELAY_GRACE_MS,
       });
-      // The listener's idle cutoff guards unauthenticated sockets; a forwarded operation gets its budget.
-      request.socket.setTimeout(route.budgetMs + RELAY_GRACE_MS);
+      // The listener's idle cutoff guards unauthenticated sockets; a forwarded operation gets its
+      // budget. The caller's socket outlives the upstream deadline so the 504 below is delivered.
+      request.socket.setTimeout(route.budgetMs + RELAY_GRACE_MS + IDLE_MS);
       response.once("finish", () => request.socket.setTimeout(IDLE_MS));
       bootstrapRequests.add(upstream);
       const teardown = () => {

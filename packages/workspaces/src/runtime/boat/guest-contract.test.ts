@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
+import dgram from "node:dgram";
 import { once } from "node:events";
 import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
@@ -8,9 +9,11 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { CredentialCipher } from "@sealant/credentials";
-import { BoatExecutionRepo } from "@sealant/db";
+import { BoatAllocationRepo, BoatExecutionRepo, WorkspaceCaptureDrainRepo } from "@sealant/db";
 import {
+  boatAllocationRecordSchema,
   boatExecutionRecordSchema,
+  nativePublicationSchema,
   type BoatExecutionRecord,
   type BoatExecutionTarget,
 } from "@sealant/validators";
@@ -20,7 +23,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import receiverRoutes from "../../../boat-image/receiver-routes.json" with { type: "json" };
-import { BoatReadinessError } from "../../worker/boat-readiness.js";
+import {
+  BoatReadiness,
+  BoatReadinessError,
+  boatReadinessLayerNoDeps,
+} from "../../worker/boat-readiness.js";
+import { BoatResources } from "../../worker/boat-resources.js";
 import { BoatAdapterError } from "./adapter.js";
 import { BoatSecret } from "./config.js";
 import {
@@ -37,7 +45,7 @@ import { boatLaunchDiagnostic } from "./launch-diagnostics.js";
 // Only the provider edge (a local socket) and privileged guest observations are substituted.
 const image = fileURLToPath(new URL("../../../boat-image/", import.meta.url));
 const token = "a".repeat(64);
-const target: BoatExecutionTarget = {
+const contractTarget: BoatExecutionTarget = {
   deploymentId: "contract",
   workspaceId: "workspace",
   runId: "run",
@@ -81,11 +89,66 @@ const secret = (value: string) => {
   return parsed.value;
 };
 
+/** A DNS reply naming the gateway address for the single question in `query`. */
+const answer = (query: Buffer) => {
+  let end = 12;
+  while (query[end] !== 0) end += (query[end] ?? 0) + 1;
+  const question = query.subarray(12, end + 5);
+  const header = Buffer.from([0, 0, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0]);
+  query.copy(header, 0, 0, 2);
+  const record = Buffer.from([0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 30, 0, 4, 100, 127, 255, 253]);
+  return Buffer.concat([header, question, record]);
+};
+
+/**
+ * The tunnel gateway's resolver, on loopback: answers the guest's real DNS probe over UDP and TCP
+ * with the gateway address, and stays silent for the UDP queries it is told to lose.
+ */
+const resolver = async (lose: readonly number[]) => {
+  let queries = 0;
+  // The probe asks UDP and TCP on one port; find a port free for both.
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const udp = dgram.createSocket("udp4");
+    udp.on("message", (message, from) => {
+      if (!lose.includes(++queries)) udp.send(answer(message), from.port, from.address);
+    });
+    await new Promise<void>((done) => udp.bind(0, "127.0.0.1", done));
+    const port = udp.address().port;
+    const tcp = net.createServer((socket) => {
+      socket.on("error", () => undefined);
+      socket.once("data", (data) => {
+        const reply = answer(data.subarray(2));
+        const length = Buffer.alloc(2);
+        length.writeUInt16BE(reply.length);
+        socket.end(Buffer.concat([length, reply]));
+      });
+    });
+    const listening = await new Promise<boolean>((done) => {
+      tcp.once("error", () => done(false));
+      tcp.listen(port, "127.0.0.1", () => done(true));
+    });
+    if (!listening) {
+      udp.close();
+      continue;
+    }
+    cleanup.push(async () => {
+      udp.close();
+      await new Promise<void>((done) => tcp.close(() => done()));
+    });
+    return { port, queries: () => queries };
+  }
+  throw new Error("no port free for both UDP and TCP");
+};
+
 /** Starts receiver and relay exactly as the guest units wire them, then returns Core's execution. */
 const guest = async (options: {
   readonly kernelLimits?: boolean;
   readonly delays?: Readonly<Record<string, number>>;
+  readonly dnsPort?: number;
+  readonly target?: BoatExecutionTarget;
 }) => {
+  const { target: chosen, ...harness } = options;
+  const target = chosen ?? contractTarget;
   const root = await mkdtemp(join(tmpdir(), "boat-guest-contract-"));
   cleanup.push(async () => {
     process.stdout.write(
@@ -117,7 +180,7 @@ const guest = async (options: {
           instance_id: target.sandboxId,
           disk_lineage: target.diskLineage,
         },
-        ...options,
+        ...harness,
       }),
     ],
     { stdio: ["ignore", "ignore", "pipe"] },
@@ -285,7 +348,7 @@ const guest = async (options: {
     if (Result.isFailure(isolated)) throw isolated.failure;
     return isolated.success;
   };
-  return { run, prepare, dispatched, log: () => receiverLog, hosted, real };
+  return { run, prepare, dispatched, log: () => receiverLog, hosted, real, layer, launch, target };
 };
 
 describe("Boat guest wire contract: Core, relay and receiver", () => {
@@ -293,24 +356,28 @@ describe("Boat guest wire contract: Core, relay and receiver", () => {
     const g = await guest({});
     const isolated = await g.prepare();
     const permitted = await g.run((execution) =>
-      execution.permit(target, {
+      execution.permit(contractTarget, {
         resourceReceipt: isolated.receipt,
         tunnelReceipt: "c".repeat(64),
       }),
     );
     expect(Result.isSuccess(permitted)).toBe(true);
-    expect(await g.run((execution) => execution.start(target.runtimeInstanceId))).toMatchObject({
+    expect(
+      await g.run((execution) => execution.start(contractTarget.runtimeInstanceId)),
+    ).toMatchObject({
       _tag: "Success",
       success: "running",
     });
-    expect(Result.isSuccess(await g.run((execution) => execution.readiness(target)))).toBe(true);
-    expect(Result.isSuccess(await g.run((execution) => execution.hold(target)))).toBe(true);
+    expect(Result.isSuccess(await g.run((execution) => execution.readiness(contractTarget)))).toBe(
+      true,
+    );
+    expect(Result.isSuccess(await g.run((execution) => execution.hold(contractTarget)))).toBe(true);
     // Before this contract, the relay answered 404 here and FINAL close never reached the guest.
-    expect(await g.run((execution) => execution.recover(target))).toMatchObject({
+    expect(await g.run((execution) => execution.recover(contractTarget))).toMatchObject({
       _tag: "Success",
       success: "running",
     });
-    const parked = await g.run((execution) => execution.park(target, randomUUID()));
+    const parked = await g.run((execution) => execution.park(contractTarget, randomUUID()));
     // The real parking handler ran and refused this unprivileged test process as its writer.
     expect(parked).toMatchObject({
       _tag: "Failure",
@@ -335,7 +402,7 @@ describe("Boat guest wire contract: Core, relay and receiver", () => {
     const g = await guest({ kernelLimits: true });
     const isolated = await g.prepare();
     const refused = await g.run((execution) =>
-      execution.permit(target, {
+      execution.permit(contractTarget, {
         resourceReceipt: isolated.receipt,
         tunnelReceipt: "c".repeat(64),
       }),
@@ -374,7 +441,7 @@ describe("Boat guest wire contract: Core, relay and receiver", () => {
     const isolated = await g.prepare();
     const began = Date.now();
     const permitted = await g.run((execution) =>
-      execution.permit(target, {
+      execution.permit(contractTarget, {
         resourceReceipt: isolated.receipt,
         tunnelReceipt: "c".repeat(64),
       }),
@@ -390,4 +457,144 @@ describe("Boat guest wire contract: Core, relay and receiver", () => {
       diagnostic: { provider: { operation: "receiver-status", status: 401 } },
     });
   }, 30_000);
+  it("retries a lost DNS answer through the real peer, transport and worker readiness loop", async () => {
+    // The reviewer's repro: one UDP answer goes missing while the worker observes readiness.
+    // Query 1 belongs to permit; query 2 is readiness's first attempt.
+    const dns = await resolver([2]);
+    const consumer = randomUUID();
+    const publicationId = randomUUID();
+    const workerTarget: BoatExecutionTarget = {
+      deploymentId: "contract",
+      workspaceId: "workspace",
+      runId: consumer,
+      runtimeInstanceId: consumer,
+      launchAttemptId: randomUUID(),
+      sourceId: publicationId,
+      sandboxId: "bx_3456789a",
+      diskLineage: randomUUID(),
+      bootId: contractTarget.bootId,
+      manifestDigest: "a".repeat(64),
+    };
+    const hash = "a".repeat(64);
+    const runtime = {
+      source: `ghcr.io/sealant-sh/sealantd-next:test@sha256:${hash}`,
+      platform: "linux/amd64",
+      manifest: hash,
+      sealantd: hash,
+      socat: hash,
+      relay: hash,
+    };
+    const allocation = boatAllocationRecordSchema.parse({
+      input: {
+        deploymentId: workerTarget.deploymentId,
+        workspaceId: workerTarget.workspaceId,
+        consumer: { runId: consumer, runtimeInstanceId: consumer },
+        launchAttemptId: workerTarget.launchAttemptId,
+        publication: nativePublicationSchema.parse({
+          kind: "boat-native",
+          publicationId,
+          snapshot: {
+            kind: "boat-saved-snapshot",
+            owner: publicationId,
+            build: randomUUID(),
+            recipeHash: hash,
+            receiptHash: hash,
+            runtime,
+            identity: {
+              name: `contract-${publicationId}`,
+              sourceSandboxId: "bx_23456789",
+              createdAt: "2026-11-09T00:00:00Z",
+              snapshotId: "contract-image",
+            },
+          },
+          evidence: {
+            imageProbe: {
+              version: 1,
+              tools: {
+                sudo: true,
+                sudoSetuid: true,
+                useradd: true,
+                groupadd: true,
+                setfacl: true,
+                getfacl: true,
+                setpriv: true,
+              },
+              sudoersMend: true,
+              sudoersIncludesDir: true,
+              noNewPrivileges: false,
+              passwdWritable: true,
+              mendGroup: "present",
+              reservedIdsInUse: [],
+              personEnv: true,
+              sharedDirs: [],
+              sealantd: null,
+            },
+            receiptHash: hash,
+            receipt: "synthetic",
+            runtime,
+            assetsHash: hash,
+            recipeHash: hash,
+            daemonRecovery: "unknown",
+            executorRecovery: "unverified",
+          },
+        }),
+        scope: { kind: "owner", ownerUserId: "usr_contract" },
+        sourceKind: "capture",
+      },
+      idempotencyKey: randomUUID(),
+      diskLineage: workerTarget.diskLineage,
+      manifestDigest: workerTarget.manifestDigest,
+      phase: "bound",
+      sandboxId: workerTarget.sandboxId,
+      conflictingSandboxes: [],
+      target: workerTarget,
+      reason: null,
+    });
+    const g = await guest({ dnsPort: dns.port, target: workerTarget });
+    const guestReceipt = await g.prepare();
+    // Only the stores and the host gateway are fixtures; the worker's own launch and retry run.
+    const readiness = boatReadinessLayerNoDeps.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          g.layer,
+          Layer.mock(BoatAllocationRepo)({
+            get: () => Effect.succeed(allocation),
+            isActive: () => Effect.succeed(true),
+          }),
+          Layer.mock(WorkspaceCaptureDrainRepo)({ getByRunId: () => Effect.succeed(undefined) }),
+          Layer.mock(BoatResources)({
+            prepare: () =>
+              Effect.succeed({
+                guest: guestReceipt,
+                gateway: {
+                  container: "gateway",
+                  containerId: "gateway-id",
+                  gatewayEpoch: "1",
+                  binding: hash,
+                  publicKey: "gateway",
+                  peerKey: "peer",
+                  listenPort: 40000,
+                  reachSubnet: "10.98.0.0/27",
+                  gateway: "100.127.255.253",
+                  client: "100.127.255.254",
+                  receipt: "c".repeat(64),
+                  peerHandshake: "unverified",
+                },
+              }),
+          }),
+        ),
+      ),
+    );
+    const launched = await Effect.runPromise(
+      Effect.flatMap(BoatReadiness, (worker) =>
+        worker.launch(workerTarget, Redacted.make(g.launch)),
+      ).pipe(Effect.provide(readiness), Effect.result),
+    );
+    if (Result.isFailure(launched)) throw launched.failure;
+    // One lost attempt, then the successful pair that brackets Core's daemon probe.
+    expect((await g.dispatched()).filter((route) => route === "readiness")).toHaveLength(3);
+    expect(g.log().match(/"error": "tunnel-dns-unavailable"/g)).toHaveLength(1);
+    expect(dns.queries()).toBeGreaterThanOrEqual(3);
+    expect(g.log()).toContain('"error": "tunnel-dns-unavailable"');
+  }, 60_000);
 });

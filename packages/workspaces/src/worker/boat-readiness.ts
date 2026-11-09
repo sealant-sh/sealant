@@ -12,7 +12,7 @@ import { Context, Effect, Layer, Schedule } from "effect";
 
 import {
   BoatExecution,
-  BoatExecutionError,
+  boatExecutionRetryable,
   type BoatReadyReceipt,
 } from "../runtime/boat/execution.js";
 import {
@@ -102,16 +102,14 @@ const make: Effect.Effect<
       Effect.retry({
         times: 20,
         schedule: Schedule.spaced("1 second"),
-        while: (error) =>
-          error instanceof BoatExecutionError && error.code === "transport-unavailable",
+        while: boatExecutionRetryable,
       }),
     );
     return yield* observe(target).pipe(
       Effect.retry({
         times: 20,
         schedule: Schedule.spaced("1 second"),
-        while: (error) =>
-          error instanceof BoatExecutionError && error.code === "transport-unavailable",
+        while: boatExecutionRetryable,
       }),
     );
   });

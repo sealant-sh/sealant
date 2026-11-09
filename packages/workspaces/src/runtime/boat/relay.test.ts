@@ -279,6 +279,32 @@ describe("standalone Boat relay", () => {
     expect(Date.now() - began).toBeGreaterThan(6_500);
   }, 20_000);
 
+  it("answers 504 when the receiver overruns its route budget, before closing the caller", async () => {
+    const path = await mkdtemp(join(directory, "case-overrun-"));
+    const bootstrapSocket = join(path, "bootstrap.sock");
+    const held = new Set<http.ServerResponse>();
+    // Never answers: status's 5 s budget plus the relay's 5 s grace must end in a 504.
+    const upstream = http.createServer((request, response) => {
+      request.resume();
+      held.add(response);
+    });
+    await new Promise<void>((done) => upstream.listen(bootstrapSocket, done));
+    resources.push(async () => {
+      for (const response of held) response.destroy();
+      upstream.closeAllConnections();
+      await new Promise<void>((done) => upstream.close(() => done()));
+    });
+    const relay = await fixture(source, undefined, bootstrapSocket);
+    const status = receiverRoutes.routes.find((route) => route.name === "status");
+    if (status === undefined) throw new Error("status route missing from the shared list");
+    const began = Date.now();
+    const response = await fetch(`${relay.origin}${status.path}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(response.status).toBe(504);
+    expect(Date.now() - began).toBeGreaterThanOrEqual(status.budgetMs + 5_000 - 100);
+  }, 20_000);
+
   it.each(["source", "bundle"])(
     "authenticates both routes and forwards binary bytes with %s artifact",
     async (kind) => {

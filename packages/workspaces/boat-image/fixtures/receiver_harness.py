@@ -41,10 +41,30 @@ receiver.revalidate_execution = lambda: []
 receiver.locked = contextlib.nullcontext
 receiver.current_control = lambda: {'boot_id': options['bootId'], 'token': receiver.Bearer(options['token'])}
 # Kernel networking: `wg pubkey` derivation, namespace setup and its observation.
-network.command = lambda *args, **kwargs: options['wireguardPublicKey']
+command = network.command
+network.command = lambda program, *args, **kwargs: (
+    options['wireguardPublicKey'] if (program, args) == ('/usr/bin/wg', ('pubkey',)) else command(program, *args, **kwargs))
 network.prepare = lambda config: None
 network.inspect = lambda config: {'namespace': {'device': 1, 'inode': 1}}
-readiness.peer = lambda binding: {'dns': 'udp-and-tcp', 'nonce': 'd' * 32}
+if 'dnsPort' in options:
+    # The real peer(): its DNS probe runs as a real process against the test's resolver on
+    # loopback instead of the tunnel gateway. Only entering the namespace and reading the
+    # kernel's WireGuard handshake are substituted.
+    readiness.DNS_PROBE = readiness.DNS_PROBE.replace("('100.127.255.253',53)", repr(('127.0.0.1', options['dnsPort'])))
+    invoke = guest.invoke
+
+    def local(program, *args):
+        if program == '/usr/bin/nsenter':
+            return list(args[args.index('--') + 1:])
+        if program == '/usr/bin/python3':
+            return [sys.executable, *args]
+        if program == '/usr/bin/wg' and args[0] == 'show':
+            gateway = json.loads(network.record_path().read_bytes())['config']['gateway_key']
+            return [sys.executable, '-c', 'print(%r)' % (gateway + '\t1700000000')]
+        return invoke(program, *args)
+    guest.invoke = local
+else:
+    readiness.peer = lambda binding: {'dns': 'udp-and-tcp', 'nonce': 'd' * 32}
 if not options.get('kernelLimits'):
     # Otherwise the real limits() reads systemd properties and refuses their absence.
     readiness.limits = lambda: '/sealant.slice/sealant-workspace.slice'

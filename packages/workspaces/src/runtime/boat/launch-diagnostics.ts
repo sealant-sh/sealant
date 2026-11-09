@@ -58,6 +58,7 @@ const diagnosticSchema = z.object({
       "receiver-unauthorized",
       "receiver-route-missing",
       "receiver-refused",
+      "receiver-not-ready",
       "admission-refused",
       "launch-held",
       "close-pending",
