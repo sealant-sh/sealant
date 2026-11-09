@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 
-import { workspacePublicationSchema as publicPublicationSchema } from "@sealant/api-contracts";
+import {
+  ResourceInstanceKey,
+  ResourceWorktreeKey,
+  workspacePublicationSchema as publicPublicationSchema,
+} from "@sealant/api-contracts";
 import {
   CredentialCipher,
   credentialCipherLayer,
@@ -9,6 +13,8 @@ import {
 } from "@sealant/credentials";
 import {
   BoatTunnelRepo,
+  ResourceInstanceRepo,
+  ResourceInstanceRepoLive,
   WorkspaceCaptureDrainRepo,
   ConnectedAccountRepo,
   ConnectedAccountRepoLive,
@@ -59,6 +65,7 @@ import { BoatImageInspection, boatImageInspectionLayer } from "../images/boat/in
 import { boatProofConfigSchema } from "../operator/boat-live-check.js";
 import { makeBoatProofCore } from "../operator/boat-proof-core.js";
 import type { RegistryClient } from "../registry/client.js";
+import { postgresSpec } from "../resources/resource.fixture.js";
 import { BoatRuntimeAdapter, BoatAdapterError } from "../runtime/boat/adapter.js";
 import { BoatApiError } from "../runtime/boat/config.js";
 import { BoatExecutionError } from "../runtime/boat/execution.js";
@@ -69,6 +76,7 @@ import { boatSessionFixture } from "../runtime/boat/session.fixture.js";
 import { startCaptureChannel } from "../runtime/capture-channel.fixture.js";
 import { LaunchRetainedError } from "../runtime/launch-retention.js";
 import type { RuntimeAdapter, RuntimeLaunch } from "../runtime/runtime-adapter.js";
+import { BoatResourcesError } from "./boat-resources.js";
 import {
   processWorkspaceBuildJob,
   processWorkspaceBuildJobEffect,
@@ -240,7 +248,7 @@ const setup = async (
 const noop = async () => {};
 
 describe.skipIf(!enabled)("native publication worker and persistence (disposable Postgres)", () => {
-  it("builds, readies, shells, FINAL closes and resumes a fresh Boat VM through the real worker", async () => {
+  it("builds, readies with a person-stopped resource, shells, FINAL closes and resumes through the real worker", async () => {
     const bundle = process.env.SEALANT_BOAT_RUNTIME_BUNDLE;
     if (bundle === undefined) throw new Error("exact runtime bundle required");
     const daemon = await boatSessionDaemon(bundle);
@@ -258,6 +266,44 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
               name: "Boat chain",
               ownerUserId: s.owner,
             }),
+          );
+          const resourceDomainId = `rdm:${randomUUID()}`;
+          const resourceReason = { kind: "person", by: "boat-check" } as const;
+          const resourceStatus = () =>
+            Effect.gen(function* () {
+              const repo = yield* ResourceInstanceRepo;
+              return yield* repo.get(resourceDomainId, ResourceInstanceKey.make("db"));
+            }).pipe(
+              Effect.provide(ResourceInstanceRepoLive),
+              Effect.provideService(SealantDB, s.db),
+            );
+          await Effect.runPromise(
+            Effect.gen(function* () {
+              yield* seedImageScope(s.db, resourceDomainId, s.owner);
+              const repo = yield* ResourceInstanceRepo;
+              const outcome = yield* repo.up({
+                resourceDomainId,
+                key: ResourceInstanceKey.make("db"),
+                spec: postgresSpec(),
+                cause: "use",
+              });
+              if (outcome.kind !== "upserted") throw new Error("resource missing");
+              yield* repo.setDesired(outcome.instance.id, { kind: "stop", reason: resourceReason });
+              yield* repo.recordObserved(outcome.instance.id, {
+                kind: "stopped",
+                at: "2026-11-08T02:15:00Z",
+                reason: resourceReason,
+              });
+              yield* repo.link({
+                workspaceId,
+                resourceDomainId,
+                worktreeKey: ResourceWorktreeKey.make("wt_1"),
+                aliases: null,
+              });
+            }).pipe(
+              Effect.provide(ResourceInstanceRepoLive),
+              Effect.provideService(SealantDB, s.db),
+            ),
           );
           const cipher = await Effect.runPromise(
             credentialCipherLayer({ key: Buffer.alloc(32, 7).toString("base64") }).pipe(
@@ -323,6 +369,12 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
               launchOwner: null,
             });
             expect(instance?.resourceId).toMatch(/^bx_/);
+            expect(await Effect.runPromise(resourceStatus())).toMatchObject({
+              desired: "stopped",
+              stopReason: resourceReason,
+              observed: { kind: "stopped", reason: resourceReason },
+            });
+            expect(session.gateway.requests.at(-1)?.instances).toEqual([]);
             return { job, instance };
           };
           const stop = async (runId: string, sandboxId: string) => {
@@ -923,7 +975,7 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
     expect(s.fixture.mutations).toEqual([]);
   });
 
-  it.each(["provider", "command", "receiver"])(
+  it.each(["provider", "command", "receiver", "resources"])(
     "keeps exact publication identity and its pin after an uncertain allocated launch: %s",
     async (failure) => {
       const s = await setup();
@@ -964,14 +1016,21 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
                           responseTail: "token=private-launch-credential receiver-unavailable",
                         },
                       })
-                    : new BoatApiError(
-                        "execute",
-                        503,
-                        "transport_error",
-                        new Error("Bearer private-launch-credential", {
-                          cause: { code: "UND_ERR_SOCKET" },
-                        }),
-                      ),
+                    : failure === "resources"
+                      ? new BoatResourcesError("unavailable", {
+                          step: "readiness",
+                          errorClass: "BoatTunnelError",
+                          code: "gateway-unavailable",
+                          resourceOperation: "configure-gateway",
+                        })
+                      : new BoatApiError(
+                          "execute",
+                          503,
+                          "transport_error",
+                          new Error("Bearer private-launch-credential", {
+                            cause: { code: "UND_ERR_SOCKET" },
+                          }),
+                        ),
                 "read-boot-id",
               ),
             ),
@@ -995,7 +1054,9 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
           ? /read-boot-id.*BoatApiError.*execute.*503.*UND_ERR_SOCKET/
           : failure === "command"
             ? /bind-exchange.*BoatExecutionError.*exitCode.*stderrTail.*outer-owner-required/
-            : /receiver-request.*BoatExecutionError.*receiver-status.*503.*receiver-unavailable/,
+            : failure === "receiver"
+              ? /receiver-request.*BoatExecutionError.*receiver-status.*503.*receiver-unavailable/
+              : /readiness.*BoatTunnelError.*gateway-unavailable.*configure-gateway/,
       );
       if (failure === "command") expect(failedRuntime?.errorMessage).toContain("REDACTED");
       expect(failedRuntime?.errorMessage).not.toContain("private-launch-credential");
