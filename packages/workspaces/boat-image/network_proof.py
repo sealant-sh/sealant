@@ -195,6 +195,51 @@ finally:
 ''')
         self.assertEqual(result['uidmap'].split(), ['0', '131072', '65536'])
 
+    def test_receiver_isolation_preserves_provider_wireguard(self):
+        # Boat's restored guest has its own outer wg0. An empty Docker netns missed this.
+        self.docker('exec', self.guest, 'ip', 'link', 'add', 'wg0', 'type', 'wireguard')
+        self.docker('exec', self.guest, 'ip', 'address', 'add', '10.248.0.1/32', 'dev', 'wg0')
+        self.docker('exec', self.guest, 'ip', 'link', 'set', 'wg0', 'up')
+        provider = self.docker('exec', self.guest, 'ip', '-j', 'address', 'show', 'dev', 'wg0')
+        collision = self.execute(self.guest, "import json,subprocess,guest_boot as g;p=subprocess.run(g.invoke('/usr/sbin/ip','link','add','wg0','type','wireguard'),capture_output=True,text=True);print(json.dumps({'exit':p.returncode,'stderr':p.stderr}))")
+        self.assertEqual(collision['exit'], 2)
+        self.assertIn('File exists', collision['stderr'])
+        print(json.dumps({'providerInterfaceCollision': collision}))
+        result = self.execute(self.guest, r'''import http.client,json,socket,sys,threading
+from unittest.mock import patch
+import guest_boot as g, guest_receiver as r
+c=json.load(sys.stdin); b=c['binding']
+r.private_directory(r.RUNTIME)
+import subprocess
+subprocess.run(['mount','-t','tmpfs','-o','mode=0700','tmpfs',str(r.RUNTIME)],check=True)
+g.save(r.RUNTIME/'control.json',{'boot_id':g.boot_id(),'token':'a'*64})
+g.save(g.ROOT/'receiver.json',{'format':'sealant-receiver-v1','identity':b['identity'],
+ 'admission':{'status':'installed','epoch':b['epoch'],'operation_id':b['operation_id'],'boot_id':b['boot_id'],'digest':'a'*64}})
+# The full-image receipt/held-process guard is proven separately. This fixture supplies
+# its accepted result; HTTP authentication, binding, tmpfs and every network command are real.
+with patch.object(g,'revalidate',return_value=(None,[],{})):
+ server=r.UnixServer(str(r.RUNTIME/'test.sock'),r.Handler)
+ thread=threading.Thread(target=server.serve_forever);thread.start()
+ try:
+  def request():
+   client=http.client.HTTPConnection('localhost',timeout=10)
+   client.sock=socket.socket(socket.AF_UNIX);client.sock.connect(str(r.RUNTIME/'test.sock'))
+   try:
+    client.request('POST','/sealant/bootstrap/isolate',json.dumps(c),
+     {'Authorization':'Bearer '+'a'*64,'Content-Type':'application/json'})
+    reply=client.getresponse();return {'status':reply.status,'body':json.loads(reply.read())}
+   finally: client.close()
+  first=request();second=request()
+  print(json.dumps({'first':first,'second':second}))
+ finally: server.shutdown();thread.join();server.server_close()
+''', self.config)
+        self.assertEqual(result['first']['status'], 200, result)
+        self.assertEqual(result['first'], result['second'])
+        self.assertTrue(result['first']['body']['configured'])
+        self.assertEqual(self.docker('exec', self.guest, 'ip', '-j', 'address', 'show', 'dev', 'wg0'), provider)
+        self.assertEqual(self.execute(self.guest, "import json,sys,guest_readiness as r;print(json.dumps(r.peer(json.load(sys.stdin))))", self.binding)['dns'], 'udp-and-tcp')
+        self.assertEqual(self.query('100.127.255.253', 53, 'udp'), '100.127.255.253')
+
     def test_partial_setup_cannot_reissue(self):
         partial = self.execute(self.guest, '''import json,sys,guest_boot as g,guest_network as n
 c=n.parse(json.load(sys.stdin));g.save(n.record_path(),{'format':'sealant-network-state-v1','status':'preparing','config':n.public(c)},exclusive=True)
