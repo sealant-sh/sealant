@@ -169,11 +169,10 @@ export const scenarios = {
         const outcome = await awaitOutcome(stack, run, 10 * 60_000);
         if (outcome.view.error !== null && /stale-transition/.test(outcome.view.error))
           throw new Error(`launch lost the exchange race to the sweep: ${outcome.view.error}`);
+        // The delay must have landed on the launch's first bind.
         expect(
-          stack.boat.events.filter(
-            (event) => event.kind === "command:detached" && BIND.test(event.detail ?? ""),
-          ).length,
-        ).toBeGreaterThanOrEqual(1);
+          stack.boat.events.filter((event) => event.kind === "fault:detached-delay"),
+        ).toHaveLength(1);
         if (outcome.status === "ready") {
           const at = Date.now();
           await run.workspace.stop();
