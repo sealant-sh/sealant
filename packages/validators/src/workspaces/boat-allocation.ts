@@ -50,6 +50,9 @@ export const boatAllocationRecordSchema = z
           targetId: sandbox,
           completed: z.literal(true),
         }),
+        // Boat holds no VM for this launch: it never issued create, or its create was replayed
+        // under the same idempotency key and definitively rejected.
+        z.strictObject({ kind: z.literal("never-created"), completed: z.literal(true) }),
       ])
       .optional(),
   })
@@ -57,13 +60,15 @@ export const boatAllocationRecordSchema = z
     const { phase, sandboxId, target, input, reason } = record;
     const closing = phase === "deleting" || phase === "deleted";
     const valid = closing
-      ? sandboxId !== null &&
-        reason === null &&
-        record.removal !== undefined &&
-        (record.removal.kind === "issued"
-          ? phase === "deleting"
-          : record.removal.targetId === sandboxId &&
-            (phase !== "deleted" || record.removal.completed))
+      ? record.removal?.kind === "never-created"
+        ? phase === "deleted" && sandboxId === null && target === null && reason === null
+        : sandboxId !== null &&
+          reason === null &&
+          record.removal !== undefined &&
+          (record.removal.kind === "issued"
+            ? phase === "deleting"
+            : record.removal.targetId === sandboxId &&
+              (phase !== "deleted" || record.removal.completed))
       : record.removal === undefined &&
         (phase === "reserved" || phase === "issued"
           ? sandboxId === null && target === null && reason === null

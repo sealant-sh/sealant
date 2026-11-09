@@ -65,8 +65,9 @@ const parse = (value: unknown) =>
 const transitions: Readonly<
   Record<BoatAllocationRecord["phase"], readonly BoatAllocationRecord["phase"][]>
 > = {
-  reserved: ["issued", "held"],
-  issued: ["allocated", "held"],
+  // `deleted` with no VM only once Boat is recorded to hold none (`removal.kind` never-created).
+  reserved: ["issued", "held", "deleted"],
+  issued: ["allocated", "held", "deleted"],
   // `deleted` straight from a live phase only on Boat's own positive absence (`removal.kind` absent).
   allocated: ["bound", "held", "deleting", "deleted"],
   bound: ["deleting", "deleted"],
@@ -220,7 +221,10 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
         (next.phase === "deleting" && previous.sandboxId === null) ||
         (next.phase === "deleted" &&
           previous.phase !== "deleting" &&
-          (next.removal?.kind !== "absent" || previous.sandboxId === null)) ||
+          !(
+            (next.removal?.kind === "absent" && previous.sandboxId !== null) ||
+            (next.removal?.kind === "never-created" && previous.sandboxId === null)
+          )) ||
         ((previous.phase !== "allocated" || next.phase !== "bound") &&
           !isDeepStrictEqual(previous.target, next.target)) ||
         (next.removal?.kind !== "absent" &&

@@ -18,7 +18,12 @@ import { Cause, Context, Effect, Layer, Schedule } from "effect";
 import { z } from "zod";
 
 import { safeCommandTail } from "../../images/boat/command-diagnostics.js";
-import { BoatOwnership, boatSandboxIdSchema, type BoatResult } from "./config.js";
+import {
+  BoatOwnership,
+  boatSandboxIdSchema,
+  type BoatApiError,
+  type BoatResult,
+} from "./config.js";
 import { BoatExecution, type BoatExecutionService } from "./execution.js";
 import {
   boatLaunchDiagnostic,
@@ -198,20 +203,55 @@ const make: Effect.Effect<
         });
         return yield* Effect.fail(new BoatAllocationError("allocation-held"));
       }
-      if (discovered.kind !== "found")
-        return yield* Effect.fail(
-          new BoatAllocationError(
-            discovered.reason === "inventory-unavailable"
-              ? "provider-unavailable"
-              : "allocation-pending",
-          ),
-        );
-      if (!boatAllocationMatches(record, discovered.sandbox))
+      if (discovered.kind === "unknown" && discovered.reason === "inventory-unavailable")
+        return yield* Effect.fail(new BoatAllocationError("provider-unavailable"));
+      let sandbox = discovered.kind === "found" ? discovered.sandbox : undefined;
+      if (sandbox === undefined) {
+        // No VM carries this launch's labels: its create reply was lost, Boat has not listed it
+        // yet, or create was never sent. Replay create under the same idempotency key. Boat answers
+        // with the VM it already accepted for that key, or creates it now; either way Core ends
+        // with a positive identity, never an inference from an empty list or elapsed time.
+        const replay = yield* Effect.tryPromise(() =>
+          api.create({
+            idempotencyKey: record.idempotencyKey,
+            ownership,
+            lifetime: { kind: "production-session" },
+            from: record.input.publication.snapshot.identity.name,
+          }),
+        ).pipe(Effect.orElseSucceed(() => undefined));
+        if (replay !== undefined && !replay.ok && createRejected(replay.error)) {
+          // A definite refusal of this key: an earlier acceptance would have been replayed, so
+          // Boat holds no VM for the launch.
+          yield* observer
+            .neverCreated(record)
+            .pipe(Effect.mapError(() => new BoatAllocationStoreError("unavailable")));
+          yield* repo.advance(record, {
+            ...record,
+            phase: "deleted",
+            removal: { kind: "never-created", completed: true },
+          });
+          return yield* Effect.fail(
+            new BoatAllocationError(
+              "allocation-held",
+              boatLaunchDiagnostic(replay.error, "create"),
+            ),
+          );
+        }
+        if (replay === undefined || !replay.ok)
+          return yield* Effect.fail(
+            new BoatAllocationError(
+              "allocation-pending",
+              replay === undefined ? undefined : boatLaunchDiagnostic(replay.error, "create"),
+            ),
+          );
+        sandbox = replay.value;
+      }
+      if (!boatAllocationMatches(record, sandbox))
         return yield* Effect.fail(new BoatAllocationError("target-mismatch"));
       record = yield* repo.advance(record, {
         ...record,
         phase: "allocated",
-        sandboxId: discovered.sandbox.id,
+        sandboxId: sandbox.id,
       });
     }
     if (record.sandboxId === null)
@@ -417,6 +457,24 @@ const make: Effect.Effect<
   return BoatAllocation.of({ prepare, reconcile });
 });
 /** Open assembly for the worker's sealed exchange and provider infrastructure. */
+/**
+ * Boat refused a create outright: what it was asked for cannot be made (source snapshot gone,
+ * account or plan limits, no machine). A replay under an accepted key is answered with that VM,
+ * never with these, so they prove Boat holds no VM for the key.
+ */
+const createRejected = (error: BoatApiError) =>
+  error.status !== null &&
+  error.status >= 400 &&
+  error.status < 500 &&
+  [
+    "snapshot_not_found",
+    "snapshot_data_expired",
+    "insufficient_balance",
+    "machine_class_plan_required",
+    "trial_auto_stop_required",
+    "trial_saved_snapshots_not_allowed",
+    "no_ready_machine",
+  ].includes(error.code);
 export const boatAllocationLayerNoDeps: Layer.Layer<
   BoatAllocation,
   never,

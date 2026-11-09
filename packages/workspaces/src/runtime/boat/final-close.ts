@@ -474,7 +474,20 @@ const make: Effect.Effect<
     if ((yield* canonical.getByRunId(runId))?.custodyContract === 3) return "skipped" as const;
     const observed = yield* observations.get(id).pipe(Effect.mapError(observeError));
     if (observed?.presence === "absent") return yield* dischargeAbsent(allocation);
-    if (allocation.sandboxId === null || allocation.phase === "deleted") return "skipped" as const;
+    if (allocation.sandboxId === null) {
+      // Stopped before create was ever issued: Boat was never asked for a VM.
+      if (allocation.phase !== "held" || allocation.reason !== "run-stopped")
+        return "skipped" as const;
+      yield* observer.neverCreated(allocation).pipe(Effect.mapError(observeError));
+      const terminal = yield* allocations.advance(allocation, {
+        ...allocation,
+        phase: "deleted",
+        reason: null,
+        removal: { kind: "never-created", completed: true },
+      });
+      return yield* dischargeAbsent(terminal);
+    }
+    if (allocation.phase === "deleted") return "skipped" as const;
     let instance = yield* runtimes.getRuntimeInstanceByRunId(runId);
     if (instance?.adapter !== "boat") return "skipped" as const;
     if (instance.status === "pending" && instance.stopReason === null) {

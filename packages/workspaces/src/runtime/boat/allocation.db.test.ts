@@ -93,7 +93,7 @@ import { cases as launchCases } from "../docker-runtime-adapter.golden-fixture.j
 import { LaunchRetainedError } from "../launch-retention.js";
 import { BoatRuntimeAdapter } from "./adapter.js";
 import { ProviderFixture, GuestFixture, GatewayFixture } from "./allocation.fixture.js";
-import { BoatAllocation, boatAllocationLayer } from "./allocation.js";
+import { BoatAllocation, boatAllocationLayer, boatAllocationLayerNoDeps } from "./allocation.js";
 import { HttpBoatApi } from "./api.js";
 import { BoatOwnership, BoatSecret } from "./config.js";
 import { boatDischargeLayerNoDeps } from "./discharge.js";
@@ -2621,22 +2621,31 @@ describe.runIf(databaseUrl !== undefined)(
         expect(s.provider.creates).toHaveLength(1);
         expect(s.guest.targets).toHaveLength(1);
       }));
-    it("keeps a pre-send crash issued even after empty or unavailable inventory and keeps its pin", () =>
+    it("resolves an issued create with no VM identity by replaying it under the same key (audit S4)", () =>
       test(async (s) => {
         const record = await execute(s.repo.reserve(reservation(s.input)));
-        await execute(s.repo.advance(record, { ...record, phase: "issued" }));
-        expect((await execute(s.allocations.reconcile({ limit: 20 }))).entries[0]?.outcome).toBe(
-          "pending",
-        );
+        const issued = await execute(s.repo.advance(record, { ...record, phase: "issued" }));
+        // An inventory Boat cannot list proves nothing: no replay, the pin stays.
         s.provider.inventoryUnavailable = true;
         expect((await execute(s.allocations.reconcile({ limit: 20 }))).entries[0]?.outcome).toBe(
           "unavailable",
         );
         expect(s.provider.creates).toHaveLength(0);
-        expect(s.guest.targets).toHaveLength(0);
         await expect(
           execute(s.catalog.release(s.input.consumer, s.input.publication.publicationId)),
         ).rejects.toThrow("consumer-conflict");
+        // An empty inventory: the create was lost before Boat accepted it, or Boat has not listed
+        // it yet. Replaying it under the same idempotency key yields a positive identity.
+        s.provider.inventoryUnavailable = false;
+        expect((await execute(s.allocations.reconcile({ limit: 20 }))).entries[0]?.outcome).toBe(
+          "bound",
+        );
+        expect(s.provider.creates).toHaveLength(1);
+        expect(s.provider.creates[0]?.key).toBe(issued.idempotencyKey);
+        expect(await execute(s.repo.get(s.input.consumer.runId))).toMatchObject({
+          phase: "bound",
+          sandboxId: "bx_23456789",
+        });
       }));
     it("admits only one create issuer under a deterministic same-record race", () =>
       test(async (s) => {
@@ -2648,7 +2657,8 @@ describe.runIf(databaseUrl !== undefined)(
         expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
         expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
         await execute(s.allocations.reconcile({ limit: 20 }));
-        expect(s.provider.creates).toHaveLength(0);
+        // The one issuer's key is the only one Boat ever sees.
+        expect(s.provider.creates.map((create) => create.key)).toEqual([record.idempotencyKey]);
       }));
     it("refuses changed source, scope, launch identity and publication before provider effects", () =>
       test(async (s) => {
@@ -2846,6 +2856,7 @@ describe.runIf(databaseUrl !== undefined)(
         const nextInput = await execute(seed(s.db, s.catalog));
         const next = await execute(s.repo.reserve(reservation(nextInput)));
         await execute(s.repo.advance(next, { ...next, phase: "issued" }));
+        s.provider.inventoryUnavailable = true;
         const sweep = await execute(s.allocations.reconcile({ limit: 2 }));
         expect(sweep.entries).toContainEqual({
           runId: s.input.consumer.runId,
@@ -2853,7 +2864,7 @@ describe.runIf(databaseUrl !== undefined)(
         });
         expect(sweep.entries).toContainEqual({
           runId: nextInput.consumer.runId,
-          outcome: "pending",
+          outcome: "unavailable",
         });
         expect(sweep.next).toBe(
           [s.input.consumer.runId, nextInput.consumer.runId].toSorted().at(-1),
@@ -2904,6 +2915,7 @@ describe.runIf(databaseUrl !== undefined)(
       test(async (s) => {
         const record = await execute(s.repo.reserve(reservation(s.input)));
         await execute(s.repo.advance(record, { ...record, phase: "issued" }));
+        s.provider.inventoryUnavailable = true;
         const first = await execute(s.allocations.reconcile({ limit: 1 }));
         expect(first.next).toBe(s.input.consumer.runId);
         if (first.next === undefined) throw new Error("missing cursor");
@@ -3315,4 +3327,106 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
         retainedAt: null,
       });
     }));
+
+  it("recovers a lost create reply Boat has not listed yet by replaying the same key, with no second VM (audit S4)", () =>
+    test(async (s) => {
+      const o = await observedLaunch(s);
+      try {
+        const allocations = await recordedAllocations(s, o);
+        // A second launch whose create reply is lost and which Boat does not list yet.
+        const input = await execute(seed(s.db, s.catalog));
+        const reserved = await execute(s.repo.reserve(reservation(input)));
+        o.boat.savedSnapshots.set(input.publication.snapshot.identity.name, {
+          ...input.publication.snapshot.identity,
+          status: "ready",
+        });
+        o.boat.loseCreateReply = true;
+        await expect(execute(allocations.prepare(input))).rejects.toThrow();
+        expect(await execute(s.repo.get(input.consumer.runId))).toMatchObject({
+          phase: "issued",
+          sandboxId: null,
+        });
+        const accepted = [...o.boat.vms.values()].filter(
+          (vm) => vm.key === reserved.idempotencyKey,
+        );
+        expect(accepted).toHaveLength(1);
+        o.boat.loseCreateReply = false;
+        o.boat.unlisted = true;
+        await execute(allocations.reconcile({ limit: 20 }));
+        expect(await execute(s.repo.get(input.consumer.runId))).toMatchObject({
+          phase: "allocated",
+          sandboxId: accepted[0]?.id,
+        });
+        expect(
+          [...o.boat.vms.values()].filter((vm) => vm.key === reserved.idempotencyKey),
+        ).toHaveLength(1);
+      } finally {
+        await o.boat.close();
+      }
+    }));
+
+  it("takes a definite create refusal as proof Boat holds no VM and discharges the launch (audit S4)", () =>
+    test(async (s) => {
+      const o = await observedLaunch(s);
+      try {
+        const allocations = await recordedAllocations(s, o);
+        const input = await execute(seed(s.db, s.catalog));
+        const reserved = await execute(s.repo.reserve(reservation(input)));
+        await execute(s.repo.advance(reserved, { ...reserved, phase: "issued" }));
+        await execute(
+          s.runtimes.upsertRuntimeInstance({
+            runId: input.consumer.runId,
+            adapter: "boat",
+            status: "failed",
+          }),
+        );
+        // Unknown outcomes never settle it: Boat is unreachable, then busy with the same key.
+        o.boat.unlisted = true;
+        o.boat.rejectCreate = { status: 409, code: "idempotency_in_progress" };
+        await execute(allocations.reconcile({ limit: 20 }));
+        expect((await execute(s.repo.get(input.consumer.runId)))?.phase).toBe("issued");
+        o.boat.rejectCreate = { status: 402, code: "insufficient_balance" };
+        await execute(allocations.reconcile({ limit: 20 }));
+        expect(await execute(s.repo.get(input.consumer.runId))).toMatchObject({
+          phase: "deleted",
+          sandboxId: null,
+          removal: { kind: "never-created" },
+        });
+        const { owner } = await execute(s.final([], o.api));
+        const sweep = await execute(owner.reconcile({ limit: 20 }));
+        expect(sweep.entries).toContainEqual({ runId: input.consumer.runId, outcome: "closed" });
+        expect(
+          await execute(s.runtimes.getRuntimeInstanceByRunId(input.consumer.runId)),
+        ).toMatchObject({
+          status: "stopped",
+          removedAt: expect.any(Date),
+        });
+        expect((await execute(nativeConsumerRows(s.db, input.consumer.runId)))[0]?.state).toBe(
+          "released",
+        );
+      } finally {
+        await o.boat.close();
+      }
+    }));
 });
+
+/** Allocation driven against the recorded-facts Boat fake. */
+const recordedAllocations = (s: AllocationFixture, o: Awaited<ReturnType<typeof observedLaunch>>) =>
+  execute(
+    Effect.gen(function* () {
+      return yield* BoatAllocation;
+    }).pipe(
+      Effect.provide(
+        boatAllocationLayerNoDeps.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(BoatAllocationRepo, s.repo),
+              Layer.succeed(BoatObserver, o.observer),
+              Layer.succeed(BoatAllocationProvider, { deploymentId: "test", api: o.api }),
+              Layer.succeed(BoatExecution, s.executor),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );

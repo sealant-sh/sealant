@@ -58,6 +58,13 @@ export class BoatObserver extends Context.Service<
       allocation: BoatAllocationRecord,
       sandboxId: string,
     ) => Effect.Effect<void, BoatObservationStoreError>;
+    /**
+     * Boat holds no VM for this launch: create was never issued, or Boat definitively refused it
+     * under the launch's idempotency key.
+     */
+    readonly neverCreated: (
+      allocation: BoatAllocationRecord,
+    ) => Effect.Effect<void, BoatObservationStoreError>;
   }
 >()("@sealant/workspaces/boat/BoatObserver") {}
 
@@ -124,7 +131,16 @@ const make = Effect.gen(function* () {
       basis: "deletion-completed",
     });
   });
-  return BoatObserver.of({ observe, deletionCompleted });
+  const neverCreated = Effect.fn("BoatObserver.neverCreated")(function* (
+    allocation: BoatAllocationRecord,
+  ) {
+    yield* observations.recordAbsent({
+      ...ids(allocation),
+      sandboxId: null,
+      basis: "not-discovered",
+    });
+  });
+  return BoatObserver.of({ observe, deletionCompleted, neverCreated });
 });
 
 export const boatObserverLayerNoDeps: Layer.Layer<

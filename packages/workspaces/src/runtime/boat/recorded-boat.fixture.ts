@@ -38,12 +38,27 @@ export class RecordedBoat {
   readonly vms = new Map<string, Vm>();
   readonly deletions = new Map<string, Deletion>();
   readonly requests: string[] = [];
+  /** Saved snapshots by name, as `GET /saved-snapshots/:name` returns them. */
+  readonly savedSnapshots = new Map<
+    string,
+    {
+      name: string;
+      status: "ready";
+      sourceSandboxId: string;
+      createdAt: string;
+      snapshotId?: string | undefined;
+    }
+  >();
   /** Fault: Boat accepted create but cannot read the VM yet (eventually consistent read). */
   unreadableAfterCreate = 0;
   /** Fault: provisioning never finishes; reads keep reporting `provisioned`. */
   stuckProvisioning = false;
   /** Runs before a VM read is answered, to interleave another writer. */
   beforeRead: () => Promise<void> = async () => {};
+  /** Fault: Boat accepted a create but its inventory does not list the VM yet. */
+  unlisted = false;
+  /** Fault: Boat refuses every create outright with this status and code. */
+  rejectCreate: { readonly status: number; readonly code: string } | undefined;
   /** Fault: the create reply is lost after Boat accepted it. */
   loseCreateReply = false;
   /** Fault: the DELETE reply is lost after Boat accepted and completed it. */
@@ -105,6 +120,8 @@ export class RecordedBoat {
     if (request.method === "POST" && path === "/sandboxes") {
       const key = request.headers["idempotency-key"];
       if (typeof key !== "string") return send(400, { ok: false, code: "invalid_request" });
+      if (this.rejectCreate !== undefined)
+        return send(this.rejectCreate.status, { ok: false, code: this.rejectCreate.code });
       const body = z
         .object({ labels: z.record(z.string(), z.string()) })
         .passthrough()
@@ -121,6 +138,7 @@ export class RecordedBoat {
     if (request.method === "GET" && path === "/sandboxes") {
       const wanted = url.searchParams.getAll("label").map((pair) => pair.split("="));
       const sandboxes = [...this.vms.values()]
+        .filter(() => !this.unlisted)
         .filter((vm) =>
           wanted.every(([key, value]) => key !== undefined && vm.labels[key] === value),
         )
@@ -164,6 +182,13 @@ export class RecordedBoat {
         ok: true,
         operation: { id: deletion.id, kind: "sandbox", targetId: id, status: "pending" },
       });
+    }
+    const saved = /^\/saved-snapshots\/([a-z0-9-]{1,63})$/.exec(path);
+    if (saved !== null && request.method === "GET") {
+      const snapshot = this.savedSnapshots.get(saved[1] ?? "");
+      return snapshot === undefined
+        ? send(404, { ok: false, code: "snapshot_not_found" })
+        : send(200, { ok: true, snapshot });
     }
     const operation = /^\/deletion-operations\/(bdop_[a-f0-9]{32})$/.exec(path);
     if (operation !== null && request.method === "GET") {
