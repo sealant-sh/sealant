@@ -145,7 +145,12 @@ class ReceiverTests(unittest.TestCase):
                 connection.sock = socket.socket(socket.AF_UNIX)
                 connection.sock.connect(path)
                 try:
-                    connection.request(method, route, body=body, headers={'Authorization': auth, **(headers or {})})
+                    try:
+                        connection.request(method, route, body=body, headers={'Authorization': auth, **(headers or {})})
+                    except BrokenPipeError:
+                        # Header refusals may close before the body is sent. Still require
+                        # the real response below; a missing response must fail the test.
+                        pass
                     response = connection.getresponse()
                     return response.status, json.loads(response.read())
                 finally:

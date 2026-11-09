@@ -157,7 +157,7 @@ it("one WireGuard peer reaches only its linked resources and DNS, with replay an
       command: [
         "python3",
         "-c",
-        "import socket; s=socket.socket(); s.bind(('0.0.0.0',31000)); s.listen();\nwhile True:\n c,_=s.accept(); c.sendall(b'project\\n'); c.close()",
+        "import signal,socket,sys; signal.signal(signal.SIGTERM,lambda *_:sys.exit(0)); s=socket.socket(); s.bind(('0.0.0.0',31000)); s.listen();\nwhile True:\n c,_=s.accept(); c.sendall(b'project\\n'); c.close()",
       ],
       ready: { kind: "exec", argv: ["true"], user: null },
       limits: { cpuMillicores: 500, memoryBytes: 134217728 },
@@ -225,6 +225,21 @@ it("one WireGuard peer reaches only its linked resources and DNS, with replay an
     const empty = await Effect.runPromise(
       runtime.ensure({ ...input, link: undefined, instances: [] }),
     );
+    // A person's Stop is authoritative even while launching a new remote workspace.
+    await resources.stop(project);
+    await expect(Effect.runPromise(runtime.ensure(input))).rejects.toThrow(
+      /ownership-conflict|gateway-unavailable/,
+    );
+    const stoppedProject = { ...project, desired: "stopped" as const };
+    expect(
+      await Effect.runPromise(
+        runtime.ensure({
+          ...input,
+          instances: [stoppedProject, other, tree],
+        }),
+      ),
+    ).toEqual(empty);
+    expect((await resources.up(project, [])).state.kind).toBe("running");
     const endpoint = await Effect.runPromise(runtime.ensure(input));
     expect(endpoint.containerId).toBe(empty.containerId);
     expect(endpoint.receipt).not.toBe(empty.receipt);
@@ -317,6 +332,23 @@ it("one WireGuard peer reaches only its linked resources and DNS, with replay an
     expect(
       (await command(client, query, { kind: "tcp", host: resolved.result, port: 31000 })).result,
     ).toBe("project");
+    await resources.stop(project);
+    await Effect.runPromise(
+      runtime.ensure({
+        ...input,
+        instances: [stoppedProject, other, tree],
+      }),
+    );
+    // No cached DNS answer or old endpoint may point this session at the stopped resource.
+    for (const kind of ["dns-udp", "dns-tcp"])
+      expect(["missing", "denied"]).toContain(
+        (await command(client, query, { kind, host: "db" })).result,
+      );
+    expect(
+      (await command(client, query, { kind: "tcp", host: resolved.result, port: 31000 })).result,
+    ).toBe("denied");
+    expect((await resources.up(project, [])).state.kind).toBe("running");
+    await Effect.runPromise(runtime.ensure(input));
     const otherIp = await docker(
       "inspect",
       "--format",

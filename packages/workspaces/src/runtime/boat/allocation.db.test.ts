@@ -54,6 +54,8 @@ import * as TestClock from "effect/testing/TestClock";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
+import { boatProofConfigSchema } from "../../operator/boat-live-check.js";
+import { makeBoatProofCore } from "../../operator/boat-proof-core.js";
 import { BoatTunnelError } from "../../resources/boat-tunnel.js";
 import { makeResourceReconciler } from "../../resources/reconciler.js";
 import { postgresSpec } from "../../resources/resource.fixture.js";
@@ -216,6 +218,8 @@ const seed = (db: DB, catalog: NativePublicationRepo["Service"]) =>
 
 const test = async (
   run: (s: {
+    databaseUrl: string;
+    api: HttpBoatApi;
     db: DB;
     input: BoatAllocationInput;
     allocations: BoatAllocation["Service"];
@@ -378,6 +382,8 @@ const test = async (
           ).pipe(Effect.map((ctx) => Context.get(ctx, BoatResources)));
         yield* Effect.promise(() =>
           run({
+            databaseUrl: url,
+            api: api.value,
             db,
             input,
             allocations,
@@ -477,6 +483,41 @@ const launched = async (s: AllocationFixture) => {
     ),
   );
   return target;
+};
+const linkedResource = async (s: AllocationFixture) => {
+  if (s.input.scope.kind !== "owner") throw new Error("expected owner scope");
+  const domainId = `rdm:${randomUUID()}`;
+  await execute(
+    s.db.insert(schema.workspaces).values({
+      id: s.input.workspaceId,
+      ownerUserId: s.input.scope.ownerUserId,
+    }),
+  );
+  await execute(
+    s.db.insert(schema.workspaceRunLinks).values({
+      workspaceId: s.input.workspaceId,
+      runId: s.input.consumer.runId,
+    }),
+  );
+  await execute(s.db.insert(schema.resourceDomains).values({ id: domainId, key: domainId }));
+  await execute(
+    s.resources.link({
+      workspaceId: s.input.workspaceId,
+      resourceDomainId: domainId,
+      worktreeKey: ResourceWorktreeKey.make("tree"),
+      aliases: null,
+    }),
+  );
+  const outcome = await execute(
+    s.resources.up({
+      resourceDomainId: domainId,
+      key: ResourceInstanceKey.make("db"),
+      spec: postgresSpec(),
+      cause: "use",
+    }),
+  );
+  if (outcome.kind !== "upserted") throw new Error("resource missing");
+  return outcome.instance;
 };
 const stopLaunched = async (s: AllocationFixture) => {
   const target = await launched(s);
@@ -1938,6 +1979,158 @@ describe.runIf(databaseUrl !== undefined)(
           snapshots: [{ state: "removed" }, { state: "removed" }],
         });
       }));
+    it("repeated FINAL of an early-aborted resource failure stays closed without resource setup", () =>
+      test(async (s) => {
+        const resource = await linkedResource(s);
+        await execute(
+          s.resources.setDesired(resource.id, {
+            kind: "stop",
+            reason: { kind: "person", by: "boat-check" },
+          }),
+        );
+        const target = await execute(s.allocations.prepare(s.input));
+        s.guest.lostIsolation = true;
+        await expect(
+          execute(
+            s.readiness.launch(
+              target,
+              Redacted.make({
+                files: [{ name: "launch", bytes: Buffer.from("launch") }],
+                pins: { credentialVersions: [], dotfiles: [] },
+              }),
+            ),
+          ),
+        ).rejects.toThrow("unavailable");
+        // Gateway setup settled normally before guest isolation failed. FINAL needs no
+        // resource setup or manual settlement to close this pre-invocation execution.
+        expect((await tunnelRecord(s, target)).updates).toEqual([]);
+        await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+        await execute(
+          s.canonical.storeCaptureToken({ runId: target.runId, sealed: "local-sealed-capture" }),
+        );
+        s.gateway.allowRemoval = true;
+        const { owner, daemon } = await execute(s.final([]));
+        expect(await execute(owner.close(target))).toBe("closed");
+        expect(await execute(owner.close(target))).toBe("closed");
+        expect(await execute(owner.reconcile({ limit: 20 }))).toMatchObject({
+          entries: [{ runId: target.runId, outcome: "closed" }],
+        });
+        expect(await execute(s.resourceOwner.reconcile({ limit: 20 }))).toMatchObject({
+          entries: [{ runId: target.runId, outcome: "closed" }],
+        });
+        expect((await execute(nativeConsumerRows(s.db, target.runId)))[0]?.state).toBe("released");
+        expect(daemon.calls).toEqual([]);
+        expect(s.provider.deleteCalls).toBe(1);
+        expect(s.gateway.removeCalls).toBe(1);
+      }));
+    it("identifies a gateway failure within readiness without exposing arbitrary error text", () =>
+      test(async (s) => {
+        const target = await execute(s.allocations.prepare(s.input));
+        s.gateway.unavailable = true;
+        try {
+          await execute(
+            s.readiness.launch(
+              target,
+              Redacted.make({
+                files: [{ name: "launch", bytes: Buffer.from("launch") }],
+                pins: { credentialVersions: [], dotfiles: [] },
+              }),
+            ),
+          );
+          throw new Error("expected gateway refusal");
+        } catch (error) {
+          expect(error).toMatchObject({
+            diagnostic: {
+              step: "readiness",
+              errorClass: "BoatTunnelError",
+              code: "gateway-unavailable",
+              resourceOperation: "configure-gateway",
+            },
+          });
+          expect(String(error)).not.toContain("unknown gateway outcome");
+        }
+      }));
+    it.each([
+      { absent: false, capture: false },
+      { absent: false, capture: true },
+      { absent: true, capture: false },
+      { absent: true, capture: true },
+    ])(
+      "the proof accepts only a settled early abort, absent=$absent capture=$capture",
+      ({ absent, capture }) =>
+        test(async (s) => {
+          const target = await execute(s.allocations.prepare(s.input));
+          await execute(
+            s.executor.stage(
+              target.runId,
+              Redacted.make({
+                files: [{ name: "launch", bytes: Buffer.from("launch") }],
+                pins: { credentialVersions: [], dotfiles: [] },
+              }),
+            ),
+          );
+          await execute(s.resourceOwner.prepare(target));
+          if (capture)
+            await execute(
+              s.canonical.storeCaptureToken({
+                runId: target.runId,
+                sealed: "local-sealed-capture",
+              }),
+            );
+          if (s.input.scope.kind !== "owner") throw new Error("expected owner scope");
+          const core = makeBoatProofCore({
+            config: boatProofConfigSchema.parse({
+              origin: "https://mend.example.invalid",
+              projectId: "proof",
+              ownerId: s.input.scope.ownerUserId,
+              deploymentId: "test",
+              resourceHost: "db",
+              resourcePort: 5432,
+            }),
+            databaseUrl: s.databaseUrl,
+            builderOwner: "local",
+            journalDirectory: "/unused",
+            api: s.api,
+          });
+          const session = {
+            id: "session",
+            projectId: "proof",
+            worktree: "proof",
+            worktreeId: "tree",
+            status: "stopped",
+            idleStoppedAt: null,
+            sealantRunId: target.runId,
+          } as const;
+          try {
+            expect(await core.runtime(session)).toMatchObject({ closed: false });
+            await execute(
+              s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }),
+            );
+            s.gateway.allowRemoval = true;
+            s.gateway.removalUnavailable = true;
+            s.provider.sandboxMissing = absent;
+            const { owner } = await execute(s.final([]));
+            await expect(execute(owner.close(target))).rejects.toThrow("unavailable");
+            expect(await core.runtime(session)).toMatchObject({ ready: false, closed: false });
+            s.gateway.removalUnavailable = false;
+            expect(await execute(owner.close(target))).toBe("closed");
+            expect(await core.runtime(session)).toMatchObject({
+              runId: target.runId,
+              ready: false,
+              closed: true,
+            });
+            expect((await execute(s.tunnels.get(target.runId)))?.removal).toBeUndefined();
+            expect(
+              (await execute(s.canonical.getByRunId(target.runId)))?.deletionState ?? null,
+            ).toBeNull();
+            expect((await execute(nativeConsumerRows(s.db, target.runId)))[0]?.state).toBe(
+              "released",
+            );
+          } finally {
+            await core.dispose();
+          }
+        }),
+    );
     it("launches only after current isolation and observes authenticated readiness without another invocation", () =>
       test(async (s) => {
         const target = await execute(s.allocations.prepare(s.input));

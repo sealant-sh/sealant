@@ -31,6 +31,9 @@ const diagnosticSchema = z.object({
     "BoatReadinessError",
     "BoatResourcesError",
     "BoatTunnelError",
+    "BoatTunnelCredentialsError",
+    "BoatTunnelStoreError",
+    "ResourceInstanceRepoError",
     "BoatAdapterError",
     "ZodError",
     "Error",
@@ -61,6 +64,8 @@ const diagnosticSchema = z.object({
       "run-stopped",
       "pin-unavailable",
       "invalid-record",
+      "gateway-unavailable",
+      "ownership-conflict",
     ])
     .optional(),
   sandboxState: z
@@ -79,6 +84,18 @@ const diagnosticSchema = z.object({
     ])
     .optional(),
   hydrated: z.boolean().optional(),
+  resourceOperation: z
+    .enum([
+      "check-authority",
+      "prepare-credentials",
+      "allocate-subnet",
+      "persist-network",
+      "read-resources",
+      "configure-gateway",
+      "settle-gateway",
+      "isolate-guest",
+    ])
+    .optional(),
   provider: boatProviderFailureSchema.optional(),
   receiver: z
     .object({

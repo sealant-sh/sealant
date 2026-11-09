@@ -33,6 +33,11 @@ import {
   type BoatGuestNetworkReceipt,
 } from "../runtime/boat/execution.js";
 import {
+  boatLaunchDiagnostic,
+  boatLaunchSummary,
+  type BoatLaunchDiagnostic,
+} from "../runtime/boat/launch-diagnostics.js";
+import {
   BoatTunnelCredentialsOwner,
   boatTunnelCredentialsLayer,
 } from "../runtime/boat/tunnel-credentials.js";
@@ -41,8 +46,11 @@ import { boatTargetIsCurrent } from "./boat-current.js";
 /** Safe per-entry failures retain every reservation; they never carry transport or key data. */
 export class BoatResourcesError extends Error {
   readonly _tag = "BoatResourcesError";
-  constructor(readonly code: "pending" | "held" | "binding-conflict" | "unavailable") {
-    super(`Boat resource reconciliation: ${code}`);
+  constructor(
+    readonly code: "pending" | "held" | "binding-conflict" | "unavailable",
+    readonly diagnostic?: BoatLaunchDiagnostic,
+  ) {
+    super(`Boat resource reconciliation: ${code}${boatLaunchSummary(diagnostic)}`);
   }
 }
 /** Current configuration acknowledgement only. No execution permit or readiness is produced. */
@@ -85,15 +93,25 @@ export class BoatResourcesHost extends Context.Service<
   }
 >()("@sealant/workspaces/boat/BoatResourcesHost") {}
 
-const boundary = <A>(effect: Effect.Effect<A, unknown>): Effect.Effect<A, BoatResourcesError> =>
+const boundary = <A>(
+  effect: Effect.Effect<A, unknown>,
+  resourceOperation?: BoatLaunchDiagnostic["resourceOperation"],
+): Effect.Effect<A, BoatResourcesError> =>
   effect.pipe(
     Effect.mapError((error) => {
-      if (error instanceof BoatResourcesError) return error;
-      if (error instanceof BoatTunnelStoreError && error.code === "binding-conflict")
-        return new BoatResourcesError("binding-conflict");
-      if (error instanceof BoatExecutionError && error.code === "invocation-held")
-        return new BoatResourcesError("held");
-      return new BoatResourcesError("unavailable");
+      if (error instanceof BoatResourcesError && resourceOperation === undefined) return error;
+      const code =
+        error instanceof BoatResourcesError
+          ? error.code
+          : error instanceof BoatTunnelStoreError && error.code === "binding-conflict"
+            ? "binding-conflict"
+            : error instanceof BoatExecutionError && error.code === "invocation-held"
+              ? "held"
+              : "unavailable";
+      return new BoatResourcesError(code, {
+        ...boatLaunchDiagnostic(error, "readiness"),
+        ...(resourceOperation === undefined ? {} : { resourceOperation }),
+      });
     }),
   );
 const make: Effect.Effect<
@@ -140,29 +158,45 @@ const make: Effect.Effect<
       return execution.admission;
     });
   const prepare = Effect.fn("BoatResources.prepare")(function* (target: BoatExecutionTarget) {
-    const admission = yield* current(target);
-    const keys = yield* credentials.prepare({ target, gatewayHostId: host.gatewayHostId });
-    const subnet = yield* Effect.tryPromise({
-      try: () =>
-        host.subnets.allocate({
-          name: reachNetworkName(boatTunnelName(target)),
-          kind: "reach",
-          owner: boatTunnelName(target),
-        }),
-      catch: () => new BoatResourcesError("unavailable"),
-    });
+    const admission = yield* boundary(current(target), "check-authority");
+    const keys = yield* boundary(
+      credentials.prepare({ target, gatewayHostId: host.gatewayHostId }),
+      "prepare-credentials",
+    );
+    const subnet = yield* boundary(
+      Effect.tryPromise({
+        try: () =>
+          host.subnets.allocate({
+            name: reachNetworkName(boatTunnelName(target)),
+            kind: "reach",
+            owner: boatTunnelName(target),
+          }),
+        catch: (error) => error,
+      }),
+      "allocate-subnet",
+    );
     const reservation = yield* tunnels.get(target.runtimeInstanceId);
     if (reservation === undefined)
       return yield* Effect.fail(new BoatResourcesError("binding-conflict"));
-    yield* tunnels.configure(reservation, {
-      epoch: admission.epoch,
-      operationId: admission.operationId,
-      endpoint: host.endpoint,
-      subnet,
-    });
-    const link = yield* resources.linkOfRun(target.runId);
+    yield* boundary(
+      tunnels.configure(reservation, {
+        epoch: admission.epoch,
+        operationId: admission.operationId,
+        endpoint: host.endpoint,
+        subnet,
+      }),
+      "persist-network",
+    );
+    const link = yield* boundary(resources.linkOfRun(target.runId), "read-resources");
+    // Match Docker's desired attachments. A person's Stop never blocks their session or gives
+    // the gateway a stopped container/alias, and its observed status remains available to clients.
     const instances =
-      link === undefined ? [] : yield* resources.list(link.resourceDomainId, { archived: false });
+      link === undefined
+        ? []
+        : (yield* boundary(
+            resources.list(link.resourceDomainId, { archived: false }),
+            "read-resources",
+          )).filter((instance) => instance.desired === "running");
     const recheck = Effect.gen(function* () {
       if (
         !isDeepStrictEqual(yield* current(target), admission) ||
@@ -177,16 +211,19 @@ const make: Effect.Effect<
     const owned = yield* tunnels.get(target.runtimeInstanceId);
     if (owned === undefined || (yield* tunnels.beginUpdate(owned, updateId)) !== "issued")
       return yield* Effect.fail(new BoatResourcesError("held"));
-    const gateway = yield* host.tunnel.ensure({
-      target,
-      privateKey: keys.gateway.privateKey,
-      peerKey: keys.guest.publicKey,
-      listenPort: keys.listenPort,
-      link,
-      instances,
-    });
+    const gateway = yield* boundary(
+      host.tunnel.ensure({
+        target,
+        privateKey: keys.gateway.privateKey,
+        peerKey: keys.guest.publicKey,
+        listenPort: keys.listenPort,
+        link,
+        instances,
+      }),
+      "configure-gateway",
+    );
     // A positive response settles dispatch even if its receipt subsequently refuses admission.
-    yield* tunnels.endUpdate(owned.binding, updateId);
+    yield* boundary(tunnels.endUpdate(owned.binding, updateId), "settle-gateway");
     if (
       gateway.reachSubnet !== subnet ||
       gateway.publicKey !== keys.gateway.publicKey ||
@@ -195,18 +232,21 @@ const make: Effect.Effect<
     )
       return yield* Effect.fail(new BoatResourcesError("binding-conflict"));
     yield* recheck;
-    const receipt = yield* guest.isolate(target, {
-      network: {
-        epoch: admission.epoch,
-        operationId: admission.operationId,
-        endpoint: host.endpoint,
-        subnet,
-      },
-      privateKey: keys.guest.privateKey,
-      publicKey: keys.guest.publicKey,
-      gatewayKey: keys.gateway.publicKey,
-      port: keys.listenPort,
-    });
+    const receipt = yield* boundary(
+      guest.isolate(target, {
+        network: {
+          epoch: admission.epoch,
+          operationId: admission.operationId,
+          endpoint: host.endpoint,
+          subnet,
+        },
+        privateKey: keys.guest.privateKey,
+        publicKey: keys.guest.publicKey,
+        gatewayKey: keys.gateway.publicKey,
+        port: keys.listenPort,
+      }),
+      "isolate-guest",
+    );
     yield* recheck;
     return { gateway, guest: receipt };
   });

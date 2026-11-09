@@ -78,7 +78,11 @@ export const makeBoatProofCore = (input: {
           if (attempt?.ownerUserId !== input.config.ownerId)
             return yield* Effect.fail(new BoatProofError("owner-mismatch"));
           const allocation = yield* (yield* BoatAllocationRepo).get(session.sealantRunId);
-          if (allocation?.phase !== "bound" || allocation.target === null) return undefined;
+          if (
+            allocation?.target == null ||
+            !["bound", "deleting", "deleted"].includes(allocation.phase)
+          )
+            return undefined;
           const target = allocation.target;
           if (target.deploymentId !== input.config.deploymentId)
             return yield* Effect.fail(new BoatProofError("deployment-mismatch"));
@@ -88,12 +92,27 @@ export const makeBoatProofCore = (input: {
           const execution = yield* (yield* BoatExecutionRepo).get(target.runId);
           const tunnel = yield* (yield* BoatTunnelRepo).get(target.runtimeInstanceId);
           const capture = yield* (yield* WorkspaceCaptureDrainRepo).getByRunId(target.runId);
+          // Early abort fences invocation before it exists. Its exact allocation removal and
+          // released aborted tunnel replace post-start capture FINAL and tunnel removal evidence.
+          const abortedClosed =
+            allocation.phase === "deleted" &&
+            allocation.removal !== undefined &&
+            allocation.removal.kind !== "issued" &&
+            allocation.removal.completed === true &&
+            allocation.removal.targetId === target.sandboxId &&
+            execution?.phase === "aborted" &&
+            isDeepStrictEqual(execution.target, target) &&
+            tunnel?.aborted === true &&
+            tunnel.removal === undefined &&
+            tunnel.closeId !== undefined &&
+            (tunnel.updates?.length ?? 0) === 0;
           return {
             runId: target.runId,
             sandboxId: target.sandboxId,
             publicationId: target.sourceId,
             resourceSubnet: tunnel?.network?.subnet ?? null,
             ready:
+              allocation.phase === "bound" &&
               instance?.adapter === "boat" &&
               instance.resourceId === target.sandboxId &&
               instance.status === "ready" &&
@@ -109,10 +128,10 @@ export const makeBoatProofCore = (input: {
               instance.resourceId === target.sandboxId &&
               instance.status === "stopped" &&
               instance.removedAt !== null &&
-              capture?.deletionState === "deleted" &&
-              capture.custodyContract !== 3 &&
+              capture?.custodyContract !== 3 &&
               tunnel?.released === true &&
-              tunnel.removal?.completed === true &&
+              (abortedClosed ||
+                (capture?.deletionState === "deleted" && tunnel.removal?.completed === true)) &&
               isDeepStrictEqual(tunnel.binding.target, target),
           };
         }),
