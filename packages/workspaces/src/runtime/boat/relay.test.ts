@@ -7,15 +7,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { Effect } from "effect";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket, createWebSocketStream } from "ws";
 
 import receiverRoutes from "../../../boat-image/receiver-routes.json" with { type: "json" };
+import { SealantRuntime, SealantRuntimeControlLive } from "../../sealantd/runtime.js";
+import { BoatReadinessError } from "../../worker/boat-readiness.js";
+import { BoatSecret } from "./config.js";
+import { BoatExecutionError, createBoatGuestTransport } from "./execution.js";
+import { boatLaunchDiagnostic } from "./launch-diagnostics.js";
 
 const source = fileURLToPath(new URL("../../../boat-image/control-relay.mjs", import.meta.url));
 const builder = fileURLToPath(new URL("../../../boat-image/build-relay.mjs", import.meta.url));
 const spike = fileURLToPath(new URL("../../../boat-image/spike.ts", import.meta.url));
 const token = "a".repeat(64);
+/** guest_control.py's verdict line: written once, before any daemon byte. */
+const verdict = (fields: Record<string, string>) =>
+  `${JSON.stringify({ format: "sealant-control-bridge-v1", ...fields })}\n`;
+const connected = verdict({ control: "connected" });
 let directory: string;
 let bundled: string;
 const resources: Array<() => Promise<void>> = [];
@@ -57,6 +67,7 @@ const fixture = async (
     socket.pipe(socket);
   },
   bootstrapSocket?: string,
+  bridgeVerdict: string | null = connected,
 ) => {
   const path = await mkdtemp(join(directory, "case-"));
   const socketPath = join(path, "control.sock");
@@ -67,6 +78,7 @@ const fixture = async (
     sockets.add(socket);
     socket.on("error", () => undefined);
     socket.once("close", () => sockets.delete(socket));
+    if (bridgeVerdict !== null) socket.write(bridgeVerdict);
     behavior(socket);
   });
   await new Promise<void>((done) => unix.listen(socketPath, done));
@@ -361,6 +373,124 @@ describe("standalone Boat relay", () => {
     );
     expect(status).toBe(input.status);
     expect(relay.sockets.size).toBe(0);
+  });
+
+  const refusal = async (origin: string) => {
+    const websocket = new WebSocket(`${origin.replace(/^http:/, "ws:")}/sealant/control`, {
+      headers: { Authorization: `Bearer ${token}` },
+      handshakeTimeout: 7000,
+    });
+    websocket.on("error", () => undefined);
+    return new Promise<{ status: number | undefined; body: string }>((done) =>
+      websocket.once("unexpected-response", (_request, response) => {
+        let body = "";
+        response.on("data", (chunk: Buffer) => {
+          body += chunk.toString();
+        });
+        response.once("end", () => {
+          done({ status: response.statusCode, body });
+          websocket.terminate();
+        });
+      }),
+    );
+  };
+
+  it.each(["source", "bundle"])(
+    "answers the bridge's refusal reason instead of upgrading with %s artifact",
+    async (kind) => {
+      const relay = await fixture(
+        kind === "bundle" ? bundled : source,
+        (socket) => socket.end(),
+        undefined,
+        verdict({ error: "control-peer-changed" }),
+      );
+      expect(await refusal(relay.origin)).toEqual({
+        status: 503,
+        body: JSON.stringify({ error: "control-peer-changed" }),
+      });
+      await waitFor(() => relay.sockets.size === 0);
+    },
+  );
+
+  it.each([
+    { name: "closes without a verdict", answer: null },
+    { name: "sends a malformed verdict", answer: "connected\n" },
+    { name: "names a free-text reason", answer: verdict({ error: "Peer Was Wrong" }) },
+  ])("answers control-unavailable when the bridge $name", async ({ answer }) => {
+    const relay = await fixture(source, (socket) => socket.end(), undefined, answer);
+    expect(await refusal(relay.origin)).toEqual({
+      status: 503,
+      body: JSON.stringify({ error: "control-unavailable" }),
+    });
+  });
+
+  it.each([
+    {
+      name: "the bridge's refusal",
+      verdict: verdict({ error: "control-peer-changed" }),
+      behavior: (socket: net.Socket) => socket.end(),
+      control: { operation: "open", status: 503, reason: "control-peer-changed" },
+    },
+    {
+      name: "a daemon that closes before answering",
+      verdict: connected,
+      behavior: (socket: net.Socket) => socket.once("data", () => socket.end()),
+      control: { operation: "health" },
+    },
+  ])("keeps $name in Core's readiness diagnostic", async (input) => {
+    const relay = await fixture(source, input.behavior, undefined, input.verdict);
+    const parse = (value: string) => {
+      const parsed = BoatSecret.parse(value);
+      if (!parsed.ok) throw parsed.error;
+      return parsed.value;
+    };
+    const failure = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runtime = yield* SealantRuntime;
+        const unused = async (): Promise<never> => {
+          throw new Error("the probe must not contact the provider");
+        };
+        const transport = createBoatGuestTransport(
+          { get: unused, execute: unused, hostControl: unused },
+          runtime,
+        );
+        return yield* Effect.promise(() =>
+          transport
+            .probe({ origin: relay.origin, cookie: parse("local-cookie-only") }, parse(token))
+            .then(
+              () => undefined,
+              (error: unknown) => error,
+            ),
+        );
+      }).pipe(Effect.provide(SealantRuntimeControlLive)),
+    );
+    expect(failure).toBeInstanceOf(BoatExecutionError);
+    const diagnostic = boatLaunchDiagnostic(failure, "readiness");
+    expect(diagnostic).toEqual({
+      step: "readiness",
+      errorClass: "TransportError",
+      code: "transport-unavailable",
+      control: input.control,
+    });
+    // The readiness boundary's message is what the runtime row keeps.
+    expect(new BoatReadinessError("unavailable", diagnostic).message).toContain(
+      JSON.stringify(input.control),
+    );
+  });
+
+  it("delivers daemon bytes that arrive in the same read as the verdict", async () => {
+    const relay = await fixture(
+      source,
+      (socket) => socket.write(Buffer.concat([Buffer.from(connected), Buffer.from([7, 0, 9])])),
+      undefined,
+      null,
+    );
+    const websocket = await connect(relay.origin);
+    const stream = createWebSocketStream(websocket, { allowHalfOpen: false });
+    stream.on("error", () => undefined);
+    expect((await once(stream, "data"))[0]).toEqual(Buffer.from([7, 0, 9]));
+    stream.destroy();
+    await waitFor(() => relay.sockets.size === 0);
   });
 
   it("returns unavailable when the Unix socket is absent", async () => {

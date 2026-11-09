@@ -28,10 +28,21 @@ times at one-second intervals; they never issue a second invocation.
 
 The hosted relay now connects through a bootstrap-owned control proxy. The proxy pins the recorded
 daemon process, root, path components and Unix socket, and checks real Linux peer credentials. It
-permits four forwarding connections, bounds writes and rechecks the held process while idle. The
-socket path is fixed inside the owned mapped root. Neither callers nor environment payloads can
-select an arbitrary outer socket. Active invocation replay validates shipped assets and recorded
-processes instead of rerunning the held-boot test that intentionally refuses a running workspace.
+permits four forwarding connections, bounds writes and rechecks the held process while idle.
+
+Both ends of the control socket follow one peer rule: each peer is the daemon's mapped owner, host
+uid 131072, which is root inside the daemon's user namespace. sealantd admits a connection only when
+the `SO_PEERCRED` uid it reads in its own namespace is its uid or root. Host root is unmapped there
+and reads as the overflow uid, so the proxy connects from a short-lived child running as 131072, and
+requires the daemon's peer credentials to name the recorded daemon process and 131072.
+
+Before any daemon byte, the proxy writes one verdict line to the relay. The relay upgrades only
+after `connected`. A refusal becomes HTTP 503 with `{"error": code}`, the receiver's error shape,
+and Core keeps the code, the HTTP status and the failing runtime operation in the launch
+diagnostic's `control` field. The socket path is fixed inside the owned mapped root. Neither callers
+nor environment payloads can select an arbitrary outer socket. Active invocation replay validates
+shipped assets and recorded processes instead of rerunning the held-boot test that intentionally
+refuses a running workspace.
 
 ## Local proof and live gate
 

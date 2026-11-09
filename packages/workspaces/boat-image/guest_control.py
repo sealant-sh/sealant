@@ -1,18 +1,55 @@
 """Bounded relay bridge to the exact owned daemon, never an arbitrary guest path."""
 from dataclasses import asdict
+import json
 import os
 import select
 import socket
 import socketserver
 import stat
 import struct
+import subprocess
 import threading
 
 import guest_boot as guest
 import guest_invocation as invocation
 import guest_receiver as receiver
 
+# One control-peer rule, held by both ends: each peer is the daemon's mapped owner. sealantd runs as
+# root in a user namespace that maps 0 to OWNER_UID, and admits a connection only when its
+# SO_PEERCRED uid, read in that namespace, is its own or root. Host root is unmapped there and reads
+# as the overflow uid, so the bridge connects from a short-lived child running as OWNER_UID, and
+# checks the daemon by the same uid.
 OWNER_UID = 131072
+OWNER_GID = 131072
+OWNER_GROUPS = []
+CONNECT_SECONDS = 2
+# Runs as OWNER_UID: connects the inherited, unconnected socket to the inherited O_PATH socket file.
+OWNER_CONNECT = ('import socket,sys\n'
+                 'socket.socket(fileno=int(sys.argv[1])).connect("/proc/self/fd/"+sys.argv[2])\n')
+# The bridge's first line to the relay: its verdict, before any daemon byte.
+STATUS_FORMAT = 'sealant-control-bridge-v1'
+
+
+def python(*args):
+    return guest.invoke('/usr/bin/python3', '-I', '-S', '-B', *args)
+
+
+def connect_as_owner(connection, descriptor):
+    """The kernel records the connecting task's credentials, so the owner child calls connect()."""
+    helper = subprocess.Popen(
+        python('-c', OWNER_CONNECT, str(connection.fileno()), str(descriptor)),
+        pass_fds=(connection.fileno(), descriptor), env={}, stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        user=OWNER_UID, group=OWNER_GID, extra_groups=OWNER_GROUPS)
+    try:
+        code = helper.wait(CONNECT_SECONDS)
+    except subprocess.TimeoutExpired:
+        helper.kill()
+        helper.wait()
+        raise receiver.Refusal('control-daemon-unreachable')
+    if code != 0:
+        raise receiver.Refusal('control-daemon-unreachable')
+
 
 def connect():
     with receiver.locked():
@@ -51,13 +88,11 @@ def connect():
             info = os.fstat(descriptor)
             if not stat.S_ISSOCK(info.st_mode) or info.st_uid != OWNER_UID:
                 raise receiver.Refusal('control-socket-owner-changed')
-            connection.settimeout(2)
-            connection.connect('/proc/self/fd/' + str(descriptor))
+            connect_as_owner(connection, descriptor)
             pid, uid, _ = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
             if (pid, uid) != (expected['pid'], OWNER_UID):
                 raise receiver.Refusal('control-peer-changed')
             held.verify()
-            connection.settimeout(None)
             return connection, held
         except BaseException:
             connection.close()
@@ -68,12 +103,24 @@ def connect():
                 os.close(descriptor)
 
 
+def status(**fields):
+    return json.dumps({'format': STATUS_FORMAT, **fields}, separators=(',', ':')).encode() + b'\n'
+
+
 class Bridge(socketserver.BaseRequestHandler):
     def handle(self):
         try:
-            upstream, held = connect()
+            try:
+                upstream, held = connect()
+            except receiver.Refusal as refusal:
+                self.request.sendall(status(error=str(refusal)))
+                return
+            except Exception:
+                self.request.sendall(status(error='control-unavailable'))
+                return
             try:
                 with upstream:
+                    self.request.sendall(status(control='connected'))
                     while True:
                         readable, _, _ = select.select([self.request, upstream], [], [], 30)
                         held.verify()

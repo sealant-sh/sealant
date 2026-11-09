@@ -1,6 +1,6 @@
 {
   "format": "sealant-native-assets-v1",
-  "relay": "4702feb2b541f4af9afd2a67e7cf28fdbdf378c7fb706cb311d831f5213e4869",
+  "relay": "dc09a93582a53dd322f37a73b4e226ad767b3dc27e7c5639c13a6e8cd18eef0b",
   "files": [
     {
       "name": "guest_boot.py",
@@ -72,7 +72,7 @@
     },
     {
       "name": "guest_control.py",
-      "sha256": "0eeba1d9c49b6b7ab7f2206a26664e39a5d457448ea9f03c30786a5955f2e70a"
+      "sha256": "e49d3b107df7257b885693fbee815c697be3eb223e392ec1756ec6ac1cdf091b"
     },
     {
       "name": "workspace.slice",

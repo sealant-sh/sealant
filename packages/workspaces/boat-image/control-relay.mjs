@@ -11,6 +11,9 @@ import receiverRoutes from "./receiver-routes.json" with { type: "json" };
 // relay allows a little longer and never answers for the receiver while Core is still waiting.
 const RELAY_GRACE_MS = 5000;
 const IDLE_MS = 5000;
+// guest_control.py writes this one line before any daemon byte.
+const BRIDGE_FORMAT = "sealant-control-bridge-v1";
+const BRIDGE_VERDICT_BYTES = 512;
 const routes = new Map(receiverRoutes.routes.map((route) => [route.path, route]));
 
 const options = new Map();
@@ -214,6 +217,7 @@ server.on("upgrade", (request, socket, head) => {
   pending.add(unix);
   let stream;
   let websocket;
+  let upgraded = false;
   const teardown = () => {
     pending.delete(unix);
     bridges.delete(teardown);
@@ -222,14 +226,62 @@ server.on("upgrade", (request, socket, head) => {
     websocket?.terminate();
     socket.destroy();
   };
-  unix.setTimeout(5000, teardown);
-  unix.once("error", teardown);
+  // The bridge answers each connection with one verdict line before any daemon byte. Only a bridge
+  // that reached the daemon is upgraded; a refusal keeps its reason, in the receiver's error shape.
+  const refuse = (reason) => {
+    pending.delete(unix);
+    unix.destroy();
+    if (socket.destroyed) return;
+    const body = JSON.stringify({ error: reason });
+    socket.once("finish", () => socket.destroy());
+    socket.end(
+      `HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
+    );
+  };
+  const failed = () => (upgraded ? teardown() : refuse("control-unavailable"));
+  unix.setTimeout(5000, failed);
+  unix.once("error", failed);
+  unix.once("end", () => {
+    if (!upgraded) refuse("control-unavailable");
+  });
   unix.once("close", (hadError) => {
-    if (hadError || !unix.readableEnded) teardown();
+    if (upgraded && (hadError || !unix.readableEnded)) teardown();
   });
   socket.once("error", teardown);
-  socket.once("close", teardown);
-  unix.once("connect", () => {
+  socket.once("close", () => {
+    if (upgraded) teardown();
+    else {
+      pending.delete(unix);
+      unix.destroy();
+    }
+  });
+  let verdict = Buffer.alloc(0);
+  const onVerdict = (chunk) => {
+    verdict = Buffer.concat([verdict, chunk]);
+    const end = verdict.indexOf(0x0a);
+    if (end === -1) {
+      if (verdict.length > BRIDGE_VERDICT_BYTES) refuse("control-unavailable");
+      return;
+    }
+    unix.off("data", onVerdict);
+    unix.pause();
+    let status;
+    try {
+      status = JSON.parse(verdict.subarray(0, end).toString("utf8"));
+    } catch {
+      status = undefined;
+    }
+    if (status?.format !== BRIDGE_FORMAT || status.control !== "connected") {
+      refuse(
+        typeof status?.error === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(status.error)
+          ? status.error
+          : "control-unavailable",
+      );
+      return;
+    }
+    const rest = verdict.subarray(end + 1);
+    if (rest.length > 0) unix.unshift(rest);
+    upgraded = true;
     pending.delete(unix);
     bridges.add(teardown);
     unix.setTimeout(0);
@@ -252,7 +304,8 @@ server.on("upgrade", (request, socket, head) => {
     } catch {
       teardown();
     }
-  });
+  };
+  unix.on("data", onVerdict);
 });
 
 const close = (exitCode = 0) => {

@@ -12,7 +12,7 @@ import { expect, it } from "vitest";
 
 import { SealantRuntime, SealantRuntimeControlLive } from "../../sealantd/runtime.js";
 import { BoatSecret } from "./config.js";
-import { createBoatGuestTransport } from "./execution.js";
+import { BoatExecutionError, createBoatGuestTransport } from "./execution.js";
 
 const secret = (value: string) => {
   const parsed = BoatSecret.parse(value);
@@ -27,6 +27,28 @@ const stop = async (child: ChildProcess) => {
 };
 const unused = async (): Promise<never> => {
   throw new Error("readiness proof must not contact provider");
+};
+/**
+ * Stands in for guest_control.py's bridge: one verdict line, then the daemon's bytes. The guest's
+ * peer rule itself is proven against real sealantd in boat-image/control_daemon_proof.py.
+ */
+const bridge = async (path: string, daemonSocket: string, refusal?: string) => {
+  const line = (fields: Record<string, string>) =>
+    `${JSON.stringify({ format: "sealant-control-bridge-v1", ...fields })}\n`;
+  const server = net.createServer((client) => {
+    client.on("error", () => undefined);
+    if (refusal !== undefined) {
+      client.end(line({ error: refusal }));
+      return;
+    }
+    const upstream = net.createConnection(daemonSocket, () => {
+      client.write(line({ control: "connected" }));
+      client.pipe(upstream).pipe(client);
+    });
+    upstream.on("error", () => client.destroy());
+  });
+  await new Promise<void>((resolve) => server.listen(path, resolve));
+  return server;
 };
 
 it("authenticated relay round-trips real pinned daemon health and capabilities, refusing a wrong bearer", async () => {
@@ -44,6 +66,7 @@ it("authenticated relay round-trips real pinned daemon health and capabilities, 
     { stdio: "ignore" },
   );
   let relay: ChildProcess | undefined;
+  const bridges: net.Server[] = [];
   try {
     for (let attempt = 0; attempt < 100 && !existsSync(socket); attempt++)
       await new Promise<void>((resolve) => setTimeout(resolve, 20));
@@ -53,12 +76,14 @@ it("authenticated relay round-trips real pinned daemon health and capabilities, 
     const address = port.address();
     if (address === null || typeof address === "string") throw new Error("missing proof port");
     await new Promise<void>((resolve) => port.close(() => resolve()));
+    const bridged = join(directory, "bridge.sock");
+    bridges.push(await bridge(bridged, socket));
     relay = spawn(
       process.execPath,
       [
         fileURLToPath(new URL("../../../boat-image/control-relay.mjs", import.meta.url)),
         "--socket",
-        socket,
+        bridged,
         "--token-file",
         tokenFile,
         "--port",
@@ -103,6 +128,8 @@ it("authenticated relay round-trips real pinned daemon health and capabilities, 
     );
   } finally {
     if (relay !== undefined) await stop(relay);
+    for (const server of bridges)
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     await stop(daemon);
     console.log({ ownedScratch: directory, entries: await readdir(directory) });
     await rm(directory, { recursive: true });

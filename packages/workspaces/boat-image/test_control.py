@@ -5,9 +5,11 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -36,6 +38,10 @@ class ControlTests(unittest.TestCase):
         self.enterContext(patch.object(invocation, 'observe', return_value='running'))
         self.enterContext(patch.object(invocation, 'state', return_value={'gate': self.expected}))
         self.enterContext(patch.object(control, 'OWNER_UID', os.getuid()))
+        # An unprivileged test can switch only to its own ids and cannot clear its groups.
+        self.enterContext(patch.object(control, 'OWNER_GID', os.getgid()))
+        self.enterContext(patch.object(control, 'OWNER_GROUPS', None))
+        self.enterContext(patch.object(control, 'python', lambda *args: [sys.executable, '-I', '-S', '-B', *args]))
         self.held = type('Held', (), {'identity': self.identity, 'verify': lambda self: None, 'close': lambda self: None})()
         self.enterContext(patch.object(guest, 'HeldProcess', return_value=self.held))
         original = os.open
@@ -54,6 +60,56 @@ class ControlTests(unittest.TestCase):
                 stream.sendall(b'exact daemon')
                 self.assertEqual(peer.recv(64), b'exact daemon')
         held.close()
+
+    def test_daemon_sees_a_short_lived_owner_child_as_the_connecting_peer(self):
+        # sealantd authorizes by the SO_PEERCRED uid it reads; the kernel records the task that calls
+        # connect(), so that task must run as the owner, never as the receiver itself.
+        stream, held = control.connect()
+        with stream:
+            peer, _ = self.listener.accept()
+            with peer:
+                pid, uid, gid = struct.unpack('3i', peer.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                self.assertEqual((uid, gid), (control.OWNER_UID, control.OWNER_GID))
+                self.assertNotEqual(pid, os.getpid())
+        held.close()
+
+    def test_owner_child_that_cannot_connect_refuses_with_a_reason(self):
+        self.listener.close()
+        with self.assertRaisesRegex(receiver.Refusal, 'control-daemon-unreachable'):
+            control.connect()
+
+    def bridge(self):
+        relay, bridged = socket.socketpair()
+        self.addCleanup(relay.close)
+        def serve():
+            # The server closes each request after its handler; this stands in for it.
+            with bridged:
+                control.Bridge(bridged, None, None)
+        worker = threading.Thread(target=serve)
+        worker.start()
+        self.addCleanup(worker.join, 10)
+        reader = relay.makefile('rb')
+        self.addCleanup(reader.close)
+        return relay, reader
+
+    def test_bridge_tells_the_relay_it_reached_the_daemon_before_any_daemon_byte(self):
+        relay, reader = self.bridge()
+        verdict = json.loads(reader.readline())
+        self.assertEqual(verdict, {'format': 'sealant-control-bridge-v1', 'control': 'connected'})
+        peer, _ = self.listener.accept()
+        with peer:
+            peer.sendall(b'daemon first')
+            self.assertEqual(reader.read(12), b'daemon first')
+            relay.sendall(b'client')
+            self.assertEqual(peer.recv(64), b'client')
+        relay.shutdown(socket.SHUT_WR)
+
+    def test_bridge_tells_the_relay_why_it_refused(self):
+        with patch.object(invocation, 'observe', return_value='ended'):
+            relay, reader = self.bridge()
+            self.assertEqual(json.loads(reader.readline()),
+                             {'format': 'sealant-control-bridge-v1', 'error': 'control-invocation-not-running'})
+            self.assertEqual(reader.read(), b'')
 
     def test_capture_recovery_proxy_uses_the_recovery_gate_and_still_checks_real_peer_credentials(self):
         marker = self.root / 'recovery.json'
