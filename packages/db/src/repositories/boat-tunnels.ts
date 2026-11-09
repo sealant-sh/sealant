@@ -332,7 +332,10 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, Dependencies> = Effe
                 saved.closeId !== before.closeId ||
                 before.closeId === undefined ||
                 operation.targetId !== before.binding.target.sandboxId ||
-                (!["deleting-issued", "deleted"].includes(root?.deletionState ?? "") && !parking) ||
+                // Canonical deletion, parking custody, or the owner's discard authorizes removal.
+                (!["deleting-issued", "deleted"].includes(root?.deletionState ?? "") &&
+                  !parking &&
+                  (root?.discardRequestedAt ?? null) === null) ||
                 (saved.updates?.length ?? 0) !== 0 ||
                 (saved.removal !== undefined && saved.removal.id !== removal.id)
               )

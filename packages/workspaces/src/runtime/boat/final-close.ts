@@ -34,6 +34,7 @@ import {
   DEFAULT_CAPTURE_DRAIN_SETTINGS,
   drainCaptureBeforeStop,
   observedComplete,
+  recordedDeletionEvidence,
   removeUnderDeletion,
   type CaptureDrainRead,
 } from "../../worker/capture-drain.js";
@@ -249,9 +250,8 @@ const make: Effect.Effect<
       const id = yield* parse(() => boatDeletionIdSchema.parse(reservation.removal?.id));
       reservation = yield* record(reservation, yield* call(() => provider.api.getDeletion(id)));
       if (reservation.removal?.completed !== true) return "pending" as const;
-      if (root?.deletionState !== "deleting-issued" || root.deletionToken === null)
-        return yield* Effect.fail(new BoatFinalCloseError("held"));
-      yield* canonical.completeDeletion({ runId: target.runId, token: root.deletionToken });
+      if (root?.deletionState === "deleting-issued" && root.deletionToken !== null)
+        yield* canonical.completeDeletion({ runId: target.runId, token: root.deletionToken });
       return yield* finish(target);
     }
     // A positively running invocation already has an immutable guest record. Delayed start replays
@@ -261,7 +261,17 @@ const make: Effect.Effect<
       (yield* current(target)).reservation,
       reservation.closeId ?? randomUUID(),
     );
-    if (root?.deletionState !== "deleting-issued") {
+    // The owner discarded the unsaved work, or Mend attested a sealed FINAL of this executor: no
+    // guest needs to answer before its VM is removed (audit S8).
+    const instance = yield* runtimes.getRuntimeInstanceByRunId(target.runId);
+    const executor = {
+      runId: target.runId,
+      resourceId: instance?.resourceId ?? target.sandboxId,
+      reference: instance?.reference ?? null,
+    };
+    const evidence = recordedDeletionEvidence(yield* ledger.read(target.runId), executor);
+    const decided = evidence.discarded || evidence.attestedComplete;
+    if (root?.deletionState !== "deleting-issued" && !decided) {
       const available = yield* execution.recover(target);
       if (available !== "running") return "retained" as const;
       const control = yield* execution.control(target);
@@ -283,12 +293,23 @@ const make: Effect.Effect<
       ledger,
       runId: target.runId,
       runtime: "running",
-      decide: (entry) =>
-        complete(entry)
-          ? { delete: true, basis: "observed-complete" }
-          : { delete: false, reason: "FINAL evidence changed" },
+      decide: (entry) => {
+        const now = recordedDeletionEvidence(entry, executor);
+        return now.discarded
+          ? { delete: true, basis: "discarded" }
+          : now.attestedComplete
+            ? { delete: true, basis: "attested-complete" }
+            : complete(entry)
+              ? { delete: true, basis: "observed-complete" }
+              : { delete: false, reason: "FINAL evidence changed" };
+      },
     });
-    if (deletion.ticket === undefined) return yield* Effect.fail(new BoatFinalCloseError("held"));
+    // Evidence-based removals hold a ticket; the owner's discard rests on no evidence to revoke.
+    if (
+      !deletion.decision.delete ||
+      (deletion.ticket === undefined && deletion.decision.basis !== "discarded")
+    )
+      return yield* Effect.fail(new BoatFinalCloseError("held"));
     const removed = yield* removeUnderDeletion({
       ledger,
       runId: target.runId,
