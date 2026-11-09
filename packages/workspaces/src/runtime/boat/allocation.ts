@@ -478,7 +478,16 @@ const make: Effect.Effect<
           Effect.flatMap((record) =>
             record.phase === "deleted"
               ? Effect.succeed("deleted" as const)
-              : drive(record).pipe(Effect.as("bound" as const)),
+              : // A live launch owns its allocation until it finishes or its lease lapses.
+                repo
+                  .launchInFlight(id)
+                  .pipe(
+                    Effect.flatMap((inFlight) =>
+                      inFlight
+                        ? Effect.succeed("pending" as const)
+                        : drive(record).pipe(Effect.as("bound" as const)),
+                    ),
+                  ),
           ),
           Effect.timeout(120_000),
           Effect.catch((error) =>

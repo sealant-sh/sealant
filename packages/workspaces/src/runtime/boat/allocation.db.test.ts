@@ -39,6 +39,7 @@ import {
   backdateAllocation,
   backdateObservation,
   corruptBoatAllocation,
+  holdBoatLaunch,
   recordRetainedBoatLaunch,
   restoreUnprogressedCaptureDrain,
   strandBoatLaunch,
@@ -3762,6 +3763,50 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
       expect(s.guest.starts).toBe(1);
       expect(s.provider.deleteCalls).toBe(1);
       expect((await execute(s.canonical.getByRunId(target.runId)))?.state).toBe("stopped");
+    }));
+
+  it("leaves a launch in flight its allocation: a sweep during a slow first bind changes nothing (harness R1)", () =>
+    test(async (s) => {
+      // The build worker writes the pending row and its launch ownership before allocating.
+      await execute(
+        s.runtimes.upsertRuntimeInstance({
+          runId: s.input.consumer.runId,
+          adapter: "boat",
+          status: "pending",
+          sourceKind: "capture",
+          publication: s.input.publication,
+          imageScope: s.input.scope,
+        }),
+      );
+      await execute(holdBoatLaunch(s.db, s.input.consumer.runId));
+      const reached = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let binds = 0;
+      s.guest.beforeBind = async () => {
+        binds += 1;
+        if (binds > 1) return;
+        reached.resolve();
+        await release.promise;
+      };
+      const launch = execute(s.allocations.prepare(s.input));
+      await reached.promise;
+      // The worker's sweep runs while the launch's first bind is still in flight.
+      expect(await execute(s.repo.launchInFlight(s.input.consumer.runId))).toBe(true);
+      await execute(s.allocations.reconcile({ limit: 20 }));
+      await execute(s.resourceOwner.reconcile({ limit: 20 }));
+      const { owner } = await execute(s.final([]));
+      await execute(owner.reconcile({ limit: 20 }));
+      expect(binds).toBe(1);
+      release.resolve();
+      const target = await launch;
+      expect(target.runId).toBe(s.input.consumer.runId);
+      expect((await execute(s.executions.get(target.runId)))?.phase).toBe("control");
+      // Once the launch's ownership lapses, the sweep owns the allocation again.
+      await execute(strandBoatLaunch(s.db, { runId: target.runId, sandboxId: target.sandboxId }));
+      expect((await execute(s.allocations.reconcile({ limit: 20 }))).entries).toContainEqual({
+        runId: target.runId,
+        outcome: "bound",
+      });
     }));
 });
 

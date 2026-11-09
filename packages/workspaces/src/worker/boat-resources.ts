@@ -278,6 +278,8 @@ const make: Effect.Effect<
           }
           if (record?.phase === "held") return "held" as const;
           if (record?.target === null || record === undefined) return "pending" as const;
+          // A live launch owns its guest and gateway until it finishes or its lease lapses.
+          if (yield* allocations.launchInFlight(id)) return "pending" as const;
           const root = yield* canonical.getByRunId(record.target.runId);
           const preservation = yield* canonical.preservation;
           const target =

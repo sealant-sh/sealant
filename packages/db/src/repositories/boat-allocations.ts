@@ -8,7 +8,7 @@ import {
   nativePublicationSchema,
   type BoatAllocationRecord,
 } from "@sealant/validators";
-import { and, asc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -48,6 +48,12 @@ export interface BoatAllocationRepoService {
   readonly isActive: (id: string) => Effect.Effect<boolean, BoatAllocationStoreError>;
   /** When the allocation was reserved; it precedes issuance, for records issued before `issuedAt`. */
   readonly reservedAt: (id: string) => Effect.Effect<Date | undefined, BoatAllocationStoreError>;
+  /**
+   * A live launch owns this allocation and its VM: its runtime row is pending and names a launch
+   * owner whose lease has not lapsed (by the database clock). Sweeps leave it alone until the launch
+   * finishes or its lease lapses; only then do they adopt it.
+   */
+  readonly launchInFlight: (id: string) => Effect.Effect<boolean, BoatAllocationStoreError>;
   readonly list: (input: {
     readonly deploymentId: string;
     readonly limit: number;
@@ -337,6 +343,21 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
         );
       return row !== undefined;
     });
+    const launchInFlight = Effect.fn("BoatAllocationRepo.launchInFlight")(function* (id: string) {
+      const [row] = yield* db
+        .select({ id: workspaceRuntimeInstances.runId })
+        .from(workspaceRuntimeInstances)
+        .where(
+          and(
+            eq(workspaceRuntimeInstances.runId, id),
+            eq(workspaceRuntimeInstances.status, "pending"),
+            // Boat launches always name their owner; its lease is read by the database clock.
+            isNotNull(workspaceRuntimeInstances.launchOwner),
+            gt(workspaceRuntimeInstances.launchLeaseExpiresAt, sql`now()`),
+          ),
+        );
+      return row !== undefined;
+    });
     const list = Effect.fn("BoatAllocationRepo.list")(function* (
       input: Parameters<BoatAllocationRepoService["list"]>[0],
     ) {
@@ -366,6 +387,7 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
     return BoatAllocationRepo.of({
       isActive: (id) => boundary(isActive(id)),
       reservedAt: (id) => boundary(reservedAt(id)),
+      launchInFlight: (id) => boundary(launchInFlight(id)),
       get: (id) => boundary(get(id)),
       reserve: (record) => boundary(reserve(record)),
       advance: (before, next) => boundary(advance(before, next)),
