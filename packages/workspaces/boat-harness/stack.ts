@@ -353,17 +353,81 @@ const preflight = async () => {
     );
 };
 
+const LOCK = "sealant-boat-harness-lock";
+const LOCK_LABEL = `${HARNESS_LABEL}.lock`;
+
+/**
+ * One harness run per Docker host: Core's worker reconciles resource networks and gateways
+ * host-wide, so two stacks on one host disturb each other. The lock is a named container that is
+ * never started; creating it is atomic. A holder whose run network is gone (it crashed) loses the
+ * lock after a short grace period. Waits up to two hours.
+ */
+const acquireHostLock = async (runId: string, log: (line: string) => void) => {
+  const deadline = Date.now() + 2 * 60 * 60_000;
+  let reported = "";
+  for (;;) {
+    const created = await docker([
+      "create",
+      "--name",
+      LOCK,
+      "--label",
+      `${LOCK_LABEL}=${runId}`,
+      "postgres:17-alpine",
+      "true",
+    ]);
+    if (created.code === 0) return;
+    const held = await docker([
+      "container",
+      "inspect",
+      "-f",
+      `{{index .Config.Labels "${LOCK_LABEL}"}} {{.Created}}`,
+      LOCK,
+    ]);
+    const [holder = "", since = ""] = held.stdout.trim().split(" ");
+    const running = (await docker(["network", "inspect", `boat-harness-${holder}`])).code === 0;
+    const young = Date.now() - Date.parse(since) < 5 * 60_000;
+    if (held.code === 0 && !running && !young) {
+      log(`removing the lock of harness run ${holder}, which is gone`);
+      await docker(["rm", LOCK]);
+      continue;
+    }
+    if (Date.now() > deadline) throw new Error(`harness run ${holder} still holds the host lock`);
+    if (reported !== holder)
+      log(`another harness run (${holder}) is using this Docker host; waiting`);
+    reported = holder;
+    await new Promise((done) => setTimeout(done, 15_000));
+  }
+};
+
+const releaseHostLock = async (runId: string) => {
+  const held = await docker([
+    "container",
+    "inspect",
+    "-f",
+    `{{index .Config.Labels "${LOCK_LABEL}"}}`,
+    LOCK,
+  ]);
+  if (held.code === 0 && held.stdout.trim() === runId) await docker(["rm", LOCK]);
+};
+
 export const startStack = async (options: StackOptions = {}): Promise<HarnessStack> => {
   const log = options.log ?? ((line: string) => process.stderr.write(`[boat-harness] ${line}\n`));
-  await preflight();
+  const runId = randomBytes(4).toString("hex");
+  await acquireHostLock(runId, log);
+  try {
+    await preflight();
+  } catch (error) {
+    await releaseHostLock(runId);
+    throw error;
+  }
   const baseline = new Set((await listCoreObjects()).map((entry) => `${entry.kind}:${entry.id}`));
   const coreObjects = async () =>
     (await listCoreObjects()).filter((entry) => !baseline.has(`${entry.kind}:${entry.id}`));
-  const runId = randomBytes(4).toString("hex");
   const label = `${HARNESS_LABEL}=${runId}`;
   const scratch = await mkdtemp(join(tmpdir(), `boat-harness-${runId}.`));
   log(`run ${runId}, scratch ${scratch}`);
-  const cleanups: Array<() => Promise<unknown>> = [];
+  // Runs last at teardown, after everything else is gone.
+  const cleanups: Array<() => Promise<unknown>> = [() => releaseHostLock(runId)];
   try {
     // Images: guest twin base and the real resource gateway.
     log("building guest twin and gateway images (cached by tag)");

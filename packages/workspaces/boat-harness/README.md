@@ -93,6 +93,9 @@ answer the guest gave through the hosted proxy. Defect signatures may match eith
 
 ## Safety on a shared machine
 
+One harness run at a time per Docker host. A run takes a host lock: a named container,
+`sealant-boat-harness-lock`, that is never started. A second run waits for the first to finish.
+
 Core's worker reconciles some Docker objects host-wide (resource reach networks, Boat gateways). The
 harness refuses to start if any Sealant resource or gateway object already exists on the Docker
 host. Set `BOAT_HARNESS_ALLOW_SHARED_DOCKER=1` to accept that risk. The worker and API get their own
