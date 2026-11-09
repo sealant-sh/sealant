@@ -168,25 +168,21 @@ const make: Effect.Effect<
         return yield* Effect.fail(new BoatFinalCloseError("held"));
       return { reservation, stopReason: instance.stopReason };
     });
+  /** The exact owned VM, read through the observer: the one source of presence. */
   const present = (target: BoatExecutionTarget) =>
     Effect.gen(function* () {
-      const id = yield* parse(() => boatSandboxIdSchema.parse(target.sandboxId));
-      const sandbox = yield* call(() => provider.api.get(id));
-      const labels = {
-        "sealant-runtime": "boat",
-        "sealant-deployment": target.deploymentId,
-        "sealant-workspace": target.workspaceId,
-        "sealant-run": target.runId,
-        "sealant-instance": target.runtimeInstanceId,
-        "sealant-attempt": target.launchAttemptId,
-        "sealant-source": target.sourceId,
-      };
-      if (
-        sandbox.id !== id ||
-        !Object.entries(labels).every(([key, value]) => sandbox.labels?.[key] === value)
-      )
+      const allocation = yield* allocations.get(target.runtimeInstanceId);
+      if (allocation === undefined || !isDeepStrictEqual(allocation.target, target))
         return yield* Effect.fail(new BoatFinalCloseError("held"));
-      return id;
+      const presence = yield* observer.observe(allocation).pipe(Effect.mapError(observeError));
+      if (presence.kind === "present")
+        return yield* parse(() => boatSandboxIdSchema.parse(presence.sandbox.id));
+      // Absent: the next pass discharges it. Foreign labels: never touched. Otherwise unknown.
+      return yield* Effect.fail(
+        new BoatFinalCloseError(
+          presence.kind === "unknown" && presence.reason === "foreign" ? "held" : "unavailable",
+        ),
+      );
     });
   const record = (reservation: BoatTunnelReservation, operation: BoatDeletion) =>
     Effect.gen(function* () {
