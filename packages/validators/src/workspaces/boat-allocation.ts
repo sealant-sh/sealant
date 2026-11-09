@@ -30,11 +30,20 @@ export const boatAllocationRecordSchema = z
     idempotencyKey: z.uuid(),
     diskLineage: z.uuid(),
     manifestDigest: z.string().regex(/^[a-f0-9]{64}$/),
+    /**
+     * When create was durably issued. It bounds only when a replay under the same idempotency key
+     * is safe (Boat keeps a key for 24 hours); it never stands for an observation.
+     */
+    issuedAt: z.iso.datetime().optional(),
     phase: z.enum(["reserved", "issued", "allocated", "bound", "held", "deleting", "deleted"]),
     sandboxId: sandbox.nullable(),
     conflictingSandboxes: z.array(sandbox).max(200),
     target: boatExecutionTargetSchema.nullable(),
-    reason: z.enum(["allocation-conflict", "lifetime-unverified", "run-stopped"]).nullable(),
+    // `create-unresolved`: issued, no VM carries its labels, and its key may have expired at Boat,
+    // so neither a replay nor a refusal can say whether a VM exists. Discovery keeps looking.
+    reason: z
+      .enum(["allocation-conflict", "lifetime-unverified", "run-stopped", "create-unresolved"])
+      .nullable(),
     // Positive removal of guests whose invocation was never issued. Exact target is retained if bound.
     removal: z
       .discriminatedUnion("kind", [

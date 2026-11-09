@@ -46,6 +46,8 @@ export interface BoatAllocationRepoService {
     next: BoatAllocationRecord,
   ) => Effect.Effect<BoatAllocationRecord, BoatAllocationStoreError>;
   readonly isActive: (id: string) => Effect.Effect<boolean, BoatAllocationStoreError>;
+  /** When the allocation was reserved; it precedes issuance, for records issued before `issuedAt`. */
+  readonly reservedAt: (id: string) => Effect.Effect<Date | undefined, BoatAllocationStoreError>;
   readonly list: (input: {
     readonly deploymentId: string;
     readonly limit: number;
@@ -71,7 +73,7 @@ const transitions: Readonly<
   // `deleted` straight from a live phase only on Boat's own positive absence (`removal.kind` absent).
   allocated: ["bound", "held", "deleting", "deleted"],
   bound: ["deleting", "deleted"],
-  held: ["deleting", "deleted"],
+  held: ["allocated", "deleting", "deleted"],
   deleting: ["deleting", "deleted"],
   deleted: [],
 };
@@ -216,6 +218,11 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
         previous.idempotencyKey !== next.idempotencyKey ||
         previous.diskLineage !== next.diskLineage ||
         previous.manifestDigest !== next.manifestDigest ||
+        (previous.issuedAt !== undefined && previous.issuedAt !== next.issuedAt) ||
+        // Only an unresolved create is ever adopted from held, when discovery finds its VM.
+        (previous.phase === "held" &&
+          next.phase === "allocated" &&
+          previous.reason !== "create-unresolved") ||
         !transitions[previous.phase].includes(next.phase) ||
         (previous.sandboxId !== null && previous.sandboxId !== next.sandboxId) ||
         (next.phase === "deleting" && previous.sandboxId === null) ||
@@ -350,8 +357,15 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
         .limit(input.limit);
       return rows.map((row) => row.id);
     });
+    const reservedAt = (id: string) =>
+      db
+        .select({ createdAt: boatAllocations.createdAt })
+        .from(boatAllocations)
+        .where(eq(boatAllocations.runtimeInstanceId, id))
+        .pipe(Effect.map(([row]) => row?.createdAt));
     return BoatAllocationRepo.of({
       isActive: (id) => boundary(isActive(id)),
+      reservedAt: (id) => boundary(reservedAt(id)),
       get: (id) => boundary(get(id)),
       reserve: (record) => boundary(reserve(record)),
       advance: (before, next) => boundary(advance(before, next)),

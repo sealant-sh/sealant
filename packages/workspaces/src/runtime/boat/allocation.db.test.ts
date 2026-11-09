@@ -3408,7 +3408,187 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
         await o.boat.close();
       }
     }));
+
+  it("never replays a create past Boat's key retention; an unlisted VM stays held until discovery finds it (review of #495)", () =>
+    test(async (s) => {
+      const o = await observedLaunch(s);
+      try {
+        const allocations = await recordedAllocations(s, o);
+        const { input, key } = await lostCreate(s, o);
+        const posts = () => o.boat.requests.filter((r) => r === "POST /api/v1/sandboxes").length;
+        const created = posts();
+        // 25 hours pass: Boat has forgotten the key and does not list the VM yet.
+        await agedIssuance(s, input.consumer.runtimeInstanceId);
+        o.boat.elapse(25 * HOUR);
+        o.boat.unlisted = true;
+        await execute(allocations.reconcile({ limit: 20 }));
+        expect(await execute(s.repo.get(input.consumer.runId))).toMatchObject({
+          phase: "held",
+          reason: "create-unresolved",
+          sandboxId: null,
+        });
+        expect(vmsFor(o, key)).toHaveLength(1);
+        expect(posts()).toBe(created);
+        // Nothing concludes absence: the pin stays and the lifecycle only holds it.
+        await execute(
+          s.runtimes.markStopRequested({ runId: input.consumer.runId, stopReason: "failed" }),
+        );
+        const { owner } = await execute(s.final([], o.api));
+        for (let pass = 0; pass < 3; pass += 1) await execute(owner.reconcile({ limit: 20 }));
+        expect(vmsFor(o, key)).toHaveLength(1);
+        expect((await execute(nativeConsumerRows(s.db, input.consumer.runId)))[0]?.state).toBe(
+          "pending",
+        );
+        // Boat lists the VM again: discovery adopts it and the lifecycle closes it.
+        o.boat.unlisted = false;
+        await execute(allocations.reconcile({ limit: 20 }));
+        expect(await execute(s.repo.get(input.consumer.runId))).toMatchObject({
+          phase: "allocated",
+          reason: null,
+        });
+        for (let pass = 0; pass < 3; pass += 1) await execute(owner.reconcile({ limit: 20 }));
+        expect(vmsFor(o, key)).toHaveLength(0);
+        expect(posts()).toBe(created);
+      } finally {
+        await o.boat.close();
+      }
+    }));
+
+  it("never takes a refusal past Boat's key retention as proof that no VM exists (review of #495)", () =>
+    test(async (s) => {
+      const o = await observedLaunch(s);
+      try {
+        const allocations = await recordedAllocations(s, o);
+        const { input, key } = await lostCreate(s, o);
+        await agedIssuance(s, input.consumer.runtimeInstanceId);
+        o.boat.elapse(25 * HOUR);
+        o.boat.unlisted = true;
+        o.boat.rejectCreate = { status: 402, code: "insufficient_balance" };
+        await execute(allocations.reconcile({ limit: 20 }));
+        const { owner } = await execute(s.final([], o.api));
+        await execute(owner.reconcile({ limit: 20 }));
+        expect((await execute(s.repo.get(input.consumer.runId)))?.phase).toBe("held");
+        expect(await execute(o.observations.get(input.consumer.runtimeInstanceId))).toBeUndefined();
+        expect(vmsFor(o, key)).toHaveLength(1);
+        expect((await execute(nativeConsumerRows(s.db, input.consumer.runId)))[0]?.state).toBe(
+          "pending",
+        );
+      } finally {
+        await o.boat.close();
+      }
+    }));
+
+  it("ends an unresolved create's session on the owner's discard without concluding absence (review of #495)", () =>
+    test(async (s) => {
+      const o = await observedLaunch(s);
+      try {
+        const allocations = await recordedAllocations(s, o);
+        const { input } = await lostCreate(s, o);
+        await agedIssuance(s, input.consumer.runtimeInstanceId);
+        o.boat.elapse(25 * HOUR);
+        o.boat.unlisted = true;
+        await execute(allocations.reconcile({ limit: 20 }));
+        await execute(
+          s.canonical.requestDiscard({ runId: input.consumer.runId, requestedBy: "usr_owner" }),
+        );
+        const { owner } = await execute(s.final([], o.api));
+        expect((await execute(owner.reconcile({ limit: 20 }))).entries).toContainEqual({
+          runId: input.consumer.runId,
+          outcome: "held",
+        });
+        expect(await execute(s.canonical.getByRunId(input.consumer.runId))).toMatchObject({
+          state: "discarded",
+        });
+        expect(
+          await execute(s.runtimes.getRuntimeInstanceByRunId(input.consumer.runId)),
+        ).toMatchObject({ status: "stopped", removedAt: null });
+        expect((await execute(s.repo.get(input.consumer.runId)))?.phase).toBe("held");
+      } finally {
+        await o.boat.close();
+      }
+    }));
+
+  it("never creates again after a crash between recording no VM and terminalizing the allocation (review of #495)", () =>
+    test(async (s) => {
+      const o = await observedLaunch(s);
+      try {
+        const input = await execute(seed(s.db, s.catalog));
+        const reserved = await execute(s.repo.reserve(reservation(input)));
+        await execute(
+          s.repo.advance(reserved, {
+            ...reserved,
+            phase: "issued",
+            issuedAt: new Date().toISOString(),
+          }),
+        );
+        o.boat.savedSnapshots.set(input.publication.snapshot.identity.name, {
+          ...input.publication.snapshot.identity,
+          status: "ready",
+        });
+        const interrupted = await recordedAllocations(
+          {
+            ...s,
+            repo: {
+              ...s.repo,
+              advance: (a, b) =>
+                b.phase === "deleted" && b.removal?.kind === "never-created"
+                  ? Effect.interrupt
+                  : s.repo.advance(a, b),
+            },
+          },
+          o,
+        );
+        o.boat.rejectCreate = { status: 402, code: "insufficient_balance" };
+        await execute(interrupted.reconcile({ limit: 20 })).catch(() => undefined);
+        expect(
+          (await execute(o.observations.get(input.consumer.runtimeInstanceId)))?.presence,
+        ).toBe("absent");
+        expect((await execute(s.repo.get(input.consumer.runId)))?.phase).toBe("issued");
+        o.boat.rejectCreate = undefined;
+        const allocations = await recordedAllocations(s, o);
+        await execute(allocations.reconcile({ limit: 20 }));
+        expect(await execute(s.repo.get(input.consumer.runId))).toMatchObject({
+          phase: "deleted",
+          removal: { kind: "never-created" },
+        });
+        expect(vmsFor(o, reserved.idempotencyKey)).toHaveLength(0);
+      } finally {
+        await o.boat.close();
+      }
+    }));
 });
+
+const HOUR = 60 * 60_000;
+const vmsFor = (o: Awaited<ReturnType<typeof observedLaunch>>, key: string) =>
+  [...o.boat.vms.values()].filter((vm) => vm.key === key);
+
+/** A second launch whose create Boat accepted but whose reply was lost. */
+const lostCreate = async (s: AllocationFixture, o: Awaited<ReturnType<typeof observedLaunch>>) => {
+  const allocations = await recordedAllocations(s, o);
+  const input = await execute(seed(s.db, s.catalog));
+  const reserved = await execute(s.repo.reserve(reservation(input)));
+  o.boat.savedSnapshots.set(input.publication.snapshot.identity.name, {
+    ...input.publication.snapshot.identity,
+    status: "ready",
+  });
+  o.boat.loseCreateReply = true;
+  await expect(execute(allocations.prepare(input))).rejects.toThrow();
+  o.boat.loseCreateReply = false;
+  expect(vmsFor(o, reserved.idempotencyKey)).toHaveLength(1);
+  return { input, key: reserved.idempotencyKey };
+};
+
+/** Core's record of when create was issued, 25 hours ago. */
+const agedIssuance = async (s: AllocationFixture, id: string) => {
+  const record = await execute(s.repo.get(id));
+  if (record === undefined) throw new Error("missing allocation");
+  await execute(
+    corruptBoatAllocation(s.db, id, {
+      ...record,
+      issuedAt: new Date(Date.now() - 25 * HOUR).toISOString(),
+    }),
+  );
+};
 
 /** Allocation driven against the recorded-facts Boat fake. */
 const recordedAllocations = (s: AllocationFixture, o: Awaited<ReturnType<typeof observedLaunch>>) =>

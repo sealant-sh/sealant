@@ -14,7 +14,7 @@ import {
   type BoatAllocationRecord,
   type BoatExecutionTarget,
 } from "@sealant/validators";
-import { Cause, Context, Effect, Layer, Schedule } from "effect";
+import { Cause, Clock, Context, Effect, Layer, Schedule } from "effect";
 import { z } from "zod";
 
 import { safeCommandTail } from "../../images/boat/command-diagnostics.js";
@@ -136,7 +136,8 @@ const make: Effect.Effect<
     const runId = record.input.consumer.runId;
     if (record.input.deploymentId !== deploymentId)
       return yield* Effect.fail(new BoatAllocationError("target-mismatch"));
-    if (["held", "deleting", "deleted"].includes(record.phase))
+    const unresolved = record.phase === "held" && record.reason === "create-unresolved";
+    if (["held", "deleting", "deleted"].includes(record.phase) && !unresolved)
       return yield* Effect.fail(new BoatAllocationError("allocation-held"));
     if (record.phase === "reserved" && !(yield* repo.isActive(runId))) {
       yield* repo.advance(record, { ...record, phase: "held", reason: "run-stopped" });
@@ -163,7 +164,8 @@ const make: Effect.Effect<
       )
         return yield* Effect.fail(new BoatAllocationError("source-mismatch"));
       // Only the winner of this transition may issue create. Redelivery after it only discovers.
-      record = yield* repo.advance(record, { ...record, phase: "issued" });
+      const issuedAt = new Date(yield* Clock.currentTimeMillis).toISOString();
+      record = yield* repo.advance(record, { ...record, phase: "issued", issuedAt });
       const sandbox = yield* provider("create", () =>
         api.create({
           idempotencyKey: record.idempotencyKey,
@@ -179,7 +181,21 @@ const make: Effect.Effect<
         phase: "allocated",
         sandboxId: sandbox.id,
       });
-    } else if (record.phase === "issued") {
+    } else if (record.phase === "issued" || unresolved) {
+      // Boat holding no VM for the launch is committed as an observation before the allocation is
+      // terminalized; a crash between the two must never be followed by another create.
+      const committed = yield* observer
+        .observe(record)
+        .pipe(Effect.mapError(() => new BoatAllocationStoreError("unavailable")));
+      if (committed.kind === "absent") {
+        yield* repo.advance(record, {
+          ...record,
+          phase: "deleted",
+          reason: null,
+          removal: { kind: "never-created", completed: true },
+        });
+        return yield* Effect.fail(new BoatAllocationError("allocation-held"));
+      }
       const discovered = yield* Effect.tryPromise({
         try: () => api.discover(ownership),
         catch: (error) =>
@@ -195,18 +211,41 @@ const make: Effect.Effect<
         ];
         if (conflictingSandboxes.length < 2 || conflictingSandboxes.length > 200)
           return yield* Effect.fail(new BoatAllocationError("target-mismatch"));
-        yield* repo.advance(record, {
-          ...record,
-          phase: "held",
-          reason: "allocation-conflict",
-          conflictingSandboxes,
-        });
+        if (record.phase === "issued")
+          yield* repo.advance(record, {
+            ...record,
+            phase: "held",
+            reason: "allocation-conflict",
+            conflictingSandboxes,
+          });
         return yield* Effect.fail(new BoatAllocationError("allocation-held"));
       }
       if (discovered.kind === "unknown" && discovered.reason === "inventory-unavailable")
         return yield* Effect.fail(new BoatAllocationError("provider-unavailable"));
       let sandbox = discovered.kind === "found" ? discovered.sandbox : undefined;
       if (sandbox === undefined) {
+        // Boat keeps an idempotency key for 24 hours. Past that, a replay could create a second VM
+        // beside one it accepted earlier, and a refusal proves nothing about that one. Only label
+        // discovery is safe then; with nothing found the outcome stays unknown, surfaced as held
+        // for an operator, whose exit is the owner's discard.
+        const issued =
+          record.issuedAt === undefined
+            ? (yield* repo.reservedAt(record.input.consumer.runtimeInstanceId))?.getTime()
+            : Date.parse(record.issuedAt);
+        if (
+          issued === undefined ||
+          (yield* Clock.currentTimeMillis) - issued >= BOAT_CREATE_REPLAY_WINDOW_MS
+        ) {
+          if (record.phase === "issued")
+            yield* repo.advance(record, { ...record, phase: "held", reason: "create-unresolved" });
+          return yield* Effect.fail(
+            new BoatAllocationError("allocation-held", {
+              step: "discover",
+              errorClass: "BoatAllocationError",
+              code: "allocation-held",
+            }),
+          );
+        }
         // No VM carries this launch's labels: its create reply was lost, Boat has not listed it
         // yet, or create was never sent. Replay create under the same idempotency key. Boat answers
         // with the VM it already accepted for that key, or creates it now; either way Core ends
@@ -219,7 +258,12 @@ const make: Effect.Effect<
             from: record.input.publication.snapshot.identity.name,
           }),
         ).pipe(Effect.orElseSucceed(() => undefined));
-        if (replay !== undefined && !replay.ok && createRejected(replay.error)) {
+        if (
+          record.phase === "issued" &&
+          replay !== undefined &&
+          !replay.ok &&
+          createRejected(replay.error)
+        ) {
           // A definite refusal of this key: an earlier acceptance would have been replayed, so
           // Boat holds no VM for the launch.
           yield* observer
@@ -251,6 +295,7 @@ const make: Effect.Effect<
       record = yield* repo.advance(record, {
         ...record,
         phase: "allocated",
+        reason: null,
         sandboxId: sandbox.id,
       });
     }
@@ -457,6 +502,12 @@ const make: Effect.Effect<
   return BoatAllocation.of({ prepare, reconcile });
 });
 /** Open assembly for the worker's sealed exchange and provider infrastructure. */
+/**
+ * How long after issuance create may be replayed under the same idempotency key: inside Boat's
+ * 24-hour key retention, with an hour of margin for clock skew between Core and Boat.
+ */
+export const BOAT_CREATE_REPLAY_WINDOW_MS = 23 * 60 * 60_000;
+
 /**
  * Boat refused a create outright: what it was asked for cannot be made (source snapshot gone,
  * account or plan limits, no machine). A replay under an accepted key is answered with that VM,

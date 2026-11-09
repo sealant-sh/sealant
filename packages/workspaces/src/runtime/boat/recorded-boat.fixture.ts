@@ -3,7 +3,8 @@
  * (docs/experiments/boat-provider-lifetime-evidence.json, boat-runtime.md, api.test.ts):
  *
  * - Create needs an `Idempotency-Key`, answers 202 with the VM in `provisioned`, and replays the
- *   same VM for the same key. Reads then move it through `cloning` to `idle`.
+ *   same VM for the same key for 24 hours; after that the key is forgotten and a replay creates
+ *   another VM. Reads then move it through `cloning` to `idle`.
  * - Discovery is a paginated label query with `pageInfo`.
  * - DELETE needs `X-Ascii-Confirm-Delete: <id>` and answers with a deletion operation that is
  *   `pending`, then `processing`, then `completed` as it is polled. Only completion removes the VM.
@@ -18,6 +19,8 @@ import http from "node:http";
 
 import { z } from "zod";
 
+/** Boat keeps an idempotency key for 24 hours (docs/experiments/boat-provider-lifetime.md). */
+const KEY_RETENTION_MS = 24 * 60 * 60_000;
 const ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz";
 const sandboxId = () =>
   `bx_${Array.from({ length: 8 }, () => ALPHABET[Math.floor(Math.random() * ALPHABET.length)]).join("")}`;
@@ -25,6 +28,8 @@ const sandboxId = () =>
 interface Vm {
   readonly id: string;
   readonly key: string;
+  /** The fake's clock when Boat accepted the create (key retention runs from here). */
+  readonly acceptedAt?: number;
   readonly labels: Record<string, string>;
   state: "provisioned" | "cloning" | "idle";
 }
@@ -68,6 +73,17 @@ export class RecordedBoat {
   /** How many polls a deletion takes to complete. */
   deletionPolls = 2;
   #server: http.Server | undefined;
+  /** How far the fake's clock has been moved past real time. */
+  #offsetMs = 0;
+
+  /** Move Boat's clock forward, as hours passing between a lost reply and its recovery would. */
+  elapse(ms: number) {
+    this.#offsetMs += ms;
+  }
+
+  #now() {
+    return Date.now() + this.#offsetMs;
+  }
 
   /** Out-of-band removal, as when a person deletes the VM in Boat's console. */
   removeOutOfBand(id: string) {
@@ -126,8 +142,16 @@ export class RecordedBoat {
         .object({ labels: z.record(z.string(), z.string()) })
         .passthrough()
         .parse(JSON.parse(raw));
-      const existing = [...this.vms.values()].find((vm) => vm.key === key);
-      const vm = existing ?? { id: sandboxId(), key, labels: body.labels, state: "provisioned" };
+      const existing = [...this.vms.values()].find(
+        (vm) => vm.key === key && this.#now() - (vm.acceptedAt ?? this.#now()) < KEY_RETENTION_MS,
+      );
+      const vm = existing ?? {
+        id: sandboxId(),
+        key,
+        acceptedAt: this.#now(),
+        labels: body.labels,
+        state: "provisioned" as const,
+      };
       this.vms.set(vm.id, vm);
       if (this.loseCreateReply) {
         response.destroy();

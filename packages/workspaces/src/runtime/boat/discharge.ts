@@ -152,8 +152,18 @@ const make = Effect.gen(function* () {
       "allocation",
       Effect.gen(function* () {
         const current = yield* allocations.get(id);
-        if (current === undefined || current.phase === "deleted" || current.sandboxId === null)
+        if (current === undefined || current.phase === "deleted") return;
+        // Boat holds no VM for the launch (observed not-discovered): finish its terminalization.
+        if (current.sandboxId === null) {
+          yield* allocations.advance(current, {
+            ...current,
+            phase: "deleted",
+            reason: null,
+            conflictingSandboxes: [],
+            removal: { kind: "never-created", completed: true },
+          });
           return;
+        }
         yield* allocations.advance(current, {
           ...current,
           phase: "deleted",
