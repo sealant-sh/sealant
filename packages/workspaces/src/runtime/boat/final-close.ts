@@ -527,6 +527,9 @@ const make: Effect.Effect<
     if (allocation.phase === "deleted") return "skipped" as const;
     let instance = yield* runtimes.getRuntimeInstanceByRunId(runId);
     if (instance?.adapter !== "boat") return "skipped" as const;
+    // A live launch owns its allocation and VM until it finishes or its lease lapses. An explicit
+    // stop reaches it through the stop worker; this sweep adopts only what no launch owns.
+    if (yield* allocations.launchInFlight(id)) return "skipped" as const;
     if (instance.status === "pending" && instance.stopReason === null) {
       // The launch's worker is gone (its ownership lapsed): nothing will finish it, so the launch
       // failed. Adoption is atomic with the lapse check; a live launch keeps its row. A pending

@@ -381,7 +381,10 @@ export class GuestFixture implements BoatGuestTransport {
   readonly networkBodies: string[] = [];
   lostIsolation = false;
   beforeIsolate: () => Promise<void> = async () => {};
+  /** Runs before each bind is answered; a slow guest boot holds it. */
+  beforeBind: () => Promise<void> = async () => {};
   async bind(target: BoatExecutionTarget, raw: unknown) {
+    await this.beforeBind();
     if (this.fail) throw new Error("lost bind");
     this.targets.push(target);
     this.target = target;

@@ -72,3 +72,16 @@ export const strandBoatLaunch = (
       launchLeaseExpiresAt: new Date(Date.now() - 60_000),
     })
     .where(eq(workspaceRuntimeInstances.runId, input.runId));
+
+/** A launch whose worker is alive: its row is pending and its launch ownership is current. */
+export const holdBoatLaunch = (db: DB, runId: string) =>
+  db
+    .update(workspaceRuntimeInstances)
+    .set({
+      adapter: "boat",
+      status: "pending",
+      stopReason: null,
+      launchOwner: "worker-still-launching",
+      launchLeaseExpiresAt: new Date(Date.now() + 5 * 60_000),
+    })
+    .where(eq(workspaceRuntimeInstances.runId, runId));
