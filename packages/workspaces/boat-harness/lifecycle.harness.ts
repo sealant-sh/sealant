@@ -121,11 +121,19 @@ const happyPath = async () => {
 };
 
 /** Runs a scenario as passing, or as an expected failure naming its defect. */
-const scenario = (name: string, defect: Defect | undefined, body: () => Promise<void>) =>
+const scenario = (
+  name: string,
+  defect: Defect | undefined,
+  body: () => Promise<void>,
+  timeoutMs?: number,
+) =>
   defect === undefined
-    ? it(name, body)
-    : it(`${name} [${defect.intermittent === true ? "intermittent" : "expected failure"} ${defect.id}: ${defect.title}]`, () =>
-        expectDefect(defect, body));
+    ? it(name, body, timeoutMs)
+    : it(
+        `${name} [${defect.intermittent === true ? "intermittent" : "expected failure"} ${defect.id}: ${defect.title}]`,
+        () => expectDefect(defect, body),
+        timeoutMs,
+      );
 
 const fault = (
   key: keyof typeof DEFECTS.faults,
@@ -133,7 +141,8 @@ const fault = (
 ) => scenario(key, DEFECTS.faults[key], () => body(stack, project));
 
 describe("Boat session lifecycle", () => {
-  scenario("happy path", DEFECTS.happyPath, happyPath);
+  // The first launch also builds and publishes the native snapshot.
+  scenario("happy path", DEFECTS.happyPath, happyPath, 40 * 60_000);
 });
 
 describe("one fault per step", () => {
