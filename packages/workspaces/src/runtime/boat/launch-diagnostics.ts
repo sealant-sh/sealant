@@ -71,6 +71,7 @@ const diagnosticSchema = z.object({
       "invalid-record",
       "gateway-unavailable",
       "ownership-conflict",
+      "sandbox-absent",
     ])
     .optional(),
   sandboxState: z
