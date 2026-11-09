@@ -28,8 +28,28 @@ const asNonEmptyString = (value: unknown): string | undefined => {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 };
 
-export const CLAUDE_API_KEY_PREFIX = "sk-ant-api";
-export const CLAUDE_ADMIN_KEY_PREFIX = "sk-ant-admin";
+/** A `claude setup-token` value. */
+export const CLAUDE_TOKEN_PREFIX = "sk-ant-oat01-";
+
+/** What an Anthropic secret is, read from its prefix. */
+export type AnthropicSecretKind = "setup-token" | "admin-key" | "api-key";
+
+/**
+ * Every Anthropic prefix Sealant reads, and what each one is: the one place a secret's kind is
+ * decided. The Console issues API keys linked to a person's account as `sk-ant-usr-` and lists the
+ * older `sk-ant-api03-` keys as legacy; both run a model. Any other `sk-ant-` string is none of
+ * these, so it is not taken as a key.
+ */
+const ANTHROPIC_SECRET_PREFIXES: ReadonlyArray<readonly [string, AnthropicSecretKind]> = [
+  [CLAUDE_TOKEN_PREFIX, "setup-token"],
+  ["sk-ant-admin", "admin-key"],
+  ["sk-ant-api", "api-key"],
+  ["sk-ant-usr-", "api-key"],
+];
+
+export const anthropicSecretKindOf = (secret: string): AnthropicSecretKind | undefined =>
+  ANTHROPIC_SECRET_PREFIXES.find(([prefix]) => secret.startsWith(prefix))?.[1];
+
 export const OPENAI_API_KEY_PREFIX = "sk-";
 const OPENAI_ADMIN_KEY_PREFIX = "sk-admin-";
 const API_KEY_MAX_LENGTH = 512;
@@ -43,6 +63,9 @@ export const apiKeyPayloadSchema = Schema.Struct({
   baseUrl: Schema.optionalKey(EndpointUrl),
 });
 export type ApiKeyPayload = typeof apiKeyPayloadSchema.Type;
+
+const ANTHROPIC_API_KEY_REFUSAL =
+  "That is not an Anthropic API key. Create one in the Anthropic Console, under API keys, and paste it whole.";
 
 export type ParseApiKeyResult =
   | { readonly valid: true; readonly apiKey: string }
@@ -60,7 +83,7 @@ export const parseApiKey = (
   const apiKey = raw.trim();
   const label = provider === "claude" ? "Claude" : "Codex";
   if (
-    apiKey.startsWith(CLAUDE_ADMIN_KEY_PREFIX) ||
+    anthropicSecretKindOf(apiKey) === "admin-key" ||
     (provider === "codex" && apiKey.startsWith(OPENAI_ADMIN_KEY_PREFIX))
   ) {
     return { valid: false, reason: "An Admin API key cannot run a model." };
@@ -80,9 +103,11 @@ export const parseApiKey = (
   if (provider === "codex" && apiKey.startsWith("sk-ant-")) {
     return { valid: false, reason: "That is an Anthropic key; connect it as a Claude account." };
   }
-  const prefix = provider === "claude" ? CLAUDE_API_KEY_PREFIX : OPENAI_API_KEY_PREFIX;
-  if (!apiKey.startsWith(prefix)) {
-    return { valid: false, reason: `A ${label} API key starts with "${prefix}".` };
+  if (provider === "claude" && anthropicSecretKindOf(apiKey) !== "api-key") {
+    return { valid: false, reason: ANTHROPIC_API_KEY_REFUSAL };
+  }
+  if (provider === "codex" && !apiKey.startsWith(OPENAI_API_KEY_PREFIX)) {
+    return { valid: false, reason: `A Codex API key starts with "${OPENAI_API_KEY_PREFIX}".` };
   }
   if (/\s/.test(apiKey)) {
     return { valid: false, reason: `A ${label} API key has no spaces or line breaks in it.` };
@@ -116,8 +141,6 @@ export const apiKeyMetadata = (
 //    workspace without the MCP refresh tokens that sat beside it.
 // ---------------------------------------------------------------------------
 
-export const CLAUDE_TOKEN_PREFIX = "sk-ant-oat01-";
-
 export const claudeTokenCredentialPayloadSchema = Schema.Struct({
   token: Schema.String.check(Schema.isStartingWith(CLAUDE_TOKEN_PREFIX)),
 });
@@ -131,9 +154,9 @@ export type ClaudeCredentialsFilePayload = typeof claudeCredentialsFilePayloadSc
 /** An Anthropic key, or with an endpoint whatever key that endpoint takes. */
 export const claudeApiKeyPayloadSchema = apiKeyPayloadSchema.check(
   Schema.makeFilter(({ apiKey, baseUrl }) =>
-    baseUrl !== undefined || apiKey.startsWith(CLAUDE_API_KEY_PREFIX)
+    baseUrl !== undefined || anthropicSecretKindOf(apiKey) === "api-key"
       ? undefined
-      : `a Claude API key without an endpoint starts with "${CLAUDE_API_KEY_PREFIX}"`,
+      : "a Claude API key without an endpoint is an Anthropic API key",
   ),
 );
 

@@ -544,7 +544,7 @@ const shapes = (bytes: number) => [
 const LINEAR_SEARCHES = new Set([
   String.raw`/([?&;])([^=&\s#?;]+)=([^&\s#;"'<>)\\]*)/g`,
   String.raw`/\b(bearer|basic)[ \t]+/gi`,
-  String.raw`/(?<![A-Za-z0-9])sk-(?:(?:ant-(?:api|oat|ort|admin)\d*|proj|svcacct|admin)-[A-Za-z0-9_-]{8,}|[A-Za-z0-9_-]{32,})/g`,
+  String.raw`/(?<![A-Za-z0-9])sk-(?:(?:ant-(?:api|usr|oat|ort|admin)\d*|proj|svcacct|admin)-[A-Za-z0-9_-]{8,}|[A-Za-z0-9_-]{32,})/g`,
 ]);
 
 /** The built-ins redaction calls today, each charged below. Calling any other needs review first. */
@@ -975,6 +975,7 @@ describe("redactCredentialsInText", () => {
   it("replaces a provider key by its shape, wherever it stands", () => {
     const keys = [
       "sk-ant-api03-FAKEclaudekeyforthetests000000wxyz",
+      "sk-ant-usr-FAKEuserkey0000wxyz",
       "sk-ant-oat01-FAKEsetuptoken0000wxyz",
       "sk-proj-FAKEcodexkey0000wxyz",
       "sk-FAKElegacyopenaikey00000000000000000000wxyz",
