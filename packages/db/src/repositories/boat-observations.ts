@@ -1,4 +1,4 @@
-import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -21,16 +21,21 @@ export interface BoatObservationRepoService {
   ) => Effect.Effect<BoatObservation | undefined, BoatObservationStoreError>;
   /**
    * Boat returned the exact labelled VM. Refreshes the last read; never revives an absent VM and
-   * never moves the observation to a different VM (`target-conflict`).
+   * never moves the observation to a different VM (`target-conflict`). Returns the committed row:
+   * an absence another observer committed first wins over this read. `created`: Boat reported
+   * the VM past creation, so from now on a 404 for it can only mean it is gone.
    */
   readonly recordPresent: (input: {
     readonly runtimeInstanceId: string;
     readonly deploymentId: string;
     readonly sandboxId: string;
     readonly providerState: string;
+    readonly created: boolean;
   }) => Effect.Effect<BoatObservation, BoatObservationStoreError>;
   /**
-   * Boat positively no longer has the VM. In the same transaction the Boat runtime row reads it:
+   * Boat positively no longer has the VM. A `not-found` absence needs a committed observation of
+   * the VM past creation (enforced by the table); without one nothing is written. In the same
+   * transaction the Boat runtime row reads it:
    * stopped (keeping any stop reason already chosen, `failed` otherwise) and removed. Its launch
    * error is left as history. Idempotent; the first absence stands.
    */
@@ -79,12 +84,18 @@ const make: Effect.Effect<BoatObservationRepoService, never, SealantDB> = Effect
             presence: "present",
             basis: "read",
             providerState: input.providerState,
-            firstPresentAt: now,
+            createdObservedAt: input.created ? now : null,
             observedAt: now,
           })
           .onConflictDoUpdate({
             target: boatObservations.runtimeInstanceId,
-            set: { providerState: input.providerState, observedAt: now },
+            set: {
+              providerState: input.providerState,
+              observedAt: now,
+              ...(input.created
+                ? { createdObservedAt: sql`coalesce(${boatObservations.createdObservedAt}, now())` }
+                : {}),
+            },
             setWhere:
               and(
                 eq(boatObservations.presence, "present"),
@@ -107,28 +118,38 @@ const make: Effect.Effect<BoatObservationRepoService, never, SealantDB> = Effect
       db.transaction(() =>
         Effect.gen(function* () {
           const now = new Date();
-          yield* db
-            .insert(boatObservations)
-            .values({
-              runtimeInstanceId: input.runtimeInstanceId,
-              deploymentId: input.deploymentId,
-              sandboxId: input.sandboxId,
-              presence: "absent",
-              basis: input.basis,
-              observedAt: now,
-            })
-            .onConflictDoUpdate({
-              target: boatObservations.runtimeInstanceId,
-              set: { presence: "absent", basis: input.basis, observedAt: now },
-              setWhere:
-                and(
-                  eq(boatObservations.presence, "present"),
-                  input.sandboxId === null
-                    ? sql`false`
-                    : eq(boatObservations.sandboxId, input.sandboxId),
-                  eq(boatObservations.deploymentId, input.deploymentId),
-                ) ?? sql`false`,
-            });
+          const fromPresent =
+            and(
+              eq(boatObservations.runtimeInstanceId, input.runtimeInstanceId),
+              eq(boatObservations.presence, "present"),
+              input.sandboxId === null
+                ? sql`false`
+                : eq(boatObservations.sandboxId, input.sandboxId),
+              eq(boatObservations.deploymentId, input.deploymentId),
+            ) ?? sql`false`;
+          if (input.basis === "not-found") {
+            // A 404 is absence only for a VM Boat had reported past creation; nothing to insert.
+            yield* db
+              .update(boatObservations)
+              .set({ presence: "absent", basis: "not-found", observedAt: now })
+              .where(and(fromPresent, isNotNull(boatObservations.createdObservedAt)) ?? sql`false`);
+          } else {
+            yield* db
+              .insert(boatObservations)
+              .values({
+                runtimeInstanceId: input.runtimeInstanceId,
+                deploymentId: input.deploymentId,
+                sandboxId: input.sandboxId,
+                presence: "absent",
+                basis: input.basis,
+                observedAt: now,
+              })
+              .onConflictDoUpdate({
+                target: boatObservations.runtimeInstanceId,
+                set: { presence: "absent", basis: input.basis, observedAt: now },
+                setWhere: fromPresent,
+              });
+          }
           const row = yield* get(input.runtimeInstanceId);
           if (
             row === undefined ||

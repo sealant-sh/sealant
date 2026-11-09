@@ -66,7 +66,6 @@ export {
 } from "./runtime/boat/final-close.js";
 
 export {
-  BOAT_CREATE_FENCE_MS,
   BoatObserver,
   boatObserverLayer,
   boatObserverLayerNoDeps,

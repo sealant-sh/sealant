@@ -21,21 +21,26 @@ export const boatObservations = snakeCase.table(
     sandboxId: text(),
     presence: text().$type<"present" | "absent">().notNull(),
     /**
-     * `read`: Boat returned the exact labelled VM. `not-found`: a typed 404 once the VM was known
-     * to exist or its create fence lapsed. `deletion-completed`: Boat's deletion operation for it
-     * completed. `not-discovered`: no VM carries the launch's labels after its create fence lapsed.
+     * `read`: Boat returned the exact labelled VM. `not-found`: a typed 404 after Boat had reported
+     * the VM's creation finished. `deletion-completed`: Boat's deletion operation for it completed.
+     * `not-discovered`: no VM carries the launch's labels (reserved for label discovery).
      */
     basis: text().$type<"read" | "not-found" | "deletion-completed" | "not-discovered">().notNull(),
     /** Boat's own state at the last `read`. */
     providerState: text(),
-    firstPresentAt: timestamp({ mode: "date", withTimezone: true }),
+    /**
+     * When Boat first reported the VM past creation (a state after `cloning`). Until then a 404 may
+     * be Boat not yet able to read a VM it accepted, so it is never absence.
+     */
+    createdObservedAt: timestamp({ mode: "date", withTimezone: true }),
     observedAt: timestamp({ mode: "date", withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     check(
       "boat_observations_shape",
-      sql`(${table.presence} = 'present' and ${table.basis} = 'read' and ${table.sandboxId} is not null and ${table.firstPresentAt} is not null)
-        or (${table.presence} = 'absent' and ${table.basis} in ('not-found', 'deletion-completed') and ${table.sandboxId} is not null)
+      sql`(${table.presence} = 'present' and ${table.basis} = 'read' and ${table.sandboxId} is not null)
+        or (${table.presence} = 'absent' and ${table.basis} = 'not-found' and ${table.sandboxId} is not null and ${table.createdObservedAt} is not null)
+        or (${table.presence} = 'absent' and ${table.basis} = 'deletion-completed' and ${table.sandboxId} is not null)
         or (${table.presence} = 'absent' and ${table.basis} = 'not-discovered' and ${table.sandboxId} is null)`,
     ),
   ],

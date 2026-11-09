@@ -1,25 +1,27 @@
 import {
-  BoatAllocationRepo,
-  BoatAllocationRepoLive,
   BoatObservationRepo,
   BoatObservationRepoLive,
-  type BoatAllocationStoreError,
+  type BoatObservation,
   type BoatObservationStoreError,
   type SealantDB,
 } from "@sealant/db";
 import type { BoatAllocationRecord } from "@sealant/validators";
-import { Clock, Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer } from "effect";
 
 import { BoatAllocationProvider, boatAllocationMatches } from "./allocation.js";
 import type { BoatSandbox } from "./api.js";
-import { boatSandboxIdSchema } from "./config.js";
+import { boatSandboxIdSchema, type BoatApiError } from "./config.js";
 
 /**
- * How long after create was issued Boat may still be unable to read the VM it accepted. Create is
- * asynchronous (202, then `provisioned` and `cloning`); a 404 inside this fence, before the VM was
- * ever read, is not absence. Recorded provisioning takes seconds to a few minutes.
+ * Boat's states while it is still accepting an asynchronous create (202, then `provisioned` and
+ * `cloning`). A VM read only in these states may not be readable yet, so a 404 for it is unknown.
  */
-export const BOAT_CREATE_FENCE_MS = 15 * 60_000;
+const CREATING: ReadonlySet<BoatSandbox["state"]> = new Set([
+  "init",
+  "provisioning",
+  "provisioned",
+  "cloning",
+]);
 
 /** What Boat says about one launch's VM right now. Only `absent` is terminal. */
 export type BoatPresence =
@@ -31,31 +33,35 @@ export type BoatPresence =
   | {
       readonly kind: "unknown";
       /**
-       * `unreadable`: Boat did not answer conclusively. `creating`: a 404 inside the create fence of
-       * a VM never read. `foreign`: Boat returned a VM without this launch's exact labels.
+       * `unreadable`: Boat did not answer conclusively. `creating`: a 404 before Boat ever reported
+       * the VM past creation. `foreign`: Boat returned a VM without this launch's exact labels.
        * `no-sandbox`: the launch has no VM identity to read.
        */
       readonly reason: "unreadable" | "creating" | "foreign" | "no-sandbox";
+      /** Boat's own answer, for diagnostics; never response text. */
+      readonly error?: BoatApiError;
     };
 
-export type BoatObserverError = BoatObservationStoreError | BoatAllocationStoreError;
-
-/** The only writer of observed presence. It never infers absence from a launch error or a lease. */
+/**
+ * The only writer of observed presence. Absence comes from Boat alone: a typed 404 for a VM Boat
+ * had reported past creation, or Boat's own completed deletion. Never elapsed time, a launch error
+ * or a lease.
+ */
 export class BoatObserver extends Context.Service<
   BoatObserver,
   {
     readonly observe: (
       allocation: BoatAllocationRecord,
-    ) => Effect.Effect<BoatPresence, BoatObserverError>;
+    ) => Effect.Effect<BoatPresence, BoatObservationStoreError>;
     /** Boat's own deletion operation for this exact VM completed. */
     readonly deletionCompleted: (
       allocation: BoatAllocationRecord,
       sandboxId: string,
-    ) => Effect.Effect<void, BoatObserverError>;
+    ) => Effect.Effect<void, BoatObservationStoreError>;
   }
 >()("@sealant/workspaces/boat/BoatObserver") {}
 
-const notFound = (error: { readonly status: number | null; readonly code: string }) =>
+const notFound = (error: BoatApiError) =>
   error.status === 404 && ["not_found", "sandbox_not_found"].includes(error.code);
 
 const ids = (allocation: BoatAllocationRecord) => ({
@@ -64,27 +70,17 @@ const ids = (allocation: BoatAllocationRecord) => ({
   deploymentId: allocation.input.deploymentId,
 });
 
+/** The committed absence, whoever wrote it. */
+const absence = (row: BoatObservation) =>
+  ({ kind: "absent", basis: row.basis === "read" ? "not-found" : row.basis }) as const;
+
 const make = Effect.gen(function* () {
   const observations = yield* BoatObservationRepo;
-  const allocations = yield* BoatAllocationRepo;
   const provider = yield* BoatAllocationProvider;
-  /** Whether Boat has certainly finished accepting create, so a 404 can only mean gone. */
-  const createSettled = (allocation: BoatAllocationRecord) =>
-    Effect.gen(function* () {
-      // A bound VM booted and answered: its creation is long finished.
-      if (allocation.target !== null) return true;
-      const issuedAt =
-        allocation.issuedAt === undefined
-          ? yield* allocations.reservedAt(allocation.input.consumer.runtimeInstanceId)
-          : new Date(allocation.issuedAt);
-      if (issuedAt === undefined) return false;
-      return (yield* Clock.currentTimeMillis) - issuedAt.getTime() >= BOAT_CREATE_FENCE_MS;
-    });
   const observe = Effect.fn("BoatObserver.observe")(function* (allocation: BoatAllocationRecord) {
     const key = ids(allocation);
     const known = yield* observations.get(key.runtimeInstanceId);
-    if (known?.presence === "absent")
-      return { kind: "absent", basis: known.basis === "read" ? "not-found" : known.basis } as const;
+    if (known?.presence === "absent") return absence(known);
     if (allocation.sandboxId === null) return { kind: "unknown", reason: "no-sandbox" } as const;
     const id = boatSandboxIdSchema.safeParse(allocation.sandboxId);
     if (!id.success) return { kind: "unknown", reason: "foreign" } as const;
@@ -95,19 +91,28 @@ const make = Effect.gen(function* () {
     if (read.ok) {
       if (read.value.id !== id.data || !boatAllocationMatches(allocation, read.value))
         return { kind: "unknown", reason: "foreign" } as const;
-      yield* observations.recordPresent({
+      const row = yield* observations.recordPresent({
         ...key,
         sandboxId: id.data,
         providerState: read.value.state,
+        created: !CREATING.has(read.value.state),
       });
-      return { kind: "present", sandbox: read.value } as const;
+      // Another observer may have committed absence while this read was in flight; it stands.
+      return row.presence === "absent"
+        ? absence(row)
+        : ({ kind: "present", sandbox: read.value } as const);
     }
-    if (!notFound(read.error)) return { kind: "unknown", reason: "unreadable" } as const;
-    const seen = known?.presence === "present" && known.sandboxId === id.data;
-    if (!seen && !(yield* createSettled(allocation)))
-      return { kind: "unknown", reason: "creating" } as const;
-    yield* observations.recordAbsent({ ...key, sandboxId: id.data, basis: "not-found" });
-    return { kind: "absent", basis: "not-found" } as const;
+    if (!notFound(read.error))
+      return { kind: "unknown", reason: "unreadable", error: read.error } as const;
+    if (
+      known?.presence !== "present" ||
+      known.sandboxId !== id.data ||
+      known.createdObservedAt === null
+    )
+      return { kind: "unknown", reason: "creating", error: read.error } as const;
+    return absence(
+      yield* observations.recordAbsent({ ...key, sandboxId: id.data, basis: "not-found" }),
+    );
   });
   const deletionCompleted = Effect.fn("BoatObserver.deletionCompleted")(function* (
     allocation: BoatAllocationRecord,
@@ -125,13 +130,11 @@ const make = Effect.gen(function* () {
 export const boatObserverLayerNoDeps: Layer.Layer<
   BoatObserver,
   never,
-  BoatObservationRepo | BoatAllocationRepo | BoatAllocationProvider
+  BoatObservationRepo | BoatAllocationProvider
 > = Layer.effect(BoatObserver, make);
 
 export const boatObserverLayer: Layer.Layer<
   BoatObserver,
   never,
   SealantDB | BoatAllocationProvider
-> = boatObserverLayerNoDeps.pipe(
-  Layer.provide(Layer.mergeAll(BoatObservationRepoLive, BoatAllocationRepoLive)),
-);
+> = boatObserverLayerNoDeps.pipe(Layer.provide(BoatObservationRepoLive));

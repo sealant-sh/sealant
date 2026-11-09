@@ -566,6 +566,7 @@ export {
   type BoatAbsenceBasis,
   type BoatObservationRepoService,
 } from "./repositories/boat-observations.js";
+export type { BoatObservation } from "./schema/boat-observations.js";
 export {
   BoatTunnelRepo,
   BoatTunnelStoreError,

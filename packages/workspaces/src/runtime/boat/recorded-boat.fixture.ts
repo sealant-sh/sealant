@@ -40,6 +40,10 @@ export class RecordedBoat {
   readonly requests: string[] = [];
   /** Fault: Boat accepted create but cannot read the VM yet (eventually consistent read). */
   unreadableAfterCreate = 0;
+  /** Fault: provisioning never finishes; reads keep reporting `provisioned`. */
+  stuckProvisioning = false;
+  /** Runs before a VM read is answered, to interleave another writer. */
+  beforeRead: () => Promise<void> = async () => {};
   /** Fault: the create reply is lost after Boat accepted it. */
   loseCreateReply = false;
   /** Fault: the DELETE reply is lost after Boat accepted and completed it. */
@@ -129,13 +133,14 @@ export class RecordedBoat {
     }
     const sandbox = /^\/sandboxes\/(bx_[a-z0-9]{8})$/.exec(path);
     if (sandbox !== null && request.method === "GET") {
+      await this.beforeRead();
       const vm = this.vms.get(sandbox[1] ?? "");
       if (vm === undefined || this.unreadableAfterCreate > 0) {
         if (vm !== undefined) this.unreadableAfterCreate -= 1;
         return send(404, { ok: false, code: "sandbox_not_found" });
       }
       const view = this.#view(vm);
-      vm.state = vm.state === "provisioned" ? "cloning" : "idle";
+      if (!this.stuckProvisioning) vm.state = vm.state === "provisioned" ? "cloning" : "idle";
       return send(200, { ok: true, sandbox: view });
     }
     if (sandbox !== null && request.method === "DELETE") {

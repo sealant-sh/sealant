@@ -182,7 +182,7 @@ export const boatSessionFixture = async (
   const Resources = boatResourcesLayer.pipe(Layer.provide(Exchange));
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
-      boatAllocationLayer.pipe(Layer.provide(Exchange)),
+      boatAllocationLayer.pipe(Layer.provide(Layer.merge(Exchange, boatObserverLayer))),
       boatReadinessLayer.pipe(Layer.provide(Layer.merge(Resources, Exchange))),
       boatFinalCloseLayerNoDeps.pipe(
         Layer.provide(

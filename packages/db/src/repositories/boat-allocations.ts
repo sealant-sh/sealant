@@ -45,8 +45,6 @@ export interface BoatAllocationRepoService {
     next: BoatAllocationRecord,
   ) => Effect.Effect<BoatAllocationRecord, BoatAllocationStoreError>;
   readonly isActive: (id: string) => Effect.Effect<boolean, BoatAllocationStoreError>;
-  /** When the allocation was reserved: the create fence for records issued before `issuedAt`. */
-  readonly reservedAt: (id: string) => Effect.Effect<Date | undefined, BoatAllocationStoreError>;
   readonly list: (input: {
     readonly deploymentId: string;
     readonly limit: number;
@@ -215,7 +213,6 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
         previous.idempotencyKey !== next.idempotencyKey ||
         previous.diskLineage !== next.diskLineage ||
         previous.manifestDigest !== next.manifestDigest ||
-        (previous.issuedAt !== undefined && previous.issuedAt !== next.issuedAt) ||
         !transitions[previous.phase].includes(next.phase) ||
         (previous.sandboxId !== null && previous.sandboxId !== next.sandboxId) ||
         (next.phase === "deleting" && previous.sandboxId === null) ||
@@ -336,15 +333,8 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
         .limit(input.limit);
       return rows.map((row) => row.id);
     });
-    const reservedAt = (id: string) =>
-      db
-        .select({ createdAt: boatAllocations.createdAt })
-        .from(boatAllocations)
-        .where(eq(boatAllocations.runtimeInstanceId, id))
-        .pipe(Effect.map(([row]) => row?.createdAt));
     return BoatAllocationRepo.of({
       isActive: (id) => boundary(isActive(id)),
-      reservedAt: (id) => boundary(reservedAt(id)),
       get: (id) => boundary(get(id)),
       reserve: (record) => boundary(reserve(record)),
       advance: (before, next) => boundary(advance(before, next)),

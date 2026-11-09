@@ -36,6 +36,7 @@ import {
   type DB,
 } from "@sealant/db";
 import {
+  backdateAllocation,
   corruptBoatAllocation,
   recordRetainedBoatLaunch,
   restoreUnprogressedCaptureDrain,
@@ -104,7 +105,7 @@ import {
   boatInteractiveControlLayerNoDeps,
   serveBoatControlRequests,
 } from "./interactive-control.js";
-import { BOAT_CREATE_FENCE_MS, BoatObserver, boatObserverLayerNoDeps } from "./observation.js";
+import { BoatObserver, boatObserverLayer, boatObserverLayerNoDeps } from "./observation.js";
 import { RecordedBoat } from "./recorded-boat.fixture.js";
 
 const databaseUrl = process.env.SEALANT_TEST_DATABASE_URL;
@@ -375,7 +376,7 @@ const test = async (
         );
         yield* Layer.build(ResourceRoot);
         const Test = Layer.mergeAll(
-          boatAllocationLayer.pipe(Layer.provide(Exchange)),
+          boatAllocationLayer.pipe(Layer.provide(Layer.merge(Exchange, boatObserverLayer))),
           ResourceLayer,
           boatReadinessLayer.pipe(Layer.provide(Layer.merge(ResourceLayer, Exchange))),
           Exchange,
@@ -2876,7 +2877,7 @@ describe.runIf(databaseUrl !== undefined)(
 /** Observed presence against a Boat fake that keeps the recorded asynchronous create. */
 const observedLaunch = async (
   s: AllocationFixture,
-  options: { readonly issuedMsAgo: number; readonly boat?: (boat: RecordedBoat) => void },
+  options: { readonly boat?: (boat: RecordedBoat) => void } = {},
 ) => {
   const boat = new RecordedBoat();
   options.boat?.(boat);
@@ -2886,6 +2887,13 @@ const observedLaunch = async (
     timeoutMs: 1000,
   });
   if (!api.ok) throw api.error;
+  const observations = await execute(
+    Effect.gen(function* () {
+      return yield* BoatObservationRepo;
+    }).pipe(
+      Effect.provide(BoatObservationRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, s.db)))),
+    ),
+  );
   const observer = await execute(
     Effect.gen(function* () {
       return yield* BoatObserver;
@@ -2894,8 +2902,7 @@ const observedLaunch = async (
         boatObserverLayerNoDeps.pipe(
           Layer.provide(
             Layer.mergeAll(
-              BoatObservationRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, s.db))),
-              Layer.succeed(BoatAllocationRepo, s.repo),
+              Layer.succeed(BoatObservationRepo, observations),
               Layer.succeed(BoatAllocationProvider, { deploymentId: "test", api: api.value }),
             ),
           ),
@@ -2904,13 +2911,7 @@ const observedLaunch = async (
     ),
   );
   const reserved = await execute(s.repo.reserve(reservation(s.input)));
-  const issued = await execute(
-    s.repo.advance(reserved, {
-      ...reserved,
-      phase: "issued",
-      issuedAt: new Date(Date.now() - options.issuedMsAgo).toISOString(),
-    }),
-  );
+  const issued = await execute(s.repo.advance(reserved, { ...reserved, phase: "issued" }));
   const ownership = BoatOwnership.parse({
     ...s.input,
     ...s.input.consumer,
@@ -2935,13 +2936,15 @@ const observedLaunch = async (
       errorCode: LAUNCH_RETAINED_ERROR_CODE,
     }),
   );
-  const observations = await execute(
-    Effect.gen(function* () {
-      return yield* BoatObservationRepo;
-    }).pipe(
-      Effect.provide(BoatObservationRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, s.db)))),
-    ),
-  );
+  /** Read until Boat reports creation finished (`provisioned`, `cloning`, then `idle`). */
+  const readUntilCreated = async () => {
+    for (let read = 0; read < 3; read += 1)
+      expect(await execute(observer.observe(allocation))).toMatchObject({ kind: "present" });
+    expect(await execute(observations.get(s.input.consumer.runtimeInstanceId))).toMatchObject({
+      providerState: "idle",
+      createdObservedAt: expect.any(Date),
+    });
+  };
   return {
     boat,
     api: api.value,
@@ -2949,6 +2952,7 @@ const observedLaunch = async (
     allocation,
     sandboxId: created.value.id,
     observations,
+    readUntilCreated,
   };
 };
 
@@ -2956,13 +2960,12 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
   it("never reads a 404 straight after create as absence", () =>
     test(async (s) => {
       const o = await observedLaunch(s, {
-        issuedMsAgo: 0,
         boat: (boat) => {
           boat.unreadableAfterCreate = 1;
         },
       });
       try {
-        expect(await execute(o.observer.observe(o.allocation))).toEqual({
+        expect(await execute(o.observer.observe(o.allocation))).toMatchObject({
           kind: "unknown",
           reason: "creating",
         });
@@ -2975,18 +2978,59 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
           status: "failed",
           removedAt: null,
         });
-        // Boat then reads it: present, and from now on a 404 can only mean gone.
         expect(await execute(o.observer.observe(o.allocation))).toMatchObject({ kind: "present" });
       } finally {
         await o.boat.close();
       }
     }));
 
-  it("records absence once a VM read before is gone, and the runtime reads stopped with its launch error kept", () =>
+  it("never takes a 404 for absence while Boat has only reported the VM provisioning, however long ago it was issued", () =>
     test(async (s) => {
-      const o = await observedLaunch(s, { issuedMsAgo: 0 });
+      const o = await observedLaunch(s, {
+        boat: (boat) => {
+          boat.stuckProvisioning = true;
+        },
+      });
       try {
+        // Read once in `provisioned`: present, but its creation is not finished.
         expect(await execute(o.observer.observe(o.allocation))).toMatchObject({ kind: "present" });
+        // Reviewer's repro: issuance long past, the VM still provisioning, and Boat answers 404.
+        await execute(
+          backdateAllocation(s.db, s.input.consumer.runtimeInstanceId, 24 * 60 * 60_000),
+        );
+        o.boat.unreadableAfterCreate = 10;
+        expect(await execute(o.observer.observe(o.allocation))).toMatchObject({
+          kind: "unknown",
+          reason: "creating",
+        });
+        const { owner } = await execute(s.final([], o.api));
+        expect(await execute(owner.closeUnbound(s.input.consumer.runId, o.sandboxId))).toBe(
+          "pending",
+        );
+        expect(o.boat.requests.filter((request) => request.startsWith("DELETE"))).toEqual([]);
+        expect(o.boat.vms.has(o.sandboxId)).toBe(true);
+        expect(await execute(o.observations.get(s.input.consumer.runtimeInstanceId))).toMatchObject(
+          {
+            presence: "present",
+            createdObservedAt: null,
+          },
+        );
+        expect(
+          await execute(s.runtimes.getRuntimeInstanceByRunId(s.input.consumer.runId)),
+        ).toMatchObject({
+          status: "failed",
+          removedAt: null,
+        });
+      } finally {
+        await o.boat.close();
+      }
+    }));
+
+  it("records absence once Boat reported the VM created and then no longer has it; the runtime reads stopped with its launch error kept", () =>
+    test(async (s) => {
+      const o = await observedLaunch(s);
+      try {
+        await o.readUntilCreated();
         o.boat.removeOutOfBand(o.sandboxId);
         expect(await execute(o.observer.observe(o.allocation))).toEqual({
           kind: "absent",
@@ -3011,6 +3055,7 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
               deploymentId: "test",
               sandboxId: o.sandboxId,
               providerState: "idle",
+              created: true,
             }),
           ),
         ).resolves.toMatchObject({ presence: "absent" });
@@ -3019,15 +3064,26 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
       }
     }));
 
-  it("reads a 404 never preceded by a read as absence only after the create fence lapses", () =>
+  it("lets an absence committed during an overlapping read win over that read", () =>
     test(async (s) => {
-      const o = await observedLaunch(s, { issuedMsAgo: BOAT_CREATE_FENCE_MS + 1 });
+      const o = await observedLaunch(s);
       try {
-        o.boat.removeOutOfBand(o.sandboxId);
+        await o.readUntilCreated();
+        // Boat completes this VM's deletion (another owner records it) while a read is in flight;
+        // the read was answered before the VM went.
+        o.boat.beforeRead = async () => {
+          o.boat.beforeRead = async () => {};
+          await execute(o.observer.deletionCompleted(o.allocation, o.sandboxId));
+        };
         expect(await execute(o.observer.observe(o.allocation))).toEqual({
           kind: "absent",
-          basis: "not-found",
+          basis: "deletion-completed",
         });
+        expect(await execute(o.observations.get(s.input.consumer.runtimeInstanceId))).toMatchObject(
+          {
+            presence: "absent",
+          },
+        );
       } finally {
         await o.boat.close();
       }
@@ -3035,10 +3091,11 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
 
   it("never takes a transport failure or a foreign VM for absence", () =>
     test(async (s) => {
-      const o = await observedLaunch(s, { issuedMsAgo: BOAT_CREATE_FENCE_MS + 1 });
+      const o = await observedLaunch(s);
       try {
+        await o.readUntilCreated();
         o.boat.unreachable = true;
-        expect(await execute(o.observer.observe(o.allocation))).toEqual({
+        expect(await execute(o.observer.observe(o.allocation))).toMatchObject({
           kind: "unknown",
           reason: "unreadable",
         });
@@ -3050,9 +3107,11 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
           kind: "unknown",
           reason: "foreign",
         });
-        expect(
-          await execute(o.observations.get(s.input.consumer.runtimeInstanceId)),
-        ).toBeUndefined();
+        expect(await execute(o.observations.get(s.input.consumer.runtimeInstanceId))).toMatchObject(
+          {
+            presence: "present",
+          },
+        );
       } finally {
         await o.boat.close();
       }
@@ -3061,7 +3120,6 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
   it("closes an unbound VM only on absence Boat can vouch for, never on a 404 straight after create", () =>
     test(async (s) => {
       const o = await observedLaunch(s, {
-        issuedMsAgo: 0,
         boat: (boat) => {
           boat.unreadableAfterCreate = 2;
         },

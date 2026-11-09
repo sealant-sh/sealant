@@ -39,3 +39,10 @@ export const recordRetainedBoatLaunch = (
       errorMessage: "launch failed after the VM was created",
     })
     .where(eq(workspaceRuntimeInstances.runId, input.runId));
+
+/** Age an allocation's reservation, as a launch issued long ago would be. */
+export const backdateAllocation = (db: DB, runtimeInstanceId: string, ms: number) =>
+  db
+    .update(boatAllocations)
+    .set({ createdAt: new Date(Date.now() - ms) })
+    .where(eq(boatAllocations.runtimeInstanceId, runtimeInstanceId));

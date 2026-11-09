@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "afa16b20-ff81-4832-b68d-fbea26332d5b",
+  "id": "7e00192c-593a-444c-9c8e-23ebb2e7eea6",
   "prevIds": ["a56a7bbe-e6b0-45ee-bc89-40e80e272b06"],
   "ddl": [
     {
@@ -7957,7 +7957,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "first_present_at",
+      "name": "created_observed_at",
       "entityType": "columns",
       "schema": "public",
       "table": "boat_observations"
@@ -16378,7 +16378,7 @@
       "table": "boat_tunnels"
     },
     {
-      "value": "(\"presence\" = 'present' and \"basis\" = 'read' and \"sandbox_id\" is not null and \"first_present_at\" is not null)\n        or (\"presence\" = 'absent' and \"basis\" in ('not-found', 'deletion-completed') and \"sandbox_id\" is not null)\n        or (\"presence\" = 'absent' and \"basis\" = 'not-discovered' and \"sandbox_id\" is null)",
+      "value": "(\"presence\" = 'present' and \"basis\" = 'read' and \"sandbox_id\" is not null)\n        or (\"presence\" = 'absent' and \"basis\" = 'not-found' and \"sandbox_id\" is not null and \"created_observed_at\" is not null)\n        or (\"presence\" = 'absent' and \"basis\" = 'deletion-completed' and \"sandbox_id\" is not null)\n        or (\"presence\" = 'absent' and \"basis\" = 'not-discovered' and \"sandbox_id\" is null)",
       "name": "boat_observations_shape",
       "entityType": "checks",
       "schema": "public",

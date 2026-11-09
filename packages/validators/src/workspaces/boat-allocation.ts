@@ -30,8 +30,6 @@ export const boatAllocationRecordSchema = z
     idempotencyKey: z.uuid(),
     diskLineage: z.uuid(),
     manifestDigest: z.string().regex(/^[a-f0-9]{64}$/),
-    /** When create was durably issued: Boat's asynchronous create is fenced from this instant. */
-    issuedAt: z.iso.datetime().optional(),
     phase: z.enum(["reserved", "issued", "allocated", "bound", "held", "deleting", "deleted"]),
     sandboxId: sandbox.nullable(),
     conflictingSandboxes: z.array(sandbox).max(200),

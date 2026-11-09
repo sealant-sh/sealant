@@ -5,8 +5,6 @@ import {
   BoatAllocationRepo,
   BoatAllocationRepoLive,
   BoatAllocationStoreError,
-  BoatObservationRepo,
-  BoatObservationRepoLive,
   type SealantDB,
 } from "@sealant/db";
 import {
@@ -16,7 +14,7 @@ import {
   type BoatAllocationRecord,
   type BoatExecutionTarget,
 } from "@sealant/validators";
-import { Cause, Clock, Context, Effect, Layer, Schedule } from "effect";
+import { Cause, Context, Effect, Layer, Schedule } from "effect";
 import { z } from "zod";
 
 import { safeCommandTail } from "../../images/boat/command-diagnostics.js";
@@ -28,6 +26,7 @@ import {
   boatLaunchSummary,
   type BoatLaunchDiagnostic,
 } from "./launch-diagnostics.js";
+import { BoatObserver } from "./observation.js";
 
 /** No provider response text crosses this failure boundary. Uncertain allocations remain pinned. */
 export class BoatAllocationError extends Error {
@@ -133,10 +132,10 @@ const manifestOf = (input: BoatAllocationInput) => {
 const make: Effect.Effect<
   BoatAllocation["Service"],
   never,
-  BoatAllocationRepo | BoatObservationRepo | BoatAllocationProvider | BoatExecution
+  BoatAllocationRepo | BoatObserver | BoatAllocationProvider | BoatExecution
 > = Effect.gen(function* () {
   const repo = yield* BoatAllocationRepo;
-  const observations = yield* BoatObservationRepo;
+  const observer = yield* BoatObserver;
   const { api, deploymentId } = yield* BoatAllocationProvider;
   const execution = yield* BoatExecution;
   const load = (id: string) =>
@@ -184,8 +183,7 @@ const make: Effect.Effect<
       )
         return yield* Effect.fail(new BoatAllocationError("source-mismatch"));
       // Only the winner of this transition may issue create. Redelivery after it only discovers.
-      const issuedAt = new Date(yield* Clock.currentTimeMillis).toISOString();
-      record = yield* repo.advance(record, { ...record, phase: "issued", issuedAt });
+      record = yield* repo.advance(record, { ...record, phase: "issued" });
       const sandbox = yield* provider("create", () =>
         api.create({
           idempotencyKey: record.idempotencyKey,
@@ -244,29 +242,38 @@ const make: Effect.Effect<
     if (record.sandboxId === null)
       return yield* Effect.fail(new BoatAllocationError("allocation-pending"));
     const sandboxId = boatSandboxIdSchema.parse(record.sandboxId);
-    const observed = yield* provider("observe-sandbox", () => api.get(sandboxId));
+    // Read through the observer: it records what Boat said, the one source of presence.
+    const presence = yield* observer
+      .observe(record)
+      .pipe(Effect.mapError(() => new BoatAllocationStoreError("unavailable")));
+    if (presence.kind === "absent")
+      return yield* Effect.fail(
+        new BoatAllocationError("allocation-held", {
+          step: "observe-sandbox",
+          errorClass: "BoatAllocationError",
+          code: "sandbox-absent",
+        }),
+      );
+    if (presence.kind === "unknown")
+      return yield* Effect.fail(
+        presence.reason === "foreign"
+          ? new BoatAllocationError("target-mismatch", {
+              step: "observe-sandbox",
+              errorClass: "BoatAllocationError",
+              code: "target-mismatch",
+            })
+          : new BoatAllocationError(
+              "provider-unavailable",
+              boatLaunchDiagnostic(presence.error, "observe-sandbox"),
+            ),
+      );
+    const observed = presence.sandbox;
     const observationDiagnostic: BoatLaunchDiagnostic = {
       step: "observe-sandbox",
       errorClass: "BoatAllocationError",
       sandboxState: observed.state,
       ...(observed.hydrated === undefined ? {} : { hydrated: observed.hydrated }),
     };
-    if (observed.id !== sandboxId || !boatAllocationMatches(record, observed))
-      return yield* Effect.fail(
-        new BoatAllocationError("target-mismatch", {
-          ...observationDiagnostic,
-          code: "target-mismatch",
-        }),
-      );
-    // Boat returned this launch's exact VM: from now on a 404 for it can only mean it is gone.
-    yield* observations
-      .recordPresent({
-        runtimeInstanceId: record.input.consumer.runtimeInstanceId,
-        deploymentId,
-        sandboxId,
-        providerState: observed.state,
-      })
-      .pipe(Effect.mapError(() => new BoatAllocationStoreError("unavailable")));
     if (
       observed.autoStop.kind !== "disabled" ||
       observed.snapshots !== true ||
@@ -438,13 +445,11 @@ const make: Effect.Effect<
 export const boatAllocationLayerNoDeps: Layer.Layer<
   BoatAllocation,
   never,
-  BoatAllocationRepo | BoatObservationRepo | BoatAllocationProvider | BoatExecution
+  BoatAllocationRepo | BoatObserver | BoatAllocationProvider | BoatExecution
 > = Layer.effect(BoatAllocation, make);
 /** Allocation owns its repository. The worker supplies the already composed exchange owner. */
 export const boatAllocationLayer: Layer.Layer<
   BoatAllocation,
   never,
-  SealantDB | BoatAllocationProvider | BoatExecution
-> = boatAllocationLayerNoDeps.pipe(
-  Layer.provide(Layer.mergeAll(BoatAllocationRepoLive, BoatObservationRepoLive)),
-);
+  SealantDB | BoatAllocationProvider | BoatExecution | BoatObserver
+> = boatAllocationLayerNoDeps.pipe(Layer.provide(BoatAllocationRepoLive));
