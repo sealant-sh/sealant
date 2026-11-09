@@ -5,6 +5,8 @@ import {
   BoatAllocationRepoLive,
   BoatExecutionRepo,
   BoatExecutionRepoLive,
+  BoatObservationRepo,
+  BoatObservationRepoLive,
   BoatTunnelRepo,
   boatTunnelRepoLayer,
   NativePublicationRepo,
@@ -46,6 +48,7 @@ export const makeBoatProofCore = (input: {
   const Repos = Layer.mergeAll(
     BoatAllocationRepoLive,
     BoatExecutionRepoLive,
+    BoatObservationRepoLive,
     boatTunnelRepoLayer,
     NativePublicationRepoLive,
     WorkspaceAttemptRepoLive,
@@ -150,20 +153,8 @@ export const makeBoatProofCore = (input: {
           const execution = yield* (yield* BoatExecutionRepo).get(target.runId);
           const tunnel = yield* (yield* BoatTunnelRepo).get(target.runtimeInstanceId);
           const capture = yield* (yield* WorkspaceCaptureDrainRepo).getByRunId(target.runId);
-          // Early abort fences invocation before it exists. Its exact allocation removal and
-          // released aborted tunnel replace post-start capture FINAL and tunnel removal evidence.
-          const abortedClosed =
-            allocation.phase === "deleted" &&
-            allocation.removal !== undefined &&
-            allocation.removal.kind !== "issued" &&
-            allocation.removal.completed === true &&
-            allocation.removal.targetId === target.sandboxId &&
-            execution?.phase === "aborted" &&
-            isDeepStrictEqual(execution.target, target) &&
-            tunnel?.aborted === true &&
-            tunnel.removal === undefined &&
-            tunnel.closeId !== undefined &&
-            (tunnel.updates?.length ?? 0) === 0;
+          // Closed means Boat said the VM is gone and every obligation of it was discharged.
+          const observed = yield* (yield* BoatObservationRepo).get(target.runtimeInstanceId);
           return {
             runId: target.runId,
             sandboxId: target.sandboxId,
@@ -188,8 +179,8 @@ export const makeBoatProofCore = (input: {
               instance.removedAt !== null &&
               capture?.custodyContract !== 3 &&
               tunnel?.released === true &&
-              (abortedClosed ||
-                (capture?.deletionState === "deleted" && tunnel.removal?.completed === true)) &&
+              observed?.presence === "absent" &&
+              observed.sandboxId === target.sandboxId &&
               isDeepStrictEqual(tunnel.binding.target, target),
           };
         }),

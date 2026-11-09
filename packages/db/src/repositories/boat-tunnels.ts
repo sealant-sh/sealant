@@ -18,6 +18,7 @@ import { Context, Effect, Fiber, Layer, type Scope } from "effect";
 import { SealantDB, type DB } from "../client.js";
 import { boatAllocations } from "../schema/boat-allocations.js";
 import { boatExecutions } from "../schema/boat-executions.js";
+import { boatObservations } from "../schema/boat-observations.js";
 import { boatTunnels } from "../schema/boat-tunnels.js";
 import { workspaceCaptureDrains } from "../schema/workspace-build-jobs.js";
 import {
@@ -92,6 +93,14 @@ export interface BoatTunnelRepoService {
   ) => Effect.Effect<void, BoatTunnelStoreError>;
   /** Canonical deletion and exact provider completion are necessary; the caller has just proved host cleanup. */
   readonly release: (previous: BoatTunnelReservation) => Effect.Effect<void, BoatTunnelStoreError>;
+  /**
+   * After host cleanup, releases the slot of a guest Boat positively no longer has (its observation
+   * is `absent`). Absence alone discharges it: no FINAL, deletion ledger or execution phase is
+   * required, because nothing can reach a VM that does not exist.
+   */
+  readonly releaseAbsent: (
+    previous: BoatTunnelReservation,
+  ) => Effect.Effect<void, BoatTunnelStoreError>;
 }
 /** Durable custody, with release available only to the canonical terminal close owner. */
 export class BoatTunnelRepo extends Context.Service<BoatTunnelRepo, BoatTunnelRepoService>()(
@@ -374,6 +383,51 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, Dependencies> = Effe
                 return yield* Effect.fail(new BoatTunnelStoreError("operation-held"));
               const next = yield* parse(() =>
                 boatTunnelReservationSchema.parse({ ...before, aborted: true, released: true }),
+              );
+              const saved = yield* get(target.runtimeInstanceId, tx);
+              if (isDeepStrictEqual(saved, next)) return;
+              if (!isDeepStrictEqual(saved, before))
+                return yield* Effect.fail(new BoatTunnelStoreError("stale-transition"));
+              const rows = yield* tx
+                .update(boatTunnels)
+                .set({ record: next, releasedAt: sql`now()` })
+                .where(
+                  and(
+                    eq(boatTunnels.runtimeInstanceId, target.runtimeInstanceId),
+                    sql`${boatTunnels.record} = ${JSON.stringify(before)}::jsonb`,
+                  ),
+                )
+                .returning();
+              if (rows.length === 0)
+                return yield* Effect.fail(new BoatTunnelStoreError("stale-transition"));
+            }),
+          ),
+        ),
+      releaseAbsent: (previous) =>
+        boundary(
+          db.transaction((tx) =>
+            Effect.gen(function* () {
+              const before = yield* parse(() => boatTunnelReservationSchema.parse(previous));
+              const target = before.binding.target;
+              const [observed] = yield* tx
+                .select()
+                .from(boatObservations)
+                .where(eq(boatObservations.runtimeInstanceId, target.runtimeInstanceId));
+              const [root] = yield* tx
+                .select()
+                .from(workspaceCaptureDrains)
+                .where(eq(workspaceCaptureDrains.runId, target.runId));
+              if (
+                observed?.presence !== "absent" ||
+                observed.sandboxId !== target.sandboxId ||
+                observed.deploymentId !== target.deploymentId ||
+                root?.custodyContract === 3 ||
+                before.closeId === undefined ||
+                (before.updates?.length ?? 0) !== 0
+              )
+                return yield* Effect.fail(new BoatTunnelStoreError("operation-held"));
+              const next = yield* parse(() =>
+                boatTunnelReservationSchema.parse({ ...before, absent: true, released: true }),
               );
               const saved = yield* get(target.runtimeInstanceId, tx);
               if (isDeepStrictEqual(saved, next)) return;

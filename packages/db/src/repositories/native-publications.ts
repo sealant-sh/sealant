@@ -25,6 +25,7 @@ import { Context, Effect, Layer } from "effect";
 import { SealantDB } from "../client.js";
 import { boatAllocations } from "../schema/boat-allocations.js";
 import { boatExecutions } from "../schema/boat-executions.js";
+import { boatObservations } from "../schema/boat-observations.js";
 import { boatTunnels } from "../schema/boat-tunnels.js";
 import {
   nativePublicationConsumers as consumers,
@@ -559,6 +560,21 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
                 .from(boatExecutions)
                 .where(eq(boatExecutions.runtimeInstanceId, consumer.runtimeInstanceId));
               const aborted = boatExecutionRecordSchema.safeParse(execution?.record);
+              const [observed] = yield* db
+                .select()
+                .from(boatObservations)
+                .where(eq(boatObservations.runtimeInstanceId, consumer.runtimeInstanceId));
+              // Boat positively no longer has the VM: nothing of it can use the publication, and
+              // its slot was released after host cleanup. Parking custody keeps its own pin.
+              const observedAbsent =
+                bound.success &&
+                observed?.presence === "absent" &&
+                observed.sandboxId === bound.data.sandboxId &&
+                capture?.custodyContract !== 3 &&
+                (tunnel === undefined ||
+                  (reservation.success &&
+                    reservation.data.released === true &&
+                    tunnel.releasedAt !== null));
               const deletedUnused =
                 bound.success &&
                 bound.data.phase === "deleted" &&
@@ -581,7 +597,9 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
               // Parking custody still needs its root publication for recovery.
               if (
                 !bound.success ||
-                (!deletedUnused && (bound.data.phase !== "bound" || bound.data.target === null)) ||
+                (!deletedUnused &&
+                  !observedAbsent &&
+                  (bound.data.phase !== "bound" || bound.data.target === null)) ||
                 !isDeepStrictEqual(bound.data.input.consumer, consumer) ||
                 bound.data.input.publication.publicationId !== publicationId ||
                 allocation.publicationId !== publicationId ||
@@ -592,6 +610,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
                 runtime.removedAt === null ||
                 runtime.publicationId !== publicationId ||
                 (!deletedUnused &&
+                  !observedAbsent &&
                   (capture?.deletionState !== "deleted" ||
                     capture.custodyContract === 3 ||
                     !reservation.success ||

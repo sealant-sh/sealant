@@ -7,6 +7,8 @@ import {
   BoatAllocationRepo,
   boatControlRequestRepoLayer,
   BoatAllocationRepoLive,
+  BoatObservationRepoLive,
+  WorkspaceAttemptRepoLive,
   BoatExecutionRepoLive,
   boatTunnelRepoLayer,
   NativePublicationRepoLive,
@@ -28,6 +30,7 @@ import { GatewayFixture, GuestFixture, ProviderFixture } from "./allocation.fixt
 import { boatAllocationLayer } from "./allocation.js";
 import { HttpBoatApi } from "./api.js";
 import { BoatSecret } from "./config.js";
+import { boatDischargeLayer } from "./discharge.js";
 import {
   BoatGuestTransportService,
   boatExecutionLayer,
@@ -189,6 +192,9 @@ export const boatSessionFixture = async (
         Layer.provide(
           Layer.mergeAll(
             boatObserverLayer,
+            boatDischargeLayer,
+            BoatObservationRepoLive,
+            WorkspaceAttemptRepoLive,
             Exchange,
             NativePublicationRepoLive,
             BoatAllocationRepoLive,

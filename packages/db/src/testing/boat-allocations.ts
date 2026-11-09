@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 
 import type { DB } from "../client.js";
 import { boatAllocations } from "../schema/boat-allocations.js";
+import { boatObservations } from "../schema/boat-observations.js";
 import {
   workspaceCaptureDrains,
   workspaceRuntimeInstances,
@@ -46,3 +47,28 @@ export const backdateAllocation = (db: DB, runtimeInstanceId: string, ms: number
     .update(boatAllocations)
     .set({ createdAt: new Date(Date.now() - ms) })
     .where(eq(boatAllocations.runtimeInstanceId, runtimeInstanceId));
+
+/** Age the last observation of a VM, as time passing between reconciliation passes would. */
+export const backdateObservation = (db: DB, runtimeInstanceId: string, ms: number) =>
+  db
+    .update(boatObservations)
+    .set({ observedAt: new Date(Date.now() - ms) })
+    .where(eq(boatObservations.runtimeInstanceId, runtimeInstanceId));
+
+/** A launch whose worker died: its row stays pending and its launch ownership has lapsed. */
+export const strandBoatLaunch = (
+  db: DB,
+  input: { readonly runId: string; readonly sandboxId: string },
+) =>
+  db
+    .update(workspaceRuntimeInstances)
+    .set({
+      adapter: "boat",
+      status: "pending",
+      resourceId: input.sandboxId,
+      reference: input.runId,
+      stopReason: null,
+      launchOwner: "worker-that-died",
+      launchLeaseExpiresAt: new Date(Date.now() - 60_000),
+    })
+    .where(eq(workspaceRuntimeInstances.runId, input.runId));
