@@ -3721,6 +3721,48 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
         captureTokenSealed: null,
       });
     }));
+
+  it("closes a start whose reply was lost once its worker is gone and the guest answers again (review of #494)", () =>
+    test(async (s) => {
+      const target = await execute(s.allocations.prepare(s.input));
+      await execute(
+        s.executor.stage(
+          target.runtimeInstanceId,
+          Redacted.make({
+            files: [{ name: "launch", bytes: Buffer.from("launch") }],
+            pins: { credentialVersions: [], dotfiles: [] },
+          }),
+        ),
+      );
+      const prepared = await execute(s.resourceOwner.prepare(target));
+      await execute(
+        s.executor.permit(target, {
+          resourceReceipt: prepared.guest.receipt,
+          tunnelReceipt: prepared.gateway.receipt,
+        }),
+      );
+      // The guest accepts start; its reply never reaches Core.
+      const original = s.guest.call.bind(s.guest);
+      s.guest.call = async (...args) => {
+        const answer = await original(...args);
+        if (args[2] === "start") throw new Error("lost hosted start reply");
+        return answer;
+      };
+      await expect(execute(s.executor.start(target.runId))).rejects.toThrow();
+      s.guest.call = original;
+      expect((await execute(s.executions.get(target.runId)))?.phase).toBe("issued");
+      expect(s.guest.starts).toBe(1);
+      // The launching worker is lost; connectivity returns.
+      await execute(strandBoatLaunch(s.db, { runId: target.runId, sandboxId: target.sandboxId }));
+      s.gateway.allowRemoval = true;
+      const { owner } = await execute(s.final([savedStatus()]));
+      await execute(owner.reconcile({ limit: 20 }));
+      const second = await execute(owner.reconcile({ limit: 20 }));
+      expect(second.entries).toContainEqual({ runId: target.runId, outcome: "closed" });
+      expect(s.guest.starts).toBe(1);
+      expect(s.provider.deleteCalls).toBe(1);
+      expect((await execute(s.canonical.getByRunId(target.runId)))?.state).toBe("stopped");
+    }));
 });
 
 const HOUR = 60 * 60_000;
