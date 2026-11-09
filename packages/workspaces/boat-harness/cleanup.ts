@@ -10,7 +10,8 @@
  *   refuses to start beside other Sealant objects, so on a host it ran on these are its own.
  *
  * It also stops the worker and API processes the run started (they carry
- * SEALANT_BOAT_HARNESS_PORT). Cached images (label value `cache`) are kept.
+ * SEALANT_BOAT_HARNESS_PORT), unless a run is live. The run that holds the host lock is live and is
+ * never touched. Cached images (label value `cache`) are kept.
  */
 import { readdir, readFile } from "node:fs/promises";
 
@@ -38,6 +39,21 @@ const runs = (
   .split("\n")
   .filter((run) => run !== "" && run !== "cache");
 
+// The run holding the host lock is live: leave it, and its processes, alone.
+const lockHolder = (
+  await dockerOk([
+    "ps",
+    "-a",
+    "--filter",
+    "name=^sealant-boat-harness-lock$",
+    "--format",
+    `{{.Label "${HARNESS_LABEL}.lock"}}`,
+  ])
+).trim();
+const holder = lockHolder === "" ? undefined : lockHolder;
+if (holder !== undefined && runs.includes(holder))
+  say(`run ${holder} is live (holds the host lock); skipped`);
+
 const processes: number[] = [];
 for (const entry of await readdir("/proc")) {
   if (!/^\d+$/.test(entry) || Number(entry) === process.pid) continue;
@@ -46,11 +62,21 @@ for (const entry of await readdir("/proc")) {
     processes.push(Number(entry));
 }
 say(`harness processes: ${processes.join(", ") || "none"}`);
-if (remove) for (const pid of processes) process.kill(pid, "SIGKILL");
+if (holder !== undefined && runs.includes(holder)) say("a run is live, so no process is stopped");
+else if (remove) for (const pid of processes) process.kill(pid, "SIGKILL");
 
 for (const run of new Set(runs)) {
+  if (run === holder) continue;
   const created = Date.parse(
-    (await dockerOk(["network", "inspect", "-f", "{{.Created}}", `boat-harness-${run}`])).trim(),
+    (
+      await dockerOk([
+        "network",
+        "inspect",
+        "-f",
+        '{{.Created.Format "2006-01-02T15:04:05.000Z07:00"}}',
+        `boat-harness-${run}`,
+      ])
+    ).trim(),
   );
   const core = [];
   for (const object of await listCoreObjects()) {
@@ -60,7 +86,11 @@ for (const run of new Set(runs)) {
           object.kind,
           "inspect",
           "-f",
-          object.kind === "volume" ? "{{.CreatedAt}}" : "{{.Created}}",
+          object.kind === "volume"
+            ? "{{.CreatedAt}}"
+            : object.kind === "network"
+              ? '{{.Created.Format "2006-01-02T15:04:05.000Z07:00"}}'
+              : "{{.Created}}",
           object.id,
         ])
       ).trim(),
@@ -77,5 +107,10 @@ for (const run of new Set(runs)) {
       `run ${run}: removed ${removed.containers.length} containers, ${removed.networks.length} networks, ${removed.volumes.length} volumes, ${removed.images.length} images`,
     );
   }
+}
+// The host lock (stack.ts) of a run that is gone.
+if (holder !== undefined && !runs.includes(holder)) {
+  say(`host lock held by finished run ${holder}`);
+  if (remove) await dockerOk(["rm", "sealant-boat-harness-lock"]);
 }
 if (!remove) say("listed only; pass --remove to remove");
