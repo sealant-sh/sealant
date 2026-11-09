@@ -14,6 +14,7 @@ import { Context, Effect, Layer } from "effect";
 import { SealantDB } from "../client.js";
 import { boatAllocations } from "../schema/boat-allocations.js";
 import { boatExecutions } from "../schema/boat-executions.js";
+import { boatObservations } from "../schema/boat-observations.js";
 import { nativePublications, nativePublicationConsumers } from "../schema/native-publications.js";
 import { workspaceRuntimeInstances } from "../schema/workspace-build-jobs.js";
 
@@ -66,9 +67,10 @@ const transitions: Readonly<
 > = {
   reserved: ["issued", "held"],
   issued: ["allocated", "held"],
-  allocated: ["bound", "held", "deleting"],
-  bound: ["deleting"],
-  held: ["deleting"],
+  // `deleted` straight from a live phase only on Boat's own positive absence (`removal.kind` absent).
+  allocated: ["bound", "held", "deleting", "deleted"],
+  bound: ["deleting", "deleted"],
+  held: ["deleting", "deleted"],
   deleting: ["deleting", "deleted"],
   deleted: [],
 };
@@ -216,6 +218,9 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
         !transitions[previous.phase].includes(next.phase) ||
         (previous.sandboxId !== null && previous.sandboxId !== next.sandboxId) ||
         (next.phase === "deleting" && previous.sandboxId === null) ||
+        (next.phase === "deleted" &&
+          previous.phase !== "deleting" &&
+          (next.removal?.kind !== "absent" || previous.sandboxId === null)) ||
         ((previous.phase !== "allocated" || next.phase !== "bound") &&
           !isDeepStrictEqual(previous.target, next.target)) ||
         (next.removal?.kind !== "absent" &&
@@ -229,6 +234,14 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
         return yield* Effect.fail(new BoatAllocationStoreError("stale-transition"));
       return yield* db.transaction(() =>
         Effect.gen(function* () {
+          if (next.phase === "deleted" && previous.phase !== "deleting") {
+            const [observed] = yield* db
+              .select()
+              .from(boatObservations)
+              .where(eq(boatObservations.runtimeInstanceId, next.input.consumer.runtimeInstanceId));
+            if (observed?.presence !== "absent" || observed.sandboxId !== next.sandboxId)
+              return yield* Effect.fail(new BoatAllocationStoreError("stale-transition"));
+          }
           if (next.phase === "deleting" && next.target !== null) {
             const [row] = yield* db
               .select()

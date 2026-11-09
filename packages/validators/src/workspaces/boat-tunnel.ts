@@ -71,13 +71,19 @@ export const boatTunnelReservationSchema = z
       .optional(),
     released: z.literal(true).optional(),
     aborted: z.literal(true).optional(),
+    /** Released because Boat positively no longer has the guest (its observation is absent). */
+    absent: z.literal(true).optional(),
   })
   .superRefine((record, context) => {
     if (
       (record.closeId !== undefined && (record.updates?.length ?? 0) !== 0) ||
       (record.removal !== undefined && record.closeId === undefined) ||
       (record.aborted === true && (record.closeId === undefined || record.removal !== undefined)) ||
-      (record.released === true && record.removal?.completed !== true && record.aborted !== true)
+      (record.absent === true && record.closeId === undefined) ||
+      (record.released === true &&
+        record.removal?.completed !== true &&
+        record.aborted !== true &&
+        record.absent !== true)
     )
       context.addIssue({ code: "custom", message: "Invalid tunnel close state" });
   });

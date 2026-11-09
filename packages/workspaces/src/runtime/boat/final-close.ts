@@ -2,22 +2,24 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import {
-  NativePublicationRepo,
-  NativePublicationRepoLive,
   BoatAllocationRepo,
   BoatAllocationRepoLive,
   BoatExecutionRepo,
   BoatExecutionRepoLive,
+  BoatObservationRepo,
+  BoatObservationRepoLive,
   BoatTunnelRepo,
   boatTunnelRepoLayer,
   WorkspaceCaptureDrainRepo,
   WorkspaceCaptureDrainRepoLive,
+  WorkspaceAttemptRepo,
+  WorkspaceAttemptRepoLive,
   WorkspaceRuntimeInstanceRepo,
   WorkspaceRuntimeInstanceRepoLive,
+  DEFAULT_UNOWNED_LAUNCH_GRACE_MS,
   SealantDB,
 } from "@sealant/db";
 import {
-  nativeArtifactConsumerSchema,
   type BoatExecutionTarget,
   type BoatTunnelReservation,
   type BoatAllocationRecord,
@@ -37,9 +39,13 @@ import {
 } from "../../worker/capture-drain.js";
 import type { BoatApi, BoatDeletion } from "./api.js";
 import { boatSandboxIdSchema, boatDeletionIdSchema, type BoatResult } from "./config.js";
+import { BoatDischarge, boatDischargeLayer } from "./discharge.js";
 import { BoatExecution } from "./execution.js";
 import { BoatObserver, boatObserverLayer } from "./observation.js";
 import { BoatAllocationProvider } from "./provider.js";
+
+/** How often a ready VM's presence is read. */
+const READY_OBSERVATION_MS = 60_000;
 
 /** Unknown effects retain the exact VM, keys and port in custody. */
 export class BoatFinalCloseError extends Error {
@@ -93,7 +99,9 @@ const make: Effect.Effect<
   BoatFinalClose["Service"],
   never,
   | SealantDB
-  | NativePublicationRepo
+  | BoatObservationRepo
+  | BoatDischarge
+  | WorkspaceAttemptRepo
   | BoatAllocationRepo
   | BoatExecutionRepo
   | BoatTunnelRepo
@@ -108,7 +116,6 @@ const make: Effect.Effect<
   const db = yield* SealantDB;
   const allocations = yield* BoatAllocationRepo;
   const exchanges = yield* BoatExecutionRepo;
-  const catalog = yield* NativePublicationRepo;
   const tunnels = yield* BoatTunnelRepo;
   const canonical = yield* WorkspaceCaptureDrainRepo;
   const runtimes = yield* WorkspaceRuntimeInstanceRepo;
@@ -117,6 +124,9 @@ const make: Effect.Effect<
   const provider = yield* BoatFinalCloseProvider;
   const runtime = yield* SealantRuntime;
   const observer = yield* BoatObserver;
+  const observations = yield* BoatObservationRepo;
+  const attempts = yield* WorkspaceAttemptRepo;
+  const discharger = yield* BoatDischarge;
   const observeError = () => new BoatFinalCloseError("unavailable");
   const ledger = databaseCaptureDrainLedger({
     db,
@@ -190,42 +200,47 @@ const make: Effect.Effect<
         completed: operation.status === "completed",
       });
     });
+  /** Boat no longer has the VM: every obligation is discharged against that observation alone. */
+  const dischargeAbsent = (allocation: BoatAllocationRecord) =>
+    discharger
+      .discharge(allocation)
+      .pipe(
+        Effect.flatMap((outcome) =>
+          outcome.kind === "discharged"
+            ? Effect.succeed("closed" as const)
+            : outcome.kind === "pending"
+              ? Effect.succeed("pending" as const)
+              : Effect.fail(new BoatFinalCloseError("held")),
+        ),
+      );
+  /** Boat's own deletion operation for this VM completed. */
   const finish = Effect.fn("BoatFinalClose.finish")(function* (target: BoatExecutionTarget) {
-    const { reservation, stopReason } = yield* current(target);
-    const root = yield* canonical.getByRunId(target.runId);
-    if (root?.deletionState !== "deleted" || reservation.removal?.completed !== true)
+    const { reservation } = yield* current(target);
+    if (reservation.removal?.completed !== true)
       return yield* Effect.fail(new BoatFinalCloseError("held"));
     const allocation = yield* allocations.get(target.runtimeInstanceId);
     if (allocation === undefined) return yield* Effect.fail(new BoatFinalCloseError("held"));
     yield* observer
       .deletionCompleted(allocation, target.sandboxId)
       .pipe(Effect.mapError(observeError));
-    yield* execution.hold(target);
-    if (reservation.released !== true) {
-      yield* host.tunnel.remove(target);
-      yield* tunnels.release((yield* current(target)).reservation);
-    }
-    yield* runtimes.markStopped({ runId: target.runId, stopReason });
-    yield* runtimes.markRemoved({ runId: target.runId, resourceId: target.sandboxId });
-    yield* catalog.release(
-      nativeArtifactConsumerSchema.parse({
-        runId: target.runId,
-        runtimeInstanceId: target.runtimeInstanceId,
-      }),
-      target.sourceId,
-    );
-    return "closed" as const;
+    return yield* dischargeAbsent(allocation);
   });
   const close = Effect.fn("BoatFinalClose.close")(function* (target: BoatExecutionTarget) {
     const stored = yield* allocations.get(target.runtimeInstanceId);
+    if (stored === undefined || !isDeepStrictEqual(stored.target, target))
+      return yield* Effect.fail(new BoatFinalCloseError("held"));
+    // Observe first: a VM Boat no longer has needs no guest, no FINAL and no DELETE to end.
+    const presence = yield* observer.observe(stored).pipe(Effect.mapError(observeError));
     const state = yield* exchanges.get(target.runtimeInstanceId);
-    if (
-      stored !== undefined &&
-      isDeepStrictEqual(stored.target, target) &&
-      (state === undefined ||
-        ["exchange", "control", "prepared", "installed", "aborted"].includes(state.phase))
-    )
-      return yield* closeUnused(target.runId, target.sandboxId, target);
+    const preIssue =
+      state === undefined ||
+      ["exchange", "control", "prepared", "installed", "aborted"].includes(state.phase);
+    if (presence.kind === "absent") {
+      // Fence any launch still racing toward start, then settle on absence alone.
+      if (preIssue) yield* exchanges.abort(target);
+      return yield* dischargeAbsent(stored);
+    }
+    if (preIssue) return yield* closeUnused(target.runId, target.sandboxId, target);
     let { reservation } = yield* current(target);
     const root = yield* canonical.getByRunId(target.runId);
     if (root?.custodyContract === 3) return yield* Effect.fail(new BoatFinalCloseError("held"));
@@ -355,29 +370,18 @@ const make: Effect.Effect<
       yield* runtimes.markStopRequested({ runId, stopReason: "user" });
     const stopped = yield* runtimes.getRuntimeInstanceByRunId(runId);
     if (stopped?.stopReason == null) return yield* Effect.fail(new BoatFinalCloseError("held"));
-    const stopReason = stopped.stopReason;
     const finishUnused = (terminal: BoatAllocationRecord) =>
       Effect.gen(function* () {
-        if (terminal.phase !== "deleted")
+        if (terminal.phase !== "deleted" || terminal.removal?.kind === "issued")
           return yield* Effect.fail(new BoatFinalCloseError("held"));
-        if (reservation !== undefined && reservation.released !== true) {
-          if (target === null) return yield* Effect.fail(new BoatFinalCloseError("held"));
-          yield* host.tunnel.remove(target);
-          yield* tunnels.releaseAborted(reservation);
-        }
-        yield* runtimes.markStopped({ runId, stopReason });
-        yield* runtimes.markRemoved({ runId, resourceId: sandboxId });
-        // No invocation was issued, and its fenced guest is positively gone. End the pre-launch
-        // drain without inventing a flush or a completion seal, including legacy closed rows.
-        if (root?.state !== "gone")
-          yield* canonical.recordObservation({
-            runId,
-            state: "gone",
-            detail:
-              "The workspace closed before its harness started; there was nothing to capture.",
-          });
-        yield* catalog.release(terminal.input.consumer, terminal.input.publication.publicationId);
-        return "closed" as const;
+        // A deletion finished before observations existed carries its own completed receipt.
+        if (
+          (yield* observer.observe(terminal).pipe(Effect.mapError(observeError))).kind !== "absent"
+        )
+          yield* observer
+            .deletionCompleted(terminal, sandboxId)
+            .pipe(Effect.mapError(observeError));
+        return yield* dischargeAbsent(terminal);
       });
     if (allocation.phase === "deleted") return yield* finishUnused(allocation);
     const now = yield* Clock.currentTimeMillis;
@@ -455,6 +459,60 @@ const make: Effect.Effect<
         error instanceof BoatFinalCloseError ? error : new BoatFinalCloseError("unavailable"),
       ),
     );
+  /**
+   * The one owner of a launch's VM from creation through cleanup. Each pass looks at desired state
+   * and at what Boat last said, never at the launch's error history: an absent VM is discharged; a
+   * VM whose run should stop (a stop, or a launch that failed and so will never be ready) is
+   * closed; a ready VM is observed, so a VM deleted or lost outside Core ends its execution.
+   */
+  const step = Effect.fn("BoatFinalClose.step")(function* (id: string) {
+    const allocation = yield* allocations.get(id);
+    if (allocation === undefined || allocation.input.deploymentId !== host.deploymentId)
+      return "skipped" as const;
+    const runId = allocation.input.consumer.runId;
+    // Snapshot parking owns every incarnation of its lineage, including their removal.
+    if ((yield* canonical.getByRunId(runId))?.custodyContract === 3) return "skipped" as const;
+    const observed = yield* observations.get(id).pipe(Effect.mapError(observeError));
+    if (observed?.presence === "absent") return yield* dischargeAbsent(allocation);
+    if (allocation.sandboxId === null || allocation.phase === "deleted") return "skipped" as const;
+    let instance = yield* runtimes.getRuntimeInstanceByRunId(runId);
+    if (instance?.adapter !== "boat") return "skipped" as const;
+    if (instance.status === "pending" && instance.stopReason === null) {
+      // The launch's worker is gone (its ownership lapsed): nothing will finish it, so the launch
+      // failed. Adoption is atomic with the lapse check; a live launch keeps its row. A pending
+      // launch whose stop was requested is closed below whatever became of its worker.
+      if (instance.resourceId === null)
+        yield* runtimes.identifyStrandedLaunch({
+          runId,
+          adapter: "boat",
+          resourceId: allocation.sandboxId,
+          reference: runId,
+          unownedGraceMs: DEFAULT_UNOWNED_LAUNCH_GRACE_MS,
+        });
+      const adopted = yield* runtimes.adoptStrandedLaunch({
+        runId,
+        unownedGraceMs: DEFAULT_UNOWNED_LAUNCH_GRACE_MS,
+        errorMessage: `The Boat VM ${allocation.sandboxId} was created and the worker launching it was lost before the launch finished.`,
+      });
+      if (adopted === undefined) return "skipped" as const;
+      yield* attempts.markAttemptFailed({ id: runId });
+      instance = adopted;
+    }
+    if (instance.stopReason === null && instance.status !== "failed") {
+      if (instance.status !== "ready") return "skipped" as const;
+      const now = yield* Clock.currentTimeMillis;
+      if (observed !== undefined && now - observed.observedAt.getTime() < READY_OBSERVATION_MS)
+        return "skipped" as const;
+      const presence = yield* observer.observe(allocation).pipe(Effect.mapError(observeError));
+      return presence.kind === "absent" ? yield* dischargeAbsent(allocation) : ("skipped" as const);
+    }
+    // A failed launch will never become ready: its desired state is stopped.
+    if (instance.stopReason === null)
+      yield* runtimes.markStopRequested({ runId, stopReason: "failed" });
+    return allocation.target === null
+      ? yield* boundedUnbound(id, allocation.sandboxId)
+      : yield* boundedClose(allocation.target);
+  });
   const reconcile = Effect.fn("BoatFinalClose.reconcile")(function* (
     input: Parameters<BoatFinalClose["Service"]["reconcile"]>[0],
   ) {
@@ -465,26 +523,8 @@ const make: Effect.Effect<
       ids,
       (id) =>
         Effect.gen(function* () {
-          const allocation = yield* allocations.get(id);
-          if (allocation?.target === null && allocation.sandboxId !== null) {
-            const instance = yield* runtimes.getRuntimeInstanceByRunId(id);
-            if (instance?.stopReason !== null || instance?.status === "failed")
-              return { runId: id, outcome: yield* boundedUnbound(id, allocation.sandboxId) };
-          }
-          if (
-            allocation?.target == null ||
-            !["bound", "deleting", "deleted"].includes(allocation.phase)
-          )
-            return { runId: id, outcome: "skipped" as const };
-          const target = allocation.target;
-          const instance = yield* runtimes.getRuntimeInstanceByRunId(target.runId);
-          if (
-            instance?.adapter !== "boat" ||
-            instance.resourceId !== target.sandboxId ||
-            (instance.stopReason === null && instance.status !== "failed")
-          )
-            return { runId: id, outcome: "skipped" as const };
-          return { runId: id, outcome: yield* boundedClose(target) };
+          const outcome = yield* step(id);
+          return { runId: id, outcome };
         }).pipe(
           Effect.catch((error) =>
             Effect.succeed({
@@ -517,7 +557,9 @@ export const boatFinalCloseLayerNoDeps: Layer.Layer<
   BoatFinalClose,
   never,
   | SealantDB
-  | NativePublicationRepo
+  | BoatObservationRepo
+  | BoatDischarge
+  | WorkspaceAttemptRepo
   | BoatAllocationRepo
   | BoatExecutionRepo
   | BoatTunnelRepo
@@ -538,7 +580,9 @@ export const boatFinalCloseLayer: Layer.Layer<
   Layer.provide(
     Layer.mergeAll(
       boatObserverLayer,
-      NativePublicationRepoLive,
+      boatDischargeLayer,
+      BoatObservationRepoLive,
+      WorkspaceAttemptRepoLive,
       BoatAllocationRepoLive,
       BoatExecutionRepoLive,
       boatTunnelRepoLayer,
