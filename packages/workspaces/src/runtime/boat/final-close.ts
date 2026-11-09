@@ -474,7 +474,40 @@ const make: Effect.Effect<
     if ((yield* canonical.getByRunId(runId))?.custodyContract === 3) return "skipped" as const;
     const observed = yield* observations.get(id).pipe(Effect.mapError(observeError));
     if (observed?.presence === "absent") return yield* dischargeAbsent(allocation);
-    if (allocation.sandboxId === null || allocation.phase === "deleted") return "skipped" as const;
+    if (allocation.sandboxId === null) {
+      if (allocation.phase === "held" && allocation.reason === "create-unresolved") {
+        // Nobody can say whether Boat holds a VM for this launch; discovery keeps looking and
+        // adopts one if it appears. The owner's discard is the person's exit: the session ends
+        // with its work reported discarded, while the allocation and its pin stay held.
+        const root = yield* canonical.getByRunId(runId);
+        if (root?.discardRequestedAt != null) {
+          yield* runtimes.markStopped({ runId, stopReason: "user" });
+          if (root.state !== "discarded")
+            yield* canonical.recordObservation({
+              runId,
+              state: "discarded",
+              detail:
+                "The owner discarded this launch while Boat could not say whether its create made a VM.",
+            });
+        }
+        yield* Effect.logWarning(
+          `Boat lifecycle · run ${runId}: create was issued more than Boat's key retention ago and no VM carries its labels; it is held for an operator until a VM is found or the owner discards it.`,
+        );
+        return "held" as const;
+      }
+      // Stopped before create was ever issued: Boat was never asked for a VM.
+      if (allocation.phase !== "held" || allocation.reason !== "run-stopped")
+        return "skipped" as const;
+      yield* observer.neverCreated(allocation).pipe(Effect.mapError(observeError));
+      const terminal = yield* allocations.advance(allocation, {
+        ...allocation,
+        phase: "deleted",
+        reason: null,
+        removal: { kind: "never-created", completed: true },
+      });
+      return yield* dischargeAbsent(terminal);
+    }
+    if (allocation.phase === "deleted") return "skipped" as const;
     let instance = yield* runtimes.getRuntimeInstanceByRunId(runId);
     if (instance?.adapter !== "boat") return "skipped" as const;
     if (instance.status === "pending" && instance.stopReason === null) {

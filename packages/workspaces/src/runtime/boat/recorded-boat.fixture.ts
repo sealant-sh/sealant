@@ -3,7 +3,8 @@
  * (docs/experiments/boat-provider-lifetime-evidence.json, boat-runtime.md, api.test.ts):
  *
  * - Create needs an `Idempotency-Key`, answers 202 with the VM in `provisioned`, and replays the
- *   same VM for the same key. Reads then move it through `cloning` to `idle`.
+ *   same VM for the same key for 24 hours; after that the key is forgotten and a replay creates
+ *   another VM. Reads then move it through `cloning` to `idle`.
  * - Discovery is a paginated label query with `pageInfo`.
  * - DELETE needs `X-Ascii-Confirm-Delete: <id>` and answers with a deletion operation that is
  *   `pending`, then `processing`, then `completed` as it is polled. Only completion removes the VM.
@@ -18,6 +19,8 @@ import http from "node:http";
 
 import { z } from "zod";
 
+/** Boat keeps an idempotency key for 24 hours (docs/experiments/boat-provider-lifetime.md). */
+const KEY_RETENTION_MS = 24 * 60 * 60_000;
 const ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz";
 const sandboxId = () =>
   `bx_${Array.from({ length: 8 }, () => ALPHABET[Math.floor(Math.random() * ALPHABET.length)]).join("")}`;
@@ -25,6 +28,8 @@ const sandboxId = () =>
 interface Vm {
   readonly id: string;
   readonly key: string;
+  /** The fake's clock when Boat accepted the create (key retention runs from here). */
+  readonly acceptedAt?: number;
   readonly labels: Record<string, string>;
   state: "provisioned" | "cloning" | "idle";
 }
@@ -38,12 +43,27 @@ export class RecordedBoat {
   readonly vms = new Map<string, Vm>();
   readonly deletions = new Map<string, Deletion>();
   readonly requests: string[] = [];
+  /** Saved snapshots by name, as `GET /saved-snapshots/:name` returns them. */
+  readonly savedSnapshots = new Map<
+    string,
+    {
+      name: string;
+      status: "ready";
+      sourceSandboxId: string;
+      createdAt: string;
+      snapshotId?: string | undefined;
+    }
+  >();
   /** Fault: Boat accepted create but cannot read the VM yet (eventually consistent read). */
   unreadableAfterCreate = 0;
   /** Fault: provisioning never finishes; reads keep reporting `provisioned`. */
   stuckProvisioning = false;
   /** Runs before a VM read is answered, to interleave another writer. */
   beforeRead: () => Promise<void> = async () => {};
+  /** Fault: Boat accepted a create but its inventory does not list the VM yet. */
+  unlisted = false;
+  /** Fault: Boat refuses every create outright with this status and code. */
+  rejectCreate: { readonly status: number; readonly code: string } | undefined;
   /** Fault: the create reply is lost after Boat accepted it. */
   loseCreateReply = false;
   /** Fault: the DELETE reply is lost after Boat accepted and completed it. */
@@ -53,6 +73,17 @@ export class RecordedBoat {
   /** How many polls a deletion takes to complete. */
   deletionPolls = 2;
   #server: http.Server | undefined;
+  /** How far the fake's clock has been moved past real time. */
+  #offsetMs = 0;
+
+  /** Move Boat's clock forward, as hours passing between a lost reply and its recovery would. */
+  elapse(ms: number) {
+    this.#offsetMs += ms;
+  }
+
+  #now() {
+    return Date.now() + this.#offsetMs;
+  }
 
   /** Out-of-band removal, as when a person deletes the VM in Boat's console. */
   removeOutOfBand(id: string) {
@@ -105,12 +136,22 @@ export class RecordedBoat {
     if (request.method === "POST" && path === "/sandboxes") {
       const key = request.headers["idempotency-key"];
       if (typeof key !== "string") return send(400, { ok: false, code: "invalid_request" });
+      if (this.rejectCreate !== undefined)
+        return send(this.rejectCreate.status, { ok: false, code: this.rejectCreate.code });
       const body = z
         .object({ labels: z.record(z.string(), z.string()) })
         .passthrough()
         .parse(JSON.parse(raw));
-      const existing = [...this.vms.values()].find((vm) => vm.key === key);
-      const vm = existing ?? { id: sandboxId(), key, labels: body.labels, state: "provisioned" };
+      const existing = [...this.vms.values()].find(
+        (vm) => vm.key === key && this.#now() - (vm.acceptedAt ?? this.#now()) < KEY_RETENTION_MS,
+      );
+      const vm = existing ?? {
+        id: sandboxId(),
+        key,
+        acceptedAt: this.#now(),
+        labels: body.labels,
+        state: "provisioned" as const,
+      };
       this.vms.set(vm.id, vm);
       if (this.loseCreateReply) {
         response.destroy();
@@ -121,6 +162,7 @@ export class RecordedBoat {
     if (request.method === "GET" && path === "/sandboxes") {
       const wanted = url.searchParams.getAll("label").map((pair) => pair.split("="));
       const sandboxes = [...this.vms.values()]
+        .filter(() => !this.unlisted)
         .filter((vm) =>
           wanted.every(([key, value]) => key !== undefined && vm.labels[key] === value),
         )
@@ -164,6 +206,13 @@ export class RecordedBoat {
         ok: true,
         operation: { id: deletion.id, kind: "sandbox", targetId: id, status: "pending" },
       });
+    }
+    const saved = /^\/saved-snapshots\/([a-z0-9-]{1,63})$/.exec(path);
+    if (saved !== null && request.method === "GET") {
+      const snapshot = this.savedSnapshots.get(saved[1] ?? "");
+      return snapshot === undefined
+        ? send(404, { ok: false, code: "snapshot_not_found" })
+        : send(200, { ok: true, snapshot });
     }
     const operation = /^\/deletion-operations\/(bdop_[a-f0-9]{32})$/.exec(path);
     if (operation !== null && request.method === "GET") {

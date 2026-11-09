@@ -14,11 +14,16 @@ import {
   type BoatAllocationRecord,
   type BoatExecutionTarget,
 } from "@sealant/validators";
-import { Cause, Context, Effect, Layer, Schedule } from "effect";
+import { Cause, Clock, Context, Effect, Layer, Schedule } from "effect";
 import { z } from "zod";
 
 import { safeCommandTail } from "../../images/boat/command-diagnostics.js";
-import { BoatOwnership, boatSandboxIdSchema, type BoatResult } from "./config.js";
+import {
+  BoatOwnership,
+  boatSandboxIdSchema,
+  type BoatApiError,
+  type BoatResult,
+} from "./config.js";
 import { BoatExecution, type BoatExecutionService } from "./execution.js";
 import {
   boatLaunchDiagnostic,
@@ -131,7 +136,8 @@ const make: Effect.Effect<
     const runId = record.input.consumer.runId;
     if (record.input.deploymentId !== deploymentId)
       return yield* Effect.fail(new BoatAllocationError("target-mismatch"));
-    if (["held", "deleting", "deleted"].includes(record.phase))
+    const unresolved = record.phase === "held" && record.reason === "create-unresolved";
+    if (["held", "deleting", "deleted"].includes(record.phase) && !unresolved)
       return yield* Effect.fail(new BoatAllocationError("allocation-held"));
     if (record.phase === "reserved" && !(yield* repo.isActive(runId))) {
       yield* repo.advance(record, { ...record, phase: "held", reason: "run-stopped" });
@@ -158,7 +164,8 @@ const make: Effect.Effect<
       )
         return yield* Effect.fail(new BoatAllocationError("source-mismatch"));
       // Only the winner of this transition may issue create. Redelivery after it only discovers.
-      record = yield* repo.advance(record, { ...record, phase: "issued" });
+      const issuedAt = new Date(yield* Clock.currentTimeMillis).toISOString();
+      record = yield* repo.advance(record, { ...record, phase: "issued", issuedAt });
       const sandbox = yield* provider("create", () =>
         api.create({
           idempotencyKey: record.idempotencyKey,
@@ -174,7 +181,21 @@ const make: Effect.Effect<
         phase: "allocated",
         sandboxId: sandbox.id,
       });
-    } else if (record.phase === "issued") {
+    } else if (record.phase === "issued" || unresolved) {
+      // Boat holding no VM for the launch is committed as an observation before the allocation is
+      // terminalized; a crash between the two must never be followed by another create.
+      const committed = yield* observer
+        .observe(record)
+        .pipe(Effect.mapError(() => new BoatAllocationStoreError("unavailable")));
+      if (committed.kind === "absent") {
+        yield* repo.advance(record, {
+          ...record,
+          phase: "deleted",
+          reason: null,
+          removal: { kind: "never-created", completed: true },
+        });
+        return yield* Effect.fail(new BoatAllocationError("allocation-held"));
+      }
       const discovered = yield* Effect.tryPromise({
         try: () => api.discover(ownership),
         catch: (error) =>
@@ -190,28 +211,92 @@ const make: Effect.Effect<
         ];
         if (conflictingSandboxes.length < 2 || conflictingSandboxes.length > 200)
           return yield* Effect.fail(new BoatAllocationError("target-mismatch"));
-        yield* repo.advance(record, {
-          ...record,
-          phase: "held",
-          reason: "allocation-conflict",
-          conflictingSandboxes,
-        });
+        if (record.phase === "issued")
+          yield* repo.advance(record, {
+            ...record,
+            phase: "held",
+            reason: "allocation-conflict",
+            conflictingSandboxes,
+          });
         return yield* Effect.fail(new BoatAllocationError("allocation-held"));
       }
-      if (discovered.kind !== "found")
-        return yield* Effect.fail(
-          new BoatAllocationError(
-            discovered.reason === "inventory-unavailable"
-              ? "provider-unavailable"
-              : "allocation-pending",
-          ),
-        );
-      if (!boatAllocationMatches(record, discovered.sandbox))
+      if (discovered.kind === "unknown" && discovered.reason === "inventory-unavailable")
+        return yield* Effect.fail(new BoatAllocationError("provider-unavailable"));
+      let sandbox = discovered.kind === "found" ? discovered.sandbox : undefined;
+      if (sandbox === undefined) {
+        // Boat keeps an idempotency key for 24 hours. Past that, a replay could create a second VM
+        // beside one it accepted earlier, and a refusal proves nothing about that one. Only label
+        // discovery is safe then; with nothing found the outcome stays unknown, surfaced as held
+        // for an operator, whose exit is the owner's discard.
+        const issued =
+          record.issuedAt === undefined
+            ? (yield* repo.reservedAt(record.input.consumer.runtimeInstanceId))?.getTime()
+            : Date.parse(record.issuedAt);
+        if (
+          issued === undefined ||
+          (yield* Clock.currentTimeMillis) - issued >= BOAT_CREATE_REPLAY_WINDOW_MS
+        ) {
+          if (record.phase === "issued")
+            yield* repo.advance(record, { ...record, phase: "held", reason: "create-unresolved" });
+          return yield* Effect.fail(
+            new BoatAllocationError("allocation-held", {
+              step: "discover",
+              errorClass: "BoatAllocationError",
+              code: "allocation-held",
+            }),
+          );
+        }
+        // No VM carries this launch's labels: its create reply was lost, Boat has not listed it
+        // yet, or create was never sent. Replay create under the same idempotency key. Boat answers
+        // with the VM it already accepted for that key, or creates it now; either way Core ends
+        // with a positive identity, never an inference from an empty list or elapsed time.
+        const replay = yield* Effect.tryPromise(() =>
+          api.create({
+            idempotencyKey: record.idempotencyKey,
+            ownership,
+            lifetime: { kind: "production-session" },
+            from: record.input.publication.snapshot.identity.name,
+          }),
+        ).pipe(Effect.orElseSucceed(() => undefined));
+        if (
+          record.phase === "issued" &&
+          replay !== undefined &&
+          !replay.ok &&
+          createRejected(replay.error)
+        ) {
+          // A definite refusal of this key: an earlier acceptance would have been replayed, so
+          // Boat holds no VM for the launch.
+          yield* observer
+            .neverCreated(record)
+            .pipe(Effect.mapError(() => new BoatAllocationStoreError("unavailable")));
+          yield* repo.advance(record, {
+            ...record,
+            phase: "deleted",
+            removal: { kind: "never-created", completed: true },
+          });
+          return yield* Effect.fail(
+            new BoatAllocationError(
+              "allocation-held",
+              boatLaunchDiagnostic(replay.error, "create"),
+            ),
+          );
+        }
+        if (replay === undefined || !replay.ok)
+          return yield* Effect.fail(
+            new BoatAllocationError(
+              "allocation-pending",
+              replay === undefined ? undefined : boatLaunchDiagnostic(replay.error, "create"),
+            ),
+          );
+        sandbox = replay.value;
+      }
+      if (!boatAllocationMatches(record, sandbox))
         return yield* Effect.fail(new BoatAllocationError("target-mismatch"));
       record = yield* repo.advance(record, {
         ...record,
         phase: "allocated",
-        sandboxId: discovered.sandbox.id,
+        reason: null,
+        sandboxId: sandbox.id,
       });
     }
     if (record.sandboxId === null)
@@ -417,6 +502,30 @@ const make: Effect.Effect<
   return BoatAllocation.of({ prepare, reconcile });
 });
 /** Open assembly for the worker's sealed exchange and provider infrastructure. */
+/**
+ * How long after issuance create may be replayed under the same idempotency key: inside Boat's
+ * 24-hour key retention, with an hour of margin for clock skew between Core and Boat.
+ */
+export const BOAT_CREATE_REPLAY_WINDOW_MS = 23 * 60 * 60_000;
+
+/**
+ * Boat refused a create outright: what it was asked for cannot be made (source snapshot gone,
+ * account or plan limits, no machine). A replay under an accepted key is answered with that VM,
+ * never with these, so they prove Boat holds no VM for the key.
+ */
+const createRejected = (error: BoatApiError) =>
+  error.status !== null &&
+  error.status >= 400 &&
+  error.status < 500 &&
+  [
+    "snapshot_not_found",
+    "snapshot_data_expired",
+    "insufficient_balance",
+    "machine_class_plan_required",
+    "trial_auto_stop_required",
+    "trial_saved_snapshots_not_allowed",
+    "no_ready_machine",
+  ].includes(error.code);
 export const boatAllocationLayerNoDeps: Layer.Layer<
   BoatAllocation,
   never,
