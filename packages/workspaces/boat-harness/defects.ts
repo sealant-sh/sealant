@@ -42,10 +42,14 @@ export const DELETED_VM_KEPT: Defect = {
   owner: "thread C (lifecycle)",
 };
 
-/** Lifecycle S4: create is persisted `issued` before send; a lost reply fails the launch and nothing adopts or closes it. */
+/**
+ * Lifecycle S4: create is persisted `issued` before send, and a lost reply fails the launch at
+ * once instead of adopting the VM through discovery. (The sweep later finds and deletes that VM,
+ * so on facc017d nothing leaks; the launch itself is still lost.)
+ */
 export const ISSUED_ALLOCATION: Defect = {
   id: "S4",
-  title: "lost create reply strands an `issued` allocation with no identity",
+  title: "a lost create reply fails the launch instead of adopting the VM",
   signature: /"allocation":"issued"/,
   owner: "thread C (lifecycle)",
 };

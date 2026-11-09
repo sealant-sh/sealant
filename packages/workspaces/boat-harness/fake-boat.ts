@@ -823,6 +823,8 @@ export class FakeBoat {
     this.#record("command:detached", sandbox.id, body.command.slice(0, 300));
     const pidFile = `/tmp/.boat-harness-process-${id}`;
     const fault = this.faults.command?.(body.command, sandbox);
+    if (fault !== undefined)
+      this.#record(`fault:detached-${fault.kind}`, sandbox.id, body.command.slice(0, 200));
     // A session leader per process lets DELETE kill the whole tree, as Boat's stop does.
     const wrapped = `echo $$ > ${pidFile}; exec /bin/bash -c "$BOAT_HARNESS_COMMAND"`;
     const child = spawn("docker", [
