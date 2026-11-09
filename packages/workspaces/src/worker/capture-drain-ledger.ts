@@ -421,7 +421,7 @@ export const captureDrainLedgerFromRepo = (
       ),
     ),
 
-  reconcileIssuedDeletion: (runId, runtime, fenceMs) =>
+  reconcileIssuedDeletion: (runId, runtime, fenceMs, reauthorizedVersion) =>
     run(
       Effect.gen(function* () {
         const repo = yield* WorkspaceCaptureDrainRepo;
@@ -432,6 +432,7 @@ export const captureDrainLedgerFromRepo = (
           token,
           leaseMs: options.deletionHoldMs ?? DELETION_HOLD_MS,
           ...(fenceMs === undefined ? {} : { fenceMs }),
+          ...(reauthorizedVersion === undefined ? {} : { reauthorizedVersion }),
         });
         return outcome === "reissue"
           ? ({ kind: "reissue", ticket: { token } } satisfies IssuedDeletionSettlement)

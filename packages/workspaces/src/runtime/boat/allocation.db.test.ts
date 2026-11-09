@@ -3633,6 +3633,94 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
       });
       expect((await execute(nativeConsumerRows(s.db, target.runId)))[0]?.state).toBe("released");
     }));
+
+  it("retries an attested deletion whose reply was lost, through an identical re-attestation and a later discard (review of #496)", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const seal = {
+        runId: target.runId,
+        executorId: target.sandboxId,
+        epoch: 1,
+        captureN: 3,
+        attestedBy: "mend",
+      };
+      await execute(s.canonical.attestCompletion(seal));
+      s.provider.deleteLost = true;
+      const { owner } = await execute(s.final(["unreachable"]));
+      await expect(execute(owner.close(target))).rejects.toThrow();
+      expect(s.provider.deleteCalls).toBe(1);
+      s.provider.deleteLost = false;
+      // The caller retries its attestation after the lost reply: the same seal, not new evidence.
+      const before = (await execute(s.canonical.getByRunId(target.runId)))?.evidenceVersion;
+      await execute(s.canonical.attestCompletion(seal));
+      expect((await execute(s.canonical.getByRunId(target.runId)))?.evidenceVersion).toBe(before);
+      const outcomes = [];
+      for (let attempt = 0; attempt < 3; attempt += 1)
+        outcomes.push(await execute(owner.close(target)).catch((error: unknown) => String(error)));
+      await execute(s.canonical.requestDiscard({ runId: target.runId, requestedBy: "usr_owner" }));
+      const discard = await execute(owner.close(target)).catch((error: unknown) => String(error));
+      expect({ outcomes, discard, deletes: s.provider.deleteCalls }).toEqual({
+        outcomes: ["closed", "closed", "closed"],
+        discard: "closed",
+        deletes: 2,
+      });
+    }));
+
+  it("completes an authorized removal when newer evidence authorizes the same removal (review of #496)", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      await execute(
+        s.canonical.attestCompletion({
+          runId: target.runId,
+          executorId: target.sandboxId,
+          epoch: 1,
+          captureN: 3,
+          attestedBy: "mend",
+        }),
+      );
+      s.provider.deleteLost = true;
+      const { owner } = await execute(s.final(["unreachable"]));
+      await expect(execute(owner.close(target))).rejects.toThrow();
+      s.provider.deleteLost = false;
+      // Newer evidence that authorizes the same removal: a later sealed FINAL is attested.
+      const before = (await execute(s.canonical.getByRunId(target.runId)))?.evidenceVersion ?? 0;
+      await execute(
+        s.canonical.attestCompletion({
+          runId: target.runId,
+          executorId: target.sandboxId,
+          epoch: 1,
+          captureN: 4,
+          attestedBy: "mend",
+        }),
+      );
+      expect((await execute(s.canonical.getByRunId(target.runId)))?.evidenceVersion).toBe(
+        before + 1,
+      );
+      expect(await execute(owner.close(target))).toBe("closed");
+      expect(s.provider.deleteCalls).toBe(2);
+    }));
+
+  it("reports an attested saved FINAL as saved after the VM is removed (review of #496)", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      await execute(
+        s.canonical.attestCompletion({
+          runId: target.runId,
+          executorId: target.sandboxId,
+          epoch: 1,
+          captureN: 3,
+          attestedBy: "mend",
+        }),
+      );
+      const { owner } = await execute(s.final(["unreachable"]));
+      expect(await execute(owner.close(target))).toBe("closed");
+      expect(s.provider.deleteCalls).toBe(1);
+      expect(await execute(s.canonical.getByRunId(target.runId))).toMatchObject({
+        state: "stopped",
+        retainedAt: null,
+        captureTokenSealed: null,
+      });
+    }));
 });
 
 const HOUR = 60 * 60_000;

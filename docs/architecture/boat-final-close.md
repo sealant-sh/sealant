@@ -30,6 +30,32 @@ unreadable, contradictory or unrecorded evidence retains the VM and its tunnel. 
 60-second budget; the complete close call has a 120-second bound. A retry can drain the same held
 daemon.
 
+## Removal without the guest
+
+Three facts let close remove a VM without the guest answering:
+
+- **Absence.** Boat itself says the VM is gone: a typed 404 after Boat reported it past creation, or
+  its own deletion operation completed. Close discharges the launch; nothing is asked of the guest
+  and no DELETE is sent.
+- **Discard.** The owner discarded the unsaved captures (`requestDiscard`). The VM is removed under
+  the `discarded` basis and the capture ends `discarded`.
+- **Attestation.** A trusted caller attested a sealed FINAL of this executor (`attestCompletion`)
+  that covers everything Core observed of it. The VM is removed under `attested-complete` and the
+  capture ends `stopped`, the same as an observed complete FINAL.
+
+An identical attestation submitted again is not new evidence and leaves the evidence version
+unchanged. A removal already authorized and issued is never stranded by newer evidence that
+authorizes the same removal: it is re-based on the current evidence and issued again.
+
+### Trust boundary: attestations are believed
+
+Core cannot verify an attestation against the capture store; it records what an authorized service
+caller asserts. A false attestation that nothing Core observed contradicts is believed, and the VM
+with any unsaved work is removed. Core refuses an attestation only when it names another executor or
+when a later observation of the daemon (a higher epoch, a later unsaved capture) contradicts it.
+Granting the attestation route to a caller is therefore granting it authority to end that executor's
+retention.
+
 ## Capture-only recovery
 
 Before FINAL, the authenticated receiver observes the original invocation. If it is still running,
