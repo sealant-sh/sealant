@@ -86,9 +86,19 @@ export interface BoatProofInventory {
   /** Exact ready catalog artifacts, independently matched to the provider. Never VM allocations. */
   readonly retainedSnapshots?: readonly { readonly publicationId: string; readonly name: string }[];
 }
+/** Core has already given up on this attempt. Its cause is the runtime row's recorded error. */
+export interface ProofFailure {
+  readonly runId: string;
+  readonly attemptStatus: string;
+  readonly runtimeStatus: string | null;
+  readonly errorCode: string | null;
+  readonly errorMessage: string | null;
+}
 /** The checker reads canonical facts; it cannot manufacture a launch, readiness or deletion receipt. */
 export interface BoatProofServices {
   readonly runtime: (session: ProofSession) => Promise<ProofRuntime | undefined>;
+  /** Terminal launch failure for the session's current attempt, before or after allocation. */
+  readonly failure: (session: ProofSession) => Promise<ProofFailure | undefined>;
   /** The current workspace attempt's catalog state, available before allocation or harness launch. */
   readonly publication: (
     session: ProofSession,
@@ -327,7 +337,7 @@ const trackProofSession = (input: {
       input.publications.add(runtime.publicationId);
       input.io.record({ event: "runtime", ...runtime });
     }
-    return { session, runtime };
+    return { session, runtime, failure: await input.io.failure(session) };
   };
   const close = async () => {
     const current = await remember();
@@ -431,11 +441,21 @@ export const runBoatLiveCheck = async (
     const checkAnswer = () => {
       if (answer?.ok === false) throw answer.error;
     };
+    // Core's verdict is final. Waiting out the budget after it only delays cleanup by minutes.
+    const checkCore = (failure: ProofFailure | undefined) => {
+      if (failure === undefined || failure.runId === previousRunId) return;
+      io.record({ event: "core-launch-failed", phase, ...failure });
+      process.stderr.write(
+        `Boat proof ${phase}: Core failed the launch (${failure.errorCode ?? failure.attemptStatus}): ${failure.errorMessage ?? "no recorded cause"}\n`,
+      );
+      throw new BoatProofError(`${phase}-core-failed`);
+    };
     try {
       const built = await waitFor("native-build", config.buildBudgetMs, async () => {
         checkAnswer();
         const observed = await owned.remember();
         if (observed === undefined) return undefined;
+        checkCore(observed.failure);
         const publication = await io.publication(observed.session);
         return publication?.ready && publication.runId !== previousRunId ? publication : undefined;
       });
@@ -444,7 +464,9 @@ export const runBoatLiveCheck = async (
       const readyAt = Date.now();
       return await waitFor(phase, 12 * 60_000, async () => {
         checkAnswer();
-        const runtime = (await owned.remember())?.runtime;
+        const observed = await owned.remember();
+        checkCore(observed?.failure);
+        const runtime = observed?.runtime;
         if (!answer?.ok || !runtime?.ready || runtime.runId === previousRunId) return undefined;
         io.record({ event: "readiness-budget", phase, elapsedMs: Date.now() - readyAt });
         return runtime;

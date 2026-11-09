@@ -189,6 +189,7 @@ export const createNativeRecipe = async (
         "guest_capsule.py",
         "guest_parking.py",
         "guest_resume.py",
+        "receiver-routes.json",
         "bootstrap-crypto.mjs",
         "build_guest.py",
         "workspace-launch.py",

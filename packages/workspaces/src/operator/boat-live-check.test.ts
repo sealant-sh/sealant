@@ -15,6 +15,7 @@ import {
   cleanupBoatLiveCheck,
   MendProofClient,
   runBoatLiveCheck,
+  type ProofFailure,
   type ProofRuntime,
   type BoatProofServices,
 } from "./boat-live-check.js";
@@ -47,6 +48,7 @@ const fixture = async (
     initialWorktree?: string;
     extraSessions?: readonly unknown[];
     detailOverrides?: Readonly<Record<string, unknown>>;
+    coreFailure?: ProofFailure;
   } = {},
 ) => {
   const source = await mkdtemp(join(tmpdir(), "boat-check-source-"));
@@ -89,7 +91,7 @@ const fixture = async (
       sandboxId: generation === 1 ? "bx_23456789" : "bx_3456789a",
       publicationId,
       resourceSubnet: "127.0.0.0/27",
-      ready: !closed,
+      ready: !closed && options.coreFailure === undefined,
       closed,
     });
   };
@@ -213,6 +215,10 @@ const fixture = async (
             runId: `run_${generation}`,
             ready: generation === 2 || (options.publicationReady?.() ?? true),
           },
+    failure: async (s) =>
+      options.coreFailure !== undefined && s.sealantRunId === options.coreFailure.runId
+        ? options.coreFailure
+        : undefined,
     runtime: async (s) => {
       options.observeRuntime?.();
       return s.sealantRunId === null ? undefined : runtimes.get(s.sealantRunId);
@@ -287,6 +293,32 @@ describe("operator checker against Mend HTTP and terminal protocol", () => {
     } finally {
       reply.resolve();
     }
+  }, 20_000);
+
+  it("stops waiting as soon as Core fails the launch and reports Core's cause", async () => {
+    const cause =
+      'Boat runtime: launch-held; diagnostic {"code":"receiver-refused","receiver":{"reason":"network-receipt-changed"}}';
+    const f = await fixture({
+      coreFailure: {
+        runId: "run_1",
+        attemptStatus: "failed",
+        runtimeStatus: "failed",
+        errorCode: "launch-retained",
+        errorMessage: cause,
+      },
+    });
+    const began = Date.now();
+    await expect(f.run()).rejects.toThrow("authenticated-readiness-core-failed");
+    // The readiness budget is twelve minutes; Core's verdict ends the wait on the next poll.
+    expect(Date.now() - began).toBeLessThan(10_000);
+    expect(f.events).toContainEqual(
+      expect.objectContaining({
+        event: "core-launch-failed",
+        phase: "authenticated-readiness",
+        errorMessage: cause,
+      }),
+    );
+    expect(f.events.at(-1)).toMatchObject({ event: "final-inventory", sandboxes: [] });
   }, 20_000);
 
   it("executes its emitted shell, observes actual idle Stop, reads captured edits and verifies a fresh child", async () => {

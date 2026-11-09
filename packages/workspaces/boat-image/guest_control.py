@@ -20,7 +20,17 @@ def connect():
         recovering = recovery.path().exists()
         if (recovery.observe() if recovering else invocation.observe()) != 'running':
             raise receiver.Refusal('control-invocation-not-running')
-        expected = invocation.state(recovery.invocation_path())['gate'] if recovering else invocation.state()['gate']
+        record_path = recovery.invocation_path() if recovering else invocation.path()
+        record = invocation.state(record_path)
+        expected = record['gate']
+        # Ordinary mode: Python PID1 holds the namespaces and its one sealantd child listens.
+        # observe() above recorded and verified that child; the socket peer must be exactly it.
+        daemon = invocation.daemon_path(record_path)
+        if daemon.exists():
+            observed = guest.private_json(daemon)
+            if observed.get('binding') != record['binding']:
+                raise receiver.Refusal('control-daemon-changed')
+            expected = observed['identity']
         held = guest.HeldProcess(expected['pid'])
         descriptors = []
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

@@ -11,6 +11,8 @@ import secrets
 import socket
 import stat
 import subprocess
+import sys
+import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
@@ -22,10 +24,34 @@ MAX_FILES = 16
 MAX_BYTES = 2 * 1024 * 1024
 RUNTIME = Path('/run/sealant-bootstrap')
 IDENTITY_KEYS = {'deployment_id', 'instance_id', 'disk_lineage'}
+# Reason codes and their first detail segment are the only failure text that leaves the guest.
+REASON = re.compile(r'[a-z][a-z0-9-]{0,63}')
+DETAIL = re.compile(r'[A-Za-z0-9_./,=+-]{1,256}')
 
 
 class Refusal(ValueError):
     pass
+
+
+def load_routes():
+    """The relay and Core read the same file. It ships beside this module, in the ZIP and on disk."""
+    directory = os.path.dirname(__file__)
+    path = os.path.join(directory, 'receiver-routes.json')
+    # The isolated guest interpreter imports this module from the bundle ZIP.
+    raw = Path(path).read_bytes() if os.path.isdir(directory) else __loader__.get_data(path)
+    value = json.loads(raw)
+    if not isinstance(value, dict) or value.get('format') != 'sealant-receiver-routes-v1':
+        raise ValueError('invalid-receiver-routes')
+    routes = {}
+    for route in value['routes']:
+        if (set(route) != {'name', 'path', 'method', 'budgetMs'} or route['method'] not in ('GET', 'POST')
+                or route['path'] != '/sealant/bootstrap/' + route['name'] or route['path'] in routes):
+            raise ValueError('invalid-receiver-routes')
+        routes[route['path']] = route
+    return routes
+
+
+ROUTES = load_routes()
 
 
 def fields(value, keys):
@@ -297,6 +323,67 @@ def revalidate_execution():
     return [guest.HeldProcess(os.getpid())]
 
 
+def permit(value):
+    import guest_readiness
+    return guest_readiness.permit(value)
+
+
+def readiness(value):
+    import guest_readiness
+    return guest_readiness.readiness(value)
+
+
+def start(value):
+    import guest_invocation
+    return guest_invocation.start(value)
+
+
+def recover(value):
+    import guest_recovery
+    return guest_recovery.start(value)
+
+
+def park(value):
+    import guest_parking
+    return guest_parking.close(value)
+
+
+ACTIONS = {'status': lambda _: status(), 'stage': lambda value: stage(value), 'start': start,
+           'isolate': lambda value: isolate(value), 'permit': permit, 'readiness': readiness,
+           'recover': recover, 'park': park}
+if set(ACTIONS) != {route['name'] for route in ROUTES.values()}:
+    raise ValueError('receiver-routes-without-action')
+
+
+def refused(error):
+    # Helper modules keep their own refusal types; only loaded modules can have raised one. The
+    # importable receiver's class counts even if this code runs from a script copy of the module.
+    return isinstance(error, (Refusal, *(getattr(sys.modules.get(module), name, ()) for module, name in (
+        ('guest_receiver', 'Refusal'), ('guest_network', 'Refusal'), ('guest_capsule', 'CapsuleRefusal')))))
+
+
+def failure(error):
+    """Classify without discarding the reason. Free text never leaves; codes and safe paths do."""
+    if refused(error):
+        code = 409
+    elif isinstance(error, (ValueError, KeyError, TypeError, RecursionError)):
+        code = 400
+    else:
+        code = 503
+    reason, _, rest = str(error).partition(':') if isinstance(error, ValueError) else ('', '', '')
+    if isinstance(error, json.JSONDecodeError):
+        reason, rest = 'invalid-json', ''
+    elif not REASON.fullmatch(reason):
+        reason, rest = {409: 'unclassified-refusal', 400: 'unclassified-error', 503: 'receiver-unavailable'}[code], ''
+    body = {'error': reason}
+    detail = rest.split(':', 1)[0]
+    if DETAIL.fullmatch(detail):
+        body['detail'] = detail
+    if code != 409:
+        body['class'] = type(error).__name__
+    return code, body
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.0'
 
@@ -312,43 +399,31 @@ class Handler(BaseHTTPRequestHandler):
                 if len(headers) != 1 or not hmac.compare_digest(headers[0], 'Bearer ' + control['token'].value):
                     self.reply(401, {'error': 'unauthorized'})
                     return
-                if self.command == 'GET' and self.path == '/sealant/bootstrap/status':
-                    self.reply(200, status())
-                    return
-                if self.command != 'POST' or self.path not in ('/sealant/bootstrap/stage', '/sealant/bootstrap/start', '/sealant/bootstrap/isolate', '/sealant/bootstrap/permit', '/sealant/bootstrap/readiness', '/sealant/bootstrap/recover', '/sealant/bootstrap/park'):
+                route = ROUTES.get(self.path)
+                if route is None or route['method'] != self.command:
                     self.reply(404, {'error': 'unknown-route'})
                     return
-                lengths = self.headers.get_all('Content-Length', [])
-                if (self.headers.get('Transfer-Encoding') is not None or len(lengths) != 1
-                        or not lengths[0].isdecimal() or not 0 < int(lengths[0]) <= MAX_BODY
-                        or self.headers.get('Content-Type') != 'application/json'):
-                    raise Refusal('invalid-body')
-                raw = self.rfile.read(int(lengths[0]))
-                if len(raw) != int(lengths[0]):
-                    raise Refusal('incomplete-body')
-                if self.path == '/sealant/bootstrap/park':
-                    import guest_parking
-                    self.reply(200, guest_parking.close(json.loads(raw)))
-                elif self.path == '/sealant/bootstrap/recover':
-                    import guest_recovery
-                    self.reply(200, guest_recovery.start(json.loads(raw)))
-                elif self.path in ('/sealant/bootstrap/permit', '/sealant/bootstrap/readiness'):
-                    import guest_readiness
-                    action = guest_readiness.permit if self.path.endswith('/permit') else guest_readiness.readiness
-                    self.reply(200, action(json.loads(raw)))
-                elif self.path == '/sealant/bootstrap/start':
-                    from guest_invocation import start
-                    self.reply(200, start(json.loads(raw)))
-                elif self.path == '/sealant/bootstrap/isolate':
-                    self.reply(200, isolate(json.loads(raw)))
-                else:
-                    self.reply(200, stage(json.loads(raw)))
-        except Refusal as error:
-            self.reply(409, {'error': str(error)})
-        except (ValueError, KeyError, TypeError, RecursionError):
-            self.reply(400, {'error': 'invalid-request'})
-        except Exception:
-            self.reply(503, {'error': 'receiver-unavailable'})
+                value = None
+                if route['method'] == 'POST':
+                    lengths = self.headers.get_all('Content-Length', [])
+                    if (self.headers.get('Transfer-Encoding') is not None or len(lengths) != 1
+                            or not lengths[0].isdecimal() or not 0 < int(lengths[0]) <= MAX_BODY
+                            or self.headers.get('Content-Type') != 'application/json'):
+                        raise Refusal('invalid-body')
+                    raw = self.rfile.read(int(lengths[0]))
+                    if len(raw) != int(lengths[0]):
+                        raise Refusal('incomplete-body')
+                    value = json.loads(raw)
+                self.reply(200, ACTIONS[route['name']](value))
+        except Exception as error:
+            code, body = failure(error)
+            # journald keeps the full cause for the operator; the reply keeps only the classified reason.
+            print(json.dumps({'event': 'receiver-request-failed', 'route': self.path if self.path in ROUTES else 'unknown',
+                              'status': code, **body, 'message': str(error)[:2048]}, sort_keys=True),
+                  file=sys.stderr, flush=True)
+            if code == 503:
+                traceback.print_exc(file=sys.stderr)
+            self.reply(code, body)
 
     def reply(self, code, value):
         raw = canonical(value)
@@ -372,9 +447,13 @@ class UnixServer(HTTPServer):
         self.server_port = 0
 
 
-def serve():
+def require_outer_owner():
     if os.geteuid() != 0 or Path('/proc/self/uid_map').read_text().split() != ['0', '0', '4294967295']:
         raise Refusal('outer-owner-required')
+
+
+def serve():
+    require_outer_owner()
     os.umask(0o077)
     private_directory(RUNTIME)
     with locked():
@@ -395,4 +474,7 @@ def serve():
 
 
 if __name__ == '__main__':
-    serve()
+    # Serve the importable module, never this script copy. Helpers import guest_receiver, and a
+    # second module object would give them a different Refusal class from the one caught above.
+    import guest_receiver
+    guest_receiver.serve()

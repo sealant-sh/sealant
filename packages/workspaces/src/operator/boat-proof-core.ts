@@ -112,6 +112,28 @@ export const makeBoatProofCore = (input: {
           };
         }),
       ),
+    failure: (session: ProofSession) =>
+      runtime.runPromise(
+        Effect.gen(function* () {
+          if (session.sealantRunId === null) return undefined;
+          const attempt = yield* (yield* WorkspaceAttemptRepo).getAttemptById(session.sealantRunId);
+          if (attempt === undefined) return undefined;
+          if (attempt.ownerUserId !== input.config.ownerId)
+            return yield* Effect.fail(new BoatProofError("owner-mismatch"));
+          const instance = yield* (yield* WorkspaceRuntimeInstanceRepo).getRuntimeInstanceByRunId(
+            session.sealantRunId,
+          );
+          if (!["failed", "cancelled"].includes(attempt.status) && instance?.status !== "failed")
+            return undefined;
+          return {
+            runId: session.sealantRunId,
+            attemptStatus: attempt.status,
+            runtimeStatus: instance?.status ?? null,
+            errorCode: instance?.errorCode ?? null,
+            errorMessage: instance?.errorMessage ?? null,
+          };
+        }),
+      ),
     runtime: (session: ProofSession) =>
       runtime.runPromise(
         Effect.gen(function* () {

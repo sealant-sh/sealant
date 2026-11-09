@@ -5,6 +5,14 @@ import net from "node:net";
 
 import { WebSocketServer, createWebSocketStream } from "ws";
 
+import receiverRoutes from "./receiver-routes.json" with { type: "json" };
+
+// One list for this relay, the guest receiver and Core. Core aborts at the route budget, so the
+// relay allows a little longer and never answers for the receiver while Core is still waiting.
+const RELAY_GRACE_MS = 5000;
+const IDLE_MS = 5000;
+const routes = new Map(receiverRoutes.routes.map((route) => [route.path, route]));
+
 const options = new Map();
 const args = process.argv.slice(2);
 for (let index = 0; index < args.length; index += 2) {
@@ -76,29 +84,11 @@ const server = http.createServer(
       response.writeHead(401).end();
       return;
     }
-    if (
-      bootstrapSocket &&
-      [
-        "/sealant/bootstrap/status",
-        "/sealant/bootstrap/stage",
-        "/sealant/bootstrap/start",
-        "/sealant/bootstrap/isolate",
-        "/sealant/bootstrap/permit",
-        "/sealant/bootstrap/readiness",
-      ].includes(request.url)
-    ) {
+    const route = bootstrapSocket ? routes.get(request.url) : undefined;
+    if (route !== undefined) {
       const length = request.headers["content-length"];
-      const isStatus = request.method === "GET" && request.url === "/sealant/bootstrap/status";
-      const isStage =
-        request.method === "POST" &&
-        [
-          "/sealant/bootstrap/stage",
-          "/sealant/bootstrap/start",
-          "/sealant/bootstrap/isolate",
-          "/sealant/bootstrap/permit",
-          "/sealant/bootstrap/readiness",
-        ].includes(request.url);
-      if (!isStatus && !isStage) {
+      const isStage = route.method === "POST";
+      if (request.method !== route.method) {
         response.writeHead(404).end();
         return;
       }
@@ -114,7 +104,7 @@ const server = http.createServer(
             Number(length) < 1 ||
             Number(length) > 4 * 1024 * 1024 ||
             request.headers["content-type"] !== "application/json")) ||
-        (isStatus && length !== undefined && length !== "0")
+        (!isStage && length !== undefined && length !== "0")
       ) {
         response.writeHead(400).end();
         return;
@@ -127,17 +117,26 @@ const server = http.createServer(
           authorization: request.headers.authorization,
           ...(isStage ? { "content-type": "application/json", "content-length": length } : {}),
         },
-        timeout: 15000,
+        timeout: route.budgetMs + RELAY_GRACE_MS,
       });
+      // The listener's idle cutoff guards unauthenticated sockets; a forwarded operation gets its budget.
+      request.socket.setTimeout(route.budgetMs + RELAY_GRACE_MS);
+      response.once("finish", () => request.socket.setTimeout(IDLE_MS));
       bootstrapRequests.add(upstream);
       const teardown = () => {
         bootstrapRequests.delete(upstream);
         upstream.destroy();
       };
       response.once("close", teardown);
-      upstream.once("timeout", () => upstream.destroy());
+      upstream.once("timeout", () => {
+        bootstrapRequests.delete(upstream);
+        if (!response.headersSent) response.writeHead(504).end();
+        else response.destroy();
+        upstream.destroy();
+      });
       upstream.once("error", () => {
         bootstrapRequests.delete(upstream);
+        if (response.writableEnded) return;
         if (!response.headersSent) response.writeHead(503).end();
         else response.destroy();
       });
@@ -188,7 +187,7 @@ const server = http.createServer(
     });
   },
 );
-server.setTimeout(5000);
+server.setTimeout(IDLE_MS);
 
 const websockets = new WebSocketServer({
   noServer: true,

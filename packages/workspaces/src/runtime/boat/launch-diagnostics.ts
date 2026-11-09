@@ -54,6 +54,10 @@ const diagnosticSchema = z.object({
       "invalid-reply",
       "seal-context-mismatch",
       "invocation-held",
+      "receiver-rejected",
+      "receiver-unauthorized",
+      "receiver-route-missing",
+      "receiver-refused",
       "admission-refused",
       "launch-held",
       "close-pending",
@@ -110,6 +114,15 @@ const diagnosticSchema = z.object({
         "/sealant/bootstrap/park",
       ]),
       responseTail: z.string().transform(safeCommandTail),
+      /** The receiver's classified reason, e.g. a policy refusal code. Never free text. */
+      reason: z
+        .string()
+        .regex(/^[a-z][a-z0-9-]{0,63}$/)
+        .optional(),
+      detail: z
+        .string()
+        .regex(/^[A-Za-z0-9_./,=+-]{1,256}$/)
+        .optional(),
     })
     .optional(),
   command: z

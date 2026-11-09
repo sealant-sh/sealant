@@ -10,6 +10,8 @@ import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket, createWebSocketStream } from "ws";
 
+import receiverRoutes from "../../../boat-image/receiver-routes.json" with { type: "json" };
+
 const source = fileURLToPath(new URL("../../../boat-image/control-relay.mjs", import.meta.url));
 const builder = fileURLToPath(new URL("../../../boat-image/build-relay.mjs", import.meta.url));
 const spike = fileURLToPath(new URL("../../../boat-image/spike.ts", import.meta.url));
@@ -211,6 +213,71 @@ describe("standalone Boat relay", () => {
       );
     },
   );
+
+  it.each(["source", "bundle"])(
+    "forwards every route in the shared receiver list and refuses its other method with %s",
+    async (kind) => {
+      const path = await mkdtemp(join(directory, "case-routes-"));
+      const bootstrapSocket = join(path, "bootstrap.sock");
+      const received: string[] = [];
+      const upstream = http.createServer((request, response) => {
+        request.resume();
+        request.on("end", () => {
+          received.push(`${request.method} ${request.url}`);
+          response.writeHead(200, { "content-type": "application/json" }).end("{}");
+        });
+      });
+      await new Promise<void>((done) => upstream.listen(bootstrapSocket, done));
+      resources.push(async () => {
+        upstream.closeAllConnections();
+        await new Promise<void>((done) => upstream.close(() => done()));
+      });
+      const relay = await fixture(kind === "bundle" ? bundled : source, undefined, bootstrapSocket);
+      const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+      for (const route of receiverRoutes.routes) {
+        const response = await fetch(`${relay.origin}${route.path}`, {
+          method: route.method,
+          headers,
+          ...(route.method === "POST" ? { body: "{}" } : {}),
+        });
+        expect([route.path, response.status]).toEqual([route.path, 200]);
+        const other = await fetch(`${relay.origin}${route.path}`, {
+          method: route.method === "POST" ? "GET" : "POST",
+          headers,
+          ...(route.method === "GET" ? { body: "{}" } : {}),
+        });
+        expect([route.path, other.status]).toEqual([route.path, 404]);
+      }
+      expect(received).toEqual(
+        receiverRoutes.routes.map((route) => `${route.method} ${route.path}`),
+      );
+    },
+  );
+
+  it("keeps a forwarded request open past the 5 s idle cutoff, within its route budget", async () => {
+    const path = await mkdtemp(join(directory, "case-slow-"));
+    const bootstrapSocket = join(path, "bootstrap.sock");
+    const upstream = http.createServer((request, response) => {
+      request.resume();
+      // Longer than the relay's 5 s idle cutoff, well inside the route budget.
+      setTimeout(() => response.writeHead(200).end(JSON.stringify({ slow: true })), 7_000);
+    });
+    await new Promise<void>((done) => upstream.listen(bootstrapSocket, done));
+    resources.push(async () => {
+      upstream.closeAllConnections();
+      await new Promise<void>((done) => upstream.close(() => done()));
+    });
+    const relay = await fixture(source, undefined, bootstrapSocket);
+    const began = Date.now();
+    const response = await fetch(`${relay.origin}/sealant/bootstrap/permit`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ slow: true });
+    expect(Date.now() - began).toBeGreaterThan(6_500);
+  }, 20_000);
 
   it.each(["source", "bundle"])(
     "authenticates both routes and forwards binary bytes with %s artifact",

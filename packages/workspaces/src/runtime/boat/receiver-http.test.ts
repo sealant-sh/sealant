@@ -160,6 +160,54 @@ describe("hosted Boat receiver HTTP", () => {
     expect(failure).toMatchObject({ diagnostic: { provider: { status: 503 } } });
     expect(String(failure).length).toBeLessThan(5_000);
   });
+  it.each([
+    {
+      status: 400,
+      body: '{"class":"ValueError","detail":"/usr/bin/systemctl","error":"semantic-command-failed"}',
+      code: "receiver-rejected",
+      reason: "semantic-command-failed",
+      detail: "/usr/bin/systemctl",
+    },
+    {
+      status: 401,
+      body: '{"error":"unauthorized"}',
+      code: "receiver-unauthorized",
+      reason: "unauthorized",
+    },
+    { status: 404, body: "", code: "receiver-route-missing" },
+    {
+      status: 409,
+      body: '{"error":"workspace-limits-unavailable"}',
+      code: "receiver-refused",
+      reason: "workspace-limits-unavailable",
+    },
+    {
+      status: 503,
+      body: '{"class":"OSError","error":"receiver-unavailable"}',
+      code: "transport-unavailable",
+      reason: "receiver-unavailable",
+    },
+  ])("classifies a receiver $status as $code and keeps its reason", async (input) => {
+    const transport = await fixture((_request, response) => {
+      response.writeHead(input.status).end(input.body);
+    });
+    const failure = await transport
+      .call(access, bearer, "permit", Redacted.make("{}"))
+      .catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      code: input.code,
+      diagnostic: {
+        code: input.code,
+        provider: { operation: "receiver-permit", status: input.status },
+        receiver: {
+          pathClass: "/sealant/bootstrap/permit",
+          ...(input.reason === undefined ? {} : { reason: input.reason }),
+          ...(input.detail === undefined ? {} : { detail: input.detail }),
+        },
+      },
+    });
+    expect(String(failure)).toContain(input.code);
+  });
   it("retains the failing operation, fixed path and redacted response through a real HTTP 503", async () => {
     const transport = await fixture((request, response) => {
       expect(request.url).toBe("/sealant/bootstrap/stage");
