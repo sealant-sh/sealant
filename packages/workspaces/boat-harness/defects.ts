@@ -10,7 +10,7 @@
  * - R1, the 30 s sweep winning a launch's exchange: #503.
  * - S3, a launch whose worker died: #494.
  */
-import type { Defect } from "./scenario.js";
+import type { Defect } from "./markers.js";
 
 /**
  * Contracts F3: the control bridge and sealantd disagree about who may connect. The audit found
@@ -21,8 +21,16 @@ import type { Defect } from "./scenario.js";
 export const PEER_PID: Defect = {
   id: "F3",
   title: "control bridge and sealantd reject each other's peer identity",
-  signature: /unauthorized peer|control-peer-changed/,
+  // Readiness failed (the runtime row says so) and the guest says why.
+  failure: /\\"step\\":\\"readiness\\"/,
+  evidence: /unauthorized peer|control-peer-changed/,
   owner: "thread A2 (readiness)",
+};
+
+/** F3 on the happy path: named at its own `ready` step, so a later step's failure is real. */
+const PEER_PID_AT_READY: Defect = {
+  ...PEER_PID,
+  failure: /^step ready: launch ended \w+ with [^\n]*\\"step\\":\\"readiness\\"/,
 };
 
 /**
@@ -33,7 +41,9 @@ export const PEER_PID: Defect = {
 export const DELETED_VM_KEPT: Defect = {
   id: "S1",
   title: "a launch failed in `cloning` is deleted but still reads retained",
-  signature: /public status retained|terminal workspace[\s\S]*retained/,
+  // Mend still reads retained although Core removed the runtime and deleted the VM.
+  failure:
+    /terminal workspace[^\n]*; public status retained; runtime [^\n]*"removed":true[^\n]*"allocation":"deleted"/,
   owner: "thread C (lifecycle)",
 };
 
@@ -45,7 +55,8 @@ export const DELETED_VM_KEPT: Defect = {
 export const ISSUED_ALLOCATION: Defect = {
   id: "S4",
   title: "a lost create reply loses the launch (no leak)",
-  signature: /"allocation":"issued"/,
+  // The launch ends at `create` with the allocation still `issued`.
+  failure: /^launch ended \w+ with [^\n]*\\"step\\":\\"create\\"[^\n]*"allocation":"issued"/,
   owner: "thread C (lifecycle)",
 };
 
@@ -53,7 +64,8 @@ export const ISSUED_ALLOCATION: Defect = {
 export const STUCK_DRAINS: Defect = {
   id: "S2",
   title: "established FINAL leaves the capture drain retained (stuck stopping)",
-  signature: /"retained":true|drain (kept|retained)|capture drain not terminal/,
+  // After Stop, Mend still reads retained while the capture drain stays kept.
+  failure: /public status retained; runtime [^\n]*"drain":"kept"/,
   owner: "thread C (lifecycle)",
 };
 
@@ -65,7 +77,7 @@ export const STUCK_DRAINS: Defect = {
 export const SLOW_CLOSE: Defect = {
   id: "C1",
   title: "failed-launch close waits on the 30 s sweep, so Mend can read retained past 60 s",
-  signature: /within 60 s; public status retained;[^\n]*"allocation":"deleting"/,
+  failure: /within 60 s; public status retained; runtime [^\n]*"allocation":"deleting"/,
   owner: "thread C (lifecycle)",
   intermittent: true,
 };
@@ -74,13 +86,14 @@ export const SLOW_CLOSE: Defect = {
 export const firstOf = (...defects: readonly Defect[]): Defect => ({
   id: defects.map((defect) => defect.id).join(" or "),
   title: defects.map((defect) => defect.title).join("; or "),
-  signature: new RegExp(defects.map((defect) => defect.signature.source).join("|")),
   owner: [...new Set(defects.map((defect) => defect.owner))].join(", "),
+  failure: /$^/,
+  anyOf: defects,
 });
 
 /** Which scenario is an expected failure on main, and why. `undefined` means it must pass. */
 export const DEFECTS = {
-  happyPath: PEER_PID,
+  happyPath: PEER_PID_AT_READY,
   faults: {
     "bind slower than one sweep period": PEER_PID,
     "create reply lost": ISSUED_ALLOCATION,

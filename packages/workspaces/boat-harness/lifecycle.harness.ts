@@ -12,16 +12,15 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { DEFECTS } from "./defects.js";
 import { scenarios } from "./faults.js";
+import { expectDefect, type Defect } from "./markers.js";
 import {
   assertSettled,
   awaitOutcome,
-  expectDefect,
   guestEvidence,
   launch,
   openProject,
   runtimeView,
   until,
-  type Defect,
   type Launch,
   type Project,
 } from "./scenario.js";

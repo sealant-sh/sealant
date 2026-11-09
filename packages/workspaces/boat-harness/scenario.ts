@@ -315,46 +315,6 @@ export const leftovers = async (
   return problems;
 };
 
-/** A known defect: a scenario fails with its signature until the fix lands, then must pass. */
-export interface Defect {
-  readonly id: string;
-  readonly title: string;
-  /** Matches the failure text the defect produces, so a different failure still fails. */
-  readonly signature: RegExp;
-  readonly owner: string;
-  /**
-   * Timing decides whether it shows. The scenario then passes either way, but any other failure
-   * still fails it. Use only for a defect the harness has seen both ways.
-   */
-  readonly intermittent?: boolean;
-}
-
-/**
- * Runs `body` as an expected failure. Passing means the defect is fixed: that fails loudly so the
- * marker gets removed. Failing with a different message is a real failure.
- */
-export const expectDefect = async (defect: Defect, body: () => Promise<void>): Promise<void> => {
-  let failure: unknown;
-  try {
-    await body();
-  } catch (error) {
-    failure = error;
-  }
-  if (failure === undefined) {
-    if (defect.intermittent === true) {
-      process.stderr.write(`[boat-harness] intermittent ${defect.id} did not show this time\n`);
-      return;
-    }
-    throw new Error(
-      `${defect.id} (${defect.title}) no longer reproduces: this scenario now passes. Remove its expected-failure marker in defects.ts.`,
-    );
-  }
-  const text =
-    failure instanceof Error ? `${failure.message}\n${failure.stack ?? ""}` : String(failure);
-  if (!defect.signature.test(text)) throw failure;
-  process.stderr.write(`[boat-harness] expected failure ${defect.id}: ${defect.title}\n`);
-};
-
 /** Guest log lines that name a cause Core's runtime row may have erased. */
 const GUEST_SIGNALS =
   /unauthorized peer|control-peer-changed|plan\.get failed|boot preparation failed|Refusal|Traceback|ERROR/;

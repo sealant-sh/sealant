@@ -10,9 +10,11 @@ import {
   copyFile,
   mkdir,
   mkdtemp,
+  open,
   readdir,
   readFile,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -35,6 +37,7 @@ import {
   type CoreObject,
 } from "./docker.js";
 import { FakeBoat } from "./fake-boat.js";
+import { LOCK, LOCK_LABEL, RUN_ENV, releaseLock } from "./reap.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const repo = join(here, "../../..");
@@ -87,6 +90,8 @@ export interface HarnessStack {
   readonly startWorker: (overrides?: Readonly<Record<string, string>>) => Promise<void>;
   /** The gateway image digest the worker was started with. */
   readonly gatewayImage: string;
+  /** A per-run derivative of an image, so containers Core creates from it carry the run label. */
+  readonly runImage: (base: string) => Promise<string>;
   readonly stop: () => Promise<void>;
 }
 
@@ -214,20 +219,21 @@ const freeSubnet = async (): Promise<string> => {
   throw new Error("no free 192.0.x.0/24 subnet for the twin network");
 };
 
-/** Builds an image once per content hash of its context; the cache tag is kept between runs. */
+/** Builds an image once per content hash of its context and returns its tag, kept between runs. */
 const cachedImage = async (name: string, context: string, dockerfile?: string): Promise<string> => {
   const digest = createHash("sha256");
   for (const file of (await readdir(context)).toSorted())
     digest.update(file).update(await readFile(join(context, file)));
   const tag = `${name}:${digest.digest("hex").slice(0, 16)}`;
   const id = await docker(["image", "inspect", "-f", "{{.Id}}", tag]);
-  if (id.code === 0 && process.env.BOAT_HARNESS_REBUILD !== "1") return id.stdout.trim();
+  if (id.code === 0 && process.env.BOAT_HARNESS_REBUILD !== "1") return tag;
   await dockerOk(
     [
       "build",
       "-q",
+      // Not the run key: containers inherit image labels, and must not look like a run's.
       "--label",
-      `${HARNESS_LABEL}=cache`,
+      `${HARNESS_LABEL}.cache=true`,
       "-t",
       tag,
       ...(dockerfile === undefined ? [] : ["-f", dockerfile]),
@@ -235,7 +241,7 @@ const cachedImage = async (name: string, context: string, dockerfile?: string): 
     ],
     { timeoutMs: 20 * 60_000 },
   );
-  return (await dockerOk(["image", "inspect", "-f", "{{.Id}}", tag])).trim();
+  return tag;
 };
 
 const makeTls = async (directory: string) => {
@@ -301,8 +307,6 @@ const makeTls = async (directory: string) => {
 };
 
 export interface StackOptions {
-  /** Gateway image override, e.g. a slow-dnsmasq variant. */
-  readonly gatewayImage?: string;
   readonly log?: (line: string) => void;
 }
 
@@ -353,14 +357,11 @@ const preflight = async () => {
     );
 };
 
-const LOCK = "sealant-boat-harness-lock";
-const LOCK_LABEL = `${HARNESS_LABEL}.lock`;
-
 /**
  * One harness run per Docker host: Core's worker reconciles resource networks and gateways
  * host-wide, so two stacks on one host disturb each other. The lock is a named container that is
- * never started; creating it is atomic. A holder whose run network is gone (it crashed) loses the
- * lock after a short grace period. Waits up to two hours.
+ * never started; creating it is atomic. It records the holder's run and PID: a holder whose process
+ * and run network are both gone has crashed, and its lock is taken over. Waits up to two hours.
  */
 const acquireHostLock = async (runId: string, log: (line: string) => void) => {
   const deadline = Date.now() + 2 * 60 * 60_000;
@@ -372,6 +373,8 @@ const acquireHostLock = async (runId: string, log: (line: string) => void) => {
       LOCK,
       "--label",
       `${LOCK_LABEL}=${runId}`,
+      "--label",
+      `${LOCK_LABEL}.pid=${process.pid}`,
       "postgres:17-alpine",
       "true",
     ]);
@@ -380,14 +383,20 @@ const acquireHostLock = async (runId: string, log: (line: string) => void) => {
       "container",
       "inspect",
       "-f",
-      `{{index .Config.Labels "${LOCK_LABEL}"}} {{.Created}}`,
+      `{{index .Config.Labels "${LOCK_LABEL}"}} {{index .Config.Labels "${LOCK_LABEL}.pid"}}`,
       LOCK,
     ]);
-    const [holder = "", since = ""] = held.stdout.trim().split(" ");
-    const running = (await docker(["network", "inspect", `boat-harness-${holder}`])).code === 0;
-    const young = Date.now() - Date.parse(since) < 5 * 60_000;
-    if (held.code === 0 && !running && !young) {
-      log(`removing the lock of harness run ${holder}, which is gone`);
+    const [holder = "", pid = ""] = held.stdout.trim().split(" ");
+    const processAlive =
+      /^\d+$/.test(pid) &&
+      (await stat(`/proc/${pid}`).then(
+        () => true,
+        () => false,
+      ));
+    const networkAlive =
+      (await docker(["network", "inspect", `boat-harness-${holder}`])).code === 0;
+    if (held.code === 0 && !processAlive && !networkAlive) {
+      log(`taking over the lock of harness run ${holder}, which is gone`);
       await docker(["rm", LOCK]);
       continue;
     }
@@ -399,17 +408,6 @@ const acquireHostLock = async (runId: string, log: (line: string) => void) => {
   }
 };
 
-const releaseHostLock = async (runId: string) => {
-  const held = await docker([
-    "container",
-    "inspect",
-    "-f",
-    `{{index .Config.Labels "${LOCK_LABEL}"}}`,
-    LOCK,
-  ]);
-  if (held.code === 0 && held.stdout.trim() === runId) await docker(["rm", LOCK]);
-};
-
 export const startStack = async (options: StackOptions = {}): Promise<HarnessStack> => {
   const log = options.log ?? ((line: string) => process.stderr.write(`[boat-harness] ${line}\n`));
   const runId = randomBytes(4).toString("hex");
@@ -417,7 +415,7 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
   try {
     await preflight();
   } catch (error) {
-    await releaseHostLock(runId);
+    await releaseLock(runId);
     throw error;
   }
   const baseline = new Set((await listCoreObjects()).map((entry) => `${entry.kind}:${entry.id}`));
@@ -426,16 +424,44 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
   const label = `${HARNESS_LABEL}=${runId}`;
   const scratch = await mkdtemp(join(tmpdir(), `boat-harness-${runId}.`));
   log(`run ${runId}, scratch ${scratch}`);
+  // A detached reaper outlives a Ctrl-C or a killed test process and removes what the run left.
+  const reaperLog = await open(join(scratch, "reaper.log"), "a");
+  const reaper = spawn(
+    "node",
+    ["--import", "tsx", join(here, "reaper.ts"), runId, String(process.pid)],
+    {
+      cwd: join(repo, "packages/workspaces"),
+      detached: true,
+      stdio: ["ignore", reaperLog.fd, reaperLog.fd],
+    },
+  );
+  reaper.unref();
+  await reaperLog.close();
   // Runs last at teardown, after everything else is gone.
-  const cleanups: Array<() => Promise<unknown>> = [() => releaseHostLock(runId)];
+  const cleanups: Array<() => Promise<unknown>> = [
+    () => releaseLock(runId),
+    async () => {
+      reaper.kill("SIGTERM");
+    },
+  ];
   try {
     // Images: guest twin base and the real resource gateway.
     log("building guest twin and gateway images (cached by tag)");
-    const [twinImage, gatewayImageId] = await Promise.all([
+    const [twinImage, gatewayBase] = await Promise.all([
       cachedImage("sealant-boat-harness-twin", join(here, "twin")),
       cachedImage("sealant-boat-harness-gateway", join(repo, "packages/workspaces/boat-tunnel")),
     ]);
-    const gatewayImage = options.gatewayImage ?? gatewayImageId;
+    // Core's gateway containers inherit their image's labels. A thin per-run image labels them
+    // with this run, so teardown, the reaper and leak checks can attribute them.
+    const runImage = async (base: string): Promise<string> => {
+      const tag = `sealant-boat-harness-run:${runId}-${createHash("sha256").update(base).digest("hex").slice(0, 8)}`;
+      await dockerOk(["build", "-q", "--label", label, "-t", tag, "-"], {
+        input: `FROM ${base}\n`,
+        timeoutMs: 5 * 60_000,
+      });
+      return (await dockerOk(["image", "inspect", "-f", "{{.Id}}", tag])).trim();
+    };
+    const gatewayImage = await runImage(gatewayBase);
 
     // The twins' network. The host is its gateway address: twins reach the published WireGuard port
     // and the capture channel there, and the host reaches each twin by its address.
@@ -634,6 +660,7 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       SEALANT_RESOURCE_EGRESS_SUBNETS: `10.${octet + 1}.0.0/16`,
       SEALANT_RESOURCE_TICK_MS: "2000",
       SEALANT_BOAT_HARNESS_PORT: String(boat.proxyPort),
+      [RUN_ENV]: runId,
       NODE_EXTRA_CA_CERTS: tls.ca,
       NODE_OPTIONS: `--import ${join(here, "preload.mjs")}`,
     };
@@ -754,6 +781,7 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       coreObjects,
       startWorker,
       gatewayImage,
+      runImage,
       stop,
     };
   } catch (error) {
