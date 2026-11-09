@@ -66,6 +66,8 @@ export class RecordedBoat {
   rejectCreate: { readonly status: number; readonly code: string } | undefined;
   /** Fault: the create reply is lost after Boat accepted it. */
   loseCreateReply = false;
+  /** Fault: Boat becomes unreachable right after a create reply is lost (a longer outage). */
+  outageAfterLostCreate = false;
   /** Fault: the DELETE reply is lost after Boat accepted and completed it. */
   loseDeleteReply = false;
   /** Fault: every request fails at the transport. */
@@ -154,6 +156,7 @@ export class RecordedBoat {
       };
       this.vms.set(vm.id, vm);
       if (this.loseCreateReply) {
+        if (this.outageAfterLostCreate) this.unreachable = true;
         response.destroy();
         return;
       }

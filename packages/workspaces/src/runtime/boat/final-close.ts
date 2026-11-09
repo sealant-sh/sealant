@@ -86,8 +86,16 @@ export class BoatFinalCloseProvider extends Context.Service<
   BoatFinalCloseProvider,
   {
     readonly api: Pick<BoatApi, "get" | "deleteSandbox" | "getDeletion">;
+    /**
+     * How long one close waits for Boat's deletion operation to complete, so the removal is
+     * recorded by the close that issued it rather than a later sweep. Default 20 s.
+     */
+    readonly deletionWaitMs?: number;
   }
 >()("@sealant/workspaces/boat/BoatFinalCloseProvider") {}
+
+const DELETION_WAIT_MS = 20_000;
+const DELETION_POLL_MS = 1_000;
 
 const complete = (record: CaptureDrainRead) =>
   record.readable &&
@@ -184,6 +192,25 @@ const make: Effect.Effect<
         ),
       );
     });
+  /** Polls Boat's own deletion operation until it completes or the wait is spent. */
+  const awaitDeletion = (operation: BoatDeletion) =>
+    Effect.gen(function* () {
+      let latest = operation;
+      const deadline =
+        (yield* Clock.currentTimeMillis) + (provider.deletionWaitMs ?? DELETION_WAIT_MS);
+      while (latest.status !== "completed" && (yield* Clock.currentTimeMillis) < deadline) {
+        yield* Effect.sleep(DELETION_POLL_MS);
+        const next = yield* call(() => provider.api.getDeletion(operation.id));
+        if (
+          next.id !== operation.id ||
+          next.kind !== "sandbox" ||
+          next.targetId !== operation.targetId
+        )
+          return yield* Effect.fail(new BoatFinalCloseError("held"));
+        latest = next;
+      }
+      return latest;
+    });
   const record = (reservation: BoatTunnelReservation, operation: BoatDeletion) =>
     Effect.gen(function* () {
       if (
@@ -244,7 +271,10 @@ const make: Effect.Effect<
     if (root?.deletionState === "deleted") return yield* finish(target);
     if (reservation.removal !== undefined) {
       const id = yield* parse(() => boatDeletionIdSchema.parse(reservation.removal?.id));
-      reservation = yield* record(reservation, yield* call(() => provider.api.getDeletion(id)));
+      const operation = yield* call(() => provider.api.getDeletion(id));
+      reservation = yield* record(reservation, operation);
+      if (reservation.removal?.completed !== true)
+        reservation = yield* record(reservation, yield* awaitDeletion(operation));
       if (reservation.removal?.completed !== true) return "pending" as const;
       if (root?.deletionState === "deleting-issued" && root.deletionToken !== null)
         yield* canonical.completeDeletion({ runId: target.runId, token: root.deletionToken });
@@ -313,16 +343,11 @@ const make: Effect.Effect<
       remove: Effect.gen(function* () {
         yield* current(target);
         const id = yield* present(target);
-        reservation = yield* record(reservation, yield* call(() => provider.api.deleteSandbox(id)));
-        if (reservation.removal?.completed !== true) {
-          const operationId = yield* parse(() =>
-            boatDeletionIdSchema.parse(reservation.removal?.id),
-          );
-          reservation = yield* record(
-            reservation,
-            yield* call(() => provider.api.getDeletion(operationId)),
-          );
-        }
+        const operation = yield* call(() => provider.api.deleteSandbox(id));
+        // The operation id is recorded before waiting, so a crash mid-wait polls it later.
+        reservation = yield* record(reservation, operation);
+        if (reservation.removal?.completed !== true)
+          reservation = yield* record(reservation, yield* awaitDeletion(operation));
         if (reservation.removal?.completed !== true)
           return yield* Effect.fail(new BoatFinalCloseError("pending"));
       }),
@@ -465,7 +490,16 @@ const make: Effect.Effect<
         completed: operation.status === "completed",
       },
     });
-    if (allocation.phase !== "deleted") return "pending" as const;
+    if (allocation.phase !== "deleted") {
+      // The operation is recorded; wait for Boat to finish it so this close records the removal.
+      const settled = yield* awaitDeletion(operation);
+      if (settled.status !== "completed") return "pending" as const;
+      allocation = yield* allocations.advance(allocation, {
+        ...allocation,
+        phase: "deleted",
+        removal: { kind: "operation", id: settled.id, targetId: id, completed: true },
+      });
+    }
     yield* observer.deletionCompleted(allocation, id).pipe(Effect.mapError(observeError));
     return yield* finishUnused(allocation);
   });
