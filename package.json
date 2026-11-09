@@ -3,6 +3,7 @@
   "private": true,
   "license": "Apache-2.0",
   "scripts": {
+    "boat:harness": "pnpm --filter @sealant/workspaces test:boat-harness",
     "build": "turbo build",
     "build:tui": "turbo build --ui=tui",
     "changeset": "changeset",
