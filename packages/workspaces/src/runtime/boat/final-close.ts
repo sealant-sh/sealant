@@ -35,9 +35,11 @@ import {
   removeUnderDeletion,
   type CaptureDrainRead,
 } from "../../worker/capture-drain.js";
+import { BoatAllocationProvider } from "./allocation.js";
 import type { BoatApi, BoatDeletion } from "./api.js";
 import { boatSandboxIdSchema, boatDeletionIdSchema, type BoatResult } from "./config.js";
 import { BoatExecution } from "./execution.js";
+import { BoatObserver, boatObserverLayer } from "./observation.js";
 
 /** Unknown effects retain the exact VM, keys and port in custody. */
 export class BoatFinalCloseError extends Error {
@@ -100,6 +102,7 @@ const make: Effect.Effect<
   | BoatExecution
   | BoatResourcesHost
   | BoatFinalCloseProvider
+  | BoatObserver
   | SealantRuntime
 > = Effect.gen(function* () {
   const db = yield* SealantDB;
@@ -113,6 +116,8 @@ const make: Effect.Effect<
   const host = yield* BoatResourcesHost;
   const provider = yield* BoatFinalCloseProvider;
   const runtime = yield* SealantRuntime;
+  const observer = yield* BoatObserver;
+  const observeError = () => new BoatFinalCloseError("unavailable");
   const ledger = databaseCaptureDrainLedger({
     db,
     owner: `boat-final-${randomUUID()}`,
@@ -190,6 +195,11 @@ const make: Effect.Effect<
     const root = yield* canonical.getByRunId(target.runId);
     if (root?.deletionState !== "deleted" || reservation.removal?.completed !== true)
       return yield* Effect.fail(new BoatFinalCloseError("held"));
+    const allocation = yield* allocations.get(target.runtimeInstanceId);
+    if (allocation === undefined) return yield* Effect.fail(new BoatFinalCloseError("held"));
+    yield* observer
+      .deletionCompleted(allocation, target.sandboxId)
+      .pipe(Effect.mapError(observeError));
     yield* execution.hold(target);
     if (reservation.released !== true) {
       yield* host.tunnel.remove(target);
@@ -382,16 +392,9 @@ const make: Effect.Effect<
       claimed = true;
     }
     const id = yield* parse(() => boatSandboxIdSchema.parse(sandboxId));
-    const observation = yield* Effect.tryPromise({
-      try: () => provider.api.get(id),
-      catch: () => new BoatFinalCloseError("unavailable"),
-    });
-    if (
-      !observation.ok &&
-      observation.error.status === 404 &&
-      ["not_found", "sandbox_not_found"].includes(observation.error.code)
-    ) {
-      // Issuance is durably fenced. Exact authenticated absence proves this unused guest gone.
+    // Absence is what Boat says, never what a timeout or a fresh create's 404 suggests.
+    const presence = yield* observer.observe(allocation).pipe(Effect.mapError(observeError));
+    if (presence.kind === "absent") {
       allocation = yield* allocations.advance(allocation, {
         ...allocation,
         phase: "deleted",
@@ -399,22 +402,12 @@ const make: Effect.Effect<
       });
       return yield* finishUnused(allocation);
     }
-    if (!observation.ok) return yield* Effect.fail(new BoatFinalCloseError("unavailable"));
-    const expected = allocation.input;
-    const labels = {
-      "sealant-runtime": "boat",
-      "sealant-deployment": host.deploymentId,
-      "sealant-workspace": expected.workspaceId,
-      "sealant-run": runId,
-      "sealant-instance": expected.consumer.runtimeInstanceId,
-      "sealant-attempt": expected.launchAttemptId,
-      "sealant-source": expected.publication.publicationId,
-    };
-    if (
-      observation.value.id !== id ||
-      !Object.entries(labels).every(([key, value]) => observation.value.labels?.[key] === value)
-    )
-      return yield* Effect.fail(new BoatFinalCloseError("held"));
+    if (presence.kind === "unknown")
+      return presence.reason === "foreign"
+        ? yield* Effect.fail(new BoatFinalCloseError("held"))
+        : presence.reason === "creating"
+          ? ("pending" as const)
+          : yield* Effect.fail(new BoatFinalCloseError("unavailable"));
     let operation: BoatDeletion;
     if (allocation.removal?.kind === "operation") {
       const operationId = yield* parse(() =>
@@ -451,7 +444,9 @@ const make: Effect.Effect<
         completed: operation.status === "completed",
       },
     });
-    return allocation.phase === "deleted" ? yield* finishUnused(allocation) : ("pending" as const);
+    if (allocation.phase !== "deleted") return "pending" as const;
+    yield* observer.deletionCompleted(allocation, id).pipe(Effect.mapError(observeError));
+    return yield* finishUnused(allocation);
   });
   const boundedUnbound = (runId: string, sandboxId: string) =>
     closeUnused(runId, sandboxId).pipe(
@@ -531,16 +526,18 @@ export const boatFinalCloseLayerNoDeps: Layer.Layer<
   | BoatExecution
   | BoatResourcesHost
   | BoatFinalCloseProvider
+  | BoatObserver
   | SealantRuntime
 > = Layer.effect(BoatFinalClose, make);
 /** Reuses the canonical capture owner and the existing sealed execution. */
 export const boatFinalCloseLayer: Layer.Layer<
   BoatFinalClose,
   never,
-  SealantDB | BoatExecution | BoatResourcesHost | BoatFinalCloseProvider
+  SealantDB | BoatExecution | BoatResourcesHost | BoatFinalCloseProvider | BoatAllocationProvider
 > = boatFinalCloseLayerNoDeps.pipe(
   Layer.provide(
     Layer.mergeAll(
+      boatObserverLayer,
       NativePublicationRepoLive,
       BoatAllocationRepoLive,
       BoatExecutionRepoLive,

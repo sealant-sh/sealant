@@ -246,3 +246,4 @@ export { boatControlRequests } from "./boat-control-requests.js";
 
 export { boatAllocations } from "./boat-allocations.js";
 export { boatTunnels } from "./boat-tunnels.js";
+export { boatObservations, type BoatObservation } from "./boat-observations.js";

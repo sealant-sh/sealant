@@ -560,6 +560,13 @@ export {
   type BoatAllocationRepoService,
 } from "./repositories/boat-allocations.js";
 export {
+  BoatObservationRepo,
+  BoatObservationRepoLive,
+  BoatObservationStoreError,
+  type BoatAbsenceBasis,
+  type BoatObservationRepoService,
+} from "./repositories/boat-observations.js";
+export {
   BoatTunnelRepo,
   BoatTunnelStoreError,
   boatTunnelRepoLayer,

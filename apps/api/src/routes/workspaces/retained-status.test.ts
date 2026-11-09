@@ -263,6 +263,64 @@ describe("a retained executor reads `retained`", () => {
     expect(details.status).toBe("retained");
   });
 
+  it("a Boat VM observed absent reads stopped, keeping its launch error as history", async () => {
+    const { details, list, attempts } = await read(
+      harness({
+        runtime: {
+          adapter: "boat",
+          resourceId: "bx_23456789",
+          reference: "run_1",
+          status: "stopped",
+          stopReason: "user",
+          errorCode: LAUNCH_RETAINED_ERROR_CODE,
+          removedAt: now,
+        },
+        retainedAt: null,
+        attemptStatus: "failed",
+      }),
+    );
+    expect(details.status).toBe("stopped");
+    expect(details.runtime?.status).toBe("stopped");
+    expect(list.items[0]?.status).toBe("stopped");
+    expect(attempts.items[0]?.status).toBe("stopped");
+  });
+
+  it("a Boat VM observed absent is not resurrected as retained by a stale retention", async () => {
+    const { details } = await read(
+      harness({
+        runtime: {
+          adapter: "boat",
+          resourceId: "bx_23456789",
+          reference: "run_1",
+          status: "stopped",
+          stopReason: "user",
+          errorCode: null,
+          removedAt: now,
+        },
+        retainedAt: now,
+      }),
+    );
+    expect(details.status).toBe("stopped");
+    expect(details.runtime?.status).toBe("stopped");
+  });
+
+  it("a Boat launch that failed with its VM still present stays retained", async () => {
+    const { details } = await read(
+      harness({
+        runtime: {
+          adapter: "boat",
+          resourceId: "bx_23456789",
+          reference: "run_1",
+          errorCode: LAUNCH_RETAINED_ERROR_CODE,
+          removedAt: null,
+        },
+        retainedAt: null,
+        attemptStatus: "failed",
+      }),
+    );
+    expect(details.status).toBe("retained");
+  });
+
   it("reads failed again once the retention ended (removed, discarded or lost)", async () => {
     const { details, list } = await read(harness({ runtime: {}, retainedAt: null }));
     expect(details.status).toBe("failed");

@@ -15,6 +15,9 @@ import {
   BoatExecutionRepo,
   BoatExecutionRepoLive,
   BoatTunnelRepo,
+  BoatObservationRepo,
+  BoatObservationRepoLive,
+  LAUNCH_RETAINED_ERROR_CODE,
   WorkspaceCaptureDrainRepo,
   WorkspaceCaptureDrainRepoLive,
   boatTunnelRepoLayer,
@@ -34,6 +37,7 @@ import {
 } from "@sealant/db";
 import {
   corruptBoatAllocation,
+  recordRetainedBoatLaunch,
   restoreUnprogressedCaptureDrain,
 } from "@sealant/db/testing/boat-allocations";
 import {
@@ -88,7 +92,7 @@ import { BoatRuntimeAdapter } from "./adapter.js";
 import { ProviderFixture, GuestFixture, GatewayFixture } from "./allocation.fixture.js";
 import { BoatAllocation, BoatAllocationProvider, boatAllocationLayer } from "./allocation.js";
 import { HttpBoatApi } from "./api.js";
-import { BoatSecret } from "./config.js";
+import { BoatOwnership, BoatSecret } from "./config.js";
 import { BoatExecution, BoatGuestTransportService, boatExecutionLayer } from "./execution.js";
 import {
   BoatFinalClose,
@@ -100,6 +104,8 @@ import {
   boatInteractiveControlLayerNoDeps,
   serveBoatControlRequests,
 } from "./interactive-control.js";
+import { BOAT_CREATE_FENCE_MS, BoatObserver, boatObserverLayerNoDeps } from "./observation.js";
+import { RecordedBoat } from "./recorded-boat.fixture.js";
 
 const databaseUrl = process.env.SEALANT_TEST_DATABASE_URL;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -233,7 +239,10 @@ const test = async (
     resourceOwner: BoatResources["Service"];
     readiness: BoatReadiness["Service"];
     canonical: WorkspaceCaptureDrainRepo["Service"];
-    final: (script: readonly CaptureDaemonScriptEntry[]) => Effect.Effect<{
+    final: (
+      script: readonly CaptureDaemonScriptEntry[],
+      boatApi?: HttpBoatApi,
+    ) => Effect.Effect<{
       owner: BoatFinalClose["Service"];
       daemon: ReturnType<typeof fakeCaptureDaemon>;
     }>;
@@ -413,7 +422,7 @@ const test = async (
             resourceOwner,
             readiness: Context.get(context, BoatReadiness),
             canonical: captureRepo,
-            final: (script) =>
+            final: (script, boatApi = api.value) =>
               Effect.gen(function* () {
                 const daemon = fakeCaptureDaemon(script);
                 const layer = boatFinalCloseLayerNoDeps.pipe(
@@ -428,7 +437,21 @@ const test = async (
                       Layer.succeed(BoatExecution, executor),
                       Layer.succeed(SealantDB, db),
                       hostLayer(),
-                      Layer.succeed(BoatFinalCloseProvider, { api: api.value }),
+                      Layer.succeed(BoatFinalCloseProvider, { api: boatApi }),
+                      boatObserverLayerNoDeps.pipe(
+                        Layer.provide(
+                          Layer.mergeAll(
+                            BoatObservationRepoLive.pipe(
+                              Layer.provide(Layer.succeed(SealantDB, db)),
+                            ),
+                            Layer.succeed(BoatAllocationRepo, repo),
+                            Layer.succeed(BoatAllocationProvider, {
+                              deploymentId: "test",
+                              api: boatApi,
+                            }),
+                          ),
+                        ),
+                      ),
                       daemon.layer,
                     ),
                   ),
@@ -2849,3 +2872,216 @@ describe.runIf(databaseUrl !== undefined)(
       }));
   },
 );
+
+/** Observed presence against a Boat fake that keeps the recorded asynchronous create. */
+const observedLaunch = async (
+  s: AllocationFixture,
+  options: { readonly issuedMsAgo: number; readonly boat?: (boat: RecordedBoat) => void },
+) => {
+  const boat = new RecordedBoat();
+  options.boat?.(boat);
+  const api = HttpBoatApi.create({
+    credential: secret("test-provider-key-local-only"),
+    baseUrl: await boat.listen(),
+    timeoutMs: 1000,
+  });
+  if (!api.ok) throw api.error;
+  const observer = await execute(
+    Effect.gen(function* () {
+      return yield* BoatObserver;
+    }).pipe(
+      Effect.provide(
+        boatObserverLayerNoDeps.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              BoatObservationRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, s.db))),
+              Layer.succeed(BoatAllocationRepo, s.repo),
+              Layer.succeed(BoatAllocationProvider, { deploymentId: "test", api: api.value }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  const reserved = await execute(s.repo.reserve(reservation(s.input)));
+  const issued = await execute(
+    s.repo.advance(reserved, {
+      ...reserved,
+      phase: "issued",
+      issuedAt: new Date(Date.now() - options.issuedMsAgo).toISOString(),
+    }),
+  );
+  const ownership = BoatOwnership.parse({
+    ...s.input,
+    ...s.input.consumer,
+    sourceId: s.input.publication.publicationId,
+  });
+  if (!ownership.ok) throw ownership.error;
+  const created = await api.value.create({
+    idempotencyKey: issued.idempotencyKey,
+    ownership: ownership.value,
+    lifetime: { kind: "production-session" },
+    from: s.input.publication.snapshot.identity.name,
+  });
+  if (!created.ok) throw created.error;
+  expect(created.value.state).toBe("provisioned");
+  const allocation = await execute(
+    s.repo.advance(issued, { ...issued, phase: "allocated", sandboxId: created.value.id }),
+  );
+  await execute(
+    recordRetainedBoatLaunch(s.db, {
+      runId: s.input.consumer.runId,
+      sandboxId: created.value.id,
+      errorCode: LAUNCH_RETAINED_ERROR_CODE,
+    }),
+  );
+  const observations = await execute(
+    Effect.gen(function* () {
+      return yield* BoatObservationRepo;
+    }).pipe(
+      Effect.provide(BoatObservationRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, s.db)))),
+    ),
+  );
+  return {
+    boat,
+    api: api.value,
+    observer,
+    allocation,
+    sandboxId: created.value.id,
+    observations,
+  };
+};
+
+describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
+  it("never reads a 404 straight after create as absence", () =>
+    test(async (s) => {
+      const o = await observedLaunch(s, {
+        issuedMsAgo: 0,
+        boat: (boat) => {
+          boat.unreadableAfterCreate = 1;
+        },
+      });
+      try {
+        expect(await execute(o.observer.observe(o.allocation))).toEqual({
+          kind: "unknown",
+          reason: "creating",
+        });
+        expect(
+          await execute(o.observations.get(s.input.consumer.runtimeInstanceId)),
+        ).toBeUndefined();
+        expect(
+          await execute(s.runtimes.getRuntimeInstanceByRunId(s.input.consumer.runId)),
+        ).toMatchObject({
+          status: "failed",
+          removedAt: null,
+        });
+        // Boat then reads it: present, and from now on a 404 can only mean gone.
+        expect(await execute(o.observer.observe(o.allocation))).toMatchObject({ kind: "present" });
+      } finally {
+        await o.boat.close();
+      }
+    }));
+
+  it("records absence once a VM read before is gone, and the runtime reads stopped with its launch error kept", () =>
+    test(async (s) => {
+      const o = await observedLaunch(s, { issuedMsAgo: 0 });
+      try {
+        expect(await execute(o.observer.observe(o.allocation))).toMatchObject({ kind: "present" });
+        o.boat.removeOutOfBand(o.sandboxId);
+        expect(await execute(o.observer.observe(o.allocation))).toEqual({
+          kind: "absent",
+          basis: "not-found",
+        });
+        expect(
+          await execute(s.runtimes.getRuntimeInstanceByRunId(s.input.consumer.runId)),
+        ).toMatchObject({
+          status: "stopped",
+          stopReason: "failed",
+          removedAt: expect.any(Date),
+          errorCode: LAUNCH_RETAINED_ERROR_CODE,
+        });
+        // Absent is terminal: Boat is not asked again and nothing revives the VM.
+        const reads = o.boat.requests.length;
+        expect(await execute(o.observer.observe(o.allocation))).toMatchObject({ kind: "absent" });
+        expect(o.boat.requests).toHaveLength(reads);
+        await expect(
+          execute(
+            o.observations.recordPresent({
+              runtimeInstanceId: s.input.consumer.runtimeInstanceId,
+              deploymentId: "test",
+              sandboxId: o.sandboxId,
+              providerState: "idle",
+            }),
+          ),
+        ).resolves.toMatchObject({ presence: "absent" });
+      } finally {
+        await o.boat.close();
+      }
+    }));
+
+  it("reads a 404 never preceded by a read as absence only after the create fence lapses", () =>
+    test(async (s) => {
+      const o = await observedLaunch(s, { issuedMsAgo: BOAT_CREATE_FENCE_MS + 1 });
+      try {
+        o.boat.removeOutOfBand(o.sandboxId);
+        expect(await execute(o.observer.observe(o.allocation))).toEqual({
+          kind: "absent",
+          basis: "not-found",
+        });
+      } finally {
+        await o.boat.close();
+      }
+    }));
+
+  it("never takes a transport failure or a foreign VM for absence", () =>
+    test(async (s) => {
+      const o = await observedLaunch(s, { issuedMsAgo: BOAT_CREATE_FENCE_MS + 1 });
+      try {
+        o.boat.unreachable = true;
+        expect(await execute(o.observer.observe(o.allocation))).toEqual({
+          kind: "unknown",
+          reason: "unreadable",
+        });
+        o.boat.unreachable = false;
+        const vm = o.boat.vms.get(o.sandboxId);
+        if (vm === undefined) throw new Error("missing VM");
+        o.boat.vms.set(o.sandboxId, { ...vm, labels: { ...vm.labels, "sealant-run": "other" } });
+        expect(await execute(o.observer.observe(o.allocation))).toEqual({
+          kind: "unknown",
+          reason: "foreign",
+        });
+        expect(
+          await execute(o.observations.get(s.input.consumer.runtimeInstanceId)),
+        ).toBeUndefined();
+      } finally {
+        await o.boat.close();
+      }
+    }));
+
+  it("closes an unbound VM only on absence Boat can vouch for, never on a 404 straight after create", () =>
+    test(async (s) => {
+      const o = await observedLaunch(s, {
+        issuedMsAgo: 0,
+        boat: (boat) => {
+          boat.unreadableAfterCreate = 2;
+        },
+      });
+      try {
+        const { owner } = await execute(s.final([], o.api));
+        expect(await execute(owner.closeUnbound(s.input.consumer.runId, o.sandboxId))).toBe(
+          "pending",
+        );
+        expect(await execute(s.repo.get(s.input.consumer.runId))).toMatchObject({
+          phase: "deleting",
+        });
+        expect(
+          await execute(s.runtimes.getRuntimeInstanceByRunId(s.input.consumer.runId)),
+        ).toMatchObject({
+          removedAt: null,
+        });
+        expect(o.boat.vms.has(o.sandboxId)).toBe(true);
+      } finally {
+        await o.boat.close();
+      }
+    }));
+});

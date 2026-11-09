@@ -39,6 +39,7 @@ import {
   boatInteractiveControlLayer,
   serveBoatControlRequests,
 } from "./interactive-control.js";
+import { boatObserverLayer } from "./observation.js";
 import type { boatSessionDaemon } from "./session-daemon.fixture.js";
 
 const secret = (value: string) => {
@@ -186,6 +187,7 @@ export const boatSessionFixture = async (
       boatFinalCloseLayerNoDeps.pipe(
         Layer.provide(
           Layer.mergeAll(
+            boatObserverLayer,
             Exchange,
             NativePublicationRepoLive,
             BoatAllocationRepoLive,
