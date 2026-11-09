@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -69,6 +71,42 @@ class ControlTests(unittest.TestCase):
             held.close()
         with patch.object(recovery, 'path', return_value=marker), patch.object(invocation, 'observe', return_value='ended'), self.assertRaises(receiver.Refusal):
             control.connect()
+
+    def test_ordinary_holder_bridges_to_its_daemon_child_by_real_peer_credentials(self):
+        # workspace-launch keeps Python PID1 as the namespace holder; its sealantd child owns the socket.
+        self.listener.close()
+        socket_path = self.root / 'run/sealant/control.sock'
+        socket_path.unlink()
+        daemon = subprocess.Popen([sys.executable, '-c', (
+            'import socket,sys\n'
+            's=socket.socket(socket.AF_UNIX);s.bind(sys.argv[1]);s.listen();print("listening",flush=True)\n'
+            'c,_=s.accept();c.sendall(c.recv(64));c.close()\n'), str(socket_path)], stdout=subprocess.PIPE, text=True)
+        self.addCleanup(daemon.wait, 10)
+        self.addCleanup(daemon.kill)
+        self.addCleanup(daemon.stdout.close)
+        self.assertEqual(daemon.stdout.readline().strip(), 'listening')
+        info = self.root.stat()
+        child = replace(guest.identity(daemon.pid), root_device=info.st_dev, root_inode=info.st_ino)
+        binding = {'identity': {'deployment_id': 'd', 'instance_id': 'bx_test', 'disk_lineage': 'l'},
+                   'boot_id': 'boot', 'epoch': 1, 'operation_id': 'launch'}
+        # Exactly what invocation.observe() records once it has verified the one daemon child.
+        guest.save(self.root / 'invocation-daemon.json', {'binding': binding, 'identity': asdict(child)})
+        held = {pid: type('Held', (), {'identity': identity, 'verify': lambda self: None, 'close': lambda self: None})()
+                for pid, identity in ((os.getpid(), self.identity), (daemon.pid, child))}
+        original = os.open
+        roots = {'/proc/' + str(pid) + '/root' for pid in held}
+        with patch.object(guest, 'ROOT', self.root), \
+             patch.object(invocation, 'state', return_value={'gate': self.expected, 'binding': binding}), \
+             patch.object(guest, 'HeldProcess', side_effect=lambda pid: held[pid]), \
+             patch.object(os, 'open', side_effect=lambda path, *args, **kwargs: original(self.root if path in roots else path, *args, **kwargs)):
+            stream, _ = control.connect()
+            with stream:
+                stream.sendall(b'daemon child')
+                self.assertEqual(stream.recv(64), b'daemon child')
+            # A record from another admission never names the peer.
+            guest.save(self.root / 'invocation-daemon.json', {'binding': {**binding, 'epoch': 2}, 'identity': asdict(child)})
+            with self.assertRaisesRegex(receiver.Refusal, 'control-daemon-changed'):
+                control.connect()
 
     def test_replaced_or_symlinked_socket_and_parent_refuse(self):
         socket_path = self.root / 'run/sealant/control.sock'

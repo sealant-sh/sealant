@@ -28,6 +28,7 @@ import { BoatNativeCatalog, boatNativeCatalogLayer } from "../images/boat/catalo
 import type { BoatApi } from "../runtime/boat/api.js";
 import {
   BoatProofError,
+  findProofFailure,
   type BoatProofConfig,
   type ProofSession,
   type BoatProofInventory,
@@ -112,6 +113,21 @@ export const makeBoatProofCore = (input: {
           };
         }),
       ),
+    failure: (session: ProofSession) =>
+      findProofFailure(session, input.config.ownerId, {
+        workspace: (id) =>
+          runtime.runPromise(Effect.flatMap(WorkspaceRepo, (repo) => repo.getWorkspaceById(id))),
+        attempt: (id) =>
+          runtime.runPromise(
+            Effect.flatMap(WorkspaceAttemptRepo, (repo) => repo.getAttemptById(id)),
+          ),
+        runtime: (runId) =>
+          runtime.runPromise(
+            Effect.flatMap(WorkspaceRuntimeInstanceRepo, (repo) =>
+              repo.getRuntimeInstanceByRunId(runId),
+            ),
+          ),
+      }),
     runtime: (session: ProofSession) =>
       runtime.runPromise(
         Effect.gen(function* () {

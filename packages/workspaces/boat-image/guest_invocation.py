@@ -34,6 +34,12 @@ def binding():
             'operation_id': admission['operation_id']}
 
 
+def daemon_path(record_path=None):
+    """Ordinary mode keeps Python PID1 as the namespace holder. This records its one daemon child."""
+    record_path = path() if record_path is None else record_path
+    return record_path.with_name(record_path.stem + '-daemon.json')
+
+
 def observe(record_path=None, unit=UNIT):
     record_path = path() if record_path is None else record_path
     if not record_path.exists():
@@ -72,7 +78,7 @@ def observe(record_path=None, unit=UNIT):
                         if (current_executable.st_dev, current_executable.st_ino) != (shipped_executable.st_dev, shipped_executable.st_ino):
                             # The verified Python PID1 keeps tmpfs alive after the daemon exits.
                             # Its only direct child is the one daemon it starts, never a restart.
-                            daemon_path = record_path.with_name(record_path.stem + '-daemon.json')
+                            daemon_record = daemon_path(record_path)
                             children = Path('/proc/' + str(expected['pid']) + '/task/' + str(expected['pid']) + '/children').read_text().split()
                             matches = []
                             for pid in children:
@@ -85,17 +91,17 @@ def observe(record_path=None, unit=UNIT):
                                 except FileNotFoundError:
                                     continue
                             if not matches:
-                                return 'ended' if daemon_path.exists() else 'issued'
+                                return 'ended' if daemon_record.exists() else 'issued'
                             if len(matches) != 1:
                                 raise ValueError('invocation-daemon-ambiguous')
                             daemon = guest.HeldProcess(matches[0])
                             held.append(daemon)
                             identity = {'binding': record['binding'], 'identity': asdict(daemon.identity)}
-                            if daemon_path.exists():
-                                if guest.private_json(daemon_path) != identity:
+                            if daemon_record.exists():
+                                if guest.private_json(daemon_record) != identity:
                                     raise ValueError('invocation-daemon-replaced')
                             else:
-                                guest.save(daemon_path, identity, exclusive=True)
+                                guest.save(daemon_record, identity, exclusive=True)
                             daemon.verify()
                             if actual != expected:
                                 raise ValueError('invocation-holder-changed')

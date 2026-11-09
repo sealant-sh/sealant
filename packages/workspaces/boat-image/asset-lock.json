@@ -1,6 +1,6 @@
 {
   "format": "sealant-native-assets-v1",
-  "relay": "75dfda24eb4a1a30ecde5359121e69469a295b518e3966ab45ac1a7628a889c9",
+  "relay": "4702feb2b541f4af9afd2a67e7cf28fdbdf378c7fb706cb311d831f5213e4869",
   "files": [
     {
       "name": "guest_boot.py",
@@ -12,7 +12,7 @@
     },
     {
       "name": "build_guest.py",
-      "sha256": "f53e376918c8f10f14adce0020ab198028f04b352efd50a2de7b4b28bae7d697"
+      "sha256": "31532f1b93f075bee1fe21e5b3bf0964e7ff9ef480dc105f584c857461c9f66b"
     },
     {
       "name": "workspace-launch.py",
@@ -40,7 +40,11 @@
     },
     {
       "name": "guest_receiver.py",
-      "sha256": "217e0787e08dfb50ff1aee2f0d89f96a6fb5ae8b8112c5ad5b2d0b1eeea2ca74"
+      "sha256": "6e83cb81af45febda0064bb95e8ab7dcdb3d837387a45b14dff33627e3853a9b"
+    },
+    {
+      "name": "receiver-routes.json",
+      "sha256": "5b18ecc17803275e9f1b8dd825a8fd13ad9abdc0b243fac1855f91265b7edbeb"
     },
     {
       "name": "bootstrap-crypto.mjs",
@@ -56,7 +60,7 @@
     },
     {
       "name": "guest_invocation.py",
-      "sha256": "9983222b0ae55629afa5b411871f48014ff91002bb8a8a98bd7674c0bd722993"
+      "sha256": "34b3f321ceeb3df09d0eb1fc862f251f33c7b55fac160b5aa44347507c26543e"
     },
     {
       "name": "guest_network.py",
@@ -64,11 +68,11 @@
     },
     {
       "name": "guest_readiness.py",
-      "sha256": "85257e36665c62a77205550533e29905d72e6a0c41137f36c907dd67396aeb4e"
+      "sha256": "988f5fa6ec987ebb20e30ac027995c9057304a000b7eec1f781db26d276a85fb"
     },
     {
       "name": "guest_control.py",
-      "sha256": "f3b28d1fd4265d9e1e7dfd12fad51669c4ea270eaaab9fa6b596f30672efa2b2"
+      "sha256": "0eeba1d9c49b6b7ab7f2206a26664e39a5d457448ea9f03c30786a5955f2e70a"
     },
     {
       "name": "workspace.slice",
@@ -92,7 +96,7 @@
     },
     {
       "name": "guest_resume.py",
-      "sha256": "323286fbaf93bef586a88825709c7c2fa9cbe37e383b12f6dac485758b8f2db8"
+      "sha256": "95d7f348f25f1b556e5eaf88138c068739db25b807f94dcff7e37e7087b82a45"
     }
   ]
 }

@@ -15,6 +15,7 @@ import {
   cleanupBoatLiveCheck,
   MendProofClient,
   runBoatLiveCheck,
+  findProofFailure,
   type ProofRuntime,
   type BoatProofServices,
 } from "./boat-live-check.js";
@@ -47,6 +48,13 @@ const fixture = async (
     initialWorktree?: string;
     extraSessions?: readonly unknown[];
     detailOverrides?: Readonly<Record<string, unknown>>;
+    /** Core's rows for a launch that fails before the agent starts, so Mend has no sealantRunId. */
+    coreFailure?: {
+      readonly attemptStatus: string;
+      readonly runtimeStatus: string;
+      readonly errorCode: string;
+      readonly errorMessage: string;
+    };
   } = {},
 ) => {
   const source = await mkdtemp(join(tmpdir(), "boat-check-source-"));
@@ -77,7 +85,8 @@ const fixture = async (
     harness: "codex",
     status: sessionStopped ? "stopped" : generation === 0 ? "starting" : "running",
     worktreeId: "worktree_test",
-    sealantRunId: generation === 0 ? null : `run_${generation}`,
+    sealantRunId:
+      generation === 0 || options.coreFailure !== undefined ? null : `run_${generation}`,
     sealantWorkspaceId: generation === 0 ? null : "workspace_test",
     idleStoppedAt,
   });
@@ -89,7 +98,7 @@ const fixture = async (
       sandboxId: generation === 1 ? "bx_23456789" : "bx_3456789a",
       publicationId,
       resourceSubnet: "127.0.0.0/27",
-      ready: !closed,
+      ready: !closed && options.coreFailure === undefined,
       closed,
     });
   };
@@ -213,6 +222,29 @@ const fixture = async (
             runId: `run_${generation}`,
             ready: generation === 2 || (options.publicationReady?.() ?? true),
           },
+    // The real lookup over Core's rows: workspace, its latest attempt, that attempt's runtime.
+    failure: (s) =>
+      findProofFailure(s, "usr_test", {
+        workspace: async (id) =>
+          id === "workspace_test" && generation > 0
+            ? { ownerUserId: "usr_test", latestRunId: `run_${generation}` }
+            : undefined,
+        attempt: async (id) =>
+          id === `run_${generation}`
+            ? {
+                ownerUserId: "usr_test",
+                status: options.coreFailure?.attemptStatus ?? "running",
+              }
+            : undefined,
+        runtime: async (runId) =>
+          runId === `run_${generation}`
+            ? {
+                status: options.coreFailure?.runtimeStatus ?? "pending",
+                errorCode: options.coreFailure?.errorCode ?? null,
+                errorMessage: options.coreFailure?.errorMessage ?? null,
+              }
+            : undefined,
+      }),
     runtime: async (s) => {
       options.observeRuntime?.();
       return s.sealantRunId === null ? undefined : runtimes.get(s.sealantRunId);
@@ -287,6 +319,31 @@ describe("operator checker against Mend HTTP and terminal protocol", () => {
     } finally {
       reply.resolve();
     }
+  }, 20_000);
+
+  it("stops waiting as soon as Core fails a launch before the agent starts, and reports Core's cause", async () => {
+    const cause =
+      'Boat runtime: launch-held; diagnostic {"code":"receiver-refused","receiver":{"reason":"network-receipt-changed"}}';
+    const f = await fixture({
+      coreFailure: {
+        attemptStatus: "failed",
+        runtimeStatus: "failed",
+        errorCode: "launch-retained",
+        errorMessage: cause,
+      },
+    });
+    const began = Date.now();
+    await expect(f.run()).rejects.toThrow("authenticated-readiness-core-failed");
+    // The readiness budget is twelve minutes; Core's verdict ends the wait on the next poll.
+    expect(Date.now() - began).toBeLessThan(10_000);
+    expect(f.events).toContainEqual(
+      expect.objectContaining({
+        event: "core-launch-failed",
+        phase: "authenticated-readiness",
+        errorMessage: cause,
+      }),
+    );
+    expect(f.events.at(-1)).toMatchObject({ event: "final-inventory", sandboxes: [] });
   }, 20_000);
 
   it("executes its emitted shell, observes actual idle Stop, reads captured edits and verifies a fresh child", async () => {

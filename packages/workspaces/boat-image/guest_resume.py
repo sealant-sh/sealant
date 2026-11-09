@@ -82,8 +82,10 @@ def rebind(request):
         guest.save(path(), record)
     history = guest.ROOT / ('history-' + request['operation_id'])
     receiver.private_directory(history)
+    # The source VM's network record and resolver describe its kernel and binding, not this boot's.
+    # Left in place, the next isolate compares against the old binding and refuses.
     for name in ('receiver.json', 'instance.json', 'invocation.json', 'invocation-daemon.json',
-                 'recovery.json', 'recovery-invocation.json', 'parking.json'):
+                 'recovery.json', 'recovery-invocation.json', 'parking.json', 'network.json', 'network-resolv.conf'):
         old, kept = guest.ROOT / name, history / name
         if old.exists() and not kept.exists():
             os.rename(old, kept)

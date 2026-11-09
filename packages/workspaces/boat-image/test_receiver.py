@@ -1,6 +1,6 @@
 import base64
 import configparser
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr
 from dataclasses import asdict
 import http.client
 import json
@@ -12,10 +12,17 @@ import subprocess
 import tempfile
 import threading
 import unittest
+import io
+import sys
+import zipfile
 from unittest.mock import patch
 
+import build_guest
 import guest_boot as guest
+import guest_network as network
+import guest_readiness as ready
 import guest_receiver as receiver
+import guest_invocation as invocation
 from guest_contract import canonical, digest
 
 
@@ -179,6 +186,91 @@ class ReceiverTests(unittest.TestCase):
             server.shutdown()
             thread.join()
             server.server_close()
+
+    def test_bootstrap_unit_serves_the_receiver_module_its_helpers_import(self):
+        # bootstrap.service runs the installed file as __main__ with the bundle ZIP as its import path.
+        unit = configparser.ConfigParser(interpolation=None)
+        unit.read(Path(__file__).with_name('bootstrap.service'))
+        command = unit['Service']['ExecStart'].split()
+        python = next(index for index, part in enumerate(command) if part.endswith('/bin/python3'))
+        self.assertEqual(command[python + 1:-1], ['-I', '-S', '-B'])
+        source = Path(__file__).parent
+        archive = self.root / 'python-bundle.zip'
+        with zipfile.ZipFile(archive, 'w') as output:
+            for path in [*sorted(source.glob('guest_*.py')), source / 'receiver-routes.json']:
+                if path.exists():
+                    output.writestr(path.name, path.read_bytes())
+        installed = self.root / 'installed'
+        installed.mkdir()
+        for name in (Path(command[-1]).name, 'receiver-routes.json'):
+            if (source / name).exists():
+                shutil.copyfile(source / name, installed / name)
+        # Only serve() is replaced: it needs the real outer root. The entry must call the ZIP module's.
+        harness = """
+import json, runpy, sys
+sys.path.insert(0, sys.argv[1])
+import guest_receiver, guest_readiness
+served = []
+guest_receiver.serve = lambda: served.append(guest_readiness.receiver.Refusal is guest_receiver.Refusal)
+try:
+    runpy.run_path(sys.argv[2], run_name='__main__')
+    print(json.dumps({'served': served}))
+except Exception as error:
+    print(json.dumps({'served': served, 'error': type(error).__name__ + ': ' + str(error)}))
+"""
+        result = subprocess.run([sys.executable, '-I', '-S', '-B', '-c', harness, str(archive),
+                                 str(installed / Path(command[-1]).name)], capture_output=True, text=True, timeout=60)
+        self.assertEqual(json.loads(result.stdout), {'served': [True]}, result.stderr)
+        self.assertIn('receiver-routes.json', build_guest.GUEST_MODULES)
+
+    def test_helper_refusals_keep_their_reason_over_http_and_reach_the_journal(self):
+        binding = {'identity': self.identity, 'boot_id': 'boot-one', 'epoch': 1, 'operation_id': 'launch-one'}
+        guest.save(network.record_path(), {'config': {'gateway_key': 'public'}})
+        permit = {'format': 'sealant-execution-permit-v2', 'binding': binding,
+                  'resource_receipt': digest(network.record_path().read_bytes()),
+                  'tunnel_receipt': 'b' * 64, 'limits': ready.LIMITS}
+        path = str(self.runtime / 'http.sock')
+        server = receiver.UnixServer(path, receiver.Handler)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+
+        def post(value):
+            connection = http.client.HTTPConnection('localhost', timeout=5)
+            connection.sock = socket.socket(socket.AF_UNIX)
+            connection.sock.connect(path)
+            try:
+                connection.request('POST', '/sealant/bootstrap/permit', body=json.dumps(value),
+                                   headers={'Authorization': 'Bearer ' + 'a' * 64, 'Content-Type': 'application/json'})
+                response = connection.getresponse()
+                return response.status, json.loads(response.read())
+            finally:
+                connection.close()
+        journal = io.StringIO()
+        try:
+            # Only kernel, systemd and DNS observations are substituted; refusals are the real classes.
+            with patch.object(invocation, 'binding', return_value=binding), \
+                 patch.object(receiver, 'require_tmpfs'), patch.object(receiver, 'revalidate_execution', return_value=[]), \
+                 patch.object(ready, 'limits', return_value='/sealant.slice/sealant-workspace.slice'), \
+                 redirect_stderr(journal):
+                with patch.object(guest, 'run'), \
+                     patch.object(ready, 'peer', side_effect=network.Refusal('network-command-refused')):
+                    self.assertEqual(post(permit), (409, {'error': 'network-command-refused'}))
+                with patch.object(guest, 'run', side_effect=ValueError(
+                        'semantic-command-failed:/usr/bin/systemctl:Unit sealant-workspace.slice not found.')):
+                    self.assertEqual(post(permit), (400, {'error': 'semantic-command-failed', 'detail': '/usr/bin/systemctl',
+                                                          'class': 'ValueError'}))
+                self.assertEqual(post({**permit, 'limits': {}}), (409, {'error': 'isolation-permit-binding-conflict'}))
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+        events = [json.loads(line) for line in journal.getvalue().splitlines() if line.startswith('{')]
+        self.assertEqual([(event['route'], event['status'], event['error']) for event in events], [
+            ('/sealant/bootstrap/permit', 409, 'network-command-refused'),
+            ('/sealant/bootstrap/permit', 400, 'semantic-command-failed'),
+            ('/sealant/bootstrap/permit', 409, 'isolation-permit-binding-conflict')])
+        # The operator's journal keeps the full cause that the reply reduces to a code.
+        self.assertIn('Unit sealant-workspace.slice not found.', events[1]['message'])
 
     def test_public_bind_encrypts_same_bearer_on_replay_and_refuses_conflicts(self):
         node = shutil.which('node')

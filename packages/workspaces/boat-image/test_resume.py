@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import guest_boot as guest
 import guest_capsule as capsule
+import guest_network as network
 import guest_parking as parking
 import guest_receiver as receiver
 import guest_resume as resume
@@ -62,6 +63,29 @@ class ResumeTests(unittest.TestCase):
         mount = resume.mounts()[0]
         self.assertEqual(mount['path'], '/tmp')
         self.assertEqual((Path(mount['source']) / 'unsent').read_bytes(), b'never uploaded')
+
+    def test_cold_child_isolates_its_own_binding_after_rebind(self):
+        # The source VM configured its network before parking; its disk carries both records.
+        source_binding = self.source_request['binding']
+        old = {'format': 'sealant-guest-network-v1', 'binding': source_binding, 'public_key': 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=',
+               'gateway_key': 'AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=', 'endpoint': '192.168.1.10', 'port': 40000,
+               'subnet': '10.98.0.0/27'}
+        guest.save(network.record_path(), {'format': 'sealant-network-state-v1', 'status': 'configured', 'config': old,
+                                           'observation': {}})
+        network.resolver_path().write_bytes(network.resolver_bytes())
+        resume.rebind(self.request)
+        child = {'identity': self.request['identity'], 'boot_id': 'new-boot', 'epoch': 1, 'operation_id': 'child-launch'}
+        request = {'format': 'sealant-guest-network-v1', 'binding': child,
+                   'private_key': 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=', 'public_key': old['public_key'],
+                   'gateway_key': old['gateway_key'], 'endpoint': old['endpoint'], 'port': old['port'], 'subnet': old['subnet']}
+        # Kernel setup and `wg pubkey` are substituted; the real configure decides from the disk records.
+        with patch.object(network, 'command', return_value=old['public_key']), \
+             patch.object(network, 'prepare', side_effect=lambda config: network.resolver_path().open('x').close()), \
+             patch.object(network, 'inspect', return_value={'namespace': {}}):
+            self.assertEqual(network.configure(request, child)['binding'], child)
+        history = self.root / ('history-' + self.request['operation_id'])
+        self.assertEqual(guest.private_json(history / 'network.json')['config']['binding'], source_binding)
+        self.assertTrue((history / 'network-resolv.conf').is_file())
 
     def test_wrong_bytes_and_live_writer_refuse_before_rebinding(self):
         original = (self.root / 'receiver.json').read_bytes()
