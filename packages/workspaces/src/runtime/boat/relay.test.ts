@@ -26,6 +26,14 @@ const token = "a".repeat(64);
 const verdict = (fields: Record<string, string>) =>
   `${JSON.stringify({ format: "sealant-control-bridge-v1", ...fields })}\n`;
 const connected = verdict({ control: "connected" });
+const parse = (value: string) => {
+  const parsed = BoatSecret.parse(value);
+  if (!parsed.ok) throw parsed.error;
+  return parsed.value;
+};
+const unused = async (): Promise<never> => {
+  throw new Error("the probe must not contact the provider");
+};
 let directory: string;
 let bundled: string;
 const resources: Array<() => Promise<void>> = [];
@@ -439,17 +447,9 @@ describe("standalone Boat relay", () => {
     },
   ])("keeps $name in Core's readiness diagnostic", async (input) => {
     const relay = await fixture(source, input.behavior, undefined, input.verdict);
-    const parse = (value: string) => {
-      const parsed = BoatSecret.parse(value);
-      if (!parsed.ok) throw parsed.error;
-      return parsed.value;
-    };
     const failure = await Effect.runPromise(
       Effect.gen(function* () {
         const runtime = yield* SealantRuntime;
-        const unused = async (): Promise<never> => {
-          throw new Error("the probe must not contact the provider");
-        };
         const transport = createBoatGuestTransport(
           { get: unused, execute: unused, hostControl: unused },
           runtime,

@@ -12,7 +12,7 @@ import { expect, it } from "vitest";
 
 import { SealantRuntime, SealantRuntimeControlLive } from "../../sealantd/runtime.js";
 import { BoatSecret } from "./config.js";
-import { BoatExecutionError, createBoatGuestTransport } from "./execution.js";
+import { createBoatGuestTransport } from "./execution.js";
 
 const secret = (value: string) => {
   const parsed = BoatSecret.parse(value);
@@ -32,9 +32,9 @@ const unused = async (): Promise<never> => {
  * Stands in for guest_control.py's bridge: one verdict line, then the daemon's bytes. The guest's
  * peer rule itself is proven against real sealantd in boat-image/control_daemon_proof.py.
  */
+const line = (fields: Record<string, string>) =>
+  `${JSON.stringify({ format: "sealant-control-bridge-v1", ...fields })}\n`;
 const bridge = async (path: string, daemonSocket: string, refusal?: string) => {
-  const line = (fields: Record<string, string>) =>
-    `${JSON.stringify({ format: "sealant-control-bridge-v1", ...fields })}\n`;
   const server = net.createServer((client) => {
     client.on("error", () => undefined);
     if (refusal !== undefined) {
