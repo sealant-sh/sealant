@@ -13,7 +13,7 @@ import {
   type BoatNetworkIntent,
 } from "@sealant/validators";
 import { and, eq, sql } from "drizzle-orm";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Fiber, Layer, type Scope } from "effect";
 
 import { SealantDB, type DB } from "../client.js";
 import { boatAllocations } from "../schema/boat-allocations.js";
@@ -60,6 +60,11 @@ export interface BoatTunnelRepoService {
     previous: BoatTunnelReservation,
     network: BoatNetworkIntent,
   ) => Effect.Effect<BoatTunnelReservation, BoatTunnelStoreError>;
+  /** Serializes host I/O and close fencing without a database transaction across Docker calls. */
+  readonly withHostLock: <A, E, R>(
+    binding: BoatTunnelBinding,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | BoatTunnelStoreError, R>;
   /** Records each host mutation before dispatch. Only the winning insert permits a call. */
   readonly beginUpdate: (
     previous: BoatTunnelReservation,
@@ -70,7 +75,7 @@ export interface BoatTunnelRepoService {
     binding: BoatTunnelBinding,
     operationId: string,
   ) => Effect.Effect<void, BoatTunnelStoreError>;
-  /** Irreversible barrier: unsettled effects refuse unless absent network intent proves no dispatch. */
+  /** Irreversible barrier: waits out active host I/O, then fences and settles orphaned dispatch. */
   readonly freeze: (
     previous: BoatTunnelReservation,
     closeId: string,
@@ -95,7 +100,9 @@ export class BoatTunnelRepo extends Context.Service<BoatTunnelRepo, BoatTunnelRe
 
 const parse = <A>(run: () => A) =>
   Effect.try({ try: run, catch: () => new BoatTunnelStoreError("invalid-record") });
-const boundary = <A>(effect: Effect.Effect<A, unknown>): Effect.Effect<A, BoatTunnelStoreError> =>
+const boundary = <A, R>(
+  effect: Effect.Effect<A, unknown, R>,
+): Effect.Effect<A, BoatTunnelStoreError, R> =>
   effect.pipe(
     Effect.mapError((error) =>
       error instanceof BoatTunnelStoreError ? error : new BoatTunnelStoreError("unavailable"),
@@ -119,8 +126,10 @@ const update = (
 const uuid = (value: string) =>
   parse(() => boatTunnelReservationSchema.shape.closeId.unwrap().parse(value));
 
-const make: Effect.Effect<BoatTunnelRepo["Service"], never, SealantDB | WorkspaceCaptureDrainRepo> =
-  Effect.gen(function* () {
+type Dependencies = SealantDB | WorkspaceCaptureDrainRepo | Scope.Scope;
+const make: Effect.Effect<BoatTunnelRepo["Service"], never, Dependencies> = Effect.gen(
+  function* () {
+    const scope = yield* Effect.scope;
     const db = yield* SealantDB;
     const canonical = yield* WorkspaceCaptureDrainRepo;
     const custody = yield* canonical.preservation;
@@ -217,6 +226,38 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, SealantDB | Workspac
         }),
       );
     });
+    function withHostLock<A, E, R>(
+      binding: BoatTunnelBinding,
+      effect: Effect.Effect<A, E, R>,
+    ): Effect.Effect<A, E | BoatTunnelStoreError, R> {
+      // A separate session lock owns provider I/O. A failed process releases the connection;
+      // a failed call releases the lock, leaving its durable update for canonical close.
+      // The layer owns host I/O after a caller times out. Awaiting it is interruptible, but
+      // its session lock remains held until Docker positively returns (or this process exits).
+      const operation = Effect.uninterruptible(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const parsed = yield* parse(() => boatTunnelBindingSchema.parse(binding));
+            const lockKey = `boat-tunnel:${parsed.target.deploymentId}:${parsed.target.runtimeInstanceId}`;
+            const connection = yield* boundary(db.$client.reserve);
+            const rows = yield* boundary(
+              connection.executeValues("select pg_try_advisory_lock(hashtextextended($1, 0))", [
+                lockKey,
+              ]),
+            );
+            if (rows[0]?.[0] !== true)
+              return yield* Effect.fail(new BoatTunnelStoreError("operation-held"));
+            yield* Effect.addFinalizer(() =>
+              connection
+                .executeValues("select pg_advisory_unlock(hashtextextended($1, 0))", [lockKey])
+                .pipe(Effect.orDie),
+            );
+            return yield* effect;
+          }),
+        ),
+      );
+      return Effect.flatMap(Effect.forkIn(operation, scope), Fiber.join);
+    }
     const install = Effect.fn("BoatTunnelRepo.install")(function* (
       input: BoatTunnelReservation,
       value: BoatTunnelMaterial,
@@ -250,6 +291,7 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, SealantDB | Workspac
     });
 
     return BoatTunnelRepo.of({
+      withHostLock,
       get: (id) => boundary(get(id)),
 
       recordRemoval: (previous, operation) =>
@@ -458,27 +500,28 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, SealantDB | Workspac
           ),
         ),
       freeze: (previous, closeId) =>
-        boundary(
-          Effect.gen(function* () {
-            const before = yield* parse(() => boatTunnelReservationSchema.parse(previous));
-            const id = yield* uuid(closeId);
-            if ((before.updates?.length ?? 0) !== 0 && before.network !== undefined)
-              return yield* Effect.fail(new BoatTunnelStoreError("operation-held"));
-            if (before.closeId !== undefined && before.closeId !== id)
-              return yield* Effect.fail(new BoatTunnelStoreError("binding-conflict"));
-            // Legacy workers began updates before subnet allocation. Gateway dispatch has always
-            // required the immutable network intent first. This CAS fences a delayed configure:
-            // if configure wins, retry sees a network and must await its actual host operation.
-            const next = {
-              ...before,
-              ...((before.updates?.length ?? 0) === 0 ? {} : { updates: [] }),
-              closeId: id,
-            };
-            if ((yield* update(before, next, db)).length !== 0) return next;
-            if (isDeepStrictEqual(yield* get(before.binding.target.runtimeInstanceId), next))
-              return next;
-            return yield* Effect.fail(new BoatTunnelStoreError("stale-transition"));
-          }),
+        withHostLock(
+          previous.binding,
+          boundary(
+            Effect.gen(function* () {
+              const before = yield* parse(() => boatTunnelReservationSchema.parse(previous));
+              const id = yield* uuid(closeId);
+              if (before.closeId !== undefined && before.closeId !== id)
+                return yield* Effect.fail(new BoatTunnelStoreError("binding-conflict"));
+              // No host call holds the session lock. The close CAS permanently forbids later
+              // dispatch, and adopts orphaned updates from failed calls or an earlier worker.
+              // A stale waiter must reread this fence under the same lock before it can dispatch.
+              const next = {
+                ...before,
+                ...((before.updates?.length ?? 0) === 0 ? {} : { updates: [] }),
+                closeId: id,
+              };
+              if ((yield* update(before, next, db)).length !== 0) return next;
+              if (isDeepStrictEqual(yield* get(before.binding.target.runtimeInstanceId), next))
+                return next;
+              return yield* Effect.fail(new BoatTunnelStoreError("stale-transition"));
+            }),
+          ),
         ),
       reserve: (binding, id) => boundary(reserve(binding, id)),
       install: (previous, material) => boundary(install(previous, material)),
@@ -534,7 +577,8 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, SealantDB | Workspac
           }),
         ),
     });
-  });
+  },
+);
 
 /** PostgreSQL enforces unique host ports across deployments and immutable ownership per run. */
 export const boatTunnelRepoLayer: Layer.Layer<BoatTunnelRepo, never, SealantDB> = Layer.effect(

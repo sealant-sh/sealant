@@ -207,23 +207,32 @@ const make: Effect.Effect<
     yield* recheck;
     // Only a configured reservation can dispatch a gateway mutation. Allocation failures have
     // no host effect to await, and a close racing this CAS prevents the dispatch entirely.
-    const updateId = randomUUID();
-    const owned = yield* tunnels.get(target.runtimeInstanceId);
-    if (owned === undefined || (yield* tunnels.beginUpdate(owned, updateId)) !== "issued")
-      return yield* Effect.fail(new BoatResourcesError("held"));
-    const gateway = yield* boundary(
-      host.tunnel.ensure({
-        target,
-        privateKey: keys.gateway.privateKey,
-        peerKey: keys.guest.publicKey,
-        listenPort: keys.listenPort,
-        link,
-        instances,
+    const gateway = yield* tunnels.withHostLock(
+      keys.binding,
+      Effect.gen(function* () {
+        // Read authority again inside the host lock. A close may have won while we waited.
+        yield* recheck;
+        const updateId = randomUUID();
+        const owned = yield* tunnels.get(target.runtimeInstanceId);
+        if (owned === undefined || (yield* tunnels.beginUpdate(owned, updateId)) !== "issued")
+          return yield* Effect.fail(new BoatResourcesError("held"));
+        const endpoint = yield* boundary(
+          host.tunnel.ensure({
+            target,
+            privateKey: keys.gateway.privateKey,
+            peerKey: keys.guest.publicKey,
+            listenPort: keys.listenPort,
+            link,
+            instances,
+          }),
+          "configure-gateway",
+        );
+        // Unknown outcomes remain in the ledger. FINAL can settle them only after fencing
+        // dispatch under this same lock and removing the exact owned endpoint and networks.
+        yield* boundary(tunnels.endUpdate(owned.binding, updateId), "settle-gateway");
+        return endpoint;
       }),
-      "configure-gateway",
     );
-    // A positive response settles dispatch even if its receipt subsequently refuses admission.
-    yield* boundary(tunnels.endUpdate(owned.binding, updateId), "settle-gateway");
     if (
       gateway.reachSubnet !== subnet ||
       gateway.publicKey !== keys.gateway.publicKey ||

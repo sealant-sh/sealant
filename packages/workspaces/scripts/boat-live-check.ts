@@ -35,6 +35,9 @@ const main = async () => {
     deploymentId: process.env.SEALANT_BOAT_DEPLOYMENT_ID,
     resourceHost: process.env.BOAT_PROOF_RESOURCE_HOST,
     resourcePort: Number(process.env.BOAT_PROOF_RESOURCE_PORT),
+    ...(process.env.BOAT_PROOF_BUILD_BUDGET_MS === undefined
+      ? {}
+      : { buildBudgetMs: Number(process.env.BOAT_PROOF_BUILD_BUDGET_MS) }),
     ...(process.env.BOAT_PROOF_IDLE_BUDGET_MS === undefined
       ? {}
       : { idleBudgetMs: Number(process.env.BOAT_PROOF_IDLE_BUDGET_MS) }),

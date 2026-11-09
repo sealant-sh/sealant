@@ -96,10 +96,14 @@ docker run --name boat-session-proof --rm --network "$PREVIEW_NETWORK" \
 
 The evidence parent directory must already exist. The run directory must be new. The checker fsyncs
 both the ledger and its directory entries before sending create. It never automatically retries
-create, launch or resume. HTTP calls are bounded, launch/readiness and resume each have 12-minute
-limits, shell execution has 60 seconds, actual idle Stop has 20 minutes, and FINAL cleanup has five
-minutes. `BOAT_PROOF_IDLE_BUDGET_MS` may select a 1–30 minute idle budget. Configure Mend's real
-idle-stop setting to fit the selected budget; do not edit session timestamps.
+create, launch or resume. Native construction has its own 30-minute budget. After the current
+attempt's publication is observed ready in Core, authenticated readiness gets a fresh 12 minutes,
+including on resume. The in-flight Mend HTTP request allows both budgets and is cancelled when a
+phase expires. The ledger records `publication-ready` and `readiness-budget` separately.
+`BOAT_PROOF_BUILD_BUDGET_MS` may select a 1–60 minute construction budget. Shell execution has 60
+seconds, actual idle Stop has 20 minutes, and FINAL cleanup has five minutes.
+`BOAT_PROOF_IDLE_BUDGET_MS` may select a 1–30 minute idle budget. Configure Mend's real idle-stop
+setting to fit the selected budget; do not edit session timestamps.
 
 For interrupted cleanup, repeat the same container command with `cleanup /proof/session-1` instead
 of `run /proof/session-1`. It reuses only the recorded session, exact publication and original

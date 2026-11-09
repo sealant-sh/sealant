@@ -151,9 +151,9 @@ export class DockerBoatTunnel implements BoatTunnel {
   ) {
     this.docker = createDockerCommandRunner(options.dockerSocketPath ?? "/var/run/docker.sock");
   }
-  private run(args: readonly string[], input?: string) {
+  private run(args: readonly string[], input?: string, timeoutMs = 15_000) {
     return this.docker("docker", [...args], {
-      timeoutMs: 15_000,
+      timeoutMs,
       ...(input === undefined ? {} : { input }),
     });
   }
@@ -409,20 +409,31 @@ export class DockerBoatTunnel implements BoatTunnel {
           JSON.stringify({ ...config, privateKey }),
         );
         let observed: z.infer<typeof statusSchema> | undefined;
-        for (let attempt = 0; attempt < 20; attempt++) {
+        // Container start is not service readiness. Status proves the exact configuration,
+        // policy and both DNS transports; bounded polling tolerates a late dnsmasq startup.
+        const readyBy = Date.now() + 30_000;
+        while (Date.now() < readyBy) {
           try {
             observed = statusSchema.parse(
               JSON.parse(
-                (await this.run(["exec", name, "python3", "-I", "-B", PROGRAM, "status"])).stdout,
+                (
+                  await this.run(
+                    ["exec", name, "python3", "-I", "-B", PROGRAM, "status"],
+                    undefined,
+                    Math.max(1, Math.min(5000, readyBy - Date.now())),
+                  )
+                ).stdout,
               ),
             );
             break;
           } catch {
-            if (attempt === 19) throw new BoatTunnelError("gateway-unavailable");
-            await new Promise<void>((resolve) => setTimeout(resolve, 100));
+            await new Promise<void>((resolve) =>
+              setTimeout(resolve, Math.min(200, Math.max(0, readyBy - Date.now()))),
+            );
           }
         }
-        if (observed === undefined || !isDeepStrictEqual(observed.config, config))
+        if (observed === undefined) throw new BoatTunnelError("gateway-unavailable");
+        if (!isDeepStrictEqual(observed.config, config))
           throw new BoatTunnelError("ownership-conflict");
         const receipt = hash(
           JSON.stringify({
