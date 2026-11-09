@@ -587,7 +587,7 @@ it("waits for a late gateway DNS control answer before acknowledging configurati
   if (imagePath === undefined) throw new Error("SEALANT_BOAT_TUNNEL_TEST_IMAGE_FILE required");
   const base = (await readFile(imagePath, "utf8")).trim();
   const context = await mkdtemp(join(tmpdir(), "boat-gateway-late-"));
-  const baseTag = `sealant-boat-gateway-test:${randomUUID()}`;
+  const fixtureTag = `sealant-boat-gateway-delay:${randomUUID()}`;
   let fixtureImage: string | undefined;
   const held = new Map<string, string>();
   const subnets: ResourceSubnets = {
@@ -612,12 +612,13 @@ it("waits for a late gateway DNS control answer before acknowledging configurati
     );
     if (source === delayed) throw new Error("missing real gateway serve seam");
     await writeFile(join(context, "gateway.py"), delayed);
-    await docker("tag", base, baseTag);
+    // Build this fixture from the production Dockerfile. Tagging the shared untagged image
+    // and then removing its last tag would delete the input needed by later guest proofs.
     await writeFile(
       join(context, "Dockerfile"),
-      `FROM ${baseTag}\nCOPY gateway.py /usr/local/lib/sealant/gateway.py\n`,
+      await readFile(new URL("../../boat-tunnel/Dockerfile", import.meta.url), "utf8"),
     );
-    fixtureImage = await docker("build", "--quiet", context);
+    fixtureImage = await docker("build", "--quiet", "--tag", fixtureTag, context);
     const resources = new DockerResourceRuntime({ subnets });
     runtime = new DockerBoatTunnel({ gatewayImage: fixtureImage, resources, subnets });
     const own = keys(),
@@ -645,8 +646,9 @@ it("waits for a late gateway DNS control answer before acknowledging configurati
     expect(held.size).toBe(0);
   } finally {
     if (runtime !== undefined) await Effect.runPromise(runtime.remove(target));
-    if (fixtureImage !== undefined) await docker("image", "rm", fixtureImage);
-    await docker("image", "rm", baseTag);
+    if (fixtureImage !== undefined) await docker("image", "rm", "--no-prune", fixtureTag);
     await rm(context, { recursive: true, force: true });
+    // CI shares this untagged immutable input with the subsequent guest network proof.
+    await docker("image", "inspect", base);
   }
 });
