@@ -282,6 +282,7 @@ const guest = async (options: {
             Effect.sync(() => (record = boatExecutionRecordSchema.parse(next))),
           isolate: (_previous, isolation) =>
             Effect.sync(() => (record = boatExecutionRecordSchema.parse({ ...record, isolation }))),
+          forgetResume: () => Effect.void,
         }),
         Layer.succeed(CredentialCipher, {
           encrypt: (raw) => Effect.succeed({ sealed: raw, keyId: "contract" }),
