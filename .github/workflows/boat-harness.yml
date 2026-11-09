@@ -37,7 +37,7 @@ jobs:
   harness:
     name: Boat harness
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 100
     steps:
       # The published snapshot image is about 6 GB and each twin adds a writable layer. Drop the
       # runner's preinstalled toolchains this job never uses (an ephemeral VM, not a shared host).
@@ -65,11 +65,15 @@ jobs:
       - name: Kernel WireGuard
         run: sudo modprobe wireguard && lsmod | grep -q '^wireguard'
 
+      # A step timeout fails the step instead of cancelling the job, so the logs still upload.
       - name: Run the harness
+        timeout-minutes: 85
+        env:
+          BOAT_HARNESS_VERBOSE: "1"
         run: pnpm boat:harness
 
       - name: Keep the harness logs
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: boat-harness-logs

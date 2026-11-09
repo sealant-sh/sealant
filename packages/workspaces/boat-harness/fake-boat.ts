@@ -123,6 +123,7 @@ export interface FakeBoatOptions {
 }
 
 const OUTPUT_LIMIT = 8 * 1024 ** 2;
+const VERBOSE = process.env.BOAT_HARNESS_VERBOSE === "1";
 const ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz";
 const newSandboxId = () =>
   "bx_" + [...randomBytes(8)].map((byte) => ALPHABET[byte % ALPHABET.length] ?? "2").join("");
@@ -264,6 +265,11 @@ export class FakeBoat {
   }
 
   #record(kind: string, sandboxId?: string, detail?: string) {
+    // CI has no other window into a run that hangs: stream the lifecycle, not every API call.
+    if (VERBOSE && kind !== "api" && !(kind === "proxy" && (detail ?? "").endsWith(" 200")))
+      process.stderr.write(
+        `[boat-harness] boat ${new Date().toISOString()} ${kind} ${sandboxId ?? ""} ${(detail ?? "").slice(0, 200)}\n`,
+      );
     this.events.push({
       at: Date.now(),
       kind,
