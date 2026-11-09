@@ -3887,6 +3887,39 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
         await o.boat.close();
       }
     }));
+
+  it("removes a launch that failed while Boat was still cloning in one sweep, so it reads stopped, not retained (harness: provisioning never finishes)", () =>
+    test(async (s) => {
+      // Boat accepts the create but never finishes provisioning; the launch gives up and records
+      // the VM it holds as a retained launch.
+      const o = await observedLaunch(s, {
+        boat: (boat) => {
+          boat.stuckProvisioning = true;
+        },
+      });
+      try {
+        expect(await execute(o.observer.observe(o.allocation))).toMatchObject({ kind: "present" });
+        o.boat.deletionPolls = 2;
+        const { owner } = await execute(s.final([], o.api, 10_000));
+        // One sweep closes it and records the removal Boat completed.
+        expect((await execute(owner.reconcile({ limit: 20 }))).entries).toContainEqual({
+          runId: s.input.consumer.runId,
+          outcome: "closed",
+        });
+        expect(o.boat.vms.has(o.sandboxId)).toBe(false);
+        expect(
+          await execute(s.runtimes.getRuntimeInstanceByRunId(s.input.consumer.runId)),
+        ).toMatchObject({ status: "stopped", removedAt: expect.any(Date) });
+        expect(await execute(s.canonical.getByRunId(s.input.consumer.runId))).toMatchObject({
+          state: "gone",
+        });
+        expect((await execute(nativeConsumerRows(s.db, s.input.consumer.runId)))[0]?.state).toBe(
+          "released",
+        );
+      } finally {
+        await o.boat.close();
+      }
+    }));
 });
 
 const HOUR = 60 * 60_000;
