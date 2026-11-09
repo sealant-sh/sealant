@@ -12,6 +12,7 @@
   "scripts": {
     "lint": "oxlint .",
     "test": "vitest run",
+    "test:boat-harness": "vitest run --config vitest.boat-harness.config.ts",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
@@ -34,6 +35,7 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@sealant/sdk": "workspace:*",
     "@sealant/typescript": "workspace:*",
     "@types/ws": "catalog:",
     "vitest": "catalog:"
