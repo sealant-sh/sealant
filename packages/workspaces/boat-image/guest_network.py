@@ -17,6 +17,7 @@ NAMESPACE = Path('/run/netns') / NAME
 OUTSIDE = 'sealant-out'
 INSIDE = 'egress0'
 WIRE = 'wg0'
+OUTER_WIRE = 'sealant-wire'
 GATEWAY = '100.127.255.253'
 CLIENT = '100.127.255.254'
 UPLINK = '169.254.241.1'
@@ -211,23 +212,26 @@ def resolver_bytes():
 
 def prepare(config):
     # Names are reserved before any kernel side effect. An uncertain partial setup holds them.
-    if NAMESPACE.exists() or Path('/sys/class/net', OUTSIDE).exists():
+    if NAMESPACE.exists() or any(Path('/sys/class/net', name).exists() for name in (OUTSIDE, OUTER_WIRE)):
         raise Refusal('network-name-already-present')
     ip('netns', 'add', NAME)
     ip('link', 'add', OUTSIDE, 'type', 'veth', 'peer', 'name', INSIDE)
     ip('link', 'set', INSIDE, 'netns', NAME)
-    ip('link', 'add', WIRE, 'type', 'wireguard')
+    # Boat owns an outer wg0 already. Only our reserved name is created or moved;
+    # the workspace's wg0 lives exclusively inside the fresh namespace.
+    ip('link', 'add', OUTER_WIRE, 'type', 'wireguard')
     # The UDP socket stays in the outer namespace, out of reach of inner root.
     descriptor = os.memfd_create('sealant-wireguard', os.MFD_CLOEXEC)
     try:
         os.write(descriptor, (config['private_key'].value + '\n').encode())
         os.lseek(descriptor, 0, os.SEEK_SET)
-        command('/usr/bin/wg', 'set', WIRE, 'private-key', '/proc/self/fd/' + str(descriptor),
+        command('/usr/bin/wg', 'set', OUTER_WIRE, 'private-key', '/proc/self/fd/' + str(descriptor),
                 'peer', config['gateway_key'], 'endpoint', config['endpoint'] + ':' + str(config['port']),
                 'allowed-ips', config['subnet'] + ',' + GATEWAY + '/32', 'persistent-keepalive', '25', pass_fds=(descriptor,))
     finally:
         os.close(descriptor)
-    ip('link', 'set', WIRE, 'netns', NAME)
+    ip('link', 'set', OUTER_WIRE, 'netns', NAME)
+    ip('link', 'set', OUTER_WIRE, 'name', WIRE, inside=True)
     command('/usr/sbin/sysctl', '-q', '-w', 'net.ipv6.conf.all.disable_ipv6=1', 'net.ipv6.conf.default.disable_ipv6=1', inside=True)
     nft(rules(config, outer_addresses()), inside=True)
     nft(outer_rules(config))

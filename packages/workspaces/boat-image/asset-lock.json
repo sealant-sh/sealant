@@ -60,7 +60,7 @@
     },
     {
       "name": "guest_network.py",
-      "sha256": "9f8d04b5c8a532dcb228cc67f5f2e03ec3747a86bc92579fe9fd570b3cc3f708"
+      "sha256": "3bbfa6030258d8bc47f4e72fd9cb6b2c53e85a007aba255c903f94de527663f6"
     },
     {
       "name": "guest_readiness.py",
