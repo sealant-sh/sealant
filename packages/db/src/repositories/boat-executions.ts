@@ -11,6 +11,7 @@ import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
 import { boatExecutions } from "../schema/boat-executions.js";
+import { boatObservations } from "../schema/boat-observations.js";
 
 /** Safe failure codes contain no ciphertext, request body or provider response. */
 export class BoatExecutionStoreError extends Error {
@@ -41,6 +42,12 @@ export interface BoatExecutionRepoService {
     previous: BoatExecutionRecord,
     isolation: NonNullable<BoatExecutionRecord["isolation"]>,
   ) => Effect.Effect<BoatExecutionRecord, BoatExecutionStoreError>;
+  /**
+   * Boat positively no longer has the guest (its observation is absent, checked in the same
+   * transaction): the sealed copy of its launch payload kept for resume has no purpose left and is
+   * erased. The sealed control bearer stays until an `ended` phase exists; it reaches nothing.
+   */
+  readonly forgetResume: (id: string) => Effect.Effect<void, BoatExecutionStoreError>;
 }
 /** Durable singleton per run and owned disk; it has no reset or replacement method. */
 export class BoatExecutionRepo extends Context.Service<
@@ -227,7 +234,46 @@ const make: Effect.Effect<BoatExecutionRepo["Service"], never, SealantDB> = Effe
       if (saved?.phase !== "aborted" || !sameTarget(saved.target, target))
         return yield* Effect.fail(new BoatExecutionStoreError("stale-transition"));
     });
-    return BoatExecutionRepo.of({ get, reserve, advance, isolate, abort });
+    const forgetResume = Effect.fn("BoatExecutionRepo.forgetResume")(function* (id: string) {
+      yield* db
+        .transaction(() =>
+          Effect.gen(function* () {
+            const [row] = yield* db
+              .select()
+              .from(boatExecutions)
+              .where(eq(boatExecutions.runtimeInstanceId, id))
+              .for("update");
+            if (row === undefined) return;
+            const record = yield* parse(row.record);
+            if (record.admission?.sealedResumeEnvelope === undefined) return;
+            const [observed] = yield* db
+              .select()
+              .from(boatObservations)
+              .where(eq(boatObservations.runtimeInstanceId, id));
+            if (observed?.presence !== "absent" || observed.sandboxId !== row.sandboxId)
+              return yield* Effect.fail(new BoatExecutionStoreError("stale-transition"));
+            const { sealedResumeEnvelope: _erased, ...admission } = record.admission;
+            const next = yield* parse({ ...record, admission });
+            yield* db
+              .update(boatExecutions)
+              .set({ record: next })
+              .where(
+                and(
+                  eq(boatExecutions.runtimeInstanceId, id),
+                  sql`${boatExecutions.record} = ${JSON.stringify(row.record)}::jsonb`,
+                ),
+              );
+          }),
+        )
+        .pipe(
+          Effect.mapError((error) =>
+            error instanceof BoatExecutionStoreError
+              ? error
+              : new BoatExecutionStoreError("unavailable"),
+          ),
+        );
+    });
+    return BoatExecutionRepo.of({ get, reserve, advance, isolate, abort, forgetResume });
   },
 );
 /** All transitions use a single database compare-and-set and perform no external I/O. */

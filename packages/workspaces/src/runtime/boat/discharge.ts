@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import {
   BoatAllocationRepo,
   BoatAllocationRepoLive,
+  BoatExecutionRepo,
+  BoatExecutionRepoLive,
   BoatObservationRepo,
   BoatObservationRepoLive,
   BoatTunnelRepo,
@@ -12,25 +14,28 @@ import {
   SealantDB,
   WorkspaceCaptureDrainRepo,
   WorkspaceCaptureDrainRepoLive,
-  type WorkspaceCaptureDrain,
 } from "@sealant/db";
 import type { BoatAllocationRecord } from "@sealant/validators";
 import { Cause, Context, Effect, Exit, Layer, Option } from "effect";
 
 import { BoatResourcesHost } from "../../worker/boat-resources.js";
 import { databaseCaptureDrainLedger } from "../../worker/capture-drain-ledger.js";
+import { recordedDeletionEvidence } from "../../worker/capture-drain.js";
 
 /**
- * What became of a VM's work once Boat positively no longer has it. `stopped`: removed after its
- * final capture was saved. `discarded`: its owner discarded the unsaved work. `gone`: removed with
- * work not confirmed saved; consumers report it lost. All three end the retention.
+ * What became of a VM's work once Boat positively no longer has it, from the canonical evidence
+ * (the same evidence that authorizes removing a VM), never from the drain's display state, which an
+ * earlier saved FINAL leaves behind after newer unsaved answers. `stopped`: a complete FINAL Core
+ * observed, or a covering attestation of a sealed FINAL, with no unsaved answer after it.
+ * `discarded`: its owner discarded the unsaved work. `gone`: anything else, reported as lost. All
+ * three end the retention.
  */
 export const terminalCaptureState = (
-  root: Pick<WorkspaceCaptureDrain, "state" | "discardRequestedAt"> | undefined,
+  evidence: ReturnType<typeof recordedDeletionEvidence>,
 ): "stopped" | "discarded" | "gone" =>
-  root?.discardRequestedAt != null
+  evidence.discarded
     ? "discarded"
-    : root?.state === "saved" || root?.state === "stopped"
+    : evidence.observedComplete || evidence.attestedComplete
       ? "stopped"
       : "gone";
 
@@ -42,7 +47,7 @@ const TERMINAL_DETAIL = {
 
 /** One obligation that could not be discharged on this pass; the next pass retries it alone. */
 export interface BoatDischargeBlocker {
-  readonly obligation: "runtime" | "capture" | "allocation" | "tunnel" | "publication";
+  readonly obligation: "runtime" | "capture" | "allocation" | "tunnel" | "publication" | "secrets";
   readonly reason: "held" | "unavailable";
 }
 
@@ -69,6 +74,7 @@ const make = Effect.gen(function* () {
   const observations = yield* BoatObservationRepo;
   const allocations = yield* BoatAllocationRepo;
   const tunnels = yield* BoatTunnelRepo;
+  const executions = yield* BoatExecutionRepo;
   const canonical = yield* WorkspaceCaptureDrainRepo;
   const catalog = yield* NativePublicationRepo;
   const host = yield* BoatResourcesHost;
@@ -130,7 +136,13 @@ const make = Effect.gen(function* () {
         // A removal issued earlier whose reply was lost: absence is its outcome.
         if (root?.deletionState === "deleting-issued" || root?.deletionState === "deleting")
           yield* ledger.reconcileIssuedDeletion(runId, "gone", undefined);
-        const state = terminalCaptureState(root);
+        const state = terminalCaptureState(
+          recordedDeletionEvidence(yield* ledger.read(runId), {
+            runId,
+            resourceId: allocation.sandboxId,
+            reference: null,
+          }),
+        );
         if (root?.state === state && root.retainedAt === null && root.captureTokenSealed === null)
           return;
         yield* canonical.recordObservation({ runId, state, detail: TERMINAL_DETAIL[state] });
@@ -151,6 +163,7 @@ const make = Effect.gen(function* () {
         });
       }),
     );
+    yield* settle("secrets", executions.forgetResume(id));
     const tunnelSettled = yield* settle(
       "tunnel",
       Effect.gen(function* () {
@@ -188,6 +201,7 @@ export const boatDischargeLayerNoDeps: Layer.Layer<
   | BoatObservationRepo
   | BoatAllocationRepo
   | BoatTunnelRepo
+  | BoatExecutionRepo
   | WorkspaceCaptureDrainRepo
   | NativePublicationRepo
   | BoatResourcesHost
@@ -200,6 +214,7 @@ export const boatDischargeLayer: Layer.Layer<BoatDischarge, never, SealantDB | B
         BoatObservationRepoLive,
         BoatAllocationRepoLive,
         boatTunnelRepoLayer,
+        BoatExecutionRepoLive,
         WorkspaceCaptureDrainRepoLive,
         NativePublicationRepoLive,
       ),

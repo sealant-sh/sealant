@@ -454,6 +454,7 @@ const test = async (
                             Layer.succeed(SealantDB, db),
                             Layer.succeed(BoatAllocationRepo, repo),
                             Layer.succeed(BoatTunnelRepo, tunnels),
+                            Layer.succeed(BoatExecutionRepo, executions),
                             Layer.succeed(WorkspaceCaptureDrainRepo, captureRepo),
                             Layer.succeed(NativePublicationRepo, catalog),
                             hostLayer(),
@@ -3198,6 +3199,10 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
       });
       expect((await execute(s.repo.get(target.runId)))?.phase).toBe("deleted");
       expect((await execute(nativeConsumerRows(s.db, target.runId)))[0]?.state).toBe("released");
+      // The sealed copy of the launch payload kept for resume is erased with the VM.
+      const execution = await execute(s.executions.get(target.runId));
+      expect(execution?.admission).not.toBeNull();
+      expect(execution?.admission?.sealedResumeEnvelope).toBeUndefined();
       // The deleted VM is no longer driven as if it were current.
       expect(await execute(s.allocations.reconcile({ limit: 10 }))).toMatchObject({
         entries: [{ runId: target.runId, outcome: "deleted" }],
@@ -3265,5 +3270,49 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
       });
       expect(s.provider.deleteCalls).toBe(1);
       expect((await execute(nativeConsumerRows(s.db, target.runId)))[0]?.state).toBe("released");
+    }));
+
+  it("never reports saved work after a newer unsaved answer when Boat loses the VM (review of #494)", () =>
+    test(async (s) => {
+      const target = await launched(s);
+      await execute(
+        s.runtimes.upsertRuntimeInstance({
+          runId: target.runId,
+          adapter: "boat",
+          status: "ready",
+          resourceId: target.sandboxId,
+        }),
+      );
+      // An earlier FINAL was saved, then the daemon reported unsaved work again.
+      await execute(
+        s.canonical.recordStatus({
+          runId: target.runId,
+          status: { ...savedStatus() },
+          observedAt: new Date(),
+        }),
+      );
+      await execute(
+        s.canonical.recordObservation({
+          runId: target.runId,
+          state: "saved",
+          detail: "earlier FINAL",
+        }),
+      );
+      await execute(
+        s.canonical.recordStatus({
+          runId: target.runId,
+          status: { ...captureStatus({ complete: false }) },
+          observedAt: new Date(),
+        }),
+      );
+      s.provider.sandboxMissing = true;
+      s.gateway.allowRemoval = true;
+      await execute(backdateObservation(s.db, target.runtimeInstanceId, 120_000));
+      const { owner } = await execute(s.final([]));
+      await execute(owner.reconcile({ limit: 20 }));
+      expect(await execute(s.canonical.getByRunId(target.runId))).toMatchObject({
+        state: "gone",
+        retainedAt: null,
+      });
     }));
 });
