@@ -1,0 +1,14 @@
+#!/bin/sh
+# Runs before systemd on every container start. A container start is one twin "boot".
+set -eu
+# Every boot gets its own Linux boot ID, as a VM would. Docker containers otherwise share the host's.
+install -d -m 0755 /var/lib/boat-twin
+cat /proc/sys/kernel/random/uuid > /var/lib/boat-twin/boot_id
+chmod 0444 /var/lib/boat-twin/boot_id
+mount --bind /var/lib/boat-twin/boot_id /proc/sys/kernel/random/boot_id
+# Boat VMs already own an outer `wg0` (run 10, #488). Recreate it at every boot.
+if [ "${BOAT_TWIN_PROVIDER_WG0:-1}" = 1 ] && ! ip link show wg0 >/dev/null 2>&1; then
+  ip link add wg0 type wireguard
+  ip link set wg0 up
+fi
+exec /sbin/init

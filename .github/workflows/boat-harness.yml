@@ -1,0 +1,79 @@
+name: Boat harness
+
+# The local Boat harness (packages/workspaces/boat-harness): Core's real worker, API, Boat adapter,
+# guest units and gateway against a fake Boat provider and guest-twin containers. It runs on pull
+# requests that touch Boat code, nightly, and on demand.
+on:
+  pull_request:
+    paths:
+      - packages/workspaces/boat-harness/**
+      - packages/workspaces/boat-image/**
+      - packages/workspaces/boat-tunnel/**
+      - packages/workspaces/src/runtime/boat/**
+      - packages/workspaces/src/images/boat/**
+      - packages/workspaces/src/worker/boat-*.ts
+      - packages/workspaces/src/worker/process-workspace-*.ts
+      - packages/workspaces/src/resources/boat-tunnel.ts
+      - packages/db/src/repositories/boat-*.ts
+      - packages/db/src/repositories/native-publications.ts
+      - packages/db/src/repositories/capture-preservation.ts
+      - packages/db/src/repositories/workspace-capture-drains.ts
+      - packages/db/src/repositories/workspace-runtime-instances.ts
+      - apps/worker/src/workers/workspaces.ts
+      - apps/api/src/routes/workspaces/**
+      - .github/workflows/boat-harness.yml
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  harness:
+    name: Boat harness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      # The published snapshot image is about 6 GB and each twin adds a writable layer. Drop the
+      # runner's preinstalled toolchains this job never uses (an ephemeral VM, not a shared host).
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The guest twin needs kernel WireGuard (Boat's provider `wg0`, and the guest's own tunnel).
+      - name: Kernel WireGuard
+        run: sudo modprobe wireguard && lsmod | grep -q '^wireguard'
+
+      - name: Run the harness
+        run: pnpm boat:harness
+
+      - name: Keep the harness logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: boat-harness-logs
+          path: |
+            /tmp/boat-harness-*/*.log
+            /tmp/boat-harness-*/*.json
+          if-no-files-found: ignore
