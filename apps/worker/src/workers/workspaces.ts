@@ -1228,7 +1228,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         });
         boatResourceCursor = resources.next;
         const held = resources.entries.filter(
-          (entry) => entry.outcome !== "configured" && entry.outcome !== "pending",
+          (entry) => !["configured", "closed", "pending"].includes(entry.outcome),
         );
         if (held.length > 0) console.warn("Boat resource obligations remain", { entries: held });
       }

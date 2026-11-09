@@ -80,6 +80,21 @@ const diagnosticSchema = z.object({
     .optional(),
   hydrated: z.boolean().optional(),
   provider: boatProviderFailureSchema.optional(),
+  receiver: z
+    .object({
+      pathClass: z.enum([
+        "/sealant/bootstrap/status",
+        "/sealant/bootstrap/stage",
+        "/sealant/bootstrap/start",
+        "/sealant/bootstrap/isolate",
+        "/sealant/bootstrap/permit",
+        "/sealant/bootstrap/readiness",
+        "/sealant/bootstrap/recover",
+        "/sealant/bootstrap/park",
+      ]),
+      responseTail: z.string().transform(safeCommandTail),
+    })
+    .optional(),
   command: z
     .object({
       exitCode: z.number().int().nullable(),

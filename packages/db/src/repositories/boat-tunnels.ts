@@ -70,7 +70,7 @@ export interface BoatTunnelRepoService {
     binding: BoatTunnelBinding,
     operationId: string,
   ) => Effect.Effect<void, BoatTunnelStoreError>;
-  /** An irreversible barrier, allowed only with no outstanding host effects. Does not release the port. */
+  /** Irreversible barrier: unsettled effects refuse unless absent network intent proves no dispatch. */
   readonly freeze: (
     previous: BoatTunnelReservation,
     closeId: string,
@@ -462,11 +462,18 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, SealantDB | Workspac
           Effect.gen(function* () {
             const before = yield* parse(() => boatTunnelReservationSchema.parse(previous));
             const id = yield* uuid(closeId);
-            if ((before.updates?.length ?? 0) !== 0)
+            if ((before.updates?.length ?? 0) !== 0 && before.network !== undefined)
               return yield* Effect.fail(new BoatTunnelStoreError("operation-held"));
             if (before.closeId !== undefined && before.closeId !== id)
               return yield* Effect.fail(new BoatTunnelStoreError("binding-conflict"));
-            const next = { ...before, closeId: id };
+            // Legacy workers began updates before subnet allocation. Gateway dispatch has always
+            // required the immutable network intent first. This CAS fences a delayed configure:
+            // if configure wins, retry sees a network and must await its actual host operation.
+            const next = {
+              ...before,
+              ...((before.updates?.length ?? 0) === 0 ? {} : { updates: [] }),
+              closeId: id,
+            };
             if ((yield* update(before, next, db)).length !== 0) return next;
             if (isDeepStrictEqual(yield* get(before.binding.target.runtimeInstanceId), next))
               return next;

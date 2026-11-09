@@ -5,6 +5,29 @@ import { BoatApiError } from "./config.js";
 import { boatLaunchDiagnostic, boatLaunchSummary } from "./launch-diagnostics.js";
 
 describe("Boat launch diagnostics", () => {
+  it("preserves the receiver operation, fixed path and redacted body across launch wrappers", () => {
+    const diagnostic = boatLaunchDiagnostic(
+      {
+        diagnostic: {
+          step: "receiver-request",
+          errorClass: "BoatExecutionError",
+          provider: { operation: "receiver-status", status: 503, causeClass: null },
+          receiver: {
+            pathClass: "/sealant/bootstrap/status",
+            responseTail: "token=hidden-value receiver-unavailable",
+          },
+        },
+      },
+      "prepare-launch",
+    );
+    const wrapper = new BoatAllocationError("provider-unavailable", diagnostic);
+    expect(boatLaunchDiagnostic(new Error("outer", { cause: wrapper }), "readiness")).toEqual(
+      diagnostic,
+    );
+    expect(wrapper.message).toContain("receiver-status");
+    expect(wrapper.message).toContain("receiver-unavailable");
+    expect(wrapper.message).not.toContain("hidden-value");
+  });
   it("bounds and redacts command tails across worker and runtime wrappers", () => {
     const diagnostic = boatLaunchDiagnostic(
       {

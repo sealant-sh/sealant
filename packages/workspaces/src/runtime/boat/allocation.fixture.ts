@@ -532,6 +532,8 @@ export class GuestFixture implements BoatGuestTransport {
   }
 }
 export class GatewayFixture {
+  subnetUnavailable = false;
+  beforeSubnet: () => Promise<void> = async () => {};
   allowRemoval = false;
   removalUnavailable = false;
   removeCalls = 0;
