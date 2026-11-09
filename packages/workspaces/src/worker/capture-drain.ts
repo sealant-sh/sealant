@@ -446,6 +446,8 @@ export interface CaptureDrainLedger {
     runId: string,
     runtime: "gone" | "present",
     fenceMs?: number,
+    /** See `WorkspaceCaptureDrainRepo.reconcileIssuedDeletion`. */
+    reauthorizedVersion?: number,
   ) => Effect.Effect<IssuedDeletionSettlement>;
   /** The runtime removed the executor: `deleted` for good. Best-effort: a failed write is logged. */
   readonly completeDeletion: (runId: string, ticket: DeletionTicket) => Effect.Effect<void>;
@@ -1318,11 +1320,15 @@ export const authorizedDeletion = (input: {
       if (ledger !== undefined && record.readable && record.entry?.removalIssued === true) {
         // The runtime was asked to remove it and nobody recorded how that went (review 8 #7):
         // nothing is observed, recovered or decided anew until the runtime says.
+        // What the record says now may authorize the same removal (a discard, a newer
+        // attestation): then the removal already issued is completed, never stranded.
+        const now = input.decide(record);
         const settled = yield* settleIssuedRemoval(
           ledger,
           runId,
           input.runtime,
           input.removalFenceMs,
+          now.delete ? record.entry?.evidenceVersion : undefined,
         );
         if (settled.kind === "reissue") {
           return {
@@ -1415,6 +1421,7 @@ const settleIssuedRemoval = (
   runId: string,
   runtime: ExecutorRuntimeState | undefined,
   fenceMs: number | undefined,
+  reauthorizedVersion: number | undefined,
 ): Effect.Effect<
   | { readonly kind: "reissue"; readonly ticket: DeletionTicket }
   | { readonly kind: "kept"; readonly reason: string }
@@ -1433,6 +1440,7 @@ const settleIssuedRemoval = (
       runId,
       runtime === "missing" ? "gone" : "present",
       fenceMs,
+      reauthorizedVersion,
     );
     switch (settled.kind) {
       case "deleted":

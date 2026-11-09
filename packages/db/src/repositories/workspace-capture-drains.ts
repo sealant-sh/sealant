@@ -289,6 +289,12 @@ export interface WorkspaceCaptureDrainRepoService {
     readonly token: string;
     readonly leaseMs: number;
     readonly fenceMs?: number | undefined;
+    /**
+     * The evidence version the caller's decision, made on the record as it stands now, still
+     * authorizes removal on. A removal already authorized is never blocked by newer evidence
+     * that authorizes the same thing: at that exact version it is re-based and issued again.
+     */
+    readonly reauthorizedVersion?: number | undefined;
   }) => Effect.Effect<
     "deleted" | "reissue" | "released" | "outstanding" | "held" | "none",
     WorkspaceCaptureDrainRepoError
@@ -1055,6 +1061,22 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                   .where(eq(workspaceCaptureDrains.runId, input.runId));
                 return "reissue" as const;
               }
+              if (
+                input.reauthorizedVersion !== undefined &&
+                input.reauthorizedVersion === current.evidenceVersion &&
+                Object.keys(current.observationFences).length === 0
+              ) {
+                // The evidence changed, but what it says now authorizes the same removal.
+                yield* tx
+                  .update(workspaceCaptureDrains)
+                  .set({
+                    deletionToken: input.token,
+                    deletionEvidenceVersion: current.evidenceVersion,
+                    deletionExpiresAt: leaseExpiry(input.leaseMs),
+                  })
+                  .where(eq(workspaceCaptureDrains.runId, input.runId));
+                return "reissue" as const;
+              }
               if (!current.fenced) {
                 // The evidence changed, so it may not be issued again; but the request already
                 // sent may still act, so it stays issued: nothing observed, nothing recovered.
@@ -1253,7 +1275,8 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
               completionSealedAt: input.sealedAt ?? null,
               completionOrigin: input.origin ?? null,
             };
-            const [row] = yield* db
+            const t = workspaceCaptureDrains;
+            const [written] = yield* db
               .insert(workspaceCaptureDrains)
               .values({ runId: input.runId, ...columns } satisfies NewWorkspaceCaptureDrain)
               .onConflictDoUpdate({
@@ -1262,8 +1285,22 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                   ...columns,
                   evidenceVersion: sql`${workspaceCaptureDrains.evidenceVersion} + 1`,
                 },
+                // The same seal attested again (a caller retrying after a lost reply) is not new
+                // evidence: it changes nothing, so a removal authorized on it stays current.
+                setWhere: sql`${t.completionExecutorId} is distinct from ${columns.completionExecutorId}
+                  or ${t.completionEpoch} is distinct from ${columns.completionEpoch}
+                  or ${t.completionCaptureN} is distinct from ${columns.completionCaptureN}
+                  or ${t.completionAttestedBy} is distinct from ${columns.completionAttestedBy}
+                  or ${t.completionLaunchId} is distinct from ${columns.completionLaunchId}
+                  or ${t.completionOrigin} is distinct from ${columns.completionOrigin === null ? null : JSON.stringify(columns.completionOrigin)}::jsonb`,
               })
               .returning();
+            const row =
+              written ??
+              (yield* db
+                .select()
+                .from(workspaceCaptureDrains)
+                .where(eq(workspaceCaptureDrains.runId, input.runId)))[0];
             if (row === undefined) {
               return yield* Effect.fail(
                 new Error(

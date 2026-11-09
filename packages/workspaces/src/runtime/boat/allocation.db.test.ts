@@ -3556,6 +3556,213 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
         await o.boat.close();
       }
     }));
+
+  it("honors the owner's discard on Boat: no guest must answer before the VM is removed (audit S8)", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      await execute(s.canonical.requestDiscard({ runId: target.runId, requestedBy: "usr_owner" }));
+      // The guest cannot answer at all.
+      const { owner, daemon } = await execute(s.final(["unreachable"]));
+      expect(await execute(owner.close(target))).toBe("closed");
+      expect(daemon.calls).toEqual([]);
+      expect(s.provider.deleteCalls).toBe(1);
+      expect(await execute(s.canonical.getByRunId(target.runId))).toMatchObject({
+        state: "discarded",
+        retainedAt: null,
+        captureTokenSealed: null,
+      });
+      expect(await execute(s.runtimes.getRuntimeInstanceByRunId(target.runId))).toMatchObject({
+        status: "stopped",
+        removedAt: expect.any(Date),
+      });
+      expect((await execute(nativeConsumerRows(s.db, target.runId)))[0]?.state).toBe("released");
+    }));
+
+  it("honors an attested sealed FINAL on Boat without asking the guest (audit S8)", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      await execute(
+        s.canonical.attestCompletion({
+          runId: target.runId,
+          executorId: target.sandboxId,
+          epoch: 1,
+          captureN: 3,
+          attestedBy: "mend",
+        }),
+      );
+      const { owner, daemon } = await execute(s.final(["unreachable"]));
+      expect(await execute(owner.close(target))).toBe("closed");
+      expect(daemon.calls).toEqual([]);
+      expect(s.provider.deleteCalls).toBe(1);
+      expect((await execute(nativeConsumerRows(s.db, target.runId)))[0]?.state).toBe("released");
+    }));
+
+  it("fences an issued start whose reply never came, keeps its VM, and lets discard remove it (audit S5)", () =>
+    test(async (s) => {
+      const target = await execute(s.allocations.prepare(s.input));
+      await execute(
+        s.executor.stage(
+          target.runtimeInstanceId,
+          Redacted.make({
+            files: [{ name: "test", bytes: Buffer.from("payload") }],
+            pins: { credentialVersions: [], dotfiles: [] },
+          }),
+        ),
+      );
+      await execute(s.resourceOwner.prepare(target));
+      const installed = await execute(s.executions.get(target.runId));
+      if (installed === undefined) throw new Error("missing execution");
+      // Core durably issued start; the guest's reply never came.
+      await execute(s.executions.advance(installed, { ...installed, phase: "issued" }));
+      await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+      s.gateway.allowRemoval = true;
+      const { owner } = await execute(s.final(["unreachable"]));
+      // Work may exist and nothing proves it saved: the VM is kept, never deleted on a guess.
+      await execute(owner.close(target)).catch(() => "kept");
+      expect(s.provider.deleteCalls).toBe(0);
+      // The start is fenced: Core can never send it again.
+      expect((await execute(s.executions.get(target.runId)))?.phase).toBe("held");
+      await expect(execute(s.executor.start(target.runtimeInstanceId))).rejects.toThrow(
+        "invocation-held",
+      );
+      await execute(s.canonical.requestDiscard({ runId: target.runId, requestedBy: "usr_owner" }));
+      expect(await execute(owner.close(target))).toBe("closed");
+      expect(s.provider.deleteCalls).toBe(1);
+      expect(await execute(s.canonical.getByRunId(target.runId))).toMatchObject({
+        state: "discarded",
+      });
+      expect((await execute(nativeConsumerRows(s.db, target.runId)))[0]?.state).toBe("released");
+    }));
+
+  it("retries an attested deletion whose reply was lost, through an identical re-attestation and a later discard (review of #496)", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const seal = {
+        runId: target.runId,
+        executorId: target.sandboxId,
+        epoch: 1,
+        captureN: 3,
+        attestedBy: "mend",
+      };
+      await execute(s.canonical.attestCompletion(seal));
+      s.provider.deleteLost = true;
+      const { owner } = await execute(s.final(["unreachable"]));
+      await expect(execute(owner.close(target))).rejects.toThrow();
+      expect(s.provider.deleteCalls).toBe(1);
+      s.provider.deleteLost = false;
+      // The caller retries its attestation after the lost reply: the same seal, not new evidence.
+      const before = (await execute(s.canonical.getByRunId(target.runId)))?.evidenceVersion;
+      await execute(s.canonical.attestCompletion(seal));
+      expect((await execute(s.canonical.getByRunId(target.runId)))?.evidenceVersion).toBe(before);
+      const outcomes = [];
+      for (let attempt = 0; attempt < 3; attempt += 1)
+        outcomes.push(await execute(owner.close(target)).catch((error: unknown) => String(error)));
+      await execute(s.canonical.requestDiscard({ runId: target.runId, requestedBy: "usr_owner" }));
+      const discard = await execute(owner.close(target)).catch((error: unknown) => String(error));
+      expect({ outcomes, discard, deletes: s.provider.deleteCalls }).toEqual({
+        outcomes: ["closed", "closed", "closed"],
+        discard: "closed",
+        deletes: 2,
+      });
+    }));
+
+  it("completes an authorized removal when newer evidence authorizes the same removal (review of #496)", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      await execute(
+        s.canonical.attestCompletion({
+          runId: target.runId,
+          executorId: target.sandboxId,
+          epoch: 1,
+          captureN: 3,
+          attestedBy: "mend",
+        }),
+      );
+      s.provider.deleteLost = true;
+      const { owner } = await execute(s.final(["unreachable"]));
+      await expect(execute(owner.close(target))).rejects.toThrow();
+      s.provider.deleteLost = false;
+      // Newer evidence that authorizes the same removal: a later sealed FINAL is attested.
+      const before = (await execute(s.canonical.getByRunId(target.runId)))?.evidenceVersion ?? 0;
+      await execute(
+        s.canonical.attestCompletion({
+          runId: target.runId,
+          executorId: target.sandboxId,
+          epoch: 1,
+          captureN: 4,
+          attestedBy: "mend",
+        }),
+      );
+      expect((await execute(s.canonical.getByRunId(target.runId)))?.evidenceVersion).toBe(
+        before + 1,
+      );
+      expect(await execute(owner.close(target))).toBe("closed");
+      expect(s.provider.deleteCalls).toBe(2);
+    }));
+
+  it("reports an attested saved FINAL as saved after the VM is removed (review of #496)", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      await execute(
+        s.canonical.attestCompletion({
+          runId: target.runId,
+          executorId: target.sandboxId,
+          epoch: 1,
+          captureN: 3,
+          attestedBy: "mend",
+        }),
+      );
+      const { owner } = await execute(s.final(["unreachable"]));
+      expect(await execute(owner.close(target))).toBe("closed");
+      expect(s.provider.deleteCalls).toBe(1);
+      expect(await execute(s.canonical.getByRunId(target.runId))).toMatchObject({
+        state: "stopped",
+        retainedAt: null,
+        captureTokenSealed: null,
+      });
+    }));
+
+  it("closes a start whose reply was lost once its worker is gone and the guest answers again (review of #494)", () =>
+    test(async (s) => {
+      const target = await execute(s.allocations.prepare(s.input));
+      await execute(
+        s.executor.stage(
+          target.runtimeInstanceId,
+          Redacted.make({
+            files: [{ name: "launch", bytes: Buffer.from("launch") }],
+            pins: { credentialVersions: [], dotfiles: [] },
+          }),
+        ),
+      );
+      const prepared = await execute(s.resourceOwner.prepare(target));
+      await execute(
+        s.executor.permit(target, {
+          resourceReceipt: prepared.guest.receipt,
+          tunnelReceipt: prepared.gateway.receipt,
+        }),
+      );
+      // The guest accepts start; its reply never reaches Core.
+      const original = s.guest.call.bind(s.guest);
+      s.guest.call = async (...args) => {
+        const answer = await original(...args);
+        if (args[2] === "start") throw new Error("lost hosted start reply");
+        return answer;
+      };
+      await expect(execute(s.executor.start(target.runId))).rejects.toThrow();
+      s.guest.call = original;
+      expect((await execute(s.executions.get(target.runId)))?.phase).toBe("issued");
+      expect(s.guest.starts).toBe(1);
+      // The launching worker is lost; connectivity returns.
+      await execute(strandBoatLaunch(s.db, { runId: target.runId, sandboxId: target.sandboxId }));
+      s.gateway.allowRemoval = true;
+      const { owner } = await execute(s.final([savedStatus()]));
+      await execute(owner.reconcile({ limit: 20 }));
+      const second = await execute(owner.reconcile({ limit: 20 }));
+      expect(second.entries).toContainEqual({ runId: target.runId, outcome: "closed" });
+      expect(s.guest.starts).toBe(1);
+      expect(s.provider.deleteCalls).toBe(1);
+      expect((await execute(s.canonical.getByRunId(target.runId)))?.state).toBe("stopped");
+    }));
 });
 
 const HOUR = 60 * 60_000;

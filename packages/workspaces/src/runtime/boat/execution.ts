@@ -577,7 +577,7 @@ export interface BoatExecutionService {
   readonly control: (
     target: BoatExecutionTarget,
   ) => Effect.Effect<Redacted.Redacted<SealantTarget>, Failure>;
-  /** Irreversibly prevents new worker starts without disturbing the daemon needed for FINAL. */
+  /** Irreversibly prevents new worker starts, issued or running, without disturbing FINAL's daemon. */
   readonly hold: (target: BoatExecutionTarget) => Effect.Effect<void, Failure>;
   /** Capture-only restart on the original boot. Missing original tmpfs remains held. */
   readonly recover: (
@@ -1178,7 +1178,9 @@ const make: Effect.Effect<
     if (!isDeepStrictEqual(record.target, target))
       return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
     if (record.phase === "held") return;
-    if (record.phase !== "running" || record.admission === null)
+    // An issued start whose reply never came is fenced too: Core never sends start again, and the
+    // guest only ever observes an invocation it already recorded (audit S5).
+    if ((record.phase !== "running" && record.phase !== "issued") || record.admission === null)
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
     yield* repo.advance(record, {
       ...record,
