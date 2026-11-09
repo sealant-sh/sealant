@@ -2,11 +2,7 @@ import type { CredentialCipher } from "@sealant/credentials";
 import type { SealantDB } from "@sealant/db";
 import { Effect, Layer } from "effect";
 
-import {
-  BoatAllocation,
-  BoatAllocationProvider,
-  boatAllocationLayer,
-} from "../runtime/boat/allocation.js";
+import { BoatAllocation, boatAllocationLayer } from "../runtime/boat/allocation.js";
 import {
   BoatExecution,
   BoatGuestTransportService,
@@ -18,7 +14,9 @@ import {
   BoatFinalCloseProvider,
   boatFinalCloseLayer,
 } from "../runtime/boat/final-close.js";
+import { boatObserverLayer } from "../runtime/boat/observation.js";
 import { BoatParking, BoatParkingProvider, boatParkingLayer } from "../runtime/boat/parking.js";
+import { BoatAllocationProvider } from "../runtime/boat/provider.js";
 import { SealantRuntime, SealantRuntimeControlLive } from "../sealantd/runtime.js";
 import { BoatReadiness, boatReadinessLayer } from "./boat-readiness.js";
 import { BoatResourcesHost, boatResourcesLayer } from "./boat-resources.js";
@@ -50,7 +48,9 @@ export const boatAllocationWorkerLayer: Layer.Layer<
   BoatAllocation,
   never,
   SealantDB | CredentialCipher | BoatAllocationProvider
-> = boatAllocationLayer.pipe(Layer.provide(boatWorkerExecutionLayer));
+> = boatAllocationLayer.pipe(
+  Layer.provide(Layer.merge(boatWorkerExecutionLayer, boatObserverLayer)),
+);
 
 const Resources = boatResourcesLayer.pipe(Layer.provide(boatWorkerExecutionLayer));
 /** Explicit launch/readiness entrypoint. No sweep invokes it and runtime registration remains disabled. */

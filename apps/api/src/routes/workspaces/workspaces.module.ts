@@ -218,9 +218,14 @@ type WorkspaceRunLinkRecord = Effect.Success<
   ReturnType<WorkspaceRepoService["listWorkspaceAttemptLinks"]>
 >[number];
 
+/**
+ * A Boat VM observed absent (`removedAt`, written with the observation) is never retained: its
+ * launch error stays history and what became of its work is the capture drain's to report.
+ */
 const executorIsRetained: typeof genericExecutorIsRetained = (input) =>
   input.runtimeInstance?.adapter === "boat"
-    ? input.runtimeInstance.errorCode === LAUNCH_RETAINED_ERROR_CODE
+    ? input.runtimeInstance.removedAt === null &&
+      input.runtimeInstance.errorCode === LAUNCH_RETAINED_ERROR_CODE
     : genericExecutorIsRetained(input);
 
 const gitHubUnavailableMessage = "GitHub integration is not configured.";

@@ -25,7 +25,7 @@ import { boatReadinessLayer } from "../../worker/boat-readiness.js";
 import { BoatResourcesHost, boatResourcesLayer } from "../../worker/boat-resources.js";
 import { BoatRuntimeAdapter } from "./adapter.js";
 import { GatewayFixture, GuestFixture, ProviderFixture } from "./allocation.fixture.js";
-import { BoatAllocationProvider, boatAllocationLayer } from "./allocation.js";
+import { boatAllocationLayer } from "./allocation.js";
 import { HttpBoatApi } from "./api.js";
 import { BoatSecret } from "./config.js";
 import {
@@ -39,6 +39,8 @@ import {
   boatInteractiveControlLayer,
   serveBoatControlRequests,
 } from "./interactive-control.js";
+import { boatObserverLayer } from "./observation.js";
+import { BoatAllocationProvider } from "./provider.js";
 import type { boatSessionDaemon } from "./session-daemon.fixture.js";
 
 const secret = (value: string) => {
@@ -181,11 +183,12 @@ export const boatSessionFixture = async (
   const Resources = boatResourcesLayer.pipe(Layer.provide(Exchange));
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
-      boatAllocationLayer.pipe(Layer.provide(Exchange)),
+      boatAllocationLayer.pipe(Layer.provide(Layer.merge(Exchange, boatObserverLayer))),
       boatReadinessLayer.pipe(Layer.provide(Layer.merge(Resources, Exchange))),
       boatFinalCloseLayerNoDeps.pipe(
         Layer.provide(
           Layer.mergeAll(
+            boatObserverLayer,
             Exchange,
             NativePublicationRepoLive,
             BoatAllocationRepoLive,

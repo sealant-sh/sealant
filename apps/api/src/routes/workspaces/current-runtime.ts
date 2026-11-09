@@ -15,7 +15,7 @@ export const currentWorkspaceRuntime = (instance: WorkspaceRuntimeInstance | und
     const canonical = selected.value;
     const root = yield* canonical.getByRunId(instance.runId);
     if (root?.custodyContract !== 3)
-      return root?.retainedAt == null
+      return root?.retainedAt == null || instance.removedAt !== null
         ? instance
         : { ...instance, status: "failed" as const, errorCode: LAUNCH_RETAINED_ERROR_CODE };
     const custody = yield* canonical.preservation;
@@ -30,6 +30,8 @@ export const currentWorkspaceRuntime = (instance: WorkspaceRuntimeInstance | und
       resourceId: target?.sandboxId ?? null,
       reference: target?.sandboxId ?? null,
       endpoint: null,
+      // The custody lineage, not the historical source row, says whether anything is still kept.
+      removedAt: status === "stopped" ? instance.removedAt : null,
       errorCode: status === "failed" ? LAUNCH_RETAINED_ERROR_CODE : null,
       errorMessage: null,
       stopReason: null,

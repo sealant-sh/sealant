@@ -66,6 +66,13 @@ export {
 } from "./runtime/boat/final-close.js";
 
 export {
+  BoatObserver,
+  boatObserverLayer,
+  boatObserverLayerNoDeps,
+  type BoatPresence,
+} from "./runtime/boat/observation.js";
+
+export {
   BoatParking,
   BoatParkingProvider,
   BoatParkingError,
