@@ -214,7 +214,7 @@ describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
         );
       expect(await execute(repo.get(binding.target.runId))).toEqual(saved);
     }));
-  it("tracks each dispatched host mutation and freezes only after all have positively returned", () =>
+  it("serializes active host mutations and fences later dispatch on close", () =>
     test(async ({ seed, owner, repo, executions }) => {
       const binding = await seed();
       await execute(owner.prepare(binding));
@@ -245,18 +245,35 @@ describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
       expect(await execute(repo.beginUpdate(initial, first))).toBe("issued");
       expect(await execute(repo.beginUpdate(initial, first))).toBe("observe-only");
       await expect(execute(repo.freeze(initial, close))).rejects.toThrow("stale-transition");
+      const entered = Promise.withResolvers<void>(),
+        release = Promise.withResolvers<void>();
+      const active = execute(
+        repo.withHostLock(
+          binding,
+          Effect.promise(async () => {
+            entered.resolve();
+            await release.promise;
+          }),
+        ),
+      );
+      await entered.promise;
       let current = requireRecord(await execute(repo.get(binding.target.runId)));
-      await expect(execute(repo.freeze(current, close))).rejects.toThrow("operation-held");
-      expect(await execute(repo.beginUpdate(current, second))).toBe("issued");
-      await execute(repo.endUpdate(binding, second));
-      current = requireRecord(await execute(repo.get(binding.target.runId)));
-      expect(current.updates).toEqual([first]);
-      await expect(execute(repo.freeze(current, close))).rejects.toThrow("operation-held");
-      await expect(
-        execute(repo.endUpdate({ ...binding, gatewayHostId: randomUUID() }, first)),
-      ).rejects.toThrow("binding-conflict");
-      await execute(repo.endUpdate(binding, first));
-      await execute(repo.endUpdate(binding, first));
+      try {
+        await expect(execute(repo.freeze(current, close))).rejects.toThrow("operation-held");
+        expect(await execute(repo.beginUpdate(current, second))).toBe("issued");
+        await execute(repo.endUpdate(binding, second));
+        current = requireRecord(await execute(repo.get(binding.target.runId)));
+        expect(current.updates).toEqual([first]);
+        await expect(execute(repo.freeze(current, close))).rejects.toThrow("operation-held");
+        await expect(
+          execute(repo.endUpdate({ ...binding, gatewayHostId: randomUUID() }, first)),
+        ).rejects.toThrow("binding-conflict");
+        await execute(repo.endUpdate(binding, first));
+        await execute(repo.endUpdate(binding, first));
+      } finally {
+        release.resolve();
+        await active;
+      }
       current = requireRecord(await execute(repo.get(binding.target.runId)));
       const frozen = await execute(repo.freeze(current, close));
       expect(await execute(repo.freeze(current, close))).toEqual(frozen);

@@ -1,7 +1,9 @@
 import { execFile, spawn } from "node:child_process";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import dgram from "node:dgram";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { boatExecutionTargetSchema } from "@sealant/validators";
@@ -578,5 +580,75 @@ it("one WireGuard peer reaches only its linked resources and DNS, with replay an
       expect(remaining.split("\n")).not.toContain(name);
     const remainingNetworks = await docker("network", "ls", "--format", "{{.Name}}");
     for (const name of networks.keys()) expect(remainingNetworks.split("\n")).not.toContain(name);
+  }
+});
+
+it("waits for a late gateway DNS control answer before acknowledging configuration", async () => {
+  if (imagePath === undefined) throw new Error("SEALANT_BOAT_TUNNEL_TEST_IMAGE_FILE required");
+  const base = (await readFile(imagePath, "utf8")).trim();
+  const context = await mkdtemp(join(tmpdir(), "boat-gateway-late-"));
+  const fixtureTag = `sealant-boat-gateway-delay:${randomUUID()}`;
+  let fixtureImage: string | undefined;
+  const held = new Map<string, string>();
+  const subnets: ResourceSubnets = {
+    allocate: async ({ name, kind }) => {
+      const subnet =
+        held.get(name) ??
+        `10.189.${Math.floor(Math.random() * 200) + 10}.${kind === "reach" ? "32/27" : "16/28"}`;
+      held.set(name, subnet);
+      return subnet;
+    },
+    release: async (name) => {
+      held.delete(name);
+    },
+  };
+  const target = executionTarget(randomUUID());
+  let runtime: DockerBoatTunnel | undefined;
+  try {
+    const source = await readFile(new URL("../../boat-tunnel/gateway.py", import.meta.url), "utf8");
+    const delayed = source.replace(
+      "    child = subprocess.Popen(['dnsmasq'",
+      "    time.sleep(8)\n    child = subprocess.Popen(['dnsmasq'",
+    );
+    if (source === delayed) throw new Error("missing real gateway serve seam");
+    await writeFile(join(context, "gateway.py"), delayed);
+    // Build this fixture from the production Dockerfile. Tagging the shared untagged image
+    // and then removing its last tag would delete the input needed by later guest proofs.
+    await writeFile(
+      join(context, "Dockerfile"),
+      await readFile(new URL("../../boat-tunnel/Dockerfile", import.meta.url), "utf8"),
+    );
+    fixtureImage = await docker("build", "--quiet", "--tag", fixtureTag, context);
+    const resources = new DockerResourceRuntime({ subnets });
+    runtime = new DockerBoatTunnel({ gatewayImage: fixtureImage, resources, subnets });
+    const own = keys(),
+      peer = keys();
+    const started = Date.now();
+    const result = await Effect.runPromise(
+      runtime.ensure({
+        target,
+        privateKey: Redacted.make(own.private),
+        peerKey: peer.public,
+        listenPort: await freePort(),
+        instances: [],
+        link: undefined,
+      }),
+    );
+    expect(Date.now() - started).toBeGreaterThanOrEqual(8000);
+    expect(result).toMatchObject({
+      container: boatTunnelName(target),
+      peerHandshake: "unverified",
+    });
+    // Cleanup uses exact Docker ownership, even when the gateway no longer answers.
+    await docker("stop", result.container);
+    await Effect.runPromise(runtime.remove(target));
+    await Effect.runPromise(runtime.remove(target));
+    expect(held.size).toBe(0);
+  } finally {
+    if (runtime !== undefined) await Effect.runPromise(runtime.remove(target));
+    if (fixtureImage !== undefined) await docker("image", "rm", "--no-prune", fixtureTag);
+    await rm(context, { recursive: true, force: true });
+    // CI shares this untagged immutable input with the subsequent guest network proof.
+    await docker("image", "inspect", base);
   }
 });

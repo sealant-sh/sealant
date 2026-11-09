@@ -11,6 +11,10 @@ import {
   NativePublicationRepoLive,
   WorkspaceAttemptRepo,
   WorkspaceAttemptRepoLive,
+  WorkspaceRepo,
+  WorkspaceRepoLive,
+  WorkspaceBuildJobRepo,
+  WorkspaceBuildJobRepoLive,
   WorkspaceCaptureDrainRepo,
   WorkspaceCaptureDrainRepoLive,
   WorkspaceRuntimeInstanceRepo,
@@ -44,6 +48,8 @@ export const makeBoatProofCore = (input: {
     boatTunnelRepoLayer,
     NativePublicationRepoLive,
     WorkspaceAttemptRepoLive,
+    WorkspaceRepoLive,
+    WorkspaceBuildJobRepoLive,
     WorkspaceCaptureDrainRepoLive,
     WorkspaceRuntimeInstanceRepoLive,
   ).pipe(Layer.provide(DB));
@@ -70,6 +76,42 @@ export const makeBoatProofCore = (input: {
     });
   return {
     dispose: () => runtime.dispose(),
+    publication: (session: ProofSession) =>
+      runtime.runPromise(
+        Effect.gen(function* () {
+          if (session.sealantWorkspaceId === null) return undefined;
+          const workspace = yield* (yield* WorkspaceRepo).getWorkspaceById(
+            session.sealantWorkspaceId,
+          );
+          if (workspace?.ownerUserId !== input.config.ownerId)
+            return yield* Effect.fail(new BoatProofError("owner-mismatch"));
+          if (workspace.latestRunId === null) return undefined;
+          const attempt = yield* (yield* WorkspaceAttemptRepo).getAttemptById(
+            workspace.latestRunId,
+          );
+          if (attempt?.ownerUserId !== input.config.ownerId)
+            return yield* Effect.fail(new BoatProofError("owner-mismatch"));
+          const job = yield* (yield* WorkspaceBuildJobRepo).getLatestJobByRunId(
+            workspace.latestRunId,
+          );
+          if (job?.publicationId == null) return undefined;
+          const record = yield* (yield* NativePublicationRepo).get(job.publicationId);
+          if (
+            record === undefined ||
+            record.ownership.key.deploymentId !== input.config.deploymentId ||
+            record.ownership.key.scope.kind !== "owner" ||
+            record.ownership.key.scope.ownerUserId !== input.config.ownerId
+          )
+            return yield* Effect.fail(new BoatProofError("publication-ownership"));
+          if (["quarantined", "withdrawn", "superseded"].includes(record.state))
+            return yield* Effect.fail(new BoatProofError("native-build-failed"));
+          return {
+            publicationId: record.ownership.publicationId,
+            runId: workspace.latestRunId,
+            ready: record.state === "ready",
+          };
+        }),
+      ),
     runtime: (session: ProofSession) =>
       runtime.runPromise(
         Effect.gen(function* () {

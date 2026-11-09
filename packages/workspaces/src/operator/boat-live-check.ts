@@ -36,6 +36,12 @@ export const boatProofConfigSchema = z.strictObject({
   deploymentId: id,
   resourceHost: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
   resourcePort: z.number().int().min(1).max(65535),
+  buildBudgetMs: z
+    .number()
+    .int()
+    .min(60_000)
+    .max(60 * 60_000)
+    .default(30 * 60_000),
   idleBudgetMs: z
     .number()
     .int()
@@ -49,6 +55,7 @@ const sessionSchema = z.object({
   worktree: z.string(),
   projectId: id,
   sealantRunId: id.nullable(),
+  sealantWorkspaceId: id.nullable(),
   worktreeId: id,
   idleStoppedAt: z.string().nullable(),
   status: z.enum([
@@ -82,6 +89,12 @@ export interface BoatProofInventory {
 /** The checker reads canonical facts; it cannot manufacture a launch, readiness or deletion receipt. */
 export interface BoatProofServices {
   readonly runtime: (session: ProofSession) => Promise<ProofRuntime | undefined>;
+  /** The current workspace attempt's catalog state, available before allocation or harness launch. */
+  readonly publication: (
+    session: ProofSession,
+  ) => Promise<
+    { readonly publicationId: string; readonly runId: string; readonly ready: boolean } | undefined
+  >;
   readonly inventory: () => Promise<BoatProofInventory>;
   readonly privacy: (publicationId: string) => Promise<unknown>;
   readonly withdraw: (publicationId: string) => Promise<void>;
@@ -101,12 +114,20 @@ export class MendProofClient {
     private readonly origin: string,
     private readonly token: string,
   ) {}
-  async request(method: "GET" | "POST", path: string, body?: unknown) {
+  async request(
+    method: "GET" | "POST",
+    path: string,
+    body?: unknown,
+    options?: { readonly signal: AbortSignal; readonly timeoutMs: number },
+  ) {
     const response = await fetch(`${this.origin.replace(/\/$/, "")}/api${path}`, {
       method,
       headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(method === "POST" ? 12 * 60_000 : 15_000),
+      signal:
+        options === undefined
+          ? AbortSignal.timeout(method === "POST" ? 12 * 60_000 : 15_000)
+          : AbortSignal.any([options.signal, AbortSignal.timeout(options.timeoutMs)]),
       redirect: "error",
     });
     if (!response.ok) {
@@ -384,6 +405,55 @@ export const runBoatLiveCheck = async (
   const name = `boat-proof-${randomUUID()}`;
   const publications = new Set<string>();
   const owned = trackProofSession({ config, mend, io, worktree: name, publications });
+  const launchReady = async (
+    phase: string,
+    path: string,
+    body: unknown,
+    previousRunId?: string,
+  ) => {
+    const controller = new AbortController();
+    let answer: { readonly ok: true } | { readonly ok: false; readonly error: unknown } | undefined;
+    const launching = mend
+      .request("POST", path, body, {
+        signal: controller.signal,
+        timeoutMs: config.buildBudgetMs + 12 * 60_000,
+      })
+      .then(
+        () => {
+          answer = { ok: true };
+          return;
+        },
+        (error: unknown) => {
+          answer = { ok: false, error };
+          return;
+        },
+      );
+    const checkAnswer = () => {
+      if (answer?.ok === false) throw answer.error;
+    };
+    try {
+      const built = await waitFor("native-build", config.buildBudgetMs, async () => {
+        checkAnswer();
+        const observed = await owned.remember();
+        if (observed === undefined) return undefined;
+        const publication = await io.publication(observed.session);
+        return publication?.ready && publication.runId !== previousRunId ? publication : undefined;
+      });
+      // This clock starts on a fresh observation of catalog readiness, even for a reused image.
+      io.record({ event: "publication-ready", phase, publicationId: built.publicationId });
+      const readyAt = Date.now();
+      return await waitFor(phase, 12 * 60_000, async () => {
+        checkAnswer();
+        const runtime = (await owned.remember())?.runtime;
+        if (!answer?.ok || !runtime?.ready || runtime.runId === previousRunId) return undefined;
+        io.record({ event: "readiness-budget", phase, elapsedMs: Date.now() - readyAt });
+        return runtime;
+      });
+    } finally {
+      controller.abort();
+      await launching;
+    }
+  };
   let failed: BoatProofError | undefined;
   try {
     const baseline = await io.inventory();
@@ -392,10 +462,8 @@ export const runBoatLiveCheck = async (
     io.record({ event: "create-intent", name, ...config });
     const session = await mend.create(config.projectId, name, owned.created);
     const started = Date.now();
-    await mend.request("POST", `/sessions/${session.id}/launch`, { mode: "protocol" });
-    const first = await waitFor("authenticated-readiness", 12 * 60_000, async () => {
-      const runtime = (await owned.remember())?.runtime;
-      return runtime?.ready ? runtime : undefined;
+    const first = await launchReady("authenticated-readiness", `/sessions/${session.id}/launch`, {
+      mode: "protocol",
     });
     io.record({ event: "ready", elapsedMs: Date.now() - started, ...first });
     io.record({ event: "privacy", result: await io.privacy(first.publicationId) });
@@ -429,11 +497,12 @@ export const runBoatLiveCheck = async (
     });
     io.record({ event: "idle-stopped", runId: first.runId, sandboxId: first.sandboxId });
     await mend.captured(stopped.worktreeId, file, bytes);
-    await mend.request("POST", `/sessions/${session.id}/resume`, { harness: null });
-    const resumed = await waitFor("fresh-resume", 12 * 60_000, async () => {
-      const runtime = (await owned.remember())?.runtime;
-      return runtime?.ready && runtime.runId !== first.runId ? runtime : undefined;
-    });
+    const resumed = await launchReady(
+      "fresh-resume",
+      `/sessions/${session.id}/resume`,
+      { harness: null },
+      first.runId,
+    );
     if (resumed.sandboxId === first.sandboxId) throw new BoatProofError("resume-reused-vm");
     await mend.shell(
       session.id,

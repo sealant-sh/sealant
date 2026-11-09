@@ -6,7 +6,7 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 
 import { BoatSecret } from "../runtime/boat/config.js";
@@ -22,6 +22,7 @@ import { BoatProofProvider } from "./boat-proof-provider.js";
 
 const disposals: (() => Promise<void>)[] = [];
 afterEach(async () => {
+  vi.useRealTimers();
   for (const dispose of disposals.splice(0).toReversed()) await dispose();
 });
 const listen = async (server: net.Server) => {
@@ -33,6 +34,9 @@ const listen = async (server: net.Server) => {
 };
 const fixture = async (
   options: {
+    beforeLaunchReply?: () => Promise<void>;
+    publicationReady?: () => boolean;
+    observeRuntime?: () => void;
     retainedPublication?: boolean;
     unknownSnapshot?: boolean;
     corruptResume?: boolean;
@@ -74,6 +78,7 @@ const fixture = async (
     status: sessionStopped ? "stopped" : generation === 0 ? "starting" : "running",
     worktreeId: "worktree_test",
     sealantRunId: generation === 0 ? null : `run_${generation}`,
+    sealantWorkspaceId: generation === 0 ? null : "workspace_test",
     idleStoppedAt,
   });
   const setRuntime = (closed: boolean) => {
@@ -113,6 +118,7 @@ const fixture = async (
       } else if (path === "/api/sessions/session_test/launch") {
         generation = 1;
         setRuntime(false);
+        await options.beforeLaunchReply?.();
       } else if (path === "/api/sessions/session_test")
         result = { session: { ...session(), ...options.detailOverrides } };
       else if (path === "/api/sessions") {
@@ -199,7 +205,18 @@ const fixture = async (
   const mend = new MendProofClient(origin, "synthetic-mend-token");
   const services: BoatProofServices = {
     record: (event) => events.push(event),
-    runtime: async (s) => (s.sealantRunId === null ? undefined : runtimes.get(s.sealantRunId)),
+    publication: async () =>
+      generation === 0
+        ? undefined
+        : {
+            publicationId,
+            runId: `run_${generation}`,
+            ready: generation === 2 || (options.publicationReady?.() ?? true),
+          },
+    runtime: async (s) => {
+      options.observeRuntime?.();
+      return s.sealantRunId === null ? undefined : runtimes.get(s.sealantRunId);
+    },
     inventory: async () => ({
       sandboxes: [...runtimes.values()].filter((r) => !r.closed).map((r) => r.sandboxId),
       snapshots: [
@@ -234,6 +251,44 @@ const fixture = async (
 };
 
 describe("operator checker against Mend HTTP and terminal protocol", () => {
+  it("gives native construction its own budget and starts readiness only at publication ready", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const began = Date.now();
+    let reads = 0;
+    let delayedReadiness = false;
+    const reply = Promise.withResolvers<void>();
+    const f = await fixture({
+      beforeLaunchReply: () => reply.promise,
+      publicationReady: () => {
+        if (++reads === 1) {
+          vi.setSystemTime(began + 13 * 60_000);
+          return false;
+        }
+        reply.resolve();
+        return true;
+      },
+      observeRuntime: () => {
+        if (!delayedReadiness && f.events.some((event) => event.event === "publication-ready")) {
+          delayedReadiness = true;
+          vi.setSystemTime(began + 24 * 60_000);
+        }
+      },
+    });
+    try {
+      await f.run();
+      expect(f.events).toContainEqual(
+        expect.objectContaining({ event: "publication-ready", phase: "authenticated-readiness" }),
+      );
+      expect(f.events).toContainEqual({
+        event: "readiness-budget",
+        phase: "authenticated-readiness",
+        elapsedMs: 11 * 60_000,
+      });
+    } finally {
+      reply.resolve();
+    }
+  }, 20_000);
+
   it("executes its emitted shell, observes actual idle Stop, reads captured edits and verifies a fresh child", async () => {
     const f = await fixture();
     await f.run();

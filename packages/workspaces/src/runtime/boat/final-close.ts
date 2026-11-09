@@ -357,6 +357,15 @@ const make: Effect.Effect<
         }
         yield* runtimes.markStopped({ runId, stopReason });
         yield* runtimes.markRemoved({ runId, resourceId: sandboxId });
+        // No invocation was issued, and its fenced guest is positively gone. End the pre-launch
+        // drain without inventing a flush or a completion seal, including legacy closed rows.
+        if (root?.state !== "gone")
+          yield* canonical.recordObservation({
+            runId,
+            state: "gone",
+            detail:
+              "The workspace closed before its harness started; there was nothing to capture.",
+          });
         yield* catalog.release(terminal.input.consumer, terminal.input.publication.publicationId);
         return "closed" as const;
       });
