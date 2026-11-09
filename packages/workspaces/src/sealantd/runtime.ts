@@ -21,6 +21,7 @@
  */
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
+import type { IncomingMessage } from "node:http";
 import { createConnection } from "node:net";
 import { Duplex } from "node:stream";
 
@@ -43,7 +44,7 @@ import {
   type ExecAccepted,
   type HealthReport,
 } from "@sealant/runtime-protocol";
-import { Context, Effect, Layer, Schema, Stream } from "effect";
+import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
 import type * as Scope from "effect/Scope";
 import { WebSocket, createWebSocketStream } from "ws";
 
@@ -173,6 +174,10 @@ export class TransportError extends Schema.TaggedError<TransportError>()("Transp
   operation: sealantOperationSchema,
   message: Schema.String,
   cause: Schema.Defect(),
+  /** HTTP status of a refused WebSocket upgrade. */
+  status: Schema.optional(Schema.Number),
+  /** The refusing frontend's classified reason (`{"error": code}`), never free text. */
+  reason: Schema.optional(Schema.String),
 }) {}
 
 export class SealantForwardBindingUnsupported extends Schema.TaggedError<SealantForwardBindingUnsupported>()(
@@ -981,16 +986,70 @@ const connectWebSocket = (
       };
       resume(Effect.succeed({ duplex, close }));
     };
+    // A refused upgrade keeps its status and the frontend's classified reason, which `ws` drops.
+    const onRefused = (_request: unknown, response: IncomingMessage) => {
+      socket.off("open", onOpen);
+      socket.off("error", onOpenError);
+      // terminate() aborts the handshake, which emits one error nobody else listens for.
+      socket.on("error", () => undefined);
+      let body = "";
+      let settled = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(deadline);
+        response.destroy();
+        socket.terminate();
+        const status = response.statusCode ?? 0;
+        const reason = refusalReason(body);
+        resume(
+          Effect.fail(
+            new TransportError({
+              operation: "open",
+              message: `Unexpected server response: ${status}${reason === undefined ? "" : ` (${reason})`}`,
+              cause: undefined,
+              status,
+              ...(reason === undefined ? {} : { reason }),
+            }),
+          ),
+        );
+      };
+      const deadline = setTimeout(settle, 5_000);
+      response.setEncoding("utf8");
+      response.on("data", (chunk: string) => {
+        body += chunk;
+        if (body.length > REFUSAL_BODY_LIMIT) settle();
+      });
+      response.once("end", settle);
+      response.once("error", settle);
+    };
 
     socket.once("error", onOpenError);
     socket.once("open", onOpen);
+    socket.once("unexpected-response", onRefused);
 
     return Effect.sync(() => {
       socket.off("error", onOpenError);
       socket.off("open", onOpen);
+      socket.off("unexpected-response", onRefused);
       socket.terminate();
     });
   });
+
+const REFUSAL_BODY_LIMIT = 1024;
+const refusalSchema = Schema.Struct({
+  error: Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9-]{0,63}$/)),
+});
+/** Only a classified reason code from a refusal body; never its free text. */
+const refusalReason = (body: string): string | undefined => {
+  if (body.length > REFUSAL_BODY_LIMIT) return undefined;
+  try {
+    return Option.getOrUndefined(Schema.decodeUnknownOption(refusalSchema)(JSON.parse(body)))
+      ?.error;
+  } catch {
+    return undefined;
+  }
+};
 
 const openTarget = (target: SealantTarget) => {
   switch (target.kind) {

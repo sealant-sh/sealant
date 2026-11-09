@@ -35,6 +35,9 @@ const diagnosticSchema = z.object({
     "BoatTunnelStoreError",
     "ResourceInstanceRepoError",
     "BoatAdapterError",
+    "TransportError",
+    "SealantControlError",
+    "SealantUnexpectedError",
     "ZodError",
     "Error",
     "TypeError",
@@ -125,6 +128,22 @@ const diagnosticSchema = z.object({
         .string()
         .regex(/^[A-Za-z0-9_./,=+-]{1,256}$/)
         .optional(),
+    })
+    .optional(),
+  /** The authenticated control stream to sealantd: where it failed and who refused it, and why. */
+  control: z
+    .object({
+      /** The runtime client operation that failed (`open`, `health`, ...), or `probe` on its deadline. */
+      operation: z.string().regex(/^[a-zA-Z]{1,32}$/),
+      /** HTTP status of a refused upgrade: the relay answers the bridge's refusal as 503. */
+      status: z.number().int().optional(),
+      /** The bridge's or relay's classified reason, e.g. `control-peer-changed`. Never free text. */
+      reason: z
+        .string()
+        .regex(/^[a-z][a-z0-9-]{0,63}$/)
+        .optional(),
+      /** The daemon's own error code, when it answered with one. */
+      daemonCode: z.number().int().optional(),
     })
     .optional(),
   command: z
