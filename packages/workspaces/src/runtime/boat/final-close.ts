@@ -35,11 +35,11 @@ import {
   removeUnderDeletion,
   type CaptureDrainRead,
 } from "../../worker/capture-drain.js";
-import { BoatAllocationProvider } from "./allocation.js";
 import type { BoatApi, BoatDeletion } from "./api.js";
 import { boatSandboxIdSchema, boatDeletionIdSchema, type BoatResult } from "./config.js";
 import { BoatExecution } from "./execution.js";
 import { BoatObserver, boatObserverLayer } from "./observation.js";
+import { BoatAllocationProvider } from "./provider.js";
 
 /** Unknown effects retain the exact VM, keys and port in custody. */
 export class BoatFinalCloseError extends Error {

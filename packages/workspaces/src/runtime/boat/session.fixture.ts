@@ -25,7 +25,7 @@ import { boatReadinessLayer } from "../../worker/boat-readiness.js";
 import { BoatResourcesHost, boatResourcesLayer } from "../../worker/boat-resources.js";
 import { BoatRuntimeAdapter } from "./adapter.js";
 import { GatewayFixture, GuestFixture, ProviderFixture } from "./allocation.fixture.js";
-import { BoatAllocationProvider, boatAllocationLayer } from "./allocation.js";
+import { boatAllocationLayer } from "./allocation.js";
 import { HttpBoatApi } from "./api.js";
 import { BoatSecret } from "./config.js";
 import {
@@ -40,6 +40,7 @@ import {
   serveBoatControlRequests,
 } from "./interactive-control.js";
 import { boatObserverLayer } from "./observation.js";
+import { BoatAllocationProvider } from "./provider.js";
 import type { boatSessionDaemon } from "./session-daemon.fixture.js";
 
 const secret = (value: string) => {

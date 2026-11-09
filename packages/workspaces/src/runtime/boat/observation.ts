@@ -8,9 +8,9 @@ import {
 import type { BoatAllocationRecord } from "@sealant/validators";
 import { Context, Effect, Layer } from "effect";
 
-import { BoatAllocationProvider, boatAllocationMatches } from "./allocation.js";
 import type { BoatSandbox } from "./api.js";
 import { boatSandboxIdSchema, type BoatApiError } from "./config.js";
+import { BoatAllocationProvider, boatAllocationMatches } from "./provider.js";
 
 /**
  * Boat's states while it is still accepting an asynchronous create (202, then `provisioned` and

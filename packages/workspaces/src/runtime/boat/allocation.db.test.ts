@@ -91,7 +91,7 @@ import { cases as launchCases } from "../docker-runtime-adapter.golden-fixture.j
 import { LaunchRetainedError } from "../launch-retention.js";
 import { BoatRuntimeAdapter } from "./adapter.js";
 import { ProviderFixture, GuestFixture, GatewayFixture } from "./allocation.fixture.js";
-import { BoatAllocation, BoatAllocationProvider, boatAllocationLayer } from "./allocation.js";
+import { BoatAllocation, boatAllocationLayer } from "./allocation.js";
 import { HttpBoatApi } from "./api.js";
 import { BoatOwnership, BoatSecret } from "./config.js";
 import { BoatExecution, BoatGuestTransportService, boatExecutionLayer } from "./execution.js";
@@ -106,6 +106,7 @@ import {
   serveBoatControlRequests,
 } from "./interactive-control.js";
 import { BoatObserver, boatObserverLayer, boatObserverLayerNoDeps } from "./observation.js";
+import { BoatAllocationProvider } from "./provider.js";
 import { RecordedBoat } from "./recorded-boat.fixture.js";
 
 const databaseUrl = process.env.SEALANT_TEST_DATABASE_URL;

@@ -18,7 +18,6 @@ import { Cause, Context, Effect, Layer, Schedule } from "effect";
 import { z } from "zod";
 
 import { safeCommandTail } from "../../images/boat/command-diagnostics.js";
-import type { BoatApi, BoatSandbox } from "./api.js";
 import { BoatOwnership, boatSandboxIdSchema, type BoatResult } from "./config.js";
 import { BoatExecution, type BoatExecutionService } from "./execution.js";
 import {
@@ -27,6 +26,7 @@ import {
   type BoatLaunchDiagnostic,
 } from "./launch-diagnostics.js";
 import { BoatObserver } from "./observation.js";
+import { BoatAllocationProvider, boatAllocationMatches } from "./provider.js";
 
 /** No provider response text crosses this failure boundary. Uncertain allocations remain pinned. */
 export class BoatAllocationError extends Error {
@@ -68,17 +68,6 @@ export interface BoatAllocationService {
 export class BoatAllocation extends Context.Service<BoatAllocation, BoatAllocationService>()(
   "@sealant/workspaces/boat/BoatAllocation",
 ) {}
-/** The composition root chooses provider access and deployment, never an ambient credential. */
-export class BoatAllocationProvider extends Context.Service<
-  BoatAllocationProvider,
-  {
-    readonly deploymentId: string;
-    readonly api: Pick<
-      BoatApi,
-      "create" | "discover" | "get" | "getSnapshot" | "execute" | "hostControl"
-    >;
-  }
->()("@sealant/workspaces/boat/BoatAllocationProvider") {}
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const attempt = <A>(run: () => A) =>
   Effect.try({ try: run, catch: () => new BoatAllocationError("invalid-input") });
@@ -98,20 +87,6 @@ const provider = <A>(step: BoatLaunchDiagnostic["step"], run: () => Promise<Boat
             ),
           ),
     ),
-  );
-/** The exact labels create stamps on a launch's VM; discovery and every read require all of them. */
-export const boatAllocationLabels = (record: BoatAllocationRecord) => ({
-  "sealant-runtime": "boat",
-  "sealant-deployment": record.input.deploymentId,
-  "sealant-workspace": record.input.workspaceId,
-  "sealant-run": record.input.consumer.runId,
-  "sealant-instance": record.input.consumer.runtimeInstanceId,
-  "sealant-attempt": record.input.launchAttemptId,
-  "sealant-source": record.input.publication.publicationId,
-});
-export const boatAllocationMatches = (record: BoatAllocationRecord, sandbox: BoatSandbox) =>
-  Object.entries(boatAllocationLabels(record)).every(
-    ([key, value]) => sandbox.labels?.[key] === value,
   );
 const manifestOf = (input: BoatAllocationInput) => {
   const publication = input.publication;

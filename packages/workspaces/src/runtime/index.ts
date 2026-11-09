@@ -258,12 +258,12 @@ export {
 export {
   BoatAllocation,
   BoatAllocationError,
-  BoatAllocationProvider,
   boatAllocationLayer,
   boatAllocationLayerNoDeps,
   type BoatAllocationService,
   type BoatAllocationSweep,
 } from "./boat/allocation.js";
+export { BoatAllocationProvider } from "./boat/provider.js";
 
 export { HttpBoatApi } from "./boat/api.js";
 export { BoatSecret } from "./boat/config.js";

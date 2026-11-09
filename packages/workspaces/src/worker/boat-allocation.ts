@@ -2,11 +2,7 @@ import type { CredentialCipher } from "@sealant/credentials";
 import type { SealantDB } from "@sealant/db";
 import { Effect, Layer } from "effect";
 
-import {
-  BoatAllocation,
-  BoatAllocationProvider,
-  boatAllocationLayer,
-} from "../runtime/boat/allocation.js";
+import { BoatAllocation, boatAllocationLayer } from "../runtime/boat/allocation.js";
 import {
   BoatExecution,
   BoatGuestTransportService,
@@ -20,6 +16,7 @@ import {
 } from "../runtime/boat/final-close.js";
 import { boatObserverLayer } from "../runtime/boat/observation.js";
 import { BoatParking, BoatParkingProvider, boatParkingLayer } from "../runtime/boat/parking.js";
+import { BoatAllocationProvider } from "../runtime/boat/provider.js";
 import { SealantRuntime, SealantRuntimeControlLive } from "../sealantd/runtime.js";
 import { BoatReadiness, boatReadinessLayer } from "./boat-readiness.js";
 import { BoatResourcesHost, boatResourcesLayer } from "./boat-resources.js";
