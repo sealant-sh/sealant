@@ -144,6 +144,14 @@ const stopProcess = async (process_: ManagedProcess, signal: NodeJS.Signals) => 
   process_.child = undefined;
 };
 
+/** Resolves once the process log matches `ready`; throws with the log tail if it has exited. */
+const alive = async (process_: ManagedProcess, ready: RegExp) => {
+  const text = await readFile(process_.log, "utf8").catch(() => "");
+  if (process_.child === undefined)
+    throw new Error(`${process_.name} exited at startup:\n${text.slice(-4000)}`);
+  return ready.test(text) ? true : undefined;
+};
+
 const waitFor = async <T>(
   what: string,
   probe: () => Promise<T | undefined>,
@@ -368,23 +376,33 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
     // The twins' network. The host is its gateway address: twins reach the published WireGuard port
     // and the capture channel there, and the host reaches each twin by its address.
     const network = `boat-harness-${runId}`;
-    const subnet = await freeSubnet();
-    await dockerOk(["network", "create", "--subnet", subnet, "--label", label, network]);
+    // Name each bridge's host address explicitly: some Docker versions leave it out of `inspect`.
+    const bridge = async (name: string) => {
+      const range = await freeSubnet();
+      const host = range.replace(/\.0\/24$/, ".1");
+      await dockerOk([
+        "network",
+        "create",
+        "--subnet",
+        range,
+        "--gateway",
+        host,
+        "--label",
+        label,
+        name,
+      ]);
+      return { range, host };
+    };
+    const { range: subnet, host: hostIp } = await bridge(network);
     cleanups.push(() => removeLabelled(label, { images: true }));
     // Runs after the worker and API stop: whatever Core created for this run and left behind.
     cleanups.push(async () => removeObjects(await coreObjects()));
-    const hostIp = (
-      await dockerOk(["network", "inspect", "-f", "{{(index .IPAM.Config 0).Gateway}}", network])
-    ).trim();
     // The guest refuses workspace egress to the WireGuard endpoint's address, and on Boat the
     // gateway host and Mend's capture endpoint are different addresses. Give the gateway endpoint a
     // host address of its own: the gateway IP of an otherwise unused bridge. Twins reach it through
     // the host; the gateway publishes its UDP port on every host address.
     const edge = `${network}-edge`;
-    await dockerOk(["network", "create", "--subnet", await freeSubnet(), "--label", label, edge]);
-    const gatewayEndpoint = (
-      await dockerOk(["network", "inspect", "-f", "{{(index .IPAM.Config 0).Gateway}}", edge])
-    ).trim();
+    const { host: gatewayEndpoint } = await bridge(edge);
 
     // Core's database.
     const dbPort = await freePort();
@@ -592,9 +610,13 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
     log("starting API and worker");
     launchProcess(api, ["--import", "tsx", "src/index.ts"], join(repo, "apps/api"), apiEnv);
     await startWorker();
+    // A process that dies at startup (e.g. a refused config) would otherwise leave every scenario
+    // waiting on a launch nobody runs. Fail the stack with the log tail instead.
+    await waitFor("the worker to start", () => alive(worker, /Sealant worker starting/), 120_000);
     await waitFor(
       "API",
       async () => {
+        if (api.child === undefined) await alive(api, /$^/);
         const response = await fetch(`${apiUrl}/healthz`).catch(() => undefined);
         return response !== undefined && response.status < 500 ? true : undefined;
       },
