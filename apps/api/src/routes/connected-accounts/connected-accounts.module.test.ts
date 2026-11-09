@@ -46,11 +46,34 @@ describe("normalizeSecret, claude", () => {
     expect(outcome.value.metadata).not.toHaveProperty("droppedSections");
   });
 
+  it("connects an Anthropic API key of either shape as an API key, and refuses an Admin key", () => {
+    for (const key of [
+      "sk-ant-usr-FAKEuserlinkedkeyforthetests00000wxyz",
+      "sk-ant-api03-FAKEclaudekeyforthetests000000wxyz",
+    ]) {
+      const outcome = run("claude", ` ${key}\n`);
+      if (!Exit.isSuccess(outcome)) throw new Error(`expected ${key.slice(0, 11)} to connect`);
+      expect(outcome.value).toMatchObject({ kind: "api-key", login: "api-key" });
+      expect(JSON.parse(outcome.value.payloadJson)).toEqual({ apiKey: key });
+    }
+    expect(
+      Effect.runSync(
+        Effect.flip(normalizeSecret("claude", "sk-ant-admin01-FAKEadminkeyforthetests0000000")),
+      ),
+    ).toMatchObject({ message: "An Admin API key cannot run a model." });
+    expect(Exit.isFailure(run("codex", "sk-ant-usr-FAKEuserlinkedkeyforthetests00000wxyz"))).toBe(
+      true,
+    );
+  });
+
   it("leaves a setup token alone, and refuses anything else", () => {
     const token = run("claude", "sk-ant-oat01-a-setup-token");
     if (!Exit.isSuccess(token)) throw new Error("expected a normalized credential");
     expect(token.value.kind).toBe("oauth-token");
     expect(Exit.isFailure(run("claude", "neither one nor the other"))).toBe(true);
+    expect(Exit.isFailure(run("claude", "sk-ant-FAKEnotakindofkeyanthropicissues00000"))).toBe(
+      true,
+    );
     expect(Exit.isFailure(run("claude", '{"mcpOAuth":{}}'))).toBe(true);
   });
 });

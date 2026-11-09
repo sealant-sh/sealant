@@ -359,7 +359,7 @@ const redactNamedValues = (text: string): string => {
  * or a digit, so `OPENAI_API_KEY_sk-…` is caught and `risk-…` is not.
  */
 const PROVIDER_KEY =
-  /(?<![A-Za-z0-9])sk-(?:(?:ant-(?:api|oat|ort|admin)\d*|proj|svcacct|admin)-[A-Za-z0-9_-]{8,}|[A-Za-z0-9_-]{32,})/g;
+  /(?<![A-Za-z0-9])sk-(?:(?:ant-(?:api|usr|oat|ort|admin)\d*|proj|svcacct|admin)-[A-Za-z0-9_-]{8,}|[A-Za-z0-9_-]{32,})/g;
 
 export const redactProviderKeys = (text: string): string => text.replace(PROVIDER_KEY, REDACTED);
 

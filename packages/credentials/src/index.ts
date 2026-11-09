@@ -71,8 +71,8 @@ export {
 export {
   apiKeyMetadata,
   apiKeyPayloadSchema,
-  CLAUDE_ADMIN_KEY_PREFIX,
-  CLAUDE_API_KEY_PREFIX,
+  anthropicSecretKindOf,
+  type AnthropicSecretKind,
   CLAUDE_TOKEN_PREFIX,
   claudeApiKeyPayloadSchema,
   claudeCredentialPayloadSchema,

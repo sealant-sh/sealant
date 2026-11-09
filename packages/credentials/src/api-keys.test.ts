@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { codexLoginFile } from "./copies.js";
 import {
+  anthropicSecretKindOf,
   codexAuthJsonLogin,
   connectedAccountKinds,
   credentialKindOf,
@@ -17,13 +18,30 @@ import {
 } from "./payloads.js";
 
 const claudeKey = "sk-ant-api03-FAKEclaudekeyforthetests000000wxyz";
+const claudeUserKey = "sk-ant-usr-FAKEuserlinkedkeyforthetests00000wxyz";
 const codexKey = "sk-proj-FAKEcodexkeyforthetests0000wxyz";
 const chatgptTokens = { access_token: "at-fake", refresh_token: "rt-fake", account_id: "acct" };
 const endpoint = Schema.decodeSync(EndpointUrl)("https://gateway.example.test/v1");
 
+describe("anthropicSecretKindOf", () => {
+  it("reads a setup token, an Admin key and both API key shapes by their prefix", () => {
+    expect(anthropicSecretKindOf("sk-ant-oat01-FAKEsetuptoken")).toBe("setup-token");
+    expect(anthropicSecretKindOf("sk-ant-admin01-FAKEadminkey")).toBe("admin-key");
+    expect(anthropicSecretKindOf(claudeKey)).toBe("api-key");
+    expect(anthropicSecretKindOf(claudeUserKey)).toBe("api-key");
+  });
+
+  it("knows no other Anthropic string", () => {
+    for (const secret of ["sk-ant-ort01-FAKErefresh", "sk-ant-FAKEunknown", "sk-ant-usr", "x"]) {
+      expect(anthropicSecretKindOf(secret)).toBeUndefined();
+    }
+  });
+});
+
 describe("parseApiKey", () => {
   it("takes a trimmed key of its provider's shape", () => {
     expect(parseApiKey("claude", `  ${claudeKey}\n`)).toEqual({ valid: true, apiKey: claudeKey });
+    expect(parseApiKey("claude", claudeUserKey)).toEqual({ valid: true, apiKey: claudeUserKey });
     expect(parseApiKey("codex", codexKey)).toEqual({ valid: true, apiKey: codexKey });
     expect(parseApiKey("codex", "sk-FAKElegacyopenaikey000000000000")).toMatchObject({
       valid: true,
@@ -39,6 +57,13 @@ describe("parseApiKey", () => {
       reason: "An Admin API key cannot run a model.",
     });
     expect(parseApiKey("codex", claudeKey)).toMatchObject({ valid: false });
+    expect(parseApiKey("codex", claudeUserKey)).toMatchObject({
+      reason: "That is an Anthropic key; connect it as a Claude account.",
+    });
+    expect(parseApiKey("claude", "sk-ant-FAKEnotakindofkeyanthropicissues00000")).toMatchObject({
+      valid: false,
+      reason: expect.stringContaining("not an Anthropic API key"),
+    });
     expect(parseApiKey("claude", codexKey)).toMatchObject({ valid: false });
     expect(parseApiKey("claude", `${claudeKey.slice(0, 20)} ${claudeKey.slice(20)}`)).toMatchObject(
       { valid: false },

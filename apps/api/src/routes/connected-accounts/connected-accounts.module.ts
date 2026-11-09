@@ -19,8 +19,7 @@ import {
 } from "@sealant/api-contracts";
 import {
   apiKeyMetadata,
-  CLAUDE_ADMIN_KEY_PREFIX,
-  CLAUDE_API_KEY_PREFIX,
+  anthropicSecretKindOf,
   CLAUDE_TOKEN_PREFIX,
   codexAuthJsonLogin,
   CredentialCipher,
@@ -282,18 +281,15 @@ export const normalizeSecret = (
           });
         }
 
-        if (token.startsWith(CLAUDE_TOKEN_PREFIX)) {
+        const kind = anthropicSecretKindOf(token);
+        if (kind === "setup-token") {
           return credentialOf(["claude", { token }], {
             tokenSuffix: token.slice(-4),
             connectedVia: "paste",
           });
         }
 
-        if (
-          endpoint !== undefined ||
-          token.startsWith(CLAUDE_API_KEY_PREFIX) ||
-          token.startsWith(CLAUDE_ADMIN_KEY_PREFIX)
-        ) {
+        if (endpoint !== undefined || kind === "api-key" || kind === "admin-key") {
           const key = parseApiKey("claude", token, endpoint);
           if (!key.valid) {
             return yield* new ConnectedAccountBadRequestError({ message: key.reason });
@@ -302,7 +298,7 @@ export const normalizeSecret = (
         }
 
         return yield* new ConnectedAccountBadRequestError({
-          message: `Claude credential must be a \`claude setup-token\` value (starts with "${CLAUDE_TOKEN_PREFIX}"), an Anthropic API key (starts with "${CLAUDE_API_KEY_PREFIX}"), or the JSON contents of a Claude Code .credentials.json session file.`,
+          message: `Claude credential must be a \`claude setup-token\` value (starts with "${CLAUDE_TOKEN_PREFIX}"), an Anthropic API key from the Console, or the JSON contents of a Claude Code .credentials.json session file.`,
         });
       }
       case "codex": {

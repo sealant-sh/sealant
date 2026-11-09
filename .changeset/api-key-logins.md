@@ -3,12 +3,12 @@
 "@sealant/api-contracts": minor
 ---
 
-A Claude or Codex connected account can be an API key. `connect()` takes an Anthropic API key
-(`sk-ant-api…`), an OpenAI key (`sk-…`), or a Codex `auth.json` whose login is a key, and stores an
-account of kind `api-key` holding the key alone. A key in an `auth.json` is checked as a bare key
-is: an Admin key, a key pasted under the other provider, and a broken or truncated key are refused
-with the reason, and so is an `auth.json` holding both a ChatGPT login and a key without an
-`auth_mode` saying which. An `auth_mode` decides first.
+A Claude or Codex connected account can be an API key. `connect()` takes an Anthropic API key from
+the Console (a legacy key or one linked to a user), an OpenAI key (`sk-…`), or a Codex `auth.json`
+whose login is a key, and stores an account of kind `api-key` holding the key alone. A key in an
+`auth.json` is checked as a bare key is: an Admin key, a key pasted under the other provider, and a
+broken or truncated key are refused with the reason, and so is an `auth.json` holding both a ChatGPT
+login and a key without an `auth_mode` saying which. An `auth_mode` decides first.
 `connect({ login: "subscription" | "api-key" })` refuses a secret of the other class before anything
 is stored ("That is a Claude subscription login, not an API key."). Without `accountId` or `name`, a
 connect replaces the only account of the secret's login class, read from each stored login, so a key
