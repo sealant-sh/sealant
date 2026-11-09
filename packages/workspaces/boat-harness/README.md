@@ -82,10 +82,12 @@ The networking follows what the guest enforces:
 - The UDP slot and the publication pin are released.
 - No live VM and no gateway container or network is left.
 
-A scenario that hits a known defect on main is an expected failure (`defects.ts`). It passes only
-while it fails with that defect's signature. Once the defect is fixed it fails, so the fix's pull
-request removes the marker. Where timing decides which of two defects a scenario meets first (the 30
-s sweep race can strike any launch), the marker names both.
+A scenario that hits a known defect on main is an expected failure (`defects.ts`, `markers.ts`). A
+marker names the failure: where the scenario fails and what the runtime row says (on the happy path,
+F3 must happen at the `ready` step). It can also require guest or proxy evidence. The scenario
+passes only while it fails exactly that way. Any other failure fails it, and so does passing, so the
+fix's pull request removes the marker. An `intermittent` marker (C1, a timing defect) passes either
+way but still fails on any other error.
 
 Core sometimes records only an error class (`readiness` / `Error`). A failure message therefore
 carries two pieces of evidence: the guest's journal lines that name a cause, and every non-200
@@ -107,9 +109,19 @@ Teardown removes:
 - the Core-labelled objects created during the run;
 - the run's scratch directory, except its logs.
 
-Cached images keep the label value `cache`. Interrupting the test runner can kill the stack before
-its teardown runs. Then `pnpm --filter @sealant/workspaces exec tsx boat-harness/cleanup.ts` lists
-what the run left, and `--remove` removes it.
+Cached images carry `sh.sealant.boat-harness.cache=true`, not a run label. Core's gateway containers
+inherit their image's labels, so each run builds a thin per-run gateway image labelled with the run.
+
+Each run starts a detached reaper (`reaper.ts`) in its own process group. Ctrl-C to the test runner,
+or a killed test process, skips the stack's teardown but not the reaper. Once the test process is
+gone, the reaper removes what the run left and releases the host lock:
+
+- the run's worker and API, found by `SEALANT_BOAT_HARNESS_RUN`;
+- its labelled objects;
+- the Core objects created after its network.
+
+`pnpm --filter @sealant/workspaces exec tsx boat-harness/cleanup.ts` does the same by hand. It lists
+first, removes only with `--remove`, and skips the run that holds the lock.
 
 ## What it cannot catch
 

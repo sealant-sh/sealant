@@ -243,7 +243,7 @@ export const scenarios = {
 
   /** Run 11's class: dnsmasq starts 8 s late. Core must wait for the gateway, not race it. */
   async gatewaySlow(stack: HarnessStack, project: Project) {
-    const image = await slowGatewayImage();
+    const image = await stack.runImage(await slowGatewayImage());
     await stack.killWorker();
     await stack.startWorker({ SEALANT_BOAT_GATEWAY_IMAGE: image });
     try {
@@ -382,7 +382,7 @@ export const scenarios = {
 const slowGatewayImage = async (): Promise<string> => {
   const tag = "sealant-boat-harness-gateway:slow-dnsmasq";
   const cached = await docker(["image", "inspect", "-f", "{{.Id}}", tag]);
-  if (cached.code === 0) return cached.stdout.trim();
+  if (cached.code === 0) return tag;
   const context = await mkdtemp(join(tmpdir(), "boat-harness-slow-gateway."));
   try {
     const source = await readFile(new URL("../boat-tunnel/gateway.py", import.meta.url), "utf8");
@@ -396,10 +396,10 @@ const slowGatewayImage = async (): Promise<string> => {
       join(context, "Dockerfile"),
       await readFile(new URL("../boat-tunnel/Dockerfile", import.meta.url), "utf8"),
     );
-    await dockerOk(["build", "-q", "--label", `${HARNESS_LABEL}=cache`, "-t", tag, context], {
+    await dockerOk(["build", "-q", "--label", `${HARNESS_LABEL}.cache=true`, "-t", tag, context], {
       timeoutMs: 15 * 60_000,
     });
-    return (await dockerOk(["image", "inspect", "-f", "{{.Id}}", tag])).trim();
+    return tag;
   } finally {
     await rm(context, { recursive: true, force: true });
   }
