@@ -312,6 +312,9 @@ const createVm = async (): Promise<Vm> => {
       SEALANT_AGENT_MODPROBE: path.join(bin, "modprobe"),
       SEALANT_AGENT_PROC_SYS: path.join(dir, "proc-sys"),
       SEALANT_AGENT_RESOLV_CONF: resolvConf,
+      // The VM's resolver on a loopback port of its own (the tunnel's address is not here).
+      SEALANT_AGENT_DNS_LISTEN_HOST: "127.0.0.1",
+      SEALANT_AGENT_DNS_LISTEN_PORT: "0",
       SEALANT_MICROVM_RECOVERY_SETTLE_MS: "3000",
       SEALANT_MICROVM_DOCKERD: path.join(bin, "dockerd"),
       SEALANT_MICROVM_DOCKER: path.join(bin, "docker"),
@@ -1085,11 +1088,40 @@ const netLines = async (vm: Vm) =>
   (await readFile(vm.netLog, "utf8").catch(() => "")).split("\n").filter((line) => line !== "");
 
 /** A fake gateway resolver: answers any A question with the gateway address, over UDP and TCP. */
+/**
+ * A zone a fake resolver serves: names (exact, or `*.suffix`) to IPv4 addresses, and the rcode for
+ * every other name. The gateway's is its reach network's aliases and SERVFAIL (it has no upstream);
+ * a VM's own resolver answers public names and NXDOMAIN.
+ */
+type FakeZone = { readonly names: Record<string, string>; readonly miss: 2 | 3 };
+const questionName = (query: Buffer): string => {
+  const labels: string[] = [];
+  let cursor = 12;
+  while (cursor < query.length && (query[cursor] ?? 0) !== 0) {
+    const length = query[cursor] ?? 0;
+    labels.push(query.subarray(cursor + 1, cursor + 1 + length).toString("ascii"));
+    cursor += length + 1;
+  }
+  return labels.join(".").toLowerCase();
+};
+const zoneAddress = (zone: FakeZone, name: string): string | undefined =>
+  zone.names[name] ??
+  Object.entries(zone.names).find(
+    ([pattern]) => pattern.startsWith("*.") && name.endsWith(pattern.slice(1)),
+  )?.[1];
+
 const startFakeDns = async (
   behaviour: "answer" | "wrong-ip" | "silent" = "answer",
-): Promise<{ readonly port: number; readonly close: () => Promise<void> }> => {
+  zone?: FakeZone,
+): Promise<{
+  readonly port: number;
+  readonly asked: string[];
+  readonly close: () => Promise<void>;
+}> => {
+  const asked: string[] = [];
   const answer = (query: Buffer): Buffer | null => {
     if (behaviour === "silent" || query.length < 12) return null;
+    asked.push(questionName(query));
     // Question ends at the terminating root label + 4 bytes of type/class.
     let cursor = 12;
     while (cursor < query.length && (query[cursor] ?? 0) !== 0) cursor += (query[cursor] ?? 0) + 1;
@@ -1100,13 +1132,19 @@ const startFakeDns = async (
     header.writeUInt16BE(0x8180, 2);
     header.writeUInt16BE(1, 4);
     header.writeUInt16BE(1, 6);
+    const zoned = zone === undefined ? undefined : zoneAddress(zone, questionName(query));
+    if (zone !== undefined && zoned === undefined) {
+      header.writeUInt16BE(0x8180 | zone.miss, 2);
+      header.writeUInt16BE(0, 6);
+      return Buffer.concat([header, question]);
+    }
     const rr = Buffer.alloc(16);
     rr.writeUInt16BE(0xc00c, 0);
     rr.writeUInt16BE(1, 2);
     rr.writeUInt16BE(1, 4);
     rr.writeUInt32BE(30, 6);
     rr.writeUInt16BE(4, 10);
-    const ip = behaviour === "wrong-ip" ? "100.127.255.1" : BOAT_AGENT_GATEWAY_ADDRESS;
+    const ip = zoned ?? (behaviour === "wrong-ip" ? "100.127.255.1" : BOAT_AGENT_GATEWAY_ADDRESS);
     Buffer.from(ip.split(".").map(Number)).copy(rr, 12);
     return Buffer.concat([header, question, rr]);
   };
@@ -1136,10 +1174,88 @@ const startFakeDns = async (
   });
   return {
     port,
+    asked,
     close: async () => {
       udp.close();
       await new Promise<void>((resolve) => tcp.close(() => resolve()));
     },
+  };
+};
+
+/** A loopback port free for both TCP and UDP right now. */
+const freePort = async (): Promise<number> => {
+  for (;;) {
+    const server = net.createServer();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (typeof address !== "object" || address === null) continue;
+    const udp = dgram.createSocket("udp4");
+    const free = await new Promise<boolean>((resolve) => {
+      udp.once("error", () => resolve(false));
+      udp.bind(address.port, "127.0.0.1", () => resolve(true));
+    });
+    udp.close();
+    if (free) return address.port;
+  }
+};
+
+/** Ask `name` (type A) of a resolver over UDP or TCP: its rcode and the first address it gave. */
+const lookup = async (
+  port: number,
+  name: string,
+  transport: "udp" | "tcp",
+): Promise<{ readonly rcode: number; readonly address: string | null }> => {
+  const header = Buffer.alloc(12);
+  header.writeUInt16BE(0x5a5a, 0);
+  header.writeUInt16BE(0x0100, 2);
+  header.writeUInt16BE(1, 4);
+  const query = Buffer.concat([
+    header,
+    ...name
+      .split(".")
+      .map((label) => Buffer.concat([Buffer.from([label.length]), Buffer.from(label)])),
+    Buffer.from([0, 0, 1, 0, 1]),
+  ]);
+  const reply = await new Promise<Buffer>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`no answer for ${name} over ${transport}`)),
+      5_000,
+    );
+    const settle = (message: Buffer) => {
+      clearTimeout(timer);
+      resolve(message);
+    };
+    if (transport === "udp") {
+      const socket = dgram.createSocket("udp4");
+      socket.on("message", (message) => {
+        socket.close();
+        settle(message);
+      });
+      socket.send(query, port, "127.0.0.1");
+    } else {
+      const socket = net.connect({ host: "127.0.0.1", port }, () => {
+        const prefix = Buffer.alloc(2);
+        prefix.writeUInt16BE(query.length, 0);
+        socket.write(Buffer.concat([prefix, query]));
+      });
+      let pending = Buffer.alloc(0);
+      socket.on("error", reject);
+      socket.on("data", (chunk: Buffer) => {
+        pending = Buffer.concat([pending, chunk]);
+        if (pending.length >= 2 && pending.length >= 2 + pending.readUInt16BE(0)) {
+          socket.destroy();
+          settle(pending.subarray(2, 2 + pending.readUInt16BE(0)));
+        }
+      });
+    }
+  });
+  expect(reply.readUInt16BE(0)).toBe(0x5a5a);
+  const rcode = reply.readUInt16BE(2) & 0x000f;
+  return {
+    rcode,
+    address:
+      reply.readUInt16BE(6) > 0 ? Array.from(reply.subarray(reply.length - 4)).join(".") : null,
   };
 };
 
@@ -1231,8 +1347,9 @@ describe("boat agent · network", () => {
     expect(agent.output()).not.toContain(privateKey);
 
     expect((await lstat(vm.resolvConf)).isSymbolicLink()).toBe(false);
+    // The VM resolves through its own resolver on the tunnel's address, never the gateway alone.
     expect(await readFile(vm.resolvConf, "utf8")).toBe(
-      `nameserver ${BOAT_AGENT_GATEWAY_ADDRESS}\noptions timeout:2 attempts:2\n`,
+      `nameserver ${BOAT_AGENT_CLIENT_ADDRESS}\noptions timeout:3 attempts:2\n`,
     );
     expect((await stat(vm.resolvConf)).mode & 0o777).toBe(0o644);
     const original = JSON.parse(await readFile(path.join(vm.dataDir, "resolv.conf.orig"), "utf8"));
@@ -1286,12 +1403,12 @@ describe("boat agent · network", () => {
     expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
       200,
     );
-    expect(await readFile(vm.resolvConf, "utf8")).toContain(BOAT_AGENT_GATEWAY_ADDRESS);
+    expect(await readFile(vm.resolvConf, "utf8")).toContain(BOAT_AGENT_CLIENT_ADDRESS);
     // The same boot again (an agent restart): the tunnel is still there, so is its resolver.
     await stopAgent(agent);
     const sameBoot = await startAgent(vm);
     expect((await lstat(vm.resolvConf)).isSymbolicLink()).toBe(false);
-    expect(await readFile(vm.resolvConf, "utf8")).toContain(BOAT_AGENT_GATEWAY_ADDRESS);
+    expect(await readFile(vm.resolvConf, "utf8")).toContain(BOAT_AGENT_CLIENT_ADDRESS);
     expect(await exists(path.join(vm.dataDir, "resolv.conf.orig"))).toBe(true);
     // Rebooted (or restored from a saved snapshot): no tunnel on this boot, the stub is back
     // exactly as it was (the symlink, not a copy of its bytes), and the kept copy is gone.
@@ -1331,6 +1448,71 @@ describe("boat agent · network", () => {
       "nameserver 10.0.0.2\nsearch corp.example\n",
     );
     expect(await exists(path.join(plain.dataDir, "resolv.conf.orig"))).toBe(false);
+  });
+
+  it("resolves resource names through the gateway and every other name through the VM's own resolver", async () => {
+    // The gateway answers its reach network's names and nothing else (no upstream: SERVFAIL); the
+    // VM's own resolver answers public names. On the gateway alone a public name never resolved
+    // (VM 131, run 3: `capture plan.get failed: ... failed to lookup address information`).
+    const gateway = await startFakeDns("answer", {
+      names: { db: "10.42.7.40", "*.sealant.gateway.invalid": BOAT_AGENT_GATEWAY_ADDRESS },
+      miss: 2,
+    });
+    const own = await startFakeDns("answer", {
+      names: { "mend-boat-preview.tailnet.example": "185.40.234.37" },
+      miss: 3,
+    });
+    try {
+      const vm = await createVm();
+      // The VM's own resolver, as its stock resolv.conf names it.
+      await writeFile(path.join(vm.dir, "etc", "stub-resolv.conf"), "nameserver 127.0.0.1\n");
+      const bearer = await bindVm(vm);
+      const listen = await freePort();
+      const env = {
+        SEALANT_AGENT_DNS_PROBE_HOST: "127.0.0.1",
+        SEALANT_AGENT_DNS_PROBE_PORT: String(gateway.port),
+        SEALANT_AGENT_DNS_LISTEN_PORT: String(listen),
+        SEALANT_AGENT_DNS_UPSTREAM_PORT: String(own.port),
+      };
+      const agent = await startAgent(vm, env);
+      const body = networkBody();
+      expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
+        200,
+      );
+      expect(await readFile(vm.resolvConf, "utf8")).toBe(
+        `nameserver ${BOAT_AGENT_CLIENT_ADDRESS}\noptions timeout:3 attempts:2\n`,
+      );
+      for (const transport of ["udp", "tcp"] as const) {
+        // A resource name: the gateway's answer, and the VM's own resolver is never asked it.
+        expect(await lookup(listen, "db", transport)).toEqual({ rcode: 0, address: "10.42.7.40" });
+        // A public name: the gateway does not know it, the VM's own resolver does.
+        expect(await lookup(listen, "mend-boat-preview.tailnet.example", transport)).toEqual({
+          rcode: 0,
+          address: "185.40.234.37",
+        });
+        // A name nobody knows: the VM's own resolver's NXDOMAIN, never the gateway's SERVFAIL.
+        expect(await lookup(listen, "absent.example", transport)).toEqual({
+          rcode: 3,
+          address: null,
+        });
+      }
+      expect(own.asked).not.toContain("db");
+      expect(own.asked).toContain("mend-boat-preview.tailnet.example");
+      // Readiness asks the VM's resolver, the way the VM asks: it reaches the gateway.
+      await vm.setHandshake(`${z.string().parse(body["gateway_key"])}\t1760000000`);
+      const status = await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer });
+      expect(boatAgentNetworkStatusSchema.parse(status.body)).toMatchObject({ dns: "udp-and-tcp" });
+      // An agent restarted on the same boot answers again on the same address.
+      await stopAgent(agent);
+      await startAgent(vm, env);
+      expect(await lookup(listen, "mend-boat-preview.tailnet.example", "udp")).toEqual({
+        rcode: 0,
+        address: "185.40.234.37",
+      });
+    } finally {
+      await gateway.close();
+      await own.close();
+    }
   });
 
   it("reports the handshake and the gateway's DNS over UDP and TCP", async () => {
@@ -1466,7 +1648,9 @@ describe("boat agent · network", () => {
           `-A DOCKER-USER -d ${endpoint}/32 -j DROP`,
           ...denied.map((cidr) => `-A DOCKER-USER -d ${cidr} -j DROP`),
           "-A DOCKER-USER -j RETURN",
-          // No new connection from a container to the VM itself.
+          // No new connection from a container to the VM itself but DNS to the VM's resolver.
+          `-A SEALANT-DOCKER-INPUT -d ${BOAT_AGENT_CLIENT_ADDRESS}/32 -p udp --dport 53 -j RETURN`,
+          `-A SEALANT-DOCKER-INPUT -d ${BOAT_AGENT_CLIENT_ADDRESS}/32 -p tcp --dport 53 -j RETURN`,
           // Matched by what a container is, whatever its bridge is called or its subnet is.
           "-A SEALANT-DOCKER-INPUT -s 198.18.1.0/24 -m conntrack --ctstate NEW -j DROP",
           "-A SEALANT-DOCKER-INPUT -s 198.19.0.0/16 -m conntrack --ctstate NEW -j DROP",

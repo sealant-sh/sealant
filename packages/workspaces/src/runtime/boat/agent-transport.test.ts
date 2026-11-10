@@ -179,6 +179,8 @@ const createVm = async (dnsPort: number): Promise<Vm> => {
       SEALANT_AGENT_RESOLV_CONF: resolvConf,
       SEALANT_AGENT_DNS_PROBE_HOST: "127.0.0.1",
       SEALANT_AGENT_DNS_PROBE_PORT: String(dnsPort),
+      SEALANT_AGENT_DNS_LISTEN_HOST: "127.0.0.1",
+      SEALANT_AGENT_DNS_LISTEN_PORT: "0",
       SEALANT_MICROVM_RECOVERY_SETTLE_MS: "3000",
       FAKE_SEALANTD_RECORD: recordFile,
     },
