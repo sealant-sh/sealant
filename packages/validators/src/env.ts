@@ -824,7 +824,13 @@ export const workerServerEnvSchema = databaseEnvSchema
      * as the worker sees it: `127.0.0.1` on the host itself). Set, the worker carries each tunnel
      * over the agent's HTTPS WebSocket, so no Boat VM dials `SEALANT_BOAT_GATEWAY_ENDPOINT`.
      */
-    SEALANT_BOAT_GATEWAY_RELAY_HOST: z.ipv4().optional(),
+    SEALANT_BOAT_GATEWAY_RELAY_HOST: z
+      .ipv4()
+      .refine((value) => value !== "0.0.0.0", {
+        message:
+          "SEALANT_BOAT_GATEWAY_RELAY_HOST must be the one address the worker reaches the gateways at, not 0.0.0.0: the gateway port is published on it.",
+      })
+      .optional(),
     SEALANT_BOAT_GATEWAY_IMAGE: z
       .string()
       .regex(/^(?:[a-z0-9./:_-]+@)?sha256:[a-f0-9]{64}$/)

@@ -66,6 +66,10 @@ describe("parseWorkerEnv", () => {
     expect(() =>
       parseWorkerEnv({ ...base, ...carriedOnly, SEALANT_BOAT_GATEWAY_RELAY_HOST: "not-an-ip" }),
     ).toThrow();
+    // The gateway port is published on the relay host: every interface is never one address.
+    expect(() =>
+      parseWorkerEnv({ ...base, ...carriedOnly, SEALANT_BOAT_GATEWAY_RELAY_HOST: "0.0.0.0" }),
+    ).toThrow("Invalid environment variables");
   });
   it("requires one credential source with deployment and cipher, including file-only gateway configuration", () => {
     const base = {

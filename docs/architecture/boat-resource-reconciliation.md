@@ -74,6 +74,11 @@ built before the carrier) is refused at network setup with `carrier-unavailable`
 an endpoint nobody can reach. Set both to serve older images and newer ones together: the port is
 then published on every interface for the older ones to dial.
 
+The relay address decides who can reach the gateway port: `0.0.0.0` is refused, and a routable
+address publishes the port there. Change either setting only with no live Boat sessions. A run
+started under one network intent is held if a later worker gives it another (for example, dropping
+the endpoint), and its resources stay unreachable until the session is launched again.
+
 The worker shares its resource runtime and subnet store with the gateway. One managed runtime owns
 the existing sealed execution service and both reconcilers, and is disposed at shutdown. The
 non-overlapping 30-second sweep walks separate allocation and resource cursors, twenty IDs per page,
