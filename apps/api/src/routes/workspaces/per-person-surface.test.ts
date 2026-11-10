@@ -681,8 +681,7 @@ describe("inspectWorkspaceImage", () => {
       platform: "linux/amd64",
       manifest: hash,
       sealantd: hash,
-      socat: hash,
-      relay: hash,
+      sealantctl: hash,
     };
     const publication = nativePublicationSchema.parse({
       kind: "boat-native",
