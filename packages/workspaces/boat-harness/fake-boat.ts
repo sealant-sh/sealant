@@ -127,6 +127,8 @@ export interface FakeBoatOptions {
   readonly trialAccount?: boolean;
   /** The docker CLI, for tests. */
   readonly docker?: DockerRunner;
+  /** `host:ip` entries for every twin's /etc/hosts (an opt-in workaround; see README). */
+  readonly extraHosts?: readonly string[];
 }
 
 /** Boat keeps an idempotency key for 24 hours (docs/experiments/boat-provider-lifetime.md). */
@@ -663,6 +665,7 @@ export class FakeBoat {
       "/run/lock",
       "--network",
       this.options.network,
+      ...(this.options.extraHosts ?? []).flatMap((entry) => ["--add-host", entry]),
       sandbox.image,
     ]);
     await this.#boot(sandbox, "create");
