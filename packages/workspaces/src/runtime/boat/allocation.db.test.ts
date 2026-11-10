@@ -354,6 +354,7 @@ const test = async (
             ensure: (carrierInput) => Effect.sync(() => void carried.push(carrierInput)),
             release: () => Effect.void,
             attached: () => Effect.succeed(false),
+            settled: () => Effect.void,
           }),
         );
         const hostLayer = (
@@ -4630,6 +4631,167 @@ describe.runIf(databaseUrl !== undefined)("Boat deployment with no resource gate
           execute(s.readiness.launch(target, Redacted.make(launchMaterial()))),
         ).rejects.toThrow(/"code":"gateway-unavailable"/);
         expect(s.guest.starts).toBe(0);
+        await expectNoGateway(s);
+      },
+      { resourceGateway: false },
+    ));
+});
+
+/**
+ * `count` runs the deployment ended long ago, each before Boat held a VM for it: the history the
+ * sweep pages through. Their ids sort before a random UUID, so a sweep reaches them first.
+ */
+const endedRuns = async (s: AllocationFixture, count: number) => {
+  if (s.input.scope.kind !== "owner") throw new Error("expected owner scope");
+  const ownerUserId = s.input.scope.ownerUserId;
+  const ids = Array.from(
+    { length: count },
+    (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+  );
+  await execute(s.db.insert(workspaceAttempts).values(ids.map((id) => ({ id, ownerUserId }))));
+  const records = ids.map((id) =>
+    boatAllocationRecordSchema.parse({
+      ...reservation(
+        boatAllocationInputSchema.parse({
+          ...s.input,
+          consumer: { runId: id, runtimeInstanceId: id },
+        }),
+      ),
+      phase: "deleted",
+      removal: { kind: "never-created", completed: true },
+    }),
+  );
+  await execute(
+    s.db.insert(schema.boatAllocations).values(
+      records.map((record) => ({
+        runtimeInstanceId: record.input.consumer.runtimeInstanceId,
+        deploymentId: record.input.deploymentId,
+        publicationId: record.input.publication.publicationId,
+        idempotencyKey: record.idempotencyKey,
+        diskLineage: record.diskLineage,
+        sandboxId: null,
+        record,
+      })),
+    ),
+  );
+  return ids;
+};
+
+describe.runIf(databaseUrl !== undefined)("Boat tunnel carriers at worker start", () => {
+  it("reopens a live run's carrier at once, where the sweep reaches it only after every ended run before it", () =>
+    test(async (s) => {
+      await linkedResource(s);
+      const target = await launched(s);
+      const tunnel = await tunnelRecord(s, target);
+      const ended = await endedRuns(s, 200);
+      expect(ended.every((id) => id < target.runId)).toBe(true);
+      const gatewayHostId = tunnel.binding.gatewayHostId;
+
+      // The sweep's pace, unchanged: twenty allocations a tick, every ended one closed and its
+      // carrier released as before, and the live run's carrier ensured only on the eleventh tick
+      // (five and a half minutes at the worker's 30 s period).
+      const swept = await execute(s.reopenResources());
+      s.carried.length = 0;
+      let page = await execute(swept.reconcile({ limit: 20 }));
+      let ticks = 1;
+      expect(page.entries).toEqual(
+        ended.slice(0, 20).map((runId) => ({ runId, outcome: "closed" })),
+      );
+      expect(s.carried).toEqual([]);
+      while (page.next !== undefined && s.carried.length === 0) {
+        page = await execute(swept.reconcile({ limit: 20, after: page.next }));
+        ticks += 1;
+      }
+      expect(ticks).toBe(11);
+      expect(page.entries).toContainEqual({ runId: target.runId, outcome: "configured" });
+
+      // The worker restarts again. Its start pass reads the live runs alone, ensures the carrier
+      // to the run's own gateway port, and configures nothing: the sweep still does that.
+      expect(
+        await execute(s.repo.listTunnelled({ deploymentId: "test", gatewayHostId, limit: 100 })),
+      ).toEqual([target.runId]);
+      const restarted = await execute(s.reopenResources());
+      s.carried.length = 0;
+      const configured = {
+        gateway: s.gateway.requests.length,
+        guest: s.guest.networkBodies.length,
+        subnets: s.gateway.subnetCalls,
+      };
+      expect(await execute(restarted.reopenCarriers())).toEqual({ runIds: [target.runId] });
+      expect(s.carried).toHaveLength(1);
+      expect(s.carried[0]).toMatchObject({
+        runId: target.runId,
+        gateway: { host: "127.0.0.1", port: tunnel.listenPort },
+      });
+      const connection = Redacted.value(await execute(s.carried[0]?.connection ?? Effect.die("")));
+      expect(connection.url).toMatch(/\/sealant\/tunnel$/);
+      expect({
+        gateway: s.gateway.requests.length,
+        guest: s.guest.networkBodies.length,
+        subnets: s.gateway.subnetCalls,
+      }).toEqual(configured);
+
+      // A stopped run is no longer live: the start pass leaves it to the sweep, which releases it.
+      await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+      expect(
+        await execute(s.repo.listTunnelled({ deploymentId: "test", gatewayHostId, limit: 100 })),
+      ).toEqual([]);
+      s.carried.length = 0;
+      expect(await execute(restarted.reopenCarriers())).toEqual({ runIds: [] });
+      expect(s.carried).toEqual([]);
+    }));
+
+  it("pages live runs by the sweep's cursor and reads none on a foreign gateway host", () =>
+    test(async (s) => {
+      const target = await launched(s);
+      const gatewayHostId = (await tunnelRecord(s, target)).binding.gatewayHostId;
+      await endedRuns(s, 20);
+      expect(
+        await execute(s.repo.listTunnelled({ deploymentId: "test", gatewayHostId, limit: 1 })),
+      ).toEqual([target.runId]);
+      expect(
+        await execute(
+          s.repo.listTunnelled({
+            deploymentId: "test",
+            gatewayHostId,
+            limit: 1,
+            after: target.runId,
+          }),
+        ),
+      ).toEqual([]);
+      for (const other of [
+        { deploymentId: "other", gatewayHostId },
+        { deploymentId: "test", gatewayHostId: randomUUID() },
+      ])
+        expect(await execute(s.repo.listTunnelled({ ...other, limit: 100 }))).toEqual([]);
+      await expect(
+        execute(s.repo.listTunnelled({ deploymentId: "test", gatewayHostId, limit: 101 })),
+      ).rejects.toThrow("invalid-record");
+      // A worker on another gateway host opens no carrier for this one's runs.
+      const foreign = await execute(s.reopenResources(randomUUID()));
+      s.carried.length = 0;
+      expect(await execute(foreign.reopenCarriers())).toEqual({ runIds: [] });
+      expect(s.carried).toEqual([]);
+    }));
+
+  it("visits no run launched without resources", () =>
+    test(
+      async (s) => {
+        const target = await launched(s);
+        await endedRuns(s, 20);
+        const restarted = await execute(s.reopenResources());
+        expect(await execute(restarted.reopenCarriers())).toEqual({ runIds: [] });
+        expect((await execute(s.repo.get(target.runId)))?.phase).toBe("bound");
+        await expectNoGateway(s);
+      },
+      { resources: "none" },
+    ));
+
+  it("opens no carrier on a deployment with no resource gateway", () =>
+    test(
+      async (s) => {
+        await endedRuns(s, 20);
+        expect(await execute(s.resourceOwner.reopenCarriers())).toEqual({ runIds: [] });
         await expectNoGateway(s);
       },
       { resourceGateway: false },

@@ -35,6 +35,12 @@ export class BoatTunnelCarrier extends Context.Service<
     readonly release: (runId: string) => Effect.Effect<void>;
     /** Whether the run's carrier is connected to the agent now. */
     readonly attached: (runId: string) => Effect.Effect<boolean>;
+    /**
+     * Completes once the run's carrier has made its first attempt to connect, attached or not: at
+     * once for a run with no carrier, or one that already tried (one holding off included). A
+     * caller that opens many carriers waits on it to bound how many upgrades are in flight.
+     */
+    readonly settled: (runId: string) => Effect.Effect<void>;
   }
 >()("@sealant/workspaces/boat/BoatTunnelCarrier") {}
 
@@ -66,6 +72,8 @@ interface Carrier {
   /** The gateway port it relays to: a carrier only ever bridges its own run's gateway. */
   readonly gateway: BoatTunnelCarrierInput["gateway"];
   readonly attached: () => boolean;
+  /** Resolves when its first connection attempt ends, or it stops. Never rejects. */
+  readonly settled: Promise<void>;
   readonly stop: () => void;
 }
 
@@ -81,6 +89,7 @@ const startCarrier = (
   let delay = options.reconnectMinMs;
   let gone = 0;
   let timer: NodeJS.Timeout | undefined;
+  const { promise: settled, resolve: settle } = Promise.withResolvers<void>();
   // Connected to the run's own gateway port: the kernel hands it that peer's datagrams only.
   const udp = dgram.createSocket("udp4");
   udp.on("error", () => {});
@@ -91,6 +100,7 @@ const startCarrier = (
   const stop = () => {
     if (done) return;
     done = true;
+    settle();
     clearTimeout(timer);
     socket?.close(1000);
     socket = null;
@@ -113,6 +123,7 @@ const startCarrier = (
       material = Redacted.value(await Effect.runPromise(input.connection));
     } catch {
       // The run's record no longer offers a carrier (held, gone) or could not be read now.
+      settle();
       gone += 1;
       if (gone >= options.goneAttempts) return stop();
       return schedule();
@@ -125,6 +136,7 @@ const startCarrier = (
       if (ws.readyState === WebSocket.OPEN) ws.ping();
     }, options.pingIntervalMs);
     ws.on("open", () => {
+      settle();
       delay = options.reconnectMinMs;
       gone = 0;
       options.log(`Boat tunnel carrier · run ${input.runId}: attached`);
@@ -146,6 +158,7 @@ const startCarrier = (
     });
     ws.on("error", () => {});
     ws.on("close", (code) => {
+      settle();
       clearInterval(ping);
       if (socket === ws) socket = null;
       if (code === REPLACED) replaced = true;
@@ -169,6 +182,7 @@ const startCarrier = (
   return {
     gateway: input.gateway,
     attached: () => socket?.readyState === WebSocket.OPEN,
+    settled,
     stop,
   };
 };
@@ -219,6 +233,9 @@ export const makeBoatTunnelCarrierLayer = (
       const attached = Effect.fn("BoatTunnelCarrier.attached")((runId: string) =>
         Effect.sync(() => carriers.get(runId)?.attached() ?? false),
       );
-      return BoatTunnelCarrier.of({ ensure, release, attached });
+      const settled = Effect.fn("BoatTunnelCarrier.settled")((runId: string) =>
+        Effect.promise(() => carriers.get(runId)?.settled ?? Promise.resolve()),
+      );
+      return BoatTunnelCarrier.of({ ensure, release, attached, settled });
     }),
   );
