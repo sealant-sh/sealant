@@ -4,8 +4,11 @@ import { isDeepStrictEqual } from "node:util";
 import {
   BoatAllocationRepo,
   BoatAllocationRepoLive,
+  BoatAllocationStoreError,
   BoatExecutionRepo,
   BoatExecutionRepoLive,
+  BoatObservationRepo,
+  BoatObservationRepoLive,
   BoatTunnelRepo,
   boatTunnelRepoLayer,
   WorkspaceRuntimeInstanceRepo,
@@ -59,9 +62,11 @@ export interface BoatRemovalOptions {
 }
 
 /**
- * How far Boat's deletion is. `absent`: Boat no longer has the VM (its own typed 404 for a VM seen
- * past creation, or a deletion it completed earlier). `completed`: its deletion operation reads
- * `completed`, recorded on the allocation. `deleting`: Boat still says the deletion is in progress.
+ * How far Boat's deletion is. `absent`: Boat no longer has the VM, by a committed absence (its own
+ * typed 404 for a VM seen past creation, or a deletion it completed earlier), whoever observed it
+ * and at whatever point of this removal. `completed`: its deletion operation reads `completed`,
+ * recorded on the allocation. `deleting`: Boat still says the deletion is in progress and no
+ * absence is committed. Both `absent` and `completed` are the deletion's end.
  */
 export type BoatDeletionOutcome = "absent" | "completed" | "deleting";
 
@@ -85,6 +90,15 @@ export type BoatRemovalOutcome = "removed" | "discharging" | "deleting";
  * is bounded (20 s by default). On `completed` the absence is recorded and every obligation
  * discharged: the gateway removed and the tunnel slot released if the run has one, the allocation
  * deleted, the resume secrets forgotten, the publication pin released. Until then nothing is.
+ *
+ * It is not the only observer of its own deletion. Boat answers 404 for the VM soon after a
+ * DELETE, often while the operation still reads `processing`, and anything that reads the VM then
+ * (the exit reconciler's `inspect`, the lifecycle sweep, a second stop) commits that absence and
+ * may discharge on it. So once its DELETE is out, the removal takes a committed absence for the
+ * deletion's end wherever it meets one: an allocation already discharged, an operation that can no
+ * longer be recorded or polled, a wait that ran out. It then discharges in the same call. Only the
+ * committed observation counts: never a failed read, a timeout, or a 404 for a VM Boat was never
+ * seen to report past creation.
  */
 export class BoatRemoval extends Context.Service<
   BoatRemoval,
@@ -134,6 +148,7 @@ const call = <A>(request: () => Promise<BoatResult<A>>) =>
 type Dependencies =
   | BoatAllocationRepo
   | BoatExecutionRepo
+  | BoatObservationRepo
   | BoatTunnelRepo
   | WorkspaceRuntimeInstanceRepo
   | BoatExecution
@@ -145,6 +160,7 @@ type Dependencies =
 const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.gen(function* () {
   const allocations = yield* BoatAllocationRepo;
   const executions = yield* BoatExecutionRepo;
+  const observations = yield* BoatObservationRepo;
   const tunnels = yield* BoatTunnelRepo;
   const runtimes = yield* WorkspaceRuntimeInstanceRepo;
   const execution = yield* BoatExecution;
@@ -177,14 +193,54 @@ const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.
       return (yield* tunnels.get(runtimeInstanceId(allocation)))?.removal;
     });
   /**
-   * Polls Boat's own deletion operation until it completes or the wait is spent. The wait bounds
-   * the whole loop, including a read still in flight, so a slow provider cannot stretch a removal.
+   * Whether Boat's absence of this exact VM is committed, by this removal or by any other observer
+   * of it. The committed observation only: a read of it that fails says nothing.
    */
-  const awaitDeletion = (operation: BoatDeletion) =>
+  const absenceCommitted = (allocation: BoatAllocationRecord) =>
+    observations
+      .get(runtimeInstanceId(allocation))
+      .pipe(
+        Effect.map(
+          (observed) =>
+            allocation.sandboxId !== null &&
+            observed?.presence === "absent" &&
+            observed.sandboxId === allocation.sandboxId &&
+            observed.deploymentId === allocation.input.deploymentId,
+        ),
+      );
+  /**
+   * A step taken once DELETE is out (or its operation is on record) that failed: if Boat's absence
+   * of the VM is committed meanwhile, that is the deletion's end and the failure does not matter.
+   * Otherwise the failure stands.
+   */
+  const orAbsent =
+    (allocation: BoatAllocationRecord) =>
+    <A, E>(step: Effect.Effect<A, E>): Effect.Effect<A | "absent", E> =>
+      step.pipe(
+        Effect.catch((error) =>
+          absenceCommitted(allocation).pipe(
+            Effect.orElseSucceed(() => false),
+            Effect.flatMap((absent) =>
+              absent ? Effect.succeed("absent" as const) : Effect.fail(error),
+            ),
+          ),
+        ),
+      );
+  /**
+   * Polls Boat's own deletion operation until it completes, the VM's absence is committed by
+   * anyone, or the wait is spent. The wait bounds the whole loop, including a read still in
+   * flight, so a slow provider cannot stretch a removal.
+   */
+  const awaitDeletion = (allocation: BoatAllocationRecord, operation: BoatDeletion) =>
     Effect.gen(function* () {
-      const latest = yield* Ref.make(operation);
+      const latest = yield* Ref.make<BoatDeletion | "absent">(operation);
       const poll = Effect.gen(function* () {
-        while ((yield* Ref.get(latest)).status !== "completed") {
+        for (;;) {
+          const last = yield* Ref.get(latest);
+          if (last === "absent" || last.status === "completed") return;
+          // Boat answers 404 for the VM before its operation reads `completed`: another observer
+          // may have committed that already.
+          if (yield* absenceCommitted(allocation)) return yield* Ref.set(latest, "absent");
           yield* Effect.sleep(DELETION_POLL_MS);
           const next = yield* call(() => provider.api.getDeletion(operation.id));
           if (
@@ -204,7 +260,7 @@ const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.
    * before any wait. From then on the allocation is `deleting`. One operation per VM: another id
    * is not this removal's. Completion never reverts.
    */
-  const record = (allocation: BoatAllocationRecord, operation: BoatDeletion) =>
+  const recordOnce = (allocation: BoatAllocationRecord, operation: BoatDeletion) =>
     Effect.gen(function* () {
       const saved = yield* stored(allocation);
       if (
@@ -232,18 +288,37 @@ const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.
       });
     });
   /**
+   * `recordOnce`, read again when the allocation moved between its read and its write: another
+   * pass recorded the same operation, or discharged the VM on Boat's absence, and either is
+   * decided on what is stored now.
+   */
+  const record = (allocation: BoatAllocationRecord, operation: BoatDeletion) =>
+    recordOnce(allocation, operation).pipe(
+      Effect.retry({
+        times: 2,
+        while: (error) =>
+          error instanceof BoatAllocationStoreError && error.code === "stale-transition",
+      }),
+    );
+  /**
    * Records the operation Boat answered with, before any wait, then waits its bound for
    * `completed` and records that. Says how far the deletion is.
    */
   const follow = (allocation: BoatAllocationRecord, operation: BoatDeletion) =>
     Effect.gen(function* () {
       let saved = yield* record(allocation, operation);
-      if (operation.status !== "completed")
-        saved = yield* record(saved, yield* awaitDeletion(operation));
+      // Discharged already, on an absence another observer committed: nothing is left to wait for.
+      if (saved.phase !== "deleted" && operation.status !== "completed") {
+        const settled = yield* awaitDeletion(saved, operation);
+        if (settled !== "absent") saved = yield* record(saved, settled);
+      }
       if (saved.removal?.kind === "operation" && saved.removal.completed)
         return "completed" as const;
-      // Another pass discharged it on Boat's own absence while this one waited.
-      return saved.phase === "deleted" ? ("absent" as const) : ("deleting" as const);
+      // Boat no longer has the VM by its own 404, committed while this removal recorded or
+      // polled, whether or not the pass that committed it discharged it too.
+      return saved.phase === "deleted" || (yield* absenceCommitted(saved))
+        ? ("absent" as const)
+        : ("deleting" as const);
     });
   /**
    * The run is Boat's own row for this VM and is stopping (or its launch failed): the only run a
@@ -392,11 +467,13 @@ const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.
         const recorded = yield* recordedOperation(saved);
         if (recorded !== undefined) {
           yield* Ref.set(sent, true);
-          const id = boatDeletionIdSchema.safeParse(recorded.id);
-          if (!id.success) return yield* Effect.fail("held" as const);
-          const operation = yield* call(() => provider.api.getDeletion(id.data));
-          if (operation.id !== recorded.id) return yield* Effect.fail("held" as const);
-          return yield* follow(saved, operation);
+          return yield* Effect.gen(function* () {
+            const id = boatDeletionIdSchema.safeParse(recorded.id);
+            if (!id.success) return yield* Effect.fail("held" as const);
+            const operation = yield* call(() => provider.api.getDeletion(id.data));
+            if (operation.id !== recorded.id) return yield* Effect.fail("held" as const);
+            return yield* follow(saved, operation);
+          }).pipe(orAbsent(saved));
         }
         // 3. Nothing was sent, or its reply was lost. Absence and a timeout are never completion:
         // DELETE goes only to the exact owned VM Boat just returned. Foreign labels are never
@@ -412,9 +489,12 @@ const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.
         const allocation = options.fence ? yield* fence(saved) : saved;
         yield* fenced(allocation);
         // 5. DELETE. The operation id is recorded before waiting, so a crash mid-wait polls it.
+        // From here on another observer may commit Boat's 404 and discharge on it at any point.
         yield* Ref.set(sent, true);
-        const operation = yield* call(() => provider.api.deleteSandbox(sandbox.data));
-        return yield* follow(allocation, operation);
+        return yield* call(() => provider.api.deleteSandbox(sandbox.data)).pipe(
+          Effect.flatMap((operation) => follow(allocation, operation)),
+          orAbsent(allocation),
+        );
       }),
     );
 
@@ -470,6 +550,7 @@ export const boatRemovalLayer: Layer.Layer<
       boatDischargeLayer,
       BoatAllocationRepoLive,
       BoatExecutionRepoLive,
+      BoatObservationRepoLive,
       boatTunnelRepoLayer,
       WorkspaceRuntimeInstanceRepoLive,
     ),

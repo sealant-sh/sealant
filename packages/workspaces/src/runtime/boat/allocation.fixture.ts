@@ -41,6 +41,8 @@ export class ProviderFixture {
   deletionUnavailable = false;
   readonly deletionId = `bdop_${randomUUID().replaceAll("-", "")}`;
   beforeDeletion: () => Promise<void> = async () => {};
+  /** Runs before each read of the deletion operation is answered. */
+  beforeDeletionRead: () => Promise<void> = async () => {};
   deletion(targetId = "bx_23456789") {
     return {
       id: this.deletionWrongId
@@ -173,6 +175,7 @@ export class ProviderFixture {
     }
     if (url.pathname.startsWith("/api/v1/deletion-operations/")) {
       this.deletionReads++;
+      await this.beforeDeletionRead();
       if (this.deletionUnavailable) {
         send({ code: "unavailable" }, 503);
         return;

@@ -249,7 +249,15 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
     if (inspect === undefined) {
       continue;
     }
-    const owned = live.filter((instance) => instance.adapter === adapter.id);
+    // OWN-CLOSE GUARD (Boat; `closesItsOwnExecutors`): from its stop request to its discharge a
+    // run is its own close's. It is not inspected here: nothing is read from the runtime or the
+    // guest for an answer this sweep would drop, and no second observer commits the absence the
+    // close's own deletion is about to produce. That holds for a VM kept after an unconfirmed
+    // FINAL too, for as long as it is kept.
+    const ownClose = closesItsOwnExecutors(adapter);
+    const owned = live.filter(
+      (instance) => instance.adapter === adapter.id && !(ownClose && instance.stopReason !== null),
+    );
     if (owned.length === 0) {
       continue;
     }
@@ -295,7 +303,7 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
 
       // OWN-CLOSE GUARD (Boat; `closesItsOwnExecutors`): its ended executor is recorded for its
       // own close owner, and nothing here drains, removes or settles it.
-      if (closesItsOwnExecutors(adapter)) {
+      if (ownClose) {
         if (yield* recordExitForCloseOwner(options, instance, adapter, resourceId, inspection)) {
           recorded += 1;
         }
@@ -685,9 +693,11 @@ const settleUnsettledExecutors = (
  *    the whole hand-over: a failed run's desired state is stopped, so the runtime's own close
  *    owner takes it on its next pass (recovers the daemon on its own disk, drains FINAL, and
  *    deletes the VM only once that is confirmed saved, or keeps it).
- *  - `exited` with a stop requested: that stop's close is already at work. Nothing is written.
  *  - `missing`: the runtime's own observation committed the absence (and the row with it) before
  *    it answered; its close owner discharges what the executor held. Nothing is written.
+ *
+ * A run whose stop is requested never comes here: the poll does not inspect it (see the filter in
+ * `reconcileRuntimeExitsEffect`), since that stop's close is at work on it.
  *
  * No daemon is probed or drained, no removal is authorized in the capture ledger, the adapter's
  * `stop` is never called and no outcome is recorded on the drain: each belongs to the close owner
@@ -709,6 +719,8 @@ const recordExitForCloseOwner = (
       return false;
     }
     if (instance.stopReason !== null) {
+      // Not reached from the poll, which leaves such a run uninspected. Kept so that this
+      // function alone never records an exit over a stop.
       return false;
     }
     const ledger = options.captureDrain?.ledger;

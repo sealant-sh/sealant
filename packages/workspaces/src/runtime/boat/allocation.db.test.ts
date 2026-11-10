@@ -668,10 +668,12 @@ const adapterFixture = async (
     readonly resources?: "none";
     /** `false`: the deployment has no resource gateway. */
     readonly resourceGateway?: boolean;
+    /** How long a removal waits for Boat's deletion operation. Default: it does not wait. */
+    readonly deletionWaitMs?: number;
   } = {},
 ) => {
   const close = await execute(
-    s.final([savedStatus()], undefined, undefined, options.resourceGateway),
+    s.final([savedStatus()], undefined, options.deletionWaitMs, options.resourceGateway),
   );
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
@@ -6408,25 +6410,41 @@ describe.runIf(databaseUrl !== undefined)("Boat runs under the generic exit reco
       }
     }));
 
-  it("writes nothing for an exit under a requested stop: that stop's close is at work", () =>
+  it("does not inspect a run whose stop is requested: no Boat or agent request, nothing written, whatever became of its daemon or its VM", () =>
     test(async (s) => {
       const f = await inspectFixture(s);
       try {
         const g = genericSweeps(s, f.adapter);
-        await execute(s.runtimes.markStopRequested({ runId: f.target.runId, stopReason: "user" }));
-        s.guest.health = () => daemonExited;
+        // Ready, with no stop requested: asked about on the poll, once per period.
+        const before = f.reads();
         expect(await g.reconcile()).toBe(0);
-        expect(await f.row()).toMatchObject({
-          status: "ready",
-          stopReason: "user",
-          errorCode: null,
-          removedAt: null,
-        });
-        expect(
-          (await execute(s.canonical.getByRunId(f.target.runId)))?.retainedAt ?? null,
-        ).toBeNull();
-        expect(s.provider.deleteCalls).toBe(0);
-        expect(g.daemon.calls).toEqual([]);
+        const live = f.reads();
+        expect(live).toEqual({ boat: before.boat + 1, agent: before.agent + 1 });
+        await execute(s.runtimes.markStopRequested({ runId: f.target.runId, stopReason: "user" }));
+        const untouched = async () => {
+          expect(f.reads()).toEqual(live);
+          expect(await f.row()).toMatchObject({
+            status: "ready",
+            stopReason: "user",
+            errorCode: null,
+            removedAt: null,
+          });
+          expect(await f.observed()).toEqual(["present"]);
+          expect(
+            (await execute(s.canonical.getByRunId(f.target.runId)))?.retainedAt ?? null,
+          ).toBeNull();
+          expect(s.provider.deleteCalls).toBe(0);
+          expect(g.daemon.calls).toEqual([]);
+        };
+        // The adapter itself would read on every call now; the reconciler does not call it.
+        s.guest.health = () => daemonExited;
+        for (const poll of ["first", "second", "third"]) expect(await g.reconcile(), poll).toBe(0);
+        await untouched();
+        // Boat answering 404 mid-close is the close's to observe, never this sweep's to commit.
+        s.provider.sandboxMissing = true;
+        f.clock.now += BOAT_INSPECT_READ_MS;
+        expect(await g.reconcile()).toBe(0);
+        await untouched();
       } finally {
         await f.runtime.dispose();
       }
@@ -6536,4 +6554,220 @@ describe.runIf(databaseUrl !== undefined)("Boat runs under the generic exit reco
         await f.runtime.dispose();
       }
     }));
+});
+
+describe.runIf(databaseUrl !== undefined).each([
+  { name: "a run with a tunnel", options: {} },
+  { name: "a run launched without resources", options: { resources: "none" } as const },
+])("Boat close of $name beside a second observer of its deletion", ({ options }) => {
+  const tunnelled = options.resources === undefined;
+  /**
+   * A stopping run and its close, with a second observer of the same VM: what the exit
+   * reconciler's `inspect` is once Boat answers 404, and Boat's lifecycle sweep, which
+   * discharges whatever Boat is recorded not to have.
+   */
+  const stopping = async (s: AllocationFixture, deletionWaitMs?: number) => {
+    const f = await adapterFixture(s, deletionWaitMs === undefined ? {} : { deletionWaitMs });
+    const target = await stopLaunched(s);
+    const seen: unknown[] = [];
+    const swept: unknown[] = [];
+    const flushedAtDelete: unknown[] = [];
+    const inspect = () => f.adapter.inspect({ resourceId: target.sandboxId });
+    return {
+      ...f,
+      target,
+      seen,
+      swept,
+      flushedAtDelete,
+      inspect,
+      /** What the daemon had been asked for when Boat received the DELETE. */
+      noteDelete: () => {
+        flushedAtDelete.push(f.close.daemon.flushRequests.map((request) => request?.kind));
+      },
+      /** Boat answers 404 for the VM from now on, and an observer other than the close reads it. */
+      observeGone: async () => {
+        s.provider.sandboxMissing = true;
+        seen.push(await inspect());
+      },
+      sweep: async () => {
+        swept.push((await execute(f.close.owner.reconcile({ limit: 20 }))).entries);
+      },
+      /** The stop job's route to the close. */
+      closeRun: () => f.adapter.closeCapture({ resourceId: target.sandboxId }, target.runId),
+    };
+  };
+  /** The stop ended as an undisturbed one does: FINAL, one DELETE, everything discharged. */
+  const closedCleanly = async (s: AllocationFixture, f: Awaited<ReturnType<typeof stopping>>) => {
+    const runId = f.target.runId;
+    expect(f.flushedAtDelete).toEqual([["final"]]);
+    expect(f.close.daemon.flushRequests.map((request) => request?.kind)).toEqual(["final"]);
+    expect(s.provider.deleteCalls).toBe(1);
+    expect(await released(s, runId)).toMatchObject(REMOVED);
+    expect(await execute(s.repo.get(runId))).toMatchObject({ phase: "deleted" });
+    expect(await execute(s.canonical.getByRunId(runId))).toMatchObject({
+      state: "stopped",
+      deletionState: "deleted",
+      retainedAt: null,
+    });
+    expect(
+      (await execute(s.db.select().from(schema.boatObservations))).map((row) => row.presence),
+    ).toEqual(["absent"]);
+    if (tunnelled) {
+      expect((await tunnelRecord(s, f.target)).released).toBe(true);
+      expect(s.gateway.removeCalls).toBe(1);
+    } else await expectNoGateway(s);
+    // A later pass, and a later stop, find nothing left to do.
+    expect(await f.closeRun()).toBe("closed");
+    expect(s.provider.deleteCalls).toBe(1);
+    if (tunnelled) expect(s.gateway.removeCalls).toBe(1);
+  };
+
+  it("closes in the same pass when Boat's 404 is committed after its DELETE and before the operation is recorded", () =>
+    test(async (s) => {
+      const f = await stopping(s);
+      try {
+        // Boat's deletion operation reads `processing` for the whole pass.
+        s.provider.deletionCompleted = false;
+        s.provider.beforeDeletion = async () => {
+          f.noteDelete();
+          await f.observeGone();
+        };
+        expect(await f.closeRun()).toBe("closed");
+        expect(f.seen).toEqual([{ state: "missing" }]);
+        await closedCleanly(s, f);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }, options));
+
+  it(
+    "closes in the same pass when Boat's 404 is committed after the operation is recorded and before its poll answers",
+    () =>
+      test(async (s) => {
+        const f = await stopping(s, 10_000);
+        try {
+          s.provider.deletionCompleted = false;
+          s.provider.beforeDeletion = async () => f.noteDelete();
+          s.provider.beforeDeletionRead = async () => {
+            if (f.seen.length === 0) await f.observeGone();
+          };
+          expect(await f.closeRun()).toBe("closed");
+          expect(f.seen).toEqual([{ state: "missing" }]);
+          // The poll that found the absence committed is the last one: the wait ends there.
+          expect(s.provider.deletionReads).toBe(1);
+          await closedCleanly(s, f);
+        } finally {
+          await f.runtime.dispose();
+        }
+      }, options),
+    20_000,
+  );
+
+  it("closes in the same pass when the lifecycle sweep discharges on that 404 before the operation is recorded (the live run)", () =>
+    test(async (s) => {
+      const f = await stopping(s);
+      try {
+        s.provider.beforeDeletion = async () => {
+          f.noteDelete();
+          await f.observeGone();
+          await f.sweep();
+        };
+        expect(await f.closeRun()).toBe("closed");
+        expect(f.seen).toEqual([{ state: "missing" }]);
+        expect(f.swept).toEqual([[{ runId: f.target.runId, outcome: "closed" }]]);
+        // As the live run left it: discharged on Boat's absence, with no operation recorded.
+        expect(await execute(s.repo.get(f.target.runId))).toMatchObject({
+          removal: { kind: "absent", completed: true },
+        });
+        await closedCleanly(s, f);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }, options));
+
+  it(
+    "closes in the same pass when the lifecycle sweep discharges on that 404 between the record and Boat's completed",
+    () =>
+      test(async (s) => {
+        const f = await stopping(s, 10_000);
+        try {
+          s.provider.deletionCompleted = false;
+          s.provider.beforeDeletion = async () => f.noteDelete();
+          s.provider.beforeDeletionRead = async () => {
+            if (f.seen.length > 0) return;
+            await f.observeGone();
+            await f.sweep();
+            s.provider.deletionCompleted = true;
+          };
+          expect(await f.closeRun()).toBe("closed");
+          expect(f.seen).toEqual([{ state: "missing" }]);
+          expect(f.swept).toEqual([[{ runId: f.target.runId, outcome: "closed" }]]);
+          await closedCleanly(s, f);
+        } finally {
+          await f.runtime.dispose();
+        }
+      }, options),
+    20_000,
+  );
+
+  it("the adapter's stop resolves in the same call when Boat's 404 is committed while its operation still reads processing", () =>
+    test(async (s) => {
+      const f = await stopping(s);
+      try {
+        s.provider.deletionCompleted = false;
+        s.provider.beforeDeletion = async () => f.observeGone();
+        expect(await f.adapter.stop({ resourceId: f.target.sandboxId })).toMatchObject({
+          outcome: "stopped",
+        });
+        expect(f.seen).toEqual([{ state: "missing" }]);
+        expect(s.provider.deleteCalls).toBe(1);
+        expect(await released(s, f.target.runId)).toMatchObject(REMOVED);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }, options));
+
+  it("still takes no failed read and no 404 of a VM never seen past creation for the deletion's completion", () =>
+    test(async (s) => {
+      const f = await stopping(s);
+      try {
+        const runId = f.target.runId;
+        s.provider.deletionCompleted = false;
+        s.provider.beforeDeletion = async () => {
+          f.noteDelete();
+          // Boat cannot be read, then answers 404 with nothing on record that it ever
+          // reported the VM past creation: neither is absence, to any observer.
+          s.provider.beforeSandboxRead = async () => {
+            throw new Error("Boat is down");
+          };
+          f.seen.push(await f.inspect());
+          s.provider.beforeSandboxRead = async () => {};
+          await execute(s.db.delete(schema.boatObservations));
+          s.provider.sandboxMissing = true;
+          f.seen.push(await f.inspect());
+        };
+        await expect(f.closeRun()).rejects.toThrow("pending");
+        expect(f.seen).toEqual([{ state: "running" }, { state: "running" }]);
+        expect(await execute(s.db.select().from(schema.boatObservations))).toEqual([]);
+        // The operation is on record and nothing is released while Boat says `processing`.
+        expect(await execute(s.repo.get(runId))).toMatchObject({
+          phase: "deleting",
+          removal: { kind: "operation", id: s.provider.deletionId, completed: false },
+        });
+        expect(await released(s, runId)).toMatchObject(NOTHING_RELEASED);
+        if (tunnelled) expect((await tunnelRecord(s, f.target)).released).toBeUndefined();
+        // The next pass polls the recorded operation, and it still reads `processing`.
+        expect(await f.closeRun()).toBe("pending");
+        expect(await released(s, runId)).toMatchObject(NOTHING_RELEASED);
+        // Only Boat's own completed operation ends it, with no second DELETE.
+        s.provider.deletionCompleted = true;
+        expect(await f.closeRun()).toBe("closed");
+        expect(await execute(s.repo.get(runId))).toMatchObject({
+          removal: { kind: "operation", id: s.provider.deletionId, completed: true },
+        });
+        await closedCleanly(s, f);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }, options));
 });

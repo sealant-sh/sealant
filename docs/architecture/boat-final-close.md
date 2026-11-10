@@ -141,6 +141,16 @@ ticket after an observed-complete FINAL, the owner's discard, or a launch that n
    publication pin released. While Boat still says the deletion is in progress it answers `deleting`
    and releases nothing.
 
+The removal is not the only observer of its own deletion. Boat answers 404 for the VM soon after a
+DELETE, often while the operation still reads `processing`, and whatever reads the VM then (the
+lifecycle sweep, a second stop, and from the next step on the exit reconciler's `inspect`) commits
+that absence and may discharge on it. Once its DELETE is out, the removal therefore takes a
+committed absence for the deletion's end wherever it meets one (an allocation another pass already
+discharged, an operation it can no longer record or poll, a wait that ran out) and discharges in the
+same call; the close does the same. Only the committed observation counts: a failed read, a timeout
+and a 404 for a VM Boat was never seen to report past creation are not absence, nothing is released
+before a committed absence, and no second DELETE is sent.
+
 `close` and `closeUnused` call it. `close` uses its two halves (`deletion`, then the discharge)
 because its capture ledger records the deletion between them.
 
@@ -176,6 +186,10 @@ drain its daemon, never authorize or issue a removal, never call `stop()`, and n
 outcome for its work. A VM Boat no longer has is committed absent by the observer inside `inspect`;
 the reconciler writes nothing, and this close discharges it exactly as when its own observation
 found the absence.
+
+Under the same guard the exit reconciler does not inspect a Boat run whose stop is requested: from
+the stop request to the discharge the run is this close's, including a VM kept after an unconfirmed
+FINAL. Nothing is read from Boat or the agent for it, so a stop has one observer of its deletion.
 
 The worker's drains reach a Boat daemon through `BoatControlMaterial.drainMaterial`, which requires
 only this deployment's run, on this sandbox, with its sealed bearer and Boat's labels on the VM.

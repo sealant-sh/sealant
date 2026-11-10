@@ -220,8 +220,19 @@ const make: Effect.Effect<
               : Effect.fail(new BoatFinalCloseError("held")),
         ),
       );
-  /** Boat's own deletion operation for this VM completed. */
+  /**
+   * Boat no longer has the VM: its absence is committed, by this close's removal or by another
+   * observer of the same deletion (which may have discharged it already), or its own deletion
+   * operation for this VM completed.
+   */
   const finish = Effect.fn("BoatFinalClose.finish")(function* (target: BoatExecutionTarget) {
+    const stored = yield* allocations.get(target.runtimeInstanceId);
+    if (stored === undefined || !isDeepStrictEqual(stored.target, target))
+      return yield* Effect.fail(new BoatFinalCloseError("held"));
+    // A committed absence discharges on its own, whatever the allocation's record says by now.
+    const discharged = yield* discharger.discharge(stored);
+    if (discharged.kind !== "not-absent")
+      return discharged.kind === "discharged" ? ("closed" as const) : ("pending" as const);
     const run = yield* current(target);
     if (recordedOf(run)?.completed !== true)
       return yield* Effect.fail(new BoatFinalCloseError("held"));
@@ -370,11 +381,10 @@ const make: Effect.Effect<
         const outcome = yield* removal
           .deletion(allocation, { fence: false })
           .pipe(Effect.mapError(removalError));
-        // Absent here is a VM that vanished since the read above: the next pass discharges it.
-        if (outcome !== "completed")
-          return yield* Effect.fail(
-            new BoatFinalCloseError(outcome === "deleting" ? "pending" : "unavailable"),
-          );
+        // `absent` is the deletion's end as much as `completed`: Boat's own 404 for this VM,
+        // committed by this removal or by another observer while it recorded or polled the
+        // operation. Only a deletion Boat still reports in progress, with no absence, is pending.
+        if (outcome === "deleting") return yield* Effect.fail(new BoatFinalCloseError("pending"));
       }),
     });
     if (!removed.removed) return yield* Effect.fail(new BoatFinalCloseError("held"));

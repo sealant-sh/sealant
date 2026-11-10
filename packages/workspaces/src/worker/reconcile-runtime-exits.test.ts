@@ -1213,17 +1213,9 @@ describe("watchRuntimeExits", () => {
       expect(stop).not.toHaveBeenCalled();
     });
 
-    it.each<readonly [string, WorkspaceRuntimeInstance, RuntimeAdapterInspectResult]>([
-      ["an exit under a requested stop", boatRow({ stopReason: "user" }), exitedOnLiveMachine],
-      ["a machine the runtime no longer has", boatRow(), { state: "missing" }],
-      [
-        "a machine gone under a requested stop",
-        boatRow({ stopReason: "user" }),
-        { state: "missing" },
-      ],
-    ])("writes nothing for %s: its own close owns it", async (_what, row, inspection) => {
-      const harness = makeHarness({ instances: [row] });
-      const { adapter, stop } = ownClose(new Map([["bx_23456789", inspection]]));
+    it("writes nothing for a machine the runtime no longer has: its own close discharges it", async () => {
+      const harness = makeHarness({ instances: [boatRow()] });
+      const { adapter, stop, inspect } = ownClose(new Map([["bx_23456789", { state: "missing" }]]));
       const ledger = inMemoryCaptureDrainLedger();
       await Effect.runPromise(ledger.recordStatus("run_1", savedStatus(), Date.now()));
       const { connects, targetOptions } = unreachable();
@@ -1233,6 +1225,8 @@ describe("watchRuntimeExits", () => {
       );
 
       expect(recorded).toBe(0);
+      // A ready run with no stop requested is still asked about.
+      expect(inspect).toHaveBeenCalledTimes(1);
       expect(harness.markExited).not.toHaveBeenCalled();
       expect(harness.markStopped).not.toHaveBeenCalled();
       expect(harness.markRemoved).not.toHaveBeenCalled();
@@ -1243,6 +1237,87 @@ describe("watchRuntimeExits", () => {
       expect(drain?.deletion).toBeUndefined();
       // Nothing is said of its work: never `gone` (lost) from here.
       expect(drain?.observation?.state).not.toBe("gone");
+    });
+
+    it.each<readonly [string, RuntimeAdapterInspectResult]>([
+      ["its daemon has exited", exitedOnLiveMachine],
+      ["its machine is gone", { state: "missing" }],
+      ["it is running", { state: "running" }],
+    ])(
+      "does not inspect a run whose stop is requested, whatever would be answered (%s): that stop's close owns it",
+      async (_what, inspection) => {
+        const harness = makeHarness({
+          instances: [
+            boatRow({ runId: "run_stopping", stopReason: "user" }),
+            boatRow({
+              runId: "run_kept",
+              resourceId: "bx_3456789a",
+              reference: "boat:bx_3456789a",
+              stopReason: "failed",
+            }),
+          ],
+        });
+        const { adapter, stop, inspect, closeCapture } = ownClose(
+          new Map([
+            ["bx_23456789", inspection],
+            ["bx_3456789a", inspection],
+          ]),
+        );
+        const ledger = inMemoryCaptureDrainLedger();
+        const { connects, targetOptions } = unreachable();
+
+        expect(await sweep(harness, adapter, ledger, targetOptions)).toBe(0);
+
+        // No request to the runtime or the guest is made for it at all.
+        expect(inspect).not.toHaveBeenCalled();
+        expect(stop).not.toHaveBeenCalled();
+        expect(closeCapture).not.toHaveBeenCalled();
+        expect(connects).toEqual([]);
+        expect(harness.markExited).not.toHaveBeenCalled();
+        expect(harness.markStopped).not.toHaveBeenCalled();
+        expect(harness.markRemoved).not.toHaveBeenCalled();
+        expect(ledger.store.rows.size).toBe(0);
+      },
+    );
+
+    it("still inspects a ready run with no stop requested beside one whose stop is requested", async () => {
+      const harness = makeHarness({
+        instances: [
+          boatRow({ runId: "run_stopping", stopReason: "user" }),
+          boatRow({ runId: "run_live", resourceId: "bx_3456789a", reference: "boat:bx_3456789a" }),
+        ],
+      });
+      const { adapter, inspect } = ownClose(
+        new Map([
+          ["bx_23456789", exitedOnLiveMachine],
+          ["bx_3456789a", exitedOnLiveMachine],
+        ]),
+      );
+      const ledger = inMemoryCaptureDrainLedger();
+      const { targetOptions } = unreachable();
+
+      expect(await sweep(harness, adapter, ledger, targetOptions)).toBe(1);
+
+      expect(inspect.mock.calls).toEqual([[{ resourceId: "bx_3456789a" }]]);
+      expect(harness.markExited.mock.calls.map(([input]) => input.runId)).toEqual(["run_live"]);
+    });
+
+    it("still inspects a stop-requested executor of a runtime with no close of its own, and records its planned stop", async () => {
+      const harness = makeHarness({
+        instances: [boatRow({ adapter: "microvm", endpoint: null, stopReason: "user" })],
+      });
+      const { adapter, inspect, stop } = stubAdapter({
+        id: "microvm",
+        inspections: new Map([["bx_23456789", exitedOnLiveMachine]]),
+      });
+      const ledger = inMemoryCaptureDrainLedger();
+      await Effect.runPromise(ledger.recordStatus("run_1", savedStatus(), Date.now()));
+
+      expect(await sweep(harness, adapter, ledger, {})).toBe(1);
+
+      expect(inspect).toHaveBeenCalledTimes(1);
+      expect(harness.markStopped).toHaveBeenCalledWith({ runId: "run_1", stopReason: "user" });
+      expect(stop).toHaveBeenCalledTimes(1);
     });
 
     it("records nothing without a capture drain: nothing could say its disk was saved", async () => {
