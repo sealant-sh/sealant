@@ -12,6 +12,8 @@ import { Effect, Redacted, type ManagedRuntime } from "effect";
 import { z } from "zod";
 
 import { nativeWorkspaceInstallation } from "../../buildkit/buildkit-builder.js";
+import { safeCommandTail } from "../../images/boat/command-diagnostics.js";
+import { SealantControlError } from "../../sealantd/runtime.js";
 import { BoatReadiness } from "../../worker/boat-readiness.js";
 import { liveControlChannel, type ControlChannel } from "../kubernetes/adapter.js";
 import {
@@ -37,6 +39,20 @@ import {
   boatLaunchSummary,
   type BoatLaunchDiagnostic,
 } from "./launch-diagnostics.js";
+
+/**
+ * The daemon's own refusal behind a launch failure. A step after ready fails as a
+ * `LaunchRetainedError` whose cause is the refusal, so the error itself is not the one to test.
+ */
+export const sealantRefusalBehind = (error: unknown): SealantControlError | undefined => {
+  let current = error;
+  for (let depth = 0; depth < 8; depth++) {
+    if (current instanceof SealantControlError) return current;
+    if (!(current instanceof Error)) return undefined;
+    current = current.cause;
+  }
+  return undefined;
+};
 
 /** Public failures never carry guest responses, credentials or sealed launch material. */
 export class BoatAdapterError extends Error {
@@ -184,6 +200,15 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
         },
       });
     } catch (error) {
+      // The diagnostic is an allowlist with no free text. What sealantd itself said when it refused
+      // an operation goes to the worker's log, where an operator can read it.
+      const refusal = sealantRefusalBehind(error);
+      if (refusal !== undefined)
+        console.warn(`Boat launch · run ${raw.runId ?? "unknown"}: sealantd refused at ${step}`, {
+          operation: refusal.operation,
+          code: refusal.code,
+          message: safeCommandTail(refusal.message),
+        });
       if (identity === undefined && raw.runId !== undefined) {
         try {
           identity = await this.locate({ runId: raw.runId });

@@ -240,10 +240,20 @@ export const dockerServiceHealthSchema = z.discriminatedUnion("status", [
       "readiness-timeout",
       "exited",
       "probe-failed",
+      // Boat: the engine's own containerd did not start, or the engine answered but could not
+      // run a container (readiness runs one).
+      "containerd-failed",
+      "container-probe-failed",
     ]),
     code: z.number().int().nullable(),
     signal: z.string().nullable(),
     probe: dockerProbeFailureSchema.optional(),
+    /**
+     * What the engine is made of (the containerd binary and socket dockerd uses, its version and
+     * the shim's, whether a system containerd was there) and the failing command's last output.
+     * Free text: Core redacts and bounds it before it enters a diagnostic.
+     */
+    output: z.string().max(4096).optional(),
   }),
 ]);
 

@@ -191,6 +191,15 @@ fi
 while :; do sleep 1; done
 `;
 
+// The bundle's own containerd: makes the socket its config names, as the real one listens.
+const FAKE_CONTAINERD = `#!/bin/sh
+if [ "$1" = --version ]; then echo "containerd v2.9.9-fake"; exit 0; fi
+trap 'exit 0' TERM
+address=$(sed -n 's/^ *address = "\\(.*\\)"$/\\1/p' "$2")
+: > "$address"
+while :; do sleep 1; done
+`;
+
 // Logs every call; \`ps\` lists FAKE_DOCKER_PS (one container id) when set.
 const FAKE_DOCKER = `#!/bin/sh
 [ -n "$FAKE_DOCKER_LOG" ] && printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
@@ -281,6 +290,12 @@ const createVm = async (): Promise<Vm> => {
     writeExecutable(path.join(bin, "modprobe"), fakeNetTool(netLog, handshakeFile)),
     writeExecutable(path.join(bin, "dockerd"), FAKE_DOCKERD),
     writeExecutable(path.join(bin, "docker"), FAKE_DOCKER),
+    writeExecutable(path.join(bin, "containerd"), FAKE_CONTAINERD),
+    writeExecutable(
+      path.join(bin, "containerd-shim-runc-v2"),
+      "#!/bin/sh\necho shim v2.9.9-fake\n",
+    ),
+    writeExecutable(path.join(bin, "docker-init"), "#!/bin/sh\nexit 0\n"),
   ]);
   const bootIdFile = path.join(dir, "boot_id");
   await writeFile(bootIdFile, `${randomUUID()}\n`);
@@ -353,6 +368,9 @@ const createVm = async (): Promise<Vm> => {
       SEALANT_MICROVM_RECOVERY_SETTLE_MS: "3000",
       SEALANT_MICROVM_DOCKERD: path.join(bin, "dockerd"),
       SEALANT_MICROVM_DOCKER: path.join(bin, "docker"),
+      SEALANT_MICROVM_CONTAINERD: path.join(bin, "containerd"),
+      SEALANT_MICROVM_CONTAINERD_SHIM: path.join(bin, "containerd-shim-runc-v2"),
+      SEALANT_MICROVM_DOCKER_INIT: path.join(bin, "docker-init"),
       SEALANT_MICROVM_DOCKER_SOCKET: path.join(dockerDir, "run", "docker.sock"),
       SEALANT_MICROVM_DOCKER_DATA_ROOT: path.join(dockerDir, "data"),
       SEALANT_MICROVM_DOCKER_EXEC_ROOT: path.join(dockerDir, "exec"),
@@ -2256,6 +2274,14 @@ describe("boat agent · park proves Docker gone, on Boat's defaults", () => {
       expect(engineProcs).toMatch(/^\d+$/);
       expect(await readFile(dockerdArgs, "utf8")).toContain(
         "--cgroup-parent sealant-docker.slice --exec-opt native.cgroupdriver=systemd",
+      );
+      // dockerd uses the bundle's own containerd, never one it would find on the VM (run 7), and
+      // was ready only after a real container ran.
+      expect(await readFile(dockerdArgs, "utf8")).toMatch(
+        /^--containerd \S+\/containerd\/containerd\.sock /,
+      );
+      expect(await readFile(dockerLog, "utf8")).toMatch(
+        / run --rm --network none --pull never --log-driver none sealant-engine-probe:1 --version/,
       );
       // A second containerd outside Docker's cgroups, from the same engine path, is not Docker's.
       const sleep = await realSleep();

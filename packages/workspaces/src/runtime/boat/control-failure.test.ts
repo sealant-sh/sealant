@@ -5,8 +5,14 @@ import { Effect } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 
-import { SealantRuntime, SealantRuntimeControlLive } from "../../sealantd/runtime.js";
+import {
+  SealantControlError,
+  SealantRuntime,
+  SealantRuntimeControlLive,
+} from "../../sealantd/runtime.js";
 import { BoatReadinessError } from "../../worker/boat-readiness.js";
+import { LaunchRetainedError } from "../launch-retention.js";
+import { sealantRefusalBehind } from "./adapter.js";
 import { BoatSecret } from "./config.js";
 import { BoatExecutionError, createBoatGuestTransport } from "./execution.js";
 import { boatLaunchDiagnostic } from "./launch-diagnostics.js";
@@ -103,5 +109,39 @@ describe("Boat control probe failure", () => {
     expect(new BoatReadinessError("unavailable", diagnostic).message).toContain(
       JSON.stringify(control),
     );
+  });
+
+  it("keeps the operation and code of a daemon's own refusal after readiness, never its message", () => {
+    // VM 131 runs 8 and 9: sealantd refused the credential-file exec, and the launch said only
+    // `SealantControlError`.
+    const refusal = new SealantControlError({
+      operation: "exec",
+      code: 9,
+      message: "process start failed: /home/dev/.codex is not writable",
+    });
+    expect(boatLaunchDiagnostic(refusal, "credentials")).toEqual({
+      step: "credentials",
+      errorClass: "SealantControlError",
+      control: { operation: "exec", daemonCode: 9 },
+    });
+  });
+
+  it("finds the daemon's refusal behind the error a failed step after ready is wrapped in", () => {
+    // The credentials step fails as a `LaunchRetainedError`: testing that error's own class found
+    // nothing, and the worker's log said nothing, on VM 131 run 10.
+    const refusal = new SealantControlError({
+      operation: "closeStdin",
+      code: 9,
+      message: "process not found: proc_1",
+    });
+    const retained = new LaunchRetainedError(
+      { adapter: "boat", resourceId: "bx_1", reference: "run_1" },
+      refusal,
+    );
+    expect(sealantRefusalBehind(retained)).toBe(refusal);
+    expect(
+      sealantRefusalBehind(new Error("unrelated", { cause: new Error("still unrelated") })),
+    ).toBeUndefined();
+    expect(sealantRefusalBehind("not an error")).toBeUndefined();
   });
 });

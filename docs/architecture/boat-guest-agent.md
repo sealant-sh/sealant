@@ -32,6 +32,18 @@ turns the agent's Docker service on (`SEALANT_MICROVM_DOCKER_CAPABLE=1`, a `198.
 cgroup, a 10-second container stop and the `containerd-shim-runc-v2` path). Such an image answers
 launch contract version 2 only.
 
+The engine is the bundle's own, end to end. The agent starts the bundle's `containerd` (its socket
+and state under the exec root, in the engine cgroup, CRI off) and gives dockerd `--containerd` for
+it. dockerd otherwise adopts a containerd already listening on `/run/containerd`, as a base image's
+own may be. Such a containerd, finding this bundle's newer `containerd-shim-runc-v2` first on PATH,
+cannot read the shim's bootstrap (VM 131 run 7: `unsupported protocol: Yunix`). Readiness then runs
+a real container: an image of one static file (`docker-init`) imported and run with no network and
+no pull. So an engine that answers `docker info` but cannot start a container is never ready
+(`container-probe-failed`; `containerd-failed` when its containerd does not start). Every start and
+failure says which containerd dockerd uses (binary, socket, version), the shim's version and whether
+a system containerd socket was there. The agent's journal records it, and a failed health carries it
+in `services.docker.output`, which Core redacts into the launch diagnostic.
+
 The agent manifest digest is `boatAgentManifestDigest`: SHA-256 over the path, mode and bytes digest
 of the agent files, `sealantd`, the unit and the Docker drop-in. The image writes it to
 `manifest.json`, the builder reads it back and records it in the installation receipt (version 4,

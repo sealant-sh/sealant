@@ -276,9 +276,25 @@ export const boatLaunchDiagnostic = (
   const { _tag: tag, name } = named.success ? named.data : {};
   const classified = diagnosticSchema.shape.errorClass.safeParse(tag ?? name);
   const errorClass = classified.success ? classified.data : "unknown";
+  // A daemon that answered with its own error: which operation it refused and its code, so the
+  // launch says more than a class name. The daemon's message is free text and stays out.
+  const refusal = z
+    .object({
+      _tag: z.literal("SealantControlError"),
+      operation: z.string(),
+      code: z.number().int(),
+    })
+    .safeParse(current);
+  const control = refusal.success
+    ? diagnosticSchema.shape.control.safeParse({
+        operation: refusal.data.operation,
+        daemonCode: refusal.data.code,
+      })
+    : undefined;
   return diagnosticSchema.parse({
     step,
     errorClass,
+    ...(control?.success === true && control.data !== undefined ? { control: control.data } : {}),
     ...(named.success && diagnosticSchema.shape.code.safeParse(named.data.code).success
       ? { code: named.data.code }
       : {}),
