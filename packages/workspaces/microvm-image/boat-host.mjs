@@ -1216,7 +1216,22 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
    * stdin from Node is a socketpair, which `/dev/stdin` cannot reopen (ENXIO).
    */
   const prepareNetwork = async (config) => {
+    // Each failure names the step it happened in (`network-<step>-failed`), so Core's diagnostic
+    // says what failed without the agent's journal: an error's own text never leaves the VM.
+    let step = "link";
+    try {
+      await prepareSteps(config, (next) => {
+        step = next;
+      });
+    } catch (error) {
+      log(`network: ${step} failed: ${error instanceof Refusal ? error.reason : error?.message}`);
+      throw new Refusal(`network-${step}-failed`, 500);
+    }
+  };
+  const prepareSteps = async (config, at) => {
+    at("link");
     await ip("link", "add", WIREGUARD_INTERFACE, "type", "wireguard");
+    at("wg");
     const keyFile = path.join(paths.stateDir, "agent", `${WIREGUARD_INTERFACE}.key`);
     await writeAtomic(keyFile, `${config.private_key}\n`, 0o600);
     let set;
@@ -1239,20 +1254,19 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
       await unlink(keyFile).catch(() => {});
     }
     if (set.code !== 0) throw new Refusal("network-command-refused", 500);
+    at("address");
     await ip("address", "add", `${CLIENT}/32`, "dev", WIREGUARD_INTERFACE);
+    at("link");
     await ip("link", "set", WIREGUARD_INTERFACE, "mtu", WIREGUARD_MTU);
     await ip("link", "set", WIREGUARD_INTERFACE, "up");
+    at("route");
     await ip("route", "add", config.subnet, "dev", WIREGUARD_INTERFACE);
     await ip("route", "add", `${GATEWAY}/32`, "dev", WIREGUARD_INTERFACE);
+    at("resolver");
     // Keep the VM's own resolver first (it is what the forwarder asks for every other name), then
     // start the forwarder, then point `resolv.conf` at it.
     await keepResolvConf();
-    try {
-      await startResolver();
-    } catch (error) {
-      log(`network: resolver could not start: ${error.message}`);
-      throw new Refusal("network-command-refused", 500);
-    }
+    await startResolver();
     await replaceResolvConf();
   };
 
@@ -1334,7 +1348,9 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
         log(`network: ${error.reason}`);
         return { status: error.status, body: { reason: error.reason } };
       }
-      throw error;
+      // Anything else (the network record could not be written, say): typed, its text kept here.
+      log(`network: setup failed: ${error?.message}`);
+      return { status: 500, body: { reason: "network-setup-failed" } };
     }
   };
 

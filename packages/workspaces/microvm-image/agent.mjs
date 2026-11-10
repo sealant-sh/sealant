@@ -64,6 +64,13 @@ const RECOVER_ROUTE = "/sealant/recover";
 const RECOVER_CONTRACT_VERSION = 1;
 // Boat host mode only (`src/runtime/boat/agent-contract.ts`).
 const PARK_ROUTE = "/sealant/park";
+/** What an unexpected failure of a Boat route answers (500): a reason Core can classify. */
+const BOAT_ROUTE_FAILURES = new Map([
+  ["/sealant/launch", "launch-failed"],
+  ["/sealant/recover", "recover-failed"],
+  ["/sealant/park", "park-failed"],
+  ["/sealant/network", "network-setup-failed"],
+]);
 const NETWORK_ROUTE = "/sealant/network";
 
 /**
@@ -1821,6 +1828,9 @@ const server = http.createServer((req, res) => {
     log(`${req.method} ${url}: ${error.message}`);
     if (res.headersSent) {
       res.end();
+    } else if (BOAT && BOAT_ROUTE_FAILURES.has(url)) {
+      // Boat: a typed reason Core's diagnostic keeps, never the error's text.
+      json(res, 500, { reason: BOAT_ROUTE_FAILURES.get(url) });
     } else {
       message(res, 500, "request failed");
     }
