@@ -1,0 +1,36 @@
+#!/bin/sh
+# The `docker` Core's worker and API find first on their PATH in the harness. It adds the run's
+# label to every container, network and volume they create, so teardown, the reaper and cleanup
+# remove only what this run owns. Everything else passes through unchanged. Core passes its daemon
+# through DOCKER_HOST, never as a global option; a global option is refused so nothing is created
+# unlabelled.
+set -eu
+real="${SEALANT_BOAT_HARNESS_REAL_DOCKER:?boat-harness docker wrapper: SEALANT_BOAT_HARNESS_REAL_DOCKER unset}"
+run="${SEALANT_BOAT_HARNESS_RUN:?boat-harness docker wrapper: SEALANT_BOAT_HARNESS_RUN unset}"
+label="sh.sealant.boat-harness=$run"
+case "${1:-}" in
+  -*)
+    echo "boat-harness docker wrapper: global options are not supported ($1)" >&2
+    exit 97
+    ;;
+  run | create)
+    command=$1
+    shift
+    exec "$real" "$command" --label "$label" "$@"
+    ;;
+  container)
+    if [ "${2:-}" = run ] || [ "${2:-}" = create ]; then
+      command=$2
+      shift 2
+      exec "$real" container "$command" --label "$label" "$@"
+    fi
+    ;;
+  network | volume)
+    if [ "${2:-}" = create ]; then
+      kind=$1
+      shift 2
+      exec "$real" "$kind" create --label "$label" "$@"
+    fi
+    ;;
+esac
+exec "$real" "$@"

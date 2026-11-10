@@ -21,8 +21,8 @@ import type { Defect } from "./markers.js";
 export const PEER_PID: Defect = {
   id: "F3",
   title: "control bridge and sealantd reject each other's peer identity",
-  // Readiness failed (the runtime row says so) and the guest says why.
-  failure: /\\"step\\":\\"readiness\\"/,
+  // The launch itself ended at readiness (its outcome, not a later timeout), and the guest says why.
+  failure: /^launch ended \w+ with [^\n]*\\"step\\":\\"readiness\\"/,
   evidence: /unauthorized peer|control-peer-changed/,
   owner: "thread A2 (readiness)",
 };
@@ -43,7 +43,7 @@ export const DELETED_VM_KEPT: Defect = {
   title: "a launch failed in `cloning` is deleted but still reads retained",
   // Mend still reads retained although Core removed the runtime and deleted the VM.
   failure:
-    /terminal workspace[^\n]*; public status retained; runtime [^\n]*"removed":true[^\n]*"allocation":"deleted"/,
+    /^timed out after \d+s waiting for Mend to see a terminal workspace[^\n]*; public status retained; runtime [^\n]*"removed":true[^\n]*"allocation":"deleted"/,
   owner: "thread C (lifecycle)",
 };
 
@@ -65,7 +65,8 @@ export const STUCK_DRAINS: Defect = {
   id: "S2",
   title: "established FINAL leaves the capture drain retained (stuck stopping)",
   // After Stop, Mend still reads retained while the capture drain stays kept.
-  failure: /public status retained; runtime [^\n]*"drain":"kept"/,
+  failure:
+    /^timed out after \d+s waiting for Mend to see a terminal workspace[^\n]*; public status retained; runtime [^\n]*"drain":"kept"/,
   owner: "thread C (lifecycle)",
 };
 
@@ -77,7 +78,9 @@ export const STUCK_DRAINS: Defect = {
 export const SLOW_CLOSE: Defect = {
   id: "C1",
   title: "failed-launch close waits on the 30 s sweep, so Mend can read retained past 60 s",
-  failure: /within 60 s; public status retained; runtime [^\n]*"allocation":"deleting"/,
+  // Only the 60 s promise: the release checks after the scenario still require the close to end.
+  failure:
+    /^timed out after \d+s waiting for Mend to see a terminal workspace[^\n]*within 60 s; public status retained; runtime [^\n]*"allocation":"deleting"/,
   owner: "thread C (lifecycle)",
   intermittent: true,
 };

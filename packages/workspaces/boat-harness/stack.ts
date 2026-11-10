@@ -14,7 +14,6 @@ import {
   readdir,
   readFile,
   rm,
-  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -28,16 +27,17 @@ import { Sealant } from "@sealant/sdk";
 import { z } from "zod";
 
 import {
+  CACHE_LABEL,
   HARNESS_LABEL,
   docker,
   dockerOk,
-  listCoreObjects,
+  listCoreObjectNames,
+  listLabelled,
   removeLabelled,
-  removeObjects,
-  type CoreObject,
+  type LabelledObjects,
 } from "./docker.js";
 import { FakeBoat } from "./fake-boat.js";
-import { LOCK, LOCK_LABEL, RUN_ENV, releaseLock } from "./reap.js";
+import { RUN_ENV, acquireHostLock, releaseLock } from "./reap.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const repo = join(here, "../../..");
@@ -85,13 +85,12 @@ export interface HarnessStack {
   /** SIGKILLs the worker: no finalizers run, as when a host dies. */
   readonly killWorker: () => Promise<void>;
   /** Core-labelled Docker objects (resources, gateways) created since the stack started. */
-  readonly coreObjects: () => Promise<CoreObject[]>;
+  /** Everything labelled with this run, Core's objects included (see `bin/docker`). */
+  readonly ownedObjects: () => Promise<LabelledObjects>;
   /** Starts the worker, optionally with environment overrides (e.g. another gateway image). */
   readonly startWorker: (overrides?: Readonly<Record<string, string>>) => Promise<void>;
   /** The gateway image digest the worker was started with. */
   readonly gatewayImage: string;
-  /** A per-run derivative of an image, so containers Core creates from it carry the run label. */
-  readonly runImage: (base: string) => Promise<string>;
   readonly stop: () => Promise<void>;
 }
 
@@ -233,7 +232,7 @@ const cachedImage = async (name: string, context: string, dockerfile?: string): 
       "-q",
       // Not the run key: containers inherit image labels, and must not look like a run's.
       "--label",
-      `${HARNESS_LABEL}.cache=true`,
+      CACHE_LABEL,
       "-t",
       tag,
       ...(dockerfile === undefined ? [] : ["-f", dockerfile]),
@@ -317,38 +316,7 @@ export interface StackOptions {
  */
 const preflight = async () => {
   if (process.env.BOAT_HARNESS_ALLOW_SHARED_DOCKER === "1") return;
-  const foreign = [
-    ...(
-      await dockerOk([
-        "network",
-        "ls",
-        "--filter",
-        "label=sealant.resource-network",
-        "--format",
-        "{{.Name}}",
-      ])
-    ).split("\n"),
-    ...(
-      await dockerOk([
-        "ps",
-        "-a",
-        "--filter",
-        "label=sealant.boat-tunnel",
-        "--format",
-        "{{.Names}}",
-      ])
-    ).split("\n"),
-    ...(
-      await dockerOk([
-        "ps",
-        "-a",
-        "--filter",
-        "label=sealant.resource-instance",
-        "--format",
-        "{{.Names}}",
-      ])
-    ).split("\n"),
-  ].filter(Boolean);
+  const foreign = await listCoreObjectNames();
   if (foreign.length > 0)
     throw new Error(
       `This Docker host already has Sealant resource or Boat gateway objects (${foreign.slice(0, 5).join(", ")}). ` +
@@ -357,70 +325,16 @@ const preflight = async () => {
     );
 };
 
-/**
- * One harness run per Docker host: Core's worker reconciles resource networks and gateways
- * host-wide, so two stacks on one host disturb each other. The lock is a named container that is
- * never started; creating it is atomic. It records the holder's run and PID: a holder whose process
- * and run network are both gone has crashed, and its lock is taken over. Waits up to two hours.
- */
-const acquireHostLock = async (runId: string, log: (line: string) => void) => {
-  const deadline = Date.now() + 2 * 60 * 60_000;
-  let reported = "";
-  for (;;) {
-    const created = await docker([
-      "create",
-      "--name",
-      LOCK,
-      "--label",
-      `${LOCK_LABEL}=${runId}`,
-      "--label",
-      `${LOCK_LABEL}.pid=${process.pid}`,
-      "postgres:17-alpine",
-      "true",
-    ]);
-    if (created.code === 0) return;
-    const held = await docker([
-      "container",
-      "inspect",
-      "-f",
-      `{{index .Config.Labels "${LOCK_LABEL}"}} {{index .Config.Labels "${LOCK_LABEL}.pid"}}`,
-      LOCK,
-    ]);
-    const [holder = "", pid = ""] = held.stdout.trim().split(" ");
-    const processAlive =
-      /^\d+$/.test(pid) &&
-      (await stat(`/proc/${pid}`).then(
-        () => true,
-        () => false,
-      ));
-    const networkAlive =
-      (await docker(["network", "inspect", `boat-harness-${holder}`])).code === 0;
-    if (held.code === 0 && !processAlive && !networkAlive) {
-      log(`taking over the lock of harness run ${holder}, which is gone`);
-      await docker(["rm", LOCK]);
-      continue;
-    }
-    if (Date.now() > deadline) throw new Error(`harness run ${holder} still holds the host lock`);
-    if (reported !== holder)
-      log(`another harness run (${holder}) is using this Docker host; waiting`);
-    reported = holder;
-    await new Promise((done) => setTimeout(done, 15_000));
-  }
-};
-
 export const startStack = async (options: StackOptions = {}): Promise<HarnessStack> => {
   const log = options.log ?? ((line: string) => process.stderr.write(`[boat-harness] ${line}\n`));
   const runId = randomBytes(4).toString("hex");
-  await acquireHostLock(runId, log);
+  await acquireHostLock(runId, process.pid, log);
   try {
     await preflight();
   } catch (error) {
     await releaseLock(runId);
     throw error;
   }
-  const baseline = new Set((await listCoreObjects()).map((entry) => `${entry.kind}:${entry.id}`));
-  const coreObjects = async () =>
-    (await listCoreObjects()).filter((entry) => !baseline.has(`${entry.kind}:${entry.id}`));
   const label = `${HARNESS_LABEL}=${runId}`;
   const scratch = await mkdtemp(join(tmpdir(), `boat-harness-${runId}.`));
   log(`run ${runId}, scratch ${scratch}`);
@@ -451,17 +365,10 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       cachedImage("sealant-boat-harness-twin", join(here, "twin")),
       cachedImage("sealant-boat-harness-gateway", join(repo, "packages/workspaces/boat-tunnel")),
     ]);
-    // Core's gateway containers inherit their image's labels. A thin per-run image labels them
-    // with this run, so teardown, the reaper and leak checks can attribute them.
-    const runImage = async (base: string): Promise<string> => {
-      const tag = `sealant-boat-harness-run:${runId}-${createHash("sha256").update(base).digest("hex").slice(0, 8)}`;
-      await dockerOk(["build", "-q", "--label", label, "-t", tag, "-"], {
-        input: `FROM ${base}\n`,
-        timeoutMs: 5 * 60_000,
-      });
-      return (await dockerOk(["image", "inspect", "-f", "{{.Id}}", tag])).trim();
-    };
-    const gatewayImage = await runImage(gatewayBase);
+    // Core wants the gateway by digest. Its containers get this run's label from `bin/docker`.
+    const gatewayImage = (
+      await dockerOk(["image", "inspect", "-f", "{{.Id}}", gatewayBase])
+    ).trim();
 
     // The twins' network. The host is its gateway address: twins reach the published WireGuard port
     // and the capture channel there, and the host reaches each twin by its address.
@@ -484,9 +391,8 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       return { range, host };
     };
     const { range: subnet, host: hostIp } = await bridge(network);
+    // Runs after the worker and API stop. Core's objects carry the label too (`bin/docker`).
     cleanups.push(() => removeLabelled(label, { images: true }));
-    // Runs after the worker and API stop: whatever Core created for this run and left behind.
-    cleanups.push(async () => removeObjects(await coreObjects()));
     // The guest refuses workspace egress to the WireGuard endpoint's address, and on Boat the
     // gateway host and Mend's capture endpoint are different addresses. Give the gateway endpoint a
     // host address of its own: the gateway IP of an otherwise unused bridge. Twins reach it through
@@ -642,6 +548,8 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
     const processTmp = join(scratch, "tmp");
     await mkdir(processTmp, { mode: 0o700 });
 
+    const realDocker = (await sh("sh", ["-c", "command -v docker"])).trim();
+    if (!realDocker.startsWith("/")) throw new Error("docker is not on PATH");
     const credentialsKey = randomBytes(32).toString("base64");
     const serviceKey = `slt_harness_${randomBytes(16).toString("hex")}`;
     const deploymentId = `harness-${runId}`;
@@ -661,6 +569,9 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       SEALANT_RESOURCE_TICK_MS: "2000",
       SEALANT_BOAT_HARNESS_PORT: String(boat.proxyPort),
       [RUN_ENV]: runId,
+      // Core runs the docker CLI from PATH; the wrapper labels what it creates with this run.
+      PATH: `${join(here, "bin")}:${process.env.PATH ?? ""}`,
+      SEALANT_BOAT_HARNESS_REAL_DOCKER: realDocker,
       NODE_EXTRA_CA_CERTS: tls.ca,
       NODE_OPTIONS: `--import ${join(here, "preload.mjs")}`,
     };
@@ -778,10 +689,9 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       api,
       query,
       killWorker: () => stopProcess(worker, "SIGKILL"),
-      coreObjects,
+      ownedObjects: () => listLabelled(label),
       startWorker,
       gatewayImage,
-      runImage,
       stop,
     };
   } catch (error) {
