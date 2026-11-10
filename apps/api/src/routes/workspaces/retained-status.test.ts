@@ -35,6 +35,9 @@ const harness = (input: {
   readonly runtime: Partial<WorkspaceRuntimeInstance>;
   readonly retainedAt: Date | null;
   readonly attemptStatus?: WorkspaceAttempt["status"];
+  /** What the run's last stop observed (`workspace_capture_drains.state`). Default `kept`. */
+  readonly drainState?: WorkspaceCaptureDrain["state"];
+  readonly drainDetail?: string;
 }) => {
   const workspace = {
     id: "ws_1",
@@ -99,8 +102,8 @@ const harness = (input: {
   } as WorkspaceRuntimeInstance;
   const drain = {
     runId: "run_1",
-    state: "kept",
-    detail: "not saved · retained · executor exited",
+    state: input.drainState === undefined ? "kept" : input.drainState,
+    detail: input.drainDetail ?? "not saved · retained · executor exited",
     observedAt: now,
     preservationStartsAt: null,
     discardRequestedAt: null,
@@ -284,4 +287,117 @@ describe("a retained executor reads `retained`", () => {
     expect(details.runtime?.status).toBe("failed");
     expect(list.items[0]?.status).toBe("failed");
   });
+});
+
+// #546: a stopped Boat session whose VM Core is still keeping read `ready` for as long as it was
+// kept. It reads `retained` from the moment its stop ended without removing the VM, and a stop
+// that is still draining never does.
+describe("a stopped Boat session whose VM is still kept reads `retained`", () => {
+  const boat = {
+    adapter: "boat",
+    resourceId: "bx_23456789",
+    reference: "boat:bx_23456789",
+    status: "ready",
+    errorCode: null,
+    errorMessage: null,
+    removedAt: null,
+  } as const;
+
+  it("a stop whose FINAL is not confirmed: retained, with why and as of when on the capture drain", async () => {
+    const { details, list, attempts } = await read(
+      harness({
+        runtime: { ...boat, stopReason: "user" },
+        retainedAt: null,
+        drainState: "kept",
+        drainDetail: "not saved · not confirmed · the daemon reports its final flush incomplete",
+      }),
+    );
+    expect(details.status).toBe("retained");
+    expect(details.runtime).toMatchObject({ status: "retained", resourceId: "bx_23456789" });
+    expect(details.captureDrain).toMatchObject({
+      state: "kept",
+      detail: expect.stringContaining("not confirmed"),
+      observedAt: now.toISOString(),
+    });
+    expect(list.items[0]?.status).toBe("retained");
+    expect(list.items[0]?.runtime?.status).toBe("retained");
+    expect(attempts.items[0]?.status).toBe("retained");
+  });
+
+  it("a stop whose work is saved and whose VM Boat is still deleting: retained, with that reason", async () => {
+    const { details, list } = await read(
+      harness({
+        runtime: { ...boat, stopReason: "user" },
+        retainedAt: null,
+        drainState: "stop-failed",
+        drainDetail:
+          "the runtime accepted the removal and has not finished it (Boat runtime: close-pending); nothing of the executor is released until it has, and every sweep asks the runtime again",
+      }),
+    );
+    expect(details.status).toBe("retained");
+    expect(details.runtime?.status).toBe("retained");
+    expect(details.captureDrain).toMatchObject({
+      state: "stop-failed",
+      detail: expect.stringContaining("accepted the removal and has not finished it"),
+    });
+    expect(list.items[0]?.status).toBe("retained");
+  });
+
+  it.each(["draining", "saved", null] as const)(
+    "a stop that is still draining never flashes retained (drain %s)",
+    async (drainState) => {
+      const { details, list, attempts } = await read(
+        harness({ runtime: { ...boat, stopReason: "user" }, retainedAt: null, drainState }),
+      );
+      expect(details.status).toBe("ready");
+      expect(details.runtime?.status).toBe("ready");
+      expect(list.items[0]?.status).toBe("ready");
+      expect(attempts.items[0]?.status).toBe("ready");
+    },
+  );
+
+  it("a live session with no stop requested reads ready, whatever an earlier observation left", async () => {
+    const { details } = await read(
+      harness({ runtime: { ...boat, stopReason: null }, retainedAt: null, drainState: "kept" }),
+    );
+    expect(details.status).toBe("ready");
+    expect(details.runtime?.status).toBe("ready");
+  });
+
+  it("reads stopped once the VM is removed and the stop recorded", async () => {
+    const { details } = await read(
+      harness({
+        runtime: { ...boat, status: "stopped", stopReason: "user", removedAt: now },
+        retainedAt: null,
+        drainState: "stopped",
+      }),
+    );
+    expect(details.status).toBe("stopped");
+    expect(details.runtime?.status).toBe("stopped");
+  });
+
+  it.each(["docker", "k8s", "microvm"] as const)(
+    "leaves a %s executor whose stop was requested and kept reading as it always has",
+    async (adapter) => {
+      for (const drainState of ["kept", "stop-failed"] as const) {
+        const { details, list } = await read(
+          harness({
+            runtime: {
+              adapter,
+              status: "ready",
+              stopReason: "user",
+              errorCode: null,
+              errorMessage: null,
+              removedAt: null,
+            },
+            retainedAt: null,
+            drainState,
+          }),
+        );
+        expect(details.status).toBe("ready");
+        expect(details.runtime?.status).toBe("ready");
+        expect(list.items[0]?.status).toBe("ready");
+      }
+    },
+  );
 });

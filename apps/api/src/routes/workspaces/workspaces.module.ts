@@ -78,7 +78,6 @@ import {
   parseStoredCredential,
 } from "@sealant/credentials";
 import {
-  LAUNCH_RETAINED_ERROR_CODE,
   ResourceDomainRepo,
   ConnectedAccountRepo,
   GitHubInstallationRepo,
@@ -218,13 +217,13 @@ type WorkspaceRunLinkRecord = Effect.Success<
 >[number];
 
 /**
- * A Boat VM observed absent (`removedAt`, written with the observation) is never retained: its
+ * A Boat VM recorded removed (`removedAt`: Boat's own word that it no longer has it, written by
+ * the stop that found it gone) is never retained, whatever a retention left on record says: its
  * launch error stays history and what became of its work is the capture drain's to report.
  */
 const executorIsRetained: typeof genericExecutorIsRetained = (input) =>
-  input.runtimeInstance?.adapter === "boat"
-    ? input.runtimeInstance.removedAt === null &&
-      input.runtimeInstance.errorCode === LAUNCH_RETAINED_ERROR_CODE
+  input.runtimeInstance?.adapter === "boat" && input.runtimeInstance.removedAt !== null
+    ? false
     : genericExecutorIsRetained(input);
 
 const gitHubUnavailableMessage = "GitHub integration is not configured.";
@@ -1411,7 +1410,11 @@ const replayedWorkspaceResponse = (workspace: WorkspaceRecord) => {
       latestJob,
       runtimeInstance,
       resolveWorkspaceSshGatewayConfig(),
-      executorIsRetained({ runtimeInstance, retainedAt: drain?.retainedAt }),
+      executorIsRetained({
+        runtimeInstance,
+        retainedAt: drain?.retainedAt,
+        captureDrainState: drain?.state,
+      }),
     );
     const response: CreateWorkspaceResponse = {
       workspaceId: workspace.id,
@@ -2241,6 +2244,7 @@ export const listWorkspaces = (query: ListWorkspacesQuery) => {
           executorIsRetained({
             runtimeInstance,
             retainedAt: runId === undefined ? undefined : drainsByRunId.get(runId)?.retainedAt,
+            captureDrainState: runId === undefined ? undefined : drainsByRunId.get(runId)?.state,
           }),
         );
       })
@@ -2331,7 +2335,11 @@ export const getWorkspace = (workspaceId: string, ownerUserId: string | undefine
       runtimeInstance,
       attemptSnapshot,
       sshGatewayConfig,
-      executorIsRetained({ runtimeInstance, retainedAt: captureDrain?.retainedAt }),
+      executorIsRetained({
+        runtimeInstance,
+        retainedAt: captureDrain?.retainedAt,
+        captureDrainState: captureDrain?.state,
+      }),
     );
     const observed = mapWorkspaceCaptureDrain(
       captureDrain,
@@ -2630,6 +2638,7 @@ export const listWorkspaceAttempts = (input: {
           executorIsRetained({
             runtimeInstance: runtimeInstancesByRunId.get(link.runId),
             retainedAt: drainsByRunId.get(link.runId)?.retainedAt,
+            captureDrainState: drainsByRunId.get(link.runId)?.state,
           }),
         ),
       ];
