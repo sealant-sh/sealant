@@ -14,8 +14,8 @@ import {
   BoatAllocationProvider,
   BoatControlMaterial,
   BoatFinalClose,
-  BoatFinalCloseProvider,
   BoatNativeCatalog,
+  BoatRemovalProvider,
   BoatResources,
   BoatResourcesHost,
   BoatRuntimeAdapter,
@@ -25,8 +25,10 @@ import {
   boatControlMaterialLayer,
   boatFinalCloseWorkerLayer,
   boatNativeCatalogLayer,
+  boatObserverLayer,
   boatProviderFromEnv,
   boatReadinessWorkerLayer,
+  boatRemovalWorkerLayer,
   boatResourcesLayer,
   boatSealedExecutionLayer,
   loadPackagedRuntime,
@@ -201,6 +203,9 @@ export const assembleBoat = async (input: {
     Resources,
     boatReadinessWorkerLayer,
     boatFinalCloseWorkerLayer,
+    // The adapter's `stop` and `inspect`: the one deletion, and the one source of presence.
+    boatRemovalWorkerLayer,
+    boatObserverLayer,
     boatSealedExecutionLayer,
     boatControlMaterialLayer,
   ).pipe(
@@ -212,7 +217,7 @@ export const assembleBoat = async (input: {
         // One carrier per run in this process, shared by every Boat owner above. It opens nothing
         // until a run with a tunnel asks; a deployment with no gateway never asks.
         makeBoatTunnelCarrierLayer({ log: (message) => console.log(message) }),
-        Layer.succeed(BoatFinalCloseProvider, { api: provider.api }),
+        Layer.succeed(BoatRemovalProvider, { api: provider.api }),
       ),
     ),
   );

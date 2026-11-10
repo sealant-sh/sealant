@@ -18,7 +18,8 @@ import { BoatAllocationProvider } from "./provider.js";
 
 /**
  * Why a Boat run's control connection was not opened. `refused`: the run is not this deployment's
- * current Boat run on that sandbox, or Boat reports a VM that is not the one Core launched.
+ * Boat run on that sandbox (for `connectMaterial`, its current one: ready and not stopping), or
+ * Boat reports a VM that is not the one Core launched.
  * `unavailable`: the database, the sealed record or Boat's API failed. The message never carries
  * the provider key, the run's bearer or the hosted cookie.
  */
@@ -37,6 +38,17 @@ export class BoatControlMaterial extends Context.Service<
   BoatControlMaterial,
   {
     readonly connectMaterial: (
+      runId: string,
+      sandboxId: string,
+    ) => Effect.Effect<WebSocketConnectMaterial, BoatControlError>;
+    /**
+     * The same material for the worker's drains, which must reach a daemon whose run is stopping
+     * or never became ready: its FINAL flush is what they are there to ask for. It requires only
+     * this deployment's run, on this sandbox, with the bearer its launch sealed, and Boat's own
+     * labels on the VM. It opens nothing for another deployment's run or another sandbox. Never
+     * for a caller that acts for a user: exec jobs and the API use `connectMaterial`.
+     */
+    readonly drainMaterial: (
       runId: string,
       sandboxId: string,
     ) => Effect.Effect<WebSocketConnectMaterial, BoatControlError>;
@@ -81,36 +93,53 @@ const make: Effect.Effect<BoatControlMaterial["Service"], never, Dependencies> =
           Effect.fail(error instanceof BoatControlError ? error : unavailable()),
         ),
       );
+    /** This deployment's run on this sandbox, as its allocation bound it. */
+    const owned = (runId: string, sandboxId: string) =>
+      Effect.gen(function* () {
+        const allocation = yield* allocations.get(runId).pipe(Effect.mapError(() => unavailable()));
+        const target = allocation?.target;
+        if (
+          target == null ||
+          target.runId !== runId ||
+          target.sandboxId !== sandboxId ||
+          target.deploymentId !== deploymentId
+        )
+          return yield* Effect.fail(refused());
+        return target;
+      });
+    /** Unseals the run's bearer, checks Boat's labels on the VM and asks Boat for a hosted cookie. */
+    const open = (target: BoatExecutionTarget) =>
+      Effect.gen(function* () {
+        const control = Redacted.value(
+          yield* execution.control(target).pipe(Effect.mapError(executionFailure)),
+        );
+        if (
+          control.kind !== "websocket" ||
+          control.auth === undefined ||
+          control.prepare === undefined
+        )
+          return yield* Effect.fail(unavailable());
+        const prepared = yield* Effect.tryPromise({ try: control.prepare, catch: unavailable });
+        return { url: control.url, auth: control.auth, headers: prepared.headers ?? {} };
+      });
     const connectMaterial = Effect.fn("BoatControlMaterial.connectMaterial")(function* (
       runId: string,
       sandboxId: string,
     ) {
-      const allocation = yield* allocations.get(runId).pipe(Effect.mapError(() => unavailable()));
-      const target = allocation?.target;
-      if (
-        target == null ||
-        target.runId !== runId ||
-        target.sandboxId !== sandboxId ||
-        target.deploymentId !== deploymentId
-      )
-        return yield* Effect.fail(refused());
+      const target = yield* owned(runId, sandboxId);
       yield* current(target);
-      // Unseals the run's bearer, checks Boat's labels on the VM and asks Boat for a hosted cookie.
-      const control = Redacted.value(
-        yield* execution.control(target).pipe(Effect.mapError(executionFailure)),
-      );
-      if (
-        control.kind !== "websocket" ||
-        control.auth === undefined ||
-        control.prepare === undefined
-      )
-        return yield* Effect.fail(unavailable());
-      const prepared = yield* Effect.tryPromise({ try: control.prepare, catch: unavailable });
+      const material = yield* open(target);
       // A Stop that won while Boat answered keeps this connection closed.
       yield* current(target);
-      return { url: control.url, auth: control.auth, headers: prepared.headers ?? {} };
+      return material;
     });
-    return BoatControlMaterial.of({ connectMaterial });
+    const drainMaterial = Effect.fn("BoatControlMaterial.drainMaterial")(function* (
+      runId: string,
+      sandboxId: string,
+    ) {
+      return yield* open(yield* owned(runId, sandboxId));
+    });
+    return BoatControlMaterial.of({ connectMaterial, drainMaterial });
   },
 );
 
@@ -143,3 +172,14 @@ export const boatConnectMaterial =
   ): NonNullable<SealantTargetDerivationOptions["boatConnectMaterial"]> =>
   (runId, sandboxId) =>
     Effect.runPromise(service.connectMaterial(runId, sandboxId));
+
+/**
+ * The same hook for the worker's own drains (the stop consumer, the reapers, the recovery sweep
+ * and the exit reconciler): it opens for a run that is stopping or never became ready.
+ */
+export const boatDrainConnectMaterial =
+  (
+    service: BoatControlMaterial["Service"],
+  ): NonNullable<SealantTargetDerivationOptions["boatConnectMaterial"]> =>
+  (runId, sandboxId) =>
+    Effect.runPromise(service.drainMaterial(runId, sandboxId));

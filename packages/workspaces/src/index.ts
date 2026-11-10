@@ -36,6 +36,7 @@ export {
   boatSealedExecutionLayer,
   boatReadinessWorkerLayer,
   boatFinalCloseWorkerLayer,
+  boatRemovalWorkerLayer,
 } from "./worker/boat-allocation.js";
 
 export {
@@ -71,10 +72,20 @@ export {
 export {
   BoatFinalClose,
   BoatFinalCloseError,
-  BoatFinalCloseProvider,
   boatFinalCloseLayer,
   boatFinalCloseLayerNoDeps,
 } from "./runtime/boat/final-close.js";
+
+export {
+  BoatRemoval,
+  BoatRemovalError,
+  BoatRemovalProvider,
+  boatRemovalLayer,
+  boatRemovalLayerNoDeps,
+  type BoatDeletionOutcome,
+  type BoatRemovalOptions,
+  type BoatRemovalOutcome,
+} from "./runtime/boat/removal.js";
 
 export {
   BoatObserver,
@@ -89,6 +100,7 @@ export {
   BoatControlError,
   BoatControlMaterial,
   boatConnectMaterial,
+  boatDrainConnectMaterial,
   boatControlMaterialLayer,
 } from "./runtime/boat/control-material.js";
 export {

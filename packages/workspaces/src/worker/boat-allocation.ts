@@ -9,13 +9,10 @@ import {
   boatExecutionLayer,
   createBoatGuestTransport,
 } from "../runtime/boat/execution.js";
-import {
-  BoatFinalClose,
-  BoatFinalCloseProvider,
-  boatFinalCloseLayer,
-} from "../runtime/boat/final-close.js";
+import { BoatFinalClose, boatFinalCloseLayer } from "../runtime/boat/final-close.js";
 import { boatObserverLayer } from "../runtime/boat/observation.js";
 import { BoatAllocationProvider } from "../runtime/boat/provider.js";
+import { BoatRemoval, BoatRemovalProvider, boatRemovalLayer } from "../runtime/boat/removal.js";
 import type { BoatTunnelCarrier } from "../runtime/boat/tunnel-carrier.js";
 import { SealantRuntime, SealantRuntimeControlLive } from "../sealantd/runtime.js";
 import { BoatReadiness, boatReadinessLayer } from "./boat-readiness.js";
@@ -67,5 +64,12 @@ export const boatReadinessWorkerLayer: Layer.Layer<
 export const boatFinalCloseWorkerLayer: Layer.Layer<
   BoatFinalClose,
   never,
-  SealantDB | CredentialCipher | BoatAllocationProvider | BoatFinalCloseProvider | BoatResourcesHost
+  SealantDB | CredentialCipher | BoatAllocationProvider | BoatRemovalProvider | BoatResourcesHost
 > = boatFinalCloseLayer.pipe(Layer.provide(boatSealedExecutionLayer));
+
+/** The one deletion of a Boat VM, for the adapter's `stop`, sharing the original sealed execution. */
+export const boatRemovalWorkerLayer: Layer.Layer<
+  BoatRemoval,
+  never,
+  SealantDB | CredentialCipher | BoatAllocationProvider | BoatRemovalProvider | BoatResourcesHost
+> = boatRemovalLayer.pipe(Layer.provide(boatSealedExecutionLayer));

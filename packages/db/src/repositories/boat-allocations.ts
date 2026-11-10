@@ -42,6 +42,15 @@ export interface BoatAllocationRepoService {
   readonly get: (
     id: string,
   ) => Effect.Effect<BoatAllocationRecord | undefined, BoatAllocationStoreError>;
+  /**
+   * The one allocation a deployment holds for a VM: `(deployment_id, sandbox_id)` is unique. What a
+   * caller that knows only the VM reads, since the runtime row's `reference` is rewritten to
+   * `boat:<sandbox>` and names no run.
+   */
+  readonly getBySandbox: (input: {
+    readonly deploymentId: string;
+    readonly sandboxId: string;
+  }) => Effect.Effect<BoatAllocationRecord | undefined, BoatAllocationStoreError>;
   readonly advance: (
     previous: BoatAllocationRecord,
     next: BoatAllocationRecord,
@@ -128,6 +137,20 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
         .select()
         .from(boatAllocations)
         .where(eq(boatAllocations.runtimeInstanceId, id));
+      return row === undefined ? undefined : yield* rowRecord(row);
+    });
+    const getBySandbox = Effect.fn("BoatAllocationRepo.getBySandbox")(function* (
+      input: Parameters<BoatAllocationRepoService["getBySandbox"]>[0],
+    ) {
+      const [row] = yield* db
+        .select()
+        .from(boatAllocations)
+        .where(
+          and(
+            eq(boatAllocations.deploymentId, input.deploymentId),
+            eq(boatAllocations.sandboxId, input.sandboxId),
+          ),
+        );
       return row === undefined ? undefined : yield* rowRecord(row);
     });
     const reserve = Effect.fn("BoatAllocationRepo.reserve")(function* (
@@ -280,13 +303,14 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
               .for("update");
             const execution = boatExecutionRecordSchema.safeParse(row?.record);
             // A bound VM is removed only once its execution can never start again: aborted before
-            // any launch was pushed, or, for a run without resources (no tunnel row to carry its
-            // removal), held by the FINAL close that drained it.
+            // any launch was pushed, or held by the removal that fenced it. A held execution was
+            // launched, and hold comes before its drain: it leaves `bound` only with Boat's own
+            // deletion operation on record, which nothing writes before a DELETE was accepted.
             if (
               !execution.success ||
               !(
                 execution.data.phase === "aborted" ||
-                (next.input.resources === "none" && execution.data.phase === "held")
+                (execution.data.phase === "held" && next.removal?.kind === "operation")
               ) ||
               !isDeepStrictEqual(execution.data.target, next.target)
             )
@@ -447,6 +471,7 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
       reservedAt: (id) => boundary(reservedAt(id)),
       launchInFlight: (id) => boundary(launchInFlight(id)),
       get: (id) => boundary(get(id)),
+      getBySandbox: (input) => boundary(getBySandbox(input)),
       reserve: (record) => boundary(reserve(record)),
       advance: (before, next) => boundary(advance(before, next)),
       list: (input) => boundary(list(input)),

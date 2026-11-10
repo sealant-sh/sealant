@@ -21,7 +21,9 @@ afterEach(async () => {
 });
 
 /** A fake Boat whose guests are answered by a scripted docker CLI. */
-const start = async (options: { clock?: () => number; trialAccount?: boolean } = {}) => {
+const start = async (
+  options: { clock?: () => number; trialAccount?: boolean; deletionWithdrawnMs?: number } = {},
+) => {
   const commands: string[][] = [];
   boat = new FakeBoat({
     runId: "abc12345",
@@ -112,6 +114,57 @@ describe("fake Boat API", () => {
       targetId: id,
       status: "pending",
     });
+  });
+
+  it("withdraws a deleted VM from the API at once, and completes its operation later", async () => {
+    const { call } = await start({ deletionWithdrawnMs: 400 });
+    const id = (await call("/sandboxes", "POST", input, { "Idempotency-Key": "w" })).body.sandbox
+      .id;
+    await idle(call, id);
+    const deletion = await call(`/sandboxes/${id}`, "DELETE", undefined, {
+      "X-Ascii-Confirm-Delete": id,
+    });
+    const operation = `/deletion-operations/${deletion.body.operation.id}`;
+    await new Promise((done) => setTimeout(done, 200));
+    expect((await call(`/sandboxes/${id}`)).status).toBe(404);
+    expect((await call("/sandboxes")).body.sandboxes).toEqual([]);
+    expect(
+      (await call(`/sandboxes/${id}/commands`, "POST", { command: "true", timeoutSeconds: 5 }))
+        .status,
+    ).toBe(404);
+    expect(
+      (await call(`/sandboxes/${id}`, "DELETE", undefined, { "X-Ascii-Confirm-Delete": id }))
+        .status,
+    ).toBe(404);
+    expect((await call(operation)).body.operation.status).toBe("processing");
+    expect(boat?.liveSandboxes().map((sandbox) => sandbox.id)).toEqual([id]);
+    await new Promise((done) => setTimeout(done, 500));
+    expect((await call(operation)).body.operation.status).toBe("completed");
+    expect(boat?.liveSandboxes()).toEqual([]);
+  });
+
+  it("can accept a DELETE and drop its reply; a second DELETE answers the same operation", async () => {
+    const { call } = await start();
+    const id = (await call("/sandboxes", "POST", input, { "Idempotency-Key": "l" })).body.sandbox
+      .id;
+    await idle(call, id);
+    const fake = boat;
+    if (fake === undefined) throw new Error("no fake Boat");
+    let lost = 0;
+    fake.faults.deleteReply = () => (lost++ === 0 ? "lose" : undefined);
+    // Never withdrawn: the second DELETE reaches the VM whatever the timing.
+    fake.faults.deletion = () => "stuck";
+    await expect(
+      call(`/sandboxes/${id}`, "DELETE", undefined, { "X-Ascii-Confirm-Delete": id }),
+    ).rejects.toThrow();
+    const [started] = fake.events.filter((event) => event.kind === "delete");
+    expect(started).toMatchObject({ sandboxId: id });
+    const again = await call(`/sandboxes/${id}`, "DELETE", undefined, {
+      "X-Ascii-Confirm-Delete": id,
+    });
+    expect(again.status).toBe(202);
+    expect(again.body.operation.id).toBe(started?.detail);
+    expect(fake.events.filter((event) => event.kind === "delete")).toHaveLength(1);
   });
 
   it("requires resume's body fields", async () => {

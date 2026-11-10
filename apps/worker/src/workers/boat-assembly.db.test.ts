@@ -144,6 +144,22 @@ describe.skipIf(DATABASE_URL === undefined)("the worker's Boat assembly (Postgre
     });
     expect(await boat.applyLink?.("run_unknown")).toBe("pending");
     expect(boat.control).toBeDefined();
+    // The adapter's stop and inspect find a VM by its id in this assembly: one it holds no
+    // allocation for is refused before Boat is asked anything, and nothing is said of it.
+    await expect(registration.adapter.stop({ resourceId: "bx_23456789" })).rejects.toMatchObject({
+      code: "target-mismatch",
+      removalRefused: true,
+    });
+    expect(await registration.adapter.inspect({ resourceId: "bx_23456789" })).toEqual({
+      state: "running",
+    });
+    // The worker's drains and its exec jobs each have their own way to a Boat daemon.
+    for (const open of [boat.control?.connectMaterial, boat.control?.drainMaterial]) {
+      if (open === undefined) throw new Error("Boat control is not assembled");
+      expect(
+        await Effect.runPromise(Effect.flip(open("run_unknown", "bx_23456789"))),
+      ).toMatchObject({ reason: "refused" });
+    }
   });
 
   it("registers Boat with its resource gateway as before: every Boat workspace is served", async () => {

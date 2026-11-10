@@ -546,6 +546,23 @@ const candidateAdapterIds = (
 /** Lifecycle consumers cannot launch a publication of the wrong kind. */
 export type RuntimeAdapterLifecycle = Omit<RuntimeAdapter<never>, "launch">;
 
+/**
+ * OWN-CLOSE GUARD (Boat). Delete this, and every use of it, in the change that removes
+ * `closeCapture` and moves Boat's stop onto the shared stop and recover path.
+ *
+ * Whether a runtime still ends its executors through a durable owner of its own (`closeCapture`:
+ * Boat's FINAL close, which recovers a dead daemon on its own disk, drains FINAL, deletes the VM
+ * and discharges what it held, under its own hold of the capture ledger). Such a runtime answers
+ * `inspect` now, so the generic paths see its executors; until its stop is theirs they do exactly
+ * one thing for it. The exit reconciler records a live executor whose daemon ended as `failed`
+ * with its retention, which hands it to that owner. They never remove one, never settle one as
+ * gone, and never start a recovery of one: a second deleter beside the owner would find its
+ * removal held, and would record an outcome of its own over the owner's.
+ */
+export const closesItsOwnExecutors = (
+  adapter: Pick<RuntimeAdapterLifecycle, "closeCapture">,
+): boolean => adapter.closeCapture !== undefined;
+
 export interface SelectRuntimeAdapterInput<A extends RuntimeAdapterLifecycle> {
   readonly blueprint: RuntimeAdapterBlueprint;
   readonly adapters: readonly A[];

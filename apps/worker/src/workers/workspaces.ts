@@ -25,6 +25,7 @@ import {
   BOAT_RESOURCE_PASS,
   BoatAllocation,
   boatConnectMaterial,
+  boatDrainConnectMaterial,
   boatResourceObligations,
   DockerResourceRuntime,
   KubernetesCallerRuntime,
@@ -409,6 +410,15 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       ? {}
       : { boatConnectMaterial: boatConnectMaterial(boatAssembly.control) }),
   };
+  // How this worker's own drains reach a Boat daemon: a stop, a reaper, the recovery sweep and the
+  // exit reconciler ask a run that is stopping, or never became ready, for its FINAL flush, which
+  // `targetOptions` refuses to open. Exec jobs and the telemetry worker keep `targetOptions`.
+  const drainTargetOptions = {
+    ...baseTargetOptions,
+    ...(boatAssembly?.control === undefined
+      ? {}
+      : { boatConnectMaterial: boatDrainConnectMaterial(boatAssembly.control) }),
+  };
   const dockerAdapters = !env.DOCKER_RUNTIME_ENABLED
     ? []
     : [
@@ -612,7 +622,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           runtimeAdapters,
           // Rotated claude/codex session files are synced back before the container is destroyed.
           ...(credentialCipher === undefined ? {} : { credentialCipher }),
-          targetOptions,
+          targetOptions: drainTargetOptions,
           ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
           captureDrain: {
             ledger: captureDrainLedger,
@@ -687,7 +697,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       db,
       runtimeAdapters,
       ...(credentialCipher === undefined ? {} : { credentialCipher }),
-      targetOptions,
+      targetOptions: drainTargetOptions,
       captureDrain: { ledger: captureDrainLedger, settings: captureDrainSettings },
     }).catch((error: unknown) => {
       console.error("Workspace expiry reaper tick failed", { error });
@@ -712,7 +722,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       db,
       runtimeAdapters,
       ...(credentialCipher === undefined ? {} : { credentialCipher }),
-      targetOptions,
+      targetOptions: drainTargetOptions,
       captureDrain: { ledger: captureDrainLedger, settings: captureDrainSettings },
       ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
       deadline: {
@@ -757,7 +767,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     recoverRetainedExecutors({
       db,
       runtimeAdapters,
-      targetOptions,
+      targetOptions: drainTargetOptions,
       // A restarted executor boots again: its capture token is unsealed and staged where it
       // was created to read it.
       ...(credentialCipher === undefined ? {} : { credentialCipher }),
@@ -795,7 +805,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       db,
       runtimeAdapters,
       ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
-      targetOptions,
+      targetOptions: drainTargetOptions,
       captureDrain: { ledger: captureDrainLedger, settings: captureDrainSettings },
     }).catch((error: unknown) => {
       console.error("Runtime exit reconciler tick failed", { error });
@@ -811,7 +821,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     db,
     runtimeAdapters,
     ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
-    targetOptions,
+    targetOptions: drainTargetOptions,
     captureDrain: { ledger: captureDrainLedger, settings: captureDrainSettings },
     onError: (error: unknown) => {
       console.error("Runtime exit watch failed; reconnecting", { error });

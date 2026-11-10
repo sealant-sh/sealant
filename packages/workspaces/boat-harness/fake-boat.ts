@@ -7,7 +7,10 @@ import { spawn, type ChildProcess } from "node:child_process";
  *   (docs/experiments/boat-provider-lifetime-evidence.json, 2026-11-05);
  * - commands run for real in the guest as uid 1000 (docs/experiments/boat-runtime.md), sync up to
  *   30 s and detached with process polling above that;
- * - DELETE requires `X-Ascii-Confirm-Delete` and returns a deletion operation to poll;
+ * - DELETE requires `X-Ascii-Confirm-Delete` and returns a deletion operation to poll. As on real
+ *   Boat, the VM leaves the API right after: its GET answers 404, it is unlisted, and it takes no
+ *   command or proxy traffic, while the operation is still `processing`. The operation completes
+ *   a while later (`deletionWithdrawnMs`);
  * - saved snapshots are `docker commit`, and creating `from` one boots a new container with a new
  *   boot ID;
  * - the hosted port proxy for `*.on.boat.dev` checks `_port_auth`, answers 403 without it and 302 for
@@ -48,6 +51,11 @@ export interface FakeSandbox {
   stoppedAt: string | null;
   ip: string | undefined;
   deletion: FakeDeletion | undefined;
+  /**
+   * Boat has withdrawn the VM after an accepted DELETE: the API answers 404 for it and the proxy
+   * routes nothing to it, though its deletion may still be `processing` and its twin still run.
+   */
+  withdrawn: boolean;
   removed: boolean;
   /** The saved snapshot's copy of `/var/lib/sealant/docker` this VM starts from, if any. */
   readonly dockerSeed: string | undefined;
@@ -102,7 +110,16 @@ export interface FakeBoatFaults {
   proxy?: (path: string, method: string, sandbox: FakeSandbox) => ProxyFault | undefined;
   /** Runs before the hosted proxy forwards a request, e.g. to break the host side first. */
   beforeProxy?: (path: string, method: string, sandbox: FakeSandbox) => Promise<void>;
+  /**
+   * `stuck`: Boat accepts the DELETE and never completes it, and the VM stays readable, listed and
+   * reachable (it is never withdrawn) until the harness calls `completeDeletion`.
+   */
   deletion?: (sandbox: FakeSandbox) => "stuck" | undefined;
+  /**
+   * `lose`: Boat accepts this DELETE (the deletion starts, or the one under way goes on), then the
+   * HTTP reply is dropped, so Core never learns the operation from it.
+   */
+  deleteReply?: (sandbox: FakeSandbox) => "lose" | undefined;
   snapshot?: (name: string) => "failed" | undefined;
 }
 
@@ -127,6 +144,15 @@ export interface FakeBoatOptions {
   readonly pageSize?: number;
   /** The fake's clock (idempotency retention). Defaults to `Date.now`. */
   readonly clock?: () => number;
+  /**
+   * How long an accepted deletion stays `processing` after the VM was withdrawn from the API.
+   * Real Boat (live stops on #598, 2026-11-10) withdraws a VM within a second or two of its DELETE
+   * and usually reads `completed` a few seconds later: Stop to `stopped` took 7 to 17 s end to end,
+   * and both orders were observed (the close's poll seeing `completed` first, or a GET's 404
+   * first). The default, 8 s, is on the long side of that, so a second observer reading Boat
+   * between withdrawal and completion is easy to hit; 2 to 4 s would be closer to Boat.
+   */
+  readonly deletionWithdrawnMs?: number;
   /** A trial account: Boat refuses saved snapshots with 403 (boat-runtime.md). */
   readonly trialAccount?: boolean;
   /** The docker CLI, for tests. */
@@ -323,7 +349,8 @@ export class FakeBoat {
 
   /** Runs a root command in a twin, outside Boat's API, for scenario setup and fault injection. */
   async guestRoot(id: string, script: string): Promise<string> {
-    const sandbox = this.#sandbox(id);
+    const sandbox = this.sandboxes.get(id);
+    if (sandbox === undefined || sandbox.removed) throw new Error(`no twin for ${id}`);
     return this.#dockerOk(["exec", sandbox.container, "/bin/bash", "-ceu", script], {
       timeoutMs: 60_000,
     });
@@ -353,7 +380,8 @@ export class FakeBoat {
 
   #sandbox(id: string): FakeSandbox {
     const sandbox = this.sandboxes.get(id);
-    if (sandbox === undefined || sandbox.removed) throw new HttpError(404, "sandbox_not_found");
+    if (sandbox === undefined || sandbox.removed || sandbox.withdrawn)
+      throw new HttpError(404, "sandbox_not_found");
     return sandbox;
   }
 
@@ -447,11 +475,15 @@ export class FakeBoat {
         if (method === "DELETE") {
           if (request.headers["x-ascii-confirm-delete"] !== id)
             throw new HttpError(400, "delete_confirmation_required");
+          const sandbox = this.#sandbox(id);
           // Recorded: Boat accepts a deletion with 202 and an operation to poll.
-          return send(202, {
-            ok: true,
-            operation: this.#delete(this.#sandbox(id)),
-          });
+          const operation = this.#delete(sandbox);
+          if (this.faults.deleteReply?.(sandbox) === "lose") {
+            this.#record("fault:delete-reply-lost", sandbox.id, operation.id);
+            response.destroy();
+            return;
+          }
+          return send(202, { ok: true, operation });
         }
       }
       if ((match = path.match(/^\/sandboxes\/(bx_[a-z0-9]+)\/commands$/)) && method === "POST") {
@@ -645,8 +677,9 @@ export class FakeBoat {
     });
     const limit = Math.min(Number(url.searchParams.get("limit") ?? "200"), 200);
     const size = Math.min(limit, this.options.pageSize ?? 200);
-    const all = this.liveSandboxes().filter((sandbox) =>
-      wanted.every(([key, value]) => sandbox.labels[key] === value),
+    const all = this.liveSandboxes().filter(
+      (sandbox) =>
+        !sandbox.withdrawn && wanted.every(([key, value]) => sandbox.labels[key] === value),
     );
     const start = Number(url.searchParams.get("cursor") ?? "0");
     const page = all.slice(start, start + size);
@@ -684,6 +717,7 @@ export class FakeBoat {
       stoppedAt: null,
       ip: undefined,
       deletion: undefined,
+      withdrawn: false,
       removed: false,
       dockerSeed,
     };
@@ -814,10 +848,16 @@ export class FakeBoat {
           this.#record("fault:deletion-stuck", sandbox.id);
           return;
         }
+        // Withdrawn from the API at once; the operation completes only after the interval.
+        sandbox.withdrawn = true;
+        const withdrawnAt = Date.now();
+        this.#record("withdrawn", sandbox.id, deletion.id);
         for (const process of this.#processes.values())
           if (process.sandboxId === sandbox.id && process.running) process.child.kill("SIGKILL");
         await this.#docker(["rm", "-f", "-v", sandbox.container]);
-        await delay(100);
+        await delay(
+          Math.max(100, withdrawnAt + (this.options.deletionWithdrawnMs ?? 8000) - Date.now()),
+        );
         sandbox.removed = true;
         sandbox.ip = undefined;
         deletion.status = "completed";
@@ -1136,7 +1176,7 @@ export class FakeBoat {
     const match = name.match(/^(bx-[a-z0-9]{8})-(\d+)\.on\.boat\.dev$/);
     if (match === null) return undefined;
     const sandbox = this.sandboxes.get((match[1] ?? "").replace("-", "_"));
-    if (sandbox === undefined || sandbox.removed) return undefined;
+    if (sandbox === undefined || sandbox.removed || sandbox.withdrawn) return undefined;
     return { sandbox, port: Number(match[2]) };
   }
 
