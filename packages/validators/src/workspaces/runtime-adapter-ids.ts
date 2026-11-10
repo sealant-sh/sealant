@@ -10,7 +10,7 @@
  * - `cloudflare`: Cloudflare Sandboxes driven through a bridge Worker (hosted deployments).
  * - `microvm`: AWS Lambda MicroVMs, one Firecracker VM per workspace, driven with the Lambda
  *   MicroVMs API and reached through the VM's authenticated inbound endpoint.
- * - `boat`: native saved snapshots. The production adapter remains unregistered.
+ * - `boat`: Boat VMs booted from native saved snapshots, on the deployment's own Boat account.
  */
 import { runtimeAdapterIds } from "@sealant/api-contracts";
 import { z } from "zod";

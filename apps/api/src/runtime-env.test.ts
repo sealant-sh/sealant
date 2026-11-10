@@ -70,19 +70,27 @@ describe("API Boat environment", () => {
       ).toThrow("Boat requires its key");
   });
 
-  it("refuses Boat admission without the Boat key: the API opens Boat sessions' control", () => {
-    const admitted = {
-      SEALANT_BOAT_ADMISSION_OWNER_IDS: "usr_proof",
-      SEALANT_BOAT_API_KEY_FILE: "/run/secrets/boat-api-key",
-      SEALANT_BOAT_DEPLOYMENT_ID: "test",
-      SEALANT_CREDENTIALS_KEY: cipher,
-    };
-    expect(parseAppEnv(admitted).SEALANT_BOAT_ADMISSION_OWNER_IDS).toEqual(["usr_proof"]);
-    for (const key of Object.keys(admitted).filter(
-      (name) => name !== "SEALANT_BOAT_ADMISSION_OWNER_IDS",
-    ))
-      expect(() =>
-        parseAppEnv(Object.fromEntries(Object.entries(admitted).filter(([name]) => name !== key))),
-      ).toThrow("Boat requires its key");
+  it("is on with the Boat deployment, and then refuses to start without the key, naming it", () => {
+    // No Boat settings: Boat is off and the API starts (it refuses Boat requests at create).
+    expect(parseAppEnv({ SEALANT_CREDENTIALS_KEY: cipher }).SEALANT_BOAT_DEPLOYMENT_ID).toBe(
+      undefined,
+    );
+    // Boat on, with its key: the API opens Boat runs' control itself.
+    expect(
+      parseAppEnv({
+        SEALANT_BOAT_API_KEY_FILE: "/run/secrets/boat-api-key",
+        SEALANT_BOAT_DEPLOYMENT_ID: "test",
+        SEALANT_CREDENTIALS_KEY: cipher,
+      }).SEALANT_BOAT_DEPLOYMENT_ID,
+    ).toBe("test");
+    // Boat on, the key forgotten: startup fails and says which settings to give it.
+    expect(() =>
+      parseAppEnv({ SEALANT_BOAT_DEPLOYMENT_ID: "test", SEALANT_CREDENTIALS_KEY: cipher }),
+    ).toThrow(/SEALANT_BOAT_API_KEY or SEALANT_BOAT_API_KEY_FILE/);
+  });
+
+  it("starts with the retired Boat owner list still set, and ignores it", () => {
+    const env = parseAppEnv({ SEALANT_BOAT_ADMISSION_OWNER_IDS: "usr_proof,usr_second" });
+    expect(env).not.toHaveProperty("SEALANT_BOAT_ADMISSION_OWNER_IDS");
   });
 });

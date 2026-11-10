@@ -193,7 +193,6 @@ const setup = async (
     };
   };
   const options = (id: string) => ({
-    boatAdmissionOwnerIds: [owner],
     db,
     jobId: id,
     workerId: "stage2b",
@@ -373,35 +372,19 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
     ).toEqual(publication);
     expect(s.fixture.posts()).toBe(1);
   });
-  it("refuses an owner outside the operator allowlist before native construction or reservation", async () => {
+  it("refuses Boat on a worker that did not register it with the generic unregistered-runtime refusal", async () => {
     const s = await setup();
     const job = await s.enqueue();
+    const { runtimes, ...rest } = s.options(job.id);
     await expect(
-      processWorkspaceBuildJob({ ...s.options(job.id), boatAdmissionOwnerIds: [] }),
-    ).rejects.toMatchObject({ errorCode: "boat-admission-refused" });
+      processWorkspaceBuildJob({
+        ...rest,
+        runtimes: runtimes.filter((runtime) => runtime.adapter.id !== "boat"),
+      }),
+    ).rejects.toMatchObject({ errorCode: "unsupported-runtime" });
     expect(s.fixture.posts()).toBe(0);
     expect(s.launches).toHaveLength(0);
     expect(await Effect.runPromise(nativeConsumerRows(s.db, job.runId))).toEqual([]);
-  });
-
-  it("rechecks the explicit owner allowlist when recovering a lost delivery", async () => {
-    await withWorkspaceJobTestDatabase(databaseUrl ?? "", async (url) => {
-      const s = await setup(undefined, undefined, url);
-      const job = await s.enqueue();
-      expect(
-        await reapStaleWorkspaceBuildJobs({
-          ...s.options(job.id),
-          boatAdmissionOwnerIds: [],
-          maxReapsPerTick: 1,
-        }),
-      ).toBe(0);
-      expect(s.fixture.posts()).toBe(0);
-      expect(s.launches).toHaveLength(0);
-      expect(await Effect.runPromise(nativeConsumerRows(s.db, job.runId))).toEqual([]);
-      expect((await Effect.runPromise(s.jobs.getJobById(job.id)))?.errorCode).toBe(
-        "boat-admission-refused",
-      );
-    });
   });
 
   it("recovers a queued scoped job whose broker wakeup was lost", async () => {

@@ -17,8 +17,8 @@ const serve = async (refused = false) => {
           refused
             ? {
                 _tag: "WorkspaceServiceUnavailableError",
-                message: "Boat execution is not available on this deployment.",
-                code: "boat-production-capability-unverified",
+                message: "No runtime adapter is registered for target.runtime.family 'boat'.",
+                code: "unsupported-runtime",
               }
             : {
                 workspaceId: "ws_runtime",
@@ -96,14 +96,14 @@ describe("explicit workspace runtime", () => {
     }
   });
 
-  it("returns a Boat admission refusal without a second create or fallback", async () => {
+  it("returns the refusal of a deployment without Boat, without a second create or fallback", async () => {
     const f = await serve(true);
     try {
       await expect(
         f.client.workspaces.create({ ...options, runtime: "boat" }),
       ).rejects.toMatchObject({
         code: "WorkspaceServiceUnavailableError",
-        reason: "boat-production-capability-unverified",
+        reason: "unsupported-runtime",
       });
       expect(f.received).toHaveLength(1);
     } finally {

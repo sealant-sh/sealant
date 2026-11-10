@@ -11,7 +11,7 @@ import { Context, Effect, Layer, Redacted } from "effect";
 
 import type { WebSocketConnectMaterial } from "../../sealantd/runtime.js";
 import type { SealantTargetDerivationOptions } from "../../sealantd/target.js";
-import { boatWorkerExecutionLayer } from "../../worker/boat-allocation.js";
+import { boatSealedExecutionLayer } from "../../worker/boat-allocation.js";
 import { boatTargetIsCurrent } from "../../worker/boat-current.js";
 import { BoatExecution, BoatExecutionError } from "./execution.js";
 import { BoatAllocationProvider } from "./provider.js";
@@ -129,7 +129,7 @@ export const boatControlMaterialLayer: Layer.Layer<
 > = boatControlMaterialLayerNoDeps.pipe(
   Layer.provide(
     Layer.mergeAll(
-      boatWorkerExecutionLayer,
+      boatSealedExecutionLayer,
       BoatAllocationRepoLive,
       WorkspaceRuntimeInstanceRepoLive,
     ),
