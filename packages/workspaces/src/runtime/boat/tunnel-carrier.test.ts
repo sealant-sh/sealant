@@ -195,6 +195,53 @@ describe("Boat tunnel carrier", () => {
     expect(await attached("run-2")).toBe(false);
   });
 
+  it("settles on its first attempt, and neither restarts nor waits on a carrier holding off after a 1012", async () => {
+    const agent = await startAgent();
+    const gateway = await startGateway();
+    const runtime = carrierRuntime(3, 1_000);
+    const ensure = (runId: string) =>
+      runtime.runPromise(
+        Effect.flatMap(BoatTunnelCarrier, (carrier) =>
+          carrier.ensure({
+            runId,
+            connection: connection(agent.url),
+            gateway: { host: "127.0.0.1", port: gateway.port },
+          }),
+        ),
+      );
+    const settled = (runId: string) =>
+      runtime.runPromise(Effect.flatMap(BoatTunnelCarrier, (c) => c.settled(runId)));
+    // No carrier: nothing to wait for.
+    await settled("run-0");
+    // Attached: settled once the upgrade is answered.
+    await ensure("run-1");
+    await settled("run-1");
+    expect(
+      await runtime.runPromise(Effect.flatMap(BoatTunnelCarrier, (c) => c.attached("run-1"))),
+    ).toBe(true);
+    // Replaced by another worker's carrier: it holds off. A worker start's pass (ensure, then
+    // settled) neither opens another upgrade nor waits out the hold-off.
+    await waitFor(() => agent.sockets.length === 1);
+    agent.sockets[0]?.close(1012);
+    await waitFor(() => agent.sockets[0]?.readyState === 3);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const started = Date.now();
+    await ensure("run-1");
+    await settled("run-1");
+    expect(Date.now() - started).toBeLessThan(200);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(agent.headers).toHaveLength(1);
+    // After its hold-off it tries again, on its own.
+    await waitFor(() => agent.headers.length === 2);
+    // Refused: settled too, whatever the answer.
+    agent.refuseWith(409);
+    await ensure("run-2");
+    await settled("run-2");
+    expect(
+      await runtime.runPromise(Effect.flatMap(BoatTunnelCarrier, (c) => c.attached("run-2"))),
+    ).toBe(false);
+  });
+
   it("closes every carrier with its layer", async () => {
     const agent = await startAgent();
     const gateway = await startGateway();

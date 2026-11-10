@@ -82,9 +82,14 @@ sends the agent `carrier: "websocket"`, and the worker keeps one WebSocket per r
 agent's `/sealant/tunnel` through Boat's hosted HTTPS, relaying each WireGuard datagram to the
 gateway's port. No Boat VM dials the gateway's host, and that host needs no inbound port and no
 firewall rule, as a MicroVM deployment needs none. Every reconcile pass ensures the carrier again,
-so a restarted worker or a dropped connection reopens it. WireGuard re-handshakes on its 25 s
-keepalive. A run that is closed or held releases its carrier. One worker carries a run: a second
-carrier for the same run replaces the first, which holds off for five minutes before it tries again.
+so a dropped connection reopens it. A restarted worker does not wait for the sweep to reach each
+run: at start it reads the live runs with a tunnel on its gateway host (`listTunnelled`: bound, not
+launched without resources, run active, reservation unreleased) and ensures their carriers only,
+four at a time, each waiting at most 15 s for its first upgrade to be answered. It configures and
+releases nothing, and a carrier already open or holding off is left as it is. WireGuard
+re-handshakes on its 25 s keepalive. A run that is closed or held releases its carrier. One worker
+carries a run: a second carrier for the same run replaces the first, which holds off for five
+minutes before it tries again.
 
 The gateway publishes its WireGuard port on the relay host's address only, never on a public
 interface. A VM whose agent cannot carry the tunnel (an image built before the carrier) is refused
