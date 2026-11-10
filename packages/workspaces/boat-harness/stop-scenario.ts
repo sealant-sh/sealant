@@ -28,7 +28,8 @@ import {
 } from "./worker-log.js";
 
 /**
- * Stop to Core's discharge (the allocation `deleted`, the workspace `stopped`). On real Boat a
+ * Stop to Core's discharge (Boat's absence committed, the tunnel slot and publication pin released,
+ * the workspace `stopped`). On real Boat a
  * clean Stop takes 7 to 17 s end to end; one that needed a second pass took 36 s.
  */
 export const ONE_PASS_BOUND_MS = 25_000;
@@ -64,7 +65,11 @@ export const stopInOnePass = async (stack: HarnessStack, run: Launch): Promise<S
       if (stopped === undefined && (await run.workspace.status()) === "stopped")
         stopped = Date.now() - stoppedAt;
       const view = await runtimeView(stack, run.runId);
-      return stopped !== undefined && view.allocation === "deleted" && view.status === "stopped"
+      return stopped !== undefined &&
+        view.allocation === "deleted" &&
+        view.tunnel_released !== false &&
+        view.pin === "released" &&
+        view.status === "stopped"
         ? true
         : undefined;
     },

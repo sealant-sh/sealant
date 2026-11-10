@@ -60,9 +60,17 @@ const deletesOf = (stack: HarnessStack, sandbox: string) =>
 const vmLive = (stack: HarnessStack, sandbox: string) =>
   stack.boat.liveSandboxes().some((vm) => vm.id === sandbox);
 
-/** Core has discharged the run: Boat's VM is gone by its word and the runtime row is stopped. */
+/**
+ * Core has discharged the run: Boat's VM is gone by its word, what it held is released, and the
+ * runtime row is no longer live. (`allocation` "deleted" alone is only the committed absence since
+ * #607, which comes before the tunnel slot and publication pin are released.)
+ */
 const discharged = (view: RuntimeView) =>
-  view.allocation === "deleted" && view.status !== null && view.status !== "ready";
+  view.allocation === "deleted" &&
+  view.tunnel_released !== false &&
+  view.pin === "released" &&
+  view.status !== null &&
+  view.status !== "ready";
 
 // ---- A run's timeline ---------------------------------------------------------------------------
 
@@ -70,6 +78,7 @@ interface Sample {
   readonly at: number;
   readonly status: WorkspaceStatus | "unreadable";
   readonly view: RuntimeView;
+  /** Boat still answers for the VM (not withdrawn after an accepted DELETE, not removed). */
   readonly vmLive: boolean;
   readonly deletion: string | undefined;
 }
@@ -90,7 +99,8 @@ const sampleRun = (stack: HarnessStack, run: Launch, sandbox: string) => {
         at: Date.now(),
         status,
         view,
-        vmLive: vmLive(stack, sandbox),
+        // Boat still has the VM by its own API: not withdrawn after a DELETE, not removed.
+        vmLive: vm !== undefined && !vm.removed && !vm.withdrawn,
         deletion: vm?.deletion?.status,
       });
       await sleep(1000);
