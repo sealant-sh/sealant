@@ -245,6 +245,7 @@ const test = async (
     allocations: BoatAllocation["Service"];
     parking: (
       script: readonly CaptureDaemonScriptEntry[],
+      automaticParkingEnabled?: boolean,
     ) => Effect.Effect<BoatParking["Service"], CredentialCipherError>;
     executor: BoatExecution["Service"];
     resourceOwner: BoatResources["Service"];
@@ -438,7 +439,7 @@ const test = async (
             db,
             input,
             allocations,
-            parking: (script) =>
+            parking: (script, automaticParkingEnabled = true) =>
               Layer.buildWithScope(
                 boatParkingLayer.pipe(
                   Layer.provide(
@@ -448,7 +449,7 @@ const test = async (
                       fakeCaptureDaemon(script).layer,
                       Layer.succeed(BoatParkingProvider, {
                         api: api.value,
-                        automaticParkingEnabled: true,
+                        automaticParkingEnabled,
                         retainedParkingDelaySeconds: 300,
                       }),
                     ),
@@ -2127,7 +2128,10 @@ describe.runIf(databaseUrl !== undefined)(
         await expect(execute(s.resourceOwner.prepare(target))).rejects.toThrow("held");
       }));
     /** A capture session whose Stop could not confirm its FINAL saved (Mend refused uploads). */
-    const keptByStop = async (s: Parameters<Parameters<typeof test>[0]>[0]) => {
+    const keptByStop = async (
+      s: Parameters<Parameters<typeof test>[0]>[0],
+      automaticParkingEnabled = true,
+    ) => {
       s.provider.parking = true;
       const target = await execute(s.allocations.prepare(s.input));
       await execute(
@@ -2153,10 +2157,13 @@ describe.runIf(databaseUrl !== undefined)(
       );
       expect(await execute(owner.close(target))).toBe("retained");
       const parking = await execute(
-        s.parking([
-          captureStatus({ complete: false, incompleteReason: "ship-failed", pending: 1 }),
-          captureStatus({ epoch: 2 }),
-        ]),
+        s.parking(
+          [
+            captureStatus({ complete: false, incompleteReason: "ship-failed", pending: 1 }),
+            captureStatus({ epoch: 2 }),
+          ],
+          automaticParkingEnabled,
+        ),
       );
       return { target, owner, parking, custody: await execute(s.canonical.preservation) };
     };
@@ -2183,6 +2190,38 @@ describe.runIf(databaseUrl !== undefined)(
         expect((await execute(parking.reconcile()))[0]?.outcome).toBe("held");
         expect(s.provider.saves).toBe(0);
         expect(s.provider.deleteCalls).toBe(0);
+      }));
+    it("with automatic parking off, leaves a session its Stop kept to the lifecycle sweep, which closes it once its FINAL saves", () =>
+      test(async (s) => {
+        const { target, owner, parking, custody } = await keptByStop(s, false);
+        expect((await execute(s.canonical.getByRunId(target.runId)))?.retainedAt).toBeInstanceOf(
+          Date,
+        );
+        // Not enrolled: custody could release the source only by parking it, which is off.
+        expect(await execute(parking.reconcile())).toEqual([]);
+        expect((await execute(s.canonical.getByRunId(target.runId)))?.custodyContract).toBeNull();
+        expect(await execute(custody.read(target.runId))).toBeUndefined();
+        // The owner asks to recover it; the lifecycle sweep keeps retrying its FINAL meanwhile.
+        expect(await execute(s.canonical.requestRecovery(target.runId))).toMatchObject({
+          custodyContract: null,
+        });
+        expect((await execute(owner.reconcile({ limit: 20 }))).entries).toContainEqual({
+          runId: target.runId,
+          outcome: "retained",
+        });
+        expect(s.provider.deleteCalls).toBe(0);
+        // Mend accepts the uploads again: the next pass saves the FINAL and closes the session.
+        const saved = await execute(s.final([savedStatus()]));
+        expect((await execute(saved.owner.reconcile({ limit: 20 }))).entries).toContainEqual({
+          runId: target.runId,
+          outcome: "closed",
+        });
+        expect(s.provider.deleteCalls).toBe(1);
+        expect(s.provider.saves).toBe(0);
+        expect(await execute(s.canonical.getByRunId(target.runId))).toMatchObject({
+          state: "stopped",
+          retainedAt: null,
+        });
       }));
     it("parks a session its Stop kept once the parking delay has passed (harness: park and resume)", () =>
       test(async (s) => {

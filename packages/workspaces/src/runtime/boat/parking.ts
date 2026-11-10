@@ -589,11 +589,16 @@ const make: Effect.Effect<BoatParking["Service"], never, ParkingDependencies> = 
         boundary(
           Effect.gen(function* () {
             // Enrollment rotates independently of the due queue so one broken source cannot starve it.
-            const ids = yield* allocations.list({
-              deploymentId: host.deploymentId,
-              limit: 100,
-              ...(enrollmentAfter === undefined ? {} : { after: enrollmentAfter }),
-            });
+            // With automatic parking off nothing is enrolled: an enrolled source can leave custody
+            // only by being parked, so a retained session stays with the lifecycle sweep, which
+            // retries its FINAL and closes it once it saves.
+            const ids = policy.automaticParkingEnabled
+              ? yield* allocations.list({
+                  deploymentId: host.deploymentId,
+                  limit: 100,
+                  ...(enrollmentAfter === undefined ? {} : { after: enrollmentAfter }),
+                })
+              : [];
             enrollmentAfter = ids.length === 100 ? ids.at(-1) : undefined;
             yield* Effect.forEach(ids, (runId) =>
               Effect.gen(function* () {

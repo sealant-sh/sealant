@@ -17,8 +17,10 @@ The worker sweeps every 30 seconds. It enrolls retained original allocations in 
 existing capture stop/exit path records retention; this does not infer user inactivity from network
 traffic or park an actively used workspace.
 
-`SEALANT_BOAT_AUTOMATIC_PARKING` defaults to true. False prevents new close intents while issued
-operations keep reconciling. `SEALANT_BOAT_PARKING_DELAY_SECONDS` defaults to 3600 and accepts 300
+`SEALANT_BOAT_AUTOMATIC_PARKING` defaults to true. False prevents new close intents and new
+enrollments while issued operations keep reconciling: an enrolled source leaves custody only by
+being parked, so a retained session that is not enrolled stays with the lifecycle sweep, which
+retries its FINAL. `SEALANT_BOAT_PARKING_DELAY_SECONDS` defaults to 3600 and accepts 300
 through 604800. The first episode freezes its policy. A resumed incarnation gets a new delay under
 that same policy when it is retained again. API stop addresses canonical custody before the legacy
 stopped-workspace no-op. The legacy recovery sweep excludes enrolled roots.
