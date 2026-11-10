@@ -17,10 +17,11 @@ import { Effect, Layer, Logger } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { LaunchMaterialStager } from "../runtime/launch-material.js";
-import type {
-  RuntimeAdapter,
-  RuntimeAdapterExitWatchInput,
-  RuntimeAdapterInspectResult,
+import {
+  removalPending,
+  type RuntimeAdapter,
+  type RuntimeAdapterExitWatchInput,
+  type RuntimeAdapterInspectResult,
 } from "../runtime/runtime-adapter.js";
 import { SealantRuntime } from "../sealantd/runtime.js";
 import type { SealantTargetDerivationOptions } from "../sealantd/target.js";
@@ -225,20 +226,6 @@ const fakeStager = () => {
     removeAll,
   };
   return { stager, removeAll };
-};
-
-/** A target the reconciler must never open, and a daemon it must never dial. */
-const unreachable = () => {
-  const connects: string[] = [];
-  return {
-    connects,
-    targetOptions: {
-      boatConnectMaterial: async (runId: string) => {
-        connects.push(runId);
-        throw new Error("the exit reconciler must not reach a Boat daemon");
-      },
-    },
-  };
 };
 
 describe("reconcileRuntimeExitsEffect", () => {
@@ -1053,6 +1040,13 @@ describe("reconcileRuntimeExitsEffect · retention is recorded with the exit (re
   });
 });
 
+/** A daemon nothing answers for: the probe finds it unreachable, as an ended one is. */
+const silent = () => ({
+  boatConnectMaterial: async (): Promise<never> => {
+    throw new Error("no daemon answers on this VM");
+  },
+});
+
 describe("watchRuntimeExits", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -1104,14 +1098,10 @@ describe("watchRuntimeExits", () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
-  describe("a runtime that closes its own executors (Boat's own-close guard)", () => {
-    /** A Boat adapter as the reconciler sees it: `inspect`, and a close owner of its own. */
-    const ownClose = (inspections: ReadonlyMap<string, RuntimeAdapterInspectResult>) => {
-      const stub = stubAdapter({ id: "boat", inspections });
-      const closeCapture = vi.fn(async () => "retained" as const);
-      const adapter: RuntimeAdapter = { ...stub.adapter, closeCapture };
-      return { ...stub, adapter, closeCapture };
-    };
+  // A Boat executor is the reconciler's like any other runtime's: the guard that kept it to
+  // Boat's own close is gone. What differs is what the adapter declares (`reportsMissingAsLost`)
+  // and a removal it marks `removalPending`; each is run beside a runtime that does not.
+  describe("a runtime with no close of its own any more (Boat on the shared path)", () => {
     const boatRow = (overrides: Partial<WorkspaceRuntimeInstance> = {}) =>
       runtimeInstance({
         adapter: "boat",
@@ -1127,19 +1117,24 @@ describe("watchRuntimeExits", () => {
       unreachableWindowMs: 1_000,
       requestTimeoutMs: 1_000,
     };
+    /** The sweep with its (expected) warnings and errors kept out of the test output. */
     const sweep = (
       harness: Harness,
       adapter: RuntimeAdapter,
-      ledger: ReturnType<typeof inMemoryCaptureDrainLedger> | undefined,
-      targetOptions: SealantTargetDerivationOptions,
+      ledger: ReturnType<typeof inMemoryCaptureDrainLedger>,
+      targetOptions: SealantTargetDerivationOptions = {},
+      logger: Logger.Logger<unknown, void> | undefined = undefined,
     ) =>
       Effect.runPromise(
         reconcileRuntimeExitsEffect({
           runtimeAdapters: [adapter],
           launchMaterialStager: fakeStager().stager,
           targetOptions,
-          ...(ledger === undefined ? {} : { captureDrain: { ledger, settings } }),
-        }).pipe(Effect.provide(harness.layer)),
+          captureDrain: { ledger, settings },
+        }).pipe(
+          Effect.provide(harness.layer),
+          Effect.provide(Logger.layer(logger === undefined ? [] : [logger])),
+        ),
       );
     const exitedOnLiveMachine: RuntimeAdapterInspectResult = {
       state: "exited",
@@ -1148,227 +1143,195 @@ describe("watchRuntimeExits", () => {
       detail: "sealantd in the Boat VM exited before the workspace stopped (code 75, signal null).",
     };
 
-    it("records a daemon that exited on a live machine as failed with its retention, and does nothing else", async () => {
+    it("removes a Boat executor whose daemon exited after a final flush Core observed complete, under its ticket, as any runtime's", async () => {
       const harness = makeHarness({ instances: [boatRow()] });
-      const { adapter, stop, closeCapture } = ownClose(
-        new Map([["bx_23456789", exitedOnLiveMachine]]),
-      );
+      const { adapter, stop } = stubAdapter({
+        id: "boat",
+        inspections: new Map([["bx_23456789", exitedOnLiveMachine]]),
+      });
       const ledger = inMemoryCaptureDrainLedger();
-      // An observed complete flush on record: for any other runtime, grounds to remove it.
       await Effect.runPromise(ledger.recordStatus("run_1", savedStatus(), Date.now()));
-      const { connects, targetOptions } = unreachable();
 
-      expect(await sweep(harness, adapter, ledger, targetOptions)).toBe(1);
+      expect(await sweep(harness, adapter, ledger, silent())).toBe(1);
 
       expect(harness.markExited).toHaveBeenCalledWith({
         runId: "run_1",
         resourceId: "bx_23456789",
         errorMessage: expect.stringContaining("exited on its own (exitCode: 75)"),
       });
-      const row = ledger.store.rows.get("run_1");
-      expect(row?.entry.retained).toBeDefined();
-      // Nothing of the generic removal: no probe, no drain, no ticket, no stop, no outcome.
-      expect(connects).toEqual([]);
-      expect(stop).not.toHaveBeenCalled();
-      expect(closeCapture).not.toHaveBeenCalled();
-      expect(harness.markRemoved).not.toHaveBeenCalled();
-      expect(harness.markStopped).not.toHaveBeenCalled();
-      expect(row?.deletion).toBeUndefined();
-      expect(row?.observation?.state).not.toBe("stopped");
-    });
-
-    it("removes the same executor of a runtime with no close of its own (the guard is the difference)", async () => {
-      const harness = makeHarness({
-        instances: [boatRow({ adapter: "microvm", endpoint: null })],
-      });
-      const { adapter, stop } = stubAdapter({
-        id: "microvm",
-        inspections: new Map([["bx_23456789", exitedOnLiveMachine]]),
-      });
-      const ledger = inMemoryCaptureDrainLedger();
-      await Effect.runPromise(ledger.recordStatus("run_1", savedStatus(), Date.now()));
-
-      expect(await sweep(harness, adapter, ledger, {})).toBe(1);
       expect(stop).toHaveBeenCalledTimes(1);
+      expect(harness.markRemoved).toHaveBeenCalledWith({
+        runId: "run_1",
+        resourceId: "bx_23456789",
+      });
+      const row = ledger.store.rows.get("run_1");
+      expect(row?.deletion?.state).toBe("deleted");
+      expect(row?.observation?.state).toBe("stopped");
     });
 
-    it("writes nothing when the retention cannot be recorded: the runtime stays ready for the next sweep", async () => {
+    it("keeps a Boat executor whose daemon exited with nothing confirmed saved: recorded failed with its retention, never removed", async () => {
       const harness = makeHarness({ instances: [boatRow()] });
-      const { adapter, stop } = ownClose(new Map([["bx_23456789", exitedOnLiveMachine]]));
+      const { adapter, stop } = stubAdapter({
+        id: "boat",
+        inspections: new Map([["bx_23456789", exitedOnLiveMachine]]),
+      });
       const ledger = inMemoryCaptureDrainLedger();
-      const unrecorded = { ...ledger, markRetained: () => Effect.succeed(false) };
-      const { targetOptions } = unreachable();
 
-      const recorded = await Effect.runPromise(
-        reconcileRuntimeExitsEffect({
-          runtimeAdapters: [adapter],
-          launchMaterialStager: fakeStager().stager,
-          targetOptions,
-          captureDrain: { ledger: unrecorded, settings },
-        }).pipe(Effect.provide(harness.layer), Effect.provide(Logger.layer([]))),
-      );
+      expect(await sweep(harness, adapter, ledger, silent())).toBe(1);
 
-      expect(recorded).toBe(0);
-      expect(harness.markExited).not.toHaveBeenCalled();
+      expect(harness.markExited).toHaveBeenCalledTimes(1);
+      expect(ledger.store.rows.get("run_1")?.entry.retained).toBeDefined();
       expect(stop).not.toHaveBeenCalled();
-    });
-
-    it("writes nothing for a machine the runtime no longer has: its own close discharges it", async () => {
-      const harness = makeHarness({ instances: [boatRow()] });
-      const { adapter, stop, inspect } = ownClose(new Map([["bx_23456789", { state: "missing" }]]));
-      const ledger = inMemoryCaptureDrainLedger();
-      await Effect.runPromise(ledger.recordStatus("run_1", savedStatus(), Date.now()));
-      const { connects, targetOptions } = unreachable();
-
-      const recorded = await Effect.runPromise(
-        sweepQuietly(harness, adapter, ledger, targetOptions),
-      );
-
-      expect(recorded).toBe(0);
-      // A ready run with no stop requested is still asked about.
-      expect(inspect).toHaveBeenCalledTimes(1);
-      expect(harness.markExited).not.toHaveBeenCalled();
-      expect(harness.markStopped).not.toHaveBeenCalled();
       expect(harness.markRemoved).not.toHaveBeenCalled();
-      expect(stop).not.toHaveBeenCalled();
-      expect(connects).toEqual([]);
-      const drain = ledger.store.rows.get("run_1");
-      expect(drain?.entry.retained).toBeUndefined();
-      expect(drain?.deletion).toBeUndefined();
-      // Nothing is said of its work: never `gone` (lost) from here.
-      expect(drain?.observation?.state).not.toBe("gone");
     });
 
-    it.each<readonly [string, RuntimeAdapterInspectResult]>([
-      ["its daemon has exited", exitedOnLiveMachine],
-      ["its machine is gone", { state: "missing" }],
-      ["it is running", { state: "running" }],
-    ])(
-      "does not inspect a run whose stop is requested, whatever would be answered (%s): that stop's close owns it",
-      async (_what, inspection) => {
-        const harness = makeHarness({
-          instances: [
-            boatRow({ runId: "run_stopping", stopReason: "user" }),
-            boatRow({
-              runId: "run_kept",
-              resourceId: "bx_3456789a",
-              reference: "boat:bx_3456789a",
-              stopReason: "failed",
-            }),
-          ],
-        });
-        const { adapter, stop, inspect, closeCapture } = ownClose(
-          new Map([
-            ["bx_23456789", inspection],
-            ["bx_3456789a", inspection],
-          ]),
-        );
-        const ledger = inMemoryCaptureDrainLedger();
-        const { connects, targetOptions } = unreachable();
-
-        expect(await sweep(harness, adapter, ledger, targetOptions)).toBe(0);
-
-        // No request to the runtime or the guest is made for it at all.
-        expect(inspect).not.toHaveBeenCalled();
-        expect(stop).not.toHaveBeenCalled();
-        expect(closeCapture).not.toHaveBeenCalled();
-        expect(connects).toEqual([]);
-        expect(harness.markExited).not.toHaveBeenCalled();
-        expect(harness.markStopped).not.toHaveBeenCalled();
-        expect(harness.markRemoved).not.toHaveBeenCalled();
-        expect(ledger.store.rows.size).toBe(0);
-      },
-    );
-
-    it("still inspects a ready run with no stop requested beside one whose stop is requested", async () => {
-      const harness = makeHarness({
-        instances: [
-          boatRow({ runId: "run_stopping", stopReason: "user" }),
-          boatRow({ runId: "run_live", resourceId: "bx_3456789a", reference: "boat:bx_3456789a" }),
-        ],
-      });
-      const { adapter, inspect } = ownClose(
-        new Map([
-          ["bx_23456789", exitedOnLiveMachine],
-          ["bx_3456789a", exitedOnLiveMachine],
-        ]),
-      );
-      const ledger = inMemoryCaptureDrainLedger();
-      const { targetOptions } = unreachable();
-
-      expect(await sweep(harness, adapter, ledger, targetOptions)).toBe(1);
-
-      expect(inspect.mock.calls).toEqual([[{ resourceId: "bx_3456789a" }]]);
-      expect(harness.markExited.mock.calls.map(([input]) => input.runId)).toEqual(["run_live"]);
-    });
-
-    it("still inspects a stop-requested executor of a runtime with no close of its own, and records its planned stop", async () => {
-      const harness = makeHarness({
-        instances: [boatRow({ adapter: "microvm", endpoint: null, stopReason: "user" })],
-      });
+    it("inspects a Boat run whose stop is requested, and records a planned stop that ended it", async () => {
+      const harness = makeHarness({ instances: [boatRow({ stopReason: "user" })] });
       const { adapter, inspect, stop } = stubAdapter({
-        id: "microvm",
+        id: "boat",
         inspections: new Map([["bx_23456789", exitedOnLiveMachine]]),
       });
       const ledger = inMemoryCaptureDrainLedger();
       await Effect.runPromise(ledger.recordStatus("run_1", savedStatus(), Date.now()));
 
-      expect(await sweep(harness, adapter, ledger, {})).toBe(1);
+      expect(await sweep(harness, adapter, ledger, silent())).toBe(1);
 
       expect(inspect).toHaveBeenCalledTimes(1);
+      expect(harness.markExited).not.toHaveBeenCalled();
       expect(harness.markStopped).toHaveBeenCalledWith({ runId: "run_1", stopReason: "user" });
       expect(stop).toHaveBeenCalledTimes(1);
     });
 
-    it("records nothing without a capture drain: nothing could say its disk was saved", async () => {
-      const harness = makeHarness({ instances: [boatRow()] });
-      const { adapter, stop } = ownClose(new Map([["bx_23456789", exitedOnLiveMachine]]));
-      const { targetOptions } = unreachable();
-
-      const recorded = await Effect.runPromise(
-        sweepQuietly(harness, adapter, undefined, targetOptions),
+    it("leaves a missing executor alone while another path's removal of it is live: nothing written, the runtime not asked", async () => {
+      // The second observer of a stop: the stop's own removal is issued and held, the runtime
+      // already answers that the executor is gone, and the stop has not recorded it yet.
+      const harness = makeHarness({ instances: [boatRow({ stopReason: "user" })] });
+      const { adapter, stop } = stubAdapter({
+        id: "boat",
+        inspections: new Map([["bx_23456789", { state: "missing" }]]),
+      });
+      const ledger = inMemoryCaptureDrainLedger();
+      await Effect.runPromise(ledger.recordStatus("run_1", savedStatus(), Date.now()));
+      const read = await Effect.runPromise(ledger.read("run_1"));
+      const authorized = await Effect.runPromise(
+        ledger.authorizeDeletion("run_1", read.readable ? (read.entry?.evidenceVersion ?? 0) : -1),
       );
+      if (authorized.kind !== "authorized") throw new Error(authorized.kind);
+      expect(await Effect.runPromise(ledger.issueDeletion("run_1", authorized.ticket))).toBe(true);
+      const levels: string[] = [];
+      const recorder = Logger.make(({ logLevel }) => {
+        levels.push(logLevel);
+      });
 
-      expect(recorded).toBe(0);
-      expect(harness.markExited).not.toHaveBeenCalled();
+      expect(await sweep(harness, adapter, ledger, silent(), recorder)).toBe(0);
+
       expect(stop).not.toHaveBeenCalled();
+      expect(harness.markStopped).not.toHaveBeenCalled();
+      expect(harness.markExited).not.toHaveBeenCalled();
+      expect(harness.markRemoved).not.toHaveBeenCalled();
+      expect(levels).not.toContain("Error");
+      // The stop's removal is untouched: still issued, still its issuer's.
+      const row = ledger.store.rows.get("run_1");
+      expect(row?.deletion).toMatchObject({
+        state: "deleting-issued",
+        token: authorized.ticket.token,
+      });
+      expect(row?.observation).toBeUndefined();
     });
 
-    it("leaves its ended executors nothing settled alone: not inspected, not retained, not reported gone, not removed", async () => {
-      const harness = makeHarness({
-        instances: [],
-        unsettled: [
-          boatRow({ runId: "run_failed", status: "failed" }),
-          boatRow({ runId: "run_stopped", status: "stopped", stopReason: "user" }),
-        ],
-      });
-      const { adapter, stop, inspect } = ownClose(new Map([["bx_23456789", { state: "missing" }]]));
-      const ledger = inMemoryCaptureDrainLedger();
-      const { targetOptions } = unreachable();
+    it.each([
+      ["lost, for a runtime that declares it", true, "gone"],
+      ["stopped, as always, for one that does not", false, "stopped"],
+    ] as const)(
+      "reports a ready executor the runtime no longer has, with nothing on record that its work was saved, as %s",
+      async (_name, declares, state) => {
+        const harness = makeHarness({ instances: [boatRow()] });
+        const stub = stubAdapter({
+          id: "boat",
+          inspections: new Map([["bx_23456789", { state: "missing" }]]),
+        });
+        const adapter: RuntimeAdapter = declares
+          ? { ...stub.adapter, reportsMissingAsLost: true }
+          : stub.adapter;
+        const ledger = inMemoryCaptureDrainLedger();
 
-      expect(await sweep(harness, adapter, ledger, targetOptions)).toBe(0);
+        expect(await sweep(harness, adapter, ledger, silent())).toBe(1);
 
-      expect(inspect).not.toHaveBeenCalled();
-      expect(stop).not.toHaveBeenCalled();
-      for (const runId of ["run_failed", "run_stopped"]) {
-        expect(ledger.store.rows.get(runId)?.entry.retained).toBeUndefined();
-        expect(ledger.store.rows.get(runId)?.observation).toBeUndefined();
+        // Recorded as every runtime's lost executor is, and the runtime asked to clean up.
+        expect(harness.markExited).toHaveBeenCalledWith({
+          runId: "run_1",
+          resourceId: "bx_23456789",
+          errorMessage: expect.stringContaining("is gone"),
+        });
+        expect(stub.stop).toHaveBeenCalledTimes(1);
+        expect(harness.markRemoved).toHaveBeenCalledTimes(1);
+        expect(ledger.store.rows.get("run_1")?.observation?.state).toBe(state);
+      },
+    );
+
+    it("reports a missing executor whose final flush was observed complete as stopped, declared or not", async () => {
+      for (const declares of [true, false]) {
+        const harness = makeHarness({ instances: [boatRow()] });
+        const stub = stubAdapter({
+          id: "boat",
+          inspections: new Map([["bx_23456789", { state: "missing" }]]),
+        });
+        const adapter: RuntimeAdapter = declares
+          ? { ...stub.adapter, reportsMissingAsLost: true }
+          : stub.adapter;
+        const ledger = inMemoryCaptureDrainLedger();
+        await Effect.runPromise(ledger.recordStatus("run_1", savedStatus(), Date.now()));
+
+        expect(await sweep(harness, adapter, ledger, silent())).toBe(1);
+        expect(ledger.store.rows.get("run_1")?.observation?.state).toBe("stopped");
       }
     });
 
-    /** The sweep with its (expected) warnings and errors kept out of the test output. */
-    const sweepQuietly = (
-      harness: Harness,
-      adapter: RuntimeAdapter,
-      ledger: ReturnType<typeof inMemoryCaptureDrainLedger> | undefined,
-      targetOptions: SealantTargetDerivationOptions,
-    ) =>
-      reconcileRuntimeExitsEffect({
-        runtimeAdapters: [adapter],
-        launchMaterialStager: fakeStager().stager,
-        targetOptions,
-        ...(ledger === undefined ? {} : { captureDrain: { ledger, settings } }),
-      }).pipe(Effect.provide(harness.layer), Effect.provide(Logger.layer([])));
+    it("says nothing failed when the runtime accepted the removal of an ended executor and has not finished it: it stays issued and nothing is recorded removed", async () => {
+      const harness = makeHarness({ instances: [boatRow()] });
+      const stub = stubAdapter({
+        id: "boat",
+        inspections: new Map([["bx_23456789", exitedOnLiveMachine]]),
+      });
+      const stop = vi.fn(async (): Promise<never> => {
+        throw removalPending(new Error("the provider is still deleting it"));
+      });
+      const adapter: RuntimeAdapter = { ...stub.adapter, stop };
+      const ledger = inMemoryCaptureDrainLedger();
+      await Effect.runPromise(ledger.recordStatus("run_1", savedStatus(), Date.now()));
+      const levels: string[] = [];
+      const recorder = Logger.make(({ logLevel }) => {
+        levels.push(logLevel);
+      });
+
+      expect(await sweep(harness, adapter, ledger, silent(), recorder)).toBe(1);
+
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(levels).not.toContain("Error");
+      expect(levels).not.toContain("Warn");
+      expect(harness.markRemoved).not.toHaveBeenCalled();
+      const row = ledger.store.rows.get("run_1");
+      expect(row?.deletion?.state).toBe("deleting-issued");
+      expect(row?.observation?.state).not.toBe("stopped");
+    });
+
+    it("settles a Boat executor that ended with nothing recorded, as any runtime's: retained when its work is not confirmed saved", async () => {
+      const harness = makeHarness({
+        instances: [],
+        unsettled: [boatRow({ runId: "run_failed", status: "failed" })],
+      });
+      const { adapter, inspect, stop } = stubAdapter({
+        id: "boat",
+        inspections: new Map([["bx_23456789", exitedOnLiveMachine]]),
+      });
+      const ledger = inMemoryCaptureDrainLedger();
+
+      expect(await sweep(harness, adapter, ledger)).toBe(0);
+
+      expect(inspect).toHaveBeenCalledTimes(1);
+      expect(stop).not.toHaveBeenCalled();
+      expect(ledger.store.rows.get("run_failed")?.entry.retained).toBeDefined();
+    });
   });
 
   it("runs the Promise entry against the live repo layer", async () => {

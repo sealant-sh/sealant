@@ -68,17 +68,13 @@ export type ExecutorDeletionBasis =
   | "attested-complete"
   | "discarded"
   /**
-   * Its recovery boot found nothing to save (sealantd exit 76): it never materialized a capture,
-   * so no user code ran on it (capture starts before any). Only the recovery sweep gives it, from
-   * the daemon's own answer (`RuntimeAdapterRecoverResult` `nothing-to-save`).
+   * Its recovery found nothing to save: its recovery boot exited 76 (it never materialized a
+   * capture, so no user code ran on it: capture starts before any), or no daemon was ever started
+   * on it (Boat: no launch was pushed to its VM, or its agent recorded none on the boot it was
+   * bound on). Only the recovery sweep gives it, from the runtime's own answer
+   * (`RuntimeAdapterRecoverResult` `nothing-to-save`).
    */
   | "nothing-to-save"
-  /**
-   * Its agent recorded no launch on the boot it was bound on (Boat: the recovery's `no-launch`
-   * basis): the daemon never started there, so nothing ran on it and nothing is lost by removing
-   * it. Only the Boat FINAL close gives it, from the agent's typed answer.
-   */
-  | "never-launched"
   /**
    * A removal of it was issued earlier on recorded evidence, its outcome was never recorded, and
    * the runtime still has the executor while that evidence still stands (review 8 #7): the
@@ -322,15 +318,16 @@ export const attestationCoversObservations = (
  * (`RuntimeAdapter.recover` restarting it). Docker can (`docker start` of the kept container).
  * MicroVM can while the VM runs on after its daemon ended (the agent starts sealantd again in
  * recovery mode on the VM's disk); a TERMINATED VM's disk is gone, which `recover` reports as
- * `missing`. Kubernetes cannot restart an ended Pod.
+ * `missing`. Boat can the same way: a Boat VM runs on after its daemon ended, and its agent starts
+ * sealantd again in recovery mode on the VM's disk. Kubernetes cannot restart an ended Pod.
  */
 export const runtimeRestartsRetainedExecutors = (adapterId: string | null | undefined): boolean =>
-  adapterId === "docker" || adapterId === "microvm";
+  adapterId === "docker" || adapterId === "microvm" || adapterId === "boat";
 
 /**
  * Whether the runtime hands the recovery boot its capture token itself (`recover({ secretEnv })`:
- * the MicroVM agent writes it on the VM) rather than reading a secret env file the worker stages
- * on its host again (Docker).
+ * the MicroVM and Boat agents write it on the VM) rather than reading a secret env file the worker
+ * stages on its host again (Docker).
  */
 export const runtimeRecoveryTakesSecretEnv = (adapterId: string | null | undefined): boolean =>
-  adapterId === "microvm";
+  adapterId === "microvm" || adapterId === "boat";

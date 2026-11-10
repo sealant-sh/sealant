@@ -15,10 +15,15 @@ import {
 import { Effect, Layer } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
-import type {
-  RuntimeAdapter,
-  RuntimeAdapterInspectResult,
-  RuntimeAdapterRecoverResult,
+import {
+  runtimeRecoveryTakesSecretEnv,
+  runtimeRestartsRetainedExecutors,
+} from "../runtime/executor-preservation.js";
+import {
+  removalPending,
+  type RuntimeAdapter,
+  type RuntimeAdapterInspectResult,
+  type RuntimeAdapterRecoverResult,
 } from "../runtime/runtime-adapter.js";
 import type { SealantTargetDerivationOptions } from "../sealantd/target.js";
 import { captureStatus, fakeCaptureDaemon, savedStatus } from "./capture-daemon.fixture.js";
@@ -70,8 +75,10 @@ const harness = (input: {
   /** What the launch recorded of the executor (its daemon build). */
   readonly instance?: Partial<WorkspaceRuntimeInstance>;
   readonly targetOptions?: SealantTargetDerivationOptions;
-  /** The runtime ends its executors through a durable close owner of its own (Boat). */
-  readonly closesItsOwn?: boolean;
+  /** The runtime's removal of the executor, in place of one that succeeds. */
+  readonly stop?: RuntimeAdapter["stop"];
+  /** The runtime answers for an executor nothing was started on (`recoverAnswersUnstarted`). */
+  readonly recoverAnswersUnstarted?: boolean;
 }) => {
   const order: string[] = [];
   const ledger = inMemoryCaptureDrainLedger({ now: () => NOW });
@@ -104,11 +111,14 @@ const harness = (input: {
     markStopped,
     markRemoved: () => Effect.void,
   } as unknown as WorkspaceRuntimeInstanceRepoService;
-  const stop = vi.fn(async (request: { resourceId: string }) => ({
-    adapter: input.adapterId ?? ("docker" as const),
-    resourceId: request.resourceId,
-    outcome: "stopped" as const,
-  }));
+  const stop = vi.fn<RuntimeAdapter["stop"]>(
+    input.stop ??
+      (async (request) => ({
+        adapter: input.adapterId ?? ("docker" as const),
+        resourceId: request.resourceId,
+        outcome: "stopped" as const,
+      })),
+  );
   const parkRetained = vi.fn(async () => {
     order.push("park");
     return { stopped: ["sealant-run-1-docker"] };
@@ -147,7 +157,7 @@ const harness = (input: {
     inspect,
     recover,
     parkRetained,
-    ...(input.closesItsOwn === true ? { closeCapture: async () => "retained" as const } : {}),
+    ...(input.recoverAnswersUnstarted === true ? { recoverAnswersUnstarted: true } : {}),
   };
   const daemon = input.daemon ?? fakeCaptureDaemon(["unreachable"]);
   const run = () =>
@@ -583,64 +593,213 @@ describe("recoverRetainedExecutorsEffect · an executor whose removal is held (r
   });
 });
 
-describe("recoverRetainedExecutorsEffect · a runtime that closes its own executors (Boat's own-close guard)", () => {
-  it.each<readonly [string, RuntimeAdapterInspectResult]>([
-    ["its daemon ended and its machine runs on", { state: "exited", platformEnded: false }],
-    ["its machine is gone", { state: "missing" }],
-    ["it is still running", { state: "running" }],
-  ])(
-    "leaves a retained executor to that close when %s: nothing inspected, authorized, started or removed",
-    async (_what, inspection) => {
-      const daemon = fakeCaptureDaemon([savedStatus()]);
-      const h = harness({
-        adapterId: "boat",
-        inspect: inspection,
-        closesItsOwn: true,
-        daemon,
-        attempts: 2,
-        instance: { endpoint: "wss://fixture-8080.on.boat.dev/sealant/control" },
-        targetOptions: {
-          boatConnectMaterial: async () => {
-            throw new Error("the recovery sweep must not reach the daemon");
-          },
-        },
-      });
-      // Evidence that would let any other runtime's executor go, were it weighed here.
-      await Effect.runPromise(h.ledger.recordStatus("run_1", savedStatus(), NOW));
+// Boat is recovered by the sweep like a MicroVM whose daemon ended on a live VM: the guard that
+// left it to Boat's own close is gone. Its agent takes the capture token with the request.
+describe("recoverRetainedExecutorsEffect · a Boat VM (the shared recovery, no close of its own)", () => {
+  const boat = {
+    adapterId: "boat" as const,
+    instance: { endpoint: "wss://fixture-8080.on.boat.dev/sealant/control" },
+    targetOptions: { boatConnectMaterial: async () => ({}) },
+  };
 
-      expect((await h.run()).get("run_1")).toBe("retained");
+  it("hands the agent the kept capture token, drains the daemon it restarted and removes the VM", async () => {
+    const daemon = fakeCaptureDaemon([savedStatus()]);
+    const h = harness({ ...boat, inspect: { state: "exited", platformEnded: false }, daemon });
 
-      expect(h.inspect).not.toHaveBeenCalled();
-      expect(h.parkRetained).not.toHaveBeenCalled();
-      expect(h.recover).not.toHaveBeenCalled();
-      expect(h.stop).not.toHaveBeenCalled();
-      expect(h.markStopped).not.toHaveBeenCalled();
-      expect(daemon.calls).toEqual([]);
-      // No removal was authorized: the close owner's own authorization finds nothing held.
-      const row = h.ledger.store.rows.get("run_1");
-      expect(row?.deletion).toBeUndefined();
-      expect(row?.entry.retained).toBeDefined();
-      expect(row?.observation?.state).not.toBe("gone");
-      expect(row?.observation?.state).not.toBe("stopped");
-      // Counted and backed off like any executor this sweep cannot recover.
-      expect(h.attempts).toEqual([
-        {
-          runId: "run_1",
-          error: expect.stringContaining("left to the boat runtime's own close"),
-          nextRecoveryAt: new Date(
-            NOW + nextRecoveryDelayMs(2, { baseMs: 60_000, maxMs: 3_600_000 }),
-          ),
-        },
-      ]);
+    expect((await h.run()).get("run_1")).toBe("released");
+
+    expect(h.recover).toHaveBeenCalledWith({
+      resourceId: "container-1",
+      reference: "sealant-run-1",
+      runId: "run_1",
+      secretEnv: { SEALANT_CAPTURE_TOKEN: "mend-capture-token" },
+    });
+    // Nothing is staged on the worker's host for a VM: the token went with the request.
+    expect(h.staged).toEqual([]);
+    expect(daemon.flushRequests).toContainEqual(expect.objectContaining({ kind: "final" }));
+    expect(h.stop).toHaveBeenCalledTimes(1);
+    expect(h.ledger.store.rows.get("run_1")?.deletion?.state).toBe("deleted");
+  });
+
+  it("removes a VM whose recovery answers that nothing ran on it, without a drain, and records why", async () => {
+    const daemon = fakeCaptureDaemon([savedStatus()]);
+    const h = harness({
+      ...boat,
+      inspect: { state: "exited", platformEnded: false },
+      daemon,
+      recover: async () => ({
+        outcome: "nothing-to-save",
+        detail: "no launch was ever pushed to the agent of Boat VM bx_23456789",
+      }),
+    });
+
+    expect((await h.run()).get("run_1")).toBe("released");
+
+    expect(daemon.calls).toEqual([]);
+    expect(h.stop).toHaveBeenCalledTimes(1);
+    expect(h.markStopped).toHaveBeenCalledWith({ runId: "run_1", stopReason: "failed" });
+    const observation = h.ledger.store.rows.get("run_1")?.observation;
+    expect(observation?.state).toBe("stopped");
+    expect(observation?.detail).toContain("no launch was ever pushed");
+  });
+
+  it("keeps a VM whose agent refused the recovery: never drained, never removed, counted on the backoff", async () => {
+    const daemon = fakeCaptureDaemon([savedStatus()]);
+    const h = harness({
+      ...boat,
+      inspect: { state: "exited", platformEnded: false },
+      daemon,
+      attempts: 2,
+      recover: async () => ({
+        outcome: "unsupported",
+        detail: "the agent of Boat VM bx_23456789 refused the recovery (recover-state-unknown)",
+      }),
+    });
+
+    expect((await h.run()).get("run_1")).toBe("retained");
+
+    expect(daemon.calls).toEqual([]);
+    expect(h.stop).not.toHaveBeenCalled();
+    expect(h.markStopped).not.toHaveBeenCalled();
+    expect(h.ledger.store.rows.get("run_1")?.entry.retained).toBeDefined();
+    expect(h.attempts).toEqual([
+      {
+        runId: "run_1",
+        error: expect.stringContaining("recover-state-unknown"),
+        nextRecoveryAt: new Date(
+          NOW + nextRecoveryDelayMs(2, { baseMs: 60_000, maxMs: 3_600_000 }),
+        ),
+      },
+    ]);
+  });
+
+  it("keeps the retention, records nothing removed and asks again soon when the runtime accepted the removal and has not finished it", async () => {
+    const h = harness({
+      ...boat,
+      inspect: { state: "exited", platformEnded: false },
+      daemon: fakeCaptureDaemon([savedStatus()]),
+      stop: async () => {
+        throw removalPending(new Error("the provider is still deleting it"));
+      },
+    });
+
+    expect((await h.run()).get("run_1")).toBe("retained");
+
+    expect(h.stop).toHaveBeenCalledTimes(1);
+    expect(h.markStopped).not.toHaveBeenCalled();
+    const row = h.ledger.store.rows.get("run_1");
+    expect(row?.entry.retained).toBeDefined();
+    // The removal stays issued, its hold ended: settled from the runtime by the next attempt.
+    expect(row?.deletion?.state).toBe("deleting-issued");
+    expect(row?.observation?.state).not.toBe("stopped");
+    expect(h.attempts).toEqual([
+      {
+        runId: "run_1",
+        error: expect.stringContaining("has not finished it"),
+        nextRecoveryAt: new Date(NOW + 60_000),
+      },
+    ]);
+  });
+
+  it("reports a VM Boat no longer has as lost, and asks nothing of it", async () => {
+    const h = harness({ ...boat, inspect: { state: "missing" } });
+
+    expect((await h.run()).get("run_1")).toBe("lost");
+    expect(h.recover).not.toHaveBeenCalled();
+    expect(h.stop).not.toHaveBeenCalled();
+    expect(h.ledger.store.rows.get("run_1")?.observation?.state).toBe("gone");
+  });
+});
+
+const unstarted = async () =>
+  ({ outcome: "nothing-to-save", detail: "no launch was ever pushed to it" }) as const;
+
+describe("recoverRetainedExecutorsEffect · a runtime that answers for an executor nothing was started on", () => {
+  it.each([
+    ["its daemon predates the recovery boot", { instance: { daemonRecoveryBoot: false } }],
+    ["Core cannot tell its daemon's build", { instance: { daemonRecoveryBoot: null } }],
+    ["no capture token was kept", { captureTokenSealed: null }],
+    ["its capture token cannot be unsealed", { captureTokenSealed: "sealed:other" }],
+  ] as const)("is asked even when %s, and told what the launch recorded", async (_name, gate) => {
+    const h = harness({
+      adapterId: "boat",
+      inspect: { state: "exited", platformEnded: false },
+      recover: unstarted,
+      recoverAnswersUnstarted: true,
+      ...gate,
+    });
+
+    expect((await h.run()).get("run_1")).toBe("released");
+
+    const kept = !("captureTokenSealed" in gate);
+    expect(h.recover).toHaveBeenCalledWith({
+      resourceId: "container-1",
+      reference: "sealant-run-1",
+      // Its token goes with the request when one was kept and unsealed; none is invented.
+      ...(kept
+        ? { runId: "run_1", secretEnv: { SEALANT_CAPTURE_TOKEN: "mend-capture-token" } }
+        : {}),
+      daemonRecoveryBoot: "instance" in gate ? gate.instance.daemonRecoveryBoot : true,
+    });
+    expect(h.stop).toHaveBeenCalledTimes(1);
+    expect(h.staged).toEqual([]);
+  });
+
+  it.each([
+    [
+      "its daemon predates the recovery boot",
+      { instance: { daemonRecoveryBoot: false } },
+      "predates",
+    ],
+    ["no capture token was kept", { captureTokenSealed: null }, "no capture token"],
+  ] as const)(
+    "leaves a runtime that does not declare it unasked when %s, as always",
+    async (_name, gate, reason) => {
+      for (const adapterId of ["docker", "microvm"] as const) {
+        const h = harness({
+          adapterId,
+          inspect: { state: "exited", exitCode: 75 },
+          recover: unstarted,
+          ...gate,
+        });
+        expect((await h.run()).get("run_1")).toBe("retained");
+        expect(h.recover).not.toHaveBeenCalled();
+        expect(h.stop).not.toHaveBeenCalled();
+        expect(h.attempts).toEqual([
+          expect.objectContaining({ error: expect.stringContaining(reason) }),
+        ]);
+      }
     },
   );
 
-  it("still releases the same executor of a runtime with no close of its own (the guard is the difference)", async () => {
-    const h = harness({ adapterId: "microvm", inspect: { state: "exited", platformEnded: false } });
-    await Effect.runPromise(h.ledger.recordStatus("run_1", savedStatus(), NOW));
+  it("hands a runtime that does not declare it nothing of the daemon's build", async () => {
+    const h = harness({
+      adapterId: "microvm",
+      inspect: { state: "exited", exitCode: 75 },
+      recover: unstarted,
+    });
+    await h.run();
+    expect(h.recover).toHaveBeenCalledWith({
+      resourceId: "container-1",
+      reference: "sealant-run-1",
+      runId: "run_1",
+      secretEnv: { SEALANT_CAPTURE_TOKEN: "mend-capture-token" },
+    });
+  });
+});
 
-    expect((await h.run()).get("run_1")).toBe("released");
-    expect(h.stop).toHaveBeenCalledTimes(1);
+describe("which runtimes restart a retained executor, and how it gets its capture token", () => {
+  it.each([
+    ["docker", true, false],
+    ["microvm", true, true],
+    ["boat", true, true],
+    ["k8s", false, false],
+    ["k3s", false, false],
+    ["cloudflare", false, false],
+    [null, false, false],
+  ] as const)("%s", (adapter, restarts, takesSecretEnv) => {
+    expect(runtimeRestartsRetainedExecutors(adapter)).toBe(restarts);
+    expect(runtimeRecoveryTakesSecretEnv(adapter)).toBe(takesSecretEnv);
   });
 });
 

@@ -367,6 +367,12 @@ export interface RuntimeAdapterRecoverInput {
    * reads it from the host directory the worker stages it into again.
    */
   readonly secretEnv?: Readonly<Record<string, string>>;
+  /**
+   * Whether the executor's daemon has sealantd's recovery boot, as its launch recorded it
+   * (`daemon_recovery_boot`). Handed only to a runtime that declares `recoverAnswersUnstarted`,
+   * which weighs it itself before it restarts anything: anything but `true` is not restarted.
+   */
+  readonly daemonRecoveryBoot?: boolean | null;
 }
 
 /**
@@ -412,20 +418,39 @@ export const nothingToSaveDetail = (output: string | undefined): string => {
 export const removalRefused = <T extends Error>(error: T): T & { readonly removalRefused: true } =>
   Object.assign(error, { removalRefused: true as const });
 
-/** Whether an error (or any error it was caused by) is the runtime's definitive refusal. */
-export const isRemovalRefusal = (error: unknown): boolean => {
+/** Whether an error, or any error it was caused by, carries `marker`. */
+const carriesMarker = (error: unknown, marker: "removalRefused" | "removalPending"): boolean => {
   let current: unknown = error;
   for (let depth = 0; depth < 8; depth += 1) {
     if (typeof current !== "object" || current === null) {
       return false;
     }
-    if ("removalRefused" in current && current.removalRefused === true) {
+    // The markers are own properties (`Object.assign`), never inherited.
+    if (Object.entries(current).some(([key, value]) => key === marker && value === true)) {
       return true;
     }
     current = "cause" in current ? current.cause : undefined;
   }
   return false;
 };
+
+/** Whether an error (or any error it was caused by) is the runtime's definitive refusal. */
+export const isRemovalRefusal = (error: unknown): boolean => carriesMarker(error, "removalRefused");
+
+/**
+ * Mark an error from a removal call (`stop`) as a removal the provider ACCEPTED and has not
+ * finished: it answered, it is removing the executor, and it still has it. Not a refusal and not
+ * an outcome nobody knows. The removal stays issued and exclusionary with its hold ended, exactly
+ * as an unknown outcome does (`removeUnderDeletion`), but nothing is logged as an error, the stop
+ * that made the call answers `draining`, and the next sweep asks the runtime again. Only a
+ * runtime whose removal is asynchronous and unbounded uses it (Boat: its deletion operation still
+ * reads `processing` when the call's wait runs out).
+ */
+export const removalPending = <T extends Error>(error: T): T & { readonly removalPending: true } =>
+  Object.assign(error, { removalPending: true as const });
+
+/** Whether an error (or any error it was caused by) is a removal accepted and not yet finished. */
+export const isRemovalPending = (error: unknown): boolean => carriesMarker(error, "removalPending");
 
 export interface RuntimeAdapter<P extends WorkspacePublication = OciPublication> {
   readonly id: RuntimeAdapterId;
@@ -448,6 +473,35 @@ export interface RuntimeAdapter<P extends WorkspacePublication = OciPublication>
    * (Kubernetes, MicroVM, Cloudflare): one `stop` call, no phase, as always.
    */
   readonly keepsRemains?: boolean;
+  /**
+   * Optional: a stop of this runtime's executor is recorded on its runtime row (`stopReason`)
+   * BEFORE its capture drain, as soon as the stop holds the run's drain claim, where every other
+   * runtime records it only when the removal starts. For a runtime whose own launch and link
+   * paths read the stop request as their fence (Boat: nothing is pushed to, and no resource link
+   * is configured for, a run whose stop is requested), so those stop the moment a stop begins and
+   * not a drain later. Absent: recorded at the removal, as always.
+   */
+  readonly stopRequestBeforeDrain?: boolean;
+  /**
+   * Optional: an executor this runtime positively no longer has, removed with nothing on record
+   * that says its work was saved, is reported lost (the drain's `gone`), where every other runtime
+   * reports the stop that found it (`stopped`). For a runtime whose executor's disk goes with the
+   * executor and can be taken away under the control plane (Boat: the VM deleted at the provider):
+   * a session that ended that way did not save its work, and its record must not say it stopped
+   * cleanly. Absent: `stopped`, as always.
+   */
+  readonly reportsMissingAsLost?: boolean;
+  /**
+   * Optional: this runtime's `recover` can answer for an executor nothing was ever started on
+   * (`nothing-to-save`, from its own records) without booting anything, and itself refuses to
+   * restart a daemon that has no recovery boot or to boot one without its capture token. The
+   * recovery sweep then asks it whatever the launch recorded of the daemon's build and whether or
+   * not a capture token was kept, where every other runtime is asked only once both allow a
+   * restart. For a runtime whose failed launches leave an executor that never ran a daemon (Boat:
+   * a VM no launch was pushed to), which would otherwise be kept for a restart it never needs.
+   * Absent: asked only when a restart is possible, as always.
+   */
+  readonly recoverAnswersUnstarted?: boolean;
 
   supports(input: RuntimeAdapterSupportInput): RuntimeAdapterSupport;
   /**
@@ -460,11 +514,6 @@ export interface RuntimeAdapter<P extends WorkspacePublication = OciPublication>
     hooks?: RuntimeAdapterLaunchHooks,
   ) => Promise<RuntimeAdapterLaunchResult>;
   stop(input: RuntimeAdapterStopInput): Promise<RuntimeAdapterStopResult>;
-  /** A runtime with its own durable FINAL/deletion owner must not enter the generic removal ledger. */
-  closeCapture?(
-    input: RuntimeAdapterStopInput,
-    runId: string,
-  ): Promise<"closed" | "retained" | "pending">;
   /**
    * Optional: what the runtime knows about a launched executor right now. Adapters that cannot
    * answer cheaply leave it undefined; callers treat an absent method as "no liveness signal
@@ -545,23 +594,6 @@ const candidateAdapterIds = (
 
 /** Lifecycle consumers cannot launch a publication of the wrong kind. */
 export type RuntimeAdapterLifecycle = Omit<RuntimeAdapter<never>, "launch">;
-
-/**
- * OWN-CLOSE GUARD (Boat). Delete this, and every use of it, in the change that removes
- * `closeCapture` and moves Boat's stop onto the shared stop and recover path.
- *
- * Whether a runtime still ends its executors through a durable owner of its own (`closeCapture`:
- * Boat's FINAL close, which recovers a dead daemon on its own disk, drains FINAL, deletes the VM
- * and discharges what it held, under its own hold of the capture ledger). Such a runtime answers
- * `inspect` now, so the generic paths see its executors; until its stop is theirs they do exactly
- * one thing for it. The exit reconciler records a live executor whose daemon ended as `failed`
- * with its retention, which hands it to that owner. They never remove one, never settle one as
- * gone, and never start a recovery of one: a second deleter beside the owner would find its
- * removal held, and would record an outcome of its own over the owner's.
- */
-export const closesItsOwnExecutors = (
-  adapter: Pick<RuntimeAdapterLifecycle, "closeCapture">,
-): boolean => adapter.closeCapture !== undefined;
 
 export interface SelectRuntimeAdapterInput<A extends RuntimeAdapterLifecycle> {
   readonly blueprint: RuntimeAdapterBlueprint;

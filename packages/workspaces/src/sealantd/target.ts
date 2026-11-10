@@ -55,6 +55,15 @@ export interface SealantTargetDerivationOptions {
     runId: string,
     sandboxId: string,
   ) => Promise<WebSocketConnectMaterial>;
+  /**
+   * A Boat run whose row records no control endpoint still yields a target. For the worker's own
+   * drains only: a launch that failed, or whose worker was lost, before its control URL was known
+   * left a VM whose daemon may be up, and its FINAL flush is what a stop is there to ask for. The
+   * connect material supplies the URL of every connection (`WebSocketConnectMaterial.url`), so the
+   * row's is never dialled; without one recorded, the target carries a placeholder that cannot
+   * resolve. Absent: a Boat run with no endpoint recorded yields no target, as before.
+   */
+  readonly boatEndpointOptional?: boolean;
   /** Control socket path inside a Docker container (docker-exec fallback). */
   readonly socketPath?: string;
   /**
@@ -95,6 +104,12 @@ export const sealantTargetForDockerContainer = (
 });
 
 /**
+ * The URL of a Boat target whose row records none (`boatEndpointOptional`): never dialled, since
+ * the connect material names the real one for every connection, and unresolvable if it ever were.
+ */
+const BOAT_UNRECORDED_ENDPOINT = "wss://boat-control.invalid/";
+
+/**
  * Derives a target from a persisted runtime instance. Pure.
  *
  *  - Docker: prefers the persisted `unix://` host socket, falls back to docker-exec on the
@@ -116,9 +131,11 @@ export const sealantTargetForRuntimeInstance = (
 
   switch (instance.adapter) {
     case "boat": {
+      const recorded = endpoint !== undefined && endpoint.length > 0;
       if (
-        endpoint === undefined ||
-        !endpoint.startsWith(WSS_ENDPOINT_PREFIX) ||
+        (recorded
+          ? !endpoint.startsWith(WSS_ENDPOINT_PREFIX)
+          : resolved.boatEndpointOptional !== true) ||
         instance.runId === undefined ||
         !instance.resourceId ||
         resolved.boatConnectMaterial === undefined
@@ -127,7 +144,11 @@ export const sealantTargetForRuntimeInstance = (
       const connect = resolved.boatConnectMaterial;
       const runId = instance.runId;
       const sandboxId = instance.resourceId;
-      return { kind: "websocket", url: endpoint, prepare: () => connect(runId, sandboxId) };
+      return {
+        kind: "websocket",
+        url: recorded ? endpoint : BOAT_UNRECORDED_ENDPOINT,
+        prepare: () => connect(runId, sandboxId),
+      };
     }
     case "docker": {
       if (endpoint?.startsWith(UNIX_ENDPOINT_PREFIX)) {

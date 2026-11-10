@@ -78,7 +78,7 @@ import {
   type LaunchMaterialStager,
 } from "../runtime/launch-material.js";
 import {
-  closesItsOwnExecutors,
+  isRemovalPending,
   type RuntimeAdapterLifecycle,
   type RuntimeAdapterExitWatch,
   type RuntimeAdapterInspectResult,
@@ -90,13 +90,13 @@ import {
 } from "../sealantd/target.js";
 import { adoptStrandedLaunchesEffect } from "./adopt-stranded-launches.js";
 import {
-  describeDeletionBasis,
   drainCaptureBeforeStop,
   recordedDeletionEvidence,
   runIsCaptureSourced,
   probeCaptureDaemon,
   ledgerObservationRecorder,
   authorizedDeletion,
+  removalObservation,
   removeUnderDeletion,
   type CaptureDrainLedger,
   type CaptureDrainSettings,
@@ -219,6 +219,13 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
         ),
       }).pipe(
         Effect.map((outcome) => outcome.removed),
+        // The runtime accepted the removal and has not finished it: nothing failed. It stays
+        // issued, and the sweep of unsettled executors asks the runtime again.
+        Effect.catchIf(isRemovalPending, () =>
+          Effect.logInfo(
+            `Runtime exit reconciler: the ${adapter.id} runtime accepted the removal of run ${instance.runId}'s ended executor and has not finished it; the next sweep asks again.`,
+          ).pipe(Effect.as(false)),
+        ),
         Effect.catchCause((cause) =>
           Effect.logWarning(
             `Runtime exit reconciler: removing the exited runtime for run ${instance.runId} failed.`,
@@ -233,10 +240,26 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
           .pipe(swallowingFailure("recording the removal", instance.runId));
       }
       if (removed && removal.captureSourced && options.captureDrain !== undefined) {
-        yield* options.captureDrain.ledger.observe(instance.runId, {
-          state: "stopped",
-          detail: `the ended runtime was removed: ${describeDeletionBasis(removal.basis)}`,
-        });
+        const { ledger } = options.captureDrain;
+        yield* ledger.observe(
+          instance.runId,
+          removalObservation({
+            basis: removal.basis,
+            reportsMissingAsLost: adapter.reportsMissingAsLost,
+            // Read only where the runtime reports from the evidence: every other runtime records
+            // `stopped` whatever the record says.
+            record:
+              removal.basis === "missing" && adapter.reportsMissingAsLost === true
+                ? yield* ledger.read(instance.runId)
+                : { readable: false },
+            executor: {
+              runId: instance.runId,
+              resourceId,
+              reference: instance.reference,
+            },
+            removed: "the ended runtime was removed",
+          }),
+        );
       }
       yield* Effect.tryPromise(() => stager.removeAll(instance.runId)).pipe(
         swallowingFailure("removing staged launch material", instance.runId),
@@ -249,15 +272,7 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
     if (inspect === undefined) {
       continue;
     }
-    // OWN-CLOSE GUARD (Boat; `closesItsOwnExecutors`): from its stop request to its discharge a
-    // run is its own close's. It is not inspected here: nothing is read from the runtime or the
-    // guest for an answer this sweep would drop, and no second observer commits the absence the
-    // close's own deletion is about to produce. That holds for a VM kept after an unconfirmed
-    // FINAL too, for as long as it is kept.
-    const ownClose = closesItsOwnExecutors(adapter);
-    const owned = live.filter(
-      (instance) => instance.adapter === adapter.id && !(ownClose && instance.stopReason !== null),
-    );
+    const owned = live.filter((instance) => instance.adapter === adapter.id);
     if (owned.length === 0) {
       continue;
     }
@@ -297,15 +312,6 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
           yield* Effect.logWarning(
             `Runtime exit reconciler: run ${instance.runId} (${adapter.id} ${resourceId}) is running with a failed guest service; left running. ${inspection.detail}`,
           );
-        }
-        continue;
-      }
-
-      // OWN-CLOSE GUARD (Boat; `closesItsOwnExecutors`): its ended executor is recorded for its
-      // own close owner, and nothing here drains, removes or settles it.
-      if (ownClose) {
-        if (yield* recordExitForCloseOwner(options, instance, adapter, resourceId, inspection)) {
-          recorded += 1;
         }
         continue;
       }
@@ -605,13 +611,7 @@ const settleUnsettledExecutors = (
         (candidate) => candidate.id === instance.adapter,
       );
       const inspect = adapter?.inspect;
-      if (
-        resourceId === null ||
-        adapter === undefined ||
-        inspect === undefined ||
-        // OWN-CLOSE GUARD (Boat): its ended executors are its own close owner's to settle.
-        closesItsOwnExecutors(adapter)
-      ) {
+      if (resourceId === null || adapter === undefined || inspect === undefined) {
         continue;
       }
       yield* Effect.gen(function* () {
@@ -682,84 +682,6 @@ const settleUnsettledExecutors = (
         ),
       );
     }
-  });
-
-/**
- * OWN-CLOSE GUARD (Boat; `closesItsOwnExecutors`, removed with `closeCapture`). What the exit
- * reconciler does for an ended executor of a runtime that closes its own, and all it does:
- *
- *  - `exited` with no stop requested (the daemon of a live session ended; its VM and disk did
- *    not): recorded `failed` / `runtime-exited` with its retention, in one transaction. That is
- *    the whole hand-over: a failed run's desired state is stopped, so the runtime's own close
- *    owner takes it on its next pass (recovers the daemon on its own disk, drains FINAL, and
- *    deletes the VM only once that is confirmed saved, or keeps it).
- *  - `missing`: the runtime's own observation committed the absence (and the row with it) before
- *    it answered; its close owner discharges what the executor held. Nothing is written.
- *
- * A run whose stop is requested never comes here: the poll does not inspect it (see the filter in
- * `reconcileRuntimeExitsEffect`), since that stop's close is at work on it.
- *
- * No daemon is probed or drained, no removal is authorized in the capture ledger, the adapter's
- * `stop` is never called and no outcome is recorded on the drain: each belongs to the close owner
- * until the stop is the shared path's. Answers whether an exit was recorded.
- */
-const recordExitForCloseOwner = (
-  options: ReconcileRuntimeExitsEffectOptions,
-  instance: WorkspaceRuntimeInstance,
-  adapter: RuntimeAdapterLifecycle,
-  resourceId: string,
-  inspection: RuntimeEnd,
-): Effect.Effect<boolean, never, WorkspaceRuntimeInstanceRepo> =>
-  Effect.gen(function* () {
-    const where = `run ${instance.runId} (${adapter.id} ${resourceId})`;
-    if (inspection.state === "missing") {
-      yield* Effect.logWarning(
-        `Runtime exit reconciler: ${where} is gone: the runtime no longer has it. Its absence is recorded by the runtime's own observation, and its own close discharges what it held.`,
-      );
-      return false;
-    }
-    if (instance.stopReason !== null) {
-      // Not reached from the poll, which leaves such a run uninspected. Kept so that this
-      // function alone never records an exit over a stop.
-      return false;
-    }
-    const ledger = options.captureDrain?.ledger;
-    if (ledger === undefined) {
-      yield* Effect.logError(
-        `Runtime exit reconciler: ${where} ended, but this reconciler has no capture drain configured: not saved · kept · nothing recorded or removed.`,
-      );
-      return false;
-    }
-    const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
-    const reason =
-      "the executor's daemon ended and its disk holds work not confirmed saved; its runtime's own close recovers it and removes it only once its final flush is confirmed";
-    const exited = yield* withRetention(
-      ledger,
-      instance.runId,
-      reason,
-      Effect.suspend(() =>
-        runtimeInstances.markExited({
-          runId: instance.runId,
-          resourceId,
-          errorMessage: describeExit(instance, inspection),
-        }),
-      ),
-    ).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logError(
-          `Runtime exit reconciler: recording the exit of ${where} failed (with its retention: neither was written); the runtime is left \`ready\` for the next sweep.`,
-          cause,
-        ).pipe(Effect.as(undefined)),
-      ),
-    );
-    if (exited === undefined) {
-      // Fenced out (a stop settled the row first), or nothing was written.
-      return false;
-    }
-    yield* Effect.logError(
-      `Runtime exit reconciler: ${where} exited with ${String(inspection.exitCode ?? "an unknown code")} while its machine runs on; recorded failed: not saved · executor exited · kept · ${reason}.`,
-    );
-    return true;
   });
 
 /**

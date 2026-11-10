@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isRemovalPending,
+  isRemovalRefusal,
   parseRuntimeAdapterSupport,
   parseRuntimeAdapterSupportInput,
+  removalPending,
+  removalRefused,
   selectRuntimeAdapter,
   type RuntimeAdapter,
 } from "./runtime-adapter.js";
@@ -213,5 +217,24 @@ describe("selectRuntimeAdapter", () => {
         defaultAdapterId: "docker",
       }),
     ).toThrow("SSH is not supported by this adapter.");
+  });
+});
+
+describe("what a removal's failure says of the runtime", () => {
+  it("tells a removal the provider accepted and has not finished from a refusal and from an unknown outcome, through any chain of causes", () => {
+    const pending = removalPending(new Error("the provider is still deleting it"));
+    const refused = removalRefused(new Error("the provider did not act"));
+    const unknown = new Error("socket hang up");
+    expect([isRemovalPending(pending), isRemovalRefusal(pending)]).toEqual([true, false]);
+    expect([isRemovalPending(refused), isRemovalRefusal(refused)]).toEqual([false, true]);
+    expect([isRemovalPending(unknown), isRemovalRefusal(unknown)]).toEqual([false, false]);
+    // As the stop paths wrap it.
+    const wrapped = new Error("removing the runtime failed", {
+      cause: new Error("stop failed", { cause: pending }),
+    });
+    expect(isRemovalPending(wrapped)).toBe(true);
+    expect(isRemovalRefusal(wrapped)).toBe(false);
+    for (const other of [undefined, null, "close-pending", { removalPending: "true" }])
+      expect(isRemovalPending(other)).toBe(false);
   });
 });

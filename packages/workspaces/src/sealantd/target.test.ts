@@ -103,6 +103,60 @@ describe("sealantTargetForRuntimeInstance", () => {
     ]);
   });
 
+  it("gives the worker's drains a Boat target for a run that recorded no endpoint, and nobody else one", async () => {
+    const calls: string[][] = [];
+    const connect = async (runId: string, sandboxId: string) => {
+      calls.push([runId, sandboxId]);
+      return { url: "wss://fresh.example/control", auth: { bearerToken: "current" } };
+    };
+    const unrecorded = runtimeInstance({
+      adapter: "boat",
+      resourceId: "bx_23456789",
+      endpoint: null,
+    });
+    // Without the option, as for every caller that acts for a user: no target.
+    expect(
+      sealantTargetForRuntimeInstance(unrecorded, { boatConnectMaterial: connect }),
+    ).toBeUndefined();
+    const drains = { boatConnectMaterial: connect, boatEndpointOptional: true };
+    const target = sealantTargetForRuntimeInstance(unrecorded, drains);
+    if (target?.kind !== "websocket") throw new Error("missing target");
+    // The row's URL is never dialled: the connect material names the real one, and the
+    // placeholder cannot resolve.
+    expect(new URL(target.url).hostname.endsWith(".invalid")).toBe(true);
+    expect(await target.prepare?.()).toMatchObject({ url: "wss://fresh.example/control" });
+    expect(calls).toEqual([[unrecorded.runId, "bx_23456789"]]);
+    // A recorded endpoint is kept, and one that is not `wss://` is still refused.
+    expect(
+      sealantTargetForRuntimeInstance(
+        { ...unrecorded, endpoint: "wss://recorded.example/control" },
+        drains,
+      ),
+    ).toMatchObject({ url: "wss://recorded.example/control" });
+    expect(
+      sealantTargetForRuntimeInstance({ ...unrecorded, endpoint: "ssh://not-control" }, drains),
+    ).toBeUndefined();
+    // Still nothing without a VM id, a run or the connect material, and nothing for another runtime.
+    expect(
+      sealantTargetForRuntimeInstance({ ...unrecorded, resourceId: null }, drains),
+    ).toBeUndefined();
+    expect(
+      sealantTargetForRuntimeInstance(
+        { adapter: "boat", resourceId: "bx_23456789", endpoint: null },
+        drains,
+      ),
+    ).toBeUndefined();
+    expect(
+      sealantTargetForRuntimeInstance(unrecorded, { boatEndpointOptional: true }),
+    ).toBeUndefined();
+    expect(
+      sealantTargetForRuntimeInstance(
+        runtimeInstance({ adapter: "k8s", resourceId: "pod-1", endpoint: null }),
+        drains,
+      ),
+    ).toBeUndefined();
+  });
+
   it("uses the persisted Unix control endpoint when the runtime exposes one", () => {
     const target = sealantTargetForRuntimeInstance(
       runtimeInstance({ endpoint: "unix:///run/sealant/sockets/workspace-123/control.sock" }),
