@@ -88,6 +88,30 @@ const custody = async (stack: HarnessStack, run: Launch) =>
 
 const IMAGE = "harness-park-probe:1";
 
+/**
+ * What `BoatParking.reconcile` needs before it enrolls a run (parking.ts), read live: Core's
+ * enrollment swallows its own errors, so a run it skips leaves no trace in the worker's log.
+ */
+const enrollmentFacts = async (stack: HarnessStack, run: Launch) => {
+  const id = sqlText(run.runId);
+  const [facts] = await stack.query(
+    `select
+       d.retained_at, d.custody_contract, d.lease_owner, d.recovery_lease_token, d.deletion_state,
+       d.next_recovery_at, d.recovery_attempts,
+       a.record->>'phase' as allocation_phase, (a.record->'target') is not null as allocation_target,
+       e.record->>'phase' as execution_phase, (e.record->'admission') is not null as admission,
+       (e.record->'admission') ? 'sealedResumeEnvelope' as resume_envelope,
+       r.removed_at, r.status as runtime_status,
+       (select string_agg(c.state, ',') from native_publication_consumers c where c.runtime_instance_id = r.run_id) as pins
+     from workspace_capture_drains d
+     left join boat_allocations a on a.runtime_instance_id = d.run_id
+     left join boat_executions e on e.runtime_instance_id = d.run_id
+     left join workspace_runtime_instances r on r.run_id = d.run_id
+     where d.run_id = '${id}'`,
+  );
+  return facts;
+};
+
 export const parkAndResume = async (stack: HarnessStack, project: Project, step: Step) => {
   const transcript = new Transcript(join(evidenceDir(stack), "parking-scenario.md"));
   await step("worker with automatic parking", () =>
@@ -186,6 +210,9 @@ export const parkAndResume = async (stack: HarnessStack, project: Project, step:
           `update workspace_capture_drains set retained_at = now(), retained_reason = 'boat-harness: simulated retention (P1)' where run_id = '${sqlText(run.runId)}' and retained_at is null and custody_contract is null`,
         );
         await transcript.note("retention simulated (BOAT_HARNESS_SIMULATE_RETENTION=1, defect P1)");
+        await transcript.note(
+          `enrollment facts: ${JSON.stringify(await enrollmentFacts(stack, run))}`,
+        );
         return;
       }
       throw new Error(
@@ -204,7 +231,7 @@ export const parkAndResume = async (stack: HarnessStack, project: Project, step:
         5000,
       ).catch(async (error: unknown) => {
         throw new Error(
-          `${error instanceof Error ? error.message : String(error)}; read ${JSON.stringify(await readWorkspace(stack, run))}; custody ${JSON.stringify(await custody(stack, run))}`,
+          `${error instanceof Error ? error.message : String(error)}; enrollment facts ${JSON.stringify(await enrollmentFacts(stack, run))}; read ${JSON.stringify(await readWorkspace(stack, run))}`,
         );
       });
       expect(stack.boat.liveSandboxes().some((vm) => vm.id === source)).toBe(false);
