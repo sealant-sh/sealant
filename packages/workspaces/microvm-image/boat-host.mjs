@@ -98,6 +98,8 @@ export const boatPaths = (env = process.env) => {
      * only, so an agent restarted on the same boot can adopt the launch, and a reboot never can.
      */
     launchEnvFile: path.join(stateDir, "agent", "launch-env.json"),
+    /** The carrier's two loopback ports on this boot (tmpfs): WireGuard's and the relay's. */
+    tunnelRelayFile: path.join(stateDir, "agent", "tunnel-relay.json"),
     bindFile: path.join(dataDir, "bind.json"),
     launchFile: path.join(dataDir, "launch.json"),
     networkFile: path.join(dataDir, "network.json"),
@@ -290,6 +292,22 @@ const NETWORK_KEYS = [
   "port",
   "subnet",
 ];
+/**
+ * The same config carried over the agent's own WebSocket (`carrier: "websocket"`): no gateway
+ * endpoint to dial. Core opens `/sealant/tunnel` through Boat's hosted HTTPS and relays each
+ * WireGuard datagram to the gateway on its own host, so the gateway's host needs no inbound port.
+ */
+const CARRIED_NETWORK_KEYS = [
+  "format",
+  "binding",
+  "private_key",
+  "public_key",
+  "gateway_key",
+  "carrier",
+  "subnet",
+];
+/** How this agent can carry the tunnel; `GET /sealant/network` says so before Core configures it. */
+export const TUNNEL_CARRIERS = ["udp", "websocket"];
 
 const validKey = (value) => {
   if (typeof value !== "string" || !/^[A-Za-z0-9+/]{43}=$/.test(value)) {
@@ -336,6 +354,26 @@ const subnetOf = (subnet, parent) =>
 
 /** `guest_network.parse`: the config exactly, or a refusal with the Python guest's reason. */
 export const parseNetworkConfig = (value) => {
+  if (isPlainObject(value) && Object.hasOwn(value, "carrier")) {
+    if (
+      !sameKeys(value, CARRIED_NETWORK_KEYS) ||
+      value.format !== NETWORK_REQUEST_FORMAT ||
+      value.carrier !== "websocket"
+    ) {
+      throw new Refusal("invalid-network-config");
+    }
+    for (const name of ["private_key", "public_key", "gateway_key"]) validKey(value[name]);
+    const subnet = parseNetwork(value.subnet);
+    if (
+      subnet === null ||
+      subnet.length !== 27 ||
+      (subnet.base & subnet.mask) >>> 0 !== subnet.base ||
+      !RFC1918.some((parent) => subnetOf(subnet, parseNetwork(parent)))
+    ) {
+      throw new Refusal("invalid-network-destination");
+    }
+    return value;
+  }
   if (!sameKeys(value, NETWORK_KEYS) || value.format !== NETWORK_REQUEST_FORMAT) {
     throw new Refusal("invalid-network-config");
   }
@@ -663,6 +701,81 @@ export const createResolver = ({ listen, gateway, upstreams, log }) => {
 };
 
 // --------------------------------------------------------------------------------------------
+// The tunnel's WebSocket carrier
+// --------------------------------------------------------------------------------------------
+
+/** The largest datagram either side relays: WireGuard's own are under the link's MTU. */
+export const MAX_TUNNEL_DATAGRAM_BYTES = 65_535;
+
+/**
+ * The VM's end of the WebSocket carrier: a UDP socket on loopback that `sealant-wg` uses as its
+ * peer's endpoint. Each datagram WireGuard sends it goes to the attached WebSocket (Core, which
+ * relays it to the gateway); each one Core sends back goes to WireGuard's own port. Datagrams from
+ * any other source are dropped, so nothing else on the VM can stand in for WireGuard. At most one
+ * WebSocket is attached: a newer one replaces the older, which is told to close.
+ */
+export const createTunnelRelay = ({ host = "127.0.0.1", port = 0, wireguardPort }) => {
+  const udp = dgram.createSocket("udp4");
+  udp.on("error", () => {});
+  let attached = null;
+  udp.on("message", (datagram, remote) => {
+    if (remote.address !== host || remote.port !== wireguardPort) return;
+    attached?.send(datagram);
+  });
+  return {
+    /** Bind; resolves with the bound port, rejects when it cannot. */
+    start: () =>
+      new Promise((resolve, reject) => {
+        udp.once("error", reject);
+        udp.bind({ address: host, port, exclusive: true }, () => {
+          udp.off("error", reject);
+          resolve(udp.address().port);
+        });
+      }),
+    attached: () => attached !== null,
+    /**
+     * Attach a WebSocket: `send` takes a datagram for Core, `replaced` is called when a newer one
+     * takes over. Returns what the WebSocket delivers to WireGuard, and how it lets go.
+     */
+    attach: ({ send, replaced }) => {
+      const previous = attached;
+      const handle = { send, replaced };
+      attached = handle;
+      previous?.replaced();
+      return {
+        deliver: (datagram) => {
+          if (attached !== handle || datagram.length > MAX_TUNNEL_DATAGRAM_BYTES) return;
+          udp.send(datagram, wireguardPort, host, () => {});
+        },
+        detach: () => {
+          if (attached === handle) attached = null;
+        },
+      };
+    },
+    close: () => {
+      attached?.replaced();
+      attached = null;
+      try {
+        udp.close();
+      } catch {
+        // Not bound.
+      }
+    },
+  };
+};
+
+/** A UDP port free on every address right now: WireGuard's own listen port in carrier mode. */
+const freeUdpPort = () =>
+  new Promise((resolve, reject) => {
+    const probe = dgram.createSocket("udp4");
+    probe.once("error", reject);
+    probe.bind({ port: 0, exclusive: true }, () => {
+      const { port } = probe.address();
+      probe.close(() => resolve(port));
+    });
+  });
+
+// --------------------------------------------------------------------------------------------
 // The host
 // --------------------------------------------------------------------------------------------
 
@@ -713,6 +826,8 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
     /** The VM's resolver while a tunnel is configured on this boot, and the port it answers on. */
     resolver: null,
     resolverPort: null,
+    /** The tunnel's WebSocket carrier, when the tunnel is configured to use one. */
+    relay: null,
   };
 
   const bootId = () => {
@@ -1157,6 +1272,52 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
     return resolvConfNameservers(Buffer.from(kept.value.contentBase64, "base64").toString("utf8"));
   };
 
+  /**
+   * Start the carrier's relay once per process. A first configure picks WireGuard's listen port and
+   * binds the relay anywhere on loopback; an agent restarted on the same boot binds the relay where
+   * WireGuard's peer already points, or points the peer at the new port when that one is taken.
+   * Returns the ports, which are kept on tmpfs for that restart.
+   */
+  const startRelay = async (config, { resume }) => {
+    if (host.relay !== null) return null;
+    const kept = readRecord(paths.tunnelRelayFile);
+    const known = resume && kept.kind === "ok" ? kept.value : null;
+    const wireguardPort = known?.wireguard_port ?? Number(env.SEALANT_AGENT_TUNNEL_WG_PORT ?? 0);
+    const wgPort = wireguardPort === 0 ? await freeUdpPort() : wireguardPort;
+    const bind = async (port) => {
+      const relay = createTunnelRelay({ host: "127.0.0.1", port, wireguardPort: wgPort });
+      return { relay, port: await relay.start() };
+    };
+    let started;
+    try {
+      started = await bind(known?.relay_port ?? Number(env.SEALANT_AGENT_TUNNEL_RELAY_PORT ?? 0));
+    } catch (error) {
+      if (known === null) throw error;
+      started = await bind(0);
+    }
+    host.relay = started.relay;
+    await writeAtomic(
+      paths.tunnelRelayFile,
+      canonical({ wireguard_port: wgPort, relay_port: started.port }),
+      0o600,
+    );
+    if (known !== null && known.relay_port !== started.port) {
+      const moved = await run(commands.wg, [
+        "set",
+        WIREGUARD_INTERFACE,
+        "peer",
+        config.gateway_key,
+        "endpoint",
+        `127.0.0.1:${String(started.port)}`,
+      ]);
+      if (moved.code !== 0) throw new Refusal("network-command-refused", 500);
+    }
+    log(
+      `network: tunnel carrier on 127.0.0.1:${String(started.port)} (wireguard ${String(wgPort)})`,
+    );
+    return { wireguardPort: wgPort, relayPort: started.port };
+  };
+
   /** Start the VM's resolver once per process; `resolv.conf` names it only after it answers. */
   const startResolver = async () => {
     if (host.resolver !== null) return;
@@ -1187,7 +1348,12 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
     if (configured !== null) {
       // An agent restarted on the boot that configured the tunnel: `resolv.conf` names its
       // resolver, which must answer again.
-      if (configured.status === "configured") await startResolver();
+      if (configured.status === "configured") {
+        if (configured.config.carrier === "websocket") {
+          await startRelay(configured.config, { resume: true });
+        }
+        await startResolver();
+      }
       return false;
     }
     const kept = readRecord(paths.resolvConfOriginal);
@@ -1232,6 +1398,10 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
     at("link");
     await ip("link", "add", WIREGUARD_INTERFACE, "type", "wireguard");
     at("wg");
+    // Carried over the WebSocket: WireGuard's peer is the relay on loopback, and WireGuard listens
+    // on a port the relay knows, so the relay answers it and nothing else.
+    const carried =
+      config.carrier === "websocket" ? await startRelay(config, { resume: false }) : null;
     const keyFile = path.join(paths.stateDir, "agent", `${WIREGUARD_INTERFACE}.key`);
     await writeAtomic(keyFile, `${config.private_key}\n`, 0o600);
     let set;
@@ -1239,12 +1409,15 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
       set = await run(commands.wg, [
         "set",
         WIREGUARD_INTERFACE,
+        ...(carried === null ? [] : ["listen-port", String(carried.wireguardPort)]),
         "private-key",
         keyFile,
         "peer",
         config.gateway_key,
         "endpoint",
-        `${config.endpoint}:${String(config.port)}`,
+        carried === null
+          ? `${config.endpoint}:${String(config.port)}`
+          : `127.0.0.1:${String(carried.relayPort)}`,
         "allowed-ips",
         `${config.subnet},${GATEWAY}/32`,
         "persistent-keepalive",
@@ -1363,6 +1536,7 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
         handshake: "unverified",
         dns: "unavailable",
         docker_policy: host.policyState,
+        carriers: TUNNEL_CARRIERS,
       };
     }
     const [handshakes, transfers, dns] = await Promise.all([
@@ -1402,6 +1576,11 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
       // A Docker image is ready only once containers are held to the gateway's allowance.
       docker_policy: host.policyState,
       ...(transfer === undefined ? {} : { transfer }),
+      carriers: TUNNEL_CARRIERS,
+      // Carried over the WebSocket: whether Core's end is attached now (no handshake without it).
+      ...(record.config.carrier === "websocket"
+        ? { carrier_attached: host.relay?.attached() ?? false }
+        : {}),
     };
   };
 
@@ -1446,7 +1625,8 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
       `-A DOCKER-USER -o ${WIREGUARD_INTERFACE} -d ${subnet} -j RETURN`,
       `-A DOCKER-USER -o ${WIREGUARD_INTERFACE} -d ${GATEWAY}/32 -p udp --dport 53 -j RETURN`,
       `-A DOCKER-USER -o ${WIREGUARD_INTERFACE} -d ${GATEWAY}/32 -p tcp --dport 53 -j RETURN`,
-      `-A DOCKER-USER -d ${endpoint}/32 -j DROP`,
+      // A carried tunnel has no endpoint: its relay is on the VM's loopback, already denied.
+      ...(endpoint === undefined ? [] : [`-A DOCKER-USER -d ${endpoint}/32 -j DROP`]),
       ...DENIED.map((cidr) => `-A DOCKER-USER -d ${cidr} -j DROP`),
       "-A DOCKER-USER -j RETURN",
       // The one service on the VM a container may reach: its resolver.
@@ -1563,6 +1743,8 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
     configureNetwork,
     networkStatus,
     restoreResolvConf,
+    /** The tunnel's WebSocket carrier, while the tunnel is configured to use one. */
+    tunnelRelay: () => host.relay,
     markDockerReady,
     markDockerStopped,
   };
