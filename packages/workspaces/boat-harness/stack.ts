@@ -680,11 +680,21 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
         for (const cleanup of cleanups.toReversed()) await cleanup().catch(() => undefined);
         log(`stopped; logs in ${scratch}`);
       })());
-    // An interrupted run still tears down what it made.
-    for (const signal of ["SIGINT", "SIGTERM"] as const)
-      process.once(signal, () => {
-        void stop().finally(() => process.exit(130));
-      });
+    // An interrupted run still tears down what it made, and releases the host lock promptly.
+    const interrupted = () => {
+      // After a normal teardown (afterAll) there is nothing left to do, and vitest ends the fork.
+      if (stopping !== undefined) return;
+      void stop().finally(() => process.exit(130));
+    };
+    for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, interrupted);
+    // Ctrl-C to vitest kills its main process but not this test fork, which would otherwise keep
+    // running scenarios and holding the lock. Treat losing the parent as an interrupt: the IPC
+    // channel to it closes, or the fork is re-parented.
+    process.once("disconnect", interrupted);
+    const parent = process.ppid;
+    setInterval(() => {
+      if (process.ppid !== parent) interrupted();
+    }, 2000).unref();
     return {
       runId,
       scratch,
