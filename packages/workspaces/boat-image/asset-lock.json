@@ -4,7 +4,7 @@
     {
       "name": "agent.mjs",
       "source": "microvm-image/agent.mjs",
-      "sha256": "7160ee1083bd26e8ce7f05b51c94312c6ba9146c9d292f72e2c7b9be94d7208d"
+      "sha256": "ed66bb1781270a5d2d14b18357d0c08c4314e82ffb04f312be6a3453467c09e6"
     },
     {
       "name": "docker-service.mjs",

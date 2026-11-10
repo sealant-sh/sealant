@@ -1754,6 +1754,11 @@ describe("boat agent · park proves Docker gone, on Boat's defaults", () => {
     await waitFor(async () => (await daemonExitCode(agent, bearer)) === 75, 10_000);
     const recovered = await call(agent, "POST", AGENT_RECOVER_ROUTE, { body: recoverBody, bearer });
     expect(recovered).toMatchObject({ status: 200, body: { outcome: "restarted" } });
+    // The recovery boot names no Docker daemon: it was stopped and proved gone first (#516).
+    await waitFor(async () => (await readDaemonRecord(vm)).argv.includes("--recovery"));
+    const recovery = await readDaemonRecord(vm);
+    expect(recovery.env).not.toHaveProperty("DOCKER_HOST");
+    expect(recovery.env).not.toHaveProperty("SEALANT_WORKSPACE_DOCKER_HOST");
   });
 
   it(

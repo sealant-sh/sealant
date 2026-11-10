@@ -849,7 +849,16 @@ const startDaemon = (bootEnv, args = ["boot"]) => {
     // systemd and Boat's own services, so no exempt list is named.
     ...(BOAT ? {} : { SEALANT_SWEEP_EXEMPT_FILE: SWEEP_EXEMPT_FILE }),
   };
-  if (state.contractVersion === DOCKER_CONTRACT_VERSION) Object.assign(env, dockerEnvironment);
+  if (args.includes("--recovery")) {
+    // A recovery boot runs after the guest Docker service was stopped (and, on Boat, proved
+    // gone): it has no workspace Docker. Naming the endpoint anyway would make sealantd count the
+    // daemon it cannot reach as a writer still there, so its final flush would never complete.
+    for (const key of [...Object.keys(dockerEnvironment), "SEALANT_WORKSPACE_DOCKER_HOST"]) {
+      delete env[key];
+    }
+  } else if (state.contractVersion === DOCKER_CONTRACT_VERSION) {
+    Object.assign(env, dockerEnvironment);
+  }
   writeSweepExemptFile();
   const command = boatHost === null ? [SEALANTD, ...args] : boatHost.daemonCommand(SEALANTD, args);
   const child = spawn(command[0], command.slice(1), {
