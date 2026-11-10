@@ -147,6 +147,14 @@ holder's process or network exists, including while it builds images.
 markers, the lock, the reaper, cleanup, the fake's API rules and the wrapper. They need no Docker
 and run with the package's unit tests.
 
+## When the Ubuntu archive is unreachable
+
+The native build downloads from `archive.ubuntu.com`, as a Boat VM does. If the address DNS returns
+is unreachable from your network (as on 2026-11-10, when both returned IPv4 addresses stalled),
+`install-recipe` passes Boat's 600 s limit and every launch fails. For a local run only,
+`BOAT_HARNESS_UBUNTU_ARCHIVE_IP=<a working archive address>` pins the name in each twin's
+`/etc/hosts`. That changes what the guest resolves, so CI never sets it.
+
 ## What it cannot catch
 
 - Boat behaviour nobody has recorded: long-stream drops (the 478 s cut), proxy TLS and header
