@@ -79,7 +79,6 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
   constructor(
     private readonly options: {
       readonly deploymentId: string;
-      readonly ownerIds: readonly string[];
       readonly runtime: ManagedRuntime.ManagedRuntime<BoatAdapterServices, never>;
       readonly control?: ControlChannel;
     },
@@ -95,8 +94,7 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
       return {
         supported: false as const,
         reason: "runtime-requirement-unsupported" as const,
-        message:
-          "Boat admission currently requires a capture source without inline dotfiles archives.",
+        message: "Boat currently requires a capture source without inline dotfiles archives.",
       };
     return { supported: true as const };
   }
@@ -111,7 +109,6 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
         runId === undefined ||
         workspaceId === undefined ||
         principalId === undefined ||
-        !this.options.ownerIds.includes(principalId) ||
         !this.supports(input).supported ||
         input.admissionPins === undefined
       )

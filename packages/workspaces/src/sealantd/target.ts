@@ -207,7 +207,9 @@ export const describeUnaddressableRuntimeInstance = (
     return "the docker instance has neither a unix:// endpoint nor a container id";
   }
   if (instance.adapter === "boat")
-    return "the Boat instance needs current worker-owned control access and a hosted endpoint";
+    return options.boatConnectMaterial === undefined
+      ? "the Boat instance needs Boat control access (SEALANT_BOAT_API_KEY or SEALANT_BOAT_API_KEY_FILE, SEALANT_BOAT_DEPLOYMENT_ID and SEALANT_CREDENTIALS_KEY) which is not configured"
+      : "the Boat instance has no wss:// endpoint or Boat VM id recorded";
   if (instance.adapter === "cloudflare") {
     return options.controlBearerToken === undefined
       ? "the cloudflare instance needs a control bearer token (SEALANT_CONTROL_BEARER_TOKEN) which is not configured"

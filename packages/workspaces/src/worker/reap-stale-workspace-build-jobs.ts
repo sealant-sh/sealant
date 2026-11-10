@@ -10,8 +10,6 @@ export interface ReapStaleWorkspaceBuildJobsOptions extends Omit<
   ProcessWorkspaceBuildJobOptions,
   "jobId"
 > {
-  /** Redelivery uses the consumer's explicit owner policy, including an empty allowlist. */
-  readonly boatAdmissionOwnerIds: readonly string[];
   /** Upper bound on jobs re-driven per tick, so a sweep can't run unbounded. Defaults to 5. */
   readonly maxReapsPerTick?: number;
 }

@@ -33,8 +33,11 @@ const TransportLayer: Layer.Layer<
     return createBoatGuestTransport(provider.api, runtime);
   }),
 );
-/** Shared sealed execution owner for allocation and resource reconciliation in one worker graph. */
-export const boatWorkerExecutionLayer: Layer.Layer<
+/**
+ * The sealed execution owner over Boat's real API: one per process graph, shared by every Boat owner
+ * built on it (the worker's allocation, readiness, resources and close; the API's control access).
+ */
+export const boatSealedExecutionLayer: Layer.Layer<
   BoatExecution,
   never,
   SealantDB | CredentialCipher | BoatAllocationProvider
@@ -43,26 +46,26 @@ export const boatWorkerExecutionLayer: Layer.Layer<
   Layer.provide(SealantRuntimeControlLive),
 );
 
-/** Worker assembly for allocation through authenticated held bootstrap. Ordinary registration remains disabled. */
+/** Worker assembly for allocation through authenticated held bootstrap. */
 export const boatAllocationWorkerLayer: Layer.Layer<
   BoatAllocation,
   never,
   SealantDB | CredentialCipher | BoatAllocationProvider
 > = boatAllocationLayer.pipe(
-  Layer.provide(Layer.merge(boatWorkerExecutionLayer, boatObserverLayer)),
+  Layer.provide(Layer.merge(boatSealedExecutionLayer, boatObserverLayer)),
 );
 
-const Resources = boatResourcesLayer.pipe(Layer.provide(boatWorkerExecutionLayer));
-/** Explicit launch/readiness entrypoint. No sweep invokes it and runtime registration remains disabled. */
+const Resources = boatResourcesLayer.pipe(Layer.provide(boatSealedExecutionLayer));
+/** Launch readiness, run by the Boat adapter's launch. No sweep invokes it. */
 export const boatReadinessWorkerLayer: Layer.Layer<
   BoatReadiness,
   never,
   SealantDB | CredentialCipher | BoatAllocationProvider | BoatResourcesHost | BoatTunnelCarrier
-> = boatReadinessLayer.pipe(Layer.provide(Layer.merge(Resources, boatWorkerExecutionLayer)));
+> = boatReadinessLayer.pipe(Layer.provide(Layer.merge(Resources, boatSealedExecutionLayer)));
 
 /** Canonical stopped-run reconciliation, sharing the original sealed execution. */
 export const boatFinalCloseWorkerLayer: Layer.Layer<
   BoatFinalClose,
   never,
   SealantDB | CredentialCipher | BoatAllocationProvider | BoatFinalCloseProvider | BoatResourcesHost
-> = boatFinalCloseLayer.pipe(Layer.provide(boatWorkerExecutionLayer));
+> = boatFinalCloseLayer.pipe(Layer.provide(boatSealedExecutionLayer));

@@ -19,6 +19,7 @@ export {
   runtimeAdapterSupportFailureReasonSchema,
   runtimeAdapterSupportSchema,
   selectRuntimeAdapter,
+  unregisteredRuntimeRefusal,
   workspaceCloneAuthSchema,
 } from "./runtime-adapter.js";
 
