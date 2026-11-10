@@ -72,7 +72,8 @@ const describeEvents = (events: readonly FakeBoatEvent[], since: number) =>
 
 /**
  * Boat accepts the Stop's DELETE and the reply is lost, and the deletion stays `processing` for
- * two sweep periods. The next pass reads Boat, finds the exact VM still there, and asks again: Boat
+ * two sweep periods with the VM still readable (a `stuck` deletion is never withdrawn: the window
+ * before real Boat withdraws a VM, held open). The next pass reads Boat, finds the exact VM still there, and asks again: Boat
  * answers the operation already under way, which Core records and then only polls. While Boat says
  * the VM is not gone nothing is released; once the deletion completes the VM is confirmed deleted,
  * with one operation for it from start to end.
@@ -164,9 +165,10 @@ export const deleteReplyLostWhileDeleting = async (stack: HarnessStack, project:
 };
 
 /**
- * Boat accepts the Stop's DELETE and the reply is lost, and the deletion finishes at once. The next
- * pass reads Boat's typed 404 for a VM it saw running, which is a committed absence: the run is
- * discharged with the one operation Boat made, never a second.
+ * Boat accepts the Stop's DELETE and the reply is lost, and Boat withdraws the VM at once, as it
+ * does (its deletion completes 8 s later). The next pass reads Boat's typed 404 for a VM it saw
+ * running, a committed absence: the run is discharged with the one operation Boat made, never a
+ * second.
  */
 export const deleteReplyLost = async (stack: HarnessStack, project: Project) => {
   let lost: { readonly sandbox: string; readonly at: number } | undefined;

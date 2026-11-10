@@ -47,7 +47,11 @@ minutes. CI runs it on pull requests that touch Boat code, nightly, and on deman
 - At most 20 labels, each value at most 256 bytes.
 - Commands run in the twin as uid 1000 through `docker exec`: sync up to 30 s, detached above.
 - Detached output keeps the last 8 MiB and reports `stdoutTruncated` / `stderrTruncated` past it.
-- `DELETE` needs `X-Ascii-Confirm-Delete` and answers 202 with an operation to poll.
+- `DELETE` needs `X-Ascii-Confirm-Delete` and answers 202 with an operation to poll. As on real Boat
+  (seen on #598's live run), the VM is withdrawn at once: `GET` answers 404, it is unlisted, and it
+  takes no command or proxy traffic while the operation is still `processing`; the operation
+  completes 8 s later (`deletionWithdrawnMs`, an assumed interval). A `stuck` deletion is never
+  withdrawn and never completes.
 - Resume needs its body (`type`, `ttlSeconds`, `noEnv`).
 - Saved snapshots are `docker commit` plus a copy of the VM's `/var/lib/sealant/docker` volume
   (commit leaves volumes out; Boat saves the whole disk), and a VM created from one starts with a
