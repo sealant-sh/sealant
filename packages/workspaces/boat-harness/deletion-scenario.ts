@@ -150,15 +150,21 @@ export const deleteReplyLostWhileDeleting = async (stack: HarnessStack, project:
       await stack.boat.completeDeletion(sandbox);
       await assertSettled(stack, run, Date.now(), { terminal: ["stopped"] });
       await assertReleased(stack, run, { discard: false });
-      expect(await recordedRemoval(stack, run.runId), await evidence()).toEqual({
-        kind: "operation",
-        id: operation,
-        completed: "true",
-      });
+      // Confirmed either way real Boat can show it: the close's poll read the operation
+      // `completed` (its receipt), or a GET's 404 was committed as the absence first. Never
+      // another operation.
+      const receipt = await recordedRemoval(stack, run.runId);
+      expect(
+        [
+          { kind: "operation", id: operation, completed: "true" },
+          { kind: "absent", id: null, completed: "true" },
+        ],
+        await evidence(),
+      ).toContainEqual(receipt);
       expect(operationsFor(stack, sandbox)).toEqual([operation]);
       expect(deleteRequests(stack, sandbox, recordedAt)).toEqual([]);
       process.stderr.write(
-        `[boat-harness] lost DELETE reply: ${asked.length} DELETEs, one operation ${operation}, recorded ${((recordedAt - fault.at) / 1000).toFixed(1)} s after the lost reply\n`,
+        `[boat-harness] lost DELETE reply: ${asked.length} DELETEs, one operation ${operation}, recorded ${((recordedAt - fault.at) / 1000).toFixed(1)} s after the lost reply; receipt ${receipt.kind}\n`,
       );
     },
   );

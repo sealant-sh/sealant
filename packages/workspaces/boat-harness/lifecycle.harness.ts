@@ -322,7 +322,7 @@ describe("workspaces without resources", () => {
 
 // A ready session's daemon watched through `inspect`, and a DELETE whose reply is lost (#598).
 describe("a ready session's daemon and its deletion", () => {
-  scenario("two clean Stops, each closed in one pass", undefined, () =>
+  scenario("six clean Stops across the sweep period, each in one pass", undefined, () =>
     cleanStopsInOnePass(stack, project),
   );
   scenario(
