@@ -357,6 +357,15 @@ describe("Boat agent requests over the hosted proxy", () => {
       code: "agent-not-ready",
     },
     {
+      // Health lists 503 as answered (the agent's own JSON 503 before a launch); the proxy's
+      // 503 for a port not open yet is not that answer, and not an invalid reply either.
+      name: "a proxy answering for an agent not listening yet, on a route that answers 503",
+      route: "health",
+      status: 503,
+      body: "<html>Service Unavailable: port 8080 is not open Bearer secret-value-here</html>",
+      code: "agent-not-ready",
+    },
+    {
       name: "a park whose Docker stop the agent could not prove",
       route: "park",
       status: 503,

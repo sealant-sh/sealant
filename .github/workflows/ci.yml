@@ -192,6 +192,11 @@ jobs:
         run: >-
           pnpm --filter @sealant/workspaces test:e2e src/runtime/docker-volume-mounts.e2e.ts
 
+      - name: Boat parking resumes pinned daemon staging without replaying user hooks
+        env:
+          SEALANTD_BIN: ${{ runner.temp }}/sealantd
+        run: pnpm --filter @sealant/workspaces test:e2e src/runtime/boat/parking-daemon.e2e.ts
+
       - name: Cloud metadata address refused from workspaces, reached when opted in
         run: >-
           pnpm --filter @sealant/workspaces test:e2e src/runtime/cloud-metadata.e2e.ts

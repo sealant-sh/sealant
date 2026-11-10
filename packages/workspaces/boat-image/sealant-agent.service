@@ -17,6 +17,9 @@ Environment=SEALANT_MICROVM_SEALANTCTL=/usr/local/bin/sealantctl
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Restart=no
 KillMode=control-group
+# One process OOM-killed in the unit's cgroup must not stop the unit (the agent, sealantd and the
+# harness with it); the agent reports the exit it sees. sealantd itself runs in a scope of its own.
+OOMPolicy=continue
 TimeoutStopSec=90
 
 [Install]

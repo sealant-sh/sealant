@@ -129,6 +129,13 @@ const diagnosticSchema = z.object({
         .optional(),
     })
     .optional(),
+  /**
+   * The readiness check that did not pass (`readiness`: an `agent-not-ready` that is retried, or
+   * a `guest-failed` that is not), in the order the checks run. Never free text.
+   */
+  check: z
+    .enum(["booted", "control-socket", "docker", "network", "handshake", "dns", "docker-policy"])
+    .optional(),
   /** What the agent's health said went wrong inside the VM: the daemon or its Docker service. */
   guest: z
     .object({

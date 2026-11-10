@@ -26,7 +26,7 @@ import {
   type BoatExecutionTarget,
   type BoatNetworkIntent,
 } from "@sealant/validators";
-import { Cause, Context, Effect, Layer, Redacted } from "effect";
+import { Cause, Context, Effect, Layer, Redacted, Schedule } from "effect";
 import { z } from "zod";
 
 import { safeCommandTail } from "../../images/boat/command-diagnostics.js";
@@ -80,6 +80,18 @@ const REQUIRED_CAPABILITIES = [
   "restore.owner_map",
   "process.secret-env.v1",
 ] as const;
+
+/**
+ * How long the bind proof waits for the agent to answer health to the exchanged bearer: the unit
+ * starts after `network-online.target`, so a fresh VM's proxy answers for the agent for a while
+ * (a 5xx of its own, not the agent's), and the first answer is slower than on a warm one. Ten
+ * tries a second apart, each within the health route's own budget.
+ */
+const BIND_PROOF_RETRIES = {
+  times: 9,
+  schedule: Schedule.spaced("1 second"),
+  while: (error: unknown) => boatExecutionRetryable(error),
+};
 
 const envName = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
 /** What a launch is made of, sealed as the admission envelope and pushed to the agent once. */
@@ -525,6 +537,18 @@ export const createBoatGuestTransport = (
         return { status: response.status, body: JSON.parse(raw) };
       } catch (error) {
         if (error instanceof BoatExecutionError) throw error;
+        // The route lists 503 as answered because the agent's health is a JSON 503 before a
+        // launch; a 5xx that is not JSON is the hosted proxy's own (its VM booting, the agent's
+        // port not open yet), not an answer: the VM is not ready, and the same request is retried.
+        const code = boatAgentFailureCode(response.status);
+        if (code === "agent-not-ready")
+          throw new BoatExecutionError(code, {
+            step: "agent-request",
+            errorClass: "BoatExecutionError",
+            code,
+            provider: { operation: `agent-${route}`, status: response.status, causeClass: null },
+            agent: { pathClass, responseTail: "" },
+          });
         throw new BoatExecutionError("invalid-reply", {
           ...boatLaunchDiagnostic(
             new BoatApiError(`agent-${route}`, response.status, "invalid_reply", error),
@@ -548,8 +572,21 @@ export class BoatGuestTransportService extends Context.Service<
 /** What a launch is made of; sealed once and pushed to the agent as the launch body. */
 export type BoatLaunchMaterial = z.infer<typeof envelopeSchema>;
 
-/** What the agent said of a held workspace's capture when asked to recover it. */
-export type BoatRecoveryOutcome = "running" | "pending" | "nothing-to-save" | "held";
+/**
+ * What the agent said of a held workspace's capture when asked to recover it. `nothing-to-save`
+ * carries the agent's basis: `no-launch` (this boot was bound and never launched: nothing ran) or
+ * `daemon` (the recovery boot found no materialized capture, sealantd exit 76), with the daemon's
+ * own line when it gave one.
+ */
+export type BoatRecoveryOutcome =
+  | "running"
+  | "pending"
+  | "held"
+  | {
+      readonly outcome: "nothing-to-save";
+      readonly basis: "no-launch" | "daemon";
+      readonly detail?: string;
+    };
 
 /** Owns sealed bootstrap and one frozen admission. Running acknowledges an accepted launch, not daemon readiness. */
 export interface BoatExecutionService {
@@ -798,6 +835,29 @@ const make: Effect.Effect<
     });
   };
 
+  /**
+   * The agent's health, parsed. The route lists 503 as answered because the agent's own health
+   * is a JSON 503 before a launch and while its daemon is down; a 503 of any other shape is the
+   * hosted proxy's (its VM booting, the agent's port not open yet): not ready, retried, never an
+   * invalid reply.
+   */
+  const healthReply = (reply: BoatAgentReply) =>
+    Effect.suspend(() => {
+      const parsed = agentHealthResponseSchema.safeParse(reply.body);
+      if (parsed.success) return Effect.succeed(parsed.data);
+      return Effect.fail(
+        reply.status === 503
+          ? new BoatExecutionError("agent-not-ready", {
+              step: "agent-request",
+              errorClass: "BoatExecutionError",
+              code: "agent-not-ready",
+              provider: { operation: "agent-health", status: reply.status, causeClass: null },
+              agent: { pathClass: AGENT_HEALTH_ROUTE, responseTail: "" },
+            })
+          : new BoatExecutionError("invalid-reply"),
+      );
+    });
+
   const exchange = Effect.fn("BoatExecution.exchange")(function* (input: BoatExecutionTarget) {
     const target = yield* attempt("invalid-input", () => boatExecutionTargetSchema.parse(input));
     let record = yield* repo.get(target.runtimeInstanceId);
@@ -877,11 +937,14 @@ const make: Effect.Effect<
     });
     const hosted = yield* io(() => transport.host(target), "host-agent");
     // The bearer is proven end to end before it is sealed: the agent answers health to it (503
-    // before a launch, as nothing is booted) and refuses any other bearer.
-    const health = yield* call({ hosted, bearer }, "health");
+    // before a launch, as nothing is booted) and refuses any other bearer. Until the agent
+    // listens, the proxy answers for it and the proof is tried again (`BIND_PROOF_RETRIES`).
+    const health = yield* call({ hosted, bearer }, "health").pipe(
+      Effect.flatMap(healthReply),
+      Effect.retry(BIND_PROOF_RETRIES),
+    );
     yield* attempt("invalid-reply", () => {
-      const parsed = agentHealthResponseSchema.parse(health.body);
-      if (parsed.booted) throw new Error();
+      if (health.booted) throw new Error();
     });
     const sealedControl = yield* seal(
       record,
@@ -1025,18 +1088,31 @@ const make: Effect.Effect<
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
     const docker = record.admission.docker;
     const connection = yield* access(record);
-    // 1. The agent: the daemon it started is up with its control socket, and Docker when asked.
-    const health = yield* call(connection, "health");
-    const observed = yield* attempt("invalid-reply", () =>
-      agentHealthResponseSchema.parse(health.body),
-    );
-    const guestFailure = (guest: NonNullable<BoatLaunchDiagnostic["guest"]>) =>
+    // Every failure names the check that did not pass (`check`): what is retried until the VM is
+    // ready (`agent-not-ready`) and what is lost for good (`guest-failed`) read the same way.
+    type Check = NonNullable<BoatLaunchDiagnostic["check"]>;
+    const notReady = (
+      pathClass: NonNullable<BoatLaunchDiagnostic["agent"]>["pathClass"],
+      check: Check,
+    ) =>
+      new BoatExecutionError("agent-not-ready", {
+        step: "readiness",
+        errorClass: "BoatExecutionError",
+        code: "agent-not-ready",
+        check,
+        agent: { pathClass, responseTail: "" },
+      });
+    const guestFailure = (guest: NonNullable<BoatLaunchDiagnostic["guest"]>, check?: Check) =>
       new BoatExecutionError("guest-failed", {
         step: "readiness",
         errorClass: "BoatExecutionError",
         code: "guest-failed",
+        ...(check === undefined ? {} : { check }),
         guest,
       });
+    // 1. The agent: the daemon it started is up with its control socket, and Docker when asked.
+    const health = yield* call(connection, "health");
+    const observed = yield* healthReply(health);
     if (observed.daemonExit !== undefined)
       return yield* Effect.fail(
         guestFailure({ service: "sealantd", exitCode: observed.daemonExit.code }),
@@ -1045,44 +1121,41 @@ const make: Effect.Effect<
       return yield* Effect.fail(new BoatExecutionError("invalid-reply"));
     if ("version" in observed && observed.services.docker.status === "failed")
       return yield* Effect.fail(
-        guestFailure({
-          service: "docker",
-          exitCode: observed.services.docker.code,
-          reason: observed.services.docker.reason,
-        }),
+        guestFailure(
+          {
+            service: "docker",
+            exitCode: observed.services.docker.code,
+            reason: observed.services.docker.reason,
+          },
+          "docker",
+        ),
       );
-    const dockerReady =
-      !docker || ("version" in observed && observed.services.docker.status === "ready");
-    if (!observed.booted || !observed.controlSocket || !dockerReady)
-      return yield* Effect.fail(
-        new BoatExecutionError("agent-not-ready", {
-          step: "readiness",
-          errorClass: "BoatExecutionError",
-          code: "agent-not-ready",
-          agent: { pathClass: AGENT_HEALTH_ROUTE, responseTail: "" },
-        }),
-      );
+    if (!observed.booted) return yield* Effect.fail(notReady(AGENT_HEALTH_ROUTE, "booted"));
+    if (!observed.controlSocket)
+      return yield* Effect.fail(notReady(AGENT_HEALTH_ROUTE, "control-socket"));
+    if (docker && !("version" in observed && observed.services.docker.status === "ready"))
+      return yield* Effect.fail(notReady(AGENT_HEALTH_ROUTE, "docker"));
     // 2. The tunnel: the gateway shook hands and its resolver answers over UDP and TCP, and the
     //    containers' network policy is where this image puts it (applied on a Docker image, absent
-    //    otherwise). `pending` and `failed` are not ready: never fail open.
+    //    otherwise). `pending` is not ready yet; `failed` is the VM's word that it could not hold
+    //    its containers to the gateway's allowance, and no later observation changes that: the
+    //    launch is lost, never retried and never failed open.
     const network = yield* call(connection, "network-status");
     const tunnel = yield* attempt("invalid-reply", () =>
       boatAgentNetworkStatusSchema.parse(network.body),
     );
-    if (
-      !tunnel.configured ||
-      tunnel.handshake !== "verified" ||
-      tunnel.dns !== "udp-and-tcp" ||
-      tunnel.docker_policy !== (docker ? "applied" : "absent")
-    )
+    if (!tunnel.configured)
+      return yield* Effect.fail(notReady(BOAT_AGENT_NETWORK_ROUTE, "network"));
+    if (tunnel.handshake !== "verified")
+      return yield* Effect.fail(notReady(BOAT_AGENT_NETWORK_ROUTE, "handshake"));
+    if (tunnel.dns !== "udp-and-tcp")
+      return yield* Effect.fail(notReady(BOAT_AGENT_NETWORK_ROUTE, "dns"));
+    if (tunnel.docker_policy === "failed")
       return yield* Effect.fail(
-        new BoatExecutionError("agent-not-ready", {
-          step: "readiness",
-          errorClass: "BoatExecutionError",
-          code: "agent-not-ready",
-          agent: { pathClass: BOAT_AGENT_NETWORK_ROUTE, responseTail: "" },
-        }),
+        guestFailure({ service: "docker", reason: "policy-failed" }, "docker-policy"),
       );
+    if (tunnel.docker_policy !== (docker ? "applied" : "absent"))
+      return yield* Effect.fail(notReady(BOAT_AGENT_NETWORK_ROUTE, "docker-policy"));
     // 3. The daemon itself, through the agent's authenticated control relay.
     const daemon = yield* io(
       () => transport.probe(connection.hosted, connection.bearer),
@@ -1158,11 +1231,13 @@ const make: Effect.Effect<
       boatAgentRecoverResponseSchema.parse(reply.body),
     );
     yield* unchanged(record);
-    return outcome.outcome === "running"
-      ? ("running" as const)
-      : outcome.outcome === "restarted"
-        ? ("pending" as const)
-        : ("nothing-to-save" as const);
+    if (outcome.outcome === "running") return "running" as const;
+    if (outcome.outcome === "restarted") return "pending" as const;
+    return {
+      outcome: "nothing-to-save" as const,
+      basis: outcome.basis,
+      ...(outcome.detail === undefined ? {} : { detail: outcome.detail }),
+    };
   });
   const park = Effect.fn("BoatExecution.park")(function* (
     target: BoatExecutionTarget,

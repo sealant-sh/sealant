@@ -234,6 +234,15 @@ const log = (line) => {
 const boatHost = BOAT
   ? (await import("./boat-host.mjs")).createBoatHost({ log, dockerCapable: DOCKER_CAPABLE })
   : null;
+// Boat: a rebooted or restored VM still has the resolver the last boot's tunnel left; the VM's
+// own comes back before anything on it needs DNS. Never fatal: Core configures the network anew.
+if (boatHost !== null) {
+  try {
+    await boatHost.restoreResolvConf();
+  } catch (error) {
+    log(`network: the VM's own resolver could not be restored: ${error.message}`);
+  }
+}
 
 /**
  * Boat: arm the agent from the bind the CLI left, if it has no bearer yet. The bearer is both

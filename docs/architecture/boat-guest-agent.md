@@ -4,9 +4,12 @@ On Boat the VM is the workspace. The image a Boat workspace boots from carries t
 the Lambda MicroVM image carries (`packages/workspaces/microvm-image/agent.mjs`), in its Boat host
 mode (`SEALANT_AGENT_HOST=boat`, `boat-host.mjs`), run as a root systemd service
 (`sealant-agent.service`) by a checksum-pinned upstream Node at `/opt/sealant/node`. sealantd runs
-as PID 1 of its own PID namespace under the agent. There is no mapped root, no `systemd-nspawn` box,
-no Python guest and no relay: Core speaks to one process in the VM, over the hosted HTTPS proxy,
-with one bearer.
+as PID 1 of its own PID namespace under the agent, in a transient scope of its own
+(`systemd-run --scope`, `sealant-workspace-<id>.scope` under `sealant-workspace.slice`,
+`OOMPolicy=continue`), and the unit itself has `OOMPolicy=continue`: an OOM kill takes one process
+of the workspace, never the agent and never the unit. There is no mapped root, no `systemd-nspawn`
+box, no Python guest and no relay: Core speaks to one process in the VM, over the hosted HTTPS
+proxy, with one bearer.
 
 The typed contract is `packages/workspaces/src/runtime/boat/agent-contract.ts`; the routes the
 Lambda runtime shares keep their shapes from `src/runtime/microvm/agent-contract.ts`.
@@ -46,7 +49,10 @@ and answers `sealant-bootstrap-reply-v1` with the bearer under RSA-OAEP-SHA256. 
 again on the same boot re-encrypts the same bearer; another operation or key refuses
 (`bind-exchange-conflict`); a stale boot id refuses (`bind-stale-boot`); a new boot binds afresh for
 the identity the disk was first bound to, and a disk parked on its last boot once more as a new
-instance of the same deployment (the parking resume). A refusal is one reason code on stderr.
+instance of the same deployment (the parking resume). The disk does not prevent a second resume: any
+VM created from the saved snapshot binds the same way. What prevents one is Core's custody: one
+resume intent per lineage, and the snapshot is retired once its child is current. A refusal is one
+reason code on stderr.
 
 The agent arms itself lazily from the tmpfs bearer: it is the launch secret and the control token,
 so `GET /sealant/health` answers it (503, not booted) before any launch, and Core proves the bearer
@@ -68,9 +74,11 @@ All over the hosted proxy on port 8080, all authenticated by the bearer:
   `503 {error: control-unavailable}` until the socket accepts.
 - `POST /sealant/network`: today's `sealant-guest-network-v1` body. The agent brings up `sealant-wg`
   in the VM's own namespace with the private key on `wg`'s stdin only, routes the subnet and the
-  gateway, points `/etc/resolv.conf` at the gateway, records the public intent (`network.json`), and
-  replays the same config without a change; a different config on the boot is
-  `network-binding-conflict`. On a Docker image it fills `DOCKER-USER` once dockerd is up.
+  gateway, points `/etc/resolv.conf` at the gateway (the VM's own resolver is kept, and put back at
+  agent start on a boot that has no tunnel: a reboot, or a VM restored from a saved snapshot),
+  records the public intent (`network.json`), and replays the same config without a change; a
+  different config on the boot is `network-binding-conflict`. On a Docker image it fills
+  `DOCKER-USER` once dockerd is up.
 - `GET /sealant/network`: `configured`, `handshake` (`wg show latest-handshakes`), `dns` (an
   unpredictable question to the gateway's resolver over UDP and TCP) and `docker_policy` (`absent`
   without Docker; `pending`, `applied` or `failed` for the containers' `DOCKER-USER` policy). Core's

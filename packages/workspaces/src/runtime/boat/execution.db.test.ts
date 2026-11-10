@@ -96,6 +96,11 @@ const running = async (context: Parameters<Parameters<typeof test>[0]>[0]) => {
   await execute(executor.recordIsolation(target, receipts));
   expect(await execute(executor.launch(target.runId))).toBe("running");
 };
+/** The agent's health, or the tunnel's status, as a readiness observation answers it. */
+const health = (body: unknown) => (route: string) =>
+  route === "health" ? { status: 503, body } : undefined;
+const tunnel = (body: unknown) => (route: string) =>
+  route === "network-status" ? { status: 200, body } : undefined;
 const refusalReason = async (effect: Effect.Effect<unknown, unknown>) => {
   const failure = await execute(Effect.flip(effect));
   expect(failure).toBeInstanceOf(BoatExecutionError);
@@ -163,7 +168,33 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
               },
             }
           : original(...args);
-      await expect(execute(executor.readiness(target))).rejects.toThrow("agent-not-ready");
+      const pending = await execute(Effect.flip(executor.readiness(target)));
+      expect(boatLaunchDiagnostic(pending, "readiness")).toMatchObject({
+        code: "agent-not-ready",
+        check: "docker-policy",
+      });
+      expect(boatExecutionRetryable(pending)).toBe(true);
+      // The VM could not hold its containers to the gateway's allowance: the launch is lost,
+      // never retried twenty times and never failed open.
+      guest.request = async (...args) =>
+        args[2] === "network-status"
+          ? {
+              status: 200,
+              body: {
+                configured: true,
+                handshake: "verified",
+                dns: "udp-and-tcp",
+                docker_policy: "failed",
+              },
+            }
+          : original(...args);
+      const failed = await execute(Effect.flip(executor.readiness(target)));
+      expect(boatLaunchDiagnostic(failed, "readiness")).toMatchObject({
+        code: "guest-failed",
+        check: "docker-policy",
+        guest: { service: "docker", reason: "policy-failed" },
+      });
+      expect(boatExecutionRetryable(failed)).toBe(false);
     }));
   it("observes readiness from the agent's health, the tunnel's handshake and the daemon", () =>
     test(async (context) => {
@@ -199,35 +230,73 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         code: "guest-failed",
         guest: { service: "sealantd", exitCode: 1 },
       });
-      guest.request = async (...args) =>
-        args[2] === "network-status"
-          ? {
-              status: 200,
-              body: {
-                configured: true,
-                handshake: "unverified",
-                dns: "unavailable",
-                docker_policy: "absent",
-              },
-            }
-          : original(...args);
-      await expect(execute(executor.readiness(target))).rejects.toThrow("agent-not-ready");
+      // Each not-ready answer names the check that did not pass, in the order they run: the
+      // agent's health first (what is booted, its control socket), then the tunnel.
+      const notReady = async (
+        reply: (route: string) => { status: number; body: unknown } | undefined,
+        check: string,
+      ) => {
+        guest.request = async (...args) => reply(args[2]) ?? original(...args);
+        const failure = await execute(Effect.flip(executor.readiness(target)));
+        expect(boatLaunchDiagnostic(failure, "readiness")).toMatchObject({
+          code: "agent-not-ready",
+          check,
+        });
+        expect(boatExecutionRetryable(failure)).toBe(true);
+      };
+      await notReady(health({ booted: false, controlSocket: false }), "booted");
+      await notReady(health({ booted: true, controlSocket: false }), "control-socket");
+      await notReady(
+        tunnel({
+          configured: false,
+          handshake: "unverified",
+          dns: "unavailable",
+          docker_policy: "absent",
+        }),
+        "network",
+      );
+      await notReady(
+        tunnel({
+          configured: true,
+          handshake: "unverified",
+          dns: "unavailable",
+          docker_policy: "absent",
+        }),
+        "handshake",
+      );
+      await notReady(
+        tunnel({
+          configured: true,
+          handshake: "verified",
+          dns: "unavailable",
+          docker_policy: "absent",
+        }),
+        "dns",
+      );
       // A policy this image should not have, or one still pending, is not ready either.
-      for (const policy of ["pending", "failed", "applied"]) {
-        guest.request = async (...args) =>
-          args[2] === "network-status"
-            ? {
-                status: 200,
-                body: {
-                  configured: true,
-                  handshake: "verified",
-                  dns: "udp-and-tcp",
-                  docker_policy: policy,
-                },
-              }
-            : original(...args);
-        await expect(execute(executor.readiness(target))).rejects.toThrow("agent-not-ready");
+      for (const policy of ["pending", "applied"]) {
+        await notReady(
+          tunnel({
+            configured: true,
+            handshake: "verified",
+            dns: "udp-and-tcp",
+            docker_policy: policy,
+          }),
+          "docker-policy",
+        );
       }
+      // The hosted proxy's own 503 on the health route (its VM not ready) is no check's answer.
+      guest.request = async (...args) =>
+        args[2] === "health"
+          ? { status: 503, body: { error: "port 8080 is not open" } }
+          : original(...args);
+      const proxied = await execute(Effect.flip(executor.readiness(target)));
+      expect(boatLaunchDiagnostic(proxied, "readiness")).toMatchObject({
+        code: "agent-not-ready",
+        agent: { pathClass: "/sealant/health" },
+      });
+      expect(boatLaunchDiagnostic(proxied, "readiness").check).toBeUndefined();
+      expect(boatExecutionRetryable(proxied)).toBe(true);
       guest.request = original;
       guest.probe = async () => ({ runtimeId: "rt_fixture", healthy: false, supports: [] });
       await expect(execute(executor.readiness(target))).rejects.toThrow("invalid-reply");
@@ -251,7 +320,11 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       guest.recovery = "restarted";
       expect(await execute(executor.recover(target))).toBe("pending");
       guest.recovery = "nothing-to-save";
-      expect(await execute(executor.recover(target))).toBe("nothing-to-save");
+      expect(await execute(executor.recover(target))).toEqual({
+        outcome: "nothing-to-save",
+        basis: "daemon",
+        detail: "sealant boot: nothing to save: never materialized (/workspace/repo)",
+      });
       for (const reason of [
         "recover-new-boot",
         "recover-binding-conflict",
@@ -475,6 +548,25 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       // A replay after the commit is a no-op that answers the same binding receipt.
       expect(await execute(executor.exchange(target))).toBe(receipt);
       expect(requests).toHaveLength(2);
+    }));
+  it("retries the bind proof while the hosted proxy answers for an agent not listening yet", () =>
+    test(async ({ executor, repo, target, guest }) => {
+      // A fresh VM: the agent's unit starts after the network is online, so the proxy answers
+      // its first health requests with a 503 of its own (never the agent's health body).
+      const original = guest.request.bind(guest);
+      let proxied = 2;
+      guest.request = async (...args) => {
+        if (args[2] === "health" && proxied > 0) {
+          proxied -= 1;
+          guest.actions.push("health");
+          return { status: 503, body: { error: "port 8080 is not open" } };
+        }
+        return original(...args);
+      };
+      const receipt = await execute(executor.exchange(target));
+      expect(receipt).toMatch(/^[a-f0-9]{64}$/);
+      expect(guest.actions).toEqual(["health", "health", "health"]);
+      expect((await execute(repo.get(target.runId)))?.phase).toBe("control");
     }));
   it("refuses a mismatched bind reply, and a bind refusal is typed, before committing control", () =>
     test(async ({ executor, repo, target, guest }) => {

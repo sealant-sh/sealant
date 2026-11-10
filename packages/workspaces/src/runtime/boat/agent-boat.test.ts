@@ -22,6 +22,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readlink,
   realpath,
   rm,
   stat,
@@ -123,6 +124,16 @@ shift
 exec "$@"
 `;
 
+// systemd-run --scope: its own arguments (up to \`--\`) are recorded, then the command is exec'd
+// in place, as the real one does once the scope is registered.
+const FAKE_SYSTEMD_RUN = `#!/bin/sh
+args=""
+while [ "$1" != "--" ]; do args="$args $1"; shift; done
+shift
+printf '%s\\n' "\${args# }" > "$FAKE_SYSTEMD_RUN_LOG"
+exec "$@"
+`;
+
 // systemd's answer for a slice: it nests by name (\`sealant-docker.slice\` is
 // /sealant.slice/sealant-docker.slice), and \`start\` realizes its cgroup, here under the scratch
 // cgroup root, as an empty one.
@@ -185,6 +196,7 @@ interface Vm {
   readonly recordFile: string;
   readonly netLog: string;
   readonly unshareLog: string;
+  readonly systemdRunLog: string;
   readonly syncLog: string;
   readonly resolvConf: string;
   readonly dockerDir: string;
@@ -229,6 +241,7 @@ const createVm = async (): Promise<Vm> => {
     writeExecutable(path.join(bin, "ip6tables"), fakeNetTool(netLog, handshakeFile)),
     writeExecutable(path.join(bin, "ip6tables-restore"), fakeNetTool(netLog, handshakeFile)),
     writeExecutable(path.join(bin, "unshare"), FAKE_UNSHARE),
+    writeExecutable(path.join(bin, "systemd-run"), FAKE_SYSTEMD_RUN),
     writeExecutable(path.join(bin, "sync"), fakeSync(syncLog)),
     writeExecutable(path.join(bin, "systemctl"), FAKE_SYSTEMCTL),
     writeExecutable(path.join(bin, "modprobe"), fakeNetTool(netLog, handshakeFile)),
@@ -257,6 +270,7 @@ const createVm = async (): Promise<Vm> => {
   const socketPath = path.join(dir, "control.sock");
   const recordFile = path.join(dir, "sealantd-record.json");
   const unshareLog = path.join(dir, "unshare.log");
+  const systemdRunLog = path.join(dir, "systemd-run.log");
   const dockerDir = path.join(dir, "docker");
   const vm: Vm = {
     dir,
@@ -269,6 +283,7 @@ const createVm = async (): Promise<Vm> => {
     recordFile,
     netLog,
     unshareLog,
+    systemdRunLog,
     syncLog,
     resolvConf,
     dockerDir,
@@ -289,6 +304,7 @@ const createVm = async (): Promise<Vm> => {
       SEALANT_AGENT_IP6TABLES: path.join(bin, "ip6tables"),
       SEALANT_AGENT_IP6TABLES_RESTORE: path.join(bin, "ip6tables-restore"),
       SEALANT_AGENT_UNSHARE: path.join(bin, "unshare"),
+      SEALANT_AGENT_SYSTEMD_RUN: path.join(bin, "systemd-run"),
       SEALANT_AGENT_SYNC: path.join(bin, "sync"),
       SEALANT_AGENT_SYSTEMCTL: path.join(bin, "systemctl"),
       SEALANT_AGENT_MODPROBE: path.join(bin, "modprobe"),
@@ -309,6 +325,7 @@ const createVm = async (): Promise<Vm> => {
       FAKE_SEALANTD_RECORD: recordFile,
       FAKE_LAUNCH_RECORD: path.join(dataDir, "launch.json"),
       FAKE_UNSHARE_LOG: unshareLog,
+      FAKE_SYSTEMD_RUN_LOG: systemdRunLog,
     },
     bootId: async () => (await readFile(bootIdFile, "utf8")).trim(),
     reboot: async () => {
@@ -818,13 +835,18 @@ describe("boat agent · launch", () => {
     expect((await call(restarted, "GET", AGENT_HEALTH_ROUTE, { bearer })).status).not.toBe(401);
   });
 
-  it("starts sealantd as PID 1 of its own PID namespace through unshare", async () => {
+  it("starts sealantd as PID 1 of its own PID namespace through unshare, in a scope of its own", async () => {
     const vm = await createVm();
     await launched(vm, { SEALANT_AGENT_DAEMON_NAMESPACE: "pid" });
     const record = await readDaemonRecord(vm);
     expect(record.argv).toEqual(["boot"]);
     expect((await readFile(vm.unshareLog, "utf8")).trim()).toBe(
       `--pid --fork --mount-proc --kill-child -- ${path.join(vm.bin, "sealantd")} boot`,
+    );
+    // The namespace runs in a transient scope under its own slice, where an OOM kill takes one
+    // of its processes and never the agent (`OOMPolicy=continue`); the name is fresh per start.
+    expect((await readFile(vm.systemdRunLog, "utf8")).trim()).toMatch(
+      /^--scope --quiet --collect --unit=sealant-workspace-[0-9a-f]{8} --slice=sealant-workspace --property=OOMPolicy=continue$/,
     );
     expect(record.env).not.toHaveProperty("SEALANT_SWEEP_EXEMPT_FILE");
   });
@@ -1247,6 +1269,63 @@ describe("boat agent · network", () => {
     expect(await call(restarted, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).toEqual(
       configured,
     );
+  });
+
+  it("puts the VM's own resolver back at start on a boot without the tunnel, and keeps the gateway's on the boot that has it", async () => {
+    // The stock image: resolv.conf is systemd-resolved's stub symlink.
+    const vm = await createVm();
+    const stub = path.join(vm.dir, "etc", "stub-resolv.conf");
+    const bearer = await bindVm(vm);
+    const agent = await startAgent(vm);
+    const body = networkBody();
+    expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
+      200,
+    );
+    expect(await readFile(vm.resolvConf, "utf8")).toContain(BOAT_AGENT_GATEWAY_ADDRESS);
+    // The same boot again (an agent restart): the tunnel is still there, so is its resolver.
+    await stopAgent(agent);
+    const sameBoot = await startAgent(vm);
+    expect((await lstat(vm.resolvConf)).isSymbolicLink()).toBe(false);
+    expect(await readFile(vm.resolvConf, "utf8")).toContain(BOAT_AGENT_GATEWAY_ADDRESS);
+    expect(await exists(path.join(vm.dataDir, "resolv.conf.orig"))).toBe(true);
+    // Rebooted (or restored from a saved snapshot): no tunnel on this boot, the stub is back
+    // exactly as it was (the symlink, not a copy of its bytes), and the kept copy is gone.
+    await stopAgent(sameBoot);
+    await vm.reboot();
+    const rebooted = await startAgent(vm);
+    expect((await lstat(vm.resolvConf)).isSymbolicLink()).toBe(true);
+    expect(await readlink(vm.resolvConf)).toBe(stub);
+    expect(await readFile(vm.resolvConf, "utf8")).toBe("nameserver 127.0.0.53\n");
+    expect(await exists(path.join(vm.dataDir, "resolv.conf.orig"))).toBe(false);
+    expect(rebooted.output()).toContain("the VM's own resolver is back");
+    // A new bind and network on this boot keep the stub afresh and replace it again.
+    const rebound = await bindVm(vm, "op-2");
+    expect(
+      (await call(rebooted, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer: rebound })).status,
+    ).toBe(200);
+    expect(JSON.parse(await readFile(path.join(vm.dataDir, "resolv.conf.orig"), "utf8"))).toEqual({
+      symlink: stub,
+      contentBase64: Buffer.from("nameserver 127.0.0.53\n").toString("base64"),
+    });
+
+    // An image whose resolv.conf is a plain file gets its bytes back.
+    const plain = await createVm();
+    await rm(plain.resolvConf);
+    await writeFile(plain.resolvConf, "nameserver 10.0.0.2\nsearch corp.example\n");
+    const plainBearer = await bindVm(plain);
+    const plainAgent = await startAgent(plain);
+    expect(
+      (await call(plainAgent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer: plainBearer }))
+        .status,
+    ).toBe(200);
+    await stopAgent(plainAgent);
+    await plain.reboot();
+    await startAgent(plain);
+    expect((await lstat(plain.resolvConf)).isSymbolicLink()).toBe(false);
+    expect(await readFile(plain.resolvConf, "utf8")).toBe(
+      "nameserver 10.0.0.2\nsearch corp.example\n",
+    );
+    expect(await exists(path.join(plain.dataDir, "resolv.conf.orig"))).toBe(false);
   });
 
   it("reports the handshake and the gateway's DNS over UDP and TCP", async () => {

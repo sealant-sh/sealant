@@ -16,7 +16,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import dgram from "node:dgram";
 import { once } from "node:events";
 import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
-import { chmod, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, rename, symlink, unlink, writeFile } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 
@@ -450,6 +450,7 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
     modprobe: env.SEALANT_AGENT_MODPROBE ?? "modprobe",
     sync: env.SEALANT_AGENT_SYNC ?? "sync",
     unshare: env.SEALANT_AGENT_UNSHARE ?? "unshare",
+    systemdRun: env.SEALANT_AGENT_SYSTEMD_RUN ?? "systemd-run",
   };
   const daemonNamespace = env.SEALANT_AGENT_DAEMON_NAMESPACE === "none" ? "none" : "pid";
   // Where the kernel's sysctls are (tests point it at a scratch tree).
@@ -555,10 +556,27 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
     );
   };
 
-  /** How sealantd is started: as PID 1 of its own PID namespace, unless told `none` (tests). */
+  /**
+   * How sealantd is started: as PID 1 of its own PID namespace, in a transient systemd scope of
+   * its own (`sealant-workspace-<id>.scope` under `sealant-workspace.slice`), unless told `none`
+   * (tests). The scope keeps the workspace's memory apart from the agent's: an OOM kill in it
+   * takes one of its processes (`OOMPolicy=continue`), never the agent, and never the unit. The
+   * agent's process is what it was: `systemd-run --scope` registers the scope and execs in place,
+   * so the child the agent spawned is the namespace's wrapper, and its process group is still what
+   * a park or recovery kills. The name is fresh per start: a recovery boot on the same boot must
+   * not wait for the ended scope to be collected.
+   */
   const daemonCommand = (sealantd, args) =>
     daemonNamespace === "pid"
       ? [
+          commands.systemdRun,
+          "--scope",
+          "--quiet",
+          "--collect",
+          `--unit=sealant-workspace-${randomBytes(4).toString("hex")}`,
+          "--slice=sealant-workspace",
+          "--property=OOMPolicy=continue",
+          "--",
           commands.unshare,
           "--pid",
           "--fork",
@@ -766,6 +784,36 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
     // rename replaces the symlink itself, not what it points at.
     await writeAtomic(paths.resolvConf, RESOLV_CONF_BYTES, 0o644);
     await chmod(paths.resolvConf, 0o644);
+  };
+
+  /**
+   * Undo `replaceResolvConf` once the tunnel it served is gone: a VM rebooted, or restored from a
+   * saved snapshot, has no tunnel yet (the network record is another boot's, or none) but its
+   * `resolv.conf` still names the gateway, so nothing on it resolves until Core configures the
+   * network again. Put the VM's own resolver back (the symlink as it was, else the bytes) and
+   * forget the kept copy: the next configure keeps the current one afresh. Called at agent start;
+   * a restart on the boot that configured the tunnel keeps the gateway. `true` when restored.
+   */
+  const restoreResolvConf = async () => {
+    if (networkRecord() !== null) return false;
+    const kept = readRecord(paths.resolvConfOriginal);
+    if (kept.kind !== "ok") return false;
+    const { symlink: target, contentBase64 } = kept.value;
+    if (typeof target === "string") {
+      // The symlink is made beside the file and renamed over it: never a moment without one.
+      const temp = `${paths.resolvConf}.${String(process.pid)}.tmp`;
+      await unlink(temp).catch(() => {});
+      await symlink(target, temp);
+      await rename(temp, paths.resolvConf);
+    } else if (typeof contentBase64 === "string") {
+      await writeAtomic(paths.resolvConf, Buffer.from(contentBase64, "base64"), 0o644);
+      await chmod(paths.resolvConf, 0o644);
+    } else {
+      await unlink(paths.resolvConf).catch(() => {});
+    }
+    await unlink(paths.resolvConfOriginal);
+    log("network: the VM's own resolver is back (no tunnel on this boot)");
+    return true;
   };
 
   /** Bring the interface up in the VM's own namespace; the private key reaches wg on stdin only. */
@@ -1054,6 +1102,7 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
     park,
     configureNetwork,
     networkStatus,
+    restoreResolvConf,
     markDockerReady,
     markDockerStopped,
   };

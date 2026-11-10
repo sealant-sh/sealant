@@ -4,7 +4,7 @@
     {
       "name": "agent.mjs",
       "source": "microvm-image/agent.mjs",
-      "sha256": "27593a4bbe23a05803916f18e2b718508969e02170fde32b1fe872a2ff6242bc"
+      "sha256": "7160ee1083bd26e8ce7f05b51c94312c6ba9146c9d292f72e2c7b9be94d7208d"
     },
     {
       "name": "docker-service.mjs",
@@ -14,12 +14,12 @@
     {
       "name": "boat-host.mjs",
       "source": "microvm-image/boat-host.mjs",
-      "sha256": "50b8d6ab0ad5f8dd3f893f7909b3bb5566119fdfae51d9383767383609b03332"
+      "sha256": "29e9dbe6e5070b199b3916ef196d898321a2f2bb8fba20578ed2266f5d660fcd"
     },
     {
       "name": "boat-bind.mjs",
       "source": "microvm-image/boat-bind.mjs",
-      "sha256": "572fad31fd8f2c0acebb637c1b45149261a0c039cc40c9d27ba0e6e2a8a6a2c8"
+      "sha256": "9c74e5151f846f607b4854fcf22ea44d7aabc0300e90224d556ef65267202308"
     },
     {
       "name": "download-docker.sh",
@@ -29,7 +29,7 @@
     {
       "name": "sealant-agent.service",
       "source": "boat-image/sealant-agent.service",
-      "sha256": "62fea6ddd54e436716d2e154729d15c92fd6ab80659d82ca253a3340cbab3902"
+      "sha256": "e60e1cc3a042afe63357133b1f61118ea608df29c0a540f24e15675c63619982"
     }
   ]
 }

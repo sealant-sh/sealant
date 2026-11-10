@@ -658,7 +658,11 @@ describe("Core's Boat execution owner against the real guest agent", () => {
     });
     await execute(c.executor.hold(t));
     // The recovery boot found nothing to save (exit 76): a distinct outcome, never `held`.
-    expect(await execute(c.executor.recover(t))).toBe("nothing-to-save");
+    expect(await execute(c.executor.recover(t))).toEqual({
+      outcome: "nothing-to-save",
+      basis: "daemon",
+      detail: "sealantd boot: nothing to save: never materialized (/workspace/repo)",
+    });
     const recovery = await daemonRecord(vm);
     expect(recovery.argv).toEqual(["boot", "--recovery"]);
     expect(

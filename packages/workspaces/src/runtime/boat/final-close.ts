@@ -32,6 +32,7 @@ import { databaseCaptureDrainLedger } from "../../worker/capture-drain-ledger.js
 import {
   authorizedDeletion,
   DEFAULT_CAPTURE_DRAIN_SETTINGS,
+  describeDeletionBasis,
   drainCaptureBeforeStop,
   observedComplete,
   recordedDeletionEvidence,
@@ -300,9 +301,10 @@ const make: Effect.Effect<
     };
     const evidence = recordedDeletionEvidence(yield* ledger.read(target.runId), executor);
     const decided = evidence.discarded || evidence.attestedComplete;
-    // The agent's word that the daemon never materialized a capture (sealantd exit 76): nothing
-    // ran on the VM, so nothing is lost by removing it. Typed by the agent, never inferred.
-    let nothingToSave = false;
+    // The agent's word that nothing ran on the VM, so nothing is lost by removing it: the daemon
+    // never materialized a capture (sealantd exit 76, `daemon`) or never started on this boot
+    // (`no-launch`). Typed by the agent, never inferred; the basis names which.
+    let nothingToSave: "nothing-to-save" | "never-launched" | null = null;
     if (root?.deletionState !== "deleting-issued" && !decided) {
       // The agent's typed refusals (another boot, a parked disk, an agent that did not launch
       // this boot) are definite answers: the capture cannot be recovered here, the VM is kept.
@@ -317,10 +319,14 @@ const make: Effect.Effect<
               : Effect.fail(error),
           ),
         );
-      if (available === "nothing-to-save") nothingToSave = true;
-      else if (available !== "running") return "retained" as const;
+      if (typeof available === "object") {
+        nothingToSave = available.basis === "no-launch" ? "never-launched" : "nothing-to-save";
+        yield* Effect.logInfo(
+          `Boat FINAL close · run ${target.runId}: ${describeDeletionBasis(nothingToSave)}${available.detail === undefined ? "" : ` (${available.detail})`}.`,
+        );
+      } else if (available !== "running") return "retained" as const;
     }
-    if (root?.deletionState !== "deleting-issued" && !decided && !nothingToSave) {
+    if (root?.deletionState !== "deleting-issued" && !decided && nothingToSave === null) {
       const control = yield* execution.control(target);
       const outcome = yield* drainCaptureBeforeStop({
         runId: target.runId,
@@ -346,8 +352,8 @@ const make: Effect.Effect<
           ? { delete: true, basis: "discarded" }
           : now.attestedComplete
             ? { delete: true, basis: "attested-complete" }
-            : nothingToSave
-              ? { delete: true, basis: "nothing-to-save" }
+            : nothingToSave !== null
+              ? { delete: true, basis: nothingToSave }
               : complete(entry)
                 ? { delete: true, basis: "observed-complete" }
                 : { delete: false, reason: "FINAL evidence changed" };
@@ -359,7 +365,8 @@ const make: Effect.Effect<
       !deletion.decision.delete ||
       (deletion.ticket === undefined &&
         deletion.decision.basis !== "discarded" &&
-        deletion.decision.basis !== "nothing-to-save")
+        deletion.decision.basis !== "nothing-to-save" &&
+        deletion.decision.basis !== "never-launched")
     )
       return yield* Effect.fail(new BoatFinalCloseError("held"));
     const removed = yield* removeUnderDeletion({

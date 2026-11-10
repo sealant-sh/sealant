@@ -62,9 +62,9 @@ resetting any durable operation. No network call runs inside a database transact
 
 The existing `BoatApi` owns HTTP and inventory parsing. `BoatAllocationRepo` is necessary because
 neither an ephemeral job claim nor the publication catalog can own a run's issued create and atomic
-runtime projection. `BoatExecution` continues to own bootstrap secrets and invocation state. The
-allocation layer centralizes issuance and positive adoption so callers cannot accidentally turn an
-uncertain result into a new disk.
+runtime projection. `BoatExecution` continues to own the bind exchange's sealed bearer and the
+launch's state. The allocation layer centralizes issuance and positive adoption so callers cannot
+accidentally turn an uncertain result into a new disk.
 
 ## Validation and remaining gates
 

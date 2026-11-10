@@ -72,6 +72,8 @@ describe("native recipe boundary", () => {
     expect(unit).toContain("Environment=SEALANT_CONTROL_SOCKET=/run/sealant/control.sock");
     expect(unit).toContain("Environment=SEALANT_MICROVM_AGENT_PORT=8080");
     expect(unit).toContain("Restart=no");
+    // One OOM-killed process never stops the unit (the agent, sealantd, the harness with it).
+    expect(unit).toContain("OOMPolicy=continue");
     expect(unit).toContain("WantedBy=multi-user.target");
     expect(files.some((file) => file.path === BOAT_AGENT_DOCKER_DROPIN_PATH)).toBe(false);
     expect(files.some((file) => file.path.endsWith("download-docker.sh"))).toBe(false);
@@ -392,6 +394,7 @@ describe("native recipe boundary", () => {
       lock.files.find((file) => file.name === "sealant-agent.service")?.sha256,
     );
     expect(unit).toContain("Restart=no");
+    expect(unit).toContain("OOMPolicy=continue");
     expect(unit).not.toContain("ConditionPathExists");
   });
 
