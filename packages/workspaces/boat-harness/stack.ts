@@ -37,7 +37,7 @@ import {
   type LabelledObjects,
 } from "./docker.js";
 import { FakeBoat } from "./fake-boat.js";
-import { RUN_ENV, acquireHostLock, releaseLock } from "./reap.js";
+import { RUN_ENV, acquireHostLock, keepLock, listRuns, releaseLock } from "./reap.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const repo = join(here, "../../..");
@@ -324,7 +324,14 @@ export interface StackOptions {
  * (`DockerResourceRuntime.converge`) and Boat gateways. On a shared Docker host it would treat
  * another deployment's objects as its own garbage. Refuse to start beside them.
  */
-const preflight = async () => {
+const preflight = async (runId: string) => {
+  // Another run's objects without its lock: that run lost the lock, or died before its teardown.
+  const others = (await listRuns()).filter((other) => other !== runId);
+  if (others.length > 0)
+    throw new Error(
+      `Harness runs ${others.join(", ")} still have labelled objects on this Docker host. ` +
+        "List and remove them with `pnpm --filter @sealant/workspaces exec tsx boat-harness/cleanup.ts [--remove]`.",
+    );
   if (process.env.BOAT_HARNESS_ALLOW_SHARED_DOCKER === "1") return;
   const foreign = await listCoreObjectNames();
   if (foreign.length > 0)
@@ -338,10 +345,14 @@ const preflight = async () => {
 export const startStack = async (options: StackOptions = {}): Promise<HarnessStack> => {
   const log = options.log ?? ((line: string) => process.stderr.write(`[boat-harness] ${line}\n`));
   const runId = randomBytes(4).toString("hex");
-  await acquireHostLock(runId, process.pid, log);
+  const lockId = await acquireHostLock(runId, log);
+  const stopRenewing = keepLock(lockId, () =>
+    log(`run ${runId} lost the host lock: its heartbeat could not be renewed`),
+  );
   try {
-    await preflight();
+    await preflight(runId);
   } catch (error) {
+    stopRenewing();
     await releaseLock(runId);
     throw error;
   }
@@ -352,10 +363,10 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
   const reaperLog = await open(join(scratch, "reaper.log"), "a");
   const reaper = spawn(
     "node",
-    ["--import", "tsx", join(here, "reaper.ts"), runId, String(process.pid)],
+    ["--import", "tsx", join(here, "reaper.ts"), runId, String(process.pid), lockId],
     {
       cwd: join(repo, "packages/workspaces"),
-      // Carrying the run keeps the lock live while the reaper works, and lets a later run find it.
+      // Carrying the run lets a later reap find it.
       env: { ...process.env, [RUN_ENV]: runId },
       detached: true,
       stdio: ["ignore", reaperLog.fd, reaperLog.fd],
@@ -365,7 +376,10 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
   await reaperLog.close();
   // Runs last at teardown, after everything else is gone.
   const cleanups: Array<() => Promise<unknown>> = [
-    () => releaseLock(runId),
+    async () => {
+      stopRenewing();
+      await releaseLock(runId);
+    },
     async () => {
       reaper.kill("SIGTERM");
     },

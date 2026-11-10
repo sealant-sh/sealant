@@ -7,7 +7,14 @@
  */
 import { readdir, readFile, stat } from "node:fs/promises";
 
-import { HARNESS_LABEL, docker, removeLabelled, type DockerRunner } from "./docker.js";
+import {
+  HARNESS_LABEL,
+  docker,
+  listLabelled,
+  removeLabelled,
+  type DockerRunner,
+  type LabelledObjects,
+} from "./docker.js";
 
 export const LOCK = "sealant-boat-harness-lock";
 export const LOCK_LABEL = `${HARNESS_LABEL}.lock`;
@@ -51,80 +58,141 @@ export const realHost: HostDeps = {
   now: Date.now,
 };
 
+/** The heartbeat's lifetime: a lock not renewed for this long ends itself. */
+export const LOCK_TTL_SECONDS = 120;
+/** How often a run's test process and its reaper renew the lock. */
+export const LOCK_RENEW_MS = 10_000;
+
+/**
+ * The lock container's own program. It stops `LOCK_TTL_SECONDS` after the last renewal, so a
+ * running lock proves its holder renewed it recently. Docker is the one thing every harness run on
+ * a host shares; process ids are not (another sandbox may have its own PID namespace).
+ */
+const LOCK_PROGRAM =
+  "date +%s > /tmp/beat && " +
+  `while [ $(( $(date +%s) - $(cat /tmp/beat) )) -lt ${LOCK_TTL_SECONDS} ]; do sleep 2; done`;
+
 export interface LockState {
   readonly holder: string;
-  readonly pid: number | undefined;
-  /**
-   * The holder's test process, or any process carrying the run (worker, API, reaper), still
-   * exists: the run is live, or its reaper is tearing it down. Leftover objects alone never keep
-   * a run live; a run whose processes are all gone is dead, and its lock and objects are reaped.
-   */
+  /** The lock container's id: removals name it, never the shared name a new holder may reuse. */
+  readonly id: string;
+  /** The heartbeat is running: the holder, or its reaper, renewed it within the TTL. */
   readonly alive: boolean;
 }
 
-/** Who holds the host lock, and whether that run is still alive. `undefined` when it is free. */
+/** Who holds the host lock, and whether its heartbeat still runs. `undefined` when it is free. */
 export const lockState = async (deps: HostDeps = realHost): Promise<LockState | undefined> => {
   const held = await deps.docker([
     "container",
     "inspect",
     "-f",
-    `{{index .Config.Labels "${LOCK_LABEL}"}} {{index .Config.Labels "${LOCK_LABEL}.pid"}}`,
+    `{{.Id}} {{.State.Running}} {{index .Config.Labels "${LOCK_LABEL}"}}`,
     LOCK,
   ]);
   if (held.code !== 0) return undefined;
-  const [holder = "", pidText = ""] = held.stdout.trim().split(" ");
-  const pid = /^\d+$/.test(pidText) ? Number(pidText) : undefined;
-  const alive =
-    (pid !== undefined && (await deps.processAlive(pid))) ||
-    (/^[a-f0-9]{8}$/.test(holder) && (await deps.runProcesses(holder)).length > 0);
-  return { holder, pid, alive };
+  const [id = "", running = "", holder = ""] = held.stdout.trim().split(" ");
+  return { holder, id, alive: running === "true" };
 };
+
+/** Renews the heartbeat of the lock `id`. False when that lock is no longer running. */
+export const renewLock = async (id: string, deps: HostDeps = realHost): Promise<boolean> => {
+  const renewed = await deps.docker(
+    ["exec", id, "sh", "-c", "date +%s > /tmp/beat.next && mv /tmp/beat.next /tmp/beat"],
+    { timeoutMs: 20_000 },
+  );
+  return renewed.code === 0;
+};
+
+/** Renews the lock every `LOCK_RENEW_MS` until the returned function is called. */
+export const keepLock = (
+  id: string,
+  onLost: () => void,
+  deps: HostDeps = realHost,
+): (() => void) => {
+  let lost = false;
+  const renew = async () => {
+    if (!(await renewLock(id, deps)) && !lost) {
+      lost = true;
+      onLost();
+    }
+  };
+  const timer = setInterval(() => void renew(), LOCK_RENEW_MS);
+  timer.unref();
+  return () => clearInterval(timer);
+};
+
+const countObjects = (objects: LabelledObjects) =>
+  objects.containers.length +
+  objects.networks.length +
+  objects.volumes.length +
+  objects.images.length;
 
 /**
  * One harness run per Docker host: Core's worker reconciles resource networks and gateways
- * host-wide, so two stacks on one host disturb each other. The lock is a named container that is
- * never started; creating it is atomic. It is taken over only when every process of its holder's
- * run is gone. Waits up to two hours.
+ * host-wide, so two stacks on one host disturb each other. The lock is a named container running
+ * a heartbeat; creating it is atomic. Its holder renews it (`keepLock`), and so does the holder's
+ * reaper until the run is reaped. A lock is taken over only when its heartbeat has stopped and no
+ * object labelled with its run exists; a dead run that left objects stops this run with the
+ * cleanup command instead, since nothing proves those objects unused. Waits up to two hours for a
+ * live holder. Returns the lock's container id.
  */
 export const acquireHostLock = async (
   runId: string,
-  pid: number,
   log: (line: string) => void,
   deps: HostDeps = realHost,
-): Promise<void> => {
+): Promise<string> => {
   const deadline = deps.now() + 2 * 60 * 60_000;
   let reported = "";
   for (;;) {
     const created = await deps.docker([
-      "create",
+      "run",
+      "-d",
       "--name",
       LOCK,
       "--label",
       `${LOCK_LABEL}=${runId}`,
-      "--label",
-      `${LOCK_LABEL}.pid=${pid}`,
+      "--entrypoint",
+      "sh",
       "postgres:17-alpine",
-      "true",
+      "-c",
+      LOCK_PROGRAM,
     ]);
-    if (created.code === 0) return;
+    if (created.code === 0) return created.stdout.trim();
     const state = await lockState(deps);
-    if (state !== undefined && !state.alive) {
-      log(`taking over the lock of harness run ${state.holder}, which is gone`);
-      await deps.docker(["rm", LOCK]);
+    if (state === undefined) {
+      // Freed between the two calls, or the create failed for another reason.
+      if (!/Conflict|already in use/i.test(created.stderr))
+        throw new Error(`could not create the host lock: ${created.stderr.slice(-1000)}`);
+      continue;
+    }
+    if (!state.alive) {
+      const left = await listLabelled(`${HARNESS_LABEL}=${state.holder}`, deps.docker);
+      if (countObjects(left) > 0)
+        throw new Error(
+          `harness run ${state.holder} ended without finishing its teardown and left ${countObjects(left)} ` +
+            `labelled objects (${[...left.containers, ...left.networks, ...left.volumes, ...left.images].slice(0, 5).join(", ")}). ` +
+            "Its lock is not taken over while they exist. List and remove them with " +
+            "`pnpm --filter @sealant/workspaces exec tsx boat-harness/cleanup.ts [--remove]`.",
+        );
+      log(
+        `taking over the lock of harness run ${state.holder}: its heartbeat stopped and it left nothing`,
+      );
+      await deps.docker(["rm", "-f", state.id]);
       continue;
     }
     if (deps.now() > deadline)
-      throw new Error(`harness run ${state?.holder ?? "?"} still holds the host lock`);
-    if (state !== undefined && reported !== state.holder)
+      throw new Error(`harness run ${state.holder} still holds the host lock`);
+    if (reported !== state.holder)
       log(`another harness run (${state.holder}) is using this Docker host; waiting`);
-    reported = state?.holder ?? "";
+    reported = state.holder;
     await deps.sleep(15_000);
   }
 };
 
 /** Releases the host lock if `runId` holds it. */
 export const releaseLock = async (runId: string, deps: HostDeps = realHost): Promise<void> => {
-  if ((await lockState(deps))?.holder === runId) await deps.docker(["rm", LOCK]);
+  const state = await lockState(deps);
+  if (state?.holder === runId) await deps.docker(["rm", "-f", state.id]);
 };
 
 /** Runs with any labelled object on this Docker host (a run that died early may have no network). */
@@ -166,14 +234,7 @@ export const reapRun = async (runId: string, deps: HostDeps = realHost): Promise
   for (const pid of processes) deps.kill(pid);
   const removed = await removeLabelled(`${HARNESS_LABEL}=${runId}`, { images: true }, deps.docker);
   await releaseLock(runId, deps);
-  return {
-    processes,
-    labelled:
-      removed.containers.length +
-      removed.networks.length +
-      removed.volumes.length +
-      removed.images.length,
-  };
+  return { processes, labelled: countObjects(removed) };
 };
 
 /**
@@ -199,7 +260,7 @@ export interface CleanupPlan {
   readonly staleLock: string | undefined;
 }
 
-/** What `cleanup.ts` may remove. A run is live while its lock holder or any of its processes exists. */
+/** What `cleanup.ts` may remove. A run is live while it holds the lock and its heartbeat runs. */
 export const cleanupPlan = async (deps: HostDeps = realHost): Promise<CleanupPlan> => {
   const runs = await listRuns(deps);
   const lock = await lockState(deps);

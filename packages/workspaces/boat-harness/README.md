@@ -113,7 +113,13 @@ answer the guest gave through the hosted proxy. Defect signatures may match eith
 ## Safety on a shared machine
 
 One harness run at a time per Docker host. A run takes a host lock: a named container,
-`sealant-boat-harness-lock`, that is never started. A second run waits for the first to finish.
+`sealant-boat-harness-lock`, that runs a heartbeat and stops itself 120 s after its last renewal.
+The run's test process renews it every 10 s, and so does its reaper until the run is reaped. A
+second run waits while the lock runs. Liveness is never read from process ids: another sandbox on
+the same Docker host may have its own PID namespace, and a run between processes (lock taken,
+nothing spawned yet) has nothing to find. A stopped lock is taken over only when no object labelled
+with its run exists; otherwise the new run stops and names `cleanup.ts`. A run also refuses to start
+beside another run's labelled objects, lock or not.
 
 Core's worker reconciles some Docker objects host-wide (resource reach networks, Boat gateways). The
 harness refuses to start if any Sealant resource or gateway object already exists on the Docker
@@ -140,10 +146,9 @@ gone, the reaper removes what the run left and releases the host lock:
   existed.
 
 `pnpm --filter @sealant/workspaces exec tsx boat-harness/cleanup.ts` does the same by hand. It lists
-first, removes only with `--remove`, and never touches a live run. A run is live while its test
-process or any process started for it (worker, API, reaper) exists, including while it builds
-images. Leftover objects alone never keep a run live: when a process-tree kill takes the reaper with
-the test process, the next run takes the lock over and `cleanup.ts --remove` reaps it.
+first, removes only with `--remove`, and never touches a live run: the one whose lock heartbeat
+runs, including while it builds images. When a process-tree kill takes the reaper with the test
+process, the heartbeat stops within 120 s, and `cleanup.ts --remove` reaps the run and its lock.
 
 `markers.test.ts`, `reap.test.ts`, `fake-boat.test.ts` and `docker-wrapper.test.ts` cover the
 markers, the lock, the reaper, cleanup, the fake's API rules and the wrapper. They need no Docker
