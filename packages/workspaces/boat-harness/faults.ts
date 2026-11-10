@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 import { expect } from "vitest";
 
-import { CACHE_LABEL, docker, dockerOk } from "./docker.js";
+import { CACHE_LABEL, HARNESS_LABEL, docker, dockerOk } from "./docker.js";
 import type { FakeBoatFaults, FakeSandbox } from "./fake-boat.js";
 import {
   assertSettled,
@@ -257,25 +257,74 @@ export const scenarios = {
     }
   },
 
-  /** The gateway container dies after Core configured it, before the guest joins its tunnel. */
+  /**
+   * The gateway container dies after Core configured it, before the guest joins its tunnel. Core
+   * may fail the launch with the gateway's cause, or recreate the gateway and go ready; a ready
+   * launch must then have a new gateway and a working tunnel (`db:5432`), and stop cleanly.
+   */
   async gatewayCrashes(stack: HarnessStack, project: Project) {
-    let killed = false;
+    let killed: string[] | undefined;
     await withFaults(
       stack,
       {
         beforeProxy: async (path, method, sandbox) => {
-          if (killed || !isSession(sandbox) || method !== "POST" || path !== "/sealant/network")
+          if (
+            killed !== undefined ||
+            !isSession(sandbox) ||
+            method !== "POST" ||
+            path !== "/sealant/network"
+          )
             return;
-          killed = true;
           const names = (await stack.ownedObjects()).containers.filter((name) =>
             name.startsWith("boat-tunnel-"),
           );
-          if (names.length > 0) await docker(["kill", ...names]);
+          const ids: string[] = [];
+          for (const name of names) {
+            const id = (await docker(["inspect", "-f", "{{.Id}}", name])).stdout.trim();
+            if ((await docker(["kill", name])).code === 0) ids.push(id);
+          }
+          killed = ids;
         },
       },
-      () => failedLaunch(stack, project, { cause: /handshake|gateway|tunnel/i }),
+      async () => {
+        const run = await launch(stack, project);
+        const outcome = await awaitOutcome(stack, run, 10 * 60_000);
+        if (killed === undefined || killed.length === 0)
+          throw new Error(
+            `the fault never fired: no gateway was running when the guest set up its network (${JSON.stringify(killed)})`,
+          );
+        if (outcome.status !== "ready") {
+          await assertSettled(stack, run, outcome.at, {
+            terminal: ["failed", "stopped"],
+            cause: /handshake|gateway|tunnel/i,
+          });
+          return;
+        }
+        const gone = new Set(killed);
+        const running: string[] = [];
+        for (const name of (await stack.ownedObjects()).containers.filter((entry) =>
+          entry.startsWith("boat-tunnel-"),
+        )) {
+          const state = await docker(["inspect", "-f", "{{.Id}} {{.State.Running}}", name]);
+          const [id = "", up = ""] = state.stdout.trim().split(" ");
+          if (up === "true" && !gone.has(id)) running.push(name);
+        }
+        if (running.length === 0)
+          throw new Error("launch became ready although its killed gateway was never replaced");
+        const reached = await run.workspace.exec([
+          "/bin/sh",
+          "-c",
+          "timeout 5 bash -c 'exec 3<>/dev/tcp/db/5432' && echo reached",
+        ]);
+        if (reached.exitCode !== 0)
+          throw new Error(
+            `launch became ready after the gateway crash, but db:5432 is unreachable: ${reached.stderr.slice(-500)}`,
+          );
+        const stoppedAt = Date.now();
+        await run.workspace.stop();
+        await assertSettled(stack, run, stoppedAt, { terminal: ["stopped"] });
+      },
     );
-    expect(killed).toBe(true);
   },
 
   /** The WireGuard UDP path from the VM to the gateway is blocked. */
@@ -284,11 +333,24 @@ export const scenarios = {
       stack,
       {
         beforeCommand: async (command, sandbox) => {
-          if (isSession(sandbox) && BIND.test(command))
-            await stack.boat.guestRoot(
-              sandbox.id,
-              "nft add table inet boat_harness && nft add chain inet boat_harness out '{ type filter hook output priority -100; }' && nft add rule inet boat_harness out udp dport 40000-40015 drop",
-            );
+          if (!isSession(sandbox) || !BIND.test(command)) return;
+          // From outside the VM, in its network namespace: a guest need not carry nft (the agent's
+          // image does not), and a path blocked on the network is what this fault stands for.
+          await dockerOk([
+            "run",
+            "--rm",
+            "--label",
+            `${HARNESS_LABEL}=${stack.runId}`,
+            "--network",
+            `container:${sandbox.container}`,
+            "--cap-add",
+            "NET_ADMIN",
+            "--entrypoint",
+            "/bin/sh",
+            stack.gatewayImage,
+            "-c",
+            "nft add table inet boat_harness && nft add chain inet boat_harness out '{ type filter hook output priority -100; }' && nft add rule inet boat_harness out udp dport 40000-40015 drop",
+          ]);
         },
       },
       () => failedLaunch(stack, project, { cause: /handshake|tunnel/i }),

@@ -13,6 +13,7 @@
  * - C1, a failed launch's close waiting on the 30 s sweep: #508.
  * - S1 for launches that fail while Boat is `cloning`: #508.
  * - F3, the control bridge and sealantd rejecting each other: gone with the bridge (#515).
+ * - S2, an established FINAL leaving the capture drain retained: passes on main 3a0d37ae.
  */
 import type { Defect } from "./markers.js";
 
@@ -29,16 +30,6 @@ export const PEER_PID: Defect = {
   failure: /^launch ended \w+ with [^\n]*\\"step\\":\\"readiness\\"/,
   evidence: /unauthorized peer|control-peer-changed/,
   owner: "thread A2 (readiness)",
-};
-
-/** Lifecycle S2: established FINAL closes resources but never ends capture retention. */
-export const STUCK_DRAINS: Defect = {
-  id: "S2",
-  title: "established FINAL leaves the capture drain retained (stuck stopping)",
-  // After Stop, Mend still reads retained while the capture drain stays kept.
-  failure:
-    /^timed out after \d+s waiting for Mend to see a terminal workspace[^\n]*; public status retained; runtime [^\n]*"drain":"kept"/,
-  owner: "thread C (lifecycle)",
 };
 
 /**
@@ -104,7 +95,7 @@ export const DEFECTS = {
     "UDP to the gateway blocked": undefined,
     "db stopped by a person": undefined,
     "worker killed after bind": undefined,
-    "Stop after the launch": STUCK_DRAINS,
+    "Stop after the launch": undefined,
     "deletion stuck in processing": undefined,
   },
 } as const satisfies {

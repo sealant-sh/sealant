@@ -231,7 +231,8 @@ describe("one fault per step", () => {
 describe("parking", () => {
   scenario(
     "park and resume keeps the workspace's Docker images",
-    DEFECTS.parking,
+    // A simulated retention (see parking-scenario.ts) steps past P1, so the rest must pass.
+    process.env.BOAT_HARNESS_SIMULATE_RETENTION === "1" ? undefined : DEFECTS.parking,
     () => parkAndResume(stack, project, step),
     60 * 60_000,
   );
