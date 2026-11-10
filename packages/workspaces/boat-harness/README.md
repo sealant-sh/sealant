@@ -21,19 +21,19 @@ that touch Boat code, nightly, and on demand (`.github/workflows/boat-harness.ym
 
 ## What is real
 
-| Part                                                              | Real or fake                                                                      |
-| ----------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Core worker                                                       | Real: the production bundle (`apps/worker` build) with its packaged Boat assets   |
-| Core API                                                          | Real, from source                                                                 |
-| Boat adapter, allocation, execution, FINAL close, guest transport | Real                                                                              |
-| Native snapshot build                                             | Real `BoatSnapshotBuilder` and `install-recipe`, run in the guest twin            |
-| Guest                                                             | Real units, receiver, relay, launcher and pinned sealantd, under systemd as PID 1 |
-| Resource gateway                                                  | Real `DockerBoatTunnel` and gateway image, real WireGuard                         |
-| `db` resource                                                     | Real Postgres through Core's Docker resource runtime                              |
-| Capture session channel                                           | Core's `capture-channel.fixture.ts` in a container, standing in for Mend's        |
-| Driving client                                                    | `@sealant/sdk`, the surface Mend uses                                             |
-| Boat's control plane                                              | Fake: `fake-boat.ts`                                                              |
-| Boat's hosted port proxy                                          | Fake: `fake-boat.ts`                                                              |
+| Part                                                              | Real or fake                                                                                                                                                        |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Core worker                                                       | Real: the production bundle (`apps/worker` build) with its packaged Boat assets                                                                                     |
+| Core API                                                          | Real, from source                                                                                                                                                   |
+| Boat adapter, allocation, execution, FINAL close, guest transport | Real                                                                                                                                                                |
+| Native snapshot build                                             | Real `BoatSnapshotBuilder` and `install-recipe`, run in the guest twin                                                                                              |
+| Guest                                                             | Real `sealant-agent.service` (the MicroVM agent in Boat host mode, `boat-bind.mjs`, the workspace's dockerd when asked) and pinned sealantd, under systemd as PID 1 |
+| Resource gateway                                                  | Real `DockerBoatTunnel` and gateway image, real WireGuard                                                                                                           |
+| `db` resource                                                     | Real Postgres through Core's Docker resource runtime                                                                                                                |
+| Capture session channel                                           | Core's `capture-channel.fixture.ts` in a container, standing in for Mend's                                                                                          |
+| Driving client                                                    | `@sealant/sdk`, the surface Mend uses                                                                                                                               |
+| Boat's control plane                                              | Fake: `fake-boat.ts`                                                                                                                                                |
+| Boat's hosted port proxy                                          | Fake: `fake-boat.ts`                                                                                                                                                |
 
 ## The fake Boat
 
@@ -68,7 +68,10 @@ its credential is a random string Boat would reject anyway.
 `twin/Dockerfile` is Ubuntu 24.04 with systemd `255.4-1ubuntu8.16` from the pinned snapshot, as the
 recipe requires. It has a uid 1000 `user` with passwordless sudo. `twin-init` runs before systemd on
 every start. It bind-mounts a fresh boot ID and creates the provider's outer `wg0`. Twins run
-privileged with a private cgroup namespace.
+privileged with a private cgroup namespace, and each gets a volume at `/var/lib/sealant/docker`: the
+workspace's own dockerd needs an upper directory that is not itself overlayfs, which a VM's disk is
+and a container's root is not. (`vm-probe.sh`'s overlayfs check fails in a twin for the same reason;
+a VM passes it.)
 
 The networking follows what the guest enforces:
 
@@ -83,9 +86,13 @@ The networking follows what the guest enforces:
 
 ## Scenarios
 
-`lifecycle.harness.ts` runs the happy path, then one fault per step. A scenario's own steps check
-that the runtime row carries the exact cause, and that Mend sees a terminal workspace (`stopped` or
-`failed`, never `retained`) within 60 s (`assertSettled`).
+`lifecycle.harness.ts` runs the happy path, the Docker scenario (`docker-scenario.ts`: a Docker
+blueprint driven as the owner's person through `exec(argv, { user })`; hello-world, a build, compose
+to `db` through the tunnel, the containers' egress policy, a two-stage `npm ci` build, the VM's and
+the session's cgroup peaks, and `boat-image/vm-probe.sh` in the twin; evidence in
+`BOAT_TWIN_PROOF_DIR` when set), then one fault per step. A scenario's own steps check that the
+runtime row carries the exact cause, and that Mend sees a terminal workspace (`stopped` or `failed`,
+never `retained`) within 60 s (`assertSettled`).
 
 Then, after every scenario and whatever it did, each launch it made must be released
 (`assertReleased`): the workspace terminal, and the UDP slot, publication pin, VM and gateway gone.
