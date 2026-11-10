@@ -10,8 +10,6 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  readdirSync,
-  readlinkSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
@@ -41,6 +39,16 @@ const DOCKER_ENV_KEYS = [
   "DOCKER_TLS_VERIFY",
   "DOCKER_CERT_PATH",
 ];
+
+/** Whether a cgroup still holds a process; one that does not exist holds none. */
+const populated = (cgroup) => {
+  try {
+    return /^populated 1$/m.test(readFileSync(path.join(cgroup, "cgroup.events"), "utf8"));
+  } catch (error) {
+    // No such cgroup: nothing was ever put in it, or it went with its last process.
+    return error?.code !== "ENOENT";
+  }
+};
 
 const nonEmpty = (value) => (typeof value === "string" && value !== "" ? value : null);
 
@@ -293,14 +301,16 @@ export const createDockerService = (options) => {
   // (containerd's shims run in their own groups). A slice name selects systemd's driver.
   const cgroupParent = nonEmpty(options.cgroupParent);
   const cgroupPath = nonEmpty(options.cgroupPath);
-  const shimPath = nonEmpty(options.shimPath);
+  // Optional: the cgroup dockerd starts in, so containerd and its shims (each in a process group
+  // of its own) are in it too and can be killed and proved gone as one, and nothing else is.
+  const engineCgroupPath = nonEmpty(options.engineCgroupPath);
   // Optional: stop every container (`docker stop -t N`) before dockerd itself is signalled.
   const containerStopSeconds =
     Number.isInteger(Number(options.containerStopSeconds)) &&
     Number(options.containerStopSeconds) > 0
       ? Number(options.containerStopSeconds)
       : null;
-  const verifiesStop = cgroupPath !== null || shimPath !== null;
+  const verifiesStop = cgroupPath !== null || engineCgroupPath !== null;
   const dockerdArgs = [
     "--host",
     dockerHost,
@@ -511,7 +521,30 @@ export const createDockerService = (options) => {
     }
     const deadline = Date.now() + readinessTimeoutMs;
     const stderrLog = openBoundedLog(options.logPath, logMaxBytes);
-    dockerd = spawn(dockerdPath, dockerdArgs, {
+    if (engineCgroupPath !== null) {
+      try {
+        mkdirSync(engineCgroupPath, { recursive: true });
+      } catch {
+        fail("directory-preparation-failed");
+        return;
+      }
+    }
+    // With an engine cgroup, a shell joins it and then execs dockerd under the same pid, so dockerd
+    // is in it before it can start anything: no child escapes the cgroup by racing the move.
+    const [command, args] =
+      engineCgroupPath === null
+        ? [dockerdPath, dockerdArgs]
+        : [
+            "/bin/sh",
+            [
+              "-c",
+              'echo $$ > "$0/cgroup.procs" && exec "$@"',
+              engineCgroupPath,
+              dockerdPath,
+              ...dockerdArgs,
+            ],
+          ];
+    dockerd = spawn(command, args, {
       detached: true,
       env,
       stdio: ["ignore", "ignore", "pipe"],
@@ -624,63 +657,24 @@ export const createDockerService = (options) => {
     );
   };
 
-  // The engine's binaries: a process running one of them after a stop is Docker still running.
-  const dockerBinaries = new Set(
-    [dockerdPath, path.join(path.dirname(dockerdPath), "containerd"), shimPath].filter(
-      (binary) => typeof binary === "string" && binary !== "",
-    ),
-  );
-  const dockerProcesses = () => {
-    let names;
-    try {
-      names = readdirSync("/proc");
-    } catch {
-      return [];
-    }
-    const found = [];
-    for (const name of names) {
-      if (!/^\d+$/.test(name)) continue;
-      try {
-        const executable = readlinkSync(`/proc/${name}/exe`).replace(/ \(deleted\)$/, "");
-        if (dockerBinaries.has(executable)) found.push(Number(name));
-      } catch {
-        // Gone, or another user's process: not ours to judge.
-      }
-    }
-    return found;
-  };
-  const cgroupPopulated = () => {
-    if (cgroupPath === null) return false;
-    try {
-      return /^populated 1$/m.test(readFileSync(path.join(cgroupPath, "cgroup.events"), "utf8"));
-    } catch (error) {
-      // No such cgroup: nothing was ever put in it, or it is gone with its last process.
-      return error?.code !== "ENOENT";
-    }
-  };
+  const cgroups = [engineCgroupPath, cgroupPath].filter((cgroup) => cgroup !== null);
   /**
-   * After dockerd is gone: kill what it left (the containers' cgroup, then any process still
-   * running an engine binary) and prove that nothing of Docker runs. `false` when it cannot.
+   * After dockerd is gone: kill what is left in Docker's own cgroups (the engine's: containerd
+   * and its shims; the containers') and prove them empty. Nothing outside them is touched, not
+   * even a process running the same engine binary. `false` when it cannot be proved.
    */
   const sweepLeftovers = async () => {
     const deadline = Date.now() + 5_000;
     for (;;) {
-      const leftovers = dockerProcesses();
-      const populated = cgroupPopulated();
-      if (leftovers.length === 0 && !populated) return true;
+      const occupied = cgroups.filter(populated);
+      if (occupied.length === 0) return true;
       if (Date.now() >= deadline) return false;
-      if (populated) {
+      for (const cgroup of occupied) {
         try {
-          writeFileSync(path.join(cgroupPath, "cgroup.kill"), "1");
+          writeFileSync(path.join(cgroup, "cgroup.kill"), "1");
         } catch {
-          // A kernel without cgroup.kill (before 5.14): the process sweep below still runs.
-        }
-      }
-      for (const pid of leftovers) {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          // Already gone.
+          // A kernel without cgroup.kill (before 5.14): the cgroup cannot be emptied, and the
+          // deadline answers that it was not.
         }
       }
       await new Promise((resolve) => setTimeout(resolve, 100));

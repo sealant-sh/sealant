@@ -126,13 +126,22 @@ const DOCKER_ADDRESS_POOLS = (process.env.SEALANT_MICROVM_DOCKER_ADDRESS_POOLS ?
   .map((entry) => entry.trim())
   .filter((entry) => entry !== "");
 const DOCKER_GROUP = process.env.SEALANT_MICROVM_DOCKER_GROUP;
-// Boat: the cgroup dockerd puts every container under (`--cgroup-parent`), and its path, so a
-// park or recovery can kill what a forced dockerd stop left (containerd's shims run in their own
-// process groups) and prove nothing of Docker still runs.
-const DOCKER_CGROUP_PARENT = process.env.SEALANT_MICROVM_DOCKER_CGROUP_PARENT;
-const DOCKER_CGROUP_PATH = process.env.SEALANT_MICROVM_DOCKER_CGROUP_PATH;
-const DOCKER_CONTAINER_STOP_SECONDS = process.env.SEALANT_MICROVM_DOCKER_CONTAINER_STOP_SECONDS;
-const DOCKER_SHIM = process.env.SEALANT_MICROVM_DOCKER_SHIM;
+// Boat proves Docker stopped before a park or recovery certifies anything, so its defaults turn
+// that on: every container gets a 10 s stop grace, then the containers' cgroup
+// (`--cgroup-parent`, under systemd's driver) and the engine's own cgroup (dockerd, containerd
+// and the shims, which run in process groups of their own) are killed and must be empty. Only
+// where the cgroup filesystem is mounted can change (tests). Lambda keeps dockerd as it was.
+const CGROUP_ROOT = process.env.SEALANT_MICROVM_CGROUP_ROOT ?? "/sys/fs/cgroup";
+const DOCKER_CGROUP_PARENT =
+  process.env.SEALANT_MICROVM_DOCKER_CGROUP_PARENT ?? (BOAT ? "sealant-docker.slice" : undefined);
+const DOCKER_CGROUP_PATH =
+  process.env.SEALANT_MICROVM_DOCKER_CGROUP_PATH ??
+  (BOAT ? path.join(CGROUP_ROOT, "sealant-docker.slice") : undefined);
+const DOCKER_ENGINE_CGROUP =
+  process.env.SEALANT_MICROVM_DOCKER_ENGINE_CGROUP ??
+  (BOAT ? path.join(CGROUP_ROOT, "sealant-docker-engine") : undefined);
+const DOCKER_CONTAINER_STOP_SECONDS =
+  process.env.SEALANT_MICROVM_DOCKER_CONTAINER_STOP_SECONDS ?? (BOAT ? "10" : undefined);
 const DOCKER_SERVICE_OPTIONS = {
   bridgeIp: DOCKER_BIP,
   addressPools: DOCKER_ADDRESS_POOLS,
@@ -140,7 +149,7 @@ const DOCKER_SERVICE_OPTIONS = {
   cgroupParent: DOCKER_CGROUP_PARENT,
   cgroupPath: DOCKER_CGROUP_PATH,
   containerStopSeconds: DOCKER_CONTAINER_STOP_SECONDS,
-  shimPath: DOCKER_SHIM,
+  engineCgroupPath: DOCKER_ENGINE_CGROUP,
   dockerdPath: DOCKERD,
   dockerPath: DOCKER,
   socketPath: DOCKER_SOCKET,
@@ -1011,6 +1020,8 @@ const handleLaunch = async (req, res) => {
   if (state.launchInProgress || state.launchAccepted) {
     return json(res, 409, { message: "already booted" });
   }
+  // A park that began while this body was read has closed the boot: nothing may start now.
+  if (boatHost?.isParked() === true) return json(res, 409, { reason: "parked" });
   if (!bearerMatches(req.headers.authorization, state.launchSecret)) {
     return message(res, 401, "launch secret does not match this VM's run");
   }
@@ -1120,6 +1131,9 @@ const handlePark = async (req, res) => {
     return message(res, 401, "control token does not match");
   }
   const body = JSON.parse((await readBody(req)) || "{}");
+  // A launch writing its material is not closed by killing a daemon it has not started yet: park
+  // refuses (typed, retryable) until the launch has settled, never certifying closure over it.
+  if (state.launchInProgress) return json(res, 409, { reason: "launch-in-progress" });
   const result = await boatHost.park(body, {
     runId: state.runId,
     stopDaemon: killDaemonGroup,

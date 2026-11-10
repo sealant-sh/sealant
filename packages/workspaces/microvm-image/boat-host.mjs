@@ -923,14 +923,20 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
    *   (`--bip` 198.18.1.0/24, pools 198.19.0.0/16); the resource subnet and the gateway's DNS
    *   through the tunnel. The tunnel's endpoint and every private, metadata and reserved range
    *   are dropped. Everything else (the Internet) returns to Docker's chains.
-   * - SEALANT-DOCKER-INPUT (from INPUT): no new connection from a Docker bridge to the VM itself.
+   * - SEALANT-DOCKER-INPUT (from INPUT): no new connection from a container to the VM itself,
+   *   matched by what a container is, not by a bridge's name (`com.docker.network.bridge.name`
+   *   can be anything): Docker's own source ranges, and any packet that entered through a bridge
+   *   port (`physdev`; a custom `--subnet` network is caught there too).
    * - IPv6: nothing forwarded for a container at all, and nothing new from a bridge to the VM.
    *   The gateway allows IPv4 only, and an `--ipv6` network must not open what it does not.
    */
   const policyInputs = (record) => {
     const subnet = record.config.subnet;
     const endpoint = record.config.endpoint;
-    const fromBridges = ["-i docker0", "-i br-+"];
+    const fromContainers = [
+      ...DOCKER_NETWORKS.map((cidr) => `-s ${cidr}`),
+      "-m physdev --physdev-is-in",
+    ];
     const v4 = [
       "*filter",
       ":DOCKER-USER - [0:0]",
@@ -943,7 +949,7 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
       `-A DOCKER-USER -d ${endpoint}/32 -j DROP`,
       ...DENIED.map((cidr) => `-A DOCKER-USER -d ${cidr} -j DROP`),
       "-A DOCKER-USER -j RETURN",
-      ...fromBridges.map(
+      ...fromContainers.map(
         (match) => `-A SEALANT-DOCKER-INPUT ${match} -m conntrack --ctstate NEW -j DROP`,
       ),
       "COMMIT",
@@ -954,9 +960,7 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
       ":DOCKER-USER - [0:0]",
       ":SEALANT-DOCKER-INPUT - [0:0]",
       "-A DOCKER-USER -j DROP",
-      ...fromBridges.map(
-        (match) => `-A SEALANT-DOCKER-INPUT ${match} -m conntrack --ctstate NEW -j DROP`,
-      ),
+      "-A SEALANT-DOCKER-INPUT -m physdev --physdev-is-in -m conntrack --ctstate NEW -j DROP",
       "COMMIT",
       "",
     ].join("\n");
