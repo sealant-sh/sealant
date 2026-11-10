@@ -28,6 +28,11 @@ export const runtimeAdapterSupportFailureReasonSchema = z.enum([
   "runtime-os-unsupported",
   "runtime-requirement-unsupported",
   "workspace-docker-unsupported",
+  /**
+   * Boat on a deployment with no resource gateway: it launches only workspaces created never to
+   * be linked to resources (`runtime.resources: "none"`).
+   */
+  "gateway-unavailable",
 ]);
 
 export const runtimeAdapterSupportSchema = z.discriminatedUnion("supported", [

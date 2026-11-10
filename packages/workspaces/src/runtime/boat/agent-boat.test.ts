@@ -898,6 +898,69 @@ describe("boat agent · launch", () => {
     expect((await call(restarted, "GET", AGENT_HEALTH_ROUTE, { bearer })).status).not.toBe(401);
   });
 
+  it("launches a run without resources with no network at all: no sealant-wg, no resolver of its own, and the VM's resolv.conf as it was", async () => {
+    // Core launches a workspace created never to be linked to resources with the same launch body
+    // and never sends `POST /sealant/network`. This is the agent every published snapshot carries
+    // (its bytes are pinned by the asset lock, unchanged), so an older snapshot launches the same.
+    const vm = await createVm();
+    const { agent, bearer } = await launched(vm);
+    await waitFor(() => exists(vm.socketPath));
+    expect(await call(agent, "GET", AGENT_HEALTH_ROUTE, { bearer })).toMatchObject({
+      status: 200,
+      body: { booted: true, controlSocket: true },
+    });
+    // No `ip`, `wg`, `modprobe` or packet-filter command ran: there is no `sealant-wg`.
+    expect(await netLines(vm)).toEqual([]);
+    // The VM's own resolver is untouched, so public names resolve as on any VM, and the agent
+    // kept no copy of it and recorded no network.
+    expect((await lstat(vm.resolvConf)).isSymbolicLink()).toBe(true);
+    expect(await readFile(vm.resolvConf, "utf8")).toBe("nameserver 127.0.0.53\n");
+    expect(await exists(path.join(vm.dataDir, "network.json"))).toBe(false);
+    expect(await exists(path.join(vm.dataDir, "resolv.conf.orig"))).toBe(false);
+    // Nothing listens where the agent's DNS forwarder would.
+    const forwarder = net.connect({
+      host: "127.0.0.1",
+      port: Number(vm.env["SEALANT_AGENT_DNS_LISTEN_PORT"]),
+    });
+    expect(
+      await new Promise<string>((resolve) => {
+        forwarder.once("connect", () => resolve("listening"));
+        forwarder.once("error", (error) =>
+          resolve(z.object({ code: z.string() }).parse(error).code),
+        );
+      }),
+    ).toBe("ECONNREFUSED");
+    forwarder.destroy();
+    // Asked, the agent says so itself, and it carries no tunnel.
+    expect(await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer })).toMatchObject({
+      status: 200,
+      body: { configured: false, handshake: "unverified", dns: "unavailable" },
+    });
+    const carrier = new WebSocket(`ws://127.0.0.1:${agent.port}/sealant/tunnel`, {
+      headers: { authorization: `Bearer ${bearer}` },
+    });
+    expect(
+      await new Promise<number | string>((resolve) => {
+        carrier.once("open", () => resolve("carried"));
+        carrier.once("unexpected-response", (_request, response) =>
+          resolve(response.statusCode ?? "no status"),
+        );
+        carrier.once("error", () => resolve("error"));
+      }),
+    ).toBe(409);
+    carrier.terminate();
+    // The close's recovery still answers for it: its daemon is running.
+    const running = await call(agent, "POST", AGENT_RECOVER_ROUTE, { body: recoverBody, bearer });
+    expect(boatAgentRecoverResponseSchema.parse(running.body)).toEqual({ outcome: "running" });
+    // An agent restarted on this boot adopts the launch and still configures nothing.
+    await stopAgent(agent);
+    const restarted = await startAgent(vm);
+    expect((await call(restarted, "GET", AGENT_HEALTH_ROUTE, { bearer })).status).not.toBe(401);
+    expect(await netLines(vm)).toEqual([]);
+    expect((await lstat(vm.resolvConf)).isSymbolicLink()).toBe(true);
+    expect(restarted.output()).not.toMatch(/network:/);
+  });
+
   it("starts sealantd as PID 1 of its own PID namespace through unshare, in a scope of its own", async () => {
     const vm = await createVm();
     await launched(vm, { SEALANT_AGENT_DAEMON_NAMESPACE: "pid" });

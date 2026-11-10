@@ -54,6 +54,10 @@ export const sealantRefusalBehind = (error: unknown): SealantControlError | unde
   return undefined;
 };
 
+/** What a Boat workspace that may be linked to resources is told on a deployment with no gateway. */
+export const BOAT_GATEWAY_UNAVAILABLE_MESSAGE =
+  'This deployment has no resource gateway for Boat: it launches only workspaces created with runtime.resources "none" (SDK `resources: "none"`), which are never linked to project resources. Create the workspace with that option, or configure SEALANT_BOAT_GATEWAY_HOST_ID, SEALANT_BOAT_GATEWAY_RELAY_HOST and SEALANT_BOAT_GATEWAY_IMAGE on the worker.';
+
 /** Public failures never carry guest responses, credentials or sealed launch material. */
 export class BoatAdapterError extends Error {
   readonly _tag = "BoatAdapterError";
@@ -81,6 +85,12 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
       readonly deploymentId: string;
       readonly runtime: ManagedRuntime.ManagedRuntime<BoatAdapterServices, never>;
       readonly control?: ControlChannel;
+      /**
+       * Whether this deployment has a resource gateway (default: it has). Without one, only a
+       * workspace created never to be linked to resources (`runtime.resources: "none"`) launches;
+       * any other is refused before its image is built or a VM is created.
+       */
+      readonly resourceGateway?: boolean;
     },
   ) {}
 
@@ -96,6 +106,12 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
         reason: "runtime-requirement-unsupported" as const,
         message: "Boat currently requires a capture source without inline dotfiles archives.",
       };
+    if (this.options.resourceGateway === false && input.blueprint.runtime.resources !== "none")
+      return {
+        supported: false as const,
+        reason: "gateway-unavailable" as const,
+        message: BOAT_GATEWAY_UNAVAILABLE_MESSAGE,
+      };
     return { supported: true as const };
   }
 
@@ -105,11 +121,19 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
     try {
       const input = boatLaunchInputSchema.parse(raw);
       const { runId, workspaceId, principalId } = input;
+      const support = this.supports(input);
+      // Refused before allocation: no VM exists, and nothing is asked of a gateway host.
+      if (!support.supported && support.reason === "gateway-unavailable")
+        throw new BoatAdapterError("admission-refused", {
+          step: "prepare-launch",
+          errorClass: "BoatAdapterError",
+          code: "gateway-unavailable",
+        });
       if (
         runId === undefined ||
         workspaceId === undefined ||
         principalId === undefined ||
-        !this.supports(input).supported ||
+        !support.supported ||
         input.admissionPins === undefined
       )
         throw new BoatAdapterError("admission-refused");
@@ -162,6 +186,9 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
             publication: input.publication,
             scope: scope.data,
             sourceKind: "capture",
+            // Read once from the run's stored spec and frozen on the allocation: readiness, the
+            // close and every sweep read it from there.
+            ...(input.blueprint.runtime.resources === "none" ? { resources: "none" as const } : {}),
           });
         }),
       );

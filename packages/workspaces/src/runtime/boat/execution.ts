@@ -584,7 +584,11 @@ export interface BoatExecutionService {
     id: string,
     material: Redacted.Redacted<BoatLaunchMaterial>,
   ) => Effect.Effect<void, Failure>;
-  /** Freezes the isolation receipts a launch was prepared under; the record is the only reader. */
+  /**
+   * Freezes what a launch was isolated under: the receipts its network was prepared under, or the
+   * fact that it has no resource network (`{ resources: "none" }`), after which `isolate` and
+   * `tunnel` refuse the run for good. The record is the only reader.
+   */
   readonly recordIsolation: (
     target: BoatExecutionTarget,
     receipts: NonNullable<BoatExecutionRecord["isolation"]>,
@@ -612,7 +616,10 @@ export interface BoatExecutionService {
   readonly hold: (target: BoatExecutionTarget) => Effect.Effect<void, Failure>;
   /** Capture-only restart on the original boot, with the capture token Core kept for it. */
   readonly recover: (target: BoatExecutionTarget) => Effect.Effect<BoatRecoveryOutcome, Failure>;
-  /** Fresh observation only: agent health, the tunnel's handshake and DNS, then daemon health. */
+  /**
+   * Fresh observation only: agent health, the tunnel's handshake and DNS, then daemon health. A
+   * run without resources has no tunnel to observe: agent health, then daemon health.
+   */
   readonly readiness: (target: BoatExecutionTarget) => Effect.Effect<BoatReadyReceipt, Failure>;
 }
 /** A current observation, never durable authority to admit a later request. */
@@ -622,8 +629,9 @@ export interface BoatReadyReceipt {
   readonly bootId: string;
   /** Digest of the binding and the frozen resource and tunnel receipts the launch ran under. */
   readonly isolationReceipt: string;
-  readonly handshake: "verified";
-  readonly dns: "udp-and-tcp";
+  /** `none`: a run without resources has no tunnel, so nothing shook hands and nothing resolves. */
+  readonly handshake: "verified" | "none";
+  readonly dns: "udp-and-tcp" | "none";
   readonly admission: "held";
 }
 /** Private key stays redacted until the authenticated HTTPS body is serialized. */
@@ -673,14 +681,21 @@ const bindingOf = (record: BoatExecutionRecord) => ({
   epoch: record.admission?.epoch,
   operation_id: record.admission?.operationId,
 });
+/** A launch frozen with no resource network: its workspace was created without resources. */
+const withoutResources = (record: BoatExecutionRecord) =>
+  record.isolation !== undefined && "resources" in record.isolation;
 /** What the readiness receipt digests: the binding and the frozen isolation receipts. */
 const isolationReceiptOf = (record: BoatExecutionRecord) =>
   sha256(
-    canonical({
-      binding: bindingOf(record),
-      resource_receipt: record.isolation?.resourceReceipt,
-      tunnel_receipt: record.isolation?.tunnelReceipt,
-    }),
+    canonical(
+      record.isolation !== undefined && "resources" in record.isolation
+        ? { binding: bindingOf(record), resources: record.isolation.resources }
+        : {
+            binding: bindingOf(record),
+            resource_receipt: record.isolation?.resourceReceipt,
+            tunnel_receipt: record.isolation?.tunnelReceipt,
+          },
+    ),
   );
 const bindingReceiptOf = (target: BoatExecutionTarget, exchangeId: string) =>
   sha256(
@@ -1037,7 +1052,12 @@ const make: Effect.Effect<
     input: BoatGuestNetworkInput,
   ) {
     const record = yield* loadTarget(target);
-    if (!["installed", "issued", "running"].includes(record.phase) || record.admission === null)
+    if (
+      !["installed", "issued", "running"].includes(record.phase) ||
+      record.admission === null ||
+      // Frozen without a resource network: this guest is never given one.
+      withoutResources(record)
+    )
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
     const network = yield* attempt("invalid-input", () =>
       boatNetworkIntentSchema.parse(input.network),
@@ -1171,6 +1191,27 @@ const make: Effect.Effect<
       return yield* Effect.fail(notReady(AGENT_HEALTH_ROUTE, "control-socket"));
     if (docker && !("version" in observed && observed.services.docker.status === "ready"))
       return yield* Effect.fail(notReady(AGENT_HEALTH_ROUTE, "docker"));
+    // 3. The daemon itself, through the agent's authenticated control relay.
+    const probeDaemon = Effect.gen(function* () {
+      const daemon = yield* io(
+        () => transport.probe(connection.hosted, connection.bearer),
+        "readiness",
+      );
+      if (!daemon.healthy || !/^rt_[a-zA-Z0-9_-]+$/.test(daemon.runtimeId))
+        return yield* Effect.fail(new BoatExecutionError("invalid-reply"));
+      yield* unchanged(record);
+      return daemon.runtimeId;
+    });
+    // A run without resources has no tunnel: nothing to shake hands with and no resolver of ours.
+    if (withoutResources(record))
+      return {
+        runtimeId: yield* probeDaemon,
+        bootId: target.bootId,
+        isolationReceipt: isolationReceiptOf(record),
+        handshake: "none" as const,
+        dns: "none" as const,
+        admission: "held" as const,
+      };
     // 2. The tunnel: the gateway shook hands and its resolver answers over UDP and TCP.
     const network = yield* call(connection, "network-status");
     const tunnel = yield* attempt("invalid-reply", () =>
@@ -1197,16 +1238,8 @@ const make: Effect.Effect<
       );
     if (tunnel.dns !== "udp-and-tcp")
       return yield* Effect.fail(notReady(BOAT_AGENT_NETWORK_ROUTE, "dns"));
-    // 3. The daemon itself, through the agent's authenticated control relay.
-    const daemon = yield* io(
-      () => transport.probe(connection.hosted, connection.bearer),
-      "readiness",
-    );
-    if (!daemon.healthy || !/^rt_[a-zA-Z0-9_-]+$/.test(daemon.runtimeId))
-      return yield* Effect.fail(new BoatExecutionError("invalid-reply"));
-    yield* unchanged(record);
     return {
-      runtimeId: daemon.runtimeId,
+      runtimeId: yield* probeDaemon,
       bootId: target.bootId,
       isolationReceipt: isolationReceiptOf(record),
       handshake: "verified" as const,
@@ -1217,7 +1250,11 @@ const make: Effect.Effect<
 
   const tunnel = Effect.fn("BoatExecution.tunnel")(function* (target: BoatExecutionTarget) {
     const record = yield* loadTarget(target);
-    if (!["installed", "issued", "running"].includes(record.phase) || record.admission === null)
+    if (
+      !["installed", "issued", "running"].includes(record.phase) ||
+      record.admission === null ||
+      withoutResources(record)
+    )
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
     const connection = yield* access(record);
     return Redacted.make<BoatTunnelConnection>(

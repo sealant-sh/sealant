@@ -4,6 +4,9 @@ import { isDeepStrictEqual } from "node:util";
 import {
   BoatAllocationRepo,
   BoatAllocationRepoLive,
+  type BoatAllocationStoreError,
+  type BoatTunnelStoreError,
+  type WorkspaceCaptureDrainRepoError,
   BoatExecutionRepo,
   BoatExecutionRepoLive,
   BoatObservationRepo,
@@ -98,6 +101,26 @@ export class BoatFinalCloseProvider extends Context.Service<
 const DELETION_WAIT_MS = 20_000;
 const DELETION_POLL_MS = 1_000;
 
+/**
+ * Where a close keeps Boat's deletion operation between DELETE and `completed`, so a restarted
+ * worker polls the operation it was given instead of issuing another. A run with a tunnel keeps it
+ * on the tunnel reservation, frozen for the close. A run launched without resources has no tunnel
+ * row: its allocation's own removal record keeps it, and the allocation is `deleting` from then on.
+ */
+type BoatCloseCustody =
+  | { readonly kind: "tunnel"; readonly reservation: BoatTunnelReservation }
+  | { readonly kind: "allocation"; readonly allocation: BoatAllocationRecord };
+
+/** The deletion operation a custody has recorded, if any. */
+const removalOf = (
+  custody: BoatCloseCustody,
+): { readonly id: string; readonly completed: boolean } | undefined =>
+  custody.kind === "tunnel"
+    ? custody.reservation.removal
+    : custody.allocation.removal?.kind === "operation"
+      ? { id: custody.allocation.removal.id, completed: custody.allocation.removal.completed }
+      : undefined;
+
 const complete = (record: CaptureDrainRead) =>
   record.readable &&
   record.entry?.lastUnreadable !== true &&
@@ -159,8 +182,15 @@ const make: Effect.Effect<
     Effect.gen(function* () {
       const allocation = yield* allocations.get(target.runtimeInstanceId);
       const instance = yield* runtimes.getRuntimeInstanceByRunId(target.runId);
+      // Launched without resources: read from the allocation, where the launch froze it.
+      const unlinked = allocation?.input.resources === "none";
       if (
-        allocation?.phase !== "bound" ||
+        allocation === undefined ||
+        !(
+          allocation.phase === "bound" ||
+          // Its deletion operation is recorded on the allocation, which is `deleting` from then on.
+          (unlinked && allocation.phase === "deleting" && allocation.removal?.kind === "operation")
+        ) ||
         !isDeepStrictEqual(allocation.target, target) ||
         target.deploymentId !== host.deploymentId ||
         instance?.adapter !== "boat" ||
@@ -169,12 +199,21 @@ const make: Effect.Effect<
       )
         return yield* Effect.fail(new BoatFinalCloseError("held"));
       const reservation = yield* tunnels.get(target.runtimeInstanceId);
+      if (unlinked) {
+        // It was never given a tunnel. A reservation recorded for it is not this close's to settle.
+        if (reservation !== undefined) return yield* Effect.fail(new BoatFinalCloseError("held"));
+        const custody: BoatCloseCustody = { kind: "allocation", allocation };
+        return { custody, stopReason: instance.stopReason };
+      }
       if (
         reservation === undefined ||
-        !isDeepStrictEqual(reservation.binding, { target, gatewayHostId: host.gatewayHostId })
+        // A deployment with no resource gateway cannot settle a tunnel: the run is held.
+        host.gateway === undefined ||
+        !isDeepStrictEqual(reservation.binding, { target, gatewayHostId: host.gateway.hostId })
       )
         return yield* Effect.fail(new BoatFinalCloseError("held"));
-      return { reservation, stopReason: instance.stopReason };
+      const custody: BoatCloseCustody = { kind: "tunnel", reservation };
+      return { custody, stopReason: instance.stopReason };
     });
   /** The exact owned VM, read through the observer: the one source of presence. */
   const present = (target: BoatExecutionTarget) =>
@@ -215,18 +254,68 @@ const make: Effect.Effect<
       yield* poll.pipe(Effect.timeoutOption(provider.deletionWaitMs ?? DELETION_WAIT_MS));
       return yield* Ref.get(latest);
     });
-  const record = (reservation: BoatTunnelReservation, operation: BoatDeletion) =>
+  /** Records Boat's deletion operation where it survives a worker restart, before any wait. */
+  const record = (
+    target: BoatExecutionTarget,
+    custody: BoatCloseCustody,
+    operation: BoatDeletion,
+  ): Effect.Effect<
+    BoatCloseCustody,
+    | BoatFinalCloseError
+    | BoatAllocationStoreError
+    | BoatTunnelStoreError
+    | WorkspaceCaptureDrainRepoError
+  > =>
     Effect.gen(function* () {
+      if (operation.kind !== "sandbox" || operation.targetId !== target.sandboxId)
+        return yield* Effect.fail(new BoatFinalCloseError("held"));
+      const completed = operation.status === "completed";
+      if (custody.kind === "tunnel")
+        return {
+          kind: "tunnel" as const,
+          reservation: yield* tunnels.recordRemoval(custody.reservation, {
+            id: operation.id,
+            targetId: operation.targetId,
+            completed,
+          }),
+        };
+      // No tunnel row: the allocation's own removal record keeps the operation. Read again, so a
+      // record this close already advanced is the one compared and set.
+      const saved = yield* allocations.get(target.runtimeInstanceId);
+      const root = yield* canonical.getByRunId(target.runId);
+      // Canonical deletion or the owner's discard authorizes removal, as for a tunnel's record.
       if (
-        operation.kind !== "sandbox" ||
-        operation.targetId !== reservation.binding.target.sandboxId
+        !["deleting-issued", "deleted"].includes(root?.deletionState ?? "") &&
+        (root?.discardRequestedAt ?? null) === null
+      )
+        return yield* Effect.fail(new BoatFinalCloseError("unavailable"));
+      if (
+        saved === undefined ||
+        saved.input.resources !== "none" ||
+        !isDeepStrictEqual(saved.target, target) ||
+        !(saved.phase === "bound" || saved.phase === "deleting") ||
+        // One operation per VM: another id is not this removal's.
+        (saved.removal !== undefined &&
+          (saved.removal.kind !== "operation" || saved.removal.id !== operation.id))
       )
         return yield* Effect.fail(new BoatFinalCloseError("held"));
-      return yield* tunnels.recordRemoval(reservation, {
-        id: operation.id,
-        targetId: operation.targetId,
-        completed: operation.status === "completed",
-      });
+      // Completion never reverts: an operation recorded complete stays complete.
+      if (saved.removal?.kind === "operation" && (saved.removal.completed || !completed))
+        return { kind: "allocation" as const, allocation: saved };
+      return {
+        kind: "allocation" as const,
+        allocation: yield* allocations.advance(saved, {
+          ...saved,
+          phase: "deleting",
+          reason: null,
+          removal: {
+            kind: "operation",
+            id: operation.id,
+            targetId: target.sandboxId,
+            completed,
+          },
+        }),
+      };
     });
   /** Boat no longer has the VM: every obligation is discharged against that observation alone. */
   const dischargeAbsent = (allocation: BoatAllocationRecord) =>
@@ -243,8 +332,8 @@ const make: Effect.Effect<
       );
   /** Boat's own deletion operation for this VM completed. */
   const finish = Effect.fn("BoatFinalClose.finish")(function* (target: BoatExecutionTarget) {
-    const { reservation } = yield* current(target);
-    if (reservation.removal?.completed !== true)
+    const { custody } = yield* current(target);
+    if (removalOf(custody)?.completed !== true)
       return yield* Effect.fail(new BoatFinalCloseError("held"));
     const allocation = yield* allocations.get(target.runtimeInstanceId);
     if (allocation === undefined) return yield* Effect.fail(new BoatFinalCloseError("held"));
@@ -268,16 +357,18 @@ const make: Effect.Effect<
       return yield* dischargeAbsent(stored);
     }
     if (preIssue) return yield* closeUnused(target.runId, target.sandboxId, target);
-    let { reservation } = yield* current(target);
+    let { custody } = yield* current(target);
     const root = yield* canonical.getByRunId(target.runId);
     if (root?.deletionState === "deleted") return yield* finish(target);
-    if (reservation.removal !== undefined) {
-      const id = yield* parse(() => boatDeletionIdSchema.parse(reservation.removal?.id));
+    const recorded = removalOf(custody);
+    if (recorded !== undefined) {
+      // DELETE was accepted earlier, by this worker or one before it: its operation is polled.
+      const id = yield* parse(() => boatDeletionIdSchema.parse(recorded.id));
       const operation = yield* call(() => provider.api.getDeletion(id));
-      reservation = yield* record(reservation, operation);
-      if (reservation.removal?.completed !== true)
-        reservation = yield* record(reservation, yield* awaitDeletion(operation));
-      if (reservation.removal?.completed !== true) return "pending" as const;
+      custody = yield* record(target, custody, operation);
+      if (removalOf(custody)?.completed !== true)
+        custody = yield* record(target, custody, yield* awaitDeletion(operation));
+      if (removalOf(custody)?.completed !== true) return "pending" as const;
       if (root?.deletionState === "deleting-issued" && root.deletionToken !== null)
         yield* canonical.completeDeletion({ runId: target.runId, token: root.deletionToken });
       return yield* finish(target);
@@ -285,10 +376,18 @@ const make: Effect.Effect<
     // A positively running invocation already has an immutable guest record. Delayed start replays
     // only adopt it; they cannot create another invocation after this FINAL.
     yield* execution.hold(target);
-    reservation = yield* tunnels.freeze(
-      (yield* current(target)).reservation,
-      reservation.closeId ?? randomUUID(),
-    );
+    const held = (yield* current(target)).custody;
+    custody =
+      held.kind === "tunnel"
+        ? {
+            kind: "tunnel",
+            reservation: yield* tunnels.freeze(
+              held.reservation,
+              (custody.kind === "tunnel" ? custody.reservation.closeId : undefined) ?? randomUUID(),
+            ),
+          }
+        : // A run without resources has no gateway to fence: the held execution is its fence.
+          held;
     // The owner discarded the unsaved work, or Mend attested a sealed FINAL of this executor: no
     // guest needs to answer before its VM is removed (audit S8).
     const instance = yield* runtimes.getRuntimeInstanceByRunId(target.runId);
@@ -376,10 +475,10 @@ const make: Effect.Effect<
         const id = yield* present(target);
         const operation = yield* call(() => provider.api.deleteSandbox(id));
         // The operation id is recorded before waiting, so a crash mid-wait polls it later.
-        reservation = yield* record(reservation, operation);
-        if (reservation.removal?.completed !== true)
-          reservation = yield* record(reservation, yield* awaitDeletion(operation));
-        if (reservation.removal?.completed !== true)
+        custody = yield* record(target, custody, operation);
+        if (removalOf(custody)?.completed !== true)
+          custody = yield* record(target, custody, yield* awaitDeletion(operation));
+        if (removalOf(custody)?.completed !== true)
           return yield* Effect.fail(new BoatFinalCloseError("pending"));
       }),
     });
@@ -429,7 +528,8 @@ const make: Effect.Effect<
     if (reservation !== undefined) {
       if (
         target === null ||
-        !isDeepStrictEqual(reservation.binding, { target, gatewayHostId: host.gatewayHostId })
+        host.gateway === undefined ||
+        !isDeepStrictEqual(reservation.binding, { target, gatewayHostId: host.gateway.hostId })
       )
         return yield* Effect.fail(new BoatFinalCloseError("held"));
       reservation = yield* tunnels.freeze(reservation, reservation.closeId ?? randomUUID());

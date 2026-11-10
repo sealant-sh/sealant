@@ -274,6 +274,8 @@ export class GuestFixture implements BoatGuestTransport {
     secretEnvJson?: string | undefined;
     services?: unknown;
   }> = [];
+  /** Every launch body exactly as Core sent it: what the agent was, and was not, told. */
+  readonly launchBodies: string[] = [];
   readonly targets: BoatExecutionTarget[] = [];
   fail = false;
   /** The next launch push is accepted by the agent, but its reply never reaches Core. */
@@ -375,6 +377,7 @@ export class GuestFixture implements BoatGuestTransport {
       if (this.starts > 0) return { status: 409, body: { message: "already booted" } };
       this.starts = 1;
       this.launches.push(launch);
+      this.launchBodies.push(raw);
       if (this.lostLaunchReply) {
         this.lostLaunchReply = false;
         throw new Error("lost hosted launch reply");
@@ -419,6 +422,8 @@ export class GuestFixture implements BoatGuestTransport {
 }
 export class GatewayFixture {
   subnetUnavailable = false;
+  /** How many subnets the gateway host was asked for: none for a run without resources. */
+  subnetCalls = 0;
   beforeSubnet: () => Promise<void> = async () => {};
   allowRemoval = false;
   removalUnavailable = false;

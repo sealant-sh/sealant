@@ -44,6 +44,7 @@ export {
   BoatResourcesError,
   boatResourcesLayer,
   boatResourcesLayerNoDeps,
+  type BoatGatewayHost,
   type BoatResourcesReceipt,
   type BoatResourcesSweep,
 } from "./worker/boat-resources.js";
@@ -85,6 +86,10 @@ export {
   boatConnectMaterial,
   boatControlMaterialLayer,
 } from "./runtime/boat/control-material.js";
-export { BoatRuntimeAdapter, type BoatAdapterServices } from "./runtime/boat/adapter.js";
+export {
+  BoatRuntimeAdapter,
+  BOAT_GATEWAY_UNAVAILABLE_MESSAGE,
+  type BoatAdapterServices,
+} from "./runtime/boat/adapter.js";
 export { BoatSnapshotBuilder } from "./images/boat/builder.js";
 export { loadPackagedRuntime } from "./images/boat/assets.js";

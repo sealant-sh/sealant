@@ -61,7 +61,8 @@ export interface BoatResourcesReceipt {
 export interface BoatResourcesSweep {
   readonly entries: readonly {
     readonly runId: string;
-    readonly outcome: "configured" | "closed" | "pending" | "held" | "unavailable";
+    /** `no-resources`: the run was launched without resources and has nothing to configure. */
+    readonly outcome: "configured" | "closed" | "pending" | "held" | "unavailable" | "no-resources";
   }[];
   readonly next?: string;
 }
@@ -80,22 +81,40 @@ export class BoatResources extends Context.Service<
     readonly reach: () => Effect.Effect<readonly ResourceWorkspaceLink[], BoatResourcesError>;
   }
 >()("@sealant/workspaces/boat/BoatResources") {}
-/** Stable operator host identity and where this worker reaches it, never inferred from a container. */
+/** The Docker host a deployment's resource gateways run on, and where this worker reaches it. */
+export interface BoatGatewayHost {
+  /** Stable operator host identity, never inferred from a container. */
+  readonly hostId: string;
+  readonly tunnel: BoatTunnel;
+  readonly subnets: ResourceSubnets;
+  /**
+   * Where this worker reaches the gateways' published WireGuard ports. Core carries every
+   * tunnel over the agent's `/sealant/tunnel` WebSocket and relays it here, so no VM dials the
+   * gateway's host and that host needs no inbound port.
+   */
+  readonly relay: { readonly host: string };
+}
+/**
+ * This deployment's Boat resource host. `gateway` is absent on a deployment with no resource
+ * gateway: it serves only runs launched without resources (`resources: "none"` on the allocation),
+ * configures nothing, and leaves any tunnel another deployment shape recorded in custody.
+ */
 export class BoatResourcesHost extends Context.Service<
   BoatResourcesHost,
   {
     readonly deploymentId: string;
-    readonly gatewayHostId: string;
-    readonly tunnel: BoatTunnel;
-    readonly subnets: ResourceSubnets;
-    /**
-     * Where this worker reaches the gateways' published WireGuard ports. Core carries every
-     * tunnel over the agent's `/sealant/tunnel` WebSocket and relays it here, so no VM dials the
-     * gateway's host and that host needs no inbound port.
-     */
-    readonly relay: { readonly host: string };
+    readonly gateway?: BoatGatewayHost;
   }
 >()("@sealant/workspaces/boat/BoatResourcesHost") {}
+
+/** The typed refusal of gateway work on a deployment that has no resource gateway. */
+const gatewayUnavailable = () =>
+  new BoatResourcesError("unavailable", {
+    step: "readiness",
+    errorClass: "BoatResourcesError",
+    code: "gateway-unavailable",
+    resourceOperation: "check-authority",
+  });
 
 const boundary = <A>(
   effect: Effect.Effect<A, unknown>,
@@ -158,15 +177,24 @@ const make: Effect.Effect<
       return execution.admission;
     });
   const prepare = Effect.fn("BoatResources.prepare")(function* (target: BoatExecutionTarget) {
+    // A run launched without resources is never given a gateway, a port or a tunnel, whoever asks.
+    const allocation = yield* boundary(
+      allocations.get(target.runtimeInstanceId),
+      "check-authority",
+    );
+    if (allocation?.input.resources === "none")
+      return yield* Effect.fail(new BoatResourcesError("held"));
+    const gatewayHost = host.gateway;
+    if (gatewayHost === undefined) return yield* Effect.fail(gatewayUnavailable());
     const admission = yield* boundary(current(target), "check-authority");
     const keys = yield* boundary(
-      credentials.prepare({ target, gatewayHostId: host.gatewayHostId }),
+      credentials.prepare({ target, gatewayHostId: gatewayHost.hostId }),
       "prepare-credentials",
     );
     const subnet = yield* boundary(
       Effect.tryPromise({
         try: () =>
-          host.subnets.allocate({
+          gatewayHost.subnets.allocate({
             name: reachNetworkName(boatTunnelName(target)),
             kind: "reach",
             owner: boatTunnelName(target),
@@ -216,7 +244,7 @@ const make: Effect.Effect<
         if (owned === undefined || (yield* tunnels.beginUpdate(owned, updateId)) !== "issued")
           return yield* Effect.fail(new BoatResourcesError("held"));
         const endpoint = yield* boundary(
-          host.tunnel.ensure({
+          gatewayHost.tunnel.ensure({
             target,
             privateKey: keys.gateway.privateKey,
             peerKey: keys.guest.publicKey,
@@ -255,7 +283,7 @@ const make: Effect.Effect<
     yield* carrier.ensure({
       runId: target.runId,
       connection: guest.tunnel(target),
-      gateway: { host: host.relay.host, port: keys.listenPort },
+      gateway: { host: gatewayHost.relay.host, port: keys.listenPort },
     });
     return { gateway, guest: receipt };
   });
@@ -268,6 +296,8 @@ const make: Effect.Effect<
       (id) =>
         Effect.gen(function* () {
           const record = yield* allocations.get(id);
+          // Launched without resources: no gateway, tunnel or carrier exists for it, in any phase.
+          if (record?.input.resources === "none") return "no-resources" as const;
           if (record?.phase === "deleted") {
             // Deletion retains its immutable target. Never try to configure that retired guest.
             // Host cleanup is a separate obligation until canonical FINAL releases its reservation.
@@ -280,6 +310,8 @@ const make: Effect.Effect<
           if (record?.target === null || record === undefined) return "pending" as const;
           // A live launch owns its guest and gateway until it finishes or its lease lapses.
           if (yield* allocations.launchInFlight(id)) return "pending" as const;
+          // No resource gateway here: a run that has a tunnel cannot be configured from this worker.
+          if (host.gateway === undefined) return "unavailable" as const;
           yield* boundary(prepare(record.target));
           return "configured" as const;
         }).pipe(
@@ -308,6 +340,9 @@ const make: Effect.Effect<
   });
   const reach = Effect.fn("BoatResources.reach")(function* () {
     const links: ResourceWorkspaceLink[] = [];
+    // No gateway, so no Boat run reaches a resource through this worker.
+    if (host.gateway === undefined) return links;
+    const gatewayHostId = host.gateway.hostId;
     let after: string | undefined;
     do {
       const ids = yield* allocations.list({
@@ -321,7 +356,7 @@ const make: Effect.Effect<
         const reservation = yield* tunnels.get(target.runtimeInstanceId);
         if (
           reservation?.network === undefined ||
-          reservation.binding.gatewayHostId !== host.gatewayHostId
+          reservation.binding.gatewayHostId !== gatewayHostId
         )
           continue;
         const execution = yield* executions.get(target.runtimeInstanceId);

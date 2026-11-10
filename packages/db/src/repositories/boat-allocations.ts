@@ -266,9 +266,15 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
               .where(eq(boatExecutions.runtimeInstanceId, next.target.runtimeInstanceId))
               .for("update");
             const execution = boatExecutionRecordSchema.safeParse(row?.record);
+            // A bound VM is removed only once its execution can never start again: aborted before
+            // any launch was pushed, or, for a run without resources (no tunnel row to carry its
+            // removal), held by the FINAL close that drained it.
             if (
               !execution.success ||
-              execution.data.phase !== "aborted" ||
+              !(
+                execution.data.phase === "aborted" ||
+                (next.input.resources === "none" && execution.data.phase === "held")
+              ) ||
               !isDeepStrictEqual(execution.data.target, next.target)
             )
               return yield* Effect.fail(new BoatAllocationStoreError("binding-conflict"));
