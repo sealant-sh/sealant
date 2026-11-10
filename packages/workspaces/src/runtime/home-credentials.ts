@@ -11,11 +11,12 @@
 import { createHash, randomBytes } from "node:crypto";
 
 import { CLAUDE_KEY_DIR } from "@sealant/db";
-import type { EventEnvelope } from "@sealant/runtime-protocol";
+import { ControlErrorCode, type EventEnvelope } from "@sealant/runtime-protocol";
 import { Effect, Option, Stream } from "effect";
 
 import { FIXED_SYSTEM_PATH } from "../buildkit/person-layout.js";
 import {
+  SealantControlError,
   SealantRuntime,
   SealantRuntimeControlLive,
   type SealantError,
@@ -727,10 +728,24 @@ export const runHomeScriptInSession = (
 ): Effect.Effect<HomeScriptExit, SealantError> =>
   Effect.gen(function* () {
     const accepted = yield* session.exec({ executable: "sh", args: ["-c", script], stdin: true });
-    if (stdin.length > 0) {
-      yield* session.writeStdin(accepted.processId, Buffer.from(stdin, "utf8"));
-    }
-    yield* session.closeStdin(accepted.processId);
+    // A script that refuses exits before it reads stdin, and one that has read every payload can
+    // exit before the close arrives (a control connection through a hosted proxy is slow enough).
+    // The daemon then answers the write or the close with "process not found". That is not the
+    // script's failure: its exit code below is the answer. Any other refusal is of a script that
+    // may still be waiting on stdin, so it fails here and not as a wait for an exit.
+    const feed = Effect.gen(function* () {
+      if (stdin.length > 0) {
+        yield* session.writeStdin(accepted.processId, Buffer.from(stdin, "utf8"));
+      }
+      yield* session.closeStdin(accepted.processId);
+    });
+    yield* feed.pipe(
+      Effect.catchIf(
+        (error) =>
+          error instanceof SealantControlError && error.code === ControlErrorCode.PROCESS_NOT_FOUND,
+        () => Effect.void,
+      ),
+    );
     const exit = yield* session.events.pipe(
       Stream.filter((event: EventEnvelope) => event.processId === accepted.processId),
       Stream.filter((event: EventEnvelope) => event.payload.case === "processExited"),
