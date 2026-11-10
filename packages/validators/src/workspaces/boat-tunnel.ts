@@ -8,6 +8,23 @@ export const boatWireGuardKeySchema = z
   .regex(/^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/)
   .refine((value) => value !== "A".repeat(43) + "=");
 
+/**
+ * The host ports a run's gateway is given, one each: published on the relay host address alone and
+ * reached only by Core's own carrier, so no firewall names them. They sit above Linux's default
+ * ephemeral range (32768 to 60999): a port in that range can already be the source port of an
+ * outbound socket on the host (Core's own carrier to another gateway is one), and the gateway
+ * that was reserved it could then never bind it.
+ */
+export const BOAT_TUNNEL_PORTS = { first: 61000, last: 61511 } as const;
+/**
+ * The sixteen ports of the tunnel's first allocator, from when each had to be opened to the
+ * Internet for VMs to dial. No longer handed out; a reservation that holds one stays valid until
+ * its run ends.
+ */
+export const BOAT_TUNNEL_LEGACY_PORTS = { first: 40000, last: 40015 } as const;
+const within = (range: { readonly first: number; readonly last: number }, port: number) =>
+  port >= range.first && port <= range.last;
+
 /** Stable operator-owned identity for the Docker host, shared across deployments on that host. */
 export const boatTunnelBindingSchema = z.strictObject({
   target: boatExecutionTargetSchema,
@@ -62,7 +79,10 @@ export const boatTunnelReservationSchema = z
   .strictObject({
     binding: boatTunnelBindingSchema,
     reservationId: z.uuid().transform((value) => value.toLowerCase()),
-    listenPort: z.number().int().min(40000).max(40015),
+    listenPort: z
+      .number()
+      .int()
+      .refine((port) => within(BOAT_TUNNEL_PORTS, port) || within(BOAT_TUNNEL_LEGACY_PORTS, port)),
     material: boatTunnelMaterialSchema.nullable(),
     network: boatNetworkIntentSchema.optional(),
     updates: z

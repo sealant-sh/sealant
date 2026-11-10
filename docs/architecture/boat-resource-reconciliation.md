@@ -76,6 +76,16 @@ what it has until it stops: a gateway whose port was published on every interfac
 is, and a reservation that recorded the dialled address is reconciled without it. No new gateway is
 published that way.
 
+A run's gateway is given one host port from 61000 to 61511, so one Docker host carries 512 Boat
+sessions at once (the first allocator's sixteen ports, 40000 to 40015, dated from when each had to
+be opened to the Internet; a reservation that holds one keeps it until its run ends). The range sits
+above Linux's default ephemeral ports, 32768 to 60999: a port in that range can already be the
+source port of an outbound socket on the host, the worker's own carrier to another gateway among
+them, and the gateway reserved it could then not bind it. A host whose `ip_local_port_range` was
+raised past 60999 has that exposure back. Beyond the ports, each run takes one `/27` of
+`SEALANT_RESOURCE_REACH_SUBNETS` and one `/28` of `SEALANT_RESOURCE_EGRESS_SUBNETS`, shared with the
+host's other resource networks: the defaults (`10.231.0.0/16`, `10.232.0.0/16`) hold 2048 and 4096.
+
 The relay address decides who can reach the gateway port: `0.0.0.0` is refused, and a routable
 address publishes the port there. Change it only with no live Boat sessions: a gateway is labelled
 with the address its port was published on, one published elsewhere is refused

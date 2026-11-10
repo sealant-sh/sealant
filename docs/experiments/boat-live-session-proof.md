@@ -57,10 +57,11 @@ The operator supplies names and values privately:
 
 The container still needs the ordinary resource/Docker configuration from the existing runbook.
 Public Mend session and Garage URLs must use the approved Funnel paths on 8443 and 10000; 443 is the
-Mend origin. No UDP port needs to reach the gateway host: its ports are published on the relay host
-address only. This change makes no networking or compose edits. Boat runs in the deployment's own
-Boat account, so the API and the worker both hold its key; this supersedes the worker-only isolation
-that [sealant-sh/mend#1523](https://github.com/sealant-sh/mend/issues/1523) asked for.
+Mend origin. No UDP port needs to reach the gateway host: its ports (61000–61511) are published on
+the relay host address only. This change makes no networking or compose edits. Boat runs in the
+deployment's own Boat account, so the API and the worker both hold its key; this supersedes the
+worker-only isolation that [sealant-sh/mend#1523](https://github.com/sealant-sh/mend/issues/1523)
+asked for.
 
 ## Checked-in proof command
 

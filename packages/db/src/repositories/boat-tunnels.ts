@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 
 import {
+  BOAT_TUNNEL_PORTS,
   boatExecutionRecordSchema,
   boatAllocationRecordSchema,
   boatNetworkIntentSchema,
@@ -12,7 +13,7 @@ import {
   type BoatTunnelReservation,
   type BoatNetworkIntent,
 } from "@sealant/validators";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { Context, Effect, Fiber, Layer, type Scope } from "effect";
 
 import { SealantDB, type DB } from "../client.js";
@@ -192,8 +193,27 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, Dependencies> = Effe
               return yield* Effect.fail(new BoatTunnelStoreError("binding-conflict"));
             return existing;
           }
+          // The host's ports in use as this transaction sees them, so a reservation costs one
+          // insert whatever the range holds. The unique index still arbitrates: a port taken
+          // since this read inserts nothing, and the next free one is tried.
+          const taken = new Set(
+            (yield* db
+              .select({ listenPort: boatTunnels.listenPort })
+              .from(boatTunnels)
+              .where(
+                and(
+                  eq(boatTunnels.gatewayHostId, binding.gatewayHostId),
+                  isNull(boatTunnels.releasedAt),
+                ),
+              )).map((held) => held.listenPort),
+          );
           // Each insert atomically arbitrates both run ownership and host-port exclusion.
-          for (let listenPort = 40000; listenPort <= 40015; listenPort++) {
+          for (
+            let listenPort = BOAT_TUNNEL_PORTS.first;
+            listenPort <= BOAT_TUNNEL_PORTS.last;
+            listenPort++
+          ) {
+            if (taken.has(listenPort)) continue;
             const record = yield* parse(() =>
               boatTunnelReservationSchema.parse({
                 binding,
