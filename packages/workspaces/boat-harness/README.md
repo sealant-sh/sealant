@@ -14,10 +14,9 @@ A failed run keeps its evidence in `$TMPDIR/boat-harness-<run>.*/`: the worker a
 fake Boat's event log (`boat-events.json`, every provider call and guest answer through the proxy),
 Core's Boat rows (`core-rows.json`) and each live twin's `sealant*` journal.
 
-It needs Docker with privileged containers, cgroup v2, kernel WireGuard (`modprobe wireguard`),
-bridge netfilter for the workspace's own Docker (`modprobe br_netfilter`; twins share the host's
-kernel and cannot load modules), `openssl`, and internet access for the native build
-(archive.ubuntu.com, nodejs.org, snapshot.ubuntu.com, ghcr.io). One pass takes about 25 to 40
+It needs Docker with privileged containers, cgroup v2, kernel WireGuard (`modprobe wireguard`; twins
+share the host's kernel and cannot load modules), `openssl`, and internet access for the native
+build (archive.ubuntu.com, nodejs.org, snapshot.ubuntu.com, ghcr.io). One pass takes about 25 to 40
 minutes. CI runs it on pull requests that touch Boat code, nightly, and on demand
 (`.github/workflows/boat-harness.yml`).
 
@@ -78,21 +77,15 @@ workspace's own dockerd needs an upper directory that is not itself overlayfs, w
 and a container's root is not. (`vm-probe.sh`'s overlayfs check fails in a twin for the same reason;
 a VM passes it.)
 
-The resource tunnel is carried by default, the production shape for a deployment with no inbound UDP
-path (#540, #542, #543). The worker runs with `SEALANT_BOAT_GATEWAY_RELAY_HOST=127.0.0.1` and no
-`SEALANT_BOAT_GATEWAY_ENDPOINT`. It opens the agent's `/sealant/tunnel` WebSocket through the hosted
-proxy and relays WireGuard to the gateway's port, which is published on 127.0.0.1 only. The happy
-path checks that its tunnel was carried. One scenario, "legacy UDP tunnel", restarts the worker with
-an endpoint and no relay host, so the guest dials the gateway over UDP. That keeps the fallback
-covered.
+The resource tunnel is carried over HTTPS, the only mode Boat has (#540, #542, #543; UDP endpoints
+went in #586). The worker runs with `SEALANT_BOAT_GATEWAY_RELAY_HOST=127.0.0.1`. It opens the
+agent's `/sealant/tunnel` WebSocket through the hosted proxy and relays WireGuard to the gateway's
+port, which is published on 127.0.0.1 only. The happy path checks that its tunnel was carried.
 
 The networking follows what the guest enforces:
 
 - The twins sit on a 192.0.X.0/24 bridge, because the guest's workspace namespace refuses private
   and special-purpose destinations (`DENIED` in `guest_network.py`).
-- In the legacy UDP mode, the workspace namespace also refuses the WireGuard endpoint's own address.
-  On Boat the gateway host and Mend's capture endpoint are different addresses, so the gateway
-  endpoint here is the host address of a second, otherwise empty bridge.
 - Each capture channel runs in its own container on the twins' bridge. A host firewall commonly
   drops bridge-to-host connections, and the Docker daemon may not see the checkout (for example
   `ProtectHome`), so the channel ships as an esbuild bundle through `docker cp`.
@@ -101,17 +94,18 @@ The networking follows what the guest enforces:
 
 `lifecycle.harness.ts` runs the happy path, the Docker scenario (`docker-scenario.ts`: a Docker
 blueprint driven as the owner's person through `exec(argv, { user })`; hello-world, a build, compose
-to `db` through the tunnel, the containers' egress policy, a two-stage `npm ci` build, the VM's and
-the session's cgroup peaks, and `boat-image/vm-probe.sh` in the twin; evidence in
+to `db` through the tunnel, a container reaching the Internet, a two-stage `npm ci` build, the VM's
+and the session's cgroup peaks, and `boat-image/vm-probe.sh` in the twin; evidence in
 `BOAT_TWIN_PROOF_DIR` when set), then one fault per step. A scenario's own steps check that the
 runtime row carries the exact cause, and that Mend sees a terminal workspace (`stopped` or `failed`,
 never `retained`) within 60 s (`assertSettled`).
 
 Then, after every scenario and whatever it did, each launch it made must be released
-(`assertReleased`): the workspace terminal, and the UDP slot, publication pin, VM and gateway gone.
-Each owner's discard is logged. A launch still not released after a minute gets the owner's discard
-only to clean up after a scenario whose body already failed; in a passing scenario, a launch that
-needed the discard to release is a leak, and the scenario fails. No marker excuses a failure here.
+(`assertReleased`): the workspace terminal, and the tunnel slot, publication pin, VM and gateway
+gone. Each owner's discard is logged. A launch still not released after a minute gets the owner's
+discard only to clean up after a scenario whose body already failed; in a passing scenario, a launch
+that needed the discard to release is a leak, and the scenario fails. No marker excuses a failure
+here.
 
 Then the whole inventory must empty within 60 s: no live VM in the fake Boat and no `boat-tunnel-*`
 container or network, whatever run they are labelled with (a build VM, a VM a recover path made
@@ -210,4 +204,4 @@ An outage would fail every scenario and say nothing about Boat, so:
   size limits. The fake pipes the upgraded connection's bytes unchanged.
 - Boat's exact sudoers, kernel and module set. The twin shares the host kernel.
 - Mend itself and `boat-live-check`. The SDK and the capture-channel fixture stand in for Mend.
-- VM 131: disk, pruned images, Funnel paths, UDP 40000 to 40015 from Boat, Garage.
+- VM 131: disk, pruned images, Funnel paths, Garage.

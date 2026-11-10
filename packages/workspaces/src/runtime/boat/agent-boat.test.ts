@@ -1,9 +1,8 @@
 /**
  * The guest agent (`microvm-image/agent.mjs`) in its Boat host mode (`SEALANT_AGENT_HOST=boat`),
  * spawned for real against a fake VM: a boot-id file the test can "reboot", a fake `sealantd`
- * (records argv + env, echoes on the control socket, can exit 75/76), fake `ip`/`wg`/`iptables`
- * (record argv and stdin), a fake `unshare`, a fake `sync`, and a local fake DNS server for the
- * readiness probe. The bind CLI (`microvm-image/boat-bind.mjs`) runs the way Core runs it.
+ * (records argv + env, echoes on the control socket, can exit 75/76), fake `ip`/`wg` (record
+ * argv), a fake `unshare`, and a local fake DNS server for the readiness probe. The bind CLI (`microvm-image/boat-bind.mjs`) runs the way Core runs it.
  */
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
@@ -21,6 +20,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   readlink,
   realpath,
@@ -54,7 +54,6 @@ import {
   BOAT_AGENT_GATEWAY_ADDRESS,
   BOAT_AGENT_NETWORK_ROUTE,
   BOAT_AGENT_TUNNEL_ROUTE,
-  BOAT_AGENT_PARK_ROUTE,
   BOAT_AGENT_WIREGUARD_INTERFACE,
   boatAgentBindRecordSchema,
   boatAgentBindReplySchema,
@@ -62,8 +61,6 @@ import {
   boatAgentLaunchRecordSchema,
   boatAgentNetworkResponseSchema,
   boatAgentNetworkStatusSchema,
-  boatAgentParkReceiptSchema,
-  boatAgentParkResponseSchema,
   boatAgentRecoverResponseSchema,
   boatAgentRefusalSchema,
   type BoatAgentBindRequest,
@@ -104,7 +101,7 @@ const FAKE_SEALANTCTL = `#!/bin/sh
 exit 0
 `;
 
-// ip / wg / iptables: one line per invocation (<name> <argv>), and wg's key file kept apart (as
+// ip / wg (and the firewall tools nothing may call): one line per invocation (<name> <argv>), and wg's key file kept apart (as
 // the real wg, it opens the file named after `private-key` by path; it never reads fd 0). The
 // agent runs these with a bare environment (PATH and LANG only, as the Python guest did), so the
 // log path is baked into each VM's script, and `wg show` answers with whatever the test put in
@@ -174,11 +171,6 @@ esac
 exit 0
 `;
 
-const fakeSync = (log: string) => `#!/bin/sh
-printf 'sync\\n' >> ${JSON.stringify(log)}
-exit 0
-`;
-
 // With FAKE_DOCKERD_SHIM, dockerd leaves what a real one does after its group is killed: a shim
 // in a session of its own that ignores SIGTERM (an ignored signal survives exec).
 const FAKE_DOCKERD = `#!/bin/sh
@@ -232,7 +224,6 @@ interface Vm {
   readonly unshareLog: string;
   readonly systemdRunLog: string;
   readonly systemctlLog: string;
-  readonly syncLog: string;
   readonly resolvConf: string;
   readonly dockerDir: string;
   readonly cgroupRoot: string;
@@ -272,20 +263,19 @@ const createVm = async (): Promise<Vm> => {
   await mkdir(bin);
   await mkdir(etc);
   const netLog = path.join(dir, "net.log");
-  const syncLog = path.join(dir, "sync.log");
   const handshakeFile = path.join(dir, "wg-handshake");
   await Promise.all([
     writeExecutable(path.join(bin, "sealantd"), FAKE_SEALANTD),
     writeExecutable(path.join(bin, "sealantctl"), FAKE_SEALANTCTL),
     writeExecutable(path.join(bin, "ip"), fakeNetTool(netLog, handshakeFile)),
     writeExecutable(path.join(bin, "wg"), fakeNetTool(netLog, handshakeFile)),
+    // Nothing on the VM may run these any more; they log, for the test that proves it.
     writeExecutable(path.join(bin, "iptables"), fakeNetTool(netLog, handshakeFile)),
     writeExecutable(path.join(bin, "iptables-restore"), fakeNetTool(netLog, handshakeFile)),
     writeExecutable(path.join(bin, "ip6tables"), fakeNetTool(netLog, handshakeFile)),
     writeExecutable(path.join(bin, "ip6tables-restore"), fakeNetTool(netLog, handshakeFile)),
     writeExecutable(path.join(bin, "unshare"), FAKE_UNSHARE),
     writeExecutable(path.join(bin, "systemd-run"), FAKE_SYSTEMD_RUN),
-    writeExecutable(path.join(bin, "sync"), fakeSync(syncLog)),
     writeExecutable(path.join(bin, "systemctl"), fakeSystemctl(dir)),
     writeExecutable(path.join(bin, "modprobe"), fakeNetTool(netLog, handshakeFile)),
     writeExecutable(path.join(bin, "dockerd"), FAKE_DOCKERD),
@@ -299,15 +289,13 @@ const createVm = async (): Promise<Vm> => {
   ]);
   const bootIdFile = path.join(dir, "boot_id");
   await writeFile(bootIdFile, `${randomUUID()}\n`);
-  // The engine's cgroup as the kernel makes it on mkdir (an empty one), and bridge netfilter off.
+  // The engine's cgroup as the kernel makes it on mkdir (an empty one).
   const engineCgroup = path.join(dir, "cgroup", "sealant-docker-engine");
   await mkdir(engineCgroup, { recursive: true });
   await writeFile(path.join(engineCgroup, "cgroup.events"), "populated 0\nfrozen 0\n");
-  const procSys = path.join(dir, "proc-sys");
-  await mkdir(path.join(procSys, "net", "bridge"), { recursive: true });
-  for (const name of ["bridge-nf-call-iptables", "bridge-nf-call-ip6tables"]) {
-    await writeFile(path.join(procSys, "net", "bridge", name), "0\n");
-  }
+  // The port WireGuard picked, as the kernel answers `wg show sealant-wg listen-port` once the
+  // interface is up. A test that relays for real names a port it holds.
+  await writeFile(`${handshakeFile}.listen-port`, "51820\n");
   const dataDir = path.join(dir, "data");
   const stateDir = path.join(dir, "state");
   const manifestFile = path.join(dir, "manifest.json");
@@ -335,7 +323,6 @@ const createVm = async (): Promise<Vm> => {
     unshareLog,
     systemdRunLog,
     systemctlLog,
-    syncLog,
     resolvConf,
     dockerDir,
     cgroupRoot: path.join(dir, "cgroup"),
@@ -351,20 +338,14 @@ const createVm = async (): Promise<Vm> => {
       SEALANT_MICROVM_SEALANTCTL: path.join(bin, "sealantctl"),
       SEALANT_AGENT_IP: path.join(bin, "ip"),
       SEALANT_AGENT_WG: path.join(bin, "wg"),
-      SEALANT_AGENT_IPTABLES: path.join(bin, "iptables"),
-      SEALANT_AGENT_IPTABLES_RESTORE: path.join(bin, "iptables-restore"),
-      SEALANT_AGENT_IP6TABLES: path.join(bin, "ip6tables"),
-      SEALANT_AGENT_IP6TABLES_RESTORE: path.join(bin, "ip6tables-restore"),
       SEALANT_AGENT_UNSHARE: path.join(bin, "unshare"),
       SEALANT_AGENT_SYSTEMD_RUN: path.join(bin, "systemd-run"),
-      SEALANT_AGENT_SYNC: path.join(bin, "sync"),
       SEALANT_AGENT_SYSTEMCTL: path.join(bin, "systemctl"),
-      SEALANT_AGENT_MODPROBE: path.join(bin, "modprobe"),
-      SEALANT_AGENT_PROC_SYS: path.join(dir, "proc-sys"),
       SEALANT_AGENT_RESOLV_CONF: resolvConf,
-      // The VM's resolver on a loopback port of its own (the tunnel's address is not here).
+      // The VM's resolver on a loopback port of its own (the tunnel's address is not here): one
+      // number for TCP and UDP, so a port free for both.
       SEALANT_AGENT_DNS_LISTEN_HOST: "127.0.0.1",
-      SEALANT_AGENT_DNS_LISTEN_PORT: "0",
+      SEALANT_AGENT_DNS_LISTEN_PORT: String(await freePort()),
       SEALANT_MICROVM_RECOVERY_SETTLE_MS: "3000",
       SEALANT_MICROVM_DOCKERD: path.join(bin, "dockerd"),
       SEALANT_MICROVM_DOCKER: path.join(bin, "docker"),
@@ -824,43 +805,37 @@ describe("boat agent · bind", () => {
   });
 });
 
-describe("boat agent · parked resume bind", () => {
-  it("binds a VM restored from a parked disk as a new instance of the same deployment, and only then", async () => {
+describe("boat agent · a disk keeps its identity", () => {
+  it("refuses another instance on a later boot, whatever an older agent left on the disk", async () => {
     const vm = await createVm();
-    const bearer = await bindVm(vm);
-    const agent = await startAgent(vm);
-    const resumed = { ...IDENTITY, instance_id: "inst-resumed" };
-
-    // Not parked: a restored disk that was never closed keeps its identity.
+    await bindVm(vm);
+    // What an agent from before parking was removed wrote when it closed this boot for a snapshot:
+    // it once let the restored disk bind as a new instance. Nothing reads it any more.
+    const operationId = randomUUID();
+    await writeFile(
+      path.join(vm.dataDir, `park-${operationId}.json`),
+      JSON.stringify({
+        format: "sealant-agent-park-receipt-v1",
+        operation_id: operationId,
+        boot_id: await vm.bootId(),
+        run_id: null,
+        daemon: "stopped",
+        docker: "absent",
+        closed_at: new Date().toISOString(),
+      }),
+    );
     await vm.reboot();
-    const unparked = await runBind(vm, await bindRequest(vm, { identity: resumed }));
-    expect(unparked.stderr.trim()).toBe("bind-identity-conflict");
-
-    // Parked on the bound boot, then restored: one fresh bind as the new instance.
-    const parkedVm = await createVm();
-    const parkedBearer = await bindVm(parkedVm);
-    const parkedAgent = await startAgent(parkedVm);
-    const parked = await call(parkedAgent, "POST", BOAT_AGENT_PARK_ROUTE, {
-      body: { format: "sealant-agent-park-v1", operationId: randomUUID() },
-      bearer: parkedBearer,
-    });
-    expect(parked.status).toBe(200);
-    await stopAgent(parkedAgent);
-    await parkedVm.reboot();
-    const otherDeployment = await runBind(
-      parkedVm,
-      await bindRequest(parkedVm, { identity: { ...resumed, deployment_id: "dep-other" } }),
-    );
-    expect(otherDeployment.stderr.trim()).toBe("bind-identity-conflict");
-    const rebound = await runBind(parkedVm, await bindRequest(parkedVm, { identity: resumed }));
-    expect(rebound, rebound.stderr).toMatchObject({ code: 0 });
+    const resumed = { ...IDENTITY, instance_id: "inst-resumed" };
+    const refused = await runBind(vm, await bindRequest(vm, { identity: resumed }));
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr.trim()).toBe("bind-identity-conflict");
+    // The identity the disk was bound to binds afresh on the new boot, as before.
+    await bindVm(vm, "op-2");
     const record = boatAgentBindRecordSchema.parse(
-      JSON.parse(await readFile(path.join(parkedVm.dataDir, "bind.json"), "utf8")),
+      JSON.parse(await readFile(path.join(vm.dataDir, "bind.json"), "utf8")),
     );
-    expect(record.identity).toEqual(resumed);
-    expect(record.boot_id).toBe(await parkedVm.bootId());
-    await stopAgent(agent);
-    expect(bearer).not.toBe(parkedBearer);
+    expect(record.identity).toEqual(IDENTITY);
+    expect(record.boot_id).toBe(await vm.bootId());
   });
 });
 
@@ -1059,89 +1034,26 @@ describe("boat agent · recover", () => {
   });
 });
 
-describe("boat agent · park", () => {
-  it("kills the daemon, syncs, writes a receipt once per operation, and blocks launch and recover", async () => {
+describe("boat agent · no park route", () => {
+  it("serves no park route: nothing closes a boot, and launch and recover answer as they do", async () => {
     const vm = await createVm();
     const { agent, bearer } = await launched(vm);
     await waitFor(() => exists(vm.socketPath));
     const daemon = await readDaemonRecord(vm);
-    expect(alive(daemon.pid)).toBe(true);
-    const operationId = randomUUID();
-    expect(
-      (await call(agent, "POST", BOAT_AGENT_PARK_ROUTE, { body: { operationId }, bearer: "no" }))
-        .status,
-    ).toBe(401);
-    expect(
-      (
-        await call(agent, "POST", BOAT_AGENT_PARK_ROUTE, {
-          body: { format: "sealant-agent-park-v1", operationId: "not-a-uuid" },
-          bearer,
-        })
-      ).status,
-    ).toBe(400);
-
-    const parked = await call(agent, "POST", BOAT_AGENT_PARK_ROUTE, {
-      body: { format: "sealant-agent-park-v1", operationId },
-      bearer,
-    });
-    expect(parked.status).toBe(200);
-    const response = boatAgentParkResponseSchema.parse(parked.body);
-    expect(response.receipt.path).toBe(path.join(vm.dataDir, `park-${operationId}.json`));
-    const bytes = await readFile(response.receipt.path);
-    expect(response.receipt).toEqual({
-      path: response.receipt.path,
-      sha256: sha256(bytes),
-      bytes: bytes.length,
-    });
-    expect((await stat(response.receipt.path)).mode & 0o777).toBe(0o600);
-    expect(boatAgentParkReceiptSchema.parse(JSON.parse(bytes.toString("utf8")))).toMatchObject({
-      operation_id: operationId,
-      boot_id: await vm.bootId(),
-      run_id: "run_abc-1",
-      daemon: "stopped",
-      docker: "absent",
-    });
-    await waitFor(async () => !alive(daemon.pid));
-    expect((await readFile(vm.syncLog, "utf8")).trim()).toBe("sync");
-
-    const again = await call(agent, "POST", BOAT_AGENT_PARK_ROUTE, {
-      body: { format: "sealant-agent-park-v1", operationId },
-      bearer,
-    });
-    expect(again).toEqual(parked);
-    expect((await readFile(vm.syncLog, "utf8")).trim()).toBe("sync");
-
-    const other = await call(agent, "POST", BOAT_AGENT_PARK_ROUTE, {
+    const parked = await call(agent, "POST", "/sealant/park", {
       body: { format: "sealant-agent-park-v1", operationId: randomUUID() },
       bearer,
     });
-    expect(other.status).toBe(409);
-    expect(boatAgentRefusalSchema.parse(other.body)).toEqual({ reason: "parked" });
+    expect(parked.status).toBe(404);
+    expect(alive(daemon.pid)).toBe(true);
+    expect((await readdir(vm.dataDir)).filter((name) => name.startsWith("park-"))).toEqual([]);
     const launch = await call(agent, "POST", AGENT_LAUNCH_ROUTE, {
       body: launchBody(bearer),
       bearer,
     });
-    expect(launch.status).toBe(409);
-    expect(boatAgentRefusalSchema.parse(launch.body)).toEqual({ reason: "parked" });
+    expect(launch).toMatchObject({ status: 409, body: { message: "already booted" } });
     const recover = await call(agent, "POST", AGENT_RECOVER_ROUTE, { body: recoverBody, bearer });
-    expect(recover.status).toBe(409);
-    expect(boatAgentRefusalSchema.parse(recover.body)).toEqual({ reason: "parked" });
-  });
-
-  it("parks a bound VM that never launched", async () => {
-    const vm = await createVm();
-    const bearer = await bindVm(vm);
-    const agent = await startAgent(vm);
-    const operationId = randomUUID();
-    const parked = await call(agent, "POST", BOAT_AGENT_PARK_ROUTE, {
-      body: { format: "sealant-agent-park-v1", operationId },
-      bearer,
-    });
-    expect(parked.status).toBe(200);
-    const response = boatAgentParkResponseSchema.parse(parked.body);
-    expect(
-      boatAgentParkReceiptSchema.parse(JSON.parse(await readFile(response.receipt.path, "utf8"))),
-    ).toMatchObject({ run_id: null, daemon: "stopped", docker: "absent" });
+    expect(recover).toMatchObject({ status: 200, body: { outcome: "running" } });
   });
 });
 
@@ -1163,11 +1075,13 @@ const networkBody = (overrides: Record<string, unknown> = {}): Record<string, un
   private_key: wireguardKey(),
   public_key: wireguardKey(),
   gateway_key: wireguardKey(),
-  endpoint: "203.0.113.10",
-  port: 51820,
+  carrier: "websocket",
   subnet: "10.42.7.32/27",
   ...overrides,
 });
+
+/** A string as a regular expression that matches exactly it. */
+const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 
 const netLines = async (vm: Vm) =>
   (await readFile(vm.netLog, "utf8").catch(() => "")).split("\n").filter((line) => line !== "");
@@ -1247,12 +1161,18 @@ const startFakeDns = async (
       socket.end(Buffer.concat([prefix, reply]));
     });
   });
+  // One port number for both transports, as a resolver has. On a host with many UDP sockets the
+  // number TCP was given may be taken for UDP, so a port free for both is asked for first.
   const udp = dgram.createSocket("udp4");
-  await new Promise<void>((resolve) => tcp.listen(0, "127.0.0.1", resolve));
-  const address = tcp.address();
-  if (typeof address !== "object" || address === null) throw new Error("no tcp address");
-  const port = address.port;
-  await new Promise<void>((resolve) => udp.bind(port, "127.0.0.1", resolve));
+  const port = await freePort();
+  await new Promise<void>((resolve, reject) => {
+    tcp.once("error", reject);
+    tcp.listen(port, "127.0.0.1", resolve);
+  });
+  await new Promise<void>((resolve, reject) => {
+    udp.once("error", reject);
+    udp.bind(port, "127.0.0.1", resolve);
+  });
   udp.on("message", (message, remote) => {
     const reply = answer(message);
     if (reply !== null) udp.send(reply, remote.port, remote.address);
@@ -1407,14 +1327,14 @@ describe("boat agent · network", () => {
     expect(await refusal(networkBody({ subnet: "8.8.8.0/27" }))).toBe(
       "invalid-network-destination",
     );
-    expect(await refusal(networkBody({ endpoint: "127.0.0.1" }))).toBe(
-      "invalid-network-destination",
+    // The tunnel is carried, and only carried: no address to dial is taken, beside the carrier or
+    // in its place (the body an agent took when a VM could dial the gateway over UDP).
+    expect(await refusal(networkBody({ carrier: "udp" }))).toBe("invalid-network-config");
+    expect(await refusal(networkBody({ endpoint: "203.0.113.10" }))).toBe("invalid-network-config");
+    const { carrier: _carrier, ...dialled } = networkBody();
+    expect(await refusal({ ...dialled, endpoint: "203.0.113.10", port: 51820 })).toBe(
+      "invalid-network-config",
     );
-    expect(await refusal(networkBody({ endpoint: "gateway.example" }))).toBe(
-      "invalid-network-destination",
-    );
-    expect(await refusal(networkBody({ port: 0 }))).toBe("invalid-network-destination");
-    expect(await refusal(networkBody({ port: "51820" }))).toBe("invalid-network-destination");
     expect(await netLines(vm)).toEqual([]);
     expect(await exists(path.join(vm.dataDir, "network.json"))).toBe(false);
   });
@@ -1442,12 +1362,18 @@ describe("boat agent · network", () => {
     const wg = BOAT_AGENT_WIREGUARD_INTERFACE;
     // The key file lives on the agent's tmpfs state directory only while wg runs.
     const keyFile = path.join(vm.stateDir, "agent", `${wg}.key`);
+    // WireGuard's peer is the carrier's relay on loopback: the VM dials no address of the gateway's.
     expect(lines).toEqual([
       `ip link add ${wg} type wireguard`,
-      `wg set ${wg} private-key ${keyFile} peer ${gatewayKey} endpoint 203.0.113.10:51820 allowed-ips 10.42.7.32/27,${BOAT_AGENT_GATEWAY_ADDRESS}/32 persistent-keepalive 25`,
+      expect.stringMatching(
+        new RegExp(
+          `^wg set ${wg} private-key ${literal(keyFile)} peer ${literal(gatewayKey)} endpoint 127\\.0\\.0\\.1:\\d+ allowed-ips 10\\.42\\.7\\.32/27,${literal(BOAT_AGENT_GATEWAY_ADDRESS)}/32 persistent-keepalive 25$`,
+        ),
+      ),
       `ip address add ${BOAT_AGENT_CLIENT_ADDRESS}/32 dev ${wg}`,
       `ip link set ${wg} mtu 1380`,
       `ip link set ${wg} up`,
+      `wg show ${wg} listen-port`,
       `ip route add 10.42.7.32/27 dev ${wg}`,
       `ip route add ${BOAT_AGENT_GATEWAY_ADDRESS}/32 dev ${wg}`,
     ]);
@@ -1489,7 +1415,7 @@ describe("boat agent · network", () => {
 
     // A different config on the same boot is a conflict.
     const conflict = await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, {
-      body: networkBody({ gateway_key: gatewayKey, port: 51821 }),
+      body: networkBody({ gateway_key: gatewayKey, subnet: "10.42.8.32/27" }),
       bearer,
     });
     expect(conflict.status).toBe(409);
@@ -1570,15 +1496,10 @@ describe("boat agent · network", () => {
     const agent = await startAgent(vm, env);
     // Before any config: the agent says it can carry the tunnel, and has nothing to carry yet.
     const before = await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer });
-    expect(boatAgentNetworkStatusSchema.parse(before.body).carriers).toEqual(["udp", "websocket"]);
+    expect(boatAgentNetworkStatusSchema.parse(before.body).carriers).toEqual(["websocket"]);
     await expect(openCarrier(agent, bearer)).rejects.toThrow("carrier refused: 409");
-    // The carried config names no endpoint, and an endpoint beside the carrier is refused.
-    const body: Record<string, unknown> = {
-      ...Object.fromEntries(
-        Object.entries(networkBody()).filter(([key]) => key !== "endpoint" && key !== "port"),
-      ),
-      carrier: "websocket",
-    };
+    // The config names no endpoint, and an endpoint beside the carrier is refused.
+    const body = networkBody();
     const mixed = await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, {
       body: { ...body, endpoint: "203.0.113.10" },
       bearer,
@@ -1659,12 +1580,7 @@ describe("boat agent · network", () => {
     // As the kernel would answer `wg show sealant-wg listen-port` after `ip link set up`.
     await writeFile(path.join(vm.dir, "wg-handshake.listen-port"), `${String(wireguardPort)}\n`);
     const agent = await startAgent(vm);
-    const body: Record<string, unknown> = {
-      ...Object.fromEntries(
-        Object.entries(networkBody()).filter(([key]) => key !== "endpoint" && key !== "port"),
-      ),
-      carrier: "websocket",
-    };
+    const body = networkBody();
     expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
       200,
     );
@@ -1702,12 +1618,7 @@ describe("boat agent · network", () => {
     const bearer = await bindVm(vm);
     const wireguardPort = await freeUdpPort();
     const agent = await startAgent(vm, { SEALANT_AGENT_TUNNEL_WG_PORT: String(wireguardPort) });
-    const body: Record<string, unknown> = {
-      ...Object.fromEntries(
-        Object.entries(networkBody()).filter(([key]) => key !== "endpoint" && key !== "port"),
-      ),
-      carrier: "websocket",
-    };
+    const body = networkBody();
     expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
       200,
     );
@@ -1882,9 +1793,9 @@ describe("boat agent · network", () => {
         configured: true,
         handshake: "verified",
         dns: "unavailable",
-        docker_policy: "absent",
         transfer: { sent: 296, received: 148 },
-        carriers: ["udp", "websocket"],
+        carriers: ["websocket"],
+        carrier_attached: false,
       });
     } finally {
       await silent.close();
@@ -1936,8 +1847,7 @@ describe("boat agent · network", () => {
         configured: false,
         handshake: "unverified",
         dns: "unavailable",
-        docker_policy: "absent",
-        carriers: ["udp", "websocket"],
+        carriers: ["websocket"],
       });
       expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
         200,
@@ -1947,8 +1857,8 @@ describe("boat agent · network", () => {
         configured: true,
         handshake: "verified",
         dns: "udp-and-tcp",
-        docker_policy: "absent",
-        carriers: ["udp", "websocket"],
+        carriers: ["websocket"],
+        carrier_attached: false,
       });
       expect(
         (await netLines(vm)).filter(
@@ -1971,8 +1881,8 @@ describe("boat agent · network", () => {
           configured: true,
           handshake: "unverified",
           dns: "unavailable",
-          docker_policy: "absent",
-          carriers: ["udp", "websocket"],
+          carriers: ["websocket"],
+          carrier_attached: false,
         });
       } finally {
         await wrong.close();
@@ -2000,130 +1910,38 @@ describe("boat agent · network", () => {
     );
     return { agent, bearer };
   };
-  const policyStatus = async (agent: Agent, bearer: string) =>
-    boatAgentNetworkStatusSchema.parse(
-      (await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer })).body,
-    ).docker_policy;
 
   it(
-    "holds containers to the gateway's allowance, atomically per family, once dockerd and the network are up",
+    "leaves the containers' network to Docker: no firewall rule, no bridge netfilter, no word of a policy",
     { timeout: 20_000 },
     async () => {
       const vm = await createVm();
-      const { agent, bearer } = await dockerLaunched(vm);
-      expect(await policyStatus(agent, bearer)).toBe("pending");
-      expect((await netLines(vm)).some((line) => line.includes("tables"))).toBe(false);
-
-      expect(
-        (await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body: networkBody(), bearer }))
-          .status,
-      ).toBe(200);
-      await waitFor(async () => (await policyStatus(agent, bearer)) === "applied");
-      const denied = [
-        "0.0.0.0/8",
-        "10.0.0.0/8",
-        "100.64.0.0/10",
-        "127.0.0.0/8",
-        "169.254.0.0/16",
-        "172.16.0.0/12",
-        "192.0.0.0/24",
-        "192.0.2.0/24",
-        "192.168.0.0/16",
-        "198.18.0.0/15",
-        "198.51.100.0/24",
-        "203.0.113.0/24",
-        "224.0.0.0/4",
-        "240.0.0.0/4",
-      ];
-      const endpoint = z.string().parse(networkBody()["endpoint"]);
-      expect(await readFile(`${vm.netLog}.iptables-restore-stdin`, "utf8")).toBe(
-        [
-          "*filter",
-          ":DOCKER-USER - [0:0]",
-          ":SEALANT-DOCKER-INPUT - [0:0]",
-          "-A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN",
-          // Docker's own networks only, not all of 198.18.0.0/15.
-          "-A DOCKER-USER -d 198.18.1.0/24 -j RETURN",
-          "-A DOCKER-USER -d 198.19.0.0/16 -j RETURN",
-          `-A DOCKER-USER -o ${BOAT_AGENT_WIREGUARD_INTERFACE} -d 10.42.7.32/27 -j RETURN`,
-          `-A DOCKER-USER -o ${BOAT_AGENT_WIREGUARD_INTERFACE} -d ${BOAT_AGENT_GATEWAY_ADDRESS}/32 -p udp --dport 53 -j RETURN`,
-          `-A DOCKER-USER -o ${BOAT_AGENT_WIREGUARD_INTERFACE} -d ${BOAT_AGENT_GATEWAY_ADDRESS}/32 -p tcp --dport 53 -j RETURN`,
-          `-A DOCKER-USER -d ${endpoint}/32 -j DROP`,
-          ...denied.map((cidr) => `-A DOCKER-USER -d ${cidr} -j DROP`),
-          "-A DOCKER-USER -j RETURN",
-          // No new connection from a container to the VM itself but DNS to the VM's resolver.
-          `-A SEALANT-DOCKER-INPUT -d ${BOAT_AGENT_CLIENT_ADDRESS}/32 -p udp --dport 53 -j RETURN`,
-          `-A SEALANT-DOCKER-INPUT -d ${BOAT_AGENT_CLIENT_ADDRESS}/32 -p tcp --dport 53 -j RETURN`,
-          // Matched by what a container is, whatever its bridge is called or its subnet is.
-          "-A SEALANT-DOCKER-INPUT -s 198.18.1.0/24 -m conntrack --ctstate NEW -j DROP",
-          "-A SEALANT-DOCKER-INPUT -s 198.19.0.0/16 -m conntrack --ctstate NEW -j DROP",
-          "-A SEALANT-DOCKER-INPUT -m physdev --physdev-is-in -m conntrack --ctstate NEW -j DROP",
-          "COMMIT",
-          "",
-        ].join("\n"),
-      );
-      // IPv6: nothing forwarded for a container, nothing new from a bridge to the VM.
-      expect(await readFile(`${vm.netLog}.ip6tables-restore-stdin`, "utf8")).toBe(
-        [
-          "*filter",
-          ":DOCKER-USER - [0:0]",
-          ":SEALANT-DOCKER-INPUT - [0:0]",
-          "-A DOCKER-USER -j DROP",
-          "-A SEALANT-DOCKER-INPUT -m physdev --physdev-is-in -m conntrack --ctstate NEW -j DROP",
-          "COMMIT",
-          "",
-        ].join("\n"),
-      );
-      const lines = await netLines(vm);
-      expect(lines).toContain("iptables-restore --noflush");
-      expect(lines).toContain("ip6tables-restore --noflush");
-      // The chains are reached: checked, and inserted only when missing.
-      expect(lines).toContain("iptables -C INPUT -j SEALANT-DOCKER-INPUT");
-      expect(lines).toContain("ip6tables -C INPUT -j SEALANT-DOCKER-INPUT");
-      expect(lines).toContain("ip6tables -C FORWARD -j DOCKER-USER");
-      // Nothing is applied rule by rule any more.
-      expect(lines.some((line) => line.startsWith("iptables -A"))).toBe(false);
-    },
-  );
-
-  it(
-    "keeps an applied policy applied while Core's replay of the same network re-applies it",
-    { timeout: 20_000 },
-    async () => {
-      const vm = await createVm();
-      const { agent, bearer } = await dockerLaunched(vm);
+      // The firewall tools and modprobe are on the agent's PATH and log what they are asked.
+      const { agent, bearer } = await dockerLaunched(vm, {
+        PATH: `${vm.bin}:${process.env["PATH"] ?? ""}`,
+      });
       const body = networkBody();
-      expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
-        200,
-      );
-      await waitFor(async () => (await policyStatus(agent, bearer)) === "applied");
-      // Core replays the same config right before it reads the state; the re-apply is in flight
-      // (held longer than the read, DNS probe included) when the read lands. The chains never lapse, so: applied.
-      await writeFile(`${vm.netLog}.slow-iptables-restore`, "");
-      expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
-        200,
-      );
-      expect(await policyStatus(agent, bearer)).toBe("applied");
+      const gatewayKey = z.string().parse(body["gateway_key"]);
+      await vm.setHandshake(`${gatewayKey}\t1760000000`);
+      for (let replay = 0; replay < 2; replay++)
+        expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
+          200,
+        );
+      const status = await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer });
+      expect(boatAgentNetworkStatusSchema.parse(status.body)).toMatchObject({
+        configured: true,
+        handshake: "verified",
+      });
+      // The status a Docker image answers has no policy to wait for.
+      expect(status.body).not.toHaveProperty("docker_policy");
+      // Give anything started in the background time to show, then read what ran: `ip` and `wg`.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const tools = new Set((await netLines(vm)).map((line) => line.split(" ")[0]));
+      expect([...tools].toSorted()).toEqual(["ip", "wg"]);
+      expect(await exists(`${vm.netLog}.iptables-restore-stdin`)).toBe(false);
+      expect(await exists(`${vm.netLog}.ip6tables-restore-stdin`)).toBe(false);
     },
   );
-
-  it(
-    "reports a policy that did not apply, so readiness refuses instead of failing open",
-    { timeout: 20_000 },
-    async () => {
-      const vm = await createVm();
-      await writeFile(`${vm.netLog}.fail-ip6tables-restore`, "");
-      const { agent, bearer } = await dockerLaunched(vm);
-      await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body: networkBody(), bearer });
-      await waitFor(async () => (await policyStatus(agent, bearer)) === "failed");
-    },
-  );
-
-  it("reports no policy for an image without Docker", async () => {
-    const vm = await createVm();
-    const { agent, bearer } = await launched(vm);
-    expect(await policyStatus(agent, bearer)).toBe("absent");
-  });
 });
 
 /** A raw WebSocket upgrade request, so a refusal's status, body and content type are readable. */
@@ -2221,12 +2039,7 @@ afterEach(() => {
   shims.clear();
 });
 
-const parkReceipt = async (vm: Vm, operationId: string) =>
-  boatAgentParkReceiptSchema.parse(
-    JSON.parse(await readFile(path.join(vm.dataDir, `park-${operationId}.json`), "utf8")),
-  );
-
-describe("boat agent · park proves Docker gone, on Boat's defaults", () => {
+describe("boat agent · recovery proves Docker gone, on Boat's defaults", () => {
   /**
    * A Docker VM whose agent runs on Boat's defaults: nothing about the stop is injected, only
    * where the cgroup filesystem is mounted (a scratch directory here, as the test is not root).
@@ -2244,26 +2057,23 @@ describe("boat agent · park proves Docker gone, on Boat's defaults", () => {
       FAKE_DOCKER_LOG: dockerLog,
       FAKE_DOCKER_PS: "0123456789ab",
       FAKE_DOCKERD_ARGS: dockerdArgs,
+      // The daemon ends with its final flush incomplete: what a recovery is for.
+      FAKE_SEALANTD_EXIT75: "1",
     });
     const accepted = await call(agent, "POST", AGENT_LAUNCH_ROUTE, {
       body: launchBody(bearer, { version: 2, services: { docker: "required" } }),
       bearer,
     });
     expect(accepted.status).toBe(200);
-    await waitFor(
-      async () => (await call(agent, "GET", AGENT_HEALTH_ROUTE, { bearer })).status === 200,
-      10_000,
-    );
+    // sealantd starts only once Docker is ready, so its exit is seen after Docker came up.
+    await waitFor(async () => (await daemonExitCode(agent, bearer)) === 75, 10_000);
     return { vm, agent, bearer, cgroupRoot, dockerLog, dockerdArgs };
   };
-  const park = (agent: Agent, bearer: string, operationId: string) =>
-    call(agent, "POST", BOAT_AGENT_PARK_ROUTE, {
-      body: { format: "sealant-agent-park-v1", operationId },
-      bearer,
-    });
+  const recover = (agent: Agent, bearer: string) =>
+    call(agent, "POST", AGENT_RECOVER_ROUTE, { body: recoverBody, bearer });
 
   it(
-    "parks an ordinary Docker session: containers stopped with their grace, Docker's cgroups proved empty",
+    "stops an ordinary Docker session for its recovery: containers stopped with their grace, Docker's cgroups proved empty",
     { timeout: 30_000 },
     async () => {
       const { vm, agent, bearer, cgroupRoot, dockerLog, dockerdArgs } = await dockerVm();
@@ -2292,17 +2102,17 @@ describe("boat agent · park proves Docker gone, on Boat's defaults", () => {
       const bystanderPid = bystander.pid ?? 0;
       shims.add(bystanderPid);
 
-      const operationId = randomUUID();
-      const parked = await park(agent, bearer, operationId);
-      expect(parked.status).toBe(200);
-      expect((await parkReceipt(vm, operationId)).docker).toBe("stopped");
+      expect(await recover(agent, bearer)).toMatchObject({
+        status: 200,
+        body: { outcome: "restarted" },
+      });
       expect(await readFile(dockerLog, "utf8")).toContain("stop --time 10 0123456789ab");
       expect(alive(bystanderPid)).toBe(true);
     },
   );
 
   it(
-    "refuses while Docker's cgroups cannot be proved empty, asks them to die, and parks on a retry",
+    "starts nothing while Docker's cgroups cannot be proved empty, asks them to die, and recovers on a retry",
     { timeout: 30_000 },
     async () => {
       // Populated where systemd really puts the slice; nothing at the flat path a guess would use.
@@ -2313,20 +2123,20 @@ describe("boat agent · park proves Docker gone, on Boat's defaults", () => {
       });
       expect(await exists(path.join(cgroupRoot, "sealant-docker.slice"))).toBe(false);
       const slice = path.join(cgroupRoot, "sealant.slice", "sealant-docker.slice");
-      const operationId = randomUUID();
-      expect(await park(agent, bearer, operationId)).toMatchObject({
+      const first = await readDaemonRecord(vm);
+      expect(await recover(agent, bearer)).toMatchObject({
         status: 503,
         body: { reason: "docker-stop-unverified" },
       });
-      expect(await exists(path.join(vm.dataDir, `park-${operationId}.json`))).toBe(false);
       expect(await readFile(path.join(slice, "cgroup.kill"), "utf8")).toBe("1");
-      // Still closed for recovery while the park is unfinished.
-      expect(
-        (await call(agent, "POST", AGENT_RECOVER_ROUTE, { body: recoverBody, bearer })).body,
-      ).toEqual({ reason: "parked" });
+      // No recovery boot started beside what may still be a writer.
+      expect((await readDaemonRecord(vm)).pid).toBe(first.pid);
       await writeFile(path.join(slice, "cgroup.events"), "populated 0\nfrozen 0\n");
-      expect((await park(agent, bearer, operationId)).status).toBe(200);
-      expect((await parkReceipt(vm, operationId)).docker).toBe("stopped");
+      expect(await recover(agent, bearer)).toMatchObject({
+        status: 200,
+        body: { outcome: "restarted" },
+      });
+      await waitFor(async () => (await readDaemonRecord(vm)).argv.includes("--recovery"));
     },
   );
 
@@ -2355,59 +2165,6 @@ describe("boat agent · park proves Docker gone, on Boat's defaults", () => {
     expect(recovery.env).not.toHaveProperty("DOCKER_HOST");
     expect(recovery.env).not.toHaveProperty("SEALANT_WORKSPACE_DOCKER_HOST");
   });
-
-  it(
-    "never certifies a park while a launch is still writing its material",
-    { timeout: 30_000 },
-    async () => {
-      const vm = await createVm();
-      const bearer = await bindVm(vm);
-      const agent = await startAgent(vm);
-      const archives = Array.from({ length: 300 }, (_, index) => ({
-        name: `a${String(index)}.tar`,
-        contentBase64: randomBytes(64 * 1024).toString("base64"),
-      }));
-      const progress = { launchDone: false };
-      const launch = call(agent, "POST", AGENT_LAUNCH_ROUTE, {
-        body: launchBody(bearer, { dotfiles: { manifestJson: "{}", archives } }),
-        bearer,
-      }).finally(() => {
-        progress.launchDone = true;
-      });
-      await waitFor(() => exists(path.join(vm.stateDir, "secrets", "env.json")), 10_000);
-      const operationId = randomUUID();
-      const during = new Set<string>();
-      while (!progress.launchDone) {
-        const attempt = await park(agent, bearer, operationId);
-        during.add(`${String(attempt.status)} ${JSON.stringify(attempt.body)}`);
-        if (attempt.status === 200) break;
-      }
-      const launchOutcome = await launch;
-      // While the launch wrote its material, park only refused. A park that closed did so after
-      // the launch was accepted, so it closed that launch: its daemon is gone, never left alive.
-      for (const entry of during) {
-        expect(
-          entry.startsWith('409 {"reason":"launch-in-progress"}') || entry.startsWith("200 "),
-        ).toBe(true);
-      }
-      expect([...during]).toContain('409 {"reason":"launch-in-progress"}');
-      expect(launchOutcome).toMatchObject({ status: 200, body: { outcome: "booting" } });
-      const closed = await park(agent, bearer, operationId);
-      expect(closed.status).toBe(200);
-      expect((await parkReceipt(vm, operationId)).daemon).toBe("stopped");
-      // The launch's daemon is gone: health reports its exit (park may have killed it before
-      // it wrote anything, so its own record is no witness).
-      await waitFor(async () => {
-        const health = await call(agent, "GET", AGENT_HEALTH_ROUTE, { bearer });
-        return (
-          typeof health.body === "object" &&
-          health.body !== null &&
-          "daemonExit" in health.body &&
-          health.body.daemonExit !== undefined
-        );
-      });
-    },
-  );
 });
 
 describe("boat agent · recover never guesses nothing-to-save", () => {
@@ -2455,42 +2212,10 @@ describe("boat agent · recover never guesses nothing-to-save", () => {
   });
 });
 
-/** Send a body's first bytes now and the rest when told: the request is in flight meanwhile. */
-const partialBody = async (agent: Agent, route: string, bearer: string, body: unknown) => {
-  const bytes = JSON.stringify(body);
-  const pending: { finish: () => void } = { finish: () => undefined };
-  const reply = new Promise<{ readonly status: number | undefined; readonly body: unknown }>(
-    (resolve, reject) => {
-      const request = http.request(
-        {
-          hostname: "127.0.0.1",
-          port: agent.port,
-          path: route,
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${bearer}`,
-            "content-type": "application/json",
-            "content-length": Buffer.byteLength(bytes),
-          },
-        },
-        (response) => {
-          let data = "";
-          response.on("data", (chunk: Buffer) => {
-            data += chunk.toString("utf8");
-          });
-          response.on("end", () =>
-            resolve({ status: response.statusCode, body: JSON.parse(data) }),
-          );
-        },
-      );
-      request.on("error", reject);
-      request.write(bytes.slice(0, 10));
-      pending.finish = () => request.end(bytes.slice(10));
-    },
-  );
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  return { finish: () => pending.finish(), reply };
-};
+const systemctlLines = async (vm: Vm) =>
+  (await readFile(vm.systemctlLog, "utf8").catch(() => ""))
+    .split("\n")
+    .filter((line) => line !== "");
 
 describe("boat agent · round-3 closures", () => {
   it(
@@ -2502,6 +2227,7 @@ describe("boat agent · round-3 closures", () => {
       const agent = await startAgent(vm, {
         SEALANT_MICROVM_DOCKER_CAPABLE: "1",
         SEALANT_MICROVM_DOCKER_READY_TIMEOUT_MS: "5000",
+        FAKE_SEALANTD_EXIT75: "1",
       });
       expect(
         (
@@ -2511,116 +2237,59 @@ describe("boat agent · round-3 closures", () => {
           })
         ).status,
       ).toBe(200);
-      await waitFor(
-        async () => (await call(agent, "GET", AGENT_HEALTH_ROUTE, { bearer })).status === 200,
-        10_000,
-      );
+      await waitFor(async () => (await daemonExitCode(agent, bearer)) === 75, 10_000);
+      const first = await readDaemonRecord(vm);
       // The slice systemd made is gone from where it was resolved: unknown, not empty.
       await rm(path.join(vm.dir, "cgroup", "sealant.slice"), { recursive: true });
-      const operationId = randomUUID();
-      const parked = await call(agent, "POST", BOAT_AGENT_PARK_ROUTE, {
-        body: { format: "sealant-agent-park-v1", operationId },
+      const recovered = await call(agent, "POST", AGENT_RECOVER_ROUTE, {
+        body: recoverBody,
         bearer,
       });
-      expect(parked).toMatchObject({ status: 503, body: { reason: "docker-stop-unverified" } });
-      expect(await exists(path.join(vm.dataDir, `park-${operationId}.json`))).toBe(false);
+      expect(recovered).toMatchObject({ status: 503, body: { reason: "docker-stop-unverified" } });
+      expect((await readDaemonRecord(vm)).pid).toBe(first.pid);
     },
   );
 
   it(
-    "turns bridge netfilter on before calling the policy applied, and fails it when it cannot",
+    "starts no recovery boot beside a daemon scope it cannot prove gone: killed, then proved by its cgroup",
     { timeout: 30_000 },
     async () => {
       const vm = await createVm();
-      const bridge = path.join(vm.dir, "proc-sys", "net", "bridge");
-      const bearer = await bindVm(vm);
-      const agent = await startAgent(vm, {
-        SEALANT_MICROVM_DOCKER_CAPABLE: "1",
-        SEALANT_MICROVM_DOCKER_READY_TIMEOUT_MS: "5000",
+      const { agent, bearer } = await launched(vm, { FAKE_SEALANTD_EXIT75: "1" });
+      await waitFor(async () => (await daemonExitCode(agent, bearer)) === 75);
+      const first = await readDaemonRecord(vm);
+      // A daemon scope is live on this boot, and nothing will die for a kill.
+      await vm.setScope("0badc0de", { sticky: true });
+      const recover = () => call(agent, "POST", AGENT_RECOVER_ROUTE, { body: recoverBody, bearer });
+      expect(await recover()).toMatchObject({
+        status: 503,
+        body: { reason: "daemon-stop-unverified" },
       });
-      await call(agent, "POST", AGENT_LAUNCH_ROUTE, {
-        body: launchBody(bearer, { version: 2, services: { docker: "required" } }),
-        bearer,
-      });
-      await waitFor(
-        async () => (await call(agent, "GET", AGENT_HEALTH_ROUTE, { bearer })).status === 200,
-        10_000,
+      expect(await systemctlLines(vm)).toContain(
+        "kill --signal=SIGKILL sealant-workspace-0badc0de.scope",
       );
-      await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body: networkBody(), bearer });
-      const policy = async () =>
-        boatAgentNetworkStatusSchema.parse(
-          (await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer })).body,
-        ).docker_policy;
-      await waitFor(async () => (await policy()) === "applied");
-      expect(await readFile(path.join(bridge, "bridge-nf-call-iptables"), "utf8")).toBe("1\n");
-      expect(await readFile(path.join(bridge, "bridge-nf-call-ip6tables"), "utf8")).toBe("1\n");
-      expect(await netLines(vm)).toContain("modprobe br_netfilter");
-
-      // A kernel without bridge netfilter (no net/bridge): the policy is not applied.
-      const other = await createVm();
-      await rm(path.join(other.dir, "proc-sys", "net", "bridge"), { recursive: true });
-      const otherBearer = await bindVm(other);
-      const otherAgent = await startAgent(other, {
-        SEALANT_MICROVM_DOCKER_CAPABLE: "1",
-        SEALANT_MICROVM_DOCKER_READY_TIMEOUT_MS: "5000",
-      });
-      await call(otherAgent, "POST", AGENT_LAUNCH_ROUTE, {
-        body: launchBody(otherBearer, { version: 2, services: { docker: "required" } }),
-        bearer: otherBearer,
-      });
-      await waitFor(
-        async () =>
-          (await call(otherAgent, "GET", AGENT_HEALTH_ROUTE, { bearer: otherBearer })).status ===
-          200,
-        10_000,
+      expect((await readDaemonRecord(vm)).pid).toBe(first.pid);
+      // Still listed active, but its cgroup reads empty: proved gone, and the retry recovers.
+      const scopeCgroup = path.join(
+        vm.cgroupRoot,
+        "sealant-workspace.slice",
+        "sealant-workspace-0badc0de.scope",
       );
-      await call(otherAgent, "POST", BOAT_AGENT_NETWORK_ROUTE, {
-        body: networkBody(),
-        bearer: otherBearer,
-      });
-      await waitFor(
-        async () =>
-          boatAgentNetworkStatusSchema.parse(
-            (await call(otherAgent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer: otherBearer })).body,
-          ).docker_policy === "failed",
-      );
+      await mkdir(scopeCgroup, { recursive: true });
+      await writeFile(path.join(scopeCgroup, "cgroup.events"), "populated 0\nfrozen 0\n");
+      expect(await recover()).toMatchObject({ status: 200, body: { outcome: "restarted" } });
+      await waitFor(async () => (await readDaemonRecord(vm)).argv.includes("--recovery"));
     },
   );
-
-  it("never restarts a daemon under a park that completed while the recovery's body arrived", async () => {
-    const vm = await createVm();
-    const { agent, bearer } = await launched(vm, { FAKE_SEALANTD_EXIT75: "1" });
-    await waitFor(async () => (await daemonExitCode(agent, bearer)) === 75);
-    const first = await readDaemonRecord(vm);
-    const pending = await partialBody(agent, AGENT_RECOVER_ROUTE, bearer, recoverBody);
-    const operationId = randomUUID();
-    const parked = await call(agent, "POST", BOAT_AGENT_PARK_ROUTE, {
-      body: { format: "sealant-agent-park-v1", operationId },
-      bearer,
-    });
-    expect(parked.status).toBe(200);
-    pending.finish();
-    expect(await pending.reply).toMatchObject({ status: 409, body: { reason: "parked" } });
-    expect((await readDaemonRecord(vm)).pid).toBe(first.pid);
-  });
 });
 
 // --------------------------------------------------------------------------------------------
 // An agent restarted on the same boot (issue #513)
 // --------------------------------------------------------------------------------------------
 
-const systemctlLines = async (vm: Vm) =>
-  (await readFile(vm.systemctlLog, "utf8").catch(() => ""))
-    .split("\n")
-    .filter((line) => line !== "");
 const launchEnvFile = (vm: Vm) => path.join(vm.stateDir, "agent", "launch-env.json");
 
 describe("boat agent · restarted on the same boot", () => {
-  const park = (agent: Agent, bearer: string, operationId: string) =>
-    call(agent, "POST", BOAT_AGENT_PARK_ROUTE, {
-      body: { format: "sealant-agent-park-v1", operationId },
-      bearer,
-    });
   const health = async (agent: Agent, bearer: string) => {
     const reply = await call(agent, "GET", AGENT_HEALTH_ROUTE, { bearer });
     return {
@@ -2661,7 +2330,7 @@ describe("boat agent · restarted on the same boot", () => {
   });
 
   it(
-    "parks the daemon an earlier agent process started: the scope is killed and proved gone before any receipt",
+    "reports the daemon an earlier agent process started from its scope: live while it is, exited once it is gone",
     { timeout: 30_000 },
     async () => {
       const vm = await createVm();
@@ -2670,7 +2339,6 @@ describe("boat agent · restarted on the same boot", () => {
       const daemon = await readDaemonRecord(vm);
       await crashAgent(agent);
       expect(alive(daemon.pid)).toBe(true);
-      // The daemon's scope is live, and nothing will die for a kill: a scope that will not end.
       await vm.setScope("0badc0de", { sticky: true });
       const restarted = await startAgent(vm);
       // Health is honest about what this process holds: booted, the daemon not exited (its scope
@@ -2679,58 +2347,20 @@ describe("boat agent · restarted on the same boot", () => {
         status: 200,
         body: { booted: true, controlSocket: true },
       });
-
-      const operationId = randomUUID();
-      const unverified = await park(restarted, bearer, operationId);
-      expect(unverified).toMatchObject({ status: 503, body: { reason: "daemon-stop-unverified" } });
-      expect(await exists(path.join(vm.dataDir, `park-${operationId}.json`))).toBe(false);
-      expect(await systemctlLines(vm)).toContain(
-        "kill --signal=SIGKILL sealant-workspace-0badc0de.scope",
-      );
-      // Still listed active, but its cgroup reads empty: proved gone, closed on the retry.
-      const scopeCgroup = path.join(
-        vm.cgroupRoot,
-        "sealant-workspace.slice",
-        "sealant-workspace-0badc0de.scope",
-      );
-      await mkdir(scopeCgroup, { recursive: true });
-      await writeFile(path.join(scopeCgroup, "cgroup.events"), "populated 0\nfrozen 0\n");
-      const closed = await park(restarted, bearer, operationId);
-      expect(closed.status).toBe(200);
-      expect(boatAgentParkResponseSchema.parse(closed.body).receipt.path).toBe(
-        path.join(vm.dataDir, `park-${operationId}.json`),
-      );
-      expect(await parkReceipt(vm, operationId)).toMatchObject({
-        run_id: "run_abc-1",
-        daemon: "stopped",
-        docker: "absent",
+      // A recovery is `running` while the scope lives: nothing is killed under a live daemon.
+      expect(
+        await call(restarted, "POST", AGENT_RECOVER_ROUTE, { body: recoverBody, bearer }),
+      ).toMatchObject({ status: 200, body: { outcome: "running" } });
+      expect(alive(daemon.pid)).toBe(true);
+      expect((await systemctlLines(vm)).some((line) => line.startsWith("kill "))).toBe(false);
+      // The scope is gone: health reports the daemon exited, with an exit this process never saw.
+      await vm.setScope(null);
+      expect(await health(restarted, bearer)).toMatchObject({
+        status: 503,
+        body: { booted: true, daemonExit: { code: null } },
       });
-      expect((await readFile(vm.syncLog, "utf8")).trim()).toBe("sync");
     },
   );
-
-  it("parks on a retry once the scope is no longer active", { timeout: 30_000 }, async () => {
-    const vm = await createVm();
-    const { agent, bearer } = await launched(vm);
-    await waitFor(() => exists(vm.socketPath));
-    await crashAgent(agent);
-    await vm.setScope("1badc0de", { sticky: true });
-    const restarted = await startAgent(vm);
-    const operationId = randomUUID();
-    expect(await park(restarted, bearer, operationId)).toMatchObject({
-      status: 503,
-      body: { reason: "daemon-stop-unverified" },
-    });
-    // A kill that takes: the scope ends.
-    await vm.setScope("1badc0de");
-    expect((await park(restarted, bearer, operationId)).status).toBe(200);
-    expect((await parkReceipt(vm, operationId)).daemon).toBe("stopped");
-    // The scope is gone: health reports the daemon exited, with an exit this process never saw.
-    expect(await health(restarted, bearer)).toMatchObject({
-      status: 503,
-      body: { booted: true, daemonExit: { code: null } },
-    });
-  });
 
   it(
     "recovers from the adopted launch: `running` while the scope is live, then a recovery boot from its environment",
@@ -2809,31 +2439,6 @@ describe("boat agent · restarted on the same boot", () => {
     },
   );
 
-  it(
-    "never closes a park over a live scope, even without a launch to adopt",
-    { timeout: 30_000 },
-    async () => {
-      const vm = await createVm();
-      const { agent, bearer } = await launched(vm, { FAKE_SEALANTD_EXIT75: "1" });
-      await waitFor(async () => (await daemonExitCode(agent, bearer)) === 75);
-      await crashAgent(agent);
-      await rm(launchEnvFile(vm));
-      await vm.setScope("3badc0de", { sticky: true });
-      const restarted = await startAgent(vm);
-      expect(
-        await call(restarted, "POST", AGENT_RECOVER_ROUTE, { body: recoverBody, bearer }),
-      ).toMatchObject({ status: 409, body: { reason: "recover-state-unknown" } });
-      const operationId = randomUUID();
-      expect(await park(restarted, bearer, operationId)).toMatchObject({
-        status: 503,
-        body: { reason: "daemon-stop-unverified" },
-      });
-      expect(await exists(path.join(vm.dataDir, `park-${operationId}.json`))).toBe(false);
-      await vm.setScope(null);
-      expect((await park(restarted, bearer, operationId)).status).toBe(200);
-    },
-  );
-
   it("adopts nothing across a reboot: the launch environment is another boot's", async () => {
     const vm = await createVm();
     const { agent, bearer } = await launched(vm, { FAKE_SEALANTD_EXIT75: "1" });
@@ -2855,7 +2460,7 @@ describe("boat agent · restarted on the same boot", () => {
   });
 
   it(
-    "parks a Docker session an earlier agent process started only once Docker's cgroups are proved empty",
+    "recovers a Docker session an earlier agent process started only once Docker's cgroups are proved empty",
     { timeout: 30_000 },
     async () => {
       const vm = await createVm();
@@ -2863,6 +2468,7 @@ describe("boat agent · restarted on the same boot", () => {
       const agent = await startAgent(vm, {
         SEALANT_MICROVM_DOCKER_CAPABLE: "1",
         SEALANT_MICROVM_DOCKER_READY_TIMEOUT_MS: "5000",
+        FAKE_SEALANTD_EXIT75: "1",
       });
       expect(
         (
@@ -2872,10 +2478,8 @@ describe("boat agent · restarted on the same boot", () => {
           })
         ).status,
       ).toBe(200);
-      await waitFor(
-        async () => (await call(agent, "GET", AGENT_HEALTH_ROUTE, { bearer })).status === 200,
-        10_000,
-      );
+      await waitFor(async () => (await daemonExitCode(agent, bearer)) === 75, 10_000);
+      const first = await readDaemonRecord(vm);
       await crashAgent(agent);
       // dockerd outlived the agent in the engine cgroup; so did a container in the slice.
       const engine = path.join(vm.cgroupRoot, "sealant-docker-engine");
@@ -2883,25 +2487,24 @@ describe("boat agent · restarted on the same boot", () => {
       await writeFile(path.join(engine, "cgroup.events"), "populated 1\nfrozen 0\n");
       await writeFile(path.join(slice, "cgroup.events"), "populated 1\nfrozen 0\n");
       const restarted = await startAgent(vm, { SEALANT_MICROVM_DOCKER_CAPABLE: "1" });
-      const operationId = randomUUID();
-      expect(await park(restarted, bearer, operationId)).toMatchObject({
+      const recover = () =>
+        call(restarted, "POST", AGENT_RECOVER_ROUTE, { body: recoverBody, bearer });
+      expect(await recover()).toMatchObject({
         status: 503,
         body: { reason: "docker-stop-unverified" },
       });
-      expect(await exists(path.join(vm.dataDir, `park-${operationId}.json`))).toBe(false);
       expect(await readFile(path.join(engine, "cgroup.kill"), "utf8")).toBe("1");
       expect(await readFile(path.join(slice, "cgroup.kill"), "utf8")).toBe("1");
       await writeFile(path.join(engine, "cgroup.events"), "populated 0\nfrozen 0\n");
-      expect(await park(restarted, bearer, operationId)).toMatchObject({
+      expect(await recover()).toMatchObject({
         status: 503,
         body: { reason: "docker-stop-unverified" },
       });
+      // Nothing was started beside what may still be a writer.
+      expect((await readDaemonRecord(vm)).pid).toBe(first.pid);
       await writeFile(path.join(slice, "cgroup.events"), "populated 0\nfrozen 0\n");
-      expect((await park(restarted, bearer, operationId)).status).toBe(200);
-      expect(await parkReceipt(vm, operationId)).toMatchObject({
-        daemon: "stopped",
-        docker: "stopped",
-      });
+      expect(await recover()).toMatchObject({ status: 200, body: { outcome: "restarted" } });
+      await waitFor(async () => (await readDaemonRecord(vm)).argv.includes("--recovery"));
     },
   );
 });
@@ -2933,17 +2536,23 @@ describe("boat agent · typed failures", () => {
   it("answers an unexpected route failure with a typed reason, not 'request failed'", async () => {
     if (process.getuid?.() === 0) return;
     const vm = await createVm();
-    const { agent, bearer } = await launched(vm);
-    // The receipt cannot be written: the park fails for a reason that is not a refusal.
+    const bearer = await bindVm(vm);
+    const agent = await startAgent(vm);
+    // The launch record cannot be written: the launch fails for a reason that is not a refusal.
     await chmod(vm.dataDir, 0o500);
     try {
-      const parked = await call(agent, "POST", BOAT_AGENT_PARK_ROUTE, {
-        body: { format: "sealant-agent-park-v1", operationId: randomUUID() },
+      const failed = await call(agent, "POST", AGENT_LAUNCH_ROUTE, {
+        body: launchBody(bearer),
         bearer,
       });
-      expect(parked).toEqual({ status: 500, body: { reason: "park-failed" } });
+      expect(failed).toEqual({ status: 500, body: { reason: "launch-failed" } });
     } finally {
       await chmod(vm.dataDir, 0o700);
     }
+    // Nothing was recorded, so nothing was started, and the same push is accepted once it can be.
+    expect(await exists(path.join(vm.dataDir, "launch.json"))).toBe(false);
+    expect(
+      await call(agent, "POST", AGENT_LAUNCH_ROUTE, { body: launchBody(bearer), bearer }),
+    ).toMatchObject({ status: 200, body: { outcome: "booting" } });
   });
 });

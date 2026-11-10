@@ -49,7 +49,6 @@ export {
 } from "./worker/boat-resources.js";
 export {
   BoatTunnelCarrier,
-  boatTunnelCarrierAbsent,
   makeBoatTunnelCarrierLayer,
   type BoatTunnelCarrierInput,
   type BoatTunnelCarrierOptions,

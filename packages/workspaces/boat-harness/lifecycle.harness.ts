@@ -3,7 +3,7 @@
  * receiver, gateway, isolate, permit, ready, shell, `db:5432` through the tunnel, an edit, Stop,
  * FINAL capture, positive deletion, resume on a new VM, a byte comparison, a final Stop and empty
  * inventories. Then one fault per step, each ending with the same four checks: nothing left
- * behind, the UDP slot and publication pin released, the exact cause on the runtime row, and a
+ * behind, the tunnel slot and publication pin released, the exact cause on the runtime row, and a
  * terminal workspace for Mend within 60 s. Scenarios share one stack and one published snapshot.
  */
 import { randomBytes } from "node:crypto";
@@ -14,8 +14,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { DEFECTS } from "./defects.js";
 import { Transcript, dockerScenario, evidenceDir } from "./docker-scenario.js";
+import { docker } from "./docker.js";
 import { scenarios } from "./faults.js";
-import { legacyUdpTunnel } from "./legacy-udp-scenario.js";
 import { runScenario, type Defect } from "./markers.js";
 import {
   assertReleased,
@@ -149,13 +149,17 @@ const happyPath = async () => {
 };
 
 /** Live VMs and Boat gateway objects on this host, whatever run (or none) they are labelled with. */
+const isGateway = (name: string) => name.startsWith("boat-tunnel-");
+
 const inventory = async () => {
   const owned = await stack.ownedObjects();
+  const gatewayContainers = owned.containers.filter(isGateway);
+  const gatewayNetworks = owned.networks.filter(isGateway);
   return {
     vms: stack.boat.liveSandboxes(),
-    gateways: [...owned.containers, ...owned.networks].filter((name) =>
-      name.startsWith("boat-tunnel-"),
-    ),
+    gatewayContainers,
+    gatewayNetworks,
+    gateways: [...gatewayContainers, ...gatewayNetworks],
   };
 };
 
@@ -177,7 +181,11 @@ const emptyInventory = async (): Promise<string | undefined> => {
   ).catch(() => false);
   if (empty) return undefined;
   const left = await inventory();
+  // After the leak is recorded: the VMs outside Boat's API, and this run's own (labelled) gateway
+  // objects, so one leak does not fail every later scenario's inventory too.
   for (const vm of left.vms) await stack.boat.forceRemove(vm.id);
+  if (left.gatewayContainers.length > 0) await docker(["rm", "-f", ...left.gatewayContainers]);
+  for (const network of left.gatewayNetworks) await docker(["network", "rm", network]);
   return `inventory not empty 60 s after the scenario (no marker excuses this): live VMs ${left.vms.map((vm) => `${vm.id}:${vm.state}:${vm.labels["sealant-run"] ?? "no run"}`).join(", ") || "none"}; gateway objects ${left.gateways.join(", ") || "none"}`;
 };
 
@@ -197,10 +205,15 @@ const scenario = (
       : `${name} [${defect.intermittent === true ? "intermittent" : "expected failure"} ${defect.id}: ${defect.title}]`,
     async () => {
       takeLaunched();
-      await runScenario(defect, body, async (bodyFailed) => {
+      await runScenario(defect, body, async (outcome) => {
+        // A discard is cleanup after a real failure, or under a marker whose defect leaves the
+        // launch for the owner's discard; otherwise a launch that needed one leaked.
+        const cleanup =
+          outcome.bodyFailed &&
+          (outcome.excusedBy === undefined || outcome.excusedBy.releasedByDiscard === true);
         const leaks: string[] = [];
         for (const run of takeLaunched())
-          await assertReleased(stack, run, { bodyFailed }).catch((error: unknown) => {
+          await assertReleased(stack, run, { bodyFailed: cleanup }).catch((error: unknown) => {
             leaks.push(`${run.runId}: ${error instanceof Error ? error.message : String(error)}`);
           });
         const leftOver = await emptyInventory();
@@ -223,7 +236,7 @@ describe("Boat session lifecycle", () => {
 
 /**
  * The workspace's own Docker, as the owner's person: hello-world, a build, compose to `db`
- * through the tunnel, the containers' egress policy, a two-stage Node build with `npm ci`, the
+ * through the tunnel, a container reaching the Internet, a two-stage Node build with `npm ci`, the
  * VM's and the session's peak memory and tasks, and the image's VM probe. Its blueprint differs
  * from the happy path's (Docker on), so it builds and publishes its own snapshot first.
  */
@@ -271,10 +284,4 @@ describe("one fault per step", () => {
   fault("worker killed after bind", scenarios.workerKilled);
   fault("Stop after the launch", scenarios.stopAfterLaunch);
   fault("deletion stuck in processing", scenarios.deletionStuck);
-});
-
-// Isolated: deleted with the tunnel's UDP endpoint mode. Restarts the worker in that mode, and
-// back to the default (carried) when it ends.
-describe("legacy UDP tunnel", () => {
-  scenario("legacy UDP tunnel", undefined, () => legacyUdpTunnel(stack, project));
 });

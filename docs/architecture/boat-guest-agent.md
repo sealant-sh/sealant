@@ -60,9 +60,8 @@ to the disk (`/var/lib/sealant/agent/bind.json`: identity, boot, operation, key 
 and answers `sealant-bootstrap-reply-v1` with the bearer under RSA-OAEP-SHA256. The same exchange
 again on the same boot re-encrypts the same bearer; another operation or key refuses
 (`bind-exchange-conflict`); a stale boot id refuses (`bind-stale-boot`); a new boot binds afresh for
-the identity the disk was first bound to, and a disk parked on its last boot once more as a new
-instance of the same deployment. Core no longer parks a disk or restores one, so that last bind is
-unused. A refusal is one reason code on stderr.
+the identity the disk was first bound to, and for no other (`bind-identity-conflict`). A refusal is
+one reason code on stderr.
 
 The agent arms itself lazily from the tmpfs bearer: it is the launch secret and the control token,
 so `GET /sealant/health` answers it (503, not booted) before any launch, and Core proves the bearer
@@ -76,59 +75,57 @@ All over the hosted proxy on port 8080, all authenticated by the bearer:
   `services.docker: "required"` on a Docker image; `runId`, `controlToken` = the bearer,
   `flushTimeoutMs`, `bootEnv`, `secretEnvJson`). The agent writes the durable launch record
   (`launch.json`: boot id, run id) before `sealantd boot`. A second push on the same boot, from this
-  agent process or a restarted one, is `409 already booted`: Core adopts it. `409 {reason: parked}`
-  once the disk was parked.
+  agent process or a restarted one, is `409 already booted`: Core adopts it.
 - `GET /sealant/health`: `booted`, `controlSocket`, `daemonExit`, and `services.docker` on a Docker
   image.
 - `GET /sealant/control`: the WebSocket relay to sealantd's control socket;
   `503 {error: control-unavailable}` until the socket accepts.
-- `GET /sealant/tunnel`: the resource tunnel's WebSocket carrier, for a network configured with
-  `carrier: "websocket"` (in place of `endpoint` and `port`; `409 tunnel-not-carried` otherwise).
-  Core opens it through Boat's hosted HTTPS with the control token, the same way it reaches every
-  other route, and relays it to the gateway on its own host. Neither the VM nor the gateway's host
-  takes an inbound connection, as with a MicroVM. Each binary frame is one WireGuard datagram,
-  either way, and a message a proxy split into fragments is put back together as one. In the VM,
-  `sealant-wg`'s peer is a UDP relay on loopback, and the relay learns the port WireGuard picked
-  itself once its interface is up (`wg show … listen-port`), so no port is handed over that could be
-  taken first. The relay takes datagrams from that port only and sends only to it, so nothing else
-  on the VM can stand in for WireGuard. One carrier at a time: a newer one replaces the older, which
-  is closed with 1012. The relay's and WireGuard's ports are kept on tmpfs, so an agent restarted on
-  the boot binds the relay where the peer points, or re-points the peer. `GET /sealant/network`
-  lists `carriers` (`udp`, `websocket`) before Core configures anything, and says `carrier_attached`
-  once configured to carry it.
-- `POST /sealant/network`: today's `sealant-guest-network-v1` body. The agent brings up `sealant-wg`
-  in the VM's own namespace with the private key on `wg`'s stdin only, routes the subnet and the
+- `GET /sealant/tunnel`: the resource tunnel's WebSocket carrier, the tunnel's only transport
+  (`409 tunnel-not-carried` until a network is configured). Core opens it through Boat's hosted
+  HTTPS with the control token, the same way it reaches every other route, and relays it to the
+  gateway on its own host. Neither the VM nor the gateway's host takes an inbound connection, as
+  with a MicroVM. Each binary frame is one WireGuard datagram, either way, and a message a proxy
+  split into fragments is put back together as one. In the VM, `sealant-wg`'s peer is a UDP relay on
+  loopback, and the relay learns the port WireGuard picked itself once its interface is up
+  (`wg show … listen-port`), so no port is handed over that could be taken first. The relay takes
+  datagrams from that port only and sends only to it, so nothing else on the VM can stand in for
+  WireGuard. One carrier at a time: a newer one replaces the older, which is closed with 1012. The
+  relay's and WireGuard's ports are kept on tmpfs, so an agent restarted on the boot binds the relay
+  where the peer points, or re-points the peer. `GET /sealant/network` lists `carriers`
+  (`websocket`) before Core configures anything, and says `carrier_attached` once configured. Core
+  refuses an agent that does not list it (an image from before the carrier) with
+  `carrier-unavailable`: there is no gateway address for a VM to dial instead.
+- `POST /sealant/network`: the `sealant-guest-network-v1` body: the tunnel's keys, the resource
+  subnet and `carrier: "websocket"`; an address or port to dial is refused
+  (`invalid-network-config`). The agent brings up `sealant-wg` in the VM's own namespace with the
+  private key in a 0600 tmpfs file that exists only for the `wg` call, routes the subnet and the
   gateway, starts the VM's resolver (a DNS forwarder on `100.127.255.254:53` that asks the gateway
   first, for resource names, then the VM's own resolvers) and points `/etc/resolv.conf` at it (the
   VM's own resolver is kept, and put back at agent start on a boot that has no tunnel: a reboot, or
   a VM restored from a saved snapshot); a resolver that cannot bind fails the step, records the
   public intent (`network.json`), and replays the same config without a change; a different config
-  on the boot is `network-binding-conflict`. On a Docker image it fills `DOCKER-USER` once dockerd
-  is up.
+  on the boot is `network-binding-conflict`. It programs no firewall: the workspace's containers are
+  on Docker's own networks, whose bridge address and address pools the image recipe keeps clear of
+  the tunnel's addresses and the resource pool.
 - `GET /sealant/network`: `configured`, `handshake` (`wg show latest-handshakes`; the peer's
   `persistent-keepalive` starts it, never DNS), `dns` (an unpredictable question asked of the VM's
-  resolver, which reaches the gateway's, over UDP and TCP), `docker_policy` (`absent` without
-  Docker; `pending`, `applied` or `failed` for the containers' `DOCKER-USER` policy) and, when wg
-  can say, `transfer` (`{sent, received}` bytes with the gateway, `wg show transfer`). Core's
-  readiness requires `applied` on a Docker image and `absent` otherwise. A handshake that is not
-  verified carries the counters into the launch diagnostic (`tunnel: {sentBytes, receivedBytes}`):
-  sent and nothing received is a gateway endpoint the VM's packets do not reach. `transfer` is
-  optional, so an older agent's answer still decodes.
+  resolver, which reaches the gateway's, over UDP and TCP) and, when wg can say, `transfer`
+  (`{sent, received}` bytes with the gateway, `wg show transfer`). A handshake that is not verified
+  carries the counters into the launch diagnostic (`tunnel: {sentBytes, receivedBytes}`): sent and
+  nothing received is a gateway the carrier's datagrams do not reach. `transfer` is optional, so an
+  older agent's answer still decodes. An agent built before the in-VM Docker network policy was
+  removed also reports `docker_policy`; Core accepts the field and never reads it.
 - `POST /sealant/recover`: `{version: 1, runId, secretEnvJson}` with the capture token. Answers from
   the records: `running`, `restarted` (`sealantd boot --recovery` on the VM's own disk),
   `nothing-to-save` with its basis (`daemon`: the recovery boot exited 76; `no-launch`: bound this
   boot and never launched), or a `409` refusal (`recover-new-boot`, `recover-binding-conflict`,
-  `recover-state-unknown`, `parked`). An earlier boot's bearer after a reboot is `recover-new-boot`,
-  never a 401. `503 {reason: docker-stop-unverified}` when Docker could not be proved stopped, and
+  `recover-state-unknown`). An earlier boot's bearer after a reboot is `recover-new-boot`, never
+  a 401. `503 {reason: docker-stop-unverified}` when Docker could not be proved stopped, and
   `503 {reason: daemon-stop-unverified}` when a daemon scope could not be proved gone: nothing was
   started, and Core retries.
-- `POST /sealant/park`: the agent still serves it; Core no longer calls it, and a later guest change
-  removes it. `{format: sealant-agent-park-v1, operationId}`. Kills the daemon's namespace (every
-  `sealant-workspace-*` scope, each proved gone), stops Docker, `sync`, writes
-  `/var/lib/sealant/agent/park-<operationId>.json` (0600) and answers its path, SHA-256 and size.
-  The same operation again is the same receipt; another operation, a launch or a recovery after a
-  park is `409 {reason: parked}`. When the daemon or Docker could not be proved stopped the agent
-  writes no receipt and answers `503 {reason: daemon-stop-unverified | docker-stop-unverified}`.
+
+There is no park route: Core removed parking, and the agent no longer serves `POST /sealant/park`
+(an image built before that still does, and nothing calls it).
 
 ## An agent restarted on the same boot
 
@@ -138,10 +135,10 @@ record and the launch environment the launch left on tmpfs (`/run/sealant/agent/
 0600: run, contract, boot env with the secret env file's path). It then holds no daemon child:
 health reports the daemon from its scope (`booted: true`, no `daemonExit` while a scope is active,
 `{code: null, signal: null}` once none is), recover answers `running` while a scope is live and
-otherwise starts the recovery boot from the adopted environment, and park kills every scope through
-systemd and proves it gone (and Docker's cgroups empty) before any receipt. A launch record without
-the environment adopts nothing: the launch stays accepted, park still proves every scope gone, and
-recover is `recover-state-unknown`. After a reboot the tmpfs is empty and nothing is adopted.
+otherwise kills every scope through systemd and proves it gone (and Docker's cgroups empty) before
+it starts the recovery boot from the adopted environment. A launch record without the environment
+adopts nothing: the launch stays accepted, and recover is `recover-state-unknown`. After a reboot
+the tmpfs is empty and nothing is adopted.
 
 ## Verification
 

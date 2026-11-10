@@ -42,6 +42,7 @@ import {
   restoreUnprogressedCaptureDrain,
   strandBoatLaunch,
 } from "@sealant/db/testing/boat-allocations";
+import { corruptBoatTunnel } from "@sealant/db/testing/boat-tunnels";
 import { nativeConsumerRows } from "@sealant/db/testing/native-publications";
 import { withWorkspaceJobTestDatabase } from "@sealant/db/testing/workspace-publications";
 import {
@@ -111,11 +112,7 @@ import {
 import { BoatObserver, boatObserverLayer, boatObserverLayerNoDeps } from "./observation.js";
 import { BoatAllocationProvider } from "./provider.js";
 import { RecordedBoat } from "./recorded-boat.fixture.js";
-import {
-  BoatTunnelCarrier,
-  boatTunnelCarrierAbsent,
-  type BoatTunnelCarrierInput,
-} from "./tunnel-carrier.js";
+import { BoatTunnelCarrier, type BoatTunnelCarrierInput } from "./tunnel-carrier.js";
 
 const databaseUrl = process.env.SEALANT_TEST_DATABASE_URL;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -250,11 +247,10 @@ const test = async (
       daemon: ReturnType<typeof fakeCaptureDaemon>;
     }>;
     reopenResources: (
-      endpoint?: string,
       gatewayHostId?: string,
       relay?: string,
     ) => Effect.Effect<BoatResources["Service"], CredentialCipherError>;
-    /** What a relay-configured host asked its (recording) carrier to keep open. */
+    /** What the host asked its (recording) carrier to keep open. */
     carried: BoatTunnelCarrierInput[];
     tunnels: BoatTunnelRepo["Service"];
     resources: ResourceInstanceRepo["Service"];
@@ -337,7 +333,7 @@ const test = async (
         );
         const gateway = new GatewayFixture();
         const gatewayHostId = randomUUID();
-        // A UDP-only host has no relay and the absent carrier; a relay records what it carries.
+        // Every tunnel is carried: the carrier records what the host asked it to keep open.
         const carried: BoatTunnelCarrierInput[] = [];
         const recordingCarrier = Layer.succeed(
           BoatTunnelCarrier,
@@ -347,18 +343,13 @@ const test = async (
             attached: () => Effect.succeed(false),
           }),
         );
-        const hostLayer = (
-          endpoint = "10.0.0.41",
-          hostId: string = gatewayHostId,
-          relay?: string,
-        ) =>
+        const hostLayer = (hostId: string = gatewayHostId, relay = "127.0.0.1") =>
           Layer.merge(
-            relay === undefined ? boatTunnelCarrierAbsent : recordingCarrier,
+            recordingCarrier,
             Layer.succeed(BoatResourcesHost, {
-              ...(relay === undefined ? {} : { relay: { host: relay } }),
+              relay: { host: relay },
               deploymentId: "test",
               gatewayHostId: hostId,
-              endpoint,
               subnets: {
                 allocate: async () => {
                   await gateway.beforeSubnet();
@@ -411,15 +402,9 @@ const test = async (
         const resourceOwner = Context.get(context, BoatResources);
         const resources = Context.get(context, ResourceInstanceRepo);
         const scope = yield* Effect.scope;
-        const reopenResources = (
-          endpoint = "10.0.0.41",
-          hostId: string = gatewayHostId,
-          relay?: string,
-        ) =>
+        const reopenResources = (hostId: string = gatewayHostId, relay?: string) =>
           Layer.buildWithScope(
-            ResourceLayer.pipe(
-              Layer.provide(Layer.merge(Infra, hostLayer(endpoint, hostId, relay))),
-            ),
+            ResourceLayer.pipe(Layer.provide(Layer.merge(Infra, hostLayer(hostId, relay)))),
             scope,
           ).pipe(Effect.map((ctx) => Context.get(ctx, BoatResources)));
         yield* Effect.promise(() =>
@@ -1501,14 +1486,13 @@ describe.runIf(databaseUrl !== undefined)("Boat canonical FINAL close", () => {
     test(async (s) => {
       const target = await stopLaunched(s);
       const { owner, daemon } = await execute(s.final([savedStatus()]));
-      // A restarted recovery boot is pending; the typed refusals (another boot, a parked disk,
-      // an agent that did not launch this boot) keep the VM too, never read as nothing to save.
+      // A restarted recovery boot is pending; the typed refusals (another boot, an agent that did
+      // not launch this boot) keep the VM too, never read as nothing to save.
       for (const state of [
         "restarted",
         "recover-new-boot",
         "recover-state-unknown",
         "recover-binding-conflict",
-        "parked",
       ] as const) {
         s.guest.recovery = state;
         expect(await execute(owner.close(target))).toBe("retained");
@@ -1840,8 +1824,9 @@ describe.runIf(databaseUrl !== undefined)(
           "unavailable",
         );
         const frozen = await execute(s.tunnels.get(target.runId));
-        expect(frozen?.network).toMatchObject({
-          endpoint: "10.0.0.41",
+        // The frozen intent names the run's epoch and subnet, and no address for a VM to dial.
+        expect(frozen?.network).toEqual({
+          operationId: expect.any(String),
           subnet: "10.98.0.32/27",
           epoch: 1,
         });
@@ -1859,35 +1844,68 @@ describe.runIf(databaseUrl !== undefined)(
           await expect(execute(reopened.prepare({ ...target, ...changed }))).rejects.toThrow(
             "binding-conflict",
           );
-        const moved = await execute(s.reopenResources("10.0.0.42"));
-        await expect(execute(moved.prepare(target))).rejects.toThrow("binding-conflict");
-        const foreignHost = await execute(s.reopenResources("10.0.0.41", randomUUID()));
+        const foreignHost = await execute(s.reopenResources(randomUUID()));
         await expect(execute(foreignHost.prepare(target))).rejects.toThrow("binding-conflict");
         expect(s.gateway.requests).toHaveLength(2);
+        // Where the worker reaches the gateway is no part of the frozen intent: a worker that
+        // reaches it at another address carries the same tunnel, to the same port, from there.
+        // (The Docker gateway is labelled with the address it was published on, and refuses one
+        // published elsewhere: `boat-tunnel.e2e.ts`.)
+        const moved = await execute(s.reopenResources(undefined, "172.17.0.1"));
+        await execute(moved.prepare(target));
+        expect(await execute(s.tunnels.get(target.runId))).toEqual(frozen);
+        expect(s.carried.at(-1)).toMatchObject({
+          runId: target.runId,
+          gateway: { host: "172.17.0.1", port: frozen?.listenPort },
+        });
       }));
-    it("carries the tunnel when the host has a relay and the agent can: the carrier gets the gateway's port", () =>
+    it("keeps reconciling a session whose reservation was made when a VM could dial the gateway", () =>
       test(async (s) => {
         const target = await execute(s.allocations.prepare(s.input));
         await execute(s.executor.stage(target.runId, Redacted.make(launchMaterial())));
-        const original = s.guest.request.bind(s.guest);
-        s.guest.request = async (...args) => {
-          const reply = await original(...args);
-          return args[2] === "network-status"
-            ? {
-                ...reply,
-                body: {
-                  ...z.object({}).passthrough().parse(reply.body),
-                  carriers: ["udp", "websocket"],
-                },
-              }
-            : reply;
-        };
-        const relayed = await execute(s.reopenResources("10.0.0.41", undefined, "127.0.0.1"));
-        const result = await execute(relayed.prepare(target));
-        expect(result.guest.carrier).toBe("websocket");
-        const body = JSON.parse(s.guest.networkBodies.at(-1) ?? "{}") as Record<string, unknown>;
+        await execute(s.resourceOwner.prepare(target));
+        const current = await execute(s.tunnels.get(target.runId));
+        if (current?.network === undefined) throw new Error("no frozen intent");
+        // As the release before this one froze it on a deployment that set the gateway's public
+        // address: the intent records where the VM dialled.
+        const dialled = { ...current, network: { ...current.network, endpoint: "10.0.0.41" } };
+        await execute(corruptBoatTunnel(s.db, target.runId, dialled));
+        expect(await execute(s.tunnels.get(target.runId))).toEqual(dialled);
+        // It still parses, still reconciles, and is neither rewritten nor read: the tunnel is
+        // carried, and the guest is sent no address.
+        const before = s.carried.length;
+        expect((await execute(s.resourceOwner.reconcile({ limit: 20 }))).entries).toEqual([
+          { runId: target.runId, outcome: "configured" },
+        ]);
+        expect(await execute(s.tunnels.get(target.runId))).toEqual(dialled);
+        expect(s.carried).toHaveLength(before + 1);
+        expect(s.guest.networkBodies.at(-1)).not.toContain("10.0.0.41");
+        // The rest of the intent is still frozen: another subnet is a conflict, as before.
+        await execute(
+          corruptBoatTunnel(s.db, target.runId, {
+            ...dialled,
+            network: { ...dialled.network, subnet: "10.98.0.64/27" },
+          }),
+        );
+        await expect(execute(s.resourceOwner.prepare(target))).rejects.toThrow("binding-conflict");
+      }));
+    it("carries every tunnel: the guest is sent no address, and the carrier gets the gateway's port on the relay host", () =>
+      test(async (s) => {
+        const target = await execute(s.allocations.prepare(s.input));
+        await execute(s.executor.stage(target.runId, Redacted.make(launchMaterial())));
+        expect(s.carried).toHaveLength(0);
+        const result = await execute(s.resourceOwner.prepare(target));
+        expect(result.guest).toEqual({
+          receipt: "e".repeat(64),
+          handshake: "unverified",
+          admission: "held",
+        });
+        const body = z
+          .record(z.string(), z.unknown())
+          .parse(JSON.parse(s.guest.networkBodies.at(-1) ?? "{}"));
         expect(body).toMatchObject({ carrier: "websocket" });
         expect(body).not.toHaveProperty("endpoint");
+        expect(body).not.toHaveProperty("port");
         expect(s.carried).toHaveLength(1);
         expect(s.carried[0]).toMatchObject({
           runId: target.runId,
@@ -1897,6 +1915,21 @@ describe.runIf(databaseUrl !== undefined)(
           await execute(s.carried[0]?.connection ?? Effect.die("")),
         );
         expect(connection.url).toMatch(/\/sealant\/tunnel$/);
+      }));
+    it("gives no tunnel to an agent that cannot carry one, and opens no carrier for it", () =>
+      test(async (s) => {
+        const target = await execute(s.allocations.prepare(s.input));
+        await execute(s.executor.stage(target.runId, Redacted.make(launchMaterial())));
+        // An image from before the carrier: its agent lists no way to carry the tunnel.
+        const { carriers: _carriers, ...older } = s.guest.networkStatus;
+        s.guest.networkStatus = older;
+        const refused = await execute(Effect.flip(s.resourceOwner.prepare(target)));
+        expect(refused).toMatchObject({
+          code: "unavailable",
+          diagnostic: { code: "carrier-unavailable", resourceOperation: "isolate-guest" },
+        });
+        expect(s.guest.networkBodies).toHaveLength(0);
+        expect(s.carried).toHaveLength(0);
       }));
     it("repeated FINAL of an early-aborted resource failure stays closed without resource setup", () =>
       test(async (s) => {
@@ -2040,14 +2073,16 @@ describe.runIf(databaseUrl !== undefined)(
           bootId: target.bootId,
         });
         // The exchange proves the bearer on health; the tunnel is configured before the launch is
-        // pushed; readiness reads health, then the tunnel's handshake, after it.
+        // pushed (the agent is asked whether it can carry it, then sent the config); readiness
+        // reads health, then the tunnel's handshake, after it.
         const launchAt = s.guest.actions.indexOf("launch");
         expect(s.guest.actions[0]).toBe("health");
-        expect(s.guest.actions.indexOf("network")).toBeLessThan(launchAt);
-        expect(s.guest.actions.indexOf("health", launchAt)).toBeGreaterThan(launchAt);
-        expect(s.guest.actions.indexOf("network-status", launchAt)).toBeGreaterThan(
-          s.guest.actions.indexOf("health", launchAt),
-        );
+        const configuredAt = s.guest.actions.indexOf("network");
+        expect(configuredAt).toBeLessThan(launchAt);
+        expect(s.guest.actions[configuredAt - 1]).toBe("network-status");
+        const healthAt = s.guest.actions.indexOf("health", launchAt);
+        expect(healthAt).toBeGreaterThan(launchAt);
+        expect(s.guest.actions[healthAt + 1]).toBe("network-status");
         expect(s.guest.starts).toBe(1);
         const before = s.guest.actions.length;
         await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));

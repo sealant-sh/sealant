@@ -145,48 +145,22 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       await execute(executor.recordIsolation(target, receipts));
       await execute(executor.launch(target.runId));
       expect(guest.launches[0]).toMatchObject({ version: 2, services: { docker: "required" } });
-      // A Docker image is ready only once the containers' policy is applied.
+      // Today's agent says nothing of a containers' network policy: a Docker image is ready on
+      // its health and its tunnel alone.
+      expect(guest.networkStatus).not.toHaveProperty("docker_policy");
       expect(await execute(executor.readiness(target))).toMatchObject({ handshake: "verified" });
+      // An agent built before the policy was removed (a session started before the upgrade) still
+      // reports one. Its status parses, and whatever it says is neither waited for nor a failure.
+      const current = guest.networkStatus;
+      for (const policy of ["absent", "pending", "applied", "failed"]) {
+        guest.networkStatus = { ...current, docker_policy: policy };
+        expect(await execute(executor.readiness(target)), policy).toMatchObject({
+          handshake: "verified",
+          dns: "udp-and-tcp",
+        });
+      }
+      guest.networkStatus = current;
       const original = guest.request.bind(guest);
-      guest.request = async (...args) =>
-        args[2] === "network-status"
-          ? {
-              status: 200,
-              body: {
-                configured: true,
-                handshake: "verified",
-                dns: "udp-and-tcp",
-                docker_policy: "pending",
-              },
-            }
-          : original(...args);
-      const pending = await execute(Effect.flip(executor.readiness(target)));
-      expect(boatLaunchDiagnostic(pending, "readiness")).toMatchObject({
-        code: "agent-not-ready",
-        check: "docker-policy",
-      });
-      expect(boatExecutionRetryable(pending)).toBe(true);
-      // The VM could not hold its containers to the gateway's allowance: the launch is lost,
-      // never retried twenty times and never failed open.
-      guest.request = async (...args) =>
-        args[2] === "network-status"
-          ? {
-              status: 200,
-              body: {
-                configured: true,
-                handshake: "verified",
-                dns: "udp-and-tcp",
-                docker_policy: "failed",
-              },
-            }
-          : original(...args);
-      const failed = await execute(Effect.flip(executor.readiness(target)));
-      expect(boatLaunchDiagnostic(failed, "readiness")).toMatchObject({
-        code: "guest-failed",
-        check: "docker-policy",
-        guest: { service: "docker", reason: "policy-failed" },
-      });
-      expect(boatExecutionRetryable(failed)).toBe(false);
       // The engine answered but could not run a container (VM 131 run 7): what it is made of and
       // the run's error come with the diagnostic, redacted, so the failure says why.
       guest.request = async (...args) =>
@@ -293,7 +267,6 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
           configured: false,
           handshake: "unverified",
           dns: "unavailable",
-          docker_policy: "absent",
         }),
         "network",
       );
@@ -302,18 +275,16 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
           configured: true,
           handshake: "unverified",
           dns: "unavailable",
-          docker_policy: "absent",
         }),
         "handshake",
       );
       // The tunnel's counters come with a handshake that never came: sent and never answered is
-      // the gateway's side (its endpoint unreachable). An older agent sends none, and still decodes.
+      // the gateway's side (nothing reaches it). An older agent sends none, and still decodes.
       guest.request = async (...args) =>
         tunnel({
           configured: true,
           handshake: "unverified",
           dns: "unavailable",
-          docker_policy: "absent",
           transfer: { sent: 444, received: 0 },
         })(args[2]) ?? original(...args);
       const silent = boatLaunchDiagnostic(
@@ -326,14 +297,13 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         tunnel: { sentBytes: 444, receivedBytes: 0 },
       });
       expect(boatLaunchSummary(silent)).toContain('"tunnel":{"sentBytes":444,"receivedBytes":0}');
-      // Carried over HTTPS: the diagnostic also says whether Core's end was attached.
+      // The diagnostic also says whether Core's end of the carrier was attached.
       guest.request = async (...args) =>
         tunnel({
           configured: true,
           handshake: "unverified",
           dns: "unavailable",
-          docker_policy: "absent",
-          carriers: ["udp", "websocket"],
+          carriers: ["websocket"],
           carrier_attached: false,
         })(args[2]) ?? original(...args);
       expect(
@@ -344,7 +314,6 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
           configured: true,
           handshake: "unverified",
           dns: "unavailable",
-          docker_policy: "absent",
         })(args[2]) ?? original(...args);
       expect(
         boatLaunchDiagnostic(await execute(Effect.flip(executor.readiness(target))), "readiness"),
@@ -354,21 +323,22 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
           configured: true,
           handshake: "verified",
           dns: "unavailable",
-          docker_policy: "absent",
         }),
         "dns",
       );
-      // A policy this image should not have, or one still pending, is not ready either.
-      for (const policy of ["pending", "applied"]) {
-        await notReady(
+      // An older agent's word on a containers' policy changes nothing, on an image without Docker
+      // either: with the handshake and DNS it is ready.
+      for (const policy of ["absent", "pending", "applied", "failed"]) {
+        guest.request = async (...args) =>
           tunnel({
             configured: true,
             handshake: "verified",
             dns: "udp-and-tcp",
             docker_policy: policy,
-          }),
-          "docker-policy",
-        );
+          })(args[2]) ?? original(...args);
+        expect(await execute(executor.readiness(target)), policy).toMatchObject({
+          runtimeId: "rt_fixture",
+        });
       }
       // The hosted proxy's own 503 on the health route (its VM not ready) is no check's answer.
       guest.request = async (...args) =>
@@ -383,7 +353,10 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       expect(boatLaunchDiagnostic(proxied, "readiness").check).toBeUndefined();
       expect(boatExecutionRetryable(proxied)).toBe(true);
       guest.request = original;
-      guest.probe = async () => ({ runtimeId: "rt_fixture", healthy: false, supports: [] });
+      // The daemon's own health decides, as on a MicroVM: no capability list is asked of it.
+      expect(await guest.probe()).toEqual({ runtimeId: "rt_fixture", healthy: true });
+      expect(await execute(executor.readiness(target))).toMatchObject({ runtimeId: "rt_fixture" });
+      guest.probe = async () => ({ runtimeId: "rt_fixture", healthy: false });
       await expect(execute(executor.readiness(target))).rejects.toThrow("invalid-reply");
       expect(await execute(repo.get(target.runId))).toEqual(record);
       await expect(
@@ -414,7 +387,6 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         "recover-new-boot",
         "recover-binding-conflict",
         "recover-state-unknown",
-        "parked",
       ] as const) {
         guest.recovery = reason;
         expect(await refusalReason(executor.recover(target))).toBe(reason);
@@ -440,16 +412,10 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
     test(async ({ executor, repo, target, guest }) => {
       await execute(executor.exchange(target));
       const input = {
-        network: {
-          epoch: 1,
-          operationId: String(randomUUID()),
-          endpoint: "10.0.0.41",
-          subnet: "10.98.0.32/27",
-        },
+        network: { epoch: 1, operationId: String(randomUUID()), subnet: "10.98.0.32/27" },
         privateKey: Redacted.make(Buffer.alloc(32, 4).toString("base64")),
         publicKey: Buffer.alloc(32, 5).toString("base64"),
         gatewayKey: Buffer.alloc(32, 6).toString("base64"),
-        port: 40000,
       };
       await expect(execute(executor.isolate(target, input))).rejects.toThrow("invocation-held");
       await execute(executor.stage(target.runId, material()));
@@ -464,7 +430,6 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         receipt: "e".repeat(64),
         handshake: "unverified",
         admission: "held",
-        carrier: "udp",
       });
       expect(new Set(guest.networkBodies).size).toBe(1);
       expect(await execute(repo.get(target.runId))).toEqual(installed);
@@ -488,7 +453,7 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       expect(guest.starts).toBe(0);
       expect(JSON.stringify(installed)).not.toContain(Redacted.value(input.privateKey));
     }));
-  it("carries the tunnel over the agent's WebSocket only when the agent says it can", () =>
+  it("carries the tunnel over the agent's WebSocket, and refuses by name an agent that cannot", () =>
     test(async ({ executor, repo, target, guest }) => {
       await execute(executor.exchange(target));
       await execute(executor.stage(target.runId, material()));
@@ -498,54 +463,47 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         network: {
           epoch: 1,
           operationId: installed.admission.operationId,
-          endpoint: "10.0.0.41",
           subnet: "10.98.0.32/27",
         },
         privateKey: Redacted.make(Buffer.alloc(32, 4).toString("base64")),
         publicKey: Buffer.alloc(32, 5).toString("base64"),
         gatewayKey: Buffer.alloc(32, 6).toString("base64"),
-        port: 40000,
-        carrier: "websocket" as const,
       };
       const bodies = () =>
-        guest.networkBodies.map((raw) => JSON.parse(raw) as Record<string, unknown>);
-      // An older agent lists no carriers: it dials the gateway over UDP, as before.
-      expect((await execute(executor.isolate(target, input))).carrier).toBe("udp");
-      expect(bodies()[0]).toMatchObject({ endpoint: "10.0.0.41", port: 40000 });
-      expect(bodies()[0]).not.toHaveProperty("carrier");
-      // An agent that can carry it: no endpoint, no port, `carrier: websocket`.
-      const original = guest.request.bind(guest);
-      guest.request = async (...args) => {
-        const reply = await original(...args);
-        return args[2] === "network-status"
-          ? {
-              ...reply,
-              body: {
-                ...z.object({}).passthrough().parse(reply.body),
-                configured: false,
-                carriers: ["udp", "websocket"],
-              },
-            }
-          : reply;
-      };
-      expect((await execute(executor.isolate(target, input))).carrier).toBe("websocket");
-      const carried = bodies()[1];
-      expect(carried).toMatchObject({ carrier: "websocket", subnet: "10.98.0.32/27" });
-      expect(carried).not.toHaveProperty("endpoint");
-      expect(carried).not.toHaveProperty("port");
-      // No public endpoint (every tunnel carried) and an agent that cannot carry it: typed, and
-      // nothing is sent to the agent.
-      guest.request = original;
-      const before = guest.networkBodies.length;
-      const { endpoint: _endpoint, ...carriedOnly } = input.network;
-      const refused = await execute(
-        Effect.flip(executor.isolate(target, { ...input, network: carriedOnly })),
-      );
-      expect(refused).toBeInstanceOf(BoatExecutionError);
-      expect(boatLaunchDiagnostic(refused, "readiness")).toMatchObject({
-        code: "carrier-unavailable",
-      });
-      expect(guest.networkBodies).toHaveLength(before);
+        guest.networkBodies.map((raw) => z.record(z.string(), z.unknown()).parse(JSON.parse(raw)));
+      // The one body there is: the keys, the subnet and the carrier. No address or port to dial.
+      await execute(executor.isolate(target, input));
+      expect(Object.keys(bodies()[0] ?? {}).toSorted()).toEqual([
+        "binding",
+        "carrier",
+        "format",
+        "gateway_key",
+        "private_key",
+        "public_key",
+        "subnet",
+      ]);
+      expect(bodies()[0]).toMatchObject({ carrier: "websocket", subnet: "10.98.0.32/27" });
+      // An agent from when a VM could also dial the gateway lists both: it is carried all the same.
+      const current = guest.networkStatus;
+      guest.networkStatus = { ...current, carriers: ["udp", "websocket"], docker_policy: "absent" };
+      await execute(executor.isolate(target, input));
+      expect(bodies()[1]).toEqual(bodies()[0]);
+      // An agent that cannot carry the tunnel (it lists no carrier, or only the dialled one) is
+      // refused by name, and nothing is sent to it: there is no other transport to fall back to.
+      for (const carriers of [undefined, [], ["udp"]]) {
+        const { carriers: _listed, ...older } = current;
+        guest.networkStatus = carriers === undefined ? older : { ...older, carriers };
+        const before = guest.networkBodies.length;
+        const refused = await execute(Effect.flip(executor.isolate(target, input)));
+        expect(refused).toBeInstanceOf(BoatExecutionError);
+        expect(boatLaunchDiagnostic(refused, "readiness")).toMatchObject({
+          code: "carrier-unavailable",
+          resourceOperation: "isolate-guest",
+        });
+        expect(boatExecutionRetryable(refused)).toBe(false);
+        expect(guest.networkBodies).toHaveLength(before);
+      }
+      guest.networkStatus = current;
       // Core's end connects to the agent's carrier route with the control token and hosted cookie.
       const connection = Redacted.value(await execute(executor.tunnel(target)));
       expect(connection.url).toMatch(/^wss:\/\/.+\/sealant\/tunnel$/);
@@ -714,15 +672,18 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         execute(executor.recordIsolation(target, { ...receipts, tunnelReceipt: "a".repeat(64) })),
       ).rejects.toThrow("stale-transition");
     }));
-  it("holds a parked launch and refuses fresh target identities on the same disk", () =>
+  it("never adopts a refused launch as accepted, and refuses fresh target identities on the same disk", () =>
     test(async (context) => {
       const { executor, repo, target, guest } = context;
       await execute(executor.exchange(target));
       await execute(executor.stage(target.runId, material()));
       await execute(executor.recordIsolation(target, receipts));
+      // "Already booted" (a `message`) is the only 409 that adopts a launch. A `{reason}`, which
+      // an agent from before the park route was removed could answer, is no acceptance.
       guest.request = async () => ({ status: 409, body: { reason: "parked" } });
-      expect(await refusalReason(executor.launch(target.runId))).toBe("parked");
+      await expect(execute(executor.launch(target.runId))).rejects.toThrow("invalid-reply");
       expect((await execute(repo.get(target.runId)))?.phase).toBe("issued");
+      expect(guest.starts).toBe(0);
       for (const changed of [
         { bootId: randomUUID() },
         { diskLineage: "another" },

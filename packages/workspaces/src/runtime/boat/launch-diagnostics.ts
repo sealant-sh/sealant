@@ -175,7 +175,7 @@ const diagnosticSchema = z.object({
         "/sealant/recover",
       ]),
       responseTail: z.string().transform(safeCommandTail),
-      /** The agent's reason code (`recover-new-boot`, `parked`, a bind refusal). */
+      /** The agent's reason code (`recover-new-boot`, a bind refusal). */
       reason: z
         .string()
         .regex(/^[a-z][a-z0-9-]{0,63}$/)
@@ -190,18 +190,16 @@ const diagnosticSchema = z.object({
    * The readiness check that did not pass (`readiness`: an `agent-not-ready` that is retried, or
    * a `guest-failed` that is not), in the order the checks run. Never free text.
    */
-  check: z
-    .enum(["booted", "control-socket", "docker", "network", "handshake", "dns", "docker-policy"])
-    .optional(),
+  check: z.enum(["booted", "control-socket", "docker", "network", "handshake", "dns"]).optional(),
   /**
    * The tunnel's byte counters when its handshake was not verified (`check: handshake`): sent with
-   * nothing received is a gateway endpoint the VM's packets do not reach, or that never answers.
+   * nothing received is a gateway the carrier's datagrams do not reach, or that never answers.
    */
   tunnel: z
     .object({
       sentBytes: z.number().int().nonnegative().optional(),
       receivedBytes: z.number().int().nonnegative().optional(),
-      /** Carried over HTTPS: whether Core's end was attached. Not attached, nothing could flow. */
+      /** Whether Core's end of the carrier was attached. Not attached, nothing could flow. */
       carrierAttached: z.boolean().optional(),
     })
     .optional(),

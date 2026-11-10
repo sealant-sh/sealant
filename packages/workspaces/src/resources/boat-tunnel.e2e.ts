@@ -12,7 +12,13 @@ import { expect, it } from "vitest";
 import { z } from "zod";
 
 import { createDockerCommandRunner } from "../runtime/docker-runtime-adapter.js";
-import { boatTunnelName, DockerBoatTunnel } from "./boat-tunnel.js";
+import {
+  boatTunnelBinding,
+  boatTunnelConfigDigests,
+  boatTunnelCreateArgs,
+  boatTunnelName,
+  DockerBoatTunnel,
+} from "./boat-tunnel.js";
 import { CALLER_GUARD_IMAGE } from "./docker-caller-runtime.js";
 import { instanceContainerName, reachNetworkName } from "./docker-resource-argv.js";
 import { DockerResourceRuntime, type ResourceSubnets } from "./docker-resource-runtime.js";
@@ -142,7 +148,14 @@ it("one WireGuard peer reaches only its linked resources and DNS, with replay an
     release: async () => {},
   };
   const resources = new DockerResourceRuntime({ subnets });
-  const runtime = new DockerBoatTunnel({ gatewayImage: image, subnets, resources });
+  // The peers here are containers on the gateway's own bridge, standing in for the worker's
+  // carrier: they reach the port on that bridge's address, known only once the gateway exists.
+  const runtime = new DockerBoatTunnel({
+    gatewayImage: image,
+    subnets,
+    resources,
+    publishHost: "0.0.0.0",
+  });
   const first = executionTarget(randomUUID());
   const second = executionTarget(randomUUID());
   const link = {
@@ -620,7 +633,12 @@ it("waits for a late gateway DNS control answer before acknowledging configurati
     );
     fixtureImage = await docker("build", "--quiet", "--tag", fixtureTag, context);
     const resources = new DockerResourceRuntime({ subnets });
-    runtime = new DockerBoatTunnel({ gatewayImage: fixtureImage, resources, subnets });
+    runtime = new DockerBoatTunnel({
+      gatewayImage: fixtureImage,
+      resources,
+      subnets,
+      publishHost: "127.0.0.1",
+    });
     const own = keys(),
       peer = keys();
     const started = Date.now();
@@ -653,7 +671,7 @@ it("waits for a late gateway DNS control answer before acknowledging configurati
   }
 });
 
-it("publishes WireGuard on the relay host only when every tunnel is carried over HTTPS", async () => {
+it("publishes WireGuard on the relay host only, where the worker relays the carried tunnel", async () => {
   if (imagePath === undefined) throw new Error("SEALANT_BOAT_TUNNEL_TEST_IMAGE_FILE required");
   const image = (await readFile(imagePath, "utf8")).trim();
   const held = new Map<string, string>();
@@ -708,6 +726,65 @@ it("publishes WireGuard on the relay host only when every tunnel is carried over
     });
     // A replay adopts the same gateway; nothing is recreated.
     expect(await Effect.runPromise(runtime.ensure(request))).toEqual(result);
+
+    // A gateway as the release before this one made it on a deployment whose VMs dialled it: the
+    // same container, published on every interface, labelled without a relay host. A session
+    // started before the upgrade has one, and must keep it.
+    await docker("rm", "-f", result.container);
+    const digests = boatTunnelConfigDigests(
+      {
+        binding: boatTunnelBinding(target),
+        publicKey: own.public,
+        peerKey: peer.public,
+        listenPort,
+        gatewayImage: image,
+      },
+      "127.0.0.1",
+    );
+    await docker(
+      ...boatTunnelCreateArgs({
+        name: result.container,
+        binding: boatTunnelBinding(target),
+        configDigest: digests.dialled,
+        egress: `${result.container}-egress`,
+        publish: String(listenPort),
+        gatewayImage: image,
+      }),
+    );
+    const dialledId = await docker("inspect", "--format", "{{.Id}}", result.container);
+    expect(dialledId).not.toBe(result.containerId);
+    // Adopted as it is: started, configured and answered for, never refused or replaced.
+    const adopted = await Effect.runPromise(runtime.ensure(request));
+    expect(adopted).toMatchObject({
+      container: result.container,
+      containerId: dialledId,
+      publicKey: own.public,
+      peerKey: peer.public,
+      listenPort,
+      reachSubnet: result.reachSubnet,
+    });
+    expect(await docker("inspect", "--format", "{{.Id}}", result.container)).toBe(dialledId);
+    expect(
+      JSON.parse(
+        await docker("inspect", "--format", "{{json .HostConfig.PortBindings}}", result.container),
+      ),
+    ).toEqual({ "51820/udp": [{ HostIp: "", HostPort: String(listenPort) }] });
+    expect(await Effect.runPromise(runtime.ensure(request))).toEqual(adopted);
+    // A gateway that is neither (another port's label, say) is still refused, and left alone.
+    await docker("rm", "-f", result.container);
+    await docker(
+      ...boatTunnelCreateArgs({
+        name: result.container,
+        binding: boatTunnelBinding(target),
+        configDigest: "f".repeat(64),
+        egress: `${result.container}-egress`,
+        publish: `127.0.0.1:${String(listenPort)}`,
+        gatewayImage: image,
+      }),
+    );
+    const foreignId = await docker("inspect", "--format", "{{.Id}}", result.container);
+    await expect(Effect.runPromise(runtime.ensure(request))).rejects.toThrow("ownership-conflict");
+    expect(await docker("inspect", "--format", "{{.Id}}", result.container)).toBe(foreignId);
   } finally {
     await Effect.runPromise(runtime.remove(target));
     expect(held.size).toBe(0);

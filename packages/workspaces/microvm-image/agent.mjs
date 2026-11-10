@@ -35,8 +35,8 @@
 //      step, no harness, nothing admitted), with the first boot's environment and its secret env
 //      file holding the capture token, so the control plane can drain it before the cap.
 //      On Boat an agent restarted on the same boot adopts the launch (`adoptBootLaunch`): the
-//      daemon runs on in a systemd scope of its own, and park and recover reach it through
-//      systemd, proving it gone before anything is certified or started.
+//      daemon runs on in a systemd scope of its own, and recover reaches it through systemd,
+//      proving it gone before anything is started.
 //
 // One listener serves all three; the image registers the same port for hooks and the endpoint
 // targets it by default.
@@ -69,12 +69,10 @@ const MAX_TUNNEL_DATAGRAM_BYTES = 65_535;
 const RECOVER_ROUTE = "/sealant/recover";
 const RECOVER_CONTRACT_VERSION = 1;
 // Boat host mode only (`src/runtime/boat/agent-contract.ts`).
-const PARK_ROUTE = "/sealant/park";
 /** What an unexpected failure of a Boat route answers (500): a reason Core can classify. */
 const BOAT_ROUTE_FAILURES = new Map([
   ["/sealant/launch", "launch-failed"],
   ["/sealant/recover", "recover-failed"],
-  ["/sealant/park", "park-failed"],
   ["/sealant/network", "network-setup-failed"],
 ]);
 const NETWORK_ROUTE = "/sealant/network";
@@ -83,7 +81,7 @@ const NETWORK_ROUTE = "/sealant/network";
  * The host this agent runs on: `lambda` (the AWS Lambda MicroVM runtime: lifecycle hooks, the
  * run payload's launch secret, sealantd beside the agent) or `boat` (the VM is the workspace:
  * no hooks, a bind exchange leaves the bearer on tmpfs, sealantd is PID 1 of its own PID
- * namespace, launch and park are durable records). Everything Boat-only lives in
+ * namespace, the launch is a durable record). Everything Boat-only lives in
  * `boat-host.mjs`; this file asks it at a few seams.
  */
 const HOST = process.env.SEALANT_AGENT_HOST === "boat" ? "boat" : "lambda";
@@ -143,7 +141,7 @@ const DOCKER_ADDRESS_POOLS = (process.env.SEALANT_MICROVM_DOCKER_ADDRESS_POOLS ?
   .map((entry) => entry.trim())
   .filter((entry) => entry !== "");
 const DOCKER_GROUP = process.env.SEALANT_MICROVM_DOCKER_GROUP;
-// Boat proves Docker stopped before a park or recovery certifies anything, so its defaults turn
+// Boat proves Docker stopped before a recovery starts anything, so its defaults turn
 // that on: every container gets a 10 s stop grace, then the containers' cgroup
 // (`--cgroup-parent`, under systemd's driver) and the engine's own cgroup (dockerd, containerd
 // and the shims, which run in process groups of their own) are killed and must be empty. Only
@@ -265,9 +263,7 @@ const log = (line) => {
 
 // Loaded on Boat only: a Lambda image ships agent.mjs and docker-service.mjs, nothing else
 // (`MICROVM_AGENT_FILES`), and must start without the Boat module.
-const boatHost = BOAT
-  ? (await import("./boat-host.mjs")).createBoatHost({ log, dockerCapable: DOCKER_CAPABLE })
-  : null;
+const boatHost = BOAT ? (await import("./boat-host.mjs")).createBoatHost({ log }) : null;
 // Boat: a rebooted or restored VM still has the resolver the last boot's tunnel left; the VM's
 // own comes back before anything on it needs DNS. Never fatal: Core configures the network anew.
 if (boatHost !== null) {
@@ -1024,7 +1020,6 @@ const v2SecretEnvIsSafe = (raw) => {
 
 const handleLaunch = async (req, res) => {
   arm();
-  if (boatHost?.isParked() === true) return json(res, 409, { reason: "parked" });
   if (state.launchInProgress || state.launchAccepted) {
     return json(res, 409, { message: "already booted" });
   }
@@ -1070,8 +1065,6 @@ const handleLaunch = async (req, res) => {
   if (state.launchInProgress || state.launchAccepted) {
     return json(res, 409, { message: "already booted" });
   }
-  // A park that began while this body was read has closed the boot: nothing may start now.
-  if (boatHost?.isParked() === true) return json(res, 409, { reason: "parked" });
   if (!bearerMatches(req.headers.authorization, state.launchSecret)) {
     return message(res, 401, "launch secret does not match this VM's run");
   }
@@ -1139,12 +1132,8 @@ const handleLaunch = async (req, res) => {
     state.dockerService = createDockerService({
       ...DOCKER_SERVICE_OPTIONS,
       onSpawn: (child, role) => trackHelper(child, role),
-      onReady: () => {
-        boatHost?.markDockerReady();
-        startDaemon(dockerBootEnv);
-      },
+      onReady: () => startDaemon(dockerBootEnv),
       onStateChange: (dockerHealth) => {
-        if (dockerHealth.status !== "ready") boatHost?.markDockerStopped();
         // The engine it is (which containerd, which socket, which versions) goes in the journal on
         // every start, not only with a failure.
         const engine = state.dockerService?.engine();
@@ -1171,26 +1160,6 @@ const sweepAdoptedDocker = () =>
     ? sweepDockerCgroups(DOCKER_SERVICE_OPTIONS)
     : Promise.resolve(true);
 
-/**
- * Boat: stop the guest Docker service for a park: `absent` when none was ever started, `stopped`
- * only when the service proved nothing of Docker still runs (containers given their stop grace,
- * then dockerd, then its cgroup and any engine process killed), `unverified` otherwise. After an
- * adopt the service is not held: the Docker cgroups are swept and proved empty by the same rules.
- */
-const stopDockerForPark = async () => {
-  boatHost?.markDockerStopped();
-  if (state.dockerService === null && imageValidation.dockerService === null) {
-    if (!state.adopted || state.contractVersion !== DOCKER_CONTRACT_VERSION) return "absent";
-    return (await sweepAdoptedDocker()) ? "stopped" : "unverified";
-  }
-  const stopped = await Promise.all(
-    [imageValidation.dockerService, state.dockerService]
-      .filter((service) => service !== null)
-      .map((service) => service.stop()),
-  );
-  return stopped.every((result) => result.verified === true) ? "stopped" : "unverified";
-};
-
 /** Boat: SIGKILL the daemon's process group (the namespace dies with its init) and wait. */
 const killDaemonGroup = async () => {
   const daemon = state.daemon;
@@ -1200,7 +1169,7 @@ const killDaemonGroup = async () => {
 };
 
 /**
- * Boat: stop every daemon on this boot for a park or recovery: the child this process holds (if
+ * Boat: stop every daemon on this boot for a recovery: the child this process holds (if
  * any), then every live `sealant-workspace-*` scope (the daemon an earlier agent process started
  * runs in one, outside this unit's cgroup), each proved gone. `stopped` only when proved; nothing
  * held and no scope live is proved too.
@@ -1227,28 +1196,6 @@ const observeAdoptedDaemon = async (scopes) => {
   state.daemonExit = { code: null, signal: null };
   log("the daemon an earlier agent process started has exited: its scope is gone");
   return "gone";
-};
-
-/**
- * `POST /sealant/park` (Boat): close the workspace for parking — kill sealantd's namespace, stop
- * Docker, `sync`, write a receipt — once per operation. Afterwards no launch or recovery is
- * accepted on this boot. Authorised by the control token.
- */
-const handlePark = async (req, res) => {
-  arm();
-  if (!bearerMatches(req.headers.authorization, state.controlToken)) {
-    return message(res, 401, "control token does not match");
-  }
-  const body = JSON.parse((await readBody(req)) || "{}");
-  // A launch writing its material is not closed by killing a daemon it has not started yet: park
-  // refuses (typed, retryable) until the launch has settled, never certifying closure over it.
-  if (state.launchInProgress) return json(res, 409, { reason: "launch-in-progress" });
-  const result = await boatHost.park(body, {
-    runId: state.runId,
-    stopDaemon: stopDaemonForClose,
-    stopDocker: stopDockerForPark,
-  });
-  return json(res, result.status, result.body);
 };
 
 /** `POST|GET /sealant/network` (Boat): configure the tunnel to the gateway, or measure it. */
@@ -1466,7 +1413,6 @@ const handleRecover = async (req, res) => {
   if (!bearerMatches(req.headers.authorization, state.controlToken)) {
     return message(res, 401, "control token does not match");
   }
-  if (boatHost?.isParked() === true) return json(res, 409, { reason: "parked" });
   const body = JSON.parse((await readBody(req)) || "{}");
   if (
     typeof body !== "object" ||
@@ -1520,13 +1466,10 @@ const handleRecover = async (req, res) => {
   if (!state.daemonExited) {
     return json(res, 200, { outcome: "running" });
   }
-  // A park that completed while this body was read closed the boot: never restart under it.
-  if (boatHost?.isParked() === true) return json(res, 409, { reason: "parked" });
   state.recoveryInProgress = true;
   try {
     // Docker goes first: its containers are the workspace's writers (a recovery boot runs no
     // user code and needs no guest service), and a dockerd left running would start them again.
-    boatHost?.markDockerStopped();
     const docker = await state.dockerService?.stop();
     // Boat proves Docker gone (a forced dockerd stop leaves containerd's shims and containers);
     // after an adopt no service is held, and the Docker cgroups are swept and proved by the same
@@ -1928,9 +1871,6 @@ const server = http.createServer((req, res) => {
     }
     if (req.method === "POST" && url === RECOVER_ROUTE) {
       return handleRecover(req, res);
-    }
-    if (BOAT && req.method === "POST" && url === PARK_ROUTE) {
-      return handlePark(req, res);
     }
     if (BOAT && (req.method === "POST" || req.method === "GET") && url === NETWORK_ROUTE) {
       return handleNetwork(req, res);

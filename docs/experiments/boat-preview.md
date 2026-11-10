@@ -51,14 +51,14 @@ version. The companion must consume the actual public SDK release before the Boa
 The operator provisions an 8 GB preview VM at `10.0.0.41`. It is separate from live Mend VM 130. The
 preview needs no public IP of its own. The Proxmox public endpoint is `49.12.133.97`.
 
-| Path                                             | Public protocol and port           | Destination in preview VM                      | Funnel support                                          |
-| ------------------------------------------------ | ---------------------------------- | ---------------------------------------------- | ------------------------------------------------------- |
-| Mend web, browser screens and terminal           | HTTPS and WSS, 443                 | Loopback 3105 to Mend 3105                     | HTTPS proxy                                             |
-| Session calls and project Git CONNECT            | TLS carrying HTTP/1.1, 8443        | Loopback 13106 to Mend 3106                    | TLS-terminated raw TCP, preserving CONNECT              |
-| Presigned capture, screen and recovery objects   | HTTPS PUT and GET, 10000           | Loopback 13900 to Garage 3900                  | TLS-terminated raw TCP, preserving Host, path and query |
-| Session resource tunnel and tunnel DNS           | WireGuard UDP, 40000 through 40015 | Proxmox DNAT to the same ports on 10.0.0.41    | Unsupported, public UDP DNAT is required                |
-| Resource Postgres, Redis and other service ports | None                               | The session's own private Docker reach network | Never publish or individually relay these ports         |
-| Core API, Postgres, Garage admin and Docker      | None                               | Internal services and Unix sockets             | Keep private                                            |
+| Path                                             | Public protocol and port    | Destination in preview VM                       | Funnel support                                          |
+| ------------------------------------------------ | --------------------------- | ----------------------------------------------- | ------------------------------------------------------- |
+| Mend web, browser screens and terminal           | HTTPS and WSS, 443          | Loopback 3105 to Mend 3105                      | HTTPS proxy                                             |
+| Session calls and project Git CONNECT            | TLS carrying HTTP/1.1, 8443 | Loopback 13106 to Mend 3106                     | TLS-terminated raw TCP, preserving CONNECT              |
+| Presigned capture, screen and recovery objects   | HTTPS PUT and GET, 10000    | Loopback 13900 to Garage 3900                   | TLS-terminated raw TCP, preserving Host, path and query |
+| Session resource tunnel and tunnel DNS           | None                        | Carried over the session's hosted HTTPS by Core | Not needed: no UDP port is public or forwarded          |
+| Resource Postgres, Redis and other service ports | None                        | The session's own private Docker reach network  | Never publish or individually relay these ports         |
+| Core API, Postgres, Garage admin and Docker      | None                        | Internal services and Unix sockets              | Keep private                                            |
 
 Only the preview browser needs the web path. Boat needs the session, object and eventual encrypted
 resource paths. It needs no webhook receiver, tailnet login, public VNC or public resource port.

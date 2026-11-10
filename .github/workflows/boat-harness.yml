@@ -62,12 +62,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # Twins share the runner's kernel and cannot load modules themselves. They need kernel
-      # WireGuard (Boat's provider `wg0`, and the guest's own tunnel) and, for the workspace's own
-      # Docker, bridge netfilter: the agent's Docker policy refuses without it (a VM loads both).
-      - name: Kernel WireGuard and bridge netfilter
-        run: |
-          sudo modprobe wireguard && lsmod | grep -q '^wireguard'
-          sudo modprobe br_netfilter && lsmod | grep -q '^br_netfilter'
+      # WireGuard: Boat's provider `wg0`, and the guest's own end of the carried resource tunnel.
+      - name: Kernel WireGuard
+        run: sudo modprobe wireguard && lsmod | grep -q '^wireguard'
 
       # The twin base image needs Ubuntu's archive and snapshot service to build (the snapshot is the
       # only source of the pinned systemd). Cached by the twin's own files, a job builds it only

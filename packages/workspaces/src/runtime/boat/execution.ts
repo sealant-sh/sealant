@@ -59,6 +59,7 @@ import {
   boatAgentRecoverResponseSchema,
   boatAgentRefusalSchema,
   type BoatAgentBindRequest,
+  type BoatAgentNetworkRequest,
 } from "./agent-contract.js";
 import type { BoatApi } from "./api.js";
 import { BoatApiError, BoatSecret, boatSandboxIdSchema, parseBoatUrl } from "./config.js";
@@ -76,13 +77,6 @@ import {
 
 /** The agent's kill switch for a hung capture flush in its lifecycle hooks; none run on Boat. */
 const BOAT_FLUSH_TIMEOUT_MS = 30_000;
-/** The daemon capabilities a Boat workspace needs before it is reported ready. */
-const REQUIRED_CAPABILITIES = [
-  "exec.user",
-  "dotfiles.user",
-  "restore.owner_map",
-  "process.secret-env.v1",
-] as const;
 
 /**
  * How long the bind proof waits for the agent to answer health to the exchanged bearer: the unit
@@ -219,7 +213,7 @@ export class BoatExecutionError extends Error {
       | "invocation-held"
       /** The agent's health named a daemon exit or a failed guest service: the launch is lost. */
       | "guest-failed"
-      /** No public endpoint to dial, and the agent cannot carry the tunnel over HTTPS. */
+      /** The agent cannot carry the tunnel over HTTPS (an image older than the carrier). */
       | "carrier-unavailable"
       | BoatAgentFailureCode,
     diagnostic?: BoatLaunchDiagnostic,
@@ -325,7 +319,7 @@ export interface BoatGuestTransport {
     body?: Redacted.Redacted<string>,
     signal?: AbortSignal,
   ) => Promise<BoatAgentReply>;
-  /** Round-trips daemon health and capabilities through the agent's control relay. */
+  /** Round-trips daemon health through the agent's control relay. */
   readonly probe: (access: BoatHostedControl, bearer: BoatSecret) => Promise<BoatDaemonReady>;
 }
 
@@ -333,7 +327,6 @@ export interface BoatGuestTransport {
 export interface BoatDaemonReady {
   readonly runtimeId: string;
   readonly healthy: boolean;
-  readonly supports: readonly string[];
 }
 
 /** The daemon probe's cause, as the runtime client classified it, kept for the runtime row. */
@@ -411,11 +404,9 @@ export const createBoatGuestTransport = (
               auth: { bearerToken: bearer.reveal() },
             });
             const health = yield* session.health;
-            const capabilities = yield* session.capabilities;
             return {
               runtimeId: health.runtimeId,
               healthy: health.state === RuntimeState.HEALTHY,
-              supports: capabilities.supports,
             };
           }),
         ).pipe(Effect.timeout(15_000), Effect.mapError(boatControlFailure)),
@@ -641,21 +632,12 @@ export interface BoatGuestNetworkInput {
   readonly privateKey: Redacted.Redacted<string>;
   readonly publicKey: string;
   readonly gatewayKey: string;
-  readonly port: number;
-  /**
-   * `websocket`: carry the tunnel over the agent's `/sealant/tunnel` when the agent can (it lists
-   * the carrier in `GET /sealant/network`), so the VM never dials the gateway's host. An agent that
-   * cannot is configured to dial it over UDP, as before.
-   */
-  readonly carrier?: "websocket";
 }
 /** This acknowledgement proves configuration, not a handshake, resource reach or daemon health. */
 export interface BoatGuestNetworkReceipt {
   readonly receipt: string;
   readonly handshake: "unverified";
   readonly admission: "held";
-  /** How the tunnel is carried: the VM dials the gateway (`udp`), or Core carries it (`websocket`). */
-  readonly carrier: "udp" | "websocket";
 }
 /** Core's end of the tunnel's WebSocket carrier: the URL and the headers that authenticate it. */
 export interface BoatTunnelConnection {
@@ -1035,10 +1017,11 @@ const make: Effect.Effect<
     );
     const reply = yield* call(connection, "launch", Redacted.make(JSON.stringify(body)));
     if (reply.status === 409) {
-      // `{reason}` is a refusal (a parked disk); the agent's "already booted" is this launch,
-      // accepted by an earlier push whose reply was lost: adopted, never pushed again.
+      // The agent's "already booted" is this launch, accepted by an earlier push whose reply was
+      // lost: adopted, never pushed again. A `{reason}` is no such answer (today's agent refuses
+      // no launch that way), so it is never adopted as one.
       if (boatAgentRefusalSchema.safeParse(reply.body).success)
-        return yield* Effect.fail(refusal("launch", reply, ["parked"]));
+        return yield* Effect.fail(new BoatExecutionError("invalid-reply"));
     } else {
       yield* attempt("invalid-reply", () => agentLaunchResponseSchema.parse(reply.body));
     }
@@ -1066,22 +1049,20 @@ const make: Effect.Effect<
       return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
     const binding = bindingOf(record);
     const connection = yield* access(record);
-    // Carried only by an agent that says it can: an older image dials the gateway over UDP.
-    const carrier =
-      input.carrier === "websocket"
-        ? yield* call(connection, "network-status").pipe(
-            Effect.flatMap((status) =>
-              attempt("invalid-reply", () =>
-                boatAgentNetworkStatusSchema.parse(status.body).carriers?.includes("websocket") ===
-                true
-                  ? ("websocket" as const)
-                  : ("udp" as const),
-              ),
-            ),
-          )
-        : ("udp" as const);
-    // No public endpoint (every tunnel carried): an image that cannot carry it cannot be reached.
-    if (carrier === "udp" && network.endpoint === undefined)
+    // The tunnel is carried over the agent's `/sealant/tunnel`, the only way it is: the VM dials
+    // nothing. An agent that does not say it can carry it (an image older than the carrier) cannot
+    // be given a tunnel, and says so by name instead of failing at the handshake.
+    const carried = yield* call(connection, "network-status").pipe(
+      Effect.flatMap((status) =>
+        attempt(
+          "invalid-reply",
+          () =>
+            boatAgentNetworkStatusSchema.parse(status.body).carriers?.includes("websocket") ===
+            true,
+        ),
+      ),
+    );
+    if (!carried)
       return yield* Effect.fail(
         new BoatExecutionError("carrier-unavailable", {
           step: "readiness",
@@ -1090,37 +1071,24 @@ const make: Effect.Effect<
           resourceOperation: "isolate-guest",
         }),
       );
-    const body = yield* attempt("invalid-input", () => {
-      const common = {
-        format: "sealant-guest-network-v1",
-        binding,
-        private_key: boatWireGuardKeySchema.parse(Redacted.value(input.privateKey)),
-        public_key: boatWireGuardKeySchema.parse(input.publicKey),
-        gateway_key: boatWireGuardKeySchema.parse(input.gatewayKey),
-      };
-      return Redacted.make(
-        JSON.stringify(
-          carrier === "websocket"
-            ? { ...common, carrier: "websocket", subnet: network.subnet }
-            : {
-                ...common,
-                endpoint: network.endpoint,
-                port: z.number().int().min(40000).max(40015).parse(input.port),
-                subnet: network.subnet,
-              },
-        ),
-      );
-    });
+    const body = yield* attempt("invalid-input", () =>
+      Redacted.make(
+        JSON.stringify({
+          format: "sealant-guest-network-v1",
+          binding,
+          private_key: boatWireGuardKeySchema.parse(Redacted.value(input.privateKey)),
+          public_key: boatWireGuardKeySchema.parse(input.publicKey),
+          gateway_key: boatWireGuardKeySchema.parse(input.gatewayKey),
+          carrier: "websocket",
+          subnet: network.subnet,
+        } satisfies BoatAgentNetworkRequest),
+      ),
+    );
     const reply = yield* call(connection, "network", body);
     const receipt = yield* attempt("invalid-reply", () => {
       const parsed = boatAgentNetworkResponseSchema.parse(reply.body);
       if (!isDeepStrictEqual(parsed.binding, binding)) throw new Error();
-      return {
-        receipt: parsed.receipt,
-        handshake: parsed.handshake,
-        admission: "held" as const,
-        carrier,
-      };
+      return { receipt: parsed.receipt, handshake: parsed.handshake, admission: "held" as const };
     });
     yield* unchanged(record);
     return receipt;
@@ -1203,11 +1171,7 @@ const make: Effect.Effect<
       return yield* Effect.fail(notReady(AGENT_HEALTH_ROUTE, "control-socket"));
     if (docker && !("version" in observed && observed.services.docker.status === "ready"))
       return yield* Effect.fail(notReady(AGENT_HEALTH_ROUTE, "docker"));
-    // 2. The tunnel: the gateway shook hands and its resolver answers over UDP and TCP, and the
-    //    containers' network policy is where this image puts it (applied on a Docker image, absent
-    //    otherwise). `pending` is not ready yet; `failed` is the VM's word that it could not hold
-    //    its containers to the gateway's allowance, and no later observation changes that: the
-    //    launch is lost, never retried and never failed open.
+    // 2. The tunnel: the gateway shook hands and its resolver answers over UDP and TCP.
     const network = yield* call(connection, "network-status");
     const tunnel = yield* attempt("invalid-reply", () =>
       boatAgentNetworkStatusSchema.parse(network.body),
@@ -1233,22 +1197,12 @@ const make: Effect.Effect<
       );
     if (tunnel.dns !== "udp-and-tcp")
       return yield* Effect.fail(notReady(BOAT_AGENT_NETWORK_ROUTE, "dns"));
-    if (tunnel.docker_policy === "failed")
-      return yield* Effect.fail(
-        guestFailure({ service: "docker", reason: "policy-failed" }, "docker-policy"),
-      );
-    if (tunnel.docker_policy !== (docker ? "applied" : "absent"))
-      return yield* Effect.fail(notReady(BOAT_AGENT_NETWORK_ROUTE, "docker-policy"));
     // 3. The daemon itself, through the agent's authenticated control relay.
     const daemon = yield* io(
       () => transport.probe(connection.hosted, connection.bearer),
       "readiness",
     );
-    if (
-      !daemon.healthy ||
-      !/^rt_[a-zA-Z0-9_-]+$/.test(daemon.runtimeId) ||
-      !REQUIRED_CAPABILITIES.every((capability) => daemon.supports.includes(capability))
-    )
+    if (!daemon.healthy || !/^rt_[a-zA-Z0-9_-]+$/.test(daemon.runtimeId))
       return yield* Effect.fail(new BoatExecutionError("invalid-reply"));
     yield* unchanged(record);
     return {

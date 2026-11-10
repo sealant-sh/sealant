@@ -230,8 +230,7 @@ export type GuestRecoveryAnswer =
   | "nothing-to-save"
   | "recover-new-boot"
   | "recover-binding-conflict"
-  | "recover-state-unknown"
-  | "parked";
+  | "recover-state-unknown";
 /**
  * A fake of the agent as Core's transport sees it: the bind exchange answers the bootstrap wire
  * with a fixed bearer, and each agent route answers the way `agent-contract.ts` says, with
@@ -253,12 +252,19 @@ export class GuestFixture implements BoatGuestTransport {
   /** Runs before each launch push is answered. */
   beforeLaunch: () => Promise<void> = async () => {};
   async probe() {
-    return {
-      runtimeId: "rt_fixture",
-      healthy: true,
-      supports: ["exec.user", "dotfiles.user", "restore.owner_map", "process.secret-env.v1"],
-    };
+    return { runtimeId: "rt_fixture", healthy: true };
   }
+  /**
+   * What `GET /sealant/network` answers: today's agent, its tunnel carried and up. A test sets
+   * another generation's answer (one that still reports `docker_policy`, one that cannot carry).
+   */
+  networkStatus: Record<string, unknown> = {
+    configured: true,
+    handshake: "verified",
+    dns: "udp-and-tcp",
+    carriers: ["websocket"],
+    carrier_attached: true,
+  };
   /** Every launch body the agent was pushed, parsed. */
   readonly launches: Array<{
     version: number;
@@ -352,19 +358,7 @@ export class GuestFixture implements BoatGuestTransport {
         : common;
       return { status: this.starts > 0 ? 200 : 503, body: health };
     }
-    if (route === "network-status")
-      return {
-        status: 200,
-        body: {
-          configured: true,
-          handshake: "verified",
-          dns: "udp-and-tcp",
-          // Where the containers' policy stands: applied once a Docker launch was accepted.
-          docker_policy: this.launches.some((launch) => launch.version === 2)
-            ? "applied"
-            : "absent",
-        },
-      };
+    if (route === "network-status") return { status: 200, body: this.networkStatus };
     if (route === "launch") {
       await this.beforeLaunch();
       const launch = z

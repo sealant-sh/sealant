@@ -74,10 +74,9 @@ staging.
 the `nothing-to-save` deletion basis, which rests on no recorded evidence a later observation could
 revoke (like the owner's discard). The agent's refusals are typed (`recover-new-boot` after a
 reboot, `recover-binding-conflict`, `recover-state-unknown` from a restarted agent that finds no
-launch environment to adopt, `parked`) and classified through the launch diagnostics; each retains
-the VM and can never be read as nothing to save. A malformed answer or lost transport keeps the VM
-too and is retried. The agent still answers `parked` for a disk its own park route closed; Core no
-longer calls that route.
+launch environment to adopt) and classified through the launch diagnostics; each retains the VM and
+can never be read as nothing to save. A malformed answer or lost transport keeps the VM too and is
+retried.
 
 ## Exact cleanup and retry
 

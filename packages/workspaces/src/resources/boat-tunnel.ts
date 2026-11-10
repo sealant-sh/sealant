@@ -29,8 +29,10 @@ const key = z
 const image = z.string().regex(/^(?:[a-z0-9./:_-]+@)?sha256:[a-f0-9]{64}$/);
 const port = z.number().int().min(1).max(65535);
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
-const bindingOf = (target: BoatExecutionTarget) =>
+/** What labels a gateway and its networks as one execution's: a digest of its whole target. */
+export const boatTunnelBinding = (target: BoatExecutionTarget) =>
   hash(JSON.stringify(boatExecutionTargetSchema.parse(target)));
+const bindingOf = boatTunnelBinding;
 const networkSchema = z.object({
   Driver: z.literal("bridge"),
   Internal: z.boolean(),
@@ -137,6 +139,79 @@ export const boatTunnelName = (target: BoatExecutionTarget): string => {
   return `boat-tunnel-${hash(JSON.stringify([parsed.deploymentId, parsed.runId])).slice(0, 32)}`;
 };
 
+/** What a gateway container is made from; its label is a digest of this. */
+export interface BoatTunnelGatewayIdentity {
+  readonly binding: string;
+  readonly publicKey: string;
+  readonly peerKey: string;
+  readonly listenPort: number;
+  readonly gatewayImage: string;
+}
+/**
+ * The two labels a run's gateway may carry. `relayed`: its port is published on the relay host
+ * alone, as every gateway is made now. `dialled`: made before the upgrade on a deployment whose
+ * VMs could dial the gateway, its port published on every interface. That one is adopted as it is
+ * until its run ends, so a session started before the upgrade keeps its resources; none is made.
+ */
+export const boatTunnelConfigDigests = (
+  identity: BoatTunnelGatewayIdentity,
+  publishHost: string,
+): { readonly relayed: string; readonly dialled: string } => {
+  const { binding, publicKey, peerKey, listenPort, gatewayImage } = identity;
+  const ordered = { binding, publicKey, peerKey, listenPort, gatewayImage };
+  return {
+    relayed: hash(JSON.stringify({ ...ordered, publishHost })),
+    dialled: hash(JSON.stringify(ordered)),
+  };
+};
+
+/**
+ * `docker create` for a run's gateway. `publish` is where its WireGuard port is published: the
+ * relay host's address and the run's port (`127.0.0.1:<port>`), as every gateway is made now.
+ */
+export const boatTunnelCreateArgs = (input: {
+  readonly name: string;
+  readonly binding: string;
+  readonly configDigest: string;
+  readonly egress: string;
+  readonly publish: string;
+  readonly gatewayImage: string;
+}): readonly string[] => [
+  "create",
+  "--name",
+  input.name,
+  "--label",
+  `${OWNER}=${input.binding}`,
+  "--label",
+  `${CONFIG}=${input.configDigest}`,
+  "--network",
+  input.egress,
+  "--publish",
+  `${input.publish}:51820/udp`,
+  "--restart",
+  "no",
+  "--read-only",
+  "--cap-drop",
+  "ALL",
+  "--cap-add",
+  "NET_ADMIN",
+  "--security-opt",
+  "no-new-privileges:true",
+  "--memory",
+  "134217728",
+  "--cpus",
+  "0.5",
+  "--pids-limit",
+  "64",
+  "--sysctl",
+  "net.ipv4.ip_forward=1",
+  "--sysctl",
+  "net.ipv6.conf.all.disable_ipv6=1",
+  "--tmpfs",
+  "/run/sealant-tunnel:rw,nosuid,nodev,noexec,size=1m,mode=0700",
+  input.gatewayImage,
+];
+
 /** Docker implementation of a single-peer encrypted endpoint in the existing resource reach network. */
 export class DockerBoatTunnel implements BoatTunnel {
   private readonly docker: DockerCommandRunner;
@@ -148,11 +223,10 @@ export class DockerBoatTunnel implements BoatTunnel {
       readonly resources: Pick<ResourceRuntime, "attachExecutor" | "detachExecutor">;
       readonly dockerSocketPath?: string;
       /**
-       * The host address the gateway's WireGuard port is published on. Set when every tunnel is
-       * carried over HTTPS (the worker relays it locally), so the port is never on a public
-       * interface; unset, it is published on every interface for VMs that dial it.
+       * The one host address the gateway's WireGuard port is published on: where the worker
+       * relays the carried tunnel. The port is never on a public interface.
        */
-      readonly publishHost?: string;
+      readonly publishHost: string;
     },
   ) {
     this.docker = createDockerCommandRunner(options.dockerSocketPath ?? "/var/run/docker.sock");
@@ -177,7 +251,7 @@ export class DockerBoatTunnel implements BoatTunnel {
       JSON.parse((await this.run(["network", "inspect", "--format", "{{json .}}", name])).stdout),
     );
   }
-  private async ownedContainer(name: string, binding: string, config?: string) {
+  private async ownedContainer(name: string, binding: string) {
     if (!(await this.exists("container", name))) return undefined;
     const raw: unknown = JSON.parse(
       (await this.run(["inspect", "--format", "{{json .}}", name])).stdout,
@@ -185,10 +259,7 @@ export class DockerBoatTunnel implements BoatTunnel {
     const identity = z
       .object({ Config: z.object({ Labels: z.record(z.string(), z.string()).nullable() }) })
       .parse(raw);
-    if (
-      identity.Config.Labels?.[OWNER] !== binding ||
-      (config !== undefined && identity.Config.Labels?.[CONFIG] !== config)
-    )
+    if (identity.Config.Labels?.[OWNER] !== binding)
       throw new BoatTunnelError("ownership-conflict");
     return containerSchema.parse(raw);
   }
@@ -275,15 +346,9 @@ export class DockerBoatTunnel implements BoatTunnel {
         const name = boatTunnelName(target);
         const binding = bindingOf(target);
         const publishHost = this.options.publishHost;
-        const configDigest = hash(
-          JSON.stringify({
-            binding,
-            publicKey,
-            peerKey,
-            listenPort,
-            gatewayImage,
-            ...(publishHost === undefined ? {} : { publishHost }),
-          }),
+        const { relayed: configDigest, dialled: dialledDigest } = boatTunnelConfigDigests(
+          { binding, publicKey, peerKey, listenPort, gatewayImage },
+          publishHost,
         );
         const egress = `${name}-egress`;
         const imageId = z
@@ -296,50 +361,34 @@ export class DockerBoatTunnel implements BoatTunnel {
           );
         await this.ensureNetwork(egress, "egress", name, binding);
         await this.ensureNetwork(reachNetworkName(name), "reach", name, binding);
-        let container = await this.ownedContainer(name, binding, configDigest);
+        const owned = async () => {
+          const found = await this.ownedContainer(name, binding);
+          const label = found?.Config.Labels[CONFIG];
+          if (found !== undefined && label !== configDigest && label !== dialledDigest)
+            throw new BoatTunnelError("ownership-conflict");
+          return found;
+        };
+        let container = await owned();
         if (container === undefined) {
           try {
-            await this.run([
-              "create",
-              "--name",
-              name,
-              "--label",
-              `${OWNER}=${binding}`,
-              "--label",
-              `${CONFIG}=${configDigest}`,
-              "--network",
-              egress,
-              "--publish",
-              `${publishHost === undefined ? "" : `${publishHost}:`}${String(listenPort)}:51820/udp`,
-              "--restart",
-              "no",
-              "--read-only",
-              "--cap-drop",
-              "ALL",
-              "--cap-add",
-              "NET_ADMIN",
-              "--security-opt",
-              "no-new-privileges:true",
-              "--memory",
-              "134217728",
-              "--cpus",
-              "0.5",
-              "--pids-limit",
-              "64",
-              "--sysctl",
-              "net.ipv4.ip_forward=1",
-              "--sysctl",
-              "net.ipv6.conf.all.disable_ipv6=1",
-              "--tmpfs",
-              "/run/sealant-tunnel:rw,nosuid,nodev,noexec,size=1m,mode=0700",
-              gatewayImage,
-            ]);
+            await this.run(
+              boatTunnelCreateArgs({
+                name,
+                binding,
+                configDigest,
+                egress,
+                publish: `${publishHost}:${String(listenPort)}`,
+                gatewayImage,
+              }),
+            );
           } catch {
             // Never remove or replace on an ambiguous create response.
           }
-          container = await this.ownedContainer(name, binding, configDigest);
+          container = await owned();
         }
         if (container === undefined) throw new BoatTunnelError("gateway-unavailable");
+        const dialled = container.Config.Labels[CONFIG] === dialledDigest;
+        const publishedOn = dialled ? "" : publishHost;
         if (container.Image !== imageId) throw new BoatTunnelError("ownership-conflict");
         const host = container.HostConfig;
         if (
@@ -370,7 +419,7 @@ export class DockerBoatTunnel implements BoatTunnel {
             "net.ipv6.conf.all.disable_ipv6": "1",
           }) ||
           !isDeepStrictEqual(host.PortBindings, {
-            "51820/udp": [{ HostIp: publishHost ?? "", HostPort: String(listenPort) }],
+            "51820/udp": [{ HostIp: publishedOn, HostPort: String(listenPort) }],
           }) ||
           container.Config.User !== "root" ||
           !isDeepStrictEqual(container.Config.Entrypoint, ["python3", "-I", "-B", PROGRAM]) ||
@@ -386,7 +435,7 @@ export class DockerBoatTunnel implements BoatTunnel {
             ? []
             : desiredAttachments([{ ...input.link, executor: name }], input.instances);
         await this.options.resources.attachExecutor(name, attachments);
-        const attached = await this.ownedContainer(name, binding, configDigest);
+        const attached = await owned();
         if (
           attached === undefined ||
           !isDeepStrictEqual(
@@ -451,7 +500,7 @@ export class DockerBoatTunnel implements BoatTunnel {
           throw new BoatTunnelError("ownership-conflict");
         const receipt = hash(
           JSON.stringify({
-            configDigest,
+            configDigest: dialled ? dialledDigest : configDigest,
             containerId: container.Id,
             gatewayEpoch: attached.State.StartedAt,
             subnet: subnet.Subnet,

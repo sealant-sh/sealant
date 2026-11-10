@@ -26,6 +26,27 @@ describe("parseWorkerEnv", () => {
     },
   );
 
+  it.each(["10.0.0.41", "49.12.133.97", "not-an-ip", ""])(
+    "starts with the retired Boat gateway endpoint %j still set, and ignores it",
+    (endpoint) => {
+      // Alone, and beside a complete configuration: it is never read, so no value of it is refused.
+      const alone = parseWorkerEnv({ SEALANT_BOAT_GATEWAY_ENDPOINT: endpoint });
+      expect(alone).not.toHaveProperty("SEALANT_BOAT_GATEWAY_ENDPOINT");
+      expect(alone.SEALANT_BOAT_GATEWAY_RELAY_HOST).toBeUndefined();
+      const configured = parseWorkerEnv({
+        SEALANT_BOAT_API_KEY: "test-key-for-local-only",
+        SEALANT_BOAT_DEPLOYMENT_ID: "test",
+        SEALANT_CREDENTIALS_KEY: Buffer.alloc(32, 7).toString("base64"),
+        SEALANT_BOAT_GATEWAY_HOST_ID: "11111111-2222-4333-8444-555555555555",
+        SEALANT_BOAT_GATEWAY_RELAY_HOST: "127.0.0.1",
+        SEALANT_BOAT_GATEWAY_IMAGE: `sha256:${"a".repeat(64)}`,
+        SEALANT_BOAT_GATEWAY_ENDPOINT: endpoint,
+      });
+      expect(configured).not.toHaveProperty("SEALANT_BOAT_GATEWAY_ENDPOINT");
+      expect(configured.SEALANT_BOAT_GATEWAY_RELAY_HOST).toBe("127.0.0.1");
+    },
+  );
+
   it("requires the complete reconciliation contract without changing runtime selection", () => {
     expect(parseWorkerEnv({}).SEALANT_BOAT_API_KEY).toBeUndefined();
     for (const values of [
@@ -50,26 +71,33 @@ describe("parseWorkerEnv", () => {
     };
     const gateway = {
       SEALANT_BOAT_GATEWAY_HOST_ID: "11111111-2222-4333-8444-555555555555",
-      SEALANT_BOAT_GATEWAY_ENDPOINT: "10.0.0.41",
+      SEALANT_BOAT_GATEWAY_RELAY_HOST: "172.17.0.1",
       SEALANT_BOAT_GATEWAY_IMAGE: `sha256:${"a".repeat(64)}`,
     };
     expect(parseWorkerEnv({ ...base, ...gateway })).toMatchObject(gateway);
+    // All of the gateway's settings, or none: any one alone refuses the worker's start.
     for (const [key, value] of Object.entries(gateway))
-      expect(() => parseWorkerEnv({ ...base, [key]: value })).toThrow("complete gateway");
+      expect(() => parseWorkerEnv({ ...base, [key]: value }), key).toThrow("complete gateway");
+    for (const key of ["SEALANT_BOAT_GATEWAY_HOST_ID", "SEALANT_BOAT_GATEWAY_IMAGE"] as const) {
+      const { [key]: _missing, ...partial } = gateway;
+      expect(() => parseWorkerEnv({ ...base, ...partial }), key).toThrow("complete gateway");
+    }
     expect(() =>
       parseWorkerEnv({ ...base, ...gateway, SEALANT_BOAT_GATEWAY_IMAGE: "gateway:latest" }),
     ).toThrow();
     expect(() => parseWorkerEnv({ ...base, ...gateway, DOCKER_RUNTIME_ENABLED: "false" })).toThrow(
       "Docker resource host",
     );
-    // Carried over HTTPS: a relay host stands in for the public endpoint; one of the two is needed.
-    const { SEALANT_BOAT_GATEWAY_ENDPOINT: _endpoint, ...carriedOnly } = gateway;
-    expect(
-      parseWorkerEnv({ ...base, ...carriedOnly, SEALANT_BOAT_GATEWAY_RELAY_HOST: "172.17.0.1" }),
-    ).toMatchObject({ SEALANT_BOAT_GATEWAY_RELAY_HOST: "172.17.0.1" });
+    // Every tunnel is carried over HTTPS to the relay host, so a gateway without one cannot be
+    // reached: the start is refused, and the refusal names the variable.
+    const { SEALANT_BOAT_GATEWAY_RELAY_HOST: _relay, ...carriedOnly } = gateway;
     expect(() => parseWorkerEnv({ ...base, ...carriedOnly })).toThrow(
-      "SEALANT_BOAT_GATEWAY_RELAY_HOST",
+      "Boat resource reconciliation requires SEALANT_BOAT_GATEWAY_RELAY_HOST",
     );
+    // The address VMs once dialled over UDP does not stand in for it.
+    expect(() =>
+      parseWorkerEnv({ ...base, ...carriedOnly, SEALANT_BOAT_GATEWAY_ENDPOINT: "10.0.0.41" }),
+    ).toThrow("Boat resource reconciliation requires SEALANT_BOAT_GATEWAY_RELAY_HOST");
     expect(() =>
       parseWorkerEnv({ ...base, ...carriedOnly, SEALANT_BOAT_GATEWAY_RELAY_HOST: "not-an-ip" }),
     ).toThrow();
@@ -99,7 +127,7 @@ describe("parseWorkerEnv", () => {
       parseWorkerEnv({
         ...base,
         SEALANT_BOAT_GATEWAY_HOST_ID: "11111111-2222-4333-8444-555555555555",
-        SEALANT_BOAT_GATEWAY_ENDPOINT: "49.12.133.97",
+        SEALANT_BOAT_GATEWAY_RELAY_HOST: "127.0.0.1",
         SEALANT_BOAT_GATEWAY_IMAGE: `sha256:${"a".repeat(64)}`,
       }).DEFAULT_RUNTIME_ADAPTER,
     ).toBe("docker");
@@ -109,19 +137,19 @@ describe("parseWorkerEnv", () => {
       SEALANT_BOAT_API_KEY_FILE: "/run/secrets/boat-api-key",
       SEALANT_BOAT_DEPLOYMENT_ID: "proof",
       SEALANT_BOAT_GATEWAY_HOST_ID: "11111111-2222-4333-8444-555555555555",
-      SEALANT_BOAT_GATEWAY_ENDPOINT: "49.12.133.97",
+      SEALANT_BOAT_GATEWAY_RELAY_HOST: "127.0.0.1",
       SEALANT_BOAT_GATEWAY_IMAGE: `sha256:${"a".repeat(64)}`,
       SEALANT_BOAT_BUILDER_OWNER: "11111111-2222-4333-8444-555555555555",
       SEALANT_BOAT_STATE_DIRECTORY: "/var/lib/sealant/boat",
       SEALANT_CREDENTIALS_KEY: Buffer.alloc(32, 7).toString("base64"),
     };
     expect(parseWorkerEnv(base).SEALANT_BOAT_BUILDER_OWNER).toBe(base.SEALANT_BOAT_BUILDER_OWNER);
-    // Every tunnel carried: no public endpoint.
-    const { SEALANT_BOAT_GATEWAY_ENDPOINT: _publicEndpoint, ...carried } = base;
-    expect(
-      parseWorkerEnv({ ...carried, SEALANT_BOAT_GATEWAY_RELAY_HOST: "127.0.0.1" })
-        .SEALANT_BOAT_STATE_DIRECTORY,
-    ).toBe(base.SEALANT_BOAT_STATE_DIRECTORY);
+    // Boat workspaces need the relay host too, and the retired endpoint is no substitute.
+    const { SEALANT_BOAT_GATEWAY_RELAY_HOST: _relayHost, ...unrelayed } = base;
+    for (const env of [unrelayed, { ...unrelayed, SEALANT_BOAT_GATEWAY_ENDPOINT: "49.12.133.97" }])
+      expect(() => parseWorkerEnv(env)).toThrow(
+        "Boat workspaces require SEALANT_BOAT_GATEWAY_RELAY_HOST",
+      );
     for (const key of Object.keys(base))
       expect(
         () =>
