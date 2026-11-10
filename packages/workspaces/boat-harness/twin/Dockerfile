@@ -10,11 +10,12 @@ ARG SYSTEMD_VERSION=255.4-1ubuntu8.16
 ARG UBUNTU_ARCHIVE=http://archive.ubuntu.com/ubuntu
 ENV container=docker
 # Packages come from the stock archive, as on a Boat VM (or from a full mirror of it when the
-# archive is down: the stack probes both, as recipe.e2e.ts does). Only the pinned systemd comes from
-# the snapshot, the one place that still has that version, through a second source used for five
-# packages and removed again; the snapshot service answers 503 for some files at times, so the
-# less it serves, the better. apt retries each fetch during the build; the image ends on the stock
-# sources, without the retry setting.
+# archive is down: the stack probes both, as recipe.e2e.ts does). Only the systemd source comes
+# from the snapshot, the one place that still has the pinned version: every binary package built
+# from it (systemd-dev too, which systemd pulls in) is pinned there by an apt preference, since the
+# native recipe refuses a VM whose systemd-source packages differ in version. The snapshot source,
+# the pin and the retry setting are removed again; the image ends on the stock sources. The
+# snapshot service answers 503 for some files at times, so it serves only this.
 RUN printf 'Acquire::Retries "6";\n' > /etc/apt/apt.conf.d/80-harness-build-retries \
     && cp /etc/apt/sources.list.d/ubuntu.sources /tmp/ubuntu.sources.stock \
     && if [ "${UBUNTU_ARCHIVE}" != http://archive.ubuntu.com/ubuntu ]; then \
@@ -22,17 +23,19 @@ RUN printf 'Acquire::Retries "6";\n' > /etc/apt/apt.conf.d/80-harness-build-retr
              -e "s|http://security.ubuntu.com/ubuntu|${UBUNTU_ARCHIVE}|g" /etc/apt/sources.list.d/ubuntu.sources; \
     fi \
     && apt-get update --error-on=any \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-       ca-certificates dbus sudo python3 iproute2 curl kmod \
-    # The snapshot is HTTPS-only, so it comes after ca-certificates.
+    # The snapshot is HTTPS-only, so trust roots come first.
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates \
     && printf '%s\n' 'Types: deb' "URIs: ${SNAPSHOT}" 'Suites: noble-updates noble-security' \
          'Components: main' 'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
          > /etc/apt/sources.list.d/harness-snapshot.sources \
+    && printf '%s\n' 'Package: src:systemd' "Pin: version ${SYSTEMD_VERSION}" 'Pin-Priority: 1001' \
+         > /etc/apt/preferences.d/harness-systemd \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades --no-install-recommends \
-       systemd=${SYSTEMD_VERSION} systemd-sysv=${SYSTEMD_VERSION} libsystemd0=${SYSTEMD_VERSION} \
-       libsystemd-shared=${SYSTEMD_VERSION} libudev1=${SYSTEMD_VERSION} \
-    && rm -f /etc/apt/sources.list.d/harness-snapshot.sources /etc/apt/apt.conf.d/80-harness-build-retries \
+       systemd systemd-sysv libsystemd0 libsystemd-shared libudev1 \
+       dbus sudo python3 iproute2 ca-certificates curl kmod \
+    && rm -f /etc/apt/sources.list.d/harness-snapshot.sources /etc/apt/preferences.d/harness-systemd \
+         /etc/apt/apt.conf.d/80-harness-build-retries \
     && mv /tmp/ubuntu.sources.stock /etc/apt/sources.list.d/ubuntu.sources \
     && rm -rf /var/lib/apt/lists/*
 # Boat's command user is uid 1000 named `user` (boat-runtime.md: "The command user was uid 1000").
@@ -49,6 +52,14 @@ RUN systemctl mask systemd-udevd.service systemd-udevd-kernel.socket systemd-ude
 RUN install -d -m 0755 /var/lib/boat-twin \
     && cp /usr/lib/systemd/systemd /var/lib/boat-twin/provider-systemd \
     && printf '%s\n' '# boat-sandbox bx_00000000' >> /home/user/.bashrc
+# The native recipe's own check (recipe.ts `systemdBaseSetup`): every installed package built from
+# the systemd source carries the pinned version. A twin it would refuse fails here, by name.
+RUN mixed=$(dpkg-query -W -f='${binary:Package} ${source:Package} ${Version} ${db:Status-Status}\n' \
+      | awk -v want="${SYSTEMD_VERSION}" '$2 == "systemd" && $4 == "installed" && $3 != want {print $1 "=" $3}') \
+    && if [ -n "$mixed" ]; then \
+      echo "twin: systemd-source packages not at ${SYSTEMD_VERSION} (the native recipe refuses this): $mixed" >&2; \
+      exit 1; \
+    fi
 COPY twin-init /usr/local/sbin/twin-init
 RUN chmod 0755 /usr/local/sbin/twin-init
 LABEL sh.sealant.boat-harness=twin-base
