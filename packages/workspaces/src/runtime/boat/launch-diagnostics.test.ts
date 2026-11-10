@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { BoatAllocationError } from "./allocation.js";
 import { BoatApiError } from "./config.js";
-import { boatLaunchDiagnostic, boatLaunchSummary } from "./launch-diagnostics.js";
+import { boatGuestOutput, boatLaunchDiagnostic, boatLaunchSummary } from "./launch-diagnostics.js";
 
 describe("Boat launch diagnostics", () => {
   it("preserves the agent operation, fixed route, reason and redacted body across launch wrappers", () => {
@@ -30,7 +30,7 @@ describe("Boat launch diagnostics", () => {
     expect(wrapper.message).toContain('"reason":"recover-new-boot"');
     expect(wrapper.message).not.toContain("hidden-value");
   });
-  it("keeps what the agent's health said of the guest, never the daemon's free text", () => {
+  it("keeps what the agent's health said of the guest, never an unlisted message", () => {
     const diagnostic = boatLaunchDiagnostic(
       {
         diagnostic: {
@@ -50,6 +50,96 @@ describe("Boat launch diagnostics", () => {
       guest: { service: "docker", exitCode: 1, reason: "readiness-timeout" },
     });
     expect(boatLaunchSummary(diagnostic)).not.toContain("hidden-value");
+  });
+  it("carries the last lines sealantd printed, bounded, with its secrets and URL paths removed", () => {
+    const output = [
+      ...Array.from({ length: 40 }, (_, line) => `INFO preparing step ${String(line)}`),
+      "token=mst_live_value and Bearer hidden-bearer",
+      "ERROR capture plan.get to https://user:pw@mend.example.com:8443/session/s1?sig=presigned-secret failed",
+      "sealantd boot: the capture worktree could not be materialized: launch-secret-value refused",
+    ].join("\n");
+    const diagnostic = boatLaunchDiagnostic(
+      {
+        diagnostic: {
+          step: "readiness",
+          errorClass: "BoatExecutionError",
+          code: "guest-failed",
+          guest: {
+            service: "sealantd",
+            exitCode: 1,
+            outputTail: boatGuestOutput(`\u001b[31m${output}\u0007`, ["launch-secret-value"]),
+          },
+        },
+      },
+      "readiness",
+    );
+    const tail = diagnostic.guest?.outputTail ?? "";
+    expect(tail.split("\n")).toHaveLength(20);
+    expect(Buffer.byteLength(tail)).toBeLessThanOrEqual(2048);
+    expect(tail).not.toContain("INFO preparing step 22\n");
+    expect(tail).toContain("[url https mend.example.com:8443]");
+    expect(tail.endsWith("could not be materialized: [REDACTED] refused")).toBe(true);
+    const summary = boatLaunchSummary(diagnostic);
+    expect(summary).toContain("could not be materialized");
+    for (const forbidden of [
+      "mst_live_value",
+      "hidden-bearer",
+      "presigned-secret",
+      "/session/s1",
+      "user:pw",
+      "launch-secret-value",
+      "\u001b",
+    ])
+      expect(summary).not.toContain(forbidden);
+  });
+  it("removes a secret printed JSON-escaped or base64, and the query of a `\\/`-escaped URL", () => {
+    const secret = 'provider"credential\\0123456789/x';
+    const output = [
+      `invalid configuration value ${JSON.stringify(secret)}`,
+      `escaped ${JSON.stringify(secret).replaceAll("/", "\\/")}`,
+      `encoded ${Buffer.from(secret).toString("base64")}`,
+      String.raw`plan {"url":"https:\/\/capture.example\/get?sig=signature-value"}`,
+    ].join("\n");
+    const diagnostic = boatLaunchDiagnostic(
+      {
+        diagnostic: {
+          step: "readiness",
+          errorClass: "BoatExecutionError",
+          code: "guest-failed",
+          guest: {
+            service: "sealantd",
+            exitCode: 1,
+            outputTail: boatGuestOutput(output, [secret]),
+          },
+        },
+      },
+      "readiness",
+    );
+    const summary = boatLaunchSummary(diagnostic);
+    expect(diagnostic.guest?.outputTail).toContain("[url https capture.example]");
+    for (const forbidden of [
+      "credential",
+      "0123456789",
+      Buffer.from(secret).toString("base64").replace(/=+$/, ""),
+      "signature-value",
+      "/get",
+    ])
+      expect(summary).not.toContain(forbidden);
+  });
+  it("bounds the output tail however it is reached, even past an untrusted wrapper", () => {
+    const diagnostic = boatLaunchDiagnostic(
+      {
+        diagnostic: {
+          step: "readiness",
+          errorClass: "BoatExecutionError",
+          code: "guest-failed",
+          guest: { service: "sealantd", exitCode: 1, outputTail: `${"é".repeat(5000)}\nlast` },
+        },
+      },
+      "readiness",
+    );
+    expect(Buffer.byteLength(diagnostic.guest?.outputTail ?? "")).toBeLessThanOrEqual(2048);
+    expect(diagnostic.guest?.outputTail?.endsWith("\nlast")).toBe(true);
   });
   it("bounds and redacts command tails across worker and runtime wrappers", () => {
     const diagnostic = boatLaunchDiagnostic(

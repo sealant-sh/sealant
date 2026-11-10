@@ -3,6 +3,63 @@ import { z } from "zod";
 import { safeCommandTail } from "../../images/boat/command-diagnostics.js";
 import { BoatApiError, boatProviderFailureSchema } from "./config.js";
 
+/** What a diagnostic keeps of a guest service's output: its last lines, at most this many bytes. */
+const GUEST_OUTPUT_LINES = 20;
+const GUEST_OUTPUT_BYTES = 2048;
+// Values shorter than this are not redacted: replacing every "1" or "on" would destroy the text,
+// and a value that short is not a credential (the agent uses the same bound).
+const MIN_REDACTED_LENGTH = 8;
+const URL_PATTERN = /\b(https?|wss?|ssh|git):\/\/(?:[^\s/?#<>"'@]*@)?([^\s/?#<>"']+)[^\s<>"']*/gi;
+
+/**
+ * A guest service's output as a diagnostic may carry it. A URL keeps only its scheme and host (which
+ * endpoint a boot could not reach is the point of the tail; a path or query can hold a presigned
+ * signature, userinfo a password), then the command-tail redactions apply: private keys, `Bearer`
+ * and `Basic` values, and `token=`-shaped assignments. The last {@link GUEST_OUTPUT_LINES} lines are
+ * kept, and at most {@link GUEST_OUTPUT_BYTES} bytes of them.
+ */
+const safeGuestOutput = (raw: string): string => {
+  const text = safeCommandTail(
+    // JSON serializers may escape `/` as `\/`; unescape first so such a URL loses its query too.
+    raw
+      .replaceAll("\\/", "/")
+      .replace(URL_PATTERN, (_url, scheme: string, host: string) => `[url ${scheme} ${host}]`),
+  )
+    .trim()
+    .split("\n")
+    .slice(-GUEST_OUTPUT_LINES)
+    .join("\n");
+  const bytes = Buffer.from(text);
+  let start = Math.max(0, bytes.length - GUEST_OUTPUT_BYTES);
+  while (start < bytes.length && ((bytes[start] ?? 0) & 0xc0) === 0x80) start++;
+  return bytes.subarray(start).toString("utf8");
+};
+
+/**
+ * The output to put in a diagnostic, with every value in `secrets` removed first: what the launch
+ * delivered (the agent removes the same values, but an older agent may not have). The diagnostic's
+ * own schema then bounds it and removes what is shaped like a secret.
+ */
+export const boatGuestOutput = (raw: string, secrets: readonly string[]): string => {
+  let text = raw;
+  // A daemon may print a value as it is, JSON-escaped (with or without `\/`), or base64-encoded.
+  const forms = [...new Set(secrets)]
+    .filter((value) => value.length >= MIN_REDACTED_LENGTH)
+    .flatMap((value) => {
+      const escaped = JSON.stringify(value).slice(1, -1);
+      return [
+        value,
+        escaped,
+        escaped.replaceAll("/", "\\/"),
+        Buffer.from(value).toString("base64").replace(/=+$/, ""),
+      ];
+    });
+  for (const form of [...new Set(forms)].toSorted((a, b) => b.length - a.length)) {
+    text = text.split(form).join("[REDACTED]");
+  }
+  return text;
+};
+
 /** Fixed names only. Exception messages, request bodies and bootstrap replies can contain secrets. */
 const diagnosticSchema = z.object({
   step: z.enum([
@@ -145,6 +202,12 @@ const diagnosticSchema = z.object({
         .string()
         .regex(/^[a-z][a-z0-9-]{0,63}$/)
         .optional(),
+      /**
+       * The end of what sealantd printed before it exited, as the agent's health reports it: a boot
+       * that fails before the control socket has nowhere else to say why. Bounded and redacted
+       * ({@link safeGuestOutput}); absent when it printed nothing.
+       */
+      outputTail: z.string().transform(safeGuestOutput).optional(),
     })
     .optional(),
   /** The authenticated control stream to sealantd: where it failed and who refused it, and why. */
