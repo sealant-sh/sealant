@@ -1286,6 +1286,12 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   resourceTickTimer.unref();
 
   return {
+    /**
+     * How this worker reaches a Boat run's daemon: fresh hosted authority per connection, through
+     * the agent's control relay (the path readiness probes). The telemetry worker beside it attaches
+     * its recorder the same way; without this a Boat run has no control target there.
+     */
+    boatConnectMaterial: targetOptions.boatConnectMaterial,
     stop: async () => {
       clearInterval(placementSweepTimer);
       clearInterval(resourceTickTimer);

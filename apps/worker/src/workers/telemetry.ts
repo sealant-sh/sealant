@@ -6,7 +6,8 @@
  * One-shot harness runs are NOT polled here: the run-exec worker already ingests them inline
  * (captureRun), bounded to the harness process. Interactive runs (SSH sessions minted by the
  * gateway) have no inline owner, so this worker polls `runs` for `status=running, mode=interactive`,
- * resolves each run's workspace to its ready docker instance, and forks one ingester fiber per run on
+ * resolves each run's workspace to its ready runtime instance (Docker, Kubernetes, Cloudflare, or
+ * Boat through the hosted control relay the workspace worker hands it), and forks one ingester fiber per run on
  * its OWN control connection with THAT run as the connection's default — attribution then routes
  * execution-tagged events (this run's own session included) while untagged daemon noise falls back
  * to the same run. When the run leaves `running` (the gateway finalized it), the fiber is
@@ -37,6 +38,7 @@ import {
   SealantRuntimeControlLive,
   sealantTargetForRuntimeInstance,
   targetDerivationOptionsFromEnv,
+  type SealantTargetDerivationOptions,
 } from "@sealant/workspaces";
 import { Cause, Context, Effect, Exit, Fiber, Layer, Scope } from "effect";
 
@@ -44,12 +46,25 @@ import { Cause, Context, Effect, Exit, Fiber, Layer, Scope } from "effect";
 // yet — see the delivery-integrity roadmap item), so poll lag is head-loss for short sessions.
 const POLL_INTERVAL_MS = 1000;
 
+/** What this worker cannot derive from its environment: the workspace worker's Boat control. */
+export interface TelemetryWorkerOptions {
+  readonly boatConnectMaterial?: SealantTargetDerivationOptions["boatConnectMaterial"];
+}
+
 /**
  * Starts the telemetry worker loop and returns a graceful shutdown handle. Mirrors
  * `startWorkspaceWorker`'s shape so `startWorkers` can compose it.
  */
-export const startTelemetryWorker = async (env: WorkerEnv) => {
-  const targetOptions = targetDerivationOptionsFromEnv(env);
+export const startTelemetryWorker = async (
+  env: WorkerEnv,
+  options: TelemetryWorkerOptions = {},
+) => {
+  const targetOptions: SealantTargetDerivationOptions = {
+    ...targetDerivationOptionsFromEnv(env),
+    ...(options.boatConnectMaterial === undefined
+      ? {}
+      : { boatConnectMaterial: options.boatConnectMaterial }),
+  };
   const dbLayer = makeSealantDBLayer(env.DATABASE_URL);
   const artifactLayer = InlineByteaArtifactStoreLive.pipe(Layer.provide(dbLayer));
   const sinkLayer = PostgresTelemetrySinkLive.pipe(
@@ -75,8 +90,11 @@ export const startTelemetryWorker = async (env: WorkerEnv) => {
   const instances = Context.get(context, WorkspaceRuntimeInstanceRepo);
 
   const started = new Map<string, Fiber.Fiber<void, unknown>>();
+  // Runs whose ready instance this worker cannot reach, said once each: a silent skip left a Boat
+  // session waiting on a recorder that was never going to attach.
+  const unreachable = new Set<string>();
 
-  const resolveTarget = (workspaceId: string) =>
+  const resolveTarget = (runId: string, workspaceId: string) =>
     Effect.gen(function* () {
       const workspace = yield* workspaces.getWorkspaceById(workspaceId);
       if (workspace === undefined || workspace.latestRunId === null) {
@@ -86,7 +104,15 @@ export const startTelemetryWorker = async (env: WorkerEnv) => {
       if (instance === undefined || instance.status !== "ready") {
         return undefined;
       }
-      return sealantTargetForRuntimeInstance(instance, targetOptions);
+      const target = sealantTargetForRuntimeInstance(instance, targetOptions);
+      if (target === undefined && !unreachable.has(runId)) {
+        unreachable.add(runId);
+        console.warn("Telemetry: no control target for a ready instance; the run is not recorded", {
+          runId,
+          adapter: instance.adapter,
+        });
+      }
+      return target;
     });
 
   const poll = async () => {
@@ -98,6 +124,7 @@ export const startTelemetryWorker = async (env: WorkerEnv) => {
     for (const [runId, fiber] of started) {
       if (!activeIds.has(runId)) {
         started.delete(runId);
+        unreachable.delete(runId);
         Effect.runFork(Fiber.interrupt(fiber));
       }
     }
@@ -106,7 +133,7 @@ export const startTelemetryWorker = async (env: WorkerEnv) => {
       if (started.has(run.id)) {
         continue;
       }
-      const target = await Effect.runPromise(resolveTarget(run.workspaceId));
+      const target = await Effect.runPromise(resolveTarget(run.id, run.workspaceId));
       if (target === undefined) {
         continue;
       }
