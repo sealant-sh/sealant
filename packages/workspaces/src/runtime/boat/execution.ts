@@ -27,12 +27,18 @@ import {
   type BoatExecutionTarget,
   type BoatNetworkIntent,
 } from "@sealant/validators";
-import { Context, Effect, Layer, Redacted } from "effect";
+import { Cause, Context, Effect, Layer, Redacted } from "effect";
 import { z } from "zod";
 
 import receiverRoutes from "../../../boat-image/receiver-routes.json" with { type: "json" };
 import { safeCommandTail } from "../../images/boat/command-diagnostics.js";
-import type { SealantRuntimeService, SealantTarget } from "../../sealantd/runtime.js";
+import {
+  SealantControlError,
+  TransportError,
+  type SealantError,
+  type SealantRuntimeService,
+  type SealantTarget,
+} from "../../sealantd/runtime.js";
 import type { BoatApi } from "./api.js";
 import { BoatApiError, BoatSecret, boatSandboxIdSchema, parseBoatUrl } from "./config.js";
 import { boatControlConnection, type BoatHostedControl } from "./connection.js";
@@ -321,6 +327,30 @@ export interface BoatDaemonReady {
   readonly supports: readonly string[];
 }
 
+/** The daemon probe's cause, as the runtime client classified it, kept for the runtime row. */
+export const boatControlFailure = (error: SealantError | Cause.TimeoutError) =>
+  new BoatExecutionError("transport-unavailable", {
+    step: "readiness",
+    code: "transport-unavailable",
+    ...(Cause.isTimeoutError(error)
+      ? { errorClass: "TimeoutError", control: { operation: "probe" } }
+      : error instanceof TransportError
+        ? {
+            errorClass: "TransportError",
+            control: {
+              operation: error.operation,
+              ...(error.status === undefined ? {} : { status: error.status }),
+              ...(error.reason === undefined ? {} : { reason: error.reason }),
+            },
+          }
+        : error instanceof SealantControlError
+          ? {
+              errorClass: "SealantControlError",
+              control: { operation: error.operation, daemonCode: error.code },
+            }
+          : { errorClass: "SealantUnexpectedError", control: { operation: error.operation } }),
+  });
+
 /** Only public identity requests use the provider command channel. Launch secrets use hosted HTTPS. */
 export const boatGuestPublicCommand = (action: "bind" | "resume", request: unknown) => {
   const raw = JSON.stringify(request);
@@ -451,7 +481,7 @@ export const createBoatGuestTransport = (
               supports: capabilities.supports,
             };
           }),
-        ).pipe(Effect.timeout(15_000)),
+        ).pipe(Effect.timeout(15_000), Effect.mapError(boatControlFailure)),
       ),
     bind: async (target, request) => {
       const id = await verify(target);
