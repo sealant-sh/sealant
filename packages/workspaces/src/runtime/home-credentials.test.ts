@@ -30,7 +30,7 @@ import {
   ExecAcceptedSchema,
   ProcessExitedSchema,
 } from "@sealant/runtime-protocol";
-import { Effect, Stream } from "effect";
+import { Effect, Exit, Stream } from "effect";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { SealantControlError, type SealantExecOptions } from "../sealantd/runtime.js";
@@ -1403,10 +1403,8 @@ forEachShell("a login is never in any process's argv or environment", () => {
         }),
       events: Stream.never,
     };
-    const result = await Effect.runPromise(
-      Effect.result(runHomeScriptInSession(session, "cat", "payload")),
-    );
-    expect(result._tag).toBe("Failure");
+    const exit = await Effect.runPromiseExit(runHomeScriptInSession(session, "cat", "payload"));
+    expect(Exit.isFailure(exit)).toBe(true);
     expect(closed).toBe(false);
   });
 });

@@ -16,6 +16,7 @@ import { Effect, Option, Stream } from "effect";
 
 import { FIXED_SYSTEM_PATH } from "../buildkit/person-layout.js";
 import {
+  SealantControlError,
   SealantRuntime,
   SealantRuntimeControlLive,
   type SealantError,
@@ -741,7 +742,7 @@ export const runHomeScriptInSession = (
     yield* feed.pipe(
       Effect.catchIf(
         (error) =>
-          error._tag === "SealantControlError" && error.code === ControlErrorCode.PROCESS_NOT_FOUND,
+          error instanceof SealantControlError && error.code === ControlErrorCode.PROCESS_NOT_FOUND,
         () => Effect.void,
       ),
     );
