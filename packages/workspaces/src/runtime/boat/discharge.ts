@@ -97,8 +97,6 @@ const make = Effect.gen(function* () {
     if (observed?.presence !== "absent" || observed.sandboxId !== allocation.sandboxId)
       return { kind: "not-absent" } as const;
     const root = yield* canonical.getByRunId(runId).pipe(Effect.orElseSucceed(() => undefined));
-    // Snapshot parking moves the work into custody before it removes a VM; it owns that lineage.
-    if (root?.custodyContract === 3) return { kind: "not-absent" } as const;
     const blockers: BoatDischargeBlocker[] = [];
     const settle = <A, E>(
       obligation: BoatDischargeBlocker["obligation"],

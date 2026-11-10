@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 import { CredentialCipher, credentialCipherLayer } from "@sealant/credentials";
 import {
@@ -88,14 +88,6 @@ const test = async (
   });
 };
 const execute = Effect.runPromise;
-/** Exchange, seal the launch, freeze isolation and push the launch: a running execution. */
-const running = async (context: Parameters<Parameters<typeof test>[0]>[0]) => {
-  const { executor, target } = context;
-  await execute(executor.exchange(target));
-  await execute(executor.stage(target.runId, material()));
-  await execute(executor.recordIsolation(target, receipts));
-  expect(await execute(executor.launch(target.runId))).toBe("running");
-};
 /** The agent's health, or the tunnel's status, as a readiness observation answers it. */
 const health = (body: unknown) => (route: string) =>
   route === "health" ? { status: 503, body } : undefined;
@@ -444,68 +436,6 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       await execute(corruptBoatExecution(db, target.runId, { ...held, admission }));
       expect(await execute(executor.recover(target))).toBe("held");
     }));
-  it("requires a held launch and maps the agent's park receipt into the custody fields", () =>
-    test(async (context) => {
-      const { executor, target, guest } = context;
-      await running(context);
-      const operationId = randomUUID();
-      await expect(execute(executor.park(target, operationId))).rejects.toThrow("invocation-held");
-      expect(guest.actions).not.toContain("park");
-      await execute(executor.hold(target));
-      const receiptHash = createHash("sha256").update(guest.capsule).digest("hex");
-      expect(await execute(executor.park(target, operationId))).toEqual({
-        operationId,
-        capsuleHash: receiptHash,
-        archiveHash: receiptHash,
-        contentBytes: guest.capsule.length,
-        storedBytes: guest.capsule.length,
-        entries: 1,
-      });
-      // A receipt for another operation, or one the agent put elsewhere, is not this park's.
-      const original = guest.request.bind(guest);
-      guest.request = async (...args) => {
-        const reply = await original(...args);
-        return args[2] === "park"
-          ? {
-              status: 200,
-              body: {
-                outcome: "closed",
-                receipt: {
-                  path: `/var/lib/sealant/agent/park-${randomUUID()}.json`,
-                  sha256: receiptHash,
-                  bytes: 1,
-                },
-              },
-            }
-          : reply;
-      };
-      await expect(execute(executor.park(target, operationId))).rejects.toThrow("invalid-reply");
-      guest.request = async () => ({ status: 409, body: { reason: "parked" } });
-      expect(await refusalReason(executor.park(target, operationId))).toBe("parked");
-      // Docker could not be proved stopped: no receipt was written; the same park is retried.
-      guest.request = async () => {
-        throw new BoatExecutionError("agent-not-ready", {
-          step: "agent-request",
-          errorClass: "BoatExecutionError",
-          code: "agent-not-ready",
-          provider: { operation: "agent-park", status: 503, causeClass: null },
-          agent: { pathClass: "/sealant/park", responseTail: "", reason: "docker-stop-unverified" },
-        });
-      };
-      const unverified = await execute(Effect.flip(executor.park(target, operationId)));
-      expect(unverified).toBeInstanceOf(BoatExecutionError);
-      expect(boatLaunchDiagnostic(unverified, "readiness")).toMatchObject({
-        code: "agent-not-ready",
-        agent: { reason: "docker-stop-unverified" },
-      });
-      expect(boatExecutionRetryable(unverified)).toBe(true);
-      guest.request = original;
-      await expect(
-        execute(executor.park({ ...target, bootId: randomUUID() }, operationId)),
-      ).rejects.toThrow("target-mismatch");
-      await expect(execute(executor.park(target, "invalid"))).rejects.toThrow("invalid-input");
-      expect(guest.starts).toBe(1);
-    }));
   it("delivers the same authenticated network intent after reply loss and refuses stale epochs, boots and replies", () =>
     test(async ({ executor, repo, target, guest }) => {
       await execute(executor.exchange(target));
@@ -820,16 +750,5 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       await expect(execute(executor.launch(target.runId))).rejects.toThrow("seal-context-mismatch");
       await execute(corruptBoatExecution(db, target.runId, { ...record, phase: "nonsense" }));
       await expect(execute(repo.get(target.runId))).rejects.toThrow("invalid-record");
-    }));
-  it("reopens the resume envelope as the original launch material for custody", () =>
-    test(async (context) => {
-      const { executor, target } = context;
-      await running(context);
-      expect(Redacted.value(await execute(executor.parkingMaterial(target)))).toEqual(
-        Redacted.value(material()),
-      );
-      await expect(
-        execute(executor.parkingMaterial({ ...target, bootId: randomUUID() })),
-      ).rejects.toThrow("target-mismatch");
     }));
 });

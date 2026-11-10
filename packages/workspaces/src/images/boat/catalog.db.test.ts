@@ -643,10 +643,10 @@ describe.skipIf(!enabled)("native publication ownership in migrated disposable P
               expect(f.posts()).toBe(2);
               const pin = pins[0];
               if (pin === undefined) throw new Error("missing pin");
-              yield* catalog.markConsumer(pin, first.publicationId, "parked");
+              yield* catalog.markConsumer(pin, first.publicationId, "retained");
               expect(yield* catalog.acquire(input(pin))).toEqual(first);
               expect(yield* nativeConsumerRows(db, pin.runId)).toEqual([
-                { state: "parked", publicationId: first.publicationId },
+                { state: "retained", publicationId: first.publicationId },
               ]);
               yield* catalog.release(pin, first.publicationId);
               yield* catalog.release(pin, first.publicationId);
@@ -876,7 +876,7 @@ describe.skipIf(!enabled)("native publication ownership in migrated disposable P
               const artifact = record.publication.snapshot;
               const recovery = yield* consumer(db, f.owner);
               yield* repo.reserve(record.ownership.key, recovery);
-              yield* catalog.markConsumer(recovery, oldest.id, "parked");
+              yield* catalog.markConsumer(recovery, oldest.id, "retained");
               expect(
                 (yield* catalog.reap({ scope: f.key.scope, limit: 200 })).entries,
               ).toContainEqual({ id: oldest.id, outcome: "skipped", code: "retained" });
@@ -933,7 +933,7 @@ describe.skipIf(!enabled)("native publication ownership in migrated disposable P
           const f = yield* prepare(db);
           const commands = Arbitrary.array(
             Arbitrary.schema(
-              Schema.Literals(["pending", "live", "retained", "parked", "unknown", "released"]),
+              Schema.Literals(["pending", "live", "retained", "unknown", "released"]),
             ),
             { minLength: 1, maxLength: 15 },
           );

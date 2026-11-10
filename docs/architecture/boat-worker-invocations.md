@@ -2,7 +2,7 @@
 
 Boat remains unregistered. This layer provides the executable worker exchange, the sealed launch
 material and the launch owner (`BoatExecution`, `src/runtime/boat/execution.ts`). It does not
-establish resource isolation, FINAL settlement, recovery, parking or an end-to-end Boat session.
+establish resource isolation, FINAL settlement, recovery or an end-to-end Boat session.
 
 `BoatExecution` uses the existing credential cipher and `BoatExecutionRepo`. The native publication
 catalog continues to own reusable images.
@@ -26,8 +26,7 @@ with the bound OAEP label, then proves it on `GET /sealant/health` (the agent an
 503, not booted). One commit stores purpose-bound encrypted control material (hosted origin, proxy
 cookie, bearer) and removes the encrypted exchange key. A reply lost before that commit replays the
 same public request. A bind refusal is typed (`agent-refused`, the CLI's reason code). The exchange
-answers a binding receipt, a digest of the public bind, the same on every replay; the parking resume
-records it as the rebind of a restored disk.
+answers a binding receipt, a digest of the public bind, the same on every replay.
 
 ## Sealed launch material
 

@@ -87,7 +87,7 @@ observed deadline produces `scheduled`. Production admission must require `disab
 snapshot retention, expiry, and pending stop observations. A successful allocation is not a
 production readiness verdict. Resume reads the exact sandbox after acceptance, so its result
 contains a fresh observation rather than inferred liveness. `idle` stays a live provider state.
-Observation and discovery issue no automatic stop, delete, parking, or lifetime updates.
+Observation and discovery issue no automatic stop, delete, or lifetime updates.
 
 `BoatOwnership` validates deployment, workspace, run, runtime instance, launch attempt, and exact
 source identity. Each value is nonempty, has no control characters, and fits Boat's 256-byte label

@@ -173,7 +173,6 @@ const diagnosticSchema = z.object({
         "/sealant/health",
         "/sealant/network",
         "/sealant/recover",
-        "/sealant/park",
       ]),
       responseTail: z.string().transform(safeCommandTail),
       /** The agent's reason code (`recover-new-boot`, `parked`, a bind refusal). */

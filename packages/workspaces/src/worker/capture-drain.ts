@@ -198,8 +198,6 @@ export interface CaptureDrainEntry {
    * decided on this entry is authorized only while it is still current (`authorizeDeletion`).
    */
   readonly evidenceVersion?: number | undefined;
-  /** This lineage requires incarnation-specific custody. Legacy runtime calls stay unavailable. */
-  readonly preservationManaged?: true;
   /**
    * Observations of the executor in flight or unresolved when this was read (a request sent whose
    * answer is not recorded — possibly because recording it failed): while any is, nothing on
@@ -1306,17 +1304,6 @@ export const authorizedDeletion = (input: {
     let record: CaptureDrainRead = { readable: false };
     for (let attempt = 0; attempt < DELETION_AUTHORIZATION_ATTEMPTS; attempt += 1) {
       record = ledger === undefined ? { readable: false } : yield* ledger.read(runId);
-      if (record.readable && record.entry?.preservationManaged === true) {
-        return {
-          decision: {
-            delete: false,
-            reason:
-              "Boat custody requires the canonical incarnation executor, which is unavailable",
-          },
-          record,
-          heldElsewhere: true,
-        };
-      }
       if (ledger !== undefined && record.readable && record.entry?.removalIssued === true) {
         // The runtime was asked to remove it and nobody recorded how that went (review 8 #7):
         // nothing is observed, recovered or decided anew until the runtime says.
@@ -1520,8 +1507,7 @@ export const removeUnderDeletion = <A, E, R>(input: {
     const { ledger, runId, ticket } = input;
     if (ledger !== undefined && ticket === undefined) {
       const record = yield* ledger.read(runId);
-      if (!record.readable || record.entry?.preservationManaged === true)
-        return { removed: false as const };
+      if (!record.readable) return { removed: false as const };
     }
     if (ledger === undefined || ticket === undefined) {
       yield* input.onIssued ?? Effect.void;

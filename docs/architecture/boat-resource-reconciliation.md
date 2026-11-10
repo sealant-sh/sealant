@@ -103,5 +103,5 @@ The agent's network setup is proven in `agent-boat.test.ts` and `agent-transport
 This layer needs no Boat allocation or VM 131 session to validate its scoped behavior. Authenticated
 readiness is next. Its first end-to-end Boat session on VM 131 needs Yiannis's approval for the
 tailnet join, Funnel on 443/8443/10000 and host UDP DNAT on 40000-40015. No box changes are made
-here. FINAL close/recovery and executable parking follow; parking retains plain `sync` before stop
-as hygiene. The shipped-only boot guard and base-matching systemd holds remain unchanged.
+here. FINAL close and recovery follow. The shipped-only boot guard and base-matching systemd holds
+remain unchanged.

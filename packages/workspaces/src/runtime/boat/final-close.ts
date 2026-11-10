@@ -64,7 +64,7 @@ export interface BoatCloseSweep {
   }[];
   readonly next?: string;
 }
-/** FINAL close and original-boot capture recovery. Enrolled parking uses its incarnation owner. */
+/** FINAL close and original-boot capture recovery. */
 export class BoatFinalClose extends Context.Service<
   BoatFinalClose,
   {
@@ -100,7 +100,6 @@ const DELETION_POLL_MS = 1_000;
 
 const complete = (record: CaptureDrainRead) =>
   record.readable &&
-  record.entry?.preservationManaged !== true &&
   record.entry?.lastUnreadable !== true &&
   (record.entry?.observationsInFlight ?? 0) === 0 &&
   observedComplete(record.entry);
@@ -271,7 +270,6 @@ const make: Effect.Effect<
     if (preIssue) return yield* closeUnused(target.runId, target.sandboxId, target);
     let { reservation } = yield* current(target);
     const root = yield* canonical.getByRunId(target.runId);
-    if (root?.custodyContract === 3) return yield* Effect.fail(new BoatFinalCloseError("held"));
     if (root?.deletionState === "deleted") return yield* finish(target);
     if (reservation.removal !== undefined) {
       const id = yield* parse(() => boatDeletionIdSchema.parse(reservation.removal?.id));
@@ -419,13 +417,9 @@ const make: Effect.Effect<
     )
       return yield* Effect.fail(new BoatFinalCloseError("held"));
     // A pre-launch capture-token row is normal. Unbound guests cannot own an exchange or tunnel.
-    // Snapshot parking always retains its independent custody contract.
-    const root = yield* canonical.getByRunId(runId);
     if (
-      (target === null &&
-        ((yield* exchanges.get(runId)) !== undefined ||
-          (yield* tunnels.get(runId)) !== undefined)) ||
-      root?.custodyContract === 3
+      target === null &&
+      ((yield* exchanges.get(runId)) !== undefined || (yield* tunnels.get(runId)) !== undefined)
     )
       return yield* Effect.fail(new BoatFinalCloseError("held"));
     // The aborted row is a durable fence against reserve, exchange, stage and installed -> issued.
@@ -565,8 +559,6 @@ const make: Effect.Effect<
     if (allocation === undefined || allocation.input.deploymentId !== host.deploymentId)
       return "skipped" as const;
     const runId = allocation.input.consumer.runId;
-    // Snapshot parking owns every incarnation of its lineage, including their removal.
-    if ((yield* canonical.getByRunId(runId))?.custodyContract === 3) return "skipped" as const;
     const observed = yield* observations.get(id).pipe(Effect.mapError(observeError));
     if (observed?.presence === "absent") return yield* dischargeAbsent(allocation);
     if (allocation.sandboxId === null) {

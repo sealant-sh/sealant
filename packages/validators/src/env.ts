@@ -806,11 +806,6 @@ export const workerServerEnvSchema = databaseEnvSchema
       .string()
       .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/)
       .optional(),
-    SEALANT_BOAT_AUTOMATIC_PARKING: z
-      .union([z.boolean(), z.enum(["true", "false"])])
-      .default("true")
-      .transform((value) => value === true || value === "true"),
-    SEALANT_BOAT_PARKING_DELAY_SECONDS: z.coerce.number().int().min(300).max(604800).default(3600),
     SEALANT_BOAT_BUILDER_OWNER: z.uuid().optional(),
     SEALANT_BOAT_STATE_DIRECTORY: z
       .string()
@@ -930,8 +925,7 @@ export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) =>
         ctx.addIssue({
           code: "custom",
           path: [key],
-          message:
-            "Boat admission requires durable construction, FINAL close and parking infrastructure.",
+          message: "Boat admission requires durable construction and FINAL close infrastructure.",
         });
     }
     if (!hasBoatCredential)

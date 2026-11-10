@@ -47,9 +47,6 @@ import {
   BoatFinalClose,
   BoatFinalCloseProvider,
   boatFinalCloseWorkerLayer,
-  BoatParking,
-  BoatParkingProvider,
-  boatParkingWorkerLayer,
   boatReadinessWorkerLayer,
   boatResourcesLayer,
   boatWorkerExecutionLayer,
@@ -422,7 +419,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         ),
       );
   const resourceReconciler = resourceAssembly?.reconciler;
-  // Admission is registered only beside the actual FINAL close and parking owners.
+  // Admission is registered only beside the actual FINAL close owner.
   const boatAssembly = await (async () => {
     if (env.SEALANT_BOAT_API_KEY === undefined && env.SEALANT_BOAT_API_KEY_FILE === undefined)
       return undefined;
@@ -509,7 +506,6 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       const WorkerLayer: Layer.Layer<
         | BoatAdapterServices
         | BoatResources
-        | BoatParking
         | BoatInteractiveControl
         | BoatControlRequestRepo
         | WorkspaceCaptureDrainRepo
@@ -519,7 +515,6 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         Resources,
         boatReadinessWorkerLayer,
         boatFinalCloseWorkerLayer,
-        boatParkingWorkerLayer,
         boatWorkerExecutionLayer,
         boatInteractiveControlLayer.pipe(Layer.provide(Repos)),
       ).pipe(
@@ -533,11 +528,6 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
               ? boatTunnelCarrierAbsent
               : makeBoatTunnelCarrierLayer({ log: (message) => console.log(message) }),
             Layer.succeed(BoatFinalCloseProvider, { api: api.value }),
-            Layer.succeed(BoatParkingProvider, {
-              api: api.value,
-              automaticParkingEnabled: env.SEALANT_BOAT_AUTOMATIC_PARKING,
-              retainedParkingDelaySeconds: env.SEALANT_BOAT_PARKING_DELAY_SECONDS,
-            }),
           ),
         ),
       );
@@ -579,8 +569,6 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
                 return report;
               },
         disposeCatalog: () => catalogRuntime?.dispose(),
-        reconcileParking: () =>
-          runtime.runPromise(Effect.flatMap(BoatParking, (parking) => parking.reconcile())),
         reconcileCloses: (input: { limit: number; after?: string }) =>
           runtime.runPromise(Effect.flatMap(BoatFinalClose, (close) => close.reconcile(input))),
         reconcileResources: (input: { limit: number; after?: string }) =>
@@ -601,7 +589,6 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       disposeCatalog: undefined,
       reconcileResources: undefined,
       reconcileCloses: undefined,
-      reconcileParking: undefined,
     };
   })();
   const boatRuntime = boatAssembly?.runtime;
@@ -1233,11 +1220,6 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           (entry) => !["closed", "skipped"].includes(entry.outcome),
         );
         if (held.length > 0) console.warn("Boat close obligations remain", { entries: held });
-      }
-      if (boatAssembly?.reconcileParking !== undefined) {
-        const parking = await boatAssembly.reconcileParking();
-        const held = parking.filter((entry) => entry.outcome !== "parked");
-        if (held.length > 0) console.warn("Boat parking obligations remain", { entries: held });
       }
       if (boatAssembly?.reconcileResources !== undefined) {
         const resources = await boatAssembly.reconcileResources({

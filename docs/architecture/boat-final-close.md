@@ -3,8 +3,11 @@
 `BoatFinalClose.close` closes an existing Boat allocation whose stop was requested. A bounded worker
 sweep visits stopped current runtimes on its own gateway host, with its own cursor and four calls at
 a time. Active, already removed and other-host runtimes are skipped. The runtime stays unregistered.
-Generic Docker cleanup does not call this capability, and it does not admit a session. Roots already
-enrolled in custody contract 3 are refused until the incarnation-aware parking executor exists.
+Generic Docker cleanup does not call this capability, and it does not admit a session. This is the
+whole of a Boat stop: the FINAL drain, then the VM's deletion, then a poll of Boat's deletion
+operation. A VM whose FINAL is incomplete stays until FINAL completes or the owner discards it; the
+sweep closes it again on every pass. Resuming is a fresh VM from the project snapshot plus the
+captured worktree.
 
 ## Before removal
 
@@ -73,8 +76,8 @@ revoke (like the owner's discard). The agent's refusals are typed (`recover-new-
 reboot, `recover-binding-conflict`, `recover-state-unknown` from a restarted agent that finds no
 launch environment to adopt, `parked`) and classified through the launch diagnostics; each retains
 the VM and can never be read as nothing to save. A malformed answer or lost transport keeps the VM
-too and is retried. Snapshot hydration and fresh-epoch recovery belong to the canonical parking
-owner.
+too and is retried. The agent still answers `parked` for a disk its own park route closed; Core no
+longer calls that route.
 
 ## Exact cleanup and retry
 
@@ -99,7 +102,7 @@ Released reservations remain immutable tombstones. A partial unique index exclud
 from active host-port exclusion, allowing the next execution to reserve the port while preserving
 the old run's receipt. A retry after host cleanup failure repeats cleanup without another DELETE. A
 retry after release finishes the runtime's terminal bookkeeping without touching a reused port. The
-native publication pin remains in custody for the later canonical incarnation/consumer owner.
+native publication pin is released by the discharge, once Boat reports the VM absent.
 
 ## Local proof and remaining gates
 
@@ -110,14 +113,10 @@ concurrent closes. The real Docker/WireGuard proof exercises linked-resource and
 cross-project and host refusal, replay, and exact gateway/reach/egress cleanup. These are separate
 local proofs; the HTTP fixture is not a real Boat deletion or a complete live close.
 
-Issue #465 remains an admission blocker until incarnation-aware recovery/parking and the live
-end-to-end proof are integrated. Executable automatic parking is also a hard admission gate: an idle
-session must be saved, its VM positively removed, and resume must restore its work intact. A local
-close proof does not establish that gate. Readiness PR #468 requires the approved VM 131 networking
-to be live and its real end-to-end proof before merge. This layer does not claim either gate. No
-provider allocation, actual Boat key read, box action or Boat contact is needed for its local
-verification.
+Issue #465 remains an admission blocker until the live end-to-end proof is integrated. Readiness PR
+#468 requires the approved VM 131 networking to be live and its real end-to-end proof before merge.
+This layer does not claim either gate. No provider allocation, actual Boat key read, box action or
+Boat contact is needed for its local verification.
 
-Parking will run plain `sync` before stop as hygiene. The durability investigation found
-user-created, edited, renamed and git files survived with or without it, so sync is not a lost-work
-fix.
+Snapshot parking (saving an idle session's disk as a Boat snapshot and removing its VM) was built
+and then cut. Nothing saves a session's disk: what survives a stop is what FINAL captured.

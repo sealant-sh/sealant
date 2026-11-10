@@ -267,7 +267,7 @@ describe("Boat agent requests over the hosted proxy", () => {
     const { origin, seen } = await hosted({
       "GET /sealant/health": { status: 503, body: JSON.stringify({ booted: false }) },
       "POST /sealant/launch": { status: 409, body: JSON.stringify({ message: "already booted" }) },
-      "POST /sealant/park": { status: 200, body: JSON.stringify({ outcome: "closed" }) },
+      "POST /sealant/recover": { status: 200, body: JSON.stringify({ outcome: "running" }) },
     });
     const access = { origin, cookie };
     expect(await transport.request(access, bearer, "health")).toEqual({
@@ -278,8 +278,8 @@ describe("Boat agent requests over the hosted proxy", () => {
       await transport.request(access, bearer, "launch", Redacted.make(JSON.stringify({ a: 1 }))),
     ).toEqual({ status: 409, body: { message: "already booted" } });
     expect(
-      await transport.request(access, bearer, "park", Redacted.make(JSON.stringify({ b: 2 }))),
-    ).toEqual({ status: 200, body: { outcome: "closed" } });
+      await transport.request(access, bearer, "recover", Redacted.make(JSON.stringify({ b: 2 }))),
+    ).toEqual({ status: 200, body: { outcome: "running" } });
     expect(seen).toEqual([
       {
         method: "GET",
@@ -297,7 +297,7 @@ describe("Boat agent requests over the hosted proxy", () => {
       },
       {
         method: "POST",
-        url: "/sealant/park",
+        url: "/sealant/recover",
         cookie: `_port_auth=${cookie.reveal()}`,
         auth: `Bearer ${bearer.reveal()}`,
         body: JSON.stringify({ b: 2 }),
@@ -329,7 +329,7 @@ describe("Boat agent requests over the hosted proxy", () => {
     },
     {
       name: "a route this agent lacks",
-      route: "park",
+      route: "recover",
       status: 404,
       body: JSON.stringify({ message: "unknown route" }),
       code: "agent-route-missing",
@@ -366,14 +366,6 @@ describe("Boat agent requests over the hosted proxy", () => {
       code: "agent-not-ready",
     },
     {
-      name: "a park whose Docker stop the agent could not prove",
-      route: "park",
-      status: 503,
-      body: JSON.stringify({ reason: "docker-stop-unverified" }),
-      code: "agent-not-ready",
-      reason: "docker-stop-unverified",
-    },
-    {
       name: "a recovery whose Docker stop the agent could not prove",
       route: "recover",
       status: 503,
@@ -390,7 +382,6 @@ describe("Boat agent requests over the hosted proxy", () => {
         "network-status": "GET /sealant/network",
         launch: "POST /sealant/launch",
         recover: "POST /sealant/recover",
-        park: "POST /sealant/park",
       }[route];
       const { origin } = await hosted({ [spec]: { status, body } });
       const failure = await transport

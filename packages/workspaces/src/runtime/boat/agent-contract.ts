@@ -9,7 +9,8 @@
  *   - the bind exchange (`boat-bind.mjs`, run by Core over Boat exec), the same
  *     `sealant-bootstrap-v1` wire the Python guest answered: Core keeps parsing it unchanged;
  *   - the typed recovery outcomes a durable launch record makes possible;
- *   - `POST /sealant/park`: close the workspace for parking and write a receipt;
+ *   - `POST /sealant/park`: close the workspace and write a receipt. The agent still serves it;
+ *     Core no longer calls it, and what is kept of it here only describes the agent's answers;
  *   - `POST|GET /sealant/network`: bring up the workspace's WireGuard interface to the gateway.
  */
 import { z } from "zod";
@@ -18,6 +19,7 @@ import { z } from "zod";
 export const AGENT_HOSTS = ["lambda", "boat"] as const;
 export type AgentHost = (typeof AGENT_HOSTS)[number];
 
+/** Served by the agent, never called by Core. */
 export const BOAT_AGENT_PARK_ROUTE = "/sealant/park";
 export const BOAT_AGENT_NETWORK_ROUTE = "/sealant/network";
 /**
@@ -185,12 +187,6 @@ export const boatAgentRecoverResponseSchema = z.discriminatedUnion("outcome", [
 ]);
 export type BoatAgentRecoverResponse = z.infer<typeof boatAgentRecoverResponseSchema>;
 
-export const boatAgentParkRequestSchema = z.strictObject({
-  format: z.literal("sealant-agent-park-v1"),
-  operationId: uuid,
-});
-export type BoatAgentParkRequest = z.infer<typeof boatAgentParkRequestSchema>;
-
 /** The receipt file the park writes (`<data dir>/park-<operationId>.json`). */
 export const boatAgentParkReceiptSchema = z.strictObject({
   format: z.literal("sealant-agent-park-receipt-v1"),
@@ -210,7 +206,6 @@ export const boatAgentParkResponseSchema = z.strictObject({
     bytes: z.number().int().nonnegative(),
   }),
 });
-export type BoatAgentParkResponse = z.infer<typeof boatAgentParkResponseSchema>;
 
 const wireguardKey = z.string().regex(/^[A-Za-z0-9+/]{43}=$/);
 

@@ -93,7 +93,7 @@ export const nativePublicationConsumers = snakeCase.table(
     index("native_publication_consumers_pin").on(table.publicationId, table.state),
     check(
       "native_publication_consumers_state",
-      sql`${table.state} in ('pending','live','retained','parked','unknown','released')`,
+      sql`${table.state} in ('pending','live','retained','unknown','released')`,
     ),
     check(
       "native_publication_consumers_instance",

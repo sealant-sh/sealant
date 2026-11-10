@@ -1,9 +1,10 @@
 # Build the separate Boat preview
 
 Build Core from `feat/boat-native-guest`, pinned to the pushed commit in its pull request. This
-branch packages the held native guest above the merged provider and publication groundwork. Boat admission is disabled. No setting
-enables Boat sessions in this version. A preview can check migrations, existing runtimes, image
-scope authorization and public publication responses now. It cannot pass the Boat session check.
+branch packages the held native guest above the merged provider and publication groundwork. Boat
+admission is disabled. No setting enables Boat sessions in this version. A preview can check
+migrations, existing runtimes, image scope authorization and public publication responses now. It
+cannot pass the Boat session check.
 
 ## Build inputs
 
@@ -27,16 +28,15 @@ The exact native daemon input is
 Its amd64 manifest is `sha256:95bdbf73519d9b122fbdba2c88a17fe73dcf84fa1ac149821ff4cfe5056ebc5b`. The
 extracted daemon SHA-256 is `cea5952d9e2b0fa45443adf925c8aaebaa6c2a50eb51cb02ffc2f9ef4083e969`. Its
 source revision is `52228108c8bd002ea69dd5dd3d5f843ce1271cca`. This is the exact native builder
-input, not evidence that it already implements the parking barrier. Any required daemon change needs
-a real publication and a new verified pin.
+input. Any required daemon change needs a real publication and a new verified pin.
 
 Set `SEALANT_DOCKER_NETWORK_GUARD_IMAGE` to
 `busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e`. This is the
 existing Docker resource/metadata guard, not a WireGuard gateway image. A resource tunnel gateway
 has not been packaged or implemented in this head.
 
-The worker ships `/app/boat-assets` beside its compiled application and verifies the packaged
-Ubuntu and Nix recipes during the image build. The assets include the mapped root launcher, private
+The worker ships `/app/boat-assets` beside its compiled application and verifies the packaged Ubuntu
+and Nix recipes during the image build. The assets include the mapped root launcher, private
 interpreter and dependency closure, units, held bootstrap and manifest. The exact relay, daemon and
 `socat` inputs match `packages/workspaces/src/images/boat/runtime-pin.json`. Held-8.16 cold startup
 has not passed; see `boat-native-guest-startup.md`. Authenticated current-boot binding delivery and
@@ -74,8 +74,8 @@ companion.
 
 Leave the existing default runtime in place in this groundwork head. `DEFAULT_RUNTIME_ADAPTER=boat`
 has no registered adapter and cannot admit sessions. The proposed `SEALANT_BOAT_CONFIG_FILE`,
-`SEALANT_BOAT_API_KEY_FILE`, resource-Docker switch, tunnel service and parking configuration are
-not implemented settings here. Do not supply speculative settings as if they enabled the runtime.
+`SEALANT_BOAT_API_KEY_FILE`, resource-Docker switch and tunnel service configuration are not
+implemented settings here. Do not supply speculative settings as if they enabled the runtime.
 
 The planned provider key delivery is a root-owned mode 0400 file under a root-owned mode 0700
 directory, mounted read-only into the worker at `/run/secrets/boat-api-key`. It is worker-only. The
@@ -97,12 +97,11 @@ cipher key and object ownership identities stable.
 
 To stop this disabled preview, stop its Compose project and remove only its own Funnel listeners and
 UDP forwarding rules. Preserve its volumes and database backup. Before any later rollback with live
-Boat objects, disable new admission and parking starts, then keep compatible reconciliation,
-credentials, assets, snapshots and publication pins until every obligation is discharged. Stopping
-the controller or enabling a provider TTL is not recovery or cleanup.
+Boat objects, disable new admission, then keep compatible reconciliation, credentials, assets,
+snapshots and publication pins until every obligation is discharged. Stopping the controller or
+enabling a provider TTL is not recovery or cleanup.
 
-Automatic parking remains a separate implementation layer. Yiannis chose it on 2026-11-05, with a
-configurable one-hour default. It requires verified private snapshot custody before source removal,
-durable save/delete/recovery identities, settled FINAL and new held-sandbox recovery. No parking
-behavior is claimed by this branch. The actual Boat session box check follows the guest, receiver,
-resource tunnel, runtime lifecycle, parking and SDK-only Mend companion work.
+Automatic parking, chosen on 2026-11-05 and built afterwards, was cut on 2026-11-10: a stopped
+session is drained and deleted, and resuming is a fresh VM from the project snapshot plus the
+captured worktree. The actual Boat session box check follows the guest, receiver, resource tunnel,
+runtime lifecycle and SDK-only Mend companion work.

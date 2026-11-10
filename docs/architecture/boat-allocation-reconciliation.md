@@ -2,8 +2,8 @@
 
 Boat remains unregistered and ordinary admission is unavailable. This layer connects allocation
 ownership to the sealed worker exchange from #459. It does not stage launch payloads, issue resource
-or tunnel permits, start the daemon, report readiness, close FINAL, recover a writer, delete disks
-or park sessions.
+or tunnel permits, start the daemon, report readiness, close FINAL, recover a writer or delete
+disks.
 
 `BoatAllocation.prepare` takes an already authorized scope, actual workspace/run identity and the
 exact publication returned by the native catalog. The catalog must have an unreleased consumer pin
@@ -36,8 +36,8 @@ issued request is still discovered so its disk cannot be forgotten; it cannot ex
 work. A reservation stopped before issuance never creates. The generic stranded-launch sweep skips
 Boat rows because its absence/grace rules cannot settle a native allocation. Canonical publication
 release refuses while an allocation obligation exists. There is deliberately no allocation reset,
-replacement, deletion or release method in this layer. FINAL/recovery/parking must later supply the
-canonical completion authority.
+replacement, deletion or release method in this layer. FINAL close and recovery supply the canonical
+completion authority.
 
 Before bootstrap, the allocator verifies provider ownership and reads the current boot UUID. It
 persists the complete target before calling `BoatExecution.exchange`. Retries use that target and
@@ -74,7 +74,8 @@ persistence, changed boot refusal and pagination. The worker assembly builds aga
 infrastructure. These checks make no new live-provider claim.
 
 [Worker/resource reconciliation](boat-resource-reconciliation.md) now connects the held execution to
-host and guest network setup. Continue with authenticated readiness, FINAL close/exclusion and held
-recovery, then executable parking. Parking will run plain `sync` before stop as hygiene. Yiannis's
-2026-11-06 shipped-only hash policy, timestamp decision, own-process mapping checks, fresh clone
-binding and base-matching systemd holds remain unchanged.
+host and guest network setup. Continue with authenticated readiness, then FINAL close/exclusion and
+held recovery. Snapshot parking was cut: a stopped session is drained and deleted, and resuming is a
+fresh VM from the project snapshot plus the captured worktree. Yiannis's 2026-11-06 shipped-only
+hash policy, timestamp decision, own-process mapping checks, fresh clone binding and base-matching
+systemd holds remain unchanged.

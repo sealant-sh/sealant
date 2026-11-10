@@ -1,4 +1,3 @@
-import type { WorkspacePreservation } from "@sealant/api-contracts";
 /**
  * e2e 5: an executor Core KEEPS for recovery read as a plain `failed` (or `stopped`) workspace, so
  * its session's control plane took it for dead and revoked the lease and capture token the
@@ -25,7 +24,6 @@ import {
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
-import type { BoatExecutionTarget } from "@sealant/validators";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -34,7 +32,6 @@ import { getWorkspace, listWorkspaceAttempts, listWorkspaces } from "./workspace
 const now = new Date("2026-09-28T01:00:00.000Z");
 
 const harness = (input: {
-  readonly canonicalState?: WorkspacePreservation["state"];
   readonly runtime: Partial<WorkspaceRuntimeInstance>;
   readonly retainedAt: Date | null;
   readonly attemptStatus?: WorkspaceAttempt["status"];
@@ -102,7 +99,6 @@ const harness = (input: {
   } as WorkspaceRuntimeInstance;
   const drain = {
     runId: "run_1",
-    custodyContract: input.canonicalState === undefined ? null : 3,
     state: "kept",
     detail: "not saved · retained · executor exited",
     observedAt: now,
@@ -120,36 +116,6 @@ const harness = (input: {
     completionAttestedAt: null,
     completionLaunchId: null,
   } as unknown as WorkspaceCaptureDrain;
-  const current: BoatExecutionTarget = {
-    deploymentId: "local",
-    workspaceId: "ws_1",
-    runId: "run_1",
-    runtimeInstanceId: "child_1",
-    launchAttemptId: "child_op",
-    sourceId: "publication",
-    sandboxId: "bx_3456789a",
-    diskLineage: "child_disk",
-    bootId: "00000000-0000-4000-8000-000000000001",
-    manifestDigest: "a".repeat(64),
-  };
-  const preservation: WorkspacePreservation = {
-    version: 1,
-    runId: "run_1",
-    revision: 1,
-    desired: "preserve",
-    state: input.canonicalState ?? "retained",
-    snapshotOnly: input.canonicalState === "parked",
-    retainedSince: now.toISOString(),
-    parkingEligibleAt: now.toISOString(),
-    parkingDelaySeconds: 3600,
-    policyRevision: "policy",
-    currentIncarnationId: "child",
-    vms: [],
-    snapshots: [],
-    operations: [],
-    allowance: { state: "unknown", reason: "not-observed" },
-    blockers: [],
-  };
   return Layer.mergeAll(
     Layer.succeed(WorkspaceRepo, {
       getWorkspaceById: () => Effect.succeed(workspace),
@@ -174,11 +140,6 @@ const harness = (input: {
     Layer.succeed(WorkspaceCaptureDrainRepo, {
       getByRunId: () => Effect.succeed(drain),
       listByRunIds: () => Effect.succeed(new Map([["run_1", drain]])),
-      preservation: Effect.succeed({
-        read: () => Effect.succeed(preservation),
-        resolveExecution: () =>
-          Effect.succeed(input.canonicalState === "active" ? current : undefined),
-      }),
     } as unknown as WorkspaceCaptureDrainRepoService),
   );
 };
@@ -196,36 +157,6 @@ const read = (layer: ReturnType<typeof harness>) =>
   );
 
 describe("a retained executor reads `retained`", () => {
-  it("reads the canonical current child after resume while the historical row still names its removed source", async () => {
-    const { details, list, attempts } = await read(
-      harness({
-        runtime: { adapter: "boat", resourceId: "bx_23456789", reference: "bx_23456789" },
-        retainedAt: now,
-        canonicalState: "active",
-      }),
-    );
-    expect(details.status).toBe("ready");
-    expect(details.runtime?.resourceId).toBe("bx_3456789a");
-    expect(details.captureDrain?.executor?.resourceId).toBe("bx_3456789a");
-    expect(list.items[0]?.status).toBe("ready");
-    expect(list.items[0]?.runtime?.resourceId).toBe("bx_3456789a");
-    expect(attempts.items[0]?.runtime?.resourceId).toBe("bx_3456789a");
-  });
-  it("reports saved custody without exposing a removed source as an interactive runtime", async () => {
-    const { details, list } = await read(
-      harness({
-        runtime: { adapter: "boat", resourceId: "bx_23456789", reference: "bx_23456789" },
-        retainedAt: now,
-        canonicalState: "parked",
-      }),
-    );
-    expect(details.status).toBe("retained");
-    expect(details.runtime).toBeUndefined();
-    expect(details.captureDrain?.executor).toBeUndefined();
-    expect(details.captureDrain?.preservation?.snapshotOnly).toBe(true);
-    expect(list.items[0]?.status).toBe("retained");
-    expect(list.items[0]?.runtime).toBeUndefined();
-  });
   it("an exited executor kept for recovery: details, list and attempts", async () => {
     const { details, list, attempts } = await read(harness({ runtime: {}, retainedAt: now }));
     expect(details.status).toBe("retained");
@@ -302,6 +233,32 @@ describe("a retained executor reads `retained`", () => {
     );
     expect(details.status).toBe("stopped");
     expect(details.runtime?.status).toBe("stopped");
+  });
+
+  it("a Boat VM kept after an incomplete FINAL reads retained on every read until it is removed", async () => {
+    const { details, list, attempts } = await read(
+      harness({
+        runtime: {
+          adapter: "boat",
+          resourceId: "bx_23456789",
+          reference: "run_1",
+          status: "stopped",
+          stopReason: "user",
+          errorCode: null,
+          removedAt: null,
+        },
+        retainedAt: now,
+      }),
+    );
+    expect(details.status).toBe("retained");
+    expect(details.runtime).toMatchObject({ status: "retained", resourceId: "bx_23456789" });
+    expect(details.captureDrain?.retained).toMatchObject({ reason: "executor exited" });
+    expect(details.captureDrain?.executor).toMatchObject({
+      adapter: "boat",
+      resourceId: "bx_23456789",
+    });
+    expect(list.items[0]?.status).toBe("retained");
+    expect(attempts.items[0]?.status).toBe("retained");
   });
 
   it("a Boat launch that failed with its VM still present stays retained", async () => {

@@ -1,12 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 
-import {
-  BoatAllocationRepo,
-  BoatAllocationRepoLive,
-  WorkspaceCaptureDrainRepo,
-  WorkspaceCaptureDrainRepoLive,
-  type SealantDB,
-} from "@sealant/db";
+import { BoatAllocationRepo, BoatAllocationRepoLive, type SealantDB } from "@sealant/db";
 import type { BoatExecutionTarget } from "@sealant/validators";
 import { Clock, Context, Effect, Layer, Redacted, Schedule } from "effect";
 
@@ -83,17 +77,13 @@ const readinessRetries = (deadline: number) => ({
 const make: Effect.Effect<
   BoatReadinessService,
   never,
-  BoatAllocationRepo | WorkspaceCaptureDrainRepo | BoatExecution | BoatResources
+  BoatAllocationRepo | BoatExecution | BoatResources
 > = Effect.gen(function* () {
   const execution = yield* BoatExecution;
   const resources = yield* BoatResources;
-  const canonical = yield* WorkspaceCaptureDrainRepo;
   const allocationRepo = yield* BoatAllocationRepo;
   const isCurrent = (target: BoatExecutionTarget) =>
-    boatTargetIsCurrent(target, true).pipe(
-      Effect.provideService(WorkspaceCaptureDrainRepo, canonical),
-      Effect.provideService(BoatAllocationRepo, allocationRepo),
-    );
+    boatTargetIsCurrent(target).pipe(Effect.provideService(BoatAllocationRepo, allocationRepo));
   const current = (target: BoatExecutionTarget) =>
     Effect.gen(function* () {
       if (!(yield* isCurrent(target))) return yield* Effect.fail(new BoatReadinessError("held"));
@@ -150,13 +140,11 @@ const make: Effect.Effect<
 export const boatReadinessLayerNoDeps: Layer.Layer<
   BoatReadiness,
   never,
-  BoatAllocationRepo | WorkspaceCaptureDrainRepo | BoatExecution | BoatResources
+  BoatAllocationRepo | BoatExecution | BoatResources
 > = Layer.effect(BoatReadiness, make);
 /** Owns allocation reads; the worker shares its existing execution and resource owners. */
 export const boatReadinessLayer: Layer.Layer<
   BoatReadiness,
   never,
   SealantDB | BoatExecution | BoatResources
-> = boatReadinessLayerNoDeps.pipe(
-  Layer.provide(Layer.merge(BoatAllocationRepoLive, WorkspaceCaptureDrainRepoLive)),
-);
+> = boatReadinessLayerNoDeps.pipe(Layer.provide(BoatAllocationRepoLive));

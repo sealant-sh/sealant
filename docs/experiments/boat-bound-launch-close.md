@@ -35,7 +35,7 @@ absent execution gets a tombstone; existing exchange/control/prepared/installed 
 allocation keeps its immutable target and records deletion issuance and positive completion or exact
 absence. Existing tunnel setup is frozen; its slot and the publication pin release only after
 positive VM deletion and host cleanup. Issued or running invocations still require capture recovery
-and canonical FINAL evidence. Parking custody does not use the pre-invocation shortcut.
+and canonical FINAL evidence.
 
 The stopped Run-7 allocation `314ba22c` will be settled by the close reconciler from its recorded
 sandbox ID and the provider's exact 404. No database reset is needed. Deleted allocations now report
