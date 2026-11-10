@@ -11,6 +11,8 @@ import {
   SealantRuntimeControlLive,
 } from "../../sealantd/runtime.js";
 import { BoatReadinessError } from "../../worker/boat-readiness.js";
+import { LaunchRetainedError } from "../launch-retention.js";
+import { sealantRefusalBehind } from "./adapter.js";
 import { BoatSecret } from "./config.js";
 import { BoatExecutionError, createBoatGuestTransport } from "./execution.js";
 import { boatLaunchDiagnostic } from "./launch-diagnostics.js";
@@ -122,5 +124,24 @@ describe("Boat control probe failure", () => {
       errorClass: "SealantControlError",
       control: { operation: "exec", daemonCode: 9 },
     });
+  });
+
+  it("finds the daemon's refusal behind the error a failed step after ready is wrapped in", () => {
+    // The credentials step fails as a `LaunchRetainedError`: testing that error's own class found
+    // nothing, and the worker's log said nothing, on VM 131 run 10.
+    const refusal = new SealantControlError({
+      operation: "closeStdin",
+      code: 9,
+      message: "process not found: proc_1",
+    });
+    const retained = new LaunchRetainedError(
+      { adapter: "boat", resourceId: "bx_1", reference: "run_1" },
+      refusal,
+    );
+    expect(sealantRefusalBehind(retained)).toBe(refusal);
+    expect(
+      sealantRefusalBehind(new Error("unrelated", { cause: new Error("still unrelated") })),
+    ).toBeUndefined();
+    expect(sealantRefusalBehind("not an error")).toBeUndefined();
   });
 });

@@ -40,6 +40,20 @@ import {
   type BoatLaunchDiagnostic,
 } from "./launch-diagnostics.js";
 
+/**
+ * The daemon's own refusal behind a launch failure. A step after ready fails as a
+ * `LaunchRetainedError` whose cause is the refusal, so the error itself is not the one to test.
+ */
+export const sealantRefusalBehind = (error: unknown): SealantControlError | undefined => {
+  let current = error;
+  for (let depth = 0; depth < 8; depth++) {
+    if (current instanceof SealantControlError) return current;
+    if (!(current instanceof Error)) return undefined;
+    current = current.cause;
+  }
+  return undefined;
+};
+
 /** Public failures never carry guest responses, credentials or sealed launch material. */
 export class BoatAdapterError extends Error {
   readonly _tag = "BoatAdapterError";
@@ -188,11 +202,12 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
     } catch (error) {
       // The diagnostic is an allowlist with no free text. What sealantd itself said when it refused
       // an operation goes to the worker's log, where an operator can read it.
-      if (error instanceof SealantControlError)
+      const refusal = sealantRefusalBehind(error);
+      if (refusal !== undefined)
         console.warn(`Boat launch · run ${raw.runId ?? "unknown"}: sealantd refused at ${step}`, {
-          operation: error.operation,
-          code: error.code,
-          message: safeCommandTail(error.message),
+          operation: refusal.operation,
+          code: refusal.code,
+          message: safeCommandTail(refusal.message),
         });
       if (identity === undefined && raw.runId !== undefined) {
         try {
