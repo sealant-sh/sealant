@@ -134,9 +134,6 @@ const DOCKER_GROUP = process.env.SEALANT_MICROVM_DOCKER_GROUP;
 const CGROUP_ROOT = process.env.SEALANT_MICROVM_CGROUP_ROOT ?? "/sys/fs/cgroup";
 const DOCKER_CGROUP_PARENT =
   process.env.SEALANT_MICROVM_DOCKER_CGROUP_PARENT ?? (BOAT ? "sealant-docker.slice" : undefined);
-const DOCKER_CGROUP_PATH =
-  process.env.SEALANT_MICROVM_DOCKER_CGROUP_PATH ??
-  (BOAT ? path.join(CGROUP_ROOT, "sealant-docker.slice") : undefined);
 const DOCKER_ENGINE_CGROUP =
   process.env.SEALANT_MICROVM_DOCKER_ENGINE_CGROUP ??
   (BOAT ? path.join(CGROUP_ROOT, "sealant-docker-engine") : undefined);
@@ -147,7 +144,8 @@ const DOCKER_SERVICE_OPTIONS = {
   addressPools: DOCKER_ADDRESS_POOLS,
   group: DOCKER_GROUP,
   cgroupParent: DOCKER_CGROUP_PARENT,
-  cgroupPath: DOCKER_CGROUP_PATH,
+  cgroupRoot: CGROUP_ROOT,
+  systemctlPath: process.env.SEALANT_AGENT_SYSTEMCTL,
   containerStopSeconds: DOCKER_CONTAINER_STOP_SECONDS,
   engineCgroupPath: DOCKER_ENGINE_CGROUP,
   dockerdPath: DOCKERD,
@@ -1399,6 +1397,8 @@ const handleRecover = async (req, res) => {
   if (!state.daemonExited) {
     return json(res, 200, { outcome: "running" });
   }
+  // A park that completed while this body was read closed the boot: never restart under it.
+  if (boatHost?.isParked() === true) return json(res, 409, { reason: "parked" });
   state.recoveryInProgress = true;
   try {
     // Docker goes first: its containers are the workspace's writers (a recovery boot runs no

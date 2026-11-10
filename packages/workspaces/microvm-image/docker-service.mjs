@@ -40,13 +40,15 @@ const DOCKER_ENV_KEYS = [
   "DOCKER_CERT_PATH",
 ];
 
-/** Whether a cgroup still holds a process; one that does not exist holds none. */
-const populated = (cgroup) => {
+/**
+ * Whether a cgroup can be proved empty. A cgroup that cannot be read, including one that is not
+ * where it was resolved to be, is never taken for empty: what cannot be seen is not proved gone.
+ */
+const provedEmpty = (cgroup) => {
   try {
-    return /^populated 1$/m.test(readFileSync(path.join(cgroup, "cgroup.events"), "utf8"));
-  } catch (error) {
-    // No such cgroup: nothing was ever put in it, or it went with its last process.
-    return error?.code !== "ENOENT";
+    return /^populated 0$/m.test(readFileSync(path.join(cgroup, "cgroup.events"), "utf8"));
+  } catch {
+    return false;
   }
 };
 
@@ -300,7 +302,12 @@ export const createDockerService = (options) => {
   // so a stop can kill and then prove empty what dockerd's own process group does not hold
   // (containerd's shims run in their own groups). A slice name selects systemd's driver.
   const cgroupParent = nonEmpty(options.cgroupParent);
-  const cgroupPath = nonEmpty(options.cgroupPath);
+  // Where the cgroup filesystem is mounted, and how to ask systemd where it put a slice: a slice
+  // nests by its name (`sealant-docker.slice` is `/sealant.slice/sealant-docker.slice`), so its
+  // path is resolved from systemd at start, never assumed.
+  const cgroupRoot = nonEmpty(options.cgroupRoot) ?? "/sys/fs/cgroup";
+  const systemctlPath = nonEmpty(options.systemctlPath) ?? "systemctl";
+  let cgroupPath = null;
   // Optional: the cgroup dockerd starts in, so containerd and its shims (each in a process group
   // of its own) are in it too and can be killed and proved gone as one, and nothing else is.
   const engineCgroupPath = nonEmpty(options.engineCgroupPath);
@@ -310,7 +317,30 @@ export const createDockerService = (options) => {
     Number(options.containerStopSeconds) > 0
       ? Number(options.containerStopSeconds)
       : null;
-  const verifiesStop = cgroupPath !== null || engineCgroupPath !== null;
+  const verifiesStop = cgroupParent !== null || engineCgroupPath !== null;
+  /** Start the containers' slice (so it exists before any container) and resolve its path. */
+  const resolveContainerCgroup = () => {
+    if (cgroupParent === null) return null;
+    if (!cgroupParent.endsWith(".slice")) return path.join(cgroupRoot, cgroupParent);
+    const systemctl = (args) =>
+      execFileSync(systemctlPath, args, {
+        encoding: "utf8",
+        timeout: 10_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    systemctl(["start", cgroupParent]);
+    const control = systemctl([
+      "show",
+      "--property",
+      "ControlGroup",
+      "--value",
+      cgroupParent,
+    ]).trim();
+    if (!control.startsWith("/") || control.includes("..")) {
+      throw new Error("systemd did not name the slice's cgroup");
+    }
+    return path.join(cgroupRoot, control);
+  };
   const dockerdArgs = [
     "--host",
     dockerHost,
@@ -521,9 +551,10 @@ export const createDockerService = (options) => {
     }
     const deadline = Date.now() + readinessTimeoutMs;
     const stderrLog = openBoundedLog(options.logPath, logMaxBytes);
-    if (engineCgroupPath !== null) {
+    if (engineCgroupPath !== null || cgroupParent !== null) {
       try {
-        mkdirSync(engineCgroupPath, { recursive: true });
+        if (engineCgroupPath !== null) mkdirSync(engineCgroupPath, { recursive: true });
+        cgroupPath = resolveContainerCgroup();
       } catch {
         fail("directory-preparation-failed");
         return;
@@ -657,16 +688,20 @@ export const createDockerService = (options) => {
     );
   };
 
-  const cgroups = [engineCgroupPath, cgroupPath].filter((cgroup) => cgroup !== null);
   /**
    * After dockerd is gone: kill what is left in Docker's own cgroups (the engine's: containerd
    * and its shims; the containers') and prove them empty. Nothing outside them is touched, not
    * even a process running the same engine binary. `false` when it cannot be proved.
    */
   const sweepLeftovers = async () => {
+    // Nothing was ever started: there is nothing of Docker to prove gone.
+    if (dockerd === null) return true;
+    // A containers' slice that was never resolved cannot be proved empty.
+    if (cgroupParent !== null && cgroupPath === null) return false;
+    const cgroups = [engineCgroupPath, cgroupPath].filter((cgroup) => cgroup !== null);
     const deadline = Date.now() + 5_000;
     for (;;) {
-      const occupied = cgroups.filter(populated);
+      const occupied = cgroups.filter((cgroup) => !provedEmpty(cgroup));
       if (occupied.length === 0) return true;
       if (Date.now() >= deadline) return false;
       for (const cgroup of occupied) {

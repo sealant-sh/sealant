@@ -123,6 +123,21 @@ shift
 exec "$@"
 `;
 
+// systemd's answer for a slice: it nests by name (\`sealant-docker.slice\` is
+// /sealant.slice/sealant-docker.slice), and \`start\` realizes its cgroup, here under the scratch
+// cgroup root, as an empty one.
+const FAKE_SYSTEMCTL = `#!/bin/sh
+for unit; do :; done
+dir="$SEALANT_MICROVM_CGROUP_ROOT/sealant.slice/$unit"
+case "$1" in
+  start)
+    mkdir -p "$dir"
+    [ -e "$dir/cgroup.events" ] || printf 'populated 0\\nfrozen 0\\n' > "$dir/cgroup.events" ;;
+  show) printf '/sealant.slice/%s\\n' "$unit" ;;
+esac
+exit 0
+`;
+
 const fakeSync = (log: string) => `#!/bin/sh
 printf 'sync\\n' >> ${JSON.stringify(log)}
 exit 0
@@ -215,11 +230,22 @@ const createVm = async (): Promise<Vm> => {
     writeExecutable(path.join(bin, "ip6tables-restore"), fakeNetTool(netLog, handshakeFile)),
     writeExecutable(path.join(bin, "unshare"), FAKE_UNSHARE),
     writeExecutable(path.join(bin, "sync"), fakeSync(syncLog)),
+    writeExecutable(path.join(bin, "systemctl"), FAKE_SYSTEMCTL),
+    writeExecutable(path.join(bin, "modprobe"), fakeNetTool(netLog, handshakeFile)),
     writeExecutable(path.join(bin, "dockerd"), FAKE_DOCKERD),
     writeExecutable(path.join(bin, "docker"), FAKE_DOCKER),
   ]);
   const bootIdFile = path.join(dir, "boot_id");
   await writeFile(bootIdFile, `${randomUUID()}\n`);
+  // The engine's cgroup as the kernel makes it on mkdir (an empty one), and bridge netfilter off.
+  const engineCgroup = path.join(dir, "cgroup", "sealant-docker-engine");
+  await mkdir(engineCgroup, { recursive: true });
+  await writeFile(path.join(engineCgroup, "cgroup.events"), "populated 0\nfrozen 0\n");
+  const procSys = path.join(dir, "proc-sys");
+  await mkdir(path.join(procSys, "net", "bridge"), { recursive: true });
+  for (const name of ["bridge-nf-call-iptables", "bridge-nf-call-ip6tables"]) {
+    await writeFile(path.join(procSys, "net", "bridge", name), "0\n");
+  }
   const dataDir = path.join(dir, "data");
   const stateDir = path.join(dir, "state");
   const manifestFile = path.join(dir, "manifest.json");
@@ -264,6 +290,9 @@ const createVm = async (): Promise<Vm> => {
       SEALANT_AGENT_IP6TABLES_RESTORE: path.join(bin, "ip6tables-restore"),
       SEALANT_AGENT_UNSHARE: path.join(bin, "unshare"),
       SEALANT_AGENT_SYNC: path.join(bin, "sync"),
+      SEALANT_AGENT_SYSTEMCTL: path.join(bin, "systemctl"),
+      SEALANT_AGENT_MODPROBE: path.join(bin, "modprobe"),
+      SEALANT_AGENT_PROC_SYS: path.join(dir, "proc-sys"),
       SEALANT_AGENT_RESOLV_CONF: resolvConf,
       SEALANT_MICROVM_RECOVERY_SETTLE_MS: "3000",
       SEALANT_MICROVM_DOCKERD: path.join(bin, "dockerd"),
@@ -1513,7 +1542,6 @@ describe("boat agent · park proves Docker gone, on Boat's defaults", () => {
   const dockerVm = async (prepare?: (cgroupRoot: string) => Promise<void>) => {
     const vm = await createVm();
     const cgroupRoot = path.join(vm.dir, "cgroup");
-    await mkdir(cgroupRoot);
     await prepare?.(cgroupRoot);
     const dockerLog = path.join(vm.dir, "docker-cli.log");
     const dockerdArgs = path.join(vm.dir, "dockerd-args");
@@ -1577,12 +1605,14 @@ describe("boat agent · park proves Docker gone, on Boat's defaults", () => {
     "refuses while Docker's cgroups cannot be proved empty, asks them to die, and parks on a retry",
     { timeout: 30_000 },
     async () => {
+      // Populated where systemd really puts the slice; nothing at the flat path a guess would use.
       const { vm, agent, bearer, cgroupRoot } = await dockerVm(async (root) => {
-        const slice = path.join(root, "sealant-docker.slice");
-        await mkdir(slice);
+        const slice = path.join(root, "sealant.slice", "sealant-docker.slice");
+        await mkdir(slice, { recursive: true });
         await writeFile(path.join(slice, "cgroup.events"), "populated 1\nfrozen 0\n");
       });
-      const slice = path.join(cgroupRoot, "sealant-docker.slice");
+      expect(await exists(path.join(cgroupRoot, "sealant-docker.slice"))).toBe(false);
+      const slice = path.join(cgroupRoot, "sealant.slice", "sealant-docker.slice");
       const operationId = randomUUID();
       expect(await park(agent, bearer, operationId)).toMatchObject({
         status: 503,
@@ -1717,5 +1747,155 @@ describe("boat agent · recover never guesses nothing-to-save", () => {
     await rm(path.join(vm.dataDir, "launch.json"));
     const recover = await call(agent, "POST", AGENT_RECOVER_ROUTE, { body: recoverBody, bearer });
     expect(recover).toMatchObject({ status: 409, body: { reason: "recover-state-unknown" } });
+  });
+});
+
+/** Send a body's first bytes now and the rest when told: the request is in flight meanwhile. */
+const partialBody = async (agent: Agent, route: string, bearer: string, body: unknown) => {
+  const bytes = JSON.stringify(body);
+  const pending: { finish: () => void } = { finish: () => undefined };
+  const reply = new Promise<{ readonly status: number | undefined; readonly body: unknown }>(
+    (resolve, reject) => {
+      const request = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: agent.port,
+          path: route,
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${bearer}`,
+            "content-type": "application/json",
+            "content-length": Buffer.byteLength(bytes),
+          },
+        },
+        (response) => {
+          let data = "";
+          response.on("data", (chunk: Buffer) => {
+            data += chunk.toString("utf8");
+          });
+          response.on("end", () =>
+            resolve({ status: response.statusCode, body: JSON.parse(data) }),
+          );
+        },
+      );
+      request.on("error", reject);
+      request.write(bytes.slice(0, 10));
+      pending.finish = () => request.end(bytes.slice(10));
+    },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  return { finish: () => pending.finish(), reply };
+};
+
+describe("boat agent · round-3 closures", () => {
+  it(
+    "never takes a containers' slice it cannot see for an empty one",
+    { timeout: 30_000 },
+    async () => {
+      const vm = await createVm();
+      const bearer = await bindVm(vm);
+      const agent = await startAgent(vm, {
+        SEALANT_MICROVM_DOCKER_CAPABLE: "1",
+        SEALANT_MICROVM_DOCKER_READY_TIMEOUT_MS: "5000",
+      });
+      expect(
+        (
+          await call(agent, "POST", AGENT_LAUNCH_ROUTE, {
+            body: launchBody(bearer, { version: 2, services: { docker: "required" } }),
+            bearer,
+          })
+        ).status,
+      ).toBe(200);
+      await waitFor(
+        async () => (await call(agent, "GET", AGENT_HEALTH_ROUTE, { bearer })).status === 200,
+        10_000,
+      );
+      // The slice systemd made is gone from where it was resolved: unknown, not empty.
+      await rm(path.join(vm.dir, "cgroup", "sealant.slice"), { recursive: true });
+      const operationId = randomUUID();
+      const parked = await call(agent, "POST", BOAT_AGENT_PARK_ROUTE, {
+        body: { format: "sealant-agent-park-v1", operationId },
+        bearer,
+      });
+      expect(parked).toMatchObject({ status: 503, body: { reason: "docker-stop-unverified" } });
+      expect(await exists(path.join(vm.dataDir, `park-${operationId}.json`))).toBe(false);
+    },
+  );
+
+  it(
+    "turns bridge netfilter on before calling the policy applied, and fails it when it cannot",
+    { timeout: 30_000 },
+    async () => {
+      const vm = await createVm();
+      const bridge = path.join(vm.dir, "proc-sys", "net", "bridge");
+      const bearer = await bindVm(vm);
+      const agent = await startAgent(vm, {
+        SEALANT_MICROVM_DOCKER_CAPABLE: "1",
+        SEALANT_MICROVM_DOCKER_READY_TIMEOUT_MS: "5000",
+      });
+      await call(agent, "POST", AGENT_LAUNCH_ROUTE, {
+        body: launchBody(bearer, { version: 2, services: { docker: "required" } }),
+        bearer,
+      });
+      await waitFor(
+        async () => (await call(agent, "GET", AGENT_HEALTH_ROUTE, { bearer })).status === 200,
+        10_000,
+      );
+      await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body: networkBody(), bearer });
+      const policy = async () =>
+        boatAgentNetworkStatusSchema.parse(
+          (await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer })).body,
+        ).docker_policy;
+      await waitFor(async () => (await policy()) === "applied");
+      expect(await readFile(path.join(bridge, "bridge-nf-call-iptables"), "utf8")).toBe("1\n");
+      expect(await readFile(path.join(bridge, "bridge-nf-call-ip6tables"), "utf8")).toBe("1\n");
+      expect(await netLines(vm)).toContain("modprobe br_netfilter");
+
+      // A kernel without bridge netfilter (no net/bridge): the policy is not applied.
+      const other = await createVm();
+      await rm(path.join(other.dir, "proc-sys", "net", "bridge"), { recursive: true });
+      const otherBearer = await bindVm(other);
+      const otherAgent = await startAgent(other, {
+        SEALANT_MICROVM_DOCKER_CAPABLE: "1",
+        SEALANT_MICROVM_DOCKER_READY_TIMEOUT_MS: "5000",
+      });
+      await call(otherAgent, "POST", AGENT_LAUNCH_ROUTE, {
+        body: launchBody(otherBearer, { version: 2, services: { docker: "required" } }),
+        bearer: otherBearer,
+      });
+      await waitFor(
+        async () =>
+          (await call(otherAgent, "GET", AGENT_HEALTH_ROUTE, { bearer: otherBearer })).status ===
+          200,
+        10_000,
+      );
+      await call(otherAgent, "POST", BOAT_AGENT_NETWORK_ROUTE, {
+        body: networkBody(),
+        bearer: otherBearer,
+      });
+      await waitFor(
+        async () =>
+          boatAgentNetworkStatusSchema.parse(
+            (await call(otherAgent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer: otherBearer })).body,
+          ).docker_policy === "failed",
+      );
+    },
+  );
+
+  it("never restarts a daemon under a park that completed while the recovery's body arrived", async () => {
+    const vm = await createVm();
+    const { agent, bearer } = await launched(vm, { FAKE_SEALANTD_EXIT75: "1" });
+    await waitFor(async () => (await daemonExitCode(agent, bearer)) === 75);
+    const first = await readDaemonRecord(vm);
+    const pending = await partialBody(agent, AGENT_RECOVER_ROUTE, bearer, recoverBody);
+    const operationId = randomUUID();
+    const parked = await call(agent, "POST", BOAT_AGENT_PARK_ROUTE, {
+      body: { format: "sealant-agent-park-v1", operationId },
+      bearer,
+    });
+    expect(parked.status).toBe(200);
+    pending.finish();
+    expect(await pending.reply).toMatchObject({ status: 409, body: { reason: "parked" } });
+    expect((await readDaemonRecord(vm)).pid).toBe(first.pid);
   });
 });

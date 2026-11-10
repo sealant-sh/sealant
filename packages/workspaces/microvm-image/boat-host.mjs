@@ -16,7 +16,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import dgram from "node:dgram";
 import { once } from "node:events";
 import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
-import { chmod, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 
@@ -447,10 +447,13 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
     iptablesRestore: env.SEALANT_AGENT_IPTABLES_RESTORE ?? "iptables-restore",
     ip6tables: env.SEALANT_AGENT_IP6TABLES ?? "ip6tables",
     ip6tablesRestore: env.SEALANT_AGENT_IP6TABLES_RESTORE ?? "ip6tables-restore",
+    modprobe: env.SEALANT_AGENT_MODPROBE ?? "modprobe",
     sync: env.SEALANT_AGENT_SYNC ?? "sync",
     unshare: env.SEALANT_AGENT_UNSHARE ?? "unshare",
   };
   const daemonNamespace = env.SEALANT_AGENT_DAEMON_NAMESPACE === "none" ? "none" : "pid";
+  // Where the kernel's sysctls are (tests point it at a scratch tree).
+  const procSys = env.SEALANT_AGENT_PROC_SYS ?? "/proc/sys";
   const dnsProbe = {
     host: env.SEALANT_AGENT_DNS_PROBE_HOST ?? GATEWAY,
     port: Number(env.SEALANT_AGENT_DNS_PROBE_PORT ?? 53),
@@ -981,8 +984,37 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
     const hooked = async (iptables, chain, target) =>
       (await run(iptables, ["-C", chain, "-j", target])).code === 0 ||
       (await run(iptables, ["-I", chain, "1", "-j", target])).code === 0;
+    /**
+     * The physdev match only sees bridged packets when bridge netfilter hands them to iptables:
+     * load it, turn it on for both families, and read it back. Not on means not applied.
+     */
+    const bridgeNetfilter = async () => {
+      await run(commands.modprobe, ["br_netfilter"]);
+      const settings = ["bridge-nf-call-iptables", "bridge-nf-call-ip6tables"].map((name) =>
+        path.join(procSys, "net", "bridge", name),
+      );
+      for (const setting of settings) {
+        try {
+          await writeFile(setting, "1\n");
+        } catch {
+          // Read back below: a setting that could not be written is not on.
+        }
+      }
+      return settings.every((setting) => {
+        try {
+          return readFileSync(setting, "utf8").trim() === "1";
+        } catch {
+          return false;
+        }
+      });
+    };
     const apply = async () => {
       host.policyState = "pending";
+      if (!(await bridgeNetfilter())) {
+        host.policyState = "failed";
+        log("docker policy: failed (bridge netfilter is not on)");
+        return false;
+      }
       const restored = await Promise.all([
         run(commands.iptablesRestore, ["--noflush"], { input: v4 }),
         run(commands.ip6tablesRestore, ["--noflush"], { input: v6 }),
