@@ -5,23 +5,25 @@ ownership to the sealed worker exchange from #459. It does not stage launch payl
 or tunnel permits, start the daemon, report readiness, close FINAL, recover a writer or delete
 disks.
 
-`BoatAllocation.prepare` takes an already authorized scope, actual workspace/run identity and the
-exact publication returned by the native catalog. The catalog must have an unreleased consumer pin
-for that same run/runtime instance. Reservation checks the canonical ready publication and scope
-under the catalog's publication/consumer locks. One transaction reserves the allocation and creates
-its pending Boat runtime row. The publication catalog still owns images; the allocation owner never
-invents a pin or changes the scope. The future native launch caller must invoke this after
-authorized catalog acquisition. Ordinary build/launch registration stays off until isolation, tunnel
-and readiness are executable.
+`BoatVm.prepare` (`src/runtime/boat/vm.ts`) takes an already authorized scope, actual workspace/run
+identity and the exact publication returned by the native catalog. The catalog must have an
+unreleased consumer pin for that same run/runtime instance. Reservation checks the canonical ready
+publication and scope under the catalog's publication/consumer locks. One transaction reserves the
+run's row in `boat_runs` and creates its pending Boat runtime row. The publication catalog still
+owns images; the VM owner never invents a pin or changes the scope. The future native launch caller
+must invoke this after authorized catalog acquisition. Ordinary build/launch registration stays off
+until isolation, tunnel and readiness are executable.
 
-The reservation freezes the source, launch attempt, disk lineage, idempotency key and the agent
-manifest digest from the installation receipt (the one every bind request names). The allocator
-checks the exact saved snapshot before atomically recording `issued`. That transition has one
-winner. Only that caller may send create, using a private snapshot-enabled production allocation
-with no auto-stop or provider environment. Reconciliation never sends another create for an issued
-request, including beyond the provider's idempotency window. A crash between recording issuance and
-sending the request can therefore leave a reservation pending indefinitely. This availability limit
-is deliberate: no empty inventory proves that an earlier create cannot still appear.
+The reservation freezes the source and its snapshot name, launch attempt, disk lineage, idempotency
+key and the agent manifest digest from the installation receipt (the one every bind request names).
+The launch checks the exact saved snapshot before issuing create: `create_issued_at` is written by
+the database's `now()` in one guarded statement, which has one winner. Only that caller may send
+create, using a private snapshot-enabled production allocation with no auto-stop or provider
+environment. Only a launch issues a first create. After that a VM is found by its labels and
+adopted, or create is replayed under the same key while Boat still holds it (23 hours from
+`create_issued_at`, by the database's clock; an issue time in the future is refused by the table).
+Past that nothing is replayed: discovery keeps looking and the run is held `create-unresolved`. No
+empty inventory proves that an earlier create cannot still appear.
 
 A lost reply is reconciled through the existing provider client's complete paginated inventory and
 all seven ownership labels. One exact positive match can be adopted. No positive evidence or an
@@ -33,17 +35,20 @@ establish resource isolation or independently prove provider privacy.
 Recording a sandbox and projecting its identity onto the pending runtime row share a transaction.
 That projection may also record a late create after a stop, preserving the stop status. A stopped
 issued request is still discovered so its disk cannot be forgotten; it cannot exchange or start
-work. A reservation stopped before issuance never creates. The generic stranded-launch sweep skips
-Boat rows because its absence/grace rules cannot settle a native allocation. Canonical publication
-release refuses while an allocation obligation exists. There is deliberately no allocation reset,
-replacement, deletion or release method in this layer. FINAL close and recovery supply the canonical
-completion authority.
+work. A reservation stopped before issuance never creates. The publication pin of a run that has a
+row is released on one thing only: Boat's committed absence on that row (`absent_at`), after its
+tunnel slot is released. There is deliberately no reset, replacement or delete of a run's row.
 
-Before bootstrap, the allocator verifies provider ownership and reads the current boot UUID. It
-persists the complete target before calling `BoatExecution.exchange`. Retries use that target and
-the existing sealed exchange operation, and refuse a changed boot rather than silently rebinding.
-Bootstrap proves authenticated held compatibility only. It is not daemon readiness or session
-admission.
+The sweep (`BoatVm.reconcile`) resolves what a launch left unresolved and nothing more: an issued
+create with no VM on record, and a run that stopped before its create. It issues no first create,
+reads no boot, binds nothing and exchanges nothing. A VM its launch never bound stays unbound and is
+removed on Core's own record that nothing ran on it.
+
+Before bootstrap, the launch verifies provider ownership and reads the current boot UUID. It
+persists the complete target on the run's row before calling `BoatExecution.exchange`. Retries use
+that target and the existing sealed exchange operation, and refuse a changed boot rather than
+silently rebinding. Bootstrap proves authenticated held compatibility only. It is not daemon
+readiness or session admission.
 
 ## Worker composition
 
@@ -54,19 +59,22 @@ The key is passed in memory to the existing provider client; no filesystem key d
 The API takes the same key and deployment settings (`boatProviderEnvSchema`) and builds its own
 client from them, to open Boat sessions' control connections.
 
-`boatAllocationWorkerLayer` composes the allocation repository, sealed exchange owner and real guest
-transport. The application owns one managed runtime and disposes it at shutdown. A non-overlapping
-30-second tick walks twenty allocation IDs at a time, with four observations in parallel and a
-120-second bound per entry. The cursor advances over held, pending and failed entries. Individual
-record parsing happens after pagination so malformed rows do not starve later records. At the end,
-the next tick wraps to the beginning. Restarting the worker restarts this read cursor without
-resetting any durable operation. No network call runs inside a database transaction.
+`boatVmWorkerLayer` composes the run repository, sealed exchange owner and real guest transport. The
+application owns one managed runtime and disposes it at shutdown. A non-overlapping 30-second tick
+walks twenty run IDs at a time, with four observations in parallel and a 120-second bound per entry.
+The cursor advances over held, pending and failed entries. Individual record parsing happens after
+pagination so malformed rows do not starve later records. At the end, the next tick wraps to the
+beginning. Restarting the worker restarts this read cursor without resetting any durable operation.
+No network call runs inside a database transaction.
 
-The existing `BoatApi` owns HTTP and inventory parsing. `BoatAllocationRepo` is necessary because
-neither an ephemeral job claim nor the publication catalog can own a run's issued create and atomic
-runtime projection. `BoatExecution` continues to own the bind exchange's sealed bearer and the
-launch's state. The allocation layer centralizes issuance and positive adoption so callers cannot
+The existing `BoatApi` owns HTTP and inventory parsing. `BoatRunRepo` is necessary because neither
+an ephemeral job claim nor the publication catalog can own a run's issued create and atomic runtime
+projection. `BoatExecution` continues to own the bind exchange's sealed bearer and the launch's
+state, on the same row. `BoatVm` centralizes issuance and positive adoption so callers cannot
 accidentally turn an uncertain result into a new disk.
+
+At start the worker opens every live run's sealed bearer once and logs, by run, any that does not
+open: such a session cannot be drained. It reads the database only and never stops the worker.
 
 ## Validation and remaining gates
 
