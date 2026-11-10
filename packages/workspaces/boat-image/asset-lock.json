@@ -14,7 +14,7 @@
     {
       "name": "boat-host.mjs",
       "source": "microvm-image/boat-host.mjs",
-      "sha256": "e97897f6c2c22e1e9e2b3923d083a832657aab9d4f364c639bfbb0e60b04e040"
+      "sha256": "519e515ef61b63291867ff4dcfcca18ff80d94e6143a10f785d3dfa8657c1048"
     },
     {
       "name": "boat-bind.mjs",

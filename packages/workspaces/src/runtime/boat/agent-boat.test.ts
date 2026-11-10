@@ -114,6 +114,7 @@ if [ "$name" = wg ]; then
   esac
 fi
 case "$name" in *-restore) cat > ${JSON.stringify(log)}."$name-stdin" ;; esac
+if [ -e ${JSON.stringify(log)}."slow-$name" ]; then sleep 6; fi
 if [ -e ${JSON.stringify(log)}."fail-$name" ]; then exit 1; fi
 exit 0
 `;
@@ -1495,6 +1496,27 @@ describe("boat agent · network", () => {
       expect(lines).toContain("ip6tables -C FORWARD -j DOCKER-USER");
       // Nothing is applied rule by rule any more.
       expect(lines.some((line) => line.startsWith("iptables -A"))).toBe(false);
+    },
+  );
+
+  it(
+    "keeps an applied policy applied while Core's replay of the same network re-applies it",
+    { timeout: 20_000 },
+    async () => {
+      const vm = await createVm();
+      const { agent, bearer } = await dockerLaunched(vm);
+      const body = networkBody();
+      expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
+        200,
+      );
+      await waitFor(async () => (await policyStatus(agent, bearer)) === "applied");
+      // Core replays the same config right before it reads the state; the re-apply is in flight
+      // (held longer than the read, DNS probe included) when the read lands. The chains never lapse, so: applied.
+      await writeFile(`${vm.netLog}.slow-iptables-restore`, "");
+      expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
+        200,
+      );
+      expect(await policyStatus(agent, bearer)).toBe("applied");
     },
   );
 

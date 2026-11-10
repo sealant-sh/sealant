@@ -1064,7 +1064,11 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
       });
     };
     const apply = async () => {
-      host.policyState = "pending";
+      // A policy already applied stays reported as applied while the same inputs are applied
+      // again (each family's chains are replaced whole, so it never lapses): Core replays the
+      // network config right before it reads this state, and a re-apply in flight is not
+      // "pending". Only a first application is, and a failed one becomes failed.
+      if (host.policyState !== "applied") host.policyState = "pending";
       if (!(await bridgeNetfilter())) {
         host.policyState = "failed";
         log("docker policy: failed (bridge netfilter is not on)");
