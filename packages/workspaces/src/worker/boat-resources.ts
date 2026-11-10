@@ -307,11 +307,19 @@ const make: Effect.Effect<
             "read-resources",
           )).filter((instance) => instance.desired === "running");
     const recheck = Effect.gen(function* () {
-      if (
-        !isDeepStrictEqual(yield* current(target), admission) ||
-        !isDeepStrictEqual(yield* resources.linkOfRun(target.runId), link)
-      )
+      if (!isDeepStrictEqual(yield* current(target), admission))
         return yield* Effect.fail(new BoatResourcesError("binding-conflict"));
+      // The link was written or removed under this configuration. Nothing is in conflict: this
+      // configuration is stale, and the link's job or the next tick makes it again. `pending`
+      // and not `held`, so the sweep does not release the carrier of a session that is running.
+      if (!isDeepStrictEqual(yield* resources.linkOfRun(target.runId), link))
+        return yield* Effect.fail(
+          new BoatResourcesError("pending", {
+            step: "readiness",
+            errorClass: "BoatResourcesError",
+            resourceOperation: "read-resources",
+          }),
+        );
     });
     yield* recheck;
     // Only a configured reservation can dispatch a gateway mutation. Allocation failures have

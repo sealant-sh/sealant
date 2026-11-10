@@ -56,7 +56,17 @@ import {
   type BoatAllocationRecord,
   type BoatExecutionTarget,
 } from "@sealant/validators";
-import { Clock, Context, Deferred, Effect, Fiber, Layer, Redacted, ManagedRuntime } from "effect";
+import {
+  Clock,
+  Context,
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  Redacted,
+  ManagedRuntime,
+  Result,
+} from "effect";
 import * as TestClock from "effect/testing/TestClock";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -113,6 +123,7 @@ import {
   type BoatLaunchMaterial,
 } from "./execution.js";
 import {
+  BOAT_CLOSE_FREEZE,
   BoatFinalClose,
   BoatFinalCloseProvider,
   boatFinalCloseLayerNoDeps,
@@ -581,6 +592,25 @@ const launchOnTestClock = (s: AllocationFixture, target: BoatExecutionTarget) =>
         // The answer reaches the launch, which then sleeps until the next poll.
         yield* realPause();
         yield* TestClock.adjust("1 second");
+      }
+      const outcome = yield* Fiber.join(fiber);
+      return { outcome, elapsedMs: (yield* Clock.currentTimeMillis) - started };
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+/**
+ * Closes on the test clock, which moves one freeze poll at a time while the close runs, so a
+ * close that waits for the gateway host lock waits its whole bound at once. Says how long it took.
+ */
+const closeOnTestClock = (owner: BoatFinalClose["Service"], target: BoatExecutionTarget) =>
+  execute(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.now());
+      const started = yield* Clock.currentTimeMillis;
+      const fiber = yield* Effect.forkChild(Effect.result(owner.close(target)));
+      while (fiber.pollUnsafe() === undefined) {
+        // Each try reads the run and tries the lock in the database: give it time to land.
+        for (let pause = 0; pause < 3; pause += 1) yield* realPause();
+        yield* TestClock.adjust(BOAT_CLOSE_FREEZE.pollMs);
       }
       const outcome = yield* Fiber.join(fiber);
       return { outcome, elapsedMs: (yield* Clock.currentTimeMillis) - started };
@@ -1713,7 +1743,11 @@ describe.runIf(databaseUrl !== undefined)("Boat canonical FINAL close", () => {
       await entered.promise;
       const { owner, daemon } = await execute(s.final([savedStatus()]));
       try {
-        await expect(execute(owner.close(target))).rejects.toThrow("unavailable");
+        // The close waits its bound for the lock (on the test clock), then fails as it always has.
+        const { outcome, elapsedMs } = await closeOnTestClock(owner, target);
+        expect(Result.isFailure(outcome) && outcome.failure.code).toBe("unavailable");
+        expect(elapsedMs).toBeGreaterThanOrEqual(BOAT_CLOSE_FREEZE.waitMs);
+        expect(elapsedMs).toBeLessThan(60_000);
         expect(daemon.calls).toEqual([]);
         expect(s.provider.deleteCalls).toBe(0);
       } finally {
@@ -4987,12 +5021,182 @@ describe.runIf(databaseUrl !== undefined)("Boat resource links applied at once (
       } finally {
         release.resolve();
       }
-      // The tick's visit read the link before the change and refuses to finish on it.
-      expect((await tick).live).toEqual({ entries: [{ runId: target.runId, outcome: "held" }] });
+      // The tick's visit read the link before the change: it is stale, and says so.
+      expect((await tick).live).toEqual({ entries: [{ runId: target.runId, outcome: "pending" }] });
       expect(await applied).toBe("configured");
       expect(s.gateway.requests).toHaveLength(requests + 2);
       expect(s.gateway.requests.at(-1)?.link).toEqual(changed);
       expect(s.releasedCarriers).not.toContain(target.runId);
+    }));
+
+  it("keeps a live session's carrier when its link is written while the tick configures it, and the next tick applies the link", () =>
+    test(async (s) => {
+      // No ended runs: the run is on the tick's page of live runs and on its page of every
+      // allocation, which is where a carrier is released.
+      const { target, changed } = await linkedRun(s);
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let replies = 0;
+      s.gateway.beforeReply = async () => {
+        replies += 1;
+        if (replies > 1) return;
+        entered.resolve();
+        await release.promise;
+      };
+      const worker = ticker(s.resourceOwner);
+      s.carried.length = 0;
+      s.releasedCarriers.length = 0;
+      const requests = s.gateway.requests.length;
+      const visiting = worker.tick();
+      await entered.promise;
+      // Mend links right after ready: the write lands while the visit is at the gateway host.
+      await execute(s.resources.link(changed));
+      release.resolve();
+      const stale = { runId: target.runId, outcome: "pending" };
+      const first = await visiting;
+      expect(first.live).toEqual({ entries: [stale] });
+      expect(first.entries).toEqual([stale]);
+      expect(s.releasedCarriers).toEqual([]);
+      expect(s.gateway.requests).toHaveLength(requests + 1);
+      // The next tick (or the link's job, whichever comes first) configures the new link.
+      const second = await worker.tick();
+      const configured = { runId: target.runId, outcome: "configured" };
+      expect(second.live).toEqual({ entries: [configured] });
+      expect(second.entries).toEqual([configured]);
+      expect(s.gateway.requests).toHaveLength(requests + 2);
+      expect(s.gateway.requests.at(-1)?.link).toEqual(changed);
+      expect(await execute(s.resourceOwner.reach())).toEqual([changed]);
+      expect(s.carried.at(-1)?.runId).toBe(target.runId);
+      expect(s.releasedCarriers).toEqual([]);
+      // The page of every allocation alone, as the sweep ran before: the same answer.
+      const again = { ...changed, worktreeKey: ResourceWorktreeKey.make("third") };
+      s.gateway.beforeReply = () => execute(s.resources.link(again)).then(() => undefined);
+      expect((await execute(s.resourceOwner.reconcile({ limit: 20 }))).entries).toEqual([stale]);
+      expect(s.releasedCarriers).toEqual([]);
+    }));
+
+  it("refuses a link job that names another deployment's run", () =>
+    test(async (s) => {
+      if (s.input.scope.kind !== "owner") throw new Error("expected owner scope");
+      const foreignRun = randomUUID();
+      await execute(
+        s.db
+          .insert(workspaceAttempts)
+          .values({ id: foreignRun, ownerUserId: s.input.scope.ownerUserId }),
+      );
+      const record = reservation(
+        boatAllocationInputSchema.parse({
+          ...s.input,
+          deploymentId: "other",
+          consumer: { runId: foreignRun, runtimeInstanceId: foreignRun },
+        }),
+      );
+      await execute(
+        s.db.insert(schema.boatAllocations).values({
+          runtimeInstanceId: foreignRun,
+          deploymentId: "other",
+          publicationId: record.input.publication.publicationId,
+          idempotencyKey: record.idempotencyKey,
+          diskLineage: record.diskLineage,
+          sandboxId: null,
+          record,
+        }),
+      );
+      // This deployment's own run in the same state is only not ready yet.
+      await execute(s.repo.reserve(reservation(s.input)));
+      expect(await execute(s.resourceOwner.apply(s.input.consumer.runId))).toBe("pending");
+      expect(await execute(s.resourceOwner.apply(foreignRun))).toBe("held");
+      // The sweep never lists it, and a link job for it released and configured nothing.
+      expect((await execute(s.resourceOwner.reconcile({ limit: 20 }))).entries).toEqual([
+        { runId: s.input.consumer.runId, outcome: "pending" },
+      ]);
+      expect(s.releasedCarriers).toEqual([]);
+      await expectNoGateway(s);
+    }));
+
+  it("a close that meets a link job at the gateway host waits for it, freezes, and ends closed in one pass", () =>
+    test(async (s) => {
+      const { target, changed } = await linkedRun(s);
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      s.gateway.beforeReply = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+      await execute(s.resources.link(changed));
+      const applied = execute(s.resourceOwner.apply(target.runId));
+      await entered.promise;
+      // The job holds the gateway host lock. The session is stopped and its close begins.
+      const before = touched(s);
+      s.releasedCarriers.length = 0;
+      await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+      s.gateway.allowRemoval = true;
+      const { owner, daemon } = await execute(s.final([savedStatus()]));
+      const closing = execute(owner.close(target));
+      try {
+        // The close holds the execution and waits: nothing is frozen, drained or deleted yet.
+        await vi.waitFor(async () =>
+          expect((await execute(s.executions.get(target.runId)))?.phase).toBe("held"),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect((await tunnelRecord(s, target)).closeId).toBeUndefined();
+        expect(daemon.calls).toEqual([]);
+        expect(s.provider.deleteCalls).toBe(0);
+      } finally {
+        release.resolve();
+      }
+      // The job's mutation returns and it finds the run held: no guest setup, no carrier.
+      expect(await applied).toBe("held");
+      expect(await closing).toBe("closed");
+      expect(touched(s)).toEqual(before);
+      expect(s.releasedCarriers).toEqual([]);
+      expect(daemon.flushRequests.map((request) => request?.kind)).toEqual(["final"]);
+      expect(s.gateway.removeCalls).toBe(1);
+      expect(s.provider.deleteCalls).toBe(1);
+      expect(await tunnelRecord(s, target)).toMatchObject({
+        updates: [],
+        released: true,
+        removal: { id: s.provider.deletionId, completed: true },
+      });
+      expect(await execute(s.repo.get(target.runId))).toMatchObject({ phase: "deleted" });
+    }));
+
+  it("a close still fails when a link job holds the gateway host past the bound, and the next pass closes", () =>
+    test(async (s) => {
+      const { target, changed } = await linkedRun(s);
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      s.gateway.beforeReply = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+      await execute(s.resources.link(changed));
+      const applied = execute(s.resourceOwner.apply(target.runId));
+      await entered.promise;
+      await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+      s.gateway.allowRemoval = true;
+      const { owner, daemon } = await execute(s.final([savedStatus()]));
+      try {
+        const { outcome, elapsedMs } = await closeOnTestClock(owner, target);
+        expect(Result.isFailure(outcome) && outcome.failure.code).toBe("unavailable");
+        // The freeze's own bound, not the close's 120 s.
+        expect(elapsedMs).toBeGreaterThanOrEqual(BOAT_CLOSE_FREEZE.waitMs);
+        expect(elapsedMs).toBeLessThan(60_000);
+        // As a close that met the lock always ended: the execution held, nothing frozen, no
+        // FINAL, no gateway removal, no DELETE.
+        expect((await execute(s.executions.get(target.runId)))?.phase).toBe("held");
+        expect((await tunnelRecord(s, target)).closeId).toBeUndefined();
+        expect(daemon.calls).toEqual([]);
+        expect(s.gateway.removeCalls).toBe(0);
+        expect(s.provider.deleteCalls).toBe(0);
+      } finally {
+        release.resolve();
+      }
+      expect(await applied).toBe("held");
+      expect(await execute(owner.close(target))).toBe("closed");
+      expect(daemon.flushRequests.map((request) => request?.kind)).toEqual(["final"]);
+      expect(s.gateway.removeCalls).toBe(1);
+      expect(s.provider.deleteCalls).toBe(1);
     }));
 
   it("never configures a run launched without resources, from a tick or from a link job", () =>

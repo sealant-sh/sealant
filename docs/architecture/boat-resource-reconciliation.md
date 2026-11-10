@@ -73,6 +73,12 @@ more. The job is only a prompt: it carries no link, and the worker reads the cur
 is lost, dead-lettered, or finds the run still launching is not retried, because every sweep tick
 also configures a page of live runs (below), which applies the same link a little later.
 
+A link written while a configuration of its run is in flight makes that configuration stale, not
+wrong: it ends `pending`, changes nothing more, and the link's job or the next tick configures the
+run with the link as it now is. Only a changed admission is a `binding-conflict`, which the sweep
+reports as held. The difference matters because the sweep releases the carrier of a held run, and a
+session whose link was just written is running.
+
 ## Worker configuration and bounds
 
 Allocation-only configuration continues to work. Resource reconciliation additionally requires
