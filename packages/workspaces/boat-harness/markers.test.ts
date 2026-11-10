@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFECTS, PEER_PID, SLOW_CLOSE } from "./defects.js";
+import { DEFECTS, DOCKER_FAILURE_HELD, PEER_PID, SLOW_CLOSE } from "./defects.js";
 import { defectMatches, expectDefect, runScenario, type BodyOutcome } from "./markers.js";
 
 /** The runtime view the harness prints, with a readiness launch error. */
@@ -121,5 +121,23 @@ describe("expected-failure markers", () => {
       { bodyFailed: true, excusedBy: SLOW_CLOSE },
       { bodyFailed: true, excusedBy: undefined },
     ]);
+  });
+
+  it("let H1 excuse only a held launch whose Docker readiness timed out", () => {
+    const held = (check: string, reason: string) =>
+      terminalTimeout(
+        runtime({
+          error: `The workspace launch failed after its executor started, and the executor was kept so no work is lost: Boat runtime: launch-held; diagnostic {"step":"readiness","errorClass":"BoatExecutionError","code":"guest-failed","check":"${check}","guest":{"service":"docker","exitCode":null,"reason":"${reason}"}}`,
+        }),
+      );
+    expect(defectMatches(DOCKER_FAILURE_HELD, held("docker", "readiness-timeout"))).toBe(true);
+    expect(DEFECTS.faults["dockerd never answers in 30 s"]).toBe(DOCKER_FAILURE_HELD);
+    expect(DOCKER_FAILURE_HELD.releasedByDiscard).toBe(true);
+    for (const other of [
+      held("docker-policy", "policy-failed"),
+      held("docker", "container-probe-failed"),
+      `launch ended failed with ${runtime({ error: "readiness-timeout" })}`,
+    ])
+      expect(defectMatches(DOCKER_FAILURE_HELD, other)).toBe(false);
   });
 });

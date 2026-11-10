@@ -20,6 +20,7 @@ import {
   startDatabase,
   until,
   type Launch,
+  type LaunchOptions,
   type Project,
   type SettleExpectation,
 } from "./scenario.js";
@@ -48,8 +49,9 @@ export const failedLaunch = async (
   project: Project,
   expectation: SettleExpectation,
   during?: (run: Launch) => Promise<void>,
+  options: LaunchOptions = {},
 ): Promise<Launch> => {
-  const run = await launch(stack, project);
+  const run = await launch(stack, project, options);
   const work = during?.(run);
   const outcome = await awaitOutcome(stack, run, 10 * 60_000);
   await work;
@@ -80,6 +82,27 @@ const commandFault =
   (pattern: RegExp, fault: NonNullable<ReturnType<NonNullable<FakeBoatFaults["command"]>>>) =>
   (command: string, sandbox: FakeSandbox) =>
     isSession(sandbox) && pattern.test(command) ? fault : undefined;
+
+/**
+ * Puts a shell wrapper in front of a binary in a twin: `prelude` runs with the binary's arguments
+ * in `$@`, then the real binary runs with the same arguments and stdin. For faults inside the guest.
+ */
+const wrapGuestBinary = (stack: HarnessStack, sandboxId: string, binary: string, prelude: string) =>
+  stack.boat.guestRoot(
+    sandboxId,
+    [
+      `mv ${binary} ${binary}.harness-real`,
+      `cat > ${binary} <<'WRAP'`,
+      "#!/bin/sh",
+      prelude,
+      `exec ${binary}.harness-real "$@"`,
+      "WRAP",
+      `chmod 0755 ${binary}`,
+    ].join("\n"),
+  );
+
+/** The agent starts the workspace's Docker (then sealantd) when Core posts the launch. */
+const LAUNCH = "/sealant/launch";
 
 /** Core's one provider command in a session VM: the agent's bind exchange. */
 const BIND = /boat-bind\.mjs/;
@@ -404,6 +427,89 @@ export const scenarios = {
    */
   async stopAfterLaunch(stack: HarnessStack, project: Project) {
     await readyThenStop(stack, project);
+  },
+
+  /**
+   * The engine's readiness probe is slow on a cold disk: `docker import` of the probe image takes
+   * 40 s and its `docker run` 20 s more, after dockerd already answers `docker info` (each stays
+   * inside its own 60 s timeout). The agent's 30 s Docker deadline does not cover the probe
+   * (docker-service.mjs `awaitReady`), so the agent starts sealantd late but healthy, and Core must
+   * wait for it within its 120 s launch budget (#564): the launch goes ready more than 45 s after
+   * Core posted it, where Core gave up before #564.
+   */
+  async slowEngineProbe(stack: HarnessStack, project: Project) {
+    let postedAt: number | undefined;
+    let sandboxId: string | undefined;
+    await withFaults(
+      stack,
+      {
+        beforeProxy: async (path, method, sandbox) => {
+          if (postedAt !== undefined || !isSession(sandbox) || method !== "POST" || path !== LAUNCH)
+            return;
+          sandboxId = sandbox.id;
+          await wrapGuestBinary(
+            stack,
+            sandbox.id,
+            "/usr/local/bin/docker",
+            [
+              'case " $* " in',
+              '  *" import "*sealant-engine-probe:1*) date +%s > /run/harness-probe-delayed; sleep 40;;',
+              '  *" run "*sealant-engine-probe:1*) sleep 20;;',
+              "esac",
+            ].join("\n"),
+          );
+          postedAt = Date.now();
+        },
+      },
+      async () => {
+        const run = await launch(stack, project, { docker: true });
+        const outcome = await awaitOutcome(stack, run, 10 * 60_000);
+        if (postedAt === undefined || sandboxId === undefined)
+          throw new Error("the fault never fired: Core never posted the launch to the agent");
+        if (outcome.status !== "ready")
+          throw new Error(
+            `launch ended ${outcome.status} with ${JSON.stringify(outcome.view)}; guest: ${await guestEvidence(stack, run.runId)}`,
+          );
+        const delayed = await stack.boat.guestRoot(sandboxId, "cat /run/harness-probe-delayed");
+        if (delayed.trim() === "")
+          throw new Error("the fault never fired: the agent never imported the probe image");
+        const slow = outcome.at - postedAt;
+        if (slow < 45_000)
+          throw new Error(
+            `the slow probe made the launch ready only ${Math.round(slow / 1000)} s after Core posted it, not past 45 s, so it does not pin #564`,
+          );
+        await cleanStop(run);
+        await assertSettled(stack, run, Date.now(), { terminal: ["stopped"] });
+      },
+    );
+  },
+
+  /**
+   * dockerd starts 45 s late, so `docker info` never answers within the agent's 30 s Docker
+   * deadline: the agent fails the engine (`readiness-timeout`) and never starts sealantd. The
+   * launch must fail with that cause and leave nothing behind.
+   */
+  async dockerNeverReady(stack: HarnessStack, project: Project) {
+    let wrapped = false;
+    await withFaults(
+      stack,
+      {
+        beforeProxy: async (path, method, sandbox) => {
+          if (wrapped || !isSession(sandbox) || method !== "POST" || path !== LAUNCH) return;
+          wrapped = true;
+          await wrapGuestBinary(stack, sandbox.id, "/usr/local/bin/dockerd", "sleep 45");
+        },
+      },
+      () =>
+        failedLaunch(
+          stack,
+          project,
+          { cause: /docker[\s\S]*readiness-timeout|readiness-timeout[\s\S]*docker/i },
+          undefined,
+          { docker: true },
+        ),
+    );
+    expect(wrapped).toBe(true);
   },
 
   /**

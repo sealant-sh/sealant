@@ -47,6 +47,24 @@ export const SLOW_CLOSE: Defect = {
   intermittent: true,
 };
 
+/**
+ * sealant#499, the "nothing-ran exit", reproduced by this harness on main e494a535: a launch whose
+ * workspace Docker never becomes ready (`docker info` silent past the agent's 30 s deadline, so
+ * the agent reports `readiness-timeout` and never starts sealantd) is held as `launch-retained`
+ * ("kept so no work is lost") instead of failing. No daemon ever ran, so there is no work to keep;
+ * Mend reads `retained` past 60 s and only the owner's discard releases the VM, slot and pin. The
+ * fix (the adapter answers `nothing-to-save` when the guest proves no daemon ran) removes this
+ * marker, and the scenario becomes its test.
+ */
+export const DOCKER_FAILURE_HELD: Defect = {
+  id: "H1",
+  title: "a launch whose Docker never became ready is held, though no daemon ever ran",
+  failure:
+    /^timed out after \d+s waiting for Mend to see a terminal workspace[^\n]*public status retained; runtime [^\n]*launch-held[^\n]*\\"check\\":\\"docker\\"[^\n]*\\"reason\\":\\"readiness-timeout\\"/,
+  owner: "Boat lead (sealant#499)",
+  releasedByDiscard: true,
+};
+
 /** Whichever of several defects a timing-dependent scenario reaches first. */
 export const firstOf = (...defects: readonly Defect[]): Defect => ({
   id: defects.map((defect) => defect.id).join(" or "),
@@ -82,6 +100,8 @@ export const DEFECTS = {
     "worker killed after bind": undefined,
     "Stop after the launch": undefined,
     "deletion stuck in processing": undefined,
+    "engine probe 40 s slow": undefined,
+    "dockerd never answers in 30 s": DOCKER_FAILURE_HELD,
   },
 } as const satisfies {
   readonly happyPath: Defect | undefined;

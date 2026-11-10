@@ -285,6 +285,8 @@ describe("one fault per step", () => {
   fault("worker killed after bind", scenarios.workerKilled);
   fault("Stop after the launch", scenarios.stopAfterLaunch);
   fault("deletion stuck in processing", scenarios.deletionStuck);
+  fault("engine probe 40 s slow", scenarios.slowEngineProbe);
+  fault("dockerd never answers in 30 s", scenarios.dockerNeverReady);
 });
 
 // Isolated: deleted with the tunnel's UDP endpoint mode. Restarts the worker in that mode, and
