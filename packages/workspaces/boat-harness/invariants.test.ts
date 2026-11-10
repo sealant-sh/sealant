@@ -37,7 +37,14 @@ const world = (input: {
     stack: {
       query: async (sql: string) =>
         sql.includes("headN")
-          ? [{ complete: "true", head_n: 3, ...input.drain }]
+          ? [
+              {
+                complete: "true",
+                head_n: 3,
+                last_status_at: new Date(1990).toISOString(),
+                ...input.drain,
+              },
+            ]
           : [row(input.row)],
       boat: {
         sandboxes: new Map(vms.map((id) => [id, { id, labels: { "sealant-run": RUN } }])),
@@ -73,6 +80,8 @@ describe("invariants checked after every scenario", () => {
       { registers: [register(1500, 2)] },
       { registers: [register(1500)], drain: { complete: "false" } },
       { registers: [register(1500)], drain: { complete: null, head_n: null } },
+      // Core learned the FINAL was complete only after it had asked Boat to delete.
+      { registers: [register(1500)], drain: { last_status_at: new Date(2010).toISOString() } },
     ]) {
       const { stack, run } = world(input);
       await expect(assertInvariants(stack, run, { discarded: false })).rejects.toThrow(
@@ -81,9 +90,11 @@ describe("invariants checked after every scenario", () => {
     }
   });
 
-  it("ignore an earlier run's FINAL on the same capture session", async () => {
-    const { stack, run } = world({ registers: [register(500)] });
-    await expect(assertInvariants(stack, run, { discarded: false })).rejects.toThrow(/no FINAL/);
+  it("accept a resumed run's FINAL with nothing new: its head registered earlier, or none", async () => {
+    for (const input of [{ registers: [register(500)] }, { drain: { head_n: null } }]) {
+      const { stack, run } = world(input);
+      await expect(assertInvariants(stack, run, { discarded: false })).resolves.toBeUndefined();
+    }
   });
 
   it("do not require a FINAL of a failed launch or an owner's discard", async () => {

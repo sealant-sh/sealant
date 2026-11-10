@@ -114,9 +114,10 @@ must then release too. No marker excuses a failure here.
 
 Two invariants are checked in the same place, for every launch: a run never had two VMs, and a Stop
 that ended cleanly (the owner's Stop, no error, no discard) captured its FINAL before the fake Boat
-was asked to delete the VM. That is: Core recorded the FINAL drain complete at head h, and the
-capture channel answered register h for that launch before the fake Boat recorded the delete. The
-capture channel's proxy records when each `capture.register` was answered.
+was asked to delete the VM. That is: Core recorded the FINAL drain complete before the fake Boat
+recorded the delete, and the capture channel answered the head that FINAL names (if any; a resumed
+run with no changes names its restored head or none) before it too. The capture channel's proxy
+records when each `capture.register` was answered.
 
 A scenario that hits a known defect on main is an expected failure (`defects.ts`, `markers.ts`). A
 marker names the failure: where the scenario fails and what the runtime row says (on the happy path,
