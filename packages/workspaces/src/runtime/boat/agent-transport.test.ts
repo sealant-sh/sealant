@@ -356,6 +356,8 @@ const secret = (value: string) => {
   if (!parsed.ok) throw parsed.error;
   return parsed.value;
 };
+/** What the recovery sweep hands a recovery: the capture token the launch carried. */
+const recoveryEnv = Redacted.make({ SEALANT_CAPTURE_TOKEN: "mst_secret" });
 const material = (): Redacted.Redacted<BoatLaunchMaterial> =>
   Redacted.make({
     bootEnv: {
@@ -678,7 +680,7 @@ describe("Core's Boat execution owner against the real guest agent", () => {
     });
     await execute(c.executor.hold(t));
     // The recovery boot found nothing to save (exit 76): a distinct outcome, never `held`.
-    expect(await execute(c.executor.recover(t))).toEqual({
+    expect(await execute(c.executor.recover(t, recoveryEnv))).toEqual({
       outcome: "nothing-to-save",
       basis: "daemon",
       detail: "sealantd boot: nothing to save: never materialized (/workspace/repo)",
@@ -693,7 +695,7 @@ describe("Core's Boat execution owner against the real guest agent", () => {
     // Rebooted: the earlier boot's bearer is answered with a typed refusal, from this agent and
     // from a fresh one, never read as nothing to save.
     await vm.reboot();
-    expect(await refusalReason(c.executor.recover(t))).toBe("recover-new-boot");
+    expect(await refusalReason(c.executor.recover(t, recoveryEnv))).toBe("recover-new-boot");
     await stopAgent(agent);
     const fresh = await startAgent(vm, { FAKE_SEALANTD_EXIT75: "1" });
     const again = await core(vm, t, fresh);
@@ -738,11 +740,11 @@ describe("Core's Boat execution owner against the real guest agent", () => {
       return failure instanceof BoatExecutionError && failure.code === "guest-failed";
     });
     await execute(c.executor.hold(t));
-    expect(await execute(c.executor.recover(t))).toBe("pending");
+    expect(await execute(c.executor.recover(t, recoveryEnv))).toBe("restarted");
     await waitFor(async () => (await daemonRecord(vm)).argv.includes("--recovery"));
     await waitFor(() => exists(vm.socketPath));
     // Running again: a second recovery is an observation.
-    expect(await execute(c.executor.recover(t))).toBe("running");
+    expect(await execute(c.executor.recover(t, recoveryEnv))).toBe("running");
   }, 30_000);
 
   it("keeps the control relay's refusal typed until the daemon answers on its socket", async () => {

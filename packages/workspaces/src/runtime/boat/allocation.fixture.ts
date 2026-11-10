@@ -18,9 +18,15 @@ import {
   type BoatTunnelInput,
   type BoatTunnelEndpoint,
 } from "../../resources/boat-tunnel.js";
+import { AGENT_RECOVER_ROUTE } from "../microvm/agent-contract.js";
 import type { BoatSandbox } from "./api.js";
 import { BoatSecret } from "./config.js";
-import type { BoatAgentReply, BoatAgentRoute, BoatGuestTransport } from "./execution.js";
+import {
+  BoatExecutionError,
+  type BoatAgentReply,
+  type BoatAgentRoute,
+  type BoatGuestTransport,
+} from "./execution.js";
 const secret = (value: string) => {
   const result = BoatSecret.parse(value);
   if (!result.ok) throw result.error;
@@ -243,6 +249,15 @@ export type GuestRecoveryAnswer =
 export class GuestFixture implements BoatGuestTransport {
   capsule = Buffer.from("faithful immutable capsule HTTP boundary");
   recovery: GuestRecoveryAnswer = "running";
+  /** The basis a `nothing-to-save` recovery names: the recovery boot's exit 76, or no launch. */
+  recoveryBasis: "daemon" | "no-launch" = "daemon";
+  /**
+   * The agent could not prove the workspace's processes stopped: `503 {reason}`, which the real
+   * transport raises as the typed not-ready failure carrying that reason.
+   */
+  recoveryUnverified: "daemon-stop-unverified" | "docker-stop-unverified" | undefined;
+  /** Every recovery body exactly as Core sent it. */
+  readonly recoverBodies: string[] = [];
   /** Answer recovery with a body that matches no contract shape. */
   malformedRecovery = false;
   /** How many launches the agent accepted (its launch record is per boot: at most one). */
@@ -406,17 +421,33 @@ export class GuestFixture implements BoatGuestTransport {
       };
     }
     if (route === "recover") {
+      this.recoverBodies.push(raw);
+      if (this.recoveryUnverified !== undefined)
+        throw new BoatExecutionError("agent-not-ready", {
+          step: "agent-request",
+          errorClass: "BoatExecutionError",
+          code: "agent-not-ready",
+          provider: { operation: "agent-recover", status: 503, causeClass: null },
+          agent: {
+            pathClass: AGENT_RECOVER_ROUTE,
+            responseTail: "",
+            reason: this.recoveryUnverified,
+          },
+        });
       if (this.malformedRecovery) return { status: 200, body: { outcome: "whatever" } };
       if (this.recovery === "running" || this.recovery === "restarted")
         return { status: 200, body: { outcome: this.recovery } };
       if (this.recovery === "nothing-to-save")
         return {
           status: 200,
-          body: {
-            outcome: "nothing-to-save",
-            basis: "daemon",
-            detail: "sealant boot: nothing to save: never materialized (/workspace/repo)",
-          },
+          body:
+            this.recoveryBasis === "no-launch"
+              ? { outcome: "nothing-to-save", basis: "no-launch" }
+              : {
+                  outcome: "nothing-to-save",
+                  basis: "daemon",
+                  detail: "sealant boot: nothing to save: never materialized (/workspace/repo)",
+                },
         };
       return { status: 409, body: { reason: this.recovery } };
     }

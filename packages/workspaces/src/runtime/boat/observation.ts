@@ -45,7 +45,8 @@ export type BoatPresence =
 /**
  * The only writer of observed presence. Absence comes from Boat alone: a typed 404 for a VM Boat
  * had reported past creation, or Boat's own completed deletion. Never elapsed time, a launch error
- * or a lease.
+ * or a lease. It writes the observation and nothing else: the run's runtime row and capture record
+ * are written by the shared stop and exit paths, which read the absence through `inspect`.
  */
 export class BoatObserver extends Context.Service<
   BoatObserver,
@@ -73,7 +74,6 @@ const notFound = (error: BoatApiError) =>
 
 const ids = (allocation: BoatAllocationRecord) => ({
   runtimeInstanceId: allocation.input.consumer.runtimeInstanceId,
-  runId: allocation.input.consumer.runId,
   deploymentId: allocation.input.deploymentId,
 });
 

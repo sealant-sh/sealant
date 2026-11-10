@@ -3,13 +3,13 @@ import type { SealantDB } from "@sealant/db";
 import { Effect, Layer } from "effect";
 
 import { BoatAllocation, boatAllocationLayer } from "../runtime/boat/allocation.js";
+import { BoatConvergence, boatConvergenceLayer } from "../runtime/boat/convergence.js";
 import {
   BoatExecution,
   BoatGuestTransportService,
   boatExecutionLayer,
   createBoatGuestTransport,
 } from "../runtime/boat/execution.js";
-import { BoatFinalClose, boatFinalCloseLayer } from "../runtime/boat/final-close.js";
 import { boatObserverLayer } from "../runtime/boat/observation.js";
 import { BoatAllocationProvider } from "../runtime/boat/provider.js";
 import { BoatRemoval, BoatRemovalProvider, boatRemovalLayer } from "../runtime/boat/removal.js";
@@ -60,12 +60,15 @@ export const boatReadinessWorkerLayer: Layer.Layer<
   SealantDB | CredentialCipher | BoatAllocationProvider | BoatResourcesHost | BoatTunnelCarrier
 > = boatReadinessLayer.pipe(Layer.provide(Layer.merge(Resources, boatSealedExecutionLayer)));
 
-/** Canonical stopped-run reconciliation, sharing the original sealed execution. */
-export const boatFinalCloseWorkerLayer: Layer.Layer<
-  BoatFinalClose,
+/**
+ * Boat's own convergence sweep (the no-VM cases, the cleanup after absence, and the nudge of the
+ * shared stop), sharing the original sealed execution.
+ */
+export const boatConvergenceWorkerLayer: Layer.Layer<
+  BoatConvergence,
   never,
   SealantDB | CredentialCipher | BoatAllocationProvider | BoatRemovalProvider | BoatResourcesHost
-> = boatFinalCloseLayer.pipe(Layer.provide(boatSealedExecutionLayer));
+> = boatConvergenceLayer.pipe(Layer.provide(boatSealedExecutionLayer));
 
 /** The one deletion of a Boat VM, for the adapter's `stop`, sharing the original sealed execution. */
 export const boatRemovalWorkerLayer: Layer.Layer<

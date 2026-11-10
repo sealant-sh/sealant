@@ -35,7 +35,7 @@ export {
   boatAllocationWorkerLayer,
   boatSealedExecutionLayer,
   boatReadinessWorkerLayer,
-  boatFinalCloseWorkerLayer,
+  boatConvergenceWorkerLayer,
   boatRemovalWorkerLayer,
 } from "./worker/boat-allocation.js";
 
@@ -70,11 +70,14 @@ export {
 } from "./worker/boat-readiness.js";
 
 export {
-  BoatFinalClose,
-  BoatFinalCloseError,
-  boatFinalCloseLayer,
-  boatFinalCloseLayerNoDeps,
-} from "./runtime/boat/final-close.js";
+  BoatConvergence,
+  BoatConvergenceError,
+  boatConvergenceLayer,
+  boatConvergenceLayerNoDeps,
+  type BoatConvergenceOutcome,
+  type BoatConvergenceSweep,
+  type BoatSharedStop,
+} from "./runtime/boat/convergence.js";
 
 export {
   BoatRemoval,
@@ -82,7 +85,6 @@ export {
   BoatRemovalProvider,
   boatRemovalLayer,
   boatRemovalLayerNoDeps,
-  type BoatDeletionOutcome,
   type BoatRemovalOptions,
   type BoatRemovalOutcome,
 } from "./runtime/boat/removal.js";

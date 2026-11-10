@@ -24,6 +24,16 @@ export const restoreUnprogressedCaptureDrain = (db: DB, runId: string, sealed: s
     })
     .where(eq(workspaceCaptureDrains.runId, runId));
 
+/**
+ * End the hold on a run's removal now, as it ends on its own once its holder (a worker that
+ * died) stops renewing it: what is recorded of the removal stays as it is.
+ */
+export const lapseCaptureDeletionHold = (db: DB, runId: string) =>
+  db
+    .update(workspaceCaptureDrains)
+    .set({ deletionExpiresAt: new Date(Date.now() - 1_000) })
+    .where(eq(workspaceCaptureDrains.runId, runId));
+
 /** A Boat launch that failed after its VM was created, as the build worker records it. */
 export const recordRetainedBoatLaunch = (
   db: DB,

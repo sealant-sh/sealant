@@ -616,10 +616,15 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
                 allocation.publicationId !== publicationId ||
                 allocation.sandboxId !== bound.data.sandboxId ||
                 runtime?.adapter !== "boat" ||
-                runtime.status !== "stopped" ||
                 runtime.resourceId !== bound.data.sandboxId ||
-                runtime.removedAt === null ||
                 runtime.publicationId !== publicationId ||
+                // Boat's own word that it no longer has the VM (or never had one for an unused
+                // launch) is what lets the pin go: nothing of it can use the publication again,
+                // whatever its run's row says by now (the shared stop records that after the
+                // removal returns). Without it, the row must say the run stopped and was removed.
+                (!deletedUnused &&
+                  !observedAbsent &&
+                  (runtime.status !== "stopped" || runtime.removedAt === null)) ||
                 (!deletedUnused &&
                   !observedAbsent &&
                   (capture?.deletionState !== "deleted" ||

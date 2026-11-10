@@ -304,13 +304,16 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
             const execution = boatExecutionRecordSchema.safeParse(row?.record);
             // A bound VM is removed only once its execution can never start again: aborted before
             // any launch was pushed, or held by the removal that fenced it. A held execution was
-            // launched, and hold comes before its drain: it leaves `bound` only with Boat's own
-            // deletion operation on record, which nothing writes before a DELETE was accepted.
+            // launched, and a recovery holds it before its drain: it leaves `bound` only with the
+            // removal's own claim on the first DELETE (`issued`, written right before it is sent)
+            // or Boat's deletion operation on record, which nothing writes before a DELETE was
+            // accepted.
             if (
               !execution.success ||
               !(
                 execution.data.phase === "aborted" ||
-                (execution.data.phase === "held" && next.removal?.kind === "operation")
+                (execution.data.phase === "held" &&
+                  (next.removal?.kind === "issued" || next.removal?.kind === "operation"))
               ) ||
               !isDeepStrictEqual(execution.data.target, next.target)
             )
@@ -359,7 +362,10 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
                   : undefined,
                 eq(workspaceRuntimeInstances.publicationId, next.input.publication.publicationId),
                 next.phase === "issued" ? isNull(workspaceRuntimeInstances.stopReason) : undefined,
-                next.phase === "deleting" || next.phase === "deleted"
+                // A VM is deleted, or recorded gone, only for a run that is stopping or failed.
+                // A launch Boat never made a VM for has nothing to delete, whatever its run says.
+                (next.phase === "deleting" || next.phase === "deleted") &&
+                  next.removal?.kind !== "never-created"
                   ? sql`(${workspaceRuntimeInstances.stopReason} is not null or ${workspaceRuntimeInstances.status} = 'failed')`
                   : undefined,
                 sql`${workspaceRuntimeInstances.resourceId} is not distinct from ${previous.sandboxId}`,

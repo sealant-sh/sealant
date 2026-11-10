@@ -16,30 +16,34 @@ import {
   type SealantDB,
 } from "@sealant/db";
 import type { BoatAllocationRecord } from "@sealant/validators";
-import { Clock, Context, Effect, Layer, Ref } from "effect";
+import { Clock, Context, Effect, Layer, Ref, Result } from "effect";
 
 import { BoatResourcesHost } from "../../worker/boat-resources.js";
 import type { BoatApi, BoatDeletion } from "./api.js";
 import { boatDeletionIdSchema, boatSandboxIdSchema, type BoatResult } from "./config.js";
 import { BoatDischarge, boatDischargeLayer } from "./discharge.js";
 import { BoatExecution } from "./execution.js";
-import { BoatObserver, boatObserverLayer, type BoatPresence } from "./observation.js";
+import { BoatObserver, boatObserverLayer } from "./observation.js";
 import type { BoatAllocationProvider } from "./provider.js";
 
 /**
  * Why a removal did not finish. `held`: the run is not this removal's to remove as it stands (it is
- * not stopping, its records disagree, it is not fenced, Boat answered for another VM or another
- * operation). `unavailable`: Boat or the database did not answer.
+ * not stopping, its records disagree, its caller holds nothing that authorizes deleting a VM a
+ * daemon may have run on, Boat answered for another VM or another operation). `unavailable`: Boat
+ * or the database did not answer.
  *
- * `requested` says whether a DELETE may have reached Boat: this call sent one, or an earlier call's
- * operation is on record. `false` means this call sent Boat nothing and knows of no deletion in
- * progress, which is the only failure a caller may take for a definitive refusal.
+ * `requested` says whether a DELETE may have reached Boat: this call sent one, another call's is
+ * in flight, or an earlier call's operation is on record. `false` means this call sent Boat nothing
+ * and knows of no deletion in progress, which is the only failure a caller may take for a
+ * definitive refusal. `recorded` says Boat's deletion operation is on record: Boat accepted the
+ * deletion, and what failed is only this call's reading of how far it is.
  */
 export class BoatRemovalError extends Error {
   readonly _tag = "BoatRemovalError";
   constructor(
     readonly code: "held" | "unavailable",
     readonly requested: boolean,
+    readonly recorded = false,
   ) {
     super(`Boat removal: ${code}`);
   }
@@ -47,75 +51,75 @@ export class BoatRemovalError extends Error {
 
 export interface BoatRemovalOptions {
   /**
-   * `true`: the caller has not fenced the run, so the removal does before it sends DELETE. A
-   * launch that was pushed is held, one that never was is aborted, the run's tunnel is frozen if
-   * it has one, and a VM never bound is claimed by its allocation. `false`: the caller fenced it
-   * where its own sequence needs to (Boat's close holds and freezes before its FINAL drain), and
-   * the removal only verifies that, sending nothing to a run that is not fenced.
+   * Whether the caller holds what authorizes deleting a VM a daemon may have run on: the capture
+   * ledger's deletion ticket, the owner's discard, or the agent's own answer that there is nothing
+   * to save. Asked only for such a VM, and only when a DELETE is about to be sent: a VM Boat no
+   * longer has is only cleaned up, a recorded deletion operation is only polled, and a VM no
+   * launch was ever pushed to (never bound, or its execution aborted) is the removal's own to
+   * delete, by Core's own record that nothing ran on it. Absent: not authorized.
    */
-  readonly fence: boolean;
-  /**
-   * What the caller read through the observer a moment ago, so Boat is not read twice for one
-   * decision. Absent: the removal observes.
-   */
-  readonly presence?: BoatPresence;
+  readonly authorized?: Effect.Effect<boolean>;
 }
 
 /**
  * How far Boat's deletion is. `absent`: Boat no longer has the VM, by a committed absence (its own
  * typed 404 for a VM seen past creation, or a deletion it completed earlier), whoever observed it
  * and at whatever point of this removal. `completed`: its deletion operation reads `completed`,
- * recorded on the allocation. `deleting`: Boat still says the deletion is in progress and no
- * absence is committed. Both `absent` and `completed` are the deletion's end.
+ * recorded on the allocation. `deleting`: Boat still says the deletion is in progress, or another
+ * call's DELETE is out and its operation not complete, and no absence is committed. Both `absent`
+ * and `completed` are the deletion's end.
  */
-export type BoatDeletionOutcome = "absent" | "completed" | "deleting";
+type BoatDeletionOutcome = "absent" | "completed" | "deleting";
 
 /**
  * `removed`: Boat no longer has the VM and every obligation of it is discharged. `discharging`:
  * Boat no longer has the VM and an obligation (the gateway on another host, say) could not be
- * discharged on this pass; the next one retries it alone. `deleting`: Boat still says the deletion
- * is in progress, and nothing was released.
+ * discharged on this pass; the next cleanup retries it alone. `deleting`: Boat still says the
+ * deletion is in progress, and nothing was released.
  */
 export type BoatRemovalOutcome = "removed" | "discharging" | "deleting";
 
 /**
- * The one deletion of a Boat VM. Every caller already holds what authorizes a DELETE (the ledger's
- * deletion ticket after an observed-complete FINAL, the owner's discard, or a launch that never
- * ran): this service decides nothing about the work on the VM. It is resumable from every point,
- * and absence is only ever Boat's own answer.
+ * The one deletion of a Boat VM. It decides nothing about the work on the VM: its caller says
+ * whether it holds what authorizes deleting one a daemon may have run on (`authorized`), and the
+ * removal sends DELETE to such a VM only then. It is resumable from every point, and absence is
+ * only ever Boat's own answer.
  *
  * In order: observe the VM; if Boat no longer has it, discharge and stop. If a deletion operation
- * is already on record, poll it and never send DELETE again. Otherwise fence the run, then send
- * DELETE. The operation id is written to the allocation before any wait; the wait for `completed`
- * is bounded (20 s by default). On `completed` the absence is recorded and every obligation
- * discharged: the gateway removed and the tunnel slot released if the run has one, the allocation
- * deleted, the resume secrets forgotten, the publication pin released. Until then nothing is.
+ * is already on record, poll it and never send DELETE again. Otherwise check the authorization,
+ * fence the run (hold a launch that may have been pushed, abort one that never was, freeze its
+ * tunnel), claim the deletion on the allocation by compare-and-set, then send DELETE. The claim
+ * serializes the first DELETE: of two calls with nothing on record, one sends it and the other
+ * waits for what it records. The operation id is written to the allocation before any wait; the
+ * wait for `completed` is bounded (20 s by default). On `completed` the absence is recorded and
+ * every obligation discharged: the gateway removed and the tunnel slot released if the run has
+ * one, the allocation deleted, the resume secrets forgotten, the publication pin released. Until
+ * then nothing is.
  *
  * It is not the only observer of its own deletion. Boat answers 404 for the VM soon after a
  * DELETE, often while the operation still reads `processing`, and anything that reads the VM then
- * (the exit reconciler's `inspect`, the lifecycle sweep, a second stop) commits that absence and
- * may discharge on it. So once its DELETE is out, the removal takes a committed absence for the
- * deletion's end wherever it meets one: an allocation already discharged, an operation that can no
- * longer be recorded or polled, a wait that ran out. It then discharges in the same call. Only the
- * committed observation counts: never a failed read, a timeout, or a 404 for a VM Boat was never
- * seen to report past creation.
+ * (the exit reconciler's `inspect`, a second stop) commits that absence and may discharge on it.
+ * So once its DELETE is out, the removal takes a committed absence for the deletion's end wherever
+ * it meets one: an allocation already discharged, an operation that can no longer be recorded or
+ * polled, a wait that ran out. It then discharges in the same call. Only the committed observation
+ * counts: never a failed read, a timeout, or a 404 for a VM Boat was never seen to report past
+ * creation.
  */
 export class BoatRemoval extends Context.Service<
   BoatRemoval,
   {
     readonly remove: (
       allocation: BoatAllocationRecord,
-      options: BoatRemovalOptions,
+      options?: BoatRemovalOptions,
     ) => Effect.Effect<BoatRemovalOutcome, BoatRemovalError>;
     /**
-     * `remove` up to Boat's `completed`, releasing nothing. Only for Boat's own FINAL close, whose
-     * capture ledger records the deletion before anything is released: it records that, then the
-     * absence, then discharges. The shared stop path needs only `remove`.
+     * Discharges what a VM Boat no longer has still holds, and nothing else: nothing is read from
+     * Boat, nothing is fenced and no DELETE is ever sent. `present`: no absence of the VM is
+     * committed (and no deletion operation of it is recorded complete), so nothing was released.
      */
-    readonly deletion: (
+    readonly cleanup: (
       allocation: BoatAllocationRecord,
-      options: BoatRemovalOptions,
-    ) => Effect.Effect<BoatDeletionOutcome, BoatRemovalError>;
+    ) => Effect.Effect<"removed" | "discharging" | "present", BoatRemovalError>;
   }
 >()("@sealant/workspaces/boat/BoatRemoval") {}
 
@@ -129,11 +133,31 @@ export class BoatRemovalProvider extends Context.Service<
      * recorded by the call that issued it rather than a later pass. Default 20 s.
      */
     readonly deletionWaitMs?: number;
+    /** How long a removal waits for the gateway host lock, and how often it tries. Default `BOAT_REMOVAL_FREEZE`. */
+    readonly freeze?: { readonly waitMs: number; readonly pollMs: number };
   }
 >()("@sealant/workspaces/boat/BoatRemovalProvider") {}
 
 const DELETION_WAIT_MS = 20_000;
 const DELETION_POLL_MS = 1_000;
+
+/**
+ * How long a removal waits to freeze its run's tunnel while a configuration of the same run is at
+ * the gateway host, and how often it tries. The host lock is tried, never queued for, and it is
+ * held across one gateway mutation (a few seconds of Docker calls, by a link job, the sweep or a
+ * launch). Without the wait a stop that met one failed at once, before anything was asked of
+ * Boat, and the VM waited for the next pass.
+ */
+export const BOAT_REMOVAL_FREEZE = { waitMs: 15_000, pollMs: 500 } as const;
+
+/**
+ * How long a claim on the first DELETE keeps every other call from sending one. A call that
+ * claimed and vanished (its worker died before, or while, the DELETE was sent) may have reached
+ * Boat: nothing sends another until this has passed, which is twice the longest one Boat request
+ * can take, and then only after reading the exact owned VM from Boat again. A call whose DELETE
+ * request ended without Boat's answer gives its claim up itself, so the next pass asks at once.
+ */
+export const BOAT_REMOVAL_CLAIM_MS = 180_000;
 
 const runtimeInstanceId = (allocation: BoatAllocationRecord) =>
   allocation.input.consumer.runtimeInstanceId;
@@ -144,6 +168,9 @@ const call = <A>(request: () => Promise<BoatResult<A>>) =>
       result.ok ? Effect.succeed(result.value) : Effect.fail("unavailable" as const),
     ),
   );
+
+/** How far a removal got with Boat, for what its failure may be taken for. */
+type Progress = "nothing-sent" | "sent" | "recorded";
 
 type Dependencies =
   | BoatAllocationRepo
@@ -168,6 +195,8 @@ const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.
   const provider = yield* BoatRemovalProvider;
   const observer = yield* BoatObserver;
   const discharger = yield* BoatDischarge;
+  const waitMs = provider.deletionWaitMs ?? DELETION_WAIT_MS;
+  const freezing = provider.freeze ?? BOAT_REMOVAL_FREEZE;
 
   /** The allocation as stored now: the caller's copy may predate a write of this removal's own. */
   const stored = (given: BoatAllocationRecord) =>
@@ -252,7 +281,7 @@ const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.
           yield* Ref.set(latest, next);
         }
       });
-      yield* poll.pipe(Effect.timeoutOption(provider.deletionWaitMs ?? DELETION_WAIT_MS));
+      yield* poll.pipe(Effect.timeoutOption(waitMs));
       return yield* Ref.get(latest);
     });
   /**
@@ -304,9 +333,16 @@ const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.
    * Records the operation Boat answered with, before any wait, then waits its bound for
    * `completed` and records that. Says how far the deletion is.
    */
-  const follow = (allocation: BoatAllocationRecord, operation: BoatDeletion) =>
+  const follow = (
+    allocation: BoatAllocationRecord,
+    operation: BoatDeletion,
+    progress: Ref.Ref<Progress>,
+  ) =>
     Effect.gen(function* () {
       let saved = yield* record(allocation, operation);
+      // Boat accepted the deletion and its operation is on record: from here on a failure is only
+      // this call's reading of how far it is.
+      yield* Ref.set(progress, "recorded");
       // Discharged already, on an absence another observer committed: nothing is left to wait for.
       if (saved.phase !== "deleted" && operation.status !== "completed") {
         const settled = yield* awaitDeletion(saved, operation);
@@ -344,6 +380,11 @@ const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.
     Effect.gen(function* () {
       const reservation = yield* tunnels.get(runtimeInstanceId(allocation));
       if (reservation === undefined) return undefined;
+      // Said on every pass that meets it: `held` alone does not name the missing setting.
+      if (allocation.input.resources !== "none" && host.gateway === undefined)
+        yield* Effect.logWarning(
+          `Boat removal · run ${allocation.input.consumer.runId}: the run has a tunnel and this worker has no resource gateway, so nothing here can settle its tunnel; its VM is held until a worker with the gateway stops it.`,
+        );
       if (
         allocation.target === null ||
         allocation.input.resources === "none" ||
@@ -356,20 +397,67 @@ const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.
         return yield* Effect.fail("held" as const);
       return reservation;
     });
+  /** Whether a launch may have been pushed to the VM: a daemon may have run on it. */
+  const launched = (allocation: BoatAllocationRecord) =>
+    Effect.gen(function* () {
+      if (allocation.target === null) return false;
+      const state = yield* executions.get(runtimeInstanceId(allocation));
+      return state !== undefined && ["issued", "running", "held"].includes(state.phase);
+    });
   /**
-   * Whether the run is this removal's to delete as it stands, before anything is sent to Boat:
-   * it is stopping, and nothing can start on the VM again. Everything the allocation's `deleting`
-   * transition will require is checked here first, so a DELETE is never sent whose operation could
-   * not be recorded.
+   * Makes sure nothing can start on the VM again. A launch that may have been pushed is held: its
+   * daemon is left as it is. One that never was is aborted, the durable fence against reserve,
+   * exchange, stage and issue. The run's tunnel is frozen if it has one, waiting out a
+   * configuration that holds the gateway host for its bound. A VM never bound owns no exchange
+   * and no tunnel, and the claim that follows is its fence against a concurrent binder.
+   */
+  const fence = (allocation: BoatAllocationRecord) =>
+    Effect.gen(function* () {
+      const state = yield* executions.get(runtimeInstanceId(allocation));
+      if (allocation.target === null) {
+        if (
+          state !== undefined ||
+          (yield* tunnels.get(runtimeInstanceId(allocation))) !== undefined
+        )
+          return yield* Effect.fail("held" as const);
+        return;
+      }
+      yield* ownTunnel(allocation);
+      if (state !== undefined && ["issued", "running", "held"].includes(state.phase))
+        yield* execution.hold(allocation.target);
+      else yield* executions.abort(allocation.target);
+      const closeId = randomUUID();
+      const freezeBy = (yield* Clock.currentTimeMillis) + freezing.waitMs;
+      for (;;) {
+        // Read again each try: the mutation that held the lock settled its update on it.
+        const reservation = yield* ownTunnel(allocation);
+        if (reservation === undefined || reservation.closeId !== undefined) return;
+        const frozen = yield* Effect.result(tunnels.freeze(reservation, closeId));
+        if (Result.isSuccess(frozen)) return;
+        // `operation-held` is the host lock, taken by a configuration at its gateway mutation.
+        // Only this removal waits, and it lets nothing through meanwhile: the execution is fenced
+        // and the stop recorded, and a configuration reads both before it dispatches, again under
+        // the lock. Every other failure, and the lock still held at the bound, fails.
+        if (
+          frozen.failure.code !== "operation-held" ||
+          (yield* Clock.currentTimeMillis) >= freezeBy
+        )
+          return yield* Effect.fail(frozen.failure);
+        yield* Effect.sleep(freezing.pollMs);
+      }
+    });
+  /**
+   * Whether the run is fenced, verified before anything is sent to Boat: it is stopping, and
+   * nothing can start on the VM again. Everything the allocation's `deleting` transition will
+   * require is checked here first, so a DELETE is never sent whose operation could not be recorded.
    */
   const fenced = (allocation: BoatAllocationRecord) =>
     Effect.gen(function* () {
       yield* stopping(allocation);
       const state = yield* executions.get(runtimeInstanceId(allocation));
       if (allocation.target === null) {
-        // Never bound: its allocation's own claim is the fence, and it owns no exchange or tunnel.
         if (
-          allocation.phase !== "deleting" ||
+          !["allocated", "held", "deleting"].includes(allocation.phase) ||
           state !== undefined ||
           (yield* tunnels.get(runtimeInstanceId(allocation))) !== undefined
         )
@@ -393,60 +481,93 @@ const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.
       )
         return yield* Effect.fail("held" as const);
     });
-  /** Makes sure nothing can start on the VM again, for a caller that has not. */
-  const fence = (allocation: BoatAllocationRecord) =>
+  /**
+   * Claims the first DELETE on the allocation by compare-and-set, as a dated `issued` removal:
+   * the one call that wins it sends DELETE. `undefined`: another call holds the claim (it is
+   * sending DELETE now, or vanished doing so less than the claim's lease ago), or won it between
+   * this call's read and its write.
+   */
+  const claim = (allocation: BoatAllocationRecord) =>
     Effect.gen(function* () {
-      // Before any fence is written: a run that is not stopping is never fenced from here.
-      yield* stopping(allocation);
-      const state = yield* executions.get(runtimeInstanceId(allocation));
-      if (allocation.target === null) {
-        // Only a never-bound VM is claimed this way. The CAS fences any concurrent binder.
-        if (
-          state !== undefined ||
-          (yield* tunnels.get(runtimeInstanceId(allocation))) !== undefined
-        )
-          return yield* Effect.fail("held" as const);
-        if (allocation.phase === "deleting") return allocation;
-        return yield* allocations.advance(allocation, {
+      const now = yield* Clock.currentTimeMillis;
+      if (
+        allocation.removal?.kind === "issued" &&
+        now - Date.parse(allocation.removal.at) < BOAT_REMOVAL_CLAIM_MS
+      )
+        return undefined;
+      return yield* allocations
+        .advance(allocation, {
           ...allocation,
           phase: "deleting",
           reason: null,
-          removal: {
-            kind: "issued",
-            token: randomUUID(),
-            at: new Date(yield* Clock.currentTimeMillis).toISOString(),
-          },
-        });
-      }
-      const reservation = yield* ownTunnel(allocation);
-      // A launch that may have been pushed is held: its daemon is left to whoever drains it. One
-      // that never was is aborted, the durable fence against reserve, exchange, stage and issue.
-      if (state !== undefined && ["issued", "running", "held"].includes(state.phase))
-        yield* execution.hold(allocation.target);
-      else yield* executions.abort(allocation.target);
-      if (reservation !== undefined && reservation.closeId === undefined)
-        yield* tunnels.freeze(reservation, randomUUID());
-      return allocation;
+          removal: { kind: "issued", token: randomUUID(), at: new Date(now).toISOString() },
+        })
+        .pipe(
+          Effect.catch((error) =>
+            error instanceof BoatAllocationStoreError && error.code === "stale-transition"
+              ? Effect.succeed(undefined)
+              : Effect.fail(error),
+          ),
+        );
+    });
+  /**
+   * Gives up a claim whose DELETE request ended without Boat's answer: the request is over, so
+   * the next call may ask again at once, after reading the exact owned VM from Boat. Best-effort:
+   * a claim that could not be given up lapses on its own.
+   */
+  const lapse = (claimed: BoatAllocationRecord) =>
+    claimed.removal?.kind !== "issued"
+      ? Effect.void
+      : allocations
+          .advance(claimed, {
+            ...claimed,
+            removal: { ...claimed.removal, at: new Date(0).toISOString() },
+          })
+          .pipe(Effect.ignore);
+  /**
+   * Another call holds the claim on the first DELETE: this one sends nothing and waits, for the
+   * same bound, for what that call brings about. Boat's absence of the VM committed, or its
+   * deletion operation recorded complete, is the deletion's end; otherwise it is still deleting.
+   */
+  const awaitClaimant = (allocation: BoatAllocationRecord) =>
+    Effect.gen(function* () {
+      const seen = yield* Ref.make<BoatDeletionOutcome>("deleting");
+      const poll = Effect.gen(function* () {
+        for (;;) {
+          if (yield* absenceCommitted(allocation)) return yield* Ref.set(seen, "absent");
+          const saved = yield* stored(allocation);
+          if (saved.phase === "deleted") return yield* Ref.set(seen, "absent");
+          if (saved.removal?.kind === "operation" && saved.removal.completed)
+            return yield* Ref.set(seen, "completed");
+          yield* Effect.sleep(DELETION_POLL_MS);
+        }
+      });
+      yield* poll.pipe(Effect.timeoutOption(waitMs));
+      return yield* Ref.get(seen);
     });
 
   /**
    * Runs one removal step. A failure before anything was asked of Boat says so (`requested`
    * false); from the DELETE on, or once an operation is on record, every failure is an outcome
-   * nobody knows yet.
+   * nobody knows yet, and with the operation on record it is only how far Boat's deletion is.
    */
   const reporting = <A>(
     step: (
-      sent: Ref.Ref<boolean>,
+      progress: Ref.Ref<Progress>,
     ) => Effect.Effect<A, "held" | "unavailable" | { readonly _tag: string }>,
   ): Effect.Effect<A, BoatRemovalError> =>
     Effect.gen(function* () {
-      const sent = yield* Ref.make(false);
-      return yield* step(sent).pipe(
+      const progress = yield* Ref.make<Progress>("nothing-sent");
+      return yield* step(progress).pipe(
         Effect.catch((error) =>
-          Ref.get(sent).pipe(
-            Effect.flatMap((requested) =>
+          Ref.get(progress).pipe(
+            Effect.flatMap((reached) =>
               Effect.fail(
-                new BoatRemovalError(error === "held" ? "held" : "unavailable", requested),
+                new BoatRemovalError(
+                  error === "held" ? "held" : "unavailable",
+                  reached !== "nothing-sent",
+                  reached === "recorded",
+                ),
               ),
             ),
           ),
@@ -455,24 +576,24 @@ const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.
     });
 
   const deletion = (given: BoatAllocationRecord, options: BoatRemovalOptions) =>
-    reporting((sent) =>
+    reporting((progress) =>
       Effect.gen(function* () {
         const saved = yield* stored(given);
         // 1. Observe. A VM Boat no longer has needs no fence and no DELETE to end.
-        const presence = options.presence ?? (yield* observer.observe(saved));
+        const presence = yield* observer.observe(saved);
         if (presence.kind === "absent") return "absent" as const;
         // 2. DELETE was accepted earlier, by this worker or one before it: its operation is
         // polled. It decides before presence does, since a VM never seen past creation reads 404
         // as `creating` and presence alone could hold it forever.
         const recorded = yield* recordedOperation(saved);
         if (recorded !== undefined) {
-          yield* Ref.set(sent, true);
+          yield* Ref.set(progress, "recorded");
           return yield* Effect.gen(function* () {
             const id = boatDeletionIdSchema.safeParse(recorded.id);
             if (!id.success) return yield* Effect.fail("held" as const);
             const operation = yield* call(() => provider.api.getDeletion(id.data));
             if (operation.id !== recorded.id) return yield* Effect.fail("held" as const);
-            return yield* follow(saved, operation);
+            return yield* follow(saved, operation, progress);
           }).pipe(orAbsent(saved));
         }
         // 3. Nothing was sent, or its reply was lost. Absence and a timeout are never completion:
@@ -485,51 +606,87 @@ const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.
         const sandbox = boatSandboxIdSchema.safeParse(presence.sandbox.id);
         if (!sandbox.success || sandbox.data !== saved.sandboxId)
           return yield* Effect.fail("held" as const);
-        // 4. Fence, then verify it whoever fenced.
-        const allocation = options.fence ? yield* fence(saved) : saved;
-        yield* fenced(allocation);
-        // 5. DELETE. The operation id is recorded before waiting, so a crash mid-wait polls it.
+        // 4. Authorize, before any fence is written: a run that is not stopping is never touched,
+        // and a VM a daemon may have run on is deleted only for a caller that holds what
+        // authorizes it. A VM no launch was ever pushed to is this removal's own to delete.
+        yield* stopping(saved);
+        const authorized = options.authorized ?? Effect.succeed(false);
+        let permitted = false;
+        if (yield* launched(saved)) {
+          permitted = yield* authorized;
+          if (!permitted) return yield* Effect.fail("held" as const);
+        }
+        // 5. Fence, then verify it. A launch issued between the check above and the fence was
+        // held by it: it is deleted only on the same authorization.
+        yield* fence(saved);
+        yield* fenced(saved);
+        if (!permitted && (yield* launched(saved)) && !(yield* authorized))
+          return yield* Effect.fail("held" as const);
+        // 6. Claim the first DELETE. Of two calls with nothing on record, one sends it.
+        const claimed = yield* claim(saved);
+        yield* Ref.set(progress, "sent");
+        if (claimed === undefined) return yield* awaitClaimant(saved);
+        // 7. DELETE. The operation id is recorded before waiting, so a crash mid-wait polls it.
         // From here on another observer may commit Boat's 404 and discharge on it at any point.
-        yield* Ref.set(sent, true);
         return yield* call(() => provider.api.deleteSandbox(sandbox.data)).pipe(
-          Effect.flatMap((operation) => follow(allocation, operation)),
-          orAbsent(allocation),
+          Effect.tapError(() => lapse(claimed)),
+          Effect.flatMap((operation) => follow(claimed, operation, progress)),
+          orAbsent(claimed),
         );
       }),
     );
 
+  /**
+   * Discharges every obligation against the committed absence alone; without one, nothing is.
+   * Boat's own deletion operation for this exact VM recorded complete is its absence, committed
+   * here first.
+   */
   const discharge = (given: BoatAllocationRecord) =>
     reporting(() =>
       Effect.gen(function* () {
         const allocation = yield* stored(given);
-        // Boat's own deletion operation for this exact VM completed: that is its absence.
         if (
           allocation.sandboxId !== null &&
           allocation.removal?.kind === "operation" &&
           allocation.removal.completed
         )
           yield* observer.deletionCompleted(allocation, allocation.sandboxId);
-        // Every obligation is discharged against the committed absence alone; without one,
-        // nothing is.
         const outcome = yield* discharger.discharge(allocation);
-        if (outcome.kind === "not-absent") return yield* Effect.fail("held" as const);
-        return outcome.kind === "discharged" ? ("removed" as const) : ("discharging" as const);
+        return outcome.kind === "not-absent"
+          ? ("present" as const)
+          : outcome.kind === "discharged"
+            ? ("removed" as const)
+            : ("discharging" as const);
       }),
     );
 
   const remove = Effect.fn("BoatRemoval.remove")(function* (
     allocation: BoatAllocationRecord,
-    options: BoatRemovalOptions,
+    options: BoatRemovalOptions = {},
   ) {
     const outcome = yield* deletion(allocation, options);
     if (outcome === "deleting") return "deleting" as const;
+    // Boat no longer has the VM: the removal is done whatever becomes of the cleanup, which the
+    // next pass retries alone. A failure from here on is never a failure to remove it, and it is
+    // what a caller that met another pass discharging the same run sees: said, never warned. A
+    // cleanup that stays undone is the convergence sweep's to report, every tick.
     return yield* discharge(allocation).pipe(
-      // Boat no longer has the VM: a failure from here on is never a refusal to remove it.
-      Effect.mapError((error) => new BoatRemovalError(error.code, true)),
+      Effect.map((discharged) =>
+        discharged === "removed" ? discharged : ("discharging" as const),
+      ),
+      Effect.catch((error) =>
+        Effect.logInfo(
+          `Boat removal · run ${allocation.input.consumer.runId}: Boat no longer has the VM, and what it held could not be discharged on this pass (${error.code}); the next pass retries it.`,
+        ).pipe(Effect.as("discharging" as const)),
+      ),
     );
   });
 
-  return BoatRemoval.of({ remove, deletion });
+  const cleanup = Effect.fn("BoatRemoval.cleanup")(function* (allocation: BoatAllocationRecord) {
+    return yield* discharge(allocation);
+  });
+
+  return BoatRemoval.of({ remove, cleanup });
 });
 
 /** Open assembly for tests that bring their own repositories, observer and provider. */

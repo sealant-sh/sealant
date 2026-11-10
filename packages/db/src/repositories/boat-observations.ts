@@ -1,9 +1,8 @@
-import { and, eq, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
+import { and, eq, isNotNull, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
 import { boatObservations, type BoatObservation } from "../schema/boat-observations.js";
-import { workspaceRuntimeInstances } from "../schema/workspace-build-jobs.js";
 
 /** Safe failure codes; no provider response is stored or echoed. */
 export class BoatObservationStoreError extends Error {
@@ -34,14 +33,13 @@ export interface BoatObservationRepoService {
   }) => Effect.Effect<BoatObservation, BoatObservationStoreError>;
   /**
    * Boat positively no longer has the VM. A `not-found` absence needs a committed observation of
-   * the VM past creation (enforced by the table); without one nothing is written. In the same
-   * transaction the Boat runtime row reads it:
-   * stopped (keeping any stop reason already chosen, `failed` otherwise) and removed. Its launch
-   * error is left as history. Idempotent; the first absence stands.
+   * the VM past creation (enforced by the table); without one nothing is written. Only the
+   * observation is written: what the run's runtime row and its capture record say of it is the
+   * shared stop and exit paths' to write, from this observation (the adapter's `inspect` answers
+   * `missing`). Idempotent; the first absence stands.
    */
   readonly recordAbsent: (input: {
     readonly runtimeInstanceId: string;
-    readonly runId: string;
     readonly deploymentId: string;
     readonly sandboxId: string | null;
     readonly basis: BoatAbsenceBasis;
@@ -158,29 +156,6 @@ const make: Effect.Effect<BoatObservationRepoService, never, SealantDB> = Effect
             row.deploymentId !== input.deploymentId
           )
             return yield* Effect.fail(new BoatObservationStoreError("target-conflict"));
-          // The runtime row is the public surface every reader already uses: it now says what Boat
-          // said. A row naming a different resource is someone else's observation and is left.
-          yield* db
-            .update(workspaceRuntimeInstances)
-            .set({
-              status: "stopped",
-              stopReason: sql`coalesce(${workspaceRuntimeInstances.stopReason}, 'failed')`,
-              finishedAt: sql`coalesce(${workspaceRuntimeInstances.finishedAt}, now())`,
-              removedAt: sql`coalesce(${workspaceRuntimeInstances.removedAt}, now())`,
-            })
-            .where(
-              and(
-                eq(workspaceRuntimeInstances.runId, input.runId),
-                eq(workspaceRuntimeInstances.adapter, "boat"),
-                input.sandboxId === null
-                  ? isNull(workspaceRuntimeInstances.resourceId)
-                  : eq(workspaceRuntimeInstances.resourceId, input.sandboxId),
-                or(
-                  ne(workspaceRuntimeInstances.status, "stopped"),
-                  isNull(workspaceRuntimeInstances.removedAt),
-                ),
-              ),
-            );
           return row;
         }),
       ),
