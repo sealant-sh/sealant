@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { DEFECTS } from "./defects.js";
 import { Transcript, dockerScenario, evidenceDir } from "./docker-scenario.js";
+import { docker } from "./docker.js";
 import { scenarios } from "./faults.js";
 import { runScenario, type Defect } from "./markers.js";
 import {
@@ -148,13 +149,17 @@ const happyPath = async () => {
 };
 
 /** Live VMs and Boat gateway objects on this host, whatever run (or none) they are labelled with. */
+const isGateway = (name: string) => name.startsWith("boat-tunnel-");
+
 const inventory = async () => {
   const owned = await stack.ownedObjects();
+  const gatewayContainers = owned.containers.filter(isGateway);
+  const gatewayNetworks = owned.networks.filter(isGateway);
   return {
     vms: stack.boat.liveSandboxes(),
-    gateways: [...owned.containers, ...owned.networks].filter((name) =>
-      name.startsWith("boat-tunnel-"),
-    ),
+    gatewayContainers,
+    gatewayNetworks,
+    gateways: [...gatewayContainers, ...gatewayNetworks],
   };
 };
 
@@ -176,7 +181,11 @@ const emptyInventory = async (): Promise<string | undefined> => {
   ).catch(() => false);
   if (empty) return undefined;
   const left = await inventory();
+  // After the leak is recorded: the VMs outside Boat's API, and this run's own (labelled) gateway
+  // objects, so one leak does not fail every later scenario's inventory too.
   for (const vm of left.vms) await stack.boat.forceRemove(vm.id);
+  if (left.gatewayContainers.length > 0) await docker(["rm", "-f", ...left.gatewayContainers]);
+  for (const network of left.gatewayNetworks) await docker(["network", "rm", network]);
   return `inventory not empty 60 s after the scenario (no marker excuses this): live VMs ${left.vms.map((vm) => `${vm.id}:${vm.state}:${vm.labels["sealant-run"] ?? "no run"}`).join(", ") || "none"}; gateway objects ${left.gateways.join(", ") || "none"}`;
 };
 
@@ -196,10 +205,15 @@ const scenario = (
       : `${name} [${defect.intermittent === true ? "intermittent" : "expected failure"} ${defect.id}: ${defect.title}]`,
     async () => {
       takeLaunched();
-      await runScenario(defect, body, async (bodyFailed) => {
+      await runScenario(defect, body, async (outcome) => {
+        // A discard is cleanup after a real failure, or under a marker whose defect leaves the
+        // launch for the owner's discard; otherwise a launch that needed one leaked.
+        const cleanup =
+          outcome.bodyFailed &&
+          (outcome.excusedBy === undefined || outcome.excusedBy.releasedByDiscard === true);
         const leaks: string[] = [];
         for (const run of takeLaunched())
-          await assertReleased(stack, run, { bodyFailed }).catch((error: unknown) => {
+          await assertReleased(stack, run, { bodyFailed: cleanup }).catch((error: unknown) => {
             leaks.push(`${run.runId}: ${error instanceof Error ? error.message : String(error)}`);
           });
         const leftOver = await emptyInventory();

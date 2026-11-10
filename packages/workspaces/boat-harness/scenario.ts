@@ -296,9 +296,27 @@ const TERMINAL: ReadonlySet<WorkspaceStatus> = new Set(["stopped", "failed"]);
  * VM and gateway are released. A launch Core keeps (`retained`) gets the owner's discard after a
  * minute, as Mend would give it, and must then release too. No marker excuses a failure here.
  */
+/** What the release checks read of the stack: its database, Docker objects and the fake Boat. */
+export type ReleaseStack = Pick<HarnessStack, "query" | "ownedObjects"> & {
+  readonly boat: {
+    readonly sandboxes: ReadonlyMap<string, Pick<FakeSandbox, "id" | "labels">>;
+    readonly events: readonly FakeBoatEvent[];
+    readonly liveSandboxes: () => ReadonlyArray<Pick<FakeSandbox, "id" | "labels" | "state">>;
+  };
+};
+
+/** What the release checks read of a launch. */
+export type ReleaseRun = Pick<Launch, "runId" | "startedAt"> & {
+  readonly workspace: {
+    readonly status: () => Promise<WorkspaceStatus>;
+    readonly stop: (options?: { readonly discardUnsaved?: boolean }) => Promise<unknown>;
+  };
+  readonly capture: { readonly state: () => Promise<Pick<CaptureState, "registers">> };
+};
+
 export const assertReleased = async (
-  stack: HarnessStack,
-  run: Launch,
+  stack: ReleaseStack,
+  run: ReleaseRun,
   options: {
     /** Give the owner's discard after a minute; false for a scenario's own release step. */
     readonly discard?: boolean;
@@ -353,7 +371,9 @@ const cleanStops = new Set<string>();
  * The owner's Stop of a ready launch. `assertReleased` then fails if the FINAL invariant did not
  * run for it, so a change to who writes the stop columns cannot make the check skip silently.
  */
-export const cleanStop = async (run: Launch): Promise<void> => {
+export const cleanStop = async (
+  run: Pick<Launch, "runId"> & { readonly workspace: Pick<ReleaseRun["workspace"], "stop"> },
+): Promise<void> => {
   cleanStops.add(run.runId);
   await run.workspace.stop();
 };
@@ -444,7 +464,10 @@ export const proxyEvidence = (stack: HarnessStack, runId: string): string => {
 };
 
 /** Core's name for a run's gateway container and networks, once the run has a bound target. */
-const gatewayName = async (stack: HarnessStack, runId: string): Promise<string | undefined> => {
+const gatewayName = async (
+  stack: Pick<HarnessStack, "query">,
+  runId: string,
+): Promise<string | undefined> => {
   const [row] = await stack.query(
     `select record->'target' as target from boat_allocations where runtime_instance_id = '${sqlText(runId)}'`,
   );
@@ -455,8 +478,8 @@ const gatewayName = async (stack: HarnessStack, runId: string): Promise<string |
 };
 
 export const leftovers = async (
-  stack: HarnessStack,
-  run: Launch,
+  stack: ReleaseStack,
+  run: Pick<Launch, "runId">,
   view: RuntimeView,
 ): Promise<string[]> => {
   const problems: string[] = [];

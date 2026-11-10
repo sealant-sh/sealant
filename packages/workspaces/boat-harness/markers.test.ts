@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { DEFECTS, PEER_PID, SLOW_CLOSE } from "./defects.js";
-import { defectMatches, expectDefect, runScenario } from "./markers.js";
+import { defectMatches, expectDefect, runScenario, type BodyOutcome } from "./markers.js";
 
 /** The runtime view the harness prints, with a readiness launch error. */
 const runtime = (extra: Record<string, unknown> = {}) =>
@@ -94,9 +94,9 @@ describe("expected-failure markers", () => {
   });
 
   it("tell the release checks whether the body threw, even when a marker excused it", async () => {
-    const seen: boolean[] = [];
-    const record = async (bodyFailed: boolean) => {
-      seen.push(bodyFailed);
+    const seen: BodyOutcome[] = [];
+    const record = async (outcome: BodyOutcome) => {
+      seen.push(outcome);
       return [];
     };
     await runScenario(undefined, async () => {}, record);
@@ -116,6 +116,10 @@ describe("expected-failure markers", () => {
         record,
       ),
     ).rejects.toThrow(/step shell/);
-    expect(seen).toEqual([false, true, true]);
+    expect(seen).toEqual([
+      { bodyFailed: false, excusedBy: undefined },
+      { bodyFailed: true, excusedBy: SLOW_CLOSE },
+      { bodyFailed: true, excusedBy: undefined },
+    ]);
   });
 });
