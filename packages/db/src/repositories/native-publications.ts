@@ -19,7 +19,7 @@ import {
   type NativePublication,
   type NativePublicationKey,
 } from "@sealant/validators";
-import { and, asc, eq, gt, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, ne, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -27,6 +27,7 @@ import { boatAllocations } from "../schema/boat-allocations.js";
 import { boatExecutions } from "../schema/boat-executions.js";
 import { boatObservations } from "../schema/boat-observations.js";
 import { boatTunnels } from "../schema/boat-tunnels.js";
+import { workspaceAttempts } from "../schema/control-plane.js";
 import {
   nativePublicationConsumers as consumers,
   nativePublications as publications,
@@ -97,6 +98,19 @@ export interface NativePublicationRepoService {
     consumer: NativeArtifactConsumer,
     publicationId: string,
   ) => Effect.Effect<void, NativeCatalogStoreError>;
+  /**
+   * Pending pins no VM can ever discharge: the run never got a Boat allocation (its native build
+   * failed or was abandoned, or it stopped first) and the run is over. Over means its runtime row
+   * is failed or stopped with no live launch lease, or it has no runtime row and its attempt
+   * failed or was cancelled. A pin with an allocation belongs to the lifecycle of that VM.
+   */
+  readonly endedUnallocatedConsumers: (input: {
+    readonly deploymentId: string;
+    readonly limit: number;
+  }) => Effect.Effect<
+    readonly { readonly consumer: NativeArtifactConsumer; readonly publicationId: string }[],
+    NativeCatalogStoreError
+  >;
   readonly candidates: (
     scope: Pick<NativePublicationKey, "deploymentId" | "scope">,
     limit: number,
@@ -796,6 +810,57 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
       markConsumer: (consumer, id, state) =>
         boundary("markConsumer", changeConsumer(consumer, id, state)),
       release: (consumer, id) => boundary("release", changeConsumer(consumer, id, "released")),
+      endedUnallocatedConsumers: (input) =>
+        boundary(
+          "endedUnallocatedConsumers",
+          db
+            .select({
+              runId: consumers.runId,
+              runtimeInstanceId: consumers.runtimeInstanceId,
+              publicationId: consumers.publicationId,
+            })
+            .from(consumers)
+            .innerJoin(publications, eq(publications.id, consumers.publicationId))
+            .leftJoin(
+              boatAllocations,
+              eq(boatAllocations.runtimeInstanceId, consumers.runtimeInstanceId),
+            )
+            .leftJoin(
+              workspaceRuntimeInstances,
+              eq(workspaceRuntimeInstances.runId, consumers.runId),
+            )
+            .leftJoin(workspaceAttempts, eq(workspaceAttempts.id, consumers.runId))
+            .where(
+              and(
+                eq(consumers.state, "pending"),
+                eq(publications.deploymentId, input.deploymentId),
+                isNull(boatAllocations.runtimeInstanceId),
+                sql`(
+                  (${workspaceRuntimeInstances.runId} is not null
+                    and ${workspaceRuntimeInstances.status} in ('failed', 'stopped')
+                    and (${workspaceRuntimeInstances.launchOwner} is null
+                      or ${workspaceRuntimeInstances.launchLeaseExpiresAt} <= now()))
+                  or (${workspaceRuntimeInstances.runId} is null
+                    and ${workspaceAttempts.status} in ('failed', 'cancelled'))
+                )`,
+              ),
+            )
+            .orderBy(asc(consumers.runId))
+            .limit(Math.max(1, Math.min(100, Math.round(input.limit))))
+            .pipe(
+              Effect.map((rows) =>
+                rows.flatMap((row) => {
+                  const consumer = nativeArtifactConsumerSchema.safeParse({
+                    runId: row.runId,
+                    runtimeInstanceId: row.runtimeInstanceId,
+                  });
+                  return consumer.success
+                    ? [{ consumer: consumer.data, publicationId: row.publicationId }]
+                    : [];
+                }),
+              ),
+            ),
+        ),
       candidates: (scope, limit, after) => boundary("candidates", candidates(scope, limit, after)),
       retire: (id, policy) => boundary("retire", retire(id, policy)),
       withdraw: (ownership) => boundary("withdraw", withdraw(ownership)),

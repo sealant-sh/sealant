@@ -3938,33 +3938,42 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
       }
     }));
 
-  it("keeps a blocked deletion pending even when the VM already reads 404, then finishes it (review of #508)", () =>
-    test(async (s) => {
-      const o = await observedLaunch(s, {
-        boat: (boat) => {
-          boat.stuckProvisioning = true;
-        },
-      });
-      try {
-        o.boat.blockDeletions = true;
-        const { owner } = await execute(s.final([], o.api, 2_000));
-        expect(await execute(owner.closeUnbound(s.input.consumer.runId, o.sandboxId))).toBe(
-          "pending",
-        );
-        expect(await execute(owner.closeUnbound(s.input.consumer.runId, o.sandboxId))).toBe(
-          "pending",
-        );
-        expect(
-          await execute(s.runtimes.getRuntimeInstanceByRunId(s.input.consumer.runId)),
-        ).toMatchObject({ removedAt: null });
-        o.boat.unblockDeletions();
-        expect(await execute(owner.closeUnbound(s.input.consumer.runId, o.sandboxId))).toBe(
-          "closed",
-        );
-      } finally {
-        await o.boat.close();
-      }
-    }));
+  it(
+    "keeps a blocked deletion pending even when the VM already reads 404, then finishes it (review of #508)",
+    () =>
+      test(async (s) => {
+        const o = await observedLaunch(s, {
+          boat: (boat) => {
+            boat.stuckProvisioning = true;
+          },
+        });
+        try {
+          o.boat.blockDeletions = true;
+          // Long enough for each close to poll the operation once (polls are 1 s apart).
+          const { owner } = await execute(s.final([], o.api, 1_100));
+          const polls = () =>
+            o.boat.requests.filter((r) => r.startsWith("GET /api/v1/deletion-operations/")).length;
+          expect(await execute(owner.closeUnbound(s.input.consumer.runId, o.sandboxId))).toBe(
+            "pending",
+          );
+          expect(await execute(owner.closeUnbound(s.input.consumer.runId, o.sandboxId))).toBe(
+            "pending",
+          );
+          // Boat was asked, and answered blocked each time; the 404 VM never stood in for completion.
+          expect(polls()).toBeGreaterThanOrEqual(2);
+          expect(
+            await execute(s.runtimes.getRuntimeInstanceByRunId(s.input.consumer.runId)),
+          ).toMatchObject({ removedAt: null });
+          o.boat.unblockDeletions();
+          expect(await execute(owner.closeUnbound(s.input.consumer.runId, o.sandboxId))).toBe(
+            "closed",
+          );
+        } finally {
+          await o.boat.close();
+        }
+      }),
+    15_000,
+  );
 
   it(
     "bounds the deletion wait even when a deletion read stalls (review of #508)",
@@ -3991,6 +4000,123 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
       }),
     15_000,
   );
+
+  it("releases the consumer pin of a launch whose native build failed, once the run is over (harness: snapshot save fails)", () =>
+    test(async (s) => {
+      // The launch pinned its publication, the build failed (no allocation was ever made), and
+      // the run ended. Nothing else holds the pin.
+      const runId = s.input.consumer.runId;
+      await execute(
+        s.runtimes.upsertRuntimeInstance({
+          runId,
+          adapter: "boat",
+          status: "pending",
+          sourceKind: "capture",
+          publication: s.input.publication,
+          imageScope: s.input.scope,
+        }),
+      );
+      await execute(holdBoatLaunch(s.db, runId));
+      const { owner } = await execute(s.final([]));
+      // While the launch is in flight its pin is its own.
+      await execute(owner.reconcile({ limit: 20 }));
+      expect((await execute(nativeConsumerRows(s.db, runId)))[0]?.state).toBe("pending");
+      await execute(
+        s.runtimes.upsertRuntimeInstance({
+          runId,
+          status: "failed",
+          releaseLaunch: true,
+          errorCode: "mechanism-failed",
+          errorMessage: "native build failed at install-recipe",
+        }),
+      );
+      await execute(owner.reconcile({ limit: 20 }));
+      expect((await execute(nativeConsumerRows(s.db, runId)))[0]?.state).toBe("released");
+      // Idempotent, and the owner's discard (a stopped run) settles the same way.
+      await execute(s.runtimes.markStopped({ runId, stopReason: "user" }));
+      await execute(owner.reconcile({ limit: 20 }));
+      expect((await execute(nativeConsumerRows(s.db, runId)))[0]?.state).toBe("released");
+    }));
+
+  it("releases the pins of launches whose publication build failed, after the owner's discard (harness: publication-build-attempts-exhausted)", () =>
+    test(async (s) => {
+      if (s.input.scope.kind !== "owner") throw new Error("expected owner scope");
+      const ownerUserId = s.input.scope.ownerUserId;
+      // An environment that has never been published, so each launch reserves its build.
+      const key = nativePublicationKeySchema.parse({
+        deploymentId: "test",
+        scope: { kind: "owner", ownerUserId },
+        recipeHash: "9".repeat(64),
+        assetsHash: "f".repeat(64),
+        platform: "linux/amd64",
+        runtime: {
+          source: `ghcr.io/sealant-sh/sealantd-next:test@sha256:${"a".repeat(64)}`,
+          platform: "linux/amd64",
+          manifest: "a".repeat(64),
+          sealantd: "b".repeat(64),
+          sealantctl: "c".repeat(64),
+        },
+      });
+      const launch = async () => {
+        const runId = randomUUID();
+        await execute(s.db.insert(workspaceAttempts).values({ id: runId, ownerUserId }));
+        const consumer = boatAllocationInputSchema.shape.consumer.parse({
+          runId,
+          runtimeInstanceId: runId,
+        });
+        const reserved = await execute(s.catalog.reserve(key, consumer));
+        return { runId, reserved };
+      };
+      const buildFails = async (publicationId: string) => {
+        const claim = await execute(s.catalog.claim(publicationId, "build", 60_000));
+        if (claim === undefined) throw new Error("no build claim");
+        // Boat's install-recipe command timed out: a retryable cause, quarantined.
+        await execute(s.catalog.quarantine(claim, "native-provider-transport_error"));
+      };
+      // The first build fails; the next launch retries it and fails too; after that every launch
+      // pins the exhausted build and fails at once.
+      const first = await launch();
+      expect(first.reserved.buildAttempt).toBe(1);
+      await buildFails(first.reserved.ownership.publicationId);
+      const second = await launch();
+      expect(second.reserved.buildAttempt).toBe(2);
+      await buildFails(second.reserved.ownership.publicationId);
+      const third = await launch();
+      expect(third.reserved.ownership.publicationId).toBe(second.reserved.ownership.publicationId);
+      expect(third.reserved.state).toBe("quarantined");
+      const runs = [first, second, third];
+      for (const { runId } of runs) {
+        await execute(
+          s.runtimes.upsertRuntimeInstance({
+            runId,
+            adapter: "boat",
+            status: "failed",
+            sourceKind: "capture",
+            imageScope: s.input.scope,
+            errorCode: "mechanism-failed",
+            errorMessage: "Native catalog: publication-build-attempts-exhausted",
+          }),
+        );
+        // The owner discards the failed launch.
+        await execute(s.runtimes.markStopped({ runId, stopReason: "user" }));
+        expect((await execute(nativeConsumerRows(s.db, runId)))[0]?.state).toBe("pending");
+      }
+      const { owner } = await execute(s.final([]));
+      await execute(owner.reconcile({ limit: 20 }));
+      for (const { runId } of runs)
+        expect((await execute(nativeConsumerRows(s.db, runId)))[0]?.state).toBe("released");
+    }));
+
+  it("leaves the pin of a run with an allocation to the lifecycle that owns that VM", () =>
+    test(async (s) => {
+      const runId = s.input.consumer.runId;
+      // The allocation exists but Boat has not been asked for a VM yet; it is not discharged.
+      await execute(s.repo.reserve(reservation(s.input)));
+      await execute(s.runtimes.upsertRuntimeInstance({ runId, adapter: "boat", status: "failed" }));
+      const { owner } = await execute(s.final([]));
+      await execute(owner.reconcile({ limit: 20 }));
+      expect((await execute(nativeConsumerRows(s.db, runId)))[0]?.state).toBe("pending");
+    }));
 });
 
 const HOUR = 60 * 60_000;
