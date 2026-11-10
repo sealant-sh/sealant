@@ -727,10 +727,17 @@ export const runHomeScriptInSession = (
 ): Effect.Effect<HomeScriptExit, SealantError> =>
   Effect.gen(function* () {
     const accepted = yield* session.exec({ executable: "sh", args: ["-c", script], stdin: true });
-    if (stdin.length > 0) {
-      yield* session.writeStdin(accepted.processId, Buffer.from(stdin, "utf8"));
-    }
-    yield* session.closeStdin(accepted.processId);
+    // A script that refuses exits before it reads stdin, and one that has read every payload can
+    // exit before the close arrives (a control connection through a hosted proxy is slow enough).
+    // The daemon then answers the write or the close with "process not found". That is not the
+    // script's failure: its exit code below is the answer.
+    const feed = Effect.gen(function* () {
+      if (stdin.length > 0) {
+        yield* session.writeStdin(accepted.processId, Buffer.from(stdin, "utf8"));
+      }
+      yield* session.closeStdin(accepted.processId);
+    });
+    yield* feed.pipe(Effect.catchTag("SealantControlError", () => Effect.void));
     const exit = yield* session.events.pipe(
       Stream.filter((event: EventEnvelope) => event.processId === accepted.processId),
       Stream.filter((event: EventEnvelope) => event.payload.case === "processExited"),
