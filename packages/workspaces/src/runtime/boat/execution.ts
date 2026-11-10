@@ -1222,6 +1222,14 @@ const make: Effect.Effect<
             service: "docker",
             exitCode: observed.services.docker.code,
             reason: observed.services.docker.reason,
+            ...(observed.services.docker.output === undefined
+              ? {}
+              : {
+                  outputTail: boatGuestOutput(
+                    observed.services.docker.output,
+                    yield* launchSecrets(record, connection),
+                  ),
+                }),
           },
           "docker",
         ),

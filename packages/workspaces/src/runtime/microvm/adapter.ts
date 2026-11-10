@@ -151,7 +151,11 @@ type MicrovmDockerFailureReason =
   | "directory-preparation-failed"
   | "readiness-timeout"
   | "exited"
-  | "probe-failed";
+  | "probe-failed"
+  // Boat's engine only (its own containerd, and a container run at readiness); the health schema
+  // is shared, so a MicroVM reading one still names it.
+  | "containerd-failed"
+  | "container-probe-failed";
 
 interface MicrovmGuestFailureDetails {
   readonly failureReason?: MicrovmDockerFailureReason | undefined;

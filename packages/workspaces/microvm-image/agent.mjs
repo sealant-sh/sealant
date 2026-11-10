@@ -177,6 +177,17 @@ const DOCKER_SERVICE_OPTIONS = {
   shutdownTimeoutMs: DOCKER_SHUTDOWN_TIMEOUT_MS,
   logPath: DOCKER_LOG,
   logMaxBytes: DOCKER_LOG_MAX_BYTES,
+  // Boat: the bundle's own containerd, never a base image's (whose PATH would find this bundle's
+  // newer shim), and readiness runs a real container. Lambda's image has no other containerd.
+  ...(BOAT
+    ? {
+        containerdPath: process.env.SEALANT_MICROVM_CONTAINERD ?? "/usr/local/bin/containerd",
+        shimPath:
+          process.env.SEALANT_MICROVM_CONTAINERD_SHIM ?? "/usr/local/bin/containerd-shim-runc-v2",
+        containerProbeInitPath:
+          process.env.SEALANT_MICROVM_DOCKER_INIT ?? "/usr/local/bin/docker-init",
+      }
+    : {}),
 };
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
 // The tail of sealantd's own output that health reports once the daemon has exited, so a failed
@@ -1134,7 +1145,12 @@ const handleLaunch = async (req, res) => {
       },
       onStateChange: (dockerHealth) => {
         if (dockerHealth.status !== "ready") boatHost?.markDockerStopped();
-        log(`docker: ${dockerHealth.status}`);
+        // The engine it is (which containerd, which socket, which versions) goes in the journal on
+        // every start, not only with a failure.
+        const engine = state.dockerService?.engine();
+        log(
+          `docker: ${dockerHealth.status}${dockerHealth.status === "failed" ? ` (${dockerHealth.reason})` : ""}${typeof engine === "string" ? `; ${engine.replaceAll("\n", "; ")}` : ""}`,
+        );
       },
     });
     state.dockerService.start();
