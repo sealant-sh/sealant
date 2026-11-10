@@ -60,7 +60,7 @@ import {
   type BoatAllocationRecord,
   type BoatExecutionTarget,
 } from "@sealant/validators";
-import { Context, Deferred, Effect, Fiber, Layer, Redacted, ManagedRuntime } from "effect";
+import { Clock, Context, Deferred, Effect, Fiber, Layer, Redacted, ManagedRuntime } from "effect";
 import * as TestClock from "effect/testing/TestClock";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -560,6 +560,37 @@ const launched = async (s: AllocationFixture) => {
   await execute(s.readiness.launch(target, Redacted.make(launchMaterial())));
   return target;
 };
+/** The agent's health while sealantd is still booting: booted, its control socket not up yet. */
+const controlSocketPending = { status: 503, body: { booted: true, controlSocket: false } };
+/** How many health observations the agent has answered. */
+const healthPolls = (s: AllocationFixture) =>
+  s.guest.actions.filter((action) => action === "health").length;
+const realPause = () => Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 5)));
+/**
+ * Launches on the test clock. A second passes each time the agent has answered a readiness poll
+ * and the launch waits for the next one, so a long wait runs at once. Says how long it took.
+ */
+const launchOnTestClock = (s: AllocationFixture, target: BoatExecutionTarget) =>
+  execute(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.now());
+      const started = yield* Clock.currentTimeMillis;
+      const fiber = yield* Effect.forkChild(
+        Effect.result(s.readiness.launch(target, Redacted.make(launchMaterial()))),
+      );
+      let answered = healthPolls(s);
+      while (fiber.pollUnsafe() === undefined) {
+        yield* realPause();
+        if (healthPolls(s) === answered) continue;
+        answered = healthPolls(s);
+        // The answer reaches the launch, which then sleeps until the next poll.
+        yield* realPause();
+        yield* TestClock.adjust("1 second");
+      }
+      const outcome = yield* Fiber.join(fiber);
+      return { outcome, elapsedMs: (yield* Clock.currentTimeMillis) - started };
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
 const linkedResource = async (s: AllocationFixture) => {
   if (s.input.scope.kind !== "owner") throw new Error("expected owner scope");
   const domainId = `rdm:${randomUUID()}`;
@@ -2321,6 +2352,82 @@ describe.runIf(databaseUrl !== undefined)(
         await expect(execute(s.readiness.observe(target))).rejects.toThrow("held");
         await expect(execute(s.readiness.launch(target, payload))).rejects.toThrow("held");
         expect(s.guest.actions).toHaveLength(before);
+      }));
+    it("waits out a VM that is not ready for a minute, longer than twenty polls, and launches", () =>
+      test(async (s) => {
+        const target = await execute(s.allocations.prepare(s.input));
+        const before = healthPolls(s);
+        let pending = 60;
+        s.guest.health = () =>
+          s.guest.starts > 0 && pending-- > 0 ? controlSocketPending : undefined;
+        const { outcome, elapsedMs } = await launchOnTestClock(s, target);
+        expect(outcome).toMatchObject({
+          _tag: "Success",
+          success: { runtimeId: "rt_fixture", handshake: "verified" },
+        });
+        expect(healthPolls(s) - before).toBe(61);
+        expect(elapsedMs).toBeGreaterThanOrEqual(60_000);
+        expect(s.guest.starts).toBe(1);
+      }));
+    it("reports the last check that did not pass when a VM never becomes ready within the budget", () =>
+      test(async (s) => {
+        const target = await execute(s.allocations.prepare(s.input));
+        const before = healthPolls(s);
+        s.guest.health = () => (s.guest.starts > 0 ? controlSocketPending : undefined);
+        const { outcome, elapsedMs } = await launchOnTestClock(s, target);
+        expect(outcome).toMatchObject({
+          _tag: "Failure",
+          failure: {
+            _tag: "BoatReadinessError",
+            code: "unavailable",
+            diagnostic: {
+              step: "readiness",
+              errorClass: "BoatExecutionError",
+              code: "agent-not-ready",
+              check: "control-socket",
+              agent: { pathClass: "/sealant/health", responseTail: "" },
+            },
+          },
+        });
+        // The wait ends 85 s into the launch, before the 120 s budget's own timeout would.
+        expect(elapsedMs).toBeGreaterThanOrEqual(85_000);
+        expect(elapsedMs).toBeLessThan(120_000);
+        expect(healthPolls(s) - before).toBeGreaterThan(60);
+        expect(s.guest.starts).toBe(1);
+      }));
+    it("stops waiting at once when the daemon exits while the VM is not ready yet", () =>
+      test(async (s) => {
+        const target = await execute(s.allocations.prepare(s.input));
+        const before = healthPolls(s);
+        let pending = 3;
+        s.guest.health = () =>
+          s.guest.starts === 0
+            ? undefined
+            : pending-- > 0
+              ? controlSocketPending
+              : {
+                  status: 503,
+                  body: {
+                    booted: true,
+                    controlSocket: false,
+                    daemonExit: { code: 1, signal: null },
+                  },
+                };
+        const { outcome, elapsedMs } = await launchOnTestClock(s, target);
+        expect(outcome).toMatchObject({
+          _tag: "Failure",
+          failure: {
+            _tag: "BoatReadinessError",
+            code: "unavailable",
+            diagnostic: {
+              step: "readiness",
+              code: "guest-failed",
+              guest: { service: "sealantd", exitCode: 1 },
+            },
+          },
+        });
+        expect(healthPolls(s) - before).toBe(4);
+        expect(elapsedMs).toBeLessThan(10_000);
       }));
     it("changed gateway custody during readiness refuses the observation", () =>
       test(async (s) => {
