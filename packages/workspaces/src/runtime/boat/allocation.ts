@@ -166,14 +166,25 @@ const make: Effect.Effect<
       // Only the winner of this transition may issue create. Redelivery after it only discovers.
       const issuedAt = new Date(yield* Clock.currentTimeMillis).toISOString();
       record = yield* repo.advance(record, { ...record, phase: "issued", issuedAt });
-      const sandbox = yield* provider("create", () =>
+      const reply = yield* Effect.tryPromise(() =>
         api.create({
           idempotencyKey: record.idempotencyKey,
           ownership,
           lifetime: { kind: "production-session" },
           from: expected.name,
         }),
-      );
+      ).pipe(Effect.orElseSucceed(() => undefined));
+      if (reply === undefined || !reply.ok) {
+        const diagnostic =
+          reply === undefined ? uncertainCreate : boatLaunchDiagnostic(reply.error, "create");
+        // A definite refusal: nothing was created. The next drive's replay records it.
+        if (reply !== undefined && createRejected(reply.error))
+          return yield* Effect.fail(new BoatAllocationError("provider-unavailable", diagnostic));
+        // Boat may have accepted it (a lost reply, a 5xx). The launch keeps its allocation: its
+        // next attempt finds the VM by label, or replays under the same key, and continues.
+        return yield* Effect.fail(new BoatAllocationError("allocation-pending", diagnostic));
+      }
+      const sandbox = reply.value;
       if (!boatAllocationMatches(record, sandbox))
         return yield* Effect.fail(new BoatAllocationError("target-mismatch"));
       record = yield* repo.advance(record, {
@@ -285,7 +296,7 @@ const make: Effect.Effect<
           return yield* Effect.fail(
             new BoatAllocationError(
               "allocation-pending",
-              replay === undefined ? undefined : boatLaunchDiagnostic(replay.error, "create"),
+              replay === undefined ? uncertainCreate : boatLaunchDiagnostic(replay.error, "create"),
             ),
           );
         sandbox = replay.value;
@@ -423,11 +434,13 @@ const make: Effect.Effect<
         while: (error) =>
           error instanceof BoatAllocationError &&
           error.code === "allocation-pending" &&
-          error.diagnostic?.step === "observe-sandbox" &&
-          (["init", "provisioning", "provisioned", "cloning"].includes(
-            error.diagnostic.sandboxState ?? "",
-          ) ||
-            error.diagnostic.hydrated === false),
+          // A create whose outcome is unknown: the next attempt discovers or replays it.
+          (error.diagnostic?.step === "create" ||
+            (error.diagnostic?.step === "observe-sandbox" &&
+              (["init", "provisioning", "provisioned", "cloning"].includes(
+                error.diagnostic.sandboxState ?? "",
+              ) ||
+                error.diagnostic.hydrated === false))),
       }),
       Effect.timeout(120_000),
       Effect.mapError((error) =>
@@ -515,6 +528,13 @@ const make: Effect.Effect<
  * How long after issuance create may be replayed under the same idempotency key: inside Boat's
  * 24-hour key retention, with an hour of margin for clock skew between Core and Boat.
  */
+/** A create whose outcome Core could not read at all. */
+const uncertainCreate: BoatLaunchDiagnostic = {
+  step: "create",
+  errorClass: "BoatAllocationError",
+  code: "allocation-pending",
+};
+
 export const BOAT_CREATE_REPLAY_WINDOW_MS = 23 * 60 * 60_000;
 
 /**
