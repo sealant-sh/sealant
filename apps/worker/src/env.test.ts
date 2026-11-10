@@ -144,11 +144,12 @@ describe("parseWorkerEnv", () => {
       SEALANT_CREDENTIALS_KEY: Buffer.alloc(32, 7).toString("base64"),
     };
     expect(parseWorkerEnv(base).SEALANT_BOAT_BUILDER_OWNER).toBe(base.SEALANT_BOAT_BUILDER_OWNER);
-    // Boat workspaces need the relay host too, and the retired endpoint is no substitute.
+    // A gateway without its relay host is half a gateway, and the retired endpoint is no
+    // substitute: the refusal names the variable that is missing.
     const { SEALANT_BOAT_GATEWAY_RELAY_HOST: _relayHost, ...unrelayed } = base;
     for (const env of [unrelayed, { ...unrelayed, SEALANT_BOAT_GATEWAY_ENDPOINT: "49.12.133.97" }])
       expect(() => parseWorkerEnv(env)).toThrow(
-        "Boat workspaces require SEALANT_BOAT_GATEWAY_RELAY_HOST",
+        "Boat resource reconciliation requires SEALANT_BOAT_GATEWAY_RELAY_HOST",
       );
     for (const key of Object.keys(base))
       expect(
@@ -156,10 +157,83 @@ describe("parseWorkerEnv", () => {
           parseWorkerEnv(Object.fromEntries(Object.entries(base).filter(([name]) => name !== key))),
         key,
       ).toThrow();
-    // Boat still runs beside the Docker resource host.
+    // With its gateway, Boat still runs beside the Docker resource host.
     expect(() => parseWorkerEnv({ ...base, DOCKER_RUNTIME_ENABLED: "false" })).toThrow(
       "Docker resource host",
     );
+  });
+  it("serves Boat workspaces from the provider and builder settings alone, with no resource gateway and no Docker host", () => {
+    const base = {
+      SEALANT_BOAT_API_KEY_FILE: "/run/secrets/boat-api-key",
+      SEALANT_BOAT_DEPLOYMENT_ID: "proof",
+      SEALANT_BOAT_BUILDER_OWNER: "11111111-2222-4333-8444-555555555555",
+      SEALANT_BOAT_STATE_DIRECTORY: "/var/lib/sealant/boat",
+      SEALANT_CREDENTIALS_KEY: Buffer.alloc(32, 7).toString("base64"),
+    };
+    const env = parseWorkerEnv(base);
+    expect(env).toMatchObject(base);
+    expect(env.SEALANT_BOAT_GATEWAY_HOST_ID).toBeUndefined();
+    expect(env.SEALANT_BOAT_GATEWAY_RELAY_HOST).toBeUndefined();
+    expect(env.SEALANT_BOAT_GATEWAY_IMAGE).toBeUndefined();
+    // The Docker host and the default runtime are the gateway's requirements, not Boat's: a
+    // worker with no Docker at all, and any other default runtime, starts.
+    for (const runtime of [
+      { DOCKER_RUNTIME_ENABLED: "false" },
+      { DOCKER_RUNTIME_ENABLED: "false", DEFAULT_RUNTIME_ADAPTER: "boat" },
+      { DEFAULT_RUNTIME_ADAPTER: "boat" },
+    ])
+      expect(parseWorkerEnv({ ...base, ...runtime })).toMatchObject({ ...base });
+    // Every provider and builder setting is still required.
+    for (const key of Object.keys(base))
+      expect(
+        () =>
+          parseWorkerEnv(Object.fromEntries(Object.entries(base).filter(([name]) => name !== key))),
+        key,
+      ).toThrow();
+  });
+  it("refuses a half-set resource gateway at start, naming the variables that are missing", () => {
+    const base = {
+      SEALANT_BOAT_API_KEY_FILE: "/run/secrets/boat-api-key",
+      SEALANT_BOAT_DEPLOYMENT_ID: "proof",
+      SEALANT_BOAT_BUILDER_OWNER: "11111111-2222-4333-8444-555555555555",
+      SEALANT_BOAT_STATE_DIRECTORY: "/var/lib/sealant/boat",
+      SEALANT_CREDENTIALS_KEY: Buffer.alloc(32, 7).toString("base64"),
+    };
+    const gateway = {
+      SEALANT_BOAT_GATEWAY_HOST_ID: "11111111-2222-4333-8444-555555555555",
+      SEALANT_BOAT_GATEWAY_RELAY_HOST: "127.0.0.1",
+      SEALANT_BOAT_GATEWAY_IMAGE: `sha256:${"a".repeat(64)}`,
+    };
+    const names = Object.keys(gateway);
+    // One or two of the three: the refusal names exactly what is not set, and nothing that is.
+    for (const set of [
+      ...names.map((name) => [name]),
+      ...names.map((name) => names.filter((other) => other !== name)),
+    ]) {
+      const missing = names.filter((name) => !set.includes(name));
+      const partial = Object.fromEntries(
+        Object.entries(gateway).filter(([name]) => set.includes(name)),
+      );
+      let message = "";
+      try {
+        parseWorkerEnv({ ...base, ...partial });
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      expect(message, set.join("+")).toContain(
+        `and ${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} not set`,
+      );
+      for (const name of missing)
+        expect(message, set.join("+")).toContain(`Boat resource reconciliation requires ${name}`);
+      for (const name of set)
+        expect(message, set.join("+")).not.toContain(
+          `Boat resource reconciliation requires ${name}`,
+        );
+      expect(message).toContain("or none of them to run Boat without a resource gateway");
+    }
+    // All three, or none, start.
+    expect(parseWorkerEnv({ ...base, ...gateway })).toMatchObject(gateway);
+    expect(parseWorkerEnv(base).SEALANT_BOAT_GATEWAY_IMAGE).toBeUndefined();
   });
 
   it("keeps legacy bind mode when Compose interpolates an unset mapping as empty", () => {
