@@ -186,7 +186,7 @@ describe("native recipe boundary", () => {
       expect(hold).toBeLessThan(script.indexOf("apt-get update"));
       expect(script).toContain('$2 == "systemd" && $3 == "installed"');
       expect(script).toContain(
-        "apt-get install -y --no-install-recommends curl xz-utils ca-certificates procps util-linux iproute2 iptables wireguard-tools",
+        "apt-get install -y --no-install-recommends curl xz-utils ca-certificates procps util-linux iproute2 iptables kmod wireguard-tools",
       );
       const unchanged =
         'test "$systemd_versions" = "$(dpkg-query -W -f=\'${binary:Package}=${Version}\\n\' "${systemd_packages[@]}")"';

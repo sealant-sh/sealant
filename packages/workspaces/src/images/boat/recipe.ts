@@ -124,7 +124,7 @@ const systemdBaseSetup = [
   "apt-get update",
   // What the agent and the workspace's network need: WireGuard to the resource gateway, iptables
   // for the DOCKER-USER policy, `unshare` (util-linux) for the daemon's PID namespace.
-  "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl xz-utils ca-certificates procps util-linux iproute2 iptables wireguard-tools",
+  "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl xz-utils ca-certificates procps util-linux iproute2 iptables kmod wireguard-tools",
   'test "$systemd_versions" = "$(dpkg-query -W -f=\'${binary:Package}=${Version}\\n\' "${systemd_packages[@]}")"',
 ];
 const systemdUnchanged =
