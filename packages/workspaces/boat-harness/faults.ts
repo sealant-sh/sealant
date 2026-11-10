@@ -80,7 +80,8 @@ const commandFault =
   (command: string, sandbox: FakeSandbox) =>
     isSession(sandbox) && pattern.test(command) ? fault : undefined;
 
-const BIND = /guest_boot\.py bind/;
+/** Core's one provider command in a session VM: the agent's bind exchange. */
+const BIND = /boat-bind\.mjs/;
 
 export const scenarios = {
   /** Run 6's class: Boat accepts create, but the reply is lost. Core must adopt the one VM. */
@@ -120,7 +121,9 @@ export const scenarios = {
             : undefined,
       },
       () =>
-        failedLaunch(stack, project, { cause: /allocation|provision|pending|lifetime|hydrat/i }),
+        failedLaunch(stack, project, {
+          cause: /allocation|provision|pending|lifetime|hydrat/i,
+        }),
     );
   },
 
@@ -128,7 +131,13 @@ export const scenarios = {
   async bindExits(stack: HarnessStack, project: Project) {
     await withFaults(
       stack,
-      { command: commandFault(BIND, { kind: "exit", code: 1, stderr: "harness: bind refused" }) },
+      {
+        command: commandFault(BIND, {
+          kind: "exit",
+          code: 1,
+          stderr: "harness: bind refused",
+        }),
+      },
       () => failedLaunch(stack, project, { cause: /bind|exchange|guest-command/i }),
     );
   },
@@ -136,7 +145,9 @@ export const scenarios = {
   /** A guest command that never finishes inside Boat's timeout. */
   async bindTimesOut(stack: HarnessStack, project: Project) {
     await withFaults(stack, { command: commandFault(BIND, { kind: "timeout" }) }, () =>
-      failedLaunch(stack, project, { cause: /bind|exchange|timed?[- ]?out|guest-command/i }),
+      failedLaunch(stack, project, {
+        cause: /bind|exchange|timed?[- ]?out|guest-command/i,
+      }),
     );
   },
 
@@ -185,29 +196,20 @@ export const scenarios = {
     );
   },
 
-  /** Run 8's class: the relay is up but the receiver never starts. */
-  async receiverAbsent(stack: HarnessStack, project: Project) {
+  /** Run 8's class, on the agent: the bind succeeded, then nothing listens on the agent's port. */
+  async agentAbsent(stack: HarnessStack, project: Project) {
     await withFaults(
       stack,
       {
-        // Run 8's state: the receiver unit is active but has no socket, and the relay is up.
-        // Stopping the unit would stop the relay too (`Requires=`), so swap its process instead.
         afterCommand: async (command, sandbox) => {
           if (!isSession(sandbox) || !BIND.test(command)) return;
-          await stack.boat.guestRoot(
-            sandbox.id,
-            [
-              "install -d /run/systemd/system/sealant-bootstrap.service.d",
-              "printf '[Service]\\nExecStart=\\nExecStart=/bin/sleep infinity\\n' > /run/systemd/system/sealant-bootstrap.service.d/boat-harness.conf",
-              "systemctl daemon-reload",
-              "systemctl restart sealant-bootstrap.service",
-              "rm -f /run/sealant-bootstrap/receiver.sock",
-              "systemctl is-active sealant-control-relay.service",
-            ].join(" && "),
-          );
+          await stack.boat.guestRoot(sandbox.id, "systemctl stop sealant-agent.service");
         },
       },
-      () => failedLaunch(stack, project, { cause: /receiver|503|status|bind/i }),
+      () =>
+        failedLaunch(stack, project, {
+          cause: /agent|502|503|not-ready|transport/i,
+        }),
     );
     // The fault must have landed: a failing hook would make this a different scenario.
     expect(stack.boat.events.filter((event) => event.kind === "fault:after-command-error")).toEqual(
@@ -215,31 +217,27 @@ export const scenarios = {
     );
   },
 
-  /** The receiver answers a permanent or transient refusal on permit. */
-  receiverRefuses: (status: 400 | 409 | 503) =>
-    async function receiverRefuses(stack: HarnessStack, project: Project) {
+  /** The agent answers the launch push with a permanent or transient refusal. */
+  agentRefuses: (status: 400 | 409 | 503) =>
+    async function agentRefuses(stack: HarnessStack, project: Project) {
       await withFaults(
         stack,
         {
           proxy: (path, method, sandbox) =>
-            isSession(sandbox) && method === "POST" && path === "/sealant/bootstrap/permit"
+            isSession(sandbox) && method === "POST" && path === "/sealant/launch"
               ? {
                   kind: "status",
                   status,
-                  body: JSON.stringify({
-                    error:
-                      status === 409
-                        ? "workspace-limits-unavailable"
-                        : status === 400
-                          ? "invalid-request"
-                          : "receiver-unavailable",
-                  }),
+                  // 409 is a typed refusal only with a reason the contract names.
+                  body: JSON.stringify(
+                    status === 409 ? { reason: "parked" } : { error: "harness-fault" },
+                  ),
                 }
               : undefined,
         },
         () =>
           failedLaunch(stack, project, {
-            cause: new RegExp(`permit[\\s\\S]*${status}|${status}[\\s\\S]*permit`),
+            cause: new RegExp(`launch[\\s\\S]*${status}|${status}[\\s\\S]*launch|agent-`),
           }),
       );
     },
@@ -266,12 +264,7 @@ export const scenarios = {
       stack,
       {
         beforeProxy: async (path, method, sandbox) => {
-          if (
-            killed ||
-            !isSession(sandbox) ||
-            method !== "POST" ||
-            path !== "/sealant/bootstrap/isolate"
-          )
+          if (killed || !isSession(sandbox) || method !== "POST" || path !== "/sealant/network")
             return;
           killed = true;
           const names = (await stack.ownedObjects()).containers.filter((name) =>
@@ -304,7 +297,10 @@ export const scenarios = {
 
   /** Run 9's preflight case: a person stopped `db`. The launch must not depend on it. */
   async resourceStopped(stack: HarnessStack, project: Project) {
-    await project.scope.instances.stop("db", { kind: "person", by: "boat harness" });
+    await project.scope.instances.stop("db", {
+      kind: "person",
+      by: "boat harness",
+    });
     try {
       await readyThenStop(stack, project);
     } finally {
@@ -351,9 +347,9 @@ export const scenarios = {
   },
 
   /**
-   * Boat's deletion stays `processing`. The launch fails at permit, after its UDP slot and
-   * publication pin are held. While Boat says `processing` the VM is not gone, so Core must keep
-   * both; once the deletion completes it must release them.
+   * Boat's deletion stays `processing`. The launch fails at the launch push, after its UDP slot
+   * and publication pin are held. While Boat says `processing` the VM is not gone, so Core must
+   * keep both; once the deletion completes it must release them.
    */
   async deletionStuck(stack: HarnessStack, project: Project) {
     let stuck: string | undefined;
@@ -361,11 +357,11 @@ export const scenarios = {
       stack,
       {
         proxy: (path, method, sandbox) =>
-          isSession(sandbox) && method === "POST" && path === "/sealant/bootstrap/permit"
+          isSession(sandbox) && method === "POST" && path === "/sealant/launch"
             ? {
                 kind: "status",
                 status: 409,
-                body: JSON.stringify({ error: "workspace-limits-unavailable" }),
+                body: JSON.stringify({ reason: "parked" }),
               }
             : undefined,
         deletion: (sandbox) => {
@@ -388,7 +384,9 @@ export const scenarios = {
         expect(held.pin).not.toBe("released");
         expect(stack.boat.liveSandboxes().some((vm) => vm.id === id)).toBe(true);
         await stack.boat.completeDeletion(id);
-        await assertSettled(stack, run, Date.now(), { terminal: ["failed", "stopped"] });
+        await assertSettled(stack, run, Date.now(), {
+          terminal: ["failed", "stopped"],
+        });
       },
     );
   },

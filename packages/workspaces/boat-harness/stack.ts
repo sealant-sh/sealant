@@ -69,6 +69,8 @@ export interface HarnessStack {
   readonly scratch: string;
   readonly network: string;
   readonly hostIp: string;
+  /** The WireGuard endpoint the guests dial: a host address of its own (see `startStack`). */
+  readonly gatewayEndpoint: string;
   readonly databaseUrl: string;
   readonly boat: FakeBoat;
   /** Opens a capture session channel (Mend's role) for one worktree, closed with the stack. */
@@ -128,7 +130,11 @@ const launchProcess = (
   env: NodeJS.ProcessEnv,
 ) => {
   const out = createWriteStream(process_.log, { flags: "a" });
-  const child = spawn("node", args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn("node", args, {
+    cwd,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   child.stdout?.pipe(out);
   child.stderr?.pipe(out);
   process_.child = child;
@@ -302,7 +308,11 @@ const makeTls = async (directory: string) => {
     "-extfile",
     ext,
   ]);
-  return { ca, key: await readFile(key, "utf8"), cert: await readFile(cert, "utf8") };
+  return {
+    ca,
+    key: await readFile(key, "utf8"),
+    cert: await readFile(cert, "utf8"),
+  };
 };
 
 export interface StackOptions {
@@ -645,16 +655,14 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
         );
       await writeFile(join(scratch, "core-rows.json"), JSON.stringify(rows, null, 1));
       for (const sandbox of boat.liveSandboxes()) {
+        // The agent's unit (sealantd's output is in it), then the guest dockerd's own log.
         const journal = await docker(
           [
             "exec",
             sandbox.container,
-            "journalctl",
-            "--no-pager",
-            "-o",
-            "short-iso",
-            "-u",
-            "sealant*",
+            "/bin/sh",
+            "-c",
+            "journalctl --no-pager -o short-iso -u 'sealant*'; echo; echo '--- /run/sealant/dockerd.stderr.log'; cat /run/sealant/dockerd.stderr.log 2>/dev/null",
           ],
           { timeoutMs: 30_000 },
         );
@@ -677,6 +685,7 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       scratch,
       network,
       hostIp,
+      gatewayEndpoint,
       databaseUrl,
       boat,
       openCapture,

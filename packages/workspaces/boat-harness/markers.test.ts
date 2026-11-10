@@ -27,16 +27,23 @@ describe("expected-failure markers", () => {
     expect(defectMatches(PEER_PID, `launch ended retained with ${runtime()}`)).toBe(false);
   });
 
-  it("hold the happy path's F3 to its ready step", () => {
+  it("hold a step-named marker to its step", () => {
+    // How F3 was held to the happy path's ready step while it was expected there.
+    const atReady = {
+      ...PEER_PID,
+      failure: /^step ready: launch ended \w+ with [^\n]*\\"step\\":\\"readiness\\"/,
+    };
     const ready = `step ready: launch ended retained with ${runtime()}${peer}`;
-    expect(defectMatches(DEFECTS.happyPath, ready)).toBe(true);
-    expect(defectMatches(DEFECTS.happyPath, `step shell: exit 1: boom${peer}`)).toBe(false);
+    expect(defectMatches(atReady, ready)).toBe(true);
+    expect(defectMatches(atReady, `step shell: exit 1: boom${peer}`)).toBe(false);
     expect(
       defectMatches(
-        DEFECTS.happyPath,
+        atReady,
         `step FINAL, deletion and release: ${terminalTimeout(runtime())}${peer}`,
       ),
     ).toBe(false);
+    // The agent has no control bridge: the happy path must pass outright.
+    expect(DEFECTS.happyPath).toBeUndefined();
   });
 
   it("let C1 excuse only the 60 s terminal timeout of a close in progress", () => {
