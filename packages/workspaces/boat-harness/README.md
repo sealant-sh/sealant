@@ -15,9 +15,11 @@ fake Boat's event log (`boat-events.json`, every provider call and guest answer 
 Core's Boat rows (`core-rows.json`) and each live twin's `sealant*` journal.
 
 It needs Docker with privileged containers, cgroup v2, kernel WireGuard (`modprobe wireguard`),
-`openssl`, and internet access for the native build (archive.ubuntu.com, nodejs.org,
-snapshot.ubuntu.com, ghcr.io). One pass takes about 25 to 40 minutes. CI runs it on pull requests
-that touch Boat code, nightly, and on demand (`.github/workflows/boat-harness.yml`).
+bridge netfilter for the workspace's own Docker (`modprobe br_netfilter`; twins share the host's
+kernel and cannot load modules), `openssl`, and internet access for the native build
+(archive.ubuntu.com, nodejs.org, snapshot.ubuntu.com, ghcr.io). One pass takes about 25 to 40
+minutes. CI runs it on pull requests that touch Boat code, nightly, and on demand
+(`.github/workflows/boat-harness.yml`).
 
 ## What is real
 

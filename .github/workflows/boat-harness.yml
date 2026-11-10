@@ -61,9 +61,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # The guest twin needs kernel WireGuard (Boat's provider `wg0`, and the guest's own tunnel).
-      - name: Kernel WireGuard
-        run: sudo modprobe wireguard && lsmod | grep -q '^wireguard'
+      # Twins share the runner's kernel and cannot load modules themselves. They need kernel
+      # WireGuard (Boat's provider `wg0`, and the guest's own tunnel) and, for the workspace's own
+      # Docker, bridge netfilter: the agent's Docker policy refuses without it (a VM loads both).
+      - name: Kernel WireGuard and bridge netfilter
+        run: |
+          sudo modprobe wireguard && lsmod | grep -q '^wireguard'
+          sudo modprobe br_netfilter && lsmod | grep -q '^br_netfilter'
 
       # A step timeout fails the step instead of cancelling the job, so the logs still upload.
       - name: Run the harness
