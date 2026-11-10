@@ -17,7 +17,6 @@ import { Transcript, dockerScenario, evidenceDir } from "./docker-scenario.js";
 import { scenarios } from "./faults.js";
 import { legacyUdpTunnel } from "./legacy-udp-scenario.js";
 import { runScenario, type Defect } from "./markers.js";
-import { parkAndResume } from "./parking-scenario.js";
 import {
   assertReleased,
   assertSettled,
@@ -242,16 +241,4 @@ describe("one fault per step", () => {
 // back to the default (carried) when it ends.
 describe("legacy UDP tunnel", () => {
   scenario("legacy UDP tunnel", undefined, () => legacyUdpTunnel(stack, project));
-});
-
-// Isolated: deleted with snapshot parking.
-// Last: it restarts the worker with automatic parking on, and back off when it ends.
-describe("parking", () => {
-  scenario(
-    "park and resume keeps the workspace's Docker images",
-    // A simulated retention (see parking-scenario.ts) steps past P1's first half to its second.
-    DEFECTS.parking,
-    () => parkAndResume(stack, project, step),
-    60 * 60_000,
-  );
 });

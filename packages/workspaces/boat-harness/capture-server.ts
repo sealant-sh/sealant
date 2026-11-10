@@ -2,13 +2,10 @@
  * Mend's capture session channel for one worktree, run in a container on the twins' network.
  * The guest dials it from inside its isolated workspace namespace, which on a firewalled host
  * cannot reach a listener on the host itself. It is Core's `capture-channel.fixture.ts` behind a
- * thin proxy on port 9100 (the endpoint the guest is given), plus harness controls on port 9000:
- *
- * - `GET /harness/state`: the channel's view, for scenario assertions;
- * - `POST /harness/uploads` `{"fail": true|false}`: answer `upload.urls` and `capture.register`
- *   with 503, so the daemon keeps its work unsent (a session Mend cannot take yet);
- * - `POST /harness/epoch` `{"epoch": n}`: the capture epoch `plan.get` answers, as Mend's lease
- *   service advances it when another executor may take the session over.
+ * thin proxy on port 9100 (the endpoint the guest is given), plus a read-only `/harness/state`
+ * view on port 9000 for scenario assertions. The proxy only observes: it records when each
+ * `capture.register` was answered and whether it carried a FINAL seal the channel recorded, so a
+ * scenario can check the FINAL was captured before Boat was asked to delete the VM.
  *
  * Env: CAPTURE_TOKEN, CAPTURE_WORKTREE_ID, CAPTURE_ADVERTISE_HOST.
  */
@@ -34,27 +31,34 @@ const channel = await startCaptureChannel({
 });
 const upstream = new URL(channel.endpoint);
 const endpoint = `http://${advertiseHost}:${PROXY_PORT}`;
-let failUploads = false;
-let refusedUploads = 0;
 
-const readBody = async (request: http.IncomingMessage): Promise<Buffer> => {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) chunks.push(Buffer.from(chunk));
-  return Buffer.concat(chunks);
+/** Every answered `capture.register`: when, which capture, and whether it sealed a FINAL. */
+const registers: Array<{ at: number; n: number | null; final: boolean; sealRecorded: boolean }> =
+  [];
+
+const finalSeal = z.looseObject({
+  manifest: z.looseObject({
+    final_seal: z.looseObject({ complete: z.boolean() }).optional(),
+  }),
+  n: z.number().optional(),
+});
+const sealAnswer = z.looseObject({ seal: z.looseObject({ state: z.string() }).optional() });
+
+const parseJson = (bytes: Buffer): unknown => {
+  try {
+    return JSON.parse(bytes.toString("utf8"));
+  } catch {
+    return undefined;
+  }
 };
 
-// Object URLs name the fixture's own port; they bypass the proxy, which only gates the calls
-// that hand them out.
+// Object URLs name the fixture's own port; they bypass the proxy. Everything else passes through
+// unchanged; a register's request and answer are buffered (small JSON) so they can be recorded.
 http
   .createServer((request, response) => {
     const path = new URL(request.url ?? "/", "http://capture.invalid").pathname;
-    if (failUploads && (path === "/upload.urls" || path === "/capture.register")) {
-      refusedUploads += 1;
-      request.resume();
-      response.writeHead(503, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ reason: "harness-uploads-unavailable" }));
-      return;
-    }
+    const watched = path === "/capture.register";
+    const sent: Buffer[] = [];
     const forwarded = http.request(
       {
         host: upstream.hostname,
@@ -65,50 +69,52 @@ http
       },
       (answer) => {
         response.writeHead(answer.statusCode ?? 502, answer.headers);
-        answer.pipe(response);
+        if (!watched) {
+          answer.pipe(response);
+          return;
+        }
+        const received: Buffer[] = [];
+        answer.on("data", (chunk: Buffer) => {
+          received.push(chunk);
+          response.write(chunk);
+        });
+        answer.on("end", () => {
+          response.end();
+          if (answer.statusCode !== 200) return;
+          const asked = finalSeal.safeParse(parseJson(Buffer.concat(sent)));
+          const told = sealAnswer.safeParse(parseJson(Buffer.concat(received)));
+          registers.push({
+            at: Date.now(),
+            n: asked.success ? (asked.data.n ?? null) : null,
+            final: asked.success && asked.data.manifest.final_seal?.complete === true,
+            sealRecorded: told.success && told.data.seal?.state === "recorded",
+          });
+        });
       },
     );
     forwarded.once("error", () => {
       if (!response.headersSent) response.writeHead(502);
       response.end();
     });
+    if (watched) request.on("data", (chunk: Buffer) => sent.push(chunk));
     request.pipe(forwarded);
   })
   .listen(PROXY_PORT, "0.0.0.0");
 
-const json = (response: http.ServerResponse, status: number, value: unknown) => {
-  response.writeHead(status, { "Content-Type": "application/json" });
-  response.end(JSON.stringify(value));
-};
-
 http
-  .createServer((request, response) => {
-    void (async () => {
-      const path = new URL(request.url ?? "/", "http://capture.invalid").pathname;
-      if (request.method === "POST" && path === "/harness/uploads") {
-        failUploads = z
-          .object({ fail: z.boolean() })
-          .parse(JSON.parse(String(await readBody(request)))).fail;
-      } else if (request.method === "POST" && path === "/harness/epoch") {
-        channel.state.epoch = z
-          .object({ epoch: z.number().int().positive() })
-          .parse(JSON.parse(String(await readBody(request)))).epoch;
-      } else if (path !== "/harness/state") {
-        json(response, 404, { reason: "not-found" });
-        return;
-      }
-      json(response, 200, {
+  .createServer((_request, response) => {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(
+      JSON.stringify({
         endpoint,
         head: channel.state.head ?? null,
         planRequests: channel.state.planRequests,
-        epoch: channel.state.epoch,
         executor: channel.state.executor ?? null,
         objects: channel.state.objects.size,
         errors: channel.state.errors.map(String),
-        failUploads,
-        refusedUploads,
-      });
-    })().catch((error: unknown) => json(response, 400, { reason: String(error) }));
+        registers,
+      }),
+    );
   })
   .listen(9000, "0.0.0.0", () => {
     process.stdout.write(`capture channel ${endpoint}\n`);

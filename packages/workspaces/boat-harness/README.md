@@ -103,15 +103,19 @@ The networking follows what the guest enforces:
 blueprint driven as the owner's person through `exec(argv, { user })`; hello-world, a build, compose
 to `db` through the tunnel, the containers' egress policy, a two-stage `npm ci` build, the VM's and
 the session's cgroup peaks, and `boat-image/vm-probe.sh` in the twin; evidence in
-`BOAT_TWIN_PROOF_DIR` when set), then one fault per step, then park and resume
-(`parking-scenario.ts`). A scenario's own steps check that the runtime row carries the exact cause,
-and that Mend sees a terminal workspace (`stopped` or `failed`, never `retained`) within 60 s
-(`assertSettled`).
+`BOAT_TWIN_PROOF_DIR` when set), then one fault per step. A scenario's own steps check that the
+runtime row carries the exact cause, and that Mend sees a terminal workspace (`stopped` or `failed`,
+never `retained`) within 60 s (`assertSettled`).
 
 Then, after every scenario and whatever it did, each launch it made must be released
 (`assertReleased`): the workspace terminal, and the UDP slot, publication pin, VM and gateway gone.
 A launch Core keeps (`retained`) gets the owner's discard after a minute, as Mend would give it, and
 must then release too. No marker excuses a failure here.
+
+Two invariants are checked in the same place, for every launch: a run never had two VMs, and a Stop
+that ended cleanly (the owner's Stop, no error, no discard) captured its FINAL before the fake Boat
+was asked to delete the VM. The capture channel's proxy records when each `capture.register` with a
+complete FINAL seal was answered; the fake Boat records its delete.
 
 A scenario that hits a known defect on main is an expected failure (`defects.ts`, `markers.ts`). A
 marker names the failure: where the scenario fails and what the runtime row says (on the happy path,
@@ -119,18 +123,6 @@ F3 must happen at the `ready` step). It can also require guest or proxy evidence
 passes only while it fails exactly that way. Any other failure fails it, and so does passing, so the
 fix's pull request removes the marker. An `intermittent` marker (C1, a timing defect) passes either
 way but still fails on any other error.
-
-Park and resume runs last, with the worker restarted with `SEALANT_BOAT_AUTOMATIC_PARKING=true` and
-the shortest delay Core accepts (300 s), and restarted with its defaults when it ends. A Docker
-session builds an image as the owner's person and leaves an edit the capture channel refuses to
-take, so its Stop keeps the VM. The worker must then park it (the agent's park, a whole-VM saved
-snapshot, the VM deleted). The owner recovers it after the capture epoch advances, and on the child
-VM the image must have the same id and run, and the edit must be unchanged. A final Stop must retire
-the snapshot. On main it stops at P1: nothing records the retention that enrolls a Boat session for
-parking. `BOAT_HARNESS_SIMULATE_RETENTION=1` writes that one value, as Core's own test helper does,
-and shows P1's second half: the Boat FINAL close keeps renewing its lease on the drain row, and the
-enrollment trigger refuses an occupied row. CI never sets it. The capture channel's harness controls
-(`capture-server.ts`: refuse uploads, set the epoch) stand in for Mend's store and lease service.
 
 Core sometimes records only an error class (`readiness` / `Error`). A failure message therefore
 carries two pieces of evidence: the guest's journal lines that name a cause, and every non-200
@@ -176,9 +168,9 @@ first, removes only with `--remove`, and never touches a live run: the one whose
 runs, including while it builds images. When a process-tree kill takes the reaper with the test
 process, the heartbeat stops within 120 s, and `cleanup.ts --remove` reaps the run and its lock.
 
-`markers.test.ts`, `reap.test.ts`, `fake-boat.test.ts` and `docker-wrapper.test.ts` cover the
-markers, the lock, the reaper, cleanup, the fake's API rules and the wrapper. They need no Docker
-and run with the package's unit tests.
+`markers.test.ts`, `invariants.test.ts`, `reap.test.ts`, `fake-boat.test.ts` and
+`docker-wrapper.test.ts` cover the markers, the invariants, the lock, the reaper, cleanup, the
+fake's API rules and the wrapper. They need no Docker and run with the package's unit tests.
 
 ## When the Ubuntu archive is unreachable
 

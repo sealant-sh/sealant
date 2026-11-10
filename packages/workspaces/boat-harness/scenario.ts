@@ -11,7 +11,8 @@ import { boatExecutionTargetSchema } from "@sealant/validators";
 import { z } from "zod";
 
 import { boatTunnelName } from "../src/resources/boat-tunnel.js";
-import type { CaptureSession, HarnessStack } from "./stack.js";
+import type { FakeBoatEvent, FakeSandbox } from "./fake-boat.js";
+import type { CaptureSession, CaptureState, HarnessStack } from "./stack.js";
 
 export const POSTGRES_IMAGE =
   "postgres:17-alpine@sha256:eee6c6e1b0894fa4fe0075eb054af9fd1cf39a35321c2d4110626cfe506411fb";
@@ -150,7 +151,10 @@ export type RuntimeView = z.infer<typeof runtimeSchema>;
 
 export const sqlText = (value: string) => value.replaceAll("'", "''");
 
-export const runtimeView = async (stack: HarnessStack, runId: string): Promise<RuntimeView> => {
+export const runtimeView = async (
+  stack: Pick<HarnessStack, "query">,
+  runId: string,
+): Promise<RuntimeView> => {
   const id = sqlText(runId);
   const [row] = await stack.query(`
     select r.status, r.error_code, left(r.error_message, 2000) as error, r.stop_reason,
@@ -303,7 +307,10 @@ export const assertReleased = async (
     const status = await run.workspace.status();
     const problems = await leftovers(stack, run, await runtimeView(stack, run.runId));
     last = { status, problems };
-    if (TERMINAL.has(status) && problems.length === 0) return;
+    if (TERMINAL.has(status) && problems.length === 0) {
+      await assertInvariants(stack, run, { discarded });
+      return;
+    }
     if (options.discard !== false && !discarded && Date.now() - started > 60_000) {
       discarded = true;
       await run.workspace.stop({ discardUnsaved: true }).catch(() => undefined);
@@ -314,6 +321,49 @@ export const assertReleased = async (
       );
     await new Promise((done) => setTimeout(done, 3000));
   }
+};
+
+/**
+ * What no Boat change may break, checked for every launch after every scenario (no marker excuses
+ * them):
+ * 1. never two VMs for one run, whatever failed or was retried;
+ * 2. a Stop that ended cleanly (the owner's Stop, no error, no discard) captured its FINAL before
+ *    the fake Boat was asked to delete the VM.
+ */
+export const assertInvariants = async (
+  stack: Pick<HarnessStack, "query"> & {
+    readonly boat: {
+      readonly sandboxes: ReadonlyMap<string, Pick<FakeSandbox, "id" | "labels">>;
+      readonly events: readonly FakeBoatEvent[];
+    };
+  },
+  run: Pick<Launch, "runId" | "startedAt"> & {
+    readonly capture: { readonly state: () => Promise<Pick<CaptureState, "registers">> };
+  },
+  options: { readonly discarded: boolean },
+): Promise<void> => {
+  const vms = [...stack.boat.sandboxes.values()].filter(
+    (sandbox) => sandbox.labels["sealant-run"] === run.runId,
+  );
+  if (vms.length > 1)
+    throw new Error(
+      `invariant broken (no marker excuses this): run ${run.runId} had ${vms.length} VMs (${vms.map((vm) => vm.id).join(", ")}); a run has at most one`,
+    );
+  const view = await runtimeView(stack, run.runId);
+  if (options.discarded || view.stop_reason !== "user" || view.error_code !== null) return;
+  const ids = new Set(vms.map((vm) => vm.id));
+  const deletedAt = stack.boat.events.find(
+    (event) => event.kind === "delete" && ids.has(event.sandboxId ?? ""),
+  )?.at;
+  if (deletedAt === undefined) return;
+  const registers = (await run.capture.state()).registers;
+  const final = registers.find(
+    (register) => register.final && register.at >= run.startedAt && register.at <= deletedAt,
+  );
+  if (final === undefined)
+    throw new Error(
+      `invariant broken (no marker excuses this): run ${run.runId} was stopped cleanly, but no FINAL was captured before Boat was asked to delete ${[...ids].join(", ")} at ${new Date(deletedAt).toISOString()}; registers ${JSON.stringify(registers.filter((register) => register.at >= run.startedAt))}`,
+    );
 };
 
 /** The guest's answers through the hosted proxy for a run's VMs, newest last. */

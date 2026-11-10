@@ -46,12 +46,19 @@ export interface CaptureState {
   readonly endpoint: string;
   readonly head: { readonly n: number; readonly capture_id: string } | null;
   readonly planRequests: number;
-  readonly epoch: number;
   readonly objects: number;
   readonly errors: readonly string[];
-  readonly failUploads: boolean;
-  /** `upload.urls` / `capture.register` calls answered 503 while uploads fail. */
-  readonly refusedUploads: number;
+  /** Every answered `capture.register`, in order (see capture-server.ts). */
+  readonly registers: readonly CaptureRegister[];
+}
+
+export interface CaptureRegister {
+  /** When the channel answered it, in ms since the epoch (same clock as the fake Boat's events). */
+  readonly at: number;
+  readonly n: number | null;
+  /** The register carried a complete FINAL seal. */
+  readonly final: boolean;
+  readonly sealRecorded: boolean;
 }
 
 /** Worker environment overrides; `undefined` removes a variable. */
@@ -63,10 +70,6 @@ export interface CaptureSession {
   readonly worktreeId: string;
   /** The channel's view: its head moves when the daemon registers a capture (e.g. FINAL). */
   readonly state: () => Promise<CaptureState>;
-  /** While true, the daemon cannot ship: its work stays unsent, as when Mend cannot take it. */
-  readonly failUploads: (fail: boolean) => Promise<void>;
-  /** Advances the capture epoch, as Mend's lease service does before another executor resumes. */
-  readonly setEpoch: (epoch: number) => Promise<void>;
 }
 
 export interface ManagedProcess {
@@ -101,8 +104,6 @@ export interface HarnessStack {
   readonly api: ManagedProcess;
   /** Runs read-only SQL in Core's database and returns its rows as JSON values. */
   readonly query: (sql: string) => Promise<unknown[]>;
-  /** Runs one SQL statement that writes. Only for a scenario's documented, opt-in simulation. */
-  readonly write: (sql: string) => Promise<void>;
   /** SIGKILLs the worker: no finalizers run, as when a host dies. */
   readonly killWorker: () => Promise<void>;
   /** Core-labelled Docker objects (resources, gateways) created since the stack started. */
@@ -544,11 +545,16 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       endpoint: z.string(),
       head: z.object({ n: z.number(), capture_id: z.string() }).nullable(),
       planRequests: z.number(),
-      epoch: z.number(),
       objects: z.number(),
       errors: z.array(z.string()),
-      failUploads: z.boolean(),
-      refusedUploads: z.number(),
+      registers: z.array(
+        z.object({
+          at: z.number(),
+          n: z.number().nullable(),
+          final: z.boolean(),
+          sealRecorded: z.boolean(),
+        }),
+      ),
     });
     const openCapture = async (worktreeId: string): Promise<CaptureSession> => {
       const token = randomBytes(24).toString("hex");
@@ -583,23 +589,7 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
         async () => (await state()).endpoint,
         60_000,
       );
-      const control = async (path: string, body: unknown) => {
-        const response = await fetch(`http://${ip}:9000${path}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        if (!response.ok)
-          throw new Error(`capture ${path}: ${response.status} ${await response.text()}`);
-      };
-      return {
-        endpoint,
-        token,
-        worktreeId,
-        state,
-        failUploads: (fail) => control("/harness/uploads", { fail }),
-        setEpoch: (epoch) => control("/harness/epoch", { epoch }),
-      };
+      return { endpoint, token, worktreeId, state };
     };
 
     // The production worker bundle with its packaged Boat assets beside it.
@@ -787,9 +777,6 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       worker,
       api,
       query,
-      write: async (sql) => {
-        await psql(sql);
-      },
       killWorker: () => stopProcess(worker, "SIGKILL"),
       ownedObjects: () => listLabelled(label),
       startWorker,
