@@ -328,7 +328,8 @@ export const assertReleased = async (
  * them):
  * 1. never two VMs for one run, whatever failed or was retried;
  * 2. a Stop that ended cleanly (the owner's Stop, no error, no discard) captured its FINAL before
- *    the fake Boat was asked to delete the VM.
+ *    the fake Boat was asked to delete the VM: Core recorded the FINAL drain complete at head h,
+ *    and the capture channel answered register h for this launch before the delete.
  */
 export const assertInvariants = async (
   stack: Pick<HarnessStack, "query"> & {
@@ -356,13 +357,26 @@ export const assertInvariants = async (
     (event) => event.kind === "delete" && ids.has(event.sandboxId ?? ""),
   )?.at;
   if (deletedAt === undefined) return;
-  const registers = (await run.capture.state()).registers;
-  const final = registers.find(
-    (register) => register.final && register.at >= run.startedAt && register.at <= deletedAt,
+  // Core's FINAL drain status names the head it captured; the channel must have answered that
+  // register for this launch before the delete. (The harness channel names no executor, so the
+  // daemon sends no `final_seal`; the head number is what ties Core's FINAL to the channel.)
+  const [drain] = await stack.query(
+    `select last_status->>'complete' as complete, (last_status->>'headN')::int as head_n from workspace_capture_drains where run_id = '${sqlText(run.runId)}'`,
   );
-  if (final === undefined)
+  const status = z
+    .object({ complete: z.string().nullable(), head_n: z.number().nullable() })
+    .optional()
+    .parse(drain);
+  const registers = (await run.capture.state()).registers.filter(
+    (register) => register.at >= run.startedAt,
+  );
+  const captured =
+    status?.complete === "true" &&
+    status.head_n !== null &&
+    registers.some((register) => register.n === status.head_n && register.at <= deletedAt);
+  if (!captured)
     throw new Error(
-      `invariant broken (no marker excuses this): run ${run.runId} was stopped cleanly, but no FINAL was captured before Boat was asked to delete ${[...ids].join(", ")} at ${new Date(deletedAt).toISOString()}; registers ${JSON.stringify(registers.filter((register) => register.at >= run.startedAt))}`,
+      `invariant broken (no marker excuses this): run ${run.runId} was stopped cleanly, but no FINAL was captured before Boat was asked to delete ${[...ids].join(", ")} at ${new Date(deletedAt).toISOString()}; Core's drain ${JSON.stringify(status ?? null)}; registers ${JSON.stringify(registers)}`,
     );
 };
 
