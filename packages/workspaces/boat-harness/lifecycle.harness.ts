@@ -12,14 +12,16 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { DEFECTS } from "./defects.js";
 import { scenarios } from "./faults.js";
-import { expectDefect, type Defect } from "./markers.js";
+import { runScenario, type Defect } from "./markers.js";
 import {
+  assertReleased,
   assertSettled,
   awaitOutcome,
   guestEvidence,
   launch,
   openProject,
   runtimeView,
+  takeLaunched,
   until,
   type Launch,
   type Project,
@@ -83,9 +85,10 @@ const happyPath = async () => {
   );
   const stoppedAt = Date.now();
   await step("Stop", () => first.workspace.stop());
-  await step("FINAL, deletion and release", () =>
-    assertSettled(stack, first, stoppedAt, { terminal: ["stopped"] }),
-  );
+  await step("FINAL, deletion and release", async () => {
+    await assertSettled(stack, first, stoppedAt, { terminal: ["stopped"] });
+    await assertReleased(stack, first, { discard: false });
+  });
   await step("FINAL captured the edit", async () => {
     expect((await first.capture.state()).head).not.toBeNull();
   });
@@ -103,15 +106,16 @@ const happyPath = async () => {
   });
   const finalAt = Date.now();
   await step("final Stop", () => resumed.workspace.stop());
-  await step("final release", () =>
-    assertSettled(stack, resumed, finalAt, { terminal: ["stopped"] }),
-  );
+  await step("final release", async () => {
+    await assertSettled(stack, resumed, finalAt, { terminal: ["stopped"] });
+    await assertReleased(stack, resumed, { discard: false });
+  });
   await step("empty inventories", () =>
     until(
       "no live VMs and no gateway objects",
       async () =>
         stack.boat.liveSandboxes().length === 0 &&
-        (await stack.coreObjects()).every((entry) => !entry.name.startsWith("boat-tunnel-"))
+        (await stack.ownedObjects()).containers.every((name) => !name.startsWith("boat-tunnel-"))
           ? true
           : undefined,
       60_000,
@@ -119,20 +123,33 @@ const happyPath = async () => {
   );
 };
 
-/** Runs a scenario as passing, or as an expected failure naming its defect. */
+/**
+ * Runs a scenario as passing, or as an expected failure naming its defect. Either way, every
+ * launch it made must then be released: a marker excuses its named step's failure, never a leak.
+ */
 const scenario = (
   name: string,
   defect: Defect | undefined,
   body: () => Promise<void>,
   timeoutMs?: number,
 ) =>
-  defect === undefined
-    ? it(name, body, timeoutMs)
-    : it(
-        `${name} [${defect.intermittent === true ? "intermittent" : "expected failure"} ${defect.id}: ${defect.title}]`,
-        () => expectDefect(defect, body),
-        timeoutMs,
-      );
+  it(
+    defect === undefined
+      ? name
+      : `${name} [${defect.intermittent === true ? "intermittent" : "expected failure"} ${defect.id}: ${defect.title}]`,
+    async () => {
+      takeLaunched();
+      await runScenario(defect, body, async () => {
+        const leaks: string[] = [];
+        for (const run of takeLaunched())
+          await assertReleased(stack, run).catch((error: unknown) => {
+            leaks.push(`${run.runId}: ${error instanceof Error ? error.message : String(error)}`);
+          });
+        return leaks;
+      });
+    },
+    timeoutMs,
+  );
 
 const fault = (
   key: keyof typeof DEFECTS.faults,

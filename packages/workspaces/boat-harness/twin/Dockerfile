@@ -28,6 +28,10 @@ RUN systemctl mask systemd-udevd.service systemd-udevd-kernel.socket systemd-ude
        systemd-resolved.service apt-daily.timer apt-daily-upgrade.timer motd-news.timer \
        systemd-timesyncd.service e2scrub_reap.service \
     && rm -f /etc/machine-id && touch /etc/machine-id
+# Boat restores its own systemd executable on a clone and rewrites .bashrc (same length).
+RUN install -d -m 0755 /var/lib/boat-twin \
+    && cp /usr/lib/systemd/systemd /var/lib/boat-twin/provider-systemd \
+    && printf '%s\n' '# boat-sandbox bx_00000000' >> /home/user/.bashrc
 COPY twin-init /usr/local/sbin/twin-init
 RUN chmod 0755 /usr/local/sbin/twin-init
 LABEL sh.sealant.boat-harness=twin-base

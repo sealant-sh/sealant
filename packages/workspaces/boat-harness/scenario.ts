@@ -99,7 +99,9 @@ export const launch = async (
     },
     30_000,
   );
-  return { workspace, capture, runId, worktreeKey, startedAt };
+  const run = { workspace, capture, runId, worktreeKey, startedAt };
+  launched.push(run);
+  return run;
 };
 
 /** Rows that say where Core thinks a launch is. Every field is nullable: absent rows read as null. */
@@ -206,11 +208,10 @@ export interface Settled {
 }
 
 /**
- * The four checks every scenario ends with:
- * 1. Mend sees a terminal workspace within 60 s of `since`;
- * 2. the runtime row carries the exact cause;
- * 3. the UDP slot and the publication pin are released;
- * 4. nothing is left behind: no live VM for this run, no gateway container or network.
+ * The checks a scenario's own step makes, which a known defect's marker may excuse:
+ * 1. the runtime row carries the exact cause;
+ * 2. Mend sees a terminal workspace within 60 s of `since`.
+ * Leaks are never excusable: `assertReleased` checks them after every scenario, marker or not.
  */
 export const assertSettled = async (
   stack: HarnessStack,
@@ -244,23 +245,45 @@ export const assertSettled = async (
       `${error instanceof Error ? error.message : String(error)}; public status ${await run.workspace.status()}; ${await evidence()}`,
     );
   });
-  // Close and its deletion polling run on the worker's 30 s sweep. Give them three sweeps.
-  await until(
-    "the UDP slot, publication pin, VM and gateway to be released",
-    async () => {
-      const current = await runtimeView(stack, run.runId);
-      const problems = await leftovers(stack, run, current);
-      return problems.length === 0 ? true : undefined;
-    },
-    120_000,
-    3000,
-  ).catch(async () => {
-    const current = await runtimeView(stack, run.runId);
-    throw new Error(
-      `left behind: ${(await leftovers(stack, run, current)).join("; ")}; runtime ${JSON.stringify(current)}`,
-    );
-  });
   return { status, view };
+};
+
+/** Every launch a scenario made, so the release checks can follow it whatever the scenario did. */
+const launched: Launch[] = [];
+
+/** The launches made since the last call. */
+export const takeLaunched = (): Launch[] => launched.splice(0);
+
+const TERMINAL: ReadonlySet<WorkspaceStatus> = new Set(["stopped", "failed"]);
+
+/**
+ * Nothing is left behind, eventually: the workspace is terminal, and the UDP slot, publication pin,
+ * VM and gateway are released. A launch Core keeps (`retained`) gets the owner's discard after a
+ * minute, as Mend would give it, and must then release too. No marker excuses a failure here.
+ */
+export const assertReleased = async (
+  stack: HarnessStack,
+  run: Launch,
+  options: { readonly discard?: boolean } = {},
+): Promise<void> => {
+  const started = Date.now();
+  let discarded = false;
+  let last = { status: "", problems: [""] };
+  for (;;) {
+    const status = await run.workspace.status();
+    const problems = await leftovers(stack, run, await runtimeView(stack, run.runId));
+    last = { status, problems };
+    if (TERMINAL.has(status) && problems.length === 0) return;
+    if (options.discard !== false && !discarded && Date.now() - started > 60_000) {
+      discarded = true;
+      await run.workspace.stop({ discardUnsaved: true }).catch(() => undefined);
+    }
+    if (Date.now() - started > 5 * 60_000)
+      throw new Error(
+        `left behind (no marker excuses this): public status ${last.status}${discarded ? " after an owner discard" : ""}; ${last.problems.join("; ") || "nothing else"}; runtime ${JSON.stringify(await runtimeView(stack, run.runId))}`,
+      );
+    await new Promise((done) => setTimeout(done, 3000));
+  }
 };
 
 /** The guest's answers through the hosted proxy for a run's VMs, newest last. */
@@ -304,14 +327,13 @@ export const leftovers = async (
   if (vms.length > 0) problems.push(`live VM ${vms.map((vm) => `${vm.id}:${vm.state}`).join(",")}`);
   // Only this run's gateway: another launch Core rightly retains keeps its own.
   const gateway = await gatewayName(stack, run.runId);
-  const objects =
-    gateway === undefined
-      ? []
-      : (await stack.coreObjects()).filter((entry) => entry.name.startsWith(gateway));
-  if (objects.length > 0)
-    problems.push(
-      `gateway objects ${objects.map((entry) => `${entry.kind}:${entry.name}`).join(",")}`,
+  if (gateway !== undefined) {
+    const owned = await stack.ownedObjects();
+    const objects = [...owned.containers, ...owned.networks].filter((name) =>
+      name.startsWith(gateway),
     );
+    if (objects.length > 0) problems.push(`gateway objects ${objects.join(",")}`);
+  }
   return problems;
 };
 

@@ -22,7 +22,7 @@ import net from "node:net";
 
 import { z } from "zod";
 
-import { HARNESS_LABEL, docker, dockerOk } from "./docker.js";
+import { HARNESS_LABEL, docker, okWith, type DockerRunner } from "./docker.js";
 
 export type SandboxState =
   | "provisioned"
@@ -116,11 +116,21 @@ export interface FakeBoatOptions {
   readonly network: string;
   /** The guest-twin base image a create without `from` boots. */
   readonly baseImage: string;
-  readonly tls: { readonly key: string; readonly cert: string };
+  /** The hosted proxy's TLS front. Without it only the plain API listens (unit tests). */
+  readonly tls?: { readonly key: string; readonly cert: string };
   /** Status the hosted proxy answers when nothing listens on the guest port. Not recorded; see README. */
   readonly closedPortStatus?: number;
   readonly pageSize?: number;
+  /** The fake's clock (idempotency retention). Defaults to `Date.now`. */
+  readonly clock?: () => number;
+  /** A trial account: Boat refuses saved snapshots with 403 (boat-runtime.md). */
+  readonly trialAccount?: boolean;
+  /** The docker CLI, for tests. */
+  readonly docker?: DockerRunner;
 }
+
+/** Boat keeps an idempotency key for 24 hours (docs/experiments/boat-provider-lifetime.md). */
+const KEY_RETENTION_MS = 24 * 60 * 60_000;
 
 const OUTPUT_LIMIT = 8 * 1024 ** 2;
 const VERBOSE = process.env.BOAT_HARNESS_VERBOSE === "1";
@@ -140,8 +150,24 @@ const createBody = z
     monitoring: z.boolean(),
     snapshots: z.boolean().optional(),
     visibility: z.literal("private").optional(),
-    labels: z.record(z.string(), z.string()),
+    // Boat's label limits: at most 20, each value at most 256 bytes.
+    labels: z
+      .record(z.string(), z.string())
+      .refine((labels) => Object.keys(labels).length <= 20, "too many labels")
+      .refine(
+        (labels) => Object.values(labels).every((value) => Buffer.byteLength(value) <= 256),
+        "label value too long",
+      ),
     from: z.string().optional(),
+  })
+  .strict();
+const resumeBody = z
+  .object({
+    type: z.literal("small"),
+    ttlSeconds: z.number().int().positive().nullable(),
+    noEnv: z.literal(true),
+    monitoring: z.boolean().optional(),
+    snapshots: z.boolean().optional(),
   })
   .strict();
 const commandBody = z
@@ -158,7 +184,9 @@ const uploadBody = z.object({ path: z.string(), ttlSeconds: z.number().int() }).
 const hostBody = z
   .object({ port: z.number().int(), public: z.boolean(), localhost: z.boolean() })
   .strict();
-const snapshotBody = z.object({ sandboxId: z.string(), name: z.string() }).strict();
+const snapshotBody = z
+  .object({ sandboxId: z.string(), name: z.string().regex(/^[a-z0-9-]{1,63}$/) })
+  .strict();
 
 interface DetachedProcess {
   readonly id: number;
@@ -167,6 +195,9 @@ interface DetachedProcess {
   readonly pidFile: string;
   stdout: string;
   stderr: string;
+  /** Output beyond 8 MiB was dropped from the front; Boat reports that. */
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
   exitCode: number | null;
   running: boolean;
 }
@@ -186,7 +217,13 @@ export class FakeBoat {
   readonly deletions = new Map<string, FakeDeletion>();
   readonly events: FakeBoatEvent[] = [];
   faults: FakeBoatFaults = {};
-  readonly #idempotency = new Map<string, { readonly body: string; readonly id: string }>();
+  readonly #idempotency = new Map<
+    string,
+    { readonly body: string; readonly id: string; readonly acceptedAt: number }
+  >();
+  readonly #docker: DockerRunner;
+  readonly #dockerOk: ReturnType<typeof okWith>;
+  readonly #clock: () => number;
   readonly #processes = new Map<number, DetachedProcess>();
   readonly #uploads = new Map<
     string,
@@ -197,7 +234,11 @@ export class FakeBoat {
   #proxy: https.Server | undefined;
   readonly #background = new Set<Promise<unknown>>();
 
-  constructor(readonly options: FakeBoatOptions) {}
+  constructor(readonly options: FakeBoatOptions) {
+    this.#docker = options.docker ?? docker;
+    this.#dockerOk = okWith(this.#docker);
+    this.#clock = options.clock ?? Date.now;
+  }
 
   get apiPort(): number {
     const address = this.#api?.address();
@@ -221,18 +262,21 @@ export class FakeBoat {
     this.#api = http.createServer((request, response) => {
       void this.#serveApi(request, response);
     });
-    this.#proxy = https.createServer(
-      { key: this.options.tls.key, cert: this.options.tls.cert },
-      (request, response) => {
+    const tls = this.options.tls;
+    if (tls !== undefined) {
+      const proxy = https.createServer({ key: tls.key, cert: tls.cert }, (request, response) => {
         void this.#serveProxy(request, response);
-      },
-    );
-    this.#proxy.on("upgrade", (request: http.IncomingMessage, socket: net.Socket, head: Buffer) => {
-      this.#upgrade(request, socket, head);
-    });
+      });
+      proxy.on("upgrade", (request: http.IncomingMessage, socket: net.Socket, head: Buffer) => {
+        this.#upgrade(request, socket, head);
+      });
+      this.#proxy = proxy;
+    }
     await Promise.all([
       new Promise<void>((done) => this.#api?.listen(0, "127.0.0.1", done)),
-      new Promise<void>((done) => this.#proxy?.listen(0, "127.0.0.1", done)),
+      new Promise<void>((done) =>
+        this.#proxy === undefined ? done() : this.#proxy.listen(0, "127.0.0.1", done),
+      ),
     ]);
   }
 
@@ -259,7 +303,7 @@ export class FakeBoat {
   /** Runs a root command in a twin, outside Boat's API, for scenario setup and fault injection. */
   async guestRoot(id: string, script: string): Promise<string> {
     const sandbox = this.#sandbox(id);
-    return dockerOk(["exec", sandbox.container, "/bin/bash", "-ceu", script], {
+    return this.#dockerOk(["exec", sandbox.container, "/bin/bash", "-ceu", script], {
       timeoutMs: 60_000,
     });
   }
@@ -337,7 +381,12 @@ export class FakeBoat {
         const key = request.headers["idempotency-key"];
         if (typeof key !== "string") throw new HttpError(400, "idempotency_key_required");
         const body = createBody.parse(json());
-        const previous = this.#idempotency.get(key);
+        const kept = this.#idempotency.get(key);
+        // After 24 hours Boat forgets the key; a replay then creates another VM.
+        const previous =
+          kept !== undefined && this.#clock() - kept.acceptedAt < KEY_RETENTION_MS
+            ? kept
+            : undefined;
         if (previous !== undefined) {
           if (previous.body !== raw.toString("utf8"))
             throw new HttpError(409, "idempotency_key_reused");
@@ -347,7 +396,11 @@ export class FakeBoat {
         }
         const fault = this.faults.create?.(body);
         const sandbox = this.#create(body, fault === "stuck");
-        this.#idempotency.set(key, { body: raw.toString("utf8"), id: sandbox.id });
+        this.#idempotency.set(key, {
+          body: raw.toString("utf8"),
+          id: sandbox.id,
+          acceptedAt: this.#clock(),
+        });
         if (fault === "lose-reply") {
           this.#record("fault:create-reply-lost", sandbox.id);
           response.destroy();
@@ -363,7 +416,8 @@ export class FakeBoat {
         if (method === "DELETE") {
           if (request.headers["x-ascii-confirm-delete"] !== id)
             throw new HttpError(400, "delete_confirmation_required");
-          return send(200, { ok: true, operation: this.#delete(this.#sandbox(id)) });
+          // Recorded: Boat accepts a deletion with 202 and an operation to poll.
+          return send(202, { ok: true, operation: this.#delete(this.#sandbox(id)) });
         }
       }
       if ((match = path.match(/^\/sandboxes\/(bx_[a-z0-9]+)\/commands$/)) && method === "POST") {
@@ -419,6 +473,8 @@ export class FakeBoat {
             exitCode: process.running ? null : process.exitCode,
             stdout: tail(process.stdout),
             stderr: tail(process.stderr),
+            ...(process.stdoutTruncated ? { stdoutTruncated: true } : {}),
+            ...(process.stderrTruncated ? { stderrTruncated: true } : {}),
           });
         if (method === "DELETE") {
           const signaled = process.running;
@@ -468,6 +524,7 @@ export class FakeBoat {
       }
       if ((match = path.match(/^\/sandboxes\/(bx_[a-z0-9]+)\/resume$/)) && method === "POST") {
         const sandbox = this.#sandbox(match[1] ?? "");
+        resumeBody.parse(json());
         sandbox.state = "provisioned";
         sandbox.stoppedAt = null;
         this.#track(this.#boot(sandbox, "resume"));
@@ -481,6 +538,8 @@ export class FakeBoat {
         if (deletion === undefined) throw new HttpError(404, "not_found");
         return send(200, { ok: true, operation: { ...deletion, kind: "sandbox" } });
       }
+      if (path === "/saved-snapshots" && method === "POST" && this.options.trialAccount === true)
+        throw new HttpError(403, "trial_saved_snapshots_not_allowed");
       if (path === "/saved-snapshots" && method === "POST")
         return send(202, { ok: true, snapshot: this.#save(snapshotBody.parse(json())) });
       if (path === "/saved-snapshots" && method === "GET") {
@@ -506,7 +565,7 @@ export class FakeBoat {
           return send(200, { ok: true, snapshot: this.#snapshotView(snapshot) });
         if (method === "DELETE") {
           this.snapshots.delete(snapshot.name);
-          await docker(["image", "rm", "-f", snapshot.image]);
+          await this.#docker(["image", "rm", "-f", snapshot.image]);
           this.#record("snapshot-deleted", snapshot.sourceSandboxId, snapshot.name);
           return send(200, { ok: true, name: snapshot.name, status: "deleted" });
         }
@@ -584,7 +643,7 @@ export class FakeBoat {
       this.#record("fault:provisioning-stuck", sandbox.id);
       return;
     }
-    await dockerOk([
+    await this.#dockerOk([
       "run",
       "-d",
       "--name",
@@ -610,13 +669,16 @@ export class FakeBoat {
   }
 
   async #boot(sandbox: FakeSandbox, reason: "create" | "resume") {
-    if (reason === "resume") await dockerOk(["start", sandbox.container]);
+    if (reason === "resume") await this.#dockerOk(["start", sandbox.container]);
     const deadline = Date.now() + 90_000;
     for (;;) {
       if (sandbox.removed || sandbox.deletion !== undefined) return;
-      const state = await docker(["exec", sandbox.container, "systemctl", "is-system-running"], {
-        timeoutMs: 10_000,
-      });
+      const state = await this.#docker(
+        ["exec", sandbox.container, "systemctl", "is-system-running"],
+        {
+          timeoutMs: 10_000,
+        },
+      );
       const value = state.stdout.trim();
       if (value === "running" || value === "degraded") break;
       if (Date.now() > deadline) {
@@ -626,8 +688,20 @@ export class FakeBoat {
       }
       await delay(250);
     }
+    // What Boat does to a VM cloned from a saved snapshot before anyone can reach it
+    // (docs/experiments/boat-native-guest-startup.md): it restores its own systemd executable and
+    // rewrites the base .bashrc to different bytes of the same length (here, the sandbox ID).
+    if (reason === "create" && sandbox.image !== this.options.baseImage)
+      await this.#dockerOk([
+        "exec",
+        sandbox.container,
+        "/bin/sh",
+        "-c",
+        "cp --remove-destination /var/lib/boat-twin/provider-systemd /usr/lib/systemd/systemd && " +
+          `sed -i 's/^# boat-sandbox bx_[a-z0-9]\\{8\\}$/# boat-sandbox ${sandbox.id}/' /home/user/.bashrc`,
+      ]);
     sandbox.ip = (
-      await dockerOk([
+      await this.#dockerOk([
         "inspect",
         "-f",
         `{{(index .NetworkSettings.Networks "${this.options.network}").IPAddress}}`,
@@ -640,7 +714,7 @@ export class FakeBoat {
   }
 
   async #archive(sandbox: FakeSandbox) {
-    await docker(["stop", "-t", "10", sandbox.container]);
+    await this.#docker(["stop", "-t", "10", sandbox.container]);
     sandbox.state = "archived";
     sandbox.stoppedAt = now();
     sandbox.ip = undefined;
@@ -668,7 +742,7 @@ export class FakeBoat {
         }
         for (const process of this.#processes.values())
           if (process.sandboxId === sandbox.id && process.running) process.child.kill("SIGKILL");
-        await docker(["rm", "-f", "-v", sandbox.container]);
+        await this.#docker(["rm", "-f", "-v", sandbox.container]);
         await delay(100);
         sandbox.removed = true;
         sandbox.ip = undefined;
@@ -683,7 +757,7 @@ export class FakeBoat {
   async completeDeletion(id: string): Promise<void> {
     const sandbox = this.sandboxes.get(id);
     if (sandbox?.deletion === undefined) return;
-    await docker(["rm", "-f", "-v", sandbox.container]);
+    await this.#docker(["rm", "-f", "-v", sandbox.container]);
     sandbox.removed = true;
     sandbox.deletion.status = "completed";
   }
@@ -710,7 +784,7 @@ export class FakeBoat {
           this.#record("fault:snapshot-failed", sandbox.id, snapshot.name);
           return;
         }
-        await dockerOk([
+        await this.#dockerOk([
           "commit",
           "--change",
           `LABEL ${HARNESS_LABEL}=${this.options.runId}`,
@@ -773,7 +847,7 @@ export class FakeBoat {
   }
 
   async #exec(sandbox: FakeSandbox, command: string, timeoutSeconds: number) {
-    const result = await docker(this.#execArgs(sandbox, command, timeoutSeconds), {
+    const result = await this.#docker(this.#execArgs(sandbox, command, timeoutSeconds), {
       timeoutMs: (timeoutSeconds + 10) * 1000,
     });
     const timedOut = result.timedOut || result.code === 124 || result.code === 137;
@@ -866,14 +940,20 @@ export class FakeBoat {
       pidFile,
       stdout: "",
       stderr: "",
+      stdoutTruncated: false,
+      stderrTruncated: false,
       exitCode: null,
       running: true,
     };
     child.stdout?.on("data", (chunk: Buffer) => {
-      process.stdout = tail(process.stdout + chunk.toString("utf8"));
+      const next = process.stdout + chunk.toString("utf8");
+      if (Buffer.byteLength(next) > OUTPUT_LIMIT) process.stdoutTruncated = true;
+      process.stdout = tail(next);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
-      process.stderr = tail(process.stderr + chunk.toString("utf8"));
+      const next = process.stderr + chunk.toString("utf8");
+      if (Buffer.byteLength(next) > OUTPUT_LIMIT) process.stderrTruncated = true;
+      process.stderr = tail(next);
     });
     const after = this.faults.afterCommand;
     child.once("close", (code) => {
@@ -896,7 +976,7 @@ export class FakeBoat {
   async #killDetached(process: DetachedProcess) {
     const sandbox = this.sandboxes.get(process.sandboxId);
     if (sandbox !== undefined)
-      await docker([
+      await this.#docker([
         "exec",
         sandbox.container,
         "/bin/sh",
@@ -907,7 +987,7 @@ export class FakeBoat {
   }
 
   async #writeGuestFile(sandbox: FakeSandbox, path: string, bytes: Buffer) {
-    const result = await docker(
+    const result = await this.#docker(
       [
         "exec",
         "-i",
