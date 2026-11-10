@@ -824,7 +824,13 @@ export const workerServerEnvSchema = databaseEnvSchema
      * as the worker sees it: `127.0.0.1` on the host itself). Set, the worker carries each tunnel
      * over the agent's HTTPS WebSocket, so no Boat VM dials `SEALANT_BOAT_GATEWAY_ENDPOINT`.
      */
-    SEALANT_BOAT_GATEWAY_RELAY_HOST: z.ipv4().optional(),
+    SEALANT_BOAT_GATEWAY_RELAY_HOST: z
+      .ipv4()
+      .refine((value) => value !== "0.0.0.0", {
+        message:
+          "SEALANT_BOAT_GATEWAY_RELAY_HOST must be the one address the worker reaches the gateways at, not 0.0.0.0: the gateway port is published on it.",
+      })
+      .optional(),
     SEALANT_BOAT_GATEWAY_IMAGE: z
       .string()
       .regex(/^(?:[a-z0-9./:_-]+@)?sha256:[a-f0-9]{64}$/)
@@ -841,14 +847,27 @@ export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) =>
       message:
         "Boat credentials require exactly one of SEALANT_BOAT_API_KEY and SEALANT_BOAT_API_KEY_FILE.",
     });
+  // A relay host carries every tunnel over HTTPS: no public endpoint is needed then.
   const gatewayKeys = [
     "SEALANT_BOAT_GATEWAY_HOST_ID",
     "SEALANT_BOAT_GATEWAY_ENDPOINT",
+    "SEALANT_BOAT_GATEWAY_RELAY_HOST",
     "SEALANT_BOAT_GATEWAY_IMAGE",
   ] as const;
+  const reachable =
+    input.SEALANT_BOAT_GATEWAY_ENDPOINT !== undefined ||
+    input.SEALANT_BOAT_GATEWAY_RELAY_HOST !== undefined;
   if (gatewayKeys.some((key) => input[key] !== undefined)) {
+    if (!reachable)
+      ctx.addIssue({
+        code: "custom",
+        path: ["SEALANT_BOAT_GATEWAY_RELAY_HOST"],
+        message:
+          "Boat resource reconciliation requires SEALANT_BOAT_GATEWAY_RELAY_HOST (tunnels carried over HTTPS) or SEALANT_BOAT_GATEWAY_ENDPOINT (VMs dial it over UDP).",
+      });
     for (const key of [
-      ...gatewayKeys,
+      "SEALANT_BOAT_GATEWAY_HOST_ID",
+      "SEALANT_BOAT_GATEWAY_IMAGE",
       "SEALANT_BOAT_DEPLOYMENT_ID",
       "SEALANT_CREDENTIALS_KEY",
     ] as const) {
@@ -892,10 +911,16 @@ export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) =>
     }
   }
   if (input.SEALANT_BOAT_ADMISSION_OWNER_IDS.length > 0) {
+    if (!reachable)
+      ctx.addIssue({
+        code: "custom",
+        path: ["SEALANT_BOAT_GATEWAY_RELAY_HOST"],
+        message:
+          "Boat admission requires SEALANT_BOAT_GATEWAY_RELAY_HOST or SEALANT_BOAT_GATEWAY_ENDPOINT.",
+      });
     for (const key of [
       "SEALANT_BOAT_DEPLOYMENT_ID",
       "SEALANT_BOAT_GATEWAY_HOST_ID",
-      "SEALANT_BOAT_GATEWAY_ENDPOINT",
       "SEALANT_BOAT_GATEWAY_IMAGE",
       "SEALANT_BOAT_BUILDER_OWNER",
       "SEALANT_BOAT_STATE_DIRECTORY",

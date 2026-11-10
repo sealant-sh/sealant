@@ -297,6 +297,19 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         tunnel: { sentBytes: 444, receivedBytes: 0 },
       });
       expect(boatLaunchSummary(silent)).toContain('"tunnel":{"sentBytes":444,"receivedBytes":0}');
+      // Carried over HTTPS: the diagnostic also says whether Core's end was attached.
+      guest.request = async (...args) =>
+        tunnel({
+          configured: true,
+          handshake: "unverified",
+          dns: "unavailable",
+          docker_policy: "absent",
+          carriers: ["udp", "websocket"],
+          carrier_attached: false,
+        })(args[2]) ?? original(...args);
+      expect(
+        boatLaunchDiagnostic(await execute(Effect.flip(executor.readiness(target))), "readiness"),
+      ).toMatchObject({ check: "handshake", tunnel: { carrierAttached: false } });
       guest.request = async (...args) =>
         tunnel({
           configured: true,
@@ -553,6 +566,19 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       expect(carried).toMatchObject({ carrier: "websocket", subnet: "10.98.0.32/27" });
       expect(carried).not.toHaveProperty("endpoint");
       expect(carried).not.toHaveProperty("port");
+      // No public endpoint (every tunnel carried) and an agent that cannot carry it: typed, and
+      // nothing is sent to the agent.
+      guest.request = original;
+      const before = guest.networkBodies.length;
+      const { endpoint: _endpoint, ...carriedOnly } = input.network;
+      const refused = await execute(
+        Effect.flip(executor.isolate(target, { ...input, network: carriedOnly })),
+      );
+      expect(refused).toBeInstanceOf(BoatExecutionError);
+      expect(boatLaunchDiagnostic(refused, "readiness")).toMatchObject({
+        code: "carrier-unavailable",
+      });
+      expect(guest.networkBodies).toHaveLength(before);
       // Core's end connects to the agent's carrier route with the control token and hosted cookie.
       const connection = Redacted.value(await execute(executor.tunnel(target)));
       expect(connection.url).toMatch(/^wss:\/\/.+\/sealant\/tunnel$/);

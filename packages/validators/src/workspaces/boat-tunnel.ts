@@ -31,7 +31,8 @@ export type BoatTunnelMaterial = z.infer<typeof boatTunnelMaterialSchema>;
 export const boatNetworkIntentSchema = z.strictObject({
   epoch: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   operationId: z.uuid(),
-  endpoint: z.ipv4(),
+  /** The gateway's public address a VM dials; absent when every tunnel is carried over HTTPS. */
+  endpoint: z.ipv4().optional(),
   subnet: z
     .string()
     .regex(/^[0-9.]+\/27$/)
