@@ -97,7 +97,7 @@ export const DEFECTS = {
   faults: {
     "bind slower than one sweep period": PEER_PID,
     "create reply lost": ISSUED_ALLOCATION,
-    "provisioning never finishes": DELETED_VM_KEPT,
+    "provisioning never finishes": firstOf(DELETED_VM_KEPT, SLOW_CLOSE),
     "bind exits 1": SLOW_CLOSE,
     "bind times out": SLOW_CLOSE,
     "bind start reply lost": SLOW_CLOSE,
