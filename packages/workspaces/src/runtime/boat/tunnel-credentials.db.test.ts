@@ -168,17 +168,12 @@ describe("WireGuard key boundary", () => {
 
 describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
   it("freezes setup on legacy reservations and rejects every changed network field without releasing custody", () =>
-    test(async ({ seed, owner, repo, executions }) => {
+    test(async ({ seed, owner, repo, executions, db }) => {
       const binding = await seed();
       await execute(owner.prepare(binding));
       const before = requireRecord(await execute(repo.get(binding.target.runId)));
       expect(before.network).toBeUndefined();
-      const network = {
-        epoch: 1,
-        operationId: randomUUID(),
-        endpoint: "10.0.0.41",
-        subnet: "10.98.0.32/27",
-      };
+      const network = { epoch: 1, operationId: randomUUID(), subnet: "10.98.0.32/27" };
       await expect(execute(repo.configure(before, network))).rejects.toThrow(
         "execution-unavailable",
       );
@@ -206,13 +201,22 @@ describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
       for (const changed of [
         { epoch: 2 },
         { operationId: randomUUID() },
-        { endpoint: "10.0.0.42" },
         { subnet: "10.98.0.64/27" },
       ])
         await expect(execute(repo.configure(saved, { ...network, ...changed }))).rejects.toThrow(
           "binding-conflict",
         );
       expect(await execute(repo.get(binding.target.runId))).toEqual(saved);
+      // A reservation frozen before the upgrade may record the address its VM dialled. It still
+      // parses, the same intent still matches it, and the record is kept as it was written.
+      const dialled = { ...saved, network: { ...network, endpoint: "10.0.0.41" } };
+      await execute(corruptBoatTunnel(db, binding.target.runId, dialled));
+      expect(await execute(repo.configure(dialled, network))).toEqual(dialled);
+      expect(await execute(repo.get(binding.target.runId))).toEqual(dialled);
+      for (const changed of [{ epoch: 2 }, { subnet: "10.98.0.64/27" }])
+        await expect(execute(repo.configure(dialled, { ...network, ...changed }))).rejects.toThrow(
+          "binding-conflict",
+        );
     }));
   it("serializes active host mutations and fences later dispatch on close", () =>
     test(async ({ seed, owner, repo, executions }) => {
@@ -231,7 +235,6 @@ describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
       const network = {
         epoch: admission.epoch,
         operationId: admission.operationId,
-        endpoint: "10.0.0.41",
         subnet: "10.98.0.32/27",
       };
       const initial = await execute(

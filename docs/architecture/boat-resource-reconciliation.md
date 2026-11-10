@@ -48,36 +48,39 @@ stays for canonical FINAL cleanup. Nothing here expires or recycles UDP slots.
 ## Worker configuration and bounds
 
 Allocation-only configuration continues to work. Resource reconciliation additionally requires
-`SEALANT_BOAT_GATEWAY_HOST_ID`, `SEALANT_BOAT_GATEWAY_IMAGE`, and `SEALANT_BOAT_GATEWAY_RELAY_HOST`
-or `SEALANT_BOAT_GATEWAY_ENDPOINT` (or both). The host ID is an operator-owned stable UUID shared
-across deployments on that physical Docker host. The endpoint is the numeric IPv4 reachable from
-Boat, and the image must be a locally available immutable digest. Partial configuration, a mutable
-image tag or a non-Docker resource host refuses worker startup. No credential discovery or network
+`SEALANT_BOAT_GATEWAY_HOST_ID`, `SEALANT_BOAT_GATEWAY_IMAGE` and `SEALANT_BOAT_GATEWAY_RELAY_HOST`,
+all three or none. The host ID is an operator-owned stable UUID shared across deployments on that
+physical Docker host, and the image must be a locally available immutable digest. Partial
+configuration, a mutable image tag or a non-Docker resource host refuses worker startup; a gateway
+without its relay host is refused by that variable's name. No credential discovery or network
 configuration is inferred from the worker's container.
 
-`SEALANT_BOAT_GATEWAY_RELAY_HOST` (optional, IPv4) carries every tunnel over HTTPS instead. It is
-the address at which the worker reaches the gateways' published WireGuard ports: `127.0.0.1` when
-the worker runs on the Docker host, or the host's address as a worker container sees it. Set, a
-network setup asks the agent for `carrier: "websocket"` when the agent lists that carrier, and the
-worker keeps one WebSocket per carried run open to the agent's `/sealant/tunnel` through Boat's
-hosted HTTPS, relaying each WireGuard datagram to the gateway's port. So no Boat VM dials the
-endpoint, and the host needs no inbound UDP. Every reconcile pass ensures the carrier again, so a
-restarted worker or a dropped connection reopens it. WireGuard re-handshakes on its 25 s keepalive.
-A run that is closed or held releases its carrier. An agent that lists no carriers (an older image)
-still dials the endpoint over UDP. One worker carries a run: a second carrier for the same run
-replaces the first, which holds off for five minutes before it tries again.
+`SEALANT_BOAT_GATEWAY_RELAY_HOST` (IPv4, never `0.0.0.0`) is the address at which the worker reaches
+the gateways' published WireGuard ports: `127.0.0.1` when the worker runs on the Docker host, or the
+host's address as a worker container sees it. Every tunnel is carried over HTTPS: a network setup
+sends the agent `carrier: "websocket"`, and the worker keeps one WebSocket per run open to the
+agent's `/sealant/tunnel` through Boat's hosted HTTPS, relaying each WireGuard datagram to the
+gateway's port. No Boat VM dials the gateway's host, and that host needs no inbound port and no
+firewall rule, as a MicroVM deployment needs none. Every reconcile pass ensures the carrier again,
+so a restarted worker or a dropped connection reopens it. WireGuard re-handshakes on its 25 s
+keepalive. A run that is closed or held releases its carrier. One worker carries a run: a second
+carrier for the same run replaces the first, which holds off for five minutes before it tries again.
 
-With a relay host, `SEALANT_BOAT_GATEWAY_ENDPOINT` may be left unset: every tunnel is then carried,
-as a MicroVM needs no inbound port either. The gateway publishes its WireGuard port on the relay
-host's address only, never on a public interface. A VM whose agent cannot carry the tunnel (an image
-built before the carrier) is refused at network setup with `carrier-unavailable`, rather than given
-an endpoint nobody can reach. Set both to serve older images and newer ones together: the port is
-then published on every interface for the older ones to dial.
+The gateway publishes its WireGuard port on the relay host's address only, never on a public
+interface. A VM whose agent cannot carry the tunnel (an image built before the carrier) is refused
+at network setup with `carrier-unavailable`: there is no gateway address for it to dial.
+
+`SEALANT_BOAT_GATEWAY_ENDPOINT`, the public address VMs once dialled over UDP, is retired. A
+deployment that still sets it starts, and it is not read. A session started before the upgrade keeps
+what it has until it stops: a gateway whose port was published on every interface is adopted as it
+is, and a reservation that recorded the dialled address is reconciled without it. No new gateway is
+published that way.
 
 The relay address decides who can reach the gateway port: `0.0.0.0` is refused, and a routable
-address publishes the port there. Change either setting only with no live Boat sessions. A run
-started under one network intent is held if a later worker gives it another (for example, dropping
-the endpoint), and its resources stay unreachable until the session is launched again.
+address publishes the port there. Change it only with no live Boat sessions: a gateway is labelled
+with the address its port was published on, one published elsewhere is refused
+(`ownership-conflict`) and never republished, and that run's resources stay unreachable until the
+session is launched again. Removing the retired endpoint setting changes nothing for a live run.
 
 The worker shares its resource runtime and subnet store with the gateway. One managed runtime owns
 the existing sealed execution service and both reconcilers, and is disposed at shutdown. The
@@ -94,14 +97,14 @@ resolver or cleanup authority is introduced.
 ## Verification and next gate
 
 Migrated PostgreSQL tests cover additive setup intent, exact replay, rebuilt service adoption, lost
-replies, changed targets and endpoints, stopped-run fencing, unlinks, idle accounting and cursor
-progress. The real Docker/WireGuard proof checks that ordinary convergence preserves both a live
-Boat gateway and an uncreated reservation; it continues to prove encrypted resource and DNS reach,
-wrong-peer denial, relinking and exact cleanup. Its Docker inventory is restricted to owned objects.
-The agent's network setup is proven in `agent-boat.test.ts` and `agent-transport.test.ts`.
+replies, changed targets, stopped-run fencing, unlinks, idle accounting and cursor progress. The
+real Docker/WireGuard proof checks that ordinary convergence preserves both a live Boat gateway and
+an uncreated reservation; it continues to prove encrypted resource and DNS reach, wrong-peer denial,
+relinking and exact cleanup. Its Docker inventory is restricted to owned objects. The agent's
+network setup is proven in `agent-boat.test.ts` and `agent-transport.test.ts`.
 
 This layer needs no Boat allocation or VM 131 session to validate its scoped behavior. Authenticated
 readiness is next. Its first end-to-end Boat session on VM 131 needs Yiannis's approval for the
-tailnet join, Funnel on 443/8443/10000 and host UDP DNAT on 40000-40015. No box changes are made
-here. FINAL close and recovery follow. The shipped-only boot guard and base-matching systemd holds
-remain unchanged.
+tailnet join and Funnel on 443/8443/10000 (the tunnel is carried over HTTPS, so no UDP is forwarded
+to the gateway's host). No box changes are made here. FINAL close and recovery follow. The
+shipped-only boot guard and base-matching systemd holds remain unchanged.

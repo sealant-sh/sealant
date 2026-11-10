@@ -222,13 +222,3 @@ export const makeBoatTunnelCarrierLayer = (
       return BoatTunnelCarrier.of({ ensure, release, attached });
     }),
   );
-
-/** The carrier for a worker that does not carry tunnels: every call is a no-op. */
-export const boatTunnelCarrierAbsent: Layer.Layer<BoatTunnelCarrier> = Layer.succeed(
-  BoatTunnelCarrier,
-  BoatTunnelCarrier.of({
-    ensure: () => Effect.void,
-    release: () => Effect.void,
-    attached: () => Effect.succeed(false),
-  }),
-);

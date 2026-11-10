@@ -31,7 +31,11 @@ export type BoatTunnelMaterial = z.infer<typeof boatTunnelMaterialSchema>;
 export const boatNetworkIntentSchema = z.strictObject({
   epoch: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   operationId: z.uuid(),
-  /** The gateway's public address a VM dials; absent when every tunnel is carried over HTTPS. */
+  /**
+   * The gateway's public address a VM dialled, from when a tunnel could be dialled over UDP.
+   * Never written now and never read: it is kept so a reservation made before the upgrade still
+   * parses, and its run can still be reconciled and closed.
+   */
   endpoint: z.ipv4().optional(),
   subnet: z
     .string()

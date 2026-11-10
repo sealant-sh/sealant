@@ -15,8 +15,8 @@ import { spawn } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import dgram from "node:dgram";
 import { on, once } from "node:events";
-import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
-import { chmod, mkdir, open, readFile, rename, symlink, unlink, writeFile } from "node:fs/promises";
+import { existsSync, lstatSync, readFileSync, readlinkSync } from "node:fs";
+import { chmod, mkdir, open, rename, symlink, unlink } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 
@@ -26,8 +26,6 @@ export const BIND_RECORD_FORMAT = "sealant-agent-bind-v1";
 export const ARM_RECORD_FORMAT = "sealant-agent-arm-v1";
 export const LAUNCH_RECORD_FORMAT = "sealant-agent-launch-v1";
 export const LAUNCH_ENV_RECORD_FORMAT = "sealant-agent-launch-env-v1";
-export const PARK_REQUEST_FORMAT = "sealant-agent-park-v1";
-export const PARK_RECEIPT_FORMAT = "sealant-agent-park-receipt-v1";
 export const NETWORK_REQUEST_FORMAT = "sealant-guest-network-v1";
 export const NETWORK_STATUS_FORMAT = "sealant-guest-network-status-v1";
 export const NETWORK_RECORD_FORMAT = "sealant-agent-network-v1";
@@ -44,26 +42,6 @@ const WIREGUARD_MTU = "1380";
 // The VM resolves through the agent's own forwarder on the tunnel address (`createResolver`):
 // the gateway first (resource names), then the VM's own resolvers (every other name).
 const RESOLV_CONF_BYTES = `nameserver ${CLIENT}\noptions timeout:3 attempts:2\n`;
-/** `guest_network.DENIED`: what a container may never reach, in this order. */
-/** Docker's own networks (`--bip` and `--default-address-pool`, set by the Boat image). */
-export const DOCKER_NETWORKS = ["198.18.1.0/24", "198.19.0.0/16"];
-
-export const DENIED = [
-  "0.0.0.0/8",
-  "10.0.0.0/8",
-  "100.64.0.0/10",
-  "127.0.0.0/8",
-  "169.254.0.0/16",
-  "172.16.0.0/12",
-  "192.0.0.0/24",
-  "192.0.2.0/24",
-  "192.168.0.0/16",
-  "198.18.0.0/15",
-  "198.51.100.0/24",
-  "203.0.113.0/24",
-  "224.0.0.0/4",
-  "240.0.0.0/4",
-];
 const RFC1918 = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"];
 const COMMAND_TIMEOUT_MS = 5_000;
 const DNS_TIMEOUT_MS = 2_000;
@@ -75,7 +53,7 @@ const GATEWAY_MISS_RCODES = new Set([2, 3, 4, 5]);
 const MAX_UDP_QUERY_BYTES = 4096;
 const MAX_DNS_IN_FLIGHT = 256;
 const MAX_DNS_TCP_CONNECTIONS = 64;
-/** How long a park or recovery waits for a killed daemon scope to be proved gone. */
+/** How long a recovery waits for a killed daemon scope to be proved gone. */
 const SCOPE_KILL_TIMEOUT_MS = 5_000;
 
 // --------------------------------------------------------------------------------------------
@@ -105,30 +83,7 @@ export const boatPaths = (env = process.env) => {
     networkFile: path.join(dataDir, "network.json"),
     resolvConfOriginal: path.join(dataDir, "resolv.conf.orig"),
     resolvConf: env.SEALANT_AGENT_RESOLV_CONF ?? "/etc/resolv.conf",
-    parkReceipt: (operationId) => path.join(dataDir, `park-${operationId}.json`),
   };
-};
-
-/**
- * Whether the disk holds a park receipt written on `bootId`: that boot's workspace was closed
- * for parking (daemon and Docker stopped, synced) before its VM was saved.
- */
-export const parkedOnBoot = (paths, bootId) => {
-  let names;
-  try {
-    names = readdirSync(paths.dataDir);
-  } catch {
-    return false;
-  }
-  return names.some((name) => {
-    if (!/^park-[0-9a-f-]{36}\.json$/.test(name)) return false;
-    const receipt = readRecord(path.join(paths.dataDir, name));
-    return (
-      receipt.kind === "ok" &&
-      receipt.value.format === PARK_RECEIPT_FORMAT &&
-      receipt.value.boot_id === bootId
-    );
-  });
 };
 
 /** The current boot's id, read at each use; throws when the VM cannot say. */
@@ -234,19 +189,18 @@ const canonical = (value) => {
 };
 
 // --------------------------------------------------------------------------------------------
-// Commands (never a shell; never the input in an error)
+// Commands (never a shell)
 // --------------------------------------------------------------------------------------------
 
 /**
- * Run a program with arguments and optional stdin, bounded. Resolves to its exit code and
- * stdout; a program that cannot start or overruns is a non-zero code. Nothing from `input`
- * (the WireGuard private key) is ever part of a result or an error.
+ * Run a program with arguments, bounded. Resolves to its exit code and stdout; a program that
+ * cannot start or overruns is a non-zero code.
  */
-const run = async (program, args, { input = null, timeoutMs = COMMAND_TIMEOUT_MS } = {}) => {
+const run = async (program, args) => {
   // A program that cannot start is an `error` event, not a throw (`once` rejects on it); a late
   // error after the close must not be unhandled.
   const child = spawn(program, args, {
-    stdio: [input === null ? "ignore" : "pipe", "pipe", "ignore"],
+    stdio: ["ignore", "pipe", "ignore"],
     env: { PATH: process.env.PATH ?? "/usr/sbin:/usr/bin:/sbin:/bin", LANG: "C.UTF-8" },
   });
   child.on("error", () => {});
@@ -254,12 +208,8 @@ const run = async (program, args, { input = null, timeoutMs = COMMAND_TIMEOUT_MS
   child.stdout.on("data", (chunk) => {
     stdout = (stdout + chunk.toString("utf8")).slice(-65536);
   });
-  if (input !== null) {
-    child.stdin.on("error", () => {});
-    child.stdin.end(input);
-  }
   // An overrun is killed; its close then reports a null code.
-  const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+  const timer = setTimeout(() => child.kill("SIGKILL"), COMMAND_TIMEOUT_MS);
   try {
     const [code] = await once(child, "close");
     return { code, stdout };
@@ -282,22 +232,12 @@ class Refusal extends Error {
   }
 }
 
-const NETWORK_KEYS = [
-  "format",
-  "binding",
-  "private_key",
-  "public_key",
-  "gateway_key",
-  "endpoint",
-  "port",
-  "subnet",
-];
 /**
- * The same config carried over the agent's own WebSocket (`carrier: "websocket"`): no gateway
- * endpoint to dial. Core opens `/sealant/tunnel` through Boat's hosted HTTPS and relays each
- * WireGuard datagram to the gateway on its own host, so the gateway's host needs no inbound port.
+ * The tunnel is carried over the agent's own WebSocket (`carrier: "websocket"`), the only way it
+ * is: the VM dials nothing. Core opens `/sealant/tunnel` through Boat's hosted HTTPS and relays
+ * each WireGuard datagram to the gateway on its own host, so that host needs no inbound port.
  */
-const CARRIED_NETWORK_KEYS = [
+const NETWORK_KEYS = [
   "format",
   "binding",
   "private_key",
@@ -307,7 +247,7 @@ const CARRIED_NETWORK_KEYS = [
   "subnet",
 ];
 /** How this agent can carry the tunnel; `GET /sealant/network` says so before Core configures it. */
-export const TUNNEL_CARRIERS = ["udp", "websocket"];
+export const TUNNEL_CARRIERS = ["websocket"];
 
 const validKey = (value) => {
   if (typeof value !== "string" || !/^[A-Za-z0-9+/]{43}=$/.test(value)) {
@@ -354,49 +294,20 @@ const subnetOf = (subnet, parent) =>
 
 /** `guest_network.parse`: the config exactly, or a refusal with the Python guest's reason. */
 export const parseNetworkConfig = (value) => {
-  if (isPlainObject(value) && Object.hasOwn(value, "carrier")) {
-    if (
-      !sameKeys(value, CARRIED_NETWORK_KEYS) ||
-      value.format !== NETWORK_REQUEST_FORMAT ||
-      value.carrier !== "websocket"
-    ) {
-      throw new Refusal("invalid-network-config");
-    }
-    for (const name of ["private_key", "public_key", "gateway_key"]) validKey(value[name]);
-    const subnet = parseNetwork(value.subnet);
-    if (
-      subnet === null ||
-      subnet.length !== 27 ||
-      (subnet.base & subnet.mask) >>> 0 !== subnet.base ||
-      !RFC1918.some((parent) => subnetOf(subnet, parseNetwork(parent)))
-    ) {
-      throw new Refusal("invalid-network-destination");
-    }
-    return value;
-  }
-  if (!sameKeys(value, NETWORK_KEYS) || value.format !== NETWORK_REQUEST_FORMAT) {
+  if (
+    !sameKeys(value, NETWORK_KEYS) ||
+    value.format !== NETWORK_REQUEST_FORMAT ||
+    value.carrier !== "websocket"
+  ) {
     throw new Refusal("invalid-network-config");
   }
   for (const name of ["private_key", "public_key", "gateway_key"]) validKey(value[name]);
-  const endpoint = parseIPv4(value.endpoint);
   const subnet = parseNetwork(value.subnet);
-  if (endpoint === null || subnet === null) throw new Refusal("invalid-network-destination");
-  const unspecified = endpoint === 0;
-  const loopback = inNetwork(endpoint, parseNetwork("127.0.0.0/8"));
-  const multicast = inNetwork(endpoint, parseNetwork("224.0.0.0/4"));
-  const linkLocal = inNetwork(endpoint, parseNetwork("169.254.0.0/16"));
-  const strict = (subnet.base & subnet.mask) >>> 0 === subnet.base;
   if (
-    unspecified ||
-    loopback ||
-    multicast ||
-    linkLocal ||
+    subnet === null ||
     subnet.length !== 27 ||
-    !strict ||
-    !RFC1918.some((parent) => subnetOf(subnet, parseNetwork(parent))) ||
-    !Number.isInteger(value.port) ||
-    value.port < 1 ||
-    value.port > 65535
+    (subnet.base & subnet.mask) >>> 0 !== subnet.base ||
+    !RFC1918.some((parent) => subnetOf(subnet, parseNetwork(parent)))
   ) {
     throw new Refusal("invalid-network-destination");
   }
@@ -783,17 +694,11 @@ export const createTunnelRelay = ({ host = "127.0.0.1", port = 0, wireguardPort 
  * The Boat host: what `agent.mjs` asks in Boat mode. `log` is the agent's logger; `env` the
  * agent's environment (command paths and test overrides come from it).
  */
-export const createBoatHost = ({ env = process.env, log, dockerCapable = false }) => {
+export const createBoatHost = ({ env = process.env, log }) => {
   const paths = boatPaths(env);
   const commands = {
     ip: env.SEALANT_AGENT_IP ?? "ip",
     wg: env.SEALANT_AGENT_WG ?? "wg",
-    iptables: env.SEALANT_AGENT_IPTABLES ?? "iptables",
-    iptablesRestore: env.SEALANT_AGENT_IPTABLES_RESTORE ?? "iptables-restore",
-    ip6tables: env.SEALANT_AGENT_IP6TABLES ?? "ip6tables",
-    ip6tablesRestore: env.SEALANT_AGENT_IP6TABLES_RESTORE ?? "ip6tables-restore",
-    modprobe: env.SEALANT_AGENT_MODPROBE ?? "modprobe",
-    sync: env.SEALANT_AGENT_SYNC ?? "sync",
     unshare: env.SEALANT_AGENT_UNSHARE ?? "unshare",
     systemdRun: env.SEALANT_AGENT_SYSTEMD_RUN ?? "systemd-run",
     systemctl: env.SEALANT_AGENT_SYSTEMCTL ?? "systemctl",
@@ -801,8 +706,6 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
   const daemonNamespace = env.SEALANT_AGENT_DAEMON_NAMESPACE === "none" ? "none" : "pid";
   // Where the cgroup filesystem is mounted (tests point it at a scratch tree).
   const cgroupRoot = env.SEALANT_MICROVM_CGROUP_ROOT ?? "/sys/fs/cgroup";
-  // Where the kernel's sysctls are (tests point it at a scratch tree).
-  const procSys = env.SEALANT_AGENT_PROC_SYS ?? "/proc/sys";
   // The gateway's resolver, which the VM's resolver asks first; and where the VM's resolver listens
   // (the tunnel's address; tests bind a loopback port, 0 for any).
   const gatewayDns = {
@@ -816,17 +719,10 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
   };
 
   const host = {
-    /** The park this agent is performing or has performed (operation id), if any. */
-    parked: null,
-    parking: null,
-    dockerReady: false,
-    policy: Promise.resolve(),
-    /** The Docker policy: `absent` (no Docker), `pending`, `applied` or `failed`. */
-    policyState: dockerCapable ? "pending" : "absent",
     /** The VM's resolver while a tunnel is configured on this boot, and the port it answers on. */
     resolver: null,
     resolverPort: null,
-    /** The tunnel's WebSocket carrier, when the tunnel is configured to use one. */
+    /** The tunnel's WebSocket carrier, while a tunnel is configured on this boot. */
     relay: null,
   };
 
@@ -870,7 +766,7 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
 
   /**
    * Arm the agent from the bind the CLI left, when it has none yet: the bearer on tmpfs is both
-   * the launch secret and the control token (so health, control, recover, park and network are
+   * the launch secret and the control token (so health, control, recover and network are
    * authorised before any launch). Only a bind of this boot counts.
    */
   const arm = (state, contractVersion) => {
@@ -1038,7 +934,7 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
    * takes one of its processes (`OOMPolicy=continue`), never the agent, and never the unit. The
    * agent's process is what it was: `systemd-run --scope` registers the scope and execs in place,
    * so the child the agent spawned is the namespace's wrapper, and its process group is still what
-   * a park or recovery kills. The name is fresh per start: a recovery boot on the same boot must
+   * a recovery kills. The name is fresh per start: a recovery boot on the same boot must
    * not wait for the ended scope to be collected.
    */
   const daemonCommand = (sealantd, args) =>
@@ -1115,100 +1011,6 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
     }
     const presented = sha256(header.slice("Bearer ".length));
     return timingSafeEqual(Buffer.from(presented), Buffer.from(bind.value.bearer_sha256));
-  };
-
-  // ---- Park -------------------------------------------------------------------------------
-
-  /** Whether this boot was parked: by this process, or by a receipt of this boot on the disk. */
-  const isParked = () => {
-    if (host.parked !== null) return true;
-    const boot = bootId();
-    let names;
-    try {
-      names = readdirSync(paths.dataDir);
-    } catch {
-      return false;
-    }
-    for (const name of names) {
-      const match = /^park-([0-9a-f-]{36})\.json$/.exec(name);
-      if (match === null) continue;
-      const receipt = readRecord(path.join(paths.dataDir, name));
-      if (receipt.kind === "ok" && receipt.value.boot_id === boot) {
-        host.parked = match[1];
-        return true;
-      }
-    }
-    return false;
-  };
-
-  const receiptResponse = async (file) => {
-    const bytes = await readFile(file);
-    return {
-      outcome: "closed",
-      receipt: { path: file, sha256: sha256(bytes), bytes: bytes.length },
-    };
-  };
-
-  /**
-   * Close the workspace for parking, once per operation: stop the daemon's namespace and Docker
-   * (the caller's `stopDaemon` / `stopDocker`, each answering `stopped` only when it proved so),
-   * `sync`, write the receipt. The same operation again returns the receipt it wrote; another
-   * operation after a park is refused. Nothing unproved is ever certified: a daemon or Docker that
-   * could not be proved stopped is a 503 with its reason, no receipt, and the park is retried.
-   */
-  const park = async (body, { runId, stopDaemon, stopDocker }) => {
-    if (
-      !sameKeys(body, ["format", "operationId"]) ||
-      body.format !== PARK_REQUEST_FORMAT ||
-      typeof body.operationId !== "string" ||
-      !UUID_PATTERN.test(body.operationId)
-    ) {
-      return { status: 400, body: { reason: "invalid-park-request" } };
-    }
-    const operationId = body.operationId;
-    const file = paths.parkReceipt(operationId);
-    if (existsSync(file)) return { status: 200, body: await receiptResponse(file) };
-    if (isParked() && host.parked !== operationId) {
-      return { status: 409, body: { reason: "parked" } };
-    }
-    if (host.parking === null) {
-      // From here no launch or recovery is accepted on this boot, whether or not this attempt
-      // completes: the daemon is being killed. The same operation can be retried.
-      host.parked = operationId;
-      host.parking = (async () => {
-        const boot = bootId();
-        log(`park ${operationId}: closing`);
-        // Never a receipt saying the daemon or Docker stopped when it cannot be proved.
-        if ((await stopDaemon()) !== "stopped") throw new Refusal("daemon-stop-unverified", 503);
-        const docker = await stopDocker();
-        if (docker === "unverified") throw new Refusal("docker-stop-unverified", 503);
-        const synced = await run(commands.sync, [], { timeoutMs: 60_000 });
-        if (synced.code !== 0) log(`park ${operationId}: sync exited ${String(synced.code)}`);
-        await writeAtomic(
-          file,
-          canonical({
-            format: PARK_RECEIPT_FORMAT,
-            operation_id: operationId,
-            boot_id: boot,
-            run_id: runId,
-            daemon: "stopped",
-            docker,
-            closed_at: new Date().toISOString(),
-          }),
-          0o600,
-        );
-        log(`park ${operationId}: closed`);
-      })();
-    }
-    try {
-      await host.parking;
-    } catch (error) {
-      host.parking = null;
-      log(`park ${operationId}: not closed (${error instanceof Refusal ? error.reason : "error"})`);
-      if (error instanceof Refusal) return { status: error.status, body: { reason: error.reason } };
-      throw error;
-    }
-    return { status: 200, body: await receiptResponse(file) };
   };
 
   // ---- Network ----------------------------------------------------------------------------
@@ -1366,11 +1168,9 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
       // An agent restarted on the boot that configured the tunnel: `resolv.conf` names its
       // resolver, which must answer again.
       if (configured.status === "configured") {
-        if (configured.config.carrier === "websocket") {
-          const carried = await startRelay(configured.config, { resume: true });
-          if (carried !== null && carried.wireguardPort === null)
-            await learnWireguardPort(carried.relayPort);
-        }
+        const carried = await startRelay(configured.config, { resume: true });
+        if (carried !== null && carried.wireguardPort === null)
+          await learnWireguardPort(carried.relayPort);
         await startResolver();
       }
       return false;
@@ -1418,9 +1218,10 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
     await ip("link", "add", WIREGUARD_INTERFACE, "type", "wireguard");
     at("wg");
     // Carried over the WebSocket: WireGuard's peer is the relay on loopback, and WireGuard listens
-    // on a port the relay knows, so the relay answers it and nothing else.
-    const carried =
-      config.carrier === "websocket" ? await startRelay(config, { resume: false }) : null;
+    // on a port the relay knows, so the relay answers it and nothing else. A relay this process
+    // already holds (an earlier setup that failed after it started) is not one to configure over.
+    const carried = await startRelay(config, { resume: false });
+    if (carried === null) throw new Refusal("network-command-refused", 500);
     const keyFile = path.join(paths.stateDir, "agent", `${WIREGUARD_INTERFACE}.key`);
     await writeAtomic(keyFile, `${config.private_key}\n`, 0o600);
     let set;
@@ -1428,17 +1229,13 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
       set = await run(commands.wg, [
         "set",
         WIREGUARD_INTERFACE,
-        ...(carried === null || carried.wireguardPort === null
-          ? []
-          : ["listen-port", String(carried.wireguardPort)]),
+        ...(carried.wireguardPort === null ? [] : ["listen-port", String(carried.wireguardPort)]),
         "private-key",
         keyFile,
         "peer",
         config.gateway_key,
         "endpoint",
-        carried === null
-          ? `${config.endpoint}:${String(config.port)}`
-          : `127.0.0.1:${String(carried.relayPort)}`,
+        `127.0.0.1:${String(carried.relayPort)}`,
         "allowed-ips",
         `${config.subnet},${GATEWAY}/32`,
         "persistent-keepalive",
@@ -1453,7 +1250,7 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
     at("link");
     await ip("link", "set", WIREGUARD_INTERFACE, "mtu", WIREGUARD_MTU);
     await ip("link", "set", WIREGUARD_INTERFACE, "up");
-    if (carried !== null && carried.wireguardPort === null) {
+    if (carried.wireguardPort === null) {
       at("wg");
       await learnWireguardPort(carried.relayPort);
     }
@@ -1513,7 +1310,6 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
           return { status: 409, body: { reason: "network-setup-unresolved" } };
         }
         await verifyNetwork();
-        void applyDockerPolicy();
         return { status: 200, body: networkReply(config, existing.raw) };
       }
       const boot = bootId();
@@ -1536,10 +1332,7 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
         config: intent,
       });
       await writeAtomic(paths.networkFile, configured, 0o644);
-      log(
-        `network: ${WIREGUARD_INTERFACE} configured to ${config.endpoint}:${String(config.port)}`,
-      );
-      void applyDockerPolicy();
+      log(`network: ${WIREGUARD_INTERFACE} configured, carried over ${config.carrier}`);
       return { status: 200, body: networkReply(config, configured) };
     } catch (error) {
       if (error instanceof Refusal) {
@@ -1560,7 +1353,6 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
         configured: false,
         handshake: "unverified",
         dns: "unavailable",
-        docker_policy: host.policyState,
         carriers: TUNNEL_CARRIERS,
       };
     }
@@ -1598,156 +1390,11 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
       configured: true,
       handshake: verified ? "verified" : "unverified",
       dns: dns ? "udp-and-tcp" : "unavailable",
-      // A Docker image is ready only once containers are held to the gateway's allowance.
-      docker_policy: host.policyState,
       ...(transfer === undefined ? {} : { transfer }),
       carriers: TUNNEL_CARRIERS,
-      // Carried over the WebSocket: whether Core's end is attached now (no handshake without it).
-      ...(record.config.carrier === "websocket"
-        ? { carrier_attached: host.relay?.attached() ?? false }
-        : {}),
+      // Whether Core's end of the carrier is attached now (no handshake without it).
+      carrier_attached: host.relay?.attached() ?? false,
     };
-  };
-
-  // ---- DOCKER-USER policy -----------------------------------------------------------------
-
-  /**
-   * Once dockerd is up AND the network is configured (either order), fill the DOCKER-USER chain:
-   * what a container may reach is the tunnel's subnet, the gateway's resolver and what it already
-   * talks to; the private and special ranges are dropped. Applied whole each time (flush, fill),
-   * so it is idempotent. Health does not depend on it; a failure is logged.
-   */
-  /**
-   * What containers may do, as one `iptables-restore` and one `ip6tables-restore` input, so each
-   * family's policy changes atomically (`--noflush` keeps Docker's own chains; a chain named in
-   * the input is replaced whole):
-   * - DOCKER-USER (forwarded traffic of bridged containers): replies; Docker's own networks
-   *   (`--bip` 198.18.1.0/24, pools 198.19.0.0/16); the resource subnet and the gateway's DNS
-   *   through the tunnel. The tunnel's endpoint and every private, metadata and reserved range
-   *   are dropped. Everything else (the Internet) returns to Docker's chains.
-   * - SEALANT-DOCKER-INPUT (from INPUT): no new connection from a container to the VM itself
-   *   but DNS to the VM's resolver (the tunnel's address, port 53: a container's `resolv.conf` is
-   *   the VM's, and Docker's embedded DNS forwards there), matched by what a container is, not by
-   *   a bridge's name (`com.docker.network.bridge.name` can be anything): Docker's own source
-   *   ranges, and any packet that entered through a bridge port (`physdev`; a custom `--subnet`
-   *   network is caught there too).
-   * - IPv6: nothing forwarded for a container at all, and nothing new from a bridge to the VM.
-   *   The gateway allows IPv4 only, and an `--ipv6` network must not open what it does not.
-   */
-  const policyInputs = (record) => {
-    const subnet = record.config.subnet;
-    const endpoint = record.config.endpoint;
-    const fromContainers = [
-      ...DOCKER_NETWORKS.map((cidr) => `-s ${cidr}`),
-      "-m physdev --physdev-is-in",
-    ];
-    const v4 = [
-      "*filter",
-      ":DOCKER-USER - [0:0]",
-      ":SEALANT-DOCKER-INPUT - [0:0]",
-      "-A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN",
-      ...DOCKER_NETWORKS.map((cidr) => `-A DOCKER-USER -d ${cidr} -j RETURN`),
-      `-A DOCKER-USER -o ${WIREGUARD_INTERFACE} -d ${subnet} -j RETURN`,
-      `-A DOCKER-USER -o ${WIREGUARD_INTERFACE} -d ${GATEWAY}/32 -p udp --dport 53 -j RETURN`,
-      `-A DOCKER-USER -o ${WIREGUARD_INTERFACE} -d ${GATEWAY}/32 -p tcp --dport 53 -j RETURN`,
-      // A carried tunnel has no endpoint: its relay is on the VM's loopback, already denied.
-      ...(endpoint === undefined ? [] : [`-A DOCKER-USER -d ${endpoint}/32 -j DROP`]),
-      ...DENIED.map((cidr) => `-A DOCKER-USER -d ${cidr} -j DROP`),
-      "-A DOCKER-USER -j RETURN",
-      // The one service on the VM a container may reach: its resolver.
-      `-A SEALANT-DOCKER-INPUT -d ${CLIENT}/32 -p udp --dport 53 -j RETURN`,
-      `-A SEALANT-DOCKER-INPUT -d ${CLIENT}/32 -p tcp --dport 53 -j RETURN`,
-      ...fromContainers.map(
-        (match) => `-A SEALANT-DOCKER-INPUT ${match} -m conntrack --ctstate NEW -j DROP`,
-      ),
-      "COMMIT",
-      "",
-    ].join("\n");
-    const v6 = [
-      "*filter",
-      ":DOCKER-USER - [0:0]",
-      ":SEALANT-DOCKER-INPUT - [0:0]",
-      "-A DOCKER-USER -j DROP",
-      "-A SEALANT-DOCKER-INPUT -m physdev --physdev-is-in -m conntrack --ctstate NEW -j DROP",
-      "COMMIT",
-      "",
-    ].join("\n");
-    return { v4, v6 };
-  };
-
-  /**
-   * Once dockerd is up AND the network is configured (either order), apply the policy; then make
-   * sure INPUT and FORWARD reach its chains. Its state is part of `GET /sealant/network`, so a
-   * policy that did not apply refuses readiness instead of failing open.
-   */
-  const applyDockerPolicy = () => {
-    const record = networkRecord();
-    if (!host.dockerReady || record === null || record.status !== "configured") {
-      return host.policy;
-    }
-    const { v4, v6 } = policyInputs(record);
-    const hooked = async (iptables, chain, target) =>
-      (await run(iptables, ["-C", chain, "-j", target])).code === 0 ||
-      (await run(iptables, ["-I", chain, "1", "-j", target])).code === 0;
-    /**
-     * The physdev match only sees bridged packets when bridge netfilter hands them to iptables:
-     * load it, turn it on for both families, and read it back. Not on means not applied.
-     */
-    const bridgeNetfilter = async () => {
-      await run(commands.modprobe, ["br_netfilter"]);
-      const settings = ["bridge-nf-call-iptables", "bridge-nf-call-ip6tables"].map((name) =>
-        path.join(procSys, "net", "bridge", name),
-      );
-      for (const setting of settings) {
-        try {
-          await writeFile(setting, "1\n");
-        } catch {
-          // Read back below: a setting that could not be written is not on.
-        }
-      }
-      return settings.every((setting) => {
-        try {
-          return readFileSync(setting, "utf8").trim() === "1";
-        } catch {
-          return false;
-        }
-      });
-    };
-    const apply = async () => {
-      // A policy already applied stays reported as applied while the same inputs are applied
-      // again (each family's chains are replaced whole, so it never lapses): Core replays the
-      // network config right before it reads this state, and a re-apply in flight is not
-      // "pending". Only a first application is, and a failed one becomes failed.
-      if (host.policyState !== "applied") host.policyState = "pending";
-      if (!(await bridgeNetfilter())) {
-        host.policyState = "failed";
-        log("docker policy: failed (bridge netfilter is not on)");
-        return false;
-      }
-      const restored = await Promise.all([
-        run(commands.iptablesRestore, ["--noflush"], { input: v4 }),
-        run(commands.ip6tablesRestore, ["--noflush"], { input: v6 }),
-      ]);
-      const ok =
-        restored.every((result) => result.code === 0) &&
-        (await hooked(commands.iptables, "INPUT", "SEALANT-DOCKER-INPUT")) &&
-        (await hooked(commands.ip6tables, "INPUT", "SEALANT-DOCKER-INPUT")) &&
-        (await hooked(commands.ip6tables, "FORWARD", "DOCKER-USER"));
-      host.policyState = ok ? "applied" : "failed";
-      log(`docker policy: ${host.policyState}`);
-      return ok;
-    };
-    host.policy = host.policy.then(apply, apply);
-    return host.policy;
-  };
-
-  const markDockerReady = () => {
-    host.dockerReady = true;
-    void applyDockerPolicy();
-  };
-
-  const markDockerStopped = () => {
-    host.dockerReady = false;
   };
 
   return {
@@ -1763,14 +1410,10 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
     daemonCommand,
     recoverDecision,
     staleBootBearer,
-    isParked,
-    park,
     configureNetwork,
     networkStatus,
     restoreResolvConf,
-    /** The tunnel's WebSocket carrier, while the tunnel is configured to use one. */
+    /** The tunnel's WebSocket carrier, while a tunnel is configured on this boot. */
     tunnelRelay: () => host.relay,
-    markDockerReady,
-    markDockerStopped,
   };
 };

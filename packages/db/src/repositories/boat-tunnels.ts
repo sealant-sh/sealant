@@ -583,9 +583,16 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, Dependencies> = Effe
               execution.admission.operationId !== network.operationId
             )
               return yield* Effect.fail(new BoatTunnelStoreError("binding-conflict"));
+            // A reservation configured before the upgrade may record the address its VM dialled
+            // (`endpoint`). That is no part of the intent any more: the rest must match, and the
+            // record is kept as it is.
+            if (before.network !== undefined) {
+              const { endpoint: _dialled, ...frozen } = before.network;
+              return isDeepStrictEqual(frozen, network)
+                ? before
+                : yield* Effect.fail(new BoatTunnelStoreError("binding-conflict"));
+            }
             const next = { ...before, network };
-            if (before.network !== undefined && !isDeepStrictEqual(before.network, network))
-              return yield* Effect.fail(new BoatTunnelStoreError("binding-conflict"));
             const rows = yield* db
               .update(boatTunnels)
               .set({ record: next })
