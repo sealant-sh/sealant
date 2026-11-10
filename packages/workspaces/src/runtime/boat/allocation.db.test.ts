@@ -3920,6 +3920,142 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
         await o.boat.close();
       }
     }));
+
+  it("finishes a never-ready VM's recorded deletion after a restart, from Boat's operation, not its 404 (review of #508)", () =>
+    test(async (s) => {
+      const o = await observedLaunch(s, {
+        boat: (boat) => {
+          boat.stuckProvisioning = true;
+        },
+      });
+      try {
+        // Boat finishes the deletion on its own while this worker is not polling (it restarts).
+        o.boat.completeDeletionsIndependently = true;
+        const first = await execute(s.final([], o.api, 0));
+        expect(await execute(first.owner.closeUnbound(s.input.consumer.runId, o.sandboxId))).toBe(
+          "pending",
+        );
+        expect(await execute(s.repo.get(s.input.consumer.runId))).toMatchObject({
+          phase: "deleting",
+          removal: { kind: "operation", completed: false },
+        });
+        expect(o.boat.vms.has(o.sandboxId)).toBe(false);
+        // The restarted worker: the VM reads 404 and was never seen created, so only Boat's
+        // recorded operation can say the removal finished.
+        const restarted = await execute(s.final([], o.api, 20_000));
+        expect(
+          await execute(restarted.owner.closeUnbound(s.input.consumer.runId, o.sandboxId)),
+        ).toBe("closed");
+        expect((await execute(s.repo.get(s.input.consumer.runId)))?.phase).toBe("deleted");
+        expect((await execute(nativeConsumerRows(s.db, s.input.consumer.runId)))[0]?.state).toBe(
+          "released",
+        );
+      } finally {
+        await o.boat.close();
+      }
+    }));
+
+  it("resumes an interrupted deletion poll of a never-ready VM after a restart (review of #508)", () =>
+    test(async (s) => {
+      const o = await observedLaunch(s, {
+        boat: (boat) => {
+          boat.stuckProvisioning = true;
+        },
+      });
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const read = o.api.getDeletion.bind(o.api);
+      o.api.getDeletion = async (id) => {
+        entered.resolve();
+        await release.promise;
+        return read(id);
+      };
+      try {
+        const { owner } = await execute(s.final([], o.api, 20_000));
+        await execute(
+          Effect.gen(function* () {
+            const fiber = yield* Effect.forkChild(
+              owner.closeUnbound(s.input.consumer.runId, o.sandboxId),
+            );
+            yield* Effect.promise(() => entered.promise);
+            yield* Fiber.interrupt(fiber);
+          }),
+        );
+        expect(await execute(s.repo.get(s.input.consumer.runId))).toMatchObject({
+          phase: "deleting",
+          removal: { kind: "operation", completed: false },
+        });
+        release.resolve();
+        o.api.getDeletion = read;
+        // Boat finishes the deletion while no worker polls it.
+        o.boat.finishDeletions();
+        expect(o.boat.vms.has(o.sandboxId)).toBe(false);
+        const restarted = await execute(s.final([], o.api, 20_000));
+        expect(
+          await execute(restarted.owner.closeUnbound(s.input.consumer.runId, o.sandboxId)),
+        ).toBe("closed");
+        expect(
+          o.boat.requests.filter((r) => r.startsWith("DELETE /api/v1/sandboxes/")),
+        ).toHaveLength(1);
+      } finally {
+        release.resolve();
+        await o.boat.close();
+      }
+    }));
+
+  it("keeps a blocked deletion pending even when the VM already reads 404, then finishes it (review of #508)", () =>
+    test(async (s) => {
+      const o = await observedLaunch(s, {
+        boat: (boat) => {
+          boat.stuckProvisioning = true;
+        },
+      });
+      try {
+        o.boat.blockDeletions = true;
+        const { owner } = await execute(s.final([], o.api, 2_000));
+        expect(await execute(owner.closeUnbound(s.input.consumer.runId, o.sandboxId))).toBe(
+          "pending",
+        );
+        expect(await execute(owner.closeUnbound(s.input.consumer.runId, o.sandboxId))).toBe(
+          "pending",
+        );
+        expect(
+          await execute(s.runtimes.getRuntimeInstanceByRunId(s.input.consumer.runId)),
+        ).toMatchObject({ removedAt: null });
+        o.boat.unblockDeletions();
+        expect(await execute(owner.closeUnbound(s.input.consumer.runId, o.sandboxId))).toBe(
+          "closed",
+        );
+      } finally {
+        await o.boat.close();
+      }
+    }));
+
+  it(
+    "bounds the deletion wait even when a deletion read stalls (review of #508)",
+    () =>
+      test(async (s) => {
+        const o = await observedLaunch(s);
+        try {
+          await o.readUntilCreated();
+          o.boat.deletionPolls = 1_000;
+          const read = o.api.getDeletion.bind(o.api);
+          o.api.getDeletion = async (id) => {
+            await new Promise((resolve) => setTimeout(resolve, 2_000));
+            return read(id);
+          };
+          const { owner } = await execute(s.final([], o.api, 1_000));
+          const started = Date.now();
+          expect(await execute(owner.closeUnbound(s.input.consumer.runId, o.sandboxId))).toBe(
+            "pending",
+          );
+          expect(Date.now() - started).toBeLessThan(1_500);
+        } finally {
+          await o.boat.close();
+        }
+      }),
+    15_000,
+  );
 });
 
 const HOUR = 60 * 60_000;

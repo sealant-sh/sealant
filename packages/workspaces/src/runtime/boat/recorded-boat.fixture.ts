@@ -7,7 +7,9 @@
  *   another VM. Reads then move it through `cloning` to `idle`.
  * - Discovery is a paginated label query with `pageInfo`.
  * - DELETE needs `X-Ascii-Confirm-Delete: <id>` and answers with a deletion operation that is
- *   `pending`, then `processing`, then `completed` as it is polled. Only completion removes the VM.
+ *   `pending`, then `processing`, then `completed`. By default it completes as it is polled; with
+ *   `completeDeletionsIndependently` Boat finishes it on its own, polled or not. With
+ *   `blockDeletions` the operation reads `blocked` while the VM already reads 404.
  * - A VM Boat does not have is a typed 404 `sandbox_not_found`.
  * - Commands run as uid 1000; this fake runs no commands and refuses them, so no test can pass by
  *   pretending a guest answered.
@@ -37,6 +39,8 @@ interface Deletion {
   readonly id: string;
   readonly targetId: string;
   polls: number;
+  /** Boat finished it on its own, whether or not anyone polled. */
+  completed?: boolean;
 }
 
 export class RecordedBoat {
@@ -74,6 +78,23 @@ export class RecordedBoat {
   unreachable = false;
   /** How many polls a deletion takes to complete. */
   deletionPolls = 2;
+  /** Boat completes each deletion right after accepting it, without being polled. */
+  completeDeletionsIndependently = false;
+  /** Boat removes the VM (404) but reports the operation `blocked` until `unblockDeletions`. */
+  blockDeletions = false;
+
+  /** Boat finishes every accepted deletion on its own, as it does while no worker polls. */
+  finishDeletions() {
+    for (const deletion of this.deletions.values()) {
+      deletion.completed = true;
+      this.vms.delete(deletion.targetId);
+    }
+  }
+
+  unblockDeletions() {
+    this.blockDeletions = false;
+    for (const deletion of this.deletions.values()) deletion.completed = true;
+  }
   #server: http.Server | undefined;
   /** How far the fake's clock has been moved past real time. */
   #offsetMs = 0;
@@ -193,12 +214,17 @@ export class RecordedBoat {
       if (request.headers["x-ascii-confirm-delete"] !== id)
         return send(400, { ok: false, code: "invalid_request" });
       if (!this.vms.has(id)) return send(404, { ok: false, code: "sandbox_not_found" });
-      const deletion = {
+      const deletion: Deletion = {
         id: `bdop_${randomUUID().replaceAll("-", "")}`,
         targetId: id,
         polls: 0,
       };
       this.deletions.set(deletion.id, deletion);
+      if (this.completeDeletionsIndependently) {
+        this.vms.delete(id);
+        deletion.completed = true;
+      }
+      if (this.blockDeletions) this.vms.delete(id);
       if (this.loseDeleteReply) {
         this.vms.delete(id);
         deletion.polls = this.deletionPolls;
@@ -222,7 +248,9 @@ export class RecordedBoat {
       const deletion = this.deletions.get(operation[1] ?? "");
       if (deletion === undefined) return send(404, { ok: false, code: "not_found" });
       deletion.polls += 1;
-      const completed = deletion.polls >= this.deletionPolls;
+      const blocked = this.blockDeletions && deletion.completed !== true;
+      const completed =
+        !blocked && (deletion.completed === true || deletion.polls >= this.deletionPolls);
       if (completed) this.vms.delete(deletion.targetId);
       return send(200, {
         ok: true,
@@ -230,7 +258,7 @@ export class RecordedBoat {
           id: deletion.id,
           kind: "sandbox",
           targetId: deletion.targetId,
-          status: completed ? "completed" : "processing",
+          status: completed ? "completed" : blocked ? "blocked" : "processing",
         },
       });
     }

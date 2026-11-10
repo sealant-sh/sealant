@@ -24,7 +24,7 @@ import {
   type BoatTunnelReservation,
   type BoatAllocationRecord,
 } from "@sealant/validators";
-import { Clock, Context, Effect, Layer, Redacted } from "effect";
+import { Clock, Context, Effect, Layer, Redacted, Ref } from "effect";
 
 import { SealantRuntime, SealantRuntimeControlLive } from "../../sealantd/runtime.js";
 import { BoatResourcesHost } from "../../worker/boat-resources.js";
@@ -192,24 +192,28 @@ const make: Effect.Effect<
         ),
       );
     });
-  /** Polls Boat's own deletion operation until it completes or the wait is spent. */
+  /**
+   * Polls Boat's own deletion operation until it completes or the wait is spent. The wait bounds
+   * the whole loop, including a read still in flight, so a slow provider cannot stretch one close.
+   */
   const awaitDeletion = (operation: BoatDeletion) =>
     Effect.gen(function* () {
-      let latest = operation;
-      const deadline =
-        (yield* Clock.currentTimeMillis) + (provider.deletionWaitMs ?? DELETION_WAIT_MS);
-      while (latest.status !== "completed" && (yield* Clock.currentTimeMillis) < deadline) {
-        yield* Effect.sleep(DELETION_POLL_MS);
-        const next = yield* call(() => provider.api.getDeletion(operation.id));
-        if (
-          next.id !== operation.id ||
-          next.kind !== "sandbox" ||
-          next.targetId !== operation.targetId
-        )
-          return yield* Effect.fail(new BoatFinalCloseError("held"));
-        latest = next;
-      }
-      return latest;
+      const latest = yield* Ref.make(operation);
+      const poll = Effect.gen(function* () {
+        while ((yield* Ref.get(latest)).status !== "completed") {
+          yield* Effect.sleep(DELETION_POLL_MS);
+          const next = yield* call(() => provider.api.getDeletion(operation.id));
+          if (
+            next.id !== operation.id ||
+            next.kind !== "sandbox" ||
+            next.targetId !== operation.targetId
+          )
+            return yield* Effect.fail(new BoatFinalCloseError("held"));
+          yield* Ref.set(latest, next);
+        }
+      });
+      yield* poll.pipe(Effect.timeoutOption(provider.deletionWaitMs ?? DELETION_WAIT_MS));
+      return yield* Ref.get(latest);
     });
   const record = (reservation: BoatTunnelReservation, operation: BoatDeletion) =>
     Effect.gen(function* () {
@@ -438,6 +442,31 @@ const make: Effect.Effect<
       claimed = true;
     }
     const id = yield* parse(() => boatSandboxIdSchema.parse(sandboxId));
+    // A recorded deletion operation is Boat's own account of this removal: it decides first. A VM
+    // never seen created reads 404 as `creating`, so presence alone could hold it forever.
+    if (allocation.removal?.kind === "operation") {
+      const operationId = yield* parse(() =>
+        boatDeletionIdSchema.parse(
+          allocation?.removal?.kind === "operation" ? allocation.removal.id : undefined,
+        ),
+      );
+      const recorded = yield* call(() => provider.api.getDeletion(operationId));
+      if (
+        recorded.kind !== "sandbox" ||
+        recorded.targetId !== id ||
+        recorded.id !== allocation.removal.id
+      )
+        return yield* Effect.fail(new BoatFinalCloseError("held"));
+      const settled = yield* awaitDeletion(recorded);
+      if (settled.status !== "completed") return "pending" as const;
+      allocation = yield* allocations.advance(allocation, {
+        ...allocation,
+        phase: "deleted",
+        removal: { kind: "operation", id: settled.id, targetId: id, completed: true },
+      });
+      yield* observer.deletionCompleted(allocation, id).pipe(Effect.mapError(observeError));
+      return yield* finishUnused(allocation);
+    }
     // Absence is what Boat says, never what a timeout or a fresh create's 404 suggests.
     const presence = yield* observer.observe(allocation).pipe(Effect.mapError(observeError));
     if (presence.kind === "absent") {
@@ -454,31 +483,17 @@ const make: Effect.Effect<
         : presence.reason === "creating"
           ? ("pending" as const)
           : yield* Effect.fail(new BoatFinalCloseError("unavailable"));
-    let operation: BoatDeletion;
-    if (allocation.removal?.kind === "operation") {
-      const operationId = yield* parse(() =>
-        boatDeletionIdSchema.parse(
-          allocation?.removal?.kind === "operation" ? allocation.removal.id : undefined,
-        ),
-      );
-      operation = yield* call(() => provider.api.getDeletion(operationId));
-    } else {
-      if (allocation.removal?.kind !== "issued")
-        return yield* Effect.fail(new BoatFinalCloseError("held"));
-      // Unknown DELETE retains a bounded lease. Accepted operations are polled, never reissued.
-      if (!claimed && now - Date.parse(allocation.removal.at) < 180_000) return "pending" as const;
-      if (!claimed)
-        allocation = yield* allocations.advance(allocation, {
-          ...allocation,
-          removal: { kind: "issued", token: randomUUID(), at: new Date(now).toISOString() },
-        });
-      operation = yield* call(() => provider.api.deleteSandbox(id));
-    }
-    if (
-      operation.kind !== "sandbox" ||
-      operation.targetId !== id ||
-      (allocation.removal?.kind === "operation" && allocation.removal.id !== operation.id)
-    )
+    if (allocation.removal?.kind !== "issued")
+      return yield* Effect.fail(new BoatFinalCloseError("held"));
+    // Unknown DELETE retains a bounded lease. Accepted operations are polled, never reissued.
+    if (!claimed && now - Date.parse(allocation.removal.at) < 180_000) return "pending" as const;
+    if (!claimed)
+      allocation = yield* allocations.advance(allocation, {
+        ...allocation,
+        removal: { kind: "issued", token: randomUUID(), at: new Date(now).toISOString() },
+      });
+    const operation = yield* call(() => provider.api.deleteSandbox(id));
+    if (operation.kind !== "sandbox" || operation.targetId !== id)
       return yield* Effect.fail(new BoatFinalCloseError("held"));
     allocation = yield* allocations.advance(allocation, {
       ...allocation,
