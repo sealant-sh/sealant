@@ -177,32 +177,43 @@ describe.skipIf(databaseUrl === undefined)("job queue (pg-boss)", () => {
     expect(await waiting("b")).toBe(1);
 
     const handled: string[] = [];
-    const { promise: firstTaken, resolve: resolveFirstTaken } = Promise.withResolvers<void>();
+    const { promise: firstTaken, resolve: resolveFirstTaken } = Promise.withResolvers<string>();
     const { promise: release, resolve: resolveRelease } = Promise.withResolvers<void>();
     const { promise: allHandled, resolve: resolveAll } = Promise.withResolvers<void>();
+    let held = false;
+    // One delivery at a time: while the first is held, nothing else can be taken, so what waits
+    // is exactly what was published. (With a second slot free, a new message for the held key is
+    // taken at once and no longer waits, which is correct and made this assertion a race.)
     const consumer = await jobs.consumeJson<{ readonly key: string }>({
       queue,
-      concurrency: 2,
+      concurrency: 1,
       parseMessage: (input) => input as { readonly key: string },
       onMessage: async ({ message }) => {
-        if (message.key === "a" && !handled.includes("a")) {
-          resolveFirstTaken();
+        if (!held) {
+          held = true;
+          resolveFirstTaken(message.key);
           await release;
         }
         handled.push(message.key);
         if (handled.length === 3) resolveAll();
       },
     });
-    await firstTaken;
-    // While "a" is being handled, a message for it is kept (the handler may have read stale
-    // state), and a burst still leaves only that one.
-    for (let i = 0; i < 3; i += 1)
-      await jobs.publishJson({ queue, message: { key: "a" }, collapseKey: "a" });
-    expect(await waiting("a")).toBe(1);
-    resolveRelease();
-    await allHandled;
-    await consumer.cancel();
-    expect(handled.toSorted()).toEqual(["a", "a", "b"]);
+    try {
+      const taken = await firstTaken;
+      // While a delivery for the key is being handled, a new message for it is kept (the handler
+      // may have read stale state), and a burst still leaves only that one.
+      for (let i = 0; i < 3; i += 1)
+        await jobs.publishJson({ queue, message: { key: taken }, collapseKey: taken });
+      expect(await waiting(taken)).toBe(1);
+      resolveRelease();
+      await allHandled;
+      expect(handled).toHaveLength(3);
+      expect(handled.filter((key) => key === taken)).toHaveLength(2);
+    } finally {
+      // A failed assertion must not leave the handler waiting: the suite's teardown would hang.
+      resolveRelease();
+      await consumer.cancel();
+    }
   }, 20_000);
 
   it("keeps no row of a delivery taken with deleteOnPickup, whether it succeeds or fails", async () => {
