@@ -6,8 +6,9 @@
  *   pnpm --filter @sealant/workspaces exec tsx boat-harness/cleanup.ts --remove   # remove
  *
  * It removes only objects labelled `sh.sealant.boat-harness=<run>` and the processes started for
- * that run. A live run (its lock holder's process or network still exists, e.g. while it builds
- * images) is never touched, nor is its lock. Cached images are kept.
+ * that run. A live run (its test process, or any process started for it, such as its reaper,
+ * still exists, e.g. while it builds images) is never touched, nor is its lock. Cached images are
+ * kept.
  */
 import { HARNESS_LABEL, listLabelled } from "./docker.js";
 import { LOCK, cleanupPlan, realHost, reapRun } from "./reap.js";

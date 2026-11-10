@@ -25,6 +25,8 @@ interface FakeState {
   lock: string | undefined;
   networks: Set<string>;
   livePids: Set<number>;
+  /** Processes carrying `RUN_ENV=<run>`, by run. */
+  runPids: Map<string, number[]>;
   /** Labelled objects by kind, as `docker ... --filter label=<label>` would list them. */
   labelled: Map<
     string,
@@ -35,11 +37,14 @@ interface FakeState {
 }
 type FakeHost = FakeState & { readonly deps: HostDeps };
 
-const host = (setup: Partial<Pick<FakeState, "lock" | "networks" | "livePids">> = {}): FakeHost => {
+const host = (
+  setup: Partial<Pick<FakeState, "lock" | "networks" | "livePids" | "runPids">> = {},
+): FakeHost => {
   const state: FakeState = {
     lock: setup.lock,
     networks: setup.networks ?? new Set(),
     livePids: setup.livePids ?? new Set(),
+    runPids: setup.runPids ?? new Map(),
     labelled: new Map(),
     commands: [],
     killed: [],
@@ -80,7 +85,7 @@ const host = (setup: Partial<Pick<FakeState, "lock" | "networks" | "livePids">> 
       return ok();
     },
     processAlive: async (pid) => state.livePids.has(pid),
-    runProcesses: async () => [4242],
+    runProcesses: async (runId) => state.runPids.get(runId) ?? [],
     kill: (pid) => {
       state.killed.push(pid);
     },
@@ -93,10 +98,10 @@ const host = (setup: Partial<Pick<FakeState, "lock" | "networks" | "livePids">> 
 };
 
 describe("host lock", () => {
-  it("does not take a lock from a live holder: a running process, or a surviving run network", async () => {
+  it("does not take a lock from a live run: its test process, or its reaper still at work", async () => {
     for (const setup of [
       { lock: "abc12345 100", livePids: new Set([100]) },
-      { lock: "abc12345 100", networks: new Set(["boat-harness-abc12345"]) },
+      { lock: "abc12345 100", runPids: new Map([["abc12345", [300]]]) },
     ]) {
       const state = host(setup);
       await expect(acquireHostLock("def67890", 200, () => {}, state.deps)).rejects.toThrow(
@@ -106,8 +111,9 @@ describe("host lock", () => {
     }
   });
 
-  it("takes over only once the holder's process and network are both gone", async () => {
-    const state = host({ lock: "abc12345 100" });
+  it("takes over once every process of the holder's run is gone, whatever objects it left", async () => {
+    // The reaper died with its parent (a process-tree kill): the run's network is still there.
+    const state = host({ lock: "abc12345 100", networks: new Set(["boat-harness-abc12345"]) });
     await acquireHostLock("def67890", 200, () => {}, state.deps);
     expect(state.lock).toBe("def67890 200");
   });
@@ -150,7 +156,7 @@ describe("cleanup", () => {
   });
 
   it("removes only objects labelled with the run, never by creation time", async () => {
-    const state = host({ lock: "abc12345 100" });
+    const state = host({ lock: "abc12345 100", runPids: new Map([["abc12345", [4242]]]) });
     state.labelled.set(`${HARNESS_LABEL}=abc12345`, {
       containers: ["boat-tunnel-0123", "sealres-own"],
       networks: ["boat-harness-abc12345"],
