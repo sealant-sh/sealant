@@ -55,6 +55,17 @@ describe("parseWorkerEnv", () => {
     expect(() => parseWorkerEnv({ ...base, ...gateway, DOCKER_RUNTIME_ENABLED: "false" })).toThrow(
       "Docker resource host",
     );
+    // Carried over HTTPS: a relay host stands in for the public endpoint; one of the two is needed.
+    const { SEALANT_BOAT_GATEWAY_ENDPOINT: _endpoint, ...carriedOnly } = gateway;
+    expect(
+      parseWorkerEnv({ ...base, ...carriedOnly, SEALANT_BOAT_GATEWAY_RELAY_HOST: "172.17.0.1" }),
+    ).toMatchObject({ SEALANT_BOAT_GATEWAY_RELAY_HOST: "172.17.0.1" });
+    expect(() => parseWorkerEnv({ ...base, ...carriedOnly })).toThrow(
+      "SEALANT_BOAT_GATEWAY_RELAY_HOST",
+    );
+    expect(() =>
+      parseWorkerEnv({ ...base, ...carriedOnly, SEALANT_BOAT_GATEWAY_RELAY_HOST: "not-an-ip" }),
+    ).toThrow();
   });
   it("requires one credential source with deployment and cipher, including file-only gateway configuration", () => {
     const base = {
@@ -99,6 +110,12 @@ describe("parseWorkerEnv", () => {
       "usr_proof",
       "usr_second",
     ]);
+    // Admission with every tunnel carried: no public endpoint.
+    const { SEALANT_BOAT_GATEWAY_ENDPOINT: _publicEndpoint, ...carried } = base;
+    expect(
+      parseWorkerEnv({ ...carried, SEALANT_BOAT_GATEWAY_RELAY_HOST: "127.0.0.1" })
+        .SEALANT_BOAT_ADMISSION_OWNER_IDS,
+    ).toEqual(["usr_proof", "usr_second"]);
     const parsed = boatAdmissionEnvSchema.parse(base);
     expect(boatAdmissionEnvSchema.parse(parsed)).toEqual(parsed);
     for (const key of Object.keys(base).filter(

@@ -652,3 +652,64 @@ it("waits for a late gateway DNS control answer before acknowledging configurati
     await docker("image", "inspect", base);
   }
 });
+
+it("publishes WireGuard on the relay host only when every tunnel is carried over HTTPS", async () => {
+  if (imagePath === undefined) throw new Error("SEALANT_BOAT_TUNNEL_TEST_IMAGE_FILE required");
+  const image = (await readFile(imagePath, "utf8")).trim();
+  const held = new Map<string, string>();
+  const subnets: ResourceSubnets = {
+    allocate: async ({ name, kind }) => {
+      const subnet =
+        held.get(name) ??
+        `10.190.${Math.floor(Math.random() * 200) + 10}.${kind === "reach" ? "32/27" : "16/28"}`;
+      held.set(name, subnet);
+      return subnet;
+    },
+    release: async (name) => {
+      held.delete(name);
+    },
+  };
+  const target = executionTarget(randomUUID());
+  const resources = new DockerResourceRuntime({ subnets });
+  const runtime = new DockerBoatTunnel({
+    gatewayImage: image,
+    resources,
+    subnets,
+    publishHost: "127.0.0.1",
+  });
+  const own = keys(),
+    peer = keys();
+  const listenPort = await freePort();
+  const request = {
+    target,
+    privateKey: Redacted.make(own.private),
+    peerKey: peer.public,
+    listenPort,
+    instances: [],
+    link: undefined,
+  };
+  try {
+    const result = await Effect.runPromise(runtime.ensure(request));
+    const bindings = z
+      .record(z.string(), z.array(z.object({ HostIp: z.string(), HostPort: z.string() })))
+      .parse(
+        JSON.parse(
+          await docker(
+            "inspect",
+            "--format",
+            "{{json .HostConfig.PortBindings}}",
+            result.container,
+          ),
+        ),
+      );
+    // Never on a public interface: only where the worker relays the carried tunnel.
+    expect(bindings).toEqual({
+      "51820/udp": [{ HostIp: "127.0.0.1", HostPort: String(listenPort) }],
+    });
+    // A replay adopts the same gateway; nothing is recreated.
+    expect(await Effect.runPromise(runtime.ensure(request))).toEqual(result);
+  } finally {
+    await Effect.runPromise(runtime.remove(target));
+    expect(held.size).toBe(0);
+  }
+});

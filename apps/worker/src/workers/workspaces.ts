@@ -445,7 +445,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     );
     if (env.SEALANT_BOAT_GATEWAY_HOST_ID !== undefined) {
       if (
-        env.SEALANT_BOAT_GATEWAY_ENDPOINT === undefined ||
+        (env.SEALANT_BOAT_GATEWAY_ENDPOINT === undefined &&
+          env.SEALANT_BOAT_GATEWAY_RELAY_HOST === undefined) ||
         env.SEALANT_BOAT_GATEWAY_IMAGE === undefined ||
         resourceAssembly === undefined ||
         resourceAssembly.subnets === undefined
@@ -454,7 +455,9 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       const Host = Layer.succeed(BoatResourcesHost, {
         deploymentId: env.SEALANT_BOAT_DEPLOYMENT_ID,
         gatewayHostId: env.SEALANT_BOAT_GATEWAY_HOST_ID,
-        endpoint: env.SEALANT_BOAT_GATEWAY_ENDPOINT,
+        ...(env.SEALANT_BOAT_GATEWAY_ENDPOINT === undefined
+          ? {}
+          : { endpoint: env.SEALANT_BOAT_GATEWAY_ENDPOINT }),
         ...(env.SEALANT_BOAT_GATEWAY_RELAY_HOST === undefined
           ? {}
           : { relay: { host: env.SEALANT_BOAT_GATEWAY_RELAY_HOST } }),
@@ -464,6 +467,12 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           subnets: resourceAssembly.subnets,
           resources: resourceAssembly.runtime,
           dockerSocketPath: env.DOCKER_SOCKET_PATH,
+          // Carried only (no public endpoint): the port is published where the worker relays it,
+          // never on a public interface.
+          ...(env.SEALANT_BOAT_GATEWAY_ENDPOINT === undefined &&
+          env.SEALANT_BOAT_GATEWAY_RELAY_HOST !== undefined
+            ? { publishHost: env.SEALANT_BOAT_GATEWAY_RELAY_HOST }
+            : {}),
         }),
       });
       const Resources = boatResourcesLayer.pipe(Layer.provide(boatWorkerExecutionLayer));

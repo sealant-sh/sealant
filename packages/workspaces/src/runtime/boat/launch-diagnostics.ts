@@ -120,6 +120,7 @@ const diagnosticSchema = z.object({
       "agent-refused",
       "agent-not-ready",
       "guest-failed",
+      "carrier-unavailable",
       "admission-refused",
       "launch-held",
       "close-pending",
@@ -199,8 +200,10 @@ const diagnosticSchema = z.object({
    */
   tunnel: z
     .object({
-      sentBytes: z.number().int().nonnegative(),
-      receivedBytes: z.number().int().nonnegative(),
+      sentBytes: z.number().int().nonnegative().optional(),
+      receivedBytes: z.number().int().nonnegative().optional(),
+      /** Carried over HTTPS: whether Core's end was attached. Not attached, nothing could flow. */
+      carrierAttached: z.boolean().optional(),
     })
     .optional(),
   /** What the agent's health said went wrong inside the VM: the daemon or its Docker service. */

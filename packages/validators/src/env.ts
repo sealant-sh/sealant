@@ -841,14 +841,27 @@ export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) =>
       message:
         "Boat credentials require exactly one of SEALANT_BOAT_API_KEY and SEALANT_BOAT_API_KEY_FILE.",
     });
+  // A relay host carries every tunnel over HTTPS: no public endpoint is needed then.
   const gatewayKeys = [
     "SEALANT_BOAT_GATEWAY_HOST_ID",
     "SEALANT_BOAT_GATEWAY_ENDPOINT",
+    "SEALANT_BOAT_GATEWAY_RELAY_HOST",
     "SEALANT_BOAT_GATEWAY_IMAGE",
   ] as const;
+  const reachable =
+    input.SEALANT_BOAT_GATEWAY_ENDPOINT !== undefined ||
+    input.SEALANT_BOAT_GATEWAY_RELAY_HOST !== undefined;
   if (gatewayKeys.some((key) => input[key] !== undefined)) {
+    if (!reachable)
+      ctx.addIssue({
+        code: "custom",
+        path: ["SEALANT_BOAT_GATEWAY_RELAY_HOST"],
+        message:
+          "Boat resource reconciliation requires SEALANT_BOAT_GATEWAY_RELAY_HOST (tunnels carried over HTTPS) or SEALANT_BOAT_GATEWAY_ENDPOINT (VMs dial it over UDP).",
+      });
     for (const key of [
-      ...gatewayKeys,
+      "SEALANT_BOAT_GATEWAY_HOST_ID",
+      "SEALANT_BOAT_GATEWAY_IMAGE",
       "SEALANT_BOAT_DEPLOYMENT_ID",
       "SEALANT_CREDENTIALS_KEY",
     ] as const) {
@@ -892,10 +905,16 @@ export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) =>
     }
   }
   if (input.SEALANT_BOAT_ADMISSION_OWNER_IDS.length > 0) {
+    if (!reachable)
+      ctx.addIssue({
+        code: "custom",
+        path: ["SEALANT_BOAT_GATEWAY_RELAY_HOST"],
+        message:
+          "Boat admission requires SEALANT_BOAT_GATEWAY_RELAY_HOST or SEALANT_BOAT_GATEWAY_ENDPOINT.",
+      });
     for (const key of [
       "SEALANT_BOAT_DEPLOYMENT_ID",
       "SEALANT_BOAT_GATEWAY_HOST_ID",
-      "SEALANT_BOAT_GATEWAY_ENDPOINT",
       "SEALANT_BOAT_GATEWAY_IMAGE",
       "SEALANT_BOAT_BUILDER_OWNER",
       "SEALANT_BOAT_STATE_DIRECTORY",

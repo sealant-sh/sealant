@@ -234,6 +234,8 @@ export class BoatExecutionError extends Error {
       | "invocation-held"
       /** The agent's health named a daemon exit or a failed guest service: the launch is lost. */
       | "guest-failed"
+      /** No public endpoint to dial, and the agent cannot carry the tunnel over HTTPS. */
+      | "carrier-unavailable"
       | BoatAgentFailureCode,
     diagnostic?: BoatLaunchDiagnostic,
   ) {
@@ -1114,6 +1116,16 @@ const make: Effect.Effect<
             ),
           )
         : ("udp" as const);
+    // No public endpoint (every tunnel carried): an image that cannot carry it cannot be reached.
+    if (carrier === "udp" && network.endpoint === undefined)
+      return yield* Effect.fail(
+        new BoatExecutionError("carrier-unavailable", {
+          step: "readiness",
+          errorClass: "BoatExecutionError",
+          code: "carrier-unavailable",
+          resourceOperation: "isolate-guest",
+        }),
+      );
     const body = yield* attempt("invalid-input", () => {
       const common = {
         format: "sealant-guest-network-v1",
@@ -1235,9 +1247,16 @@ const make: Effect.Effect<
         notReady(
           BOAT_AGENT_NETWORK_ROUTE,
           "handshake",
-          tunnel.transfer === undefined
+          tunnel.transfer === undefined && tunnel.carrier_attached === undefined
             ? undefined
-            : { sentBytes: tunnel.transfer.sent, receivedBytes: tunnel.transfer.received },
+            : {
+                ...(tunnel.transfer === undefined
+                  ? {}
+                  : { sentBytes: tunnel.transfer.sent, receivedBytes: tunnel.transfer.received }),
+                ...(tunnel.carrier_attached === undefined
+                  ? {}
+                  : { carrierAttached: tunnel.carrier_attached }),
+              },
         ),
       );
     if (tunnel.dns !== "udp-and-tcp")

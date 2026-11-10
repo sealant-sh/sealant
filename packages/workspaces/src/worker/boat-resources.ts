@@ -88,7 +88,8 @@ export class BoatResourcesHost extends Context.Service<
   {
     readonly deploymentId: string;
     readonly gatewayHostId: string;
-    readonly endpoint: string;
+    /** The gateway's public address VMs dial; absent when `relay` carries every tunnel. */
+    readonly endpoint?: string;
     readonly tunnel: BoatTunnel;
     readonly subnets: ResourceSubnets;
     /**
@@ -191,7 +192,7 @@ const make: Effect.Effect<
       tunnels.configure(reservation, {
         epoch: admission.epoch,
         operationId: admission.operationId,
-        endpoint: host.endpoint,
+        ...(host.endpoint === undefined ? {} : { endpoint: host.endpoint }),
         subnet,
       }),
       "persist-network",
@@ -255,7 +256,7 @@ const make: Effect.Effect<
         network: {
           epoch: admission.epoch,
           operationId: admission.operationId,
-          endpoint: host.endpoint,
+          ...(host.endpoint === undefined ? {} : { endpoint: host.endpoint }),
           subnet,
         },
         privateKey: keys.guest.privateKey,
