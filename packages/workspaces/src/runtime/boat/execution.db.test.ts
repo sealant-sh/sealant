@@ -221,14 +221,27 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         args[2] === "health"
           ? {
               status: 503,
-              body: { booted: true, controlSocket: false, daemonExit: { code: 1, signal: null } },
+              body: {
+                booted: true,
+                controlSocket: false,
+                daemonExit: {
+                  code: 1,
+                  signal: null,
+                  // An older agent's output is not redacted: Core removes the launch's secrets too.
+                  output: "sealantd boot: capture token capture-version-one refused\nexiting",
+                },
+              },
             }
           : original(...args);
       const exited = await execute(Effect.flip(executor.readiness(target)));
       expect(exited).toBeInstanceOf(BoatExecutionError);
       expect(boatLaunchDiagnostic(exited, "readiness")).toMatchObject({
         code: "guest-failed",
-        guest: { service: "sealantd", exitCode: 1 },
+        guest: {
+          service: "sealantd",
+          exitCode: 1,
+          outputTail: "sealantd boot: capture token [REDACTED] refused\nexiting",
+        },
       });
       // Each not-ready answer names the check that did not pass, in the order they run: the
       // agent's health first (what is booted, its control socket), then the tunnel.

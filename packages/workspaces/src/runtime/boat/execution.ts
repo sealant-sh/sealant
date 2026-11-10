@@ -66,6 +66,7 @@ import type { BoatApi } from "./api.js";
 import { BoatApiError, BoatSecret, boatSandboxIdSchema, parseBoatUrl } from "./config.js";
 import { boatControlConnection, type BoatHostedControl } from "./connection.js";
 import {
+  boatGuestOutput,
   boatLaunchDiagnostic,
   boatLaunchSummary,
   type BoatLaunchDiagnostic,
@@ -808,6 +809,27 @@ const make: Effect.Effect<
       });
       return { hosted, bearer };
     });
+  /**
+   * Every secret value this launch handed the VM: the bearer, the hosted cookie and the launch's
+   * secret environment. A material that no longer opens leaves the first two.
+   */
+  const launchSecrets = (
+    record: BoatExecutionRecord,
+    connection: { hosted: BoatHostedControl; bearer: BoatSecret },
+  ) =>
+    (record.admission?.sealedResumeEnvelope == null
+      ? Effect.succeed([])
+      : openMaterial(record, record.admission.sealedResumeEnvelope).pipe(
+          Effect.map((material) => Object.values(Redacted.value(material).secretEnv)),
+          Effect.orElseSucceed(() => []),
+        )
+    ).pipe(
+      Effect.map((values) => [
+        connection.bearer.reveal(),
+        connection.hosted.cookie.reveal(),
+        ...values,
+      ]),
+    );
   const call = (
     connection: { hosted: BoatHostedControl; bearer: BoatSecret },
     route: BoatAgentRoute,
@@ -1113,10 +1135,18 @@ const make: Effect.Effect<
     // 1. The agent: the daemon it started is up with its control socket, and Docker when asked.
     const health = yield* call(connection, "health");
     const observed = yield* healthReply(health);
-    if (observed.daemonExit !== undefined)
+    if (observed.daemonExit !== undefined) {
+      const output = observed.daemonExit.output;
       return yield* Effect.fail(
-        guestFailure({ service: "sealantd", exitCode: observed.daemonExit.code }),
+        guestFailure({
+          service: "sealantd",
+          exitCode: observed.daemonExit.code,
+          ...(output === undefined
+            ? {}
+            : { outputTail: boatGuestOutput(output, yield* launchSecrets(record, connection)) }),
+        }),
       );
+    }
     if (docker && !("version" in observed))
       return yield* Effect.fail(new BoatExecutionError("invalid-reply"));
     if ("version" in observed && observed.services.docker.status === "failed")
