@@ -77,9 +77,17 @@ export interface LaunchOptions {
   readonly docker?: boolean;
   /** Give the owner's person a passwd entry in the workspace (the capture owner map). */
   readonly person?: boolean;
+  /**
+   * `"none"`: created never to be linked to project resources (SDK `resources: "none"`). On Boat
+   * such a run gets no gateway, tunnel or in-VM resolver. It is not linked to the project.
+   */
+  readonly resources?: "none";
 }
 
-/** Creates a capture-sourced Boat workspace and links it to the project, as a Mend session does. */
+/**
+ * Creates a capture-sourced Boat workspace and links it to the project, as a Mend session does
+ * (unless it is created without resources, which refuses a link).
+ */
 export const launch = async (
   stack: HarnessStack,
   project: Project,
@@ -96,6 +104,7 @@ export const launch = async (
     name: `harness-${stack.runId}-${randomBytes(3).toString("hex")}`,
     wait: false,
     ...(options.docker === true ? { services: { docker: true } } : {}),
+    ...(options.resources === "none" ? { resources: "none" } : {}),
     source: {
       kind: "capture",
       endpoint: capture.endpoint,
@@ -114,7 +123,8 @@ export const launch = async (
     },
   });
   const worktreeKey = `w-${randomBytes(3).toString("hex")}`;
-  await project.scope.workspaces.link(workspace.id, { worktreeKey });
+  if (options.resources !== "none")
+    await project.scope.workspaces.link(workspace.id, { worktreeKey });
   const runId = await until(
     "the workspace's attempt",
     async () => {
