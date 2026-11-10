@@ -3972,6 +3972,75 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
       expect((await execute(nativeConsumerRows(s.db, runId)))[0]?.state).toBe("released");
     }));
 
+  it("releases the pins of launches whose publication build failed, after the owner's discard (harness: publication-build-attempts-exhausted)", () =>
+    test(async (s) => {
+      if (s.input.scope.kind !== "owner") throw new Error("expected owner scope");
+      const ownerUserId = s.input.scope.ownerUserId;
+      // An environment that has never been published, so each launch reserves its build.
+      const key = nativePublicationKeySchema.parse({
+        deploymentId: "test",
+        scope: { kind: "owner", ownerUserId },
+        recipeHash: "9".repeat(64),
+        assetsHash: "f".repeat(64),
+        platform: "linux/amd64",
+        runtime: {
+          source: `ghcr.io/sealant-sh/sealantd-next:test@sha256:${"a".repeat(64)}`,
+          platform: "linux/amd64",
+          manifest: "a".repeat(64),
+          sealantd: "b".repeat(64),
+          sealantctl: "c".repeat(64),
+        },
+      });
+      const launch = async () => {
+        const runId = randomUUID();
+        await execute(s.db.insert(workspaceAttempts).values({ id: runId, ownerUserId }));
+        const consumer = boatAllocationInputSchema.shape.consumer.parse({
+          runId,
+          runtimeInstanceId: runId,
+        });
+        const reserved = await execute(s.catalog.reserve(key, consumer));
+        return { runId, reserved };
+      };
+      const buildFails = async (publicationId: string) => {
+        const claim = await execute(s.catalog.claim(publicationId, "build", 60_000));
+        if (claim === undefined) throw new Error("no build claim");
+        // Boat's install-recipe command timed out: a retryable cause, quarantined.
+        await execute(s.catalog.quarantine(claim, "native-provider-transport_error"));
+      };
+      // The first build fails; the next launch retries it and fails too; after that every launch
+      // pins the exhausted build and fails at once.
+      const first = await launch();
+      expect(first.reserved.buildAttempt).toBe(1);
+      await buildFails(first.reserved.ownership.publicationId);
+      const second = await launch();
+      expect(second.reserved.buildAttempt).toBe(2);
+      await buildFails(second.reserved.ownership.publicationId);
+      const third = await launch();
+      expect(third.reserved.ownership.publicationId).toBe(second.reserved.ownership.publicationId);
+      expect(third.reserved.state).toBe("quarantined");
+      const runs = [first, second, third];
+      for (const { runId } of runs) {
+        await execute(
+          s.runtimes.upsertRuntimeInstance({
+            runId,
+            adapter: "boat",
+            status: "failed",
+            sourceKind: "capture",
+            imageScope: s.input.scope,
+            errorCode: "mechanism-failed",
+            errorMessage: "Native catalog: publication-build-attempts-exhausted",
+          }),
+        );
+        // The owner discards the failed launch.
+        await execute(s.runtimes.markStopped({ runId, stopReason: "user" }));
+        expect((await execute(nativeConsumerRows(s.db, runId)))[0]?.state).toBe("pending");
+      }
+      const { owner } = await execute(s.final([]));
+      await execute(owner.reconcile({ limit: 20 }));
+      for (const { runId } of runs)
+        expect((await execute(nativeConsumerRows(s.db, runId)))[0]?.state).toBe("released");
+    }));
+
   it("leaves the pin of a run with an allocation to the lifecycle that owns that VM", () =>
     test(async (s) => {
       const runId = s.input.consumer.runId;
