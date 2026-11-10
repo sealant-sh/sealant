@@ -24,6 +24,7 @@ import {
   type DB,
   type ResourceInstanceRepoService,
 } from "@sealant/db";
+import { newWorkspaceSchema } from "@sealant/validators";
 import { Effect, Layer, Schema } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -41,6 +42,19 @@ const spec = (overrides: Partial<Record<keyof ResourceInstanceSpec, unknown>> = 
     ready: { kind: "tcp", port: 5432 },
     idleStopAfterSeconds: 1800,
     ...overrides,
+  });
+
+/** The spec a create stores: `resources` is its `runtime.resources`, `family` its runtime. */
+const storedSpec = (options: { resources?: "none"; family?: "boat" | "docker" } = {}) =>
+  newWorkspaceSchema.parse({
+    sources: {
+      workspace: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
+    },
+    harness: { id: "claude-code" },
+    ...(options.resources === undefined ? {} : { runtime: { resources: options.resources } }),
+    ...(options.family === undefined
+      ? {}
+      : { target: { runtime: { family: options.family, mode: "require" } } }),
   });
 
 const key = (value: string) => ResourceInstanceKey.make(value);
@@ -105,6 +119,98 @@ describe.skipIf(DATABASE_URL === undefined)("resource instances (Postgres)", () 
     );
     return { workspaceId, runId };
   };
+
+  /**
+   * A workspace as a create leaves it: its latest run, that run's stored spec and, once it has
+   * one, its executor's runtime row (`adapter` null: not launched yet).
+   */
+  const createdWorkspace = async (
+    adapter: "boat" | "docker" | "k8s" | null,
+    stored: ReturnType<typeof storedSpec>,
+  ) => {
+    const workspaceId = `ws_${randomUUID()}`;
+    const launch = async () => {
+      const runId = `run_${randomUUID()}`;
+      await Effect.runPromise(
+        db.insert(schema.workspaceAttempts).values({ id: runId, ownerUserId: person }),
+      );
+      await Effect.runPromise(
+        db.insert(schema.workspaceAttemptSnapshots).values({
+          runId,
+          userSpecPayload: stored,
+          resolvedSpecPayload: stored,
+          blueprintPayload: stored,
+        }),
+      );
+      return runId;
+    };
+    const runId = await launch();
+    await Effect.runPromise(
+      db
+        .insert(schema.workspaces)
+        .values({ id: workspaceId, ownerUserId: person, latestRunId: runId }),
+    );
+    await Effect.runPromise(db.insert(schema.workspaceRunLinks).values({ workspaceId, runId }));
+    if (adapter !== null)
+      await Effect.runPromise(
+        db.insert(schema.workspaceRuntimeInstances).values({
+          runId,
+          adapter,
+          status: "ready",
+          reference: adapter === "boat" ? "boat:bx_23456789" : `sealant-${randomUUID()}`,
+        }),
+      );
+    return { workspaceId, runId };
+  };
+  const linkTo = (domain: string, workspaceId: string) =>
+    run((repo) =>
+      repo.link({
+        workspaceId,
+        resourceDomainId: domain,
+        worktreeKey: worktree("w1"),
+        aliases: null,
+      }),
+    );
+
+  it("refuses to link a Boat workspace created without resources, and writes nothing", async () => {
+    const domain = await newDomain();
+    const without = storedSpec({ resources: "none" });
+    const boat = await createdWorkspace("boat", without);
+    expect(await linkTo(domain, boat.workspaceId)).toEqual({ kind: "workspace-without-resources" });
+    // Not yet launched, and it requires Boat: refused the same, before any executor exists.
+    const queued = await createdWorkspace(null, storedSpec({ resources: "none", family: "boat" }));
+    expect(await linkTo(domain, queued.workspaceId)).toEqual({
+      kind: "workspace-without-resources",
+    });
+    expect(await run((repo) => repo.links(domain))).toEqual([]);
+    expect(await run((repo) => repo.linkOfRun(boat.runId))).toBeUndefined();
+    // The domain's own refusals still come first: nothing about the workspace is read.
+    await run((repo) => repo.setDomainState(domain, "fenced"));
+    expect(await linkTo(domain, boat.workspaceId)).toEqual({
+      kind: "domain-not-active",
+      state: "fenced",
+    });
+  });
+
+  it("links a workspace created without resources on the runtimes that attach to a running workspace, and any Boat workspace created without the option", async () => {
+    const domain = await newDomain();
+    const without = storedSpec({ resources: "none" });
+    // Docker and Kubernetes attach resources to a running executor: the option is not enforced.
+    for (const adapter of ["docker", "k8s"] as const) {
+      const { workspaceId } = await createdWorkspace(adapter, without);
+      expect((await linkTo(domain, workspaceId)).kind, adapter).toBe("linked");
+    }
+    // A Boat workspace that may be linked (no option) is linked as before.
+    const linkable = await createdWorkspace("boat", storedSpec());
+    expect((await linkTo(domain, linkable.workspaceId)).kind).toBe("linked");
+    expect((await run((repo) => repo.linkOfRun(linkable.runId)))?.workspaceId).toBe(
+      linkable.workspaceId,
+    );
+    // Not launched and naming no runtime: nothing says it is Boat's, so it links as before.
+    const unknown = await createdWorkspace(null, without);
+    expect((await linkTo(domain, unknown.workspaceId)).kind).toBe("linked");
+    expect(await run((repo) => repo.links(domain))).toHaveLength(4);
+  });
 
   it("answers one instance to the same spec twice, and updates its digest when the spec changes", async () => {
     const domain = await newDomain();

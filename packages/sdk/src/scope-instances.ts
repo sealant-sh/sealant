@@ -196,7 +196,12 @@ export interface ScopeWorkspaces {
    * the worktree's own `mail` and the project's `db`, and no other instance. Without it, every
    * project instance and the worktree's own. Linking again replaces the worktree key and the map,
    * and detaches what the new map leaves out at once; a workspace linked to another scope rejects
-   * (409 `ResourceWorkspaceLinkedElsewhereError`). Answers once its running executors converged.
+   * (409 `ResourceWorkspaceLinkedElsewhereError`). A Boat workspace created with
+   * `resources: "none"` rejects too (409 `ResourceWorkspaceWithoutResourcesError`, `reason`
+   * `workspace-without-resources`): Boat gives a workspace its way to reach resources at launch
+   * or never, so nothing is linked; create it again without the option and link that one. Docker
+   * and Kubernetes link a workspace created with the option as any other. Answers once its
+   * running executors converged.
    */
   link(
     workspaceId: string,

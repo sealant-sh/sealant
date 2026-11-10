@@ -453,6 +453,20 @@ export class ResourceWorkspaceLinkedElsewhereError extends Schema.TaggedError<Re
   { httpApiStatus: 409 },
 ) {}
 
+/**
+ * The workspace was created never to be linked to resources (`spec.runtime.resources: "none"`) and
+ * runs on a runtime that gives a workspace its way to reach resources at launch or never (Boat).
+ * Nothing was written, and the workspace's running executor is unchanged. Create the workspace
+ * again without the option and link that one: it reaches the resources from its next start. Docker
+ * and Kubernetes never answer this: they attach resources to a running workspace, so they link a
+ * workspace created with the option as they link any other.
+ */
+export class ResourceWorkspaceWithoutResourcesError extends Schema.TaggedError<ResourceWorkspaceWithoutResourcesError>()(
+  "ResourceWorkspaceWithoutResourcesError",
+  { message: Schema.String, code: Schema.Literals(["workspace-without-resources"]) },
+  { httpApiStatus: 409 },
+) {}
+
 /** Another lifecycle operation holds the instance. Retry after it finishes. */
 export class ResourceInstanceBusyError extends Schema.TaggedError<ResourceInstanceBusyError>()(
   "ResourceInstanceBusyError",
@@ -564,6 +578,7 @@ export const ResourceInstancesGroup = HttpApiGroup.make("resourceInstances")
           ...baseErrors,
           ResourceWorkspaceNotFoundError,
           ResourceWorkspaceLinkedElsewhereError,
+          ResourceWorkspaceWithoutResourcesError,
           ResourceDomainNotActiveError,
           ResourceRuntimeUnsupportedError,
         ],

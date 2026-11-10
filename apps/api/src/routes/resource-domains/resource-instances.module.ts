@@ -22,6 +22,7 @@ import {
   ResourceRuntimeUnsupportedError,
   ResourceWorkspaceLinkedElsewhereError,
   ResourceWorkspaceNotFoundError,
+  ResourceWorkspaceWithoutResourcesError,
   type ResourceReachAliases,
   ResourceWorktreeKey,
   type ResourceInstanceArchivedVolumeWire,
@@ -574,6 +575,12 @@ export const linkResourceWorkspace = (
         });
       case "no-such-workspace":
         return yield* new ResourceWorkspaceNotFoundError({ message: "No such workspace." });
+      case "workspace-without-resources":
+        return yield* new ResourceWorkspaceWithoutResourcesError({
+          message:
+            'This workspace was created without resources (runtime.resources "none") and runs on Boat, which gives a workspace its way to reach resources at launch or never. Nothing was linked. Create the workspace again without the option and link that one: it reaches the resources from its next start.',
+          code: "workspace-without-resources",
+        });
       case "other-domain":
         return yield* new ResourceWorkspaceLinkedElsewhereError({
           message: "This workspace is linked to another resource domain.",

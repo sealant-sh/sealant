@@ -103,6 +103,42 @@ the old run's receipt. A retry after host cleanup failure repeats cleanup withou
 retry after release finishes the runtime's terminal bookkeeping without touching a reused port. The
 native publication pin is released by the discharge, once Boat reports the VM absent.
 
+## A run without resources has no tunnel
+
+A workspace created never to be linked to resources (`runtime.resources: "none"` in its stored spec)
+is launched with no gateway, tunnel or port: the launch reads the option once and freezes it as
+`resources: "none"` on the allocation's input, and readiness, this close and every sweep read it
+from there. Its close is the same sequence with one difference, which is where Boat's deletion
+operation is kept:
+
+1. The execution is held, then recovery and the FINAL drain run exactly as above (unless the owner
+   discarded the work or a sealed FINAL was attested). There is no tunnel reservation to require or
+   freeze; one recorded for such a run holds the close.
+2. DELETE is authorized and issued through the same canonical ledger, after a fresh positive
+   observation of the exact owned sandbox.
+3. The operation id is recorded on the allocation's own removal record before any wait: the
+   allocation leaves `bound` for `deleting` with `removal: { kind: "operation", id, completed }`.
+   The allocation repository allows that transition only for a run without resources, and only once
+   its execution is `held` (a run with a tunnel still reaches `deleting` only from an aborted
+   execution). The same authorization as a tunnel's record applies: canonical deletion issued, or
+   the owner's discard.
+4. Every later pass (a stop, the sweep, a restarted worker) finds the recorded operation and polls
+   it. A different operation id or target refuses; completion never reverts.
+5. Only once Boat reports `completed` is absence recorded (`deletion-completed`) and the discharge
+   run: runtime row stopped and removed, capture state, allocation `deleted` (keeping the completed
+   operation as its receipt), resume secrets forgotten, publication pin released. The allocation is
+   never `deleted` before the absence is recorded, so a crash anywhere in this sequence is found and
+   finished by the next sweep.
+
+A launch that failed before its guest was reached is closed as an unused guest (`closeUnused`),
+which never needed a tunnel. A lost DELETE reply leaves the allocation `bound` with the ledger's
+removal still issued, and is settled as above: by Boat's own absence, or by asking again for the
+same owned VM.
+
+A deployment with no resource gateway (`BoatResourcesHost.gateway` absent) closes such runs and
+holds any run that has a tunnel: its gateway is another deployment shape's to settle, and its VM is
+kept until the gateway settings are back.
+
 ## Local proof and remaining gates
 
 The PostgreSQL/HTTP suite covers successful FINAL and reuse, stop and launch fences, incomplete

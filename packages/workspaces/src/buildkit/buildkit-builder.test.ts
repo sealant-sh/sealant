@@ -1511,6 +1511,18 @@ describe("planWorkspaceImageBuild", () => {
     expect(withRuntimeEnv.planHash).toBe(base.planHash);
   });
 
+  it("keeps the plan hash of a workspace created without resources", () => {
+    const base = createWorkspaceBuildSpec();
+    const linkable = planWorkspaceImageBuild({ platform: "linux/amd64", blueprint: base });
+    const unlinked = planWorkspaceImageBuild({
+      platform: "linux/amd64",
+      blueprint: { ...base, runtime: { ...base.runtime, resources: "none" } },
+    });
+    // Whether a workspace is ever linked to resources is decided at launch, never in its image.
+    expect(unlinked.planHash).toBe(linkable.planHash);
+    expect(unlinked.containerfile).toBe(linkable.containerfile);
+  });
+
   it("records the plan hash in the compile result metadata and writes the same Containerfile", async () => {
     const blueprint = createWorkspaceBuildSpec();
     const commandRunner = vi.fn<

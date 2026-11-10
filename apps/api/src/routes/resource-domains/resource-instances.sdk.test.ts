@@ -17,7 +17,8 @@ import {
   type DB,
   type ResourceInstanceRecord,
 } from "@sealant/db";
-import { Sealant, type ScopeInstanceSpec } from "@sealant/sdk";
+import { Sealant, SealantApiError, type ScopeInstanceSpec } from "@sealant/sdk";
+import { newWorkspaceSchema } from "@sealant/validators";
 import type { ReachAttachment, ResourceExecCommand, ResourceRuntime } from "@sealant/workspaces";
 import { Effect, Layer } from "effect";
 import { HttpRouter } from "effect/http";
@@ -190,6 +191,78 @@ describe.skipIf(DATABASE_URL === undefined)("a scope's instances through the SDK
     );
     return workspaceId;
   };
+
+  /**
+   * A workspace created with `resources: "none"`, launched on `adapter`: its latest run stores
+   * the spec the SDK's create sent.
+   */
+  const workspaceWithoutResources = async (adapter: "boat" | "docker", executor: string) => {
+    const workspaceId = `ws_${randomUUID()}`;
+    const runId = `run_${randomUUID()}`;
+    const stored = newWorkspaceSchema.parse({
+      sources: {
+        workspace: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
+      },
+      harness: { id: "claude-code" },
+      runtime: { resources: "none" },
+    });
+    await Effect.runPromise(
+      db.insert(schema.workspaceAttempts).values({ id: runId, ownerUserId: person }),
+    );
+    await Effect.runPromise(
+      db.insert(schema.workspaceAttemptSnapshots).values({
+        runId,
+        userSpecPayload: stored,
+        resolvedSpecPayload: stored,
+        blueprintPayload: stored,
+      }),
+    );
+    await Effect.runPromise(
+      db
+        .insert(schema.workspaces)
+        .values({ id: workspaceId, ownerUserId: person, latestRunId: runId }),
+    );
+    await Effect.runPromise(db.insert(schema.workspaceRunLinks).values({ workspaceId, runId }));
+    await Effect.runPromise(
+      db
+        .insert(schema.workspaceRuntimeInstances)
+        .values({ runId, adapter, status: "ready", reference: executor }),
+    );
+    return workspaceId;
+  };
+
+  it("refuses to link a Boat workspace created without resources with a typed error, and links the same workspace on Docker", async () => {
+    const scope = await newScope();
+    await scope.instances.up("db", postgres, { cause: "use" });
+    const attached = recorded.calls.attach.length;
+    const boat = await workspaceWithoutResources("boat", "boat:bx_23456789");
+    const refusal = await scope.workspaces.link(boat, { worktreeKey: "w1" }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(refusal).toBeInstanceOf(SealantApiError);
+    expect(refusal).toMatchObject({
+      code: "ResourceWorkspaceWithoutResourcesError",
+      reason: "workspace-without-resources",
+      message: expect.stringContaining("from its next start"),
+    });
+    // Nothing was linked and no executor was touched.
+    expect(recorded.calls.attach).toHaveLength(attached);
+    expect(
+      (await Effect.runPromise(db.select().from(schema.resourceWorkspaceLinks))).filter(
+        (link) => link.workspaceId === boat,
+      ),
+    ).toEqual([]);
+    // Docker attaches resources to a running workspace: the option is not enforced there.
+    const executor = `sealant-${randomUUID()}`;
+    const docker = await workspaceWithoutResources("docker", executor);
+    expect(await scope.workspaces.link(docker, { worktreeKey: "w1" })).toEqual({
+      worktreeKey: "w1",
+      aliases: null,
+      attachedExecutors: 1,
+    });
+    expect(recorded.calls.attach.at(-1)).toEqual({ executor, aliases: ["db"] });
+  });
 
   it("starts an instance and answers it running, once for the same spec twice", async () => {
     const scope = await newScope();

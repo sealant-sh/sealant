@@ -18,6 +18,12 @@ import { docker } from "./docker.js";
 import { scenarios } from "./faults.js";
 import { runScenario, type Defect } from "./markers.js";
 import {
+  gatewaylessWorker,
+  noResourcesDeletionStuck,
+  noResourcesLifecycle,
+  noResourcesWorkerKilledDuringDelete,
+} from "./no-resources-scenario.js";
+import {
   assertReleased,
   assertSettled,
   awaitOutcome,
@@ -284,4 +290,22 @@ describe("one fault per step", () => {
   fault("worker killed after bind", scenarios.workerKilled);
   fault("Stop after the launch", scenarios.stopAfterLaunch);
   fault("deletion stuck in processing", scenarios.deletionStuck);
+});
+
+// Workspaces created without resources (#589): no gateway, tunnel or in-VM resolver.
+describe("workspaces without resources", () => {
+  scenario(
+    "no resources: launch, link refused, Stop, resume",
+    undefined,
+    () => noResourcesLifecycle(stack, project, step),
+    40 * 60_000,
+  );
+  scenario("no resources: deletion stuck in processing", undefined, () =>
+    noResourcesDeletionStuck(stack, project),
+  );
+  scenario("no resources: worker killed between DELETE and completed", undefined, () =>
+    noResourcesWorkerKilledDuringDelete(stack, project),
+  );
+  // Restarts the worker without its gateway, and with it again when it ends.
+  scenario("worker without a resource gateway", undefined, () => gatewaylessWorker(stack, project));
 });

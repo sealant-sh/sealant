@@ -30,6 +30,26 @@ completed replay and refuses a different config on the same boot. The host ackno
 says `peerHandshake: unverified`; the agent says `handshake: unverified`. Neither is admission
 authority: readiness reads the handshake and the gateway's DNS afterwards.
 
+## Runs without resources, and deployments without a gateway
+
+A workspace created with `runtime.resources: "none"` (SDK `resources: "none"`) is never linked to
+project resources. Its run's allocation input carries `resources: "none"`, and for such a run
+nothing in this layer runs: `prepare` refuses it, `reconcile` reports `no-resources`, `reach` omits
+it, and `BoatExecution` freezes `isolation: { resources: "none" }` before the launch is pushed,
+after which `isolate` and `tunnel` refuse the run for good. The guest is sent the ordinary launch
+body and never `POST /sealant/network`, so it has no `sealant-wg`, no forwarder, and its own
+`resolv.conf`. Readiness is the agent's health, then the daemon's own. Linking such a workspace is
+refused on Boat (`ResourceWorkspaceWithoutResourcesError`); Docker and Kubernetes attach resources
+to a running workspace and do not enforce the option.
+
+The gateway settings (`SEALANT_BOAT_GATEWAY_HOST_ID`, `SEALANT_BOAT_GATEWAY_RELAY_HOST`,
+`SEALANT_BOAT_GATEWAY_IMAGE`) are one optional group: all three, or none. With them the worker needs
+the Docker resource host and `DEFAULT_RUNTIME_ADAPTER=docker`, as before. Without them the worker
+registers Boat from its provider and builder settings alone, needs no Docker host, serves runs
+created with the option, and refuses any other Boat workspace before its image is built with the
+launch failure code `gateway-unavailable`. Every worker of one deployment should carry the same
+gateway settings: a worker without them holds the close of a run that has a tunnel.
+
 ## Shared resource ownership
 
 Generic Docker convergence preserves the reserved `boat-tunnel-<32 hex>` executor names, including

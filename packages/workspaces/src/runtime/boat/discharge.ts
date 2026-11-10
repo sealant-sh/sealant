@@ -172,7 +172,12 @@ const make = Effect.gen(function* () {
           phase: "deleted",
           reason: null,
           conflictingSandboxes: [],
-          removal: { kind: "absent", targetId: current.sandboxId, completed: true },
+          // A removal this allocation recorded as Boat's own completed deletion operation (the
+          // close of a run without resources keeps it here) stays as its receipt.
+          removal:
+            current.removal?.kind === "operation" && current.removal.completed
+              ? current.removal
+              : { kind: "absent", targetId: current.sandboxId, completed: true },
         });
       }),
     );
@@ -182,14 +187,16 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const reservation = yield* tunnels.get(id);
         if (reservation === undefined || reservation.released === true) return;
-        // A slot recorded by another gateway host is that host's to clean; it is never guessed.
-        if (reservation.binding.gatewayHostId !== host.gatewayHostId)
+        // A slot recorded by another gateway host is that host's to clean; it is never guessed. A
+        // deployment with no resource gateway has no host of its own to clean one from.
+        const gateway = host.gateway;
+        if (gateway === undefined || reservation.binding.gatewayHostId !== gateway.hostId)
           return yield* Effect.fail("foreign-host" as const);
         const frozen =
           reservation.closeId === undefined
             ? yield* tunnels.freeze(reservation, randomUUID())
             : reservation;
-        yield* host.tunnel.remove(frozen.binding.target);
+        yield* gateway.tunnel.remove(frozen.binding.target);
         yield* tunnels.releaseAbsent(frozen);
       }),
       (error) => error === "foreign-host",

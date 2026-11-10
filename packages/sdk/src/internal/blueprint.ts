@@ -51,6 +51,12 @@ export const buildCreateWorkspaceRequest = (
       code: "invalid_create_options",
     });
   }
+  if (options.resources !== undefined && options.resources !== "none") {
+    throw new SealantError(
+      'workspaces.create `resources` is "none" (the workspace is never linked to project resources) or omitted.',
+      { code: "invalid_create_options" },
+    );
+  }
   if ((options.repository === undefined) === (options.source === undefined)) {
     throw new SealantError(
       "workspaces.create requires exactly one of `repository` (a git remote to clone) or `source` (a caller-owned mount).",
@@ -210,6 +216,8 @@ export const buildCreateWorkspaceRequest = (
       ? {}
       : { kubernetes: { serviceAccountName: options.kubernetes.serviceAccountName } }),
     ...(options.network?.cloudMetadata === true ? { network: { cloudMetadata: true } } : {}),
+    // Sent only when asked: absent is the control plane's default (the workspace may be linked).
+    ...(options.resources === undefined ? {} : { resources: options.resources }),
     ...(options.credentialsHome === undefined
       ? {}
       : {

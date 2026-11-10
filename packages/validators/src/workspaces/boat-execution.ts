@@ -46,7 +46,17 @@ export const boatExecutionRecordSchema = z
         sealedResumeEnvelope: z.string().min(1).optional(),
       })
       .nullable(),
-    isolation: z.strictObject({ resourceReceipt: hash, tunnelReceipt: hash }).optional(),
+    /**
+     * What the launch was isolated under, frozen before it is pushed: the gateway's and the guest's
+     * network receipts, or the fact that the run has no resource network at all (a workspace
+     * created with `runtime.resources: "none"`), after which the guest is never given one.
+     */
+    isolation: z
+      .union([
+        z.strictObject({ resourceReceipt: hash, tunnelReceipt: hash }),
+        z.strictObject({ resources: z.literal("none") }),
+      ])
+      .optional(),
     phase: z.enum(["exchange", "control", "installed", "issued", "running", "held", "aborted"]),
   })
   .superRefine((record, context) => {

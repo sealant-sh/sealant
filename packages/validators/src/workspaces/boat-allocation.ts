@@ -19,6 +19,13 @@ export const boatAllocationInputSchema = z.strictObject({
   publication: nativePublicationSchema,
   scope: nativeImageScopeSchema,
   sourceKind: z.enum(["git", "capture", "empty"]),
+  /**
+   * `"none"`: the workspace was created never to be linked to project resources
+   * (`runtime.resources` of its stored spec), read once at launch and frozen here for the run. Such
+   * a run has no resource gateway, tunnel or in-VM resolver; readiness, the close and every sweep
+   * read this, and nothing derives it again. Absent: the run has a gateway and a tunnel.
+   */
+  resources: z.literal("none").optional(),
 });
 /** Immutable allocation inputs; retries may not substitute another source or run. */
 export type BoatAllocationInput = z.infer<typeof boatAllocationInputSchema>;

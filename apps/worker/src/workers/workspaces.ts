@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
 
 import {
   CredentialCipher,
@@ -16,10 +15,6 @@ import {
   ResourceDomainRepo,
   ResourceDomainRepoLive,
   WorkspaceCredentialHomeRepoLive,
-  BoatAllocationRepoLive,
-  WorkspaceRuntimeInstanceRepoLive,
-  WorkspaceCaptureDrainRepoLive,
-  type WorkspaceCaptureDrainRepo,
   type DB,
 } from "@sealant/db";
 import { createJobQueueService } from "@sealant/jobs";
@@ -28,28 +23,8 @@ import { deleteExpiredRunRecords } from "@sealant/telemetry";
 import type { WorkerEnv } from "@sealant/validators/env";
 import {
   BoatAllocation,
-  BoatRuntimeAdapter,
-  type BoatAdapterServices,
-  BoatSnapshotBuilder,
-  BoatNativeCatalog,
-  boatNativeCatalogLayer,
-  loadPackagedRuntime,
   boatConnectMaterial,
-  boatControlMaterialLayer,
-  BoatControlMaterial,
-  boatProviderFromEnv,
-  BoatAllocationProvider,
-  BoatResources,
-  BoatResourcesHost,
-  makeBoatTunnelCarrierLayer,
-  BoatFinalClose,
-  BoatFinalCloseProvider,
-  boatFinalCloseWorkerLayer,
-  boatReadinessWorkerLayer,
-  boatResourcesLayer,
-  boatSealedExecutionLayer,
-  DockerBoatTunnel,
-  boatAllocationWorkerLayer,
+  boatResourceObligations,
   DockerResourceRuntime,
   KubernetesCallerRuntime,
   parseResourceCallers,
@@ -108,8 +83,9 @@ import {
   type CaptureDrainSettings,
   type RegistryClient,
 } from "@sealant/workspaces";
-import { Effect, Layer, ManagedRuntime } from "effect";
+import { Effect, Layer } from "effect";
 
+import { assembleBoat } from "./boat-assembly.js";
 import { processRunExecJob } from "./process-run-exec-job.js";
 import {
   CLAUDE_SESSION_REFRESH_INTERVAL_MS,
@@ -415,153 +391,15 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         ),
       );
   const resourceReconciler = resourceAssembly?.reconciler;
-  // The Boat adapter is registered only beside the actual FINAL close owner.
-  const boatAssembly = await (async () => {
-    const provider = boatProviderFromEnv(env);
-    if (provider === undefined) return undefined;
-    if (credentialCipher === undefined)
-      throw new Error("Boat reconciliation configuration is incomplete.");
-    const Infra = Layer.mergeAll(
-      Layer.succeed(SealantDB, db),
-      Layer.succeed(CredentialCipher, credentialCipher),
-      Layer.succeed(BoatAllocationProvider, provider),
-    );
-    if (env.SEALANT_BOAT_GATEWAY_HOST_ID !== undefined) {
-      if (
-        env.SEALANT_BOAT_GATEWAY_RELAY_HOST === undefined ||
-        env.SEALANT_BOAT_GATEWAY_IMAGE === undefined ||
-        resourceAssembly === undefined ||
-        resourceAssembly.subnets === undefined
-      )
-        throw new Error("Boat resource reconciliation configuration is incomplete.");
-      const Host = Layer.succeed(BoatResourcesHost, {
-        deploymentId: provider.deploymentId,
-        gatewayHostId: env.SEALANT_BOAT_GATEWAY_HOST_ID,
-        relay: { host: env.SEALANT_BOAT_GATEWAY_RELAY_HOST },
-        subnets: resourceAssembly.subnets,
-        tunnel: new DockerBoatTunnel({
-          gatewayImage: env.SEALANT_BOAT_GATEWAY_IMAGE,
-          subnets: resourceAssembly.subnets,
-          resources: resourceAssembly.runtime,
-          dockerSocketPath: env.DOCKER_SOCKET_PATH,
-          // The port is published where the worker relays it, never on a public interface.
-          publishHost: env.SEALANT_BOAT_GATEWAY_RELAY_HOST,
-        }),
-      });
-      const Resources = boatResourcesLayer.pipe(Layer.provide(boatSealedExecutionLayer));
-      const Repos = Layer.mergeAll(
-        BoatAllocationRepoLive,
-        WorkspaceRuntimeInstanceRepoLive,
-        WorkspaceCaptureDrainRepoLive,
-      ).pipe(Layer.provide(Infra));
-      // Boat serves launches where its builder is configured, the way MicroVM does where its build
-      // role is: the worker's env schema then holds the rest of the Boat configuration complete.
-      const bundle =
-        env.SEALANT_BOAT_BUILDER_OWNER === undefined ? undefined : await loadPackagedRuntime();
-      if (bundle !== undefined && !bundle.ok) throw bundle.error;
-      const catalogRuntime =
-        bundle === undefined
-          ? undefined
-          : (() => {
-              if (
-                env.SEALANT_BOAT_STATE_DIRECTORY === undefined ||
-                env.SEALANT_BOAT_BUILDER_OWNER === undefined
-              )
-                throw new Error("Boat construction custody is not configured.");
-              return ManagedRuntime.make(
-                boatNativeCatalogLayer({
-                  deploymentId: provider.deploymentId,
-                  builder: new BoatSnapshotBuilder({
-                    api: provider.api,
-                    runtimeBundle: bundle.value,
-                    journalDirectory: join(env.SEALANT_BOAT_STATE_DIRECTORY, "native-builds"),
-                    owner: env.SEALANT_BOAT_BUILDER_OWNER,
-                  }),
-                }).pipe(Layer.provide(Infra)),
-              );
-            })();
-      const WorkerLayer: Layer.Layer<
-        | BoatAdapterServices
-        | BoatResources
-        | BoatControlMaterial
-        | WorkspaceCaptureDrainRepo
-        | CredentialCipher
-      > = Layer.mergeAll(
-        boatAllocationWorkerLayer,
-        Resources,
-        boatReadinessWorkerLayer,
-        boatFinalCloseWorkerLayer,
-        boatSealedExecutionLayer,
-        boatControlMaterialLayer,
-      ).pipe(
-        Layer.provideMerge(Repos),
-        Layer.provideMerge(
-          Layer.mergeAll(
-            Infra,
-            Host,
-            // One carrier per run in this process, shared by every Boat owner above.
-            makeBoatTunnelCarrierLayer({ log: (message) => console.log(message) }),
-            Layer.succeed(BoatFinalCloseProvider, { api: provider.api }),
-          ),
-        ),
-      );
-      const runtime = ManagedRuntime.make(WorkerLayer);
-      const registration =
-        catalogRuntime === undefined
-          ? undefined
-          : {
-              kind: "boat-native" as const,
-              adapter: new BoatRuntimeAdapter({
-                deploymentId: provider.deploymentId,
-                runtime,
-              }),
-              artifacts: await catalogRuntime.runPromise(BoatNativeCatalog),
-            };
-      let catalogCursor: string | undefined;
-      const control = await runtime.runPromise(BoatControlMaterial);
-      boatResourceReach = () =>
-        runtime.runPromise(Effect.flatMap(BoatResources, (resources) => resources.reach()));
-      return {
-        runtime,
-        registration,
-        control,
-        reconcileCatalog:
-          catalogRuntime === undefined
-            ? undefined
-            : async () => {
-                const report = await catalogRuntime.runPromise(
-                  Effect.flatMap(BoatNativeCatalog, (catalog) =>
-                    catalog.reconcile({
-                      limit: 20,
-                      ...(catalogCursor === undefined ? {} : { after: catalogCursor }),
-                    }),
-                  ),
-                );
-                catalogCursor = report.next;
-                return report;
-              },
-        disposeCatalog: () => catalogRuntime?.dispose(),
-        reconcileCloses: (input: { limit: number; after?: string }) =>
-          runtime.runPromise(Effect.flatMap(BoatFinalClose, (close) => close.reconcile(input))),
-        reconcileResources: (input: { limit: number; after?: string }) =>
-          runtime.runPromise(
-            Effect.flatMap(BoatResources, (resources) => resources.reconcile(input)),
-          ),
-      };
-    }
-    const WorkerLayer: Layer.Layer<BoatAllocation> = boatAllocationWorkerLayer.pipe(
-      Layer.provide(Infra),
-    );
-    return {
-      runtime: ManagedRuntime.make(WorkerLayer),
-      registration: undefined,
-      control: undefined,
-      reconcileCatalog: undefined,
-      disposeCatalog: undefined,
-      reconcileResources: undefined,
-      reconcileCloses: undefined,
-    };
-  })();
+  // What this worker runs for Boat, from its settings alone (`assembleBoat`): the adapter where
+  // the builder is configured, with a resource gateway or without one.
+  const boatAssembly = await assembleBoat({
+    env,
+    db,
+    credentialCipher,
+    docker: resourceAssembly,
+  });
+  boatResourceReach = boatAssembly?.reach;
   const boatRuntime = boatAssembly?.runtime;
   const targetOptions = {
     ...baseTargetOptions,
@@ -1196,9 +1034,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           ...(boatResourceCursor === undefined ? {} : { after: boatResourceCursor }),
         });
         boatResourceCursor = resources.next;
-        const held = resources.entries.filter(
-          (entry) => !["configured", "closed", "pending"].includes(entry.outcome),
-        );
+        const held = boatResourceObligations(resources.entries);
         if (held.length > 0) console.warn("Boat resource obligations remain", { entries: held });
       }
       if (boatAssembly?.registration !== undefined) await boatAssembly.reconcileCatalog?.();

@@ -200,6 +200,34 @@ const workspace = await sealant.workspaces.create({
 A gVisor (`runsc`) workspace cannot be guarded, so it launches only with the opt-in. A control plane
 older than the option rejects it.
 
+## Workspaces that never reach project resources
+
+A workspace can be linked to a scope's resource instances (`scope.workspaces.link()`), and reaches
+them by alias (`db`). On the Boat runtime that reach is built when the workspace launches: a gateway
+on the control plane's Docker host, a tunnel to it and a resolver in the VM. A workspace whose
+worktree binds no resource does not need any of it:
+
+```ts
+const workspace = await sealant.workspaces.create({
+  source: { kind: "capture", endpoint, token },
+  harness: claudeCode(),
+  runtime: "boat",
+  resources: "none",
+});
+```
+
+`resources: "none"` is a promise made at create and kept for the workspace's life, restarts
+included: this workspace will never be linked. On Boat it is launched with no gateway, tunnel or
+resolver, is ready sooner, and can run on a deployment that has no resource gateway. Linking it
+later rejects with `ResourceWorkspaceWithoutResourcesError` (`reason` `workspace-without-resources`)
+and changes nothing; create the workspace again without the option and link that one, and it reaches
+the resources from its next start. Docker and Kubernetes attach resources to a running workspace, so
+they do not enforce the option: a later link works there.
+
+A Boat deployment with no resource gateway refuses a Boat workspace created without the option
+before it is built: `ready()` rejects with code `gateway-unavailable`. A control plane older than
+the option rejects the create.
+
 ## Workspace environment variables
 
 Ordinary (non-secret) configuration set on the workspace at creation and inherited by every process

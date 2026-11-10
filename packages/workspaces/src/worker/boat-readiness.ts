@@ -30,7 +30,11 @@ export class BoatReadinessError extends Error {
 }
 /** Explicit launch and fresh observation. Neither method publishes readiness or enables runtime registration. */
 export interface BoatReadinessService {
-  /** Seals the launch once, prepares the tunnel, pushes the launch to the agent and observes health. */
+  /**
+   * Seals the launch once, prepares the tunnel, pushes the launch to the agent and observes health.
+   * A run launched without resources skips the tunnel: nothing is created on the gateway host and
+   * the guest is told nothing about a network.
+   */
   readonly launch: (
     target: BoatExecutionTarget,
     material: Redacted.Redacted<BoatLaunchMaterial>,
@@ -45,7 +49,10 @@ export class BoatReadiness extends Context.Service<BoatReadiness, BoatReadinessS
   "@sealant/workspaces/boat/BoatReadiness",
 ) {}
 
-/** The launch budget: the VM must boot sealantd and shake hands with the gateway within it. */
+/**
+ * The launch budget: the VM must boot sealantd and shake hands with the gateway within it (a run
+ * without resources has no gateway to shake hands with).
+ */
 const LAUNCH_BUDGET_MS = 120_000;
 /**
  * How far into the launch budget readiness may still start a poll. A poll waits on the agent for
@@ -88,8 +95,22 @@ const make: Effect.Effect<
     Effect.gen(function* () {
       if (!(yield* isCurrent(target))) return yield* Effect.fail(new BoatReadinessError("held"));
     });
+  /**
+   * Whether the run was launched without resources: frozen on its allocation when it was reserved,
+   * read from there by the launch and by every later observation. Never derived again.
+   */
+  const withoutResources = (target: BoatExecutionTarget) =>
+    allocationRepo
+      .get(target.runtimeInstanceId)
+      .pipe(Effect.map((allocation) => allocation?.input.resources === "none"));
   const observe = Effect.fn("BoatReadiness.observe")(function* (target: BoatExecutionTarget) {
     yield* current(target);
+    if (yield* withoutResources(target)) {
+      // No gateway and no tunnel to keep configured: the agent's health, then the daemon's.
+      const receipt = yield* execution.readiness(target);
+      yield* current(target);
+      return receipt;
+    }
     const prepared = yield* resources.prepare(target);
     yield* current(target);
     const receipt = yield* execution.readiness(target);
@@ -108,12 +129,17 @@ const make: Effect.Effect<
     yield* current(target);
     yield* execution.stage(target.runtimeInstanceId, material);
     yield* current(target);
-    const prepared = yield* resources.prepare(target);
-    yield* current(target);
-    yield* execution.recordIsolation(target, {
-      resourceReceipt: prepared.guest.receipt,
-      tunnelReceipt: prepared.gateway.receipt,
-    });
+    if (yield* withoutResources(target)) {
+      // Frozen before the launch is pushed: this guest is never asked to configure a network.
+      yield* execution.recordIsolation(target, { resources: "none" });
+    } else {
+      const prepared = yield* resources.prepare(target);
+      yield* current(target);
+      yield* execution.recordIsolation(target, {
+        resourceReceipt: prepared.guest.receipt,
+        tunnelReceipt: prepared.gateway.receipt,
+      });
+    }
     yield* current(target);
     // Launch owns durable issuance and exact adoption. Readiness retries never push another launch.
     yield* Effect.gen(function* () {

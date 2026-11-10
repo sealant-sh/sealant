@@ -827,8 +827,9 @@ export const workerServerEnvSchema = databaseEnvSchema
   .extend({
     /**
      * The Boat builder. Set (with SEALANT_BOAT_STATE_DIRECTORY), this worker serves Boat
-     * workspaces, the way SEALANT_MICROVM_BUILD_ROLE_ARN makes it serve MicroVM ones; the rest of
-     * the Boat configuration is then required.
+     * workspaces, the way SEALANT_MICROVM_BUILD_ROLE_ARN makes it serve MicroVM ones; the Boat
+     * provider configuration is then required. The resource gateway is not: see
+     * SEALANT_BOAT_GATEWAY_HOST_ID.
      */
     SEALANT_BOAT_BUILDER_OWNER: z.uuid().optional(),
     SEALANT_BOAT_STATE_DIRECTORY: z
@@ -836,6 +837,14 @@ export const workerServerEnvSchema = databaseEnvSchema
       .startsWith("/")
       .refine((value) => !value.includes("\0") && !value.endsWith("/"))
       .optional(),
+    /**
+     * The resource gateway: this stable id of the Docker host its containers run on, with
+     * SEALANT_BOAT_GATEWAY_RELAY_HOST and SEALANT_BOAT_GATEWAY_IMAGE. All three, or none. With
+     * them a Boat workspace reaches its project's resources (`@db`) through a gateway on this
+     * worker's Docker host, which must then be the deployment's default runtime. With none, Boat
+     * needs no Docker host: the worker serves workspaces created with `runtime.resources: "none"`
+     * and refuses any other Boat workspace before it is built (`gateway-unavailable`).
+     */
     SEALANT_BOAT_GATEWAY_HOST_ID: z.uuid().optional(),
     /**
      * Where this worker reaches the gateways' published WireGuard ports (the Docker host's address
@@ -860,27 +869,30 @@ export const workerServerEnvSchema = databaseEnvSchema
 export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) => {
   const hasCredential = hasBoatCredential(input);
   addBoatProviderIssues(input, ctx);
-  // The gateway's host, its image and where the worker relays every tunnel to it: all, or none.
+  // The resource gateway is optional, and all or nothing: its host, its image and where the worker
+  // relays every tunnel to it. With it, Boat workspaces reach project resources and the gateways
+  // run on this worker's Docker host. Without it, Boat needs no Docker host: the worker serves only
+  // workspaces created never to be linked to resources (`runtime.resources: "none"`).
   const gatewayKeys = [
     "SEALANT_BOAT_GATEWAY_HOST_ID",
     "SEALANT_BOAT_GATEWAY_RELAY_HOST",
     "SEALANT_BOAT_GATEWAY_IMAGE",
   ] as const;
-  const relayed = input.SEALANT_BOAT_GATEWAY_RELAY_HOST !== undefined;
-  if (gatewayKeys.some((key) => input[key] !== undefined)) {
-    if (!relayed)
+  const missingGatewayKeys = gatewayKeys.filter((key) => input[key] === undefined);
+  if (missingGatewayKeys.length < gatewayKeys.length) {
+    for (const key of missingGatewayKeys)
       ctx.addIssue({
         code: "custom",
-        path: ["SEALANT_BOAT_GATEWAY_RELAY_HOST"],
-        message:
-          "Boat resource reconciliation requires SEALANT_BOAT_GATEWAY_RELAY_HOST: the address this worker reaches the gateways at, where it relays every tunnel it carries over HTTPS.",
+        path: [key],
+        message: `Boat resource reconciliation requires ${key}${
+          key === "SEALANT_BOAT_GATEWAY_RELAY_HOST"
+            ? " (the address this worker reaches the gateways at, where it relays every tunnel it carries over HTTPS)"
+            : ""
+        }: the complete gateway configuration is ${gatewayKeys.join(", ")}, and ${missingGatewayKeys.join(", ")} ${
+          missingGatewayKeys.length === 1 ? "is" : "are"
+        } not set. Set all three, or none of them to run Boat without a resource gateway.`,
       });
-    for (const key of [
-      "SEALANT_BOAT_GATEWAY_HOST_ID",
-      "SEALANT_BOAT_GATEWAY_IMAGE",
-      "SEALANT_BOAT_DEPLOYMENT_ID",
-      "SEALANT_CREDENTIALS_KEY",
-    ] as const) {
+    for (const key of ["SEALANT_BOAT_DEPLOYMENT_ID", "SEALANT_CREDENTIALS_KEY"] as const) {
       if (input[key] === undefined)
         ctx.addIssue({
           code: "custom",
@@ -902,22 +914,14 @@ export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) =>
         message: "Boat resource reconciliation requires the Docker resource host.",
       });
   }
-  // Either builder setting is Boat serving workspaces from this worker.
+  // Either builder setting is Boat serving workspaces from this worker, with a resource gateway
+  // or without one.
   if (
     input.SEALANT_BOAT_BUILDER_OWNER !== undefined ||
     input.SEALANT_BOAT_STATE_DIRECTORY !== undefined
   ) {
-    if (!relayed)
-      ctx.addIssue({
-        code: "custom",
-        path: ["SEALANT_BOAT_GATEWAY_RELAY_HOST"],
-        message:
-          "Boat workspaces require SEALANT_BOAT_GATEWAY_RELAY_HOST: the address this worker reaches the gateways at, where it relays every tunnel it carries over HTTPS.",
-      });
     for (const key of [
       "SEALANT_BOAT_DEPLOYMENT_ID",
-      "SEALANT_BOAT_GATEWAY_HOST_ID",
-      "SEALANT_BOAT_GATEWAY_IMAGE",
       "SEALANT_BOAT_BUILDER_OWNER",
       "SEALANT_BOAT_STATE_DIRECTORY",
       "SEALANT_CREDENTIALS_KEY",

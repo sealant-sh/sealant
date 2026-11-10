@@ -75,6 +75,21 @@ const dotfilesPayload = (ownerUserId: string): CreateWorkspaceRequest => ({
   },
 });
 
+/** A create whose spec says, or does not say, that its workspace is never linked to resources. */
+const resourcesPayload = (ownerUserId: string, resources?: "none"): CreateWorkspaceRequest => ({
+  ownerUserId,
+  registryId: "default",
+  repository: "resources-restart",
+  tag: "e2e",
+  spec: {
+    sources: {
+      workspace: { kind: "git", provider: "generic", url: "https://github.com/example/repo.git" },
+    },
+    harness: { id: "opencode" },
+    ...(resources === undefined ? {} : { runtime: { resources } }),
+  },
+});
+
 /** One in-memory store behind the three repositories create and restart use. */
 interface Store {
   workspace?: Workspace;
@@ -364,6 +379,70 @@ describe("restartWorkspace dotfiles", () => {
         expect(store.jobs.size).toBe(count);
       }).pipe(Effect.provide(makeLayer(store))),
     );
+  });
+
+  it("stores `runtime.resources` with the workspace on create, and a restart launches with the same answer", async () => {
+    for (const resources of ["none", undefined] as const) {
+      const store = newStore();
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const owner = `usr_resources_${resources ?? "default"}`;
+          const created = yield* createWorkspace({
+            payload: resourcesPayload(owner, resources),
+            headers: {},
+          });
+          const firstRunId = store.workspace?.latestRunId ?? "";
+          // What the worker launches from, and what every later read (a restart, a link) reads.
+          expect(store.jobs.get(firstRunId)?.requestPayload.runtime.resources).toBe(resources);
+          expect(store.snapshots.get(firstRunId)?.runtime.resources).toBe(resources);
+          settle(store, firstRunId);
+          const restarted = yield* restartWorkspace({
+            workspaceId: created.workspaceId,
+            payload: { ownerUserId: owner },
+          });
+          expect(restarted.runId).not.toBe(firstRunId);
+          expect(store.jobs.get(restarted.runId)?.requestPayload.runtime.resources).toBe(resources);
+          expect(store.snapshots.get(restarted.runId)?.runtime.resources).toBe(resources);
+          // Absent stays absent: nothing is written for a workspace created without the option.
+          if (resources === undefined)
+            expect(store.jobs.get(restarted.runId)?.requestPayload.runtime).not.toHaveProperty(
+              "resources",
+            );
+        }).pipe(Effect.provide(makeLayer(store))),
+      );
+    }
+  });
+
+  it("refuses a `runtime.resources` value it does not know at create", async () => {
+    const store = newStore();
+    const refused = await Effect.runPromise(
+      Effect.result(
+        createWorkspace({
+          payload: {
+            ownerUserId: "usr_resources_invalid",
+            registryId: "default",
+            repository: "resources-invalid",
+            tag: "e2e",
+            spec: {
+              sources: {
+                workspace: {
+                  kind: "git",
+                  provider: "generic",
+                  url: "https://github.com/example/repo.git",
+                },
+              },
+              harness: { id: "opencode" },
+              runtime: { resources: "all" },
+            },
+          },
+          headers: {},
+        }),
+      ).pipe(Effect.provide(makeLayer(store))),
+    );
+    expect(Result.isFailure(refused) && refused.failure).toMatchObject({
+      _tag: "WorkspaceBadRequestError",
+    });
+    expect(store.jobs.size).toBe(0);
   });
 
   it("keeps the archives out of the snapshot and in the build job on create", async () => {
