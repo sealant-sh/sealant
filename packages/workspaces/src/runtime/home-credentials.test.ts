@@ -1384,6 +1384,31 @@ forEachShell("a login is never in any process's argv or environment", () => {
       expect(exit.exitCode).toBe(HOME_SCRIPT_EXIT.missing);
     });
   }
+
+  it("fails on any other refusal of the write, and does not wait for an exit that may never come", async () => {
+    // The script is still alive and waiting on stdin: closing it would hand it an empty payload,
+    // and waiting for its exit would hang the launch.
+    const refused = new SealantControlError({
+      operation: "writeStdin",
+      code: 16,
+      message: "queue full",
+    });
+    let closed = false;
+    const session: HomeScriptSession = {
+      exec: () => Effect.succeed(create(ExecAcceptedSchema, { processId: "proc_1" })),
+      writeStdin: () => Effect.fail(refused),
+      closeStdin: () =>
+        Effect.sync(() => {
+          closed = true;
+        }),
+      events: Stream.never,
+    };
+    const result = await Effect.runPromise(
+      Effect.result(runHomeScriptInSession(session, "cat", "payload")),
+    );
+    expect(result._tag).toBe("Failure");
+    expect(closed).toBe(false);
+  });
 });
 
 const keyFile = (home: string, id: string) => join(home, CLAUDE_KEY_DIR, id);
