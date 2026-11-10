@@ -505,6 +505,15 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
           );
         }
         yield* execution.hold(target);
+        // A daemon that is up needs no recovery boot and no token: it is drained as it is. This
+        // is every attempt after the one that restarted it, which the sweep hands no token (it
+        // reads the daemon as running), and whose drain is the only thing left to do. With a
+        // token and a recovery boot the agent is asked, and answers `running` for it itself.
+        if (
+          (input.daemonRecoveryBoot !== true || input.secretEnv === undefined) &&
+          (yield* execution.daemon(target)).kind === "up"
+        )
+          return { outcome: "running" } as const;
         // A daemon may have run on it: only a recovery boot can save what its disk holds. One
         // without it would run its ordinary boot over that work, and one without its capture
         // token could ship nothing.

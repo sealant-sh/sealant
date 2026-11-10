@@ -7198,6 +7198,63 @@ describe.runIf(databaseUrl !== undefined)(
         expect(s.guest.starts).toBe(1);
       }));
 
+    it("drains a restarted daemon again on the next recovery when its first drain did not finish, without restarting it twice, and deletes the VM only then", () =>
+      test(async (s) => {
+        // Silent while it is dead; restarted, its FINAL is not complete within the first drain.
+        const f = await readyPaths(s, ["unreachable", captureStatus({ complete: false })]);
+        s.guest.health = () => daemonExited;
+        expect(await execute(f.reconcileExits())).toBe(1);
+        s.guest.recovery = "restarted";
+        expect(await execute(f.recover(f.runId))).toBe("retained");
+        expect(f.recovers()).toBe(1);
+        expect(s.provider.deleteCalls).toBe(0);
+        expect(await released(s, f.runId)).toMatchObject(NOTHING_RELEASED);
+        // The daemon is up now, so the sweep reads it running and hands no capture token. It is
+        // drained as it is: not refused for the missing token, and not restarted a second time.
+        s.guest.health = () => undefined;
+        const next = await execute(s.final([savedStatus()]));
+        expect(await execute(next.recover(f.runId))).toBe("released");
+        expect(f.recovers()).toBe(1);
+        expect(next.daemon.flushRequests.map((request) => request?.kind)).toEqual(["final"]);
+        expect(s.provider.deleteCalls).toBe(1);
+        expect(await f.row()).toMatchObject({ status: "stopped", removedAt: expect.any(Date) });
+        expect(await f.drain()).toMatchObject({
+          state: "stopped",
+          deletionState: "deleted",
+          retainedAt: null,
+        });
+        expect(await released(s, f.runId)).toMatchObject(REMOVED);
+      }));
+
+    it("drains a daemon restarted during a requested stop on the next recovery, where nothing else would: the stopped run's VM is not kept with its work unsaved", () =>
+      test(async (s) => {
+        const target = await stopLaunched(s);
+        const first = await execute(s.final(["unreachable", captureStatus({ complete: false })]));
+        // The daemon ended during the stop; the agent restarts it, and its FINAL is not complete
+        // within this attempt's drain.
+        s.guest.health = () => daemonExited;
+        s.guest.recovery = "restarted";
+        expect(await execute(first.stop(target))).toBe("kept");
+        expect(recovers(s)).toBe(1);
+        expect(s.provider.deleteCalls).toBe(0);
+        expect(await execute(s.canonical.getByRunId(target.runId))).toMatchObject({
+          retainedAt: expect.any(Date),
+          deletionState: null,
+        });
+        s.guest.health = () => undefined;
+        const next = await execute(s.final([savedStatus()]));
+        expect(await execute(next.recover(target.runId))).toBe("released");
+        expect(recovers(s)).toBe(1);
+        expect(next.daemon.flushRequests.map((request) => request?.kind)).toEqual(["final"]);
+        expect(s.provider.deleteCalls).toBe(1);
+        expect(await execute(s.canonical.getByRunId(target.runId))).toMatchObject({
+          state: "stopped",
+          deletionState: "deleted",
+          retainedAt: null,
+        });
+        expect(await released(s, target.runId)).toMatchObject(REMOVED);
+      }));
+
     it("removes the VM of a dead daemon whose recovery boot finds nothing to save (exit 76), without a FINAL", () =>
       test(async (s) => {
         const f = await readyPaths(s, ["unreachable"]);
@@ -7678,6 +7735,30 @@ describe.runIf(databaseUrl !== undefined).each([
         });
         expect(seen).toEqual([{ state: "missing" }]);
         expect(s.provider.deleteCalls).toBe(1);
+        expect(await released(s, f.target.runId)).toMatchObject(DISCHARGED);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }, options));
+
+  it("the adapter's stop resolves in the same call on Boat's 404 while its operation still reads processing, when nothing else reads the VM (the live run)", () =>
+    test(async (s) => {
+      const f = await stopping(s, 5_000);
+      try {
+        await discardedBy(s, f.target.runId);
+        // Boat withdraws the VM at the DELETE and its operation stays `processing`. No reconciler
+        // and no second stop reads the VM meanwhile: the removal reads it itself.
+        s.provider.deletionCompleted = false;
+        s.provider.beforeDeletion = async () => {
+          s.provider.sandboxMissing = true;
+        };
+        expect(await f.adapter.stop({ resourceId: f.target.sandboxId })).toMatchObject({
+          outcome: "stopped",
+        });
+        expect(s.provider.deleteCalls).toBe(1);
+        expect(await execute(s.db.select().from(schema.boatObservations))).toMatchObject([
+          { presence: "absent" },
+        ]);
         expect(await released(s, f.target.runId)).toMatchObject(DISCHARGED);
       } finally {
         await f.runtime.dispose();

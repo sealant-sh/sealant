@@ -97,8 +97,9 @@ export type BoatRemovalOutcome = "removed" | "discharging" | "deleting";
  * then nothing is.
  *
  * It is not the only observer of its own deletion. Boat answers 404 for the VM soon after a
- * DELETE, often while the operation still reads `processing`, and anything that reads the VM then
- * (the exit reconciler's `inspect`, a second stop) commits that absence and may discharge on it.
+ * DELETE, often while the operation still reads `processing`. The removal reads the VM itself
+ * while it waits, and anything else that reads the VM then (the exit reconciler's `inspect`, a
+ * second stop) commits that absence too and may discharge on it.
  * So once its DELETE is out, the removal takes a committed absence for the deletion's end wherever
  * it meets one: an allocation already discharged, an operation that can no longer be recorded or
  * polled, a wait that ran out. It then discharges in the same call. Only the committed observation
@@ -267,9 +268,12 @@ const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.
         for (;;) {
           const last = yield* Ref.get(latest);
           if (last === "absent" || last.status === "completed") return;
-          // Boat answers 404 for the VM before its operation reads `completed`: another observer
-          // may have committed that already.
-          if (yield* absenceCommitted(allocation)) return yield* Ref.set(latest, "absent");
+          // Boat answers 404 for the VM before its operation reads `completed`, at times by more
+          // than this whole wait. The removal reads the VM itself on every poll rather than wait
+          // for another observer to: the exit reconciler reads a stopping run only now and then.
+          // An absence already committed is read from the record, with no call to Boat.
+          if ((yield* observer.observe(allocation)).kind === "absent")
+            return yield* Ref.set(latest, "absent");
           yield* Effect.sleep(DELETION_POLL_MS);
           const next = yield* call(() => provider.api.getDeletion(operation.id));
           if (

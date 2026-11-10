@@ -117,7 +117,13 @@ const make = Effect.gen(function* () {
               ? current.removal
               : { kind: "absent", targetId: current.sandboxId, completed: true },
         });
-      }),
+      }).pipe(
+        // A discharge can meet another writer of the same allocation: a second discharge of the
+        // same absence (the removal's own and the sweep's), or the removal recording Boat's
+        // operation. The write that loses is decided again on what is stored now, which is
+        // deleted already or one write from it.
+        Effect.retry({ times: 2 }),
+      ),
     );
     yield* settle("secrets", executions.forgetResume(id));
     const tunnelSettled = yield* settle(
