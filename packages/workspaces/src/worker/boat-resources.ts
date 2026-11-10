@@ -3,10 +3,8 @@ import { isDeepStrictEqual } from "node:util";
 
 import type { CredentialCipher } from "@sealant/credentials";
 import {
-  BoatAllocationRepo,
-  BoatAllocationRepoLive,
-  BoatExecutionRepo,
-  BoatExecutionRepoLive,
+  BoatRunRepo,
+  BoatRunRepoLive,
   BoatTunnelRepo,
   BoatTunnelStoreError,
   boatTunnelRepoLayer,
@@ -15,7 +13,7 @@ import {
   type ResourceWorkspaceLink,
   type SealantDB,
 } from "@sealant/db";
-import type { BoatExecutionTarget } from "@sealant/validators";
+import { boatRunLaunchPhase, boatRunVmPhase, type BoatExecutionTarget } from "@sealant/validators";
 import { Context, Effect, Layer, Semaphore } from "effect";
 
 import {
@@ -168,7 +166,7 @@ export interface BoatGatewayHost {
 }
 /**
  * This deployment's Boat resource host. `gateway` is absent on a deployment with no resource
- * gateway: it serves only runs launched without resources (`resources: "none"` on the allocation),
+ * gateway: it serves only runs launched without resources (`resources: "none"` on the run's row),
  * configures nothing, and leaves any tunnel another deployment shape recorded in custody.
  */
 export class BoatResourcesHost extends Context.Service<
@@ -222,8 +220,7 @@ const boundary = <A>(
 const make: Effect.Effect<
   BoatResources["Service"],
   never,
-  | BoatAllocationRepo
-  | BoatExecutionRepo
+  | BoatRunRepo
   | BoatTunnelRepo
   | ResourceInstanceRepo
   | BoatTunnelCredentialsOwner
@@ -231,8 +228,7 @@ const make: Effect.Effect<
   | BoatResourcesHost
   | BoatTunnelCarrier
 > = Effect.gen(function* () {
-  const allocations = yield* BoatAllocationRepo;
-  const executions = yield* BoatExecutionRepo;
+  const runs = yield* BoatRunRepo;
   const tunnels = yield* BoatTunnelRepo;
   const resources = yield* ResourceInstanceRepo;
   const credentials = yield* BoatTunnelCredentialsOwner;
@@ -240,32 +236,27 @@ const make: Effect.Effect<
   const host = yield* BoatResourcesHost;
   const carrier = yield* BoatTunnelCarrier;
   const isCurrent = (target: BoatExecutionTarget) =>
-    boatTargetIsCurrent(target).pipe(Effect.provideService(BoatAllocationRepo, allocations));
+    boatTargetIsCurrent(target).pipe(Effect.provideService(BoatRunRepo, runs));
   const current = (target: BoatExecutionTarget) =>
     Effect.gen(function* () {
-      const execution = yield* executions.get(target.runtimeInstanceId);
-      if (
-        target.deploymentId !== host.deploymentId ||
-        !isDeepStrictEqual(execution?.target, target)
-      )
+      const run = yield* runs.get(target.runId);
+      if (target.deploymentId !== host.deploymentId || !isDeepStrictEqual(run?.target, target))
         return yield* Effect.fail(new BoatResourcesError("binding-conflict"));
-      if (!(yield* isCurrent(target)) || execution === undefined || execution.phase === "held")
+      const phase = run === undefined ? "none" : boatRunLaunchPhase(run);
+      if (!(yield* isCurrent(target)) || run === undefined || phase === "held")
         return yield* Effect.fail(new BoatResourcesError("held"));
       if (
-        execution.admission === null ||
-        !["installed", "issued", "running"].includes(execution.phase)
+        run.admissionOperationId === null ||
+        run.admissionEpoch === null ||
+        !["installed", "issued", "running"].includes(phase)
       )
         return yield* Effect.fail(new BoatResourcesError("pending"));
-      return execution.admission;
+      return { epoch: run.admissionEpoch, operationId: run.admissionOperationId };
     });
   const prepare = Effect.fn("BoatResources.prepare")(function* (target: BoatExecutionTarget) {
     // A run launched without resources is never given a gateway, a port or a tunnel, whoever asks.
-    const allocation = yield* boundary(
-      allocations.get(target.runtimeInstanceId),
-      "check-authority",
-    );
-    if (allocation?.input.resources === "none")
-      return yield* Effect.fail(new BoatResourcesError("held"));
+    const run = yield* boundary(runs.get(target.runId), "check-authority");
+    if (run?.resources === "none") return yield* Effect.fail(new BoatResourcesError("held"));
     const gatewayHost = host.gateway;
     if (gatewayHost === undefined) return yield* Effect.fail(gatewayUnavailable());
     const admission = yield* boundary(current(target), "check-authority");
@@ -399,31 +390,31 @@ const make: Effect.Effect<
   /** What the run needs: an outcome that is already known, or the target to configure. */
   const candidate = (id: string) =>
     Effect.gen(function* () {
-      const record = yield* allocations.get(id);
+      const run = yield* runs.get(id);
       // Launched without resources: no gateway, tunnel or carrier exists for it, in any phase.
-      if (record?.input.resources === "none") return "no-resources" as const;
+      if (run?.resources === "none") return "no-resources" as const;
       // Another deployment's run is never configured from here; a link job can name any run.
-      if (record !== undefined && record.input.deploymentId !== host.deploymentId)
-        return "held" as const;
-      if (record?.phase === "deleted") {
-        // Deletion retains its immutable target. Never try to configure that retired guest.
-        // Host cleanup is a separate obligation until canonical FINAL releases its reservation.
-        const tunnel = yield* tunnels.get(record.target?.runtimeInstanceId ?? id);
+      if (run !== undefined && run.deploymentId !== host.deploymentId) return "held" as const;
+      const phase = run === undefined ? undefined : boatRunVmPhase(run);
+      if (phase === "deleted") {
+        // Boat no longer has the guest. Never try to configure it. Host cleanup is a separate
+        // obligation until the removal releases its reservation.
+        const tunnel = yield* tunnels.get(id);
         return tunnel === undefined || tunnel.released === true
           ? ("closed" as const)
           : ("held" as const);
       }
-      if (record?.phase === "held") return "held" as const;
-      if (record?.target === null || record === undefined) return "pending" as const;
+      if (phase === "held") return "held" as const;
+      if (run === undefined || run.target === null) return "pending" as const;
       // A live launch owns its guest and gateway until it finishes or its lease lapses.
-      if (yield* allocations.launchInFlight(id)) return "pending" as const;
+      if (yield* runs.launchInFlight(id)) return "pending" as const;
       // No resource gateway here: a run that has a tunnel cannot be configured from this worker.
       if (host.gateway === undefined) return "unavailable" as const;
-      return record.target;
+      return run.target;
     });
   /**
    * Visit one run: report what is known of it, or configure it in its turn. `prepare` reads the
-   * run's authority itself (its allocation bound to this target, its run active, its execution
+   * run's authority itself (its row bound to this target, its run active, its launch
    * not held) before any host or guest effect, so a run that stopped while this waited is held.
    */
   const settle = (id: string): Effect.Effect<BoatResourcesOutcome> =>
@@ -453,7 +444,7 @@ const make: Effect.Effect<
     Effect.gen(function* () {
       const gatewayHost = host.gateway;
       if (gatewayHost === undefined) return page([], input.limit, []);
-      const ids = yield* allocations.listTunnelled({
+      const ids = yield* runs.listTunnelled({
         deploymentId: host.deploymentId,
         gatewayHostId: gatewayHost.hostId,
         limit: input.limit,
@@ -471,7 +462,7 @@ const make: Effect.Effect<
   ) {
     const live = input.live === undefined ? undefined : yield* reconcileLive(input.live);
     const settled = new Map(live?.entries.map((entry) => [entry.runId, entry.outcome]));
-    const ids = yield* allocations.list({
+    const ids = yield* runs.list({
       deploymentId: host.deploymentId,
       limit: input.limit,
       ...(input.after === undefined ? {} : { after: input.after }),
@@ -499,19 +490,18 @@ const make: Effect.Effect<
    */
   const configured = (id: string, gatewayHostId: string) =>
     Effect.gen(function* () {
-      const target = (yield* allocations.get(id))?.target ?? undefined;
-      if (target === undefined) return undefined;
-      const reservation = yield* tunnels.get(target.runtimeInstanceId);
+      const run = yield* runs.get(id);
+      const target = run?.target ?? undefined;
+      if (run === undefined || target === undefined) return undefined;
+      const reservation = yield* tunnels.get(target.runId);
       if (reservation?.network === undefined || reservation.binding.gatewayHostId !== gatewayHostId)
         return undefined;
-      const execution = yield* executions.get(target.runtimeInstanceId);
       if (
-        execution?.admission === null ||
-        execution === undefined ||
-        execution.phase === "held" ||
-        !isDeepStrictEqual(execution.target, reservation.binding.target) ||
-        execution.admission.epoch !== reservation.network.epoch ||
-        execution.admission.operationId !== reservation.network.operationId ||
+        run.admissionOperationId === null ||
+        boatRunLaunchPhase(run) === "held" ||
+        !isDeepStrictEqual(target, reservation.binding.target) ||
+        run.admissionEpoch !== reservation.network.epoch ||
+        run.admissionOperationId !== reservation.network.operationId ||
         !(yield* isCurrent(target))
       )
         return undefined;
@@ -523,7 +513,7 @@ const make: Effect.Effect<
     if (gatewayHost === undefined) return { runIds };
     let after: string | undefined;
     do {
-      const ids = yield* allocations.listTunnelled({
+      const ids = yield* runs.listTunnelled({
         deploymentId: host.deploymentId,
         gatewayHostId: gatewayHost.hostId,
         limit: BOAT_CARRIER_REOPEN.page,
@@ -563,7 +553,7 @@ const make: Effect.Effect<
     const gatewayHostId = host.gateway.hostId;
     let after: string | undefined;
     do {
-      const ids = yield* allocations.list({
+      const ids = yield* runs.list({
         deploymentId: host.deploymentId,
         limit: 100,
         ...(after === undefined ? {} : { after }),
@@ -589,8 +579,7 @@ const make: Effect.Effect<
 export const boatResourcesLayerNoDeps: Layer.Layer<
   BoatResources,
   never,
-  | BoatAllocationRepo
-  | BoatExecutionRepo
+  | BoatRunRepo
   | BoatTunnelRepo
   | ResourceInstanceRepo
   | BoatTunnelCredentialsOwner
@@ -606,8 +595,7 @@ export const boatResourcesLayer: Layer.Layer<
 > = boatResourcesLayerNoDeps.pipe(
   Layer.provide(
     Layer.mergeAll(
-      BoatAllocationRepoLive,
-      BoatExecutionRepoLive,
+      BoatRunRepoLive,
       boatTunnelRepoLayer,
       ResourceInstanceRepoLive,
       boatTunnelCredentialsLayer,

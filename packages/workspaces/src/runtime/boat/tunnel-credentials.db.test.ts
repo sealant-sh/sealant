@@ -6,8 +6,8 @@ import {
   credentialCipherLayer,
 } from "@sealant/credentials";
 import {
-  BoatExecutionRepo,
-  BoatExecutionRepoLive,
+  BoatRunRepo,
+  BoatRunRepoLive,
   BoatTunnelRepo,
   boatTunnelRepoLayer,
   makeSealantDBLayer,
@@ -15,18 +15,16 @@ import {
   user,
   workspaceAttempts,
 } from "@sealant/db";
-import { corruptBoatExecution } from "@sealant/db/testing/boat-executions";
+import { corruptBoatRun, seedBoatRun } from "@sealant/db/testing/boat-runs";
 import {
   corruptBoatTunnel,
-  deleteBoatExecutionWithTunnel,
+  deleteBoatRunWithTunnel,
   occupyBoatTunnelPorts,
 } from "@sealant/db/testing/boat-tunnels";
 import { withWorkspaceJobTestDatabase } from "@sealant/db/testing/workspace-publications";
 import {
   BOAT_TUNNEL_LEGACY_PORTS,
   BOAT_TUNNEL_PORTS,
-  boatExecutionRecordSchema,
-  boatExecutionTargetSchema,
   boatTunnelReservationSchema,
   boatWireGuardKeySchema,
   type BoatTunnelBinding,
@@ -63,6 +61,13 @@ const rawKeys = (credentials: BoatTunnelCredentials) => ({
   gateway: Redacted.value(credentials.gateway.privateKey),
   guest: Redacted.value(credentials.guest.privateKey),
 });
+/** A run whose bind exchange finished: its bearer is sealed and nothing is staged. */
+const CONTROL = {
+  exchangeId: randomUUID(),
+  exchangePublicKey: "p".repeat(100),
+  sealedExchange: null,
+  sealedControl: "test-control",
+};
 const requireRecord = (record: BoatTunnelReservation | undefined) => {
   if (record === undefined) throw new Error("missing test reservation");
   return record;
@@ -70,7 +75,7 @@ const requireRecord = (record: BoatTunnelReservation | undefined) => {
 interface TestContext {
   owner: BoatTunnelCredentialsOwner["Service"];
   repo: BoatTunnelRepo["Service"];
-  executions: BoatExecutionRepo["Service"];
+  runs: BoatRunRepo["Service"];
   cipher: CredentialCipher["Service"];
   db: SealantDB["Service"];
   seed: (host?: string, deployment?: string) => Promise<BoatTunnelBinding>;
@@ -87,14 +92,14 @@ const test = async (run: (context: TestContext) => Promise<void>) => {
     );
     const Test = boatTunnelCredentialsLayerNoDeps.pipe(
       Layer.provideMerge(boatTunnelRepoLayer),
-      Layer.provideMerge(BoatExecutionRepoLive),
+      Layer.provideMerge(BoatRunRepoLive),
       Layer.provideMerge(Infra),
     );
     await execute(
       Effect.gen(function* () {
         const owner = yield* BoatTunnelCredentialsOwner;
         const repo = yield* BoatTunnelRepo;
-        const executions = yield* BoatExecutionRepo;
+        const runs = yield* BoatRunRepo;
         const cipher = yield* CredentialCipher;
         const db = yield* SealantDB;
         const userId = `usr_${randomUUID()}`;
@@ -104,47 +109,19 @@ const test = async (run: (context: TestContext) => Promise<void>) => {
         const seed = async (host: string = randomUUID(), deployment = "test") => {
           const runId = randomUUID();
           await execute(db.insert(workspaceAttempts).values({ id: runId, ownerUserId: userId }));
-          const target = boatExecutionTargetSchema.parse({
-            deploymentId: deployment,
-            workspaceId: "workspace",
-            runId,
-            runtimeInstanceId: runId,
-            launchAttemptId: "attempt",
-            sourceId: "publication",
-            sandboxId: "bx_23456789",
-            diskLineage: `disk_${randomUUID()}`,
-            bootId: randomUUID(),
-            manifestDigest: "b".repeat(64),
-          });
-          // Every seeded execution owns a different sandbox within its deployment.
+          // Every seeded run owns a different sandbox within its deployment.
           const alphabet = "23456789abcdefghjkmnpqrstuvwxyz";
-          target.sandboxId = `bx_${randomUUID()
+          const sandboxId = `bx_${randomUUID()
             .replaceAll("-", "")
             .slice(0, 8)
             .split("")
             .map((c) => alphabet[parseInt(c, 16)])
             .join("")}`;
-          const before = await execute(
-            executions.reserve(
-              boatExecutionRecordSchema.parse({
-                target,
-                exchangeId: randomUUID(),
-                publicKey: "p".repeat(100),
-                sealedExchange: "test-exchange",
-                sealedControl: null,
-                admission: null,
-                phase: "exchange",
-              }),
-            ),
+          const target = await execute(
+            seedBoatRun(db, { runId, deploymentId: deployment, sandboxId }),
           );
-          await execute(
-            executions.advance(before, {
-              ...before,
-              phase: "control",
-              sealedExchange: null,
-              sealedControl: "test-control",
-            }),
-          );
+          // Its bearer is sealed: the launch state a tunnel is first reserved in.
+          await execute(corruptBoatRun(db, runId, CONTROL));
           return { target, gatewayHostId: host };
         };
         const reopen = (binding: BoatTunnelBinding) =>
@@ -155,9 +132,7 @@ const test = async (run: (context: TestContext) => Promise<void>) => {
           );
         const occupy = (host: string, ports: readonly number[]) =>
           execute(occupyBoatTunnelPorts(db, { gatewayHostId: host, ownerUserId: userId, ports }));
-        yield* Effect.promise(() =>
-          run({ owner, repo, executions, cipher, db, seed, occupy, reopen }),
-        );
+        yield* Effect.promise(() => run({ owner, repo, runs, cipher, db, seed, occupy, reopen }));
       }).pipe(Effect.provide(Test)),
     );
   });
@@ -215,7 +190,7 @@ describe("WireGuard key boundary", () => {
 
 describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
   it("freezes setup on legacy reservations and rejects every changed network field without releasing custody", () =>
-    test(async ({ seed, owner, repo, executions, db }) => {
+    test(async ({ seed, owner, repo, runs, db }) => {
       const binding = await seed();
       await execute(owner.prepare(binding));
       const before = requireRecord(await execute(repo.get(binding.target.runId)));
@@ -224,19 +199,13 @@ describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
       await expect(execute(repo.configure(before, network))).rejects.toThrow(
         "execution-unavailable",
       );
-      const control = await execute(executions.get(binding.target.runId));
-      if (control === undefined) throw new Error("missing control");
       await execute(
-        executions.advance(control, {
-          ...control,
-          phase: "installed",
-          admission: {
-            epoch: network.epoch,
-            operationId: network.operationId,
-            digest: "a".repeat(64),
-            docker: false,
-            sealedEnvelope: "test-envelope",
-          },
+        runs.stage(binding.target.runId, {
+          epoch: network.epoch,
+          operationId: network.operationId,
+          digest: "a".repeat(64),
+          docker: false,
+          sealedLaunch: "test-envelope",
         }),
       );
       const saved = await execute(repo.configure(before, network));
@@ -266,19 +235,17 @@ describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
         );
     }));
   it("serializes active host mutations and fences later dispatch on close", () =>
-    test(async ({ seed, owner, repo, executions }) => {
+    test(async ({ seed, owner, repo, runs }) => {
       const binding = await seed();
       await execute(owner.prepare(binding));
-      const control = await execute(executions.get(binding.target.runId));
-      if (control === undefined) throw new Error("missing execution");
       const admission = {
         epoch: 1,
         operationId: randomUUID(),
         digest: "a".repeat(64),
         docker: false,
-        sealedEnvelope: "sealed",
+        sealedLaunch: "sealed",
       };
-      await execute(executions.advance(control, { ...control, phase: "installed", admission }));
+      await execute(runs.stage(binding.target.runId, admission));
       const network = {
         epoch: admission.epoch,
         operationId: admission.operationId,
@@ -458,7 +425,7 @@ describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
       );
     }));
   it("refuses absent, exchange and held executions while retaining previously installed custody", () =>
-    test(async ({ seed, owner, repo, executions, db }) => {
+    test(async ({ seed, owner, repo, db }) => {
       const binding = await seed();
       await expect(
         execute(
@@ -468,32 +435,24 @@ describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
           }),
         ),
       ).rejects.toThrow("execution-unavailable");
-      const original = await execute(executions.get(binding.target.runId));
-      if (original === undefined) throw new Error("missing test execution");
+      // Its bind exchange still in flight: no bearer is sealed, so no tunnel is reserved.
       await execute(
-        corruptBoatExecution(db, binding.target.runId, {
-          ...original,
-          phase: "exchange",
-          sealedExchange: "test",
-          sealedControl: null,
-        }),
+        corruptBoatRun(db, binding.target.runId, { sealedExchange: "test", sealedControl: null }),
       );
       await expect(execute(owner.prepare(binding))).rejects.toThrow("execution-unavailable");
       expect(await execute(repo.get(binding.target.runId))).toBeUndefined();
-      await execute(corruptBoatExecution(db, binding.target.runId, original));
+      await execute(corruptBoatRun(db, binding.target.runId, CONTROL));
       await execute(owner.prepare(binding));
       const before = await execute(repo.get(binding.target.runId));
+      // Fenced after its launch was pushed: held.
       await execute(
-        corruptBoatExecution(db, binding.target.runId, {
-          ...original,
-          phase: "held",
-          admission: {
-            operationId: randomUUID(),
-            epoch: 1,
-            digest: "d".repeat(64),
-            docker: false,
-            sealedEnvelope: null,
-          },
+        corruptBoatRun(db, binding.target.runId, {
+          admissionOperationId: randomUUID(),
+          admissionEpoch: 1,
+          admissionDigest: "d".repeat(64),
+          docker: false,
+          launchIssuedAt: new Date(Date.now() - 1_000),
+          fencedAt: new Date(Date.now() - 1_000),
         }),
       );
       await expect(execute(owner.prepare(binding))).rejects.toThrow("execution-unavailable");
@@ -639,13 +598,11 @@ describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
       expect(JSON.stringify(failure)).not.toContain("sensitive-key-id");
       expect(failure).not.toHaveProperty("cause");
     }));
-  it("protects the outstanding reservation from generic execution deletion", () =>
+  it("protects the outstanding reservation from deletion of its run's row", () =>
     test(async ({ seed, owner, repo, db }) => {
       const binding = await seed();
       await execute(owner.prepare(binding));
-      await expect(
-        execute(deleteBoatExecutionWithTunnel(db, binding.target.runId)),
-      ).rejects.toThrow();
+      await expect(execute(deleteBoatRunWithTunnel(db, binding.target.runId))).rejects.toThrow();
       expect(await execute(repo.get(binding.target.runId))).toBeDefined();
     }));
 });

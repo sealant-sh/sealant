@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { BoatAllocationError } from "./allocation.js";
 import { BoatApiError } from "./config.js";
 import { boatGuestOutput, boatLaunchDiagnostic, boatLaunchSummary } from "./launch-diagnostics.js";
+import { BoatAllocationError } from "./vm.js";
 
 describe("Boat launch diagnostics", () => {
   it("preserves the agent operation, fixed route, reason and redacted body across launch wrappers", () => {

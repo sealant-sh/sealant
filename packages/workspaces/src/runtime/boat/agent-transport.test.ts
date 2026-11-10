@@ -17,12 +17,13 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 import { credentialCipherLayer } from "@sealant/credentials";
-import { BoatExecutionRepo, BoatExecutionStoreError } from "@sealant/db";
+import { BoatRunRepo, BoatRunStoreError } from "@sealant/db";
 import {
-  boatExecutionRecordSchema,
   boatExecutionTargetSchema,
-  type BoatExecutionRecord,
+  boatRunLaunchPhase,
+  boatRunSchema,
   type BoatExecutionTarget,
+  type BoatRun,
 } from "@sealant/validators";
 import { Context, Effect, Layer, Redacted } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -329,6 +330,8 @@ const startFakeDns = async (): Promise<{ port: number; close: () => Promise<void
 
 // ---- Core's side ---------------------------------------------------------------------------
 
+const SOURCE_ID = "22222222-2222-4222-8222-222222222222";
+const DISK_LINEAGE = "33333333-3333-4333-8333-333333333333";
 const target = (bootId: string): BoatExecutionTarget =>
   boatExecutionTargetSchema.parse({
     deploymentId: "dep-1",
@@ -336,9 +339,9 @@ const target = (bootId: string): BoatExecutionTarget =>
     runId: "run_abc-1",
     runtimeInstanceId: "run_abc-1",
     launchAttemptId: "11111111-1111-4111-8111-111111111111",
-    sourceId: "source",
+    sourceId: SOURCE_ID,
     sandboxId: "bx_23456789",
-    diskLineage: "disk-1",
+    diskLineage: DISK_LINEAGE,
     bootId,
     manifestDigest: MANIFEST_DIGEST,
   });
@@ -413,50 +416,129 @@ const providerApi = (
   }),
 });
 
-/** The execution store, in memory, with the repository's transition rules that matter here. */
-const parseRecord = (value: unknown) =>
-  Effect.try({
-    try: () => boatExecutionRecordSchema.parse(value),
-    catch: () => new BoatExecutionStoreError("invalid-record"),
+/** A repository method this suite never reaches. */
+const unused = () => Effect.die("not used");
+/**
+ * The run's row, in memory, with the repository's guards that matter here: the run starts as the
+ * VM owner leaves it (its VM bound to `target`), and each launch statement writes only where its
+ * guard holds. Nothing here is the VM's or the deletion's.
+ */
+const memoryRepo = (t: BoatExecutionTarget): BoatRunRepo["Service"] => {
+  let row: BoatRun = boatRunSchema.parse({
+    runId: t.runId,
+    deploymentId: t.deploymentId,
+    publicationId: t.sourceId,
+    workspaceId: t.workspaceId,
+    launchAttemptId: t.launchAttemptId,
+    manifestDigest: t.manifestDigest,
+    snapshotName: "snapshot",
+    resources: null,
+    idempotencyKey: "44444444-4444-4444-8444-444444444444",
+    diskLineage: t.diskLineage,
+    createIssuedAt: new Date(),
+    sandboxId: t.sandboxId,
+    createdSeenAt: new Date(),
+    target: t,
+    exchangeId: null,
+    exchangePublicKey: null,
+    sealedExchange: null,
+    sealedControl: null,
+    admissionOperationId: null,
+    admissionEpoch: null,
+    admissionDigest: null,
+    docker: null,
+    sealedLaunch: null,
+    isolation: null,
+    launchIssuedAt: null,
+    launchAcceptedAt: null,
+    fencedAt: null,
+    deletionClaimedAt: null,
+    deletionOperationId: null,
+    deletionCompletedAt: null,
+    absentAt: null,
+    absentBasis: null,
+    heldReason: null,
+    conflictingSandboxes: [],
   });
-const memoryRepo = (): BoatExecutionRepo["Service"] => {
-  const rows = new Map<string, BoatExecutionRecord>();
-  const parse = parseRecord;
+  /** One guarded statement: writes where `guard` holds, else fails `stale-transition`. */
+  const write = (guard: boolean, columns: Partial<BoatRun>) =>
+    Effect.suspend(() => {
+      if (!guard) return Effect.fail(new BoatRunStoreError("stale-transition"));
+      row = boatRunSchema.parse({ ...row, ...columns });
+      return Effect.succeed(row);
+    });
   return {
-    get: (id) => Effect.succeed(rows.get(id)),
-    reserve: (record) =>
-      Effect.gen(function* () {
-        const parsed = yield* parse(record);
-        const saved = rows.get(parsed.target.runtimeInstanceId);
-        if (saved === undefined) rows.set(parsed.target.runtimeInstanceId, parsed);
-        const now = rows.get(parsed.target.runtimeInstanceId);
-        if (now === undefined || !isDeepStrictEqual(now.target, parsed.target))
-          return yield* Effect.fail(new BoatExecutionStoreError("target-conflict"));
-        return now;
+    get: (id) => Effect.sync(() => (id === row.runId ? row : undefined)),
+    beginExchange: (_target, exchange) =>
+      Effect.suspend(() =>
+        row.exchangeId === null && row.fencedAt === null
+          ? write(true, {
+              exchangeId: exchange.exchangeId,
+              exchangePublicKey: exchange.publicKey,
+              sealedExchange: exchange.sealedExchange,
+            })
+          : Effect.succeed(row),
+      ),
+    sealControl: (_id, exchangeId, sealedControl) =>
+      write(row.exchangeId === exchangeId && row.sealedControl === null && row.fencedAt === null, {
+        sealedControl,
+        sealedExchange: null,
       }),
-    advance: (previous, next) =>
-      Effect.gen(function* () {
-        const parsed = yield* parse(next);
-        const saved = rows.get(previous.target.runtimeInstanceId);
-        if (!isDeepStrictEqual(saved, previous))
-          return yield* Effect.fail(new BoatExecutionStoreError("stale-transition"));
-        rows.set(parsed.target.runtimeInstanceId, parsed);
-        return parsed;
+    stage: (_id, admission) =>
+      write(
+        row.sealedControl !== null && row.admissionOperationId === null && row.fencedAt === null,
+        {
+          admissionOperationId: admission.operationId,
+          admissionEpoch: admission.epoch,
+          admissionDigest: admission.digest,
+          docker: admission.docker,
+          sealedLaunch: admission.sealedLaunch,
+        },
+      ),
+    isolate: (_id, isolation) =>
+      Effect.suspend(() =>
+        isDeepStrictEqual(row.isolation, isolation)
+          ? Effect.succeed(row)
+          : write(row.isolation === null && row.fencedAt === null, { isolation }),
+      ),
+    issueLaunch: () =>
+      write(
+        row.launchIssuedAt === null &&
+          row.fencedAt === null &&
+          row.sealedLaunch !== null &&
+          row.isolation !== null,
+        { launchIssuedAt: new Date() },
+      ),
+    acceptLaunch: () =>
+      write(row.launchIssuedAt !== null && row.launchAcceptedAt === null && row.fencedAt === null, {
+        launchAcceptedAt: new Date(),
       }),
-    isolate: (previous, isolation) =>
-      Effect.gen(function* () {
-        const parsed = yield* parse({ ...previous, isolation });
-        rows.set(parsed.target.runtimeInstanceId, parsed);
-        return parsed;
-      }),
-    abort: () => Effect.die("not used"),
-    forgetResume: () => Effect.die("not used"),
+    fence: () => write(true, { fencedAt: row.fencedAt ?? new Date() }),
+    getBySandbox: unused,
+    list: unused,
+    listTunnelled: unused,
+    listBearing: unused,
+    isActive: unused,
+    launchInFlight: unused,
+    createAgeMs: unused,
+    reserve: unused,
+    sameLaunch: unused,
+    issueCreate: unused,
+    adopt: unused,
+    hold: unused,
+    seen: unused,
+    recordNotFound: unused,
+    recordNeverCreated: unused,
+    bind: unused,
+    claimDeletion: unused,
+    lapseDeletionClaim: unused,
+    recordDeletion: unused,
   };
 };
 
 interface Core {
   readonly executor: BoatExecution["Service"];
-  readonly repo: BoatExecutionRepo["Service"];
+  readonly repo: BoatRunRepo["Service"];
   readonly transport: BoatGuestTransport;
   readonly probe: { healthy: boolean };
 }
@@ -479,13 +561,13 @@ const core = async (vm: Vm, t: BoatExecutionTarget, agent: Agent): Promise<Core>
       healthy: probe.healthy,
     }),
   };
-  const repo = memoryRepo();
+  const repo = memoryRepo(t);
   const context = await Effect.runPromise(
     Layer.build(
       boatExecutionLayerNoDeps.pipe(
         Layer.provide(
           Layer.mergeAll(
-            Layer.succeed(BoatExecutionRepo, repo),
+            Layer.succeed(BoatRunRepo, repo),
             Layer.succeed(BoatGuestTransportService, transport),
             credentialCipherLayer({ key: Buffer.alloc(32, 7).toString("base64") }),
           ),
@@ -533,13 +615,14 @@ const launched = async (extraEnv: Record<string, string> = {}) => {
   await execute(c.executor.exchange(t));
   await execute(c.executor.stage(t.runtimeInstanceId, material()));
   const record = await execute(c.repo.get(t.runtimeInstanceId));
-  if (record?.admission == null) throw new Error("no admission");
+  if (record?.admissionOperationId == null || record.admissionEpoch === null)
+    throw new Error("no admission");
   const gatewayKey = wireguardKey();
   const network = await execute(
     c.executor.isolate(t, {
       network: {
-        epoch: record.admission.epoch,
-        operationId: record.admission.operationId,
+        epoch: record.admissionEpoch,
+        operationId: record.admissionOperationId,
         subnet: "10.42.7.32/27",
       },
       privateKey: Redacted.make(wireguardKey()),
@@ -561,10 +644,11 @@ describe("Core's Boat execution owner against the real guest agent", () => {
     );
     expect(bind).toMatchObject({
       boot_id: t.bootId,
-      identity: { deployment_id: "dep-1", instance_id: t.sandboxId, disk_lineage: "disk-1" },
+      identity: { deployment_id: "dep-1", instance_id: t.sandboxId, disk_lineage: DISK_LINEAGE },
     });
     const control = await execute(c.repo.get(t.runtimeInstanceId));
-    expect(control?.phase).toBe("installed");
+    if (control === undefined) throw new Error("no run");
+    expect(boatRunLaunchPhase(control)).toBe("installed");
     expect(JSON.stringify(control)).not.toContain(bind.bearer_sha256);
     // The network intent reached wg with the key in the agent's tmpfs key file, never in argv,
     // and with the carrier's relay on loopback as its peer: the VM dials nothing of the gateway's.
@@ -626,7 +710,7 @@ describe("Core's Boat execution owner against the real guest agent", () => {
         boatExecutionLayerNoDeps.pipe(
           Layer.provide(
             Layer.mergeAll(
-              Layer.succeed(BoatExecutionRepo, c.repo),
+              Layer.succeed(BoatRunRepo, c.repo),
               Layer.succeed(BoatGuestTransportService, {
                 ...lossy,
                 probe: async () => ({ runtimeId: "rt_fixture", healthy: true }),
@@ -641,7 +725,9 @@ describe("Core's Boat execution owner against the real guest agent", () => {
     await expect(execute(executor.launch(t.runtimeInstanceId))).rejects.toThrow(
       "transport-unavailable",
     );
-    expect((await execute(c.repo.get(t.runtimeInstanceId)))?.phase).toBe("issued");
+    const issued = await execute(c.repo.get(t.runtimeInstanceId));
+    if (issued === undefined) throw new Error("no run");
+    expect(boatRunLaunchPhase(issued)).toBe("issued");
     // The agent answers 409 "already booted": the same launch, adopted.
     expect(await execute(executor.launch(t.runtimeInstanceId))).toBe("running");
     await waitFor(() => exists(vm.socketPath));
@@ -699,20 +785,6 @@ describe("Core's Boat execution owner against the real guest agent", () => {
     await stopAgent(agent);
     const fresh = await startAgent(vm, { FAKE_SEALANTD_EXIT75: "1" });
     const again = await core(vm, t, fresh);
-    const record = await execute(c.repo.get(t.runtimeInstanceId));
-    if (record === undefined) throw new Error("record");
-    await execute(
-      again.repo
-        .reserve({
-          ...record,
-          phase: "exchange",
-          sealedExchange: "x",
-          sealedControl: null,
-          admission: null,
-          isolation: undefined,
-        })
-        .pipe(Effect.catch(() => Effect.void)),
-    );
     const hosted = { origin: HOSTED_ORIGIN, cookie: secret("local-cookie-only") };
     const bearer = JSON.parse(
       await readFile(path.join(vm.dir, "state", "agent", "arm.json"), "utf8"),

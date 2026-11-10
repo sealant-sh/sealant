@@ -2,8 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import {
-  boatAllocationRecordSchema,
-  boatExecutionRecordSchema,
   boatTunnelReservationSchema,
   nativeArtifactConsumerSchema,
   nativeCatalogRecordSchema,
@@ -23,19 +21,14 @@ import { and, asc, eq, gt, isNull, ne, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
-import { boatAllocations } from "../schema/boat-allocations.js";
-import { boatExecutions } from "../schema/boat-executions.js";
-import { boatObservations } from "../schema/boat-observations.js";
+import { boatRuns } from "../schema/boat-runs.js";
 import { boatTunnels } from "../schema/boat-tunnels.js";
 import { workspaceAttempts } from "../schema/control-plane.js";
 import {
   nativePublicationConsumers as consumers,
   nativePublications as publications,
 } from "../schema/native-publications.js";
-import {
-  workspaceRuntimeInstances,
-  workspaceCaptureDrains,
-} from "../schema/workspace-build-jobs.js";
+import { workspaceRuntimeInstances } from "../schema/workspace-build-jobs.js";
 
 /** Persistence failures never imply a publication was absent or a consumer was released. */
 export class NativeCatalogStoreError extends Error {
@@ -99,10 +92,10 @@ export interface NativePublicationRepoService {
     publicationId: string,
   ) => Effect.Effect<void, NativeCatalogStoreError>;
   /**
-   * Pending pins no VM can ever discharge: the run never got a Boat allocation (its native build
+   * Pending pins no VM can ever discharge: the run never got a Boat row (its native build
    * failed or was abandoned, or it stopped first) and the run is over. Over means its runtime row
    * is failed or stopped with no live launch lease, or it has no runtime row and its attempt
-   * failed or was cancelled. A pin with an allocation belongs to the lifecycle of that VM.
+   * failed or was cancelled. The pin of a run that has a Boat row belongs to the lifecycle of that VM.
    */
   readonly endedUnallocatedConsumers: (input: {
     readonly deploymentId: string;
@@ -549,90 +542,39 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
             return yield* Effect.fail(new NativeCatalogStoreError("consumer", "consumer-released"));
           }
           if (state === "released") {
-            const [allocation] = yield* db
+            const [run] = yield* db
               .select()
-              .from(boatAllocations)
-              .where(eq(boatAllocations.runtimeInstanceId, consumer.runtimeInstanceId))
+              .from(boatRuns)
+              .where(eq(boatRuns.runId, consumer.runtimeInstanceId))
               .limit(1);
-            if (allocation !== undefined) {
-              const bound = boatAllocationRecordSchema.safeParse(allocation.record);
+            if (run !== undefined) {
               const [runtime] = yield* db
                 .select()
                 .from(workspaceRuntimeInstances)
                 .where(eq(workspaceRuntimeInstances.runId, consumer.runId));
-              const [capture] = yield* db
-                .select()
-                .from(workspaceCaptureDrains)
-                .where(eq(workspaceCaptureDrains.runId, consumer.runId));
               const [tunnel] = yield* db
                 .select()
                 .from(boatTunnels)
                 .where(eq(boatTunnels.runtimeInstanceId, consumer.runtimeInstanceId));
               const reservation = boatTunnelReservationSchema.safeParse(tunnel?.record);
-              const [execution] = yield* db
-                .select()
-                .from(boatExecutions)
-                .where(eq(boatExecutions.runtimeInstanceId, consumer.runtimeInstanceId));
-              const aborted = boatExecutionRecordSchema.safeParse(execution?.record);
-              const [observed] = yield* db
-                .select()
-                .from(boatObservations)
-                .where(eq(boatObservations.runtimeInstanceId, consumer.runtimeInstanceId));
-              // Boat positively no longer has the VM: nothing of it can use the publication, and
-              // its slot was released after host cleanup.
-              const observedAbsent =
-                bound.success &&
-                observed?.presence === "absent" &&
-                observed.sandboxId === bound.data.sandboxId &&
-                (tunnel === undefined ||
-                  (reservation.success &&
-                    reservation.data.released === true &&
-                    tunnel.releasedAt !== null));
-              const deletedUnused =
-                bound.success &&
-                bound.data.phase === "deleted" &&
-                bound.data.removal !== undefined &&
-                bound.data.removal.kind !== "issued" &&
-                bound.data.removal.completed &&
-                (bound.data.target === null
-                  ? execution === undefined && tunnel === undefined
-                  : aborted.success &&
-                    aborted.data.phase === "aborted" &&
-                    isDeepStrictEqual(aborted.data.target, bound.data.target) &&
-                    (tunnel === undefined ||
-                      (reservation.success &&
-                        reservation.data.released === true &&
-                        reservation.data.aborted === true &&
-                        tunnel.releasedAt !== null &&
-                        isDeepStrictEqual(reservation.data.binding.target, bound.data.target))));
-              // The immutable allocation remains as an audit record after canonical FINAL.
+              // The pin of a run that has a Boat row goes on one thing only: Boat's own word, on
+              // that row, that it holds no VM for the run (its typed 404 for a VM seen past
+              // creation, its completed deletion, or a create that was never issued or was
+              // refused). Nothing of the VM can use the publication again, whatever the run's
+              // runtime row says by now (the shared stop records that after the removal returns).
+              // A run that had a tunnel releases its slot first, after host cleanup.
               if (
-                !bound.success ||
-                (!deletedUnused &&
-                  !observedAbsent &&
-                  (bound.data.phase !== "bound" || bound.data.target === null)) ||
-                !isDeepStrictEqual(bound.data.input.consumer, consumer) ||
-                bound.data.input.publication.publicationId !== publicationId ||
-                allocation.publicationId !== publicationId ||
-                allocation.sandboxId !== bound.data.sandboxId ||
+                run.absentAt === null ||
+                run.publicationId !== publicationId ||
+                (tunnel !== undefined &&
+                  !(
+                    reservation.success &&
+                    reservation.data.released === true &&
+                    tunnel.releasedAt !== null
+                  )) ||
                 runtime?.adapter !== "boat" ||
-                runtime.resourceId !== bound.data.sandboxId ||
-                runtime.publicationId !== publicationId ||
-                // Boat's own word that it no longer has the VM (or never had one for an unused
-                // launch) is what lets the pin go: nothing of it can use the publication again,
-                // whatever its run's row says by now (the shared stop records that after the
-                // removal returns). Without it, the row must say the run stopped and was removed.
-                (!deletedUnused &&
-                  !observedAbsent &&
-                  (runtime.status !== "stopped" || runtime.removedAt === null)) ||
-                (!deletedUnused &&
-                  !observedAbsent &&
-                  (capture?.deletionState !== "deleted" ||
-                    !reservation.success ||
-                    reservation.data.released !== true ||
-                    tunnel?.releasedAt === null ||
-                    reservation.data.removal?.completed !== true ||
-                    !isDeepStrictEqual(reservation.data.binding.target, bound.data.target)))
+                runtime.resourceId !== run.sandboxId ||
+                runtime.publicationId !== publicationId
               )
                 return yield* Effect.fail(
                   new NativeCatalogStoreError("consumer", "consumer-conflict"),
@@ -822,10 +764,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
             })
             .from(consumers)
             .innerJoin(publications, eq(publications.id, consumers.publicationId))
-            .leftJoin(
-              boatAllocations,
-              eq(boatAllocations.runtimeInstanceId, consumers.runtimeInstanceId),
-            )
+            .leftJoin(boatRuns, eq(boatRuns.runId, consumers.runtimeInstanceId))
             .leftJoin(
               workspaceRuntimeInstances,
               eq(workspaceRuntimeInstances.runId, consumers.runId),
@@ -835,7 +774,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
               and(
                 eq(consumers.state, "pending"),
                 eq(publications.deploymentId, input.deploymentId),
-                isNull(boatAllocations.runtimeInstanceId),
+                isNull(boatRuns.runId),
                 sql`(
                   (${workspaceRuntimeInstances.runId} is not null
                     and ${workspaceRuntimeInstances.status} in ('failed', 'stopped')

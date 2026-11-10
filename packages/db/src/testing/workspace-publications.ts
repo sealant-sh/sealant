@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { mkdtemp, readdir, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { eq, sql } from "drizzle-orm";
@@ -35,6 +38,71 @@ export const withWorkspaceJobTestDatabase = async <A>(
       if (created) await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);
     } finally {
       await admin.end();
+    }
+  }
+};
+
+/**
+ * An isolated database migrated up to, and not including, `migration`: what a deployment held
+ * right before it. `run` writes rows of that earlier schema through `client`, then calls
+ * `upgrade`, which applies every remaining migration and rejects with a migration's own error when
+ * one refuses.
+ */
+export const withDatabaseBeforeMigration = async <A>(
+  databaseUrl: string,
+  migration: string,
+  run: (context: {
+    readonly url: string;
+    readonly client: Client;
+    readonly upgrade: () => Promise<void>;
+  }) => Promise<A>,
+): Promise<A> => {
+  const migrationsFolder = fileURLToPath(new URL("../../drizzle", import.meta.url));
+  const earlier = (await readdir(migrationsFolder)).filter((name) => name < migration);
+  if (earlier.length === 0 || !(await readdir(migrationsFolder)).includes(migration))
+    throw new Error(`unknown migration ${migration}`);
+  const name = `boat_upgrade_${randomUUID().replaceAll("-", "")}`;
+  const before = await mkdtemp(join(tmpdir(), "sealant-migrations-"));
+  const admin = new Client({ connectionString: databaseUrl });
+  await admin.connect();
+  let created = false;
+  try {
+    // The earlier migrations, by link: the runner reads a folder, and applies all of it.
+    await Promise.all(
+      earlier.map((folder) => symlink(join(migrationsFolder, folder), join(before, folder))),
+    );
+    await admin.query(`CREATE DATABASE "${name}"`);
+    created = true;
+    const isolated = new URL(databaseUrl);
+    isolated.pathname = `/${name}`;
+    await runMigrations({
+      databaseUrl: isolated.href,
+      migrationsFolder: before,
+      log: () => undefined,
+    });
+    const client = new Client({ connectionString: isolated.href });
+    await client.connect();
+    try {
+      return await run({
+        url: isolated.href,
+        client,
+        upgrade: async () => {
+          await runMigrations({
+            databaseUrl: isolated.href,
+            migrationsFolder,
+            log: () => undefined,
+          });
+        },
+      });
+    } finally {
+      await client.end();
+    }
+  } finally {
+    try {
+      if (created) await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);
+    } finally {
+      await admin.end();
+      await rm(before, { recursive: true, force: true });
     }
   }
 };

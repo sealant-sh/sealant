@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 
-import { BoatAllocationRepo, BoatAllocationRepoLive, type SealantDB } from "@sealant/db";
+import { BoatRunRepo, BoatRunRepoLive, type SealantDB } from "@sealant/db";
 import type { BoatExecutionTarget } from "@sealant/validators";
 import { Clock, Context, Effect, Layer, Redacted, Schedule } from "effect";
 
@@ -44,7 +44,7 @@ export interface BoatReadinessService {
     target: BoatExecutionTarget,
   ) => Effect.Effect<BoatReadyReceipt, BoatReadinessError>;
 }
-/** Coordinates current allocation authority, resource custody and authenticated guest readiness. */
+/** Coordinates the run's current authority, resource custody and authenticated guest readiness. */
 export class BoatReadiness extends Context.Service<BoatReadiness, BoatReadinessService>()(
   "@sealant/workspaces/boat/BoatReadiness",
 ) {}
@@ -84,25 +84,23 @@ const readinessRetries = (deadline: number) => ({
 const make: Effect.Effect<
   BoatReadinessService,
   never,
-  BoatAllocationRepo | BoatExecution | BoatResources
+  BoatRunRepo | BoatExecution | BoatResources
 > = Effect.gen(function* () {
   const execution = yield* BoatExecution;
   const resources = yield* BoatResources;
-  const allocationRepo = yield* BoatAllocationRepo;
+  const runs = yield* BoatRunRepo;
   const isCurrent = (target: BoatExecutionTarget) =>
-    boatTargetIsCurrent(target).pipe(Effect.provideService(BoatAllocationRepo, allocationRepo));
+    boatTargetIsCurrent(target).pipe(Effect.provideService(BoatRunRepo, runs));
   const current = (target: BoatExecutionTarget) =>
     Effect.gen(function* () {
       if (!(yield* isCurrent(target))) return yield* Effect.fail(new BoatReadinessError("held"));
     });
   /**
-   * Whether the run was launched without resources: frozen on its allocation when it was reserved,
-   * read from there by the launch and by every later observation. Never derived again.
+   * Whether the run was launched without resources: frozen on its row when it was reserved, read
+   * from there by the launch and by every later observation. Never derived again.
    */
   const withoutResources = (target: BoatExecutionTarget) =>
-    allocationRepo
-      .get(target.runtimeInstanceId)
-      .pipe(Effect.map((allocation) => allocation?.input.resources === "none"));
+    runs.get(target.runId).pipe(Effect.map((run) => run?.resources === "none"));
   const observe = Effect.fn("BoatReadiness.observe")(function* (target: BoatExecutionTarget) {
     yield* current(target);
     if (yield* withoutResources(target)) {
@@ -166,11 +164,11 @@ const make: Effect.Effect<
 export const boatReadinessLayerNoDeps: Layer.Layer<
   BoatReadiness,
   never,
-  BoatAllocationRepo | BoatExecution | BoatResources
+  BoatRunRepo | BoatExecution | BoatResources
 > = Layer.effect(BoatReadiness, make);
-/** Owns allocation reads; the worker shares its existing execution and resource owners. */
+/** Owns its reads of the run; the worker shares its existing execution and resource owners. */
 export const boatReadinessLayer: Layer.Layer<
   BoatReadiness,
   never,
   SealantDB | BoatExecution | BoatResources
-> = boatReadinessLayerNoDeps.pipe(Layer.provide(BoatAllocationRepoLive));
+> = boatReadinessLayerNoDeps.pipe(Layer.provide(BoatRunRepoLive));

@@ -1,12 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import {
-  BoatAllocationRepo,
-  BoatExecutionRepo,
-  WorkspaceCaptureDrainRepo,
-  WorkspaceRuntimeInstanceRepo,
-} from "@sealant/db";
+import { BoatRunRepo, WorkspaceCaptureDrainRepo, WorkspaceRuntimeInstanceRepo } from "@sealant/db";
 import {
   boatSupport,
   nativeArtifactConsumerSchema,
@@ -44,15 +39,14 @@ import {
   type RuntimeAdapterStopInput,
 } from "../runtime-adapter.js";
 import { BOAT_AGENT_CLOSE_UNVERIFIED } from "./agent-contract.js";
-import { BoatAllocation } from "./allocation.js";
 import { BoatExecution, BoatExecutionError } from "./execution.js";
 import {
   boatLaunchDiagnostic,
   boatLaunchSummary,
   type BoatLaunchDiagnostic,
 } from "./launch-diagnostics.js";
-import { BoatObserver } from "./observation.js";
 import { BoatRemoval, BoatRemovalError } from "./removal.js";
+import { BoatVm } from "./vm.js";
 
 /**
  * The daemon's own refusal behind a launch failure. A step after ready fails as a
@@ -97,13 +91,11 @@ export class BoatAdapterError extends Error {
 }
 
 export type BoatAdapterServices =
-  | BoatAllocation
+  | BoatVm
   | BoatReadiness
   | BoatExecution
   | BoatRemoval
-  | BoatObserver
-  | BoatAllocationRepo
-  | BoatExecutionRepo
+  | BoatRunRepo
   | WorkspaceCaptureDrainRepo
   | WorkspaceRuntimeInstanceRepo;
 
@@ -255,7 +247,7 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
             return yield* Effect.fail(new BoatAdapterError("target-mismatch"));
           const scope = nativeImageScopeSchema.safeParse(instance.imageScope);
           if (!scope.success) return yield* Effect.fail(new BoatAdapterError("target-mismatch"));
-          return yield* (yield* BoatAllocation).prepare({
+          return yield* (yield* BoatVm).prepare({
             deploymentId,
             workspaceId,
             consumer: nativeArtifactConsumerSchema.parse({ runId, runtimeInstanceId: runId }),
@@ -263,8 +255,8 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
             publication: input.publication,
             scope: scope.data,
             sourceKind: "capture",
-            // Read once from the run's stored spec and frozen on the allocation: readiness, the
-            // close and every sweep read it from there.
+            // Read once from the run's stored spec and frozen on the run's row: readiness, the
+            // removal and every sweep read it from there.
             ...(input.blueprint.runtime.resources === "none" ? { resources: "none" as const } : {}),
           });
         }),
@@ -330,32 +322,31 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
   }
 
   async locate(input: { readonly runId: string }): Promise<RuntimeLaunchIdentity | undefined> {
-    const record = await this.options.runtime.runPromise(
-      Effect.flatMap(BoatAllocationRepo, (repo) => repo.get(input.runId)),
+    const run = await this.options.runtime.runPromise(
+      Effect.flatMap(BoatRunRepo, (repo) => repo.get(input.runId)),
     );
-    if (record?.input.deploymentId !== this.options.deploymentId) return undefined;
-    if (record.sandboxId !== null)
-      return { adapter: "boat", resourceId: record.sandboxId, reference: input.runId };
+    if (run?.deploymentId !== this.options.deploymentId) return undefined;
+    if (run.sandboxId !== null)
+      return { adapter: "boat", resourceId: run.sandboxId, reference: input.runId };
     // Boat was never asked for a VM, or holds none by its own word: the run has no executor.
-    if (record.phase === "reserved" || record.phase === "deleted") return undefined;
-    if (record.phase === "held" && record.reason === "run-stopped") return undefined;
+    if (run.createIssuedAt === null || run.absentAt !== null) return undefined;
     // A create was issued and nobody knows yet whether Boat made a VM for it: unknown is never
-    // taken for none. The allocation sweep keeps looking, and adopts the VM if it appears.
+    // taken for none. The VM sweep keeps looking, and adopts the VM if it appears.
     throw new BoatAdapterError("launch-held");
   }
 
   /**
    * The one deletion of the VM (`BoatRemoval.remove`), found by its id, which a deployment holds
-   * one allocation for; `reference` is not read (the allocation's writes rewrite it to
-   * `boat:<sandbox>`, which names no run).
+   * one run for; `reference` is not read (adopting the VM rewrites it to `boat:<sandbox>`, which
+   * names no run).
    *
    * Authorization. Nothing here weighs the work on the VM: that is its caller's, and `stop` checks
    * that the caller holds what it says. A VM Boat no longer has is only cleaned up, and a recorded
    * deletion operation is only polled. A DELETE is sent only for a run that is stopping or failed,
    * and then only when one of these holds, read at the moment the DELETE is about to be sent:
    *
-   *  - no launch was ever pushed to the VM (it was never bound, or its execution is aborted, which
-   *    only a launch never pushed can be): Core's own record that no daemon ran on it;
+   *  - no launch was ever pushed to the VM (it was never bound, or it was fenced with no launch
+   *    issued): Core's own record that no daemon ran on it;
    *  - the run's capture record holds an issued removal under a live hold: the shared path's
    *    deletion ticket, which it issues right before this call and only while the evidence it was
    *    authorized on (a complete FINAL observed or attested) is still current, with no
@@ -368,16 +359,16 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
    * runtime reported `missing`, which here only cleans up. Anything else is refused before Boat
    * is asked (`close-held`).
    *
-   * It fences the run, claims the first DELETE on the allocation, sends it once, records Boat's
+   * It fences the run, claims the first DELETE on the run's row, sends it once, records Boat's
    * operation and waits at most the removal's bound for `completed`. Idempotent on the recorded
    * operation: a repeat polls it and never sends DELETE again. Resolves once Boat no longer has
-   * the VM; what the VM held (gateway, tunnel slot, allocation, resume secrets, publication pin)
-   * is discharged in the same call, and whatever of it could not be is retried by Boat's
+   * the VM; what the VM held (gateway, tunnel slot, publication pin) is released in the same
+   * call, and whatever of it could not be is retried by Boat's
    * convergence sweep. A deletion Boat accepted and has not finished throws `close-pending` marked
    * `removalPending`: nothing is released, and the next call polls it. A failure once Boat was
    * asked and before its operation was recorded throws `close-pending` unmarked: an outcome nobody
    * knows. Only a failure before Boat was asked anything (`close-held`, `close-unavailable`, or no
-   * allocation for the VM) is marked `removalRefused`.
+   * run for the VM) is marked `removalRefused`.
    *
    * It declares no `removalFenceMs`: Boat states no bound on a deletion.
    */
@@ -387,14 +378,14 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
     const saidNothingToSave = this.#nothingToSave;
     const settled = await this.options.runtime.runPromise(
       Effect.gen(function* () {
-        const allocation = yield* (yield* BoatAllocationRepo)
+        const run = yield* (yield* BoatRunRepo)
           .getBySandbox({ deploymentId, sandboxId: input.resourceId })
           .pipe(Effect.mapError(() => new BoatRemovalError("unavailable", false)));
-        if (allocation === undefined) return "unknown-vm" as const;
+        if (run === undefined) return "unknown-vm" as const;
         const drains = yield* WorkspaceCaptureDrainRepo;
         // Read when the removal is about to send DELETE to a VM a daemon may have run on. A read
         // that fails authorizes nothing.
-        const authorized = drains.getByRunId(allocation.input.consumer.runId).pipe(
+        const authorized = drains.getByRunId(run.runId).pipe(
           Effect.map((record) => {
             if (record?.discardRequestedAt != null) return true;
             // The hold is the database's instant: weighed against the wall clock, never the
@@ -410,7 +401,7 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
           }),
           Effect.orElseSucceed(() => false),
         );
-        return yield* (yield* BoatRemoval).remove(allocation, { authorized });
+        return yield* (yield* BoatRemoval).remove(run, { authorized });
       }).pipe(Effect.result, Effect.timeoutOption(this.options.stopBoundMs ?? BOAT_STOP_BOUND_MS)),
     );
     // Not answered within the bound: Boat may have been asked, and nobody knows.
@@ -439,9 +430,10 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
    * Recover a retained VM: one whose run is stopping or failed and whose daemon is not known to
    * be up. Fences first, so nothing can start on the VM again whatever is answered:
    *
-   *  - a launch never pushed to the VM's agent is aborted (a compare-and-set against the push:
-   *    if the push won, the abort fails and the attempt is retried), and a VM never bound has
-   *    none to push: `nothing-to-save`, by Core's own record that no daemon ran on it;
+   *  - a launch never pushed to the VM's agent is never pushed (the fence and the push are each
+   *    one statement on the run's row: whichever is first decides, and the fence says which), and
+   *    a VM never bound has none to push: `nothing-to-save`, by Core's own record that no daemon
+   *    ran on it;
    *  - a launch that may have been pushed is held, and the agent is asked to recover it on the
    *    VM's own disk (`POST /sealant/recover`), handed the capture token the sweep unsealed. Only
    *    when its launch recorded a daemon with sealantd's recovery boot, and only with that token:
@@ -465,15 +457,14 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
     const sandboxId = input.resourceId;
     const result = await this.options.runtime.runPromise(
       Effect.gen(function* () {
-        const allocations = yield* BoatAllocationRepo;
-        const allocation = yield* allocations.getBySandbox({ deploymentId, sandboxId });
-        if (allocation === undefined)
+        const runs = yield* BoatRunRepo;
+        const run = yield* runs.getBySandbox({ deploymentId, sandboxId });
+        if (run === undefined)
           return unsupported(
-            `no Boat allocation of this deployment names VM ${sandboxId}; it is not this adapter's to recover`,
+            `no Boat run of this deployment names VM ${sandboxId}; it is not this adapter's to recover`,
           );
-        const id = allocation.input.consumer.runtimeInstanceId;
         const instance = yield* (yield* WorkspaceRuntimeInstanceRepo).getRuntimeInstanceByRunId(
-          allocation.input.consumer.runId,
+          run.runId,
         );
         // Only a run that is stopping or failed is ever fenced.
         if (
@@ -484,27 +475,24 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
           return unsupported(
             `the run of Boat VM ${sandboxId} is not stopping; nothing on it is fenced or recovered`,
           );
-        const presence = yield* (yield* BoatObserver).observe(allocation);
+        const presence = yield* (yield* BoatVm).observe(run);
         if (presence.kind === "absent") return { outcome: "missing" } as const;
         // Boat did not answer for the exact owned VM: nothing is concluded, and nothing fenced.
         if (presence.kind !== "present")
           return yield* Effect.fail(new BoatAdapterError("close-unavailable"));
-        const target = allocation.target;
+        const target = run.target;
         if (target === null)
           return nothingToSave(
             `Boat VM ${sandboxId} was never bound: no launch could be pushed to it, so no daemon ran on it`,
           );
-        const executions = yield* BoatExecutionRepo;
         const execution = yield* BoatExecution;
-        const state = yield* executions.get(id);
-        if (state === undefined || !["issued", "running", "held"].includes(state.phase)) {
-          // The durable fence against the push: once aborted, no launch is ever pushed.
-          yield* executions.abort(target);
+        // The durable fence against the push: one statement, which says whether a push was issued
+        // before it. Once fenced, no launch is ever pushed.
+        const fenced = yield* runs.fence(run.runId);
+        if (fenced.launchIssuedAt === null)
           return nothingToSave(
             `no launch was ever pushed to the agent of Boat VM ${sandboxId}, so no daemon ran on it`,
           );
-        }
-        yield* execution.hold(target);
         // A daemon that is up needs no recovery boot and no token: it is drained as it is. This
         // is every attempt after the one that restarted it, which the sweep hands no token (it
         // reads the daemon as running), and whose drain is the only thing left to do. With a
@@ -559,7 +547,7 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
         if (answered.basis === "daemon") return nothingToSave(nothingToSaveDetail(answered.detail));
         // `no-launch`: the agent recorded no launch on this boot. A push the launch issued may
         // still be on its way while that launch runs: taken only once it is over.
-        if (yield* allocations.launchInFlight(id))
+        if (yield* runs.launchInFlight(run.runId))
           return unsupported(
             `the agent of Boat VM ${sandboxId} recorded no launch, and the launch that issued one is still in flight; asked again once it is over`,
           );
@@ -601,14 +589,11 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
     const sandboxId = input.resourceId;
     const running: RuntimeAdapterInspectResult = { state: "running" };
     const read = Effect.gen(function* () {
-      const allocation = yield* (yield* BoatAllocationRepo).getBySandbox({
-        deploymentId,
-        sandboxId,
-      });
-      // No allocation of this deployment names the VM: nothing here can say anything of it.
-      if (allocation === undefined) return running;
+      const run = yield* (yield* BoatRunRepo).getBySandbox({ deploymentId, sandboxId });
+      // No run of this deployment names the VM: nothing here can say anything of it.
+      if (run === undefined) return running;
       const instance = yield* (yield* WorkspaceRuntimeInstanceRepo).getRuntimeInstanceByRunId(
-        allocation.input.consumer.runId,
+        run.runId,
       );
       // The run is stopping, or its launch failed or its daemon ended: its desired state is
       // stopped.
@@ -625,7 +610,7 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
         for (const [id, at] of inspected)
           if (now - at >= BOAT_INSPECT_READ_MS) inspected.delete(id);
       inspected.set(sandboxId, now);
-      const presence = yield* (yield* BoatObserver).observe(allocation);
+      const presence = yield* (yield* BoatVm).observe(run);
       if (presence.kind === "absent") return { state: "missing" } as const;
       // A 404 before Boat ever reported the VM past creation, a failed read, another VM's labels.
       if (presence.kind !== "present") return running;
@@ -637,8 +622,8 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
           "The run is stopping or failed, and no launch was confirmed running on its Boat VM: its recovery fences it and asks the VM's agent.",
       };
       // Never bound: no launch could be pushed. While its launch may still bind it, it is running.
-      if (allocation.target === null) return stopping ? neverConfirmed : running;
-      const daemon = yield* (yield* BoatExecution).daemon(allocation.target);
+      if (run.target === null) return stopping ? neverConfirmed : running;
+      const daemon = yield* (yield* BoatExecution).daemon(run.target);
       switch (daemon.kind) {
         case "exited":
           return {

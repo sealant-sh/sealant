@@ -1,12 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 
 import {
-  BoatAllocationRepo,
-  BoatAllocationRepoLive,
-  BoatExecutionRepo,
-  BoatExecutionRepoLive,
-  BoatObservationRepo,
-  BoatObservationRepoLive,
+  BoatRunRepo,
+  BoatRunRepoLive,
   BoatTunnelRepo,
   boatTunnelRepoLayer,
   NativePublicationRepo,
@@ -21,6 +17,7 @@ import {
   WorkspaceRuntimeInstanceRepoLive,
   makeSealantDBLayer,
 } from "@sealant/db";
+import { boatRunLaunchPhase, boatRunVmPhase } from "@sealant/validators";
 import { Effect, Layer, ManagedRuntime } from "effect";
 
 import { BoatSnapshotBuilder } from "../images/boat/builder.js";
@@ -44,9 +41,7 @@ export const makeBoatProofCore = (input: {
 }) => {
   const DB = makeSealantDBLayer(input.databaseUrl);
   const Repos = Layer.mergeAll(
-    BoatAllocationRepoLive,
-    BoatExecutionRepoLive,
-    BoatObservationRepoLive,
+    BoatRunRepoLive,
     boatTunnelRepoLayer,
     NativePublicationRepoLive,
     WorkspaceAttemptRepoLive,
@@ -135,47 +130,38 @@ export const makeBoatProofCore = (input: {
           const attempt = yield* (yield* WorkspaceAttemptRepo).getAttemptById(session.sealantRunId);
           if (attempt?.ownerUserId !== input.config.ownerId)
             return yield* Effect.fail(new BoatProofError("owner-mismatch"));
-          const allocation = yield* (yield* BoatAllocationRepo).get(session.sealantRunId);
-          if (
-            allocation?.target == null ||
-            !["bound", "deleting", "deleted"].includes(allocation.phase)
-          )
-            return undefined;
-          const target = allocation.target;
+          const run = yield* (yield* BoatRunRepo).get(session.sealantRunId);
+          if (run?.target == null) return undefined;
+          const target = run.target;
           if (target.deploymentId !== input.config.deploymentId)
             return yield* Effect.fail(new BoatProofError("deployment-mismatch"));
           const instance = yield* (yield* WorkspaceRuntimeInstanceRepo).getRuntimeInstanceByRunId(
             target.runId,
           );
-          const execution = yield* (yield* BoatExecutionRepo).get(target.runId);
-          const tunnel = yield* (yield* BoatTunnelRepo).get(target.runtimeInstanceId);
-          // Closed means Boat said the VM is gone and every obligation of it was discharged.
-          const observed = yield* (yield* BoatObservationRepo).get(target.runtimeInstanceId);
+          const tunnel = yield* (yield* BoatTunnelRepo).get(target.runId);
           return {
             runId: target.runId,
             sandboxId: target.sandboxId,
             publicationId: target.sourceId,
             resourceSubnet: tunnel?.network?.subnet ?? null,
             ready:
-              allocation.phase === "bound" &&
+              boatRunVmPhase(run) === "bound" &&
               instance?.adapter === "boat" &&
               instance.resourceId === target.sandboxId &&
               instance.status === "ready" &&
               instance.stopReason === null &&
-              execution?.phase === "running" &&
-              isDeepStrictEqual(execution.target, target) &&
+              boatRunLaunchPhase(run) === "running" &&
               isDeepStrictEqual(tunnel?.binding.target, target) &&
-              execution.admission !== null &&
-              execution.isolation !== undefined &&
+              run.isolation !== null &&
               tunnel?.network !== undefined,
+            // Closed means Boat said the VM is gone and every obligation of it was discharged.
             closed:
               instance?.adapter === "boat" &&
               instance.resourceId === target.sandboxId &&
               instance.status === "stopped" &&
               instance.removedAt !== null &&
               tunnel?.released === true &&
-              observed?.presence === "absent" &&
-              observed.sandboxId === target.sandboxId &&
+              run.absentAt !== null &&
               isDeepStrictEqual(tunnel.binding.target, target),
           };
         }),

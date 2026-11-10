@@ -82,9 +82,8 @@ const diagnosticSchema = z.object({
   errorClass: z.enum([
     "BoatApiError",
     "BoatAllocationError",
-    "BoatAllocationStoreError",
+    "BoatRunStoreError",
     "BoatExecutionError",
-    "BoatExecutionStoreError",
     "BoatReadinessError",
     "BoatResourcesError",
     "BoatTunnelError",

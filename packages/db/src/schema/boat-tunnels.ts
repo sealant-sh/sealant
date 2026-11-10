@@ -10,7 +10,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
-import { boatExecutions } from "./boat-executions.js";
+import { boatRuns } from "./boat-runs.js";
 
 /** Reservations survive worker loss and cannot disappear with generic run cleanup. */
 export const boatTunnels = snakeCase.table(
@@ -18,7 +18,7 @@ export const boatTunnels = snakeCase.table(
   {
     runtimeInstanceId: text()
       .primaryKey()
-      .references(() => boatExecutions.runtimeInstanceId, { onDelete: "restrict" }),
+      .references(() => boatRuns.runId, { onDelete: "restrict" }),
     gatewayHostId: uuid().notNull(),
     listenPort: integer().notNull(),
     reservationId: uuid().notNull().unique(),

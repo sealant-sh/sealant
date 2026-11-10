@@ -32,11 +32,12 @@ export * from "./git/working-tree-changes.js";
 export * from "./worker/reconcile-native-publications.js";
 
 export {
-  boatAllocationWorkerLayer,
+  boatVmWorkerLayer,
   boatSealedExecutionLayer,
   boatReadinessWorkerLayer,
   boatConvergenceWorkerLayer,
   boatRemovalWorkerLayer,
+  verifyBoatBearers,
 } from "./worker/boat-allocation.js";
 
 export {
@@ -88,13 +89,6 @@ export {
   type BoatRemovalOptions,
   type BoatRemovalOutcome,
 } from "./runtime/boat/removal.js";
-
-export {
-  BoatObserver,
-  boatObserverLayer,
-  boatObserverLayerNoDeps,
-  type BoatPresence,
-} from "./runtime/boat/observation.js";
 
 export { loadBoatCredential } from "./runtime/boat/credential.js";
 export { boatProviderFromEnv, type BoatProviderEnvLike } from "./runtime/boat/provider-env.js";

@@ -23,7 +23,7 @@ import { deleteExpiredRunRecords } from "@sealant/telemetry";
 import type { WorkerEnv } from "@sealant/validators/env";
 import {
   BOAT_RESOURCE_PASS,
-  BoatAllocation,
+  BoatVm,
   boatConnectMaterial,
   boatDrainConnectMaterial,
   boatResourceObligations,
@@ -1094,8 +1094,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     try {
       const report = await boatRuntime.runPromise(
         Effect.gen(function* () {
-          const allocations = yield* BoatAllocation;
-          return yield* allocations.reconcile({
+          const vms = yield* BoatVm;
+          return yield* vms.reconcile({
             limit: 20,
             ...(boatCursor === undefined ? {} : { after: boatCursor }),
           });
@@ -1193,6 +1193,23 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     }
   };
   void reopenBoatCarriers();
+  // A session whose sealed bearer no longer opens cannot be drained: said at start, by run (the
+  // check logs each one at error level). It reads the database only and never stops the worker.
+  const verifyBoatBearers = async () => {
+    if (boatAssembly?.verifyBearers === undefined) return;
+    try {
+      const { checked, unopened } = await boatAssembly.verifyBearers();
+      if (unopened.length > 0)
+        console.error("Boat sealed bearers do not open; their sessions cannot be drained", {
+          runs: unopened,
+          checked,
+        });
+      else if (checked > 0) console.log("Boat sealed bearers open", { runs: checked });
+    } catch {
+      console.error("Boat sealed bearers could not be checked at start");
+    }
+  };
+  void verifyBoatBearers();
 
   resourceTickTimer.unref();
 

@@ -7,7 +7,7 @@ import {
 } from "node:crypto";
 import http from "node:http";
 
-import type { BoatAllocationInput, BoatExecutionTarget } from "@sealant/validators";
+import type { BoatExecutionTarget, BoatRunInput } from "@sealant/validators";
 import { Effect, Redacted } from "effect";
 import { expect } from "vitest";
 import { z } from "zod";
@@ -79,7 +79,7 @@ export class ProviderFixture {
   /** `POST /sandboxes/:id/host`: each call is a fresh hosted cookie, or Boat's failure. */
   hostCalls = 0;
   hostUnavailable = false;
-  constructor(readonly input: BoatAllocationInput) {}
+  constructor(readonly input: BoatRunInput) {}
   sandbox(id = "bx_23456789") {
     return {
       id,

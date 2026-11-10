@@ -1,8 +1,8 @@
 import {
-  BoatAllocationRepo,
-  BoatAllocationRepoLive,
-  BoatObservationRepo,
-  BoatObservationRepoLive,
+  BoatRunRepo,
+  BoatRunRepoLive,
+  NativePublicationRepo,
+  NativePublicationRepoLive,
   WorkspaceCaptureDrainRepo,
   WorkspaceCaptureDrainRepoLive,
   WorkspaceRuntimeInstanceRepo,
@@ -10,14 +10,12 @@ import {
   type SealantDB,
   type WorkspaceRuntimeInstanceStopReason,
 } from "@sealant/db";
-import type { BoatAllocationRecord } from "@sealant/validators";
-import { Clock, Context, Effect, Layer } from "effect";
+import type { BoatRun } from "@sealant/validators";
+import { Clock, Context, Effect, Exit, Layer } from "effect";
 
 import { BoatResourcesHost } from "../../worker/boat-resources.js";
 import type { WorkspaceStopOutcome } from "../../worker/process-workspace-stop.js";
-import { BoatDischarge, boatDischargeLayer } from "./discharge.js";
 import type { BoatExecution } from "./execution.js";
-import { BoatObserver, boatObserverLayer } from "./observation.js";
 import type { BoatAllocationProvider } from "./provider.js";
 import { BoatRemoval, boatRemovalLayer, type BoatRemovalProvider } from "./removal.js";
 
@@ -44,7 +42,7 @@ export type BoatConvergenceOutcome =
   | "skipped"
   | "unavailable";
 
-/** One bounded page; the worker carries its cursor independently of allocation and resources. */
+/** One bounded page; the worker carries its cursor independently of the VM sweep and resources. */
 export interface BoatConvergenceSweep {
   readonly entries: readonly {
     readonly runId: string;
@@ -67,11 +65,11 @@ export type BoatSharedStop = (run: {
  *
  *  - **No VM.** A run whose create was never issued, or whose VM Boat never made: the shared stop
  *    never calls the adapter for a run that names no VM, so the conclusion that Boat holds none
- *    (`not-discovered`), the allocation's end and the release of its publication pin stay here.
- *    A create nobody can resolve is held for an operator, and its owner's discard ends the
- *    session while the allocation and its pin stay held.
- *  - **Cleanup.** A VM Boat no longer has, by its own committed word, whose gateway, tunnel slot,
- *    allocation, resume secrets or publication pin are not released yet: released here
+ *    (`never-created`) and the release of its publication pin stay here. A create nobody can
+ *    resolve is held for an operator, and its owner's discard ends the session while the run's
+ *    row and its pin stay held.
+ *  - **Cleanup.** A VM Boat no longer has, by its own committed word, whose gateway, tunnel slot
+ *    or publication pin are not released yet: released here
  *    (`BoatRemoval.cleanup`, which never asks Boat anything and never sends DELETE). And a
  *    deletion Boat accepted whose operation is on record and not complete is polled here, so it
  *    ends whatever a read of the VM answers; that sends no DELETE either.
@@ -103,32 +101,28 @@ export const BOAT_KEPT_REPORT_MS = 60 * 60_000;
 const BOAT_KEPT_REMEMBERED = 1_024;
 
 type Dependencies =
-  | BoatAllocationRepo
-  | BoatObservationRepo
+  | BoatRunRepo
+  | NativePublicationRepo
   | WorkspaceRuntimeInstanceRepo
   | WorkspaceCaptureDrainRepo
   | BoatRemoval
-  | BoatObserver
-  | BoatDischarge
   | BoatResourcesHost;
 
 const make: Effect.Effect<BoatConvergence["Service"], never, Dependencies> = Effect.gen(
   function* () {
-    const allocations = yield* BoatAllocationRepo;
-    const observations = yield* BoatObservationRepo;
+    const runs = yield* BoatRunRepo;
+    const catalog = yield* NativePublicationRepo;
     const runtimes = yield* WorkspaceRuntimeInstanceRepo;
     const canonical = yield* WorkspaceCaptureDrainRepo;
     const removal = yield* BoatRemoval;
-    const observer = yield* BoatObserver;
-    const discharger = yield* BoatDischarge;
     const host = yield* BoatResourcesHost;
     /** When each kept run was last reported. This process only. */
     const reported = new Map<string, number>();
 
     /** Says once an hour that a run's VM is kept, and why, for as long as it is. */
-    const reportKept = (allocation: BoatAllocationRecord) =>
+    const reportKept = (run: BoatRun) =>
       Effect.gen(function* () {
-        const runId = allocation.input.consumer.runId;
+        const { runId } = run;
         const now = yield* Clock.currentTimeMillis;
         const last = reported.get(runId);
         if (last !== undefined && now - last < BOAT_KEPT_REPORT_MS) return;
@@ -140,7 +134,7 @@ const make: Effect.Effect<BoatConvergence["Service"], never, Dependencies> = Eff
           .pipe(Effect.orElseSucceed(() => undefined));
         const since = record?.retainedAt ?? record?.observedAt;
         yield* Effect.logWarning(
-          `Boat convergence · run ${runId}: its VM ${allocation.sandboxId ?? "unknown"} is kept${
+          `Boat convergence · run ${runId}: its VM ${run.sandboxId ?? "unknown"} is kept${
             since == null ? "" : ` (as last recorded ${since.toISOString()})`
           }: ${record?.detail ?? "its work is not confirmed saved"}. Nothing removes it until its final capture is confirmed saved or its owner discards it; it is paid for meanwhile.`,
         );
@@ -172,24 +166,41 @@ const make: Effect.Effect<BoatConvergence["Service"], never, Dependencies> = Eff
         });
       });
 
+    /**
+     * Releases the publication pins no VM will ever discharge: runs that never got a Boat row (a
+     * failed or abandoned native build, a stop first) and are over. Idempotent.
+     */
+    const releaseEndedPins = Effect.gen(function* () {
+      const ended = yield* catalog
+        .endedUnallocatedConsumers({ deploymentId: host.deploymentId, limit: 20 })
+        .pipe(Effect.orElseSucceed(() => []));
+      for (const { consumer, publicationId } of ended) {
+        // The guarded release keeps the catalog's lock order and refuses anything still pinned.
+        const result = yield* Effect.exit(catalog.release(consumer, publicationId));
+        if (!Exit.isSuccess(result))
+          yield* Effect.logWarning(
+            `Boat discharge · run ${consumer.runId}: its ended, unallocated publication pin was not released; retried on the next pass.`,
+            result.cause,
+          );
+      }
+    });
+
     const step = Effect.fn("BoatConvergence.step")(function* (id: string, stop: BoatSharedStop) {
-      const found = yield* allocations.get(id);
-      if (found === undefined || found.input.deploymentId !== host.deploymentId)
+      const found = yield* runs.get(id);
+      if (found === undefined || found.deploymentId !== host.deploymentId)
         return "skipped" as const;
       // Boat accepted a deletion of this VM and its operation is on record: it is polled here,
       // whatever Boat's GET says of the VM. One never seen past creation reads 404 as still being
       // created, so presence alone would hold it for good. The removal then only polls: it sends
       // no DELETE, and releases what the VM held once Boat says the operation completed.
       if (
-        found.phase === "deleting" &&
-        found.removal?.kind === "operation" &&
-        !found.removal.completed &&
+        found.deletionOperationId !== null &&
+        found.absentAt === null &&
         (yield* removal.remove(found)) === "deleting"
       )
         return "draining" as const;
-      const allocation = (yield* allocations.get(id)) ?? found;
-      const runId = allocation.input.consumer.runId;
-      const observed = yield* observations.get(id);
+      const run = (yield* runs.get(id)) ?? found;
+      const { runId } = run;
       const instance = yield* runtimes.getRuntimeInstanceByRunId(runId);
       const stopping =
         instance?.adapter === "boat" &&
@@ -197,14 +208,14 @@ const make: Effect.Effect<BoatConvergence["Service"], never, Dependencies> = Eff
       /** The shared stop, for a run it has not ended yet. */
       const nudge = (reason: WorkspaceRuntimeInstanceStopReason) =>
         Effect.tryPromise(() => stop({ runId, stopReason: reason })).pipe(
-          Effect.tap((outcome) => (outcome === "kept" ? reportKept(allocation) : Effect.void)),
+          Effect.tap((outcome) => (outcome === "kept" ? reportKept(run) : Effect.void)),
         );
 
-      if (allocation.sandboxId === null) {
-        if (allocation.phase === "held" && allocation.reason === "create-unresolved") {
+      if (run.sandboxId === null) {
+        if (run.heldReason === "create-unresolved") {
           // Nobody can say whether Boat holds a VM for this launch; discovery keeps looking and
           // adopts one if it appears. The owner's discard is the person's exit: the session ends
-          // with its work reported discarded, while the allocation and its pin stay held.
+          // with its work reported discarded, while the run's row and its pin stay held.
           const record = yield* canonical.getByRunId(runId);
           if (record?.discardRequestedAt != null) {
             yield* runtimes.markStopped({ runId, stopReason: "user" });
@@ -221,50 +232,42 @@ const make: Effect.Effect<BoatConvergence["Service"], never, Dependencies> = Eff
           );
           return "held" as const;
         }
-        let ended = allocation;
-        if (observed?.presence !== "absent") {
-          // Stopped before create was ever issued: Boat was never asked for a VM. Anything else
-          // without a VM is a launch still resolving its create, which the allocation sweep owns.
-          if (allocation.phase !== "held" || allocation.reason !== "run-stopped")
-            return "skipped" as const;
-          yield* observer.neverCreated(allocation);
-          ended = yield* allocations.advance(allocation, {
-            ...allocation,
-            phase: "deleted",
-            reason: null,
-            removal: { kind: "never-created", completed: true },
-          });
+        let ended = run;
+        if (run.absentAt === null) {
+          // Stopped before create was ever issued: Boat was never asked for a VM, which is Core's
+          // own record. Anything else without a VM is a launch still resolving its create, which
+          // the VM sweep owns.
+          if (run.heldReason !== "run-stopped") return "skipped" as const;
+          ended = yield* runs.recordNeverCreated(runId);
         }
         // Boat holds no VM for the launch, by its own word or because it was never asked.
-        const discharged = yield* discharger.discharge(ended);
+        const cleaned = yield* removal.cleanup(ended);
         yield* endCaptureWithoutVm(runId);
         // The run names no VM, so the shared stop only records it stopped.
         if (
           instance !== undefined &&
           stopping &&
           instance.status !== "stopped" &&
-          !(yield* allocations.launchInFlight(id))
+          !(yield* runs.launchInFlight(id))
         )
           yield* nudge(instance.stopReason ?? "failed");
-        return discharged.kind === "discharged" ? ("cleaned" as const) : ("discharging" as const);
+        return cleaned === "removed" ? ("cleaned" as const) : ("discharging" as const);
       }
 
       // Boat no longer has the VM (its own committed 404, or its deletion operation recorded
       // complete): what the VM held is released. Nothing is asked of Boat and nothing is deleted.
       // A run still recorded live is left to the exit reconciler, which records what became of
       // it first (and calls the adapter, which cleans up the same way).
-      const gone =
-        observed?.presence === "absent" ||
-        (allocation.removal?.kind === "operation" && allocation.removal.completed);
+      const gone = run.absentAt !== null;
       const live = instance?.adapter === "boat" && !stopping && instance.status !== "stopped";
-      const cleaned = gone && !live ? yield* removal.cleanup(allocation) : undefined;
+      const cleaned = gone && !live ? yield* removal.cleanup(run) : undefined;
 
       if (instance?.adapter !== "boat")
         return cleaned === "removed" ? ("cleaned" as const) : ("skipped" as const);
-      // A live launch owns its allocation and VM until it finishes or its lease lapses. An explicit
+      // A live launch owns its run and VM until it finishes or its lease lapses. An explicit
       // stop reaches it through the stop worker, and a launch its worker lost is adopted by the
       // shared stranded-launch sweep.
-      if (yield* allocations.launchInFlight(id)) return "skipped" as const;
+      if (yield* runs.launchInFlight(id)) return "skipped" as const;
 
       if (stopping && instance.status !== "stopped") {
         // Stopping, or failed and so never to be ready: its desired state is stopped. The shared
@@ -277,25 +280,24 @@ const make: Effect.Effect<BoatConvergence["Service"], never, Dependencies> = Eff
           : cleaned === "discharging"
             ? ("discharging" as const)
             : ("skipped" as const);
-      if (instance.status !== "stopped" || allocation.phase === "deleted")
-        return "skipped" as const;
+      if (instance.status !== "stopped" || gone) return "skipped" as const;
 
       // The run is recorded stopped and Boat still has a VM for it, which no stop will visit
       // again. A retained one is its recovery's.
       const record = yield* canonical.getByRunId(runId);
       if (record?.retainedAt != null) return "skipped" as const;
-      if (allocation.target === null) {
+      if (run.target === null) {
         // Adopted by its labels after the run ended (a create whose reply was lost): never bound,
         // so no launch was pushed and nothing ran on it. The removal deletes it on that record
         // alone, and refuses anything a daemon may have run on.
-        const removed = yield* removal.remove(allocation);
+        const removed = yield* removal.remove(run);
         return removed === "removed"
           ? ("cleaned" as const)
           : removed === "discharging"
             ? ("discharging" as const)
             : ("draining" as const);
       }
-      yield* reportKept(allocation);
+      yield* reportKept(run);
       return "held" as const;
     });
 
@@ -304,9 +306,9 @@ const make: Effect.Effect<BoatConvergence["Service"], never, Dependencies> = Eff
     ) {
       if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 20)
         return yield* Effect.fail(new BoatConvergenceError("invalid-page"));
-      // Pins with no allocation are no VM's to discharge; release the ones whose run is over.
-      yield* discharger.releaseEndedPins({ limit: 20 });
-      const ids = yield* allocations
+      // Pins with no Boat row are no VM's to discharge; release the ones whose run is over.
+      yield* releaseEndedPins;
+      const ids = yield* runs
         .list({
           deploymentId: host.deploymentId,
           limit: input.limit,
@@ -337,11 +339,11 @@ const make: Effect.Effect<BoatConvergence["Service"], never, Dependencies> = Eff
   },
 );
 
-/** Open assembly for tests that bring their own repositories, observer, discharge and removal. */
+/** Open assembly for tests that bring their own repositories and removal. */
 export const boatConvergenceLayerNoDeps: Layer.Layer<BoatConvergence, never, Dependencies> =
   Layer.effect(BoatConvergence, make);
 
-/** Shares the sealed execution owner; owns its repositories, the observer, discharge and removal. */
+/** Shares the sealed execution owner; owns its repositories and the removal. */
 export const boatConvergenceLayer: Layer.Layer<
   BoatConvergence,
   never,
@@ -350,10 +352,8 @@ export const boatConvergenceLayer: Layer.Layer<
   Layer.provide(
     Layer.mergeAll(
       boatRemovalLayer,
-      boatObserverLayer,
-      boatDischargeLayer,
-      BoatAllocationRepoLive,
-      BoatObservationRepoLive,
+      BoatRunRepoLive,
+      NativePublicationRepoLive,
       WorkspaceCaptureDrainRepoLive,
       WorkspaceRuntimeInstanceRepoLive,
     ),

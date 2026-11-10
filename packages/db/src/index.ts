@@ -541,26 +541,11 @@ export {
 } from "./repositories/native-publications.js";
 
 export {
-  BoatExecutionRepo,
-  BoatExecutionRepoLive,
-  BoatExecutionStoreError,
-  type BoatExecutionRepoService,
-} from "./repositories/boat-executions.js";
-
-export {
-  BoatAllocationRepo,
-  BoatAllocationRepoLive,
-  BoatAllocationStoreError,
-  type BoatAllocationRepoService,
-} from "./repositories/boat-allocations.js";
-export {
-  BoatObservationRepo,
-  BoatObservationRepoLive,
-  BoatObservationStoreError,
-  type BoatAbsenceBasis,
-  type BoatObservationRepoService,
-} from "./repositories/boat-observations.js";
-export type { BoatObservation } from "./schema/boat-observations.js";
+  BoatRunRepo,
+  BoatRunRepoLive,
+  BoatRunStoreError,
+  type BoatRunRepoService,
+} from "./repositories/boat-runs.js";
 export {
   BoatTunnelRepo,
   BoatTunnelStoreError,
