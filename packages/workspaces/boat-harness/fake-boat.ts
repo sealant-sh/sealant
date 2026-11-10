@@ -368,7 +368,7 @@ export class FakeBoat {
       monitoring: sandbox.monitoring,
       dataExpiredAt: null,
       stoppedAt: sandbox.stoppedAt,
-      // Core's parking reads the stop operation's status before it saves a snapshot.
+      // Boat reports its stop operation's status on the sandbox (recorded).
       stop:
         sandbox.state === "archiving"
           ? { status: "pending" }

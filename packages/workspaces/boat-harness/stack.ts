@@ -656,7 +656,6 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       SEALANT_BOAT_GATEWAY_IMAGE: gatewayImage,
       SEALANT_BOAT_BUILDER_OWNER: randomUUID(),
       SEALANT_BOAT_STATE_DIRECTORY: stateDir,
-      SEALANT_BOAT_AUTOMATIC_PARKING: "false",
     };
     const apiEnv = {
       ...shared,
