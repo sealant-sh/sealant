@@ -57,6 +57,8 @@ interface Ledgers {
     readonly phase:
       | "exchange"
       | "control"
+      /** Written until #515: bearer sealed and launch material staged, nothing pushed. */
+      | "prepared"
       | "installed"
       | "issued"
       | "running"
@@ -202,7 +204,9 @@ const seeder = (client: Sql, cipher: CredentialCipher["Service"]) => {
           cookie: "hosted-cookie-local-only",
           bearer: BEARER,
         });
-      const staged = ["installed", "issued", "running", "held"].includes(phase);
+      const staged = ["prepared", "installed", "issued", "running", "held"].includes(phase);
+      // A record of the launch script's time: no `docker`, no copy kept past the push.
+      const legacy = phase === "prepared";
       const pushed = phase === "running" || phase === "held";
       await client.query(
         `insert into boat_executions (runtime_instance_id, run_id, deployment_id, sandbox_id, disk_lineage, record)
@@ -226,9 +230,11 @@ const seeder = (client: Sql, cipher: CredentialCipher["Service"]) => {
                   operationId: exchangeId,
                   epoch: 1,
                   digest: "d".repeat(64),
-                  docker: false,
+                  ...(legacy ? {} : { docker: false }),
                   sealedEnvelope: pushed ? null : sealedEnvelope,
-                  ...(execution.resume === false ? {} : { sealedResumeEnvelope: sealedEnvelope }),
+                  ...(execution.resume === false || legacy
+                    ? {}
+                    : { sealedResumeEnvelope: sealedEnvelope }),
                 }
               : null,
             ...(execution.isolation === undefined ? {} : { isolation: execution.isolation }),
@@ -402,6 +408,13 @@ describe.runIf(databaseUrl !== undefined)(
           execution: { phase: "installed" },
           observation: present,
         });
+        // A launch that failed at the guest install of the launch script's time (before #515):
+        // staged, never pushed, and its row left in a phase no later code writes.
+        const prepared = await seed({
+          allocation: { phase: "bound" },
+          execution: { phase: "prepared" },
+          observation: present,
+        });
         // A launch whose push was issued, with an unknown outcome.
         const issued = await seed({
           allocation: { phase: "bound" },
@@ -503,6 +516,16 @@ describe.runIf(databaseUrl !== undefined)(
           expect(s.run).toMatchObject({ sealedLaunch: staged.sealedEnvelope, ...launchedBare });
           await opens(staged);
 
+          // The same for the phase that came before `installed`: carried, not refused.
+          const p = await read(prepared);
+          expect(p).toMatchObject({ vm: "bound", launch: "installed" });
+          expect(p.run).toMatchObject({
+            sealedLaunch: prepared.sealedEnvelope,
+            docker: false,
+            ...launchedBare,
+          });
+          await opens(prepared);
+
           // Never carried as never launched: its push was issued, whatever became of it.
           const i = await read(issued);
           expect(i).toMatchObject({ vm: "bound", launch: "issued" });
@@ -546,7 +569,7 @@ describe.runIf(databaseUrl !== undefined)(
               ),
             ),
           );
-          expect(checked).toEqual({ checked: 7, unopened: [] });
+          expect(checked).toEqual({ checked: 8, unopened: [] });
           expect(logged).toEqual([]);
         });
       }));
@@ -854,7 +877,7 @@ describe.runIf(databaseUrl !== undefined)(
         expect(rows).toEqual([{ referenced: "boat_runs" }]);
       }));
 
-    it("freezes the three old tables: every INSERT, UPDATE and DELETE raises, one that matches no row included, and they keep what they held", () =>
+    it("freezes the three old tables: every INSERT, UPDATE, DELETE and TRUNCATE raises, one that matches no row included, and they keep what they held", () =>
       before(async ({ client, upgrade }, seed) => {
         const run = await seed({
           allocation: { phase: "bound" },
@@ -880,6 +903,7 @@ describe.runIf(databaseUrl !== undefined)(
           await expect(
             client.query(`insert into ${table} select * from ${table} where false`),
           ).rejects.toThrow(frozen);
+          await expect(client.query(`truncate ${table} cascade`)).rejects.toThrow(frozen);
           const { rows } = await client.query(
             `select deployment_id from ${table} where runtime_instance_id = $1`,
             [run.runId],
@@ -963,9 +987,12 @@ describe.runIf(databaseUrl !== undefined)(
           where runtime_instance_id = $1`,
           [run.runId, randomUUID()],
         );
-        await expect(refusal(upgrade())).resolves.toMatch(
+        const refused = await refusal(upgrade());
+        expect(refused).toMatch(
           /boat_executions has 1 row\(s\) with no allocation, or whose target is not their allocation's target/,
         );
+        // It names the run to look at.
+        expect(refused).toContain(run.runId);
         const { rows } = await client.query(`select to_regclass('boat_runs') as created`);
         expect(rows).toEqual([{ created: null }]);
       }));

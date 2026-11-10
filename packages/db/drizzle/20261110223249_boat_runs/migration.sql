@@ -7,65 +7,68 @@
 -- (it launches nothing and deletes nothing, and every VM is kept until it is upgraded). They are
 -- dropped by a later migration. Nothing is written to both.
 --
--- (1) Refuse what cannot be carried. Each of these is a state Core never writes; a database that
--- has one is not upgraded until it is looked at.
+-- (1) Nothing writes a run while it is checked and carried.
+LOCK TABLE "boat_allocations", "boat_executions", "boat_observations", "boat_tunnels" IN ACCESS EXCLUSIVE MODE;
+--> statement-breakpoint
+-- (2) Refuse what cannot be carried. Each of these is a state no current writer leaves; a database
+-- that has one is not upgraded until it is looked at, and the refusal names the runs to look at.
 DO $$
 DECLARE
   found bigint;
+  named text;
 BEGIN
   -- #561: every lookup by run id depends on the two being equal, and nothing enforced it.
-  SELECT count(*) INTO found FROM "boat_executions" WHERE "runtime_instance_id" <> "run_id";
+  SELECT count(*), array_to_string((array_agg("run_id" ORDER BY "run_id"))[1:10], ', ') INTO found, named FROM "boat_executions" WHERE "runtime_instance_id" <> "run_id";
   IF found > 0 THEN
-    RAISE EXCEPTION 'boat_executions has % row(s) whose runtime_instance_id is not their run_id; boat_runs has one row per run and cannot carry them.', found
+    RAISE EXCEPTION 'boat_executions has % row(s) whose runtime_instance_id is not their run_id; boat_runs has one row per run and cannot carry them. Runs (first 10): %', found, named
       USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
-  SELECT count(*) INTO found FROM "boat_allocations" a
+  SELECT count(*), array_to_string((array_agg(a."runtime_instance_id" ORDER BY a."runtime_instance_id"))[1:10], ', ') INTO found, named FROM "boat_allocations" a
     WHERE a."record"->>'phase' IS NULL
        OR a."record"->>'phase' NOT IN ('reserved','issued','allocated','bound','held','deleting','deleted');
   IF found > 0 THEN
-    RAISE EXCEPTION 'boat_allocations has % row(s) in a phase this migration does not know.', found
+    RAISE EXCEPTION 'boat_allocations has % row(s) in a phase this migration does not know. Runs (first 10): %', found, named
       USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
-  SELECT count(*) INTO found FROM "boat_executions" e
+  -- `prepared` was written until the guest agent replaced the launch script (#515): bearer sealed
+  -- and launch material staged, nothing pushed. A launch that failed there left its row.
+  SELECT count(*), array_to_string((array_agg(e."runtime_instance_id" ORDER BY e."runtime_instance_id"))[1:10], ', ') INTO found, named FROM "boat_executions" e
     WHERE e."record"->>'phase' IS NULL
-       OR e."record"->>'phase' NOT IN ('exchange','control','installed','issued','running','held','aborted');
+       OR e."record"->>'phase' NOT IN ('exchange','control','prepared','installed','issued','running','held','aborted');
   IF found > 0 THEN
-    RAISE EXCEPTION 'boat_executions has % row(s) in a phase this migration does not know.', found
+    RAISE EXCEPTION 'boat_executions has % row(s) in a phase this migration does not know. Runs (first 10): %', found, named
       USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
   -- A sealed bearer opens only under the target it was sealed with, and that target becomes the
   -- run's: an execution with no allocation, or bound to another target, has no row to live on.
-  SELECT count(*) INTO found FROM "boat_executions" e
+  SELECT count(*), array_to_string((array_agg(e."runtime_instance_id" ORDER BY e."runtime_instance_id"))[1:10], ', ') INTO found, named FROM "boat_executions" e
     LEFT JOIN "boat_allocations" a ON a."runtime_instance_id" = e."runtime_instance_id"
     WHERE a."runtime_instance_id" IS NULL
        OR a."record"->'target' IS DISTINCT FROM e."record"->'target';
   IF found > 0 THEN
-    RAISE EXCEPTION 'boat_executions has % row(s) with no allocation, or whose target is not their allocation''s target.', found
+    RAISE EXCEPTION 'boat_executions has % row(s) with no allocation, or whose target is not their allocation''s target. Runs (first 10): %', found, named
       USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
-  SELECT count(*) INTO found FROM "boat_observations" o
+  SELECT count(*), array_to_string((array_agg(o."runtime_instance_id" ORDER BY o."runtime_instance_id"))[1:10], ', ') INTO found, named FROM "boat_observations" o
     LEFT JOIN "boat_allocations" a ON a."runtime_instance_id" = o."runtime_instance_id"
     WHERE a."runtime_instance_id" IS NULL
        OR (o."presence" = 'absent' AND o."sandbox_id" IS DISTINCT FROM a."sandbox_id");
   IF found > 0 THEN
-    RAISE EXCEPTION 'boat_observations has % row(s) with no allocation, or recording the absence of a VM that is not their allocation''s.', found
+    RAISE EXCEPTION 'boat_observations has % row(s) with no allocation, or recording the absence of a VM that is not their allocation''s. Runs (first 10): %', found, named
       USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
   -- An allocation ended on Boat''s 404 is written only under a committed absence.
-  SELECT count(*) INTO found FROM "boat_allocations" a
+  SELECT count(*), array_to_string((array_agg(a."runtime_instance_id" ORDER BY a."runtime_instance_id"))[1:10], ', ') INTO found, named FROM "boat_allocations" a
     LEFT JOIN "boat_observations" o ON o."runtime_instance_id" = a."runtime_instance_id"
     WHERE a."record"->>'phase' = 'deleted'
       AND a."record"->'removal'->>'kind' = 'absent'
       AND o."presence" IS DISTINCT FROM 'absent';
   IF found > 0 THEN
-    RAISE EXCEPTION 'boat_allocations has % row(s) ended on Boat''s absence with no absence observed.', found
+    RAISE EXCEPTION 'boat_allocations has % row(s) ended on Boat''s absence with no absence observed. Runs (first 10): %', found, named
       USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
 END;
 $$;
---> statement-breakpoint
--- (2) Nothing writes a run while it is carried.
-LOCK TABLE "boat_allocations", "boat_executions", "boat_observations", "boat_tunnels" IN ACCESS EXCLUSIVE MODE;
 --> statement-breakpoint
 -- (3) The table.
 CREATE TABLE "boat_runs" (
@@ -264,11 +267,11 @@ BEGIN
 END;
 $$;
 --> statement-breakpoint
-CREATE TRIGGER "boat_allocations_frozen" BEFORE INSERT OR UPDATE OR DELETE ON "boat_allocations"
+CREATE TRIGGER "boat_allocations_frozen" BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON "boat_allocations"
   FOR EACH STATEMENT EXECUTE FUNCTION boat_ledger_frozen();
 --> statement-breakpoint
-CREATE TRIGGER "boat_executions_frozen" BEFORE INSERT OR UPDATE OR DELETE ON "boat_executions"
+CREATE TRIGGER "boat_executions_frozen" BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON "boat_executions"
   FOR EACH STATEMENT EXECUTE FUNCTION boat_ledger_frozen();
 --> statement-breakpoint
-CREATE TRIGGER "boat_observations_frozen" BEFORE INSERT OR UPDATE OR DELETE ON "boat_observations"
+CREATE TRIGGER "boat_observations_frozen" BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON "boat_observations"
   FOR EACH STATEMENT EXECUTE FUNCTION boat_ledger_frozen();
