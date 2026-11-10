@@ -20,9 +20,12 @@ import { chmod, mkdir, open, readFile, rename, symlink, unlink, writeFile } from
 import net from "node:net";
 import path from "node:path";
 
+import { provedEmpty, unitControlGroup } from "./docker-service.mjs";
+
 export const BIND_RECORD_FORMAT = "sealant-agent-bind-v1";
 export const ARM_RECORD_FORMAT = "sealant-agent-arm-v1";
 export const LAUNCH_RECORD_FORMAT = "sealant-agent-launch-v1";
+export const LAUNCH_ENV_RECORD_FORMAT = "sealant-agent-launch-env-v1";
 export const PARK_REQUEST_FORMAT = "sealant-agent-park-v1";
 export const PARK_RECEIPT_FORMAT = "sealant-agent-park-receipt-v1";
 export const NETWORK_REQUEST_FORMAT = "sealant-guest-network-v1";
@@ -72,6 +75,8 @@ const GATEWAY_MISS_RCODES = new Set([2, 3, 4, 5]);
 const MAX_UDP_QUERY_BYTES = 4096;
 const MAX_DNS_IN_FLIGHT = 256;
 const MAX_DNS_TCP_CONNECTIONS = 64;
+/** How long a park or recovery waits for a killed daemon scope to be proved gone. */
+const SCOPE_KILL_TIMEOUT_MS = 5_000;
 
 // --------------------------------------------------------------------------------------------
 // Paths and records
@@ -88,6 +93,11 @@ export const boatPaths = (env = process.env) => {
     dataDir,
     /** The bearer: tmpfs only, never on the disk. */
     armFile: path.join(stateDir, "agent", "arm.json"),
+    /**
+     * What a recovery boot starts from (the boot env, with the secret env file's path): tmpfs
+     * only, so an agent restarted on the same boot can adopt the launch, and a reboot never can.
+     */
+    launchEnvFile: path.join(stateDir, "agent", "launch-env.json"),
     bindFile: path.join(dataDir, "bind.json"),
     launchFile: path.join(dataDir, "launch.json"),
     networkFile: path.join(dataDir, "network.json"),
@@ -673,8 +683,11 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
     sync: env.SEALANT_AGENT_SYNC ?? "sync",
     unshare: env.SEALANT_AGENT_UNSHARE ?? "unshare",
     systemdRun: env.SEALANT_AGENT_SYSTEMD_RUN ?? "systemd-run",
+    systemctl: env.SEALANT_AGENT_SYSTEMCTL ?? "systemctl",
   };
   const daemonNamespace = env.SEALANT_AGENT_DAEMON_NAMESPACE === "none" ? "none" : "pid";
+  // Where the cgroup filesystem is mounted (tests point it at a scratch tree).
+  const cgroupRoot = env.SEALANT_MICROVM_CGROUP_ROOT ?? "/sys/fs/cgroup";
   // Where the kernel's sysctls are (tests point it at a scratch tree).
   const procSys = env.SEALANT_AGENT_PROC_SYS ?? "/proc/sys";
   // The gateway's resolver, which the VM's resolver asks first; and where the VM's resolver listens
@@ -789,6 +802,121 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
   };
 
   /**
+   * What a recovery boot on this boot starts from, kept on tmpfs (0600): the run, the contract,
+   * whether the launch booted a capture source, the flush timeout, and the boot env sealantd got
+   * (with the secret env file's path; the file itself is on tmpfs too). Written BEFORE the launch
+   * record, so a push whose material failed to persist leaves no record and can be retried; alone
+   * it adopts nothing. Gone with the tmpfs on a reboot, where its boot id would refuse it anyway.
+   */
+  const recordLaunchEnv = async ({
+    runId,
+    contractVersion,
+    captureSourced,
+    flushTimeoutMs,
+    bootEnv,
+  }) => {
+    const boot = bootId();
+    if (boot === null) throw new Error("the VM's boot id cannot be read");
+    await writeAtomic(
+      paths.launchEnvFile,
+      `${JSON.stringify({
+        format: LAUNCH_ENV_RECORD_FORMAT,
+        boot_id: boot,
+        run_id: runId,
+        contract_version: contractVersion,
+        capture_sourced: captureSourced,
+        flush_timeout_ms: flushTimeoutMs,
+        boot_env: bootEnv,
+      })}\n`,
+      0o600,
+    );
+  };
+
+  /**
+   * The launch an earlier agent process accepted on this boot, for a restarted agent to adopt:
+   * the launch record is this boot's, and the launch environment on tmpfs is this boot's and this
+   * run's. `null` when there is nothing to adopt (never launched, another boot, or no environment:
+   * the launch is still accepted, but a recovery from it is unknown).
+   */
+  const adoptLaunch = () => {
+    const boot = bootId();
+    const launch = launchRecord();
+    if (boot === null || launch.kind !== "ok" || launch.value.boot_id !== boot) return null;
+    const record = readRecord(paths.launchEnvFile);
+    if (record.kind !== "ok") return null;
+    const value = record.value;
+    if (
+      value.format !== LAUNCH_ENV_RECORD_FORMAT ||
+      value.boot_id !== boot ||
+      value.run_id !== launch.value.run_id ||
+      !Number.isInteger(value.contract_version) ||
+      typeof value.capture_sourced !== "boolean" ||
+      !Number.isInteger(value.flush_timeout_ms) ||
+      value.flush_timeout_ms <= 0 ||
+      !isPlainObject(value.boot_env) ||
+      !Object.values(value.boot_env).every((item) => typeof item === "string")
+    ) {
+      return null;
+    }
+    return {
+      runId: value.run_id,
+      contractVersion: value.contract_version,
+      captureSourced: value.capture_sourced,
+      flushTimeoutMs: value.flush_timeout_ms,
+      bootEnv: { ...value.boot_env },
+    };
+  };
+
+  /**
+   * The daemon scopes live on this boot (`sealant-workspace-*.scope`, active), from systemd; the
+   * daemon an earlier agent process started runs in one, outside the agent's own cgroup, so it
+   * outlives that process. `null` when systemd could not say: nothing is known then.
+   */
+  const liveDaemonScopes = async () => {
+    const listed = await run(commands.systemctl, [
+      "list-units",
+      "--type=scope",
+      "--state=active",
+      "--plain",
+      "--no-legend",
+      "sealant-workspace-*",
+    ]);
+    if (listed.code !== 0) return null;
+    return listed.stdout
+      .split("\n")
+      .map((line) => line.trim().split(/\s+/)[0] ?? "")
+      .filter((unit) => /^sealant-workspace-[\w.-]+\.scope$/.test(unit));
+  };
+
+  /**
+   * Kill every live daemon scope (SIGKILL to all its processes) and prove each gone: no longer
+   * active, or its cgroup (where systemd says it is) reads empty. `true` only when every one was,
+   * within the deadline; what systemd cannot list is not proved gone.
+   */
+  const killDaemonScopes = async () => {
+    const deadline = Date.now() + SCOPE_KILL_TIMEOUT_MS;
+    for (;;) {
+      const scopes = await liveDaemonScopes();
+      if (scopes === null) return false;
+      const remaining = scopes.filter((unit) => {
+        try {
+          return !provedEmpty(
+            unitControlGroup(unit, { systemctlPath: commands.systemctl, cgroupRoot }),
+          );
+        } catch {
+          return true;
+        }
+      });
+      if (remaining.length === 0) return true;
+      if (Date.now() >= deadline) return false;
+      for (const unit of remaining) {
+        await run(commands.systemctl, ["kill", "--signal=SIGKILL", unit]);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  };
+
+  /**
    * How sealantd is started: as PID 1 of its own PID namespace, in a transient systemd scope of
    * its own (`sealant-workspace-<id>.scope` under `sealant-workspace.slice`), unless told `none`
    * (tests). The scope keeps the workspace's memory apart from the agent's: an OOM kill in it
@@ -822,8 +950,8 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
 
   /**
    * What a recovery request may do, from the records: a refusal `{reason}`, `nothing-to-save`
-   * (bound this boot, never launched), or `proceed`. `agentLaunched`: whether THIS agent process
-   * accepted the launch (and so holds the boot env a recovery starts from).
+   * (bound this boot, never launched), or `proceed`. `agentLaunched`: whether this agent process
+   * holds the boot env a recovery starts from (it accepted the launch, or adopted it from tmpfs).
    */
   const recoverDecision = ({ runId, agentLaunched, agentActive }) => {
     const boot = bootId();
@@ -908,8 +1036,10 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
 
   /**
    * Close the workspace for parking, once per operation: stop the daemon's namespace and Docker
-   * (the caller's `stopDaemon` / `stopDocker`), `sync`, write the receipt. The same operation
-   * again returns the receipt it wrote; another operation after a park is refused.
+   * (the caller's `stopDaemon` / `stopDocker`, each answering `stopped` only when it proved so),
+   * `sync`, write the receipt. The same operation again returns the receipt it wrote; another
+   * operation after a park is refused. Nothing unproved is ever certified: a daemon or Docker that
+   * could not be proved stopped is a 503 with its reason, no receipt, and the park is retried.
    */
   const park = async (body, { runId, stopDaemon, stopDocker }) => {
     if (
@@ -933,12 +1063,10 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
       host.parking = (async () => {
         const boot = bootId();
         log(`park ${operationId}: closing`);
-        await stopDaemon();
+        // Never a receipt saying the daemon or Docker stopped when it cannot be proved.
+        if ((await stopDaemon()) !== "stopped") throw new Refusal("daemon-stop-unverified", 503);
         const docker = await stopDocker();
-        if (docker === "unverified") {
-          // Never a receipt saying Docker stopped when it cannot be proved.
-          throw new Refusal("docker-stop-unverified", 503);
-        }
+        if (docker === "unverified") throw new Refusal("docker-stop-unverified", 503);
         const synced = await run(commands.sync, [], { timeoutMs: 60_000 });
         if (synced.code !== 0) log(`park ${operationId}: sync exited ${String(synced.code)}`);
         await writeAtomic(
@@ -1390,6 +1518,10 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
     arm,
     launchAccepted,
     recordLaunch,
+    recordLaunchEnv,
+    adoptLaunch,
+    liveDaemonScopes,
+    killDaemonScopes,
     daemonCommand,
     recoverDecision,
     staleBootBearer,

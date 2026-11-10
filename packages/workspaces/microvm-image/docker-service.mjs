@@ -44,7 +44,7 @@ const DOCKER_ENV_KEYS = [
  * Whether a cgroup can be proved empty. A cgroup that cannot be read, including one that is not
  * where it was resolved to be, is never taken for empty: what cannot be seen is not proved gone.
  */
-const provedEmpty = (cgroup) => {
+export const provedEmpty = (cgroup) => {
   try {
     return /^populated 0$/m.test(readFileSync(path.join(cgroup, "cgroup.events"), "utf8"));
   } catch {
@@ -52,7 +52,94 @@ const provedEmpty = (cgroup) => {
   }
 };
 
+/**
+ * Where systemd put a unit's cgroup, under the cgroup filesystem's mount point: asked of systemd
+ * (`systemctl show --property ControlGroup --value`), never assumed, since a slice nests by name
+ * (`sealant-docker.slice` is `/sealant.slice/sealant-docker.slice`). Throws when systemd does not
+ * name one (a unit that is not loaded, or no systemd to ask).
+ */
+export const unitControlGroup = (unit, { systemctlPath = "systemctl", cgroupRoot }) => {
+  const control = execFileSync(
+    systemctlPath,
+    ["show", "--property", "ControlGroup", "--value", unit],
+    { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] },
+  ).trim();
+  if (!control.startsWith("/") || control.includes("..")) {
+    throw new Error("systemd did not name the unit's cgroup");
+  }
+  return path.join(cgroupRoot, control);
+};
+
+/**
+ * Kill what is in each cgroup (`cgroup.kill`) until every one is proved empty, or `timeoutMs`
+ * passes: `true` only when all were. Nothing outside them is touched.
+ */
+export const killCgroupsUntilEmpty = async (cgroups, timeoutMs = 5_000) => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const occupied = cgroups.filter((cgroup) => !provedEmpty(cgroup));
+    if (occupied.length === 0) return true;
+    if (Date.now() >= deadline) return false;
+    for (const cgroup of occupied) {
+      try {
+        writeFileSync(path.join(cgroup, "cgroup.kill"), "1");
+      } catch {
+        // A kernel without cgroup.kill (before 5.14): the cgroup cannot be emptied, and the
+        // deadline answers that it was not.
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+};
+
 const nonEmpty = (value) => (typeof value === "string" && value !== "" ? value : null);
+
+/**
+ * The cgroups the service's Docker lives in, resolved as the service resolves them at start: the
+ * engine's (made if missing, as the service makes it before dockerd joins it) and the containers'
+ * slice (started so it exists, then located from systemd). Throws when the slice cannot be
+ * located; `null` for a cgroup the options do not name.
+ */
+const dockerCgroups = (options) => {
+  const cgroupParent = nonEmpty(options.cgroupParent);
+  const cgroupRoot = nonEmpty(options.cgroupRoot) ?? "/sys/fs/cgroup";
+  const systemctlPath = nonEmpty(options.systemctlPath) ?? "systemctl";
+  const engineCgroupPath = nonEmpty(options.engineCgroupPath);
+  if (engineCgroupPath !== null) mkdirSync(engineCgroupPath, { recursive: true });
+  let containerCgroupPath = null;
+  if (cgroupParent !== null) {
+    if (!cgroupParent.endsWith(".slice")) {
+      containerCgroupPath = path.join(cgroupRoot, cgroupParent);
+    } else {
+      execFileSync(systemctlPath, ["start", cgroupParent], {
+        encoding: "utf8",
+        timeout: 10_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      containerCgroupPath = unitControlGroup(cgroupParent, { systemctlPath, cgroupRoot });
+    }
+  }
+  return { engineCgroupPath, containerCgroupPath };
+};
+
+/**
+ * Kill whatever of Docker runs in the cgroups the options name and prove them empty, without a
+ * service holding dockerd: what an agent restarted on the same boot owes a park or recovery, since
+ * the dockerd an earlier agent process started lives on in the engine's cgroup, and its containers
+ * in theirs. `true` only when both were proved empty; a slice that cannot be located proves
+ * nothing.
+ */
+export const sweepDockerCgroups = async (options) => {
+  let cgroups;
+  try {
+    cgroups = dockerCgroups(options);
+  } catch {
+    return false;
+  }
+  return killCgroupsUntilEmpty(
+    [cgroups.engineCgroupPath, cgroups.containerCgroupPath].filter((cgroup) => cgroup !== null),
+  );
+};
 
 const positiveInteger = (value, fallback) => {
   const parsed = Number(value);
@@ -318,29 +405,6 @@ export const createDockerService = (options) => {
       ? Number(options.containerStopSeconds)
       : null;
   const verifiesStop = cgroupParent !== null || engineCgroupPath !== null;
-  /** Start the containers' slice (so it exists before any container) and resolve its path. */
-  const resolveContainerCgroup = () => {
-    if (cgroupParent === null) return null;
-    if (!cgroupParent.endsWith(".slice")) return path.join(cgroupRoot, cgroupParent);
-    const systemctl = (args) =>
-      execFileSync(systemctlPath, args, {
-        encoding: "utf8",
-        timeout: 10_000,
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-    systemctl(["start", cgroupParent]);
-    const control = systemctl([
-      "show",
-      "--property",
-      "ControlGroup",
-      "--value",
-      cgroupParent,
-    ]).trim();
-    if (!control.startsWith("/") || control.includes("..")) {
-      throw new Error("systemd did not name the slice's cgroup");
-    }
-    return path.join(cgroupRoot, control);
-  };
   const dockerdArgs = [
     "--host",
     dockerHost,
@@ -553,8 +617,14 @@ export const createDockerService = (options) => {
     const stderrLog = openBoundedLog(options.logPath, logMaxBytes);
     if (engineCgroupPath !== null || cgroupParent !== null) {
       try {
-        if (engineCgroupPath !== null) mkdirSync(engineCgroupPath, { recursive: true });
-        cgroupPath = resolveContainerCgroup();
+        // The engine's cgroup is made before dockerd joins it; the containers' slice is started
+        // (so it exists before any container) and located from systemd.
+        cgroupPath = dockerCgroups({
+          engineCgroupPath,
+          cgroupParent,
+          cgroupRoot,
+          systemctlPath,
+        }).containerCgroupPath;
       } catch {
         fail("directory-preparation-failed");
         return;
@@ -698,22 +768,9 @@ export const createDockerService = (options) => {
     if (dockerd === null) return true;
     // A containers' slice that was never resolved cannot be proved empty.
     if (cgroupParent !== null && cgroupPath === null) return false;
-    const cgroups = [engineCgroupPath, cgroupPath].filter((cgroup) => cgroup !== null);
-    const deadline = Date.now() + 5_000;
-    for (;;) {
-      const occupied = cgroups.filter((cgroup) => !provedEmpty(cgroup));
-      if (occupied.length === 0) return true;
-      if (Date.now() >= deadline) return false;
-      for (const cgroup of occupied) {
-        try {
-          writeFileSync(path.join(cgroup, "cgroup.kill"), "1");
-        } catch {
-          // A kernel without cgroup.kill (before 5.14): the cgroup cannot be emptied, and the
-          // deadline answers that it was not.
-        }
-      }
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
+    return killCgroupsUntilEmpty(
+      [engineCgroupPath, cgroupPath].filter((cgroup) => cgroup !== null),
+    );
   };
 
   const stop = () => {

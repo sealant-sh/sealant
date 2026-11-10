@@ -104,8 +104,58 @@ export const boatAgentLaunchRecordSchema = z.strictObject({
   accepted_at: z.string().datetime(),
 });
 
+/**
+ * Where the agent keeps what a recovery boot starts from: tmpfs (`/run/sealant`), 0600, so an
+ * agent restarted on the same boot adopts the launch and a reboot never can (the file is gone
+ * with the tmpfs, and its boot id would refuse it anyway).
+ */
+export const BOAT_AGENT_LAUNCH_ENV_FILE = "/run/sealant/agent/launch-env.json";
+
+/**
+ * The launch environment (`BOAT_AGENT_LAUNCH_ENV_FILE`), written just before the launch record.
+ * `boot_env` is the env sealantd got (the secret env file's path included; that file is on tmpfs
+ * too). With it a restarted agent adopts the launch:
+ *
+ *   - `GET /sealant/health` keeps its shape: `booted: true`; `daemonExit` absent while a
+ *     `sealant-workspace-*` scope is active (the daemon an earlier agent process started runs
+ *     on, outside the agent's cgroup), `{code: null, signal: null}` once none is (it exited; its
+ *     code is unknown to this process); `controlSocket` as measured. On a Docker image
+ *     `services.docker` is `starting` (no service is held) until a recovery boot, which needs
+ *     none.
+ *   - `POST /sealant/recover`: `running` while a scope is live; otherwise Docker's cgroups are
+ *     swept and proved empty, every scope killed and proved gone, and `sealantd boot --recovery`
+ *     starts from `boot_env` as an in-process recovery would (`restarted`, or `nothing-to-save`
+ *     on exit 76).
+ *   - `POST /sealant/park`: every live scope is killed (`systemctl kill --signal=SIGKILL`) and
+ *     proved gone (no longer active, or its cgroup reads `populated 0`), then Docker's cgroups,
+ *     before the receipt.
+ *
+ * A launch record of this boot without this file adopts nothing: the launch stays accepted and a
+ * recovery is `recover-state-unknown`.
+ */
+export const boatAgentLaunchEnvRecordSchema = z.strictObject({
+  format: z.literal("sealant-agent-launch-env-v1"),
+  boot_id: uuid,
+  run_id: z.string().trim().min(1),
+  contract_version: z.union([z.literal(1), z.literal(2)]),
+  capture_sourced: z.boolean(),
+  flush_timeout_ms: z.number().int().positive(),
+  boot_env: z.record(z.string(), z.string()),
+});
+
 /** A refusal: `409 {reason}`. */
 export const boatAgentRefusalSchema = z.strictObject({ reason: boatAgentReasonSchema });
+
+/**
+ * `503 {reason}` from a park or recovery that could not prove the workspace closed: no receipt
+ * is written and nothing is started; Core retries the same operation. `daemon-stop-unverified`: a
+ * `sealant-workspace-*` scope is still active and its cgroup not proved empty;
+ * `docker-stop-unverified`: Docker's engine cgroup or its containers' slice is not proved empty.
+ */
+export const BOAT_AGENT_CLOSE_UNVERIFIED = [
+  "daemon-stop-unverified",
+  "docker-stop-unverified",
+] as const;
 
 export const BOAT_AGENT_RECOVER_REFUSALS = [
   "recover-new-boot",
