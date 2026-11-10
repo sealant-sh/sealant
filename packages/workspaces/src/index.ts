@@ -42,6 +42,7 @@ export {
   BoatResources,
   BoatResourcesHost,
   BoatResourcesError,
+  boatResourceObligations,
   boatResourcesLayer,
   boatResourcesLayerNoDeps,
   type BoatGatewayHost,

@@ -57,6 +57,18 @@ export interface BoatResourcesReceipt {
   readonly gateway: BoatTunnelEndpoint;
   readonly guest: BoatGuestNetworkReceipt;
 }
+/**
+ * The sweep entries an operator should hear about: a run whose resources are held or unavailable.
+ * A run launched without resources has nothing to configure, so it is never one of them; reporting
+ * it would list every such run on every pass and bury a tunnel that really is held.
+ */
+export const boatResourceObligations = (
+  entries: BoatResourcesSweep["entries"],
+): BoatResourcesSweep["entries"] =>
+  entries.filter(
+    (entry) => !["configured", "closed", "pending", "no-resources"].includes(entry.outcome),
+  );
+
 /** One bounded page; failures advance the cursor without resetting any durable intent. */
 export interface BoatResourcesSweep {
   readonly entries: readonly {

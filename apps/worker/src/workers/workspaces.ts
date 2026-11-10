@@ -24,6 +24,7 @@ import type { WorkerEnv } from "@sealant/validators/env";
 import {
   BoatAllocation,
   boatConnectMaterial,
+  boatResourceObligations,
   DockerResourceRuntime,
   KubernetesCallerRuntime,
   parseResourceCallers,
@@ -1033,9 +1034,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           ...(boatResourceCursor === undefined ? {} : { after: boatResourceCursor }),
         });
         boatResourceCursor = resources.next;
-        const held = resources.entries.filter(
-          (entry) => !["configured", "closed", "pending"].includes(entry.outcome),
-        );
+        const held = boatResourceObligations(resources.entries);
         if (held.length > 0) console.warn("Boat resource obligations remain", { entries: held });
       }
       if (boatAssembly?.registration !== undefined) await boatAssembly.reconcileCatalog?.();
