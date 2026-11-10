@@ -82,7 +82,7 @@ name=$(basename "$0")
 printf '%s %s\\n' "$name" "$*" >> ${JSON.stringify(log)}
 if [ "$name" = wg ]; then
   case "$1" in
-    set) cat > ${JSON.stringify(`${log}.wg-stdin`)} ;;
+    set) shift 2; [ "$1" = private-key ] && cat "$2" > ${JSON.stringify(`${log}.wg-key`)} ;;
     show) cat ${JSON.stringify(handshakeFile)} 2>/dev/null ;;
   esac
 fi
@@ -552,9 +552,9 @@ describe("Core's Boat execution owner against the real guest agent", () => {
     const control = await execute(c.repo.get(t.runtimeInstanceId));
     expect(control?.phase).toBe("installed");
     expect(JSON.stringify(control)).not.toContain(bind.bearer_sha256);
-    // The network intent reached wg with the key on stdin, never in argv.
+    // The network intent reached wg with the key in the agent's tmpfs key file, never in argv.
     expect(await netLines(vm)).toContainEqual(
-      expect.stringMatching(/^wg set sealant-wg private-key \/dev\/stdin peer /),
+      expect.stringMatching(/^wg set sealant-wg private-key \/[^ ]+\/agent\/sealant-wg\.key peer /),
     );
     // Nothing is launched before Core pushes it: readiness says so.
     await expect(execute(c.executor.readiness(t))).rejects.toThrow("invocation-held");

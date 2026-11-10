@@ -99,7 +99,8 @@ const FAKE_SEALANTCTL = `#!/bin/sh
 exit 0
 `;
 
-// ip / wg / iptables: one line per invocation (<name> <argv>), and wg's stdin kept apart. The
+// ip / wg / iptables: one line per invocation (<name> <argv>), and wg's key file kept apart (as
+// the real wg, it opens the file named after `private-key` by path; it never reads fd 0). The
 // agent runs these with a bare environment (PATH and LANG only, as the Python guest did), so the
 // log path is baked into each VM's script, and `wg show` answers with whatever the test put in
 // the handshake file.
@@ -108,7 +109,7 @@ name=$(basename "$0")
 printf '%s %s\\n' "$name" "$*" >> ${JSON.stringify(log)}
 if [ "$name" = wg ]; then
   case "$1" in
-    set) cat > ${JSON.stringify(`${log}.wg-stdin`)} ;;
+    set) shift 2; [ "$1" = private-key ] && cat "$2" > ${JSON.stringify(`${log}.wg-key`)} ;;
     show) cat ${JSON.stringify(handshakeFile)} 2>/dev/null ;;
   esac
 fi
@@ -1189,7 +1190,7 @@ describe("boat agent · network", () => {
     expect(await exists(path.join(vm.dataDir, "network.json"))).toBe(false);
   });
 
-  it("brings up sealant-wg with the key on wg's stdin only, points DNS at the gateway, and replays without mutating", async () => {
+  it("brings up sealant-wg with the key in a tmpfs file wg alone reads, points DNS at the gateway, and replays without mutating", async () => {
     const vm = await createVm();
     const bearer = await bindVm(vm);
     const agent = await startAgent(vm);
@@ -1210,17 +1211,20 @@ describe("boat agent · network", () => {
     });
     const lines = await netLines(vm);
     const wg = BOAT_AGENT_WIREGUARD_INTERFACE;
+    // The key file lives on the agent's tmpfs state directory only while wg runs.
+    const keyFile = path.join(vm.stateDir, "agent", `${wg}.key`);
     expect(lines).toEqual([
       `ip link add ${wg} type wireguard`,
-      `wg set ${wg} private-key /dev/stdin peer ${gatewayKey} endpoint 203.0.113.10:51820 allowed-ips 10.42.7.32/27,${BOAT_AGENT_GATEWAY_ADDRESS}/32 persistent-keepalive 25`,
+      `wg set ${wg} private-key ${keyFile} peer ${gatewayKey} endpoint 203.0.113.10:51820 allowed-ips 10.42.7.32/27,${BOAT_AGENT_GATEWAY_ADDRESS}/32 persistent-keepalive 25`,
       `ip address add ${BOAT_AGENT_CLIENT_ADDRESS}/32 dev ${wg}`,
       `ip link set ${wg} mtu 1380`,
       `ip link set ${wg} up`,
       `ip route add 10.42.7.32/27 dev ${wg}`,
       `ip route add ${BOAT_AGENT_GATEWAY_ADDRESS}/32 dev ${wg}`,
     ]);
-    expect(await readFile(`${vm.netLog}.wg-stdin`, "utf8")).toBe(`${privateKey}\n`);
-    // The private key is on wg's stdin and nowhere else: not in any argv, record or console line.
+    expect(await readFile(`${vm.netLog}.wg-key`, "utf8")).toBe(`${privateKey}\n`);
+    expect(await exists(keyFile)).toBe(false);
+    // The private key reached wg's file and nowhere else: not in any argv, record or console line.
     expect(lines.join("\n")).not.toContain(privateKey);
     expect(recordBytes.toString("utf8")).not.toContain(privateKey);
     expect(agent.output()).not.toContain(privateKey);

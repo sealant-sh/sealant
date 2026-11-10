@@ -816,16 +816,22 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
     return true;
   };
 
-  /** Bring the interface up in the VM's own namespace; the private key reaches wg on stdin only. */
+  /**
+   * Bring the interface up in the VM's own namespace. The private key reaches wg through a 0600
+   * file on tmpfs that exists only for the call: `wg` opens its key file by path, and a child's
+   * stdin from Node is a socketpair, which `/dev/stdin` cannot reopen (ENXIO).
+   */
   const prepareNetwork = async (config) => {
     await ip("link", "add", WIREGUARD_INTERFACE, "type", "wireguard");
-    const set = await run(
-      commands.wg,
-      [
+    const keyFile = path.join(paths.stateDir, "agent", `${WIREGUARD_INTERFACE}.key`);
+    await writeAtomic(keyFile, `${config.private_key}\n`, 0o600);
+    let set;
+    try {
+      set = await run(commands.wg, [
         "set",
         WIREGUARD_INTERFACE,
         "private-key",
-        "/dev/stdin",
+        keyFile,
         "peer",
         config.gateway_key,
         "endpoint",
@@ -834,9 +840,10 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
         `${config.subnet},${GATEWAY}/32`,
         "persistent-keepalive",
         "25",
-      ],
-      { input: `${config.private_key}\n` },
-    );
+      ]);
+    } finally {
+      await unlink(keyFile).catch(() => {});
+    }
     if (set.code !== 0) throw new Refusal("network-command-refused", 500);
     await ip("address", "add", `${CLIENT}/32`, "dev", WIREGUARD_INTERFACE);
     await ip("link", "set", WIREGUARD_INTERFACE, "mtu", WIREGUARD_MTU);
