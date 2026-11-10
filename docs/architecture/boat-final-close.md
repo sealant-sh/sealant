@@ -1,59 +1,59 @@
-# Boat FINAL close and tunnel release
+# Boat stop: FINAL, then DELETE, on the shared stop path
 
-`BoatFinalClose.close` closes an existing Boat allocation whose stop was requested. A bounded worker
-sweep visits stopped current runtimes on its own gateway host, with its own cursor and four calls at
-a time. Active, already removed and other-host runtimes are skipped. The runtime stays unregistered.
-Generic Docker cleanup does not call this capability, and it does not admit a session. This is the
-whole of a Boat stop: the FINAL drain, then the VM's deletion, then a poll of Boat's deletion
-operation. A VM whose FINAL is incomplete stays until FINAL completes or the owner discards it; the
-sweep closes it again on every pass. Resuming is a fresh VM from the project snapshot plus the
-captured worktree.
+A Boat session is stopped by the same path that stops every runtime's executor
+(`worker/process-workspace-stop.ts`), recovered by the same sweep
+(`worker/recover-retained-executors.ts`) and watched by the same exit reconciler
+(`worker/reconcile-runtime-exits.ts`). Boat has no close owner of its own. What stays Boat's is the
+adapter (`runtime/boat/adapter.ts`), the one deletion of a VM (`runtime/boat/removal.ts`), the
+release of what a VM held once Boat no longer has it (`runtime/boat/discharge.ts`), and a small
+convergence sweep (`runtime/boat/convergence.ts`).
 
-## Before removal
+A stop is the FINAL drain, then the VM's deletion, then a poll of Boat's deletion operation. A VM
+whose FINAL is incomplete stays until FINAL completes or the owner discards it, without bound.
+Resuming is a fresh VM from the project snapshot plus the captured worktree.
 
-The owner requires the same bound allocation, execution, provider sandbox, run, publication source,
-boot, disk lineage and physical gateway host. The runtime row must still name that sandbox and have
-an explicit stop reason. It holds an execution that was previously positively running, preserving
-its sealed capture control but erasing its launch envelope. The agent's durable launch record means
-a delayed push can only adopt that launch, never start another after FINAL. Unissued or ambiguous
-first launches are retained for a separate close/recovery path.
+The rule that outranks everything: no loss of work. A session's worktree is captured before its VM
+is deleted, on every path. Nothing a VM held is released before Boat's own word that it no longer
+has the VM. That word is a typed 404 for a VM Boat had reported past creation, or its completed
+deletion operation; never elapsed time, an error or a failed read.
 
-Every host mutation is recorded before dispatch. A UUID fences subnet allocation and gateway ensure;
-only its winning database transition permits dispatch. The UUID remains outstanding if the request
-has an unknown outcome, including worker loss. A later successful setup cannot erase an earlier
-uncertain request. The close barrier is irreversible and requires every outstanding request to have
-positively returned. No lease expiry, timeout or empty Docker inventory substitutes for settlement.
-A crash immediately after recording a host request can therefore retain its port indefinitely. This
-conservative limitation needs positive host-operation reconciliation before admission can be
-enabled.
+## A stop, step by step
 
-A configuration holds the gateway host lock across its one gateway mutation, and the lock is tried,
-never queued for. A close that meets it (a link job, the sweep's visit, a launch) has already held
-the execution; it then tries the freeze again every 500 ms for up to 15 s, reading the reservation
-again each time, and freezes as soon as the mutation returns. Nothing gets through while it waits: a
-configuration reads the stop and the held execution before it dispatches, again under the lock. A
-lock still held at 15 s, or any other failure of the freeze, fails the close as before, and the next
-close pass finishes it. Only the close of a run that was issued waits; the close of a launch that
-never issued fails at once.
+1. **Claim.** The stop takes the run's capture drain claim. A second stop of the same run (the
+   expiry reaper's, the sweep's nudge) finds it held and leaves the run alone (`busy`).
+2. **Stop request.** The adapter declares `stopRequestBeforeDrain`, so the stop reason is written to
+   the runtime row now, before anything is asked of the VM. Boat's launch and link paths read it as
+   their fence (`BoatAllocationRepo.isActive`, `boatTargetIsCurrent`): from here on no launch is
+   pushed and no resource link is configured for the run.
+3. **Inspect.** The adapter says whether the VM is `running`, `exited` (its daemon is not known to
+   be up) or `missing` (below).
+4. **Drain.** A running executor is sent FINAL through the worker's drain control
+   (`BoatControlMaterial.drainMaterial`) and polled until it reports the flush complete. Empty
+   queues do not count. Incomplete, unreadable, contradictory or unrecorded evidence keeps the VM:
+   the stop answers `kept`, and every later pass flushes again.
+5. **Authorize.** The preservation policy (`decideExecutorDeletion`) decides on the capture record
+   as it stands, and a removal that rests on evidence takes a deletion ticket from the capture
+   ledger, re-checked and issued right before the runtime call.
+6. **Remove.** `BoatRuntimeAdapter.stop()` deletes the VM (below) and returns once Boat no longer
+   has it. A deletion Boat accepted and has not finished is `removalPending`: the stop answers
+   `draining`, nothing is released, and the next pass polls the operation.
+7. **Record.** The runtime row is recorded stopped and removed, the ledger's removal completed, the
+   drain's outcome written.
 
-The canonical capture drain sends FINAL through authenticated control and records every observation
-in `workspace_capture_drains`. Empty queues do not count as FINAL completion. Incomplete,
-unreadable, contradictory or unrecorded evidence retains the VM and its tunnel. The drain has a
-60-second budget; the complete close call has a 120-second bound. A retry can drain the same held
-daemon.
+A stop whose executor ended (`exited`) with nothing on record that its work was saved is kept and
+recorded retained, which starts the recovery sweep at once.
 
 ## Removal without the guest
 
-Three facts let close remove a VM without the guest answering:
+Three things let a stop remove a VM without the guest answering:
 
-- **Absence.** Boat itself says the VM is gone: a typed 404 after Boat reported it past creation, or
-  its own deletion operation completed. Close discharges the launch; nothing is asked of the guest
-  and no DELETE is sent.
+- **Absence.** Boat itself says the VM is gone. The stop only cleans up; no DELETE is sent.
 - **Discard.** The owner discarded the unsaved captures (`requestDiscard`). The VM is removed under
   the `discarded` basis and the capture ends `discarded`.
-- **Attestation.** A trusted caller attested a sealed FINAL of this executor (`attestCompletion`)
-  that covers everything Core observed of it. The VM is removed under `attested-complete` and the
-  capture ends `stopped`, the same as an observed complete FINAL.
+- **Attestation, for an executor that ended.** A trusted caller attested a sealed FINAL of this
+  executor (`attestCompletion`) that covers everything Core observed of it, and its daemon has
+  ended. The VM is removed under `attested-complete`. A VM whose daemon is still up is drained first
+  whatever is attested, as on every runtime: it may have written since the seal.
 
 An identical attestation submitted again is not new evidence and leaves the evidence version
 unchanged. A removal already authorized and issued is never stranded by newer evidence that
@@ -68,98 +68,105 @@ when a later observation of the daemon (a higher epoch, a later unsaved capture)
 Granting the attestation route to a caller is therefore granting it authority to end that executor's
 retention.
 
-## Capture-only recovery
+## Recovery of a kept VM
 
-Before FINAL, close asks the [guest agent](boat-guest-agent.md) to recover the capture
-(`POST /sealant/recover`, with the capture token Core kept sealed in the resume envelope). The agent
-answers from its durable records, never from a guess: `running` (the daemon is up; FINAL drains it),
-`restarted` (sealantd had exited 75 and was started again in recovery mode on the VM's own disk: the
-VM is retained and the next pass observes it), or `nothing-to-save` (the daemon's recovery boot
-exited 76 because it never materialized a capture, or this boot was bound and never launched). The
-recovery boot runs no dotfiles, lifecycle step or harness, admits nothing, and resumes its own
-staging.
+The recovery sweep asks the adapter to `recover` a retained VM. The adapter fences first, so nothing
+can start on the VM again whatever it answers:
 
-`nothing-to-save` is a distinct execution result: nothing ran on the VM, so close removes it under
-the `nothing-to-save` deletion basis, which rests on no recorded evidence a later observation could
-revoke (like the owner's discard). The agent's refusals are typed (`recover-new-boot` after a
-reboot, `recover-binding-conflict`, `recover-state-unknown` from a restarted agent that finds no
-launch environment to adopt) and classified through the launch diagnostics; each retains the VM and
-can never be read as nothing to save. A malformed answer or lost transport keeps the VM too and is
-retried.
+- **No launch was ever pushed** (the VM was never bound, or its execution had not reached the push):
+  the execution is aborted, a compare-and-set against the push, and the answer is `nothing-to-save`,
+  from Core's own record that no daemon ran. The sweep then removes the VM.
+- **A launch may have been pushed:** the execution is held and the
+  [guest agent](boat-guest-agent.md) is asked to recover the capture (`POST /sealant/recover`, with
+  the capture token the sweep unsealed from the run's capture record). The agent answers from its
+  durable records: `running` (the daemon is up), `restarted` (sealantd had exited and was started
+  again in recovery mode on the VM's own disk), or `nothing-to-save` (the recovery boot exited 76
+  because it never materialized a capture, or this boot was bound and never launched). On `running`
+  and `restarted` the sweep drains FINAL and removes the VM once that is confirmed. The agent's
+  `no-launch` answer is taken only once the launch that issued the push is over.
 
-## Exact cleanup and retry
+The agent's refusals (`recover-new-boot`, `recover-binding-conflict`, `recover-state-unknown`), its
+503 when it cannot prove the workspace's processes stopped, a daemon without sealantd's recovery
+boot and a recovery with no capture token are all `unsupported`: the VM is kept until its owner
+discards it. A malformed answer or lost transport is a failed attempt, retried on the backoff.
 
-Only canonical deletion authorization and issuance permit DELETE. A fresh provider observation must
-positively identify the same sandbox with all allocation ownership labels. Missing inventory is not
-a deletion receipt. A lost DELETE response retains the issued obligation. If the same owned sandbox
-is positively present and the canonical FINAL evidence still stands, a retry can repeat DELETE for
-that stable sandbox ID. It never creates another VM.
+## One removal
 
-The exact provider deletion operation ID is persisted on the allocation's own removal record, for
-every run, before any wait: the allocation leaves `bound` for `deleting` with
-`removal: { kind: "operation", id, targetId, completed }`. The allocation repository allows that
-transition only once the execution can never start again: aborted before any launch was pushed, or
-held, and from a held execution only with an operation record (hold comes before the drain, so held
-alone lets nothing leave `bound`). Pending, blocked, transport loss and unknown outcomes keep the
-port and host gateway. Observation of that operation can resume after worker loss without another
-FINAL or DELETE. Changed operation IDs or target IDs refuse. Once exact completion is recorded, an
-older pending response cannot downgrade it.
+`BoatRemoval.remove(allocation, { authorized })` is the one deletion of a Boat VM. It decides
+nothing about the work on the VM. In order:
+
+1. Observe the VM through the observer. If Boat no longer has it, release what it held and stop.
+2. If a deletion operation is on record, poll it. DELETE is never sent again.
+3. Otherwise DELETE goes only to the exact owned VM Boat just returned, for a run that is stopping
+   or failed. A VM a daemon may have run on (its launch may have been pushed) is deleted only when
+   the caller's `authorized` answers yes. A VM no launch was ever pushed to is the removal's own to
+   delete.
+4. Fence: hold a launch that may have been pushed, abort one that never was, freeze the run's tunnel
+   if it has one. A configuration holding the gateway host lock is waited for, 15 s at most; past
+   that nothing is sent and the removal fails as a refusal.
+5. Claim the first DELETE on the allocation by compare-and-set (`removal: { kind: "issued" }`, phase
+   `deleting`). Of two calls with nothing on record one sends the DELETE; the other waits for what
+   it records. A claim whose caller vanished keeps every other call off for 180 s.
+6. Send DELETE, record Boat's operation on the allocation before any wait, and wait at most 20 s for
+   `completed`.
+7. On `completed`, record the absence (`deletion-completed`) and release: gateway removed and tunnel
+   slot released if the run has one, allocation `deleted`, resume secrets forgotten, publication pin
+   released. While Boat still says the deletion is in progress it answers `deleting` and releases
+   nothing.
+
+`BoatRemoval.cleanup(allocation)` is step 1's release alone: it asks Boat nothing and never sends
+DELETE.
+
+The allocation repository allows `bound` to `deleting` only once the execution can never start
+again: aborted before any launch was pushed, or held, and from a held execution only under the
+removal's claim or Boat's operation. A lost DELETE reply leaves the claim, given up so the next pass
+asks again after reading the VM. Changed operation ids or target ids refuse. Once completion is
+recorded, an older pending answer cannot downgrade it.
 
 A run closed by a version that kept the operation on its tunnel reservation is still honoured: the
 reservation's `removal` is read (never written again), its operation polled, and the result recorded
 on the allocation from then on. No second DELETE is sent for it.
 
-Provider deletion completion proves that the VM and its tunnel peer are gone. The host owner then
-removes the exact owned gateway, detaches the reach network, and removes its egress network. It
-positively rechecks all three names for absence. Only after that return can the canonical
-transaction release the port. The transaction also requires a deleted capture root, held exact
-execution, frozen close, completed exact provider removal and no outstanding host requests.
+### What authorizes `stop()`
 
-Released reservations remain immutable tombstones. A partial unique index excludes those tombstones
-from active host-port exclusion, allowing the next execution to reserve the port while preserving
-the old run's receipt. A retry after host cleanup failure repeats cleanup without another DELETE. A
-retry after release finishes the runtime's terminal bookkeeping without touching a reused port. The
-native publication pin is released by the discharge, once Boat reports the VM absent.
+`BoatRuntimeAdapter.stop()` finds the VM by `(deployment_id, sandbox_id)` and calls `remove`. Its
+`authorized` reads, at the moment a DELETE is about to be sent:
 
-## One removal
+- the run's capture record holds an issued removal under a live hold (the shared path's deletion
+  ticket, issued right before the call and only while its evidence is still current); or
+- the owner's discard is on that record; or
+- this adapter's own `recover` answered, in this process and within ten minutes, that the VM holds
+  nothing to save.
 
-`BoatRemoval.remove(allocation, { fence })` is the one deletion of a Boat VM. It decides nothing
-about the work on the VM: its caller already holds what authorizes a DELETE (the ledger's deletion
-ticket after an observed-complete FINAL, the owner's discard, or a launch that never ran). In order:
+Every caller of `stop()` in the shared paths holds one of those, or acts on an executor reported
+`missing`, which only cleans up. Anything else is refused before Boat is asked (`close-held`, marked
+`removalRefused`). A deletion in progress is `close-pending` marked `removalPending`; a failure once
+Boat was asked and before its operation was recorded is `close-pending` unmarked, an outcome nobody
+knows. The whole call is bounded (45 s). It declares no `removalFenceMs`, since Boat states no bound
+on a deletion.
 
-1. Observe the VM through the observer. If Boat no longer has it, discharge and stop.
-2. If a deletion operation is on record, poll it. DELETE is never sent again.
-3. Otherwise fence: with `fence: true` the removal holds a launched execution (or aborts one never
-   pushed), freezes the run's tunnel if it has one, and claims a never-bound VM's allocation. With
-   `fence: false` its caller did that where its own sequence needs it (the close holds and freezes
-   before its FINAL drain) and the removal only verifies it. A run that is not stopping, not fenced,
-   or whose VM does not carry its labels is sent nothing.
-4. Send DELETE to the exact owned VM Boat just returned, record the operation on the allocation, and
-   wait at most 20 s for `completed`.
-5. On `completed`, record the absence (`deletion-completed`) and discharge: gateway removed and
-   tunnel slot released if the run has one, allocation `deleted`, resume secrets forgotten,
-   publication pin released. While Boat still says the deletion is in progress it answers `deleting`
-   and releases nothing.
+### Second observers of a deletion
 
 The removal is not the only observer of its own deletion. Boat answers 404 for the VM soon after a
-DELETE, often while the operation still reads `processing`, and whatever reads the VM then (the
-lifecycle sweep, a second stop, and from the next step on the exit reconciler's `inspect`) commits
-that absence and may discharge on it. Once its DELETE is out, the removal therefore takes a
-committed absence for the deletion's end wherever it meets one (an allocation another pass already
-discharged, an operation it can no longer record or poll, a wait that ran out) and discharges in the
-same call; the close does the same. Only the committed observation counts: a failed read, a timeout
-and a 404 for a VM Boat was never seen to report past creation are not absence, nothing is released
-before a committed absence, and no second DELETE is sent.
+DELETE, often while the operation still reads `processing`, and whatever reads the VM then commits
+that absence. Four callers can overlap one stop:
 
-`close` and `closeUnused` call it. `close` uses its two halves (`deletion`, then the discharge)
-because its capture ledger records the deletion between them.
+- **The exit reconciler** polls every ready run, stop requested or not. Its `inspect` commits the
+  404 and answers `missing`. With the stop's removal issued and held, the reconciler's probe is
+  refused by the capture ledger and it writes nothing.
+- **Boat's convergence sweep** releases what a VM recorded absent still holds. If it gets there
+  first, the removal finds the allocation already `deleted` and ends there. Two releases overlapping
+  in real time can leave one waiting on the gateway host lock: `stop()` still returns, because Boat
+  no longer has the VM, and the sweep finishes the cleanup on its next pass.
+- **A second stop** (the expiry reaper's, the sweep's nudge) finds the drain claim held: `busy`.
+- **The recovery sweep** acts only on a retained run, under its own claim, and a removal issued by
+  another path keeps it off.
 
-`BoatRuntimeAdapter.stop()` is `remove` with `fence: true`, found by `(deployment_id, sandbox_id)`
-(the runtime row's `reference` is rewritten to `boat:<sandbox>` and names no run). A deletion still
-in progress, and every failure once Boat was asked, is `close-pending`: an outcome nobody knows yet.
-Only a failure before Boat was asked anything is marked `removalRefused`. It declares no
-`removalFenceMs`, since Boat states no bound on a deletion. Nothing calls it while stops still go
-through `closeCapture` (see the guard below).
+So once its DELETE is out, the removal takes a committed absence for the deletion's end wherever it
+meets one (an allocation already released, an operation it can no longer record or poll, a wait that
+ran out) and releases in the same call. Only the committed observation counts: a failed read, a
+timeout and a 404 for a VM Boat was never seen to report past creation are not absence, nothing is
+released before a committed absence, and no second DELETE is sent.
 
 ## What the runtime adapter reports (`inspect`)
 
@@ -167,65 +174,55 @@ Found by sandbox id:
 
 - `missing`: only from a committed absence: Boat's typed 404 for a VM that was seen past creation,
   or a completed deletion operation.
-- `exited` with `platformEnded: false`: the agent's health names `daemonExit`, or reports
-  `booted: false`, or the row shows the launch was never pushed and the execution is fenced.
+- `exited` with `platformEnded: false`: the agent's health names `daemonExit`; or the run is
+  stopping or failed and no daemon is known to be up on its VM (no launch was pushed, a push was
+  never confirmed, or the agent reports no launch on its boot for a run that was never ready).
 - `running`: everything else, including every failed, timed-out or unreadable read of Boat or the
-  agent.
+  agent, a launch still in flight, and an agent that reports no launch on its boot for a run that
+  was ready (it restarted and could not adopt its record; the daemon may be alive).
 
-Boat and the agent are read at most once per VM per 60 s, and `running` is answered in between; once
-a stop is requested for the run every call reads. Only `running` is ever answered without a read: an
+Boat and the agent are read at most once per VM per 60 s, or per 15 s once the run is stopping or
+failed, and `running` is answered in between. Only `running` is ever answered without a read: an
 `exited` or `missing` is never served from memory. The daemon's last output is redacted with the
 run's bearer only.
 
-With `inspect` present the generic exit reconciler sees Boat runs. While Boat still closes its own
-executors (`closesItsOwnExecutors`, a guard removed with `closeCapture`) the generic paths do one
-thing for a Boat run: a daemon that exited in a live VM is recorded `failed` / `runtime-exited` with
-its retention, in one transaction. That hands it to this close owner, which recovers the daemon on
-its own disk, drains FINAL and deletes the VM only once that is confirmed saved. They never probe or
-drain its daemon, never authorize or issue a removal, never call `stop()`, and never record an
-outcome for its work. A VM Boat no longer has is committed absent by the observer inside `inspect`;
-the reconciler writes nothing, and this close discharges it exactly as when its own observation
-found the absence.
-
-Under the same guard the exit reconciler does not inspect a Boat run whose stop is requested: from
-the stop request to the discharge the run is this close's, including a VM kept after an unconfirmed
-FINAL. Nothing is read from Boat or the agent for it, so a stop has one observer of its deletion.
+The observer writes the observation and nothing else. The run's runtime row and its capture record
+are written by the shared paths, for Boat as for every runtime. A VM Boat lost under a live session
+is recorded `failed` / `runtime-exited` by the exit reconciler and its work reported `gone` unless
+something on record says it was saved (`reportsMissingAsLost`).
 
 The worker's drains reach a Boat daemon through `BoatControlMaterial.drainMaterial`, which requires
 only this deployment's run, on this sandbox, with its sealed bearer and Boat's labels on the VM.
 Exec jobs and the API keep `connectMaterial`, which also requires a ready run that is not stopping.
 
+## Convergence
+
+`BoatConvergence.reconcile` runs every 30 s, a page at a time:
+
+- **No VM.** A run whose create was never issued, or whose VM Boat never made: the shared stop never
+  calls the adapter for a run that names no VM, so the conclusion that Boat holds none
+  (`not-discovered`), the allocation's end and the release of its pin stay here. A create nobody can
+  resolve is held for an operator; its owner's discard ends the session while the allocation and its
+  pin stay held.
+- **Cleanup.** What a VM Boat no longer has still holds is released (`cleanup`). A deletion Boat
+  accepted whose operation is on record is polled here whatever a read of the VM says: a VM never
+  seen past creation reads 404 as still being created, so presence alone would hold it for good.
+- **The nudge.** For a run that is stopping or failed and still has a VM, the shared stop is called.
+  The nudge decides nothing.
+
+A VM kept because its FINAL cannot be confirmed is reported once an hour per run.
+
 ## A run without resources has no tunnel
 
 A workspace created never to be linked to resources (`runtime.resources: "none"` in its stored spec)
 is launched with no gateway, tunnel or port: the launch reads the option once and freezes it as
-`resources: "none"` on the allocation's input, and readiness, this close and every sweep read it
-from there. Its close is the same sequence with one difference: there is no tunnel to freeze, and
+`resources: "none"` on the allocation's input, and readiness, the removal and every sweep read it
+from there. Its stop is the same sequence with one difference: there is no tunnel to freeze, and
 nothing on a gateway host to remove.
 
-1. The execution is held, then recovery and the FINAL drain run exactly as above (unless the owner
-   discarded the work or a sealed FINAL was attested). There is no tunnel reservation to require or
-   freeze; one recorded for such a run holds the close.
-2. DELETE is authorized and issued through the same canonical ledger, after a fresh positive
-   observation of the exact owned sandbox.
-3. The operation id is recorded on the allocation's own removal record before any wait, as for every
-   run.
-4. Every later pass (a stop, the sweep, a restarted worker) finds the recorded operation and polls
-   it. A different operation id or target refuses; completion never reverts.
-5. Only once Boat reports `completed` is absence recorded (`deletion-completed`) and the discharge
-   run: runtime row stopped and removed, capture state, allocation `deleted` (keeping the completed
-   operation as its receipt), resume secrets forgotten, publication pin released. The allocation is
-   never `deleted` before the absence is recorded, so a crash anywhere in this sequence is found and
-   finished by the next sweep.
-
-A launch that failed before its guest was reached is closed as an unused guest (`closeUnused`),
-which never needed a tunnel. A lost DELETE reply leaves the allocation `bound` with the ledger's
-removal still issued, and is settled as above: by Boat's own absence, or by asking again for the
-same owned VM.
-
-A deployment with no resource gateway (`BoatResourcesHost.gateway` absent) closes such runs and
-holds any run that has a tunnel: its gateway is another deployment shape's to settle, and its VM is
-kept until the gateway settings are back.
+A deployment with no resource gateway (`BoatResourcesHost.gateway` absent) stops such runs and keeps
+any run that has a tunnel: its work is saved, the removal is refused before Boat is asked (this
+worker cannot remove the run's gateway), and its VM is kept until the gateway settings are back.
 
 ## Local proof and remaining gates
 
