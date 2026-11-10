@@ -146,6 +146,7 @@ const SYSTEM_CONTAINERD_SOCKET = "/run/containerd/containerd.sock";
 /** The probe image the container check imports: one static file, no registry. */
 const PROBE_IMAGE = "sealant-engine-probe:1";
 const PROBE_TIMEOUT_MS = 60_000;
+const PROBE_IMAGE_REMOVAL_TIMEOUT_MS = 15_000;
 const ENGINE_OUTPUT_MAX_CHARS = 2_048;
 
 /** A tar header field: octal digits, NUL-terminated, to its width. */
@@ -755,6 +756,13 @@ export const createDockerService = (options) => {
       ],
       spawnOptions,
     );
+    // The image was only ever the probe's. It leaves the workspace's `docker image ls` whatever the
+    // run said, so no start leaves one behind for the next import to orphan. Best effort: an image
+    // that stays is a line in a listing, not a reason to fail the engine.
+    await runBounded(dockerPath, ["--host", dockerHost, "image", "rm", PROBE_IMAGE], {
+      ...spawnOptions,
+      timeoutMs: PROBE_IMAGE_REMOVAL_TIMEOUT_MS,
+    });
     if (ran.code !== 0)
       return { ok: false, detail: `container probe: docker run failed:\n${ran.output}` };
     return { ok: true, detail: "" };
@@ -914,6 +922,13 @@ export const createDockerService = (options) => {
       };
       void awaitReady();
     };
+    // The default engine (Lambda's) starts and reports exactly as it did before these options
+    // existed. Only an engine the agent assembles from them is described, so only its failures
+    // carry `output`, which a Core older than the field refuses.
+    if (containerdPath === null && probeInitPath === null) {
+      launchDockerd();
+      return;
+    }
     void (async () => {
       engineSummary = await describeEngine();
       if (stopping || health.status === "failed") return;

@@ -419,6 +419,20 @@ describe("DockerService runtime directories", () => {
     await expect(readFile(fixture.dockerdRecord, "utf8")).rejects.toMatchObject({
       code: "ENOENT",
     });
+    // The default engine's failed health is the four fields it always was: no `output`, which a
+    // Core from before the field refuses.
+    const health: unknown = JSON.parse(
+      result.stdout
+        .split("\n")
+        .find((line) => line.startsWith("HEALTH:"))
+        ?.slice(7) ?? "null",
+    );
+    expect(health).toEqual({
+      status: "failed",
+      reason: "directory-preparation-failed",
+      code: null,
+      signal: null,
+    });
   });
 });
 
@@ -486,6 +500,11 @@ describe("DockerService with the engine's own containerd and a container at read
       `${host} run --rm --network none --pull never --log-driver none sealant-engine-probe:1 --version`,
     );
     expect(calls.indexOf(`${host} info`)).toBeLessThan(calls.findIndex((c) => c.includes(" run ")));
+    // The probe's image does not stay in the workspace's Docker.
+    expect(calls).toContain(`${host} image rm sealant-engine-probe:1`);
+    expect(calls.findIndex((c) => c.includes(" image rm "))).toBeGreaterThan(
+      calls.findIndex((c) => c.includes(" run ")),
+    );
   });
 
   it("is not ready when the engine answers but cannot run a container, and says what it is made of", async () => {
@@ -505,6 +524,11 @@ describe("DockerService with the engine's own containerd and a container at read
     expect(health.output).toContain("v2.9.9-fake");
     expect(health.output).toMatch(/system containerd socket: (present|absent)/);
     expect(health.output).toContain("unsupported protocol: Yunix");
+    // A probe that failed still takes its image with it.
+    const calls = (await readFile(own.env.FAKE_DOCKER_LOG, "utf8")).trim().split("\n");
+    expect(calls).toContain(
+      `--host unix://${fixture.paths.socket} image rm sealant-engine-probe:1`,
+    );
   });
 
   it("fails as containerd-failed, and never starts dockerd, when its containerd exits", async () => {

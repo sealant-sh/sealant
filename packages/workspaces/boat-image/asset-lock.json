@@ -9,7 +9,7 @@
     {
       "name": "docker-service.mjs",
       "source": "microvm-image/docker-service.mjs",
-      "sha256": "8f4d65e44328dd111a69b050af970ca51e58482f07fedbfec05adda00e82977a"
+      "sha256": "26993c793b1cf9880a4e40fbeb4288713a5a14aae9224a91c01bddcd7379754b"
     },
     {
       "name": "boat-host.mjs",
