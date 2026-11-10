@@ -44,6 +44,7 @@ export {
   BoatResourcesError,
   boatResourcesLayer,
   boatResourcesLayerNoDeps,
+  type BoatCarriersReopened,
   type BoatGatewayHost,
   type BoatResourcesReceipt,
   type BoatResourcesSweep,

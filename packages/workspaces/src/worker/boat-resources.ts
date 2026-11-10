@@ -66,6 +66,16 @@ export interface BoatResourcesSweep {
   }[];
   readonly next?: string;
 }
+/** What a worker's start pass did: the live runs whose carrier it ensured. */
+export interface BoatCarriersReopened {
+  readonly runIds: readonly string[];
+}
+/**
+ * The start pass's bounds. Live runs are read a page at a time, carriers are opened a few at a
+ * time and each waits for its first attempt to connect before the next one starts, at most
+ * `settleMs`, so a restart does not send every upgrade to Boat's hosted proxy at once.
+ */
+export const BOAT_CARRIER_REOPEN = { page: 100, concurrency: 4, settleMs: 15_000 } as const;
 /** Reconciles existing installed executions only, never allocation, staging or launch. */
 export class BoatResources extends Context.Service<
   BoatResources,
@@ -77,6 +87,13 @@ export class BoatResources extends Context.Service<
       readonly limit: number;
       readonly after?: string;
     }) => Effect.Effect<BoatResourcesSweep, BoatResourcesError>;
+    /**
+     * At worker start: ensure the carrier of every live run with a tunnel on this gateway host,
+     * and nothing else. The sweep reaches a run only as its cursor does, through every allocation
+     * the deployment ever had; this pass reads live runs only. It configures no gateway or guest
+     * and releases nothing: the sweep still owns both. Nothing to do without a gateway.
+     */
+    readonly reopenCarriers: () => Effect.Effect<BoatCarriersReopened, BoatResourcesError>;
     /** Used only for resource idle accounting. Generic Docker convergence must not own Boat networks. */
     readonly reach: () => Effect.Effect<readonly ResourceWorkspaceLink[], BoatResourcesError>;
   }
@@ -338,6 +355,69 @@ const make: Effect.Effect<
     const last = ids.at(-1);
     return { entries, ...(ids.length === input.limit && last !== undefined ? { next: last } : {}) };
   });
+  /**
+   * The run's configured network custody on this gateway host while its admitted epoch is current,
+   * or `undefined`: its target and the reservation whose port its gateway publishes.
+   */
+  const configured = (id: string, gatewayHostId: string) =>
+    Effect.gen(function* () {
+      const target = (yield* allocations.get(id))?.target ?? undefined;
+      if (target === undefined) return undefined;
+      const reservation = yield* tunnels.get(target.runtimeInstanceId);
+      if (reservation?.network === undefined || reservation.binding.gatewayHostId !== gatewayHostId)
+        return undefined;
+      const execution = yield* executions.get(target.runtimeInstanceId);
+      if (
+        execution?.admission === null ||
+        execution === undefined ||
+        execution.phase === "held" ||
+        !isDeepStrictEqual(execution.target, reservation.binding.target) ||
+        execution.admission.epoch !== reservation.network.epoch ||
+        execution.admission.operationId !== reservation.network.operationId ||
+        !(yield* isCurrent(target))
+      )
+        return undefined;
+      return { target, reservation };
+    });
+  const reopenCarriers = Effect.fn("BoatResources.reopenCarriers")(function* () {
+    const runIds: string[] = [];
+    const gatewayHost = host.gateway;
+    if (gatewayHost === undefined) return { runIds };
+    let after: string | undefined;
+    do {
+      const ids = yield* allocations.listTunnelled({
+        deploymentId: host.deploymentId,
+        gatewayHostId: gatewayHost.hostId,
+        limit: BOAT_CARRIER_REOPEN.page,
+        ...(after === undefined ? {} : { after }),
+      });
+      yield* Effect.forEach(
+        ids,
+        (id) =>
+          Effect.gen(function* () {
+            const custody = yield* configured(id, gatewayHost.hostId);
+            if (custody === undefined) return;
+            const { target, reservation } = custody;
+            // A no-op for a run already carried, one holding off after a 1012 included.
+            yield* carrier.ensure({
+              runId: target.runId,
+              connection: guest.tunnel(target),
+              gateway: { host: gatewayHost.relay.host, port: reservation.listenPort },
+            });
+            runIds.push(target.runId);
+            yield* carrier
+              .settled(target.runId)
+              .pipe(Effect.timeout(BOAT_CARRIER_REOPEN.settleMs), Effect.ignore);
+          }).pipe(
+            // One run's unreadable record never keeps the others' carriers closed.
+            Effect.catch(() => Effect.void),
+          ),
+        { concurrency: BOAT_CARRIER_REOPEN.concurrency, discard: true },
+      );
+      after = ids.length === BOAT_CARRIER_REOPEN.page ? ids.at(-1) : undefined;
+    } while (after !== undefined);
+    return { runIds };
+  });
   const reach = Effect.fn("BoatResources.reach")(function* () {
     const links: ResourceWorkspaceLink[] = [];
     // No gateway, so no Boat run reaches a resource through this worker.
@@ -351,25 +431,7 @@ const make: Effect.Effect<
         ...(after === undefined ? {} : { after }),
       });
       for (const id of ids) {
-        const target = (yield* allocations.get(id))?.target ?? undefined;
-        if (target === undefined) continue;
-        const reservation = yield* tunnels.get(target.runtimeInstanceId);
-        if (
-          reservation?.network === undefined ||
-          reservation.binding.gatewayHostId !== gatewayHostId
-        )
-          continue;
-        const execution = yield* executions.get(target.runtimeInstanceId);
-        if (
-          execution?.admission === null ||
-          execution === undefined ||
-          execution.phase === "held" ||
-          !isDeepStrictEqual(execution.target, reservation.binding.target) ||
-          execution.admission.epoch !== reservation.network.epoch ||
-          execution.admission.operationId !== reservation.network.operationId ||
-          !(yield* isCurrent(target))
-        )
-          continue;
+        if ((yield* configured(id, gatewayHostId)) === undefined) continue;
         const link = yield* resources.linkOfRun(id);
         if (link !== undefined) links.push(link);
       }
@@ -380,6 +442,7 @@ const make: Effect.Effect<
   return BoatResources.of({
     prepare: (target) => boundary(prepare(target)),
     reconcile: (input) => boundary(reconcile(input)),
+    reopenCarriers: () => boundary(reopenCarriers()),
     reach: () => boundary(reach()),
   });
 });

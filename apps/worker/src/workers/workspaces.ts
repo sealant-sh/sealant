@@ -1053,6 +1053,20 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   const boatSweepTimer = boatRuntime === undefined ? undefined : setInterval(runBoatSweep, 30_000);
   boatSweepTimer?.unref();
   void runBoatSweep();
+  // A restart dropped every tunnel carrier this worker held. The sweep above reopens a run's only
+  // as its resource cursor reaches it, twenty allocations a tick through every one the deployment
+  // ever had, so the last live run could wait minutes without its resources. Reopen the live
+  // runs' carriers now, beside the sweep: a carrier the sweep opens first is left as it is.
+  const reopenBoatCarriers = async () => {
+    if (boatAssembly?.reopenCarriers === undefined) return;
+    try {
+      const { runIds } = await boatAssembly.reopenCarriers();
+      if (runIds.length > 0) console.log("Boat tunnel carriers reopened", { runs: runIds.length });
+    } catch {
+      console.error("Boat tunnel carriers could not be reopened at start");
+    }
+  };
+  void reopenBoatCarriers();
 
   resourceTickTimer.unref();
 
