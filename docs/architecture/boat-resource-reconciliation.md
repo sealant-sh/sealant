@@ -47,13 +47,37 @@ stays for canonical FINAL cleanup. Nothing here expires or recycles UDP slots.
 
 ## Worker configuration and bounds
 
-Allocation-only configuration continues to work. Resource reconciliation additionally requires all
-of `SEALANT_BOAT_GATEWAY_HOST_ID`, `SEALANT_BOAT_GATEWAY_ENDPOINT` and `SEALANT_BOAT_GATEWAY_IMAGE`.
-The host ID is an operator-owned stable UUID shared across deployments on that physical Docker host.
-The endpoint is the numeric IPv4 reachable from Boat, and the image must be a locally available
-immutable digest. Partial configuration, a mutable image tag or a non-Docker resource host refuses
-worker startup. No credential discovery or network configuration is inferred from the worker's
-container.
+Allocation-only configuration continues to work. Resource reconciliation additionally requires
+`SEALANT_BOAT_GATEWAY_HOST_ID`, `SEALANT_BOAT_GATEWAY_IMAGE`, and `SEALANT_BOAT_GATEWAY_RELAY_HOST`
+or `SEALANT_BOAT_GATEWAY_ENDPOINT` (or both). The host ID is an operator-owned stable UUID shared
+across deployments on that physical Docker host. The endpoint is the numeric IPv4 reachable from
+Boat, and the image must be a locally available immutable digest. Partial configuration, a mutable
+image tag or a non-Docker resource host refuses worker startup. No credential discovery or network
+configuration is inferred from the worker's container.
+
+`SEALANT_BOAT_GATEWAY_RELAY_HOST` (optional, IPv4) carries every tunnel over HTTPS instead. It is
+the address at which the worker reaches the gateways' published WireGuard ports: `127.0.0.1` when
+the worker runs on the Docker host, or the host's address as a worker container sees it. Set, a
+network setup asks the agent for `carrier: "websocket"` when the agent lists that carrier, and the
+worker keeps one WebSocket per carried run open to the agent's `/sealant/tunnel` through Boat's
+hosted HTTPS, relaying each WireGuard datagram to the gateway's port. So no Boat VM dials the
+endpoint, and the host needs no inbound UDP. Every reconcile pass ensures the carrier again, so a
+restarted worker or a dropped connection reopens it. WireGuard re-handshakes on its 25 s keepalive.
+A run that is closed or held releases its carrier. An agent that lists no carriers (an older image)
+still dials the endpoint over UDP. One worker carries a run: a second carrier for the same run
+replaces the first, which holds off for five minutes before it tries again.
+
+With a relay host, `SEALANT_BOAT_GATEWAY_ENDPOINT` may be left unset: every tunnel is then carried,
+as a MicroVM needs no inbound port either. The gateway publishes its WireGuard port on the relay
+host's address only, never on a public interface. A VM whose agent cannot carry the tunnel (an image
+built before the carrier) is refused at network setup with `carrier-unavailable`, rather than given
+an endpoint nobody can reach. Set both to serve older images and newer ones together: the port is
+then published on every interface for the older ones to dial.
+
+The relay address decides who can reach the gateway port: `0.0.0.0` is refused, and a routable
+address publishes the port there. Change either setting only with no live Boat sessions. A run
+started under one network intent is held if a later worker gives it another (for example, dropping
+the endpoint), and its resources stay unreachable until the session is launched again.
 
 The worker shares its resource runtime and subnet store with the gateway. One managed runtime owns
 the existing sealed execution service and both reconcilers, and is disposed at shutdown. The

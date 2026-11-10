@@ -4,17 +4,17 @@
     {
       "name": "agent.mjs",
       "source": "microvm-image/agent.mjs",
-      "sha256": "7160ee1083bd26e8ce7f05b51c94312c6ba9146c9d292f72e2c7b9be94d7208d"
+      "sha256": "f574e129956543bf8cc633c9d7683ecf5320bbe0ab84d9d12511936b6007270b"
     },
     {
       "name": "docker-service.mjs",
       "source": "microvm-image/docker-service.mjs",
-      "sha256": "0ecfa4fa822d8db1ec536d462a2a49e6aec1db0ae6e0fbb0506e47126a3c8a90"
+      "sha256": "1bad972d2972a9865fd66f46ee8e9a983ddd23cb69057cbac67493e6f154828e"
     },
     {
       "name": "boat-host.mjs",
       "source": "microvm-image/boat-host.mjs",
-      "sha256": "519e515ef61b63291867ff4dcfcca18ff80d94e6143a10f785d3dfa8657c1048"
+      "sha256": "bcf6bacd0dfad64ac1df9028e41fad703335c4cf6764ffc20e88ca46f59a7fe0"
     },
     {
       "name": "boat-bind.mjs",

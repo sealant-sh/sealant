@@ -25,7 +25,7 @@ import {
   boatExecutionRetryable,
   type BoatLaunchMaterial,
 } from "./execution.js";
-import { boatLaunchDiagnostic } from "./launch-diagnostics.js";
+import { boatLaunchDiagnostic, boatLaunchSummary } from "./launch-diagnostics.js";
 
 const databaseUrl = process.env.SEALANT_TEST_DATABASE_URL;
 const material = (version = "version-one"): Redacted.Redacted<BoatLaunchMaterial> =>
@@ -221,14 +221,27 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         args[2] === "health"
           ? {
               status: 503,
-              body: { booted: true, controlSocket: false, daemonExit: { code: 1, signal: null } },
+              body: {
+                booted: true,
+                controlSocket: false,
+                daemonExit: {
+                  code: 1,
+                  signal: null,
+                  // An older agent's output is not redacted: Core removes the launch's secrets too.
+                  output: "sealantd boot: capture token capture-version-one refused\nexiting",
+                },
+              },
             }
           : original(...args);
       const exited = await execute(Effect.flip(executor.readiness(target)));
       expect(exited).toBeInstanceOf(BoatExecutionError);
       expect(boatLaunchDiagnostic(exited, "readiness")).toMatchObject({
         code: "guest-failed",
-        guest: { service: "sealantd", exitCode: 1 },
+        guest: {
+          service: "sealantd",
+          exitCode: 1,
+          outputTail: "sealantd boot: capture token [REDACTED] refused\nexiting",
+        },
       });
       // Each not-ready answer names the check that did not pass, in the order they run: the
       // agent's health first (what is booted, its control socket), then the tunnel.
@@ -264,6 +277,49 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         }),
         "handshake",
       );
+      // The tunnel's counters come with a handshake that never came: sent and never answered is
+      // the gateway's side (its endpoint unreachable). An older agent sends none, and still decodes.
+      guest.request = async (...args) =>
+        tunnel({
+          configured: true,
+          handshake: "unverified",
+          dns: "unavailable",
+          docker_policy: "absent",
+          transfer: { sent: 444, received: 0 },
+        })(args[2]) ?? original(...args);
+      const silent = boatLaunchDiagnostic(
+        await execute(Effect.flip(executor.readiness(target))),
+        "readiness",
+      );
+      expect(silent).toMatchObject({
+        code: "agent-not-ready",
+        check: "handshake",
+        tunnel: { sentBytes: 444, receivedBytes: 0 },
+      });
+      expect(boatLaunchSummary(silent)).toContain('"tunnel":{"sentBytes":444,"receivedBytes":0}');
+      // Carried over HTTPS: the diagnostic also says whether Core's end was attached.
+      guest.request = async (...args) =>
+        tunnel({
+          configured: true,
+          handshake: "unverified",
+          dns: "unavailable",
+          docker_policy: "absent",
+          carriers: ["udp", "websocket"],
+          carrier_attached: false,
+        })(args[2]) ?? original(...args);
+      expect(
+        boatLaunchDiagnostic(await execute(Effect.flip(executor.readiness(target))), "readiness"),
+      ).toMatchObject({ check: "handshake", tunnel: { carrierAttached: false } });
+      guest.request = async (...args) =>
+        tunnel({
+          configured: true,
+          handshake: "unverified",
+          dns: "unavailable",
+          docker_policy: "absent",
+        })(args[2]) ?? original(...args);
+      expect(
+        boatLaunchDiagnostic(await execute(Effect.flip(executor.readiness(target))), "readiness"),
+      ).not.toHaveProperty("tunnel");
       await notReady(
         tunnel({
           configured: true,
@@ -441,6 +497,7 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         receipt: "e".repeat(64),
         handshake: "unverified",
         admission: "held",
+        carrier: "udp",
       });
       expect(new Set(guest.networkBodies).size).toBe(1);
       expect(await execute(repo.get(target.runId))).toEqual(installed);
@@ -463,6 +520,70 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       await expect(execute(executor.isolate(target, input))).rejects.toThrow("invalid-reply");
       expect(guest.starts).toBe(0);
       expect(JSON.stringify(installed)).not.toContain(Redacted.value(input.privateKey));
+    }));
+  it("carries the tunnel over the agent's WebSocket only when the agent says it can", () =>
+    test(async ({ executor, repo, target, guest }) => {
+      await execute(executor.exchange(target));
+      await execute(executor.stage(target.runId, material()));
+      const installed = await execute(repo.get(target.runId));
+      if (installed?.admission === null || installed === undefined) throw new Error("no admission");
+      const input = {
+        network: {
+          epoch: 1,
+          operationId: installed.admission.operationId,
+          endpoint: "10.0.0.41",
+          subnet: "10.98.0.32/27",
+        },
+        privateKey: Redacted.make(Buffer.alloc(32, 4).toString("base64")),
+        publicKey: Buffer.alloc(32, 5).toString("base64"),
+        gatewayKey: Buffer.alloc(32, 6).toString("base64"),
+        port: 40000,
+        carrier: "websocket" as const,
+      };
+      const bodies = () =>
+        guest.networkBodies.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+      // An older agent lists no carriers: it dials the gateway over UDP, as before.
+      expect((await execute(executor.isolate(target, input))).carrier).toBe("udp");
+      expect(bodies()[0]).toMatchObject({ endpoint: "10.0.0.41", port: 40000 });
+      expect(bodies()[0]).not.toHaveProperty("carrier");
+      // An agent that can carry it: no endpoint, no port, `carrier: websocket`.
+      const original = guest.request.bind(guest);
+      guest.request = async (...args) => {
+        const reply = await original(...args);
+        return args[2] === "network-status"
+          ? {
+              ...reply,
+              body: {
+                ...z.object({}).passthrough().parse(reply.body),
+                configured: false,
+                carriers: ["udp", "websocket"],
+              },
+            }
+          : reply;
+      };
+      expect((await execute(executor.isolate(target, input))).carrier).toBe("websocket");
+      const carried = bodies()[1];
+      expect(carried).toMatchObject({ carrier: "websocket", subnet: "10.98.0.32/27" });
+      expect(carried).not.toHaveProperty("endpoint");
+      expect(carried).not.toHaveProperty("port");
+      // No public endpoint (every tunnel carried) and an agent that cannot carry it: typed, and
+      // nothing is sent to the agent.
+      guest.request = original;
+      const before = guest.networkBodies.length;
+      const { endpoint: _endpoint, ...carriedOnly } = input.network;
+      const refused = await execute(
+        Effect.flip(executor.isolate(target, { ...input, network: carriedOnly })),
+      );
+      expect(refused).toBeInstanceOf(BoatExecutionError);
+      expect(boatLaunchDiagnostic(refused, "readiness")).toMatchObject({
+        code: "carrier-unavailable",
+      });
+      expect(guest.networkBodies).toHaveLength(before);
+      // Core's end connects to the agent's carrier route with the control token and hosted cookie.
+      const connection = Redacted.value(await execute(executor.tunnel(target)));
+      expect(connection.url).toMatch(/^wss:\/\/.+\/sealant\/tunnel$/);
+      expect(connection.headers["Authorization"]).toMatch(/^Bearer [a-f0-9]{64}$/);
+      expect(connection.headers["Cookie"]).toMatch(/^_port_auth=/);
     }));
   it("refuses another run claiming either the owned sandbox or disk before provider delivery", () =>
     test(async ({ executor, target, db, guest }) => {

@@ -48,6 +48,13 @@ export {
   type BoatResourcesReceipt,
   type BoatResourcesSweep,
 } from "./worker/boat-resources.js";
+export {
+  BoatTunnelCarrier,
+  boatTunnelCarrierAbsent,
+  makeBoatTunnelCarrierLayer,
+  type BoatTunnelCarrierInput,
+  type BoatTunnelCarrierOptions,
+} from "./runtime/boat/tunnel-carrier.js";
 
 export {
   BoatReadiness,

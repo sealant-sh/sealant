@@ -72,30 +72,66 @@ All over the hosted proxy on port 8080, all authenticated by the bearer:
   image.
 - `GET /sealant/control`: the WebSocket relay to sealantd's control socket;
   `503 {error: control-unavailable}` until the socket accepts.
+- `GET /sealant/tunnel`: the resource tunnel's WebSocket carrier, for a network configured with
+  `carrier: "websocket"` (in place of `endpoint` and `port`; `409 tunnel-not-carried` otherwise).
+  Core opens it through Boat's hosted HTTPS with the control token, the same way it reaches every
+  other route, and relays it to the gateway on its own host. Neither the VM nor the gateway's host
+  takes an inbound connection, as with a MicroVM. Each binary frame is one WireGuard datagram,
+  either way, and a message a proxy split into fragments is put back together as one. In the VM,
+  `sealant-wg`'s peer is a UDP relay on loopback, and the relay learns the port WireGuard picked
+  itself once its interface is up (`wg show … listen-port`), so no port is handed over that could be
+  taken first. The relay takes datagrams from that port only and sends only to it, so nothing else
+  on the VM can stand in for WireGuard. One carrier at a time: a newer one replaces the older, which
+  is closed with 1012. The relay's and WireGuard's ports are kept on tmpfs, so an agent restarted on
+  the boot binds the relay where the peer points, or re-points the peer. `GET /sealant/network`
+  lists `carriers` (`udp`, `websocket`) before Core configures anything, and says `carrier_attached`
+  once configured to carry it.
 - `POST /sealant/network`: today's `sealant-guest-network-v1` body. The agent brings up `sealant-wg`
   in the VM's own namespace with the private key on `wg`'s stdin only, routes the subnet and the
-  gateway, points `/etc/resolv.conf` at the gateway (the VM's own resolver is kept, and put back at
-  agent start on a boot that has no tunnel: a reboot, or a VM restored from a saved snapshot),
-  records the public intent (`network.json`), and replays the same config without a change; a
-  different config on the boot is `network-binding-conflict`. On a Docker image it fills
-  `DOCKER-USER` once dockerd is up.
-- `GET /sealant/network`: `configured`, `handshake` (`wg show latest-handshakes`), `dns` (an
-  unpredictable question to the gateway's resolver over UDP and TCP) and `docker_policy` (`absent`
-  without Docker; `pending`, `applied` or `failed` for the containers' `DOCKER-USER` policy). Core's
-  readiness requires `applied` on a Docker image and `absent` otherwise.
+  gateway, starts the VM's resolver (a DNS forwarder on `100.127.255.254:53` that asks the gateway
+  first, for resource names, then the VM's own resolvers) and points `/etc/resolv.conf` at it (the
+  VM's own resolver is kept, and put back at agent start on a boot that has no tunnel: a reboot, or
+  a VM restored from a saved snapshot); a resolver that cannot bind fails the step, records the
+  public intent (`network.json`), and replays the same config without a change; a different config
+  on the boot is `network-binding-conflict`. On a Docker image it fills `DOCKER-USER` once dockerd
+  is up.
+- `GET /sealant/network`: `configured`, `handshake` (`wg show latest-handshakes`; the peer's
+  `persistent-keepalive` starts it, never DNS), `dns` (an unpredictable question asked of the VM's
+  resolver, which reaches the gateway's, over UDP and TCP), `docker_policy` (`absent` without
+  Docker; `pending`, `applied` or `failed` for the containers' `DOCKER-USER` policy) and, when wg
+  can say, `transfer` (`{sent, received}` bytes with the gateway, `wg show transfer`). Core's
+  readiness requires `applied` on a Docker image and `absent` otherwise. A handshake that is not
+  verified carries the counters into the launch diagnostic (`tunnel: {sentBytes, receivedBytes}`):
+  sent and nothing received is a gateway endpoint the VM's packets do not reach. `transfer` is
+  optional, so an older agent's answer still decodes.
 - `POST /sealant/recover`: `{version: 1, runId, secretEnvJson}` with the capture token. Answers from
   the records: `running`, `restarted` (`sealantd boot --recovery` on the VM's own disk),
   `nothing-to-save` with its basis (`daemon`: the recovery boot exited 76; `no-launch`: bound this
   boot and never launched), or a `409` refusal (`recover-new-boot`, `recover-binding-conflict`,
   `recover-state-unknown`, `parked`). An earlier boot's bearer after a reboot is `recover-new-boot`,
-  never a 401. `503 {reason: docker-stop-unverified}` when Docker could not be proved stopped:
-  nothing was started, and Core retries.
-- `POST /sealant/park`: `{format: sealant-agent-park-v1, operationId}`. Kills the daemon's
-  namespace, stops Docker, `sync`, writes `/var/lib/sealant/agent/park-<operationId>.json` (0600)
-  and answers its path, SHA-256 and size. The same operation again is the same receipt; another
-  operation, a launch or a recovery after a park is `409 {reason: parked}`. When Docker could not be
-  proved stopped the agent writes no receipt and answers `503 {reason: docker-stop-unverified}`;
+  never a 401. `503 {reason: docker-stop-unverified}` when Docker could not be proved stopped, and
+  `503 {reason: daemon-stop-unverified}` when a daemon scope could not be proved gone: nothing was
+  started, and Core retries.
+- `POST /sealant/park`: `{format: sealant-agent-park-v1, operationId}`. Kills the daemon's namespace
+  (every `sealant-workspace-*` scope, each proved gone), stops Docker, `sync`, writes
+  `/var/lib/sealant/agent/park-<operationId>.json` (0600) and answers its path, SHA-256 and size.
+  The same operation again is the same receipt; another operation, a launch or a recovery after a
+  park is `409 {reason: parked}`. When the daemon or Docker could not be proved stopped the agent
+  writes no receipt and answers `503 {reason: daemon-stop-unverified | docker-stop-unverified}`;
   Core maps it as retryable, never as closed, and the same park is retried.
+
+## An agent restarted on the same boot
+
+sealantd runs in a transient scope of its own (`sealant-workspace-<id>.scope`), outside the agent
+unit's cgroup, so it survives the agent process. A restarted agent adopts the launch from the launch
+record and the launch environment the launch left on tmpfs (`/run/sealant/agent/launch-env.json`,
+0600: run, contract, boot env with the secret env file's path). It then holds no daemon child:
+health reports the daemon from its scope (`booted: true`, no `daemonExit` while a scope is active,
+`{code: null, signal: null}` once none is), recover answers `running` while a scope is live and
+otherwise starts the recovery boot from the adopted environment, and park kills every scope through
+systemd and proves it gone (and Docker's cgroups empty) before any receipt. A launch record without
+the environment adopts nothing: the launch stays accepted, park still proves every scope gone, and
+recover is `recover-state-unknown`. After a reboot the tmpfs is empty and nothing is adopted.
 
 ## Verification
 

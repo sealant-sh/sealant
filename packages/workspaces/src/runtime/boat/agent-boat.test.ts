@@ -35,7 +35,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { Effect, ManagedRuntime, Redacted } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
+import { WebSocket } from "ws";
 import { z } from "zod";
 
 import { MICROVM_AGENT_FILES } from "../../images/microvm/recipe.js";
@@ -51,10 +53,12 @@ import {
   BOAT_AGENT_FILES,
   BOAT_AGENT_GATEWAY_ADDRESS,
   BOAT_AGENT_NETWORK_ROUTE,
+  BOAT_AGENT_TUNNEL_ROUTE,
   BOAT_AGENT_PARK_ROUTE,
   BOAT_AGENT_WIREGUARD_INTERFACE,
   boatAgentBindRecordSchema,
   boatAgentBindReplySchema,
+  boatAgentLaunchEnvRecordSchema,
   boatAgentLaunchRecordSchema,
   boatAgentNetworkResponseSchema,
   boatAgentNetworkStatusSchema,
@@ -64,6 +68,7 @@ import {
   boatAgentRefusalSchema,
   type BoatAgentBindRequest,
 } from "./agent-contract.js";
+import { BoatTunnelCarrier, makeBoatTunnelCarrierLayer } from "./tunnel-carrier.js";
 
 const PACKAGE_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const AGENT = path.join(PACKAGE_ROOT, "microvm-image/agent.mjs");
@@ -103,19 +108,24 @@ exit 0
 // the real wg, it opens the file named after `private-key` by path; it never reads fd 0). The
 // agent runs these with a bare environment (PATH and LANG only, as the Python guest did), so the
 // log path is baked into each VM's script, and `wg show` answers with whatever the test put in
-// the handshake file.
+// the handshake file (`wg show <if> transfer`: the transfer file beside it).
 const fakeNetTool = (log: string, handshakeFile: string) => `#!/bin/sh
 name=$(basename "$0")
 printf '%s %s\\n' "$name" "$*" >> ${JSON.stringify(log)}
 if [ "$name" = wg ]; then
   case "$1" in
     set) shift 2; [ "$1" = private-key ] && cat "$2" > ${JSON.stringify(`${log}.wg-key`)} ;;
-    show) cat ${JSON.stringify(handshakeFile)} 2>/dev/null ;;
+    show) case "$3" in
+      transfer) cat ${JSON.stringify(`${handshakeFile}.transfer`)} 2>/dev/null ;;
+      listen-port) cat ${JSON.stringify(`${handshakeFile}.listen-port`)} 2>/dev/null ;;
+      *) cat ${JSON.stringify(handshakeFile)} 2>/dev/null ;;
+    esac ;;
   esac
 fi
 case "$name" in *-restore) cat > ${JSON.stringify(log)}."$name-stdin" ;; esac
 if [ -e ${JSON.stringify(log)}."slow-$name" ]; then sleep 6; fi
 if [ -e ${JSON.stringify(log)}."fail-$name" ]; then exit 1; fi
+if [ -e ${JSON.stringify(log)}."fail-$name-\${1:-}" ]; then exit 1; fi
 exit 0
 `;
 
@@ -138,15 +148,28 @@ exec "$@"
 
 // systemd's answer for a slice: it nests by name (\`sealant-docker.slice\` is
 // /sealant.slice/sealant-docker.slice), and \`start\` realizes its cgroup, here under the scratch
-// cgroup root, as an empty one.
-const FAKE_SYSTEMCTL = `#!/bin/sh
+// cgroup root, as an empty one. The daemon's scope (\`sealant-workspace-<id>.scope\`) is "active"
+// while the \`scope-live\` file names its id; \`kill\` ends it unless \`scope-sticky\` is there (a
+// scope whose processes will not die). Every call is logged.
+const fakeSystemctl = (dir: string) => `#!/bin/sh
 for unit; do :; done
-dir="$SEALANT_MICROVM_CGROUP_ROOT/sealant.slice/$unit"
+printf '%s\\n' "$*" >> ${JSON.stringify(path.join(dir, "systemctl.log"))}
+live=${JSON.stringify(path.join(dir, "scope-live"))}
+sticky=${JSON.stringify(path.join(dir, "scope-sticky"))}
 case "$1" in
   start)
-    mkdir -p "$dir"
-    [ -e "$dir/cgroup.events" ] || printf 'populated 0\\nfrozen 0\\n' > "$dir/cgroup.events" ;;
-  show) printf '/sealant.slice/%s\\n' "$unit" ;;
+    slice="$SEALANT_MICROVM_CGROUP_ROOT/sealant.slice/$unit"
+    mkdir -p "$slice"
+    [ -e "$slice/cgroup.events" ] || printf 'populated 0\\nfrozen 0\\n' > "$slice/cgroup.events" ;;
+  show)
+    case "$unit" in
+      *.scope) printf '/sealant-workspace.slice/%s\\n' "$unit" ;;
+      *) printf '/sealant.slice/%s\\n' "$unit" ;;
+    esac ;;
+  list-units)
+    [ -e "$live" ] && printf 'sealant-workspace-%s.scope loaded active running unshare\\n' "$(cat "$live")" ;;
+  kill)
+    [ -e "$sticky" ] || rm -f "$live" ;;
 esac
 exit 0
 `;
@@ -199,14 +222,23 @@ interface Vm {
   readonly netLog: string;
   readonly unshareLog: string;
   readonly systemdRunLog: string;
+  readonly systemctlLog: string;
   readonly syncLog: string;
   readonly resolvConf: string;
   readonly dockerDir: string;
+  readonly cgroupRoot: string;
   readonly env: Record<string, string>;
   readonly bootId: () => Promise<string>;
   readonly reboot: () => Promise<string>;
   /** What the fake `wg show sealant-wg latest-handshakes` prints from now on. */
   readonly setHandshake: (line: string) => Promise<void>;
+  /**
+   * What the fake `systemctl` says of the daemon's scope: `sealant-workspace-<id>.scope` is
+   * active while `id` is a string; `sticky` keeps it so through a `kill`. `null` ends it.
+   */
+  readonly setScope: (id: string | null, options?: { readonly sticky?: boolean }) => Promise<void>;
+  /** What `wg show <if> transfer` prints: `<peer key>\t<received>\t<sent>`. */
+  readonly setTransfer: (line: string) => Promise<void>;
 }
 
 interface Agent {
@@ -245,7 +277,7 @@ const createVm = async (): Promise<Vm> => {
     writeExecutable(path.join(bin, "unshare"), FAKE_UNSHARE),
     writeExecutable(path.join(bin, "systemd-run"), FAKE_SYSTEMD_RUN),
     writeExecutable(path.join(bin, "sync"), fakeSync(syncLog)),
-    writeExecutable(path.join(bin, "systemctl"), FAKE_SYSTEMCTL),
+    writeExecutable(path.join(bin, "systemctl"), fakeSystemctl(dir)),
     writeExecutable(path.join(bin, "modprobe"), fakeNetTool(netLog, handshakeFile)),
     writeExecutable(path.join(bin, "dockerd"), FAKE_DOCKERD),
     writeExecutable(path.join(bin, "docker"), FAKE_DOCKER),
@@ -273,6 +305,7 @@ const createVm = async (): Promise<Vm> => {
   const recordFile = path.join(dir, "sealantd-record.json");
   const unshareLog = path.join(dir, "unshare.log");
   const systemdRunLog = path.join(dir, "systemd-run.log");
+  const systemctlLog = path.join(dir, "systemctl.log");
   const dockerDir = path.join(dir, "docker");
   const vm: Vm = {
     dir,
@@ -286,9 +319,11 @@ const createVm = async (): Promise<Vm> => {
     netLog,
     unshareLog,
     systemdRunLog,
+    systemctlLog,
     syncLog,
     resolvConf,
     dockerDir,
+    cgroupRoot: path.join(dir, "cgroup"),
     env: {
       SEALANT_AGENT_HOST: "boat",
       SEALANT_AGENT_DAEMON_NAMESPACE: "none",
@@ -312,6 +347,9 @@ const createVm = async (): Promise<Vm> => {
       SEALANT_AGENT_MODPROBE: path.join(bin, "modprobe"),
       SEALANT_AGENT_PROC_SYS: path.join(dir, "proc-sys"),
       SEALANT_AGENT_RESOLV_CONF: resolvConf,
+      // The VM's resolver on a loopback port of its own (the tunnel's address is not here).
+      SEALANT_AGENT_DNS_LISTEN_HOST: "127.0.0.1",
+      SEALANT_AGENT_DNS_LISTEN_PORT: "0",
       SEALANT_MICROVM_RECOVERY_SETTLE_MS: "3000",
       SEALANT_MICROVM_DOCKERD: path.join(bin, "dockerd"),
       SEALANT_MICROVM_DOCKER: path.join(bin, "docker"),
@@ -337,6 +375,21 @@ const createVm = async (): Promise<Vm> => {
     },
     setHandshake: async (line) => {
       await writeFile(handshakeFile, `${line}\n`);
+    },
+    setScope: async (id, options = {}) => {
+      const live = path.join(dir, "scope-live");
+      const sticky = path.join(dir, "scope-sticky");
+      if (id === null) {
+        await rm(live, { force: true });
+        await rm(sticky, { force: true });
+        return;
+      }
+      await writeFile(live, id);
+      if (options.sticky === true) await writeFile(sticky, "");
+      else await rm(sticky, { force: true });
+    },
+    setTransfer: async (line) => {
+      await writeFile(`${handshakeFile}.transfer`, `${line}\n`);
     },
   };
   vms.add(vm);
@@ -393,9 +446,24 @@ const stopAgent = async (agent: Agent): Promise<void> => {
   }
 };
 
+/** The agent killed outright (SIGKILL), as a crash would: nothing it started is stopped. */
+const crashAgent = async (agent: Agent): Promise<void> => {
+  agents.delete(agent);
+  agent.child.kill("SIGKILL");
+  await exited(agent.child);
+};
+
+/**
+ * Every daemon the fake sealantd recorded, and every dockerd that joined the fake engine cgroup
+ * (its pid is what the wrapper wrote to `cgroup.procs`): an agent crashed by a test leaves them.
+ */
 const killRecordedDaemons = async (vm: Vm) => {
-  const pids = await readFile(`${vm.recordFile}.pids`, "utf8").catch(() => "");
-  for (const pid of pids
+  const recorded = await readFile(`${vm.recordFile}.pids`, "utf8").catch(() => "");
+  const engine = await readFile(
+    path.join(vm.cgroupRoot, "sealant-docker-engine", "cgroup.procs"),
+    "utf8",
+  ).catch(() => "");
+  for (const pid of `${recorded}\n${engine}`
     .split("\n")
     .map(Number)
     .filter((value) => value > 1)) {
@@ -954,11 +1022,13 @@ describe("boat agent · recover", () => {
     expect(wrong.status).toBe(401);
   });
 
-  it("refuses with `recover-state-unknown` from an agent that did not launch this boot itself", async () => {
+  it("refuses with `recover-state-unknown` from a restarted agent that finds no launch environment", async () => {
     const vm = await createVm();
     const { agent, bearer } = await launched(vm, { FAKE_SEALANTD_EXIT75: "1" });
     await waitFor(async () => (await daemonExitCode(agent, bearer)) === 75);
     await stopAgent(agent);
+    // The launch record is this boot's, but what a recovery boot starts from is gone from tmpfs.
+    await rm(path.join(vm.stateDir, "agent", "launch-env.json"));
     const restarted = await startAgent(vm);
     const refused = await call(restarted, "POST", AGENT_RECOVER_ROUTE, {
       body: recoverBody,
@@ -1085,11 +1155,40 @@ const netLines = async (vm: Vm) =>
   (await readFile(vm.netLog, "utf8").catch(() => "")).split("\n").filter((line) => line !== "");
 
 /** A fake gateway resolver: answers any A question with the gateway address, over UDP and TCP. */
+/**
+ * A zone a fake resolver serves: names (exact, or `*.suffix`) to IPv4 addresses, and the rcode for
+ * every other name. The gateway's is its reach network's aliases and SERVFAIL (it has no upstream);
+ * a VM's own resolver answers public names and NXDOMAIN.
+ */
+type FakeZone = { readonly names: Record<string, string>; readonly miss: 2 | 3 };
+const questionName = (query: Buffer): string => {
+  const labels: string[] = [];
+  let cursor = 12;
+  while (cursor < query.length && (query[cursor] ?? 0) !== 0) {
+    const length = query[cursor] ?? 0;
+    labels.push(query.subarray(cursor + 1, cursor + 1 + length).toString("ascii"));
+    cursor += length + 1;
+  }
+  return labels.join(".").toLowerCase();
+};
+const zoneAddress = (zone: FakeZone, name: string): string | undefined =>
+  zone.names[name] ??
+  Object.entries(zone.names).find(
+    ([pattern]) => pattern.startsWith("*.") && name.endsWith(pattern.slice(1)),
+  )?.[1];
+
 const startFakeDns = async (
   behaviour: "answer" | "wrong-ip" | "silent" = "answer",
-): Promise<{ readonly port: number; readonly close: () => Promise<void> }> => {
+  zone?: FakeZone,
+): Promise<{
+  readonly port: number;
+  readonly asked: string[];
+  readonly close: () => Promise<void>;
+}> => {
+  const asked: string[] = [];
   const answer = (query: Buffer): Buffer | null => {
     if (behaviour === "silent" || query.length < 12) return null;
+    asked.push(questionName(query));
     // Question ends at the terminating root label + 4 bytes of type/class.
     let cursor = 12;
     while (cursor < query.length && (query[cursor] ?? 0) !== 0) cursor += (query[cursor] ?? 0) + 1;
@@ -1100,13 +1199,19 @@ const startFakeDns = async (
     header.writeUInt16BE(0x8180, 2);
     header.writeUInt16BE(1, 4);
     header.writeUInt16BE(1, 6);
+    const zoned = zone === undefined ? undefined : zoneAddress(zone, questionName(query));
+    if (zone !== undefined && zoned === undefined) {
+      header.writeUInt16BE(0x8180 | zone.miss, 2);
+      header.writeUInt16BE(0, 6);
+      return Buffer.concat([header, question]);
+    }
     const rr = Buffer.alloc(16);
     rr.writeUInt16BE(0xc00c, 0);
     rr.writeUInt16BE(1, 2);
     rr.writeUInt16BE(1, 4);
     rr.writeUInt32BE(30, 6);
     rr.writeUInt16BE(4, 10);
-    const ip = behaviour === "wrong-ip" ? "100.127.255.1" : BOAT_AGENT_GATEWAY_ADDRESS;
+    const ip = zoned ?? (behaviour === "wrong-ip" ? "100.127.255.1" : BOAT_AGENT_GATEWAY_ADDRESS);
     Buffer.from(ip.split(".").map(Number)).copy(rr, 12);
     return Buffer.concat([header, question, rr]);
   };
@@ -1136,11 +1241,116 @@ const startFakeDns = async (
   });
   return {
     port,
+    asked,
     close: async () => {
       udp.close();
       await new Promise<void>((resolve) => tcp.close(() => resolve()));
     },
   };
+};
+
+/** A loopback port free for both TCP and UDP right now. */
+const freePort = async (): Promise<number> => {
+  for (;;) {
+    const server = net.createServer();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (typeof address !== "object" || address === null) continue;
+    const udp = dgram.createSocket("udp4");
+    const free = await new Promise<boolean>((resolve) => {
+      udp.once("error", () => resolve(false));
+      udp.bind(address.port, "127.0.0.1", () => resolve(true));
+    });
+    udp.close();
+    if (free) return address.port;
+  }
+};
+
+/** Ask `name` (type A) of a resolver over UDP or TCP: its rcode and the first address it gave. */
+const lookup = async (
+  port: number,
+  name: string,
+  transport: "udp" | "tcp",
+): Promise<{ readonly rcode: number; readonly address: string | null }> => {
+  const header = Buffer.alloc(12);
+  header.writeUInt16BE(0x5a5a, 0);
+  header.writeUInt16BE(0x0100, 2);
+  header.writeUInt16BE(1, 4);
+  const query = Buffer.concat([
+    header,
+    ...name
+      .split(".")
+      .map((label) => Buffer.concat([Buffer.from([label.length]), Buffer.from(label)])),
+    Buffer.from([0, 0, 1, 0, 1]),
+  ]);
+  const reply = await new Promise<Buffer>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`no answer for ${name} over ${transport}`)),
+      5_000,
+    );
+    const settle = (message: Buffer) => {
+      clearTimeout(timer);
+      resolve(message);
+    };
+    if (transport === "udp") {
+      const socket = dgram.createSocket("udp4");
+      socket.on("message", (message) => {
+        socket.close();
+        settle(message);
+      });
+      socket.send(query, port, "127.0.0.1");
+    } else {
+      const socket = net.connect({ host: "127.0.0.1", port }, () => {
+        const prefix = Buffer.alloc(2);
+        prefix.writeUInt16BE(query.length, 0);
+        socket.write(Buffer.concat([prefix, query]));
+      });
+      let pending = Buffer.alloc(0);
+      socket.on("error", reject);
+      socket.on("data", (chunk: Buffer) => {
+        pending = Buffer.concat([pending, chunk]);
+        if (pending.length >= 2 && pending.length >= 2 + pending.readUInt16BE(0)) {
+          socket.destroy();
+          settle(pending.subarray(2, 2 + pending.readUInt16BE(0)));
+        }
+      });
+    }
+  });
+  expect(reply.readUInt16BE(0)).toBe(0x5a5a);
+  const rcode = reply.readUInt16BE(2) & 0x000f;
+  return {
+    rcode,
+    address:
+      reply.readUInt16BE(6) > 0 ? Array.from(reply.subarray(reply.length - 4)).join(".") : null,
+  };
+};
+
+/** A UDP port free on loopback right now. */
+const freeUdpPort = async (): Promise<number> => {
+  const socket = dgram.createSocket("udp4");
+  await new Promise<void>((resolve) => socket.bind(0, "127.0.0.1", resolve));
+  const { port } = socket.address();
+  await new Promise<void>((resolve) => socket.close(() => resolve()));
+  return port;
+};
+
+/** Core's end of the carrier, as a test drives it: datagrams in, datagrams out. */
+const openCarrier = async (agent: Agent, bearer: string) => {
+  const socket = new WebSocket(`ws://127.0.0.1:${String(agent.port)}${BOAT_AGENT_TUNNEL_ROUTE}`, {
+    headers: { authorization: `Bearer ${bearer}` },
+  });
+  const received: Buffer[] = [];
+  const closed = new Promise<number>((resolve) => socket.once("close", (code) => resolve(code)));
+  socket.on("message", (data: Buffer) => received.push(Buffer.from(data)));
+  await new Promise<void>((resolve, reject) => {
+    socket.once("open", () => resolve());
+    socket.once("unexpected-response", (_request, response) =>
+      reject(new Error(`carrier refused: ${String(response.statusCode)}`)),
+    );
+    socket.once("error", reject);
+  });
+  return { socket, received, closed };
 };
 
 describe("boat agent · network", () => {
@@ -1231,8 +1441,9 @@ describe("boat agent · network", () => {
     expect(agent.output()).not.toContain(privateKey);
 
     expect((await lstat(vm.resolvConf)).isSymbolicLink()).toBe(false);
+    // The VM resolves through its own resolver on the tunnel's address, never the gateway alone.
     expect(await readFile(vm.resolvConf, "utf8")).toBe(
-      `nameserver ${BOAT_AGENT_GATEWAY_ADDRESS}\noptions timeout:2 attempts:2\n`,
+      `nameserver ${BOAT_AGENT_CLIENT_ADDRESS}\noptions timeout:3 attempts:2\n`,
     );
     expect((await stat(vm.resolvConf)).mode & 0o777).toBe(0o644);
     const original = JSON.parse(await readFile(path.join(vm.dataDir, "resolv.conf.orig"), "utf8"));
@@ -1286,12 +1497,12 @@ describe("boat agent · network", () => {
     expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
       200,
     );
-    expect(await readFile(vm.resolvConf, "utf8")).toContain(BOAT_AGENT_GATEWAY_ADDRESS);
+    expect(await readFile(vm.resolvConf, "utf8")).toContain(BOAT_AGENT_CLIENT_ADDRESS);
     // The same boot again (an agent restart): the tunnel is still there, so is its resolver.
     await stopAgent(agent);
     const sameBoot = await startAgent(vm);
     expect((await lstat(vm.resolvConf)).isSymbolicLink()).toBe(false);
-    expect(await readFile(vm.resolvConf, "utf8")).toContain(BOAT_AGENT_GATEWAY_ADDRESS);
+    expect(await readFile(vm.resolvConf, "utf8")).toContain(BOAT_AGENT_CLIENT_ADDRESS);
     expect(await exists(path.join(vm.dataDir, "resolv.conf.orig"))).toBe(true);
     // Rebooted (or restored from a saved snapshot): no tunnel on this boot, the stub is back
     // exactly as it was (the symlink, not a copy of its bytes), and the kept copy is gone.
@@ -1333,6 +1544,359 @@ describe("boat agent · network", () => {
     expect(await exists(path.join(plain.dataDir, "resolv.conf.orig"))).toBe(false);
   });
 
+  it("carries the tunnel over /sealant/tunnel: WireGuard's datagrams to Core and back, nothing else", async () => {
+    const vm = await createVm();
+    const bearer = await bindVm(vm);
+    const wireguardPort = await freeUdpPort();
+    const env = { SEALANT_AGENT_TUNNEL_WG_PORT: String(wireguardPort) };
+    const agent = await startAgent(vm, env);
+    // Before any config: the agent says it can carry the tunnel, and has nothing to carry yet.
+    const before = await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer });
+    expect(boatAgentNetworkStatusSchema.parse(before.body).carriers).toEqual(["udp", "websocket"]);
+    await expect(openCarrier(agent, bearer)).rejects.toThrow("carrier refused: 409");
+    // The carried config names no endpoint, and an endpoint beside the carrier is refused.
+    const body: Record<string, unknown> = {
+      ...Object.fromEntries(
+        Object.entries(networkBody()).filter(([key]) => key !== "endpoint" && key !== "port"),
+      ),
+      carrier: "websocket",
+    };
+    const mixed = await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, {
+      body: { ...body, endpoint: "203.0.113.10" },
+      bearer,
+    });
+    expect(mixed).toEqual({ status: 400, body: { reason: "invalid-network-config" } });
+    expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
+      200,
+    );
+    const gatewayKey = z.string().parse(body["gateway_key"]);
+    const set = (await netLines(vm)).find((line) => line.startsWith("wg set "));
+    const relayPort = Number(/endpoint 127\.0\.0\.1:(\d+) /.exec(set ?? "")?.[1] ?? Number.NaN);
+    expect(set).toMatch(
+      new RegExp(
+        `^wg set ${BOAT_AGENT_WIREGUARD_INTERFACE} listen-port ${String(wireguardPort)} private-key \\S+ peer ${gatewayKey.replace(/[+/]/g, "\\$&")} endpoint 127\\.0\\.0\\.1:\\d+ allowed-ips`,
+      ),
+    );
+    expect(Number.isInteger(relayPort)).toBe(true);
+
+    // WireGuard, as the relay sees it: datagrams from its own port.
+    const wireguard = dgram.createSocket("udp4");
+    await new Promise<void>((resolve) => wireguard.bind(wireguardPort, "127.0.0.1", resolve));
+    const toWireguard: Buffer[] = [];
+    wireguard.on("message", (message) => toWireguard.push(message));
+    try {
+      expect(
+        boatAgentNetworkStatusSchema.parse(
+          (await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer })).body,
+        ).carrier_attached,
+      ).toBe(false);
+      await expect(openCarrier(agent, "f".repeat(64))).rejects.toThrow("carrier refused: 401");
+      const core = await openCarrier(agent, bearer);
+      expect(
+        boatAgentNetworkStatusSchema.parse(
+          (await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer })).body,
+        ).carrier_attached,
+      ).toBe(true);
+      // Out: a handshake initiation from WireGuard reaches Core as one binary frame.
+      wireguard.send(Buffer.from("initiation"), relayPort, "127.0.0.1");
+      await waitFor(async () => core.received.length === 1);
+      expect(core.received[0]?.toString()).toBe("initiation");
+      // In: Core's frame reaches WireGuard's own port.
+      core.socket.send(Buffer.from("response"));
+      await waitFor(async () => toWireguard.length === 1);
+      expect(toWireguard[0]?.toString()).toBe("response");
+      // Anything else on the VM sending to the relay is not WireGuard, and goes nowhere.
+      const stranger = dgram.createSocket("udp4");
+      await new Promise<void>((resolve) => stranger.bind(0, "127.0.0.1", resolve));
+      stranger.send(Buffer.from("not-wireguard"), relayPort, "127.0.0.1");
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      stranger.close();
+      expect(core.received.map(String)).toEqual(["initiation"]);
+      // A newer carrier takes over; the older is closed with 1012 (restart).
+      const newer = await openCarrier(agent, bearer);
+      expect(await core.closed).toBe(1012);
+      wireguard.send(Buffer.from("keepalive"), relayPort, "127.0.0.1");
+      await waitFor(async () => newer.received.length === 1);
+      expect(newer.received[0]?.toString()).toBe("keepalive");
+
+      // An agent restarted on the same boot binds the relay where WireGuard's peer still points.
+      newer.socket.close();
+      await stopAgent(agent);
+      const restarted = await startAgent(vm, env);
+      const after = await openCarrier(restarted, bearer);
+      wireguard.send(Buffer.from("after-restart"), relayPort, "127.0.0.1");
+      await waitFor(async () => after.received.length === 1);
+      expect(after.received[0]?.toString()).toBe("after-restart");
+      expect((await netLines(vm)).filter((line) => line.startsWith("wg set "))).toHaveLength(1);
+      after.socket.close();
+    } finally {
+      wireguard.close();
+    }
+  });
+
+  it("relays to the port WireGuard picked itself, read back once its interface is up", async () => {
+    const vm = await createVm();
+    const bearer = await bindVm(vm);
+    const wireguardPort = await freeUdpPort();
+    // As the kernel would answer `wg show sealant-wg listen-port` after `ip link set up`.
+    await writeFile(path.join(vm.dir, "wg-handshake.listen-port"), `${String(wireguardPort)}\n`);
+    const agent = await startAgent(vm);
+    const body: Record<string, unknown> = {
+      ...Object.fromEntries(
+        Object.entries(networkBody()).filter(([key]) => key !== "endpoint" && key !== "port"),
+      ),
+      carrier: "websocket",
+    };
+    expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
+      200,
+    );
+    const lines = await netLines(vm);
+    const set = lines.find((line) => line.startsWith("wg set ")) ?? "";
+    // No port is handed to WireGuard: one picked here could be taken before it binds.
+    expect(set).not.toContain("listen-port");
+    expect(lines.indexOf(`wg show ${BOAT_AGENT_WIREGUARD_INTERFACE} listen-port`)).toBeGreaterThan(
+      lines.indexOf(`ip link set ${BOAT_AGENT_WIREGUARD_INTERFACE} up`),
+    );
+    const relayPort = Number(/endpoint 127\.0\.0\.1:(\d+) /.exec(set)?.[1]);
+    const wireguard = dgram.createSocket("udp4");
+    await new Promise<void>((resolve) => wireguard.bind(wireguardPort, "127.0.0.1", resolve));
+    try {
+      const core = await openCarrier(agent, bearer);
+      wireguard.send(Buffer.from("initiation"), relayPort, "127.0.0.1");
+      await waitFor(async () => core.received.length === 1);
+      expect(core.received[0]?.toString()).toBe("initiation");
+      // A message split into fragments on the way (a proxy may re-frame it) is one datagram.
+      const toWireguard: Buffer[] = [];
+      wireguard.on("message", (message) => toWireguard.push(message));
+      core.socket.send(Buffer.from("frag"), { binary: true, fin: false });
+      core.socket.ping();
+      core.socket.send(Buffer.from("mented"), { binary: true, fin: true });
+      await waitFor(async () => toWireguard.length === 1);
+      expect(toWireguard[0]?.toString()).toBe("fragmented");
+      core.socket.close();
+    } finally {
+      wireguard.close();
+    }
+  });
+
+  it("connects WireGuard to the gateway end to end through the agent's carrier and Core's", async () => {
+    const vm = await createVm();
+    const bearer = await bindVm(vm);
+    const wireguardPort = await freeUdpPort();
+    const agent = await startAgent(vm, { SEALANT_AGENT_TUNNEL_WG_PORT: String(wireguardPort) });
+    const body: Record<string, unknown> = {
+      ...Object.fromEntries(
+        Object.entries(networkBody()).filter(([key]) => key !== "endpoint" && key !== "port"),
+      ),
+      carrier: "websocket",
+    };
+    expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
+      200,
+    );
+    const relayPort = Number(
+      /endpoint 127\.0\.0\.1:(\d+) /.exec(
+        (await netLines(vm)).find((line) => line.startsWith("wg set ")) ?? "",
+      )?.[1],
+    );
+    // The gateway's published port on Core's host, and the VM's WireGuard.
+    const gateway = dgram.createSocket("udp4");
+    await new Promise<void>((resolve) => gateway.bind(0, "127.0.0.1", resolve));
+    const atGateway: { data: Buffer; port: number }[] = [];
+    gateway.on("message", (data, remote) => atGateway.push({ data, port: remote.port }));
+    const wireguard = dgram.createSocket("udp4");
+    await new Promise<void>((resolve) => wireguard.bind(wireguardPort, "127.0.0.1", resolve));
+    const atWireguard: Buffer[] = [];
+    wireguard.on("message", (data) => atWireguard.push(data));
+    const runtime = ManagedRuntime.make(
+      makeBoatTunnelCarrierLayer({ reconnectMinMs: 20, reconnectMaxMs: 40 }),
+    );
+    try {
+      await runtime.runPromise(
+        Effect.flatMap(BoatTunnelCarrier, (carrier) =>
+          carrier.ensure({
+            runId: "run-e2e",
+            connection: Effect.succeed(
+              Redacted.make({
+                url: `ws://127.0.0.1:${String(agent.port)}${BOAT_AGENT_TUNNEL_ROUTE}`,
+                headers: { Authorization: `Bearer ${bearer}` },
+              }),
+            ),
+            gateway: { host: "127.0.0.1", port: gateway.address().port },
+          }),
+        ),
+      );
+      await waitFor(async () =>
+        Boolean(
+          boatAgentNetworkStatusSchema.parse(
+            (await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer })).body,
+          ).carrier_attached,
+        ),
+      );
+      // The VM's initiation reaches the gateway; the gateway's response reaches the VM.
+      wireguard.send(Buffer.from("initiation"), relayPort, "127.0.0.1");
+      await waitFor(async () => atGateway.length === 1);
+      expect(atGateway[0]?.data.toString()).toBe("initiation");
+      gateway.send(Buffer.from("response"), atGateway[0]?.port ?? 0, "127.0.0.1");
+      await waitFor(async () => atWireguard.length === 1);
+      expect(atWireguard[0]?.toString()).toBe("response");
+    } finally {
+      await runtime.dispose();
+      wireguard.close();
+      gateway.close();
+    }
+  });
+
+  it("resolves resource names through the gateway and every other name through the VM's own resolver", async () => {
+    // The gateway answers its reach network's names and nothing else (no upstream: SERVFAIL); the
+    // VM's own resolver answers public names. On the gateway alone a public name never resolved
+    // (VM 131, run 3: `capture plan.get failed: ... failed to lookup address information`).
+    const gateway = await startFakeDns("answer", {
+      names: { db: "10.42.7.40", "*.sealant.gateway.invalid": BOAT_AGENT_GATEWAY_ADDRESS },
+      miss: 2,
+    });
+    const own = await startFakeDns("answer", {
+      names: { "mend-boat-preview.tailnet.example": "185.40.234.37" },
+      miss: 3,
+    });
+    try {
+      const vm = await createVm();
+      // The VM's own resolver, as its stock resolv.conf names it.
+      await writeFile(path.join(vm.dir, "etc", "stub-resolv.conf"), "nameserver 127.0.0.1\n");
+      const bearer = await bindVm(vm);
+      const listen = await freePort();
+      const env = {
+        SEALANT_AGENT_DNS_PROBE_HOST: "127.0.0.1",
+        SEALANT_AGENT_DNS_PROBE_PORT: String(gateway.port),
+        SEALANT_AGENT_DNS_LISTEN_PORT: String(listen),
+        SEALANT_AGENT_DNS_UPSTREAM_PORT: String(own.port),
+      };
+      const agent = await startAgent(vm, env);
+      const body = networkBody();
+      expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
+        200,
+      );
+      expect(await readFile(vm.resolvConf, "utf8")).toBe(
+        `nameserver ${BOAT_AGENT_CLIENT_ADDRESS}\noptions timeout:3 attempts:2\n`,
+      );
+      for (const transport of ["udp", "tcp"] as const) {
+        // A resource name: the gateway's answer, and the VM's own resolver is never asked it.
+        expect(await lookup(listen, "db", transport)).toEqual({ rcode: 0, address: "10.42.7.40" });
+        // A public name: the gateway does not know it, the VM's own resolver does.
+        expect(await lookup(listen, "mend-boat-preview.tailnet.example", transport)).toEqual({
+          rcode: 0,
+          address: "185.40.234.37",
+        });
+        // A name nobody knows: the VM's own resolver's NXDOMAIN, never the gateway's SERVFAIL.
+        expect(await lookup(listen, "absent.example", transport)).toEqual({
+          rcode: 3,
+          address: null,
+        });
+      }
+      expect(own.asked).not.toContain("db");
+      expect(own.asked).toContain("mend-boat-preview.tailnet.example");
+      // Readiness asks the VM's resolver, the way the VM asks: it reaches the gateway.
+      await vm.setHandshake(`${z.string().parse(body["gateway_key"])}\t1760000000`);
+      const status = await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer });
+      expect(boatAgentNetworkStatusSchema.parse(status.body)).toMatchObject({ dns: "udp-and-tcp" });
+      // An agent restarted on the same boot answers again on the same address.
+      await stopAgent(agent);
+      await startAgent(vm, env);
+      expect(await lookup(listen, "mend-boat-preview.tailnet.example", "udp")).toEqual({
+        rcode: 0,
+        address: "185.40.234.37",
+      });
+    } finally {
+      await gateway.close();
+      await own.close();
+    }
+  });
+
+  it("reports what the tunnel sent and received, so a handshake that never comes says which side is silent", async () => {
+    const dns = await startFakeDns();
+    try {
+      const vm = await createVm();
+      const bearer = await bindVm(vm);
+      const body = networkBody();
+      const gatewayKey = z.string().parse(body["gateway_key"]);
+      const agent = await startAgent(vm, {
+        SEALANT_AGENT_DNS_PROBE_HOST: "127.0.0.1",
+        SEALANT_AGENT_DNS_PROBE_PORT: String(dns.port),
+      });
+      expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
+        200,
+      );
+      // VM 131: initiations went out, nothing came back. Another peer's line is not the gateway's.
+      await vm.setHandshake(`${gatewayKey}\t0`);
+      await vm.setTransfer(`${"o".repeat(43)}=\t9\t9\n${gatewayKey}\t0\t444`);
+      const silent = await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer });
+      expect(boatAgentNetworkStatusSchema.parse(silent.body)).toMatchObject({
+        handshake: "unverified",
+        transfer: { sent: 444, received: 0 },
+      });
+      // No counters to read (wg fails): the field is absent, never a guess.
+      await rm(path.join(vm.dir, "wg-handshake.transfer"), { force: true });
+      await writeFile(`${vm.netLog}.fail-wg`, "");
+      const unread = await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer });
+      expect(boatAgentNetworkStatusSchema.parse(unread.body)).not.toHaveProperty("transfer");
+    } finally {
+      await dns.close();
+    }
+  });
+
+  it("verifies the handshake without DNS: a resolver that does not answer is `dns`, never `handshake`", async () => {
+    const silent = await startFakeDns("silent");
+    try {
+      const vm = await createVm();
+      const bearer = await bindVm(vm);
+      const body = networkBody();
+      const gatewayKey = z.string().parse(body["gateway_key"]);
+      await vm.setHandshake(`${gatewayKey}\t1760000000`);
+      await vm.setTransfer(`${gatewayKey}\t148\t296`);
+      const agent = await startAgent(vm, {
+        SEALANT_AGENT_DNS_PROBE_HOST: "127.0.0.1",
+        SEALANT_AGENT_DNS_PROBE_PORT: String(silent.port),
+      });
+      expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
+        200,
+      );
+      const status = await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer });
+      expect(boatAgentNetworkStatusSchema.parse(status.body)).toEqual({
+        configured: true,
+        handshake: "verified",
+        dns: "unavailable",
+        docker_policy: "absent",
+        transfer: { sent: 296, received: 148 },
+        carriers: ["udp", "websocket"],
+      });
+    } finally {
+      await silent.close();
+    }
+  });
+
+  it("fails the network step when the VM's resolver cannot bind, and leaves resolv.conf the VM's", async () => {
+    const vm = await createVm();
+    const bearer = await bindVm(vm);
+    // Something else holds the resolver's address and port.
+    const holder = net.createServer();
+    await new Promise<void>((resolve) => holder.listen(0, "127.0.0.1", resolve));
+    const address = holder.address();
+    if (typeof address !== "object" || address === null) throw new Error("no address");
+    try {
+      const agent = await startAgent(vm, { SEALANT_AGENT_DNS_LISTEN_PORT: String(address.port) });
+      const configured = await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, {
+        body: networkBody(),
+        bearer,
+      });
+      expect(configured.status).toBe(500);
+      // Named by the step it failed in, like every network setup failure.
+      expect(configured.body).toEqual({ reason: "network-resolver-failed" });
+      expect((await lstat(vm.resolvConf)).isSymbolicLink()).toBe(true);
+      expect(await readFile(vm.resolvConf, "utf8")).toBe("nameserver 127.0.0.53\n");
+    } finally {
+      await new Promise<void>((resolve) => holder.close(() => resolve()));
+    }
+  });
+
   it("reports the handshake and the gateway's DNS over UDP and TCP", async () => {
     const dns = await startFakeDns();
     try {
@@ -1355,6 +1919,7 @@ describe("boat agent · network", () => {
         handshake: "unverified",
         dns: "unavailable",
         docker_policy: "absent",
+        carriers: ["udp", "websocket"],
       });
       expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
         200,
@@ -1365,6 +1930,7 @@ describe("boat agent · network", () => {
         handshake: "verified",
         dns: "udp-and-tcp",
         docker_policy: "absent",
+        carriers: ["udp", "websocket"],
       });
       expect(
         (await netLines(vm)).filter(
@@ -1388,6 +1954,7 @@ describe("boat agent · network", () => {
           handshake: "unverified",
           dns: "unavailable",
           docker_policy: "absent",
+          carriers: ["udp", "websocket"],
         });
       } finally {
         await wrong.close();
@@ -1466,7 +2033,9 @@ describe("boat agent · network", () => {
           `-A DOCKER-USER -d ${endpoint}/32 -j DROP`,
           ...denied.map((cidr) => `-A DOCKER-USER -d ${cidr} -j DROP`),
           "-A DOCKER-USER -j RETURN",
-          // No new connection from a container to the VM itself.
+          // No new connection from a container to the VM itself but DNS to the VM's resolver.
+          `-A SEALANT-DOCKER-INPUT -d ${BOAT_AGENT_CLIENT_ADDRESS}/32 -p udp --dport 53 -j RETURN`,
+          `-A SEALANT-DOCKER-INPUT -d ${BOAT_AGENT_CLIENT_ADDRESS}/32 -p tcp --dport 53 -j RETURN`,
           // Matched by what a container is, whatever its bridge is called or its subnet is.
           "-A SEALANT-DOCKER-INPUT -s 198.18.1.0/24 -m conntrack --ctstate NEW -j DROP",
           "-A SEALANT-DOCKER-INPUT -s 198.19.0.0/16 -m conntrack --ctstate NEW -j DROP",
@@ -1754,6 +2323,11 @@ describe("boat agent · park proves Docker gone, on Boat's defaults", () => {
     await waitFor(async () => (await daemonExitCode(agent, bearer)) === 75, 10_000);
     const recovered = await call(agent, "POST", AGENT_RECOVER_ROUTE, { body: recoverBody, bearer });
     expect(recovered).toMatchObject({ status: 200, body: { outcome: "restarted" } });
+    // The recovery boot names no Docker daemon: it was stopped and proved gone first (#516).
+    await waitFor(async () => (await readDaemonRecord(vm)).argv.includes("--recovery"));
+    const recovery = await readDaemonRecord(vm);
+    expect(recovery.env).not.toHaveProperty("DOCKER_HOST");
+    expect(recovery.env).not.toHaveProperty("SEALANT_WORKSPACE_DOCKER_HOST");
   });
 
   it(
@@ -2002,5 +2576,348 @@ describe("boat agent · round-3 closures", () => {
     pending.finish();
     expect(await pending.reply).toMatchObject({ status: 409, body: { reason: "parked" } });
     expect((await readDaemonRecord(vm)).pid).toBe(first.pid);
+  });
+});
+
+// --------------------------------------------------------------------------------------------
+// An agent restarted on the same boot (issue #513)
+// --------------------------------------------------------------------------------------------
+
+const systemctlLines = async (vm: Vm) =>
+  (await readFile(vm.systemctlLog, "utf8").catch(() => ""))
+    .split("\n")
+    .filter((line) => line !== "");
+const launchEnvFile = (vm: Vm) => path.join(vm.stateDir, "agent", "launch-env.json");
+
+describe("boat agent · restarted on the same boot", () => {
+  const park = (agent: Agent, bearer: string, operationId: string) =>
+    call(agent, "POST", BOAT_AGENT_PARK_ROUTE, {
+      body: { format: "sealant-agent-park-v1", operationId },
+      bearer,
+    });
+  const health = async (agent: Agent, bearer: string) => {
+    const reply = await call(agent, "GET", AGENT_HEALTH_ROUTE, { bearer });
+    return {
+      status: reply.status,
+      body: z
+        .object({
+          booted: z.boolean(),
+          controlSocket: z.boolean(),
+          daemonExit: z.object({ code: z.number().nullable() }).optional(),
+        })
+        .parse(reply.body),
+    };
+  };
+
+  it("keeps what a recovery boot needs on tmpfs, 0600, from the launch on", async () => {
+    const vm = await createVm();
+    const { agent, bearer } = await launched(vm);
+    await waitFor(() => exists(vm.socketPath));
+    const file = launchEnvFile(vm);
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    expect(boatAgentLaunchEnvRecordSchema.parse(JSON.parse(await readFile(file, "utf8")))).toEqual({
+      format: "sealant-agent-launch-env-v1",
+      boot_id: await vm.bootId(),
+      run_id: "run_abc-1",
+      contract_version: 1,
+      capture_sourced: true,
+      flush_timeout_ms: 400,
+      boot_env: {
+        SEALANT_WORKSPACE_SOURCE: "capture",
+        SEALANT_CAPTURE_ENDPOINT: "https://mend.example.com/session/s1",
+        MEND_SESSION_ID: "1",
+        SEALANT_SECRET_ENV_FILE: path.join(vm.stateDir, "secrets", "env.json"),
+      },
+    });
+    // The bearer is the control token: it is on tmpfs already (`arm.json`), never here.
+    expect(await readFile(file, "utf8")).not.toContain(bearer);
+    expect(agent.port).toBeGreaterThan(0);
+  });
+
+  it(
+    "parks the daemon an earlier agent process started: the scope is killed and proved gone before any receipt",
+    { timeout: 30_000 },
+    async () => {
+      const vm = await createVm();
+      const { agent, bearer } = await launched(vm);
+      await waitFor(() => exists(vm.socketPath));
+      const daemon = await readDaemonRecord(vm);
+      await crashAgent(agent);
+      expect(alive(daemon.pid)).toBe(true);
+      // The daemon's scope is live, and nothing will die for a kill: a scope that will not end.
+      await vm.setScope("0badc0de", { sticky: true });
+      const restarted = await startAgent(vm);
+      // Health is honest about what this process holds: booted, the daemon not exited (its scope
+      // is live), the control socket as measured.
+      expect(await health(restarted, bearer)).toEqual({
+        status: 200,
+        body: { booted: true, controlSocket: true },
+      });
+
+      const operationId = randomUUID();
+      const unverified = await park(restarted, bearer, operationId);
+      expect(unverified).toMatchObject({ status: 503, body: { reason: "daemon-stop-unverified" } });
+      expect(await exists(path.join(vm.dataDir, `park-${operationId}.json`))).toBe(false);
+      expect(await systemctlLines(vm)).toContain(
+        "kill --signal=SIGKILL sealant-workspace-0badc0de.scope",
+      );
+      // Still listed active, but its cgroup reads empty: proved gone, closed on the retry.
+      const scopeCgroup = path.join(
+        vm.cgroupRoot,
+        "sealant-workspace.slice",
+        "sealant-workspace-0badc0de.scope",
+      );
+      await mkdir(scopeCgroup, { recursive: true });
+      await writeFile(path.join(scopeCgroup, "cgroup.events"), "populated 0\nfrozen 0\n");
+      const closed = await park(restarted, bearer, operationId);
+      expect(closed.status).toBe(200);
+      expect(boatAgentParkResponseSchema.parse(closed.body).receipt.path).toBe(
+        path.join(vm.dataDir, `park-${operationId}.json`),
+      );
+      expect(await parkReceipt(vm, operationId)).toMatchObject({
+        run_id: "run_abc-1",
+        daemon: "stopped",
+        docker: "absent",
+      });
+      expect((await readFile(vm.syncLog, "utf8")).trim()).toBe("sync");
+    },
+  );
+
+  it("parks on a retry once the scope is no longer active", { timeout: 30_000 }, async () => {
+    const vm = await createVm();
+    const { agent, bearer } = await launched(vm);
+    await waitFor(() => exists(vm.socketPath));
+    await crashAgent(agent);
+    await vm.setScope("1badc0de", { sticky: true });
+    const restarted = await startAgent(vm);
+    const operationId = randomUUID();
+    expect(await park(restarted, bearer, operationId)).toMatchObject({
+      status: 503,
+      body: { reason: "daemon-stop-unverified" },
+    });
+    // A kill that takes: the scope ends.
+    await vm.setScope("1badc0de");
+    expect((await park(restarted, bearer, operationId)).status).toBe(200);
+    expect((await parkReceipt(vm, operationId)).daemon).toBe("stopped");
+    // The scope is gone: health reports the daemon exited, with an exit this process never saw.
+    expect(await health(restarted, bearer)).toMatchObject({
+      status: 503,
+      body: { booted: true, daemonExit: { code: null } },
+    });
+  });
+
+  it(
+    "recovers from the adopted launch: `running` while the scope is live, then a recovery boot from its environment",
+    { timeout: 30_000 },
+    async () => {
+      const vm = await createVm();
+      const bearer = await bindVm(vm);
+      const agent = await startAgent(vm, {
+        SEALANT_MICROVM_DOCKER_CAPABLE: "1",
+        SEALANT_MICROVM_DOCKER_READY_TIMEOUT_MS: "5000",
+        FAKE_SEALANTD_EXIT75: "1",
+      });
+      expect(
+        (
+          await call(agent, "POST", AGENT_LAUNCH_ROUTE, {
+            body: launchBody(bearer, { version: 2, services: { docker: "required" } }),
+            bearer,
+          })
+        ).status,
+      ).toBe(200);
+      await waitFor(async () => (await daemonExitCode(agent, bearer)) === 75, 10_000);
+      const first = await readDaemonRecord(vm);
+      await crashAgent(agent);
+
+      await vm.setScope("2badc0de");
+      const restarted = await startAgent(vm, { SEALANT_MICROVM_DOCKER_CAPABLE: "1" });
+      const running = await call(restarted, "POST", AGENT_RECOVER_ROUTE, {
+        body: recoverBody,
+        bearer,
+      });
+      expect(running.status).toBe(200);
+      expect(boatAgentRecoverResponseSchema.parse(running.body)).toEqual({ outcome: "running" });
+      expect((await readDaemonRecord(vm)).pid).toBe(first.pid);
+      expect(await health(restarted, bearer)).toMatchObject({
+        body: { booted: true, controlSocket: false },
+      });
+      expect((await health(restarted, bearer)).body).not.toHaveProperty("daemonExit");
+
+      await vm.setScope(null);
+      const recovered = await call(restarted, "POST", AGENT_RECOVER_ROUTE, {
+        body: recoverBody,
+        bearer,
+      });
+      expect(recovered.status).toBe(200);
+      expect(boatAgentRecoverResponseSchema.parse(recovered.body)).toEqual({
+        outcome: "restarted",
+      });
+      await waitFor(async () => (await readDaemonRecord(vm)).argv.includes("--recovery"));
+      const recovery = await readDaemonRecord(vm);
+      expect(recovery.argv).toEqual(["boot", "--recovery"]);
+      // The adopted boot env, less Docker (#520) and the dotfiles, plus the capture token.
+      expect(recovery.env).toMatchObject({
+        SEALANT_WORKSPACE_SOURCE: "capture",
+        SEALANT_CAPTURE_ENDPOINT: "https://mend.example.com/session/s1",
+        MEND_SESSION_ID: "1",
+        SEALANT_CONTROL_SOCKET: vm.socketPath,
+        SEALANT_SECRET_ENV_FILE: path.join(vm.stateDir, "secrets", "env.json"),
+      });
+      for (const key of [
+        "DOCKER_HOST",
+        "DOCKER_CONTEXT",
+        "SEALANT_WORKSPACE_DOCKER_HOST",
+        "SEALANT_DOTFILES_ARCHIVE_DIR",
+        "SEALANT_SWEEP_EXEMPT_FILE",
+      ]) {
+        expect(recovery.env).not.toHaveProperty(key);
+      }
+      expect(
+        JSON.parse(await readFile(path.join(vm.stateDir, "secrets", "env.json"), "utf8")),
+      ).toEqual({ SEALANT_CAPTURE_TOKEN: "mst_recovery_token" });
+      // Docker's cgroups were looked at before anything started: the containers' slice resolved
+      // from systemd, as the service does.
+      expect(await systemctlLines(vm)).toContain(
+        "show --property ControlGroup --value sealant-docker.slice",
+      );
+    },
+  );
+
+  it(
+    "never closes a park over a live scope, even without a launch to adopt",
+    { timeout: 30_000 },
+    async () => {
+      const vm = await createVm();
+      const { agent, bearer } = await launched(vm, { FAKE_SEALANTD_EXIT75: "1" });
+      await waitFor(async () => (await daemonExitCode(agent, bearer)) === 75);
+      await crashAgent(agent);
+      await rm(launchEnvFile(vm));
+      await vm.setScope("3badc0de", { sticky: true });
+      const restarted = await startAgent(vm);
+      expect(
+        await call(restarted, "POST", AGENT_RECOVER_ROUTE, { body: recoverBody, bearer }),
+      ).toMatchObject({ status: 409, body: { reason: "recover-state-unknown" } });
+      const operationId = randomUUID();
+      expect(await park(restarted, bearer, operationId)).toMatchObject({
+        status: 503,
+        body: { reason: "daemon-stop-unverified" },
+      });
+      expect(await exists(path.join(vm.dataDir, `park-${operationId}.json`))).toBe(false);
+      await vm.setScope(null);
+      expect((await park(restarted, bearer, operationId)).status).toBe(200);
+    },
+  );
+
+  it("adopts nothing across a reboot: the launch environment is another boot's", async () => {
+    const vm = await createVm();
+    const { agent, bearer } = await launched(vm, { FAKE_SEALANTD_EXIT75: "1" });
+    await waitFor(async () => (await daemonExitCode(agent, bearer)) === 75);
+    const first = await readDaemonRecord(vm);
+    await crashAgent(agent);
+    await vm.reboot();
+    // In reality tmpfs is empty after a reboot; here the file is there and its boot id is not.
+    expect(await exists(launchEnvFile(vm))).toBe(true);
+    const rebooted = await startAgent(vm);
+    expect(rebooted.output()).not.toContain("adopted");
+    const refused = await call(rebooted, "POST", AGENT_RECOVER_ROUTE, {
+      body: recoverBody,
+      bearer,
+    });
+    expect(refused.status).toBe(409);
+    expect(boatAgentRefusalSchema.parse(refused.body)).toEqual({ reason: "recover-new-boot" });
+    expect((await readDaemonRecord(vm)).pid).toBe(first.pid);
+  });
+
+  it(
+    "parks a Docker session an earlier agent process started only once Docker's cgroups are proved empty",
+    { timeout: 30_000 },
+    async () => {
+      const vm = await createVm();
+      const bearer = await bindVm(vm);
+      const agent = await startAgent(vm, {
+        SEALANT_MICROVM_DOCKER_CAPABLE: "1",
+        SEALANT_MICROVM_DOCKER_READY_TIMEOUT_MS: "5000",
+      });
+      expect(
+        (
+          await call(agent, "POST", AGENT_LAUNCH_ROUTE, {
+            body: launchBody(bearer, { version: 2, services: { docker: "required" } }),
+            bearer,
+          })
+        ).status,
+      ).toBe(200);
+      await waitFor(
+        async () => (await call(agent, "GET", AGENT_HEALTH_ROUTE, { bearer })).status === 200,
+        10_000,
+      );
+      await crashAgent(agent);
+      // dockerd outlived the agent in the engine cgroup; so did a container in the slice.
+      const engine = path.join(vm.cgroupRoot, "sealant-docker-engine");
+      const slice = path.join(vm.cgroupRoot, "sealant.slice", "sealant-docker.slice");
+      await writeFile(path.join(engine, "cgroup.events"), "populated 1\nfrozen 0\n");
+      await writeFile(path.join(slice, "cgroup.events"), "populated 1\nfrozen 0\n");
+      const restarted = await startAgent(vm, { SEALANT_MICROVM_DOCKER_CAPABLE: "1" });
+      const operationId = randomUUID();
+      expect(await park(restarted, bearer, operationId)).toMatchObject({
+        status: 503,
+        body: { reason: "docker-stop-unverified" },
+      });
+      expect(await exists(path.join(vm.dataDir, `park-${operationId}.json`))).toBe(false);
+      expect(await readFile(path.join(engine, "cgroup.kill"), "utf8")).toBe("1");
+      expect(await readFile(path.join(slice, "cgroup.kill"), "utf8")).toBe("1");
+      await writeFile(path.join(engine, "cgroup.events"), "populated 0\nfrozen 0\n");
+      expect(await park(restarted, bearer, operationId)).toMatchObject({
+        status: 503,
+        body: { reason: "docker-stop-unverified" },
+      });
+      await writeFile(path.join(slice, "cgroup.events"), "populated 0\nfrozen 0\n");
+      expect((await park(restarted, bearer, operationId)).status).toBe(200);
+      expect(await parkReceipt(vm, operationId)).toMatchObject({
+        daemon: "stopped",
+        docker: "stopped",
+      });
+    },
+  );
+});
+
+describe("boat agent · typed failures", () => {
+  it("names the network setup step that failed, never the error's text", async () => {
+    const vm = await createVm();
+    const { agent, bearer } = await launched(vm);
+    await writeFile(`${vm.netLog}.fail-ip-route`, "");
+    const routed = await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, {
+      body: networkBody(),
+      bearer,
+    });
+    expect(routed).toEqual({ status: 500, body: { reason: "network-route-failed" } });
+
+    const other = await createVm();
+    const resolver = await launched(other, {
+      // A resolver path under a regular file cannot be written: the last step fails.
+      SEALANT_AGENT_RESOLV_CONF: path.join(other.bootIdFile, "resolv.conf"),
+    });
+    expect(
+      await call(resolver.agent, "POST", BOAT_AGENT_NETWORK_ROUTE, {
+        body: networkBody(),
+        bearer: resolver.bearer,
+      }),
+    ).toEqual({ status: 500, body: { reason: "network-resolver-failed" } });
+  });
+
+  it("answers an unexpected route failure with a typed reason, not 'request failed'", async () => {
+    if (process.getuid?.() === 0) return;
+    const vm = await createVm();
+    const { agent, bearer } = await launched(vm);
+    // The receipt cannot be written: the park fails for a reason that is not a refusal.
+    await chmod(vm.dataDir, 0o500);
+    try {
+      const parked = await call(agent, "POST", BOAT_AGENT_PARK_ROUTE, {
+        body: { format: "sealant-agent-park-v1", operationId: randomUUID() },
+        bearer,
+      });
+      expect(parked).toEqual({ status: 500, body: { reason: "park-failed" } });
+    } finally {
+      await chmod(vm.dataDir, 0o700);
+    }
   });
 });

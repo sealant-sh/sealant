@@ -42,6 +42,8 @@ import {
   BoatAllocationProvider,
   BoatResources,
   BoatResourcesHost,
+  boatTunnelCarrierAbsent,
+  makeBoatTunnelCarrierLayer,
   BoatFinalClose,
   BoatFinalCloseProvider,
   boatFinalCloseWorkerLayer,
@@ -443,7 +445,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     );
     if (env.SEALANT_BOAT_GATEWAY_HOST_ID !== undefined) {
       if (
-        env.SEALANT_BOAT_GATEWAY_ENDPOINT === undefined ||
+        (env.SEALANT_BOAT_GATEWAY_ENDPOINT === undefined &&
+          env.SEALANT_BOAT_GATEWAY_RELAY_HOST === undefined) ||
         env.SEALANT_BOAT_GATEWAY_IMAGE === undefined ||
         resourceAssembly === undefined ||
         resourceAssembly.subnets === undefined
@@ -452,13 +455,24 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       const Host = Layer.succeed(BoatResourcesHost, {
         deploymentId: env.SEALANT_BOAT_DEPLOYMENT_ID,
         gatewayHostId: env.SEALANT_BOAT_GATEWAY_HOST_ID,
-        endpoint: env.SEALANT_BOAT_GATEWAY_ENDPOINT,
+        ...(env.SEALANT_BOAT_GATEWAY_ENDPOINT === undefined
+          ? {}
+          : { endpoint: env.SEALANT_BOAT_GATEWAY_ENDPOINT }),
+        ...(env.SEALANT_BOAT_GATEWAY_RELAY_HOST === undefined
+          ? {}
+          : { relay: { host: env.SEALANT_BOAT_GATEWAY_RELAY_HOST } }),
         subnets: resourceAssembly.subnets,
         tunnel: new DockerBoatTunnel({
           gatewayImage: env.SEALANT_BOAT_GATEWAY_IMAGE,
           subnets: resourceAssembly.subnets,
           resources: resourceAssembly.runtime,
           dockerSocketPath: env.DOCKER_SOCKET_PATH,
+          // Carried only (no public endpoint): the port is published where the worker relays it,
+          // never on a public interface.
+          ...(env.SEALANT_BOAT_GATEWAY_ENDPOINT === undefined &&
+          env.SEALANT_BOAT_GATEWAY_RELAY_HOST !== undefined
+            ? { publishHost: env.SEALANT_BOAT_GATEWAY_RELAY_HOST }
+            : {}),
         }),
       });
       const Resources = boatResourcesLayer.pipe(Layer.provide(boatWorkerExecutionLayer));
@@ -514,6 +528,10 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           Layer.mergeAll(
             Infra,
             Host,
+            // One carrier per run in this process, shared by every Boat owner above.
+            env.SEALANT_BOAT_GATEWAY_RELAY_HOST === undefined
+              ? boatTunnelCarrierAbsent
+              : makeBoatTunnelCarrierLayer({ log: (message) => console.log(message) }),
             Layer.succeed(BoatFinalCloseProvider, { api: api.value }),
             Layer.succeed(BoatParkingProvider, {
               api: api.value,
@@ -1268,6 +1286,12 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   resourceTickTimer.unref();
 
   return {
+    /**
+     * How this worker reaches a Boat run's daemon: fresh hosted authority per connection, through
+     * the agent's control relay (the path readiness probes). The telemetry worker beside it attaches
+     * its recorder the same way; without this a Boat run has no control target there.
+     */
+    boatConnectMaterial: targetOptions.boatConnectMaterial,
     stop: async () => {
       clearInterval(placementSweepTimer);
       clearInterval(resourceTickTimer);

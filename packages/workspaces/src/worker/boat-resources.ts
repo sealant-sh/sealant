@@ -37,6 +37,7 @@ import {
   boatLaunchSummary,
   type BoatLaunchDiagnostic,
 } from "../runtime/boat/launch-diagnostics.js";
+import { BoatTunnelCarrier } from "../runtime/boat/tunnel-carrier.js";
 import {
   BoatTunnelCredentialsOwner,
   boatTunnelCredentialsLayer,
@@ -87,9 +88,16 @@ export class BoatResourcesHost extends Context.Service<
   {
     readonly deploymentId: string;
     readonly gatewayHostId: string;
-    readonly endpoint: string;
+    /** The gateway's public address VMs dial; absent when `relay` carries every tunnel. */
+    readonly endpoint?: string;
     readonly tunnel: BoatTunnel;
     readonly subnets: ResourceSubnets;
+    /**
+     * Where this worker reaches the gateways' published WireGuard ports. Set, Core carries each
+     * tunnel over the agent's `/sealant/tunnel` WebSocket (the agent permitting), so no VM dials
+     * the gateway's host; unset, every VM dials `endpoint` over UDP.
+     */
+    readonly relay?: { readonly host: string };
   }
 >()("@sealant/workspaces/boat/BoatResourcesHost") {}
 
@@ -125,6 +133,7 @@ const make: Effect.Effect<
   | BoatTunnelCredentialsOwner
   | BoatExecution
   | BoatResourcesHost
+  | BoatTunnelCarrier
 > = Effect.gen(function* () {
   const allocations = yield* BoatAllocationRepo;
   const executions = yield* BoatExecutionRepo;
@@ -133,6 +142,7 @@ const make: Effect.Effect<
   const credentials = yield* BoatTunnelCredentialsOwner;
   const guest = yield* BoatExecution;
   const host = yield* BoatResourcesHost;
+  const carrier = yield* BoatTunnelCarrier;
   const canonical = yield* WorkspaceCaptureDrainRepo;
   const allocationRepo = yield* BoatAllocationRepo;
   const isCurrent = (target: BoatExecutionTarget) =>
@@ -182,7 +192,7 @@ const make: Effect.Effect<
       tunnels.configure(reservation, {
         epoch: admission.epoch,
         operationId: admission.operationId,
-        endpoint: host.endpoint,
+        ...(host.endpoint === undefined ? {} : { endpoint: host.endpoint }),
         subnet,
       }),
       "persist-network",
@@ -246,17 +256,26 @@ const make: Effect.Effect<
         network: {
           epoch: admission.epoch,
           operationId: admission.operationId,
-          endpoint: host.endpoint,
+          ...(host.endpoint === undefined ? {} : { endpoint: host.endpoint }),
           subnet,
         },
         privateKey: keys.guest.privateKey,
         publicKey: keys.guest.publicKey,
         gatewayKey: keys.gateway.publicKey,
         port: keys.listenPort,
+        ...(host.relay === undefined ? {} : { carrier: "websocket" as const }),
       }),
       "isolate-guest",
     );
     yield* recheck;
+    // Carried: this worker holds the tunnel's WebSocket and relays it to the gateway's port here.
+    // Every reconcile pass ensures it again, so a restarted worker or a dropped carrier reopens.
+    if (receipt.carrier === "websocket" && host.relay !== undefined)
+      yield* carrier.ensure({
+        runId: target.runId,
+        connection: guest.tunnel(target),
+        gateway: { host: host.relay.host, port: keys.listenPort },
+      });
     return { gateway, guest: receipt };
   });
   const reconcile = Effect.fn("BoatResources.reconcile")(function* (
@@ -301,6 +320,10 @@ const make: Effect.Effect<
                     : ("unavailable" as const)
                 : ("unavailable" as const),
             ),
+          ),
+          // A run that is closed or held carries no tunnel any more.
+          Effect.tap((outcome) =>
+            outcome === "closed" || outcome === "held" ? carrier.release(id) : Effect.void,
           ),
           Effect.map((outcome) => ({ runId: id, outcome })),
         ),
@@ -372,12 +395,13 @@ export const boatResourcesLayerNoDeps: Layer.Layer<
   | BoatTunnelCredentialsOwner
   | BoatExecution
   | BoatResourcesHost
+  | BoatTunnelCarrier
 > = Layer.effect(BoatResources, make);
 /** Owns its stores and sealed tunnel credentials. The worker supplies authenticated exchange and host I/O. */
 export const boatResourcesLayer: Layer.Layer<
   BoatResources,
   never,
-  SealantDB | CredentialCipher | BoatExecution | BoatResourcesHost
+  SealantDB | CredentialCipher | BoatExecution | BoatResourcesHost | BoatTunnelCarrier
 > = boatResourcesLayerNoDeps.pipe(
   Layer.provide(
     Layer.mergeAll(

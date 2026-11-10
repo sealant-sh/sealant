@@ -64,8 +64,13 @@ import {
 } from "./agent-contract.js";
 import type { BoatApi } from "./api.js";
 import { BoatApiError, BoatSecret, boatSandboxIdSchema, parseBoatUrl } from "./config.js";
-import { boatControlConnection, type BoatHostedControl } from "./connection.js";
 import {
+  boatControlConnection,
+  boatTunnelConnection,
+  type BoatHostedControl,
+} from "./connection.js";
+import {
+  boatGuestOutput,
   boatLaunchDiagnostic,
   boatLaunchSummary,
   type BoatLaunchDiagnostic,
@@ -178,8 +183,9 @@ export interface BoatAgentReply {
  * The agent's status decides, never its text: 400 is a request Core built wrong, 401 a bearer the
  * agent does not hold, 404 an agent without the route, 409 a refusal whose reason the body names.
  * 502/503/504 (the proxy's VM still booting, an agent not yet listening, or the agent's own
- * `503 {reason: docker-stop-unverified}` on a park or recovery it could not finish) and lost
- * transport are the only retryable failures; their reason, when the body names one, is kept.
+ * `503 {reason: daemon-stop-unverified | docker-stop-unverified}` on a park or recovery it could
+ * not finish) and lost transport are the only retryable failures; their reason, when the body
+ * names one, is kept.
  */
 export type BoatAgentFailureCode =
   | "agent-rejected"
@@ -228,6 +234,8 @@ export class BoatExecutionError extends Error {
       | "invocation-held"
       /** The agent's health named a daemon exit or a failed guest service: the launch is lost. */
       | "guest-failed"
+      /** No public endpoint to dial, and the agent cannot carry the tunnel over HTTPS. */
+      | "carrier-unavailable"
       | BoatAgentFailureCode,
     diagnostic?: BoatLaunchDiagnostic,
   ) {
@@ -616,6 +624,14 @@ export interface BoatExecutionService {
     target: BoatExecutionTarget,
     input: BoatGuestNetworkInput,
   ) => Effect.Effect<BoatGuestNetworkReceipt, Failure>;
+  /**
+   * Where Core's end of the tunnel's WebSocket carrier connects (`/sealant/tunnel` through Boat's
+   * hosted HTTPS, with a fresh hosted cookie and the control token), from network setup until the
+   * launch is held. Read again for every reconnect: the hosted cookie may expire.
+   */
+  readonly tunnel: (
+    target: BoatExecutionTarget,
+  ) => Effect.Effect<Redacted.Redacted<BoatTunnelConnection>, Failure>;
   /** Authenticated capture control for the original running or terminally held launch. */
   readonly control: (
     target: BoatExecutionTarget,
@@ -662,12 +678,25 @@ export interface BoatGuestNetworkInput {
   readonly publicKey: string;
   readonly gatewayKey: string;
   readonly port: number;
+  /**
+   * `websocket`: carry the tunnel over the agent's `/sealant/tunnel` when the agent can (it lists
+   * the carrier in `GET /sealant/network`), so the VM never dials the gateway's host. An agent that
+   * cannot is configured to dial it over UDP, as before.
+   */
+  readonly carrier?: "websocket";
 }
 /** This acknowledgement proves configuration, not a handshake, resource reach or daemon health. */
 export interface BoatGuestNetworkReceipt {
   readonly receipt: string;
   readonly handshake: "unverified";
   readonly admission: "held";
+  /** How the tunnel is carried: the VM dials the gateway (`udp`), or Core carries it (`websocket`). */
+  readonly carrier: "udp" | "websocket";
+}
+/** Core's end of the tunnel's WebSocket carrier: the URL and the headers that authenticate it. */
+export interface BoatTunnelConnection {
+  readonly url: string;
+  readonly headers: Readonly<Record<string, string>>;
 }
 /** Ordinary runtime registration does not provide this service until all activation gates pass. */
 export class BoatExecution extends Context.Service<BoatExecution, BoatExecutionService>()(
@@ -808,6 +837,27 @@ const make: Effect.Effect<
       });
       return { hosted, bearer };
     });
+  /**
+   * Every secret value this launch handed the VM: the bearer, the hosted cookie and the launch's
+   * secret environment. A material that no longer opens leaves the first two.
+   */
+  const launchSecrets = (
+    record: BoatExecutionRecord,
+    connection: { hosted: BoatHostedControl; bearer: BoatSecret },
+  ) =>
+    (record.admission?.sealedResumeEnvelope == null
+      ? Effect.succeed([])
+      : openMaterial(record, record.admission.sealedResumeEnvelope).pipe(
+          Effect.map((material) => Object.values(Redacted.value(material).secretEnv)),
+          Effect.orElseSucceed(() => []),
+        )
+    ).pipe(
+      Effect.map((values) => [
+        connection.bearer.reveal(),
+        connection.hosted.cookie.reveal(),
+        ...values,
+      ]),
+    );
   const call = (
     connection: { hosted: BoatHostedControl; bearer: BoatSecret },
     route: BoatAgentRoute,
@@ -1051,26 +1101,62 @@ const make: Effect.Effect<
     )
       return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
     const binding = bindingOf(record);
-    const body = yield* attempt("invalid-input", () =>
-      Redacted.make(
-        JSON.stringify({
-          format: "sealant-guest-network-v1",
-          binding,
-          private_key: boatWireGuardKeySchema.parse(Redacted.value(input.privateKey)),
-          public_key: boatWireGuardKeySchema.parse(input.publicKey),
-          gateway_key: boatWireGuardKeySchema.parse(input.gatewayKey),
-          endpoint: network.endpoint,
-          port: z.number().int().min(40000).max(40015).parse(input.port),
-          subnet: network.subnet,
-        }),
-      ),
-    );
     const connection = yield* access(record);
+    // Carried only by an agent that says it can: an older image dials the gateway over UDP.
+    const carrier =
+      input.carrier === "websocket"
+        ? yield* call(connection, "network-status").pipe(
+            Effect.flatMap((status) =>
+              attempt("invalid-reply", () =>
+                boatAgentNetworkStatusSchema.parse(status.body).carriers?.includes("websocket") ===
+                true
+                  ? ("websocket" as const)
+                  : ("udp" as const),
+              ),
+            ),
+          )
+        : ("udp" as const);
+    // No public endpoint (every tunnel carried): an image that cannot carry it cannot be reached.
+    if (carrier === "udp" && network.endpoint === undefined)
+      return yield* Effect.fail(
+        new BoatExecutionError("carrier-unavailable", {
+          step: "readiness",
+          errorClass: "BoatExecutionError",
+          code: "carrier-unavailable",
+          resourceOperation: "isolate-guest",
+        }),
+      );
+    const body = yield* attempt("invalid-input", () => {
+      const common = {
+        format: "sealant-guest-network-v1",
+        binding,
+        private_key: boatWireGuardKeySchema.parse(Redacted.value(input.privateKey)),
+        public_key: boatWireGuardKeySchema.parse(input.publicKey),
+        gateway_key: boatWireGuardKeySchema.parse(input.gatewayKey),
+      };
+      return Redacted.make(
+        JSON.stringify(
+          carrier === "websocket"
+            ? { ...common, carrier: "websocket", subnet: network.subnet }
+            : {
+                ...common,
+                endpoint: network.endpoint,
+                port: z.number().int().min(40000).max(40015).parse(input.port),
+                subnet: network.subnet,
+              },
+        ),
+      );
+    });
     const reply = yield* call(connection, "network", body);
     const receipt = yield* attempt("invalid-reply", () => {
       const parsed = boatAgentNetworkResponseSchema.parse(reply.body);
       if (!isDeepStrictEqual(parsed.binding, binding)) throw new Error();
-      return { receipt: parsed.receipt, handshake: parsed.handshake, admission: "held" as const };
+      return {
+        receipt: parsed.receipt,
+        handshake: parsed.handshake,
+        admission: "held" as const,
+        carrier,
+      };
     });
     yield* unchanged(record);
     return receipt;
@@ -1094,6 +1180,7 @@ const make: Effect.Effect<
     const notReady = (
       pathClass: NonNullable<BoatLaunchDiagnostic["agent"]>["pathClass"],
       check: Check,
+      tunnel?: BoatLaunchDiagnostic["tunnel"],
     ) =>
       new BoatExecutionError("agent-not-ready", {
         step: "readiness",
@@ -1101,6 +1188,7 @@ const make: Effect.Effect<
         code: "agent-not-ready",
         check,
         agent: { pathClass, responseTail: "" },
+        ...(tunnel === undefined ? {} : { tunnel }),
       });
     const guestFailure = (guest: NonNullable<BoatLaunchDiagnostic["guest"]>, check?: Check) =>
       new BoatExecutionError("guest-failed", {
@@ -1113,10 +1201,18 @@ const make: Effect.Effect<
     // 1. The agent: the daemon it started is up with its control socket, and Docker when asked.
     const health = yield* call(connection, "health");
     const observed = yield* healthReply(health);
-    if (observed.daemonExit !== undefined)
+    if (observed.daemonExit !== undefined) {
+      const output = observed.daemonExit.output;
       return yield* Effect.fail(
-        guestFailure({ service: "sealantd", exitCode: observed.daemonExit.code }),
+        guestFailure({
+          service: "sealantd",
+          exitCode: observed.daemonExit.code,
+          ...(output === undefined
+            ? {}
+            : { outputTail: boatGuestOutput(output, yield* launchSecrets(record, connection)) }),
+        }),
       );
+    }
     if (docker && !("version" in observed))
       return yield* Effect.fail(new BoatExecutionError("invalid-reply"));
     if ("version" in observed && observed.services.docker.status === "failed")
@@ -1147,7 +1243,22 @@ const make: Effect.Effect<
     if (!tunnel.configured)
       return yield* Effect.fail(notReady(BOAT_AGENT_NETWORK_ROUTE, "network"));
     if (tunnel.handshake !== "verified")
-      return yield* Effect.fail(notReady(BOAT_AGENT_NETWORK_ROUTE, "handshake"));
+      return yield* Effect.fail(
+        notReady(
+          BOAT_AGENT_NETWORK_ROUTE,
+          "handshake",
+          tunnel.transfer === undefined && tunnel.carrier_attached === undefined
+            ? undefined
+            : {
+                ...(tunnel.transfer === undefined
+                  ? {}
+                  : { sentBytes: tunnel.transfer.sent, receivedBytes: tunnel.transfer.received }),
+                ...(tunnel.carrier_attached === undefined
+                  ? {}
+                  : { carrierAttached: tunnel.carrier_attached }),
+              },
+        ),
+      );
     if (tunnel.dns !== "udp-and-tcp")
       return yield* Effect.fail(notReady(BOAT_AGENT_NETWORK_ROUTE, "dns"));
     if (tunnel.docker_policy === "failed")
@@ -1178,6 +1289,15 @@ const make: Effect.Effect<
     };
   });
 
+  const tunnel = Effect.fn("BoatExecution.tunnel")(function* (target: BoatExecutionTarget) {
+    const record = yield* loadTarget(target);
+    if (!["installed", "issued", "running"].includes(record.phase) || record.admission === null)
+      return yield* Effect.fail(new BoatExecutionError("invocation-held"));
+    const connection = yield* access(record);
+    return Redacted.make<BoatTunnelConnection>(
+      boatTunnelConnection(connection.hosted, connection.bearer),
+    );
+  });
   const control = Effect.fn("BoatExecution.control")(function* (target: BoatExecutionTarget) {
     const record = yield* loadTarget(target);
     if (record.phase !== "running" && record.phase !== "held")
@@ -1288,6 +1408,7 @@ const make: Effect.Effect<
     launch,
     isolate,
     readiness,
+    tunnel,
     control,
     hold,
     recover,

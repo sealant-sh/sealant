@@ -179,6 +179,8 @@ const createVm = async (dnsPort: number): Promise<Vm> => {
       SEALANT_AGENT_RESOLV_CONF: resolvConf,
       SEALANT_AGENT_DNS_PROBE_HOST: "127.0.0.1",
       SEALANT_AGENT_DNS_PROBE_PORT: String(dnsPort),
+      SEALANT_AGENT_DNS_LISTEN_HOST: "127.0.0.1",
+      SEALANT_AGENT_DNS_LISTEN_PORT: "0",
       SEALANT_MICROVM_RECOVERY_SETTLE_MS: "3000",
       FAKE_SEALANTD_RECORD: recordFile,
     },
@@ -652,9 +654,14 @@ describe("Core's Boat execution owner against the real guest agent", () => {
       return failure instanceof BoatExecutionError && failure.code === "guest-failed";
     });
     const failure = await execute(Effect.flip(c.executor.readiness(t)));
+    // What the daemon printed last comes with it, so a failed boot says why without the VM.
     expect(boatLaunchDiagnostic(failure, "readiness")).toMatchObject({
       code: "guest-failed",
-      guest: { service: "sealantd", exitCode: 75 },
+      guest: {
+        service: "sealantd",
+        exitCode: 75,
+        outputTail: "Error: final capture incomplete; exiting with EX_TEMPFAIL",
+      },
     });
     await execute(c.executor.hold(t));
     // The recovery boot found nothing to save (exit 76): a distinct outcome, never `held`.

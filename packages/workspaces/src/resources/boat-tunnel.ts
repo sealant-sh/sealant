@@ -147,6 +147,12 @@ export class DockerBoatTunnel implements BoatTunnel {
       readonly subnets: ResourceSubnets;
       readonly resources: Pick<ResourceRuntime, "attachExecutor" | "detachExecutor">;
       readonly dockerSocketPath?: string;
+      /**
+       * The host address the gateway's WireGuard port is published on. Set when every tunnel is
+       * carried over HTTPS (the worker relays it locally), so the port is never on a public
+       * interface; unset, it is published on every interface for VMs that dial it.
+       */
+      readonly publishHost?: string;
     },
   ) {
     this.docker = createDockerCommandRunner(options.dockerSocketPath ?? "/var/run/docker.sock");
@@ -268,8 +274,16 @@ export class DockerBoatTunnel implements BoatTunnel {
         }
         const name = boatTunnelName(target);
         const binding = bindingOf(target);
+        const publishHost = this.options.publishHost;
         const configDigest = hash(
-          JSON.stringify({ binding, publicKey, peerKey, listenPort, gatewayImage }),
+          JSON.stringify({
+            binding,
+            publicKey,
+            peerKey,
+            listenPort,
+            gatewayImage,
+            ...(publishHost === undefined ? {} : { publishHost }),
+          }),
         );
         const egress = `${name}-egress`;
         const imageId = z
@@ -296,7 +310,7 @@ export class DockerBoatTunnel implements BoatTunnel {
               "--network",
               egress,
               "--publish",
-              `${listenPort}:51820/udp`,
+              `${publishHost === undefined ? "" : `${publishHost}:`}${String(listenPort)}:51820/udp`,
               "--restart",
               "no",
               "--read-only",
@@ -356,7 +370,7 @@ export class DockerBoatTunnel implements BoatTunnel {
             "net.ipv6.conf.all.disable_ipv6": "1",
           }) ||
           !isDeepStrictEqual(host.PortBindings, {
-            "51820/udp": [{ HostIp: "", HostPort: String(listenPort) }],
+            "51820/udp": [{ HostIp: publishHost ?? "", HostPort: String(listenPort) }],
           }) ||
           container.Config.User !== "root" ||
           !isDeepStrictEqual(container.Config.Entrypoint, ["python3", "-I", "-B", PROGRAM]) ||

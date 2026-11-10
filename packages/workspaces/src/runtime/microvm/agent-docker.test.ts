@@ -947,6 +947,12 @@ describe("microvm agent guest-local Docker", () => {
         path.join(agent.dir, "state", "sweep-exempt.json"),
       );
     }
+    // The first boot drives the workspace's Docker; the recovery boot has none: Docker was
+    // stopped and proved gone first, and a named endpoint it cannot reach would read as a writer
+    // still there, so its final flush would never complete (#516).
+    expect(boots[0]?.env["DOCKER_HOST"]).toMatch(/^unix:\/\/.+\/docker\.sock$/);
+    expect(boots[1]?.env).not.toHaveProperty("DOCKER_HOST");
+    expect(boots[1]?.env).not.toHaveProperty("SEALANT_WORKSPACE_DOCKER_HOST");
   });
 
   it("stops Docker, sealantd and probe work on SIGTERM", async ({ signal, onTestFinished }) => {
