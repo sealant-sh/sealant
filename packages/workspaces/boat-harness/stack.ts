@@ -629,6 +629,10 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       DATABASE_URL: databaseUrl,
       SEALANT_CREDENTIALS_KEY: credentialsKey,
       SEALANT_BOAT_ADMISSION_OWNER_IDS: ownerId,
+      // Both the worker and the API hold the Boat key and deployment (the API needs them once it
+      // talks to Boat itself, #563; on main it ignores them).
+      SEALANT_BOAT_API_KEY: credential,
+      SEALANT_BOAT_DEPLOYMENT_ID: deploymentId,
       DEFAULT_RUNTIME_ADAPTER: "docker",
       SEALANT_RESOURCE_REACH_SUBNETS: `10.${octet}.0.0/16`,
       SEALANT_RESOURCE_EGRESS_SUBNETS: `10.${octet + 1}.0.0/16`,
@@ -644,8 +648,6 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
     const workerEnv = {
       ...shared,
       DOCKER_RUNTIME_ENABLED: "true",
-      SEALANT_BOAT_API_KEY: credential,
-      SEALANT_BOAT_DEPLOYMENT_ID: deploymentId,
       SEALANT_BOAT_GATEWAY_HOST_ID: randomUUID(),
       // The production shape for a deployment with no inbound UDP path (#540, #542, #543): the
       // worker carries each tunnel over the agent's WebSocket through the hosted proxy, to the
