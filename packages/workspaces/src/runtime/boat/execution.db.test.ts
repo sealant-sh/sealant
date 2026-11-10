@@ -1,4 +1,4 @@
-import { constants, createHash, publicEncrypt, randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { CredentialCipher, credentialCipherLayer } from "@sealant/credentials";
 import {
@@ -11,285 +11,31 @@ import {
 } from "@sealant/db";
 import { corruptBoatExecution } from "@sealant/db/testing/boat-executions";
 import { withWorkspaceJobTestDatabase } from "@sealant/db/testing/workspace-publications";
-import {
-  boatExecutionRecordSchema,
-  boatExecutionTargetSchema,
-  type BoatExecutionTarget,
-} from "@sealant/validators";
+import { boatExecutionTargetSchema, type BoatExecutionTarget } from "@sealant/validators";
 import { Effect, Layer, Redacted } from "effect";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { BoatSecret } from "./config.js";
+import { GuestFixture } from "./allocation.fixture.js";
 import {
   BoatExecution,
+  BoatExecutionError,
   BoatGuestTransportService,
   boatExecutionLayer,
-  type BoatGuestTransport,
+  boatExecutionRetryable,
+  type BoatLaunchMaterial,
 } from "./execution.js";
+import { boatLaunchDiagnostic } from "./launch-diagnostics.js";
 
 const databaseUrl = process.env.SEALANT_TEST_DATABASE_URL;
-const secret = (value: string) => {
-  const result = BoatSecret.parse(value);
-  if (!result.ok) throw result.error;
-  return result.value;
-};
-const requestSchema = z.object({
-  format: z.string(),
-  identity: z.object({
-    deployment_id: z.string(),
-    instance_id: z.string(),
-    disk_lineage: z.string(),
-  }),
-  boot_id: z.string(),
-  operation_id: z.string(),
-  manifest_digest: z.string(),
-  public_key: z.string(),
-});
-const canonical = (value: unknown): string => {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value !== null && typeof value === "object")
-    return (
-      "{" +
-      Object.entries(value)
-        .toSorted(([a], [b]) => a.localeCompare(b))
-        .map(([k, v]) => JSON.stringify(k) + ":" + canonical(v))
-        .join(",") +
-      "}"
-    );
-  return JSON.stringify(value) ?? "null";
-};
-const digestCanonical = (value: unknown) =>
-  createHash("sha256").update(canonical(value)).digest("hex");
-class GuestFixture implements BoatGuestTransport {
-  healthy = true;
-  badCapabilities = false;
-  changedInvocation = false;
-  permitLost = false;
-  readonly permitBodies: string[] = [];
-  readinessCalls = 0;
-  parkingLost = false;
-  parkingConflict = false;
-  readonly parkingBodies: string[] = [];
-  async probe() {
-    return {
-      runtimeId: "rt_fixture",
-      healthy: this.healthy,
-      supports: this.badCapabilities
-        ? []
-        : ["exec.user", "dotfiles.user", "restore.owner_map", "process.secret-env.v1"],
-    };
-  }
-  readonly token = "a".repeat(64);
-  readonly requests: string[] = [];
-  bindLost = false;
-  stageLost = false;
-  startLost = false;
-  wrongTarget = false;
-  terminal = false;
-  starts = 0;
-  hosts = 0;
-  isolationLost = false;
-  wrongNetworkBinding = false;
-  readonly networkBodies: string[] = [];
-  stageBodies: string[] = [];
-  stageRequest: { operation_id: string; epoch: number } | undefined;
-  target: BoatExecutionTarget | undefined;
-  bootstrap: z.infer<typeof requestSchema> | undefined;
-  beforeBind: () => Promise<void> = async () => {};
-  async bind(target: BoatExecutionTarget, raw: unknown) {
-    this.target = target;
-    const request = requestSchema.parse(raw);
-    await this.beforeBind();
-    this.requests.push(JSON.stringify(raw));
-    if (this.bootstrap !== undefined) expect(request).toEqual(this.bootstrap);
-    this.bootstrap = request;
-    const label = JSON.stringify([
-      request.format,
-      target.deploymentId,
-      target.sandboxId,
-      target.diskLineage,
-      target.bootId,
-      request.operation_id,
-      target.manifestDigest,
-    ]);
-    const reply = {
-      format: "sealant-bootstrap-reply-v1",
-      identity: request.identity,
-      boot_id: target.bootId,
-      operation_id: request.operation_id,
-      admission: "held",
-      boot: { status: "compatible" },
-      ciphertext: publicEncrypt(
-        {
-          key: request.public_key,
-          padding: constants.RSA_PKCS1_OAEP_PADDING,
-          oaepHash: "sha256",
-          oaepLabel: Buffer.from(label),
-        },
-        Buffer.from(this.token),
-      ).toString("base64"),
-    };
-    if (this.bindLost) {
-      this.bindLost = false;
-      throw new Error("lost");
-    }
-    return this.wrongTarget
-      ? { ...reply, identity: { ...request.identity, instance_id: "bx_other" } }
-      : reply;
-  }
-  async host() {
-    this.hosts++;
-    return { origin: "https://fixture-8080.on.boat.dev", cookie: secret("cookie".repeat(8)) };
-  }
-  async call(
-    _host: unknown,
-    bearer: BoatSecret,
-    route: Parameters<BoatGuestTransport["call"]>[2],
-    body?: Redacted.Redacted<string>,
-  ) {
-    expect(bearer.reveal()).toBe(this.token);
-    if (route === "park") {
-      if (body === undefined) throw new Error("missing parking body");
-      const raw = Redacted.value(body);
-      this.parkingBodies.push(raw);
-      const request: unknown = JSON.parse(raw);
-      if (this.parkingLost) {
-        this.parkingLost = false;
-        throw new Error("lost parking reply");
-      }
-      return {
-        format: "sealant-parking-status-v1",
-        request: this.parkingConflict ? {} : request,
-        phase: "closed",
-        writers: "closed",
-        capsule: {
-          sha256: "d".repeat(64),
-          archive_sha256: "c".repeat(64),
-          bytes: 8,
-          stored_bytes: 500,
-          entries: 3,
-        },
-      };
-    }
-    if (route === "recover") {
-      if (body === undefined) throw new Error("missing recovery body");
-      const request = z.object({ binding: z.unknown() }).parse(JSON.parse(Redacted.value(body)));
-      return {
-        format: "sealant-capture-recovery-status-v1",
-        binding: request.binding,
-        execution: this.terminal ? "issued" : "running",
-        mode: this.terminal ? "recovery" : "original",
-      };
-    }
-    if (route === "stage") {
-      if (body === undefined) throw new Error("no body");
-      const raw = Redacted.value(body);
-      this.stageBodies.push(raw);
-      const parsed = z
-        .object({ operation_id: z.string(), epoch: z.number() })
-        .parse(JSON.parse(raw));
-      if (this.stageRequest !== undefined) expect(parsed).toEqual(this.stageRequest);
-      this.stageRequest = parsed;
-      if (this.stageLost) {
-        this.stageLost = false;
-        throw new Error("lost");
-      }
-    }
-    if (route === "isolate") {
-      if (body === undefined) throw new Error("no network body");
-      const raw = Redacted.value(body);
-      this.networkBodies.push(raw);
-      const value = z.object({ binding: z.unknown() }).parse(JSON.parse(raw));
-      if (this.isolationLost) {
-        this.isolationLost = false;
-        throw new Error("lost network reply");
-      }
-      return {
-        format: "sealant-guest-network-status-v1",
-        binding: this.wrongNetworkBinding ? {} : value.binding,
-        receipt: "e".repeat(64),
-        configured: true,
-        handshake: "unverified",
-        admission: "held",
-      };
-    }
-    if (route === "permit" || route === "readiness") {
-      if (body === undefined) throw new Error("missing permit body");
-      const raw = Redacted.value(body);
-      const value = z
-        .object({ binding: z.unknown(), permit_receipt: z.string().optional() })
-        .parse(JSON.parse(raw));
-      if (route === "permit") {
-        this.permitBodies.push(raw);
-        if (this.permitLost) {
-          this.permitLost = false;
-          throw new Error("lost permit response");
-        }
-        return {
-          format: "sealant-execution-permitted-v1",
-          binding: value.binding,
-          receipt: digestCanonical(JSON.parse(raw)),
-          handshake: "verified",
-          dns: "udp-and-tcp",
-          admission: "held",
-        };
-      }
-      this.readinessCalls++;
-      return {
-        format: "sealant-readiness-status-v1",
-        binding: value.binding,
-        permit_receipt: value.permit_receipt,
-        invocation:
-          this.changedInvocation && this.readinessCalls % 2 === 0 ? "f".repeat(32) : "d".repeat(32),
-        handshake: "verified",
-        dns: "udp-and-tcp",
-        limits: { memory_bytes: 2147483648, cpu_millicores: 1000, tasks: 512 },
-        admission: "held",
-      };
-    }
-    if (route === "start") {
-      if (this.starts === 0) this.starts++;
-      if (this.startLost) {
-        this.startLost = false;
-        throw new Error("lost");
-      }
-    }
-    if (this.target === undefined) throw new Error("no target");
-    return {
-      format: "sealant-receiver-status-v1",
-      identity: {
-        deployment_id: this.target.deploymentId,
-        instance_id: this.target.sandboxId,
-        disk_lineage: this.target.diskLineage,
-      },
-      boot_id: this.target.bootId,
-      admission: "held",
-      execution: this.terminal ? "ended" : this.starts > 0 ? "running" : "unavailable",
-      epoch: this.stageRequest?.epoch ?? null,
-      operation_id: this.stageRequest?.operation_id ?? null,
-      stage: this.stageRequest === undefined ? "empty" : "installed",
-    };
-  }
-}
-const payload = (version = "version-one") =>
+const material = (version = "version-one"): Redacted.Redacted<BoatLaunchMaterial> =>
   Redacted.make({
-    files: [
-      {
-        name: "launch",
-        bytes: Buffer.from(
-          JSON.stringify({ format: "sealant-daemon-launch-v1", boot_env: { TOKEN: version } }),
-        ),
-      },
-      { name: "dotfiles", bytes: Buffer.from("pinned-archive") },
-    ],
-    pins: {
-      credentialVersions: [{ id: "credential", version }],
-      dotfiles: [
-        { name: "dotfiles", sha256: createHash("sha256").update("pinned-archive").digest("hex") },
-      ],
-    },
+    bootEnv: { SEALANT_WORKSPACE_SOURCE: "capture", TOKEN_VERSION: version },
+    secretEnv: { SEALANT_CAPTURE_TOKEN: `capture-${version}` },
+    pins: { credentialVersions: [{ id: "credential", version }], dotfiles: [] },
+    docker: false,
   });
+const receipts = { resourceReceipt: "e".repeat(64), tunnelReceipt: "f".repeat(64) };
 const test = async (
   run: (context: {
     executor: BoatExecution["Service"];
@@ -342,66 +88,330 @@ const test = async (
   });
 };
 const execute = Effect.runPromise;
+/** Exchange, seal the launch, freeze isolation and push the launch: a running execution. */
+const running = async (context: Parameters<Parameters<typeof test>[0]>[0]) => {
+  const { executor, target } = context;
+  await execute(executor.exchange(target));
+  await execute(executor.stage(target.runId, material()));
+  await execute(executor.recordIsolation(target, receipts));
+  expect(await execute(executor.launch(target.runId))).toBe("running");
+};
+/** The agent's health, or the tunnel's status, as a readiness observation answers it. */
+const health = (body: unknown) => (route: string) =>
+  route === "health" ? { status: 503, body } : undefined;
+const tunnel = (body: unknown) => (route: string) =>
+  route === "network-status" ? { status: 200, body } : undefined;
+const refusalReason = async (effect: Effect.Effect<unknown, unknown>) => {
+  const failure = await execute(Effect.flip(effect));
+  expect(failure).toBeInstanceOf(BoatExecutionError);
+  const diagnostic = boatLaunchDiagnostic(failure, "readiness");
+  expect(diagnostic.code).toBe("agent-refused");
+  return diagnostic.agent?.reason;
+};
 
 describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () => {
-  it("allows only terminally held original identities to request capture-only recovery", () =>
-    test(async ({ executor, repo, target, guest }) => {
+  it("pushes the sealed launch once as the agent contract names it, and adopts a lost reply", () =>
+    test(async (context) => {
+      const { executor, repo, target, guest } = context;
+      await execute(executor.exchange(target));
+      await execute(executor.stage(target.runId, material()));
+      // No isolation receipts yet: nothing is pushed.
+      await expect(execute(executor.launch(target.runId))).rejects.toThrow("invocation-held");
+      expect((await execute(repo.get(target.runId)))?.phase).toBe("installed");
+      await execute(executor.recordIsolation(target, receipts));
+      guest.lostLaunchReply = true;
+      await expect(execute(executor.launch(target.runId))).rejects.toThrow("transport-unavailable");
+      expect((await execute(repo.get(target.runId)))?.phase).toBe("issued");
+      // The agent accepted the first push (its launch record is durable): the retry adopts it.
+      expect(await execute(executor.launch(target.runId))).toBe("running");
+      expect(guest.starts).toBe(1);
+      expect(guest.launches).toHaveLength(1);
+      expect(guest.launches[0]).toEqual({
+        version: 1,
+        runId: target.runId,
+        controlToken: "a".repeat(64),
+        bootEnv: { SEALANT_WORKSPACE_SOURCE: "capture", TOKEN_VERSION: "version-one" },
+        secretEnvJson: JSON.stringify({ SEALANT_CAPTURE_TOKEN: "capture-version-one" }),
+      });
+      const settled = await execute(repo.get(target.runId));
+      expect(settled?.phase).toBe("running");
+      expect(settled?.admission?.sealedEnvelope).toBeNull();
+      expect(settled?.admission?.sealedResumeEnvelope).not.toBeUndefined();
+      // Running: nothing is pushed again.
+      expect(await execute(executor.launch(target.runId))).toBe("running");
+      expect(guest.actions.filter((action) => action === "launch")).toHaveLength(2);
+    }));
+  it("asks for the Docker service only when the sealed material does", () =>
+    test(async ({ executor, target, guest }) => {
+      await execute(executor.exchange(target));
+      await execute(
+        executor.stage(
+          target.runId,
+          Redacted.make({ ...Redacted.value(material()), docker: true }),
+        ),
+      );
+      await execute(executor.recordIsolation(target, receipts));
+      await execute(executor.launch(target.runId));
+      expect(guest.launches[0]).toMatchObject({ version: 2, services: { docker: "required" } });
+      // A Docker image is ready only once the containers' policy is applied.
+      expect(await execute(executor.readiness(target))).toMatchObject({ handshake: "verified" });
+      const original = guest.request.bind(guest);
+      guest.request = async (...args) =>
+        args[2] === "network-status"
+          ? {
+              status: 200,
+              body: {
+                configured: true,
+                handshake: "verified",
+                dns: "udp-and-tcp",
+                docker_policy: "pending",
+              },
+            }
+          : original(...args);
+      const pending = await execute(Effect.flip(executor.readiness(target)));
+      expect(boatLaunchDiagnostic(pending, "readiness")).toMatchObject({
+        code: "agent-not-ready",
+        check: "docker-policy",
+      });
+      expect(boatExecutionRetryable(pending)).toBe(true);
+      // The VM could not hold its containers to the gateway's allowance: the launch is lost,
+      // never retried twenty times and never failed open.
+      guest.request = async (...args) =>
+        args[2] === "network-status"
+          ? {
+              status: 200,
+              body: {
+                configured: true,
+                handshake: "verified",
+                dns: "udp-and-tcp",
+                docker_policy: "failed",
+              },
+            }
+          : original(...args);
+      const failed = await execute(Effect.flip(executor.readiness(target)));
+      expect(boatLaunchDiagnostic(failed, "readiness")).toMatchObject({
+        code: "guest-failed",
+        check: "docker-policy",
+        guest: { service: "docker", reason: "policy-failed" },
+      });
+      expect(boatExecutionRetryable(failed)).toBe(false);
+    }));
+  it("observes readiness from the agent's health, the tunnel's handshake and the daemon", () =>
+    test(async (context) => {
+      const { executor, repo, target, guest } = context;
+      await execute(context.executor.exchange(target));
+      await execute(executor.stage(target.runId, material()));
+      await execute(executor.recordIsolation(target, receipts));
+      await expect(execute(executor.readiness(target))).rejects.toThrow("invocation-held");
+      await execute(executor.launch(target.runId));
+      const record = await execute(repo.get(target.runId));
+      expect(await execute(executor.readiness(target))).toEqual({
+        runtimeId: "rt_fixture",
+        bootId: target.bootId,
+        isolationReceipt: expect.stringMatching(/^[a-f0-9]{64}$/),
+        handshake: "verified",
+        dns: "udp-and-tcp",
+        admission: "held",
+      });
+      expect(guest.actions.slice(-2)).toEqual(["health", "network-status"]);
+      // A daemon exit reported by the agent fails the launch for good; a tunnel without its
+      // handshake is not ready yet.
+      const original = guest.request.bind(guest);
+      guest.request = async (...args) =>
+        args[2] === "health"
+          ? {
+              status: 503,
+              body: { booted: true, controlSocket: false, daemonExit: { code: 1, signal: null } },
+            }
+          : original(...args);
+      const exited = await execute(Effect.flip(executor.readiness(target)));
+      expect(exited).toBeInstanceOf(BoatExecutionError);
+      expect(boatLaunchDiagnostic(exited, "readiness")).toMatchObject({
+        code: "guest-failed",
+        guest: { service: "sealantd", exitCode: 1 },
+      });
+      // Each not-ready answer names the check that did not pass, in the order they run: the
+      // agent's health first (what is booted, its control socket), then the tunnel.
+      const notReady = async (
+        reply: (route: string) => { status: number; body: unknown } | undefined,
+        check: string,
+      ) => {
+        guest.request = async (...args) => reply(args[2]) ?? original(...args);
+        const failure = await execute(Effect.flip(executor.readiness(target)));
+        expect(boatLaunchDiagnostic(failure, "readiness")).toMatchObject({
+          code: "agent-not-ready",
+          check,
+        });
+        expect(boatExecutionRetryable(failure)).toBe(true);
+      };
+      await notReady(health({ booted: false, controlSocket: false }), "booted");
+      await notReady(health({ booted: true, controlSocket: false }), "control-socket");
+      await notReady(
+        tunnel({
+          configured: false,
+          handshake: "unverified",
+          dns: "unavailable",
+          docker_policy: "absent",
+        }),
+        "network",
+      );
+      await notReady(
+        tunnel({
+          configured: true,
+          handshake: "unverified",
+          dns: "unavailable",
+          docker_policy: "absent",
+        }),
+        "handshake",
+      );
+      await notReady(
+        tunnel({
+          configured: true,
+          handshake: "verified",
+          dns: "unavailable",
+          docker_policy: "absent",
+        }),
+        "dns",
+      );
+      // A policy this image should not have, or one still pending, is not ready either.
+      for (const policy of ["pending", "applied"]) {
+        await notReady(
+          tunnel({
+            configured: true,
+            handshake: "verified",
+            dns: "udp-and-tcp",
+            docker_policy: policy,
+          }),
+          "docker-policy",
+        );
+      }
+      // The hosted proxy's own 503 on the health route (its VM not ready) is no check's answer.
+      guest.request = async (...args) =>
+        args[2] === "health"
+          ? { status: 503, body: { error: "port 8080 is not open" } }
+          : original(...args);
+      const proxied = await execute(Effect.flip(executor.readiness(target)));
+      expect(boatLaunchDiagnostic(proxied, "readiness")).toMatchObject({
+        code: "agent-not-ready",
+        agent: { pathClass: "/sealant/health" },
+      });
+      expect(boatLaunchDiagnostic(proxied, "readiness").check).toBeUndefined();
+      expect(boatExecutionRetryable(proxied)).toBe(true);
+      guest.request = original;
+      guest.probe = async () => ({ runtimeId: "rt_fixture", healthy: false, supports: [] });
+      await expect(execute(executor.readiness(target))).rejects.toThrow("invalid-reply");
+      expect(await execute(repo.get(target.runId))).toEqual(record);
+      await expect(
+        execute(executor.readiness({ ...target, bootId: randomUUID() })),
+      ).rejects.toThrow("target-mismatch");
+    }));
+  it("maps every recovery answer: running, restarted, nothing-to-save and the typed refusals", () =>
+    test(async (context) => {
+      const { executor, repo, target, guest, db } = context;
       await execute(executor.exchange(target));
       await expect(execute(executor.recover(target))).rejects.toThrow("invocation-held");
-      await execute(executor.stage(target.runId, payload()));
-      await execute(
-        executor.permit(target, { resourceReceipt: "e".repeat(64), tunnelReceipt: "f".repeat(64) }),
-      );
-      await execute(executor.start(target.runId));
+      await execute(executor.stage(target.runId, material()));
+      await execute(executor.recordIsolation(target, receipts));
+      await execute(executor.launch(target.runId));
       await expect(execute(executor.recover(target))).rejects.toThrow("invocation-held");
       await execute(executor.hold(target));
       const held = await execute(repo.get(target.runId));
       expect(await execute(executor.recover(target))).toBe("running");
-      guest.terminal = true;
+      guest.recovery = "restarted";
       expect(await execute(executor.recover(target))).toBe("pending");
-      expect(await execute(executor.recover(target))).toBe("pending");
+      guest.recovery = "nothing-to-save";
+      expect(await execute(executor.recover(target))).toEqual({
+        outcome: "nothing-to-save",
+        basis: "daemon",
+        detail: "sealant boot: nothing to save: never materialized (/workspace/repo)",
+      });
+      for (const reason of [
+        "recover-new-boot",
+        "recover-binding-conflict",
+        "recover-state-unknown",
+        "parked",
+      ] as const) {
+        guest.recovery = reason;
+        expect(await refusalReason(executor.recover(target))).toBe(reason);
+      }
+      guest.recovery = "running";
+      guest.malformedRecovery = true;
+      await expect(execute(executor.recover(target))).rejects.toThrow("invalid-reply");
+      guest.malformedRecovery = false;
       await expect(execute(executor.recover({ ...target, bootId: randomUUID() }))).rejects.toThrow(
         "target-mismatch",
       );
       expect(await execute(repo.get(target.runId))).toEqual(held);
-      await expect(execute(executor.start(target.runId))).rejects.toThrow("invocation-held");
+      // A held execution is fenced: the launch is never pushed again.
+      await expect(execute(executor.launch(target.runId))).rejects.toThrow("invocation-held");
       expect(guest.starts).toBe(1);
+      // The resume envelope erased (Boat reported the VM absent): nothing to recover with.
+      if (held?.admission == null) throw new Error("held admission");
+      const { sealedResumeEnvelope: _erased, ...admission } = held.admission;
+      await execute(corruptBoatExecution(db, target.runId, { ...held, admission }));
+      expect(await execute(executor.recover(target))).toBe("held");
     }));
-  it("freezes permit receipts before lost delivery, adopts replay and requires fresh authenticated health", () =>
-    test(async ({ executor, repo, target, guest }) => {
-      await execute(executor.exchange(target));
-      await execute(executor.stage(target.runId, payload()));
-      const receipts = { resourceReceipt: "e".repeat(64), tunnelReceipt: "f".repeat(64) };
-      guest.permitLost = true;
-      await expect(execute(executor.permit(target, receipts))).rejects.toThrow(
-        "transport-unavailable",
-      );
-      expect((await execute(repo.get(target.runId)))?.isolation).toEqual(receipts);
-      await execute(executor.permit(target, receipts));
-      expect(new Set(guest.permitBodies).size).toBe(1);
-      await expect(
-        execute(executor.permit(target, { ...receipts, tunnelReceipt: "a".repeat(64) })),
-      ).rejects.toThrow("stale-transition");
-      await expect(execute(executor.readiness(target))).rejects.toThrow("invocation-held");
-      await execute(executor.start(target.runId));
-      expect(await execute(executor.readiness(target))).toMatchObject({
-        runtimeId: "rt_fixture",
-        handshake: "verified",
-        admission: "held",
+  it("requires a held launch and maps the agent's park receipt into the custody fields", () =>
+    test(async (context) => {
+      const { executor, target, guest } = context;
+      await running(context);
+      const operationId = randomUUID();
+      await expect(execute(executor.park(target, operationId))).rejects.toThrow("invocation-held");
+      expect(guest.actions).not.toContain("park");
+      await execute(executor.hold(target));
+      const receiptHash = createHash("sha256").update(guest.capsule).digest("hex");
+      expect(await execute(executor.park(target, operationId))).toEqual({
+        operationId,
+        capsuleHash: receiptHash,
+        archiveHash: receiptHash,
+        contentBytes: guest.capsule.length,
+        storedBytes: guest.capsule.length,
+        entries: 1,
       });
-      guest.healthy = false;
-      await expect(execute(executor.readiness(target))).rejects.toThrow("invalid-reply");
-      guest.healthy = true;
-      guest.badCapabilities = true;
-      await expect(execute(executor.readiness(target))).rejects.toThrow("invalid-reply");
-      guest.badCapabilities = false;
-      guest.changedInvocation = true;
-      guest.readinessCalls = 0;
-      await expect(execute(executor.readiness(target))).rejects.toThrow("target-mismatch");
-      expect(guest.starts).toBe(1);
+      // A receipt for another operation, or one the agent put elsewhere, is not this park's.
+      const original = guest.request.bind(guest);
+      guest.request = async (...args) => {
+        const reply = await original(...args);
+        return args[2] === "park"
+          ? {
+              status: 200,
+              body: {
+                outcome: "closed",
+                receipt: {
+                  path: `/var/lib/sealant/agent/park-${randomUUID()}.json`,
+                  sha256: receiptHash,
+                  bytes: 1,
+                },
+              },
+            }
+          : reply;
+      };
+      await expect(execute(executor.park(target, operationId))).rejects.toThrow("invalid-reply");
+      guest.request = async () => ({ status: 409, body: { reason: "parked" } });
+      expect(await refusalReason(executor.park(target, operationId))).toBe("parked");
+      // Docker could not be proved stopped: no receipt was written; the same park is retried.
+      guest.request = async () => {
+        throw new BoatExecutionError("agent-not-ready", {
+          step: "agent-request",
+          errorClass: "BoatExecutionError",
+          code: "agent-not-ready",
+          provider: { operation: "agent-park", status: 503, causeClass: null },
+          agent: { pathClass: "/sealant/park", responseTail: "", reason: "docker-stop-unverified" },
+        });
+      };
+      const unverified = await execute(Effect.flip(executor.park(target, operationId)));
+      expect(unverified).toBeInstanceOf(BoatExecutionError);
+      expect(boatLaunchDiagnostic(unverified, "readiness")).toMatchObject({
+        code: "agent-not-ready",
+        agent: { reason: "docker-stop-unverified" },
+      });
+      expect(boatExecutionRetryable(unverified)).toBe(true);
+      guest.request = original;
       await expect(
-        execute(executor.readiness({ ...target, bootId: randomUUID() })),
+        execute(executor.park({ ...target, bootId: randomUUID() }, operationId)),
       ).rejects.toThrow("target-mismatch");
+      await expect(execute(executor.park(target, "invalid"))).rejects.toThrow("invalid-input");
+      expect(guest.starts).toBe(1);
     }));
   it("delivers the same authenticated network intent after reply loss and refuses stale epochs, boots and replies", () =>
     test(async ({ executor, repo, target, guest }) => {
@@ -419,11 +429,11 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         port: 40000,
       };
       await expect(execute(executor.isolate(target, input))).rejects.toThrow("invocation-held");
-      await execute(executor.stage(target.runId, payload()));
+      await execute(executor.stage(target.runId, material()));
       const installed = await execute(repo.get(target.runId));
       if (installed?.admission === null || installed === undefined) throw new Error("no admission");
       input.network.operationId = installed.admission.operationId;
-      guest.isolationLost = true;
+      guest.lostIsolation = true;
       await expect(execute(executor.isolate(target, input))).rejects.toThrow(
         "transport-unavailable",
       );
@@ -443,7 +453,13 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       await expect(
         execute(executor.isolate({ ...target, bootId: randomUUID() }, input)),
       ).rejects.toThrow("target-mismatch");
-      guest.wrongNetworkBinding = true;
+      const original = guest.request.bind(guest);
+      guest.request = async (...args) => {
+        const reply = await original(...args);
+        return args[2] === "network"
+          ? { status: 200, body: { ...z.object({}).passthrough().parse(reply.body), binding: {} } }
+          : reply;
+      };
       await expect(execute(executor.isolate(target, input))).rejects.toThrow("invalid-reply");
       expect(guest.starts).toBe(0);
       expect(JSON.stringify(installed)).not.toContain(Redacted.value(input.privateKey));
@@ -471,108 +487,154 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         });
         await expect(execute(executor.exchange(next))).rejects.toThrow("target-conflict");
       }
-      expect(guest.requests).toHaveLength(1);
+      expect(guest.targets).toHaveLength(1);
     }));
-  it("refuses an archive pin that does not match delivered bytes before accepting admission", () =>
+  it("refuses duplicate pins before sealing anything", () =>
     test(async ({ executor, repo, target, guest }) => {
       await execute(executor.exchange(target));
-      const original = Redacted.value(payload());
+      const original = Redacted.value(material());
       await expect(
         execute(
           executor.stage(
             target.runId,
             Redacted.make({
               ...original,
-              pins: { ...original.pins, dotfiles: [{ name: "dotfiles", sha256: "f".repeat(64) }] },
+              pins: {
+                ...original.pins,
+                dotfiles: [
+                  { name: "dotfiles", sha256: "f".repeat(64) },
+                  { name: "dotfiles", sha256: "e".repeat(64) },
+                ],
+              },
             }),
           ),
         ),
       ).rejects.toThrow("invalid-input");
-      expect(guest.stageBodies).toHaveLength(0);
+      expect(guest.actions).toEqual(["health"]);
       expect((await execute(repo.get(target.runId)))?.phase).toBe("control");
     }));
   it("seals before delivery, replays the same public exchange after reply loss, then erases its key", () =>
     test(async ({ executor, repo, target, guest, cipher }) => {
-      guest.beforeBind = async () => {
+      const requests: string[] = [];
+      const originalBind = guest.bind.bind(guest);
+      let lost = true;
+      guest.bind = async (bindTarget, raw) => {
         const record = await execute(repo.get(target.runId));
         expect(record?.sealedExchange).not.toBeNull();
         expect(record?.sealedControl).toBeNull();
+        requests.push(JSON.stringify(raw));
+        const reply = await originalBind(bindTarget, raw);
+        if (lost) {
+          lost = false;
+          throw new Error("lost");
+        }
+        return reply;
       };
-      guest.bindLost = true;
       await expect(execute(executor.exchange(target))).rejects.toThrow("transport-unavailable");
-      await execute(executor.exchange(target));
+      const receipt = await execute(executor.exchange(target));
+      expect(receipt).toMatch(/^[a-f0-9]{64}$/);
+      // The exchange is proven with the bearer before it is sealed: health answered it.
+      expect(guest.actions).toEqual(["health"]);
       const record = await execute(repo.get(target.runId));
       expect(record?.phase).toBe("control");
       expect(record?.sealedExchange).toBeNull();
-      expect(guest.requests).toHaveLength(2);
-      expect(guest.requests[0]).toBe(guest.requests[1]);
-      expect(JSON.stringify(record)).not.toContain(guest.token);
-      expect(guest.requests.join("")).not.toContain(guest.token);
+      expect(requests).toHaveLength(2);
+      expect(requests[0]).toBe(requests[1]);
+      expect(JSON.stringify(record)).not.toContain("a".repeat(64));
+      expect(requests.join("")).not.toContain("a".repeat(64));
       if (!record?.sealedControl) throw new Error("missing control");
       const opened = await execute(cipher.decrypt(record.sealedControl));
-      expect(opened).toContain(guest.token);
+      expect(opened).toContain("a".repeat(64));
+      // A replay after the commit is a no-op that answers the same binding receipt.
+      expect(await execute(executor.exchange(target))).toBe(receipt);
+      expect(requests).toHaveLength(2);
     }));
-  it("refuses a mismatched provider reply before committing control", () =>
+  it("retries the bind proof while the hosted proxy answers for an agent not listening yet", () =>
     test(async ({ executor, repo, target, guest }) => {
-      guest.wrongTarget = true;
+      // A fresh VM: the agent's unit starts after the network is online, so the proxy answers
+      // its first health requests with a 503 of its own (never the agent's health body).
+      const original = guest.request.bind(guest);
+      let proxied = 2;
+      guest.request = async (...args) => {
+        if (args[2] === "health" && proxied > 0) {
+          proxied -= 1;
+          guest.actions.push("health");
+          return { status: 503, body: { error: "port 8080 is not open" } };
+        }
+        return original(...args);
+      };
+      const receipt = await execute(executor.exchange(target));
+      expect(receipt).toMatch(/^[a-f0-9]{64}$/);
+      expect(guest.actions).toEqual(["health", "health", "health"]);
+      expect((await execute(repo.get(target.runId)))?.phase).toBe("control");
+    }));
+  it("refuses a mismatched bind reply, and a bind refusal is typed, before committing control", () =>
+    test(async ({ executor, repo, target, guest }) => {
+      const originalBind = guest.bind.bind(guest);
+      guest.bind = async (bindTarget, raw) => {
+        const reply = await originalBind(bindTarget, raw);
+        return {
+          ...reply,
+          identity: {
+            ...z.object({}).passthrough().parse(reply.identity),
+            instance_id: "bx_other",
+          },
+        };
+      };
       await expect(execute(executor.exchange(target))).rejects.toThrow("invalid-reply");
       expect((await execute(repo.get(target.runId)))?.phase).toBe("exchange");
+      guest.bind = async () => {
+        throw new BoatExecutionError("agent-refused", {
+          step: "bind-exchange",
+          errorClass: "BoatExecutionError",
+          code: "agent-refused",
+          command: { exitCode: 1, timedOut: false, stderrTail: "bind-manifest-mismatch" },
+        });
+      };
+      await expect(execute(executor.exchange(target))).rejects.toThrow("agent-refused");
+      expect((await execute(repo.get(target.runId)))?.phase).toBe("exchange");
     }));
-  it("freezes the exact payload and pins across delivery loss and newer caller credentials", () =>
+  it("freezes the first sealed material; later callers with newer material change nothing", () =>
     test(async ({ executor, repo, target, guest }) => {
       await execute(executor.exchange(target));
-      guest.stageLost = true;
-      await expect(execute(executor.stage(target.runId, payload()))).rejects.toThrow(
-        "transport-unavailable",
-      );
-      const before = await execute(repo.get(target.runId));
-      expect(before?.phase).toBe("prepared");
-      expect(JSON.stringify(before)).not.toContain("version-one");
-      await execute(executor.stage(target.runId, payload("version-two")));
-      expect(guest.stageBodies).toHaveLength(2);
-      expect(guest.stageBodies[0]).toBe(guest.stageBodies[1]);
-      expect(
-        Buffer.from(
-          z
-            .object({ files: z.array(z.object({ data: z.string() })) })
-            .parse(JSON.parse(guest.stageBodies[1] ?? "")).files[0]?.data ?? "",
-          "base64",
-        ).toString(),
-      ).toContain("version-one");
+      const results = await Promise.allSettled([
+        execute(executor.stage(target.runId, material("one"))),
+        execute(executor.stage(target.runId, material("two"))),
+      ]);
+      expect(results.some((result) => result.status === "fulfilled")).toBe(true);
+      for (const result of results)
+        if (result.status === "rejected")
+          expect(String(result.reason)).toContain("stale-transition");
+      const installed = await execute(repo.get(target.runId));
+      expect(installed?.phase).toBe("installed");
+      expect(JSON.stringify(installed)).not.toContain("version-");
+      await execute(executor.stage(target.runId, material("three")));
+      expect(await execute(repo.get(target.runId))).toEqual(installed);
+      await execute(executor.recordIsolation(target, receipts));
+      await execute(executor.launch(target.runId));
+      // What the agent received is the first sealed material, whichever caller won.
+      expect(["one", "two"]).toContain(guest.launches[0]?.bootEnv["TOKEN_VERSION"]);
     }));
-  it("adopts the same started invocation after reply loss and clears launch secrets on settlement", () =>
-    test(async ({ executor, repo, target, guest }) => {
+  it("freezes isolation receipts once and refuses a changed set", () =>
+    test(async ({ executor, repo, target }) => {
       await execute(executor.exchange(target));
-      await execute(executor.stage(target.runId, payload()));
-      await expect(execute(executor.start(target.runId))).rejects.toThrow("invocation-held");
-      expect((await execute(repo.get(target.runId)))?.phase).toBe("installed");
-      await execute(
-        executor.permit(target, { resourceReceipt: "e".repeat(64), tunnelReceipt: "f".repeat(64) }),
-      );
-      guest.startLost = true;
-      await expect(execute(executor.start(target.runId))).rejects.toThrow("transport-unavailable");
+      await execute(executor.stage(target.runId, material()));
+      await execute(executor.recordIsolation(target, receipts));
+      expect((await execute(repo.get(target.runId)))?.isolation).toEqual(receipts);
+      await execute(executor.recordIsolation(target, receipts));
+      await expect(
+        execute(executor.recordIsolation(target, { ...receipts, tunnelReceipt: "a".repeat(64) })),
+      ).rejects.toThrow("stale-transition");
+    }));
+  it("holds a parked launch and refuses fresh target identities on the same disk", () =>
+    test(async (context) => {
+      const { executor, repo, target, guest } = context;
+      await execute(executor.exchange(target));
+      await execute(executor.stage(target.runId, material()));
+      await execute(executor.recordIsolation(target, receipts));
+      guest.request = async () => ({ status: 409, body: { reason: "parked" } });
+      expect(await refusalReason(executor.launch(target.runId))).toBe("parked");
       expect((await execute(repo.get(target.runId)))?.phase).toBe("issued");
-      expect(await execute(executor.start(target.runId))).toBe("running");
-      const settled = await execute(repo.get(target.runId));
-      expect(settled?.phase).toBe("running");
-      expect(settled?.admission?.sealedEnvelope).toBeNull();
-      expect(guest.starts).toBe(1);
-      expect(guest.hosts).toBeGreaterThan(2);
-      guest.terminal = true;
-      await expect(execute(executor.start(target.runId))).rejects.toThrow("invocation-held");
-      expect((await execute(repo.get(target.runId)))?.phase).toBe("held");
-      expect(guest.starts).toBe(1);
-    }));
-  it("holds ended invocation and refuses fresh target identities on the same disk", () =>
-    test(async ({ executor, repo, target, guest }) => {
-      await execute(executor.exchange(target));
-      await execute(executor.stage(target.runId, payload()));
-      await execute(
-        executor.permit(target, { resourceReceipt: "e".repeat(64), tunnelReceipt: "f".repeat(64) }),
-      );
-      guest.terminal = true;
-      await expect(execute(executor.start(target.runId))).rejects.toThrow("invocation-held");
-      expect((await execute(repo.get(target.runId)))?.admission?.sealedEnvelope).toBeNull();
       for (const changed of [
         { bootId: randomUUID() },
         { diskLineage: "another" },
@@ -581,119 +643,35 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         await expect(execute(executor.exchange({ ...target, ...changed }))).rejects.toThrow(
           "target-mismatch",
         );
-      await expect(execute(executor.start(target.runId))).rejects.toThrow("invocation-held");
+      await execute(executor.hold(target));
+      await expect(execute(executor.launch(target.runId))).rejects.toThrow("invocation-held");
     }));
   it("rejects swapped encrypted purposes and malformed persisted state", () =>
     test(async ({ executor, repo, target, db }) => {
       await execute(executor.exchange(target));
-      await execute(executor.stage(target.runId, payload()));
+      await execute(executor.stage(target.runId, material()));
       const record = await execute(repo.get(target.runId));
       if (record?.admission === null || record === undefined) throw new Error("no admission");
       await execute(
         corruptBoatExecution(db, target.runId, {
           ...record,
-          phase: "prepared",
           admission: { ...record.admission, sealedEnvelope: record.sealedControl },
         }),
       );
-      await expect(execute(executor.stage(target.runId, payload()))).rejects.toThrow(
-        "seal-context-mismatch",
-      );
+      await execute(executor.recordIsolation(target, receipts));
+      await expect(execute(executor.launch(target.runId))).rejects.toThrow("seal-context-mismatch");
       await execute(corruptBoatExecution(db, target.runId, { ...record, phase: "nonsense" }));
       await expect(execute(repo.get(target.runId))).rejects.toThrow("invalid-record");
     }));
-  it("fences conflicting transitions from the same prior record and adopts an exact replay", () =>
-    test(async ({ executor, repo, target, cipher, guest }) => {
-      await execute(executor.exchange(target));
-      const before = await execute(repo.get(target.runId));
-      if (before === undefined) throw new Error("no reservation");
-      const proposals = await Promise.all(
-        ["one", "two"].map(async (value) =>
-          boatExecutionRecordSchema.parse({
-            ...before,
-            phase: "prepared",
-            admission: {
-              epoch: 1,
-              operationId: randomUUID(),
-              digest: createHash("sha256").update(value).digest("hex"),
-              sealedEnvelope: (await execute(cipher.encrypt(value))).sealed,
-            },
-          }),
-        ),
+  it("reopens the resume envelope as the original launch material for custody", () =>
+    test(async (context) => {
+      const { executor, target } = context;
+      await running(context);
+      expect(Redacted.value(await execute(executor.parkingMaterial(target)))).toEqual(
+        Redacted.value(material()),
       );
-      const results = await Promise.allSettled(
-        proposals.map((proposal) => execute(repo.advance(before, proposal))),
-      );
-      const winners = results.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : [],
-      );
-      expect(winners).toHaveLength(1);
-      const winner = winners[0];
-      if (winner === undefined) throw new Error("no winner");
-      const loser = proposals.find(
-        (proposal) => proposal.admission?.operationId !== winner.admission?.operationId,
-      );
-      if (loser === undefined) throw new Error("no loser");
-      expect(await execute(repo.get(target.runId))).toEqual(winner);
-      expect(await execute(repo.advance(before, winner))).toEqual(winner);
-      await expect(execute(repo.advance(before, loser))).rejects.toThrow("stale-transition");
-      await expect(execute(repo.advance(before, { ...before, phase: "held" }))).rejects.toThrow(
-        "invalid-record",
-      );
-      expect(guest.stageBodies).toHaveLength(0);
-    }));
-  it("keeps one frozen payload when concurrent or later callers stage newer material", () =>
-    test(async ({ executor, repo, target, guest }) => {
-      await execute(executor.exchange(target));
-      const results = await Promise.allSettled([
-        execute(executor.stage(target.runId, payload("one"))),
-        execute(executor.stage(target.runId, payload("two"))),
-      ]);
-      expect(results.some((result) => result.status === "fulfilled")).toBe(true);
-      for (const result of results)
-        if (result.status === "rejected")
-          expect(String(result.reason)).toContain("stale-transition");
-      expect(guest.stageBodies.length).toBeGreaterThan(0);
-      expect(new Set(guest.stageBodies).size).toBe(1);
-      const installed = await execute(repo.get(target.runId));
-      expect(installed?.phase).toBe("installed");
-      const deliveries = guest.stageBodies.length;
-      await execute(executor.stage(target.runId, payload("three")));
-      expect(guest.stageBodies).toHaveLength(deliveries);
-      expect(await execute(repo.get(target.runId))).toEqual(installed);
-    }));
-  it("requires a held invocation and correlates the exact parking operation across reply loss", () =>
-    test(async ({ executor, target, guest }) => {
-      await execute(executor.exchange(target));
-      await execute(executor.stage(target.runId, payload()));
-      await execute(
-        executor.permit(target, { resourceReceipt: "e".repeat(64), tunnelReceipt: "f".repeat(64) }),
-      );
-      await execute(executor.start(target.runId));
-      const operationId = randomUUID();
-      await expect(execute(executor.park(target, operationId))).rejects.toThrow("invocation-held");
-      expect(guest.parkingBodies).toEqual([]);
-      await execute(executor.hold(target));
-      guest.parkingLost = true;
-      await expect(execute(executor.park(target, operationId))).rejects.toThrow(
-        "transport-unavailable",
-      );
-      expect(await execute(executor.park(target, operationId))).toEqual({
-        operationId,
-        capsuleHash: "d".repeat(64),
-        archiveHash: "c".repeat(64),
-        contentBytes: 8,
-        storedBytes: 500,
-        entries: 3,
-      });
-      expect(guest.parkingBodies).toHaveLength(2);
-      expect(guest.parkingBodies[0]).toBe(guest.parkingBodies[1]);
-      guest.parkingConflict = true;
-      await expect(execute(executor.park(target, operationId))).rejects.toThrow("invalid-reply");
       await expect(
-        execute(executor.park({ ...target, bootId: randomUUID() }, operationId)),
+        execute(executor.parkingMaterial({ ...target, bootId: randomUUID() })),
       ).rejects.toThrow("target-mismatch");
-      await expect(execute(executor.park(target, "invalid"))).rejects.toThrow("invalid-input");
-      expect(guest.starts).toBe(1);
     }));
 });

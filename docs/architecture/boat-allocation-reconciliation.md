@@ -14,14 +14,14 @@ invents a pin or changes the scope. The future native launch caller must invoke 
 authorized catalog acquisition. Ordinary build/launch registration stays off until isolation, tunnel
 and readiness are executable.
 
-The reservation freezes the source, launch attempt, disk lineage, idempotency key and protected
-guest manifest digest from the installation receipt. The allocator checks the exact saved snapshot
-before atomically recording `issued`. That transition has one winner. Only that caller may send
-create, using a private snapshot-enabled production allocation with no auto-stop or provider
-environment. Reconciliation never sends another create for an issued request, including beyond the
-provider's idempotency window. A crash between recording issuance and sending the request can
-therefore leave a reservation pending indefinitely. This availability limit is deliberate: no empty
-inventory proves that an earlier create cannot still appear.
+The reservation freezes the source, launch attempt, disk lineage, idempotency key and the agent
+manifest digest from the installation receipt (the one every bind request names). The allocator
+checks the exact saved snapshot before atomically recording `issued`. That transition has one
+winner. Only that caller may send create, using a private snapshot-enabled production allocation
+with no auto-stop or provider environment. Reconciliation never sends another create for an issued
+request, including beyond the provider's idempotency window. A crash between recording issuance and
+sending the request can therefore leave a reservation pending indefinitely. This availability limit
+is deliberate: no empty inventory proves that an earlier create cannot still appear.
 
 A lost reply is reconciled through the existing provider client's complete paginated inventory and
 all seven ownership labels. One exact positive match can be adopted. No positive evidence or an
@@ -62,9 +62,9 @@ resetting any durable operation. No network call runs inside a database transact
 
 The existing `BoatApi` owns HTTP and inventory parsing. `BoatAllocationRepo` is necessary because
 neither an ephemeral job claim nor the publication catalog can own a run's issued create and atomic
-runtime projection. `BoatExecution` continues to own bootstrap secrets and invocation state. The
-allocation layer centralizes issuance and positive adoption so callers cannot accidentally turn an
-uncertain result into a new disk.
+runtime projection. `BoatExecution` continues to own the bind exchange's sealed bearer and the
+launch's state. The allocation layer centralizes issuance and positive adoption so callers cannot
+accidentally turn an uncertain result into a new disk.
 
 ## Validation and remaining gates
 

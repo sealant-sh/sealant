@@ -28,7 +28,7 @@ export interface BoatExecutionRepoService {
   readonly get: (
     id: string,
   ) => Effect.Effect<BoatExecutionRecord | undefined, BoatExecutionStoreError>;
-  /** Irreversible fence. Refuses once an invocation may have been issued. Inserts a tombstone if absent. */
+  /** Irreversible fence. Refuses once a launch may have been pushed to the agent. Inserts a tombstone if absent. */
   readonly abort: (target: BoatExecutionTarget) => Effect.Effect<void, BoatExecutionStoreError>;
   readonly reserve: (
     record: BoatExecutionRecord,
@@ -37,7 +37,7 @@ export interface BoatExecutionRepoService {
     previous: BoatExecutionRecord,
     next: BoatExecutionRecord,
   ) => Effect.Effect<BoatExecutionRecord, BoatExecutionStoreError>;
-  /** Freezes current isolation receipts before permit delivery. Changed receipts never replace them. */
+  /** Freezes the isolation receipts before the launch is pushed. Changed receipts never replace them. */
   readonly isolate: (
     previous: BoatExecutionRecord,
     isolation: NonNullable<BoatExecutionRecord["isolation"]>,
@@ -65,8 +65,7 @@ const transitions: Readonly<
   Record<BoatExecutionRecord["phase"], readonly BoatExecutionRecord["phase"][]>
 > = {
   exchange: ["control"],
-  control: ["prepared"],
-  prepared: ["installed"],
+  control: ["installed"],
   installed: ["issued"],
   issued: ["running", "held"],
   running: ["held"],
@@ -192,7 +191,7 @@ const make: Effect.Effect<BoatExecutionRepo["Service"], never, SealantDB> = Effe
       if (
         before !== undefined &&
         (!sameTarget(before.target, target) ||
-          !["exchange", "control", "prepared", "installed", "aborted"].includes(before.phase))
+          !["exchange", "control", "installed", "aborted"].includes(before.phase))
       )
         return yield* Effect.fail(new BoatExecutionStoreError("stale-transition"));
       if (before?.phase === "aborted") return;

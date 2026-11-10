@@ -85,7 +85,7 @@ const parseRequest = (argv) => {
   return request;
 };
 
-/** The bearer under RSA-OAEP (SHA-256) with the exchange as the label, as bootstrap-crypto.mjs. */
+/** The bearer under RSA-OAEP (SHA-256) with the exchange as the label, as Core's `execution.exchange` opens it. */
 const encrypt = (request, key, bearer) => {
   const label = Buffer.from(
     JSON.stringify([

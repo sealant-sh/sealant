@@ -5,16 +5,18 @@ import { BoatApiError } from "./config.js";
 import { boatLaunchDiagnostic, boatLaunchSummary } from "./launch-diagnostics.js";
 
 describe("Boat launch diagnostics", () => {
-  it("preserves the receiver operation, fixed path and redacted body across launch wrappers", () => {
+  it("preserves the agent operation, fixed route, reason and redacted body across launch wrappers", () => {
     const diagnostic = boatLaunchDiagnostic(
       {
         diagnostic: {
-          step: "receiver-request",
+          step: "agent-request",
           errorClass: "BoatExecutionError",
-          provider: { operation: "receiver-status", status: 503, causeClass: null },
-          receiver: {
-            pathClass: "/sealant/bootstrap/status",
-            responseTail: "token=hidden-value receiver-unavailable",
+          code: "agent-refused",
+          provider: { operation: "agent-recover", status: 409, causeClass: null },
+          agent: {
+            pathClass: "/sealant/recover",
+            responseTail: "token=hidden-value recover-new-boot",
+            reason: "recover-new-boot",
           },
         },
       },
@@ -24,9 +26,30 @@ describe("Boat launch diagnostics", () => {
     expect(boatLaunchDiagnostic(new Error("outer", { cause: wrapper }), "readiness")).toEqual(
       diagnostic,
     );
-    expect(wrapper.message).toContain("receiver-status");
-    expect(wrapper.message).toContain("receiver-unavailable");
+    expect(wrapper.message).toContain("agent-recover");
+    expect(wrapper.message).toContain('"reason":"recover-new-boot"');
     expect(wrapper.message).not.toContain("hidden-value");
+  });
+  it("keeps what the agent's health said of the guest, never the daemon's free text", () => {
+    const diagnostic = boatLaunchDiagnostic(
+      {
+        diagnostic: {
+          step: "readiness",
+          errorClass: "BoatExecutionError",
+          code: "guest-failed",
+          guest: { service: "docker", exitCode: 1, reason: "readiness-timeout" },
+          message: "Bearer hidden-value",
+        },
+      },
+      "readiness",
+    );
+    expect(diagnostic).toEqual({
+      step: "readiness",
+      errorClass: "BoatExecutionError",
+      code: "guest-failed",
+      guest: { service: "docker", exitCode: 1, reason: "readiness-timeout" },
+    });
+    expect(boatLaunchSummary(diagnostic)).not.toContain("hidden-value");
   });
   it("bounds and redacts command tails across worker and runtime wrappers", () => {
     const diagnostic = boatLaunchDiagnostic(
@@ -38,15 +61,14 @@ describe("Boat launch diagnostics", () => {
             exitCode: 1,
             timedOut: false,
             stdoutTail: "a".repeat(10000) + " secret=do-not-record-me",
-            stderrTail:
-              "Bearer hidden-value\nhttps://secret.invalid/path\nValueError: guard-refused",
+            stderrTail: "Bearer hidden-value\nhttps://secret.invalid/path\nbind-manifest-mismatch",
           },
         },
       },
       "prepare-launch",
     );
     expect(Buffer.byteLength(diagnostic.command?.stdoutTail ?? "")).toBeLessThanOrEqual(4096);
-    expect(boatLaunchSummary(diagnostic)).toContain("guard-refused");
+    expect(boatLaunchSummary(diagnostic)).toContain("bind-manifest-mismatch");
     for (const forbidden of ["hidden-value", "secret.invalid", "do-not-record-me"])
       expect(boatLaunchSummary(diagnostic)).not.toContain(forbidden);
   });

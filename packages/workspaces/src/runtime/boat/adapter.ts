@@ -20,6 +20,7 @@ import {
   type RuntimeAdapterLaunchHooks,
   type RuntimeLaunchIdentity,
 } from "../launch-retention.js";
+import { SECRET_ENV_FILE_PATH } from "../microvm/agent-contract.js";
 import { bindsEnv } from "../mount-intent.js";
 import { nativeBootEnv } from "../native-boot-env.js";
 import {
@@ -114,21 +115,17 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
         ...nativeBootEnv(input, {
           secretEnvFile: true,
           dotfiles: false,
-          secretEnvFilePath: "/run/sealant-inputs/secret-env",
+          secretEnvFilePath: SECRET_ENV_FILE_PATH,
           stopGraceMs: 60_000,
         }),
       };
-      const payload = Redacted.make({
-        files: [
-          {
-            name: "launch",
-            bytes: Buffer.from(
-              JSON.stringify({ format: "sealant-daemon-launch-v1", boot_env: bootEnv }),
-            ),
-          },
-          { name: "secret-env", bytes: Buffer.from(JSON.stringify(secretEnv)) },
-        ],
+      // What the agent receives in one push: the boot environment, the secret environment it
+      // writes 0600 before `sealantd boot`, and whether the VM's own Docker must be up first.
+      const material = Redacted.make({
+        bootEnv,
+        secretEnv,
         pins: input.admissionPins,
+        docker: input.blueprint.tooling.services?.docker?.enabled === true,
       });
       const deploymentId = this.options.deploymentId;
       step = "prepare-allocation";
@@ -160,7 +157,7 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
       await hooks?.onStarted?.(identity);
       step = "readiness";
       await this.options.runtime.runPromise(
-        Effect.flatMap(BoatReadiness, (ready) => ready.launch(target, payload)),
+        Effect.flatMap(BoatReadiness, (ready) => ready.launch(target, material)),
       );
       step = "control";
       const control = Redacted.value(

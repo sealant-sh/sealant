@@ -1656,6 +1656,8 @@ export const describeDeletionBasis = (basis: ExecutorDeletionBasis): string => {
       return "the owner discarded its unsaved captures";
     case "nothing-to-save":
       return "its recovery boot found nothing to save: it never materialized a capture, so no user code ran on it";
+    case "never-launched":
+      return "its agent recorded no launch on this boot: the daemon never started there, so no user code ran on it";
     case "issued-before":
       return "its removal was issued earlier on evidence that still stands, and the runtime still had it";
   }

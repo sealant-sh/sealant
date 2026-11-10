@@ -8,11 +8,12 @@ import {
   type SealantDB,
 } from "@sealant/db";
 import type { BoatExecutionTarget } from "@sealant/validators";
-import { Context, Effect, Layer, Schedule } from "effect";
+import { Context, Effect, Layer, Redacted, Schedule } from "effect";
 
 import {
   BoatExecution,
   boatExecutionRetryable,
+  type BoatLaunchMaterial,
   type BoatReadyReceipt,
 } from "../runtime/boat/execution.js";
 import {
@@ -23,7 +24,7 @@ import {
 import { boatTargetIsCurrent } from "./boat-current.js";
 import { BoatResources } from "./boat-resources.js";
 
-/** Refusal leaves the original invocation and reservations in custody. No output or secrets escape. */
+/** Refusal leaves the original launch and reservations in custody. No output or secrets escape. */
 export class BoatReadinessError extends Error {
   readonly _tag = "BoatReadinessError";
   constructor(
@@ -35,10 +36,10 @@ export class BoatReadinessError extends Error {
 }
 /** Explicit launch and fresh observation. Neither method publishes readiness or enables runtime registration. */
 export interface BoatReadinessService {
-  /** Stages once, proves isolation, starts the original invocation and observes authenticated health. */
+  /** Seals the launch once, prepares the tunnel, pushes the launch to the agent and observes health. */
   readonly launch: (
     target: BoatExecutionTarget,
-    payload: Parameters<BoatExecution["Service"]["stage"]>[1],
+    material: Redacted.Redacted<BoatLaunchMaterial>,
   ) => Effect.Effect<BoatReadyReceipt, BoatReadinessError>;
   /** Read-only with respect to execution. A previous successful observation never authorizes a new one. */
   readonly observe: (
@@ -49,6 +50,10 @@ export interface BoatReadinessService {
 export class BoatReadiness extends Context.Service<BoatReadiness, BoatReadinessService>()(
   "@sealant/workspaces/boat/BoatReadiness",
 ) {}
+
+/** The launch budget: the VM must boot sealantd and shake hands with the gateway within it. */
+const LAUNCH_BUDGET_MS = 120_000;
+const RETRIES = { times: 20, schedule: Schedule.spaced("1 second"), while: boatExecutionRetryable };
 
 const make: Effect.Effect<
   BoatReadinessService,
@@ -82,40 +87,28 @@ const make: Effect.Effect<
   });
   const launch = Effect.fn("BoatReadiness.launch")(function* (
     target: BoatExecutionTarget,
-    payload: Parameters<BoatReadinessService["launch"]>[1],
+    material: Redacted.Redacted<BoatLaunchMaterial>,
   ) {
     yield* current(target);
-    yield* execution.stage(target.runtimeInstanceId, payload);
+    yield* execution.stage(target.runtimeInstanceId, material);
     yield* current(target);
     const prepared = yield* resources.prepare(target);
     yield* current(target);
-    yield* execution.permit(target, {
+    yield* execution.recordIsolation(target, {
       resourceReceipt: prepared.guest.receipt,
       tunnelReceipt: prepared.gateway.receipt,
     });
     yield* current(target);
-    // Start owns durable issuance and exact adoption. Readiness retries never issue another invocation.
+    // Launch owns durable issuance and exact adoption. Readiness retries never push another launch.
     yield* Effect.gen(function* () {
       yield* current(target);
-      return yield* execution.start(target.runtimeInstanceId);
-    }).pipe(
-      Effect.retry({
-        times: 20,
-        schedule: Schedule.spaced("1 second"),
-        while: boatExecutionRetryable,
-      }),
-    );
-    return yield* observe(target).pipe(
-      Effect.retry({
-        times: 20,
-        schedule: Schedule.spaced("1 second"),
-        while: boatExecutionRetryable,
-      }),
-    );
+      return yield* execution.launch(target.runtimeInstanceId);
+    }).pipe(Effect.retry(RETRIES));
+    return yield* observe(target).pipe(Effect.retry(RETRIES));
   });
   const boundary = <A>(effect: Effect.Effect<A, unknown>): Effect.Effect<A, BoatReadinessError> =>
     effect.pipe(
-      Effect.timeout(120_000),
+      Effect.timeout(LAUNCH_BUDGET_MS),
       Effect.mapError((error) =>
         error instanceof BoatReadinessError
           ? error
@@ -123,7 +116,7 @@ const make: Effect.Effect<
       ),
     );
   return BoatReadiness.of({
-    launch: (target, payload) => boundary(launch(target, payload)),
+    launch: (target, material) => boundary(launch(target, material)),
     observe: (target) => boundary(observe(target)),
   });
 });

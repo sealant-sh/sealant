@@ -3,8 +3,6 @@ import { createHash } from "node:crypto";
 import { nativeRuntimeIdentitySchema } from "@sealant/validators";
 import { z } from "zod";
 
-import assetLock from "../../../boat-image/asset-lock.json" with { type: "json" };
-
 export { nativeRuntimeIdentitySchema } from "@sealant/validators";
 
 import {
@@ -53,36 +51,29 @@ export type NativeResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: NativeBuildError };
 
-/** The relay hash covers the bundled local relay and its dependencies. */
+/** The pinned daemon and its client, both taken from the one released sealantd image. */
 export type NativeRuntimeIdentity = z.infer<typeof nativeRuntimeIdentitySchema>;
 
-/** Only exact next180 bytes and checked platform provenance can construct this bundle. */
+/** Only exact pinned bytes and checked platform provenance can construct this bundle. */
 export class VerifiedRuntimeBundle {
   readonly #daemon: Uint8Array;
-  readonly #socat: Uint8Array;
-  readonly #relay: Uint8Array;
+  readonly #client: Uint8Array;
 
   private constructor(
     readonly identity: NativeRuntimeIdentity,
-    input: {
-      readonly sealantd: Uint8Array;
-      readonly socat: Uint8Array;
-      readonly relay: Uint8Array;
-    },
+    input: { readonly sealantd: Uint8Array; readonly sealantctl: Uint8Array },
   ) {
     Object.freeze(identity);
     this.#daemon = Uint8Array.from(input.sealantd);
-    this.#socat = Uint8Array.from(input.socat);
-    this.#relay = Uint8Array.from(input.relay);
+    this.#client = Uint8Array.from(input.sealantctl);
   }
 
-  /** Verify a guest-extracted or previously supplied bundle against the measured exact pin. */
+  /** Verify a staged or previously supplied bundle against the measured exact pin. */
   static parse(input: {
     readonly sourceIndex: Uint8Array;
     readonly platformManifest: Uint8Array;
     readonly sealantd: Uint8Array;
-    readonly socat: Uint8Array;
-    readonly relay: Uint8Array;
+    readonly sealantctl: Uint8Array;
   }): NativeResult<VerifiedRuntimeBundle> {
     try {
       const index = z
@@ -104,8 +95,7 @@ export class VerifiedRuntimeBundle {
         amd64.length !== 1 ||
         amd64[0]?.digest !== `sha256:${NATIVE_RUNTIME_PIN.manifest}` ||
         sha256(input.sealantd) !== NATIVE_RUNTIME_PIN.sealantd ||
-        sha256(input.socat) !== NATIVE_RUNTIME_PIN.socat ||
-        sha256(input.relay) !== assetLock.relay
+        sha256(input.sealantctl) !== NATIVE_RUNTIME_PIN.sealantctl
       )
         return { ok: false, error: new NativeBuildError("native-runtime-provenance-mismatch") };
       return {
@@ -116,8 +106,7 @@ export class VerifiedRuntimeBundle {
             platform: "linux/amd64",
             manifest: NATIVE_RUNTIME_PIN.manifest,
             sealantd: NATIVE_RUNTIME_PIN.sealantd,
-            socat: NATIVE_RUNTIME_PIN.socat,
-            relay: sha256(input.relay),
+            sealantctl: NATIVE_RUNTIME_PIN.sealantctl,
           },
           input,
         ),
@@ -140,14 +129,9 @@ export class VerifiedRuntimeBundle {
         sha256: this.identity.sealantd,
       },
       {
-        path: "/usr/local/bin/socat",
-        bytes: Uint8Array.from(this.#socat),
-        sha256: this.identity.socat,
-      },
-      {
-        path: "/usr/local/lib/sealant/control-relay.cjs",
-        bytes: Uint8Array.from(this.#relay),
-        sha256: this.identity.relay,
+        path: "/usr/local/bin/sealantctl",
+        bytes: Uint8Array.from(this.#client),
+        sha256: this.identity.sealantctl,
       },
     ];
   }

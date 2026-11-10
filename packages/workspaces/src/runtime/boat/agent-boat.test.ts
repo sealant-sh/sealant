@@ -22,6 +22,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readlink,
   realpath,
   rm,
   stat,
@@ -98,7 +99,8 @@ const FAKE_SEALANTCTL = `#!/bin/sh
 exit 0
 `;
 
-// ip / wg / iptables: one line per invocation (<name> <argv>), and wg's stdin kept apart. The
+// ip / wg / iptables: one line per invocation (<name> <argv>), and wg's key file kept apart (as
+// the real wg, it opens the file named after `private-key` by path; it never reads fd 0). The
 // agent runs these with a bare environment (PATH and LANG only, as the Python guest did), so the
 // log path is baked into each VM's script, and `wg show` answers with whatever the test put in
 // the handshake file.
@@ -107,11 +109,12 @@ name=$(basename "$0")
 printf '%s %s\\n' "$name" "$*" >> ${JSON.stringify(log)}
 if [ "$name" = wg ]; then
   case "$1" in
-    set) cat > ${JSON.stringify(`${log}.wg-stdin`)} ;;
+    set) shift 2; [ "$1" = private-key ] && cat "$2" > ${JSON.stringify(`${log}.wg-key`)} ;;
     show) cat ${JSON.stringify(handshakeFile)} 2>/dev/null ;;
   esac
 fi
 case "$name" in *-restore) cat > ${JSON.stringify(log)}."$name-stdin" ;; esac
+if [ -e ${JSON.stringify(log)}."slow-$name" ]; then sleep 6; fi
 if [ -e ${JSON.stringify(log)}."fail-$name" ]; then exit 1; fi
 exit 0
 `;
@@ -120,6 +123,16 @@ const FAKE_UNSHARE = `#!/bin/sh
 printf '%s\\n' "$*" > "$FAKE_UNSHARE_LOG"
 while [ "$1" != "--" ]; do shift; done
 shift
+exec "$@"
+`;
+
+// systemd-run --scope: its own arguments (up to \`--\`) are recorded, then the command is exec'd
+// in place, as the real one does once the scope is registered.
+const FAKE_SYSTEMD_RUN = `#!/bin/sh
+args=""
+while [ "$1" != "--" ]; do args="$args $1"; shift; done
+shift
+printf '%s\\n' "\${args# }" > "$FAKE_SYSTEMD_RUN_LOG"
 exec "$@"
 `;
 
@@ -185,6 +198,7 @@ interface Vm {
   readonly recordFile: string;
   readonly netLog: string;
   readonly unshareLog: string;
+  readonly systemdRunLog: string;
   readonly syncLog: string;
   readonly resolvConf: string;
   readonly dockerDir: string;
@@ -229,6 +243,7 @@ const createVm = async (): Promise<Vm> => {
     writeExecutable(path.join(bin, "ip6tables"), fakeNetTool(netLog, handshakeFile)),
     writeExecutable(path.join(bin, "ip6tables-restore"), fakeNetTool(netLog, handshakeFile)),
     writeExecutable(path.join(bin, "unshare"), FAKE_UNSHARE),
+    writeExecutable(path.join(bin, "systemd-run"), FAKE_SYSTEMD_RUN),
     writeExecutable(path.join(bin, "sync"), fakeSync(syncLog)),
     writeExecutable(path.join(bin, "systemctl"), FAKE_SYSTEMCTL),
     writeExecutable(path.join(bin, "modprobe"), fakeNetTool(netLog, handshakeFile)),
@@ -257,6 +272,7 @@ const createVm = async (): Promise<Vm> => {
   const socketPath = path.join(dir, "control.sock");
   const recordFile = path.join(dir, "sealantd-record.json");
   const unshareLog = path.join(dir, "unshare.log");
+  const systemdRunLog = path.join(dir, "systemd-run.log");
   const dockerDir = path.join(dir, "docker");
   const vm: Vm = {
     dir,
@@ -269,6 +285,7 @@ const createVm = async (): Promise<Vm> => {
     recordFile,
     netLog,
     unshareLog,
+    systemdRunLog,
     syncLog,
     resolvConf,
     dockerDir,
@@ -289,6 +306,7 @@ const createVm = async (): Promise<Vm> => {
       SEALANT_AGENT_IP6TABLES: path.join(bin, "ip6tables"),
       SEALANT_AGENT_IP6TABLES_RESTORE: path.join(bin, "ip6tables-restore"),
       SEALANT_AGENT_UNSHARE: path.join(bin, "unshare"),
+      SEALANT_AGENT_SYSTEMD_RUN: path.join(bin, "systemd-run"),
       SEALANT_AGENT_SYNC: path.join(bin, "sync"),
       SEALANT_AGENT_SYSTEMCTL: path.join(bin, "systemctl"),
       SEALANT_AGENT_MODPROBE: path.join(bin, "modprobe"),
@@ -309,6 +327,7 @@ const createVm = async (): Promise<Vm> => {
       FAKE_SEALANTD_RECORD: recordFile,
       FAKE_LAUNCH_RECORD: path.join(dataDir, "launch.json"),
       FAKE_UNSHARE_LOG: unshareLog,
+      FAKE_SYSTEMD_RUN_LOG: systemdRunLog,
     },
     bootId: async () => (await readFile(bootIdFile, "utf8")).trim(),
     reboot: async () => {
@@ -818,13 +837,18 @@ describe("boat agent · launch", () => {
     expect((await call(restarted, "GET", AGENT_HEALTH_ROUTE, { bearer })).status).not.toBe(401);
   });
 
-  it("starts sealantd as PID 1 of its own PID namespace through unshare", async () => {
+  it("starts sealantd as PID 1 of its own PID namespace through unshare, in a scope of its own", async () => {
     const vm = await createVm();
     await launched(vm, { SEALANT_AGENT_DAEMON_NAMESPACE: "pid" });
     const record = await readDaemonRecord(vm);
     expect(record.argv).toEqual(["boot"]);
     expect((await readFile(vm.unshareLog, "utf8")).trim()).toBe(
       `--pid --fork --mount-proc --kill-child -- ${path.join(vm.bin, "sealantd")} boot`,
+    );
+    // The namespace runs in a transient scope under its own slice, where an OOM kill takes one
+    // of its processes and never the agent (`OOMPolicy=continue`); the name is fresh per start.
+    expect((await readFile(vm.systemdRunLog, "utf8")).trim()).toMatch(
+      /^--scope --quiet --collect --unit=sealant-workspace-[0-9a-f]{8} --slice=sealant-workspace --property=OOMPolicy=continue$/,
     );
     expect(record.env).not.toHaveProperty("SEALANT_SWEEP_EXEMPT_FILE");
   });
@@ -1167,7 +1191,7 @@ describe("boat agent · network", () => {
     expect(await exists(path.join(vm.dataDir, "network.json"))).toBe(false);
   });
 
-  it("brings up sealant-wg with the key on wg's stdin only, points DNS at the gateway, and replays without mutating", async () => {
+  it("brings up sealant-wg with the key in a tmpfs file wg alone reads, points DNS at the gateway, and replays without mutating", async () => {
     const vm = await createVm();
     const bearer = await bindVm(vm);
     const agent = await startAgent(vm);
@@ -1188,17 +1212,20 @@ describe("boat agent · network", () => {
     });
     const lines = await netLines(vm);
     const wg = BOAT_AGENT_WIREGUARD_INTERFACE;
+    // The key file lives on the agent's tmpfs state directory only while wg runs.
+    const keyFile = path.join(vm.stateDir, "agent", `${wg}.key`);
     expect(lines).toEqual([
       `ip link add ${wg} type wireguard`,
-      `wg set ${wg} private-key /dev/stdin peer ${gatewayKey} endpoint 203.0.113.10:51820 allowed-ips 10.42.7.32/27,${BOAT_AGENT_GATEWAY_ADDRESS}/32 persistent-keepalive 25`,
+      `wg set ${wg} private-key ${keyFile} peer ${gatewayKey} endpoint 203.0.113.10:51820 allowed-ips 10.42.7.32/27,${BOAT_AGENT_GATEWAY_ADDRESS}/32 persistent-keepalive 25`,
       `ip address add ${BOAT_AGENT_CLIENT_ADDRESS}/32 dev ${wg}`,
       `ip link set ${wg} mtu 1380`,
       `ip link set ${wg} up`,
       `ip route add 10.42.7.32/27 dev ${wg}`,
       `ip route add ${BOAT_AGENT_GATEWAY_ADDRESS}/32 dev ${wg}`,
     ]);
-    expect(await readFile(`${vm.netLog}.wg-stdin`, "utf8")).toBe(`${privateKey}\n`);
-    // The private key is on wg's stdin and nowhere else: not in any argv, record or console line.
+    expect(await readFile(`${vm.netLog}.wg-key`, "utf8")).toBe(`${privateKey}\n`);
+    expect(await exists(keyFile)).toBe(false);
+    // The private key reached wg's file and nowhere else: not in any argv, record or console line.
     expect(lines.join("\n")).not.toContain(privateKey);
     expect(recordBytes.toString("utf8")).not.toContain(privateKey);
     expect(agent.output()).not.toContain(privateKey);
@@ -1247,6 +1274,63 @@ describe("boat agent · network", () => {
     expect(await call(restarted, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).toEqual(
       configured,
     );
+  });
+
+  it("puts the VM's own resolver back at start on a boot without the tunnel, and keeps the gateway's on the boot that has it", async () => {
+    // The stock image: resolv.conf is systemd-resolved's stub symlink.
+    const vm = await createVm();
+    const stub = path.join(vm.dir, "etc", "stub-resolv.conf");
+    const bearer = await bindVm(vm);
+    const agent = await startAgent(vm);
+    const body = networkBody();
+    expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
+      200,
+    );
+    expect(await readFile(vm.resolvConf, "utf8")).toContain(BOAT_AGENT_GATEWAY_ADDRESS);
+    // The same boot again (an agent restart): the tunnel is still there, so is its resolver.
+    await stopAgent(agent);
+    const sameBoot = await startAgent(vm);
+    expect((await lstat(vm.resolvConf)).isSymbolicLink()).toBe(false);
+    expect(await readFile(vm.resolvConf, "utf8")).toContain(BOAT_AGENT_GATEWAY_ADDRESS);
+    expect(await exists(path.join(vm.dataDir, "resolv.conf.orig"))).toBe(true);
+    // Rebooted (or restored from a saved snapshot): no tunnel on this boot, the stub is back
+    // exactly as it was (the symlink, not a copy of its bytes), and the kept copy is gone.
+    await stopAgent(sameBoot);
+    await vm.reboot();
+    const rebooted = await startAgent(vm);
+    expect((await lstat(vm.resolvConf)).isSymbolicLink()).toBe(true);
+    expect(await readlink(vm.resolvConf)).toBe(stub);
+    expect(await readFile(vm.resolvConf, "utf8")).toBe("nameserver 127.0.0.53\n");
+    expect(await exists(path.join(vm.dataDir, "resolv.conf.orig"))).toBe(false);
+    expect(rebooted.output()).toContain("the VM's own resolver is back");
+    // A new bind and network on this boot keep the stub afresh and replace it again.
+    const rebound = await bindVm(vm, "op-2");
+    expect(
+      (await call(rebooted, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer: rebound })).status,
+    ).toBe(200);
+    expect(JSON.parse(await readFile(path.join(vm.dataDir, "resolv.conf.orig"), "utf8"))).toEqual({
+      symlink: stub,
+      contentBase64: Buffer.from("nameserver 127.0.0.53\n").toString("base64"),
+    });
+
+    // An image whose resolv.conf is a plain file gets its bytes back.
+    const plain = await createVm();
+    await rm(plain.resolvConf);
+    await writeFile(plain.resolvConf, "nameserver 10.0.0.2\nsearch corp.example\n");
+    const plainBearer = await bindVm(plain);
+    const plainAgent = await startAgent(plain);
+    expect(
+      (await call(plainAgent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer: plainBearer }))
+        .status,
+    ).toBe(200);
+    await stopAgent(plainAgent);
+    await plain.reboot();
+    await startAgent(plain);
+    expect((await lstat(plain.resolvConf)).isSymbolicLink()).toBe(false);
+    expect(await readFile(plain.resolvConf, "utf8")).toBe(
+      "nameserver 10.0.0.2\nsearch corp.example\n",
+    );
+    expect(await exists(path.join(plain.dataDir, "resolv.conf.orig"))).toBe(false);
   });
 
   it("reports the handshake and the gateway's DNS over UDP and TCP", async () => {
@@ -1412,6 +1496,27 @@ describe("boat agent · network", () => {
       expect(lines).toContain("ip6tables -C FORWARD -j DOCKER-USER");
       // Nothing is applied rule by rule any more.
       expect(lines.some((line) => line.startsWith("iptables -A"))).toBe(false);
+    },
+  );
+
+  it(
+    "keeps an applied policy applied while Core's replay of the same network re-applies it",
+    { timeout: 20_000 },
+    async () => {
+      const vm = await createVm();
+      const { agent, bearer } = await dockerLaunched(vm);
+      const body = networkBody();
+      expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
+        200,
+      );
+      await waitFor(async () => (await policyStatus(agent, bearer)) === "applied");
+      // Core replays the same config right before it reads the state; the re-apply is in flight
+      // (held longer than the read, DNS probe included) when the read lands. The chains never lapse, so: applied.
+      await writeFile(`${vm.netLog}.slow-iptables-restore`, "");
+      expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
+        200,
+      );
+      expect(await policyStatus(agent, bearer)).toBe("applied");
     },
   );
 

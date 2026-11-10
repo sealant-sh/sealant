@@ -274,8 +274,8 @@ export interface CapturePreservationStore {
     operationId: string,
     readiness: {
       readonly runtimeId: string;
-      readonly invocation: string;
-      readonly permitReceipt: string;
+      readonly bootId: string;
+      readonly isolationReceipt: string;
     },
   ) => Effect.Effect<void, CapturePreservationError>;
   readonly resolveExecution: (
@@ -2055,7 +2055,7 @@ export const makeCapturePreservationStore = (
         db.transaction(() =>
           Effect.gen(function* () {
             const ready = yield* parse(
-              Schema.Struct({ runtimeId: nonempty, invocation: nonempty, permitReceipt: digest }),
+              Schema.Struct({ runtimeId: nonempty, bootId: uuid, isolationReceipt: digest }),
               readiness,
               "recovery-ready",
               "invalid-input",
@@ -2256,7 +2256,9 @@ export const makeCapturePreservationStore = (
               artifactId = randomUUID(),
               saveId = randomUUID(),
               scopeId = randomUUID();
-            const capsulePath = `/var/lib/sealant/guest/capsules/${close.id}/capsule.pack`;
+            // The park receipt the agent wrote on the closed disk (`boat-host.mjs`): the one file the
+            // saved snapshot must carry byte for byte before the source VM is removed.
+            const capsulePath = `/var/lib/sealant/agent/park-${close.id}.json`;
             yield* db
               .insert(operations)
               .values({

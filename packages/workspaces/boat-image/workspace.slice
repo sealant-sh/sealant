@@ -1,8 +1,0 @@
-[Unit]
-Description=Sealant workspace resource boundary
-
-[Slice]
-MemoryMax=2147483648
-MemorySwapMax=0
-CPUQuota=100%
-TasksMax=512

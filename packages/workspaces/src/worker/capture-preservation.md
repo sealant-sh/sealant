@@ -1,10 +1,11 @@
 # Automatic Boat parking
 
 The canonical capture ledger now executes parking and resume. A retained, idle capture session keeps
-its original VM during a frozen retention delay, then transfers custody to a named personal saved
-snapshot before positively deleting that VM. Resume allocates a fresh child, restores the capsule,
-and starts the pinned daemon against its original capture staging. It preserves unsent work and does
-not replay setup, startup, dotfiles or the original harness.
+its original VM during a frozen retention delay, then closes the workspace on it (the guest agent's
+park), transfers custody to a named personal saved snapshot of that VM's disk and positively deletes
+the VM. Resume allocates a fresh child from the snapshot, binds it on its new boot, and pushes a
+launch that starts the pinned daemon on the kept disk against its original capture staging. It
+preserves unsent work and does not replay setup, startup, dotfiles or the original harness.
 
 Boat remains unregistered. Ordinary admission stays off. These local proofs do not satisfy the
 required live preview proof of readiness, automatic parking, positive deletion and resume.
@@ -25,18 +26,17 @@ stopped-workspace no-op. The legacy recovery sweep excludes enrolled roots.
 ## Custody transfer
 
 An authenticated FINAL observation must settle before a close can issue. An unanswered or active
-FINAL remains a fence. The receiver records the exact source binding and close UUID before closing
-all normal and capture-recovery start paths. A namespace holder survives daemon exit. The outer
-receiver pins that holder, freezes the complete writer cgroup, exports volatile mounts, verifies the
-durable capsule, kills the cgroup and proves it empty. Plain `sync` runs before provider stop as
-hygiene; the earlier durability investigation found no user-work loss that it needs to fix.
+FINAL remains a fence. The close is the guest agent's park (`POST /sealant/park`, one operation id,
+`docs/architecture/boat-guest-agent.md`): from its first attempt no launch or recovery is accepted
+on that boot. It kills sealantd's PID namespace (the daemon and every process it started die with
+their init), stops the guest Docker service and proves nothing of Docker still runs (its engine's
+and containers' cgroups are emptied, else no receipt and a retryable refusal), runs `sync`, and
+writes the receipt the saved snapshot must carry. The same operation again answers the same receipt.
+The earlier durability investigation found no user-work loss that `sync` needs to fix.
 
-The capsule uses no-follow, descriptor-relative traversal and records ownership, modes, xattrs,
-hardlinks, timestamps, directories, regular files, symlinks and FIFOs. Sockets are recorded but not
-recreated. Unsupported devices and external hardlinks refuse. Limits are 16 GiB, 200000 entries and
-a 60-second guest operation deadline. A failed export retains its source and never authorizes source
-deletion. Hydrated mounts remain included in subsequent parking even though their backing filesystem
-is now persistent.
+The saved snapshot is the VM's disk as the park left it; Core exports no capsule of its own. What
+the custody ledger records of it is the park receipt (its path, SHA-256 and size), and the saved
+snapshot is verified to hold exactly that file before the source VM is deleted.
 
 The worker records a unique save intent before sending it once. It verifies the personal-wallet
 inventory, the exact ready artifact identity, and the bounded raw capsule file stream by immutable
@@ -51,10 +51,11 @@ acknowledged exact deletion, so absence alone does not release an artifact or pi
 ## Resume and current identity
 
 A recovery intent reserves the child runtime, guest binding, allocation key and artifact consumer.
-The child must be hydrated with automatic stop disabled. A provider-authenticated public command
-verifies the closed source capsule, hydrates private backing directories and replaces the old
-receiver and invocation identities. It leaves admission held. The worker then establishes fresh
-exchange keys, isolation, tunnel, invocation ownership and authenticated readiness.
+The child must be hydrated with automatic stop disabled. The disk was parked on its last boot, so
+the bind exchange on the child's new boot binds it once more, as this new instance of the same
+deployment; the binding receipt is the rebind's durable identity. Admission stays held. The worker
+then establishes fresh exchange keys, isolation, tunnel, launch ownership and authenticated
+readiness.
 
 The launch retains its capture launch ID and worktree ID. It preserves the original sealed inputs
 until canonical terminal release. The worker waits at least 31 seconds after positive writer
@@ -85,10 +86,11 @@ hydration must be confirmed in the live proof before admission.
 
 This layer introduces no Boat calls during local verification. The PostgreSQL/HTTP fixture proves
 durable ordering, lost replies, stale claims, repeated parking and descendant retirement. It does
-not prove Boat's deletion or snapshot semantics. The real kernel proof proves freeze/export/kill,
-namespace retention, tmpfs loss and hydration. The real pinned daemon proof proves staging transfer
-and unchanged unsent bytes on copied disk with no hook replay. These proofs are deliberately
-separate from a provider end-to-end claim.
+not prove Boat's deletion or snapshot semantics. The agent's tests (`agent-boat.test.ts`) prove the
+park closes the boot, kills the daemon's namespace, proves Docker stopped and writes one receipt per
+operation. The real pinned daemon proof (`parking-daemon.e2e.ts`) proves staging transfer and
+unchanged unsent bytes on copied disk with no hook replay. These proofs are deliberately separate
+from a provider end-to-end claim.
 
 ## Reproduction
 
@@ -99,13 +101,11 @@ Apply migrations to an owned PostgreSQL 17 database before testing. With its URL
 pnpm --filter @sealant/workspaces exec vitest run \
   src/runtime/boat/allocation.db.test.ts src/runtime/boat/execution.db.test.ts \
   src/runtime/boat/api.test.ts src/worker/capture-preservation.db.test.ts \
-  src/worker/capture-drain-ledger.db.test.ts
-unshare -Urm env PYTHONPATH=packages/workspaces/boat-image \
-  python3 -B -m unittest discover -s packages/workspaces/boat-image -p 'test_*.py'
+  src/worker/capture-drain-ledger.db.test.ts src/runtime/boat/agent-boat.test.ts
 ```
 
-The Docker CI job runs the real encrypted network proof and its parking kernel tests without skips.
-`parking-daemon.e2e.ts` requires the exact pinned `SEALANTD_BIN` or `SEALANT_BOAT_RUNTIME_BUNDLE`.
-`assets.test.ts` exercises packaging with the latter variable set, including a checker run with
-source files unavailable. CI also runs forced typecheck and lint through the standard monorepo
-tasks.
+The Docker CI job runs the real encrypted network proof and the pinned daemon's parking proof
+without skips. `parking-daemon.e2e.ts` requires the exact pinned `SEALANTD_BIN` or
+`SEALANT_BOAT_RUNTIME_BUNDLE`. `assets.test.ts` exercises packaging with the latter variable set,
+including a checker run with source files unavailable. CI also runs forced typecheck and lint
+through the standard monorepo tasks.

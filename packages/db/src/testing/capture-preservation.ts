@@ -98,8 +98,7 @@ export const seedParkingSource = (db: DB, runId: string, retainedAt?: Date) =>
       platform: "linux/amd64",
       manifest: hash,
       sealantd: hash,
-      socat: hash,
-      relay: hash,
+      sealantctl: hash,
     };
     const publication = nativePublicationSchema.parse({
       kind: "boat-native",

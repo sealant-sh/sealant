@@ -1,0 +1,26 @@
+[Unit]
+Description=Sealant guest agent (Boat host mode)
+Documentation=https://github.com/sealant-sh/sealant/blob/main/docs/architecture/boat-guest-agent.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/install -d -m0700 /run/sealant
+ExecStart=/opt/sealant/node /opt/sealant/agent.mjs
+Environment=SEALANT_AGENT_HOST=boat
+Environment=SEALANT_CONTROL_SOCKET=/run/sealant/control.sock
+Environment=SEALANT_MICROVM_AGENT_PORT=8080
+Environment=SEALANT_MICROVM_AGENT_STATE_DIR=/run/sealant
+Environment=SEALANT_MICROVM_SEALANTD=/usr/local/bin/sealantd
+Environment=SEALANT_MICROVM_SEALANTCTL=/usr/local/bin/sealantctl
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Restart=no
+KillMode=control-group
+# One process OOM-killed in the unit's cgroup must not stop the unit (the agent, sealantd and the
+# harness with it); the agent reports the exit it sees. sealantd itself runs in a scope of its own.
+OOMPolicy=continue
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

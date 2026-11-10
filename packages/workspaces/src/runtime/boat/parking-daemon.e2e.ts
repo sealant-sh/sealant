@@ -16,7 +16,6 @@ import { promisify } from "node:util";
 
 import { Effect, Redacted } from "effect";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { z } from "zod";
 
 import { docker } from "../../sealantd/boot.js";
 import { SealantRuntime, SealantRuntimeControlLive } from "../../sealantd/runtime.js";
@@ -109,7 +108,7 @@ it("the pinned daemon continues copied staging with a fresh epoch and unchanged 
       "--mount",
       `type=bind,src=${binary},dst=/usr/local/bin/sealantd,readonly`,
       "--mount",
-      `type=bind,src=${secretFile},dst=/run/sealant-inputs/secret-env,readonly`,
+      `type=bind,src=${secretFile},dst=${environment.SEALANT_SECRET_ENV_FILE ?? "/run/sealant-inputs/secret-env"},readonly`,
       "--mount",
       `type=bind,src=${directory},dst=/workspace`,
       ...Object.entries(environment).flatMap(([key, value]) => ["-e", `${key}=${value}`]),
@@ -188,15 +187,18 @@ it("the pinned daemon continues copied staging with a fresh epoch and unchanged 
     channel.state.epoch = 2;
     const wire = await Effect.runPromise(
       parkingResumeLaunch(
-        Redacted.make(
-          Buffer.from(JSON.stringify({ format: "sealant-daemon-launch-v1", boot_env: env })),
-        ),
+        Redacted.make(env),
         Redacted.make({ endpoint: channel.endpoint, token, worktreeId, launchId }),
       ),
     );
-    const value: unknown = JSON.parse(Buffer.from(Redacted.value(wire).launch).toString("utf8"));
-    const parsed = z.object({ boot_env: z.record(z.string(), z.string()) }).parse(value);
-    const second = await boot(restored, parsed.boot_env, Redacted.value(wire).secretEnv);
+    // The boot env the resume pushes to the agent (`parkingResumeLaunch`), with the capture token
+    // in the secret env file where that env names it.
+    const resumedEnv = Redacted.value(wire);
+    const second = await boot(
+      restored,
+      resumedEnv,
+      Buffer.from(JSON.stringify({ SEALANT_CAPTURE_TOKEN: token })),
+    );
     expect(await docker(["exec", second, "cat", "/workspace/repo/work"])).toBe("unsent-user-edit");
     expect(await docker(["exec", second, "cat", "/workspace/repo/never-uploaded"])).toBe("private");
     expect(await docker(["exec", second, "cat", "/workspace/setup-count"])).toBe("setup");

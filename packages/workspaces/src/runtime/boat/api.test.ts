@@ -356,7 +356,7 @@ describe("immutable recovery-pack verification", () => {
   const bytes = Buffer.from("synthetic recovery pack bytes");
   const expected = {
     snapshotId: "snapshot_immutable",
-    path: `/var/lib/sealant/guest/capsules/${marker}/capsule.pack`,
+    path: `/var/lib/sealant/agent/park-${marker}.json`,
     bytes: bytes.length,
     sha256: createHash("sha256").update(bytes).digest("hex"),
   };
@@ -893,8 +893,7 @@ describe("Boat API boundary", () => {
               platform: "linux/amd64",
               manifest: NATIVE_RUNTIME_PIN.manifest,
               sealantd: NATIVE_RUNTIME_PIN.sealantd,
-              socat: NATIVE_RUNTIME_PIN.socat,
-              relay: "c".repeat(64),
+              sealantctl: NATIVE_RUNTIME_PIN.sealantctl,
             },
           },
         },

@@ -1,21 +1,8 @@
 import { randomUUID } from "node:crypto";
 
+import { workspacePublicationSchema as publicPublicationSchema } from "@sealant/api-contracts";
+import { sha256Hex, type CredentialCipherService } from "@sealant/credentials";
 import {
-  ResourceInstanceKey,
-  ResourceWorktreeKey,
-  workspacePublicationSchema as publicPublicationSchema,
-} from "@sealant/api-contracts";
-import {
-  CredentialCipher,
-  credentialCipherLayer,
-  sha256Hex,
-  type CredentialCipherService,
-} from "@sealant/credentials";
-import {
-  BoatTunnelRepo,
-  ResourceInstanceRepo,
-  ResourceInstanceRepoLive,
-  WorkspaceCaptureDrainRepo,
   ConnectedAccountRepo,
   ConnectedAccountRepoLive,
   WorkspaceCaptureDrainRepoLive,
@@ -50,7 +37,7 @@ import {
   type NativePublicationKey,
   type NativePublication,
 } from "@sealant/validators";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { resolveWorkspacePublication, resolveWorkspacePublishedImage } from "../api/workspace.js";
@@ -65,15 +52,10 @@ import { BoatImageInspection, boatImageInspectionLayer } from "../images/boat/in
 import { boatProofConfigSchema } from "../operator/boat-live-check.js";
 import { makeBoatProofCore } from "../operator/boat-proof-core.js";
 import type { RegistryClient } from "../registry/client.js";
-import { postgresSpec } from "../resources/resource.fixture.js";
-import { BoatRuntimeAdapter, BoatAdapterError } from "../runtime/boat/adapter.js";
+import { BoatAdapterError } from "../runtime/boat/adapter.js";
 import { BoatApiError } from "../runtime/boat/config.js";
 import { BoatExecutionError } from "../runtime/boat/execution.js";
-import { BoatFinalClose } from "../runtime/boat/final-close.js";
 import { boatLaunchDiagnostic } from "../runtime/boat/launch-diagnostics.js";
-import { boatSessionDaemon } from "../runtime/boat/session-daemon.fixture.js";
-import { boatSessionFixture } from "../runtime/boat/session.fixture.js";
-import { startCaptureChannel } from "../runtime/capture-channel.fixture.js";
 import { LaunchRetainedError } from "../runtime/launch-retention.js";
 import type { RuntimeAdapter, RuntimeLaunch } from "../runtime/runtime-adapter.js";
 import { BoatResourcesError } from "./boat-resources.js";
@@ -104,7 +86,6 @@ const setup = async (
   waitBeforeBuild?: () => Promise<void>,
   url: string = databaseUrl ?? "",
   mode: Parameters<typeof nativeBuilderFixture>[0] = "normal",
-  daemon?: Awaited<ReturnType<typeof boatSessionDaemon>>,
 ) => {
   const db = await createSealantDB(url);
   const owner = `usr_stage2b_${randomUUID()}`;
@@ -162,7 +143,6 @@ const setup = async (
     ...fixture.spec,
     target: { ...fixture.spec.target, runtime: { family: "boat", mode: "require" } },
   });
-  const session = daemon === undefined ? undefined : await boatSessionFixture(db, owner, daemon);
   const launches: NativePublication[] = [];
   const launchInputs: RuntimeLaunch<NativePublication>[] = [];
   const adapter: RuntimeAdapter<NativePublication> = {
@@ -218,9 +198,7 @@ const setup = async (
     jobId: id,
     workerId: "stage2b",
     leaseDurationMs: 300,
-    runtimes: [
-      { kind: "boat-native" as const, artifacts: catalog, adapter: session?.adapter ?? adapter },
-    ],
+    runtimes: [{ kind: "boat-native" as const, artifacts: catalog, adapter }],
     defaultRuntimeAdapterId: "boat" as const,
     registryClient: registry,
     launchMaterialStager: {
@@ -238,7 +216,6 @@ const setup = async (
     ...repos,
     spec,
     launches,
-    session,
     launchInputs,
     enqueue,
     options,
@@ -248,253 +225,6 @@ const setup = async (
 const noop = async () => {};
 
 describe.skipIf(!enabled)("native publication worker and persistence (disposable Postgres)", () => {
-  it("builds, readies with a person-stopped resource, shells, FINAL closes and resumes through the real worker", async () => {
-    const bundle = process.env.SEALANT_BOAT_RUNTIME_BUNDLE;
-    if (bundle === undefined) throw new Error("exact runtime bundle required");
-    const daemon = await boatSessionDaemon(bundle);
-    const channel = await startCaptureChannel({ token: "local-capture-only", worktreeId: "wt_1" });
-    try {
-      await withWorkspaceJobTestDatabase(databaseUrl ?? "", async (url) => {
-        const s = await setup(undefined, undefined, url, "normal", daemon);
-        const session = s.session;
-        if (session === undefined) throw new Error("missing session fixture");
-        try {
-          const workspaceId = randomUUID();
-          await Effect.runPromise(
-            s.workspaces.createWorkspace({
-              id: workspaceId,
-              name: "Boat chain",
-              ownerUserId: s.owner,
-            }),
-          );
-          const resourceDomainId = `rdm:${randomUUID()}`;
-          const resourceReason = { kind: "person", by: "boat-check" } as const;
-          const resourceStatus = () =>
-            Effect.gen(function* () {
-              const repo = yield* ResourceInstanceRepo;
-              return yield* repo.get(resourceDomainId, ResourceInstanceKey.make("db"));
-            }).pipe(
-              Effect.provide(ResourceInstanceRepoLive),
-              Effect.provideService(SealantDB, s.db),
-            );
-          await Effect.runPromise(
-            Effect.gen(function* () {
-              yield* seedImageScope(s.db, resourceDomainId, s.owner);
-              const repo = yield* ResourceInstanceRepo;
-              const outcome = yield* repo.up({
-                resourceDomainId,
-                key: ResourceInstanceKey.make("db"),
-                spec: postgresSpec(),
-                cause: "use",
-              });
-              if (outcome.kind !== "upserted") throw new Error("resource missing");
-              yield* repo.setDesired(outcome.instance.id, { kind: "stop", reason: resourceReason });
-              yield* repo.recordObserved(outcome.instance.id, {
-                kind: "stopped",
-                at: "2026-11-08T02:15:00Z",
-                reason: resourceReason,
-              });
-              yield* repo.link({
-                workspaceId,
-                resourceDomainId,
-                worktreeKey: ResourceWorktreeKey.make("wt_1"),
-                aliases: null,
-              });
-            }).pipe(
-              Effect.provide(ResourceInstanceRepoLive),
-              Effect.provideService(SealantDB, s.db),
-            ),
-          );
-          const cipher = await Effect.runPromise(
-            credentialCipherLayer({ key: Buffer.alloc(32, 7).toString("base64") }).pipe(
-              Layer.build,
-              Effect.map((ctx) => Context.get(ctx, CredentialCipher)),
-              Effect.scoped,
-            ),
-          );
-          const spec = newWorkspaceSchema.parse({
-            ...s.spec,
-            sources: {
-              ...s.spec.sources,
-              workspace: {
-                kind: "capture",
-                endpoint: channel.endpoint,
-                worktreeId: "wt_1",
-                harnessHome: "/workspace/harness-home",
-              },
-            },
-            customization: { ...s.spec.customization, applyDotfiles: false },
-            lifecycle: {
-              setup: [],
-              startup: {
-                steps: [],
-                foreground: { kind: "command", run: "sleep infinity", shell: "bash" },
-              },
-            },
-          });
-          const launch = async () => {
-            const sealed = await Effect.runPromise(
-              cipher.encrypt(JSON.stringify({ SEALANT_CAPTURE_TOKEN: "local-capture-only" })),
-            );
-            const job = await s.enqueue(undefined, undefined, {
-              spec,
-              secretEnvSealed: sealed.sealed,
-            });
-            await Effect.runPromise(
-              s.workspaces.linkWorkspaceAttempt({ workspaceId, attemptId: job.runId }),
-            );
-            channel.state.executor = job.runId;
-            try {
-              await processWorkspaceBuildJob({
-                ...s.options(job.id),
-                credentialCipher: cipher,
-                launchMaterialStager: {
-                  ...s.options(job.id).launchMaterialStager,
-                  stage: async () => ({
-                    secretEnv: { SEALANT_CAPTURE_TOKEN: "local-capture-only" },
-                  }),
-                },
-              });
-            } catch (error) {
-              expect(session.failures).toEqual([]);
-              throw error;
-            }
-            const instance = await Effect.runPromise(
-              s.instances.getRuntimeInstanceByRunId(job.runId),
-            );
-            expect(instance).toMatchObject({
-              adapter: "boat",
-              status: "ready",
-              sourceKind: "capture",
-              launchOwner: null,
-            });
-            expect(instance?.resourceId).toMatch(/^bx_/);
-            expect(await Effect.runPromise(resourceStatus())).toMatchObject({
-              desired: "stopped",
-              stopReason: resourceReason,
-              observed: { kind: "stopped", reason: resourceReason },
-            });
-            expect(session.gateway.requests.at(-1)?.instances).toEqual([]);
-            return { job, instance };
-          };
-          const stop = async (runId: string, sandboxId: string) => {
-            await Effect.runPromise(s.instances.markStopRequested({ runId, stopReason: "user" }));
-            try {
-              expect(
-                await session.adapter.stop({ resourceId: sandboxId, reference: runId }),
-              ).toMatchObject({ outcome: "stopped" });
-            } catch (error) {
-              if (!(error instanceof BoatAdapterError) || error.code !== "close-pending")
-                throw error;
-              // FINAL may first answer "sealing". The ordinary worker resumes that same close.
-              for (let tick = 0; tick < 100; tick++) {
-                const observed = await session.runtime.runPromise(
-                  Effect.flatMap(BoatFinalClose, (owner) => owner.reconcile({ limit: 20 })),
-                );
-                if (
-                  observed.entries.some(
-                    (entry) => entry.runId === runId && entry.outcome === "closed",
-                  )
-                )
-                  break;
-                if (tick === 99)
-                  throw new Error(`FINAL did not complete: ${JSON.stringify(observed)}`, {
-                    cause: error,
-                  });
-                await new Promise<void>((resolve) => setTimeout(resolve, 25));
-              }
-            }
-            expect(
-              await Effect.runPromise(s.instances.getRuntimeInstanceByRunId(runId)),
-            ).toMatchObject({ status: "stopped", removedAt: expect.any(Date) });
-            expect(
-              await session.runtime.runPromise(
-                Effect.flatMap(BoatTunnelRepo, (repo) => repo.get(runId)),
-              ),
-            ).toMatchObject({ released: true, removal: { completed: true } });
-            expect(
-              await session.runtime.runPromise(
-                Effect.flatMap(WorkspaceCaptureDrainRepo, (repo) => repo.getByRunId(runId)),
-              ),
-            ).toMatchObject({ deletionState: "deleted" });
-            expect((await Effect.runPromise(nativeConsumerRows(s.db, runId)))[0]?.state).toBe(
-              "released",
-            );
-          };
-          // Match run 5's leftover: a real failed launch, ready publication and pending pin,
-          // with no allocation. A different consumer must still reuse that publication.
-          const failedSecret = await Effect.runPromise(
-            cipher.encrypt(JSON.stringify({ SEALANT_CAPTURE_TOKEN: "local-capture-only" })),
-          );
-          const failed = await s.enqueue(undefined, undefined, {
-            spec,
-            secretEnvSealed: failedSecret.sealed,
-          });
-          await Effect.runPromise(
-            s.workspaces.linkWorkspaceAttempt({ workspaceId, attemptId: failed.runId }),
-          );
-          await expect(
-            processWorkspaceBuildJob({
-              ...s.options(failed.id),
-              credentialCipher: cipher,
-              runtimes: [
-                {
-                  kind: "boat-native",
-                  artifacts: s.catalog,
-                  adapter: new BoatRuntimeAdapter({
-                    deploymentId: s.owner,
-                    ownerIds: [],
-                    runtime: session.runtime,
-                  }),
-                },
-              ],
-            }),
-          ).rejects.toMatchObject({ cause: { code: "admission-refused" } });
-          const failedPin = (await Effect.runPromise(nativeConsumerRows(s.db, failed.runId)))[0];
-          expect(failedPin?.state).toBe("pending");
-          expect(session.provider).toBeUndefined();
-          const first = await launch();
-          expect(first.instance?.publicationId).toBe(failedPin?.publicationId);
-          expect(s.fixture.posts()).toBe(1);
-          if (first.instance?.resourceId == null) throw new Error("missing first VM");
-          expect(session.provider?.creates).toHaveLength(1);
-          expect(
-            await session.shell(
-              first.job.runId,
-              "printf intact > /workspace/repo/user-edit; cat /workspace/repo/user-edit",
-            ),
-          ).toEqual({ exitCode: 0, stdout: "intact" });
-          await stop(first.job.runId, first.instance.resourceId);
-          expect(channel.state.head).toBeDefined();
-          channel.state.epoch++;
-          const resumed = await launch();
-          expect(resumed.instance?.publicationId).toBe(first.instance.publicationId);
-          expect(resumed.instance?.resourceId).not.toBe(first.instance.resourceId);
-          expect(await session.shell(resumed.job.runId, "cat /workspace/repo/user-edit")).toEqual({
-            exitCode: 0,
-            stdout: "intact",
-          });
-          if (resumed.instance?.resourceId == null) throw new Error("missing resumed VM");
-          await stop(resumed.job.runId, resumed.instance.resourceId);
-          expect(daemon.boots).toHaveLength(2);
-          expect(new Set(session.guest.targets.map((target) => target.bootId)).size).toBe(2);
-          expect((await Effect.runPromise(nativeConsumerRows(s.db, failed.runId)))[0]?.state).toBe(
-            "pending",
-          );
-          expect(session.provider?.creates).toHaveLength(2);
-          expect(session.provider?.deleteCalls).toBe(2);
-          expect(session.gateway.removeCalls).toBe(2);
-          expect(channel.state.errors).toEqual([]);
-          expect(session.failures).toEqual([]);
-        } finally {
-          await session.dispose();
-        }
-      });
-    } finally {
-      await channel.close();
-      await daemon.dispose();
-    }
-  }, 120_000);
   it("accounts only for ready owned publication snapshots with the provider's exact immutable identity", async () => {
     await withWorkspaceJobTestDatabase(databaseUrl ?? "", async (url) => {
       const s = await setup(undefined, undefined, url);
@@ -975,7 +705,7 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
     expect(s.fixture.mutations).toEqual([]);
   });
 
-  it.each(["provider", "command", "receiver", "resources"])(
+  it.each(["provider", "command", "agent", "resources"])(
     "keeps exact publication identity and its pin after an uncertain allocated launch: %s",
     async (failure) => {
       const s = await setup();
@@ -1006,14 +736,14 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
                           "Bearer private-launch-credential\nValueError: outer-owner-required",
                       },
                     })
-                  : failure === "receiver"
-                    ? new BoatExecutionError("transport-unavailable", {
-                        step: "receiver-request",
+                  : failure === "agent"
+                    ? new BoatExecutionError("agent-not-ready", {
+                        step: "agent-request",
                         errorClass: "BoatExecutionError",
-                        provider: { operation: "receiver-status", status: 503, causeClass: null },
-                        receiver: {
-                          pathClass: "/sealant/bootstrap/status",
-                          responseTail: "token=private-launch-credential receiver-unavailable",
+                        provider: { operation: "agent-health", status: 503, causeClass: null },
+                        agent: {
+                          pathClass: "/sealant/health",
+                          responseTail: "token=private-launch-credential agent-unavailable",
                         },
                       })
                     : failure === "resources"
@@ -1054,8 +784,8 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
           ? /read-boot-id.*BoatApiError.*execute.*503.*UND_ERR_SOCKET/
           : failure === "command"
             ? /bind-exchange.*BoatExecutionError.*exitCode.*stderrTail.*outer-owner-required/
-            : failure === "receiver"
-              ? /receiver-request.*BoatExecutionError.*receiver-status.*503.*receiver-unavailable/
+            : failure === "agent"
+              ? /agent-request.*BoatExecutionError.*agent-health.*503.*agent-unavailable/
               : /readiness.*BoatTunnelError.*gateway-unavailable.*configure-gateway/,
       );
       if (failure === "command") expect(failedRuntime?.errorMessage).toContain("REDACTED");

@@ -8,10 +8,7 @@ export type BoatSupport =
   | { readonly supported: true }
   | {
       readonly supported: false;
-      readonly reason:
-        | "runtime-os-unsupported"
-        | "runtime-requirement-unsupported"
-        | "workspace-docker-unsupported";
+      readonly reason: "runtime-os-unsupported" | "runtime-requirement-unsupported";
       readonly detail: string;
       readonly message: string;
     };
@@ -42,12 +39,6 @@ export const boatSupport = (spec: WorkspaceBlueprint): BoatSupport => {
       "runtime-requirement-unsupported",
       "native-oci-runtime-unsupported",
       "Boat cannot supply the runsc OCI runtime.",
-    );
-  if (spec.tooling.services?.docker?.enabled)
-    return refuse(
-      "workspace-docker-unsupported",
-      "native-workspace-docker-unsupported",
-      "Boat cannot supply workspace Docker.",
     );
   if (
     spec.sources.workspace.kind === "mount" ||

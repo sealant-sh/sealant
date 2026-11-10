@@ -13,8 +13,7 @@ export const nativeRuntimeIdentitySchema = z.object({
   platform: z.literal("linux/amd64"),
   manifest: nativeHashSchema,
   sealantd: nativeHashSchema,
-  socat: nativeHashSchema,
-  relay: nativeHashSchema,
+  sealantctl: nativeHashSchema,
 });
 
 /** Scope is supplied by the authorized caller; parsing alone grants no authorization. */

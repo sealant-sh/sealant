@@ -74,6 +74,12 @@ export type ExecutorDeletionBasis =
    */
   | "nothing-to-save"
   /**
+   * Its agent recorded no launch on the boot it was bound on (Boat: the recovery's `no-launch`
+   * basis): the daemon never started there, so nothing ran on it and nothing is lost by removing
+   * it. Only the Boat FINAL close gives it, from the agent's typed answer.
+   */
+  | "never-launched"
+  /**
    * A removal of it was issued earlier on recorded evidence, its outcome was never recorded, and
    * the runtime still has the executor while that evidence still stands (review 8 #7): the
    * removal is issued again. Only `authorizedDeletion` gives it, when it settles such a removal.

@@ -1576,7 +1576,8 @@ export const dockerServiceRefusal = (
     spec.target.runtime.family === "auto"
       ? install.defaultAdapterFamily
       : spec.target.runtime.family;
-  if (family === "docker") {
+  // Boat's VM is the workspace: its image carries the engine when the blueprint asks for it.
+  if (family === "docker" || family === "boat") {
     return null;
   }
   if (family === "k8s" || family === "k3s") {

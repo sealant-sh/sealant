@@ -25,6 +25,9 @@ RUN node tooling/scripts/stage-agent-cli.mjs apps/worker /staged
 # (`app-server`), which resolves its @openai/codex-{platform}-{arch} vendored binary next to the
 # bundle — mirrors apps/api/Dockerfile.
 RUN node tooling/scripts/stage-codex-cli.mjs apps/worker /staged
+# What a Boat workspace image's recipe copies into the VM (the guest agent, its Boat host mode,
+# the bind CLI, the Docker installer and the agent's unit) and the pinned sealantd runtime, staged
+# flat and checked against boat-image/asset-lock.json.
 RUN node packages/workspaces/boat-image/stage-assets.mjs /staged/boat-assets
 
 # Docker 27 carries CLI/API support for named-volume subpaths (API >= 1.45). Copy the official,
