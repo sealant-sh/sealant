@@ -510,7 +510,11 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       // from this network. It changes what the guest resolves, so it does not represent Boat.
       ...(process.env.BOAT_HARNESS_UBUNTU_ARCHIVE_IP === undefined
         ? {}
-        : { extraHosts: [`archive.ubuntu.com:${process.env.BOAT_HARNESS_UBUNTU_ARCHIVE_IP}`] }),
+        : {
+            extraHosts: ["archive.ubuntu.com", "security.ubuntu.com"].map(
+              (name) => `${name}:${process.env.BOAT_HARNESS_UBUNTU_ARCHIVE_IP}`,
+            ),
+          }),
       tls: { key: tls.key, cert: tls.cert },
     });
     await boat.start();

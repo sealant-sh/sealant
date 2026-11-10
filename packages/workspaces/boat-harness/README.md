@@ -175,8 +175,9 @@ and run with the package's unit tests.
 The native build downloads from `archive.ubuntu.com`, as a Boat VM does. If the address DNS returns
 is unreachable from your network (as on 2026-11-10, when both returned IPv4 addresses stalled),
 `install-recipe` passes Boat's 600 s limit and every launch fails. For a local run only,
-`BOAT_HARNESS_UBUNTU_ARCHIVE_IP=<a working archive address>` pins the name in each twin's
-`/etc/hosts`. That changes what the guest resolves, so CI never sets it.
+`BOAT_HARNESS_UBUNTU_ARCHIVE_IP=<a working archive address>` pins `archive.ubuntu.com` and
+`security.ubuntu.com` (Canonical serves both from the same machines) in each twin's `/etc/hosts`.
+That changes what the guest resolves, so CI never sets it.
 
 ## What it cannot catch
 
