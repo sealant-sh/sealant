@@ -256,6 +256,17 @@ export const boatAgentNetworkStatusSchema = z.strictObject({
    * gateway's allowance. A Docker image is not ready while it is `pending` or `failed`.
    */
   docker_policy: z.enum(["absent", "pending", "applied", "failed"]),
+  /**
+   * What the tunnel sent the gateway and received from it, in bytes (`wg show transfer`), while it
+   * is configured: initiations sent and nothing received is a gateway endpoint that never answers.
+   * Absent when wg could not say, and from agents older than this field.
+   */
+  transfer: z
+    .strictObject({
+      sent: z.number().int().nonnegative(),
+      received: z.number().int().nonnegative(),
+    })
+    .optional(),
 });
 export type BoatAgentNetworkStatus = z.infer<typeof boatAgentNetworkStatusSchema>;
 

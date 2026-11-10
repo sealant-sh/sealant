@@ -74,15 +74,22 @@ All over the hosted proxy on port 8080, all authenticated by the bearer:
   `503 {error: control-unavailable}` until the socket accepts.
 - `POST /sealant/network`: today's `sealant-guest-network-v1` body. The agent brings up `sealant-wg`
   in the VM's own namespace with the private key on `wg`'s stdin only, routes the subnet and the
-  gateway, points `/etc/resolv.conf` at the gateway (the VM's own resolver is kept, and put back at
-  agent start on a boot that has no tunnel: a reboot, or a VM restored from a saved snapshot),
-  records the public intent (`network.json`), and replays the same config without a change; a
-  different config on the boot is `network-binding-conflict`. On a Docker image it fills
-  `DOCKER-USER` once dockerd is up.
-- `GET /sealant/network`: `configured`, `handshake` (`wg show latest-handshakes`), `dns` (an
-  unpredictable question to the gateway's resolver over UDP and TCP) and `docker_policy` (`absent`
-  without Docker; `pending`, `applied` or `failed` for the containers' `DOCKER-USER` policy). Core's
-  readiness requires `applied` on a Docker image and `absent` otherwise.
+  gateway, starts the VM's resolver (a DNS forwarder on `100.127.255.254:53` that asks the gateway
+  first, for resource names, then the VM's own resolvers) and points `/etc/resolv.conf` at it (the
+  VM's own resolver is kept, and put back at agent start on a boot that has no tunnel: a reboot, or
+  a VM restored from a saved snapshot); a resolver that cannot bind fails the step, records the
+  public intent (`network.json`), and replays the same config without a change; a different config
+  on the boot is `network-binding-conflict`. On a Docker image it fills `DOCKER-USER` once dockerd
+  is up.
+- `GET /sealant/network`: `configured`, `handshake` (`wg show latest-handshakes`; the peer's
+  `persistent-keepalive` starts it, never DNS), `dns` (an unpredictable question asked of the VM's
+  resolver, which reaches the gateway's, over UDP and TCP), `docker_policy` (`absent` without
+  Docker; `pending`, `applied` or `failed` for the containers' `DOCKER-USER` policy) and, when wg
+  can say, `transfer` (`{sent, received}` bytes with the gateway, `wg show transfer`). Core's
+  readiness requires `applied` on a Docker image and `absent` otherwise. A handshake that is not
+  verified carries the counters into the launch diagnostic (`tunnel: {sentBytes, receivedBytes}`):
+  sent and nothing received is a gateway endpoint the VM's packets do not reach. `transfer` is
+  optional, so an older agent's answer still decodes.
 - `POST /sealant/recover`: `{version: 1, runId, secretEnvJson}` with the capture token. Answers from
   the records: `running`, `restarted` (`sealantd boot --recovery` on the VM's own disk),
   `nothing-to-save` with its basis (`daemon`: the recovery boot exited 76; `no-launch`: bound this

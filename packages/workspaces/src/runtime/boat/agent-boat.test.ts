@@ -104,14 +104,14 @@ exit 0
 // the real wg, it opens the file named after `private-key` by path; it never reads fd 0). The
 // agent runs these with a bare environment (PATH and LANG only, as the Python guest did), so the
 // log path is baked into each VM's script, and `wg show` answers with whatever the test put in
-// the handshake file.
+// the handshake file (`wg show <if> transfer`: the transfer file beside it).
 const fakeNetTool = (log: string, handshakeFile: string) => `#!/bin/sh
 name=$(basename "$0")
 printf '%s %s\\n' "$name" "$*" >> ${JSON.stringify(log)}
 if [ "$name" = wg ]; then
   case "$1" in
     set) shift 2; [ "$1" = private-key ] && cat "$2" > ${JSON.stringify(`${log}.wg-key`)} ;;
-    show) cat ${JSON.stringify(handshakeFile)} 2>/dev/null ;;
+    show) if [ "$3" = transfer ]; then cat ${JSON.stringify(`${handshakeFile}.transfer`)} 2>/dev/null; else cat ${JSON.stringify(handshakeFile)} 2>/dev/null; fi ;;
   esac
 fi
 case "$name" in *-restore) cat > ${JSON.stringify(log)}."$name-stdin" ;; esac
@@ -229,6 +229,8 @@ interface Vm {
    * active while `id` is a string; `sticky` keeps it so through a `kill`. `null` ends it.
    */
   readonly setScope: (id: string | null, options?: { readonly sticky?: boolean }) => Promise<void>;
+  /** What `wg show <if> transfer` prints: `<peer key>\t<received>\t<sent>`. */
+  readonly setTransfer: (line: string) => Promise<void>;
 }
 
 interface Agent {
@@ -377,6 +379,9 @@ const createVm = async (): Promise<Vm> => {
       await writeFile(live, id);
       if (options.sticky === true) await writeFile(sticky, "");
       else await rm(sticky, { force: true });
+    },
+    setTransfer: async (line) => {
+      await writeFile(`${handshakeFile}.transfer`, `${line}\n`);
     },
   };
   vms.add(vm);
@@ -1566,6 +1571,91 @@ describe("boat agent · network", () => {
     } finally {
       await gateway.close();
       await own.close();
+    }
+  });
+
+  it("reports what the tunnel sent and received, so a handshake that never comes says which side is silent", async () => {
+    const dns = await startFakeDns();
+    try {
+      const vm = await createVm();
+      const bearer = await bindVm(vm);
+      const body = networkBody();
+      const gatewayKey = z.string().parse(body["gateway_key"]);
+      const agent = await startAgent(vm, {
+        SEALANT_AGENT_DNS_PROBE_HOST: "127.0.0.1",
+        SEALANT_AGENT_DNS_PROBE_PORT: String(dns.port),
+      });
+      expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
+        200,
+      );
+      // VM 131: initiations went out, nothing came back. Another peer's line is not the gateway's.
+      await vm.setHandshake(`${gatewayKey}\t0`);
+      await vm.setTransfer(`${"o".repeat(43)}=\t9\t9\n${gatewayKey}\t0\t444`);
+      const silent = await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer });
+      expect(boatAgentNetworkStatusSchema.parse(silent.body)).toMatchObject({
+        handshake: "unverified",
+        transfer: { sent: 444, received: 0 },
+      });
+      // No counters to read (wg fails): the field is absent, never a guess.
+      await rm(path.join(vm.dir, "wg-handshake.transfer"), { force: true });
+      await writeFile(`${vm.netLog}.fail-wg`, "");
+      const unread = await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer });
+      expect(boatAgentNetworkStatusSchema.parse(unread.body)).not.toHaveProperty("transfer");
+    } finally {
+      await dns.close();
+    }
+  });
+
+  it("verifies the handshake without DNS: a resolver that does not answer is `dns`, never `handshake`", async () => {
+    const silent = await startFakeDns("silent");
+    try {
+      const vm = await createVm();
+      const bearer = await bindVm(vm);
+      const body = networkBody();
+      const gatewayKey = z.string().parse(body["gateway_key"]);
+      await vm.setHandshake(`${gatewayKey}\t1760000000`);
+      await vm.setTransfer(`${gatewayKey}\t148\t296`);
+      const agent = await startAgent(vm, {
+        SEALANT_AGENT_DNS_PROBE_HOST: "127.0.0.1",
+        SEALANT_AGENT_DNS_PROBE_PORT: String(silent.port),
+      });
+      expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
+        200,
+      );
+      const status = await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer });
+      expect(boatAgentNetworkStatusSchema.parse(status.body)).toEqual({
+        configured: true,
+        handshake: "verified",
+        dns: "unavailable",
+        docker_policy: "absent",
+        transfer: { sent: 296, received: 148 },
+      });
+    } finally {
+      await silent.close();
+    }
+  });
+
+  it("fails the network step when the VM's resolver cannot bind, and leaves resolv.conf the VM's", async () => {
+    const vm = await createVm();
+    const bearer = await bindVm(vm);
+    // Something else holds the resolver's address and port.
+    const holder = net.createServer();
+    await new Promise<void>((resolve) => holder.listen(0, "127.0.0.1", resolve));
+    const address = holder.address();
+    if (typeof address !== "object" || address === null) throw new Error("no address");
+    try {
+      const agent = await startAgent(vm, { SEALANT_AGENT_DNS_LISTEN_PORT: String(address.port) });
+      const configured = await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, {
+        body: networkBody(),
+        bearer,
+      });
+      expect(configured.status).toBe(500);
+      // Named by the step it failed in, like every network setup failure.
+      expect(configured.body).toEqual({ reason: "network-resolver-failed" });
+      expect((await lstat(vm.resolvConf)).isSymbolicLink()).toBe(true);
+      expect(await readFile(vm.resolvConf, "utf8")).toBe("nameserver 127.0.0.53\n");
+    } finally {
+      await new Promise<void>((resolve) => holder.close(() => resolve()));
     }
   });
 
