@@ -16,6 +16,13 @@ import { DEFECTS } from "./defects.js";
 import { Transcript, dockerScenario, evidenceDir } from "./docker-scenario.js";
 import { docker } from "./docker.js";
 import { scenarios } from "./faults.js";
+import {
+  linkAfterReady,
+  linkJobDropped,
+  linkWhileStopping,
+  relinkRunning,
+  stopWhileConfiguring,
+} from "./link-scenario.js";
 import { runScenario, type Defect } from "./markers.js";
 import {
   gatewaylessWorker,
@@ -308,4 +315,25 @@ describe("workspaces without resources", () => {
   );
   // Restarts the worker without its gateway, and with it again when it ends.
   scenario("worker without a resource gateway", undefined, () => gatewaylessWorker(stack, project));
+});
+
+// Last, after every other scenario's allocation rows: a link must reach a live session's gateway
+// when it is written, whatever the deployment's history (sealant#594).
+describe("resource links on a live session", () => {
+  scenario("linked right after ready, db within 10 s", undefined, () =>
+    linkAfterReady(stack, project),
+  );
+  scenario("re-linked with a changed map, served within 10 s", undefined, () =>
+    relinkRunning(stack, project),
+  );
+  scenario("linked while stopping, nothing changes", undefined, () =>
+    linkWhileStopping(stack, project),
+  );
+  scenario("stopped while a link is configuring, one close", undefined, () =>
+    stopWhileConfiguring(stack, project),
+  );
+  // Kills the worker for the link and starts it again.
+  scenario("link job lost, served within one tick", undefined, () =>
+    linkJobDropped(stack, project),
+  );
 });

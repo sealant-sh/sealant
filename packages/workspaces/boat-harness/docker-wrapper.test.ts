@@ -1,4 +1,8 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -33,5 +37,31 @@ describe("bin/docker", () => {
 
   it("refuses global options, so nothing is created unlabelled", async () => {
     await expect(docker("--host", "unix:///x", "run", "image")).rejects.toMatchObject({ code: 97 });
+  });
+
+  it("delays a gateway configure only while the delay file exists, and marks that it started", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "boat-harness-wrapper-test."));
+    const file = join(directory, "configure-delay");
+    const delayed = { ...env, SEALANT_BOAT_HARNESS_CONFIGURE_DELAY_FILE: file };
+    const configure = ["exec", "-i", "gw", "python3", "gateway.py", "configure"];
+    try {
+      const started = Date.now();
+      await run(wrapper, configure, { env: delayed });
+      expect(Date.now() - started).toBeLessThan(800);
+      expect(existsSync(`${file}.started`)).toBe(false);
+      await writeFile(file, "1");
+      const slow = Date.now();
+      expect((await run(wrapper, configure, { env: delayed })).stdout.trim()).toBe(
+        configure.join(" "),
+      );
+      expect(Date.now() - slow).toBeGreaterThanOrEqual(900);
+      expect(existsSync(`${file}.started`)).toBe(true);
+      // Any other exec passes at once.
+      const other = Date.now();
+      await run(wrapper, ["exec", "gw", "python3", "gateway.py", "status"], { env: delayed });
+      expect(Date.now() - other).toBeLessThan(800);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

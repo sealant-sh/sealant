@@ -82,6 +82,8 @@ export interface LaunchOptions {
    * such a run gets no gateway, tunnel or in-VM resolver. It is not linked to the project.
    */
   readonly resources?: "none";
+  /** `false`: create without linking it to the project (link it later, as a scenario needs). */
+  readonly link?: boolean;
 }
 
 /**
@@ -123,7 +125,7 @@ export const launch = async (
     },
   });
   const worktreeKey = `w-${randomBytes(3).toString("hex")}`;
-  if (options.resources !== "none")
+  if (options.resources !== "none" && options.link !== false)
     await project.scope.workspaces.link(workspace.id, { worktreeKey });
   const runId = await until(
     "the workspace's attempt",
@@ -474,7 +476,8 @@ export const proxyEvidence = (stack: HarnessStack, runId: string): string => {
 };
 
 /** Core's name for a run's gateway container and networks, once the run has a bound target. */
-const gatewayName = async (
+/** The name Core gives a run's gateway container (and the prefix of its networks). */
+export const gatewayName = async (
   stack: Pick<HarnessStack, "query">,
   runId: string,
 ): Promise<string | undefined> => {
