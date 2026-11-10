@@ -35,3 +35,54 @@ describe("API MicroVM environment", () => {
     });
   });
 });
+
+describe("API Boat environment", () => {
+  const cipher = Buffer.alloc(32, 7).toString("base64");
+
+  it("starts with no Boat settings, and holds none", () => {
+    const env = parseAppEnv({});
+    expect(env.SEALANT_BOAT_API_KEY).toBeUndefined();
+    expect(env.SEALANT_BOAT_API_KEY_FILE).toBeUndefined();
+    expect(env.SEALANT_BOAT_DEPLOYMENT_ID).toBeUndefined();
+  });
+
+  it("takes the Boat key, or its file, with the deployment and the credential cipher", () => {
+    expect(
+      parseAppEnv({
+        SEALANT_BOAT_API_KEY: "test-key-for-local-only",
+        SEALANT_BOAT_DEPLOYMENT_ID: "test",
+        SEALANT_CREDENTIALS_KEY: cipher,
+      }),
+    ).toMatchObject({ SEALANT_BOAT_DEPLOYMENT_ID: "test" });
+    const file = {
+      SEALANT_BOAT_API_KEY_FILE: "/run/secrets/boat-api-key",
+      SEALANT_BOAT_DEPLOYMENT_ID: "test",
+      SEALANT_CREDENTIALS_KEY: cipher,
+    };
+    expect(parseAppEnv(file).SEALANT_BOAT_API_KEY_FILE).toBe(file.SEALANT_BOAT_API_KEY_FILE);
+    expect(() => parseAppEnv({ ...file, SEALANT_BOAT_API_KEY: "test-key-for-local-only" })).toThrow(
+      "exactly one",
+    );
+    expect(() => parseAppEnv({ ...file, SEALANT_BOAT_API_KEY_FILE: "relative" })).toThrow();
+    for (const key of Object.keys(file))
+      expect(() =>
+        parseAppEnv(Object.fromEntries(Object.entries(file).filter(([name]) => name !== key))),
+      ).toThrow("Boat requires its key");
+  });
+
+  it("refuses Boat admission without the Boat key: the API opens Boat sessions' control", () => {
+    const admitted = {
+      SEALANT_BOAT_ADMISSION_OWNER_IDS: "usr_proof",
+      SEALANT_BOAT_API_KEY_FILE: "/run/secrets/boat-api-key",
+      SEALANT_BOAT_DEPLOYMENT_ID: "test",
+      SEALANT_CREDENTIALS_KEY: cipher,
+    };
+    expect(parseAppEnv(admitted).SEALANT_BOAT_ADMISSION_OWNER_IDS).toEqual(["usr_proof"]);
+    for (const key of Object.keys(admitted).filter(
+      (name) => name !== "SEALANT_BOAT_ADMISSION_OWNER_IDS",
+    ))
+      expect(() =>
+        parseAppEnv(Object.fromEntries(Object.entries(admitted).filter(([name]) => name !== key))),
+      ).toThrow("Boat requires its key");
+  });
+});

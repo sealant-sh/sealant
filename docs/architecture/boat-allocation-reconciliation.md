@@ -51,6 +51,8 @@ The opt-in worker settings are `SEALANT_BOAT_API_KEY`, `SEALANT_BOAT_DEPLOYMENT_
 `SEALANT_CREDENTIALS_KEY`. Partial configuration refuses startup. None of these settings adds Boat
 to runtime registration. With no Boat configuration, the worker starts no Boat client or reconciler.
 The key is passed in memory to the existing provider client; no filesystem key discovery is added.
+The API takes the same key and deployment settings (`boatProviderEnvSchema`) and builds its own
+client from them, to open Boat sessions' control connections.
 
 `boatAllocationWorkerLayer` composes the allocation repository, sealed exchange owner and real guest
 transport. The application owns one managed runtime and disposes it at shutdown. A non-overlapping

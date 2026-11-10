@@ -46,7 +46,7 @@ import {
 } from "@sealant/workspaces";
 import { Effect, Stream } from "effect";
 
-import { requestTargetOptions } from "../../services/boat-control.js";
+import { requestTargetOptions } from "../../services/control-target-options.js";
 import { authPosture, servicePrincipals } from "../../services/service-principals.js";
 import {
   checkProcessUser,

@@ -73,7 +73,7 @@ import {
 import { Duration, Effect, Option, Result, Semaphore } from "effect";
 
 import { env } from "../../runtime-env.js";
-import { requestTargetOptions } from "../../services/boat-control.js";
+import { requestTargetOptions } from "../../services/control-target-options.js";
 import { CurrentPrincipal } from "../../services/service-principals.js";
 import { resolveSelectedConnectedAccount } from "./connected-account-selection.js";
 /**

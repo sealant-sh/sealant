@@ -46,7 +46,11 @@ export interface RuntimeInstanceTargetSource {
 
 /** How a consumer reaches each runtime family; everything optional so Docker needs nothing. */
 export interface SealantTargetDerivationOptions {
-  /** Worker-owned refresh of exact current Boat control authority, once per connection. */
+  /**
+   * Fresh control material for one connection to a Boat run (`BoatControlMaterial`): the process's
+   * own Boat client asks Boat for hosted access each time. Without it a boat instance yields no
+   * target.
+   */
   readonly boatConnectMaterial?: (
     runId: string,
     sandboxId: string,

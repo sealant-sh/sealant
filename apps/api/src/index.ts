@@ -3,12 +3,7 @@ import { createServer } from "node:http";
 import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import { credentialCipherLayer } from "@sealant/credentials";
-import {
-  ControlPlaneDataAccessLive,
-  SealantDBLive,
-  BoatAllocationRepoLive,
-  boatControlRequestRepoLayer,
-} from "@sealant/db";
+import { ControlPlaneDataAccessLive, SealantDBLive } from "@sealant/db";
 import { gitHubSourceIntegrationLayer } from "@sealant/source-integrations";
 import {
   InlineByteaArtifactStoreLive,
@@ -16,7 +11,12 @@ import {
   TelemetryQueryLive,
 } from "@sealant/telemetry";
 import { urlForDisplay } from "@sealant/validators/url-for-display";
-import { SealantRuntimeControlLive, boatInteractiveControlLayer } from "@sealant/workspaces";
+import {
+  BoatAllocationProvider,
+  SealantRuntimeControlLive,
+  boatControlMaterialLayer,
+  boatProviderFromEnv,
+} from "@sealant/workspaces";
 import { Effect, Layer, Redacted } from "effect";
 import { HttpMiddleware, HttpRouter, HttpServerResponse } from "effect/http";
 
@@ -167,23 +167,34 @@ const credentialCipher = credentialCipherLayer({
   key: env.SEALANT_CREDENTIALS_KEY ?? Buffer.alloc(32).toString("base64"),
 });
 
+/**
+ * Boat control layer:
+ *
+ * Built only where the deployment gives the API its Boat key, the way it holds AWS credentials for
+ * MicroVM. Each control connection to a Boat run (sessions, credential pushes) reads the run's
+ * sealed bearer and asks Boat for a fresh hosted cookie. Without a key, nothing Boat is built.
+ */
+const boatProvider = boatProviderFromEnv(env);
+const boatControlLayer =
+  boatProvider === undefined
+    ? Layer.empty
+    : boatControlMaterialLayer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            databaseClientLayer,
+            credentialCipher,
+            Layer.succeed(BoatAllocationProvider, boatProvider),
+          ),
+        ),
+      );
+
 export const requestDependenciesLayer = Layer.mergeAll(
   sourceIntegrationLayer,
   ControlPlaneCapabilitiesLive,
   telemetryQueryLayer,
   telemetrySinkLayer,
   credentialCipher,
-  boatInteractiveControlLayer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        databaseLayer,
-        databaseClientLayer,
-        credentialCipher,
-        BoatAllocationRepoLive.pipe(Layer.provide(databaseClientLayer)),
-        boatControlRequestRepoLayer.pipe(Layer.provide(databaseClientLayer)),
-      ),
-    ),
-  ),
+  boatControlLayer,
   // Daemon control-channel access for the interactive-session verbs: each request opens a
   // short-lived docker-exec bridge to the workspace daemon (sessions are daemon-owned, so no
   // connection registry is needed API-side).

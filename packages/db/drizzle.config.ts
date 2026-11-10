@@ -12,7 +12,6 @@ export default defineConfig({
     "./src/schema/resource-instances.ts",
     "./src/schema/native-publications.ts",
     "./src/schema/boat-executions.ts",
-    "./src/schema/boat-control-requests.ts",
     "./src/schema/boat-allocations.ts",
     "./src/schema/boat-tunnels.ts",
     "./src/schema/boat-observations.ts",
