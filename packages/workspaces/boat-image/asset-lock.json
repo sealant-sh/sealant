@@ -4,7 +4,7 @@
     {
       "name": "agent.mjs",
       "source": "microvm-image/agent.mjs",
-      "sha256": "2bcf139c9bde44ef67997a260a18495b5f1452a93e9a74fa4a82f2d7b8637854"
+      "sha256": "1cdb632794981ccf7d26645371cb034116f80e3c7214e61f14112c30fc369af3"
     },
     {
       "name": "docker-service.mjs",
@@ -14,7 +14,7 @@
     {
       "name": "boat-host.mjs",
       "source": "microvm-image/boat-host.mjs",
-      "sha256": "058e1840c4858188f9a066287c6a5f4f900366c0f6c1431d19e48de8dbeeec26"
+      "sha256": "96607e9547d46295f9b0d59a081c7348f6a81b6c6d128031a0a1ea21a71a0f45"
     },
     {
       "name": "boat-bind.mjs",

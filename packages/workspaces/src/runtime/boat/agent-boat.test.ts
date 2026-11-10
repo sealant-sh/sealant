@@ -117,6 +117,7 @@ fi
 case "$name" in *-restore) cat > ${JSON.stringify(log)}."$name-stdin" ;; esac
 if [ -e ${JSON.stringify(log)}."slow-$name" ]; then sleep 6; fi
 if [ -e ${JSON.stringify(log)}."fail-$name" ]; then exit 1; fi
+if [ -e ${JSON.stringify(log)}."fail-$name-\${1:-}" ]; then exit 1; fi
 exit 0
 `;
 
@@ -2546,4 +2547,46 @@ describe("boat agent · restarted on the same boot", () => {
       });
     },
   );
+});
+
+describe("boat agent · typed failures", () => {
+  it("names the network setup step that failed, never the error's text", async () => {
+    const vm = await createVm();
+    const { agent, bearer } = await launched(vm);
+    await writeFile(`${vm.netLog}.fail-ip-route`, "");
+    const routed = await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, {
+      body: networkBody(),
+      bearer,
+    });
+    expect(routed).toEqual({ status: 500, body: { reason: "network-route-failed" } });
+
+    const other = await createVm();
+    const resolver = await launched(other, {
+      // A resolver path under a regular file cannot be written: the last step fails.
+      SEALANT_AGENT_RESOLV_CONF: path.join(other.bootIdFile, "resolv.conf"),
+    });
+    expect(
+      await call(resolver.agent, "POST", BOAT_AGENT_NETWORK_ROUTE, {
+        body: networkBody(),
+        bearer: resolver.bearer,
+      }),
+    ).toEqual({ status: 500, body: { reason: "network-resolver-failed" } });
+  });
+
+  it("answers an unexpected route failure with a typed reason, not 'request failed'", async () => {
+    if (process.getuid?.() === 0) return;
+    const vm = await createVm();
+    const { agent, bearer } = await launched(vm);
+    // The receipt cannot be written: the park fails for a reason that is not a refusal.
+    await chmod(vm.dataDir, 0o500);
+    try {
+      const parked = await call(agent, "POST", BOAT_AGENT_PARK_ROUTE, {
+        body: { format: "sealant-agent-park-v1", operationId: randomUUID() },
+        bearer,
+      });
+      expect(parked).toEqual({ status: 500, body: { reason: "park-failed" } });
+    } finally {
+      await chmod(vm.dataDir, 0o700);
+    }
+  });
 });

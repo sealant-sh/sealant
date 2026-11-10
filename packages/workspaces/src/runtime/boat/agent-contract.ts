@@ -227,7 +227,13 @@ export const BOAT_AGENT_NETWORK_REFUSALS = [
   "invalid-network-destination",
   "network-binding-conflict",
   "network-setup-unresolved",
-  "network-command-refused",
+  // A setup that failed, by the step it failed in (500), or for any other reason.
+  "network-link-failed",
+  "network-wg-failed",
+  "network-address-failed",
+  "network-route-failed",
+  "network-resolver-failed",
+  "network-setup-failed",
 ] as const;
 
 /** Mirrors the Python `guest_network.configure` reply. */
