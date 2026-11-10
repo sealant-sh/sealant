@@ -136,15 +136,25 @@ export const parkAndResume = async (stack: HarnessStack, project: Project, step:
 
     await step("Stop keeps the VM", async () => {
       await run.workspace.stop();
+      // The FINAL cannot drain (uploads refused, or its deadline passes first), so Mend must read
+      // the session as kept. Whether the daemon got as far as asking to upload is only evidence.
+      let seen = "";
       await until(
-        "the Stop to keep the session (retained) with its upload refused",
-        async () =>
-          (await run.workspace.status()) === "retained" &&
-          (await run.capture.state()).refusedUploads > 0
-            ? true
-            : undefined,
+        "the Stop to keep the session (retained)",
+        async () => {
+          seen = await run.workspace.status();
+          return seen === "retained" ? true : undefined;
+        },
         3 * 60_000,
         2000,
+      ).catch(async (error: unknown) => {
+        throw new Error(
+          `${error instanceof Error ? error.message : String(error)}; last status ${seen}; capture ${JSON.stringify(await run.capture.state())}`,
+        );
+      });
+      const channel = await run.capture.state();
+      await transcript.note(
+        `kept: public status retained; capture head ${JSON.stringify(channel.head)}, uploads refused ${String(channel.refusedUploads)}`,
       );
     });
 
