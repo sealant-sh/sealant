@@ -1,7 +1,13 @@
 import { spawn } from "node:child_process";
 
-/** Every container, network, volume and image the harness creates carries this label. */
+/**
+ * Every container, network, volume and image a harness run creates carries
+ * `sh.sealant.boat-harness=<run>`, including what Core creates for it (see `bin/docker`). That label
+ * is the only ownership evidence teardown, the reaper and `cleanup.ts` act on.
+ */
 export const HARNESS_LABEL = "sh.sealant.boat-harness";
+/** Cached images carry this instead, so nothing that inherits their labels looks like a run's. */
+export const CACHE_LABEL = `${HARNESS_LABEL}.cache=true`;
 
 export interface DockerResult {
   readonly code: number | null;
@@ -10,11 +16,15 @@ export interface DockerResult {
   readonly timedOut: boolean;
 }
 
-/** Runs one docker CLI command. Never throws for a non-zero exit; callers decide. */
-export const docker = (
+export type DockerOptions = { readonly input?: string | Buffer; readonly timeoutMs?: number };
+/** The docker CLI, injectable so the ownership and lock logic can be tested without Docker. */
+export type DockerRunner = (
   args: readonly string[],
-  options: { readonly input?: string | Buffer; readonly timeoutMs?: number } = {},
-): Promise<DockerResult> =>
+  options?: DockerOptions,
+) => Promise<DockerResult>;
+
+/** Runs one docker CLI command. Never throws for a non-zero exit; callers decide. */
+export const docker: DockerRunner = (args, options = {}) =>
   new Promise((resolve, reject) => {
     const child = spawn("docker", args, { stdio: ["pipe", "pipe", "pipe"] });
     const out: Buffer[] = [];
@@ -42,18 +52,19 @@ export const docker = (
     child.stdin.end(options.input);
   });
 
-/** Like `docker`, but a non-zero exit is an error carrying stderr. */
-export const dockerOk = async (
-  args: readonly string[],
-  options: { readonly input?: string | Buffer; readonly timeoutMs?: number } = {},
-): Promise<string> => {
-  const result = await docker(args, options);
-  if (result.code !== 0)
-    throw new Error(
-      `docker ${args.slice(0, 3).join(" ")} failed (${result.code}): ${result.stderr.slice(-2000)}`,
-    );
-  return result.stdout;
-};
+/** Like a runner, but a non-zero exit is an error carrying stderr. */
+export const okWith =
+  (run: DockerRunner) =>
+  async (args: readonly string[], options: DockerOptions = {}): Promise<string> => {
+    const result = await run(args, options);
+    if (result.code !== 0)
+      throw new Error(
+        `docker ${args.slice(0, 3).join(" ")} failed (${result.code}): ${result.stderr.slice(-2000)}`,
+      );
+    return result.stdout;
+  };
+
+export const dockerOk = okWith(docker);
 
 export interface LabelledObjects {
   readonly containers: readonly string[];
@@ -65,39 +76,46 @@ export interface LabelledObjects {
 const lines = (text: string) => text.split("\n").filter((line) => line.length > 0);
 
 /** Lists every Docker object carrying `label` (a `key` or `key=value` filter). */
-export const listLabelled = async (label: string): Promise<LabelledObjects> => ({
-  containers: lines(
-    await dockerOk(["ps", "-a", "--filter", `label=${label}`, "--format", "{{.Names}}"]),
-  ),
-  networks: lines(
-    await dockerOk(["network", "ls", "--filter", `label=${label}`, "--format", "{{.Name}}"]),
-  ),
-  volumes: lines(
-    await dockerOk(["volume", "ls", "--filter", `label=${label}`, "--format", "{{.Name}}"]),
-  ),
-  images: lines(
-    await dockerOk([
-      "image",
-      "ls",
-      "--filter",
-      `label=${label}`,
-      "--format",
-      "{{.Repository}}:{{.Tag}}",
-    ]),
-  ).filter((name) => !name.includes("<none>")),
-});
+export const listLabelled = async (
+  label: string,
+  run: DockerRunner = docker,
+): Promise<LabelledObjects> => {
+  const ok = okWith(run);
+  return {
+    containers: lines(
+      await ok(["ps", "-a", "--filter", `label=${label}`, "--format", "{{.Names}}"]),
+    ),
+    networks: lines(
+      await ok(["network", "ls", "--filter", `label=${label}`, "--format", "{{.Name}}"]),
+    ),
+    volumes: lines(
+      await ok(["volume", "ls", "--filter", `label=${label}`, "--format", "{{.Name}}"]),
+    ),
+    images: lines(
+      await ok([
+        "image",
+        "ls",
+        "--filter",
+        `label=${label}`,
+        "--format",
+        "{{.Repository}}:{{.Tag}}",
+      ]),
+    ).filter((name) => !name.includes("<none>")),
+  };
+};
 
 /** Removes exactly the objects carrying `label`, after listing them. Returns what it removed. */
 export const removeLabelled = async (
   label: string,
   options: { readonly images?: boolean } = {},
+  run: DockerRunner = docker,
 ): Promise<LabelledObjects> => {
-  const found = await listLabelled(label);
-  if (found.containers.length > 0) await docker(["rm", "-f", "-v", ...found.containers]);
-  for (const network of found.networks) await docker(["network", "rm", network]);
-  if (found.volumes.length > 0) await docker(["volume", "rm", "-f", ...found.volumes]);
+  const found = await listLabelled(label, run);
+  if (found.containers.length > 0) await run(["rm", "-f", "-v", ...found.containers]);
+  for (const network of found.networks) await run(["network", "rm", network]);
+  if (found.volumes.length > 0) await run(["volume", "rm", "-f", ...found.volumes]);
   if (options.images === true && found.images.length > 0)
-    await docker(["image", "rm", "-f", ...found.images]);
+    await run(["image", "rm", "-f", ...found.images]);
   return found;
 };
 
@@ -109,49 +127,16 @@ export const CORE_LABELS = [
   "sealant.boat-tunnel",
 ] as const;
 
-export interface CoreObject {
-  readonly kind: "container" | "network" | "volume";
-  readonly id: string;
-  readonly name: string;
-}
-
-/** Every Docker object carrying one of Core's resource or gateway labels. */
-export const listCoreObjects = async (): Promise<CoreObject[]> => {
-  const found = new Map<string, CoreObject>();
-  for (const label of CORE_LABELS) {
-    const sources = [
-      [
-        "container",
-        ["ps", "-a", "--no-trunc", "--filter", `label=${label}`, "--format", "{{.ID}} {{.Names}}"],
-      ],
-      [
-        "network",
-        [
-          "network",
-          "ls",
-          "--no-trunc",
-          "--filter",
-          `label=${label}`,
-          "--format",
-          "{{.ID}} {{.Name}}",
-        ],
-      ],
-      ["volume", ["volume", "ls", "--filter", `label=${label}`, "--format", "{{.Name}} {{.Name}}"]],
-    ] as const;
-    for (const [kind, args] of sources)
-      for (const line of lines(await dockerOk(args))) {
-        const [id = "", name = ""] = line.split(" ");
-        found.set(`${kind}:${id}`, { kind, id, name });
-      }
-  }
-  return [...found.values()];
-};
-
-/** Removes exactly `objects` (containers first, then networks, then volumes). */
-export const removeObjects = async (objects: readonly CoreObject[]): Promise<void> => {
-  const of = (kind: CoreObject["kind"]) =>
-    objects.filter((entry) => entry.kind === kind).map((entry) => entry.id);
-  if (of("container").length > 0) await docker(["rm", "-f", "-v", ...of("container")]);
-  for (const id of of("network")) await docker(["network", "rm", id]);
-  if (of("volume").length > 0) await docker(["volume", "rm", "-f", ...of("volume")]);
+/** Names of Core-labelled objects on the host, for the preflight. They are never removed. */
+export const listCoreObjectNames = async (run: DockerRunner = docker): Promise<string[]> => {
+  const ok = okWith(run);
+  const names = new Set<string>();
+  for (const label of CORE_LABELS)
+    for (const args of [
+      ["ps", "-a", "--filter", `label=${label}`, "--format", "{{.Names}}"],
+      ["network", "ls", "--filter", `label=${label}`, "--format", "{{.Name}}"],
+      ["volume", "ls", "--filter", `label=${label}`, "--format", "{{.Name}}"],
+    ])
+      for (const name of lines(await ok(args))) names.add(name);
+  return [...names];
 };

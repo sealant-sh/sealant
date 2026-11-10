@@ -69,3 +69,27 @@ export const expectDefect = async (defect: Defect, body: () => Promise<void>): P
   }
   process.stderr.write(`[boat-harness] expected failure ${defect.id}: ${defect.title}\n`);
 };
+
+/**
+ * A scenario: its body (as an expected failure when `defect` is set), then `releaseChecks`, which
+ * always run and whose failures no marker excuses. A marker excuses its named step, never a leak.
+ */
+export const runScenario = async (
+  defect: Defect | undefined,
+  body: () => Promise<void>,
+  releaseChecks: () => Promise<readonly string[]>,
+): Promise<void> => {
+  let failure: unknown;
+  try {
+    await (defect === undefined ? body() : expectDefect(defect, body));
+  } catch (error) {
+    failure = error;
+  }
+  const leaks = await releaseChecks();
+  if (failure !== undefined) {
+    if (leaks.length > 0 && failure instanceof Error)
+      failure.message = `${failure.message}\nand left behind: ${leaks.join("\n")}`;
+    throw failure;
+  }
+  if (leaks.length > 0) throw new Error(`left behind: ${leaks.join("\n")}`);
+};

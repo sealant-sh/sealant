@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 import { expect } from "vitest";
 
-import { HARNESS_LABEL, docker, dockerOk } from "./docker.js";
+import { CACHE_LABEL, docker, dockerOk } from "./docker.js";
 import type { FakeBoatFaults, FakeSandbox } from "./fake-boat.js";
 import {
   assertSettled,
@@ -173,11 +173,14 @@ export const scenarios = {
         expect(
           stack.boat.events.filter((event) => event.kind === "fault:detached-delay"),
         ).toHaveLength(1);
-        if (outcome.status === "ready") {
-          const at = Date.now();
-          await run.workspace.stop();
-          await assertSettled(stack, run, at, { terminal: ["stopped"] });
-        } else await assertSettled(stack, run, outcome.at);
+        // Past the race the launch must become ready; a later failure is named at its outcome.
+        if (outcome.status !== "ready")
+          throw new Error(
+            `launch ended ${outcome.status} with ${JSON.stringify(outcome.view)}; guest: ${await guestEvidence(stack, run.runId)}`,
+          );
+        const at = Date.now();
+        await run.workspace.stop();
+        await assertSettled(stack, run, at, { terminal: ["stopped"] });
       },
     );
   },
@@ -243,7 +246,9 @@ export const scenarios = {
 
   /** Run 11's class: dnsmasq starts 8 s late. Core must wait for the gateway, not race it. */
   async gatewaySlow(stack: HarnessStack, project: Project) {
-    const image = await stack.runImage(await slowGatewayImage());
+    const image = (
+      await dockerOk(["image", "inspect", "-f", "{{.Id}}", await slowGatewayImage()])
+    ).trim();
     await stack.killWorker();
     await stack.startWorker({ SEALANT_BOAT_GATEWAY_IMAGE: image });
     try {
@@ -269,9 +274,9 @@ export const scenarios = {
           )
             return;
           killed = true;
-          const names = (await stack.coreObjects())
-            .filter((entry) => entry.kind === "container" && entry.name.startsWith("boat-tunnel-"))
-            .map((entry) => entry.name);
+          const names = (await stack.ownedObjects()).containers.filter((name) =>
+            name.startsWith("boat-tunnel-"),
+          );
           if (names.length > 0) await docker(["kill", ...names]);
         },
       },
@@ -342,20 +347,27 @@ export const scenarios = {
    * must reach the guest (recover through the relay), save, delete the VM and end the drain.
    */
   async stopAfterLaunch(stack: HarnessStack, project: Project) {
-    const run = await launch(stack, project);
-    await awaitOutcome(stack, run, 10 * 60_000);
-    const at = Date.now();
-    await run.workspace.stop();
-    await assertSettled(stack, run, at, { terminal: ["stopped"] });
+    await readyThenStop(stack, project);
   },
 
-  /** Boat's deletion stays `processing`. Core must not release on an unfinished delete. */
+  /**
+   * Boat's deletion stays `processing`. The launch fails at permit, after its UDP slot and
+   * publication pin are held. While Boat says `processing` the VM is not gone, so Core must keep
+   * both; once the deletion completes it must release them.
+   */
   async deletionStuck(stack: HarnessStack, project: Project) {
     let stuck: string | undefined;
     await withFaults(
       stack,
       {
-        command: commandFault(BIND, { kind: "exit", code: 1, stderr: "harness: bind refused" }),
+        proxy: (path, method, sandbox) =>
+          isSession(sandbox) && method === "POST" && path === "/sealant/bootstrap/permit"
+            ? {
+                kind: "status",
+                status: 409,
+                body: JSON.stringify({ error: "workspace-limits-unavailable" }),
+              }
+            : undefined,
         deletion: (sandbox) => {
           if (!isSession(sandbox)) return undefined;
           stuck = sandbox.id;
@@ -367,10 +379,14 @@ export const scenarios = {
         const outcome = await awaitOutcome(stack, run, 10 * 60_000);
         expect(outcome.status).not.toBe("ready");
         const id = await until("a stuck deletion", async () => stuck, 3 * 60_000);
-        // While Boat says `processing`, the VM is not gone: the slot and pin must stay held.
-        await new Promise((done) => setTimeout(done, 35_000));
+        // Two sweeps with Boat still `processing`: nothing may be released yet.
+        await new Promise((done) => setTimeout(done, 65_000));
         const held = await runtimeView(stack, run.runId);
         expect(held.allocation).not.toBe("deleted");
+        expect(held.has_tunnel).toBe(true);
+        expect(held.tunnel_released).toBe(false);
+        expect(held.pin).not.toBe("released");
+        expect(stack.boat.liveSandboxes().some((vm) => vm.id === id)).toBe(true);
         await stack.boat.completeDeletion(id);
         await assertSettled(stack, run, Date.now(), { terminal: ["failed", "stopped"] });
       },
@@ -396,7 +412,7 @@ const slowGatewayImage = async (): Promise<string> => {
       join(context, "Dockerfile"),
       await readFile(new URL("../boat-tunnel/Dockerfile", import.meta.url), "utf8"),
     );
-    await dockerOk(["build", "-q", "--label", `${HARNESS_LABEL}.cache=true`, "-t", tag, context], {
+    await dockerOk(["build", "-q", "--label", CACHE_LABEL, "-t", tag, context], {
       timeoutMs: 15 * 60_000,
     });
     return tag;

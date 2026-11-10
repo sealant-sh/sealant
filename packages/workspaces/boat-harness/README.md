@@ -41,11 +41,20 @@ that touch Boat code, nightly, and on demand (`.github/workflows/boat-harness.ym
 (`docs/experiments/boat-provider-lifetime-evidence.json`, `boat-runtime.md`,
 `boat-native-snapshots*.md`):
 
-- create answers 202 `provisioned`, then `cloning`, then `idle` once the twin's systemd is up;
-- commands run in the twin as uid 1000 through `docker exec`, sync up to 30 s, detached above;
-- `DELETE` needs `X-Ascii-Confirm-Delete` and returns an operation to poll;
-- saved snapshots are `docker commit`; `create from` boots a new container, so a new boot ID;
-- the hosted proxy for `*.on.boat.dev` answers 403 without `_port_auth`, 302 for `_token`, and
+- Create answers 202 `provisioned`, then `cloning`, then `idle` once the twin's systemd is up.
+- An `Idempotency-Key` replays the same VM for 24 hours on the fake's clock, then is forgotten.
+- At most 20 labels, each value at most 256 bytes.
+- Commands run in the twin as uid 1000 through `docker exec`: sync up to 30 s, detached above.
+- Detached output keeps the last 8 MiB and reports `stdoutTruncated` / `stderrTruncated` past it.
+- `DELETE` needs `X-Ascii-Confirm-Delete` and answers 202 with an operation to poll.
+- Resume needs its body (`type`, `ttlSeconds`, `noEnv`).
+- Saved snapshots are `docker commit`. Names are at most 63 characters. A trial account can be set
+  to refuse them with 403 `trial_saved_snapshots_not_allowed`.
+- `create from` a snapshot boots a new container, so a new boot ID. Before the VM reads `idle`, the
+  fake applies Boat's clone rewrites (`boat-native-guest-startup.md`): it restores the provider's
+  own systemd executable and rewrites `.bashrc` to different bytes of the same length (the sandbox
+  ID; Boat's exact substitution is unrecorded).
+- The hosted proxy for `*.on.boat.dev` answers 403 without `_port_auth` and 302 for `_token`. It
   forwards HTTP and WebSocket to the guest's port 8080.
 
 Core reaches it without production changes. `preload.mjs`, loaded with `node --import`, sends TLS
@@ -74,13 +83,14 @@ The networking follows what the guest enforces:
 
 ## Scenarios
 
-`lifecycle.harness.ts` runs the happy path, then one fault per step. Every scenario ends with
-`assertSettled`, which checks four things:
+`lifecycle.harness.ts` runs the happy path, then one fault per step. A scenario's own steps check
+that the runtime row carries the exact cause, and that Mend sees a terminal workspace (`stopped` or
+`failed`, never `retained`) within 60 s (`assertSettled`).
 
-- Mend sees a terminal workspace (`stopped` or `failed`, never `retained`) within 60 s.
-- The runtime row carries the exact cause.
-- The UDP slot and the publication pin are released.
-- No live VM and no gateway container or network is left.
+Then, after every scenario and whatever it did, each launch it made must be released
+(`assertReleased`): the workspace terminal, and the UDP slot, publication pin, VM and gateway gone.
+A launch Core keeps (`retained`) gets the owner's discard after a minute, as Mend would give it, and
+must then release too. No marker excuses a failure here.
 
 A scenario that hits a known defect on main is an expected failure (`defects.ts`, `markers.ts`). A
 marker names the failure: where the scenario fails and what the runtime row says (on the happy path,
@@ -103,25 +113,32 @@ harness refuses to start if any Sealant resource or gateway object already exist
 host. Set `BOAT_HARNESS_ALLOW_SHARED_DOCKER=1` to accept that risk. The worker and API get their own
 `TMPDIR`, because the worker sweeps stale build contexts from its temp directory.
 
-Teardown removes:
+Ownership is a label, never a guess. Core's worker and API run the docker CLI from `PATH`, and the
+harness puts `bin/docker` first there. It adds `--label sh.sealant.boat-harness=<run>` to every
+container, network and volume Core creates, refuses global options rather than create anything
+unlabelled, and passes everything else through. The harness labels its own objects the same way.
+Teardown, the reaper and `cleanup.ts` remove only objects carrying the run's label, so they cannot
+touch another deployment's resources. The run's scratch directory is removed too, except its logs.
 
-- everything labelled `sh.sealant.boat-harness=<run>`;
-- the Core-labelled objects created during the run;
-- the run's scratch directory, except its logs.
-
-Cached images carry `sh.sealant.boat-harness.cache=true`, not a run label. Core's gateway containers
-inherit their image's labels, so each run builds a thin per-run gateway image labelled with the run.
+A Docker daemon per run would isolate further, but the host would then need routes into the nested
+daemon (root) and nested privileged systemd with WireGuard. Cached images carry
+`sh.sealant.boat-harness.cache=true`, not a run label.
 
 Each run starts a detached reaper (`reaper.ts`) in its own process group. Ctrl-C to the test runner,
 or a killed test process, skips the stack's teardown but not the reaper. Once the test process is
 gone, the reaper removes what the run left and releases the host lock:
 
 - the run's worker and API, found by `SEALANT_BOAT_HARNESS_RUN`;
-- its labelled objects;
-- the Core objects created after its network.
+- every object labelled with the run, images included, even if the run died before its network
+  existed.
 
 `pnpm --filter @sealant/workspaces exec tsx boat-harness/cleanup.ts` does the same by hand. It lists
-first, removes only with `--remove`, and skips the run that holds the lock.
+first, removes only with `--remove`, and never touches a live run. A run is live while its lock
+holder's process or network exists, including while it builds images.
+
+`markers.test.ts`, `reap.test.ts`, `fake-boat.test.ts` and `docker-wrapper.test.ts` cover the
+markers, the lock, the reaper, cleanup, the fake's API rules and the wrapper. They need no Docker
+and run with the package's unit tests.
 
 ## What it cannot catch
 
