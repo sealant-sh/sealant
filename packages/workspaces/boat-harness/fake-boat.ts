@@ -146,8 +146,11 @@ export interface FakeBoatOptions {
   readonly clock?: () => number;
   /**
    * How long an accepted deletion stays `processing` after the VM was withdrawn from the API.
-   * Real Boat answers 404 for the VM soon after the DELETE, before the operation completes (live
-   * run on #598, 2026-11-10); the interval itself was not measured. Default 8 s.
+   * Real Boat (live stops on #598, 2026-11-10) withdraws a VM within a second or two of its DELETE
+   * and usually reads `completed` a few seconds later: Stop to `stopped` took 7 to 17 s end to end,
+   * and both orders were observed (the close's poll seeing `completed` first, or a GET's 404
+   * first). The default, 8 s, is on the long side of that, so a second observer reading Boat
+   * between withdrawal and completion is easy to hit; 2 to 4 s would be closer to Boat.
    */
   readonly deletionWithdrawnMs?: number;
   /** A trial account: Boat refuses saved snapshots with 403 (boat-runtime.md). */
