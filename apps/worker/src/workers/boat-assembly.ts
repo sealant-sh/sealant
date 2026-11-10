@@ -3,17 +3,17 @@ import { join } from "node:path";
 import { CredentialCipher, type CredentialCipherService } from "@sealant/credentials";
 import {
   BoatAllocationRepoLive,
+  BoatExecutionRepoLive,
   SealantDB,
   WorkspaceCaptureDrainRepoLive,
   WorkspaceRuntimeInstanceRepoLive,
   type DB,
-  type WorkspaceCaptureDrainRepo,
 } from "@sealant/db";
 import type { WorkerEnv } from "@sealant/validators/env";
 import {
   BoatAllocationProvider,
   BoatControlMaterial,
-  BoatFinalClose,
+  BoatConvergence,
   BoatNativeCatalog,
   BoatRemovalProvider,
   BoatResources,
@@ -23,7 +23,7 @@ import {
   DockerBoatTunnel,
   boatAllocationWorkerLayer,
   boatControlMaterialLayer,
-  boatFinalCloseWorkerLayer,
+  boatConvergenceWorkerLayer,
   boatNativeCatalogLayer,
   boatObserverLayer,
   boatProviderFromEnv,
@@ -37,6 +37,7 @@ import {
   type BoatAllocation,
   type BoatGatewayHost,
   type BoatNativeCatalogOptions,
+  type BoatSharedStop,
   type HttpBoatApi,
   type ResourceRuntime,
   type ResourceSubnets,
@@ -109,8 +110,8 @@ const packagedSnapshotBuilder = async (options: {
  * What this worker runs for Boat, from its settings alone, or `undefined` when it has no Boat key.
  *
  * - With the builder (`SEALANT_BOAT_BUILDER_OWNER` and `SEALANT_BOAT_STATE_DIRECTORY`) it serves
- *   Boat workspaces: the adapter is registered beside the FINAL close owner, with a resource
- *   gateway or without one. The resource gateway is optional. With it, Boat workspaces reach
+ *   Boat workspaces: the adapter is registered, and its stops go through the shared stop path as
+ *   every runtime's do, with a resource gateway or without one. The resource gateway is optional. With it, Boat workspaces reach
  *   project resources through gateways on this worker's Docker host. Without it, Boat needs no
  *   Docker host: the worker serves workspaces created never to be linked to resources
  *   (`runtime.resources: "none"`) and refuses any other Boat workspace before its build
@@ -152,6 +153,7 @@ export const assembleBoat = async (input: {
     return {
       runtime: ManagedRuntime.make(WorkerLayer),
       registration: undefined,
+      lifecycle: undefined,
       control: undefined,
       reach: undefined,
       reopenCarriers: undefined,
@@ -159,7 +161,7 @@ export const assembleBoat = async (input: {
       disposeCatalog: undefined,
       reconcileResources: undefined,
       applyLink: undefined,
-      reconcileCloses: undefined,
+      reconcileConvergence: undefined,
     };
   }
   const Host = Layer.succeed(BoatResourcesHost, {
@@ -169,6 +171,7 @@ export const assembleBoat = async (input: {
   const Resources = boatResourcesLayer.pipe(Layer.provide(boatSealedExecutionLayer));
   const Repos = Layer.mergeAll(
     BoatAllocationRepoLive,
+    BoatExecutionRepoLive,
     WorkspaceRuntimeInstanceRepoLive,
     WorkspaceCaptureDrainRepoLive,
   ).pipe(Layer.provide(Infra));
@@ -193,16 +196,13 @@ export const assembleBoat = async (input: {
           ),
         );
   const WorkerLayer: Layer.Layer<
-    | BoatAdapterServices
-    | BoatResources
-    | BoatControlMaterial
-    | WorkspaceCaptureDrainRepo
-    | CredentialCipher
+    BoatAdapterServices | BoatResources | BoatControlMaterial | BoatConvergence | CredentialCipher
   > = Layer.mergeAll(
     boatAllocationWorkerLayer,
     Resources,
     boatReadinessWorkerLayer,
-    boatFinalCloseWorkerLayer,
+    // What stays Boat's own: the no-VM cases, the cleanup after absence, the nudge.
+    boatConvergenceWorkerLayer,
     // The adapter's `stop` and `inspect`: the one deletion, and the one source of presence.
     boatRemovalWorkerLayer,
     boatObserverLayer,
@@ -222,17 +222,20 @@ export const assembleBoat = async (input: {
     ),
   );
   const runtime = ManagedRuntime.make(WorkerLayer);
-  // The Boat adapter is registered only beside the actual FINAL close owner.
+  // One adapter: every stop, inspection and recovery of a Boat run goes through the shared paths
+  // with it, on a worker that launches Boat workspaces and on one that only holds their gateway
+  // (whose tunnels no other worker can release). It launches only where the builder is.
+  const adapter = new BoatRuntimeAdapter({
+    deploymentId: provider.deploymentId,
+    runtime,
+    resourceGateway: gateway !== undefined,
+  });
   const registration =
     catalogRuntime === undefined
       ? undefined
       : {
           kind: "boat-native" as const,
-          adapter: new BoatRuntimeAdapter({
-            deploymentId: provider.deploymentId,
-            runtime,
-            resourceGateway: gateway !== undefined,
-          }),
+          adapter,
           artifacts: await catalogRuntime.runPromise(BoatNativeCatalog),
         };
   let catalogCursor: string | undefined;
@@ -240,6 +243,8 @@ export const assembleBoat = async (input: {
   return {
     runtime,
     registration,
+    /** The adapter for the shared stop, exit and recovery paths, launching or not. */
+    lifecycle: adapter,
     control,
     /** The resource links Boat runs reach through this worker's gateway; none without one. */
     reach:
@@ -273,8 +278,14 @@ export const assembleBoat = async (input: {
             return report;
           },
     disposeCatalog: () => catalogRuntime?.dispose(),
-    reconcileCloses: (page: { limit: number; after?: string }) =>
-      runtime.runPromise(Effect.flatMap(BoatFinalClose, (close) => close.reconcile(page))),
+    /**
+     * One page of Boat's own convergence: the no-VM cases, the cleanup of what a VM Boat no
+     * longer has still holds, and the nudge. `stop` is the worker's shared stop, which decides.
+     */
+    reconcileConvergence: (page: { limit: number; after?: string; stop: BoatSharedStop }) =>
+      runtime.runPromise(
+        Effect.flatMap(BoatConvergence, (convergence) => convergence.reconcile(page)),
+      ),
     /** One tick of the resource sweep; with `live`, a page of live runs is configured first. */
     reconcileResources: (page: {
       limit: number;
