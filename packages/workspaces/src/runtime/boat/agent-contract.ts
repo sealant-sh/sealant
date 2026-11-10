@@ -27,16 +27,15 @@ export const BOAT_AGENT_DATA_DIR = "/var/lib/sealant/agent";
 export const BOAT_AGENT_MANIFEST_FILE = "/var/lib/sealant/agent/manifest.json";
 
 /**
- * The files the Boat image copies in from `packages/workspaces/microvm-image/` (and the one
- * from `boat-image/`), for the image recipe: the agent and its Docker service, the Boat host
- * module, the bind CLI and the bootstrap cipher it shares with the Python guest.
+ * The files the Boat image copies in from `packages/workspaces/microvm-image/`, for the image
+ * recipe: the agent and its Docker service, the Boat host module and the bind CLI (which carries
+ * its own RSA-OAEP exchange). The agent starts from exactly these.
  */
 export const BOAT_AGENT_FILES = [
   "microvm-image/agent.mjs",
   "microvm-image/docker-service.mjs",
   "microvm-image/boat-host.mjs",
   "microvm-image/boat-bind.mjs",
-  "boat-image/bootstrap-crypto.mjs",
 ] as const;
 
 /** The identity names Boat's receiver accepted; the bind CLI accepts exactly these. */
@@ -196,6 +195,11 @@ export const boatAgentNetworkStatusSchema = z.strictObject({
   configured: z.boolean(),
   handshake: z.enum(["verified", "unverified"]),
   dns: z.enum(["udp-and-tcp", "unavailable"]),
+  /**
+   * The containers' network policy: `absent` without Docker, `applied` once it holds them to the
+   * gateway's allowance. A Docker image is not ready while it is `pending` or `failed`.
+   */
+  docker_policy: z.enum(["absent", "pending", "applied", "failed"]),
 });
 export type BoatAgentNetworkStatus = z.infer<typeof boatAgentNetworkStatusSchema>;
 

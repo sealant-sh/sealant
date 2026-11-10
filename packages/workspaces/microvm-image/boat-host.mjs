@@ -40,6 +40,9 @@ export const CLIENT = "100.127.255.254";
 const WIREGUARD_MTU = "1380";
 const RESOLV_CONF_BYTES = `nameserver ${GATEWAY}\noptions timeout:2 attempts:2\n`;
 /** `guest_network.DENIED`: what a container may never reach, in this order. */
+/** Docker's own networks (`--bip` and `--default-address-pool`, set by the Boat image). */
+export const DOCKER_NETWORKS = ["198.18.1.0/24", "198.19.0.0/16"];
+
 export const DENIED = [
   "0.0.0.0/8",
   "10.0.0.0/8",
@@ -435,12 +438,15 @@ export const probeDns = async ({ host, port }) => {
  * The Boat host: what `agent.mjs` asks in Boat mode. `log` is the agent's logger; `env` the
  * agent's environment (command paths and test overrides come from it).
  */
-export const createBoatHost = ({ env = process.env, log }) => {
+export const createBoatHost = ({ env = process.env, log, dockerCapable = false }) => {
   const paths = boatPaths(env);
   const commands = {
     ip: env.SEALANT_AGENT_IP ?? "ip",
     wg: env.SEALANT_AGENT_WG ?? "wg",
     iptables: env.SEALANT_AGENT_IPTABLES ?? "iptables",
+    iptablesRestore: env.SEALANT_AGENT_IPTABLES_RESTORE ?? "iptables-restore",
+    ip6tables: env.SEALANT_AGENT_IP6TABLES ?? "ip6tables",
+    ip6tablesRestore: env.SEALANT_AGENT_IP6TABLES_RESTORE ?? "ip6tables-restore",
     sync: env.SEALANT_AGENT_SYNC ?? "sync",
     unshare: env.SEALANT_AGENT_UNSHARE ?? "unshare",
   };
@@ -456,6 +462,8 @@ export const createBoatHost = ({ env = process.env, log }) => {
     parking: null,
     dockerReady: false,
     policy: Promise.resolve(),
+    /** The Docker policy: `absent` (no Docker), `pending`, `applied` or `failed`. */
+    policyState: dockerCapable ? "pending" : "absent",
   };
 
   const bootId = () => {
@@ -564,7 +572,7 @@ export const createBoatHost = ({ env = process.env, log }) => {
    * (bound this boot, never launched), or `proceed`. `agentLaunched`: whether THIS agent process
    * accepted the launch (and so holds the boot env a recovery starts from).
    */
-  const recoverDecision = ({ runId, agentLaunched }) => {
+  const recoverDecision = ({ runId, agentLaunched, agentActive }) => {
     const boot = bootId();
     if (boot === null) return { kind: "refuse", reason: "recover-state-unknown" };
     const bind = readRecord(paths.bindFile);
@@ -574,7 +582,13 @@ export const createBoatHost = ({ env = process.env, log }) => {
     }
     const launch = launchRecord();
     if (launch.kind === "unreadable") return { kind: "refuse", reason: "recover-state-unknown" };
-    if (launch.kind === "absent") return { kind: "nothing-to-save" };
+    // `nothing-to-save` is a positive fact: bound this boot, no launch recorded, and this agent
+    // neither launching nor holding a daemon. Anything else without a record is not known.
+    if (launch.kind === "absent") {
+      return agentActive
+        ? { kind: "refuse", reason: "recover-state-unknown" }
+        : { kind: "nothing-to-save" };
+    }
     if (launch.value.boot_id !== boot) return { kind: "refuse", reason: "recover-new-boot" };
     if (launch.value.run_id !== runId) {
       return { kind: "refuse", reason: "recover-binding-conflict" };
@@ -660,12 +674,18 @@ export const createBoatHost = ({ env = process.env, log }) => {
       return { status: 409, body: { reason: "parked" } };
     }
     if (host.parking === null) {
+      // From here no launch or recovery is accepted on this boot, whether or not this attempt
+      // completes: the daemon is being killed. The same operation can be retried.
       host.parked = operationId;
       host.parking = (async () => {
         const boot = bootId();
         log(`park ${operationId}: closing`);
         await stopDaemon();
         const docker = await stopDocker();
+        if (docker === "unverified") {
+          // Never a receipt saying Docker stopped when it cannot be proved.
+          throw new Refusal("docker-stop-unverified", 503);
+        }
         const synced = await run(commands.sync, [], { timeoutMs: 60_000 });
         if (synced.code !== 0) log(`park ${operationId}: sync exited ${String(synced.code)}`);
         await writeAtomic(
@@ -684,7 +704,14 @@ export const createBoatHost = ({ env = process.env, log }) => {
         log(`park ${operationId}: closed`);
       })();
     }
-    await host.parking;
+    try {
+      await host.parking;
+    } catch (error) {
+      host.parking = null;
+      log(`park ${operationId}: not closed (${error instanceof Refusal ? error.reason : "error"})`);
+      if (error instanceof Refusal) return { status: error.status, body: { reason: error.reason } };
+      throw error;
+    }
     return { status: 200, body: await receiptResponse(file) };
   };
 
@@ -854,7 +881,12 @@ export const createBoatHost = ({ env = process.env, log }) => {
   const networkStatus = async () => {
     const record = networkRecord();
     if (record === null || record.status !== "configured") {
-      return { configured: false, handshake: "unverified", dns: "unavailable" };
+      return {
+        configured: false,
+        handshake: "unverified",
+        dns: "unavailable",
+        docker_policy: host.policyState,
+      };
     }
     const [handshakes, dns] = await Promise.all([
       run(commands.wg, ["show", WIREGUARD_INTERFACE, "latest-handshakes"]),
@@ -870,6 +902,8 @@ export const createBoatHost = ({ env = process.env, log }) => {
       configured: true,
       handshake: verified ? "verified" : "unverified",
       dns: dns ? "udp-and-tcp" : "unavailable",
+      // A Docker image is ready only once containers are held to the gateway's allowance.
+      docker_policy: host.policyState,
     };
   };
 
@@ -881,36 +915,84 @@ export const createBoatHost = ({ env = process.env, log }) => {
    * talks to; the private and special ranges are dropped. Applied whole each time (flush, fill),
    * so it is idempotent. Health does not depend on it; a failure is logged.
    */
+  /**
+   * What containers may do, as one `iptables-restore` and one `ip6tables-restore` input, so each
+   * family's policy changes atomically (`--noflush` keeps Docker's own chains; a chain named in
+   * the input is replaced whole):
+   * - DOCKER-USER (forwarded traffic of bridged containers): replies; Docker's own networks
+   *   (`--bip` 198.18.1.0/24, pools 198.19.0.0/16); the resource subnet and the gateway's DNS
+   *   through the tunnel. The tunnel's endpoint and every private, metadata and reserved range
+   *   are dropped. Everything else (the Internet) returns to Docker's chains.
+   * - SEALANT-DOCKER-INPUT (from INPUT): no new connection from a Docker bridge to the VM itself.
+   * - IPv6: nothing forwarded for a container at all, and nothing new from a bridge to the VM.
+   *   The gateway allows IPv4 only, and an `--ipv6` network must not open what it does not.
+   */
+  const policyInputs = (record) => {
+    const subnet = record.config.subnet;
+    const endpoint = record.config.endpoint;
+    const fromBridges = ["-i docker0", "-i br-+"];
+    const v4 = [
+      "*filter",
+      ":DOCKER-USER - [0:0]",
+      ":SEALANT-DOCKER-INPUT - [0:0]",
+      "-A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN",
+      ...DOCKER_NETWORKS.map((cidr) => `-A DOCKER-USER -d ${cidr} -j RETURN`),
+      `-A DOCKER-USER -o ${WIREGUARD_INTERFACE} -d ${subnet} -j RETURN`,
+      `-A DOCKER-USER -o ${WIREGUARD_INTERFACE} -d ${GATEWAY}/32 -p udp --dport 53 -j RETURN`,
+      `-A DOCKER-USER -o ${WIREGUARD_INTERFACE} -d ${GATEWAY}/32 -p tcp --dport 53 -j RETURN`,
+      `-A DOCKER-USER -d ${endpoint}/32 -j DROP`,
+      ...DENIED.map((cidr) => `-A DOCKER-USER -d ${cidr} -j DROP`),
+      "-A DOCKER-USER -j RETURN",
+      ...fromBridges.map(
+        (match) => `-A SEALANT-DOCKER-INPUT ${match} -m conntrack --ctstate NEW -j DROP`,
+      ),
+      "COMMIT",
+      "",
+    ].join("\n");
+    const v6 = [
+      "*filter",
+      ":DOCKER-USER - [0:0]",
+      ":SEALANT-DOCKER-INPUT - [0:0]",
+      "-A DOCKER-USER -j DROP",
+      ...fromBridges.map(
+        (match) => `-A SEALANT-DOCKER-INPUT ${match} -m conntrack --ctstate NEW -j DROP`,
+      ),
+      "COMMIT",
+      "",
+    ].join("\n");
+    return { v4, v6 };
+  };
+
+  /**
+   * Once dockerd is up AND the network is configured (either order), apply the policy; then make
+   * sure INPUT and FORWARD reach its chains. Its state is part of `GET /sealant/network`, so a
+   * policy that did not apply refuses readiness instead of failing open.
+   */
   const applyDockerPolicy = () => {
     const record = networkRecord();
     if (!host.dockerReady || record === null || record.status !== "configured") {
       return host.policy;
     }
-    const subnet = record.config.subnet;
-    const rules = [
-      ["-N", "DOCKER-USER"],
-      ["-F", "DOCKER-USER"],
-      ["-A", "DOCKER-USER", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "RETURN"],
-      ["-A", "DOCKER-USER", "-d", "198.18.0.0/15", "-j", "RETURN"],
-      ["-A", "DOCKER-USER", "-o", WIREGUARD_INTERFACE, "-d", subnet, "-j", "RETURN"],
-      ["-A", "DOCKER-USER", "-d", `${GATEWAY}/32`, "-p", "udp", "--dport", "53", "-j", "RETURN"],
-      ["-A", "DOCKER-USER", "-d", `${GATEWAY}/32`, "-p", "tcp", "--dport", "53", "-j", "RETURN"],
-      ...DENIED.map((cidr) => ["-A", "DOCKER-USER", "-d", cidr, "-j", "DROP"]),
-      ["-A", "DOCKER-USER", "-j", "RETURN"],
-    ];
+    const { v4, v6 } = policyInputs(record);
+    const hooked = async (iptables, chain, target) =>
+      (await run(iptables, ["-C", chain, "-j", target])).code === 0 ||
+      (await run(iptables, ["-I", chain, "1", "-j", target])).code === 0;
     const apply = async () => {
-      for (const [index, rule] of rules.entries()) {
-        const result = await run(commands.iptables, rule);
-        // The chain may exist already (dockerd makes it): creating it again is not a failure.
-        if (result.code !== 0 && index !== 0) {
-          log(`docker policy: iptables ${rule.join(" ")} exited ${String(result.code)}`);
-          return false;
-        }
-      }
-      log("docker policy: DOCKER-USER applied");
-      return true;
+      host.policyState = "pending";
+      const restored = await Promise.all([
+        run(commands.iptablesRestore, ["--noflush"], { input: v4 }),
+        run(commands.ip6tablesRestore, ["--noflush"], { input: v6 }),
+      ]);
+      const ok =
+        restored.every((result) => result.code === 0) &&
+        (await hooked(commands.iptables, "INPUT", "SEALANT-DOCKER-INPUT")) &&
+        (await hooked(commands.ip6tables, "INPUT", "SEALANT-DOCKER-INPUT")) &&
+        (await hooked(commands.ip6tables, "FORWARD", "DOCKER-USER"));
+      host.policyState = ok ? "applied" : "failed";
+      log(`docker policy: ${host.policyState}`);
+      return ok;
     };
-    host.policy = host.policy.then(apply);
+    host.policy = host.policy.then(apply, apply);
     return host.policy;
   };
 

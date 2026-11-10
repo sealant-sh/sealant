@@ -45,7 +45,6 @@ import http from "node:http";
 import net from "node:net";
 import path from "node:path";
 
-import { createBoatHost } from "./boat-host.mjs";
 import {
   createDockerService,
   stopGuestProcessGroup as stopProcessGroup,
@@ -127,10 +126,21 @@ const DOCKER_ADDRESS_POOLS = (process.env.SEALANT_MICROVM_DOCKER_ADDRESS_POOLS ?
   .map((entry) => entry.trim())
   .filter((entry) => entry !== "");
 const DOCKER_GROUP = process.env.SEALANT_MICROVM_DOCKER_GROUP;
+// Boat: the cgroup dockerd puts every container under (`--cgroup-parent`), and its path, so a
+// park or recovery can kill what a forced dockerd stop left (containerd's shims run in their own
+// process groups) and prove nothing of Docker still runs.
+const DOCKER_CGROUP_PARENT = process.env.SEALANT_MICROVM_DOCKER_CGROUP_PARENT;
+const DOCKER_CGROUP_PATH = process.env.SEALANT_MICROVM_DOCKER_CGROUP_PATH;
+const DOCKER_CONTAINER_STOP_SECONDS = process.env.SEALANT_MICROVM_DOCKER_CONTAINER_STOP_SECONDS;
+const DOCKER_SHIM = process.env.SEALANT_MICROVM_DOCKER_SHIM;
 const DOCKER_SERVICE_OPTIONS = {
   bridgeIp: DOCKER_BIP,
   addressPools: DOCKER_ADDRESS_POOLS,
   group: DOCKER_GROUP,
+  cgroupParent: DOCKER_CGROUP_PARENT,
+  cgroupPath: DOCKER_CGROUP_PATH,
+  containerStopSeconds: DOCKER_CONTAINER_STOP_SECONDS,
+  shimPath: DOCKER_SHIM,
   dockerdPath: DOCKERD,
   dockerPath: DOCKER,
   socketPath: DOCKER_SOCKET,
@@ -212,7 +222,11 @@ const log = (line) => {
   console.log(`${new Date().toISOString()} agent: ${line}`);
 };
 
-const boatHost = BOAT ? createBoatHost({ log }) : null;
+// Loaded on Boat only: a Lambda image ships agent.mjs and docker-service.mjs, nothing else
+// (`MICROVM_AGENT_FILES`), and must start without the Boat module.
+const boatHost = BOAT
+  ? (await import("./boat-host.mjs")).createBoatHost({ log, dockerCapable: DOCKER_CAPABLE })
+  : null;
 
 /**
  * Boat: arm the agent from the bind the CLI left, if it has no bearer yet. The bearer is both
@@ -1071,12 +1085,20 @@ const handleLaunch = async (req, res) => {
   return json(res, 200, { outcome: "booting" });
 };
 
-/** Boat: stop the guest Docker service for a park; `absent` when none was ever started. */
+/**
+ * Boat: stop the guest Docker service for a park: `absent` when none was ever started, `stopped`
+ * only when the service proved nothing of Docker still runs (containers given their stop grace,
+ * then dockerd, then its cgroup and any engine process killed), `unverified` otherwise.
+ */
 const stopDockerForPark = async () => {
   if (state.dockerService === null && imageValidation.dockerService === null) return "absent";
   boatHost?.markDockerStopped();
-  await Promise.all([imageValidation.dockerService?.stop(), state.dockerService?.stop()]);
-  return "stopped";
+  const stopped = await Promise.all(
+    [imageValidation.dockerService, state.dockerService]
+      .filter((service) => service !== null)
+      .map((service) => service.stop()),
+  );
+  return stopped.every((result) => result.verified === true) ? "stopped" : "unverified";
 };
 
 /** Boat: SIGKILL the daemon's process group (the namespace dies with its init) and wait. */
@@ -1342,6 +1364,9 @@ const handleRecover = async (req, res) => {
     const decision = boatHost.recoverDecision({
       runId: body.runId,
       agentLaunched: state.launchAccepted && state.bootEnv !== null,
+      // Whatever this process knows that the records may not say yet (a launch writing its
+      // material) or no longer say (a record removed under a running daemon).
+      agentActive: state.launchInProgress || state.launchAccepted || state.daemon !== null,
     });
     if (decision.kind === "refuse") return json(res, 409, { reason: decision.reason });
     if (decision.kind === "nothing-to-save") {
@@ -1366,6 +1391,11 @@ const handleRecover = async (req, res) => {
     // user code and needs no guest service), and a dockerd left running would start them again.
     boatHost?.markDockerStopped();
     const docker = await state.dockerService?.stop();
+    // Boat proves Docker gone (a forced dockerd stop leaves containerd's shims and containers).
+    if (BOAT && docker !== undefined && docker.verified !== true) {
+      log("recover: the guest Docker service could not be proved stopped; nothing started");
+      return json(res, 503, { reason: "docker-stop-unverified" });
+    }
     if (docker !== undefined && docker.ok === false && docker.killed !== true) {
       log("recover: the guest Docker service did not stop; nothing started");
       return message(res, 503, "the guest Docker service did not stop");

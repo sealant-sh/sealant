@@ -10,6 +10,9 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
+  readlinkSync,
+  writeFileSync,
   writeSync,
 } from "node:fs";
 import path from "node:path";
@@ -38,6 +41,8 @@ const DOCKER_ENV_KEYS = [
   "DOCKER_TLS_VERIFY",
   "DOCKER_CERT_PATH",
 ];
+
+const nonEmpty = (value) => (typeof value === "string" && value !== "" ? value : null);
 
 const positiveInteger = (value, fallback) => {
   const parsed = Number(value);
@@ -283,6 +288,19 @@ export const createDockerService = (options) => {
     ? options.addressPools.filter((pool) => typeof pool === "string" && pool !== "")
     : [];
   const group = typeof options.group === "string" && options.group !== "" ? options.group : null;
+  // Optional: the cgroup every container is put under, and its path in the cgroup filesystem,
+  // so a stop can kill and then prove empty what dockerd's own process group does not hold
+  // (containerd's shims run in their own groups). A slice name selects systemd's driver.
+  const cgroupParent = nonEmpty(options.cgroupParent);
+  const cgroupPath = nonEmpty(options.cgroupPath);
+  const shimPath = nonEmpty(options.shimPath);
+  // Optional: stop every container (`docker stop -t N`) before dockerd itself is signalled.
+  const containerStopSeconds =
+    Number.isInteger(Number(options.containerStopSeconds)) &&
+    Number(options.containerStopSeconds) > 0
+      ? Number(options.containerStopSeconds)
+      : null;
+  const verifiesStop = cgroupPath !== null || shimPath !== null;
   const dockerdArgs = [
     "--host",
     dockerHost,
@@ -295,6 +313,13 @@ export const createDockerService = (options) => {
     ...(bridgeIp === null ? [] : ["--bip", bridgeIp]),
     ...addressPools.flatMap((pool) => ["--default-address-pool", pool]),
     ...(group === null ? [] : ["--group", group]),
+    ...(cgroupParent === null
+      ? []
+      : [
+          "--cgroup-parent",
+          cgroupParent,
+          ...(cgroupParent.endsWith(".slice") ? ["--exec-opt", "native.cgroupdriver=systemd"] : []),
+        ]),
   ];
   const probeArgs = ["--host", dockerHost, "info"];
   const socketDirectory = path.dirname(socketPath);
@@ -557,26 +582,144 @@ export const createDockerService = (options) => {
     }
   };
 
+  /** A Docker CLI call against this daemon, bounded; never throws. */
+  const dockerCommand = async (args, timeoutMs) => {
+    let child;
+    try {
+      child = spawn(dockerPath, ["--host", dockerHost, ...args], {
+        detached: true,
+        env,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      return { code: null, stdout: "" };
+    }
+    options.onSpawn?.(child, "docker-probe");
+    let stdout = "";
+    child.stdout.on("data", (chunk) => {
+      if (stdout.length < 1024 * 1024) stdout += chunk.toString("utf8");
+    });
+    const killTimer = setTimeout(() => stopGuestProcessGroup(child, "SIGKILL"), timeoutMs);
+    killTimer.unref();
+    try {
+      // `once` rejects on the child's `error`: a CLI that could not start answers no code.
+      const [code] = await once(child, "close");
+      return { code, stdout };
+    } catch {
+      return { code: null, stdout: "" };
+    } finally {
+      clearTimeout(killTimer);
+    }
+  };
+
+  /** Give every container its stop grace (`docker stop -t N`) while dockerd still runs. */
+  const stopContainers = async () => {
+    if (containerStopSeconds === null || dockerd === null || dockerdClosed) return;
+    const listed = await dockerCommand(["ps", "--quiet", "--no-trunc"], 10_000);
+    const ids = listed.stdout.split("\n").filter((id) => /^[a-f0-9]{12,64}$/.test(id));
+    if (listed.code !== 0 || ids.length === 0) return;
+    await dockerCommand(
+      ["stop", "--time", String(containerStopSeconds), ...ids],
+      (containerStopSeconds + 15) * 1000,
+    );
+  };
+
+  // The engine's binaries: a process running one of them after a stop is Docker still running.
+  const dockerBinaries = new Set(
+    [dockerdPath, path.join(path.dirname(dockerdPath), "containerd"), shimPath].filter(
+      (binary) => typeof binary === "string" && binary !== "",
+    ),
+  );
+  const dockerProcesses = () => {
+    let names;
+    try {
+      names = readdirSync("/proc");
+    } catch {
+      return [];
+    }
+    const found = [];
+    for (const name of names) {
+      if (!/^\d+$/.test(name)) continue;
+      try {
+        const executable = readlinkSync(`/proc/${name}/exe`).replace(/ \(deleted\)$/, "");
+        if (dockerBinaries.has(executable)) found.push(Number(name));
+      } catch {
+        // Gone, or another user's process: not ours to judge.
+      }
+    }
+    return found;
+  };
+  const cgroupPopulated = () => {
+    if (cgroupPath === null) return false;
+    try {
+      return /^populated 1$/m.test(readFileSync(path.join(cgroupPath, "cgroup.events"), "utf8"));
+    } catch (error) {
+      // No such cgroup: nothing was ever put in it, or it is gone with its last process.
+      return error?.code !== "ENOENT";
+    }
+  };
+  /**
+   * After dockerd is gone: kill what it left (the containers' cgroup, then any process still
+   * running an engine binary) and prove that nothing of Docker runs. `false` when it cannot.
+   */
+  const sweepLeftovers = async () => {
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      const leftovers = dockerProcesses();
+      const populated = cgroupPopulated();
+      if (leftovers.length === 0 && !populated) return true;
+      if (Date.now() >= deadline) return false;
+      if (populated) {
+        try {
+          writeFileSync(path.join(cgroupPath, "cgroup.kill"), "1");
+        } catch {
+          // A kernel without cgroup.kill (before 5.14): the process sweep below still runs.
+        }
+      }
+      for (const pid of leftovers) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  };
+
   const stop = () => {
-    if (stopPromise !== null) return stopPromise;
+    // A stop already made is not repeated, but one that could not prove Docker gone is checked
+    // (and swept) again: a park or recovery that was refused for it can be retried.
+    if (stopPromise !== null) {
+      return stopPromise.then(async (result) =>
+        verifiesStop && result.verified !== true
+          ? { ...result, verified: await sweepLeftovers() }
+          : result,
+      );
+    }
     stopPromise = (async () => {
       stopping = true;
       clearProbeTimer();
       stopProbes();
+      await stopContainers();
       stopGuestProcessGroup(dockerd, "SIGTERM");
+      let result;
       if (await waitForDockerdClose(shutdownTimeoutMs)) {
-        return { ok: true, forced: false };
+        result = { ok: true, forced: false };
+      } else {
+        stopGuestProcessGroup(dockerd, "SIGKILL");
+        const killed = await waitForDockerdClose(shutdownTimeoutMs);
+        result = {
+          ok: false,
+          forced: true,
+          reason: "shutdown-timeout",
+          code: dockerd?.exitCode ?? null,
+          signal: dockerd?.signalCode ?? null,
+          killed,
+        };
       }
-      stopGuestProcessGroup(dockerd, "SIGKILL");
-      const killed = await waitForDockerdClose(shutdownTimeoutMs);
-      return {
-        ok: false,
-        forced: true,
-        reason: "shutdown-timeout",
-        code: dockerd?.exitCode ?? null,
-        signal: dockerd?.signalCode ?? null,
-        killed,
-      };
+      // `verified`: nothing of Docker runs any more (only when the service can tell).
+      return verifiesStop ? { ...result, verified: await sweepLeftovers() } : result;
     })();
     return stopPromise;
   };
