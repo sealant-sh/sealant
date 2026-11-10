@@ -22,6 +22,20 @@ export interface Defect {
   readonly intermittent?: boolean;
   /** Any one of these (see `firstOf`). */
   readonly anyOf?: readonly Defect[];
+  /**
+   * The defect leaves its launch for the owner's discard to release (e.g. Core keeps it as
+   * `retained`). Without this, a launch that releases only after a discard is a leak even when the
+   * marker excused the scenario's own failure.
+   */
+  readonly releasedByDiscard?: boolean;
+}
+
+/** How a scenario's body ended, as the release checks after it need to know. */
+export interface BodyOutcome {
+  /** The body threw, whether or not a marker then excused it. */
+  readonly bodyFailed: boolean;
+  /** The marker that excused the body's failure, if one did. */
+  readonly excusedBy: Defect | undefined;
 }
 
 /** Splits a failure into the scenario's own message and the evidence attached after it. */
@@ -77,8 +91,7 @@ export const expectDefect = async (defect: Defect, body: () => Promise<void>): P
 export const runScenario = async (
   defect: Defect | undefined,
   body: () => Promise<void>,
-  /** Told whether the body threw, even when a marker excused it: then a discard is cleanup. */
-  releaseChecks: (bodyFailed: boolean) => Promise<readonly string[]>,
+  releaseChecks: (outcome: BodyOutcome) => Promise<readonly string[]>,
 ): Promise<void> => {
   let failure: unknown;
   let threw = false;
@@ -95,7 +108,10 @@ export const runScenario = async (
   } catch (error) {
     failure = error;
   }
-  const leaks = await releaseChecks(threw);
+  const leaks = await releaseChecks({
+    bodyFailed: threw,
+    excusedBy: threw && failure === undefined ? defect : undefined,
+  });
   if (failure !== undefined) {
     if (leaks.length > 0 && failure instanceof Error)
       failure.message = `${failure.message}\nand left behind: ${leaks.join("\n")}`;
