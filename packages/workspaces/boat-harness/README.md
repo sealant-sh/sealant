@@ -185,12 +185,20 @@ fake's API rules and the wrapper. They need no Docker and run with the package's
 
 ## When the Ubuntu archive is unreachable
 
-The native build downloads from `archive.ubuntu.com`, as a Boat VM does. If the address DNS returns
-is unreachable from your network (as on 2026-11-10, when both returned IPv4 addresses stalled),
-`install-recipe` passes Boat's 600 s limit and every launch fails. For a local run only,
-`BOAT_HARNESS_UBUNTU_ARCHIVE_IP=<a working archive address>` pins `archive.ubuntu.com` and
-`security.ubuntu.com` (Canonical serves both from the same machines) in each twin's `/etc/hosts`.
-That changes what the guest resolves, so CI never sets it.
+The native build downloads from `archive.ubuntu.com`, as a Boat VM does, and the twin base image
+needs both the archive and `snapshot.ubuntu.com` (the only source of the pinned systemd) to build.
+An outage would fail every scenario and say nothing about Boat, so:
+
+- Before building, the stack probes the archive and then a full mirror of it
+  (`mirrors.edge.kernel.org`), as `recipe.e2e.ts` does. If only the mirror answers, the twin base
+  builds from it, and the twins run from a one-layer image over the base that points apt at the
+  mirror. The base itself always ends on the stock archive. If neither answers, the stack stops at
+  once and says so.
+- CI keeps the twin base image in the Actions cache, keyed by the files in `twin/`. A job builds it
+  only when they change, so it needs the snapshot service only then.
+- For a local run, `BOAT_HARNESS_UBUNTU_ARCHIVE_IP=<a working archive address>` instead pins
+  `archive.ubuntu.com` and `security.ubuntu.com` (Canonical serves both from the same machines) in
+  each twin's `/etc/hosts`. That changes what the guest resolves, so CI never sets it.
 
 ## What it cannot catch
 

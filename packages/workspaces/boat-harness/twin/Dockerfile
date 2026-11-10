@@ -5,9 +5,18 @@
 FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
 ARG SNAPSHOT=https://snapshot.ubuntu.com/ubuntu/20260731T000000Z
 ARG SYSTEMD_VERSION=255.4-1ubuntu8.16
+# Where this build reads Ubuntu before the snapshot takes over: the stock archive, or a full mirror
+# of it when the archive is down (the stack probes both, as recipe.e2e.ts does). Either way the
+# image ends on the stock archive, as a Boat VM does; the stack points a derived image at the mirror
+# when it must. A fetch error fails the build at once.
+ARG UBUNTU_ARCHIVE=http://archive.ubuntu.com/ubuntu
 ENV container=docker
 # The snapshot archive is HTTPS-only, so trust roots come from the base archive first.
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates \
+RUN if [ "${UBUNTU_ARCHIVE}" != http://archive.ubuntu.com/ubuntu ]; then \
+      sed -i -e "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_ARCHIVE}|g" \
+             -e "s|http://security.ubuntu.com/ubuntu|${UBUNTU_ARCHIVE}|g" /etc/apt/sources.list.d/ubuntu.sources; \
+    fi \
+    && apt-get update --error-on=any && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates \
     && sed -i "s|^URIs: .*|URIs: ${SNAPSHOT}|" /etc/apt/sources.list.d/ubuntu.sources \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades --no-install-recommends \
