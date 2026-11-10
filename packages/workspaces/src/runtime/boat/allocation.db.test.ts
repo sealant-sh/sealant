@@ -45,6 +45,7 @@ import {
 import { corruptBoatTunnel } from "@sealant/db/testing/boat-tunnels";
 import { nativeConsumerRows } from "@sealant/db/testing/native-publications";
 import { withWorkspaceJobTestDatabase } from "@sealant/db/testing/workspace-publications";
+import { closeJobQueueSingleton, getJobQueueSingleton } from "@sealant/jobs";
 import {
   boatExecutionRecordSchema,
   boatAllocationInputSchema,
@@ -62,6 +63,11 @@ import { z } from "zod";
 
 import { boatProofConfigSchema } from "../../operator/boat-live-check.js";
 import { makeBoatProofCore } from "../../operator/boat-proof-core.js";
+import {
+  boatResourceLinkQueue,
+  consumeBoatResourceLinkJobs,
+  publishBoatResourceLinkChanged,
+} from "../../queue/boat-resource-link-queue.js";
 import { BoatTunnelError } from "../../resources/boat-tunnel.js";
 import { makeResourceReconciler } from "../../resources/reconciler.js";
 import { postgresSpec } from "../../resources/resource.fixture.js";
@@ -74,6 +80,7 @@ import {
 } from "../../worker/boat-allocation.js";
 import { BoatReadiness, boatReadinessLayer } from "../../worker/boat-readiness.js";
 import {
+  BOAT_RESOURCE_PASS,
   BoatResources,
   BoatResourcesHost,
   boatResourcesLayer,
@@ -255,6 +262,8 @@ const test = async (
     ) => Effect.Effect<BoatResources["Service"], CredentialCipherError>;
     /** What the host asked its (recording) carrier to keep open. */
     carried: BoatTunnelCarrierInput[];
+    /** The runs whose carrier the host asked its (recording) carrier to release, in order. */
+    releasedCarriers: string[];
     tunnels: BoatTunnelRepo["Service"];
     resources: ResourceInstanceRepo["Service"];
     gateway: GatewayFixture;
@@ -348,11 +357,12 @@ const test = async (
         const gatewayHostId = randomUUID();
         // Every tunnel is carried: the carrier records what the host asked it to keep open.
         const carried: BoatTunnelCarrierInput[] = [];
+        const releasedCarriers: string[] = [];
         const recordingCarrier = Layer.succeed(
           BoatTunnelCarrier,
           BoatTunnelCarrier.of({
             ensure: (carrierInput) => Effect.sync(() => void carried.push(carrierInput)),
-            release: () => Effect.void,
+            release: (runId) => Effect.sync(() => void releasedCarriers.push(runId)),
             attached: () => Effect.succeed(false),
             settled: () => Effect.void,
           }),
@@ -502,6 +512,7 @@ const test = async (
               }),
             reopenResources,
             carried,
+            releasedCarriers,
             tunnels,
             resources,
             gateway,
@@ -4796,4 +4807,269 @@ describe.runIf(databaseUrl !== undefined)("Boat tunnel carriers at worker start"
       },
       { resourceGateway: false },
     ));
+});
+
+/** How the page of every allocation reports an ended run. */
+const closedRun = (runId: string) => ({ runId, outcome: "closed" });
+/** What a configuration touches: the gateway host, its subnets, the guest's network, a carrier. */
+const touched = (s: AllocationFixture) => ({
+  gateway: s.gateway.requests.length,
+  guest: s.guest.networkBodies.length,
+  subnets: s.gateway.subnetCalls,
+  carried: s.carried.length,
+});
+
+describe.runIf(databaseUrl !== undefined)("Boat resource links applied at once (#594)", () => {
+  /** The worker's resource tick: a page of live runs, then a page of every allocation. */
+  const ticker = (owner: BoatResources["Service"]) => {
+    const cursor: { all?: string | undefined; live?: string | undefined } = {};
+    return {
+      cursor,
+      tick: async () => {
+        const sweep = await execute(
+          owner.reconcile({
+            limit: 20,
+            ...(cursor.all === undefined ? {} : { after: cursor.all }),
+            live: {
+              limit: BOAT_RESOURCE_PASS.livePage,
+              ...(cursor.live === undefined ? {} : { after: cursor.live }),
+            },
+          }),
+        );
+        cursor.all = sweep.next;
+        cursor.live = sweep.live?.next;
+        return sweep;
+      },
+    };
+  };
+  /** A launched run linked to a resource, and the link Mend rewrites it to while it runs. */
+  const linkedRun = async (s: AllocationFixture) => {
+    await linkedResource(s);
+    const target = await launched(s);
+    const link = await execute(s.resources.linkOfRun(target.runId));
+    if (link === undefined) throw new Error("missing link");
+    expect(s.gateway.requests.at(-1)?.link).toEqual(link);
+    return { target, changed: { ...link, worktreeKey: ResourceWorktreeKey.make("other") } };
+  };
+
+  it("applies a changed link on the next tick, not after the sweep has paged through every ended run", () =>
+    test(async (s) => {
+      const { target, changed } = await linkedRun(s);
+      const ended = await endedRuns(s, 200);
+      expect(ended.every((id) => id < target.runId)).toBe(true);
+      await execute(s.resources.link(changed));
+      const worker = ticker(await execute(s.reopenResources()));
+      s.releasedCarriers.length = 0;
+      let requests = s.gateway.requests.length;
+
+      // The first tick after the change: the live run is configured with the new link, while the
+      // page of every allocation is still on the first twenty ended runs.
+      const first = await worker.tick();
+      expect(first.live).toEqual({ entries: [{ runId: target.runId, outcome: "configured" }] });
+      expect(s.gateway.requests).toHaveLength(requests + 1);
+      expect(s.gateway.requests.at(-1)?.link).toEqual(changed);
+      expect(await execute(s.resourceOwner.reach())).toEqual([changed]);
+      // Ended runs keep their pace and their treatment: twenty a tick, reported closed, their
+      // carriers released, and nothing of the live run's released.
+      expect(first.entries).toEqual(ended.slice(0, 20).map(closedRun));
+      expect(first.next).toBe(ended[19]);
+      expect(s.releasedCarriers.toSorted()).toEqual(ended.slice(0, 20));
+
+      // Every later tick configures the live run once: also the eleventh, whose page of every
+      // allocation holds the run and reports the outcome the live page had.
+      let ticks = 1;
+      let sweep = first;
+      while (worker.cursor.all !== undefined) {
+        requests = s.gateway.requests.length;
+        sweep = await worker.tick();
+        ticks += 1;
+        expect(s.gateway.requests).toHaveLength(requests + 1);
+        expect(sweep.live?.entries).toEqual([{ runId: target.runId, outcome: "configured" }]);
+        if (ticks <= 10)
+          expect(sweep.entries).toEqual(ended.slice((ticks - 1) * 20, ticks * 20).map(closedRun));
+      }
+      expect(ticks).toBe(11);
+      expect(sweep.entries).toEqual([{ runId: target.runId, outcome: "configured" }]);
+      expect(s.releasedCarriers.toSorted()).toEqual(ended);
+    }));
+
+  it("pages live runs by a cursor of their own, and visits none on a foreign gateway host", () =>
+    test(async (s) => {
+      const { target } = await linkedRun(s);
+      await endedRuns(s, 20);
+      const requests = s.gateway.requests.length;
+      // A full page of live runs hands back a cursor; the page after the last run is empty and
+      // starts the next tick from the beginning.
+      const full = await execute(s.resourceOwner.reconcile({ limit: 20, live: { limit: 1 } }));
+      expect(full.live).toEqual({
+        entries: [{ runId: target.runId, outcome: "configured" }],
+        next: target.runId,
+      });
+      const after = await execute(
+        s.resourceOwner.reconcile({ limit: 20, live: { limit: 1, after: target.runId } }),
+      );
+      expect(after.live).toEqual({ entries: [] });
+      expect(s.gateway.requests).toHaveLength(requests + 1);
+      // Without `live` a call is the page of every allocation alone, as before.
+      expect(await execute(s.resourceOwner.reconcile({ limit: 20 }))).not.toHaveProperty("live");
+      const foreign = await execute(s.reopenResources(randomUUID()));
+      expect((await execute(foreign.reconcile({ limit: 20, live: { limit: 20 } }))).live).toEqual({
+        entries: [],
+      });
+    }));
+
+  it("applies a link when the API's message arrives, without a tick, and a burst of re-links is one application", () =>
+    test(async (s) => {
+      const { target, changed } = await linkedRun(s);
+      await endedRuns(s, 200);
+      await execute(s.resources.link(changed));
+      const message = { workspaceId: target.workspaceId, runId: target.runId };
+      try {
+        // The link route's message, five times over: one waits in the queue.
+        for (let i = 0; i < 5; i += 1) await publishBoatResourceLinkChanged(s.databaseUrl, message);
+        const { boss } = await getJobQueueSingleton(s.databaseUrl);
+        const waiting = async () =>
+          (await boss.findJobs(boatResourceLinkQueue.name)).filter(
+            (job) => job.state === "created",
+          );
+        expect(await waiting()).toHaveLength(1);
+        const before = touched(s);
+        s.releasedCarriers.length = 0;
+        // The worker's consumer, as `startWorkspaceWorker` registers it. No tick runs here.
+        const outcomes: string[] = [];
+        const consumer = await consumeBoatResourceLinkJobs({
+          databaseUrl: s.databaseUrl,
+          concurrency: BOAT_RESOURCE_PASS.linkJobs,
+          onMessage: async (delivery) => {
+            outcomes.push(await execute(s.resourceOwner.apply(delivery.message.runId)));
+          },
+        });
+        await vi.waitFor(() => expect(outcomes).toHaveLength(1), { timeout: 15_000 });
+        await consumer.cancel();
+        expect(outcomes).toEqual(["configured"]);
+        expect(await waiting()).toEqual([]);
+        expect(s.gateway.requests).toHaveLength(before.gateway + 1);
+        expect(s.gateway.requests.at(-1)?.link).toEqual(changed);
+        expect(await execute(s.resourceOwner.reach())).toEqual([changed]);
+        expect(s.releasedCarriers).toEqual([]);
+        // Applying it again finds nothing to change and breaks nothing.
+        expect(await execute(s.resourceOwner.apply(target.runId))).toBe("configured");
+        expect(s.gateway.requests.at(-1)?.link).toEqual(changed);
+      } finally {
+        await closeJobQueueSingleton();
+      }
+    }));
+
+  it("configures a run for one caller at a time: a link job waits out the tick's visit, then applies the link it may have missed", () =>
+    test(async (s) => {
+      const { target, changed } = await linkedRun(s);
+      // Twenty ended runs fill the tick's page of every allocation: the live run is not on it.
+      await endedRuns(s, 20);
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let replies = 0;
+      s.gateway.beforeReply = async () => {
+        replies += 1;
+        if (replies > 1) return;
+        entered.resolve();
+        await release.promise;
+      };
+      const requests = s.gateway.requests.length;
+      s.releasedCarriers.length = 0;
+      const tick = execute(s.resourceOwner.reconcile({ limit: 20, live: { limit: 20 } }));
+      await entered.promise;
+      // The link changes while the tick's configuration is at the gateway host, and its job runs.
+      await execute(s.resources.link(changed));
+      const applied = execute(s.resourceOwner.apply(target.runId));
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(s.gateway.requests).toHaveLength(requests + 1);
+      } finally {
+        release.resolve();
+      }
+      // The tick's visit read the link before the change and refuses to finish on it.
+      expect((await tick).live).toEqual({ entries: [{ runId: target.runId, outcome: "held" }] });
+      expect(await applied).toBe("configured");
+      expect(s.gateway.requests).toHaveLength(requests + 2);
+      expect(s.gateway.requests.at(-1)?.link).toEqual(changed);
+      expect(s.releasedCarriers).not.toContain(target.runId);
+    }));
+
+  it("never configures a run launched without resources, from a tick or from a link job", () =>
+    test(
+      async (s) => {
+        const target = await launched(s);
+        expect(await execute(s.resourceOwner.apply(target.runId))).toBe("no-resources");
+        const sweep = await execute(s.resourceOwner.reconcile({ limit: 20, live: { limit: 20 } }));
+        expect(sweep.live).toEqual({ entries: [] });
+        expect(sweep.entries).toEqual([{ runId: target.runId, outcome: "no-resources" }]);
+        expect(s.releasedCarriers).toEqual([]);
+        await expectNoGateway(s);
+      },
+      { resources: "none" },
+    ));
+
+  it("configures nothing on a deployment with no resource gateway", () =>
+    test(
+      async (s) => {
+        const target = await execute(s.allocations.prepare(s.input));
+        await execute(s.executor.stage(target.runtimeInstanceId, Redacted.make(launchMaterial())));
+        expect(await execute(s.resourceOwner.apply(target.runId))).toBe("unavailable");
+        expect(
+          (await execute(s.resourceOwner.reconcile({ limit: 20, live: { limit: 20 } }))).live,
+        ).toEqual({ entries: [] });
+        await expectNoGateway(s);
+      },
+      { resourceGateway: false },
+    ));
+
+  it("leaves a stopping run as its close froze it, from a tick or from a link job, and the close ends as before", () =>
+    test(async (s) => {
+      const { target, changed } = await linkedRun(s);
+      await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+      s.gateway.allowRemoval = true;
+      s.carried.length = 0;
+      s.releasedCarriers.length = 0;
+      const before = touched(s);
+      // A stop was requested and its close has not begun: a link job changes nothing.
+      await execute(s.resources.link(changed));
+      expect(await execute(s.resourceOwner.apply(target.runId))).toBe("held");
+      expect(touched(s)).toEqual(before);
+
+      // The close holds the execution and freezes the tunnel, then waits on its FINAL drain.
+      const reached = await execute(Deferred.make<void>());
+      const open = await execute(Deferred.make<void>());
+      const { owner, daemon } = await execute(s.final([{ gated: savedStatus(), reached, open }]));
+      const closing = execute(owner.close(target));
+      await execute(Deferred.await(reached));
+      try {
+        const frozen = await tunnelRecord(s, target);
+        expect(frozen.closeId).toBeDefined();
+        expect((await execute(s.executions.get(target.runId)))?.phase).toBe("held");
+        expect(await execute(s.resourceOwner.apply(target.runId))).toBe("held");
+        expect(s.releasedCarriers).toEqual([]);
+        // The tick: no longer a live run, and the page of every allocation reports it held and
+        // releases its carrier, as the sweep did before.
+        const sweep = await execute(s.resourceOwner.reconcile({ limit: 20, live: { limit: 20 } }));
+        expect(sweep.live).toEqual({ entries: [] });
+        expect(sweep.entries).toEqual([{ runId: target.runId, outcome: "held" }]);
+        expect(s.releasedCarriers).toEqual([target.runId]);
+        expect(touched(s)).toEqual(before);
+        expect(await tunnelRecord(s, target)).toEqual(frozen);
+      } finally {
+        await execute(Deferred.succeed(open, undefined));
+      }
+      expect(await closing).toBe("closed");
+      expect(daemon.flushRequests.map((request) => request?.kind)).toEqual(["final"]);
+      expect(s.gateway.removeCalls).toBe(1);
+      expect(s.provider.deleteCalls).toBe(1);
+      expect(await tunnelRecord(s, target)).toMatchObject({
+        released: true,
+        removal: { id: s.provider.deletionId, completed: true },
+      });
+      expect(await execute(s.repo.get(target.runId))).toMatchObject({ phase: "deleted" });
+      // Closed: a late link job reports it and still touches nothing.
+      expect(await execute(s.resourceOwner.apply(target.runId))).toBe("closed");
+      expect(touched(s)).toEqual(before);
+    }));
 });

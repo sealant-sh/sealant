@@ -11,6 +11,8 @@ It provides:
 - a small queue definition type (`JobQueueDefinition`) that mirrors the old RabbitMQ topology: a
   durable queue plus a dead-letter queue, with no automatic retries
 - generic JSON publish/consume helpers (`publishJobQueueJson`, `consumeJobQueueJson`)
+- an optional collapse per key (`collapseWaiting` on the queue, `collapseKey` on a message): while
+  one message with a key waits, another with it is dropped, for messages that only say "look again"
 - an Effect service (`JobQueueServiceTag`) plus `createJobQueueService` for imperative call sites
 
 Workers wake on Postgres `LISTEN`/`NOTIFY`, with polling as the fallback, so enqueue-to-start

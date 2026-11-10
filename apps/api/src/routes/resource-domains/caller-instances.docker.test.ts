@@ -25,6 +25,7 @@ import { Context, Effect, Layer } from "effect";
 import { HttpRouter } from "effect/http";
 import { describe, expect, it } from "vitest";
 
+import { BoatResourceLinkPublisherService } from "../../services/control-plane-capabilities.js";
 import { ResourceRuntimeHost } from "../../services/resource-runtime.js";
 import { controlPlaneRoutes, gateControlPlane } from "../control-plane.fixture.js";
 import { ResourceDomainsHandlersLive } from "./resource-domains.http-api.js";
@@ -111,6 +112,8 @@ describe.skipIf(!enabled)("caller instances through the public SDK on real Docke
       const provides = Layer.mergeAll(
         assembly,
         Layer.succeed(ResourceRuntimeHost, { kind: "docker", runtime }),
+        // No workspace here runs on Boat: the link route has nothing to tell the worker.
+        Layer.succeed(BoatResourceLinkPublisherService, { publishLinkChanged: async () => {} }),
       );
       const groups: ReadonlyArray<"resourceDomains" | "resourceInstances"> = [
         "resourceDomains",

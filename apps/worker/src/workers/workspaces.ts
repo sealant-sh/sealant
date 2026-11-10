@@ -22,6 +22,7 @@ import { createGitHubSourceIntegration } from "@sealant/source-integrations";
 import { deleteExpiredRunRecords } from "@sealant/telemetry";
 import type { WorkerEnv } from "@sealant/validators/env";
 import {
+  BOAT_RESOURCE_PASS,
   BoatAllocation,
   boatConnectMaterial,
   boatResourceObligations,
@@ -31,6 +32,7 @@ import {
   makeResourceReconciler,
   repositorySubnets,
   resourceSubnetPools,
+  consumeBoatResourceLinkJobs,
   consumeRunExecJobs,
   sweepRunExecJobRows,
   sweepCredentialPlacements,
@@ -1001,6 +1003,9 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   const resourceTickTimer = setInterval(resourceTick, env.SEALANT_RESOURCE_TICK_MS);
   let boatCursor: string | undefined;
   let boatResourceCursor: string | undefined;
+  // Live runs have a cursor of their own, so a link is applied within ceil(live runs / page)
+  // ticks however many ended allocations the cursor above still has to page through.
+  let boatLiveResourceCursor: string | undefined;
   let boatCloseCursor: string | undefined;
   let boatSweepRunning = false;
   const runBoatSweep = async () => {
@@ -1032,9 +1037,19 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         const resources = await boatAssembly.reconcileResources({
           limit: 20,
           ...(boatResourceCursor === undefined ? {} : { after: boatResourceCursor }),
+          live: {
+            limit: BOAT_RESOURCE_PASS.livePage,
+            ...(boatLiveResourceCursor === undefined ? {} : { after: boatLiveResourceCursor }),
+          },
         });
         boatResourceCursor = resources.next;
-        const held = boatResourceObligations(resources.entries);
+        boatLiveResourceCursor = resources.live?.next;
+        // A live run both pages reached is listed once: the second reports the first's outcome.
+        const paged = new Set(resources.entries.map((entry) => entry.runId));
+        const held = boatResourceObligations([
+          ...(resources.live?.entries ?? []).filter((entry) => !paged.has(entry.runId)),
+          ...resources.entries,
+        ]);
         if (held.length > 0) console.warn("Boat resource obligations remain", { entries: held });
       }
       if (boatAssembly?.registration !== undefined) await boatAssembly.reconcileCatalog?.();
@@ -1049,13 +1064,42 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       boatSweepRunning = false;
     }
   };
+  // A link written or removed for a live Boat run is applied when the API says so, not at the
+  // run's next visit by the sweep above. The sweep is the fallback: a delivery that is lost, or
+  // that finds the run not ready to configure, is completed and nothing is retried.
+  const applyBoatLink = boatAssembly?.applyLink;
+  const boatLinkConsumer =
+    applyBoatLink === undefined
+      ? undefined
+      : await consumeBoatResourceLinkJobs({
+          databaseUrl: env.DATABASE_URL,
+          concurrency: BOAT_RESOURCE_PASS.linkJobs,
+          onMessage: async ({ message }) => {
+            try {
+              const outcome = await applyBoatLink(message.runId);
+              if (outcome !== "configured")
+                console.log("Boat resource link left to the sweep", {
+                  workspaceId: message.workspaceId,
+                  runId: message.runId,
+                  outcome,
+                });
+            } catch (error) {
+              console.error("Boat resource link job failed; the sweep applies the link", {
+                workspaceId: message.workspaceId,
+                runId: message.runId,
+                error:
+                  error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error),
+              });
+              throw error;
+            }
+          },
+        });
   const boatSweepTimer = boatRuntime === undefined ? undefined : setInterval(runBoatSweep, 30_000);
   boatSweepTimer?.unref();
   void runBoatSweep();
   // A restart dropped every tunnel carrier this worker held. The sweep above reopens a run's only
-  // as its resource cursor reaches it, twenty allocations a tick through every one the deployment
-  // ever had, so the last live run could wait minutes without its resources. Reopen the live
-  // runs' carriers now, beside the sweep: a carrier the sweep opens first is left as it is.
+  // when it configures it: twenty live runs a tick, each after a full configuration. Reopen every
+  // live run's carrier now, beside the sweep: a carrier the sweep opens first is left as it is.
   const reopenBoatCarriers = async () => {
     if (boatAssembly?.reopenCarriers === undefined) return;
     try {
@@ -1085,6 +1129,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       clearInterval(recoverySweepTimer);
       clearInterval(exitReconcilerTimer);
       if (boatSweepTimer !== undefined) clearInterval(boatSweepTimer);
+      // Before the Boat runtime goes: a delivery in flight finishes its configuration on it.
+      await boatLinkConsumer?.cancel();
       await boatRuntime?.dispose();
       await boatAssembly?.disposeCatalog?.();
       exitWatch.close();

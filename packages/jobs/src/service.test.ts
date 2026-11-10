@@ -157,6 +157,54 @@ describe.skipIf(databaseUrl === undefined)("job queue (pg-boss)", () => {
     });
   });
 
+  it("collapses messages that share a key while one waits, and queues one more behind a delivery being handled", async () => {
+    const queue = defineJobQueue(`test-collapse-${suffix}`, {
+      activeTimeoutSeconds: 60,
+      collapseWaiting: true,
+    });
+    const jobs = createJobQueueService(url);
+    const { boss } = await getJobQueueSingleton(url);
+    const waiting = async (key: string) =>
+      (await boss.findJobs<{ readonly key: string }>(queue.name)).filter(
+        (job) => job.state === "created" && job.data.key === key,
+      ).length;
+
+    // No consumer yet: a burst for one key leaves one delivery, and another key its own.
+    for (let i = 0; i < 5; i += 1)
+      await jobs.publishJson({ queue, message: { key: "a" }, collapseKey: "a" });
+    await jobs.publishJson({ queue, message: { key: "b" }, collapseKey: "b" });
+    expect(await waiting("a")).toBe(1);
+    expect(await waiting("b")).toBe(1);
+
+    const handled: string[] = [];
+    const { promise: firstTaken, resolve: resolveFirstTaken } = Promise.withResolvers<void>();
+    const { promise: release, resolve: resolveRelease } = Promise.withResolvers<void>();
+    const { promise: allHandled, resolve: resolveAll } = Promise.withResolvers<void>();
+    const consumer = await jobs.consumeJson<{ readonly key: string }>({
+      queue,
+      concurrency: 2,
+      parseMessage: (input) => input as { readonly key: string },
+      onMessage: async ({ message }) => {
+        if (message.key === "a" && !handled.includes("a")) {
+          resolveFirstTaken();
+          await release;
+        }
+        handled.push(message.key);
+        if (handled.length === 3) resolveAll();
+      },
+    });
+    await firstTaken;
+    // While "a" is being handled, a message for it is kept (the handler may have read stale
+    // state), and a burst still leaves only that one.
+    for (let i = 0; i < 3; i += 1)
+      await jobs.publishJson({ queue, message: { key: "a" }, collapseKey: "a" });
+    expect(await waiting("a")).toBe(1);
+    resolveRelease();
+    await allHandled;
+    await consumer.cancel();
+    expect(handled.toSorted()).toEqual(["a", "a", "b"]);
+  }, 20_000);
+
   it("keeps no row of a delivery taken with deleteOnPickup, whether it succeeds or fails", async () => {
     const queue = defineJobQueue(`test-delete-on-pickup-${suffix}`, { activeTimeoutSeconds: 60 });
     const jobs = createJobQueueService(url);

@@ -137,6 +137,12 @@ describe.skipIf(DATABASE_URL === undefined)("the worker's Boat assembly (Postgre
     expect(boat.reach).toBeUndefined();
     expect(await boat.reconcileCloses?.({ limit: 20 })).toEqual({ entries: [] });
     expect(await boat.reconcileResources?.({ limit: 20 })).toEqual({ entries: [] });
+    // A tick with its page of live runs, and a link job, find nothing to configure here.
+    expect(await boat.reconcileResources?.({ limit: 20, live: { limit: 20 } })).toEqual({
+      entries: [],
+      live: { entries: [] },
+    });
+    expect(await boat.applyLink?.("run_unknown")).toBe("pending");
     expect(boat.control).toBeDefined();
   });
 
@@ -152,6 +158,12 @@ describe.skipIf(DATABASE_URL === undefined)("the worker's Boat assembly (Postgre
     });
     expect(await boat.reach?.()).toEqual([]);
     expect(await boat.reconcileResources?.({ limit: 20 })).toEqual({ entries: [] });
+    expect(await boat.reconcileResources?.({ limit: 20, live: { limit: 20 } })).toEqual({
+      entries: [],
+      live: { entries: [] },
+    });
+    // A link job for a run this deployment never had changes nothing.
+    expect(await boat.applyLink?.("run_unknown")).toBe("pending");
   });
 
   it("refuses the gateway settings without the Docker resource host they run on", async () => {
@@ -164,6 +176,8 @@ describe.skipIf(DATABASE_URL === undefined)("the worker's Boat assembly (Postgre
     const keyOnly = await assemble(provider, undefined);
     expect(keyOnly).toMatchObject({ registration: undefined, control: undefined });
     expect(keyOnly?.reconcileCloses).toBeUndefined();
+    // No resource owner here: this worker takes no link jobs.
+    expect(keyOnly?.applyLink).toBeUndefined();
     const sweeps = await assemble({ ...provider, ...gateway }, dockerHost);
     expect(sweeps?.registration).toBeUndefined();
     expect(await sweeps?.reconcileCloses?.({ limit: 20 })).toEqual({ entries: [] });

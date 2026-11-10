@@ -49,6 +49,7 @@ export class ResourceInstanceRepoError extends Schema.TaggedError<ResourceInstan
       "unlink",
       "links",
       "linkedExecutors",
+      "liveBoatRuns",
       "allocateNetwork",
       "releaseNetwork",
       "networks",
@@ -231,6 +232,14 @@ export interface ResourceInstanceRepoService {
   readonly linkedExecutors: (
     resourceDomainId?: string,
   ) => Effect.Effect<ReadonlyArray<LinkedExecutor>, ResourceInstanceRepoError>;
+  /**
+   * The live Boat runs of a workspace (launching or ready, no stop requested), by run id. A Boat
+   * run reaches resources through a gateway only the worker configures, so these are the runs a
+   * link change is not applied to until the worker hears of it.
+   */
+  readonly liveBoatRuns: (
+    workspaceId: string,
+  ) => Effect.Effect<ReadonlyArray<string>, ResourceInstanceRepoError>;
   /**
    * The network's subnet: the one it holds, or the lowest free one of the pool. Concurrent
    * allocations get distinct subnets (the unique subnet decides the race).
@@ -777,6 +786,30 @@ export const ResourceInstanceRepoLive: Layer.Layer<ResourceInstanceRepo, never, 
                 rows.flatMap(({ executor, ...link }) =>
                   executor === null ? [] : [{ ...toLink(link), executor }],
                 ),
+            ),
+          ),
+        liveBoatRuns: (workspaceId) =>
+          withError(
+            "liveBoatRuns",
+            Effect.map(
+              db
+                .select({ runId: workspaceRuntimeInstances.runId })
+                .from(workspaceRunLinks)
+                .innerJoin(
+                  workspaceRuntimeInstances,
+                  eq(workspaceRuntimeInstances.runId, workspaceRunLinks.runId),
+                )
+                .where(
+                  and(
+                    eq(workspaceRunLinks.workspaceId, workspaceId),
+                    eq(workspaceRuntimeInstances.adapter, "boat"),
+                    inArray(workspaceRuntimeInstances.status, ["pending", "running", "ready"]),
+                    isNull(workspaceRuntimeInstances.stopReason),
+                    isNull(workspaceRuntimeInstances.finishedAt),
+                  ),
+                )
+                .orderBy(asc(workspaceRuntimeInstances.runId)),
+              (rows) => rows.map((row) => row.runId),
             ),
           ),
         allocateNetwork: ({ name, kind, owner, pool }) =>
