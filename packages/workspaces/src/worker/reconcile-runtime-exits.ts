@@ -77,10 +77,11 @@ import {
   hostDirectoryLaunchMaterialStager,
   type LaunchMaterialStager,
 } from "../runtime/launch-material.js";
-import type {
-  RuntimeAdapterLifecycle,
-  RuntimeAdapterExitWatch,
-  RuntimeAdapterInspectResult,
+import {
+  closesItsOwnExecutors,
+  type RuntimeAdapterLifecycle,
+  type RuntimeAdapterExitWatch,
+  type RuntimeAdapterInspectResult,
 } from "../runtime/runtime-adapter.js";
 import { SealantRuntimeControlLive, type SealantRuntime } from "../sealantd/runtime.js";
 import {
@@ -288,6 +289,15 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
           yield* Effect.logWarning(
             `Runtime exit reconciler: run ${instance.runId} (${adapter.id} ${resourceId}) is running with a failed guest service; left running. ${inspection.detail}`,
           );
+        }
+        continue;
+      }
+
+      // OWN-CLOSE GUARD (Boat; `closesItsOwnExecutors`): its ended executor is recorded for its
+      // own close owner, and nothing here drains, removes or settles it.
+      if (closesItsOwnExecutors(adapter)) {
+        if (yield* recordExitForCloseOwner(options, instance, adapter, resourceId, inspection)) {
+          recorded += 1;
         }
         continue;
       }
@@ -587,7 +597,13 @@ const settleUnsettledExecutors = (
         (candidate) => candidate.id === instance.adapter,
       );
       const inspect = adapter?.inspect;
-      if (resourceId === null || adapter === undefined || inspect === undefined) {
+      if (
+        resourceId === null ||
+        adapter === undefined ||
+        inspect === undefined ||
+        // OWN-CLOSE GUARD (Boat): its ended executors are its own close owner's to settle.
+        closesItsOwnExecutors(adapter)
+      ) {
         continue;
       }
       yield* Effect.gen(function* () {
@@ -658,6 +674,80 @@ const settleUnsettledExecutors = (
         ),
       );
     }
+  });
+
+/**
+ * OWN-CLOSE GUARD (Boat; `closesItsOwnExecutors`, removed with `closeCapture`). What the exit
+ * reconciler does for an ended executor of a runtime that closes its own, and all it does:
+ *
+ *  - `exited` with no stop requested (the daemon of a live session ended; its VM and disk did
+ *    not): recorded `failed` / `runtime-exited` with its retention, in one transaction. That is
+ *    the whole hand-over: a failed run's desired state is stopped, so the runtime's own close
+ *    owner takes it on its next pass (recovers the daemon on its own disk, drains FINAL, and
+ *    deletes the VM only once that is confirmed saved, or keeps it).
+ *  - `exited` with a stop requested: that stop's close is already at work. Nothing is written.
+ *  - `missing`: the runtime's own observation committed the absence (and the row with it) before
+ *    it answered; its close owner discharges what the executor held. Nothing is written.
+ *
+ * No daemon is probed or drained, no removal is authorized in the capture ledger, the adapter's
+ * `stop` is never called and no outcome is recorded on the drain: each belongs to the close owner
+ * until the stop is the shared path's. Answers whether an exit was recorded.
+ */
+const recordExitForCloseOwner = (
+  options: ReconcileRuntimeExitsEffectOptions,
+  instance: WorkspaceRuntimeInstance,
+  adapter: RuntimeAdapterLifecycle,
+  resourceId: string,
+  inspection: RuntimeEnd,
+): Effect.Effect<boolean, never, WorkspaceRuntimeInstanceRepo> =>
+  Effect.gen(function* () {
+    const where = `run ${instance.runId} (${adapter.id} ${resourceId})`;
+    if (inspection.state === "missing") {
+      yield* Effect.logWarning(
+        `Runtime exit reconciler: ${where} is gone: the runtime no longer has it. Its absence is recorded by the runtime's own observation, and its own close discharges what it held.`,
+      );
+      return false;
+    }
+    if (instance.stopReason !== null) {
+      return false;
+    }
+    const ledger = options.captureDrain?.ledger;
+    if (ledger === undefined) {
+      yield* Effect.logError(
+        `Runtime exit reconciler: ${where} ended, but this reconciler has no capture drain configured: not saved · kept · nothing recorded or removed.`,
+      );
+      return false;
+    }
+    const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
+    const reason =
+      "the executor's daemon ended and its disk holds work not confirmed saved; its runtime's own close recovers it and removes it only once its final flush is confirmed";
+    const exited = yield* withRetention(
+      ledger,
+      instance.runId,
+      reason,
+      Effect.suspend(() =>
+        runtimeInstances.markExited({
+          runId: instance.runId,
+          resourceId,
+          errorMessage: describeExit(instance, inspection),
+        }),
+      ),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logError(
+          `Runtime exit reconciler: recording the exit of ${where} failed (with its retention: neither was written); the runtime is left \`ready\` for the next sweep.`,
+          cause,
+        ).pipe(Effect.as(undefined)),
+      ),
+    );
+    if (exited === undefined) {
+      // Fenced out (a stop settled the row first), or nothing was written.
+      return false;
+    }
+    yield* Effect.logError(
+      `Runtime exit reconciler: ${where} exited with ${String(inspection.exitCode ?? "an unknown code")} while its machine runs on; recorded failed: not saved · executor exited · kept · ${reason}.`,
+    );
+    return true;
   });
 
 /**

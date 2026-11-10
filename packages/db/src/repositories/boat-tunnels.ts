@@ -79,7 +79,11 @@ export interface BoatTunnelRepoService {
     closeId: string,
   ) => Effect.Effect<BoatTunnelReservation, BoatTunnelStoreError>;
 
-  /** Monotonic exact provider deletion receipt, accepted only after canonical issuance. */
+  /**
+   * Monotonic exact provider deletion receipt, accepted only after canonical issuance. No longer
+   * called: every run's deletion operation is recorded on its allocation. A reservation written
+   * before that still carries its `removal`, which is read and never written again.
+   */
   readonly recordRemoval: (
     previous: BoatTunnelReservation,
     operation: { readonly id: string; readonly targetId: string; readonly completed: boolean },

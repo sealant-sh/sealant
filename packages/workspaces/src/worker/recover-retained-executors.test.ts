@@ -70,6 +70,8 @@ const harness = (input: {
   /** What the launch recorded of the executor (its daemon build). */
   readonly instance?: Partial<WorkspaceRuntimeInstance>;
   readonly targetOptions?: SealantTargetDerivationOptions;
+  /** The runtime ends its executors through a durable close owner of its own (Boat). */
+  readonly closesItsOwn?: boolean;
 }) => {
   const order: string[] = [];
   const ledger = inMemoryCaptureDrainLedger({ now: () => NOW });
@@ -115,6 +117,7 @@ const harness = (input: {
     order.push("recover");
     return (input.recover ?? (async () => ({ outcome: "restarted" as const })))();
   });
+  const inspect = vi.fn(async () => input.inspect);
   const staged: Array<{ runId: string; secretEnv: Readonly<Record<string, string>> }> = [];
   const stager = {
     stage: () => Promise.reject(new Error("unused")),
@@ -141,9 +144,10 @@ const harness = (input: {
       throw new Error("unused");
     },
     stop,
-    inspect: async () => input.inspect,
+    inspect,
     recover,
     parkRetained,
+    ...(input.closesItsOwn === true ? { closeCapture: async () => "retained" as const } : {}),
   };
   const daemon = input.daemon ?? fakeCaptureDaemon(["unreachable"]);
   const run = () =>
@@ -180,6 +184,7 @@ const harness = (input: {
     ledger,
     attempts,
     stop,
+    inspect,
     recover,
     parkRetained,
     markStopped,
@@ -575,6 +580,67 @@ describe("recoverRetainedExecutorsEffect · an executor whose removal is held (r
     expect((await h.run()).get("run_1")).toBe("released");
     expect(h.stop).toHaveBeenCalledOnce();
     expect(h.ledger.store.rows.get("run_1")?.deletion?.state).toBe("deleted");
+  });
+});
+
+describe("recoverRetainedExecutorsEffect · a runtime that closes its own executors (Boat's own-close guard)", () => {
+  it.each<readonly [string, RuntimeAdapterInspectResult]>([
+    ["its daemon ended and its machine runs on", { state: "exited", platformEnded: false }],
+    ["its machine is gone", { state: "missing" }],
+    ["it is still running", { state: "running" }],
+  ])(
+    "leaves a retained executor to that close when %s: nothing inspected, authorized, started or removed",
+    async (_what, inspection) => {
+      const daemon = fakeCaptureDaemon([savedStatus()]);
+      const h = harness({
+        adapterId: "boat",
+        inspect: inspection,
+        closesItsOwn: true,
+        daemon,
+        attempts: 2,
+        instance: { endpoint: "wss://fixture-8080.on.boat.dev/sealant/control" },
+        targetOptions: {
+          boatConnectMaterial: async () => {
+            throw new Error("the recovery sweep must not reach the daemon");
+          },
+        },
+      });
+      // Evidence that would let any other runtime's executor go, were it weighed here.
+      await Effect.runPromise(h.ledger.recordStatus("run_1", savedStatus(), NOW));
+
+      expect((await h.run()).get("run_1")).toBe("retained");
+
+      expect(h.inspect).not.toHaveBeenCalled();
+      expect(h.parkRetained).not.toHaveBeenCalled();
+      expect(h.recover).not.toHaveBeenCalled();
+      expect(h.stop).not.toHaveBeenCalled();
+      expect(h.markStopped).not.toHaveBeenCalled();
+      expect(daemon.calls).toEqual([]);
+      // No removal was authorized: the close owner's own authorization finds nothing held.
+      const row = h.ledger.store.rows.get("run_1");
+      expect(row?.deletion).toBeUndefined();
+      expect(row?.entry.retained).toBeDefined();
+      expect(row?.observation?.state).not.toBe("gone");
+      expect(row?.observation?.state).not.toBe("stopped");
+      // Counted and backed off like any executor this sweep cannot recover.
+      expect(h.attempts).toEqual([
+        {
+          runId: "run_1",
+          error: expect.stringContaining("left to the boat runtime's own close"),
+          nextRecoveryAt: new Date(
+            NOW + nextRecoveryDelayMs(2, { baseMs: 60_000, maxMs: 3_600_000 }),
+          ),
+        },
+      ]);
+    },
+  );
+
+  it("still releases the same executor of a runtime with no close of its own (the guard is the difference)", async () => {
+    const h = harness({ adapterId: "microvm", inspect: { state: "exited", platformEnded: false } });
+    await Effect.runPromise(h.ledger.recordStatus("run_1", savedStatus(), NOW));
+
+    expect((await h.run()).get("run_1")).toBe("released");
+    expect(h.stop).toHaveBeenCalledTimes(1);
   });
 });
 

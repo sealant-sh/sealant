@@ -70,9 +70,10 @@ import {
   hostDirectoryLaunchMaterialStager,
   type LaunchMaterialStager,
 } from "../runtime/launch-material.js";
-import type {
-  RuntimeAdapterLifecycle,
-  RuntimeAdapterRecoverResult,
+import {
+  closesItsOwnExecutors,
+  type RuntimeAdapterLifecycle,
+  type RuntimeAdapterRecoverResult,
 } from "../runtime/runtime-adapter.js";
 import { SealantRuntimeControlLive } from "../sealantd/runtime.js";
 import {
@@ -356,6 +357,18 @@ const recoverOne = (
         `${prefix}: not saved · retained · no runtime adapter is registered for '${instance.adapter}' on this worker.`,
       );
       return yield* retry(`no runtime adapter is registered for '${instance.adapter}'`);
+    }
+    // OWN-CLOSE GUARD (Boat; `closesItsOwnExecutors`, removed with `closeCapture`): its retained
+    // executor is recovered, drained and removed by the runtime's own close owner, under its own
+    // hold of the capture ledger. Nothing is inspected, authorized, started or removed from here:
+    // the retention stays on record and the attempt is counted, as it always was for a runtime
+    // this sweep cannot recover.
+    if (closesItsOwnExecutors(adapter)) {
+      const detail = `left to the ${adapter.id} runtime's own close, which recovers the executor on its own disk and removes it only once its final flush is confirmed`;
+      yield* (row.recoveryAttempts === 0 ? Effect.logInfo : Effect.logDebug)(
+        `${prefix}: retained · ${detail}.`,
+      );
+      return yield* retry(detail);
     }
     const executor = { runId, resourceId, reference };
     const stopReason = instance.stopReason ?? "failed";

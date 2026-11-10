@@ -4,9 +4,6 @@ import { isDeepStrictEqual } from "node:util";
 import {
   BoatAllocationRepo,
   BoatAllocationRepoLive,
-  type BoatAllocationStoreError,
-  type BoatTunnelStoreError,
-  type WorkspaceCaptureDrainRepoError,
   BoatExecutionRepo,
   BoatExecutionRepoLive,
   BoatObservationRepo,
@@ -27,7 +24,7 @@ import {
   type BoatTunnelReservation,
   type BoatAllocationRecord,
 } from "@sealant/validators";
-import { Clock, Context, Effect, Layer, Redacted, Ref, Result } from "effect";
+import { Clock, Context, Effect, Layer, Redacted, Result } from "effect";
 
 import { SealantRuntime, SealantRuntimeControlLive } from "../../sealantd/runtime.js";
 import { BoatResourcesHost } from "../../worker/boat-resources.js";
@@ -42,12 +39,17 @@ import {
   removeUnderDeletion,
   type CaptureDrainRead,
 } from "../../worker/capture-drain.js";
-import type { BoatApi, BoatDeletion } from "./api.js";
-import { boatSandboxIdSchema, boatDeletionIdSchema, type BoatResult } from "./config.js";
+import { boatSandboxIdSchema } from "./config.js";
 import { BoatDischarge, boatDischargeLayer } from "./discharge.js";
 import { BoatExecution, BoatExecutionError } from "./execution.js";
-import { BoatObserver, boatObserverLayer } from "./observation.js";
+import { BoatObserver, boatObserverLayer, type BoatPresence } from "./observation.js";
 import { BoatAllocationProvider } from "./provider.js";
+import {
+  BoatRemoval,
+  boatRemovalLayer,
+  type BoatRemovalError,
+  type BoatRemovalProvider,
+} from "./removal.js";
 
 /** How often a ready VM's presence is read. */
 const READY_OBSERVATION_MS = 60_000;
@@ -85,21 +87,6 @@ export class BoatFinalClose extends Context.Service<
     }) => Effect.Effect<BoatCloseSweep, BoatFinalCloseError>;
   }
 >()("@sealant/workspaces/boat/BoatFinalClose") {}
-/** The root supplies the allocation account; this service never discovers credentials. */
-export class BoatFinalCloseProvider extends Context.Service<
-  BoatFinalCloseProvider,
-  {
-    readonly api: Pick<BoatApi, "get" | "deleteSandbox" | "getDeletion">;
-    /**
-     * How long one close waits for Boat's deletion operation to complete, so the removal is
-     * recorded by the close that issued it rather than a later sweep. Default 20 s.
-     */
-    readonly deletionWaitMs?: number;
-  }
->()("@sealant/workspaces/boat/BoatFinalCloseProvider") {}
-
-const DELETION_WAIT_MS = 20_000;
-const DELETION_POLL_MS = 1_000;
 /**
  * How long a close waits to freeze its run's tunnel while a configuration of the same run is at
  * the gateway host, and how often it tries. The host lock is tried, never queued for, and it is
@@ -110,24 +97,17 @@ const DELETION_POLL_MS = 1_000;
 export const BOAT_CLOSE_FREEZE = { waitMs: 15_000, pollMs: 500 } as const;
 
 /**
- * Where a close keeps Boat's deletion operation between DELETE and `completed`, so a restarted
- * worker polls the operation it was given instead of issuing another. A run with a tunnel keeps it
- * on the tunnel reservation, frozen for the close. A run launched without resources has no tunnel
- * row: its allocation's own removal record keeps it, and the allocation is `deleting` from then on.
+ * The deletion operation a run has on record, if any: on its allocation, where every removal
+ * writes it, or on its tunnel reservation, where a close before that wrote it for a run with a
+ * tunnel. The tunnel's is read and never written.
  */
-type BoatCloseCustody =
-  | { readonly kind: "tunnel"; readonly reservation: BoatTunnelReservation }
-  | { readonly kind: "allocation"; readonly allocation: BoatAllocationRecord };
-
-/** The deletion operation a custody has recorded, if any. */
-const removalOf = (
-  custody: BoatCloseCustody,
-): { readonly id: string; readonly completed: boolean } | undefined =>
-  custody.kind === "tunnel"
-    ? custody.reservation.removal
-    : custody.allocation.removal?.kind === "operation"
-      ? { id: custody.allocation.removal.id, completed: custody.allocation.removal.completed }
-      : undefined;
+const recordedOf = (run: {
+  readonly allocation: BoatAllocationRecord;
+  readonly reservation: BoatTunnelReservation | undefined;
+}) =>
+  run.allocation.removal?.kind === "operation"
+    ? { id: run.allocation.removal.id, completed: run.allocation.removal.completed }
+    : run.reservation?.removal;
 
 const complete = (record: CaptureDrainRead) =>
   record.readable &&
@@ -149,7 +129,7 @@ const make: Effect.Effect<
   | WorkspaceRuntimeInstanceRepo
   | BoatExecution
   | BoatResourcesHost
-  | BoatFinalCloseProvider
+  | BoatRemoval
   | BoatObserver
   | SealantRuntime
 > = Effect.gen(function* () {
@@ -161,7 +141,7 @@ const make: Effect.Effect<
   const runtimes = yield* WorkspaceRuntimeInstanceRepo;
   const execution = yield* BoatExecution;
   const host = yield* BoatResourcesHost;
-  const provider = yield* BoatFinalCloseProvider;
+  const removal = yield* BoatRemoval;
   const runtime = yield* SealantRuntime;
   const observer = yield* BoatObserver;
   const observations = yield* BoatObservationRepo;
@@ -175,29 +155,18 @@ const make: Effect.Effect<
   });
   const parse = <A>(read: () => A) =>
     Effect.try({ try: read, catch: () => new BoatFinalCloseError("held") });
-  const call = <A>(request: () => Promise<BoatResult<A>>) =>
-    Effect.tryPromise({
-      try: request,
-      catch: () => new BoatFinalCloseError("unavailable"),
-    }).pipe(
-      Effect.flatMap((result) =>
-        result.ok
-          ? Effect.succeed(result.value)
-          : Effect.fail(new BoatFinalCloseError("unavailable")),
-      ),
-    );
+  /** A removal's failure, as this close reports one. */
+  const removalError = (error: BoatRemovalError) => new BoatFinalCloseError(error.code);
   const current = (target: BoatExecutionTarget) =>
     Effect.gen(function* () {
       const allocation = yield* allocations.get(target.runtimeInstanceId);
       const instance = yield* runtimes.getRuntimeInstanceByRunId(target.runId);
-      // Launched without resources: read from the allocation, where the launch froze it.
-      const unlinked = allocation?.input.resources === "none";
       if (
         allocation === undefined ||
         !(
           allocation.phase === "bound" ||
           // Its deletion operation is recorded on the allocation, which is `deleting` from then on.
-          (unlinked && allocation.phase === "deleting" && allocation.removal?.kind === "operation")
+          (allocation.phase === "deleting" && allocation.removal?.kind === "operation")
         ) ||
         !isDeepStrictEqual(allocation.target, target) ||
         target.deploymentId !== host.deploymentId ||
@@ -207,11 +176,11 @@ const make: Effect.Effect<
       )
         return yield* Effect.fail(new BoatFinalCloseError("held"));
       const reservation = yield* tunnels.get(target.runtimeInstanceId);
-      if (unlinked) {
+      // Launched without resources: read from the allocation, where the launch froze it.
+      if (allocation.input.resources === "none") {
         // It was never given a tunnel. A reservation recorded for it is not this close's to settle.
         if (reservation !== undefined) return yield* Effect.fail(new BoatFinalCloseError("held"));
-        const custody: BoatCloseCustody = { kind: "allocation", allocation };
-        return { custody, stopReason: instance.stopReason };
+        return { allocation, reservation: undefined, stopReason: instance.stopReason };
       }
       if (
         reservation === undefined ||
@@ -220,8 +189,7 @@ const make: Effect.Effect<
         !isDeepStrictEqual(reservation.binding, { target, gatewayHostId: host.gateway.hostId })
       )
         return yield* Effect.fail(new BoatFinalCloseError("held"));
-      const custody: BoatCloseCustody = { kind: "tunnel", reservation };
-      return { custody, stopReason: instance.stopReason };
+      return { allocation, reservation, stopReason: instance.stopReason };
     });
   /** The exact owned VM, read through the observer: the one source of presence. */
   const present = (target: BoatExecutionTarget) =>
@@ -239,92 +207,6 @@ const make: Effect.Effect<
         ),
       );
     });
-  /**
-   * Polls Boat's own deletion operation until it completes or the wait is spent. The wait bounds
-   * the whole loop, including a read still in flight, so a slow provider cannot stretch one close.
-   */
-  const awaitDeletion = (operation: BoatDeletion) =>
-    Effect.gen(function* () {
-      const latest = yield* Ref.make(operation);
-      const poll = Effect.gen(function* () {
-        while ((yield* Ref.get(latest)).status !== "completed") {
-          yield* Effect.sleep(DELETION_POLL_MS);
-          const next = yield* call(() => provider.api.getDeletion(operation.id));
-          if (
-            next.id !== operation.id ||
-            next.kind !== "sandbox" ||
-            next.targetId !== operation.targetId
-          )
-            return yield* Effect.fail(new BoatFinalCloseError("held"));
-          yield* Ref.set(latest, next);
-        }
-      });
-      yield* poll.pipe(Effect.timeoutOption(provider.deletionWaitMs ?? DELETION_WAIT_MS));
-      return yield* Ref.get(latest);
-    });
-  /** Records Boat's deletion operation where it survives a worker restart, before any wait. */
-  const record = (
-    target: BoatExecutionTarget,
-    custody: BoatCloseCustody,
-    operation: BoatDeletion,
-  ): Effect.Effect<
-    BoatCloseCustody,
-    | BoatFinalCloseError
-    | BoatAllocationStoreError
-    | BoatTunnelStoreError
-    | WorkspaceCaptureDrainRepoError
-  > =>
-    Effect.gen(function* () {
-      if (operation.kind !== "sandbox" || operation.targetId !== target.sandboxId)
-        return yield* Effect.fail(new BoatFinalCloseError("held"));
-      const completed = operation.status === "completed";
-      if (custody.kind === "tunnel")
-        return {
-          kind: "tunnel" as const,
-          reservation: yield* tunnels.recordRemoval(custody.reservation, {
-            id: operation.id,
-            targetId: operation.targetId,
-            completed,
-          }),
-        };
-      // No tunnel row: the allocation's own removal record keeps the operation. Read again, so a
-      // record this close already advanced is the one compared and set.
-      const saved = yield* allocations.get(target.runtimeInstanceId);
-      const root = yield* canonical.getByRunId(target.runId);
-      // Canonical deletion or the owner's discard authorizes removal, as for a tunnel's record.
-      if (
-        !["deleting-issued", "deleted"].includes(root?.deletionState ?? "") &&
-        (root?.discardRequestedAt ?? null) === null
-      )
-        return yield* Effect.fail(new BoatFinalCloseError("unavailable"));
-      if (
-        saved === undefined ||
-        saved.input.resources !== "none" ||
-        !isDeepStrictEqual(saved.target, target) ||
-        !(saved.phase === "bound" || saved.phase === "deleting") ||
-        // One operation per VM: another id is not this removal's.
-        (saved.removal !== undefined &&
-          (saved.removal.kind !== "operation" || saved.removal.id !== operation.id))
-      )
-        return yield* Effect.fail(new BoatFinalCloseError("held"));
-      // Completion never reverts: an operation recorded complete stays complete.
-      if (saved.removal?.kind === "operation" && (saved.removal.completed || !completed))
-        return { kind: "allocation" as const, allocation: saved };
-      return {
-        kind: "allocation" as const,
-        allocation: yield* allocations.advance(saved, {
-          ...saved,
-          phase: "deleting",
-          reason: null,
-          removal: {
-            kind: "operation",
-            id: operation.id,
-            targetId: target.sandboxId,
-            completed,
-          },
-        }),
-      };
-    });
   /** Boat no longer has the VM: every obligation is discharged against that observation alone. */
   const dischargeAbsent = (allocation: BoatAllocationRecord) =>
     discharger
@@ -340,11 +222,10 @@ const make: Effect.Effect<
       );
   /** Boat's own deletion operation for this VM completed. */
   const finish = Effect.fn("BoatFinalClose.finish")(function* (target: BoatExecutionTarget) {
-    const { custody } = yield* current(target);
-    if (removalOf(custody)?.completed !== true)
+    const run = yield* current(target);
+    if (recordedOf(run)?.completed !== true)
       return yield* Effect.fail(new BoatFinalCloseError("held"));
-    const allocation = yield* allocations.get(target.runtimeInstanceId);
-    if (allocation === undefined) return yield* Effect.fail(new BoatFinalCloseError("held"));
+    const { allocation } = run;
     yield* observer
       .deletionCompleted(allocation, target.sandboxId)
       .pipe(Effect.mapError(observeError));
@@ -364,19 +245,17 @@ const make: Effect.Effect<
       if (preIssue) yield* exchanges.abort(target);
       return yield* dischargeAbsent(stored);
     }
-    if (preIssue) return yield* closeUnused(target.runId, target.sandboxId, target);
-    let { custody } = yield* current(target);
+    if (preIssue) return yield* closeUnused(target.runId, target.sandboxId, target, presence);
+    const run = yield* current(target);
     const root = yield* canonical.getByRunId(target.runId);
     if (root?.deletionState === "deleted") return yield* finish(target);
-    const recorded = removalOf(custody);
-    if (recorded !== undefined) {
-      // DELETE was accepted earlier, by this worker or one before it: its operation is polled.
-      const id = yield* parse(() => boatDeletionIdSchema.parse(recorded.id));
-      const operation = yield* call(() => provider.api.getDeletion(id));
-      custody = yield* record(target, custody, operation);
-      if (removalOf(custody)?.completed !== true)
-        custody = yield* record(target, custody, yield* awaitDeletion(operation));
-      if (removalOf(custody)?.completed !== true) return "pending" as const;
+    if (recordedOf(run) !== undefined) {
+      // DELETE was accepted earlier, by this worker or one before it: the removal polls its
+      // operation and sends nothing. The observation above is the one it decides on.
+      const outcome = yield* removal
+        .deletion(run.allocation, { fence: false, presence })
+        .pipe(Effect.mapError(removalError));
+      if (outcome === "deleting") return "pending" as const;
       if (root?.deletionState === "deleting-issued" && root.deletionToken !== null)
         yield* canonical.completeDeletion({ runId: target.runId, token: root.deletionToken });
       return yield* finish(target);
@@ -384,21 +263,14 @@ const make: Effect.Effect<
     // A positively running invocation already has an immutable guest record. Delayed start replays
     // only adopt it; they cannot create another invocation after this FINAL.
     yield* execution.hold(target);
-    const closeId =
-      (custody.kind === "tunnel" ? custody.reservation.closeId : undefined) ?? randomUUID();
+    const closeId = run.reservation?.closeId ?? randomUUID();
     const freezeBy = (yield* Clock.currentTimeMillis) + BOAT_CLOSE_FREEZE.waitMs;
     for (;;) {
-      const held = (yield* current(target)).custody;
-      if (held.kind !== "tunnel") {
-        // A run without resources has no gateway to fence: the held execution is its fence.
-        custody = held;
-        break;
-      }
-      const frozen = yield* Effect.result(tunnels.freeze(held.reservation, closeId));
-      if (Result.isSuccess(frozen)) {
-        custody = { kind: "tunnel", reservation: frozen.success };
-        break;
-      }
+      const held = (yield* current(target)).reservation;
+      // A run without resources has no gateway to fence: the held execution is its fence.
+      if (held === undefined) break;
+      const frozen = yield* Effect.result(tunnels.freeze(held, closeId));
+      if (Result.isSuccess(frozen)) break;
       // `operation-held` is the host lock, taken by a configuration at its gateway mutation. Only
       // this close waits, and it lets nothing through meanwhile: the execution is held and the
       // stop recorded, and a configuration reads both before it dispatches, again under the lock.
@@ -491,15 +363,18 @@ const make: Effect.Effect<
       runId: target.runId,
       ticket: deletion.ticket,
       remove: Effect.gen(function* () {
-        yield* current(target);
-        const id = yield* present(target);
-        const operation = yield* call(() => provider.api.deleteSandbox(id));
-        // The operation id is recorded before waiting, so a crash mid-wait polls it later.
-        custody = yield* record(target, custody, operation);
-        if (removalOf(custody)?.completed !== true)
-          custody = yield* record(target, custody, yield* awaitDeletion(operation));
-        if (removalOf(custody)?.completed !== true)
-          return yield* Effect.fail(new BoatFinalCloseError("pending"));
+        // The run was held and its tunnel frozen above, before its drain: the removal verifies
+        // that, reads the exact owned VM once more, sends DELETE and records the operation on the
+        // allocation before it waits.
+        const { allocation } = yield* current(target);
+        const outcome = yield* removal
+          .deletion(allocation, { fence: false })
+          .pipe(Effect.mapError(removalError));
+        // Absent here is a VM that vanished since the read above: the next pass discharges it.
+        if (outcome !== "completed")
+          return yield* Effect.fail(
+            new BoatFinalCloseError(outcome === "deleting" ? "pending" : "unavailable"),
+          );
       }),
     });
     if (!removed.removed) return yield* Effect.fail(new BoatFinalCloseError("held"));
@@ -516,6 +391,8 @@ const make: Effect.Effect<
     runId: string,
     sandboxId: string,
     target: BoatExecutionTarget | null = null,
+    /** What the close that came here just read of the VM, so a recorded operation's poll reads no more. */
+    observed?: BoatPresence,
   ) {
     let allocation = yield* allocations.get(runId);
     const instance = yield* runtimes.getRuntimeInstanceByRunId(runId);
@@ -584,32 +461,22 @@ const make: Effect.Effect<
       });
       claimed = true;
     }
-    const id = yield* parse(() => boatSandboxIdSchema.parse(sandboxId));
+    // This close fenced the VM above (its exchange aborted, its tunnel frozen, its allocation
+    // claimed) and holds what lets a never-launched VM go: the removal sends DELETE, or polls the
+    // operation an earlier DELETE was answered with, records it, and discharges on `completed`.
+    const remove = (fenced: BoatAllocationRecord, presence: BoatPresence | undefined) =>
+      removal
+        .remove(fenced, { fence: false, ...(presence === undefined ? {} : { presence }) })
+        .pipe(
+          Effect.mapError(removalError),
+          Effect.map((outcome) =>
+            outcome === "removed" ? ("closed" as const) : ("pending" as const),
+          ),
+        );
     // A recorded deletion operation is Boat's own account of this removal: it decides first. A VM
     // never seen created reads 404 as `creating`, so presence alone could hold it forever.
-    if (allocation.removal?.kind === "operation") {
-      const operationId = yield* parse(() =>
-        boatDeletionIdSchema.parse(
-          allocation?.removal?.kind === "operation" ? allocation.removal.id : undefined,
-        ),
-      );
-      const recorded = yield* call(() => provider.api.getDeletion(operationId));
-      if (
-        recorded.kind !== "sandbox" ||
-        recorded.targetId !== id ||
-        recorded.id !== allocation.removal.id
-      )
-        return yield* Effect.fail(new BoatFinalCloseError("held"));
-      const settled = yield* awaitDeletion(recorded);
-      if (settled.status !== "completed") return "pending" as const;
-      allocation = yield* allocations.advance(allocation, {
-        ...allocation,
-        phase: "deleted",
-        removal: { kind: "operation", id: settled.id, targetId: id, completed: true },
-      });
-      yield* observer.deletionCompleted(allocation, id).pipe(Effect.mapError(observeError));
-      return yield* finishUnused(allocation);
-    }
+    if (allocation.removal?.kind === "operation") return yield* remove(allocation, observed);
+    const id = yield* parse(() => boatSandboxIdSchema.parse(sandboxId));
     // Absence is what Boat says, never what a timeout or a fresh create's 404 suggests.
     const presence = yield* observer.observe(allocation).pipe(Effect.mapError(observeError));
     if (presence.kind === "absent") {
@@ -635,31 +502,7 @@ const make: Effect.Effect<
         ...allocation,
         removal: { kind: "issued", token: randomUUID(), at: new Date(now).toISOString() },
       });
-    const operation = yield* call(() => provider.api.deleteSandbox(id));
-    if (operation.kind !== "sandbox" || operation.targetId !== id)
-      return yield* Effect.fail(new BoatFinalCloseError("held"));
-    allocation = yield* allocations.advance(allocation, {
-      ...allocation,
-      phase: operation.status === "completed" ? "deleted" : "deleting",
-      removal: {
-        kind: "operation",
-        id: operation.id,
-        targetId: id,
-        completed: operation.status === "completed",
-      },
-    });
-    if (allocation.phase !== "deleted") {
-      // The operation is recorded; wait for Boat to finish it so this close records the removal.
-      const settled = yield* awaitDeletion(operation);
-      if (settled.status !== "completed") return "pending" as const;
-      allocation = yield* allocations.advance(allocation, {
-        ...allocation,
-        phase: "deleted",
-        removal: { kind: "operation", id: settled.id, targetId: id, completed: true },
-      });
-    }
-    yield* observer.deletionCompleted(allocation, id).pipe(Effect.mapError(observeError));
-    return yield* finishUnused(allocation);
+    return yield* remove(allocation, presence);
   });
   const boundedUnbound = (runId: string, sandboxId: string) =>
     closeUnused(runId, sandboxId).pipe(
@@ -812,7 +655,7 @@ export const boatFinalCloseLayerNoDeps: Layer.Layer<
   | WorkspaceRuntimeInstanceRepo
   | BoatExecution
   | BoatResourcesHost
-  | BoatFinalCloseProvider
+  | BoatRemoval
   | BoatObserver
   | SealantRuntime
 > = Layer.effect(BoatFinalClose, make);
@@ -820,10 +663,11 @@ export const boatFinalCloseLayerNoDeps: Layer.Layer<
 export const boatFinalCloseLayer: Layer.Layer<
   BoatFinalClose,
   never,
-  SealantDB | BoatExecution | BoatResourcesHost | BoatFinalCloseProvider | BoatAllocationProvider
+  SealantDB | BoatExecution | BoatResourcesHost | BoatRemovalProvider | BoatAllocationProvider
 > = boatFinalCloseLayerNoDeps.pipe(
   Layer.provide(
     Layer.mergeAll(
+      boatRemovalLayer,
       boatObserverLayer,
       boatDischargeLayer,
       BoatObservationRepoLive,

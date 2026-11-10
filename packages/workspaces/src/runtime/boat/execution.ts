@@ -572,6 +572,25 @@ export type BoatRecoveryOutcome =
       readonly detail?: string;
     };
 
+/**
+ * What a run's records and its agent say of the daemon on its VM, in one read. `up`: the agent
+ * reports the launch it accepted on this boot, and names no exit. `exited`: the agent's health
+ * names the daemon's exit. `not-booted`: the agent reports no launch on this boot. `never-launched`:
+ * the execution was aborted, which only a launch never pushed to the agent can be, so nothing ran.
+ * `unasked`: the launch has not been accepted yet (or never bound a bearer), so the agent's
+ * `booted: false` would describe a launch still in flight; it is not asked.
+ */
+export type BoatDaemonObservation =
+  | { readonly kind: "up" | "not-booted" | "never-launched" | "unasked" }
+  | {
+      readonly kind: "exited";
+      readonly exitCode: number | null;
+      /** A signal name as the agent gave it, or `unrecognized` for anything that is not one. */
+      readonly signal: string | null;
+      /** The daemon's last output, bounded, with the run's bearer redacted. */
+      readonly output?: string;
+    };
+
 /** Owns sealed bootstrap and one frozen admission. Running acknowledges an accepted launch, not daemon readiness. */
 export interface BoatExecutionService {
   /**
@@ -621,6 +640,12 @@ export interface BoatExecutionService {
    * run without resources has no tunnel to observe: agent health, then daemon health.
    */
   readonly readiness: (target: BoatExecutionTarget) => Effect.Effect<BoatReadyReceipt, Failure>;
+  /**
+   * Whether the daemon of this run is up: its record, then one read of the agent's health for a
+   * launch that was accepted (`running`) or fenced after it was issued (`held`). No tunnel and no
+   * daemon probe. A failed read fails; it is never an exit.
+   */
+  readonly daemon: (target: BoatExecutionTarget) => Effect.Effect<BoatDaemonObservation, Failure>;
 }
 /** A current observation, never durable authority to admit a later request. */
 export interface BoatReadyReceipt {
@@ -1322,6 +1347,32 @@ const make: Effect.Effect<
       ...(outcome.detail === undefined ? {} : { detail: outcome.detail }),
     };
   });
+  const daemon = Effect.fn("BoatExecution.daemon")(function* (target: BoatExecutionTarget) {
+    const record = yield* loadTarget(target);
+    // Aborted is reached only from before the launch push: nothing was ever started on the VM.
+    if (record.phase === "aborted") return { kind: "never-launched" } as const;
+    if (record.phase !== "running" && record.phase !== "held") return { kind: "unasked" } as const;
+    const connection = yield* access(record);
+    const observed = yield* call(connection, "health").pipe(Effect.flatMap(healthReply));
+    if (observed.daemonExit !== undefined) {
+      const output = observed.daemonExit.output;
+      return {
+        kind: "exited" as const,
+        exitCode: observed.daemonExit.code,
+        // The guest's word: only a signal's name is repeated.
+        signal:
+          observed.daemonExit.signal === null ||
+          /^SIG[A-Z0-9]{1,12}$/.test(observed.daemonExit.signal)
+            ? observed.daemonExit.signal
+            : "unrecognized",
+        // The agent removes the launch's secrets itself; the bearer is removed again here.
+        ...(output === undefined
+          ? {}
+          : { output: safeCommandTail(boatGuestOutput(output, [connection.bearer.reveal()])) }),
+      };
+    }
+    return { kind: observed.booted ? "up" : "not-booted" } as const;
+  });
   return BoatExecution.of({
     exchange,
     stage,
@@ -1333,6 +1384,7 @@ const make: Effect.Effect<
     control,
     hold,
     recover,
+    daemon,
   });
 });
 /** Open assembly for worker infrastructure and faithful test transports. */

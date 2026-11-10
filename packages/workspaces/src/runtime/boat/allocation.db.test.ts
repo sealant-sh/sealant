@@ -15,6 +15,7 @@ import {
   BoatTunnelRepo,
   BoatObservationRepo,
   BoatObservationRepoLive,
+  DatabaseTransactionLive,
   LAUNCH_RETAINED_ERROR_CODE,
   WorkspaceCaptureDrainRepo,
   WorkspaceCaptureDrainRepoLive,
@@ -101,10 +102,23 @@ import {
   captureStatus,
   type CaptureDaemonScriptEntry,
 } from "../../worker/capture-daemon.fixture.js";
+import { databaseCaptureDrainLedger } from "../../worker/capture-drain-ledger.js";
+import { DEFAULT_CAPTURE_DRAIN_SETTINGS } from "../../worker/capture-drain.js";
+import { reconcileRuntimeExitsEffect } from "../../worker/reconcile-runtime-exits.js";
+import { recoverRetainedExecutorsEffect } from "../../worker/recover-retained-executors.js";
 import { cases as launchCases } from "../docker-runtime-adapter.golden-fixture.js";
 import { LaunchRetainedError } from "../launch-retention.js";
-import { selectRuntimeAdapter } from "../runtime-adapter.js";
-import { BOAT_GATEWAY_UNAVAILABLE_MESSAGE, BoatRuntimeAdapter } from "./adapter.js";
+import {
+  isRemovalRefusal,
+  selectRuntimeAdapter,
+  type RuntimeAdapterLifecycle,
+} from "../runtime-adapter.js";
+import {
+  BOAT_GATEWAY_UNAVAILABLE_MESSAGE,
+  BOAT_INSPECT_READ_MS,
+  BoatAdapterError,
+  BoatRuntimeAdapter,
+} from "./adapter.js";
 import { ProviderFixture, GuestFixture, GatewayFixture } from "./allocation.fixture.js";
 import { BoatAllocation, boatAllocationLayer, boatAllocationLayerNoDeps } from "./allocation.js";
 import { HttpBoatApi } from "./api.js";
@@ -114,6 +128,7 @@ import {
   BoatControlMaterial,
   boatConnectMaterial,
   boatControlMaterialLayer,
+  boatDrainConnectMaterial,
 } from "./control-material.js";
 import { boatDischargeLayerNoDeps } from "./discharge.js";
 import {
@@ -122,15 +137,11 @@ import {
   boatExecutionLayer,
   type BoatLaunchMaterial,
 } from "./execution.js";
-import {
-  BOAT_CLOSE_FREEZE,
-  BoatFinalClose,
-  BoatFinalCloseProvider,
-  boatFinalCloseLayerNoDeps,
-} from "./final-close.js";
+import { BOAT_CLOSE_FREEZE, BoatFinalClose, boatFinalCloseLayerNoDeps } from "./final-close.js";
 import { BoatObserver, boatObserverLayer, boatObserverLayerNoDeps } from "./observation.js";
 import { BoatAllocationProvider } from "./provider.js";
 import { RecordedBoat } from "./recorded-boat.fixture.js";
+import { BoatRemoval, BoatRemovalProvider, boatRemovalLayerNoDeps } from "./removal.js";
 import { BoatTunnelCarrier, type BoatTunnelCarrierInput } from "./tunnel-carrier.js";
 
 const databaseUrl = process.env.SEALANT_TEST_DATABASE_URL;
@@ -265,6 +276,9 @@ const test = async (
       resourceGateway?: boolean,
     ) => Effect.Effect<{
       owner: BoatFinalClose["Service"];
+      /** The one deletion the close owner calls, over the same repositories, provider and host. */
+      removal: BoatRemoval["Service"];
+      observer: BoatObserver["Service"];
       daemon: ReturnType<typeof fakeCaptureDaemon>;
     }>;
     reopenResources: (
@@ -431,7 +445,7 @@ const test = async (
             Layer.mergeAll(
               Infra,
               hostLayer(),
-              Layer.succeed(BoatFinalCloseProvider, { api: api.value }),
+              Layer.succeed(BoatRemovalProvider, { api: api.value }),
             ),
           ),
         );
@@ -469,57 +483,41 @@ const test = async (
               Effect.gen(function* () {
                 const daemon = fakeCaptureDaemon(script);
                 const closeHost = hostLayer(gatewayHostId, "127.0.0.1", resourceGateway);
+                const observations = BoatObservationRepoLive.pipe(
+                  Layer.provide(Layer.succeed(SealantDB, db)),
+                );
+                const stores = Layer.mergeAll(
+                  Layer.succeed(NativePublicationRepo, catalog),
+                  Layer.succeed(BoatAllocationRepo, repo),
+                  Layer.succeed(BoatExecutionRepo, executions),
+                  Layer.succeed(BoatTunnelRepo, tunnels),
+                  Layer.succeed(WorkspaceCaptureDrainRepo, captureRepo),
+                  Layer.succeed(WorkspaceRuntimeInstanceRepo, runtimes),
+                  Layer.succeed(BoatExecution, executor),
+                  Layer.succeed(SealantDB, db),
+                  closeHost,
+                  Layer.succeed(BoatRemovalProvider, { api: boatApi, deletionWaitMs }),
+                  Layer.succeed(BoatAllocationProvider, { deploymentId: "test", api: boatApi }),
+                  observations,
+                  WorkspaceAttemptRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, db))),
+                  daemon.layer,
+                );
+                // The observer and the discharge are built once and shared by the removal and
+                // the close, as the production assembly shares them.
+                const owners = Layer.mergeAll(
+                  boatObserverLayerNoDeps,
+                  boatDischargeLayerNoDeps,
+                ).pipe(Layer.provideMerge(stores));
                 const layer = boatFinalCloseLayerNoDeps.pipe(
-                  Layer.provide(
-                    Layer.mergeAll(
-                      Layer.succeed(NativePublicationRepo, catalog),
-                      Layer.succeed(BoatAllocationRepo, repo),
-                      Layer.succeed(BoatExecutionRepo, executions),
-                      Layer.succeed(BoatTunnelRepo, tunnels),
-                      Layer.succeed(WorkspaceCaptureDrainRepo, captureRepo),
-                      Layer.succeed(WorkspaceRuntimeInstanceRepo, runtimes),
-                      Layer.succeed(BoatExecution, executor),
-                      Layer.succeed(SealantDB, db),
-                      closeHost,
-                      Layer.succeed(BoatFinalCloseProvider, { api: boatApi, deletionWaitMs }),
-                      BoatObservationRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, db))),
-                      WorkspaceAttemptRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, db))),
-                      boatDischargeLayerNoDeps.pipe(
-                        Layer.provide(
-                          Layer.mergeAll(
-                            BoatObservationRepoLive.pipe(
-                              Layer.provide(Layer.succeed(SealantDB, db)),
-                            ),
-                            Layer.succeed(SealantDB, db),
-                            Layer.succeed(BoatAllocationRepo, repo),
-                            Layer.succeed(BoatTunnelRepo, tunnels),
-                            Layer.succeed(BoatExecutionRepo, executions),
-                            Layer.succeed(WorkspaceCaptureDrainRepo, captureRepo),
-                            Layer.succeed(NativePublicationRepo, catalog),
-                            closeHost,
-                          ),
-                        ),
-                      ),
-                      boatObserverLayerNoDeps.pipe(
-                        Layer.provide(
-                          Layer.mergeAll(
-                            BoatObservationRepoLive.pipe(
-                              Layer.provide(Layer.succeed(SealantDB, db)),
-                            ),
-                            Layer.succeed(BoatAllocationRepo, repo),
-                            Layer.succeed(BoatAllocationProvider, {
-                              deploymentId: "test",
-                              api: boatApi,
-                            }),
-                          ),
-                        ),
-                      ),
-                      daemon.layer,
-                    ),
-                  ),
+                  Layer.provideMerge(boatRemovalLayerNoDeps.pipe(Layer.provideMerge(owners))),
                 );
                 const built = yield* Layer.buildWithScope(layer, scope);
-                return { owner: Context.get(built, BoatFinalClose), daemon };
+                return {
+                  owner: Context.get(built, BoatFinalClose),
+                  removal: Context.get(built, BoatRemoval),
+                  observer: Context.get(built, BoatObserver),
+                  daemon,
+                };
               }),
             reopenResources,
             carried,
@@ -681,6 +679,8 @@ const adapterFixture = async (
       Layer.succeed(BoatReadiness, s.readiness),
       Layer.succeed(BoatExecution, s.executor),
       Layer.succeed(BoatFinalClose, close.owner),
+      Layer.succeed(BoatRemoval, close.removal),
+      Layer.succeed(BoatObserver, close.observer),
       Layer.succeed(BoatAllocationRepo, s.repo),
       Layer.succeed(WorkspaceRuntimeInstanceRepo, s.runtimes),
     ),
@@ -1623,10 +1623,12 @@ describe.runIf(databaseUrl !== undefined)("Boat canonical FINAL close", () => {
       expect(s.gateway.removeCalls).toBe(1);
       expect((await execute(s.canonical.getByRunId(target.runId)))?.deletionState).toBe("deleted");
       const terminal = await tunnelRecord(s, target);
-      expect(terminal).toMatchObject({
-        released: true,
-        removal: { id: s.provider.deletionId, completed: true },
-        updates: [],
+      expect(terminal).toMatchObject({ released: true, updates: [] });
+      // Boat's deletion operation is on the allocation, for a run with a tunnel as for one without.
+      expect(terminal.removal).toBeUndefined();
+      expect(await execute(s.repo.get(target.runId))).toMatchObject({
+        phase: "deleted",
+        removal: { kind: "operation", id: s.provider.deletionId, completed: true },
       });
       expect((await execute(s.executions.get(target.runId)))?.phase).toBe("held");
       expect(
@@ -1765,34 +1767,41 @@ describe.runIf(databaseUrl !== undefined)("Boat canonical FINAL close", () => {
       expect((await execute(s.canonical.getByRunId(target.runId)))?.deletionState).toBe(
         "deleting-issued",
       );
-      expect((await tunnelRecord(s, target)).removal).toEqual({
-        id: s.provider.deletionId,
-        completed: false,
-      });
+      // The operation is on the allocation, which is `deleting` from then on; the port is kept.
+      const recorded = {
+        phase: "deleting",
+        removal: {
+          kind: "operation",
+          id: s.provider.deletionId,
+          targetId: target.sandboxId,
+          completed: false,
+        },
+      };
+      expect(await execute(s.repo.get(target.runId))).toMatchObject(recorded);
+      expect(await tunnelRecord(s, target)).toMatchObject({ closeId: expect.any(String) });
+      expect((await tunnelRecord(s, target)).removal).toBeUndefined();
+      expect((await tunnelRecord(s, target)).released).toBeUndefined();
       expect(s.gateway.removeCalls).toBe(0);
       s.provider.deletionUnavailable = true;
       await expect(execute(owner.close(target))).rejects.toThrow("unavailable");
       s.provider.deletionUnavailable = false;
+      // Boat answering for another operation: not this removal's, with or without a tunnel.
       s.provider.deletionWrongId = true;
-      await expect(execute(owner.close(target))).rejects.toThrow("unavailable");
+      await expect(execute(owner.close(target))).rejects.toThrow("held");
       s.provider.deletionWrongId = false;
-      expect((await tunnelRecord(s, target)).removal?.id).toBe(s.provider.deletionId);
+      expect(await execute(s.repo.get(target.runId))).toMatchObject(recorded);
       expect(await execute(owner.close(target))).toBe("pending");
       s.provider.deletionCompleted = true;
       const restarted = await execute(s.final(["unreachable"]));
       expect(await execute(restarted.owner.close(target))).toBe("closed");
       expect(restarted.daemon.calls).toEqual([]);
       expect(s.provider.deleteCalls).toBe(1);
-      const completed = await tunnelRecord(s, target);
-      expect(
-        await execute(
-          s.tunnels.recordRemoval(completed, {
-            id: s.provider.deletionId,
-            targetId: target.sandboxId,
-            completed: false,
-          }),
-        ),
-      ).toEqual(completed);
+      // The completed operation stays as the allocation's receipt.
+      expect(await execute(s.repo.get(target.runId))).toMatchObject({
+        phase: "deleted",
+        removal: { kind: "operation", id: s.provider.deletionId, completed: true },
+      });
+      expect(await tunnelRecord(s, target)).toMatchObject({ released: true });
     }));
   it("a lost DELETE response is retried only against the same positively owned sandbox and unchanged evidence", () =>
     test(async (s) => {
@@ -1800,7 +1809,10 @@ describe.runIf(databaseUrl !== undefined)("Boat canonical FINAL close", () => {
       s.provider.deleteLost = true;
       const { owner } = await execute(s.final([savedStatus()]));
       await expect(execute(owner.close(target))).rejects.toThrow("unavailable");
+      // No operation id came back: none is recorded, and the allocation is still bound.
       expect((await tunnelRecord(s, target)).removal).toBeUndefined();
+      expect(await execute(s.repo.get(target.runId))).toMatchObject({ phase: "bound" });
+      expect((await execute(s.repo.get(target.runId)))?.removal).toBeUndefined();
       expect((await execute(s.canonical.getByRunId(target.runId)))?.deletionState).toBe(
         "deleting-issued",
       );
@@ -1842,7 +1854,10 @@ describe.runIf(databaseUrl !== undefined)("Boat canonical FINAL close", () => {
       const { owner } = await execute(s.final([savedStatus()]));
       await expect(execute(owner.close(target))).rejects.toThrow("held");
       expect(s.gateway.removeCalls).toBe(0);
+      // Another VM's operation is recorded nowhere.
       expect((await tunnelRecord(s, target)).removal).toBeUndefined();
+      expect(await execute(s.repo.get(target.runId))).toMatchObject({ phase: "bound" });
+      expect((await execute(s.repo.get(target.runId)))?.removal).toBeUndefined();
     }));
   it("refuses provider label changes and a newer unsaved observation before issuance", () =>
     test(async (s) => {
@@ -4496,29 +4511,47 @@ describe.runIf(databaseUrl !== undefined)("Boat run without resources", () => {
       // Still running: a launch could be adopted, so the VM is not anyone's to remove.
       await expect(execute(s.repo.advance(bound, deleting))).rejects.toThrow("binding-conflict");
       await execute(s.executor.hold(target));
+      // Held comes before the drain: it alone lets nothing leave `bound`. Only Boat's own
+      // deletion operation does, which nothing has before a DELETE was accepted (#592).
+      await expect(
+        execute(
+          s.repo.advance(bound, {
+            ...bound,
+            phase: "deleting",
+            removal: { kind: "issued", token: randomUUID(), at: new Date().toISOString() },
+          }),
+        ),
+      ).rejects.toThrow("binding-conflict");
       expect(await execute(s.repo.advance(bound, deleting))).toMatchObject({ phase: "deleting" });
     }, unlinked));
 
-  it("never lets a run that has a tunnel leave bound for deleting through its held execution", () =>
+  it("lets a run that has a tunnel leave bound for deleting the same way: held, and only with Boat's deletion operation", () =>
     test(async (s) => {
       const target = await stopLaunched(s);
       const bound = await execute(s.repo.get(target.runId));
       if (bound === undefined) throw new Error("missing allocation");
+      const deleting: BoatAllocationRecord = {
+        ...bound,
+        phase: "deleting",
+        removal: {
+          kind: "operation",
+          id: s.provider.deletionId,
+          targetId: target.sandboxId,
+          completed: false,
+        },
+      };
+      await expect(execute(s.repo.advance(bound, deleting))).rejects.toThrow("binding-conflict");
       await execute(s.executor.hold(target));
       await expect(
         execute(
           s.repo.advance(bound, {
             ...bound,
             phase: "deleting",
-            removal: {
-              kind: "operation",
-              id: s.provider.deletionId,
-              targetId: target.sandboxId,
-              completed: false,
-            },
+            removal: { kind: "issued", token: randomUUID(), at: new Date().toISOString() },
           }),
         ),
       ).rejects.toThrow("binding-conflict");
+      expect(await execute(s.repo.advance(bound, deleting))).toMatchObject({ phase: "deleting" });
     }));
 
   it("leaves a run without the option unchanged: gateway, carrier, handshake, DNS and the close through its tunnel", () =>
@@ -4552,14 +4585,12 @@ describe.runIf(databaseUrl !== undefined)("Boat run without resources", () => {
       expect(await execute(owner.close(target))).toBe("closed");
       expect(daemon.flushRequests.map((request) => request?.kind)).toEqual(["final"]);
       expect(s.gateway.removeCalls).toBe(1);
-      // Its deletion operation lives on the tunnel row, and its allocation ends on absence.
-      expect(await tunnelRecord(s, target)).toMatchObject({
-        released: true,
-        removal: { id: s.provider.deletionId, completed: true },
-      });
+      // Its tunnel slot is released, and its deletion operation is its allocation's receipt.
+      expect(await tunnelRecord(s, target)).toMatchObject({ released: true });
+      expect((await tunnelRecord(s, target)).removal).toBeUndefined();
       expect(await execute(s.repo.get(target.runId))).toMatchObject({
         phase: "deleted",
-        removal: { kind: "absent", completed: true },
+        removal: { kind: "operation", id: s.provider.deletionId, completed: true },
       });
     }));
 });
@@ -5153,12 +5184,11 @@ describe.runIf(databaseUrl !== undefined)("Boat resource links applied at once (
       expect(daemon.flushRequests.map((request) => request?.kind)).toEqual(["final"]);
       expect(s.gateway.removeCalls).toBe(1);
       expect(s.provider.deleteCalls).toBe(1);
-      expect(await tunnelRecord(s, target)).toMatchObject({
-        updates: [],
-        released: true,
-        removal: { id: s.provider.deletionId, completed: true },
+      expect(await tunnelRecord(s, target)).toMatchObject({ updates: [], released: true });
+      expect(await execute(s.repo.get(target.runId))).toMatchObject({
+        phase: "deleted",
+        removal: { kind: "operation", id: s.provider.deletionId, completed: true },
       });
-      expect(await execute(s.repo.get(target.runId))).toMatchObject({ phase: "deleted" });
     }));
 
   it("a close still fails when a link job holds the gateway host past the bound, and the next pass closes", () =>
@@ -5267,13 +5297,1243 @@ describe.runIf(databaseUrl !== undefined)("Boat resource links applied at once (
       expect(daemon.flushRequests.map((request) => request?.kind)).toEqual(["final"]);
       expect(s.gateway.removeCalls).toBe(1);
       expect(s.provider.deleteCalls).toBe(1);
-      expect(await tunnelRecord(s, target)).toMatchObject({
-        released: true,
-        removal: { id: s.provider.deletionId, completed: true },
+      expect(await tunnelRecord(s, target)).toMatchObject({ released: true });
+      expect(await execute(s.repo.get(target.runId))).toMatchObject({
+        phase: "deleted",
+        removal: { kind: "operation", id: s.provider.deletionId, completed: true },
       });
-      expect(await execute(s.repo.get(target.runId))).toMatchObject({ phase: "deleted" });
       // Closed: a late link job reports it and still touches nothing.
       expect(await execute(s.resourceOwner.apply(target.runId))).toBe("closed");
       expect(touched(s)).toEqual(before);
+    }));
+});
+
+/** The stored allocation of a run. */
+const allocationOf = async (s: AllocationFixture, runId: string) => {
+  const allocation = await execute(s.repo.get(runId));
+  if (allocation === undefined) throw new Error("missing allocation");
+  return allocation;
+};
+/** What a stop that must not resolve rejected with. */
+const stopFailure = (stop: Promise<unknown>) =>
+  stop.then(
+    () => {
+      throw new Error("stop resolved");
+    },
+    (error: unknown) => error,
+  );
+/** Everything a removal discharges once Boat's deletion completed, short of the capture token. */
+const REMOVED = {
+  runtime: { status: "stopped", removed: true },
+  pin: true,
+  allocation: true,
+  resumeSecrets: true,
+};
+
+describe.runIf(databaseUrl !== undefined).each([
+  { name: "a run with a tunnel", options: {} },
+  { name: "a run launched without resources", options: { resources: "none" } as const },
+])("Boat removal: the one deletion of $name", ({ options }) => {
+  const tunnelled = options.resources === undefined;
+  /** The run's tunnel slot: held while frozen and unreleased, or absent for a run without one. */
+  const slot = async (s: AllocationFixture, target: BoatExecutionTarget) => {
+    if (!tunnelled) return null;
+    const record = await tunnelRecord(s, target);
+    return { frozen: record.closeId !== undefined, released: record.released === true };
+  };
+  const settled = async (s: AllocationFixture, target: BoatExecutionTarget) => {
+    if (!tunnelled) return expectNoGateway(s);
+    expect(await slot(s, target)).toEqual({ frozen: true, released: true });
+    expect(s.gateway.removeCalls).toBe(1);
+  };
+  const unreleased = async (s: AllocationFixture, target: BoatExecutionTarget) => {
+    expect(await released(s, target.runId)).toMatchObject(NOTHING_RELEASED);
+    expect(s.gateway.removeCalls).toBe(0);
+    if (tunnelled) expect(await slot(s, target)).toMatchObject({ released: false });
+  };
+
+  it("from nothing sent: fences, sends one DELETE, records the operation on the allocation, and discharges on completed", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const { removal, daemon } = await execute(s.final(["unreachable"]));
+      const asked = s.guest.actions.length;
+      const atDelete: unknown[] = [];
+      s.provider.beforeDeletion = async () => {
+        atDelete.push({
+          execution: (await execute(s.executions.get(target.runId)))?.phase,
+          slot: await slot(s, target),
+          ...(await released(s, target.runId)),
+        });
+      };
+      const allocation = await allocationOf(s, target.runId);
+      expect(await execute(removal.remove(allocation, { fence: true }))).toBe("removed");
+      // Fenced before the DELETE, with nothing released yet.
+      expect(atDelete).toHaveLength(1);
+      expect(atDelete[0]).toMatchObject({
+        execution: "held",
+        slot: tunnelled ? { frozen: true, released: false } : null,
+        ...NOTHING_RELEASED,
+      });
+      expect(s.provider.deleteCalls).toBe(1);
+      // It weighs nothing about the work on the VM: the guest and its daemon are asked nothing.
+      expect(daemon.calls).toEqual([]);
+      expect(s.guest.actions.length).toBe(asked);
+      expect(await execute(s.repo.get(target.runId))).toMatchObject({
+        phase: "deleted",
+        removal: {
+          kind: "operation",
+          id: s.provider.deletionId,
+          targetId: target.sandboxId,
+          completed: true,
+        },
+      });
+      expect(await released(s, target.runId)).toMatchObject(REMOVED);
+      await settled(s, target);
+      // A repeat, with the record it was first given, finds it removed and asks Boat nothing.
+      const reads = s.provider.reads.length;
+      expect(await execute(removal.remove(allocation, { fence: true }))).toBe("removed");
+      expect(s.provider.reads.length).toBe(reads);
+      expect(s.provider.deleteCalls).toBe(1);
+      await settled(s, target);
+    }, options));
+
+  it("with the operation recorded and not complete: releases nothing, polls it from a restarted worker, never sends DELETE again, and discharges once Boat completes", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      await execute(s.canonical.storeCaptureToken({ runId: target.runId, sealed: "sealed-token" }));
+      const first = await execute(s.final(["unreachable"]));
+      const allocation = await allocationOf(s, target.runId);
+      s.provider.deletionCompleted = false;
+      expect(await execute(first.removal.remove(allocation, { fence: true }))).toBe("deleting");
+      const recorded = {
+        phase: "deleting",
+        removal: {
+          kind: "operation",
+          id: s.provider.deletionId,
+          targetId: target.sandboxId,
+          completed: false,
+        },
+      };
+      expect(await execute(s.repo.get(target.runId))).toMatchObject(recorded);
+      if (tunnelled) expect((await tunnelRecord(s, target)).removal).toBeUndefined();
+      await unreleased(s, target);
+      expect(await released(s, target.runId)).toMatchObject(NOTHING_RELEASED_WITH_TOKEN);
+      // A restarted worker has no memory of the DELETE: it polls the operation it finds.
+      const restarted = await execute(s.final(["unreachable"]));
+      const polled = s.provider.deletionReads;
+      expect(
+        await Promise.all([
+          execute(restarted.removal.remove(allocation, { fence: true })),
+          execute(restarted.removal.remove(allocation, { fence: false })),
+        ]),
+      ).toEqual(["deleting", "deleting"]);
+      expect(s.provider.deletionReads).toBeGreaterThanOrEqual(polled + 2);
+      expect(s.provider.deleteCalls).toBe(1);
+      expect(await execute(s.repo.get(target.runId))).toMatchObject(recorded);
+      await unreleased(s, target);
+      // Boat unreachable, then answering for another operation: the recorded one is kept.
+      s.provider.deletionUnavailable = true;
+      expect(
+        await execute(Effect.flip(restarted.removal.remove(allocation, { fence: true }))),
+      ).toMatchObject({ code: "unavailable", requested: true });
+      s.provider.deletionUnavailable = false;
+      s.provider.deletionWrongId = true;
+      expect(
+        await execute(Effect.flip(restarted.removal.remove(allocation, { fence: true }))),
+      ).toMatchObject({ code: "held", requested: true });
+      s.provider.deletionWrongId = false;
+      expect(await execute(s.repo.get(target.runId))).toMatchObject(recorded);
+      await unreleased(s, target);
+      // Boat completes it. Recorded complete and not yet discharged: still nothing released.
+      s.provider.deletionCompleted = true;
+      expect(await execute(restarted.removal.deletion(allocation, { fence: true }))).toBe(
+        "completed",
+      );
+      expect(await execute(s.repo.get(target.runId))).toMatchObject({
+        phase: "deleting",
+        removal: { kind: "operation", id: s.provider.deletionId, completed: true },
+      });
+      await unreleased(s, target);
+      // Complete, not discharged: the next call discharges, with no DELETE.
+      expect(await execute(restarted.removal.remove(allocation, { fence: true }))).toBe("removed");
+      expect(s.provider.deleteCalls).toBe(1);
+      expect(await released(s, target.runId)).toMatchObject({ ...REMOVED, captureToken: true });
+      expect(await execute(s.repo.get(target.runId))).toMatchObject({
+        phase: "deleted",
+        removal: { kind: "operation", id: s.provider.deletionId, completed: true },
+      });
+      await settled(s, target);
+    }, options));
+
+  it("with the DELETE sent and its reply lost: records no operation and releases nothing, then asks again for the same owned VM", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const { removal } = await execute(s.final(["unreachable"]));
+      const allocation = await allocationOf(s, target.runId);
+      s.provider.deleteLost = true;
+      // Boat was asked: the outcome is unknown, never a refusal.
+      expect(await execute(Effect.flip(removal.remove(allocation, { fence: true })))).toMatchObject(
+        { code: "unavailable", requested: true },
+      );
+      expect(await execute(s.repo.get(target.runId))).toMatchObject({ phase: "bound" });
+      expect((await execute(s.repo.get(target.runId)))?.removal).toBeUndefined();
+      expect((await execute(s.executions.get(target.runId)))?.phase).toBe("held");
+      await unreleased(s, target);
+      // Boat still has the VM: it is read again, and DELETE goes to that exact VM again.
+      s.provider.deleteLost = false;
+      expect(await execute(removal.remove(allocation, { fence: true }))).toBe("removed");
+      expect(s.provider.deleteCalls).toBe(2);
+      expect(await released(s, target.runId)).toMatchObject(REMOVED);
+      await settled(s, target);
+    }, options));
+
+  it("with the DELETE sent and its reply lost: Boat's own 404 answers it, with no second DELETE", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const { removal } = await execute(s.final(["unreachable"]));
+      const allocation = await allocationOf(s, target.runId);
+      s.provider.deleteLost = true;
+      await expect(execute(removal.remove(allocation, { fence: true }))).rejects.toThrow(
+        "unavailable",
+      );
+      // Boat carried the DELETE out; only its reply was lost.
+      s.provider.sandboxMissing = true;
+      expect(await execute(removal.remove(allocation, { fence: true }))).toBe("removed");
+      expect(s.provider.deleteCalls).toBe(1);
+      expect(await execute(s.repo.get(target.runId))).toMatchObject({
+        phase: "deleted",
+        removal: { kind: "absent", completed: true },
+      });
+      expect(await released(s, target.runId)).toMatchObject(REMOVED);
+      await settled(s, target);
+    }, options));
+
+  it("with the VM already absent: cleans up only, fencing nothing and sending nothing", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const { removal } = await execute(s.final(["unreachable"]));
+      s.provider.sandboxMissing = true;
+      expect(
+        await execute(removal.remove(await allocationOf(s, target.runId), { fence: true })),
+      ).toBe("removed");
+      expect(s.provider.deleteCalls).toBe(0);
+      // Nothing can reach a VM that does not exist: its execution was not held for it.
+      expect((await execute(s.executions.get(target.runId)))?.phase).toBe("running");
+      expect(await execute(s.repo.get(target.runId))).toMatchObject({
+        phase: "deleted",
+        removal: { kind: "absent", completed: true },
+      });
+      expect(await released(s, target.runId)).toMatchObject(REMOVED);
+      await settled(s, target);
+    }, options));
+
+  it("sends Boat nothing for a run that is not stopping, one its caller did not fence, a foreign VM, or one Boat cannot be read for", () =>
+    test(async (s) => {
+      const target = await launched(s);
+      s.gateway.allowRemoval = true;
+      const { removal } = await execute(s.final(["unreachable"]));
+      const allocation = await allocationOf(s, target.runId);
+      const refusal = (fence: boolean) =>
+        execute(Effect.flip(removal.remove(allocation, { fence })));
+      // Not stopping: refused before any fence is written.
+      expect(await refusal(true)).toMatchObject({ code: "held", requested: false });
+      expect((await execute(s.executions.get(target.runId)))?.phase).toBe("running");
+      if (tunnelled) expect(await slot(s, target)).toMatchObject({ frozen: false });
+      await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+      // Stopping, and its caller says it fenced the run: it did not, so nothing is sent.
+      expect(await refusal(false)).toMatchObject({ code: "held", requested: false });
+      expect((await execute(s.executions.get(target.runId)))?.phase).toBe("running");
+      // A VM without this run's labels is never touched, and an unreadable one is unknown.
+      s.provider.foreign = true;
+      expect(await refusal(true)).toMatchObject({ code: "held", requested: false });
+      s.provider.foreign = false;
+      s.provider.beforeSandboxRead = async () => {
+        throw new Error("Boat is down");
+      };
+      expect(await refusal(true)).toMatchObject({ code: "unavailable", requested: false });
+      s.provider.beforeSandboxRead = async () => {};
+      expect(s.provider.deleteCalls).toBe(0);
+      expect(await execute(s.repo.get(target.runId))).toMatchObject({ phase: "bound" });
+      await unreleased(s, target);
+      // An operation Boat names for another VM is recorded nowhere, and nothing is released.
+      s.provider.deletionForeign = true;
+      expect(await refusal(true)).toMatchObject({ code: "held", requested: true });
+      expect((await execute(s.repo.get(target.runId)))?.removal).toBeUndefined();
+      await unreleased(s, target);
+    }, options));
+
+  it("the adapter's stop finds the VM by its id, reports a deletion in progress as an error that is no refusal, and is idempotent on the recorded operation", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      try {
+        const target = await stopLaunched(s);
+        // The row's reference names no run: the allocation's writes rewrote it.
+        const instance = await execute(s.runtimes.getRuntimeInstanceByRunId(target.runId));
+        expect(instance?.reference).toBe(`boat:${target.sandboxId}`);
+        const input = { resourceId: target.sandboxId, reference: `boat:${target.sandboxId}` };
+        // Boat states no bound on a deletion: the generic path reads none from its adapter.
+        const lifecycle: RuntimeAdapterLifecycle = f.adapter;
+        expect(lifecycle.removalFenceMs).toBeUndefined();
+        const failure = stopFailure;
+        s.provider.deletionCompleted = false;
+        for (const attempt of [1, 2, 3]) {
+          const pending = await failure(f.adapter.stop(input));
+          expect(pending).toBeInstanceOf(BoatAdapterError);
+          expect(pending).toMatchObject({ code: "close-pending" });
+          expect(isRemovalRefusal(pending)).toBe(false);
+          // One DELETE, whatever the number of stops: the later ones poll its operation.
+          expect(s.provider.deleteCalls).toBe(1);
+          expect(s.provider.deletionReads).toBeGreaterThanOrEqual(attempt - 1);
+          await unreleased(s, target);
+        }
+        expect(await execute(s.repo.get(target.runId))).toMatchObject({
+          phase: "deleting",
+          removal: { kind: "operation", id: s.provider.deletionId, completed: false },
+        });
+        // Boat unreachable while the operation is on record: still no refusal.
+        s.provider.deletionUnavailable = true;
+        const unknown = await failure(f.adapter.stop(input));
+        expect(unknown).toMatchObject({ code: "close-pending" });
+        expect(isRemovalRefusal(unknown)).toBe(false);
+        s.provider.deletionUnavailable = false;
+        s.provider.deletionCompleted = true;
+        const stopped = { adapter: "boat", resourceId: target.sandboxId, outcome: "stopped" };
+        // With or without a reference: only the VM's id is read.
+        expect(await f.adapter.stop({ resourceId: target.sandboxId })).toEqual(stopped);
+        expect(await released(s, target.runId)).toMatchObject(REMOVED);
+        await settled(s, target);
+        expect(await f.adapter.stop(input)).toEqual(stopped);
+        expect(s.provider.deleteCalls).toBe(1);
+        await settled(s, target);
+        // The executor is gone: the runtime answers `missing` from its own completed deletion.
+        expect(await f.adapter.inspect({ resourceId: target.sandboxId })).toEqual({
+          state: "missing",
+        });
+      } finally {
+        await f.runtime.dispose();
+      }
+    }, options));
+
+  it("the adapter's stop reports a lost DELETE reply as an unknown outcome, and a refusal only when Boat was asked nothing", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      try {
+        const target = await launched(s);
+        s.gateway.allowRemoval = true;
+        const failure = (adapter: BoatRuntimeAdapter, resourceId: string) =>
+          stopFailure(adapter.stop({ resourceId }));
+        // Not stopping: nothing is fenced and Boat is asked nothing. A definitive refusal.
+        const held = await failure(f.adapter, target.sandboxId);
+        expect(held).toMatchObject({ code: "close-held" });
+        expect(isRemovalRefusal(held)).toBe(true);
+        expect((await execute(s.executions.get(target.runId)))?.phase).toBe("running");
+        await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+        // Boat cannot be read: nothing is fenced and nothing is sent. A refusal too.
+        s.provider.beforeSandboxRead = async () => {
+          throw new Error("Boat is down");
+        };
+        const unread = await failure(f.adapter, target.sandboxId);
+        expect(unread).toMatchObject({ code: "close-unavailable" });
+        expect(isRemovalRefusal(unread)).toBe(true);
+        s.provider.beforeSandboxRead = async () => {};
+        // A VM this deployment holds no allocation for, and another deployment's adapter.
+        const unknown = await failure(f.adapter, "bx_3456789a");
+        expect(unknown).toMatchObject({ code: "target-mismatch" });
+        expect(isRemovalRefusal(unknown)).toBe(true);
+        const foreign = await failure(
+          new BoatRuntimeAdapter({ deploymentId: "other", runtime: f.runtime }),
+          target.sandboxId,
+        );
+        expect(foreign).toMatchObject({ code: "target-mismatch" });
+        expect(isRemovalRefusal(foreign)).toBe(true);
+        expect((await execute(s.executions.get(target.runId)))?.phase).toBe("running");
+        expect(s.provider.deleteCalls).toBe(0);
+        // The DELETE went out and its reply was lost: Boat may be deleting. No refusal.
+        s.provider.deleteLost = true;
+        const lost = await failure(f.adapter, target.sandboxId);
+        expect(lost).toMatchObject({ code: "close-pending" });
+        expect(isRemovalRefusal(lost)).toBe(false);
+        expect(s.provider.deleteCalls).toBe(1);
+        await unreleased(s, target);
+        s.provider.deleteLost = false;
+        expect(await f.adapter.stop({ resourceId: target.sandboxId })).toMatchObject({
+          outcome: "stopped",
+        });
+        expect(await released(s, target.runId)).toMatchObject(REMOVED);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }, options));
+});
+
+describe.runIf(databaseUrl !== undefined)("Boat removal of a run closed before the upgrade", () => {
+  /** A close by the earlier code: execution held, tunnel frozen, the operation on the tunnel row. */
+  const closedByEarlierCode = async (s: AllocationFixture, completed: boolean) => {
+    const target = await stopLaunched(s);
+    await execute(s.executor.hold(target));
+    const frozen = await execute(s.tunnels.freeze(await tunnelRecord(s, target), randomUUID()));
+    await execute(
+      corruptBoatTunnel(s.db, target.runId, {
+        ...frozen,
+        removal: { id: s.provider.deletionId, completed },
+      }),
+    );
+    expect(await execute(s.repo.get(target.runId))).toMatchObject({ phase: "bound" });
+    expect((await execute(s.repo.get(target.runId)))?.removal).toBeUndefined();
+    return target;
+  };
+
+  it("honours an operation id recorded on the tunnel row: polled, never a second DELETE, and kept on the allocation from then on", () =>
+    test(async (s) => {
+      const target = await closedByEarlierCode(s, false);
+      s.provider.deletionCompleted = false;
+      const { owner, removal, daemon } = await execute(s.final(["unreachable"]));
+      // Through the close, as the sweep and a stop reach it.
+      expect(await execute(owner.close(target))).toBe("pending");
+      expect(s.provider.deleteCalls).toBe(0);
+      expect(s.provider.deletionReads).toBeGreaterThan(0);
+      expect(await execute(s.repo.get(target.runId))).toMatchObject({
+        phase: "deleting",
+        removal: {
+          kind: "operation",
+          id: s.provider.deletionId,
+          targetId: target.sandboxId,
+          completed: false,
+        },
+      });
+      // The tunnel row is read, never written: it keeps what the earlier code recorded.
+      expect((await tunnelRecord(s, target)).removal).toEqual({
+        id: s.provider.deletionId,
+        completed: false,
+      });
+      expect(await released(s, target.runId)).toMatchObject(NOTHING_RELEASED);
+      expect(s.gateway.removeCalls).toBe(0);
+      // Through the removal itself, as the adapter's stop reaches it.
+      expect(
+        await execute(removal.remove(await allocationOf(s, target.runId), { fence: true })),
+      ).toBe("deleting");
+      expect(s.provider.deleteCalls).toBe(0);
+      s.provider.deletionCompleted = true;
+      expect(await execute(owner.close(target))).toBe("closed");
+      expect(daemon.calls).toEqual([]);
+      expect(s.provider.deleteCalls).toBe(0);
+      expect(s.gateway.removeCalls).toBe(1);
+      expect(await tunnelRecord(s, target)).toMatchObject({ released: true });
+      expect(await execute(s.repo.get(target.runId))).toMatchObject({
+        phase: "deleted",
+        removal: { kind: "operation", id: s.provider.deletionId, completed: true },
+      });
+      expect(await released(s, target.runId)).toMatchObject(REMOVED);
+    }));
+
+  it("discharges a deletion the earlier code recorded complete on the tunnel row and had not discharged", () =>
+    test(async (s) => {
+      const target = await closedByEarlierCode(s, true);
+      const { removal } = await execute(s.final(["unreachable"]));
+      expect(
+        await execute(removal.remove(await allocationOf(s, target.runId), { fence: false })),
+      ).toBe("removed");
+      expect(s.provider.deleteCalls).toBe(0);
+      expect(s.gateway.removeCalls).toBe(1);
+      expect(await execute(s.repo.get(target.runId))).toMatchObject({
+        phase: "deleted",
+        removal: { kind: "operation", id: s.provider.deletionId, completed: true },
+      });
+      expect(await released(s, target.runId)).toMatchObject(REMOVED);
+    }));
+});
+
+/** A launched run recorded ready, as the build worker records it. */
+const readyRun = async (s: AllocationFixture) => {
+  const target = await launched(s);
+  await execute(
+    s.runtimes.upsertRuntimeInstance({
+      runId: target.runId,
+      adapter: "boat",
+      status: "ready",
+      resourceId: target.sandboxId,
+    }),
+  );
+  return target;
+};
+/** The agent's health once sealantd exited: its code and its last output, the bearer in it. */
+const daemonExited = {
+  status: 503,
+  body: {
+    booted: true,
+    controlSocket: false,
+    daemonExit: {
+      code: 75,
+      signal: null,
+      output: `sealantd: final flush incomplete\ncontrol ${"a".repeat(64)} closed\n`,
+    },
+  },
+};
+/** The same exit with a signal that is no signal's name: the guest's free text is not repeated. */
+const daemonKilledOddly = {
+  status: 503,
+  body: {
+    booted: true,
+    controlSocket: false,
+    daemonExit: { code: null, signal: "SIGKILL; rm -rf /" },
+  },
+};
+/** A ready run and an adapter on a clock the test moves, with what each inspection read. */
+const inspectFixture = async (s: AllocationFixture, inspectBoundMs?: number) => {
+  const f = await adapterFixture(s);
+  const clock = { now: Date.parse("2026-11-10T00:00:00.000Z") };
+  const adapter = new BoatRuntimeAdapter({
+    deploymentId: "test",
+    runtime: f.runtime,
+    now: () => clock.now,
+    ...(inspectBoundMs === undefined ? {} : { inspectBoundMs }),
+  });
+  const target = await readyRun(s);
+  return {
+    ...f,
+    adapter,
+    clock,
+    target,
+    inspect: () => adapter.inspect({ resourceId: target.sandboxId }),
+    /** How often Boat was asked for the VM, and the agent for its health. */
+    reads: () => ({
+      boat: s.provider.reads.filter((path) => path === `/api/v1/sandboxes/${target.sandboxId}`)
+        .length,
+      agent: healthPolls(s),
+    }),
+    row: () => execute(s.runtimes.getRuntimeInstanceByRunId(target.runId)),
+    observed: async () =>
+      (await execute(s.db.select().from(schema.boatObservations))).map((row) => row.presence),
+  };
+};
+
+describe.runIf(databaseUrl !== undefined)("Boat adapter inspect", () => {
+  it("answers running for a VM Boat has whose agent reports its daemon up", () =>
+    test(async (s) => {
+      const f = await inspectFixture(s);
+      try {
+        expect(await f.inspect()).toEqual({ state: "running", platformState: "running" });
+        expect(await f.row()).toMatchObject({ status: "ready", removedAt: null });
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+
+  it("answers exited, the machine still up, when the agent's health names the daemon's exit, with the bearer redacted", () =>
+    test(async (s) => {
+      const f = await inspectFixture(s);
+      try {
+        s.guest.health = () => daemonExited;
+        const exited = await f.inspect();
+        expect(exited).toMatchObject({
+          state: "exited",
+          exitCode: 75,
+          platformEnded: false,
+          platformState: "running",
+        });
+        if (exited.state !== "exited") throw new Error("expected an exit");
+        expect(exited.detail).toContain("final flush incomplete");
+        expect(exited.detail).toContain("[REDACTED]");
+        expect(exited.detail).not.toContain("a".repeat(64));
+        // What Boat said of the VM is unchanged: present, and nothing was written about it.
+        expect(await f.observed()).toEqual(["present"]);
+        expect(await f.row()).toMatchObject({ status: "ready", removedAt: null });
+        // No exit code, and a signal that is not a signal's name: reported, never repeated.
+        s.guest.health = () => daemonKilledOddly;
+        expect(await f.inspect()).toEqual({
+          state: "exited",
+          platformEnded: false,
+          platformState: "running",
+          detail:
+            "sealantd in the Boat VM exited before the workspace stopped (code null, signal unrecognized).",
+        });
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+
+  it("answers exited, the machine still up, when the agent reports no daemon launched on its boot", () =>
+    test(async (s) => {
+      const f = await inspectFixture(s);
+      try {
+        s.guest.health = () => ({ status: 503, body: { booted: false, controlSocket: false } });
+        expect(await f.inspect()).toEqual({
+          state: "exited",
+          platformEnded: false,
+          platformState: "running",
+          detail: expect.stringContaining("no daemon launched"),
+        });
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+
+  it("answers exited for a launch never pushed whose execution is fenced, and running while it is not, without asking the agent", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      try {
+        const target = await execute(s.allocations.prepare(s.input));
+        const asked = healthPolls(s);
+        const inspect = () => f.adapter.inspect({ resourceId: target.sandboxId });
+        // Bound, its launch not pushed and not fenced: a launch may still be on its way.
+        expect((await execute(s.executions.get(target.runId)))?.phase).toBe("control");
+        expect(await inspect()).toEqual({ state: "running", platformState: "running" });
+        await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+        await execute(s.executions.abort(target));
+        expect(await inspect()).toEqual({
+          state: "exited",
+          platformEnded: false,
+          platformState: "running",
+          detail: expect.stringContaining("No launch was ever pushed"),
+        });
+        // The record answers: the agent's `booted: false` would describe the same thing.
+        expect(healthPolls(s)).toBe(asked);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+
+  it.each<readonly [string, (s: AllocationFixture) => void]>([
+    [
+      "Boat does not answer",
+      (s) => {
+        s.provider.beforeSandboxRead = async () => {
+          throw new Error("Boat is down");
+        };
+      },
+    ],
+    [
+      "Boat answers with a VM that does not carry the run's labels",
+      (s) => {
+        s.provider.foreign = true;
+      },
+    ],
+    [
+      "Boat cannot host the agent",
+      (s) => {
+        s.guest.beforeHost = async () => {
+          throw new Error("hosting failed");
+        };
+      },
+    ],
+    [
+      "the agent's health is lost in transport",
+      (s) => {
+        s.guest.health = () => {
+          throw new Error("connection reset");
+        };
+      },
+    ],
+    [
+      "the hosted proxy answers 503 for the agent",
+      (s) => {
+        s.guest.health = () => ({ status: 503, body: { message: "upstream not ready" } });
+      },
+    ],
+    [
+      "the agent's health is not the contract's",
+      (s) => {
+        s.guest.health = () => ({ status: 200, body: { booted: "yes" } });
+      },
+    ],
+  ])("answers running, and records nothing, when %s", (_what, fail) =>
+    test(async (s) => {
+      const f = await inspectFixture(s);
+      try {
+        fail(s);
+        expect(await f.inspect()).toMatchObject({ state: "running" });
+        expect(await f.observed()).toEqual(["present"]);
+        expect(await f.row()).toMatchObject({ status: "ready", removedAt: null });
+        expect(s.provider.deleteCalls).toBe(0);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }),
+  );
+
+  it("answers running when a read does not answer within its bound", () =>
+    test(async (s) => {
+      const f = await inspectFixture(s, 250);
+      const never = Promise.withResolvers<void>();
+      try {
+        s.guest.beforeReady = () => never.promise;
+        expect(await f.inspect()).toEqual({ state: "running" });
+        expect(await f.row()).toMatchObject({ status: "ready", removedAt: null });
+      } finally {
+        never.resolve();
+        await f.runtime.dispose();
+      }
+    }));
+
+  it("answers running for a 404 of a VM Boat never reported past creation, and commits no absence", () =>
+    test(async (s) => {
+      const f = await inspectFixture(s);
+      try {
+        // As straight after create: nothing on record says Boat ever reported the VM created.
+        await execute(s.db.delete(schema.boatObservations));
+        s.provider.sandboxMissing = true;
+        expect(await f.inspect()).toEqual({ state: "running" });
+        expect(await f.observed()).toEqual([]);
+        expect(await f.row()).toMatchObject({ status: "ready", removedAt: null });
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+
+  it("answers missing on Boat's typed 404 for a VM it had reported past creation, and from that committed absence afterwards", () =>
+    test(async (s) => {
+      const f = await inspectFixture(s);
+      try {
+        expect(await f.inspect()).toMatchObject({ state: "running" });
+        // Another period, and a person deleted the VM in Boat's console meanwhile.
+        f.clock.now += BOAT_INSPECT_READ_MS;
+        s.provider.sandboxMissing = true;
+        expect(await f.inspect()).toEqual({ state: "missing" });
+        // The absence is the observer's own commit, with the runtime row in the same write.
+        expect(await f.observed()).toEqual(["absent"]);
+        expect(await f.row()).toMatchObject({
+          status: "stopped",
+          stopReason: "failed",
+          removedAt: expect.any(Date),
+        });
+        // Asked again, even of a Boat that answers once more: the committed absence stands.
+        s.provider.sandboxMissing = false;
+        const read = f.reads();
+        expect(await f.inspect()).toEqual({ state: "missing" });
+        expect(f.reads()).toEqual(read);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+
+  it("reads Boat and the agent once per period for a live VM, answers running in between, and never answers exited or missing from memory", () =>
+    test(async (s) => {
+      const f = await inspectFixture(s);
+      try {
+        const start = f.reads();
+        const after = (reads: number) => ({
+          boat: start.boat + reads,
+          agent: start.agent + reads,
+        });
+        expect(await f.inspect()).toEqual({ state: "running", platformState: "running" });
+        expect(f.reads()).toEqual(after(1));
+        // The daemon dies a moment later. Until the period is over nothing is read: `running`.
+        s.guest.health = () => daemonExited;
+        for (const elapsed of [5_000, 30_000, BOAT_INSPECT_READ_MS - 1]) {
+          f.clock.now += elapsed - (f.clock.now - Date.parse("2026-11-10T00:00:00.000Z"));
+          expect(await f.inspect()).toEqual({ state: "running" });
+        }
+        expect(f.reads()).toEqual(after(1));
+        // The period is over: read, and the exit is reported.
+        f.clock.now += 1;
+        expect(await f.inspect()).toMatchObject({ state: "exited", exitCode: 75 });
+        expect(f.reads()).toEqual(after(2));
+        // An exit is never remembered. Asked again in the same instant, it is read again...
+        expect(await f.inspect()).toMatchObject({ state: "exited", exitCode: 75 });
+        expect(f.reads()).toEqual(after(3));
+        // ...so a daemon that is up again is believed at once, not answered `exited` from memory.
+        s.guest.health = () => undefined;
+        expect(await f.inspect()).toEqual({ state: "running", platformState: "running" });
+        expect(f.reads()).toEqual(after(4));
+        // That read answered `running`, and paces the next period.
+        f.clock.now += BOAT_INSPECT_READ_MS - 1;
+        s.provider.sandboxMissing = true;
+        expect(await f.inspect()).toEqual({ state: "running" });
+        expect(f.reads()).toEqual(after(4));
+        expect(await f.observed()).toEqual(["present"]);
+        // The absence is concluded only from a read: Boat's own 404, once the period is over.
+        f.clock.now += 1;
+        expect(await f.inspect()).toEqual({ state: "missing" });
+        expect(f.reads().boat).toBe(start.boat + 5);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+
+  it("paces a failed read like any other, as running", () =>
+    test(async (s) => {
+      const f = await inspectFixture(s);
+      try {
+        s.guest.health = () => {
+          throw new Error("connection reset");
+        };
+        expect(await f.inspect()).toMatchObject({ state: "running" });
+        const read = f.reads();
+        f.clock.now += BOAT_INSPECT_READ_MS - 1;
+        expect(await f.inspect()).toEqual({ state: "running" });
+        expect(f.reads()).toEqual(read);
+        f.clock.now += 1;
+        s.guest.health = () => daemonExited;
+        expect(await f.inspect()).toMatchObject({ state: "exited" });
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+
+  it("reads on every call once a stop is requested for the run", () =>
+    test(async (s) => {
+      const f = await inspectFixture(s);
+      try {
+        expect(await f.inspect()).toMatchObject({ state: "running" });
+        const read = f.reads();
+        expect(await f.inspect()).toEqual({ state: "running" });
+        expect(f.reads()).toEqual(read);
+        await execute(s.runtimes.markStopRequested({ runId: f.target.runId, stopReason: "user" }));
+        // Same instant, three calls, three reads: a stop waits on no period.
+        for (const call of [1, 2, 3]) {
+          expect(await f.inspect()).toEqual({ state: "running", platformState: "running" });
+          expect(f.reads()).toEqual({ boat: read.boat + call, agent: read.agent + call });
+        }
+        s.guest.health = () => daemonExited;
+        expect(await f.inspect()).toMatchObject({ state: "exited", platformEnded: false });
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+
+  it("says nothing of a VM this deployment holds no allocation for", () =>
+    test(async (s) => {
+      const f = await inspectFixture(s);
+      try {
+        const other = new BoatRuntimeAdapter({ deploymentId: "other", runtime: f.runtime });
+        const read = f.reads();
+        expect(await other.inspect({ resourceId: f.target.sandboxId })).toEqual({
+          state: "running",
+        });
+        expect(await f.adapter.inspect({ resourceId: "bx_3456789a" })).toEqual({
+          state: "running",
+        });
+        expect(f.reads()).toEqual(read);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+});
+
+describe.runIf(databaseUrl !== undefined)("Boat control material for the worker's drains", () => {
+  const drainFailure = (
+    control: BoatControlMaterial["Service"],
+    runId: string,
+    sandboxId: string,
+  ) =>
+    execute(
+      control
+        .drainMaterial(runId, sandboxId)
+        .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => undefined })),
+    );
+
+  it("opens for a stop-requested run, and for one whose execution a close holds, where the strict method refuses", () =>
+    test(async (s) => {
+      const f = await controlFixture(s);
+      try {
+        const { runId, sandboxId } = f.target;
+        await execute(s.runtimes.markStopRequested({ runId, stopReason: "user" }));
+        // Exec jobs and the API: a stopping run is refused, before Boat is asked.
+        expect(await f.failure(runId, sandboxId)).toMatchObject({ reason: "refused" });
+        expect(s.provider.hostCalls).toBe(0);
+        const opened = {
+          url: "wss://fixture-8080.on.boat.dev/sealant/control",
+          auth: { bearerToken: "a".repeat(64) },
+          headers: {
+            Cookie: "_port_auth=test-cookie-local-only",
+            Authorization: `Bearer ${"a".repeat(64)}`,
+          },
+        };
+        expect(await execute(f.control.drainMaterial(runId, sandboxId))).toEqual(opened);
+        expect(s.provider.hostCalls).toBe(1);
+        // FINAL's daemon is reached after the close held the execution too.
+        await execute(s.executor.hold(f.target));
+        expect(await boatDrainConnectMaterial(f.control)(runId, sandboxId)).toEqual(opened);
+        // A fresh hosted cookie from Boat for every connection, as the strict method asks.
+        expect(s.provider.hostCalls).toBe(2);
+        expect(await f.failure(runId, sandboxId)).toMatchObject({ reason: "refused" });
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+
+  it("opens for a run that never became ready, where the strict method refuses", () =>
+    test(async (s) => {
+      const target = await launched(s);
+      const f = await controlMaterial(s, "test");
+      try {
+        const row = await execute(s.runtimes.getRuntimeInstanceByRunId(target.runId));
+        expect(row?.status).not.toBe("ready");
+        expect(await f.failure(target.runId, target.sandboxId)).toMatchObject({
+          reason: "refused",
+        });
+        expect(
+          await execute(f.control.drainMaterial(target.runId, target.sandboxId)),
+        ).toMatchObject({ auth: { bearerToken: "a".repeat(64) } });
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+
+  it("refuses another deployment's run and a different sandbox, before asking Boat", () =>
+    test(async (s) => {
+      const f = await controlFixture(s);
+      const other = await controlMaterial(s, "other");
+      try {
+        const { runId, sandboxId } = f.target;
+        await execute(s.runtimes.markStopRequested({ runId, stopReason: "user" }));
+        const asked = s.provider.reads.length;
+        for (const refused of [
+          await drainFailure(other.control, runId, sandboxId),
+          await drainFailure(f.control, runId, "bx_3456789a"),
+          await drainFailure(f.control, randomUUID(), sandboxId),
+          await boatDrainConnectMaterial(other.control)(runId, sandboxId).then(
+            () => undefined,
+            (error: unknown) => error,
+          ),
+        ]) {
+          expect(refused).toBeInstanceOf(BoatControlError);
+          expect(refused).toMatchObject({ reason: "refused" });
+          namesNoSecret(refused);
+        }
+        expect(s.provider.reads.length).toBe(asked);
+        expect(s.provider.hostCalls).toBe(0);
+      } finally {
+        await f.runtime.dispose();
+        await other.runtime.dispose();
+      }
+    }));
+
+  it("refuses a VM whose Boat labels are not the run's, and names no secret when Boat fails", () =>
+    test(async (s) => {
+      const f = await controlFixture(s);
+      const logged = vi.spyOn(console, "log").mockImplementation(() => {});
+      const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const errored = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const { runId, sandboxId } = f.target;
+        await execute(s.runtimes.markStopRequested({ runId, stopReason: "user" }));
+        // The ownership-label check stands: Boat is never asked to host a foreign VM.
+        s.provider.foreign = true;
+        expect(await drainFailure(f.control, runId, sandboxId)).toMatchObject({
+          reason: "refused",
+        });
+        expect(s.provider.hostCalls).toBe(0);
+        s.provider.foreign = false;
+        s.provider.hostUnavailable = true;
+        const unavailable = await drainFailure(f.control, runId, sandboxId);
+        expect(unavailable).toMatchObject({ reason: "unavailable" });
+        namesNoSecret(unavailable);
+        for (const spy of [logged, warned, errored])
+          for (const call of spy.mock.calls) namesNoSecret(call);
+      } finally {
+        logged.mockRestore();
+        warned.mockRestore();
+        errored.mockRestore();
+        await f.runtime.dispose();
+      }
+    }));
+
+  it("refuses a run whose launch was never pushed, or was fenced before it: no daemon ran to drain", () =>
+    test(async (s) => {
+      const target = await execute(s.allocations.prepare(s.input));
+      const f = await controlMaterial(s, "test");
+      try {
+        await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+        expect((await execute(s.executions.get(target.runId)))?.phase).toBe("control");
+        expect(await drainFailure(f.control, target.runId, target.sandboxId)).toMatchObject({
+          reason: "refused",
+        });
+        await execute(s.executions.abort(target));
+        expect(await drainFailure(f.control, target.runId, target.sandboxId)).toMatchObject({
+          reason: "refused",
+        });
+        expect(s.provider.hostCalls).toBe(0);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+});
+
+/** The worker's generic sweeps over the test database, with a daemon nothing may dial. */
+const genericSweeps = (s: AllocationFixture, adapter: BoatRuntimeAdapter) => {
+  const daemon = fakeCaptureDaemon(["unreachable"]);
+  const connects: string[] = [];
+  const options = {
+    runtimeAdapters: [adapter],
+    captureDrain: {
+      ledger: databaseCaptureDrainLedger({
+        db: s.db,
+        owner: `generic-${randomUUID()}`,
+        leaseMs: 60_000,
+      }),
+      settings: DEFAULT_CAPTURE_DRAIN_SETTINGS,
+    },
+    targetOptions: {
+      boatConnectMaterial: async (runId: string) => {
+        connects.push(runId);
+        throw new Error("a generic sweep must not reach a Boat daemon");
+      },
+    },
+  };
+  const layer = Layer.merge(
+    Layer.mergeAll(
+      WorkspaceRuntimeInstanceRepoLive,
+      WorkspaceAttemptRepoLive,
+      WorkspaceCaptureDrainRepoLive,
+      DatabaseTransactionLive,
+    ).pipe(Layer.provide(Layer.succeed(SealantDB, s.db))),
+    daemon.layer,
+  );
+  return {
+    daemon,
+    connects,
+    /** One poll of the exit reconciler: how many exits it recorded. */
+    reconcile: () => execute(reconcileRuntimeExitsEffect(options).pipe(Effect.provide(layer))),
+    /** One recovery attempt of this run's retained executor. */
+    recover: async (runId: string) =>
+      (
+        await execute(
+          recoverRetainedExecutorsEffect({ ...options, runIds: [runId] }).pipe(
+            Effect.provide(layer),
+          ),
+        )
+      ).get(runId),
+  };
+};
+
+describe.runIf(databaseUrl !== undefined)("Boat runs under the generic exit reconciler", () => {
+  it("records a daemon that exited in a live VM as failed with its retention, removes nothing, and leaves the recovery, FINAL and DELETE to Boat's own close", () =>
+    test(async (s) => {
+      const f = await inspectFixture(s);
+      try {
+        const g = genericSweeps(s, f.adapter);
+        const runId = f.target.runId;
+        // A healthy session is left alone.
+        expect(await g.reconcile()).toBe(0);
+        expect(await f.row()).toMatchObject({ status: "ready", errorCode: null });
+        f.clock.now += BOAT_INSPECT_READ_MS;
+        s.guest.health = () => daemonExited;
+        expect(await g.reconcile()).toBe(1);
+        expect(await f.row()).toMatchObject({
+          status: "failed",
+          errorCode: "runtime-exited",
+          errorMessage: expect.stringContaining("exitCode: 75"),
+          stopReason: null,
+          removedAt: null,
+        });
+        expect(await execute(s.canonical.getByRunId(runId))).toMatchObject({
+          retainedAt: expect.any(Date),
+          deletionState: null,
+        });
+        // The generic path asked nothing of the daemon, of the guest's recovery or of Boat.
+        const untouched = async () => {
+          expect(g.connects).toEqual([]);
+          expect(g.daemon.calls).toEqual([]);
+          expect(s.guest.actions.includes("recover")).toBe(false);
+          expect(s.provider.deleteCalls).toBe(0);
+          expect(await execute(s.repo.get(runId))).toMatchObject({ phase: "bound" });
+          expect((await execute(s.executions.get(runId)))?.phase).toBe("running");
+          expect((await tunnelRecord(s, f.target)).closeId).toBeUndefined();
+          expect(await released(s, runId)).toMatchObject(NOTHING_RELEASED);
+          expect((await execute(s.canonical.getByRunId(runId)))?.deletionState).toBeNull();
+        };
+        await untouched();
+        // Recorded once: the row is no longer `ready`, and the settle sweep leaves it alone.
+        expect(await g.reconcile()).toBe(0);
+        // The recovery sweep its retention starts leaves it to Boat's close as well.
+        expect(await g.recover(runId)).toBe("retained");
+        await untouched();
+        expect(await execute(s.canonical.getByRunId(runId))).toMatchObject({
+          retainedAt: expect.any(Date),
+          recoveryAttempts: 1,
+        });
+        // Boat's own close owner takes the failed run: it recovers the daemon on its own disk,
+        // drains FINAL, and only then deletes the VM and discharges what it held.
+        s.guest.health = () => undefined;
+        s.gateway.allowRemoval = true;
+        expect((await execute(f.close.owner.reconcile({ limit: 20 }))).entries).toEqual([
+          { runId, outcome: "closed" },
+        ]);
+        expect(s.guest.actions.filter((action) => action === "recover")).toHaveLength(1);
+        expect(f.close.daemon.flushRequests.map((request) => request?.kind)).toEqual(["final"]);
+        expect(s.provider.deleteCalls).toBe(1);
+        expect(await f.row()).toMatchObject({
+          status: "stopped",
+          stopReason: "failed",
+          errorCode: "runtime-exited",
+          removedAt: expect.any(Date),
+        });
+        expect(await execute(s.canonical.getByRunId(runId))).toMatchObject({
+          state: "stopped",
+          deletionState: "deleted",
+          retainedAt: null,
+        });
+        expect(await released(s, runId)).toMatchObject(REMOVED);
+        expect(g.connects).toEqual([]);
+        expect(g.daemon.calls).toEqual([]);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+
+  it("keeps the VM of a dead daemon whose FINAL cannot be confirmed: recorded failed and retained, never deleted", () =>
+    test(async (s) => {
+      const f = await inspectFixture(s);
+      try {
+        const g = genericSweeps(s, f.adapter);
+        const runId = f.target.runId;
+        s.guest.health = () => daemonExited;
+        expect(await g.reconcile()).toBe(1);
+        // The agent cannot bring the daemon back on this boot: Boat's close keeps the VM.
+        s.guest.recovery = "recover-state-unknown";
+        s.gateway.allowRemoval = true;
+        expect(await g.recover(runId)).toBe("retained");
+        for (const pass of [1, 2]) {
+          expect((await execute(f.close.owner.reconcile({ limit: 20 }))).entries).toEqual([
+            { runId, outcome: "retained" },
+          ]);
+          expect(await g.reconcile()).toBe(0);
+          // Only Boat's own close asks the agent to recover: once per pass of its sweep.
+          expect(s.guest.actions.filter((action) => action === "recover")).toHaveLength(pass);
+        }
+        expect(s.provider.deleteCalls).toBe(0);
+        expect(f.close.daemon.calls).toEqual([]);
+        expect(g.daemon.calls).toEqual([]);
+        expect(await f.row()).toMatchObject({ status: "failed", removedAt: null });
+        expect(await execute(s.repo.get(runId))).toMatchObject({ phase: "bound" });
+        expect(await released(s, runId)).toMatchObject(NOTHING_RELEASED);
+        expect((await tunnelRecord(s, f.target)).released).toBeUndefined();
+        expect(await execute(s.canonical.getByRunId(runId))).toMatchObject({
+          retainedAt: expect.any(Date),
+          deletionState: null,
+        });
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+
+  it("writes nothing for an exit under a requested stop: that stop's close is at work", () =>
+    test(async (s) => {
+      const f = await inspectFixture(s);
+      try {
+        const g = genericSweeps(s, f.adapter);
+        await execute(s.runtimes.markStopRequested({ runId: f.target.runId, stopReason: "user" }));
+        s.guest.health = () => daemonExited;
+        expect(await g.reconcile()).toBe(0);
+        expect(await f.row()).toMatchObject({
+          status: "ready",
+          stopReason: "user",
+          errorCode: null,
+          removedAt: null,
+        });
+        expect(
+          (await execute(s.canonical.getByRunId(f.target.runId)))?.retainedAt ?? null,
+        ).toBeNull();
+        expect(s.provider.deleteCalls).toBe(0);
+        expect(g.daemon.calls).toEqual([]);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+
+  it("concludes a VM missing only from Boat's own answer, records and removes nothing itself, and ends in the discharge Boat's own observation ends in", () =>
+    test(async (s) => {
+      const f = await inspectFixture(s);
+      try {
+        const g = genericSweeps(s, f.adapter);
+        const runId = f.target.runId;
+        await execute(s.canonical.storeCaptureToken({ runId, sealed: "sealed-token" }));
+        // Boat does not answer: nothing is concluded, however often it is asked.
+        s.provider.beforeSandboxRead = async () => {
+          throw new Error("Boat is down");
+        };
+        expect(await g.reconcile()).toBe(0);
+        f.clock.now += BOAT_INSPECT_READ_MS;
+        expect(await g.reconcile()).toBe(0);
+        expect(await f.row()).toMatchObject({ status: "ready", removedAt: null });
+        expect(await f.observed()).toEqual(["present"]);
+        // A person deletes the VM in Boat's console; no stop was ever requested.
+        s.provider.beforeSandboxRead = async () => {};
+        s.provider.sandboxMissing = true;
+        f.clock.now += BOAT_INSPECT_READ_MS;
+        expect(await g.reconcile()).toBe(0);
+        // The absence is the observer's commit, the runtime row with it. The reconciler wrote
+        // no exit of its own, said nothing of the work, and released nothing.
+        expect(await f.observed()).toEqual(["absent"]);
+        expect(await f.row()).toMatchObject({
+          status: "stopped",
+          stopReason: "failed",
+          errorCode: null,
+          removedAt: expect.any(Date),
+        });
+        expect(await execute(s.canonical.getByRunId(runId))).toMatchObject({
+          state: null,
+          retainedAt: null,
+          captureTokenSealed: "sealed-token",
+          deletionState: null,
+        });
+        expect(await execute(s.repo.get(runId))).toMatchObject({ phase: "bound" });
+        expect((await tunnelRecord(s, f.target)).released).toBeUndefined();
+        expect((await execute(nativeConsumerRows(s.db, runId)))[0]?.state).not.toBe("released");
+        expect(s.gateway.removeCalls).toBe(0);
+        // Boat's own close discharges it: the end its own observation of the absence reaches.
+        s.gateway.allowRemoval = true;
+        // Twice, with the reconciler between: the discharge is idempotent, whoever comes back.
+        for (const pass of ["Boat's close", "the same close again"]) {
+          expect((await execute(f.close.owner.reconcile({ limit: 20 }))).entries, pass).toEqual([
+            { runId, outcome: "closed" },
+          ]);
+          expect(await g.reconcile()).toBe(0);
+          expect(await f.row()).toMatchObject({
+            status: "stopped",
+            stopReason: "failed",
+            removedAt: expect.any(Date),
+          });
+          expect(await execute(s.canonical.getByRunId(runId))).toMatchObject({
+            state: "gone",
+            retainedAt: null,
+            captureTokenSealed: null,
+          });
+          expect(await execute(s.repo.get(runId))).toMatchObject({
+            phase: "deleted",
+            removal: { kind: "absent", completed: true },
+          });
+          expect((await tunnelRecord(s, f.target)).released).toBe(true);
+          expect((await execute(nativeConsumerRows(s.db, runId)))[0]?.state).toBe("released");
+          expect(s.gateway.removeCalls).toBe(1);
+        }
+        expect(s.provider.deleteCalls).toBe(0);
+        expect(g.connects).toEqual([]);
+        expect(g.daemon.calls).toEqual([]);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+
+  it("leaves an ended Boat run nothing settled to its own close: not inspected, not retained, not reported gone", () =>
+    test(async (s) => {
+      const f = await adapterFixture(s);
+      try {
+        const g = genericSweeps(s, f.adapter);
+        const target = await execute(s.allocations.prepare(s.input));
+        // A launch that failed after its VM was created, as the build worker records it.
+        await execute(
+          recordRetainedBoatLaunch(s.db, {
+            runId: target.runId,
+            sandboxId: target.sandboxId,
+            errorCode: "launch-failed",
+          }),
+        );
+        const asked = s.provider.reads.length;
+        expect(await g.reconcile()).toBe(0);
+        expect(s.provider.reads.length).toBe(asked);
+        const drain = await execute(s.canonical.getByRunId(target.runId));
+        expect(drain?.retainedAt ?? null).toBeNull();
+        expect(drain?.state ?? null).toBeNull();
+        // Its own close removes the never-launched VM, as it did before.
+        expect((await execute(f.close.owner.reconcile({ limit: 20 }))).entries).toEqual([
+          { runId: target.runId, outcome: "closed" },
+        ]);
+        expect(f.close.daemon.calls).toEqual([]);
+        expect(s.provider.deleteCalls).toBe(1);
+      } finally {
+        await f.runtime.dispose();
+      }
     }));
 });
