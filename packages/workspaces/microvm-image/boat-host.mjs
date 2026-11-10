@@ -1365,8 +1365,9 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
         docker_policy: host.policyState,
       };
     }
-    const [handshakes, dns] = await Promise.all([
+    const [handshakes, transfers, dns] = await Promise.all([
       run(commands.wg, ["show", WIREGUARD_INTERFACE, "latest-handshakes"]),
+      run(commands.wg, ["show", WIREGUARD_INTERFACE, "transfer"]),
       // Asked of the VM's resolver, the way everything on the VM asks: it proves the resolver
       // answers and reaches the gateway, over UDP and over TCP.
       host.resolverPort === null
@@ -1379,12 +1380,28 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
         const [key, time] = line.trim().split(/\s+/);
         return key === record.config.gateway_key && /^\d+$/.test(time ?? "") && Number(time) > 0;
       });
+    // What the tunnel sent the gateway and received from it, in bytes (`<key> <rx> <tx>`): a
+    // handshake that never comes says which side is silent. Absent when wg cannot say.
+    const transfer =
+      transfers.code !== 0
+        ? undefined
+        : transfers.stdout
+            .split("\n")
+            .map((line) => line.trim().split(/\s+/))
+            .filter(
+              ([key, received, sent]) =>
+                key === record.config.gateway_key &&
+                /^\d{1,15}$/.test(received ?? "") &&
+                /^\d{1,15}$/.test(sent ?? ""),
+            )
+            .map(([, received, sent]) => ({ sent: Number(sent), received: Number(received) }))[0];
     return {
       configured: true,
       handshake: verified ? "verified" : "unverified",
       dns: dns ? "udp-and-tcp" : "unavailable",
       // A Docker image is ready only once containers are held to the gateway's allowance.
       docker_policy: host.policyState,
+      ...(transfer === undefined ? {} : { transfer }),
     };
   };
 

@@ -1117,6 +1117,7 @@ const make: Effect.Effect<
     const notReady = (
       pathClass: NonNullable<BoatLaunchDiagnostic["agent"]>["pathClass"],
       check: Check,
+      tunnel?: BoatLaunchDiagnostic["tunnel"],
     ) =>
       new BoatExecutionError("agent-not-ready", {
         step: "readiness",
@@ -1124,6 +1125,7 @@ const make: Effect.Effect<
         code: "agent-not-ready",
         check,
         agent: { pathClass, responseTail: "" },
+        ...(tunnel === undefined ? {} : { tunnel }),
       });
     const guestFailure = (guest: NonNullable<BoatLaunchDiagnostic["guest"]>, check?: Check) =>
       new BoatExecutionError("guest-failed", {
@@ -1178,7 +1180,15 @@ const make: Effect.Effect<
     if (!tunnel.configured)
       return yield* Effect.fail(notReady(BOAT_AGENT_NETWORK_ROUTE, "network"));
     if (tunnel.handshake !== "verified")
-      return yield* Effect.fail(notReady(BOAT_AGENT_NETWORK_ROUTE, "handshake"));
+      return yield* Effect.fail(
+        notReady(
+          BOAT_AGENT_NETWORK_ROUTE,
+          "handshake",
+          tunnel.transfer === undefined
+            ? undefined
+            : { sentBytes: tunnel.transfer.sent, receivedBytes: tunnel.transfer.received },
+        ),
+      );
     if (tunnel.dns !== "udp-and-tcp")
       return yield* Effect.fail(notReady(BOAT_AGENT_NETWORK_ROUTE, "dns"));
     if (tunnel.docker_policy === "failed")

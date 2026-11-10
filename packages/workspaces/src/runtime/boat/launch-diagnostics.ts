@@ -193,6 +193,16 @@ const diagnosticSchema = z.object({
   check: z
     .enum(["booted", "control-socket", "docker", "network", "handshake", "dns", "docker-policy"])
     .optional(),
+  /**
+   * The tunnel's byte counters when its handshake was not verified (`check: handshake`): sent with
+   * nothing received is a gateway endpoint the VM's packets do not reach, or that never answers.
+   */
+  tunnel: z
+    .object({
+      sentBytes: z.number().int().nonnegative(),
+      receivedBytes: z.number().int().nonnegative(),
+    })
+    .optional(),
   /** What the agent's health said went wrong inside the VM: the daemon or its Docker service. */
   guest: z
     .object({

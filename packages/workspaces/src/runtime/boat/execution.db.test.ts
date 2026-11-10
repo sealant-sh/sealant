@@ -25,7 +25,7 @@ import {
   boatExecutionRetryable,
   type BoatLaunchMaterial,
 } from "./execution.js";
-import { boatLaunchDiagnostic } from "./launch-diagnostics.js";
+import { boatLaunchDiagnostic, boatLaunchSummary } from "./launch-diagnostics.js";
 
 const databaseUrl = process.env.SEALANT_TEST_DATABASE_URL;
 const material = (version = "version-one"): Redacted.Redacted<BoatLaunchMaterial> =>
@@ -277,6 +277,36 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         }),
         "handshake",
       );
+      // The tunnel's counters come with a handshake that never came: sent and never answered is
+      // the gateway's side (its endpoint unreachable). An older agent sends none, and still decodes.
+      guest.request = async (...args) =>
+        tunnel({
+          configured: true,
+          handshake: "unverified",
+          dns: "unavailable",
+          docker_policy: "absent",
+          transfer: { sent: 444, received: 0 },
+        })(args[2]) ?? original(...args);
+      const silent = boatLaunchDiagnostic(
+        await execute(Effect.flip(executor.readiness(target))),
+        "readiness",
+      );
+      expect(silent).toMatchObject({
+        code: "agent-not-ready",
+        check: "handshake",
+        tunnel: { sentBytes: 444, receivedBytes: 0 },
+      });
+      expect(boatLaunchSummary(silent)).toContain('"tunnel":{"sentBytes":444,"receivedBytes":0}');
+      guest.request = async (...args) =>
+        tunnel({
+          configured: true,
+          handshake: "unverified",
+          dns: "unavailable",
+          docker_policy: "absent",
+        })(args[2]) ?? original(...args);
+      expect(
+        boatLaunchDiagnostic(await execute(Effect.flip(executor.readiness(target))), "readiness"),
+      ).not.toHaveProperty("tunnel");
       await notReady(
         tunnel({
           configured: true,
