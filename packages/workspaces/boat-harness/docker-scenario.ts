@@ -63,6 +63,23 @@ export const asPerson = async (
   return result.stdout;
 };
 
+/**
+ * The person's passwd entry: made at prepare, as root, through the platform's exec (what Mend
+ * does; sealantd only maps ownership to it). Their primary group is `mend`; `docker` lets them
+ * reach the engine's socket, which the Boat image gives the docker group.
+ */
+export const preparePerson = async (run_: Launch, transcript: Transcript) => {
+  const prepared = await run_.workspace.exec([
+    "/bin/sh",
+    "-c",
+    `getent passwd ${String(PERSON.uid)} >/dev/null || useradd -u ${String(PERSON.uid)} -g ${String(MEND_GID)} -G docker -m -d ${PERSON.home} -s /bin/bash ${PERSON.id}; id ${PERSON.id}`,
+  ]);
+  await transcript.note(
+    `## prepare the person as root (exit ${String(prepared.exitCode)})\n${prepared.stdout}${prepared.stderr}`,
+  );
+  if (prepared.exitCode !== 0) throw new Error(`useradd failed: ${prepared.stderr.slice(-1000)}`);
+};
+
 /** A file into the person's home, through the exec path, byte for byte. */
 export const putFile = (run_: Launch, transcript: Transcript, path: string, content: string) =>
   asPerson(
@@ -240,18 +257,7 @@ export const dockerScenario = async (
   };
   await measure("ready");
 
-  // The person's passwd entry: made at prepare, as root, through the platform's exec (what Mend
-  // does; sealantd only maps ownership to it). Their primary group is `mend`; `docker` lets them
-  // reach the engine's socket, which the Boat image gives the docker group.
-  const prepared = await run_.workspace.exec([
-    "/bin/sh",
-    "-c",
-    `getent passwd ${String(PERSON.uid)} >/dev/null || useradd -u ${String(PERSON.uid)} -g ${String(MEND_GID)} -G docker -m -d ${PERSON.home} -s /bin/bash ${PERSON.id}; id ${PERSON.id}`,
-  ]);
-  await transcript.note(
-    `## prepare the person as root (exit ${String(prepared.exitCode)})\n${prepared.stdout}${prepared.stderr}`,
-  );
-  if (prepared.exitCode !== 0) throw new Error(`useradd failed: ${prepared.stderr.slice(-1000)}`);
+  await preparePerson(run_, transcript);
 
   // Who we are, and what Docker we see.
   const identity = await asPerson(

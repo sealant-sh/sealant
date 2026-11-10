@@ -264,6 +264,7 @@ export const scenarios = {
    */
   async gatewayCrashes(stack: HarnessStack, project: Project) {
     let killed: string[] | undefined;
+    let killedAt = 0;
     await withFaults(
       stack,
       {
@@ -279,6 +280,7 @@ export const scenarios = {
             name.startsWith("boat-tunnel-"),
           );
           const ids: string[] = [];
+          killedAt = Date.now();
           for (const name of names) {
             const id = (await docker(["inspect", "-f", "{{.Id}}", name])).stdout.trim();
             if ((await docker(["kill", name])).code === 0) ids.push(id);
@@ -300,17 +302,24 @@ export const scenarios = {
           });
           return;
         }
-        const gone = new Set(killed);
+        // Core may start the same container again or make a new one: either way, started after the kill.
         const running: string[] = [];
         for (const name of (await stack.ownedObjects()).containers.filter((entry) =>
           entry.startsWith("boat-tunnel-"),
         )) {
-          const state = await docker(["inspect", "-f", "{{.Id}} {{.State.Running}}", name]);
-          const [id = "", up = ""] = state.stdout.trim().split(" ");
-          if (up === "true" && !gone.has(id)) running.push(name);
+          const state = await docker([
+            "inspect",
+            "-f",
+            "{{.State.Running}} {{.State.StartedAt}}",
+            name,
+          ]);
+          const [up = "", started = ""] = state.stdout.trim().split(" ");
+          if (up === "true" && Date.parse(started) >= killedAt - 1000) running.push(name);
         }
         if (running.length === 0)
-          throw new Error("launch became ready although its killed gateway was never replaced");
+          throw new Error(
+            "launch became ready although no gateway was running again after the kill",
+          );
         const reached = await run.workspace.exec([
           "/bin/sh",
           "-c",

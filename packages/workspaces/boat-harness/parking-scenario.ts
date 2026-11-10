@@ -24,7 +24,7 @@ import { join } from "node:path";
 import { expect } from "vitest";
 import { z } from "zod";
 
-import { Transcript, asPerson, evidenceDir } from "./docker-scenario.js";
+import { Transcript, asPerson, evidenceDir, preparePerson } from "./docker-scenario.js";
 import {
   assertReleased,
   assertSettled,
@@ -111,6 +111,7 @@ export const parkAndResume = async (stack: HarnessStack, project: Project, step:
     );
 
     const imageId = await step("build an image", async () => {
+      await preparePerson(run, transcript);
       await asPerson(
         run,
         transcript,
