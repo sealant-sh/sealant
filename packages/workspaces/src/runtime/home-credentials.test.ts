@@ -30,10 +30,10 @@ import {
   ExecAcceptedSchema,
   ProcessExitedSchema,
 } from "@sealant/runtime-protocol";
-import { Effect, Stream } from "effect";
+import { Effect, Exit, Stream } from "effect";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import type { SealantExecOptions } from "../sealantd/runtime.js";
+import { SealantControlError, type SealantExecOptions } from "../sealantd/runtime.js";
 import {
   buildHomeCredentialScript,
   HOME_SCRIPT_EXIT,
@@ -1352,6 +1352,60 @@ forEachShell("a login is never in any process's argv or environment", () => {
       expect(JSON.stringify(execs), needle).not.toContain(needle);
     }
     expect(written.join("")).toBe(stdin);
+  });
+
+  for (const [name, refuses] of [
+    ["the write", "write"],
+    ["the close", "close"],
+  ] as const) {
+    it(`answers with the script's exit code when the daemon refuses ${name} for a process that already exited`, async () => {
+      // VM 131 runs 8 to 10: the launch failed as `closeStdin`, daemon code 9 (process not found),
+      // and the script's own exit code never reached the caller.
+      const gone = new SealantControlError({
+        operation: refuses === "write" ? "writeStdin" : "closeStdin",
+        code: 9,
+        message: "process not found: proc_1",
+      });
+      const session: HomeScriptSession = {
+        exec: () => Effect.succeed(create(ExecAcceptedSchema, { processId: "proc_1" })),
+        writeStdin: () => (refuses === "write" ? Effect.fail(gone) : Effect.void),
+        closeStdin: () => (refuses === "close" ? Effect.fail(gone) : Effect.void),
+        events: Stream.make(
+          create(EventEnvelopeSchema, {
+            processId: "proc_1",
+            payload: {
+              case: "processExited",
+              value: create(ProcessExitedSchema, { exitCode: HOME_SCRIPT_EXIT.missing }),
+            },
+          }),
+        ),
+      };
+      const exit = await Effect.runPromise(runHomeScriptInSession(session, "exit 74", "payload"));
+      expect(exit.exitCode).toBe(HOME_SCRIPT_EXIT.missing);
+    });
+  }
+
+  it("fails on any other refusal of the write, and does not wait for an exit that may never come", async () => {
+    // The script is still alive and waiting on stdin: closing it would hand it an empty payload,
+    // and waiting for its exit would hang the launch.
+    const refused = new SealantControlError({
+      operation: "writeStdin",
+      code: 16,
+      message: "queue full",
+    });
+    let closed = false;
+    const session: HomeScriptSession = {
+      exec: () => Effect.succeed(create(ExecAcceptedSchema, { processId: "proc_1" })),
+      writeStdin: () => Effect.fail(refused),
+      closeStdin: () =>
+        Effect.sync(() => {
+          closed = true;
+        }),
+      events: Stream.never,
+    };
+    const exit = await Effect.runPromiseExit(runHomeScriptInSession(session, "cat", "payload"));
+    expect(Exit.isFailure(exit)).toBe(true);
+    expect(closed).toBe(false);
   });
 });
 
