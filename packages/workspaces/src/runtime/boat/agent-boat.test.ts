@@ -35,6 +35,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { Effect, ManagedRuntime, Redacted } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { z } from "zod";
@@ -67,6 +68,7 @@ import {
   boatAgentRefusalSchema,
   type BoatAgentBindRequest,
 } from "./agent-contract.js";
+import { BoatTunnelCarrier, makeBoatTunnelCarrierLayer } from "./tunnel-carrier.js";
 
 const PACKAGE_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const AGENT = path.join(PACKAGE_ROOT, "microvm-image/agent.mjs");
@@ -113,7 +115,11 @@ printf '%s %s\\n' "$name" "$*" >> ${JSON.stringify(log)}
 if [ "$name" = wg ]; then
   case "$1" in
     set) shift 2; [ "$1" = private-key ] && cat "$2" > ${JSON.stringify(`${log}.wg-key`)} ;;
-    show) if [ "$3" = transfer ]; then cat ${JSON.stringify(`${handshakeFile}.transfer`)} 2>/dev/null; else cat ${JSON.stringify(handshakeFile)} 2>/dev/null; fi ;;
+    show) case "$3" in
+      transfer) cat ${JSON.stringify(`${handshakeFile}.transfer`)} 2>/dev/null ;;
+      listen-port) cat ${JSON.stringify(`${handshakeFile}.listen-port`)} 2>/dev/null ;;
+      *) cat ${JSON.stringify(handshakeFile)} 2>/dev/null ;;
+    esac ;;
   esac
 fi
 case "$name" in *-restore) cat > ${JSON.stringify(log)}."$name-stdin" ;; esac
@@ -1625,6 +1631,118 @@ describe("boat agent · network", () => {
       after.socket.close();
     } finally {
       wireguard.close();
+    }
+  });
+
+  it("relays to the port WireGuard picked itself, read back once its interface is up", async () => {
+    const vm = await createVm();
+    const bearer = await bindVm(vm);
+    const wireguardPort = await freeUdpPort();
+    // As the kernel would answer `wg show sealant-wg listen-port` after `ip link set up`.
+    await writeFile(path.join(vm.dir, "wg-handshake.listen-port"), `${String(wireguardPort)}\n`);
+    const agent = await startAgent(vm);
+    const body: Record<string, unknown> = {
+      ...Object.fromEntries(
+        Object.entries(networkBody()).filter(([key]) => key !== "endpoint" && key !== "port"),
+      ),
+      carrier: "websocket",
+    };
+    expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
+      200,
+    );
+    const lines = await netLines(vm);
+    const set = lines.find((line) => line.startsWith("wg set ")) ?? "";
+    // No port is handed to WireGuard: one picked here could be taken before it binds.
+    expect(set).not.toContain("listen-port");
+    expect(lines.indexOf(`wg show ${BOAT_AGENT_WIREGUARD_INTERFACE} listen-port`)).toBeGreaterThan(
+      lines.indexOf(`ip link set ${BOAT_AGENT_WIREGUARD_INTERFACE} up`),
+    );
+    const relayPort = Number(/endpoint 127\.0\.0\.1:(\d+) /.exec(set)?.[1]);
+    const wireguard = dgram.createSocket("udp4");
+    await new Promise<void>((resolve) => wireguard.bind(wireguardPort, "127.0.0.1", resolve));
+    try {
+      const core = await openCarrier(agent, bearer);
+      wireguard.send(Buffer.from("initiation"), relayPort, "127.0.0.1");
+      await waitFor(async () => core.received.length === 1);
+      expect(core.received[0]?.toString()).toBe("initiation");
+      // A message split into fragments on the way (a proxy may re-frame it) is one datagram.
+      const toWireguard: Buffer[] = [];
+      wireguard.on("message", (message) => toWireguard.push(message));
+      core.socket.send(Buffer.from("frag"), { binary: true, fin: false });
+      core.socket.ping();
+      core.socket.send(Buffer.from("mented"), { binary: true, fin: true });
+      await waitFor(async () => toWireguard.length === 1);
+      expect(toWireguard[0]?.toString()).toBe("fragmented");
+      core.socket.close();
+    } finally {
+      wireguard.close();
+    }
+  });
+
+  it("connects WireGuard to the gateway end to end through the agent's carrier and Core's", async () => {
+    const vm = await createVm();
+    const bearer = await bindVm(vm);
+    const wireguardPort = await freeUdpPort();
+    const agent = await startAgent(vm, { SEALANT_AGENT_TUNNEL_WG_PORT: String(wireguardPort) });
+    const body: Record<string, unknown> = {
+      ...Object.fromEntries(
+        Object.entries(networkBody()).filter(([key]) => key !== "endpoint" && key !== "port"),
+      ),
+      carrier: "websocket",
+    };
+    expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
+      200,
+    );
+    const relayPort = Number(
+      /endpoint 127\.0\.0\.1:(\d+) /.exec(
+        (await netLines(vm)).find((line) => line.startsWith("wg set ")) ?? "",
+      )?.[1],
+    );
+    // The gateway's published port on Core's host, and the VM's WireGuard.
+    const gateway = dgram.createSocket("udp4");
+    await new Promise<void>((resolve) => gateway.bind(0, "127.0.0.1", resolve));
+    const atGateway: { data: Buffer; port: number }[] = [];
+    gateway.on("message", (data, remote) => atGateway.push({ data, port: remote.port }));
+    const wireguard = dgram.createSocket("udp4");
+    await new Promise<void>((resolve) => wireguard.bind(wireguardPort, "127.0.0.1", resolve));
+    const atWireguard: Buffer[] = [];
+    wireguard.on("message", (data) => atWireguard.push(data));
+    const runtime = ManagedRuntime.make(
+      makeBoatTunnelCarrierLayer({ reconnectMinMs: 20, reconnectMaxMs: 40 }),
+    );
+    try {
+      await runtime.runPromise(
+        Effect.flatMap(BoatTunnelCarrier, (carrier) =>
+          carrier.ensure({
+            runId: "run-e2e",
+            connection: Effect.succeed(
+              Redacted.make({
+                url: `ws://127.0.0.1:${String(agent.port)}${BOAT_AGENT_TUNNEL_ROUTE}`,
+                headers: { Authorization: `Bearer ${bearer}` },
+              }),
+            ),
+            gateway: { host: "127.0.0.1", port: gateway.address().port },
+          }),
+        ),
+      );
+      await waitFor(async () =>
+        Boolean(
+          boatAgentNetworkStatusSchema.parse(
+            (await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer })).body,
+          ).carrier_attached,
+        ),
+      );
+      // The VM's initiation reaches the gateway; the gateway's response reaches the VM.
+      wireguard.send(Buffer.from("initiation"), relayPort, "127.0.0.1");
+      await waitFor(async () => atGateway.length === 1);
+      expect(atGateway[0]?.data.toString()).toBe("initiation");
+      gateway.send(Buffer.from("response"), atGateway[0]?.port ?? 0, "127.0.0.1");
+      await waitFor(async () => atWireguard.length === 1);
+      expect(atWireguard[0]?.toString()).toBe("response");
+    } finally {
+      await runtime.dispose();
+      wireguard.close();
+      gateway.close();
     }
   });
 

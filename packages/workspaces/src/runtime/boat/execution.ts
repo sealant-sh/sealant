@@ -64,7 +64,11 @@ import {
 } from "./agent-contract.js";
 import type { BoatApi } from "./api.js";
 import { BoatApiError, BoatSecret, boatSandboxIdSchema, parseBoatUrl } from "./config.js";
-import { boatControlConnection, type BoatHostedControl } from "./connection.js";
+import {
+  boatControlConnection,
+  boatTunnelConnection,
+  type BoatHostedControl,
+} from "./connection.js";
 import {
   boatGuestOutput,
   boatLaunchDiagnostic,
@@ -618,6 +622,14 @@ export interface BoatExecutionService {
     target: BoatExecutionTarget,
     input: BoatGuestNetworkInput,
   ) => Effect.Effect<BoatGuestNetworkReceipt, Failure>;
+  /**
+   * Where Core's end of the tunnel's WebSocket carrier connects (`/sealant/tunnel` through Boat's
+   * hosted HTTPS, with a fresh hosted cookie and the control token), from network setup until the
+   * launch is held. Read again for every reconnect: the hosted cookie may expire.
+   */
+  readonly tunnel: (
+    target: BoatExecutionTarget,
+  ) => Effect.Effect<Redacted.Redacted<BoatTunnelConnection>, Failure>;
   /** Authenticated capture control for the original running or terminally held launch. */
   readonly control: (
     target: BoatExecutionTarget,
@@ -664,12 +676,25 @@ export interface BoatGuestNetworkInput {
   readonly publicKey: string;
   readonly gatewayKey: string;
   readonly port: number;
+  /**
+   * `websocket`: carry the tunnel over the agent's `/sealant/tunnel` when the agent can (it lists
+   * the carrier in `GET /sealant/network`), so the VM never dials the gateway's host. An agent that
+   * cannot is configured to dial it over UDP, as before.
+   */
+  readonly carrier?: "websocket";
 }
 /** This acknowledgement proves configuration, not a handshake, resource reach or daemon health. */
 export interface BoatGuestNetworkReceipt {
   readonly receipt: string;
   readonly handshake: "unverified";
   readonly admission: "held";
+  /** How the tunnel is carried: the VM dials the gateway (`udp`), or Core carries it (`websocket`). */
+  readonly carrier: "udp" | "websocket";
+}
+/** Core's end of the tunnel's WebSocket carrier: the URL and the headers that authenticate it. */
+export interface BoatTunnelConnection {
+  readonly url: string;
+  readonly headers: Readonly<Record<string, string>>;
 }
 /** Ordinary runtime registration does not provide this service until all activation gates pass. */
 export class BoatExecution extends Context.Service<BoatExecution, BoatExecutionService>()(
@@ -1074,26 +1099,52 @@ const make: Effect.Effect<
     )
       return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
     const binding = bindingOf(record);
-    const body = yield* attempt("invalid-input", () =>
-      Redacted.make(
-        JSON.stringify({
-          format: "sealant-guest-network-v1",
-          binding,
-          private_key: boatWireGuardKeySchema.parse(Redacted.value(input.privateKey)),
-          public_key: boatWireGuardKeySchema.parse(input.publicKey),
-          gateway_key: boatWireGuardKeySchema.parse(input.gatewayKey),
-          endpoint: network.endpoint,
-          port: z.number().int().min(40000).max(40015).parse(input.port),
-          subnet: network.subnet,
-        }),
-      ),
-    );
     const connection = yield* access(record);
+    // Carried only by an agent that says it can: an older image dials the gateway over UDP.
+    const carrier =
+      input.carrier === "websocket"
+        ? yield* call(connection, "network-status").pipe(
+            Effect.flatMap((status) =>
+              attempt("invalid-reply", () =>
+                boatAgentNetworkStatusSchema.parse(status.body).carriers?.includes("websocket") ===
+                true
+                  ? ("websocket" as const)
+                  : ("udp" as const),
+              ),
+            ),
+          )
+        : ("udp" as const);
+    const body = yield* attempt("invalid-input", () => {
+      const common = {
+        format: "sealant-guest-network-v1",
+        binding,
+        private_key: boatWireGuardKeySchema.parse(Redacted.value(input.privateKey)),
+        public_key: boatWireGuardKeySchema.parse(input.publicKey),
+        gateway_key: boatWireGuardKeySchema.parse(input.gatewayKey),
+      };
+      return Redacted.make(
+        JSON.stringify(
+          carrier === "websocket"
+            ? { ...common, carrier: "websocket", subnet: network.subnet }
+            : {
+                ...common,
+                endpoint: network.endpoint,
+                port: z.number().int().min(40000).max(40015).parse(input.port),
+                subnet: network.subnet,
+              },
+        ),
+      );
+    });
     const reply = yield* call(connection, "network", body);
     const receipt = yield* attempt("invalid-reply", () => {
       const parsed = boatAgentNetworkResponseSchema.parse(reply.body);
       if (!isDeepStrictEqual(parsed.binding, binding)) throw new Error();
-      return { receipt: parsed.receipt, handshake: parsed.handshake, admission: "held" as const };
+      return {
+        receipt: parsed.receipt,
+        handshake: parsed.handshake,
+        admission: "held" as const,
+        carrier,
+      };
     });
     yield* unchanged(record);
     return receipt;
@@ -1219,6 +1270,15 @@ const make: Effect.Effect<
     };
   });
 
+  const tunnel = Effect.fn("BoatExecution.tunnel")(function* (target: BoatExecutionTarget) {
+    const record = yield* loadTarget(target);
+    if (!["installed", "issued", "running"].includes(record.phase) || record.admission === null)
+      return yield* Effect.fail(new BoatExecutionError("invocation-held"));
+    const connection = yield* access(record);
+    return Redacted.make<BoatTunnelConnection>(
+      boatTunnelConnection(connection.hosted, connection.bearer),
+    );
+  });
   const control = Effect.fn("BoatExecution.control")(function* (target: BoatExecutionTarget) {
     const record = yield* loadTarget(target);
     if (record.phase !== "running" && record.phase !== "held")
@@ -1329,6 +1389,7 @@ const make: Effect.Effect<
     launch,
     isolate,
     readiness,
+    tunnel,
     control,
     hold,
     recover,

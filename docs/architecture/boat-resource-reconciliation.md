@@ -55,6 +55,18 @@ immutable digest. Partial configuration, a mutable image tag or a non-Docker res
 worker startup. No credential discovery or network configuration is inferred from the worker's
 container.
 
+`SEALANT_BOAT_GATEWAY_RELAY_HOST` (optional, IPv4) carries every tunnel over HTTPS instead. It is
+the address at which the worker reaches the gateways' published WireGuard ports: `127.0.0.1` when
+the worker runs on the Docker host, or the host's address as a worker container sees it. Set, a
+network setup asks the agent for `carrier: "websocket"` when the agent lists that carrier, and the
+worker keeps one WebSocket per carried run open to the agent's `/sealant/tunnel` through Boat's
+hosted HTTPS, relaying each WireGuard datagram to the gateway's port. So no Boat VM dials the
+endpoint, and the host needs no inbound UDP. Every reconcile pass ensures the carrier again, so a
+restarted worker or a dropped connection reopens it. WireGuard re-handshakes on its 25 s keepalive.
+A run that is closed or held releases its carrier. An agent that lists no carriers (an older image)
+still dials the endpoint over UDP. One worker carries a run: a second carrier for the same run
+replaces the first, which then stops.
+
 The worker shares its resource runtime and subnet store with the gateway. One managed runtime owns
 the existing sealed execution service and both reconcilers, and is disposed at shutdown. The
 non-overlapping 30-second sweep walks separate allocation and resource cursors, twenty IDs per page,

@@ -42,6 +42,8 @@ import {
   BoatAllocationProvider,
   BoatResources,
   BoatResourcesHost,
+  boatTunnelCarrierAbsent,
+  makeBoatTunnelCarrierLayer,
   BoatFinalClose,
   BoatFinalCloseProvider,
   boatFinalCloseWorkerLayer,
@@ -453,6 +455,9 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         deploymentId: env.SEALANT_BOAT_DEPLOYMENT_ID,
         gatewayHostId: env.SEALANT_BOAT_GATEWAY_HOST_ID,
         endpoint: env.SEALANT_BOAT_GATEWAY_ENDPOINT,
+        ...(env.SEALANT_BOAT_GATEWAY_RELAY_HOST === undefined
+          ? {}
+          : { relay: { host: env.SEALANT_BOAT_GATEWAY_RELAY_HOST } }),
         subnets: resourceAssembly.subnets,
         tunnel: new DockerBoatTunnel({
           gatewayImage: env.SEALANT_BOAT_GATEWAY_IMAGE,
@@ -514,6 +519,10 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           Layer.mergeAll(
             Infra,
             Host,
+            // One carrier per run in this process, shared by every Boat owner above.
+            env.SEALANT_BOAT_GATEWAY_RELAY_HOST === undefined
+              ? boatTunnelCarrierAbsent
+              : makeBoatTunnelCarrierLayer({ log: (message) => console.log(message) }),
             Layer.succeed(BoatFinalCloseProvider, { api: api.value }),
             Layer.succeed(BoatParkingProvider, {
               api: api.value,

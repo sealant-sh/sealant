@@ -714,12 +714,15 @@ export const MAX_TUNNEL_DATAGRAM_BYTES = 65_535;
  * any other source are dropped, so nothing else on the VM can stand in for WireGuard. At most one
  * WebSocket is attached: a newer one replaces the older, which is told to close.
  */
-export const createTunnelRelay = ({ host = "127.0.0.1", port = 0, wireguardPort }) => {
+export const createTunnelRelay = ({ host = "127.0.0.1", port = 0, wireguardPort = null }) => {
   const udp = dgram.createSocket("udp4");
   udp.on("error", () => {});
   let attached = null;
+  // WireGuard's own port: known once its interface is up (it picks the port itself), or from the
+  // boot's record after an agent restart. Until then nothing is relayed either way.
+  let wireguard = wireguardPort;
   udp.on("message", (datagram, remote) => {
-    if (remote.address !== host || remote.port !== wireguardPort) return;
+    if (wireguard === null || remote.address !== host || remote.port !== wireguard) return;
     attached?.send(datagram);
   });
   return {
@@ -733,6 +736,9 @@ export const createTunnelRelay = ({ host = "127.0.0.1", port = 0, wireguardPort 
         });
       }),
     attached: () => attached !== null,
+    setWireguardPort: (value) => {
+      wireguard = value;
+    },
     /**
      * Attach a WebSocket: `send` takes a datagram for Core, `replaced` is called when a newer one
      * takes over. Returns what the WebSocket delivers to WireGuard, and how it lets go.
@@ -744,8 +750,13 @@ export const createTunnelRelay = ({ host = "127.0.0.1", port = 0, wireguardPort 
       previous?.replaced();
       return {
         deliver: (datagram) => {
-          if (attached !== handle || datagram.length > MAX_TUNNEL_DATAGRAM_BYTES) return;
-          udp.send(datagram, wireguardPort, host, () => {});
+          if (
+            attached !== handle ||
+            wireguard === null ||
+            datagram.length > MAX_TUNNEL_DATAGRAM_BYTES
+          )
+            return;
+          udp.send(datagram, wireguard, host, () => {});
         },
         detach: () => {
           if (attached === handle) attached = null;
@@ -763,17 +774,6 @@ export const createTunnelRelay = ({ host = "127.0.0.1", port = 0, wireguardPort 
     },
   };
 };
-
-/** A UDP port free on every address right now: WireGuard's own listen port in carrier mode. */
-const freeUdpPort = () =>
-  new Promise((resolve, reject) => {
-    const probe = dgram.createSocket("udp4");
-    probe.once("error", reject);
-    probe.bind({ port: 0, exclusive: true }, () => {
-      const { port } = probe.address();
-      probe.close(() => resolve(port));
-    });
-  });
 
 // --------------------------------------------------------------------------------------------
 // The host
@@ -1282,8 +1282,10 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
     if (host.relay !== null) return null;
     const kept = readRecord(paths.tunnelRelayFile);
     const known = resume && kept.kind === "ok" ? kept.value : null;
-    const wireguardPort = known?.wireguard_port ?? Number(env.SEALANT_AGENT_TUNNEL_WG_PORT ?? 0);
-    const wgPort = wireguardPort === 0 ? await freeUdpPort() : wireguardPort;
+    // A first configure lets WireGuard pick its port (read back once the link is up): a port
+    // picked here and handed to it could be taken in between. Tests may name one.
+    const named = Number(env.SEALANT_AGENT_TUNNEL_WG_PORT ?? 0);
+    const wgPort = known?.wireguard_port ?? (named > 0 ? named : null);
     const bind = async (port) => {
       const relay = createTunnelRelay({ host: "127.0.0.1", port, wireguardPort: wgPort });
       return { relay, port: await relay.start() };
@@ -1296,12 +1298,10 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
       started = await bind(0);
     }
     host.relay = started.relay;
-    await writeAtomic(
-      paths.tunnelRelayFile,
-      canonical({ wireguard_port: wgPort, relay_port: started.port }),
-      0o600,
-    );
-    if (known !== null && known.relay_port !== started.port) {
+    if (wgPort !== null) await keepRelayPorts(wgPort, started.port);
+    // Restarted on the boot: WireGuard's peer points where the record says the relay was. Without
+    // a record (the earlier agent stopped before it kept one) the peer is pointed here afresh.
+    if (resume && (known === null || known.relay_port !== started.port)) {
       const moved = await run(commands.wg, [
         "set",
         WIREGUARD_INTERFACE,
@@ -1312,10 +1312,27 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
       ]);
       if (moved.code !== 0) throw new Refusal("network-command-refused", 500);
     }
-    log(
-      `network: tunnel carrier on 127.0.0.1:${String(started.port)} (wireguard ${String(wgPort)})`,
-    );
+    log(`network: tunnel carrier on 127.0.0.1:${String(started.port)}`);
     return { wireguardPort: wgPort, relayPort: started.port };
+  };
+
+  /** The carrier's two ports on this boot, for an agent restarted on it (tmpfs). */
+  const keepRelayPorts = (wireguardPort, relayPort) =>
+    writeAtomic(
+      paths.tunnelRelayFile,
+      canonical({ wireguard_port: wireguardPort, relay_port: relayPort }),
+      0o600,
+    );
+
+  /** The port WireGuard picked for `sealant-wg` once it is up: the only source the relay takes. */
+  const learnWireguardPort = async (relayPort) => {
+    const shown = await run(commands.wg, ["show", WIREGUARD_INTERFACE, "listen-port"]);
+    const port = Number(shown.stdout.trim());
+    if (shown.code !== 0 || !Number.isInteger(port) || port < 1 || port > 65535)
+      throw new Refusal("network-command-refused", 500);
+    host.relay.setWireguardPort(port);
+    await keepRelayPorts(port, relayPort);
+    log(`network: tunnel carrier relays wireguard ${String(port)}`);
   };
 
   /** Start the VM's resolver once per process; `resolv.conf` names it only after it answers. */
@@ -1350,7 +1367,9 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
       // resolver, which must answer again.
       if (configured.status === "configured") {
         if (configured.config.carrier === "websocket") {
-          await startRelay(configured.config, { resume: true });
+          const carried = await startRelay(configured.config, { resume: true });
+          if (carried !== null && carried.wireguardPort === null)
+            await learnWireguardPort(carried.relayPort);
         }
         await startResolver();
       }
@@ -1409,7 +1428,9 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
       set = await run(commands.wg, [
         "set",
         WIREGUARD_INTERFACE,
-        ...(carried === null ? [] : ["listen-port", String(carried.wireguardPort)]),
+        ...(carried === null || carried.wireguardPort === null
+          ? []
+          : ["listen-port", String(carried.wireguardPort)]),
         "private-key",
         keyFile,
         "peer",
@@ -1432,6 +1453,10 @@ export const createBoatHost = ({ env = process.env, log, dockerCapable = false }
     at("link");
     await ip("link", "set", WIREGUARD_INTERFACE, "mtu", WIREGUARD_MTU);
     await ip("link", "set", WIREGUARD_INTERFACE, "up");
+    if (carried !== null && carried.wireguardPort === null) {
+      at("wg");
+      await learnWireguardPort(carried.relayPort);
+    }
     at("route");
     await ip("route", "add", config.subnet, "dev", WIREGUARD_INTERFACE);
     await ip("route", "add", `${GATEWAY}/32`, "dev", WIREGUARD_INTERFACE);

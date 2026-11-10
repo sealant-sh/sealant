@@ -64,6 +64,8 @@ const CONTROL_ROUTE = "/sealant/control";
 const TUNNEL_ROUTE = "/sealant/tunnel";
 /** A carrier that cannot take more is dropping datagrams, as UDP would: never buffering them. */
 const TUNNEL_BACKLOG_BYTES = 1024 * 1024;
+/** The largest datagram the carrier relays (`boat-host.mjs` drops anything larger). */
+const MAX_TUNNEL_DATAGRAM_BYTES = 65_535;
 const RECOVER_ROUTE = "/sealant/recover";
 const RECOVER_CONTRACT_VERSION = 1;
 // Boat host mode only (`src/runtime/boat/agent-contract.ts`).
@@ -1672,7 +1674,7 @@ const parseFrames = (buffer) => {
         payload[i] ^= mask[i % 4];
       }
     }
-    frames.push({ opcode, payload });
+    frames.push({ opcode, payload, fin: (first & 0x80) !== 0 });
     offset = cursor + length;
   }
   return { frames, rest: buffer.subarray(offset) };
@@ -1842,6 +1844,10 @@ const handleTunnelUpgrade = (req, socket, head) => {
   });
   log("tunnel: carrier attached");
   let pending = Buffer.alloc(0);
+  // A proxy may split a message into fragments (a binary frame without FIN, continuations up to
+  // the one with it): they are one datagram, put back together. Control frames may come between.
+  let fragments = null;
+  const close = (code) => socket.end(encodeFrame(0x8, Buffer.from([code >> 8, code & 0xff])));
   const onData = (chunk) => {
     pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk]);
     let parsed;
@@ -1853,14 +1859,29 @@ const handleTunnelUpgrade = (req, socket, head) => {
     }
     pending = parsed.rest;
     for (const frame of parsed.frames) {
-      if (frame.opcode === 0x2) carrier.deliver(frame.payload);
-      else if (frame.opcode === 0x9) socket.write(encodeFrame(0xa, frame.payload));
-      else if (frame.opcode === 0xa) continue;
-      else {
-        // A close, or a frame the carrier does not speak.
-        socket.end(encodeFrame(0x8, Buffer.from([0x03, 0xe8])));
-        return;
+      if (frame.opcode === 0x9) {
+        socket.write(encodeFrame(0xa, frame.payload));
+        continue;
       }
+      if (frame.opcode === 0xa) continue;
+      if (frame.opcode === 0x2 && fragments === null) {
+        if (frame.fin) carrier.deliver(frame.payload);
+        else fragments = [frame.payload];
+        continue;
+      }
+      if (frame.opcode === 0x0 && fragments !== null) {
+        fragments.push(frame.payload);
+        const size = fragments.reduce((total, part) => total + part.length, 0);
+        // 1009 (message too big): no datagram is this large.
+        if (size > MAX_TUNNEL_DATAGRAM_BYTES) return close(1009);
+        if (frame.fin) {
+          carrier.deliver(Buffer.concat(fragments));
+          fragments = null;
+        }
+        continue;
+      }
+      // A close, text, or a fragment out of order: not something the carrier speaks.
+      return close(1000);
     }
   };
   if (head.length > 0) onData(head);
