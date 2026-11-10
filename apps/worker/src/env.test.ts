@@ -21,7 +21,7 @@ describe("parseWorkerEnv", () => {
       { SEALANT_BOAT_API_KEY: "test-key-for-local-only" },
       { SEALANT_BOAT_DEPLOYMENT_ID: "test" },
     ]) {
-      expect(() => parseWorkerEnv(values)).toThrow("Boat reconciliation requires");
+      expect(() => parseWorkerEnv(values)).toThrow("Boat requires its key");
     }
     expect(
       parseWorkerEnv({
@@ -81,7 +81,7 @@ describe("parseWorkerEnv", () => {
     for (const key of Object.keys(base)) {
       expect(() =>
         parseWorkerEnv(Object.fromEntries(Object.entries(base).filter(([name]) => name !== key))),
-      ).toThrow("Boat reconciliation requires");
+      ).toThrow("Boat requires its key");
     }
     expect(() => parseWorkerEnv({ ...base, SEALANT_BOAT_API_KEY_FILE: "relative" })).toThrow();
     expect(

@@ -19,8 +19,6 @@ import {
   BoatAllocationRepoLive,
   WorkspaceRuntimeInstanceRepoLive,
   WorkspaceCaptureDrainRepoLive,
-  boatControlRequestRepoLayer,
-  type BoatControlRequestRepo,
   type WorkspaceCaptureDrainRepo,
   type DB,
 } from "@sealant/db";
@@ -36,9 +34,10 @@ import {
   BoatNativeCatalog,
   boatNativeCatalogLayer,
   loadPackagedRuntime,
-  boatInteractiveControlLayer,
-  BoatInteractiveControl,
-  serveBoatControlRequests,
+  boatConnectMaterial,
+  boatControlMaterialLayer,
+  BoatControlMaterial,
+  boatProviderFromEnv,
   BoatAllocationProvider,
   BoatResources,
   BoatResourcesHost,
@@ -51,8 +50,6 @@ import {
   boatResourcesLayer,
   boatWorkerExecutionLayer,
   DockerBoatTunnel,
-  loadBoatCredential,
-  HttpBoatApi,
   boatAllocationWorkerLayer,
   DockerResourceRuntime,
   KubernetesCallerRuntime,
@@ -421,24 +418,14 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   const resourceReconciler = resourceAssembly?.reconciler;
   // Admission is registered only beside the actual FINAL close owner.
   const boatAssembly = await (async () => {
-    if (env.SEALANT_BOAT_API_KEY === undefined && env.SEALANT_BOAT_API_KEY_FILE === undefined)
-      return undefined;
-    if (env.SEALANT_BOAT_DEPLOYMENT_ID === undefined || credentialCipher === undefined)
+    const provider = boatProviderFromEnv(env);
+    if (provider === undefined) return undefined;
+    if (credentialCipher === undefined)
       throw new Error("Boat reconciliation configuration is incomplete.");
-    const credential = loadBoatCredential({
-      value: env.SEALANT_BOAT_API_KEY,
-      file: env.SEALANT_BOAT_API_KEY_FILE,
-    });
-    if (!credential.ok) throw credential.error;
-    const api = HttpBoatApi.create({ credential: credential.value });
-    if (!api.ok) throw api.error;
     const Infra = Layer.mergeAll(
       Layer.succeed(SealantDB, db),
       Layer.succeed(CredentialCipher, credentialCipher),
-      Layer.succeed(BoatAllocationProvider, {
-        deploymentId: env.SEALANT_BOAT_DEPLOYMENT_ID,
-        api: api.value,
-      }),
+      Layer.succeed(BoatAllocationProvider, provider),
     );
     if (env.SEALANT_BOAT_GATEWAY_HOST_ID !== undefined) {
       if (
@@ -450,7 +437,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       )
         throw new Error("Boat resource reconciliation configuration is incomplete.");
       const Host = Layer.succeed(BoatResourcesHost, {
-        deploymentId: env.SEALANT_BOAT_DEPLOYMENT_ID,
+        deploymentId: provider.deploymentId,
         gatewayHostId: env.SEALANT_BOAT_GATEWAY_HOST_ID,
         ...(env.SEALANT_BOAT_GATEWAY_ENDPOINT === undefined
           ? {}
@@ -477,7 +464,6 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         BoatAllocationRepoLive,
         WorkspaceRuntimeInstanceRepoLive,
         WorkspaceCaptureDrainRepoLive,
-        boatControlRequestRepoLayer,
       ).pipe(Layer.provide(Infra));
       const bundle =
         env.SEALANT_BOAT_ADMISSION_OWNER_IDS.length === 0 ? undefined : await loadPackagedRuntime();
@@ -493,9 +479,9 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
                 throw new Error("Boat construction custody is not configured.");
               return ManagedRuntime.make(
                 boatNativeCatalogLayer({
-                  deploymentId: env.SEALANT_BOAT_DEPLOYMENT_ID,
+                  deploymentId: provider.deploymentId,
                   builder: new BoatSnapshotBuilder({
-                    api: api.value,
+                    api: provider.api,
                     runtimeBundle: bundle.value,
                     journalDirectory: join(env.SEALANT_BOAT_STATE_DIRECTORY, "native-builds"),
                     owner: env.SEALANT_BOAT_BUILDER_OWNER,
@@ -506,8 +492,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       const WorkerLayer: Layer.Layer<
         | BoatAdapterServices
         | BoatResources
-        | BoatInteractiveControl
-        | BoatControlRequestRepo
+        | BoatControlMaterial
         | WorkspaceCaptureDrainRepo
         | CredentialCipher
       > = Layer.mergeAll(
@@ -516,7 +501,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         boatReadinessWorkerLayer,
         boatFinalCloseWorkerLayer,
         boatWorkerExecutionLayer,
-        boatInteractiveControlLayer.pipe(Layer.provide(Repos)),
+        boatControlMaterialLayer,
       ).pipe(
         Layer.provideMerge(Repos),
         Layer.provideMerge(
@@ -527,7 +512,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
             env.SEALANT_BOAT_GATEWAY_RELAY_HOST === undefined
               ? boatTunnelCarrierAbsent
               : makeBoatTunnelCarrierLayer({ log: (message) => console.log(message) }),
-            Layer.succeed(BoatFinalCloseProvider, { api: api.value }),
+            Layer.succeed(BoatFinalCloseProvider, { api: provider.api }),
           ),
         ),
       );
@@ -538,21 +523,20 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           : {
               kind: "boat-native" as const,
               adapter: new BoatRuntimeAdapter({
-                deploymentId: env.SEALANT_BOAT_DEPLOYMENT_ID,
+                deploymentId: provider.deploymentId,
                 ownerIds: env.SEALANT_BOAT_ADMISSION_OWNER_IDS,
                 runtime,
               }),
               artifacts: await catalogRuntime.runPromise(BoatNativeCatalog),
             };
       let catalogCursor: string | undefined;
-      const control = await runtime.runPromise(BoatInteractiveControl);
+      const control = await runtime.runPromise(BoatControlMaterial);
       boatResourceReach = () =>
         runtime.runPromise(Effect.flatMap(BoatResources, (resources) => resources.reach()));
       return {
         runtime,
         admission,
         control,
-        serveControl: () => runtime.runPromise(serveBoatControlRequests),
         reconcileCatalog:
           catalogRuntime === undefined
             ? undefined
@@ -584,7 +568,6 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       runtime: ManagedRuntime.make(WorkerLayer),
       admission: undefined,
       control: undefined,
-      serveControl: undefined,
       reconcileCatalog: undefined,
       disposeCatalog: undefined,
       reconcileResources: undefined,
@@ -596,7 +579,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     ...baseTargetOptions,
     ...(boatAssembly?.control === undefined
       ? {}
-      : { boatConnectMaterial: boatAssembly.control.connectMaterial }),
+      : { boatConnectMaterial: boatConnectMaterial(boatAssembly.control) }),
   };
   const dockerAdapters = !env.DOCKER_RUNTIME_ENABLED
     ? []
@@ -1244,24 +1227,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       boatSweepRunning = false;
     }
   };
-  let controlTickRunning = false;
-  const controlTick = async () => {
-    if (controlTickRunning || boatAssembly?.serveControl === undefined) return;
-    controlTickRunning = true;
-    try {
-      await boatAssembly.serveControl();
-    } catch {
-      console.error("Boat control access tick failed");
-    } finally {
-      controlTickRunning = false;
-    }
-  };
-  const boatControlTimer =
-    boatAssembly?.serveControl === undefined
-      ? undefined
-      : setInterval(() => void controlTick(), 250);
   const boatSweepTimer = boatRuntime === undefined ? undefined : setInterval(runBoatSweep, 30_000);
-  boatControlTimer?.unref();
   boatSweepTimer?.unref();
   void runBoatSweep();
 
@@ -1283,7 +1249,6 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       clearInterval(recoverySweepTimer);
       clearInterval(exitReconcilerTimer);
       if (boatSweepTimer !== undefined) clearInterval(boatSweepTimer);
-      if (boatControlTimer !== undefined) clearInterval(boatControlTimer);
       await boatRuntime?.dispose();
       await boatAssembly?.disposeCatalog?.();
       exitWatch.close();

@@ -10,9 +10,10 @@ currently refused. Native image preflight can return unknown while construction 
 the ordinary native publication owner.
 
 The ordinary adapter stages the real launch material and credential revision pins, waits for
-authenticated readiness, and resolves interactive control through the credential-owning worker. The
-API holds no Boat key. Each interactive connection uses a fresh, 30-second database request and a
-sealed, exact-target reply, rechecked against Stop and current execution ownership.
+authenticated readiness, and opens interactive control directly. The API holds the deployment's Boat
+key the way it holds AWS credentials for MicroVM: each interactive connection reads the run's sealed
+bearer, checks the VM's ownership labels, asks Boat for a fresh hosted cookie and is rechecked
+against Stop and current execution ownership.
 
 Ordinary Stop uses canonical FINAL capture, positive provider deletion and gateway cleanup before
 releasing the UDP slot and native publication consumer. Reconciliation finishes publication release
@@ -32,24 +33,26 @@ built from #471 remains suitable; this layer does not change `boat-tunnel`.
 
 The operator supplies names and values privately:
 
-- Both API and worker: `SEALANT_BOAT_ADMISSION_OWNER_IDS`, `SEALANT_CREDENTIALS_KEY`.
-- Worker: `SEALANT_BOAT_API_KEY_FILE=/run/secrets/boat-api-key`, `SEALANT_BOAT_DEPLOYMENT_ID`,
-  `SEALANT_BOAT_GATEWAY_HOST_ID`, `SEALANT_BOAT_GATEWAY_ENDPOINT`, `SEALANT_BOAT_GATEWAY_IMAGE`,
-  `SEALANT_BOAT_BUILDER_OWNER`, `SEALANT_BOAT_STATE_DIRECTORY=/var/lib/sealant/boat`.
+- Both API and worker: `SEALANT_BOAT_ADMISSION_OWNER_IDS`, `SEALANT_CREDENTIALS_KEY`,
+  `SEALANT_BOAT_API_KEY_FILE=/run/secrets/boat-api-key` (or `SEALANT_BOAT_API_KEY`) and
+  `SEALANT_BOAT_DEPLOYMENT_ID`. The API refuses to start with admission on and no Boat key.
+- Worker: `SEALANT_BOAT_GATEWAY_HOST_ID`, `SEALANT_BOAT_GATEWAY_ENDPOINT`,
+  `SEALANT_BOAT_GATEWAY_IMAGE`, `SEALANT_BOAT_BUILDER_OWNER`,
+  `SEALANT_BOAT_STATE_DIRECTORY=/var/lib/sealant/boat`.
 - `SEALANT_BOAT_AUTOMATIC_PARKING` and `SEALANT_BOAT_PARKING_DELAY_SECONDS` are retired. The worker
   ignores them, so they can be removed.
 - Mount the persistent native-build journal directory at `/var/lib/sealant/boat`. The builder owner
-  UUID must survive worker restarts. Mount the secret directory read-only at `/run/secrets`, owned
-  by root with mode 0700, containing the root-owned, regular, single-link 0400 key file. Symlink
-  components and simultaneous `SEALANT_BOAT_API_KEY` and file settings are refused. The loader never
-  copies key bytes to environment variables or diagnostics.
+  UUID must survive worker restarts. Mount the secret directory read-only at `/run/secrets` in both
+  the API and the worker, owned by root with mode 0700, containing the root-owned, regular,
+  single-link 0400 key file. Symlink components and simultaneous `SEALANT_BOAT_API_KEY` and file
+  settings are refused. The loader never copies key bytes to environment variables or diagnostics.
 
 The container still needs the ordinary resource/Docker configuration from the existing runbook.
 Public Mend session and Garage URLs must use the approved Funnel paths on 8443 and 10000; 443 is the
 Mend origin. UDP 40000–40015 must reach the configured gateway host. This change makes no networking
-or compose edits. Worker-only credential isolation in Mend is a GA blocker,
-[sealant-sh/mend#1523](https://github.com/sealant-sh/mend/issues/1523). The dedicated preview proof
-uses the separately authorized shared-container trade-off.
+or compose edits. Boat runs in the deployment's own Boat account, so the API and the worker both
+hold its key; this supersedes the worker-only isolation that
+[sealant-sh/mend#1523](https://github.com/sealant-sh/mend/issues/1523) asked for.
 
 ## Checked-in proof command
 

@@ -79,11 +79,13 @@ export {
 } from "./runtime/boat/observation.js";
 
 export { loadBoatCredential } from "./runtime/boat/credential.js";
+export { boatProviderFromEnv, type BoatProviderEnvLike } from "./runtime/boat/provider-env.js";
 export {
-  BoatInteractiveControl,
-  boatInteractiveControlLayer,
-  serveBoatControlRequests,
-} from "./runtime/boat/interactive-control.js";
+  BoatControlError,
+  BoatControlMaterial,
+  boatConnectMaterial,
+  boatControlMaterialLayer,
+} from "./runtime/boat/control-material.js";
 export { BoatRuntimeAdapter, type BoatAdapterServices } from "./runtime/boat/adapter.js";
 export { BoatSnapshotBuilder } from "./images/boat/builder.js";
 export { loadPackagedRuntime } from "./images/boat/assets.js";

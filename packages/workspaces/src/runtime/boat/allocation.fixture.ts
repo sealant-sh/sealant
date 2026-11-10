@@ -68,6 +68,9 @@ export class ProviderFixture {
   snapshotMismatch = false;
   bootReadUnavailable = false;
   beforeCreateReply: () => Promise<void> = async () => {};
+  /** `POST /sandboxes/:id/host`: each call is a fresh hosted cookie, or Boat's failure. */
+  hostCalls = 0;
+  hostUnavailable = false;
   constructor(readonly input: BoatAllocationInput) {}
   sandbox(id = "bx_23456789") {
     return {
@@ -103,6 +106,19 @@ export class ProviderFixture {
       return;
     }
     this.reads.push(url.pathname);
+    if (request.method === "POST" && url.pathname === "/api/v1/sandboxes/bx_23456789/host") {
+      this.hostCalls++;
+      if (this.hostUnavailable) {
+        send({ code: "rate_limited" }, 429);
+        return;
+      }
+      send({
+        ok: true,
+        url: "https://fixture-8080.on.boat.dev/?_token=test-cookie-local-only",
+        isProtected: true,
+      });
+      return;
+    }
     const processId = Number(url.pathname.match(/\/commands\/(\d+)$/)?.[1]);
     if (request.method === "GET" && this.commandResults.has(processId)) {
       send({

@@ -78,8 +78,9 @@ has no registered adapter and cannot admit sessions. The proposed `SEALANT_BOAT_
 implemented settings here. Do not supply speculative settings as if they enabled the runtime.
 
 The planned provider key delivery is a root-owned mode 0400 file under a root-owned mode 0700
-directory, mounted read-only into the worker at `/run/secrets/boat-api-key`. It is worker-only. The
-later file loader must verify ownership, permissions and symlink policy. Keep the key out of Compose
+directory, mounted read-only into the worker at `/run/secrets/boat-api-key`. (Superseded: the API
+holds the key too, to open Boat sessions' control; see `boat-live-session-proof.md`.) The later file
+loader must verify ownership, permissions and symlink policy. Keep the key out of Compose
 environment values, logs, images, provider `env` and `setupScript`. This head does not need a
 provider key for the admission-disabled control-plane checks.
 

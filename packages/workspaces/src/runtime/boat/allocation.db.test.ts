@@ -9,8 +9,6 @@ import {
 } from "@sealant/credentials";
 import {
   BoatAllocationRepo,
-  BoatControlRequestRepo,
-  boatControlRequestRepoLayer,
   BoatAllocationRepoLive,
   BoatExecutionRepo,
   BoatExecutionRepoLive,
@@ -92,6 +90,12 @@ import { ProviderFixture, GuestFixture, GatewayFixture } from "./allocation.fixt
 import { BoatAllocation, boatAllocationLayer, boatAllocationLayerNoDeps } from "./allocation.js";
 import { HttpBoatApi } from "./api.js";
 import { BoatOwnership, BoatSecret } from "./config.js";
+import {
+  BoatControlError,
+  BoatControlMaterial,
+  boatConnectMaterial,
+  boatControlMaterialLayer,
+} from "./control-material.js";
 import { boatDischargeLayerNoDeps } from "./discharge.js";
 import {
   BoatExecution,
@@ -104,11 +108,6 @@ import {
   BoatFinalCloseProvider,
   boatFinalCloseLayerNoDeps,
 } from "./final-close.js";
-import {
-  BoatInteractiveControl,
-  boatInteractiveControlLayerNoDeps,
-  serveBoatControlRequests,
-} from "./interactive-control.js";
 import { BoatObserver, boatObserverLayer, boatObserverLayerNoDeps } from "./observation.js";
 import { BoatAllocationProvider } from "./provider.js";
 import { RecordedBoat } from "./recorded-boat.fixture.js";
@@ -1294,7 +1293,33 @@ describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () =>
     }));
 });
 
-const interactiveFixture = async (s: AllocationFixture) => {
+/** The secrets a control connection carries; none may surface in an error or a log line. */
+const CONTROL_SECRETS = ["a".repeat(64), "test-cookie-local-only", "test-provider-key-local-only"];
+/** The API's and the worker's assembly over the real Boat client, against the provider fixture. */
+const controlMaterial = async (s: AllocationFixture, deploymentId: string) => {
+  const runtime = ManagedRuntime.make(
+    boatControlMaterialLayer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.succeed(SealantDB, s.db),
+          credentialCipherLayer({ key: Buffer.alloc(32, 7).toString("base64") }).pipe(Layer.orDie),
+          Layer.succeed(BoatAllocationProvider, { deploymentId, api: s.api }),
+        ),
+      ),
+    ),
+  );
+  const control = await runtime.runPromise(BoatControlMaterial);
+  /** The typed failure, or `undefined` when connect material came back. */
+  const failure = (runId: string, sandboxId: string) =>
+    execute(
+      control
+        .connectMaterial(runId, sandboxId)
+        .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => undefined })),
+    );
+  return { runtime, control, failure };
+};
+/** A launched, ready Boat run and this deployment's control material for it. */
+const controlFixture = async (s: AllocationFixture) => {
   const target = await launched(s);
   await execute(
     s.runtimes.upsertRuntimeInstance({
@@ -1304,112 +1329,65 @@ const interactiveFixture = async (s: AllocationFixture) => {
       resourceId: target.sandboxId,
     }),
   );
-  const runtime = ManagedRuntime.make(
-    Layer.mergeAll(
-      boatInteractiveControlLayerNoDeps,
-      Layer.succeed(BoatExecution, s.executor),
-    ).pipe(
-      Layer.provideMerge(
-        Layer.mergeAll(
-          Layer.succeed(BoatAllocationRepo, s.repo),
-          Layer.succeed(WorkspaceRuntimeInstanceRepo, s.runtimes),
-          Layer.succeed(WorkspaceCaptureDrainRepo, s.canonical),
-          credentialCipherLayer({ key: Buffer.alloc(32, 7).toString("base64") }).pipe(Layer.orDie),
-          boatControlRequestRepoLayer.pipe(Layer.provide(Layer.succeed(SealantDB, s.db))),
-        ),
-      ),
-    ),
-  );
-  return {
-    runtime,
-    target,
-    control: await runtime.runPromise(BoatInteractiveControl),
-    requests: await runtime.runPromise(BoatControlRequestRepo),
-    cipher: await runtime.runPromise(CredentialCipher),
-  };
+  return { target, ...(await controlMaterial(s, "test")) };
 };
-const pendingRequests = async (requests: BoatControlRequestRepo["Service"], count: number) => {
-  await expect.poll(async () => (await execute(requests.pending())).length).toBe(count);
-  return execute(requests.pending());
+const namesNoSecret = (value: unknown) => {
+  const text = `${String(value)} ${JSON.stringify(value)} ${value instanceof Error ? value.stack : ""}`;
+  for (const known of CONTROL_SECRETS) expect(text).not.toContain(known);
 };
 
-describe.runIf(databaseUrl !== undefined)("Boat interactive control fencing", () => {
-  it("rejects swapped and corrupt encrypted replies and removes both callers' requests", () =>
+describe.runIf(databaseUrl !== undefined)("Boat control material", () => {
+  it("opens a running run's control with a fresh hosted cookie from Boat on every connection", () =>
     test(async (s) => {
-      const f = await interactiveFixture(s);
+      const f = await controlFixture(s);
       try {
-        const first = f.control.connectMaterial(f.target.runId, f.target.sandboxId).then(
-          () => "accepted",
-          () => "refused",
+        expect(await execute(s.repo.isActive(f.target.runId))).toBe(true);
+        const expected = {
+          url: "wss://fixture-8080.on.boat.dev/sealant/control",
+          auth: { bearerToken: "a".repeat(64) },
+          headers: {
+            Cookie: "_port_auth=test-cookie-local-only",
+            Authorization: `Bearer ${"a".repeat(64)}`,
+          },
+        };
+        expect(
+          await execute(f.control.connectMaterial(f.target.runId, f.target.sandboxId)),
+        ).toEqual(expected);
+        // No cache: the next connection asks Boat again.
+        expect(
+          await execute(f.control.connectMaterial(f.target.runId, f.target.sandboxId)),
+        ).toEqual(expected);
+        expect(s.provider.hostCalls).toBe(2);
+        // The target derivation's hook resolves the same material.
+        expect(await boatConnectMaterial(f.control)(f.target.runId, f.target.sandboxId)).toEqual(
+          expected,
         );
-        const second = f.control.connectMaterial(f.target.runId, f.target.sandboxId).then(
-          () => "accepted",
-          () => "refused",
-        );
-        const rows = await pendingRequests(f.requests, 2);
-        const a = rows[0],
-          b = rows[1];
-        if (a === undefined || b === undefined) throw new Error("missing requests");
-        const sealed = await execute(
-          f.cipher.encrypt(
-            JSON.stringify({
-              context: { id: b.id, target: b.target, purpose: "interactive-control" },
-              value: {
-                url: "wss://fixture.example/control",
-                auth: { bearerToken: "a".repeat(64) },
-                headers: {},
-              },
-            }),
-          ),
-        );
-        await execute(f.requests.complete(a, sealed.sealed));
-        await execute(f.requests.complete(b, "corrupt"));
-        expect(await Promise.all([first, second])).toEqual(["refused", "refused"]);
-        expect(await execute(f.requests.get(a.id))).toBeUndefined();
-        expect(await execute(f.requests.get(b.id))).toBeUndefined();
+        await execute(s.runtimes.markStopRequested({ runId: f.target.runId, stopReason: "user" }));
+        expect(await f.failure(f.target.runId, f.target.sandboxId)).toMatchObject({
+          _tag: "BoatControlError",
+          reason: "refused",
+        });
+        await expect(
+          boatConnectMaterial(f.control)(f.target.runId, f.target.sandboxId),
+        ).rejects.toThrow("Boat interactive control refused");
+        expect(s.provider.hostCalls).toBe(3);
         expect(s.provider.creates).toHaveLength(1);
       } finally {
         await f.runtime.dispose();
       }
     }));
-  it("does not publish refreshed hosted access if Stop wins during the refresh", () =>
+
+  it("refuses a run whose row names another sandbox or deployment, before asking Boat", () =>
     test(async (s) => {
-      const f = await interactiveFixture(s);
+      const f = await controlFixture(s);
+      const other = await controlMaterial(s, "another-deployment");
       try {
-        const result = f.control.connectMaterial(f.target.runId, f.target.sandboxId).then(
-          () => "accepted",
-          () => "refused",
-        );
-        const rows = await pendingRequests(f.requests, 1);
-        const request = rows[0];
-        if (request === undefined) throw new Error("missing request");
-        s.guest.beforeHost = () =>
-          execute(s.runtimes.markStopRequested({ runId: f.target.runId, stopReason: "user" }));
-        await f.runtime.runPromise(serveBoatControlRequests);
-        expect((await execute(f.requests.get(request.id)))?.sealedAccess).toBeNull();
-        await execute(f.requests.remove(request.id));
-        expect(await result).toBe("refused");
-        await expect(f.control.connectMaterial(f.target.runId, "bx_3456789a")).rejects.toThrow(
-          "unavailable",
-        );
-      } finally {
-        await f.runtime.dispose();
-      }
-    }));
-  it("refuses a changed runtime and an expired request instead of using historical authority", () =>
-    test(async (s) => {
-      const f = await interactiveFixture(s);
-      try {
-        const result = f.control.connectMaterial(f.target.runId, f.target.sandboxId).then(
-          () => "accepted",
-          () => "refused",
-        );
-        const rows = await pendingRequests(f.requests, 1);
-        const request = rows[0];
-        if (request === undefined) throw new Error("missing request");
-        await execute(s.db.update(schema.boatControlRequests).set({ expiresAt: new Date(0) }));
-        expect(await result).toBe("refused");
-        expect(await execute(f.requests.get(request.id))).toBeUndefined();
+        const refused = { _tag: "BoatControlError", reason: "refused" };
+        expect(await f.failure(f.target.runId, "bx_3456789a")).toMatchObject(refused);
+        expect(await f.failure(randomUUID(), f.target.sandboxId)).toMatchObject(refused);
+        // Another deployment's process never opens this deployment's runs.
+        expect(await other.failure(f.target.runId, f.target.sandboxId)).toMatchObject(refused);
+        // The run's runtime moved to another sandbox: its old one is no longer its control.
         await execute(
           s.runtimes.upsertRuntimeInstance({
             runId: f.target.runId,
@@ -1418,76 +1396,79 @@ describe.runIf(databaseUrl !== undefined)("Boat interactive control fencing", ()
             resourceId: "bx_3456789a",
           }),
         );
-        await expect(f.control.connectMaterial(f.target.runId, f.target.sandboxId)).rejects.toThrow(
-          "unavailable",
-        );
-        expect(await execute(f.requests.pending())).toEqual([]);
+        expect(await f.failure(f.target.runId, f.target.sandboxId)).toMatchObject(refused);
+        expect(s.provider.hostCalls).toBe(0);
       } finally {
+        await f.runtime.dispose();
+        await other.runtime.dispose();
+      }
+    }));
+
+  it("refuses a VM whose Boat labels are not the run's, and never asks Boat to host it", () =>
+    test(async (s) => {
+      const f = await controlFixture(s);
+      try {
+        s.provider.foreign = true;
+        expect(await f.failure(f.target.runId, f.target.sandboxId)).toMatchObject({
+          _tag: "BoatControlError",
+          reason: "refused",
+        });
+        expect(s.provider.hostCalls).toBe(0);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+
+  it("hands out nothing when Stop wins while Boat answers", () =>
+    test(async (s) => {
+      const f = await controlFixture(s);
+      try {
+        s.provider.beforeSandboxRead = () =>
+          execute(s.runtimes.markStopRequested({ runId: f.target.runId, stopReason: "user" }));
+        expect(await f.failure(f.target.runId, f.target.sandboxId)).toMatchObject({
+          _tag: "BoatControlError",
+          reason: "refused",
+        });
+        expect(s.provider.hostCalls).toBe(1);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+
+  it("surfaces a Boat API failure as typed unavailability that names no secret, in no log", () =>
+    test(async (s) => {
+      const f = await controlFixture(s);
+      const logs = (["log", "info", "warn", "error", "debug"] as const).map((level) =>
+        vi.spyOn(console, level).mockImplementation(() => {}),
+      );
+      try {
+        s.provider.hostUnavailable = true;
+        const error = await f.failure(f.target.runId, f.target.sandboxId);
+        expect(error).toBeInstanceOf(BoatControlError);
+        expect(error).toMatchObject({ reason: "unavailable" });
+        namesNoSecret(error);
+        const rejected = await boatConnectMaterial(f.control)(
+          f.target.runId,
+          f.target.sandboxId,
+        ).then(
+          () => undefined,
+          (cause: unknown) => cause,
+        );
+        expect(rejected).toBeInstanceOf(Error);
+        namesNoSecret(rejected);
+        // A refusal names no secret either.
+        s.provider.hostUnavailable = false;
+        namesNoSecret(await f.failure(f.target.runId, "bx_3456789a"));
+        for (const spy of logs) namesNoSecret(spy.mock.calls);
+        expect(s.provider.hostCalls).toBe(2);
+      } finally {
+        for (const spy of logs) spy.mockRestore();
         await f.runtime.dispose();
       }
     }));
 });
 
 describe.runIf(databaseUrl !== undefined)("Boat canonical FINAL close", () => {
-  it("keeps ready allocations current and serves fresh sealed interactive access without exposing the provider key", () =>
-    test(async (s) => {
-      const target = await launched(s);
-      await execute(
-        s.runtimes.upsertRuntimeInstance({
-          runId: target.runId,
-          adapter: "boat",
-          status: "ready",
-          resourceId: target.sandboxId,
-        }),
-      );
-      expect(await execute(s.repo.isActive(target.runId))).toBe(true);
-      const runtime = ManagedRuntime.make(
-        Layer.mergeAll(
-          boatInteractiveControlLayerNoDeps,
-          Layer.succeed(BoatExecution, s.executor),
-        ).pipe(
-          Layer.provideMerge(
-            Layer.mergeAll(
-              Layer.succeed(BoatAllocationRepo, s.repo),
-              Layer.succeed(WorkspaceRuntimeInstanceRepo, s.runtimes),
-              Layer.succeed(WorkspaceCaptureDrainRepo, s.canonical),
-              credentialCipherLayer({ key: Buffer.alloc(32, 7).toString("base64") }).pipe(
-                Layer.orDie,
-              ),
-              boatControlRequestRepoLayer.pipe(Layer.provide(Layer.succeed(SealantDB, s.db))),
-            ),
-          ),
-        ),
-      );
-      try {
-        const control = await runtime.runPromise(BoatInteractiveControl);
-        const pending = control.connectMaterial(target.runId, target.sandboxId);
-        const requests = await runtime.runPromise(BoatControlRequestRepo);
-        const rows = await pendingRequests(requests, 1);
-        expect(rows).toHaveLength(1);
-        await runtime.runPromise(serveBoatControlRequests);
-        const stored = await execute(requests.get(rows[0]?.id ?? ""));
-        expect(stored?.sealedAccess).toBeTypeOf("string");
-        expect(stored?.sealedAccess).not.toContain("test-cookie-local-only");
-        const material = await pending;
-        expect(material).toMatchObject({
-          url: "wss://fixture-8080.on.boat.dev/sealant/control",
-          auth: { bearerToken: "a".repeat(64) },
-          headers: { Cookie: "_port_auth=test-cookie-local-only" },
-        });
-        expect(await execute(requests.get(rows[0]?.id ?? ""))).toBeUndefined();
-        await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
-        expect(await execute(s.repo.isActive(target.runId))).toBe(false);
-        await expect(control.connectMaterial(target.runId, target.sandboxId)).rejects.toThrow(
-          "unavailable",
-        );
-        expect(await execute(requests.pending())).toEqual([]);
-        expect(s.provider.creates).toHaveLength(1);
-      } finally {
-        await runtime.dispose();
-      }
-    }));
-
   it("reconciles only stopped current runtimes on this gateway host and resumes after the page cursor", () =>
     test(async (s) => {
       const target = await launched(s);
