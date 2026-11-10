@@ -136,25 +136,40 @@ export const parkAndResume = async (stack: HarnessStack, project: Project, step:
 
     await step("Stop keeps the VM", async () => {
       await run.workspace.stop();
-      // The FINAL cannot drain (uploads refused, or its deadline passes first), so Mend must read
-      // the session as kept. Whether the daemon got as far as asking to upload is only evidence.
-      let seen = "";
+      // The FINAL cannot drain (uploads refused), so the worker keeps the VM. Read that from
+      // Core's own record: the stop requested, the FINAL incomplete, the runtime not stopped. What
+      // Mend reads meanwhile is evidence (on 3a0d37ae+ it stays `ready`; see the report).
+      const kept = z.object({
+        stop_reason: z.string().nullable(),
+        status: z.string(),
+        complete: z.string().nullable(),
+      });
+      let last: unknown;
       await until(
-        "the Stop to keep the session (retained)",
+        "the worker to keep the session (stop requested, FINAL incomplete)",
         async () => {
-          seen = await run.workspace.status();
-          return seen === "retained" ? true : undefined;
+          const [row] = await stack.query(
+            `select r.stop_reason, r.status, d.last_status->>'complete' as complete from workspace_runtime_instances r join workspace_capture_drains d using (run_id) where r.run_id = '${sqlText(run.runId)}'`,
+          );
+          last = row;
+          const parsed = kept.safeParse(row);
+          return parsed.success &&
+            parsed.data.stop_reason !== null &&
+            parsed.data.complete === "false" &&
+            parsed.data.status !== "stopped"
+            ? true
+            : undefined;
         },
         3 * 60_000,
         2000,
       ).catch(async (error: unknown) => {
         throw new Error(
-          `${error instanceof Error ? error.message : String(error)}; last status ${seen}; capture ${JSON.stringify(await run.capture.state())}`,
+          `${error instanceof Error ? error.message : String(error)}; row ${JSON.stringify(last)}; public status ${await run.workspace.status()}; capture ${JSON.stringify(await run.capture.state())}`,
         );
       });
       const channel = await run.capture.state();
       await transcript.note(
-        `kept: public status retained; capture head ${JSON.stringify(channel.head)}, uploads refused ${String(channel.refusedUploads)}`,
+        `kept: ${JSON.stringify(last)}; Mend reads ${await run.workspace.status()}; uploads refused ${String(channel.refusedUploads)}, capture head ${JSON.stringify(channel.head)}`,
       );
     });
 
