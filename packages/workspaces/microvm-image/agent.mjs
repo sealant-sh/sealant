@@ -34,6 +34,9 @@
 //      recognised by name), then starts `sealantd boot --recovery` on that disk (resume its own staging, no restore, no dotfiles, no lifecycle
 //      step, no harness, nothing admitted), with the first boot's environment and its secret env
 //      file holding the capture token, so the control plane can drain it before the cap.
+//      On Boat an agent restarted on the same boot adopts the launch (`adoptBootLaunch`): the
+//      daemon runs on in a systemd scope of its own, and park and recover reach it through
+//      systemd, proving it gone before anything is certified or started.
 //
 // One listener serves all three; the image registers the same port for hooks and the endpoint
 // targets it by default.
@@ -48,6 +51,7 @@ import path from "node:path";
 import {
   createDockerService,
   stopGuestProcessGroup as stopProcessGroup,
+  sweepDockerCgroups,
 } from "./docker-service.mjs";
 
 const CONTRACT_VERSION = 1;
@@ -195,6 +199,12 @@ const state = {
   launchAccepted: false,
   /** The boot env the launch started sealantd with; a recovery boot starts from it. */
   bootEnv: null,
+  /**
+   * Boat: this process adopted a launch an earlier agent process accepted on this boot. It holds
+   * no daemon child then: the daemon lives in its scope (`sealant-workspace-*.scope`), outside the
+   * agent's cgroup, and is observed through systemd until a recovery starts one here.
+   */
+  adopted: false,
   /** sealantd was started again in recovery mode (no harness, so no guest service is needed). */
   recovery: false,
   recoveryInProgress: false,
@@ -1068,10 +1078,19 @@ const handleLaunch = async (req, res) => {
       bootEnv.SEALANT_DOTFILES_ARCHIVE_DIR = DOTFILES_DIR;
     }
     // Boat: the run is the first valid launch body's, and the launch is durable BEFORE anything
-    // starts: an agent restarted on this boot must know it was accepted. Last of the writes, so
-    // a push whose material failed to persist leaves no record and can be retried.
+    // starts: an agent restarted on this boot must know it was accepted, and (from the tmpfs
+    // launch environment, written just before) what to recover from. Last of the writes, so a
+    // push whose material failed to persist leaves no record and can be retried.
     if (boatHost !== null) {
       state.runId = body.runId;
+      await boatHost.recordLaunchEnv({
+        runId: body.runId,
+        contractVersion: body.version,
+        captureSourced: body.bootEnv.SEALANT_WORKSPACE_SOURCE === "capture",
+        flushTimeoutMs: body.flushTimeoutMs,
+        bootEnv:
+          body.version === DOCKER_CONTRACT_VERSION ? { ...bootEnv, ...dockerEnvironment } : bootEnv,
+      });
       await boatHost.recordLaunch(body.runId);
     }
   } catch (error) {
@@ -1113,13 +1132,28 @@ const handleLaunch = async (req, res) => {
 };
 
 /**
+ * Boat: the Docker an earlier agent process started on this boot, which no service here holds:
+ * dockerd lives on in the engine's cgroup and its containers in their slice when the agent is
+ * restarted. Its Docker image's launch was adopted, so the same cgroups the service would sweep
+ * are killed and proved empty. `true` only when they were.
+ */
+const sweepAdoptedDocker = () =>
+  state.adopted && state.contractVersion === DOCKER_CONTRACT_VERSION
+    ? sweepDockerCgroups(DOCKER_SERVICE_OPTIONS)
+    : Promise.resolve(true);
+
+/**
  * Boat: stop the guest Docker service for a park: `absent` when none was ever started, `stopped`
  * only when the service proved nothing of Docker still runs (containers given their stop grace,
- * then dockerd, then its cgroup and any engine process killed), `unverified` otherwise.
+ * then dockerd, then its cgroup and any engine process killed), `unverified` otherwise. After an
+ * adopt the service is not held: the Docker cgroups are swept and proved empty by the same rules.
  */
 const stopDockerForPark = async () => {
-  if (state.dockerService === null && imageValidation.dockerService === null) return "absent";
   boatHost?.markDockerStopped();
+  if (state.dockerService === null && imageValidation.dockerService === null) {
+    if (!state.adopted || state.contractVersion !== DOCKER_CONTRACT_VERSION) return "absent";
+    return (await sweepAdoptedDocker()) ? "stopped" : "unverified";
+  }
   const stopped = await Promise.all(
     [imageValidation.dockerService, state.dockerService]
       .filter((service) => service !== null)
@@ -1134,6 +1168,36 @@ const killDaemonGroup = async () => {
   if (daemon === null) return;
   stopProcessGroup(daemon, "SIGKILL");
   await waitForExit(daemon);
+};
+
+/**
+ * Boat: stop every daemon on this boot for a park or recovery: the child this process holds (if
+ * any), then every live `sealant-workspace-*` scope (the daemon an earlier agent process started
+ * runs in one, outside this unit's cgroup), each proved gone. `stopped` only when proved; nothing
+ * held and no scope live is proved too.
+ */
+const stopDaemonForClose = async () => {
+  await killDaemonGroup();
+  return (await boatHost.killDaemonScopes()) ? "stopped" : "unverified";
+};
+
+/**
+ * Boat, after an adopt: what became of the daemon this process never held, from its scope.
+ * `live` while a `sealant-workspace-*` scope is active, `gone` once none is (the daemon exited;
+ * its code is unknown here, so health reports `{code: null, signal: null}`), `unknown` when
+ * systemd could not say. `held` when this process holds a daemon of its own (a recovery boot) or
+ * adopted nothing. `scopes`: a listing made just now, when the caller has one.
+ */
+const observeAdoptedDaemon = async (scopes) => {
+  if (!state.adopted || state.daemon !== null) return "held";
+  if (state.daemonExited) return "gone";
+  const live = scopes === undefined ? await boatHost.liveDaemonScopes() : scopes;
+  if (live === null) return "unknown";
+  if (live.length > 0) return "live";
+  state.daemonExited = true;
+  state.daemonExit = { code: null, signal: null };
+  log("the daemon an earlier agent process started has exited: its scope is gone");
+  return "gone";
 };
 
 /**
@@ -1152,7 +1216,7 @@ const handlePark = async (req, res) => {
   if (state.launchInProgress) return json(res, 409, { reason: "launch-in-progress" });
   const result = await boatHost.park(body, {
     runId: state.runId,
-    stopDaemon: killDaemonGroup,
+    stopDaemon: stopDaemonForClose,
     stopDocker: stopDockerForPark,
   });
   return json(res, result.status, result.body);
@@ -1389,14 +1453,22 @@ const handleRecover = async (req, res) => {
   ) {
     return message(res, 400, "recovery request does not match the sealant agent contract");
   }
+  // Boat: the daemon scopes live on this boot, from systemd (`null`: it could not say).
+  const scopes = boatHost === null ? [] : await boatHost.liveDaemonScopes();
   if (boatHost !== null) {
     // The records decide what this agent may say. Never `nothing-to-save` when unsure.
     const decision = boatHost.recoverDecision({
       runId: body.runId,
       agentLaunched: state.launchAccepted && state.bootEnv !== null,
       // Whatever this process knows that the records may not say yet (a launch writing its
-      // material) or no longer say (a record removed under a running daemon).
-      agentActive: state.launchInProgress || state.launchAccepted || state.daemon !== null,
+      // material) or no longer say (a record removed under a running daemon), and whatever
+      // systemd shows running on this boot that this process did not start.
+      agentActive:
+        state.launchInProgress ||
+        state.launchAccepted ||
+        state.daemon !== null ||
+        scopes === null ||
+        scopes.length > 0,
     });
     if (decision.kind === "refuse") return json(res, 409, { reason: decision.reason });
     if (decision.kind === "nothing-to-save") {
@@ -1412,6 +1484,10 @@ const handleRecover = async (req, res) => {
   if (state.recoveryInProgress) {
     return message(res, 409, "a recovery is already starting");
   }
+  // Boat, after an adopt: the daemon is known through its scope, never guessed.
+  if ((await observeAdoptedDaemon(scopes)) === "unknown") {
+    return json(res, 409, { reason: "recover-state-unknown" });
+  }
   if (!state.daemonExited) {
     return json(res, 200, { outcome: "running" });
   }
@@ -1423,8 +1499,14 @@ const handleRecover = async (req, res) => {
     // user code and needs no guest service), and a dockerd left running would start them again.
     boatHost?.markDockerStopped();
     const docker = await state.dockerService?.stop();
-    // Boat proves Docker gone (a forced dockerd stop leaves containerd's shims and containers).
-    if (BOAT && docker !== undefined && docker.verified !== true) {
+    // Boat proves Docker gone (a forced dockerd stop leaves containerd's shims and containers);
+    // after an adopt no service is held, and the Docker cgroups are swept and proved by the same
+    // rules.
+    if (
+      BOAT &&
+      ((docker !== undefined && docker.verified !== true) ||
+        (docker === undefined && !(await sweepAdoptedDocker())))
+    ) {
       log("recover: the guest Docker service could not be proved stopped; nothing started");
       return json(res, 503, { reason: "docker-stop-unverified" });
     }
@@ -1432,9 +1514,14 @@ const handleRecover = async (req, res) => {
       log("recover: the guest Docker service did not stop; nothing started");
       return message(res, 503, "the guest Docker service did not stop");
     }
-    // On Boat sealantd was PID 1 of its own namespace: killing the wrapper's group ends it all.
-    if (BOAT) await killDaemonGroup();
-    else if (!(await killDaemonLeftovers(state.daemon?.pid))) {
+    // On Boat sealantd was PID 1 of its own namespace: killing the wrapper's group ends it all,
+    // and every daemon scope on the boot is killed and proved gone before another starts.
+    if (BOAT) {
+      if ((await stopDaemonForClose()) !== "stopped") {
+        log("recover: a daemon scope could not be proved gone; nothing started");
+        return json(res, 503, { reason: "daemon-stop-unverified" });
+      }
+    } else if (!(await killDaemonLeftovers(state.daemon?.pid))) {
       log("recover: processes the ended sealantd left are still running; nothing started");
       return message(res, 503, "processes the ended daemon left are still running");
     }
@@ -1485,11 +1572,14 @@ const daemonExitReport = () => {
   };
 };
 
-const handleHealth = (req, res) => {
+const handleHealth = async (req, res) => {
   arm();
   if (!bearerMatches(req.headers.authorization, state.controlToken)) {
     return message(res, 401, "control token does not match");
   }
+  // Boat, after an adopt: the daemon is reported from its scope (not exited while one is live;
+  // exited, code unknown, once none is), never from a child this process does not hold.
+  await observeAdoptedDaemon();
   const common = {
     booted: state.booted,
     controlSocket: controlSocketReady(),
@@ -1765,6 +1855,37 @@ const shutdown = async (signal) => {
 };
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));
+
+/**
+ * Boat: adopt the launch an earlier agent process accepted on this boot, from the durable launch
+ * record and the tmpfs launch environment (`boat-host.mjs`). This process then knows the run, the
+ * contract, and the boot env a recovery starts from, and reports the daemon from its scope; it
+ * holds no child. A launch record without the environment (or another boot's) adopts nothing:
+ * the launch stays accepted (`409 already booted`), and a recovery is `recover-state-unknown`.
+ */
+const adoptBootLaunch = () => {
+  if (boatHost === null) return;
+  const adopted = boatHost.adoptLaunch();
+  if (adopted === null) return;
+  state.adopted = true;
+  state.runId = adopted.runId;
+  state.contractVersion = adopted.contractVersion;
+  state.bootEnv = adopted.bootEnv;
+  state.captureSourced = adopted.captureSourced;
+  state.flushTimeoutMs = adopted.flushTimeoutMs;
+  state.launchAccepted = true;
+  state.booted = true;
+  arm();
+  let secretEnvJson;
+  try {
+    secretEnvJson = readFileSync(SECRET_ENV_FILE, "utf8");
+  } catch {
+    // No secret env on tmpfs: nothing of it to redact.
+  }
+  state.redactions = redactionsFor(state.controlToken ?? "", secretEnvJson);
+  log(`adopted the launch of run ${state.runId} (contract ${String(state.contractVersion)})`);
+};
+adoptBootLaunch();
 
 server.listen(PORT, "0.0.0.0", () => {
   const address = server.address();

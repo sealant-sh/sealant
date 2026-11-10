@@ -88,14 +88,29 @@ All over the hosted proxy on port 8080, all authenticated by the bearer:
   `nothing-to-save` with its basis (`daemon`: the recovery boot exited 76; `no-launch`: bound this
   boot and never launched), or a `409` refusal (`recover-new-boot`, `recover-binding-conflict`,
   `recover-state-unknown`, `parked`). An earlier boot's bearer after a reboot is `recover-new-boot`,
-  never a 401. `503 {reason: docker-stop-unverified}` when Docker could not be proved stopped:
-  nothing was started, and Core retries.
-- `POST /sealant/park`: `{format: sealant-agent-park-v1, operationId}`. Kills the daemon's
-  namespace, stops Docker, `sync`, writes `/var/lib/sealant/agent/park-<operationId>.json` (0600)
-  and answers its path, SHA-256 and size. The same operation again is the same receipt; another
-  operation, a launch or a recovery after a park is `409 {reason: parked}`. When Docker could not be
-  proved stopped the agent writes no receipt and answers `503 {reason: docker-stop-unverified}`;
+  never a 401. `503 {reason: docker-stop-unverified}` when Docker could not be proved stopped, and
+  `503 {reason: daemon-stop-unverified}` when a daemon scope could not be proved gone: nothing was
+  started, and Core retries.
+- `POST /sealant/park`: `{format: sealant-agent-park-v1, operationId}`. Kills the daemon's namespace
+  (every `sealant-workspace-*` scope, each proved gone), stops Docker, `sync`, writes
+  `/var/lib/sealant/agent/park-<operationId>.json` (0600) and answers its path, SHA-256 and size.
+  The same operation again is the same receipt; another operation, a launch or a recovery after a
+  park is `409 {reason: parked}`. When the daemon or Docker could not be proved stopped the agent
+  writes no receipt and answers `503 {reason: daemon-stop-unverified | docker-stop-unverified}`;
   Core maps it as retryable, never as closed, and the same park is retried.
+
+## An agent restarted on the same boot
+
+sealantd runs in a transient scope of its own (`sealant-workspace-<id>.scope`), outside the agent
+unit's cgroup, so it survives the agent process. A restarted agent adopts the launch from the launch
+record and the launch environment the launch left on tmpfs (`/run/sealant/agent/launch-env.json`,
+0600: run, contract, boot env with the secret env file's path). It then holds no daemon child:
+health reports the daemon from its scope (`booted: true`, no `daemonExit` while a scope is active,
+`{code: null, signal: null}` once none is), recover answers `running` while a scope is live and
+otherwise starts the recovery boot from the adopted environment, and park kills every scope through
+systemd and proves it gone (and Docker's cgroups empty) before any receipt. A launch record without
+the environment adopts nothing: the launch stays accepted, park still proves every scope gone, and
+recover is `recover-state-unknown`. After a reboot the tmpfs is empty and nothing is adopted.
 
 ## Verification
 

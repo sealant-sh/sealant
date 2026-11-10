@@ -179,8 +179,9 @@ export interface BoatAgentReply {
  * The agent's status decides, never its text: 400 is a request Core built wrong, 401 a bearer the
  * agent does not hold, 404 an agent without the route, 409 a refusal whose reason the body names.
  * 502/503/504 (the proxy's VM still booting, an agent not yet listening, or the agent's own
- * `503 {reason: docker-stop-unverified}` on a park or recovery it could not finish) and lost
- * transport are the only retryable failures; their reason, when the body names one, is kept.
+ * `503 {reason: daemon-stop-unverified | docker-stop-unverified}` on a park or recovery it could
+ * not finish) and lost transport are the only retryable failures; their reason, when the body
+ * names one, is kept.
  */
 export type BoatAgentFailureCode =
   | "agent-rejected"

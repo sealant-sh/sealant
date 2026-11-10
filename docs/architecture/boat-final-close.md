@@ -70,10 +70,11 @@ staging.
 `nothing-to-save` is a distinct execution result: nothing ran on the VM, so close removes it under
 the `nothing-to-save` deletion basis, which rests on no recorded evidence a later observation could
 revoke (like the owner's discard). The agent's refusals are typed (`recover-new-boot` after a
-reboot, `recover-binding-conflict`, `recover-state-unknown` from an agent that did not launch this
-boot, `parked`) and classified through the launch diagnostics; each retains the VM and can never be
-read as nothing to save. A malformed answer or lost transport keeps the VM too and is retried.
-Snapshot hydration and fresh-epoch recovery belong to the canonical parking owner.
+reboot, `recover-binding-conflict`, `recover-state-unknown` from a restarted agent that finds no
+launch environment to adopt, `parked`) and classified through the launch diagnostics; each retains
+the VM and can never be read as nothing to save. A malformed answer or lost transport keeps the VM
+too and is retried. Snapshot hydration and fresh-epoch recovery belong to the canonical parking
+owner.
 
 ## Exact cleanup and retry
 
