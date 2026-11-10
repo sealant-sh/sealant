@@ -3872,33 +3872,42 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
       }
     }));
 
-  it("keeps a blocked deletion pending even when the VM already reads 404, then finishes it (review of #508)", () =>
-    test(async (s) => {
-      const o = await observedLaunch(s, {
-        boat: (boat) => {
-          boat.stuckProvisioning = true;
-        },
-      });
-      try {
-        o.boat.blockDeletions = true;
-        const { owner } = await execute(s.final([], o.api, 2_000));
-        expect(await execute(owner.closeUnbound(s.input.consumer.runId, o.sandboxId))).toBe(
-          "pending",
-        );
-        expect(await execute(owner.closeUnbound(s.input.consumer.runId, o.sandboxId))).toBe(
-          "pending",
-        );
-        expect(
-          await execute(s.runtimes.getRuntimeInstanceByRunId(s.input.consumer.runId)),
-        ).toMatchObject({ removedAt: null });
-        o.boat.unblockDeletions();
-        expect(await execute(owner.closeUnbound(s.input.consumer.runId, o.sandboxId))).toBe(
-          "closed",
-        );
-      } finally {
-        await o.boat.close();
-      }
-    }));
+  it(
+    "keeps a blocked deletion pending even when the VM already reads 404, then finishes it (review of #508)",
+    () =>
+      test(async (s) => {
+        const o = await observedLaunch(s, {
+          boat: (boat) => {
+            boat.stuckProvisioning = true;
+          },
+        });
+        try {
+          o.boat.blockDeletions = true;
+          // Long enough for each close to poll the operation once (polls are 1 s apart).
+          const { owner } = await execute(s.final([], o.api, 1_100));
+          const polls = () =>
+            o.boat.requests.filter((r) => r.startsWith("GET /api/v1/deletion-operations/")).length;
+          expect(await execute(owner.closeUnbound(s.input.consumer.runId, o.sandboxId))).toBe(
+            "pending",
+          );
+          expect(await execute(owner.closeUnbound(s.input.consumer.runId, o.sandboxId))).toBe(
+            "pending",
+          );
+          // Boat was asked, and answered blocked each time; the 404 VM never stood in for completion.
+          expect(polls()).toBeGreaterThanOrEqual(2);
+          expect(
+            await execute(s.runtimes.getRuntimeInstanceByRunId(s.input.consumer.runId)),
+          ).toMatchObject({ removedAt: null });
+          o.boat.unblockDeletions();
+          expect(await execute(owner.closeUnbound(s.input.consumer.runId, o.sandboxId))).toBe(
+            "closed",
+          );
+        } finally {
+          await o.boat.close();
+        }
+      }),
+    15_000,
+  );
 
   it(
     "bounds the deletion wait even when a deletion read stalls (review of #508)",
