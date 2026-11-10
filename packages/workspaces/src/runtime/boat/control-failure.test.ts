@@ -5,7 +5,11 @@ import { Effect } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 
-import { SealantRuntime, SealantRuntimeControlLive } from "../../sealantd/runtime.js";
+import {
+  SealantControlError,
+  SealantRuntime,
+  SealantRuntimeControlLive,
+} from "../../sealantd/runtime.js";
 import { BoatReadinessError } from "../../worker/boat-readiness.js";
 import { BoatSecret } from "./config.js";
 import { BoatExecutionError, createBoatGuestTransport } from "./execution.js";
@@ -103,5 +107,20 @@ describe("Boat control probe failure", () => {
     expect(new BoatReadinessError("unavailable", diagnostic).message).toContain(
       JSON.stringify(control),
     );
+  });
+
+  it("keeps the operation and code of a daemon's own refusal after readiness, never its message", () => {
+    // VM 131 runs 8 and 9: sealantd refused the credential-file exec, and the launch said only
+    // `SealantControlError`.
+    const refusal = new SealantControlError({
+      operation: "exec",
+      code: 9,
+      message: "process start failed: /home/dev/.codex is not writable",
+    });
+    expect(boatLaunchDiagnostic(refusal, "credentials")).toEqual({
+      step: "credentials",
+      errorClass: "SealantControlError",
+      control: { operation: "exec", daemonCode: 9 },
+    });
   });
 });

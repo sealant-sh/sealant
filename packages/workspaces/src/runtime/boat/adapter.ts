@@ -12,6 +12,8 @@ import { Effect, Redacted, type ManagedRuntime } from "effect";
 import { z } from "zod";
 
 import { nativeWorkspaceInstallation } from "../../buildkit/buildkit-builder.js";
+import { safeCommandTail } from "../../images/boat/command-diagnostics.js";
+import { SealantControlError } from "../../sealantd/runtime.js";
 import { BoatReadiness } from "../../worker/boat-readiness.js";
 import { liveControlChannel, type ControlChannel } from "../kubernetes/adapter.js";
 import {
@@ -184,6 +186,14 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
         },
       });
     } catch (error) {
+      // The diagnostic is an allowlist with no free text. What sealantd itself said when it refused
+      // an operation goes to the worker's log, where an operator can read it.
+      if (error instanceof SealantControlError)
+        console.warn(`Boat launch · run ${raw.runId ?? "unknown"}: sealantd refused at ${step}`, {
+          operation: error.operation,
+          code: error.code,
+          message: safeCommandTail(error.message),
+        });
       if (identity === undefined && raw.runId !== undefined) {
         try {
           identity = await this.locate({ runId: raw.runId });
