@@ -47,7 +47,7 @@ import {
   type Project,
 } from "./scenario.js";
 import { startStack, type HarnessStack } from "./stack.js";
-import { cleanStopsInOnePass } from "./stop-scenario.js";
+import { cleanStopsInOnePass, noResourcesStopsInOnePass } from "./stop-scenario.js";
 
 let stack: HarnessStack;
 let project: Project;
@@ -324,6 +324,11 @@ describe("workspaces without resources", () => {
 describe("a ready session's daemon and its deletion", () => {
   scenario("two clean Stops, each closed in one pass", undefined, () =>
     cleanStopsInOnePass(stack, project),
+  );
+  scenario(
+    "no resources: six clean Stops across the sweep period, each in one pass",
+    undefined,
+    () => noResourcesStopsInOnePass(stack, project),
   );
   scenario("agent unreachable, then 503, for a few polls: the session goes on", undefined, () =>
     agentBrieflyUnreachable(stack, project),

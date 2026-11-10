@@ -25,6 +25,15 @@ import type { HarnessStack } from "./stack.js";
  */
 export const ONE_PASS_BOUND_MS = 25_000;
 
+/**
+ * How long after `stopped` the log is still read: a closer that met another one can fail its pass
+ * after the workspace already reads `stopped` (3 s later, on a live no-resources Stop).
+ */
+const LATE_PASS_MS = 10_000;
+
+/** Boat's lifecycle sweep runs every 30 s (`apps/worker/src/workers/workspaces.ts`). */
+const SWEEP_PERIOD_MS = 30_000;
+
 /** What a close pass that did not finish logs, for the run or naming no run at all. */
 const FAILED_PASS = /Boat FINAL close: [a-z-]+|outcome nobody knows/;
 const NAMES_A_RUN = /run [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
@@ -48,7 +57,8 @@ const entriesSince = async (stack: HarnessStack, offset: number) => {
 
 /**
  * The owner's Stop of a ready launch, closed in one pass: Mend sees `stopped` within
- * `ONE_PASS_BOUND_MS`, and the worker logged no failed close pass for the run while it closed.
+ * `ONE_PASS_BOUND_MS`, and the worker logged no failed close pass for the run while it closed or
+ * in the `LATE_PASS_MS` after.
  */
 export const stopInOnePass = async (stack: HarnessStack, run: Launch) => {
   const offset = (await stat(workerLog(stack))).size;
@@ -61,6 +71,7 @@ export const stopInOnePass = async (stack: HarnessStack, run: Launch) => {
     500,
   );
   const took = Date.now() - stoppedAt;
+  await new Promise((done) => setTimeout(done, LATE_PASS_MS));
   const entries = (await entriesSince(stack, offset)).filter(
     (entry) => entry.includes(run.runId) || !NAMES_A_RUN.test(entry),
   );
@@ -97,5 +108,43 @@ export const cleanStopsInOnePass = async (stack: HarnessStack, project: Project)
   if (failures.length > 0)
     throw new Error(
       `${failures.length} of 2 clean Stops needed more than one pass:\n${failures.join("\n")}`,
+    );
+};
+
+/**
+ * A run without resources has no gateway host lock or tunnel freeze to serialize its closers, so
+ * the Stop's close and the lifecycle sweep's close of the same run can meet (a live Stop on main
+ * failed its pass with `Boat FINAL close: held` after the sweep finished the deletion). Six
+ * sessions, each stopped at a different phase of the sweep's 30 s period (5 s apart, from the same
+ * reference), so some Stop has the sweep's tick land inside its close: each must close in one pass.
+ */
+export const noResourcesStopsInOnePass = async (stack: HarnessStack, project: Project) => {
+  const sessions = 6;
+  const reference = Date.now();
+  const failures: string[] = [];
+  const times: string[] = [];
+  for (let session = 0; session < sessions; session++) {
+    const run = await launch(stack, project, { resources: "none" });
+    const outcome = await awaitOutcome(stack, run, 30 * 60_000);
+    if (outcome.status !== "ready")
+      throw new Error(
+        `launch ended ${outcome.status} with ${JSON.stringify(outcome.view)}; guest: ${await guestEvidence(stack, run.runId)}`,
+      );
+    const phase = (session * SWEEP_PERIOD_MS) / sessions;
+    const wait =
+      (phase - ((Date.now() - reference) % SWEEP_PERIOD_MS) + SWEEP_PERIOD_MS) % SWEEP_PERIOD_MS;
+    await new Promise((done) => setTimeout(done, wait));
+    try {
+      const took = await stopInOnePass(stack, run);
+      times.push(`phase ${phase / 1000} s: ${(took / 1000).toFixed(1)} s`);
+    } catch (error) {
+      times.push(`phase ${phase / 1000} s: failed`);
+      failures.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  process.stderr.write(`[boat-harness] no-resources Stops: ${times.join("; ")}\n`);
+  if (failures.length > 0)
+    throw new Error(
+      `${failures.length} of ${sessions} no-resources Stops needed more than one pass (${times.join("; ")}):\n${failures.join("\n")}`,
     );
 };
