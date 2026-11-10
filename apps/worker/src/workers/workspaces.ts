@@ -532,7 +532,10 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
             env.SEALANT_BOAT_GATEWAY_RELAY_HOST === undefined
               ? boatTunnelCarrierAbsent
               : makeBoatTunnelCarrierLayer({ log: (message) => console.log(message) }),
-            Layer.succeed(BoatFinalCloseProvider, { api: api.value }),
+            Layer.succeed(BoatFinalCloseProvider, {
+              api: api.value,
+              parksRetained: env.SEALANT_BOAT_AUTOMATIC_PARKING,
+            }),
             Layer.succeed(BoatParkingProvider, {
               api: api.value,
               automaticParkingEnabled: env.SEALANT_BOAT_AUTOMATIC_PARKING,

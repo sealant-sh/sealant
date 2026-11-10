@@ -83,11 +83,14 @@ When FINAL drains but the daemon cannot confirm the work saved (`unconfirmed`, `
 and records the retention on the run's capture root (`retained_at`, with why). With automatic
 parking on, that record is what enrolls the session for parking: the parking sweep takes over its
 lineage, and the session is parked only once `SEALANT_BOAT_PARKING_DELAY_SECONDS` have passed since
-the retention. From enrollment on, the lifecycle sweep leaves the run to parking. With automatic
-parking off nothing is enrolled: the lifecycle sweep keeps retrying FINAL and closes the session
-once it saves. A FINAL whose queue is still moving, or one another close holds, records nothing; the
-close that owns the drain decides. The agent's refusals and a pending recovery boot keep the VM
-without recording a retention.
+the retention. Once the retention is recorded, a close (the stop job's or the lifecycle sweep's)
+asks the guest nothing more and holds no drain lease, because parking cannot enroll a row a drain
+holds; only the owner's discard or an attestation still closes the VM. From enrollment on, the
+lifecycle sweep leaves the run to parking. With automatic parking off nothing is enrolled: the
+lifecycle sweep keeps retrying FINAL and closes the session once it saves. Either way the legacy
+recovery sweep never takes a Boat run. A FINAL whose queue is still moving, or one another close
+holds, records nothing; the close that owns the drain decides. The agent's refusals and a pending
+recovery boot keep the VM without recording a retention.
 
 ## Exact cleanup and retry
 

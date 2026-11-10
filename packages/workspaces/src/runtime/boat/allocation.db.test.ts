@@ -255,6 +255,7 @@ const test = async (
       script: readonly CaptureDaemonScriptEntry[],
       boatApi?: HttpBoatApi,
       deletionWaitMs?: number,
+      parksRetained?: boolean,
     ) => Effect.Effect<{
       owner: BoatFinalClose["Service"];
       daemon: ReturnType<typeof fakeCaptureDaemon>;
@@ -462,7 +463,7 @@ const test = async (
             resourceOwner,
             readiness: Context.get(context, BoatReadiness),
             canonical: captureRepo,
-            final: (script, boatApi = api.value, deletionWaitMs = 0) =>
+            final: (script, boatApi = api.value, deletionWaitMs = 0, parksRetained = false) =>
               Effect.gen(function* () {
                 const daemon = fakeCaptureDaemon(script);
                 const layer = boatFinalCloseLayerNoDeps.pipe(
@@ -477,7 +478,11 @@ const test = async (
                       Layer.succeed(BoatExecution, executor),
                       Layer.succeed(SealantDB, db),
                       hostLayer(),
-                      Layer.succeed(BoatFinalCloseProvider, { api: boatApi, deletionWaitMs }),
+                      Layer.succeed(BoatFinalCloseProvider, {
+                        api: boatApi,
+                        deletionWaitMs,
+                        parksRetained,
+                      }),
                       BoatObservationRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, db))),
                       WorkspaceAttemptRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, db))),
                       boatDischargeLayerNoDeps.pipe(
@@ -2222,6 +2227,61 @@ describe.runIf(databaseUrl !== undefined)(
           state: "stopped",
           retainedAt: null,
         });
+      }));
+    it("a close in flight keeps parking from enrolling the session, so with parking on a recorded retention is left to parking (harness: park and resume, P1b)", () =>
+      test(async (s) => {
+        const { target, parking } = await keptByStop(s);
+        const contract = async () =>
+          (await execute(s.canonical.getByRunId(target.runId)))?.custodyContract;
+        // The next close of the kept session, its FINAL still in flight while the parking sweep
+        // runs: the guard refuses to enroll a row a drain holds.
+        const reached = await execute(Deferred.make<void>()),
+          open = await execute(Deferred.make<void>());
+        const draining = await execute(
+          s.final([
+            {
+              gated: captureStatus({ complete: false, incompleteReason: "ship-failed" }),
+              reached,
+              open,
+            },
+          ]),
+        );
+        const inFlight = execute(draining.owner.close(target));
+        await execute(Deferred.await(reached));
+        expect((await execute(s.canonical.getByRunId(target.runId)))?.leaseOwner).not.toBeNull();
+        expect(await execute(parking.reconcile())).toEqual([]);
+        expect(await contract()).toBeNull();
+        await execute(Deferred.succeed(open, undefined));
+        expect(await inFlight).toBe("retained");
+        // With parking on the close leaves a recorded retention alone: no FINAL, no lease.
+        const leaving = await execute(
+          s.final(
+            [captureStatus({ complete: false, incompleteReason: "ship-failed" })],
+            undefined,
+            0,
+            true,
+          ),
+        );
+        expect(await execute(leaving.owner.close(target))).toBe("retained");
+        expect(leaving.daemon.calls).toEqual([]);
+        expect((await execute(s.canonical.getByRunId(target.runId)))?.leaseOwner).toBeNull();
+        expect(await execute(parking.reconcile())).toEqual([]);
+        expect(await contract()).toBe(3);
+        // Nothing was removed on the way: the VM is parking's to save.
+        expect(s.provider.deleteCalls).toBe(0);
+      }));
+    it("never hands a retained Boat session to the legacy recovery sweep, with parking on or off (P1b)", () =>
+      test(async (s) => {
+        const { target } = await keptByStop(s, false);
+        expect((await execute(s.canonical.getByRunId(target.runId)))?.retainedAt).toBeInstanceOf(
+          Date,
+        );
+        expect(
+          (await execute(s.canonical.listRetainedDue({ limit: 100 }))).map((row) => row.runId),
+        ).not.toContain(target.runId);
+        expect(
+          await execute(s.canonical.listRetainedDue({ limit: 100, runIds: [target.runId] })),
+        ).toEqual([]);
       }));
     it("parks a session its Stop kept once the parking delay has passed (harness: park and resume)", () =>
       test(async (s) => {

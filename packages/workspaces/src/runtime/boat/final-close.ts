@@ -92,6 +92,13 @@ export class BoatFinalCloseProvider extends Context.Service<
      * recorded by the close that issued it rather than a later sweep. Default 20 s.
      */
     readonly deletionWaitMs?: number;
+    /**
+     * Automatic parking is on (`SEALANT_BOAT_AUTOMATIC_PARKING`): a session whose retention is
+     * recorded belongs to parking, which enrolls it. The close then drains it no more, so it holds
+     * no drain lease (an occupied row cannot be enrolled). Default false: the close keeps
+     * retrying FINAL.
+     */
+    readonly parksRetained?: boolean;
   }
 >()("@sealant/workspaces/boat/BoatFinalCloseProvider") {}
 
@@ -305,6 +312,16 @@ const make: Effect.Effect<
     // never materialized a capture (sealantd exit 76, `daemon`) or never started on this boot
     // (`no-launch`). Typed by the agent, never inferred; the basis names which.
     let nothingToSave: "nothing-to-save" | "never-launched" | null = null;
+    // Kept, recorded, and parking is on: parking takes the session from here (its enrollment
+    // needs the row free of any drain lease). The owner's discard or an attestation still closes
+    // it above; nothing else is asked of the guest.
+    if (
+      provider.parksRetained === true &&
+      root?.retainedAt != null &&
+      root.deletionState !== "deleting-issued" &&
+      !decided
+    )
+      return "retained" as const;
     if (root?.deletionState !== "deleting-issued" && !decided) {
       // The agent's typed refusals (another boot, a parked disk, an agent that did not launch
       // this boot) are definite answers: the capture cannot be recovered here, the VM is kept.

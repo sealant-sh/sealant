@@ -23,7 +23,8 @@ being parked, so a retained session that is not enrolled stays with the lifecycl
 retries its FINAL. `SEALANT_BOAT_PARKING_DELAY_SECONDS` defaults to 3600 and accepts 300
 through 604800. The first episode freezes its policy. A resumed incarnation gets a new delay under
 that same policy when it is retained again. API stop addresses canonical custody before the legacy
-stopped-workspace no-op. The legacy recovery sweep excludes enrolled roots.
+stopped-workspace no-op. The legacy recovery sweep excludes enrolled roots and every Boat run. An
+enrollment that fails is logged once per distinct cause and retried on the next sweep.
 
 ## Custody transfer
 

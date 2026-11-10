@@ -385,7 +385,7 @@ export interface WorkspaceCaptureDrainRepoService {
   /**
    * Retained executors whose next recovery attempt is due and that nobody is recovering now (no
    * live recovery lease): the one whose runtime ends soonest first (its platform deadline, review
-   * 9 #8), then the most overdue.
+   * 9 #8), then the most overdue. Never a Boat run: Boat parking or the Boat close owns those.
    */
   readonly listRetainedDue: (input: {
     readonly limit: number;
@@ -1328,6 +1328,10 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
               and(
                 isNotNull(workspaceCaptureDrains.retainedAt),
                 isNull(workspaceCaptureDrains.custodyContract),
+                // A retained Boat session is parking's (automatic parking on) or the Boat close's
+                // (off), never this sweep's: it cannot restart one, and its recovery lease would
+                // keep parking from enrolling the session.
+                sql`${workspaceRuntimeInstances.adapter} is distinct from 'boat'`,
                 or(
                   isNull(workspaceCaptureDrains.nextRecoveryAt),
                   lte(workspaceCaptureDrains.nextRecoveryAt, sql`now()`),

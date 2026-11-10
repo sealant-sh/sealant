@@ -14,7 +14,7 @@ import {
 } from "@sealant/db";
 import type { BoatExecutionTarget } from "@sealant/validators";
 import { boatExecutionTargetSchema } from "@sealant/validators";
-import { Context, Effect, Layer, Redacted, Clock } from "effect";
+import { Cause, Context, Effect, Layer, Redacted, Clock } from "effect";
 import { z } from "zod";
 
 import { SealantRuntime } from "../../sealantd/runtime.js";
@@ -561,6 +561,8 @@ const make: Effect.Effect<BoatParking["Service"], never, ParkingDependencies> = 
         ).pipe(Effect.ensuring(releaseClaim(claim))),
       );
     let enrollmentAfter: string | undefined;
+    /** What each run's enrollment last failed on, so a source that keeps failing is said once. */
+    const enrollmentFailures = new Map<string, string>();
     return BoatParking.of({
       retain: (target) => boundary(retain(target)),
       resume: (runId) =>
@@ -629,7 +631,18 @@ const make: Effect.Effect<BoatParking["Service"], never, ParkingDependencies> = 
                   },
                   policy,
                 );
-              }).pipe(Effect.catch(() => Effect.void)),
+                enrollmentFailures.delete(runId);
+              }).pipe(
+                Effect.catch((error) => {
+                  const why = error.message;
+                  if (enrollmentFailures.get(runId) === why) return Effect.void;
+                  enrollmentFailures.set(runId, why);
+                  return Effect.logWarning(
+                    `Boat parking · run ${runId}: enrolling the retained session failed (${why}); the next sweep tries again.`,
+                    Cause.fail(error),
+                  );
+                }),
+              ),
             );
             const claims = yield* custody.claimDue(10);
             return yield* Effect.forEach(claims, (claim) =>
