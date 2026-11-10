@@ -20,6 +20,12 @@ export type AgentHost = (typeof AGENT_HOSTS)[number];
 
 export const BOAT_AGENT_PARK_ROUTE = "/sealant/park";
 export const BOAT_AGENT_NETWORK_ROUTE = "/sealant/network";
+/**
+ * The resource tunnel's WebSocket carrier (Boat agents that list `websocket` in `carriers`): Core
+ * opens it through Boat's hosted HTTPS with the control token, and each binary frame is one
+ * WireGuard datagram, either way. The gateway's host then needs no inbound port.
+ */
+export const BOAT_AGENT_TUNNEL_ROUTE = "/sealant/tunnel";
 
 /** Where the agent keeps what must survive an agent restart on the same boot. */
 export const BOAT_AGENT_DATA_DIR = "/var/lib/sealant/agent";
@@ -221,6 +227,15 @@ export const boatAgentNetworkRequestSchema = z.strictObject({
 });
 export type BoatAgentNetworkRequest = z.infer<typeof boatAgentNetworkRequestSchema>;
 
+/**
+ * `POST /sealant/network` with the tunnel carried over `/sealant/tunnel`: the same body with
+ * `carrier: "websocket"` in place of the gateway's endpoint and port.
+ */
+export const boatAgentCarriedNetworkRequestSchema = boatAgentNetworkRequestSchema
+  .omit({ endpoint: true, port: true })
+  .extend({ carrier: z.literal("websocket") });
+export type BoatAgentCarriedNetworkRequest = z.infer<typeof boatAgentCarriedNetworkRequestSchema>;
+
 export const BOAT_AGENT_NETWORK_REFUSALS = [
   "invalid-network-config",
   "invalid-network-key",
@@ -267,6 +282,10 @@ export const boatAgentNetworkStatusSchema = z.strictObject({
       received: z.number().int().nonnegative(),
     })
     .optional(),
+  /** How this agent can carry the tunnel. Absent from agents that only dial the gateway (UDP). */
+  carriers: z.array(z.enum(["udp", "websocket"])).optional(),
+  /** Carried over `/sealant/tunnel`: whether Core's end is attached now. */
+  carrier_attached: z.boolean().optional(),
 });
 export type BoatAgentNetworkStatus = z.infer<typeof boatAgentNetworkStatusSchema>;
 

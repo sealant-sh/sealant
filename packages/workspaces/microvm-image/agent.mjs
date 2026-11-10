@@ -60,6 +60,10 @@ const HOOK_PREFIX = "/aws/lambda-microvms/runtime/v1";
 const LAUNCH_ROUTE = "/sealant/launch";
 const HEALTH_ROUTE = "/sealant/health";
 const CONTROL_ROUTE = "/sealant/control";
+/** Boat: the resource tunnel's WebSocket carrier (one WireGuard datagram per binary frame). */
+const TUNNEL_ROUTE = "/sealant/tunnel";
+/** A carrier that cannot take more is dropping datagrams, as UDP would: never buffering them. */
+const TUNNEL_BACKLOG_BYTES = 1024 * 1024;
 const RECOVER_ROUTE = "/sealant/recover";
 const RECOVER_CONTRACT_VERSION = 1;
 // Boat host mode only (`src/runtime/boat/agent-contract.ts`).
@@ -1793,6 +1797,81 @@ const handleControlUpgrade = (req, socket, head) => {
   });
 };
 
+/**
+ * Boat: `/sealant/tunnel`, the resource tunnel's carrier. Core opens it through Boat's hosted HTTPS
+ * with the control token and relays it to the gateway on its own host, so neither the VM nor the
+ * gateway's host takes an inbound connection. Each binary frame is one WireGuard datagram, either
+ * way; anything else but ping and close ends it. One carrier at a time: a newer one replaces this.
+ */
+const handleTunnelUpgrade = (req, socket, head) => {
+  const refuse = (status, text) => {
+    socket.end(
+      `HTTP/1.1 ${status} ${text}\r\nconnection: close\r\ncontent-type: text/plain\r\ncontent-length: ${Buffer.byteLength(text)}\r\n\r\n${text}`,
+    );
+    setTimeout(() => socket.destroy(), 1_000).unref();
+  };
+  arm();
+  if (!bearerMatches(req.headers.authorization, state.controlToken)) {
+    return refuse(401, "control token does not match");
+  }
+  const relay = boatHost.tunnelRelay();
+  if (relay === null) return refuse(409, "tunnel-not-carried");
+  const key = req.headers["sec-websocket-key"];
+  if (typeof key !== "string" || req.headers.upgrade?.toLowerCase() !== "websocket") {
+    return refuse(400, "not a websocket upgrade");
+  }
+  const accept = createHash("sha1").update(`${key}${WS_GUID}`).digest("base64");
+  socket.write(
+    [
+      "HTTP/1.1 101 Switching Protocols",
+      "upgrade: websocket",
+      "connection: Upgrade",
+      `sec-websocket-accept: ${accept}`,
+      "",
+      "",
+    ].join("\r\n"),
+  );
+  socket.setNoDelay(true);
+  const carrier = relay.attach({
+    send: (datagram) => {
+      if (socket.writableLength > TUNNEL_BACKLOG_BYTES) return;
+      socket.write(encodeFrame(0x2, datagram));
+    },
+    // 1012 (service restart): a newer carrier took over.
+    replaced: () => socket.end(encodeFrame(0x8, Buffer.from([0x03, 0xf4]))),
+  });
+  log("tunnel: carrier attached");
+  let pending = Buffer.alloc(0);
+  const onData = (chunk) => {
+    pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk]);
+    let parsed;
+    try {
+      parsed = parseFrames(pending);
+    } catch {
+      socket.destroy();
+      return;
+    }
+    pending = parsed.rest;
+    for (const frame of parsed.frames) {
+      if (frame.opcode === 0x2) carrier.deliver(frame.payload);
+      else if (frame.opcode === 0x9) socket.write(encodeFrame(0xa, frame.payload));
+      else if (frame.opcode === 0xa) continue;
+      else {
+        // A close, or a frame the carrier does not speak.
+        socket.end(encodeFrame(0x8, Buffer.from([0x03, 0xe8])));
+        return;
+      }
+    }
+  };
+  if (head.length > 0) onData(head);
+  socket.on("data", onData);
+  socket.on("error", () => socket.destroy());
+  socket.on("close", () => {
+    carrier.detach();
+    log("tunnel: carrier detached");
+  });
+};
+
 // --------------------------------------------------------------------------------------------
 // Server
 // --------------------------------------------------------------------------------------------
@@ -1819,8 +1898,8 @@ const server = http.createServer((req, res) => {
     if (BOAT && (req.method === "POST" || req.method === "GET") && url === NETWORK_ROUTE) {
       return handleNetwork(req, res);
     }
-    if (url === CONTROL_ROUTE) {
-      return message(res, 426, "the control route only speaks WebSocket");
+    if (url === CONTROL_ROUTE || (BOAT && url === TUNNEL_ROUTE)) {
+      return message(res, 426, "this route only speaks WebSocket");
     }
     return message(res, 404, "unknown route");
   };
@@ -1838,6 +1917,10 @@ const server = http.createServer((req, res) => {
 });
 
 server.on("upgrade", (req, socket, head) => {
+  if (BOAT && req.url === TUNNEL_ROUTE) {
+    handleTunnelUpgrade(req, socket, head);
+    return;
+  }
   if (req.url !== CONTROL_ROUTE) {
     socket.write("HTTP/1.1 404 Not Found\r\nconnection: close\r\n\r\n");
     socket.destroy();

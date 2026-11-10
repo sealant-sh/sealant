@@ -36,6 +36,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
+import { WebSocket } from "ws";
 import { z } from "zod";
 
 import { MICROVM_AGENT_FILES } from "../../images/microvm/recipe.js";
@@ -51,6 +52,7 @@ import {
   BOAT_AGENT_FILES,
   BOAT_AGENT_GATEWAY_ADDRESS,
   BOAT_AGENT_NETWORK_ROUTE,
+  BOAT_AGENT_TUNNEL_ROUTE,
   BOAT_AGENT_PARK_ROUTE,
   BOAT_AGENT_WIREGUARD_INTERFACE,
   boatAgentBindRecordSchema,
@@ -1318,6 +1320,33 @@ const lookup = async (
   };
 };
 
+/** A UDP port free on loopback right now. */
+const freeUdpPort = async (): Promise<number> => {
+  const socket = dgram.createSocket("udp4");
+  await new Promise<void>((resolve) => socket.bind(0, "127.0.0.1", resolve));
+  const { port } = socket.address();
+  await new Promise<void>((resolve) => socket.close(() => resolve()));
+  return port;
+};
+
+/** Core's end of the carrier, as a test drives it: datagrams in, datagrams out. */
+const openCarrier = async (agent: Agent, bearer: string) => {
+  const socket = new WebSocket(`ws://127.0.0.1:${String(agent.port)}${BOAT_AGENT_TUNNEL_ROUTE}`, {
+    headers: { authorization: `Bearer ${bearer}` },
+  });
+  const received: Buffer[] = [];
+  const closed = new Promise<number>((resolve) => socket.once("close", (code) => resolve(code)));
+  socket.on("message", (data: Buffer) => received.push(Buffer.from(data)));
+  await new Promise<void>((resolve, reject) => {
+    socket.once("open", () => resolve());
+    socket.once("unexpected-response", (_request, response) =>
+      reject(new Error(`carrier refused: ${String(response.statusCode)}`)),
+    );
+    socket.once("error", reject);
+  });
+  return { socket, received, closed };
+};
+
 describe("boat agent · network", () => {
   it("validates the config the way the Python guest did", async () => {
     const vm = await createVm();
@@ -1509,6 +1538,96 @@ describe("boat agent · network", () => {
     expect(await exists(path.join(plain.dataDir, "resolv.conf.orig"))).toBe(false);
   });
 
+  it("carries the tunnel over /sealant/tunnel: WireGuard's datagrams to Core and back, nothing else", async () => {
+    const vm = await createVm();
+    const bearer = await bindVm(vm);
+    const wireguardPort = await freeUdpPort();
+    const env = { SEALANT_AGENT_TUNNEL_WG_PORT: String(wireguardPort) };
+    const agent = await startAgent(vm, env);
+    // Before any config: the agent says it can carry the tunnel, and has nothing to carry yet.
+    const before = await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer });
+    expect(boatAgentNetworkStatusSchema.parse(before.body).carriers).toEqual(["udp", "websocket"]);
+    await expect(openCarrier(agent, bearer)).rejects.toThrow("carrier refused: 409");
+    // The carried config names no endpoint, and an endpoint beside the carrier is refused.
+    const body: Record<string, unknown> = {
+      ...Object.fromEntries(
+        Object.entries(networkBody()).filter(([key]) => key !== "endpoint" && key !== "port"),
+      ),
+      carrier: "websocket",
+    };
+    const mixed = await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, {
+      body: { ...body, endpoint: "203.0.113.10" },
+      bearer,
+    });
+    expect(mixed).toEqual({ status: 400, body: { reason: "invalid-network-config" } });
+    expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
+      200,
+    );
+    const gatewayKey = z.string().parse(body["gateway_key"]);
+    const set = (await netLines(vm)).find((line) => line.startsWith("wg set "));
+    const relayPort = Number(/endpoint 127\.0\.0\.1:(\d+) /.exec(set ?? "")?.[1] ?? Number.NaN);
+    expect(set).toMatch(
+      new RegExp(
+        `^wg set ${BOAT_AGENT_WIREGUARD_INTERFACE} listen-port ${String(wireguardPort)} private-key \\S+ peer ${gatewayKey.replace(/[+/]/g, "\\$&")} endpoint 127\\.0\\.0\\.1:\\d+ allowed-ips`,
+      ),
+    );
+    expect(Number.isInteger(relayPort)).toBe(true);
+
+    // WireGuard, as the relay sees it: datagrams from its own port.
+    const wireguard = dgram.createSocket("udp4");
+    await new Promise<void>((resolve) => wireguard.bind(wireguardPort, "127.0.0.1", resolve));
+    const toWireguard: Buffer[] = [];
+    wireguard.on("message", (message) => toWireguard.push(message));
+    try {
+      expect(
+        boatAgentNetworkStatusSchema.parse(
+          (await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer })).body,
+        ).carrier_attached,
+      ).toBe(false);
+      await expect(openCarrier(agent, "f".repeat(64))).rejects.toThrow("carrier refused: 401");
+      const core = await openCarrier(agent, bearer);
+      expect(
+        boatAgentNetworkStatusSchema.parse(
+          (await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer })).body,
+        ).carrier_attached,
+      ).toBe(true);
+      // Out: a handshake initiation from WireGuard reaches Core as one binary frame.
+      wireguard.send(Buffer.from("initiation"), relayPort, "127.0.0.1");
+      await waitFor(async () => core.received.length === 1);
+      expect(core.received[0]?.toString()).toBe("initiation");
+      // In: Core's frame reaches WireGuard's own port.
+      core.socket.send(Buffer.from("response"));
+      await waitFor(async () => toWireguard.length === 1);
+      expect(toWireguard[0]?.toString()).toBe("response");
+      // Anything else on the VM sending to the relay is not WireGuard, and goes nowhere.
+      const stranger = dgram.createSocket("udp4");
+      await new Promise<void>((resolve) => stranger.bind(0, "127.0.0.1", resolve));
+      stranger.send(Buffer.from("not-wireguard"), relayPort, "127.0.0.1");
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      stranger.close();
+      expect(core.received.map(String)).toEqual(["initiation"]);
+      // A newer carrier takes over; the older is closed with 1012 (restart).
+      const newer = await openCarrier(agent, bearer);
+      expect(await core.closed).toBe(1012);
+      wireguard.send(Buffer.from("keepalive"), relayPort, "127.0.0.1");
+      await waitFor(async () => newer.received.length === 1);
+      expect(newer.received[0]?.toString()).toBe("keepalive");
+
+      // An agent restarted on the same boot binds the relay where WireGuard's peer still points.
+      newer.socket.close();
+      await stopAgent(agent);
+      const restarted = await startAgent(vm, env);
+      const after = await openCarrier(restarted, bearer);
+      wireguard.send(Buffer.from("after-restart"), relayPort, "127.0.0.1");
+      await waitFor(async () => after.received.length === 1);
+      expect(after.received[0]?.toString()).toBe("after-restart");
+      expect((await netLines(vm)).filter((line) => line.startsWith("wg set "))).toHaveLength(1);
+      after.socket.close();
+    } finally {
+      wireguard.close();
+    }
+  });
+
   it("resolves resource names through the gateway and every other name through the VM's own resolver", async () => {
     // The gateway answers its reach network's names and nothing else (no upstream: SERVFAIL); the
     // VM's own resolver answers public names. On the gateway alone a public name never resolved
@@ -1629,6 +1748,7 @@ describe("boat agent · network", () => {
         dns: "unavailable",
         docker_policy: "absent",
         transfer: { sent: 296, received: 148 },
+        carriers: ["udp", "websocket"],
       });
     } finally {
       await silent.close();
@@ -1681,6 +1801,7 @@ describe("boat agent · network", () => {
         handshake: "unverified",
         dns: "unavailable",
         docker_policy: "absent",
+        carriers: ["udp", "websocket"],
       });
       expect((await call(agent, "POST", BOAT_AGENT_NETWORK_ROUTE, { body, bearer })).status).toBe(
         200,
@@ -1691,6 +1812,7 @@ describe("boat agent · network", () => {
         handshake: "verified",
         dns: "udp-and-tcp",
         docker_policy: "absent",
+        carriers: ["udp", "websocket"],
       });
       expect(
         (await netLines(vm)).filter(
@@ -1714,6 +1836,7 @@ describe("boat agent · network", () => {
           handshake: "unverified",
           dns: "unavailable",
           docker_policy: "absent",
+          carriers: ["udp", "websocket"],
         });
       } finally {
         await wrong.close();
