@@ -66,6 +66,11 @@ export class BoatDischarge extends Context.Service<
       | { readonly kind: "pending"; readonly blockers: readonly BoatDischargeBlocker[] }
       | { readonly kind: "not-absent" }
     >;
+    /**
+     * Releases the publication pins no VM will ever discharge: runs that never got a Boat
+     * allocation (a failed or abandoned native build, a stop first) and are over. Idempotent.
+     */
+    readonly releaseEndedPins: (input: { readonly limit: number }) => Effect.Effect<number>;
   }
 >()("@sealant/workspaces/boat/BoatDischarge") {}
 
@@ -201,7 +206,26 @@ const make = Effect.gen(function* () {
       ? ({ kind: "discharged" } as const)
       : ({ kind: "pending", blockers } as const);
   });
-  return BoatDischarge.of({ discharge });
+  const releaseEndedPins = Effect.fn("BoatDischarge.releaseEndedPins")(function* (input: {
+    readonly limit: number;
+  }) {
+    const ended = yield* catalog
+      .endedUnallocatedConsumers({ deploymentId: host.deploymentId, limit: input.limit })
+      .pipe(Effect.orElseSucceed(() => []));
+    let released = 0;
+    for (const { consumer, publicationId } of ended) {
+      // The guarded release keeps the catalog's lock order and refuses anything still pinned.
+      const result = yield* Effect.exit(catalog.release(consumer, publicationId));
+      if (Exit.isSuccess(result)) released += 1;
+      else
+        yield* Effect.logWarning(
+          `Boat discharge · run ${consumer.runId}: its ended, unallocated publication pin was not released; retried on the next pass.`,
+          result.cause,
+        );
+    }
+    return released;
+  });
+  return BoatDischarge.of({ discharge, releaseEndedPins });
 });
 
 export const boatDischargeLayerNoDeps: Layer.Layer<

@@ -649,6 +649,8 @@ const make: Effect.Effect<
   ) {
     if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 20)
       return yield* Effect.fail(new BoatFinalCloseError("held"));
+    // Pins with no allocation are no VM's to discharge; release the ones whose run is over.
+    yield* discharger.releaseEndedPins({ limit: 20 });
     const ids = yield* allocations.list({ deploymentId: host.deploymentId, ...input });
     const entries = yield* Effect.forEach(
       ids,

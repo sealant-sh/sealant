@@ -3925,6 +3925,54 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
       }),
     15_000,
   );
+
+  it("releases the consumer pin of a launch whose native build failed, once the run is over (harness: snapshot save fails)", () =>
+    test(async (s) => {
+      // The launch pinned its publication, the build failed (no allocation was ever made), and
+      // the run ended. Nothing else holds the pin.
+      const runId = s.input.consumer.runId;
+      await execute(
+        s.runtimes.upsertRuntimeInstance({
+          runId,
+          adapter: "boat",
+          status: "pending",
+          sourceKind: "capture",
+          publication: s.input.publication,
+          imageScope: s.input.scope,
+        }),
+      );
+      await execute(holdBoatLaunch(s.db, runId));
+      const { owner } = await execute(s.final([]));
+      // While the launch is in flight its pin is its own.
+      await execute(owner.reconcile({ limit: 20 }));
+      expect((await execute(nativeConsumerRows(s.db, runId)))[0]?.state).toBe("pending");
+      await execute(
+        s.runtimes.upsertRuntimeInstance({
+          runId,
+          status: "failed",
+          releaseLaunch: true,
+          errorCode: "mechanism-failed",
+          errorMessage: "native build failed at install-recipe",
+        }),
+      );
+      await execute(owner.reconcile({ limit: 20 }));
+      expect((await execute(nativeConsumerRows(s.db, runId)))[0]?.state).toBe("released");
+      // Idempotent, and the owner's discard (a stopped run) settles the same way.
+      await execute(s.runtimes.markStopped({ runId, stopReason: "user" }));
+      await execute(owner.reconcile({ limit: 20 }));
+      expect((await execute(nativeConsumerRows(s.db, runId)))[0]?.state).toBe("released");
+    }));
+
+  it("leaves the pin of a run with an allocation to the lifecycle that owns that VM", () =>
+    test(async (s) => {
+      const runId = s.input.consumer.runId;
+      // The allocation exists but Boat has not been asked for a VM yet; it is not discharged.
+      await execute(s.repo.reserve(reservation(s.input)));
+      await execute(s.runtimes.upsertRuntimeInstance({ runId, adapter: "boat", status: "failed" }));
+      const { owner } = await execute(s.final([]));
+      await execute(owner.reconcile({ limit: 20 }));
+      expect((await execute(nativeConsumerRows(s.db, runId)))[0]?.state).toBe("pending");
+    }));
 });
 
 const HOUR = 60 * 60_000;
