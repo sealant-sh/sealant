@@ -39,10 +39,12 @@ The operator supplies names and values privately:
   `SEALANT_BOAT_API_KEY_FILE=/run/secrets/boat-api-key` (or `SEALANT_BOAT_API_KEY`) and
   `SEALANT_BOAT_DEPLOYMENT_ID`. Given the deployment id, the API refuses to start without the Boat
   key and names the settings; given neither, it refuses Boat requests at create.
-- Worker: `SEALANT_BOAT_GATEWAY_HOST_ID`, `SEALANT_BOAT_GATEWAY_ENDPOINT`,
+- Worker: `SEALANT_BOAT_GATEWAY_HOST_ID`, `SEALANT_BOAT_GATEWAY_RELAY_HOST`,
   `SEALANT_BOAT_GATEWAY_IMAGE`, `SEALANT_BOAT_BUILDER_OWNER`,
   `SEALANT_BOAT_STATE_DIRECTORY=/var/lib/sealant/boat`. The builder settings are what register the
   Boat adapter; with either one set, the worker refuses to start without the rest.
+- `SEALANT_BOAT_GATEWAY_ENDPOINT` is retired: every tunnel is carried over HTTPS to the relay host.
+  The worker ignores it, so it can be removed.
 - `SEALANT_BOAT_ADMISSION_OWNER_IDS` is retired. The API and the worker ignore it, so it can be
   removed.
 - `SEALANT_BOAT_AUTOMATIC_PARKING` and `SEALANT_BOAT_PARKING_DELAY_SECONDS` are retired. The worker
@@ -55,10 +57,11 @@ The operator supplies names and values privately:
 
 The container still needs the ordinary resource/Docker configuration from the existing runbook.
 Public Mend session and Garage URLs must use the approved Funnel paths on 8443 and 10000; 443 is the
-Mend origin. UDP 40000–40015 must reach the configured gateway host. This change makes no networking
-or compose edits. Boat runs in the deployment's own Boat account, so the API and the worker both
-hold its key; this supersedes the worker-only isolation that
-[sealant-sh/mend#1523](https://github.com/sealant-sh/mend/issues/1523) asked for.
+Mend origin. No UDP port needs to reach the gateway host: its ports (61000–61511) are published on
+the relay host address only. This change makes no networking or compose edits. Boat runs in the
+deployment's own Boat account, so the API and the worker both hold its key; this supersedes the
+worker-only isolation that [sealant-sh/mend#1523](https://github.com/sealant-sh/mend/issues/1523)
+asked for.
 
 ## Checked-in proof command
 

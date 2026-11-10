@@ -3,7 +3,7 @@
  * receiver, gateway, isolate, permit, ready, shell, `db:5432` through the tunnel, an edit, Stop,
  * FINAL capture, positive deletion, resume on a new VM, a byte comparison, a final Stop and empty
  * inventories. Then one fault per step, each ending with the same four checks: nothing left
- * behind, the UDP slot and publication pin released, the exact cause on the runtime row, and a
+ * behind, the tunnel slot and publication pin released, the exact cause on the runtime row, and a
  * terminal workspace for Mend within 60 s. Scenarios share one stack and one published snapshot.
  */
 import { randomBytes } from "node:crypto";
@@ -16,7 +16,6 @@ import { DEFECTS } from "./defects.js";
 import { Transcript, dockerScenario, evidenceDir } from "./docker-scenario.js";
 import { docker } from "./docker.js";
 import { scenarios } from "./faults.js";
-import { legacyUdpTunnel } from "./legacy-udp-scenario.js";
 import { runScenario, type Defect } from "./markers.js";
 import {
   assertReleased,
@@ -237,7 +236,7 @@ describe("Boat session lifecycle", () => {
 
 /**
  * The workspace's own Docker, as the owner's person: hello-world, a build, compose to `db`
- * through the tunnel, the containers' egress policy, a two-stage Node build with `npm ci`, the
+ * through the tunnel, a container reaching the Internet, a two-stage Node build with `npm ci`, the
  * VM's and the session's peak memory and tasks, and the image's VM probe. Its blueprint differs
  * from the happy path's (Docker on), so it builds and publishes its own snapshot first.
  */
@@ -285,10 +284,4 @@ describe("one fault per step", () => {
   fault("worker killed after bind", scenarios.workerKilled);
   fault("Stop after the launch", scenarios.stopAfterLaunch);
   fault("deletion stuck in processing", scenarios.deletionStuck);
-});
-
-// Isolated: deleted with the tunnel's UDP endpoint mode. Restarts the worker in that mode, and
-// back to the default (carried) when it ends.
-describe("legacy UDP tunnel", () => {
-  scenario("legacy UDP tunnel", undefined, () => legacyUdpTunnel(stack, project));
 });

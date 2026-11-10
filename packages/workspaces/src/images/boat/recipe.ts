@@ -98,7 +98,15 @@ const isAgentFile = (path: string) =>
   path === BOAT_AGENT_UNIT_PATH ||
   path === BOAT_AGENT_DOCKER_DROPIN_PATH;
 
-/** `sealant-agent.service.d/docker.conf`: the agent's Docker service, on a guest-private subnet. */
+/**
+ * `sealant-agent.service.d/docker.conf`: the agent's Docker service. Its bridge address and its
+ * address pools are the one thing the image decides about the containers' network: ranges that
+ * collide with neither the resource tunnel's addresses (`100.127.255.252/30`) nor the resource
+ * subnets a tunnel routes (`SEALANT_RESOURCE_REACH_SUBNETS`, RFC 1918), so a container's traffic to
+ * a linked resource is routed into the tunnel and not onto a Docker bridge. Nothing else is
+ * programmed: what a container may reach on Boat's network is the deployment owner's own
+ * infrastructure.
+ */
 const DOCKER_DROPIN = [
   "[Service]",
   "Environment=SEALANT_MICROVM_DOCKER_CAPABLE=1",
@@ -123,7 +131,8 @@ const systemdBaseSetup = [
   'apt-mark hold "${systemd_packages[@]}"',
   "apt-get update",
   // What the agent and the workspace's network need: WireGuard to the resource gateway, iptables
-  // for the DOCKER-USER policy, `unshare` (util-linux) for the daemon's PID namespace.
+  // and kmod for dockerd's own NAT and bridges, `unshare` (util-linux) for the daemon's PID
+  // namespace.
   "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl xz-utils ca-certificates procps util-linux iproute2 iptables kmod wireguard-tools",
   'test "$systemd_versions" = "$(dpkg-query -W -f=\'${binary:Package}=${Version}\\n\' "${systemd_packages[@]}")"',
 ];
@@ -260,7 +269,7 @@ export const createNativeRecipe = async (
         `chmod 0755 ${BOAT_AGENT_DIRECTORY}/node`,
         `${BOAT_AGENT_DIRECTORY}/node --version`,
         ")",
-        // The agent's data directory is private: bind records and park receipts live there.
+        // The agent's data directory is private: the bind and launch records live there.
         "install -d -m0700 /var/lib/sealant/agent",
         "chmod 0700 /var/lib/sealant/agent",
         `test -f ${BOAT_AGENT_MANIFEST_FILE}`,
@@ -276,8 +285,8 @@ export const createNativeRecipe = async (
         "systemctl daemon-reload",
         "systemctl enable sealant-agent.service",
         'test "$(systemctl is-enabled sealant-agent.service)" = enabled',
-        // The agent runs on the snapshot's own boots, never on the build VM: nothing is bound,
-        // launched or parked when the image is saved.
+        // The agent runs on the snapshot's own boots, never on the build VM: nothing is bound or
+        // launched when the image is saved.
         "! systemctl is-active --quiet sealant-agent.service",
         "test ! -e /var/lib/sealant/agent/bind.json",
         "test ! -e /var/lib/sealant/agent/launch.json",

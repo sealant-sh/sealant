@@ -292,7 +292,7 @@ export const takeLaunched = (): Launch[] => launched.splice(0);
 const TERMINAL: ReadonlySet<WorkspaceStatus> = new Set(["stopped", "failed"]);
 
 /**
- * Nothing is left behind, eventually: the workspace is terminal, and the UDP slot, publication pin,
+ * Nothing is left behind, eventually: the workspace is terminal, and the tunnel slot, publication pin,
  * VM and gateway are released. A launch Core keeps (`retained`) gets the owner's discard after a
  * minute, as Mend would give it, and must then release too. No marker excuses a failure here.
  */
@@ -483,7 +483,7 @@ export const leftovers = async (
   view: RuntimeView,
 ): Promise<string[]> => {
   const problems: string[] = [];
-  if (view.has_tunnel && view.tunnel_released !== true) problems.push("UDP slot still reserved");
+  if (view.has_tunnel && view.tunnel_released !== true) problems.push("tunnel slot still reserved");
   if (view.pin !== null && view.pin !== "released") problems.push(`publication pin ${view.pin}`);
   const vms = stack.boat
     .liveSandboxes()

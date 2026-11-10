@@ -80,22 +80,20 @@ export class BoatResources extends Context.Service<
     readonly reach: () => Effect.Effect<readonly ResourceWorkspaceLink[], BoatResourcesError>;
   }
 >()("@sealant/workspaces/boat/BoatResources") {}
-/** Stable operator host identity and reachable numeric endpoint, never inferred from a container. */
+/** Stable operator host identity and where this worker reaches it, never inferred from a container. */
 export class BoatResourcesHost extends Context.Service<
   BoatResourcesHost,
   {
     readonly deploymentId: string;
     readonly gatewayHostId: string;
-    /** The gateway's public address VMs dial; absent when `relay` carries every tunnel. */
-    readonly endpoint?: string;
     readonly tunnel: BoatTunnel;
     readonly subnets: ResourceSubnets;
     /**
-     * Where this worker reaches the gateways' published WireGuard ports. Set, Core carries each
-     * tunnel over the agent's `/sealant/tunnel` WebSocket (the agent permitting), so no VM dials
-     * the gateway's host; unset, every VM dials `endpoint` over UDP.
+     * Where this worker reaches the gateways' published WireGuard ports. Core carries every
+     * tunnel over the agent's `/sealant/tunnel` WebSocket and relays it here, so no VM dials the
+     * gateway's host and that host needs no inbound port.
      */
-    readonly relay?: { readonly host: string };
+    readonly relay: { readonly host: string };
   }
 >()("@sealant/workspaces/boat/BoatResourcesHost") {}
 
@@ -184,7 +182,6 @@ const make: Effect.Effect<
       tunnels.configure(reservation, {
         epoch: admission.epoch,
         operationId: admission.operationId,
-        ...(host.endpoint === undefined ? {} : { endpoint: host.endpoint }),
         subnet,
       }),
       "persist-network",
@@ -245,29 +242,21 @@ const make: Effect.Effect<
     yield* recheck;
     const receipt = yield* boundary(
       guest.isolate(target, {
-        network: {
-          epoch: admission.epoch,
-          operationId: admission.operationId,
-          ...(host.endpoint === undefined ? {} : { endpoint: host.endpoint }),
-          subnet,
-        },
+        network: { epoch: admission.epoch, operationId: admission.operationId, subnet },
         privateKey: keys.guest.privateKey,
         publicKey: keys.guest.publicKey,
         gatewayKey: keys.gateway.publicKey,
-        port: keys.listenPort,
-        ...(host.relay === undefined ? {} : { carrier: "websocket" as const }),
       }),
       "isolate-guest",
     );
     yield* recheck;
-    // Carried: this worker holds the tunnel's WebSocket and relays it to the gateway's port here.
-    // Every reconcile pass ensures it again, so a restarted worker or a dropped carrier reopens.
-    if (receipt.carrier === "websocket" && host.relay !== undefined)
-      yield* carrier.ensure({
-        runId: target.runId,
-        connection: guest.tunnel(target),
-        gateway: { host: host.relay.host, port: keys.listenPort },
-      });
+    // This worker holds the tunnel's WebSocket and relays it to the gateway's port here. Every
+    // reconcile pass ensures it again, so a restarted worker or a dropped carrier reopens.
+    yield* carrier.ensure({
+      runId: target.runId,
+      connection: guest.tunnel(target),
+      gateway: { host: host.relay.host, port: keys.listenPort },
+    });
     return { gateway, guest: receipt };
   });
   const reconcile = Effect.fn("BoatResources.reconcile")(function* (

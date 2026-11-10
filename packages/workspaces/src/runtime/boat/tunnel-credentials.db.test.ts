@@ -16,11 +16,18 @@ import {
   workspaceAttempts,
 } from "@sealant/db";
 import { corruptBoatExecution } from "@sealant/db/testing/boat-executions";
-import { corruptBoatTunnel, deleteBoatExecutionWithTunnel } from "@sealant/db/testing/boat-tunnels";
+import {
+  corruptBoatTunnel,
+  deleteBoatExecutionWithTunnel,
+  occupyBoatTunnelPorts,
+} from "@sealant/db/testing/boat-tunnels";
 import { withWorkspaceJobTestDatabase } from "@sealant/db/testing/workspace-publications";
 import {
+  BOAT_TUNNEL_LEGACY_PORTS,
+  BOAT_TUNNEL_PORTS,
   boatExecutionRecordSchema,
   boatExecutionTargetSchema,
+  boatTunnelReservationSchema,
   boatWireGuardKeySchema,
   type BoatTunnelBinding,
   type BoatTunnelReservation,
@@ -67,6 +74,8 @@ interface TestContext {
   cipher: CredentialCipher["Service"];
   db: SealantDB["Service"];
   seed: (host?: string, deployment?: string) => Promise<BoatTunnelBinding>;
+  /** Hold these ports of a host with reservations written straight to the tables. */
+  occupy: (host: string, ports: readonly number[]) => Promise<void>;
   reopen: (binding: BoatTunnelBinding) => Promise<BoatTunnelCredentials>;
 }
 const test = async (run: (context: TestContext) => Promise<void>) => {
@@ -144,11 +153,49 @@ const test = async (run: (context: TestContext) => Promise<void>) => {
               return yield* (yield* BoatTunnelCredentialsOwner).prepare(binding);
             }).pipe(Effect.provide(boatTunnelCredentialsLayer.pipe(Layer.provide(Infra)))),
           );
-        yield* Effect.promise(() => run({ owner, repo, executions, cipher, db, seed, reopen }));
+        const occupy = (host: string, ports: readonly number[]) =>
+          execute(occupyBoatTunnelPorts(db, { gatewayHostId: host, ownerUserId: userId, ports }));
+        yield* Effect.promise(() =>
+          run({ owner, repo, executions, cipher, db, seed, occupy, reopen }),
+        );
       }).pipe(Effect.provide(Test)),
     );
   });
 };
+
+/** Whether a reservation on this host port parses. */
+const reservation = (listenPort: number) =>
+  boatTunnelReservationSchema.safeParse({
+    binding: {
+      target: {
+        deploymentId: "test",
+        workspaceId: "workspace",
+        runId: "run",
+        runtimeInstanceId: "run",
+        launchAttemptId: "attempt",
+        sourceId: "publication",
+        sandboxId: "bx_23456789",
+        diskLineage: "disk",
+        bootId: randomUUID(),
+        manifestDigest: "b".repeat(64),
+      },
+      gatewayHostId: randomUUID(),
+    },
+    reservationId: randomUUID(),
+    listenPort,
+    material: null,
+  }).success;
+
+describe("tunnel port boundary", () => {
+  it("accepts a reservation on a port of either range, and on no other", () => {
+    for (const port of [40000, 40015, BOAT_TUNNEL_PORTS.first, BOAT_TUNNEL_PORTS.last])
+      expect(reservation(port), String(port)).toBe(true);
+    for (const port of [39999, 40016, 51820, 60999, BOAT_TUNNEL_PORTS.last + 1, 61000.5])
+      expect(reservation(port), String(port)).toBe(false);
+    expect(BOAT_TUNNEL_PORTS).toEqual({ first: 61000, last: 61511 });
+    expect(BOAT_TUNNEL_LEGACY_PORTS).toEqual({ first: 40000, last: 40015 });
+  });
+});
 
 describe("WireGuard key boundary", () => {
   it("rejects zero, malformed length and noncanonical padding without accepting a secret as diagnostics", () => {
@@ -168,17 +215,12 @@ describe("WireGuard key boundary", () => {
 
 describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
   it("freezes setup on legacy reservations and rejects every changed network field without releasing custody", () =>
-    test(async ({ seed, owner, repo, executions }) => {
+    test(async ({ seed, owner, repo, executions, db }) => {
       const binding = await seed();
       await execute(owner.prepare(binding));
       const before = requireRecord(await execute(repo.get(binding.target.runId)));
       expect(before.network).toBeUndefined();
-      const network = {
-        epoch: 1,
-        operationId: randomUUID(),
-        endpoint: "10.0.0.41",
-        subnet: "10.98.0.32/27",
-      };
+      const network = { epoch: 1, operationId: randomUUID(), subnet: "10.98.0.32/27" };
       await expect(execute(repo.configure(before, network))).rejects.toThrow(
         "execution-unavailable",
       );
@@ -206,13 +248,22 @@ describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
       for (const changed of [
         { epoch: 2 },
         { operationId: randomUUID() },
-        { endpoint: "10.0.0.42" },
         { subnet: "10.98.0.64/27" },
       ])
         await expect(execute(repo.configure(saved, { ...network, ...changed }))).rejects.toThrow(
           "binding-conflict",
         );
       expect(await execute(repo.get(binding.target.runId))).toEqual(saved);
+      // A reservation frozen before the upgrade may record the address its VM dialled. It still
+      // parses, the same intent still matches it, and the record is kept as it was written.
+      const dialled = { ...saved, network: { ...network, endpoint: "10.0.0.41" } };
+      await execute(corruptBoatTunnel(db, binding.target.runId, dialled));
+      expect(await execute(repo.configure(dialled, network))).toEqual(dialled);
+      expect(await execute(repo.get(binding.target.runId))).toEqual(dialled);
+      for (const changed of [{ epoch: 2 }, { subnet: "10.98.0.64/27" }])
+        await expect(execute(repo.configure(dialled, { ...network, ...changed }))).rejects.toThrow(
+          "binding-conflict",
+        );
     }));
   it("serializes active host mutations and fences later dispatch on close", () =>
     test(async ({ seed, owner, repo, executions }) => {
@@ -231,7 +282,6 @@ describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
       const network = {
         epoch: admission.epoch,
         operationId: admission.operationId,
-        endpoint: "10.0.0.41",
         subnet: "10.98.0.32/27",
       };
       const initial = await execute(
@@ -313,25 +363,81 @@ describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
       expect(new Set(results.map((value) => JSON.stringify(rawKeys(value)))).size).toBe(1);
       expect(requireRecord(await execute(repo.get(binding.target.runId))).material).not.toBeNull();
     }));
-  it("arbitrates all sixteen ports concurrently across deployments, exhausts visibly, and isolates other hosts", () =>
-    test(async ({ seed, owner, repo }) => {
+  it("arbitrates ports concurrently across deployments, above the first allocator's sixteen, and isolates other hosts", () =>
+    test(async ({ seed, owner }) => {
       const host = randomUUID();
+      // More sessions at once than the first allocator's range could hold on one host.
       const bindings = await Promise.all(
-        Array.from({ length: 16 }, (_, n) => seed(host, `deployment-${n}`)),
+        Array.from({ length: 24 }, (_, n) => seed(host, `deployment-${n}`)),
       );
       const credentials = await Promise.all(
         bindings.map((binding) => execute(owner.prepare(binding))),
       );
       expect(credentials.map((value) => value.listenPort).toSorted()).toEqual(
-        Array.from({ length: 16 }, (_, n) => 40000 + n),
+        Array.from({ length: 24 }, (_, n) => BOAT_TUNNEL_PORTS.first + n),
+      );
+      expect(BOAT_TUNNEL_PORTS.first).toBeGreaterThan(BOAT_TUNNEL_LEGACY_PORTS.last);
+      expect(BOAT_TUNNEL_PORTS.last - BOAT_TUNNEL_PORTS.first + 1).toBeGreaterThanOrEqual(300);
+      // Above Linux's default ephemeral range, where a port may be an outbound socket's source.
+      expect(BOAT_TUNNEL_PORTS.first).toBeGreaterThan(60999);
+      expect((await execute(owner.prepare(await seed()))).listenPort).toBe(BOAT_TUNNEL_PORTS.first);
+      expect((await execute(owner.prepare(bindings[0] ?? (await seed())))).reservationId).toBe(
+        credentials[0]?.reservationId,
+      );
+    }));
+  it("hands out every port of the range, the last one included, and refuses visibly once it is full", () =>
+    test(async ({ seed, owner, repo, occupy }) => {
+      const host = randomUUID();
+      const range = Array.from(
+        { length: BOAT_TUNNEL_PORTS.last - BOAT_TUNNEL_PORTS.first + 1 },
+        (_, n) => BOAT_TUNNEL_PORTS.first + n,
+      );
+      // Every port but two is held, one of the free ones in the middle and one at the very end.
+      const middle = BOAT_TUNNEL_PORTS.first + 137;
+      await occupy(
+        host,
+        range.filter((port) => port !== middle && port !== BOAT_TUNNEL_PORTS.last),
+      );
+      expect((await execute(owner.prepare(await seed(host)))).listenPort).toBe(middle);
+      expect((await execute(owner.prepare(await seed(host)))).listenPort).toBe(
+        BOAT_TUNNEL_PORTS.last,
       );
       const exhausted = await seed(host);
       await expect(execute(owner.prepare(exhausted))).rejects.toThrow("ports-exhausted");
       expect(await execute(repo.get(exhausted.target.runId))).toBeUndefined();
-      expect((await execute(owner.prepare(await seed()))).listenPort).toBe(40000);
-      expect((await execute(owner.prepare(bindings[0] ?? exhausted))).reservationId).toBe(
-        credentials[0]?.reservationId,
+      // Another host's range is its own.
+      expect((await execute(owner.prepare(await seed()))).listenPort).toBe(BOAT_TUNNEL_PORTS.first);
+    }));
+  it("keeps a port the first allocator reserved valid until its run ends, and never hands one out again", () =>
+    test(async ({ seed, owner, occupy }) => {
+      const host = randomUUID();
+      const legacy = Array.from(
+        { length: BOAT_TUNNEL_LEGACY_PORTS.last - BOAT_TUNNEL_LEGACY_PORTS.first + 1 },
+        (_, n) => BOAT_TUNNEL_LEGACY_PORTS.first + n,
       );
+      // Rows as the release before this one wrote them still satisfy the database's check.
+      await occupy(host, legacy);
+      // The old range being full is no exhaustion: the next session gets a port of the new one.
+      expect((await execute(owner.prepare(await seed(host)))).listenPort).toBe(
+        BOAT_TUNNEL_PORTS.first,
+      );
+      // And the old range being free is no room: with the new one full, nothing is handed out.
+      const other = randomUUID();
+      await occupy(
+        other,
+        Array.from(
+          { length: BOAT_TUNNEL_PORTS.last - BOAT_TUNNEL_PORTS.first + 1 },
+          (_, n) => BOAT_TUNNEL_PORTS.first + n,
+        ),
+      );
+      await expect(execute(owner.prepare(await seed(other)))).rejects.toThrow("ports-exhausted");
+      // A port outside both ranges is refused by the database itself.
+      for (const port of [
+        BOAT_TUNNEL_LEGACY_PORTS.last + 1,
+        BOAT_TUNNEL_PORTS.first - 1,
+        BOAT_TUNNEL_PORTS.last + 1,
+      ])
+        await expect(occupy(randomUUID(), [port]), String(port)).rejects.toThrow();
     }));
   it("refuses a changed host, boot, publication, launch identity or disk without rebinding", () =>
     test(async ({ seed, owner, repo }) => {
@@ -499,7 +605,10 @@ describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
           sealedKeys: (
             await execute(
               cipher.encrypt(
-                JSON.stringify({ ...opened, context: { ...opened.context, listenPort: 40015 } }),
+                JSON.stringify({
+                  ...opened,
+                  context: { ...opened.context, listenPort: BOAT_TUNNEL_PORTS.last },
+                }),
               ),
             )
           ).sealed,

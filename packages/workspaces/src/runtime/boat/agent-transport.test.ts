@@ -91,10 +91,6 @@ while [ "$1" != "--" ]; do shift; done
 shift
 exec "$@"
 `;
-const fakeSync = (log: string) => `#!/bin/sh
-printf 'sync\\n' >> ${JSON.stringify(log)}
-exit 0
-`;
 
 interface Vm {
   readonly dir: string;
@@ -103,7 +99,6 @@ interface Vm {
   readonly socketPath: string;
   readonly recordFile: string;
   readonly netLog: string;
-  readonly syncLog: string;
   readonly env: Record<string, string>;
   readonly bootId: () => Promise<string>;
   readonly reboot: () => Promise<string>;
@@ -127,16 +122,13 @@ const createVm = async (dnsPort: number): Promise<Vm> => {
   await mkdir(bin);
   await mkdir(etc);
   const netLog = path.join(dir, "net.log");
-  const syncLog = path.join(dir, "sync.log");
   const handshakeFile = path.join(dir, "wg-handshake");
   await Promise.all([
     writeExecutable(path.join(bin, "sealantd"), FAKE_SEALANTD),
     writeExecutable(path.join(bin, "sealantctl"), "#!/bin/sh\nexit 0\n"),
     writeExecutable(path.join(bin, "ip"), fakeNetTool(netLog, handshakeFile)),
     writeExecutable(path.join(bin, "wg"), fakeNetTool(netLog, handshakeFile)),
-    writeExecutable(path.join(bin, "iptables"), fakeNetTool(netLog, handshakeFile)),
     writeExecutable(path.join(bin, "unshare"), FAKE_UNSHARE),
-    writeExecutable(path.join(bin, "sync"), fakeSync(syncLog)),
   ]);
   const bootIdFile = path.join(dir, "boot_id");
   await writeFile(bootIdFile, `${randomUUID()}\n`);
@@ -156,7 +148,6 @@ const createVm = async (dnsPort: number): Promise<Vm> => {
     socketPath,
     recordFile,
     netLog,
-    syncLog,
     env: {
       PATH: `${bin}:${process.env["PATH"] ?? ""}`,
       SEALANT_AGENT_HOST: "boat",
@@ -171,14 +162,14 @@ const createVm = async (dnsPort: number): Promise<Vm> => {
       SEALANT_MICROVM_SEALANTCTL: path.join(bin, "sealantctl"),
       SEALANT_AGENT_IP: path.join(bin, "ip"),
       SEALANT_AGENT_WG: path.join(bin, "wg"),
-      SEALANT_AGENT_IPTABLES: path.join(bin, "iptables"),
       SEALANT_AGENT_UNSHARE: path.join(bin, "unshare"),
-      SEALANT_AGENT_SYNC: path.join(bin, "sync"),
+      // The port WireGuard listens on, which the tunnel's carrier relays for.
+      SEALANT_AGENT_TUNNEL_WG_PORT: "51820",
       SEALANT_AGENT_RESOLV_CONF: resolvConf,
       SEALANT_AGENT_DNS_PROBE_HOST: "127.0.0.1",
       SEALANT_AGENT_DNS_PROBE_PORT: String(dnsPort),
       SEALANT_AGENT_DNS_LISTEN_HOST: "127.0.0.1",
-      SEALANT_AGENT_DNS_LISTEN_PORT: "0",
+      SEALANT_AGENT_DNS_LISTEN_PORT: String(await freePort()),
       SEALANT_MICROVM_RECOVERY_SETTLE_MS: "3000",
       FAKE_SEALANTD_RECORD: recordFile,
     },
@@ -279,6 +270,23 @@ const answer = (query: Buffer): Buffer | null => {
   return Buffer.concat([header, question, rr]);
 };
 /** A fake gateway resolver answering any A question with the gateway address, over UDP and TCP. */
+/** A loopback port free for both TCP and UDP right now. */
+const freePort = async (): Promise<number> => {
+  for (;;) {
+    const server = net.createServer();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (typeof address !== "object" || address === null) continue;
+    const udp = dgram.createSocket("udp4");
+    const free = await new Promise<boolean>((resolve) => {
+      udp.once("error", () => resolve(false));
+      udp.bind(address.port, "127.0.0.1", () => resolve(true));
+    });
+    udp.close();
+    if (free) return address.port;
+  }
+};
 const startFakeDns = async (): Promise<{ port: number; close: () => Promise<void> }> => {
   const tcp = net.createServer((socket) => {
     let pending = Buffer.alloc(0);
@@ -294,17 +302,24 @@ const startFakeDns = async (): Promise<{ port: number; close: () => Promise<void
       socket.end(Buffer.concat([prefix, reply]));
     });
   });
+  // One port number for both transports, as a resolver has. On a host with many UDP sockets the
+  // number TCP was given may be taken for UDP, so a port free for both is asked for first.
   const udp = dgram.createSocket("udp4");
-  await new Promise<void>((resolve) => tcp.listen(0, "127.0.0.1", resolve));
-  const address = tcp.address();
-  if (typeof address !== "object" || address === null) throw new Error("no tcp address");
-  await new Promise<void>((resolve) => udp.bind(address.port, "127.0.0.1", resolve));
+  const port = await freePort();
+  await new Promise<void>((resolve, reject) => {
+    tcp.once("error", reject);
+    tcp.listen(port, "127.0.0.1", resolve);
+  });
+  await new Promise<void>((resolve, reject) => {
+    udp.once("error", reject);
+    udp.bind(port, "127.0.0.1", resolve);
+  });
   udp.on("message", (message, remote) => {
     const reply = answer(message);
     if (reply !== null) udp.send(reply, remote.port, remote.address);
   });
   return {
-    port: address.port,
+    port,
     close: async () => {
       udp.close();
       await new Promise<void>((resolve) => tcp.close(() => resolve()));
@@ -460,7 +475,6 @@ const core = async (vm: Vm, t: BoatExecutionTarget, agent: Agent): Promise<Core>
     probe: async () => ({
       runtimeId: "rt_fixture",
       healthy: probe.healthy,
-      supports: ["exec.user", "dotfiles.user", "restore.owner_map", "process.secret-env.v1"],
     }),
   };
   const repo = memoryRepo();
@@ -524,13 +538,11 @@ const launched = async (extraEnv: Record<string, string> = {}) => {
       network: {
         epoch: record.admission.epoch,
         operationId: record.admission.operationId,
-        endpoint: "203.0.113.10",
         subnet: "10.42.7.32/27",
       },
       privateKey: Redacted.make(wireguardKey()),
       publicKey: wireguardKey(),
       gatewayKey,
-      port: 40000,
     }),
   );
   await execute(c.executor.recordIsolation(t, { ...receipts, resourceReceipt: network.receipt }));
@@ -552,9 +564,12 @@ describe("Core's Boat execution owner against the real guest agent", () => {
     const control = await execute(c.repo.get(t.runtimeInstanceId));
     expect(control?.phase).toBe("installed");
     expect(JSON.stringify(control)).not.toContain(bind.bearer_sha256);
-    // The network intent reached wg with the key in the agent's tmpfs key file, never in argv.
+    // The network intent reached wg with the key in the agent's tmpfs key file, never in argv,
+    // and with the carrier's relay on loopback as its peer: the VM dials nothing of the gateway's.
     expect(await netLines(vm)).toContainEqual(
-      expect.stringMatching(/^wg set sealant-wg private-key \/[^ ]+\/agent\/sealant-wg\.key peer /),
+      expect.stringMatching(
+        /^wg set sealant-wg listen-port 51820 private-key \/[^ ]+\/agent\/sealant-wg\.key peer \S+ endpoint 127\.0\.0\.1:\d+ allowed-ips /,
+      ),
     );
     // Nothing is launched before Core pushes it: readiness says so.
     await expect(execute(c.executor.readiness(t))).rejects.toThrow("invocation-held");
@@ -612,7 +627,7 @@ describe("Core's Boat execution owner against the real guest agent", () => {
               Layer.succeed(BoatExecutionRepo, c.repo),
               Layer.succeed(BoatGuestTransportService, {
                 ...lossy,
-                probe: async () => ({ runtimeId: "rt_fixture", healthy: true, supports: [] }),
+                probe: async () => ({ runtimeId: "rt_fixture", healthy: true }),
               }),
               credentialCipherLayer({ key: Buffer.alloc(32, 7).toString("base64") }),
             ),

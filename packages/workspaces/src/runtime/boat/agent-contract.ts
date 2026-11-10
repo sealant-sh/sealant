@@ -9,9 +9,8 @@
  *   - the bind exchange (`boat-bind.mjs`, run by Core over Boat exec), the same
  *     `sealant-bootstrap-v1` wire the Python guest answered: Core keeps parsing it unchanged;
  *   - the typed recovery outcomes a durable launch record makes possible;
- *   - `POST /sealant/park`: close the workspace and write a receipt. The agent still serves it;
- *     Core no longer calls it, and what is kept of it here only describes the agent's answers;
- *   - `POST|GET /sealant/network`: bring up the workspace's WireGuard interface to the gateway.
+ *   - `POST|GET /sealant/network`: bring up the workspace's WireGuard interface to the gateway,
+ *     carried over `GET /sealant/tunnel` (a WebSocket Core opens; the VM dials nothing).
  */
 import { z } from "zod";
 
@@ -19,13 +18,12 @@ import { z } from "zod";
 export const AGENT_HOSTS = ["lambda", "boat"] as const;
 export type AgentHost = (typeof AGENT_HOSTS)[number];
 
-/** Served by the agent, never called by Core. */
-export const BOAT_AGENT_PARK_ROUTE = "/sealant/park";
 export const BOAT_AGENT_NETWORK_ROUTE = "/sealant/network";
 /**
- * The resource tunnel's WebSocket carrier (Boat agents that list `websocket` in `carriers`): Core
- * opens it through Boat's hosted HTTPS with the control token, and each binary frame is one
- * WireGuard datagram, either way. The gateway's host then needs no inbound port.
+ * The resource tunnel's WebSocket carrier, the tunnel's only transport: Core opens it through
+ * Boat's hosted HTTPS with the control token, and each binary frame is one WireGuard datagram,
+ * either way. The gateway's host needs no inbound port. An agent that does not list `websocket` in
+ * `carriers` (an image older than the carrier) cannot be given a tunnel.
  */
 export const BOAT_AGENT_TUNNEL_ROUTE = "/sealant/tunnel";
 
@@ -134,9 +132,6 @@ export const BOAT_AGENT_LAUNCH_ENV_FILE = "/run/sealant/agent/launch-env.json";
  *     swept and proved empty, every scope killed and proved gone, and `sealantd boot --recovery`
  *     starts from `boot_env` as an in-process recovery would (`restarted`, or `nothing-to-save`
  *     on exit 76).
- *   - `POST /sealant/park`: every live scope is killed (`systemctl kill --signal=SIGKILL`) and
- *     proved gone (no longer active, or its cgroup reads `populated 0`), then Docker's cgroups,
- *     before the receipt.
  *
  * A launch record of this boot without this file adopts nothing: the launch stays accepted and a
  * recovery is `recover-state-unknown`.
@@ -155,8 +150,8 @@ export const boatAgentLaunchEnvRecordSchema = z.strictObject({
 export const boatAgentRefusalSchema = z.strictObject({ reason: boatAgentReasonSchema });
 
 /**
- * `503 {reason}` from a park or recovery that could not prove the workspace closed: no receipt
- * is written and nothing is started; Core retries the same operation. `daemon-stop-unverified`: a
+ * `503 {reason}` from a recovery that could not prove the workspace's processes gone: nothing is
+ * started; Core retries the same operation. `daemon-stop-unverified`: a
  * `sealant-workspace-*` scope is still active and its cgroup not proved empty;
  * `docker-stop-unverified`: Docker's engine cgroup or its containers' slice is not proved empty.
  */
@@ -169,7 +164,6 @@ export const BOAT_AGENT_RECOVER_REFUSALS = [
   "recover-new-boot",
   "recover-binding-conflict",
   "recover-state-unknown",
-  "parked",
 ] as const;
 
 /**
@@ -187,49 +181,22 @@ export const boatAgentRecoverResponseSchema = z.discriminatedUnion("outcome", [
 ]);
 export type BoatAgentRecoverResponse = z.infer<typeof boatAgentRecoverResponseSchema>;
 
-/** The receipt file the park writes (`<data dir>/park-<operationId>.json`). */
-export const boatAgentParkReceiptSchema = z.strictObject({
-  format: z.literal("sealant-agent-park-receipt-v1"),
-  operation_id: uuid,
-  boot_id: uuid,
-  run_id: z.string().nullable(),
-  daemon: z.literal("stopped"),
-  docker: z.enum(["stopped", "absent"]),
-  closed_at: z.string().datetime(),
-});
-
-export const boatAgentParkResponseSchema = z.strictObject({
-  outcome: z.literal("closed"),
-  receipt: z.strictObject({
-    path: z.string().min(1),
-    sha256: sha256Hex,
-    bytes: z.number().int().nonnegative(),
-  }),
-});
-
 const wireguardKey = z.string().regex(/^[A-Za-z0-9+/]{43}=$/);
 
-/** `POST /sealant/network`: today's `sealant-guest-network-v1` body, unchanged. */
+/**
+ * `POST /sealant/network`: the tunnel's keys and the resource subnet, with the tunnel carried over
+ * `/sealant/tunnel` (`carrier: "websocket"`). The agent takes no gateway address to dial.
+ */
 export const boatAgentNetworkRequestSchema = z.strictObject({
   format: z.literal("sealant-guest-network-v1"),
   binding: z.unknown(),
   private_key: wireguardKey,
   public_key: wireguardKey,
   gateway_key: wireguardKey,
-  endpoint: z.string().regex(/^\d{1,3}(\.\d{1,3}){3}$/),
-  port: z.number().int().min(1).max(65535),
+  carrier: z.literal("websocket"),
   subnet: z.string().regex(/^\d{1,3}(\.\d{1,3}){3}\/27$/),
 });
 export type BoatAgentNetworkRequest = z.infer<typeof boatAgentNetworkRequestSchema>;
-
-/**
- * `POST /sealant/network` with the tunnel carried over `/sealant/tunnel`: the same body with
- * `carrier: "websocket"` in place of the gateway's endpoint and port.
- */
-export const boatAgentCarriedNetworkRequestSchema = boatAgentNetworkRequestSchema
-  .omit({ endpoint: true, port: true })
-  .extend({ carrier: z.literal("websocket") });
-export type BoatAgentCarriedNetworkRequest = z.infer<typeof boatAgentCarriedNetworkRequestSchema>;
 
 export const BOAT_AGENT_NETWORK_REFUSALS = [
   "invalid-network-config",
@@ -262,10 +229,10 @@ export const boatAgentNetworkStatusSchema = z.strictObject({
   handshake: z.enum(["verified", "unverified"]),
   dns: z.enum(["udp-and-tcp", "unavailable"]),
   /**
-   * The containers' network policy: `absent` without Docker, `applied` once it holds them to the
-   * gateway's allowance. A Docker image is not ready while it is `pending` or `failed`.
+   * Sent by agents built before the in-VM Docker network policy was removed, on sessions started
+   * before the upgrade. Accepted so their status still parses; never read, never waited for.
    */
-  docker_policy: z.enum(["absent", "pending", "applied", "failed"]),
+  docker_policy: z.enum(["absent", "pending", "applied", "failed"]).optional(),
   /**
    * What the tunnel sent the gateway and received from it, in bytes (`wg show transfer`), while it
    * is configured: initiations sent and nothing received is a gateway endpoint that never answers.
@@ -277,9 +244,12 @@ export const boatAgentNetworkStatusSchema = z.strictObject({
       received: z.number().int().nonnegative(),
     })
     .optional(),
-  /** How this agent can carry the tunnel. Absent from agents that only dial the gateway (UDP). */
+  /**
+   * How this agent can carry the tunnel. Today's agents list `websocket` alone; older ones also
+   * list `udp` (a gateway address the VM dialled, no longer offered), and the oldest list nothing.
+   */
   carriers: z.array(z.enum(["udp", "websocket"])).optional(),
-  /** Carried over `/sealant/tunnel`: whether Core's end is attached now. */
+  /** Whether Core's end of `/sealant/tunnel` is attached now. */
   carrier_attached: z.boolean().optional(),
 });
 export type BoatAgentNetworkStatus = z.infer<typeof boatAgentNetworkStatusSchema>;

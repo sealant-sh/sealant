@@ -22,7 +22,6 @@ import {
   UUID_PATTERN,
   boatPaths,
   isIdentity,
-  parkedOnBoot,
   readBootId,
   readRecord,
   sameJson,
@@ -140,17 +139,8 @@ const main = async () => {
     if (record.format !== BIND_RECORD_FORMAT || !isIdentity(record.identity)) {
       refuse("bind-state-unknown");
     }
-    // A disk is bound to one VM identity. The exception is a parked one: its workspace was closed
-    // on the earlier boot before Boat saved it, and the VM restored from that snapshot is a new
-    // instance of the same deployment, bound once on its own boot.
-    if (
-      !sameJson(record.identity, request.identity) &&
-      (record.boot_id === bootId ||
-        record.identity.deployment_id !== request.identity.deployment_id ||
-        !parkedOnBoot(paths, record.boot_id))
-    ) {
-      refuse("bind-identity-conflict");
-    }
+    // A disk is bound to one VM identity, on every boot.
+    if (!sameJson(record.identity, request.identity)) refuse("bind-identity-conflict");
     if (record.boot_id === bootId) {
       // Same boot: the same exchange, or none.
       if (

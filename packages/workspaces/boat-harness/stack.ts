@@ -91,14 +91,6 @@ export interface HarnessStack {
   readonly scratch: string;
   readonly network: string;
   readonly hostIp: string;
-  /**
-   * The WireGuard endpoint a guest dials in the legacy UDP mode: a host address of its own (see
-   * `startStack`). By default the worker carries every tunnel over the agent's HTTPS WebSocket
-   * (`SEALANT_BOAT_GATEWAY_RELAY_HOST`), and no guest dials this.
-   */
-  readonly gatewayEndpoint: string;
-  /** Worker overrides for the legacy UDP mode: guests dial `gatewayEndpoint`, nothing is carried. */
-  readonly legacyUdpTunnel: Readonly<Record<string, string | undefined>>;
   readonly databaseUrl: string;
   readonly boat: FakeBoat;
   /** Opens a capture session channel (Mend's role) for one worktree, closed with the stack. */
@@ -449,13 +441,6 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
     const { range: subnet, host: hostIp } = await bridge(network);
     // Runs after the worker and API stop. Core's objects carry the label too (`bin/docker`).
     cleanups.push(() => removeLabelled(label, { images: true }));
-    // Legacy UDP mode only. The guest refuses workspace egress to the WireGuard endpoint's address,
-    // and on Boat the gateway host and Mend's capture endpoint are different addresses. Give the
-    // gateway endpoint a host address of its own: the gateway IP of an otherwise unused bridge.
-    // Twins reach it through the host; in that mode the gateway publishes its UDP port on every
-    // host address.
-    const edge = `${network}-edge`;
-    const { host: gatewayEndpoint } = await bridge(edge);
 
     // Core's database.
     const dbPort = await freePort();
@@ -775,11 +760,6 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       scratch,
       network,
       hostIp,
-      gatewayEndpoint,
-      legacyUdpTunnel: {
-        SEALANT_BOAT_GATEWAY_ENDPOINT: gatewayEndpoint,
-        SEALANT_BOAT_GATEWAY_RELAY_HOST: undefined,
-      },
       databaseUrl,
       boat,
       openCapture,

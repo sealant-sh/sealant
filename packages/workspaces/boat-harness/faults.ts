@@ -218,7 +218,11 @@ export const scenarios = {
     );
   },
 
-  /** The agent answers the launch push with a permanent or transient refusal. */
+  /**
+   * The agent answers the launch push with an error (400), a 409 carrying a well-formed reason, or
+   * a transient 503. No 409 `{reason}` is a launch refusal any more (#586): Core must read it as an
+   * invalid reply, never adopt it as an earlier launch.
+   */
   agentRefuses: (status: 400 | 409 | 503) =>
     async function agentRefuses(stack: HarnessStack, project: Project) {
       await withFaults(
@@ -229,16 +233,18 @@ export const scenarios = {
               ? {
                   kind: "status",
                   status,
-                  // 409 is a typed refusal only with a reason the contract names.
                   body: JSON.stringify(
-                    status === 409 ? { reason: "parked" } : { error: "harness-fault" },
+                    status === 409 ? { reason: "harness-refused" } : { error: "harness-fault" },
                   ),
                 }
               : undefined,
         },
         () =>
           failedLaunch(stack, project, {
-            cause: new RegExp(`launch[\\s\\S]*${status}|${status}[\\s\\S]*launch|agent-`),
+            cause:
+              status === 409
+                ? /invalid-reply/
+                : new RegExp(`launch[\\s\\S]*${status}|${status}[\\s\\S]*launch|agent-`),
           }),
       );
     },
@@ -407,8 +413,8 @@ export const scenarios = {
   },
 
   /**
-   * Boat's deletion stays `processing`. The launch fails at the launch push, after its UDP slot
-   * and publication pin are held. While Boat says `processing` the VM is not gone, so Core must
+   * Boat's deletion stays `processing`. The launch fails at the launch push (a 400), after its
+   * tunnel slot and publication pin are held. While Boat says `processing` the VM is not gone, so Core must
    * keep both; once the deletion completes it must release them.
    */
   async deletionStuck(stack: HarnessStack, project: Project) {
@@ -420,8 +426,8 @@ export const scenarios = {
           isSession(sandbox) && method === "POST" && path === "/sealant/launch"
             ? {
                 kind: "status",
-                status: 409,
-                body: JSON.stringify({ reason: "parked" }),
+                status: 400,
+                body: JSON.stringify({ error: "harness-fault" }),
               }
             : undefined,
         deletion: (sandbox) => {

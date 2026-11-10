@@ -837,11 +837,12 @@ export const workerServerEnvSchema = databaseEnvSchema
       .refine((value) => !value.includes("\0") && !value.endsWith("/"))
       .optional(),
     SEALANT_BOAT_GATEWAY_HOST_ID: z.uuid().optional(),
-    SEALANT_BOAT_GATEWAY_ENDPOINT: z.ipv4().optional(),
     /**
      * Where this worker reaches the gateways' published WireGuard ports (the Docker host's address
-     * as the worker sees it: `127.0.0.1` on the host itself). Set, the worker carries each tunnel
-     * over the agent's HTTPS WebSocket, so no Boat VM dials `SEALANT_BOAT_GATEWAY_ENDPOINT`.
+     * as the worker sees it: `127.0.0.1` on the host itself). The worker carries every tunnel over
+     * the agent's HTTPS WebSocket and relays it here, so no Boat VM dials the gateway's host and
+     * that host needs no inbound port. (`SEALANT_BOAT_GATEWAY_ENDPOINT`, the address VMs dialled
+     * over UDP, is retired: a deployment that still sets it starts, and it is not read.)
      */
     SEALANT_BOAT_GATEWAY_RELAY_HOST: z
       .ipv4()
@@ -859,23 +860,20 @@ export const workerServerEnvSchema = databaseEnvSchema
 export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) => {
   const hasCredential = hasBoatCredential(input);
   addBoatProviderIssues(input, ctx);
-  // A relay host carries every tunnel over HTTPS: no public endpoint is needed then.
+  // The gateway's host, its image and where the worker relays every tunnel to it: all, or none.
   const gatewayKeys = [
     "SEALANT_BOAT_GATEWAY_HOST_ID",
-    "SEALANT_BOAT_GATEWAY_ENDPOINT",
     "SEALANT_BOAT_GATEWAY_RELAY_HOST",
     "SEALANT_BOAT_GATEWAY_IMAGE",
   ] as const;
-  const reachable =
-    input.SEALANT_BOAT_GATEWAY_ENDPOINT !== undefined ||
-    input.SEALANT_BOAT_GATEWAY_RELAY_HOST !== undefined;
+  const relayed = input.SEALANT_BOAT_GATEWAY_RELAY_HOST !== undefined;
   if (gatewayKeys.some((key) => input[key] !== undefined)) {
-    if (!reachable)
+    if (!relayed)
       ctx.addIssue({
         code: "custom",
         path: ["SEALANT_BOAT_GATEWAY_RELAY_HOST"],
         message:
-          "Boat resource reconciliation requires SEALANT_BOAT_GATEWAY_RELAY_HOST (tunnels carried over HTTPS) or SEALANT_BOAT_GATEWAY_ENDPOINT (VMs dial it over UDP).",
+          "Boat resource reconciliation requires SEALANT_BOAT_GATEWAY_RELAY_HOST: the address this worker reaches the gateways at, where it relays every tunnel it carries over HTTPS.",
       });
     for (const key of [
       "SEALANT_BOAT_GATEWAY_HOST_ID",
@@ -909,12 +907,12 @@ export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) =>
     input.SEALANT_BOAT_BUILDER_OWNER !== undefined ||
     input.SEALANT_BOAT_STATE_DIRECTORY !== undefined
   ) {
-    if (!reachable)
+    if (!relayed)
       ctx.addIssue({
         code: "custom",
         path: ["SEALANT_BOAT_GATEWAY_RELAY_HOST"],
         message:
-          "Boat workspaces require SEALANT_BOAT_GATEWAY_RELAY_HOST or SEALANT_BOAT_GATEWAY_ENDPOINT.",
+          "Boat workspaces require SEALANT_BOAT_GATEWAY_RELAY_HOST: the address this worker reaches the gateways at, where it relays every tunnel it carries over HTTPS.",
       });
     for (const key of [
       "SEALANT_BOAT_DEPLOYMENT_ID",
