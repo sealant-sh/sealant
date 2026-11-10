@@ -118,8 +118,9 @@ take, so its Stop keeps the VM. The worker must then park it (the agent's park, 
 snapshot, the VM deleted). The owner recovers it after the capture epoch advances, and on the child
 VM the image must have the same id and run, and the edit must be unchanged. A final Stop must retire
 the snapshot. On main it stops at P1: nothing records the retention that enrolls a Boat session for
-parking. `BOAT_HARNESS_SIMULATE_RETENTION=1` writes that one row so the later steps can be proved
-locally before the fix; CI never sets it. The capture channel's harness controls
+parking. `BOAT_HARNESS_SIMULATE_RETENTION=1` writes that one value, as Core's own test helper does,
+and shows P1's second half: the Boat FINAL close keeps renewing its lease on the drain row, and the
+enrollment trigger refuses an occupied row. CI never sets it. The capture channel's harness controls
 (`capture-server.ts`: refuse uploads, set the epoch) stand in for Mend's store and lease service.
 
 Core sometimes records only an error class (`readiness` / `Error`). A failure message therefore

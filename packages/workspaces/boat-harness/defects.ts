@@ -49,15 +49,20 @@ export const SLOW_CLOSE: Defect = {
 
 /**
  * Found by this harness on main 3a0d37ae: a Boat session whose Stop keeps the VM (its FINAL could
- * not drain) is never parked. Enrollment needs `workspace_capture_drains.retained_at`, and nothing
- * on the Boat path writes it: the stop's canonical close returns `retained` and the stop worker
- * only reports `kept` (`process-workspace-stop.ts`); API stop retains only rows already enrolled,
- * and `BoatParking.retain` runs only for enrolled roots. The session waits with its VM forever.
+ * not drain) is never parked, for two reasons:
+ * - a: enrollment needs `workspace_capture_drains.retained_at`, and nothing on the Boat path
+ *   writes it: the stop's canonical close returns `retained` and the stop worker only reports
+ *   `kept` (`process-workspace-stop.ts`); API stop retains only rows already enrolled, and
+ *   `BoatParking.retain` runs only for enrolled roots;
+ * - b: with retention recorded (`BOAT_HARNESS_SIMULATE_RETENTION=1`), the Boat FINAL close keeps
+ *   renewing its lease on the drain row (`lease_owner` `boat-final-…`), and the guard trigger
+ *   refuses to enroll an occupied row; `BoatParking.reconcile` swallows that error.
+ * The session waits with its VM forever.
  */
 export const NEVER_PARKED: Defect = {
   id: "P1",
   title: "a retained Boat session is never enrolled for parking (nothing records retention)",
-  failure: /^step retention: parking never starts: /,
+  failure: /^step (retention: parking never starts|parked: parking never enrolls): /,
   owner: "thread C (lifecycle) or D (parking)",
 };
 

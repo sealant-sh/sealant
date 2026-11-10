@@ -16,7 +16,8 @@
  * (300 s) for this scenario only.
  *
  * `BOAT_HARNESS_SIMULATE_RETENTION=1` writes the `retained_at` Core's Boat stop does not record
- * (defect P1), so the steps after it can be proved before P1 is fixed. Never set in CI.
+ * (P1's first half), to show its second: the FINAL close's lease then keeps parking from
+ * enrolling. Never set in CI. Once P1 is fixed, the same scenario proves park and resume.
  */
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
@@ -221,6 +222,27 @@ export const parkAndResume = async (stack: HarnessStack, project: Project, step:
     });
 
     await step("parked", async () => {
+      // Enrollment first, within four sweeps. Core's enrollment swallows its errors, so name the
+      // occupied row it refuses (the guard trigger: "cannot enroll an occupied legacy executor").
+      const enrolled = await until(
+        "parking to enroll the session",
+        async () => ((await custody(stack, run))?.custody_contract === 3 ? true : undefined),
+        120_000,
+        5000,
+      ).catch(() => false);
+      if (!enrolled) {
+        const facts = z
+          .looseObject({ lease_owner: z.string().nullable() })
+          .safeParse(await enrollmentFacts(stack, run));
+        const owner = facts.success ? facts.data.lease_owner : null;
+        throw new Error(
+          `parking never enrolls: 120 s after retention custody_contract is still null` +
+            (owner === null
+              ? ""
+              : `, while ${owner.split("#")[0] ?? owner} keeps the drain row's lease (renewed; the enrollment trigger refuses an occupied row)`) +
+            `; enrollment facts ${JSON.stringify(await enrollmentFacts(stack, run))}`,
+        );
+      }
       await until(
         "the worker to park the session (agent park, saved snapshot, VM deleted)",
         async () => {

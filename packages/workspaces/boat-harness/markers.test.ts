@@ -68,6 +68,12 @@ describe("expected-failure markers", () => {
         "step retention: parking never starts: the Stop kept the session, but 90 s later ...",
       ),
     ).toBe(true);
+    expect(
+      defectMatches(
+        NEVER_PARKED,
+        "step parked: parking never enrolls: 120 s after retention custody_contract is still null, while boat-final-1 keeps the drain row's lease",
+      ),
+    ).toBe(true);
     expect(DEFECTS.parking).toBe(NEVER_PARKED);
     for (const later of [
       "step parked: timed out after 1200s waiting for the worker to park the session",
