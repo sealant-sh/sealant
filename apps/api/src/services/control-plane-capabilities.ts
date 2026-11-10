@@ -1,5 +1,6 @@
 import { PackageResolutionCacheRepo } from "@sealant/db";
 import {
+  publishBoatResourceLinkChanged,
   publishRunExecRequested,
   publishWorkspaceStopRequested,
   type PackageStandardizer,
@@ -66,6 +67,23 @@ export class WorkspaceLifecyclePublisherService extends Context.Service<
   WorkspaceLifecyclePublisher
 >()("@sealant/api/WorkspaceLifecyclePublisherService") {}
 
+export interface BoatResourceLinkPublisher {
+  /**
+   * Tell the worker that the link of a workspace with a live Boat run was written or removed, so
+   * it applies the link to that run's resource gateway now. The worker's sweep applies it anyway,
+   * a little later: a message that is not delivered loses nothing.
+   */
+  readonly publishLinkChanged: (input: {
+    readonly workspaceId: string;
+    readonly runId: string;
+  }) => Promise<void>;
+}
+
+export class BoatResourceLinkPublisherService extends Context.Service<
+  BoatResourceLinkPublisherService,
+  BoatResourceLinkPublisher
+>()("@sealant/api/BoatResourceLinkPublisherService") {}
+
 export const PackageStandardizerServiceLive = Layer.effect(
   PackageStandardizerService,
   Effect.gen(function* () {
@@ -99,10 +117,18 @@ export const WorkspaceLifecyclePublisherServiceLive = Layer.succeed(
   },
 );
 
+export const BoatResourceLinkPublisherServiceLive = Layer.succeed(
+  BoatResourceLinkPublisherService,
+  {
+    publishLinkChanged: (input) => publishBoatResourceLinkChanged(env.DATABASE_URL, input),
+  },
+);
+
 export const ControlPlaneCapabilitiesLive = Layer.mergeAll(
   PackageStandardizerServiceLive,
   RegistryClientServiceLive,
   WorkspaceBuildJobPublisherServiceLive,
   RunExecPublisherServiceLive,
   WorkspaceLifecyclePublisherServiceLive,
+  BoatResourceLinkPublisherServiceLive,
 );

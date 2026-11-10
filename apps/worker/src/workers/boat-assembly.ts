@@ -156,6 +156,7 @@ export const assembleBoat = async (input: {
       reconcileCatalog: undefined,
       disposeCatalog: undefined,
       reconcileResources: undefined,
+      applyLink: undefined,
       reconcileCloses: undefined,
     };
   }
@@ -269,7 +270,18 @@ export const assembleBoat = async (input: {
     disposeCatalog: () => catalogRuntime?.dispose(),
     reconcileCloses: (page: { limit: number; after?: string }) =>
       runtime.runPromise(Effect.flatMap(BoatFinalClose, (close) => close.reconcile(page))),
-    reconcileResources: (page: { limit: number; after?: string }) =>
+    /** One tick of the resource sweep; with `live`, a page of live runs is configured first. */
+    reconcileResources: (page: {
+      limit: number;
+      after?: string;
+      live?: { limit: number; after?: string };
+    }) =>
       runtime.runPromise(Effect.flatMap(BoatResources, (resources) => resources.reconcile(page))),
+    /**
+     * A link was written or removed for this live run: configure it now, in its turn with the
+     * sweep. A no-op for a run that needs nothing, and for every run without a gateway here.
+     */
+    applyLink: (runId: string) =>
+      runtime.runPromise(Effect.flatMap(BoatResources, (resources) => resources.apply(runId))),
   };
 };

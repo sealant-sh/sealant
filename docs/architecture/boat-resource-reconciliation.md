@@ -61,9 +61,23 @@ subnet between reservation and gateway creation. It does not classify an uncerta
 The resource tick uses current Boat links for idle accounting only. Network intent counts
 conservatively as reached while that exact epoch's runtime is active, including an uncertain setup.
 A failed custody read aborts that tick before idle decisions. Generic starts and network convergence
-still receive only ordinary executors. Boat reconciliation applies current aliases and unlinks on
-its next pass. A stopped or held execution receives no new setup; its outstanding network custody
-stays for canonical FINAL cleanup. Nothing here expires or recycles UDP slots.
+still receive only ordinary executors. A stopped or held execution receives no new setup; its
+outstanding network custody stays for canonical FINAL cleanup. Nothing here expires or recycles UDP
+slots.
+
+A link, its aliases or its removal reach a live run's gateway in two ways. When the API writes or
+removes the link of a workspace with a live Boat run, it enqueues one `boat-resource-links` job
+naming the run, and the worker configures that run at once. The queue keeps one waiting job per run,
+so a burst of re-links is one configuration, and a link written while one is in flight queues one
+more. The job is only a prompt: it carries no link, and the worker reads the current one. A job that
+is lost, dead-lettered, or finds the run still launching is not retried, because every sweep tick
+also configures a page of live runs (below), which applies the same link a little later.
+
+A link written while a configuration of its run is in flight makes that configuration stale, not
+wrong: it ends `pending`, changes nothing more, and the link's job or the next tick configures the
+run with the link as it now is. Only a changed admission is a `binding-conflict`, which the sweep
+reports as held. The difference matters because the sweep releases the carrier of a held run, and a
+session whose link was just written is running.
 
 ## Worker configuration and bounds
 
@@ -121,8 +135,19 @@ The worker shares its resource runtime and subnet store with the gateway. One ma
 the existing sealed execution service and both reconcilers, and is disposed at shutdown. The
 non-overlapping 30-second sweep walks separate allocation and resource cursors, twenty IDs per page,
 with four observations in parallel and a 120-second bound per resource entry. Parsing failures, held
-and pending entries advance the cursor. Resource idle accounting reads all configured custody on
-this deployment and host, independent of the current sweep page.
+and pending entries advance the cursor.
+
+The resource cursor pages through every allocation the deployment ever had, ended ones included, so
+a live run's turn on it comes once per `ceil(allocations / 20)` ticks. That page keeps its pace and
+its work: it reports ended runs closed or held and releases their carriers, and configures the live
+runs it reaches. A live run does not wait for it. Each tick first configures a page of live runs
+alone (`listTunnelled`, twenty per tick, a cursor of its own), so with N live runs each is
+configured every `ceil(N / 20)` ticks whatever the history, and a run that page configured is not
+configured again when the other page reaches it in the same tick. The live page and link jobs
+release nothing. One run is configured by one caller at a time in a worker, and at most four runs at
+once across both pages and link jobs, of which link jobs take at most two: a burst of links cannot
+hold up the tick that allocation and close work share. Resource idle accounting reads all configured
+custody on this deployment and host, independent of the current sweep page.
 
 `BoatResources` owns the effect order because neither the credential store, gateway adapter nor
 guest agent alone can check the current allocation and resource link across both setup requests.

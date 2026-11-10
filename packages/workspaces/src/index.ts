@@ -39,6 +39,7 @@ export {
 } from "./worker/boat-allocation.js";
 
 export {
+  BOAT_RESOURCE_PASS,
   BoatResources,
   BoatResourcesHost,
   BoatResourcesError,
@@ -47,6 +48,8 @@ export {
   boatResourcesLayerNoDeps,
   type BoatCarriersReopened,
   type BoatGatewayHost,
+  type BoatResourcesOutcome,
+  type BoatResourcesPage,
   type BoatResourcesReceipt,
   type BoatResourcesSweep,
 } from "./worker/boat-resources.js";

@@ -27,7 +27,7 @@ import {
   type BoatTunnelReservation,
   type BoatAllocationRecord,
 } from "@sealant/validators";
-import { Clock, Context, Effect, Layer, Redacted, Ref } from "effect";
+import { Clock, Context, Effect, Layer, Redacted, Ref, Result } from "effect";
 
 import { SealantRuntime, SealantRuntimeControlLive } from "../../sealantd/runtime.js";
 import { BoatResourcesHost } from "../../worker/boat-resources.js";
@@ -100,6 +100,14 @@ export class BoatFinalCloseProvider extends Context.Service<
 
 const DELETION_WAIT_MS = 20_000;
 const DELETION_POLL_MS = 1_000;
+/**
+ * How long a close waits to freeze its run's tunnel while a configuration of the same run is at
+ * the gateway host, and how often it tries. The host lock is tried, never queued for, and it is
+ * held across one gateway mutation (a few seconds of Docker calls, by a link job, the sweep or a
+ * launch). Without the wait a close that met one failed at once and FINAL waited for the next
+ * close pass. Well inside a close's own 120 s bound, beside its 60 s drain and 20 s deletion wait.
+ */
+export const BOAT_CLOSE_FREEZE = { waitMs: 15_000, pollMs: 500 } as const;
 
 /**
  * Where a close keeps Boat's deletion operation between DELETE and `completed`, so a restarted
@@ -376,18 +384,30 @@ const make: Effect.Effect<
     // A positively running invocation already has an immutable guest record. Delayed start replays
     // only adopt it; they cannot create another invocation after this FINAL.
     yield* execution.hold(target);
-    const held = (yield* current(target)).custody;
-    custody =
-      held.kind === "tunnel"
-        ? {
-            kind: "tunnel",
-            reservation: yield* tunnels.freeze(
-              held.reservation,
-              (custody.kind === "tunnel" ? custody.reservation.closeId : undefined) ?? randomUUID(),
-            ),
-          }
-        : // A run without resources has no gateway to fence: the held execution is its fence.
-          held;
+    const closeId =
+      (custody.kind === "tunnel" ? custody.reservation.closeId : undefined) ?? randomUUID();
+    const freezeBy = (yield* Clock.currentTimeMillis) + BOAT_CLOSE_FREEZE.waitMs;
+    for (;;) {
+      const held = (yield* current(target)).custody;
+      if (held.kind !== "tunnel") {
+        // A run without resources has no gateway to fence: the held execution is its fence.
+        custody = held;
+        break;
+      }
+      const frozen = yield* Effect.result(tunnels.freeze(held.reservation, closeId));
+      if (Result.isSuccess(frozen)) {
+        custody = { kind: "tunnel", reservation: frozen.success };
+        break;
+      }
+      // `operation-held` is the host lock, taken by a configuration at its gateway mutation. Only
+      // this close waits, and it lets nothing through meanwhile: the execution is held and the
+      // stop recorded, and a configuration reads both before it dispatches, again under the lock.
+      // The reservation is read again each try, since the mutation that held the lock settled its
+      // update on it. Every other failure, and the lock still held at the bound, fails as before.
+      if (frozen.failure.code !== "operation-held" || (yield* Clock.currentTimeMillis) >= freezeBy)
+        return yield* Effect.fail(frozen.failure);
+      yield* Effect.sleep(BOAT_CLOSE_FREEZE.pollMs);
+    }
     // The owner discarded the unsaved work, or Mend attested a sealed FINAL of this executor: no
     // guest needs to answer before its VM is removed (audit S8).
     const instance = yield* runtimes.getRuntimeInstanceByRunId(target.runId);

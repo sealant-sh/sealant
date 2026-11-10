@@ -61,3 +61,15 @@ export {
   type WorkspaceStopReason,
   type WorkspaceStopRequestedMessage,
 } from "./workspace-lifecycle-queue.js";
+
+export {
+  boatResourceLinkChangedMessageKind,
+  boatResourceLinkQueue,
+  boatResourceLinkQueueName,
+  consumeBoatResourceLinkJobs,
+  parseBoatResourceLinkChangedMessage,
+  publishBoatResourceLinkChanged,
+  type BoatResourceLinkChangedMessage,
+  type BoatResourceLinkConsumerMessage,
+  type ConsumeBoatResourceLinkJobsOptions,
+} from "./boat-resource-link-queue.js";

@@ -4,7 +4,8 @@ import { createHash, randomUUID } from "node:crypto";
  * A scope's `instances`, `workspaces` and `archive` through the SDK, against the API booted in this
  * process: the real contract, transport gate, handlers, raw exec route and repositories on
  * Postgres, with a runtime that records what it was asked instead of driving Docker (the Docker
- * side is `@sealant/workspaces`' e2e). Gated on SEALANT_TEST_DATABASE_URL.
+ * side is `@sealant/workspaces`' e2e). The link route's message to the worker goes into the real
+ * job queue (pg-boss, in the same database). Gated on SEALANT_TEST_DATABASE_URL.
  */
 import { credentialCipherLayer } from "@sealant/credentials";
 import {
@@ -19,11 +20,20 @@ import {
 } from "@sealant/db";
 import { Sealant, SealantApiError, type ScopeInstanceSpec } from "@sealant/sdk";
 import { newWorkspaceSchema } from "@sealant/validators";
-import type { ReachAttachment, ResourceExecCommand, ResourceRuntime } from "@sealant/workspaces";
+import {
+  boatResourceLinkQueue,
+  closeJobQueueSingleton,
+  getJobQueueSingleton,
+  publishBoatResourceLinkChanged,
+  type ReachAttachment,
+  type ResourceExecCommand,
+  type ResourceRuntime,
+} from "@sealant/workspaces";
 import { Effect, Layer } from "effect";
 import { HttpRouter } from "effect/http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { BoatResourceLinkPublisherService } from "../../services/control-plane-capabilities.js";
 import {
   ResourceRuntimeHost,
   type ResourceRuntimeHostShape,
@@ -129,9 +139,27 @@ describe.skipIf(DATABASE_URL === undefined)("a scope's instances through the SDK
   let sealant: Sealant;
   let kubernetes: Sealant;
   const person = `user_instances_sdk_${randomUUID()}`;
+  /** What the link route told the worker, in order; each is also sent to the real queue. */
+  const told: Array<{ readonly workspaceId: string; readonly runId: string }> = [];
+  let queueDown = false;
+  const publisher = Layer.succeed(BoatResourceLinkPublisherService, {
+    publishLinkChanged: async (input) => {
+      if (queueDown) throw new Error("the job queue is down");
+      told.push(input);
+      await publishBoatResourceLinkChanged(DATABASE_URL ?? "", input);
+    },
+  });
+  /** The messages waiting in the queue for one run. */
+  const waiting = async (runId: string) => {
+    const { boss } = await getJobQueueSingleton(DATABASE_URL ?? "");
+    return (await boss.findJobs<{ readonly runId: string }>(boatResourceLinkQueue.name))
+      .filter((job) => job.state === "created" && job.data.runId === runId)
+      .map((job) => job.data);
+  };
 
   const boot = async (host: ResourceRuntimeHostShape) => {
     const provides = Layer.mergeAll(
+      publisher,
       credentialCipherLayer({ key: Buffer.alloc(32, 17).toString("base64") }).pipe(Layer.orDie),
       ResourceDomainRepoLive,
       ResourceInstanceRepoLive,
@@ -166,6 +194,7 @@ describe.skipIf(DATABASE_URL === undefined)("a scope's instances through the SDK
   afterAll(async () => {
     for (const client of clients) await client.close();
     for (const api of apis) await api.close();
+    await closeJobQueueSingleton();
   });
 
   const newScope = async () =>
@@ -230,6 +259,93 @@ describe.skipIf(DATABASE_URL === undefined)("a scope's instances through the SDK
     );
     return workspaceId;
   };
+
+  /** A workspace whose one run is on Boat, live unless a stop was requested for it. */
+  const boatWorkspace = async (stopped: boolean) => {
+    const workspaceId = `ws_${randomUUID()}`;
+    const runId = `run_${randomUUID()}`;
+    await Effect.runPromise(
+      db.insert(schema.workspaceAttempts).values({ id: runId, ownerUserId: person }),
+    );
+    await Effect.runPromise(
+      db.insert(schema.workspaces).values({ id: workspaceId, ownerUserId: person }),
+    );
+    await Effect.runPromise(db.insert(schema.workspaceRunLinks).values({ workspaceId, runId }));
+    await Effect.runPromise(
+      db.insert(schema.workspaceRuntimeInstances).values({
+        runId,
+        adapter: "boat",
+        status: "ready",
+        reference: "boat:bx_23456789",
+        ...(stopped ? { stopReason: "user" } : {}),
+      }),
+    );
+    return { workspaceId, runId };
+  };
+
+  it("tells the worker when the link of a workspace with a live Boat run is written, changed or removed, and a burst leaves one message", async () => {
+    const scope = await newScope();
+    const { workspaceId, runId } = await boatWorkspace(false);
+    const message = { kind: "boat.resource-link.changed", workspaceId, runId };
+    told.length = 0;
+    // Boat has no executor for the API's runtime to attach: the answer says none, as before.
+    expect(await scope.workspaces.link(workspaceId, { worktreeKey: "w1" })).toEqual({
+      worktreeKey: "w1",
+      aliases: null,
+      attachedExecutors: 0,
+    });
+    expect(told).toEqual([{ workspaceId, runId }]);
+    expect(await waiting(runId)).toEqual([message]);
+    // Mend re-links a running session when its project's bindings change: every change is
+    // told, and the queue keeps one message for the run until a worker takes it.
+    await scope.workspaces.link(workspaceId, { worktreeKey: "w1", aliases: { mail: "worktree" } });
+    await scope.workspaces.link(workspaceId, { worktreeKey: "w2" });
+    expect(told).toHaveLength(3);
+    expect(await waiting(runId)).toEqual([message]);
+    // The queue being down fails no link: the worker's sweep applies it.
+    queueDown = true;
+    try {
+      expect(await scope.workspaces.link(workspaceId, { worktreeKey: "w3" })).toEqual({
+        worktreeKey: "w3",
+        aliases: null,
+        attachedExecutors: 0,
+      });
+    } finally {
+      queueDown = false;
+    }
+    expect(told).toHaveLength(3);
+    // Archiving the scope removes the link: the run's gateway is told to drop what it served.
+    await scope.archive();
+    expect(told).toHaveLength(4);
+    expect(told.at(-1)).toEqual({ workspaceId, runId });
+    expect(await waiting(runId)).toEqual([message]);
+    const { boss } = await getJobQueueSingleton(DATABASE_URL ?? "");
+    for (const job of await boss.findJobs<{ readonly runId: string }>(boatResourceLinkQueue.name))
+      if (job.data.runId === runId) await boss.deleteJob(boatResourceLinkQueue.name, job.id);
+  });
+
+  it("tells the worker nothing for a workspace on Docker or one whose Boat run is stopping, and answers them as before", async () => {
+    const scope = await newScope();
+    await scope.instances.up("db", postgres, { cause: "use" });
+    told.length = 0;
+    const executor = `sealant-${randomUUID()}`;
+    const docker = await workspaceWithExecutor(executor);
+    expect(await scope.workspaces.link(docker, { worktreeKey: "w1" })).toEqual({
+      worktreeKey: "w1",
+      aliases: null,
+      attachedExecutors: 1,
+    });
+    expect(recorded.calls.attach.at(-1)).toEqual({ executor, aliases: ["db"] });
+    const stopping = await boatWorkspace(true);
+    expect(await scope.workspaces.link(stopping.workspaceId, { worktreeKey: "w1" })).toEqual({
+      worktreeKey: "w1",
+      aliases: null,
+      attachedExecutors: 0,
+    });
+    await scope.archive();
+    expect(told).toEqual([]);
+    expect(await waiting(stopping.runId)).toEqual([]);
+  });
 
   it("refuses to link a Boat workspace created without resources with a typed error, and links the same workspace on Docker", async () => {
     const scope = await newScope();

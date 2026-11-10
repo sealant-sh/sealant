@@ -46,6 +46,7 @@ import {
 import { Schema } from "effect";
 import { Effect } from "effect";
 
+import { BoatResourceLinkPublisherService } from "../../services/control-plane-capabilities.js";
 import { ResourceRuntimeHost } from "../../services/resource-runtime.js";
 import { CurrentPrincipal } from "../../services/service-principals.js";
 
@@ -547,6 +548,28 @@ const purgeResourceInstanceUnlocked = (
     return { kind: "purged" } satisfies ResourceInstancePurgeResult;
   });
 
+/**
+ * A Boat run reaches resources through a gateway that only the worker configures, so the link
+ * just written or removed changes nothing its session can reach until the worker applies it. Ask
+ * the worker to apply it now, once for each live Boat run of the workspace (none for a workspace
+ * on another runtime). The worker's sweep applies the link within a few ticks whatever happens
+ * here, so a failure is logged and never changes the route's answer.
+ */
+const announceBoatLink = (workspaceId: string) =>
+  Effect.gen(function* () {
+    const repo = yield* ResourceInstanceRepo;
+    const publisher = yield* BoatResourceLinkPublisherService;
+    for (const runId of yield* repo.liveBoatRuns(workspaceId)) {
+      yield* Effect.tryPromise(() => publisher.publishLinkChanged({ workspaceId, runId }));
+    }
+  }).pipe(
+    Effect.catch(() =>
+      Effect.logWarning(
+        `Workspace ${workspaceId}: its resource link changed, and the worker could not be told. A Boat session reaches the change at the worker's next resource sweep.`,
+      ),
+    ),
+  );
+
 export const linkResourceWorkspace = (
   resourceDomainId: string,
   workspaceId: string,
@@ -587,6 +610,7 @@ export const linkResourceWorkspace = (
           resourceDomainId: outcome.resourceDomainId,
         });
       case "linked": {
+        yield* announceBoatLink(workspaceId);
         // Converge the executors it runs now, so a narrower map detaches at once; a later launch
         // attaches its own (the worker's hook).
         const executors = (yield* repo
@@ -642,6 +666,7 @@ export const archiveResourceDomain = (resourceDomainId: string) =>
     }
     for (const link of yield* repo.links(resourceDomainId).pipe(Effect.mapError(failed))) {
       yield* repo.unlink(link.workspaceId).pipe(Effect.mapError(failed));
+      yield* announceBoatLink(link.workspaceId);
     }
     yield* repo.setDomainState(resourceDomainId, "archived").pipe(Effect.mapError(failed));
     return { volumes };

@@ -27,6 +27,15 @@ A crash immediately after recording a host request can therefore retain its port
 conservative limitation needs positive host-operation reconciliation before admission can be
 enabled.
 
+A configuration holds the gateway host lock across its one gateway mutation, and the lock is tried,
+never queued for. A close that meets it (a link job, the sweep's visit, a launch) has already held
+the execution; it then tries the freeze again every 500 ms for up to 15 s, reading the reservation
+again each time, and freezes as soon as the mutation returns. Nothing gets through while it waits: a
+configuration reads the stop and the held execution before it dispatches, again under the lock. A
+lock still held at 15 s, or any other failure of the freeze, fails the close as before, and the next
+close pass finishes it. Only the close of a run that was issued waits; the close of a launch that
+never issued fails at once.
+
 The canonical capture drain sends FINAL through authenticated control and records every observation
 in `workspace_capture_drains`. Empty queues do not count as FINAL completion. Incomplete,
 unreadable, contradictory or unrecorded evidence retains the VM and its tunnel. The drain has a

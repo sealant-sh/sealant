@@ -16,7 +16,7 @@ import {
   type SealantDB,
 } from "@sealant/db";
 import type { BoatExecutionTarget } from "@sealant/validators";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Semaphore } from "effect";
 
 import {
   boatTunnelName,
@@ -69,15 +69,40 @@ export const boatResourceObligations = (
     (entry) => !["configured", "closed", "pending", "no-resources"].includes(entry.outcome),
   );
 
+/** What one visit of a run found. `no-resources`: launched without resources, nothing to configure. */
+export type BoatResourcesOutcome =
+  | "configured"
+  | "closed"
+  | "pending"
+  | "held"
+  | "unavailable"
+  | "no-resources";
 /** One bounded page; failures advance the cursor without resetting any durable intent. */
-export interface BoatResourcesSweep {
+export interface BoatResourcesPage {
   readonly entries: readonly {
     readonly runId: string;
-    /** `no-resources`: the run was launched without resources and has nothing to configure. */
-    readonly outcome: "configured" | "closed" | "pending" | "held" | "unavailable" | "no-resources";
+    readonly outcome: BoatResourcesOutcome;
   }[];
   readonly next?: string;
 }
+/** One tick: a page of every allocation and, when asked for, the page of live runs before it. */
+export interface BoatResourcesSweep extends BoatResourcesPage {
+  readonly live?: BoatResourcesPage;
+}
+/**
+ * The bounds on configuring runs outside a launch. Every tick visits `livePage` live runs, so
+ * with N of them each is visited every ceil(N / livePage) ticks whatever the deployment's history.
+ * At most `concurrency` runs are configured at once across the sweep's two pages and link jobs,
+ * each for at most `entryTimeoutMs`; link jobs take at most `linkJobs` of those turns, so a burst
+ * of links leaves the sweep, which shares the worker's tick with allocation and close work, at
+ * least the rest.
+ */
+export const BOAT_RESOURCE_PASS = {
+  livePage: 20,
+  concurrency: 4,
+  linkJobs: 2,
+  entryTimeoutMs: 120_000,
+} as const;
 /** What a worker's start pass did: the live runs whose carrier it ensured. */
 export interface BoatCarriersReopened {
   readonly runIds: readonly string[];
@@ -95,14 +120,32 @@ export class BoatResources extends Context.Service<
     readonly prepare: (
       target: BoatExecutionTarget,
     ) => Effect.Effect<BoatResourcesReceipt, BoatResourcesError>;
+    /**
+     * One page of every allocation the deployment ever had: a live run is configured, an ended one
+     * reported closed or held and its carrier released.
+     *
+     * With `live`, a page of the live runs that have a tunnel on this gateway host is configured
+     * first, by its own cursor, so how soon a live run's link is applied does not depend on how
+     * many runs have ended. A run that page visited is not configured again by this call: the
+     * page of every allocation reports the outcome it had.
+     */
     readonly reconcile: (input: {
       readonly limit: number;
       readonly after?: string;
+      readonly live?: { readonly limit: number; readonly after?: string };
     }) => Effect.Effect<BoatResourcesSweep, BoatResourcesError>;
     /**
+     * Configure one run now, as the sweep does when its cursor reaches it: for a link written or
+     * removed while the run is live. It waits for a configuration of the same run in flight, then
+     * runs again, since that one may have read the link before the change. It releases nothing:
+     * a run that is stopping, ended, launched without resources or not this deployment's is left
+     * as it is, and so is every run on a deployment with no resource gateway.
+     */
+    readonly apply: (runId: string) => Effect.Effect<BoatResourcesOutcome>;
+    /**
      * At worker start: ensure the carrier of every live run with a tunnel on this gateway host,
-     * and nothing else. The sweep reaches a run only as its cursor does, through every allocation
-     * the deployment ever had; this pass reads live runs only. It configures no gateway or guest
+     * and nothing else. The sweep opens a carrier only as it configures the run, a page of live
+     * runs a tick; this pass reads every live run at once. It configures no gateway or guest
      * and releases nothing: the sweep still owns both. Nothing to do without a gateway.
      */
     readonly reopenCarriers: () => Effect.Effect<BoatCarriersReopened, BoatResourcesError>;
@@ -144,6 +187,16 @@ const gatewayUnavailable = () =>
     code: "gateway-unavailable",
     resourceOperation: "check-authority",
   });
+
+/** A page's entries and, when the page was full, the cursor of the next one. */
+const page = (
+  ids: readonly string[],
+  limit: number,
+  entries: BoatResourcesPage["entries"],
+): BoatResourcesPage => {
+  const last = ids.at(-1);
+  return { entries, ...(ids.length === limit && last !== undefined ? { next: last } : {}) };
+};
 
 const boundary = <A>(
   effect: Effect.Effect<A, unknown>,
@@ -254,11 +307,19 @@ const make: Effect.Effect<
             "read-resources",
           )).filter((instance) => instance.desired === "running");
     const recheck = Effect.gen(function* () {
-      if (
-        !isDeepStrictEqual(yield* current(target), admission) ||
-        !isDeepStrictEqual(yield* resources.linkOfRun(target.runId), link)
-      )
+      if (!isDeepStrictEqual(yield* current(target), admission))
         return yield* Effect.fail(new BoatResourcesError("binding-conflict"));
+      // The link was written or removed under this configuration. Nothing is in conflict: this
+      // configuration is stale, and the link's job or the next tick makes it again. `pending`
+      // and not `held`, so the sweep does not release the carrier of a session that is running.
+      if (!isDeepStrictEqual(yield* resources.linkOfRun(target.runId), link))
+        return yield* Effect.fail(
+          new BoatResourcesError("pending", {
+            step: "readiness",
+            errorClass: "BoatResourcesError",
+            resourceOperation: "read-resources",
+          }),
+        );
     });
     yield* recheck;
     // Only a configured reservation can dispatch a gateway mutation. Allocation failures have
@@ -316,56 +377,121 @@ const make: Effect.Effect<
     });
     return { gateway, guest: receipt };
   });
+  // One run is configured by one caller at a time in this process, and `concurrency` runs at
+  // once: the sweep's two pages and link jobs all take their turn here.
+  const turns = yield* Semaphore.make(BOAT_RESOURCE_PASS.concurrency);
+  const inTurn = new Map<string, { readonly turn: Semaphore.Semaphore; waiting: number }>();
+  const exclusively = <A, E>(id: string, effect: Effect.Effect<A, E>) =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const entry = inTurn.get(id) ?? { turn: Semaphore.makeUnsafe(1), waiting: 0 };
+        entry.waiting += 1;
+        inTurn.set(id, entry);
+        return entry;
+      }),
+      (entry) => entry.turn.withPermits(1)(turns.withPermits(1)(effect)),
+      (entry) =>
+        Effect.sync(() => {
+          entry.waiting -= 1;
+          if (entry.waiting === 0) inTurn.delete(id);
+        }),
+    );
+  /** What the run needs: an outcome that is already known, or the target to configure. */
+  const candidate = (id: string) =>
+    Effect.gen(function* () {
+      const record = yield* allocations.get(id);
+      // Launched without resources: no gateway, tunnel or carrier exists for it, in any phase.
+      if (record?.input.resources === "none") return "no-resources" as const;
+      // Another deployment's run is never configured from here; a link job can name any run.
+      if (record !== undefined && record.input.deploymentId !== host.deploymentId)
+        return "held" as const;
+      if (record?.phase === "deleted") {
+        // Deletion retains its immutable target. Never try to configure that retired guest.
+        // Host cleanup is a separate obligation until canonical FINAL releases its reservation.
+        const tunnel = yield* tunnels.get(record.target?.runtimeInstanceId ?? id);
+        return tunnel === undefined || tunnel.released === true
+          ? ("closed" as const)
+          : ("held" as const);
+      }
+      if (record?.phase === "held") return "held" as const;
+      if (record?.target === null || record === undefined) return "pending" as const;
+      // A live launch owns its guest and gateway until it finishes or its lease lapses.
+      if (yield* allocations.launchInFlight(id)) return "pending" as const;
+      // No resource gateway here: a run that has a tunnel cannot be configured from this worker.
+      if (host.gateway === undefined) return "unavailable" as const;
+      return record.target;
+    });
+  /**
+   * Visit one run: report what is known of it, or configure it in its turn. `prepare` reads the
+   * run's authority itself (its allocation bound to this target, its run active, its execution
+   * not held) before any host or guest effect, so a run that stopped while this waited is held.
+   */
+  const settle = (id: string): Effect.Effect<BoatResourcesOutcome> =>
+    Effect.gen(function* () {
+      const known = yield* candidate(id).pipe(Effect.timeout(BOAT_RESOURCE_PASS.entryTimeoutMs));
+      if (typeof known === "string") return known;
+      yield* exclusively(
+        id,
+        boundary(prepare(known)).pipe(Effect.timeout(BOAT_RESOURCE_PASS.entryTimeoutMs)),
+      );
+      return "configured" as const;
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.succeed(
+          error instanceof BoatResourcesError
+            ? error.code === "pending"
+              ? ("pending" as const)
+              : error.code === "held" || error.code === "binding-conflict"
+                ? ("held" as const)
+                : ("unavailable" as const)
+            : ("unavailable" as const),
+        ),
+      ),
+    );
+  /** A page of the live runs with a tunnel on this gateway host, each configured. No releases. */
+  const reconcileLive = (input: { readonly limit: number; readonly after?: string }) =>
+    Effect.gen(function* () {
+      const gatewayHost = host.gateway;
+      if (gatewayHost === undefined) return page([], input.limit, []);
+      const ids = yield* allocations.listTunnelled({
+        deploymentId: host.deploymentId,
+        gatewayHostId: gatewayHost.hostId,
+        limit: input.limit,
+        ...(input.after === undefined ? {} : { after: input.after }),
+      });
+      const entries = yield* Effect.forEach(
+        ids,
+        (id) => settle(id).pipe(Effect.map((outcome) => ({ runId: id, outcome }))),
+        { concurrency: BOAT_RESOURCE_PASS.concurrency },
+      );
+      return page(ids, input.limit, entries);
+    });
   const reconcile = Effect.fn("BoatResources.reconcile")(function* (
     input: Parameters<BoatResources["Service"]["reconcile"]>[0],
   ) {
-    const ids = yield* allocations.list({ deploymentId: host.deploymentId, ...input });
+    const live = input.live === undefined ? undefined : yield* reconcileLive(input.live);
+    const settled = new Map(live?.entries.map((entry) => [entry.runId, entry.outcome]));
+    const ids = yield* allocations.list({
+      deploymentId: host.deploymentId,
+      limit: input.limit,
+      ...(input.after === undefined ? {} : { after: input.after }),
+    });
     const entries = yield* Effect.forEach(
       ids,
-      (id) =>
-        Effect.gen(function* () {
-          const record = yield* allocations.get(id);
-          // Launched without resources: no gateway, tunnel or carrier exists for it, in any phase.
-          if (record?.input.resources === "none") return "no-resources" as const;
-          if (record?.phase === "deleted") {
-            // Deletion retains its immutable target. Never try to configure that retired guest.
-            // Host cleanup is a separate obligation until canonical FINAL releases its reservation.
-            const tunnel = yield* tunnels.get(record.target?.runtimeInstanceId ?? id);
-            return tunnel === undefined || tunnel.released === true
-              ? ("closed" as const)
-              : ("held" as const);
-          }
-          if (record?.phase === "held") return "held" as const;
-          if (record?.target === null || record === undefined) return "pending" as const;
-          // A live launch owns its guest and gateway until it finishes or its lease lapses.
-          if (yield* allocations.launchInFlight(id)) return "pending" as const;
-          // No resource gateway here: a run that has a tunnel cannot be configured from this worker.
-          if (host.gateway === undefined) return "unavailable" as const;
-          yield* boundary(prepare(record.target));
-          return "configured" as const;
-        }).pipe(
-          Effect.timeout(120_000),
-          Effect.catch((error) =>
-            Effect.succeed(
-              error instanceof BoatResourcesError
-                ? error.code === "pending"
-                  ? ("pending" as const)
-                  : error.code === "held" || error.code === "binding-conflict"
-                    ? ("held" as const)
-                    : ("unavailable" as const)
-                : ("unavailable" as const),
-            ),
-          ),
+      (id) => {
+        // Visited as a live run a moment ago in this call: its outcome stands, not a second visit.
+        const already = settled.get(id);
+        return (already === undefined ? settle(id) : Effect.succeed(already)).pipe(
           // A run that is closed or held carries no tunnel any more.
           Effect.tap((outcome) =>
             outcome === "closed" || outcome === "held" ? carrier.release(id) : Effect.void,
           ),
           Effect.map((outcome) => ({ runId: id, outcome })),
-        ),
-      { concurrency: 4 },
+        );
+      },
+      { concurrency: BOAT_RESOURCE_PASS.concurrency },
     );
-    const last = ids.at(-1);
-    return { entries, ...(ids.length === input.limit && last !== undefined ? { next: last } : {}) };
+    return { ...page(ids, input.limit, entries), ...(live === undefined ? {} : { live }) };
   });
   /**
    * The run's configured network custody on this gateway host while its admitted epoch is current,
@@ -454,6 +580,7 @@ const make: Effect.Effect<
   return BoatResources.of({
     prepare: (target) => boundary(prepare(target)),
     reconcile: (input) => boundary(reconcile(input)),
+    apply: Effect.fn("BoatResources.apply")((runId: string) => settle(runId)),
     reopenCarriers: () => boundary(reopenCarriers()),
     reach: () => boundary(reach()),
   });

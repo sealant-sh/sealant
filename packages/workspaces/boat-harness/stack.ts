@@ -5,7 +5,7 @@
  */
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { createWriteStream } from "node:fs";
+import { createWriteStream, existsSync } from "node:fs";
 import {
   copyFile,
   mkdir,
@@ -104,6 +104,15 @@ export interface HarnessStack {
   readonly api: ManagedProcess;
   /** Runs read-only SQL in Core's database and returns its rows as JSON values. */
   readonly query: (sql: string) => Promise<unknown[]>;
+  /**
+   * Makes each of Core's gateway configures wait `seconds` before it runs (a slow configuration
+   * holding the gateway host's lock), or, with `undefined`, run at once again.
+   */
+  readonly slowGatewayConfigure: (seconds: number | undefined) => Promise<void>;
+  /** A gateway configure has begun waiting since `slowGatewayConfigure` was last armed. */
+  readonly gatewayConfigureStarted: () => boolean;
+  /** Runs one SQL statement that writes: only for a fault a scenario names (e.g. a dropped job). */
+  readonly write: (sql: string) => Promise<void>;
   /** SIGKILLs the worker: no finalizers run, as when a host dies. */
   readonly killWorker: () => Promise<void>;
   /** Core-labelled Docker objects (resources, gateways) created since the stack started. */
@@ -691,6 +700,7 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
     await mkdir(processTmp, { mode: 0o700 });
 
     const realDocker = (await sh("sh", ["-c", "command -v docker"])).trim();
+    const configureDelayFile = join(scratch, "gateway-configure-delay");
     if (!realDocker.startsWith("/")) throw new Error("docker is not on PATH");
     const credentialsKey = randomBytes(32).toString("base64");
     const serviceKey = `slt_harness_${randomBytes(16).toString("hex")}`;
@@ -717,6 +727,8 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       // Core runs the docker CLI from PATH; the wrapper labels what it creates with this run.
       PATH: `${join(here, "bin")}:${process.env.PATH ?? ""}`,
       SEALANT_BOAT_HARNESS_REAL_DOCKER: realDocker,
+      // `bin/docker` delays Core's gateway configures while this file exists (slowGatewayConfigure).
+      SEALANT_BOAT_HARNESS_CONFIGURE_DELAY_FILE: configureDelayFile,
       NODE_EXTRA_CA_CERTS: tls.ca,
       NODE_OPTIONS: `--import ${join(here, "preload.mjs")}`,
     };
@@ -848,6 +860,15 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       worker,
       api,
       query,
+      write: async (sql) => {
+        await psql(sql);
+      },
+      slowGatewayConfigure: async (seconds) => {
+        await rm(`${configureDelayFile}.started`, { force: true });
+        if (seconds === undefined) await rm(configureDelayFile, { force: true });
+        else await writeFile(configureDelayFile, String(seconds));
+      },
+      gatewayConfigureStarted: () => existsSync(`${configureDelayFile}.started`),
       killWorker: () => stopProcess(worker, "SIGKILL"),
       ownedObjects: () => listLabelled(label),
       startWorker,
