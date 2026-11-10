@@ -178,14 +178,25 @@ const commandBody = z
   })
   .strict();
 const fileBody = z
-  .object({ path: z.string(), content: z.string(), encoding: z.literal("utf8") })
+  .object({
+    path: z.string(),
+    content: z.string(),
+    encoding: z.literal("utf8"),
+  })
   .strict();
 const uploadBody = z.object({ path: z.string(), ttlSeconds: z.number().int() }).strict();
 const hostBody = z
-  .object({ port: z.number().int(), public: z.boolean(), localhost: z.boolean() })
+  .object({
+    port: z.number().int(),
+    public: z.boolean(),
+    localhost: z.boolean(),
+  })
   .strict();
 const snapshotBody = z
-  .object({ sandboxId: z.string(), name: z.string().regex(/^[a-z0-9-]{1,63}$/) })
+  .object({
+    sandboxId: z.string(),
+    name: z.string().regex(/^[a-z0-9-]{1,63}$/),
+  })
   .strict();
 
 interface DetachedProcess {
@@ -227,7 +238,11 @@ export class FakeBoat {
   readonly #processes = new Map<number, DetachedProcess>();
   readonly #uploads = new Map<
     string,
-    { readonly sandboxId: string; readonly path: string; readonly expires: number }
+    {
+      readonly sandboxId: string;
+      readonly path: string;
+      readonly expires: number;
+    }
   >();
   #nextProcess = 1;
   #api: http.Server | undefined;
@@ -347,6 +362,13 @@ export class FakeBoat {
       monitoring: sandbox.monitoring,
       dataExpiredAt: null,
       stoppedAt: sandbox.stoppedAt,
+      // Core's parking reads the stop operation's status before it saves a snapshot.
+      stop:
+        sandbox.state === "archiving"
+          ? { status: "pending" }
+          : sandbox.stoppedAt === null
+            ? null
+            : { status: "completed" },
       ...(sandbox.hydrated === undefined ? {} : { hydrated: sandbox.hydrated }),
     };
   }
@@ -412,12 +434,18 @@ export class FakeBoat {
       if ((match = path.match(/^\/sandboxes\/(bx_[a-z0-9]+)$/))) {
         const id = match[1] ?? "";
         if (method === "GET")
-          return send(200, { ok: true, sandbox: this.#view(this.#sandbox(id)) });
+          return send(200, {
+            ok: true,
+            sandbox: this.#view(this.#sandbox(id)),
+          });
         if (method === "DELETE") {
           if (request.headers["x-ascii-confirm-delete"] !== id)
             throw new HttpError(400, "delete_confirmation_required");
           // Recorded: Boat accepts a deletion with 202 and an operation to poll.
-          return send(202, { ok: true, operation: this.#delete(this.#sandbox(id)) });
+          return send(202, {
+            ok: true,
+            operation: this.#delete(this.#sandbox(id)),
+          });
         }
       }
       if ((match = path.match(/^\/sandboxes\/(bx_[a-z0-9]+)\/commands$/)) && method === "POST") {
@@ -447,7 +475,10 @@ export class FakeBoat {
           response.destroy();
           return;
         }
-        return send(200, { ok: true, ...(await this.#runSync(sandbox, body, fault)) });
+        return send(200, {
+          ok: true,
+          ...(await this.#runSync(sandbox, body, fault)),
+        });
       }
       if ((match = path.match(/^\/sandboxes\/(bx_[a-z0-9]+)\/commands\/(\d+)$/))) {
         this.#sandbox(match[1] ?? "");
@@ -479,7 +510,12 @@ export class FakeBoat {
         if (method === "DELETE") {
           const signaled = process.running;
           if (signaled) await this.#killDetached(process);
-          return send(200, { ok: true, processId: process.id, running: false, signaled });
+          return send(200, {
+            ok: true,
+            processId: process.id,
+            running: false,
+            signaled,
+          });
         }
       }
       if ((match = path.match(/^\/sandboxes\/(bx_[a-z0-9]+)\/files$/)) && method === "PUT") {
@@ -536,12 +572,18 @@ export class FakeBoat {
       ) {
         const deletion = this.deletions.get(match[1] ?? "");
         if (deletion === undefined) throw new HttpError(404, "not_found");
-        return send(200, { ok: true, operation: { ...deletion, kind: "sandbox" } });
+        return send(200, {
+          ok: true,
+          operation: { ...deletion, kind: "sandbox" },
+        });
       }
       if (path === "/saved-snapshots" && method === "POST" && this.options.trialAccount === true)
         throw new HttpError(403, "trial_saved_snapshots_not_allowed");
       if (path === "/saved-snapshots" && method === "POST")
-        return send(202, { ok: true, snapshot: this.#save(snapshotBody.parse(json())) });
+        return send(202, {
+          ok: true,
+          snapshot: this.#save(snapshotBody.parse(json())),
+        });
       if (path === "/saved-snapshots" && method === "GET") {
         const snapshots = [...this.snapshots.values()].map((snapshot) =>
           this.#snapshotView(snapshot),
@@ -562,12 +604,19 @@ export class FakeBoat {
         const snapshot = this.snapshots.get(match[1] ?? "");
         if (snapshot === undefined) throw new HttpError(404, "not_found");
         if (method === "GET")
-          return send(200, { ok: true, snapshot: this.#snapshotView(snapshot) });
+          return send(200, {
+            ok: true,
+            snapshot: this.#snapshotView(snapshot),
+          });
         if (method === "DELETE") {
           this.snapshots.delete(snapshot.name);
           await this.#docker(["image", "rm", "-f", snapshot.image]);
           this.#record("snapshot-deleted", snapshot.sourceSandboxId, snapshot.name);
-          return send(200, { ok: true, name: snapshot.name, status: "deleted" });
+          return send(200, {
+            ok: true,
+            name: snapshot.name,
+            status: "deleted",
+          });
         }
       }
       if ((match = path.match(/^\/snapshots\/([A-Za-z0-9_-]+)\/files$/)) && method === "GET")
@@ -643,6 +692,17 @@ export class FakeBoat {
       this.#record("fault:provisioning-stuck", sandbox.id);
       return;
     }
+    // The workspace's own dockerd keeps its layers under /var/lib/sealant/docker. On a VM that is
+    // a disk; in the twin it would be the container's overlay root, which overlayfs refuses as an
+    // upper layer, so each twin gets a volume there (this run's label; removed with it).
+    const dockerData = `${sandbox.container}-docker`;
+    await this.#dockerOk([
+      "volume",
+      "create",
+      "--label",
+      `${HARNESS_LABEL}=${this.options.runId}`,
+      dockerData,
+    ]);
     await this.#dockerOk([
       "run",
       "-d",
@@ -661,6 +721,8 @@ export class FakeBoat {
       "/run",
       "--tmpfs",
       "/run/lock",
+      "-v",
+      `${dockerData}:/var/lib/sealant/docker`,
       "--network",
       this.options.network,
       sandbox.image,
@@ -802,7 +864,8 @@ export class FakeBoat {
     const snapshot = [...this.snapshots.values()].find((entry) => entry.snapshotId === snapshotId);
     if (snapshot === undefined || snapshot.status !== "ready")
       throw new HttpError(404, "snapshot_not_found");
-    if (!/^\/var\/lib\/sealant\/guest\/capsules\/[a-f0-9-]{36}\/capsule\.pack$/.test(path))
+    // The one file Core reads back from a saved snapshot: the agent's park receipt.
+    if (!/^\/var\/lib\/sealant\/agent\/park-[a-f0-9-]{36}\.json$/.test(path))
       throw new HttpError(400, "invalid_path");
     const child = spawn("docker", [
       "run",
@@ -869,7 +932,12 @@ export class FakeBoat {
     this.#record("command", sandbox.id, body.command.slice(0, 300));
     if (fault?.kind === "exit") {
       this.#record("fault:command-exit", sandbox.id, String(fault.code));
-      return { exitCode: fault.code, timedOut: false, stdout: "", stderr: fault.stderr ?? "" };
+      return {
+        exitCode: fault.code,
+        timedOut: false,
+        stdout: "",
+        stderr: fault.stderr ?? "",
+      };
     }
     if (fault?.kind === "timeout") {
       this.#record("fault:command-timeout", sandbox.id);
@@ -1065,7 +1133,13 @@ export class FakeBoat {
     const headers = { ...request.headers };
     delete headers.cookie;
     const upstream = http.request(
-      { host: sandbox.ip, port, method: request.method, path: request.url, headers },
+      {
+        host: sandbox.ip,
+        port,
+        method: request.method,
+        path: request.url,
+        headers,
+      },
       (reply) => {
         // Every guest answer is evidence: e.g. the relay's 404 for a route it does not forward.
         this.#record("proxy", sandbox.id, `${request.method} ${url.pathname} ${reply.statusCode}`);

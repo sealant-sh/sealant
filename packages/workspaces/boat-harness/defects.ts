@@ -27,12 +27,6 @@ export const PEER_PID: Defect = {
   owner: "thread A2 (readiness)",
 };
 
-/** F3 on the happy path: named at its own `ready` step, so a later step's failure is real. */
-const PEER_PID_AT_READY: Defect = {
-  ...PEER_PID,
-  failure: /^step ready: launch ended \w+ with [^\n]*\\"step\\":\\"readiness\\"/,
-};
-
 /**
  * Lifecycle S1, the part #491 left: a launch that fails while Boat still reports `cloning`
  * (`observe-sandbox` / `allocation-pending`) is deleted correctly, but its public status stays
@@ -94,26 +88,31 @@ export const firstOf = (...defects: readonly Defect[]): Defect => ({
   anyOf: defects,
 });
 
-/** Which scenario is an expected failure on main, and why. `undefined` means it must pass. */
+/**
+ * Which scenario is an expected failure on main, and why. `undefined` means it must pass.
+ *
+ * F3 was the Python guest's control bridge; the agent (sealant#512, #515) has no bridge, so the
+ * scenarios it marked must pass now. `PEER_PID` stays exported for the record only.
+ */
 export const DEFECTS = {
-  happyPath: PEER_PID_AT_READY,
+  happyPath: undefined,
   faults: {
-    "bind slower than one sweep period": PEER_PID,
+    "bind slower than one sweep period": undefined,
     "create reply lost": ISSUED_ALLOCATION,
     "provisioning never finishes": firstOf(DELETED_VM_KEPT, SLOW_CLOSE),
     "bind exits 1": SLOW_CLOSE,
     "bind times out": SLOW_CLOSE,
     "bind start reply lost": SLOW_CLOSE,
-    "receiver socket absent behind a live relay": SLOW_CLOSE,
-    "receiver answers 400 on permit": SLOW_CLOSE,
-    "receiver answers 409 on permit": SLOW_CLOSE,
-    "receiver answers 503 on permit": SLOW_CLOSE,
-    "gateway dnsmasq starts 8 s late": PEER_PID,
+    "agent stopped after bind": SLOW_CLOSE,
+    "agent answers 400 on launch": SLOW_CLOSE,
+    "agent answers 409 on launch": SLOW_CLOSE,
+    "agent answers 503 on launch": SLOW_CLOSE,
+    "gateway dnsmasq starts 8 s late": undefined,
     "gateway crashes before the guest joins": SLOW_CLOSE,
     "UDP to the gateway blocked": SLOW_CLOSE,
-    "db stopped by a person": PEER_PID,
+    "db stopped by a person": undefined,
     "worker killed after bind": undefined,
-    "Stop after the launch": firstOf(PEER_PID, STUCK_DRAINS),
+    "Stop after the launch": STUCK_DRAINS,
     "deletion stuck in processing": SLOW_CLOSE,
   },
 } as const satisfies {

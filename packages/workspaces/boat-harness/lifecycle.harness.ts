@@ -7,10 +7,13 @@
  * terminal workspace for Mend within 60 s. Scenarios share one stack and one published snapshot.
  */
 import { randomBytes } from "node:crypto";
+import { copyFile, mkdir, readdir } from "node:fs/promises";
+import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { DEFECTS } from "./defects.js";
+import { Transcript, dockerScenario, evidenceDir } from "./docker-scenario.js";
 import { scenarios } from "./faults.js";
 import { runScenario, type Defect } from "./markers.js";
 import {
@@ -37,7 +40,16 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await stack?.stop();
+  if (stack === undefined) return;
+  await stack.stop();
+  // Keep the run's logs beside the scenario evidence when a proof directory was given.
+  const proof = process.env.BOAT_TWIN_PROOF_DIR;
+  if (proof === undefined) return;
+  const logs = join(proof, "harness-logs");
+  await mkdir(logs, { recursive: true });
+  for (const name of await readdir(stack.scratch).catch(() => []))
+    if (/\.(log|json)$/.test(name))
+      await copyFile(join(stack.scratch, name), join(logs, name)).catch(() => undefined);
 });
 
 /** Prefixes a failure with the lifecycle step it happened in. */
@@ -67,15 +79,16 @@ const happyPath = async () => {
       `step ready: launch ended ${outcome.status} with ${JSON.stringify(outcome.view)}; guest: ${await guestEvidence(stack, first.runId)}`,
     );
   const view = await runtimeView(stack, first.runId);
-  expect(view).toMatchObject({ allocation: "bound", execution: "running", status: "ready" });
+  expect(view).toMatchObject({
+    allocation: "bound",
+    execution: "running",
+    status: "ready",
+  });
   await step("shell", async () => {
     expect((await sh(first, "id -un")).trim()).not.toBe("");
   });
   await step("db:5432 through the tunnel", () =>
-    sh(
-      first,
-      `python3 -c "import socket; socket.create_connection(('db', 5432), 5).close(); print('reached')"`,
-    ),
+    sh(first, `timeout 5 bash -c 'exec 3<>/dev/tcp/db/5432' && echo reached`),
   );
   await step("edit", () =>
     sh(
@@ -161,6 +174,38 @@ describe("Boat session lifecycle", () => {
   scenario("happy path", DEFECTS.happyPath, happyPath, 40 * 60_000);
 });
 
+/**
+ * The workspace's own Docker, as the owner's person: hello-world, a build, compose to `db`
+ * through the tunnel, the containers' egress policy, a two-stage Node build with `npm ci`, the
+ * VM's and the session's peak memory and tasks, and the image's VM probe. Its blueprint differs
+ * from the happy path's (Docker on), so it builds and publishes its own snapshot first.
+ */
+const dockerInTheWorkspace = async () => {
+  const transcript = new Transcript(join(evidenceDir(stack), "docker-scenario.md"));
+  const run = await step("launch (docker, person)", () =>
+    launch(stack, project, { docker: true, person: true }),
+  );
+  const outcome = await step("ready", () => awaitOutcome(stack, run, 40 * 60_000));
+  if (outcome.status !== "ready")
+    throw new Error(
+      `step ready: launch ended ${outcome.status} with ${JSON.stringify(outcome.view)}; guest: ${await guestEvidence(stack, run.runId)}`,
+    );
+  await transcript.note(
+    `# Docker in the workspace: run ${run.runId}, workspace ${run.workspace.id}, ready after ${String(Math.round((outcome.at - run.startedAt) / 1000))}s`,
+  );
+  await step("docker scenario", () => dockerScenario(stack, run, transcript));
+  const stoppedAt = Date.now();
+  await step("Stop", () => run.workspace.stop());
+  await step("FINAL, deletion and release", async () => {
+    await assertSettled(stack, run, stoppedAt, { terminal: ["stopped"] });
+    await assertReleased(stack, run, { discard: false });
+  });
+};
+
+describe("Docker in the workspace", () => {
+  scenario("docker, as the owner's person", undefined, dockerInTheWorkspace, 60 * 60_000);
+});
+
 describe("one fault per step", () => {
   fault("bind slower than one sweep period", scenarios.bindSlowerThanSweep);
   fault("create reply lost", scenarios.createReplyLost);
@@ -168,10 +213,10 @@ describe("one fault per step", () => {
   fault("bind exits 1", scenarios.bindExits);
   fault("bind times out", scenarios.bindTimesOut);
   fault("bind start reply lost", scenarios.bindReplyDropped);
-  fault("receiver socket absent behind a live relay", scenarios.receiverAbsent);
-  fault("receiver answers 400 on permit", scenarios.receiverRefuses(400));
-  fault("receiver answers 409 on permit", scenarios.receiverRefuses(409));
-  fault("receiver answers 503 on permit", scenarios.receiverRefuses(503));
+  fault("agent stopped after bind", scenarios.agentAbsent);
+  fault("agent answers 400 on launch", scenarios.agentRefuses(400));
+  fault("agent answers 409 on launch", scenarios.agentRefuses(409));
+  fault("agent answers 503 on launch", scenarios.agentRefuses(503));
   fault("gateway dnsmasq starts 8 s late", scenarios.gatewaySlow);
   fault("gateway crashes before the guest joins", scenarios.gatewayCrashes);
   fault("UDP to the gateway blocked", scenarios.udpBlocked);

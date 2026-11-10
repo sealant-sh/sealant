@@ -58,9 +58,24 @@ export interface Launch {
   readonly startedAt: number;
 }
 
+/**
+ * The owner's person (Mend ADR 0016): a uid in Mend's range whose passwd entry sealantd makes from
+ * the capture owner map, so `workspace.exec(argv, { user })` runs as them and not as root.
+ */
+export const PERSON = {
+  id: "harness-person",
+  uid: 40001,
+  home: "/home/harness-person",
+} as const;
+const MEND_GID = 40000;
+
 export interface LaunchOptions {
   /** Resume an earlier session: the daemon restores its worktree's captures before anything runs. */
   readonly resume?: CaptureSession;
+  /** The workspace's own Docker (`tooling.services.docker.enabled`): the image carries the engine. */
+  readonly docker?: boolean;
+  /** Give the owner's person a passwd entry in the workspace (the capture owner map). */
+  readonly person?: boolean;
 }
 
 /** Creates a capture-sourced Boat workspace and links it to the project, as a Mend session does. */
@@ -72,18 +87,29 @@ export const launch = async (
   const startedAt = Date.now();
   const capture =
     options.resume ?? (await stack.openCapture(`wt_${randomBytes(6).toString("hex")}`));
+  if (options.person === true) await project.client.users.bindPerson(stack.ownerId, PERSON);
   const workspace = await project.client.workspaces.create({
     runtime: "boat",
     os: "ubuntu",
     harness: codex(),
     name: `harness-${stack.runId}-${randomBytes(3).toString("hex")}`,
     wait: false,
+    ...(options.docker === true ? { services: { docker: true } } : {}),
     source: {
       kind: "capture",
       endpoint: capture.endpoint,
       token: capture.token,
       worktreeId: capture.worktreeId,
       transport: { plaintext: true },
+      ...(options.person === true
+        ? {
+            ownerMap: {
+              gid: MEND_GID,
+              worktreeUid: PERSON.uid,
+              people: [{ id: PERSON.id, uid: PERSON.uid }],
+            },
+          }
+        : {}),
     },
   });
   const worktreeKey = `w-${randomBytes(3).toString("hex")}`;
@@ -178,7 +204,11 @@ export const awaitOutcome = async (
   stack: HarnessStack,
   run: Launch,
   timeoutMs: number,
-): Promise<{ readonly status: WorkspaceStatus; readonly view: RuntimeView; readonly at: number }> =>
+): Promise<{
+  readonly status: WorkspaceStatus;
+  readonly view: RuntimeView;
+  readonly at: number;
+}> =>
   until(
     "a ready or terminal launch",
     async () => {
@@ -339,12 +369,13 @@ export const leftovers = async (
 
 /** Guest log lines that name a cause Core's runtime row may have erased. */
 const GUEST_SIGNALS =
-  /unauthorized peer|control-peer-changed|plan\.get failed|boot preparation failed|Refusal|Traceback|ERROR/;
+  /plan\.get failed|boot preparation failed|Refusal|refused|not closed|exited|failed|bind-[a-z-]+|recover-[a-z-]+|docker policy|Traceback|ERROR|error/;
 
 /** Distinct guest journal lines for a run's live VM that look like a cause. */
 export const guestEvidence = async (stack: HarnessStack, runId: string): Promise<string> => {
   const vm = stack.boat.liveSandboxes().find((sandbox) => sandbox.labels["sealant-run"] === runId);
   if (vm === undefined) return "no live VM";
+  // The agent's unit, and sealantd's own output inside it (the agent logs what it starts).
   const journal = await stack.boat
     .guestRoot(vm.id, "journalctl --no-pager -o cat -u 'sealant*'")
     .catch((error: unknown) => String(error));
