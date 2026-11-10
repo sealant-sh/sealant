@@ -2105,7 +2105,10 @@ export const nativeWorkspaceInstallation = (
     ...extras.postInstall,
     ...(chezmoi === undefined ? [] : [chezmoi.join("\n")]),
     ...harnessInstallCommands(plan, "native"),
-    personLayoutCommands({ family, dockerService: false }).join(";\n"),
+    personLayoutCommands({
+      family,
+      dockerService: parsed.tooling.services?.docker?.enabled === true,
+    }).join(";\n"),
     `usermod -s ${shellQuote(distroDefinitions[family].shellPaths[plan.customization.defaultShell])} root`,
     ...(dotfiles === undefined ? [] : [dotfiles]),
     ...imageProbeCommands({ require: true }),

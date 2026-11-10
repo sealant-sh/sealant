@@ -21,13 +21,14 @@ transaction. Resource links can change concurrently, so acknowledgements describ
 configuration; readiness must obtain fresh observations and authorization before admitting
 execution.
 
-`BoatExecution.isolate` owns access to the sealed bearer. It refreshes authenticated hosted access,
-checks the receiver's identity, boot and installed epoch, then delivers the strict network request.
-The guest private key remains redacted until HTTPS serialization. It validates the returned binding,
-configured state and receipt, and checks the execution record again. A lost reply reuses identical
-inputs. Existing guest setup verifies a completed replay and refuses partial or changed setup. The
-host acknowledgement still says `peerHandshake: unverified`; the guest says `handshake: unverified`
-and `admission: held`. Neither is admission authority.
+`BoatExecution.isolate` owns access to the sealed bearer. It refreshes authenticated hosted access
+and delivers the strict network request to the [guest agent](boat-guest-agent.md)
+(`POST /sealant/network`). The guest private key remains redacted until HTTPS serialization and
+reaches `wg` on its stdin only. It validates the returned binding, configured state and receipt, and
+checks the execution record again. A lost reply reuses identical inputs. The agent verifies a
+completed replay and refuses a different config on the same boot. The host acknowledgement still
+says `peerHandshake: unverified`; the agent says `handshake: unverified`. Neither is admission
+authority: readiness reads the handshake and the gateway's DNS afterwards.
 
 ## Shared resource ownership
 
@@ -62,9 +63,9 @@ and pending entries advance the cursor. Resource idle accounting reads all confi
 this deployment and host, independent of the current sweep page.
 
 `BoatResources` owns the effect order because neither the credential store, gateway adapter nor
-receiver alone can check the current allocation and resource link across both setup requests.
-Existing owners continue to handle SQL, cryptography, Docker and guest boot policy. No new provider
-client, credential resolver or cleanup authority is introduced.
+guest agent alone can check the current allocation and resource link across both setup requests.
+Existing owners continue to handle SQL, cryptography and Docker. No new provider client, credential
+resolver or cleanup authority is introduced.
 
 ## Verification and next gate
 
@@ -73,7 +74,7 @@ replies, changed targets and endpoints, stopped-run fencing, unlinks, idle accou
 progress. The real Docker/WireGuard proof checks that ordinary convergence preserves both a live
 Boat gateway and an uncreated reservation; it continues to prove encrypted resource and DNS reach,
 wrong-peer denial, relinking and exact cleanup. Its Docker inventory is restricted to owned objects.
-The guest's packaged network proof remains unchanged.
+The agent's network setup is proven in `agent-boat.test.ts` and `agent-transport.test.ts`.
 
 This layer needs no Boat allocation or VM 131 session to validate its scoped behavior. Authenticated
 readiness is next. Its first end-to-end Boat session on VM 131 needs Yiannis's approval for the

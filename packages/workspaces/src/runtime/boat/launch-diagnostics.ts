@@ -14,8 +14,8 @@ const diagnosticSchema = z.object({
     "observe-sandbox",
     "read-boot-id",
     "bind-exchange",
-    "host-receiver",
-    "receiver-request",
+    "host-agent",
+    "agent-request",
     "readiness",
     "control",
     "report-started",
@@ -57,11 +57,12 @@ const diagnosticSchema = z.object({
       "invalid-reply",
       "seal-context-mismatch",
       "invocation-held",
-      "receiver-rejected",
-      "receiver-unauthorized",
-      "receiver-route-missing",
-      "receiver-refused",
-      "receiver-not-ready",
+      "agent-rejected",
+      "agent-unauthorized",
+      "agent-route-missing",
+      "agent-refused",
+      "agent-not-ready",
+      "guest-failed",
       "admission-refused",
       "launch-held",
       "close-pending",
@@ -106,20 +107,18 @@ const diagnosticSchema = z.object({
     ])
     .optional(),
   provider: boatProviderFailureSchema.optional(),
-  receiver: z
+  /** The guest agent's answer: which route, its status and its classified reason. Never free text. */
+  agent: z
     .object({
       pathClass: z.enum([
-        "/sealant/bootstrap/status",
-        "/sealant/bootstrap/stage",
-        "/sealant/bootstrap/start",
-        "/sealant/bootstrap/isolate",
-        "/sealant/bootstrap/permit",
-        "/sealant/bootstrap/readiness",
-        "/sealant/bootstrap/recover",
-        "/sealant/bootstrap/park",
+        "/sealant/launch",
+        "/sealant/health",
+        "/sealant/network",
+        "/sealant/recover",
+        "/sealant/park",
       ]),
       responseTail: z.string().transform(safeCommandTail),
-      /** The receiver's classified reason, e.g. a policy refusal code. Never free text. */
+      /** The agent's reason code (`recover-new-boot`, `parked`, a bind refusal). */
       reason: z
         .string()
         .regex(/^[a-z][a-z0-9-]{0,63}$/)
@@ -130,14 +129,25 @@ const diagnosticSchema = z.object({
         .optional(),
     })
     .optional(),
+  /** What the agent's health said went wrong inside the VM: the daemon or its Docker service. */
+  guest: z
+    .object({
+      service: z.enum(["sealantd", "docker"]),
+      exitCode: z.number().int().nullable().optional(),
+      reason: z
+        .string()
+        .regex(/^[a-z][a-z0-9-]{0,63}$/)
+        .optional(),
+    })
+    .optional(),
   /** The authenticated control stream to sealantd: where it failed and who refused it, and why. */
   control: z
     .object({
       /** The runtime client operation that failed (`open`, `health`, ...), or `probe` on its deadline. */
       operation: z.string().regex(/^[a-zA-Z]{1,32}$/),
-      /** HTTP status of a refused upgrade: the relay answers the bridge's refusal as 503. */
+      /** HTTP status of a refused upgrade: the agent answers a daemon socket it cannot reach as 503. */
       status: z.number().int().optional(),
-      /** The bridge's or relay's classified reason, e.g. `control-peer-changed`. Never free text. */
+      /** The agent's classified reason, e.g. `control-unavailable`. Never free text. */
       reason: z
         .string()
         .regex(/^[a-z][a-z0-9-]{0,63}$/)

@@ -1,14 +1,23 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
 
+import lock from "../../../boat-image/asset-lock.json" with { type: "json" };
 import {
   nativeWorkspaceInstallation,
   planWorkspaceImageBuild,
 } from "../../buildkit/buildkit-builder.js";
 import { createWorkspaceBuildSpec } from "../../buildkit/docker-parity.fixture.js";
-import { createNativeRecipe, NATIVE_SUBSTRATE } from "./recipe.js";
+import { BOAT_AGENT_FILES, BOAT_AGENT_MANIFEST_FILE } from "../../runtime/boat/agent-contract.js";
+import {
+  BOAT_AGENT_DOCKER_DROPIN_PATH,
+  BOAT_AGENT_UNIT_PATH,
+  boatAgentManifestDigest,
+  createNativeRecipe,
+  NATIVE_SUBSTRATE,
+} from "./recipe.js";
 import {
   NATIVE_RUNTIME_PIN,
   sha256,
@@ -21,42 +30,149 @@ const runtime: NativeRuntimeIdentity = {
   platform: "linux/amd64",
   manifest: NATIVE_RUNTIME_PIN.manifest,
   sealantd: NATIVE_RUNTIME_PIN.sealantd,
-  socat: NATIVE_RUNTIME_PIN.socat,
-  relay: "a".repeat(64),
+  sealantctl: NATIVE_RUNTIME_PIN.sealantctl,
 };
-const serializationBundleFixture = { identity: runtime, files: () => [] };
+const daemon = Buffer.from("sealantd bytes");
+const client = Buffer.from("sealantctl bytes");
+const serializationBundleFixture = {
+  identity: runtime,
+  files: () => [
+    { path: "/usr/local/bin/sealantd", bytes: daemon, sha256: sha256(daemon) },
+    { path: "/usr/local/bin/sealantctl", bytes: client, sha256: sha256(client) },
+  ],
+};
 const spec = (family: "ubuntu" | "nix" | "auto" | "arch" | "fedora" | "custom" = "ubuntu") =>
   createWorkspaceBuildSpec({
     target: { os: { family, mode: "require" }, runtime: { family: "auto", mode: "prefer" } },
   });
+const withDocker = (base = spec()) => ({
+  ...base,
+  tooling: { ...base.tooling, services: { docker: { enabled: true } } },
+});
+const text = (bytes: Uint8Array | undefined) => Buffer.from(bytes ?? []).toString();
 
 describe("native recipe boundary", () => {
-  it("packages the isolated capture-only recovery unit and its protected interpreter module", async () => {
+  it("ships the guest agent, its Boat host mode and the bind CLI beside the pinned Node, run by one unit", async () => {
     const planned = await createNativeRecipe(spec(), serializationBundleFixture);
     if (!planned.ok) throw planned.error;
     const files = planned.value.files;
-    const unit = files.find((file) => file.path === "/etc/systemd/system/sealant-recovery.service");
-    expect(unit?.mode).toBe("0644");
-    expect(Buffer.from(unit?.bytes ?? []).toString()).toContain("guest_recovery.py");
-    expect(Buffer.from(unit?.bytes ?? []).toString()).toContain("Restart=no");
-    expect(files.some((file) => file.path === "/var/lib/sealant/guest/guest_recovery.py")).toBe(
-      true,
+    for (const source of BOAT_AGENT_FILES) {
+      const name = source.slice(source.lastIndexOf("/") + 1);
+      const shipped = files.find((file) => file.path === `/opt/sealant/${name}`);
+      expect(shipped?.mode).toBe("0644");
+      expect(shipped?.sha256).toBe(lock.files.find((file) => file.name === name)?.sha256);
+    }
+    expect(files.find((file) => file.path === "/usr/local/bin/sealantd")?.sha256).toBe(
+      sha256(daemon),
     );
-    const builder = Buffer.from(
-      files.find((file) => file.path.endsWith("/build_guest.py"))?.bytes ?? [],
-    ).toString();
-    expect(builder).toContain("'guest_recovery.py'");
-    expect(builder).toContain("'sealant-recovery.service'");
+    expect(files.find((file) => file.path === "/usr/local/bin/sealantctl")?.mode).toBe("0755");
+    const unit = text(files.find((file) => file.path === BOAT_AGENT_UNIT_PATH)?.bytes);
+    expect(unit).toContain("ExecStart=/opt/sealant/node /opt/sealant/agent.mjs");
+    expect(unit).toContain("Environment=SEALANT_AGENT_HOST=boat");
+    expect(unit).toContain("Environment=SEALANT_CONTROL_SOCKET=/run/sealant/control.sock");
+    expect(unit).toContain("Environment=SEALANT_MICROVM_AGENT_PORT=8080");
+    expect(unit).toContain("Restart=no");
+    expect(unit).toContain("WantedBy=multi-user.target");
+    expect(files.some((file) => file.path === BOAT_AGENT_DOCKER_DROPIN_PATH)).toBe(false);
+    expect(files.some((file) => file.path.endsWith("download-docker.sh"))).toBe(false);
+    // Nothing of the box: no mapped root, no Python guest, no relay, no held-boot units.
+    for (const file of files) {
+      expect(file.path).not.toContain("/var/lib/sealant/guest");
+      expect(file.path).not.toContain("/var/lib/sealant/workspace-root");
+      expect(file.path).not.toMatch(/\.py$/);
+    }
+    expect(planned.value.installScript).not.toContain("debootstrap");
+    expect(planned.value.installScript).not.toContain("systemd-container");
+    expect(planned.value.installScript).not.toContain("python3");
+    expect(planned.value.installScript).not.toContain("uidmap");
+    expect(planned.value.installScript).toContain("systemctl enable sealant-agent.service");
+    expect(planned.value.installScript).toContain(
+      "! systemctl is-active --quiet sealant-agent.service",
+    );
   });
-  it("preserves Boat's base systemd family while installing the matching nspawn package", async () => {
+  it("writes the agent manifest digest the bind exchange names, over the agent files, the daemon and the unit", async () => {
+    const planned = await createNativeRecipe(spec(), serializationBundleFixture);
+    if (!planned.ok) throw planned.error;
+    const files = planned.value.files;
+    const manifest = files.find((file) => file.path === BOAT_AGENT_MANIFEST_FILE);
+    expect(manifest?.mode).toBe("0600");
+    expect(JSON.parse(text(manifest?.bytes))).toEqual({
+      digest: planned.value.agentManifestDigest,
+    });
+    const covered = files.filter(
+      (file) =>
+        file.path.startsWith("/opt/sealant/") ||
+        file.path === "/usr/local/bin/sealantd" ||
+        file.path === BOAT_AGENT_UNIT_PATH,
+    );
+    expect(covered.map((file) => file.path)).toEqual(
+      expect.arrayContaining([
+        "/opt/sealant/agent.mjs",
+        "/opt/sealant/boat-host.mjs",
+        "/opt/sealant/boat-bind.mjs",
+        "/usr/local/bin/sealantd",
+        BOAT_AGENT_UNIT_PATH,
+      ]),
+    );
+    // The project install script lives beside the agent but is not the agent.
+    expect(planned.value.agentManifestDigest).toBe(
+      boatAgentManifestDigest(covered.filter((file) => !file.path.endsWith("project-install.sh"))),
+    );
+    // Another daemon is another manifest; another project is not.
+    const otherDaemon = await createNativeRecipe(spec(), {
+      ...serializationBundleFixture,
+      files: () => [
+        { path: "/usr/local/bin/sealantd", bytes: client, sha256: sha256(client) },
+        { path: "/usr/local/bin/sealantctl", bytes: client, sha256: sha256(client) },
+      ],
+    });
+    const otherProject = await createNativeRecipe(
+      { ...spec(), customization: { ...spec().customization, defaultShell: "zsh" } },
+      serializationBundleFixture,
+    );
+    if (!otherDaemon.ok || !otherProject.ok) throw new Error("recipes");
+    expect(otherDaemon.value.agentManifestDigest).not.toBe(planned.value.agentManifestDigest);
+    expect(otherProject.value.agentManifestDigest).toBe(planned.value.agentManifestDigest);
+  });
+  it("carries the Docker engine and turns the agent's Docker service on when the blueprint asks for it", async () => {
+    const planned = await createNativeRecipe(withDocker(), serializationBundleFixture);
+    if (!planned.ok) throw planned.error;
+    const files = planned.value.files;
+    expect(planned.value.dockerService).toBe(true);
+    const installer = files.find((file) => file.path === "/opt/sealant/download-docker.sh");
+    expect(installer?.mode).toBe("0755");
+    expect(installer?.sha256).toBe(
+      lock.files.find((file) => file.name === "download-docker.sh")?.sha256,
+    );
+    expect(planned.value.installScript).toContain("/opt/sealant/download-docker.sh");
+    const dropin = text(files.find((file) => file.path === BOAT_AGENT_DOCKER_DROPIN_PATH)?.bytes);
+    expect(dropin).toContain("Environment=SEALANT_MICROVM_DOCKER_CAPABLE=1");
+    expect(dropin).toContain("Environment=SEALANT_MICROVM_DOCKER_BIP=198.18.1.1/24");
+    expect(dropin).toContain(
+      "Environment=SEALANT_MICROVM_DOCKER_ADDRESS_POOLS=base=198.19.0.0/16,size=24",
+    );
+    expect(dropin).toContain("Environment=SEALANT_MICROVM_DOCKER_GROUP=docker");
+    // The proved stop is the agent's Boat default, not something the image must remember.
+    expect(dropin).not.toContain("CGROUP");
+    expect(dropin).not.toContain("CONTAINER_STOP_SECONDS");
+    // The person layout makes the docker group the daemon's socket is owned by.
+    const project = text(files.find((file) => file.path.endsWith("project-install.sh"))?.bytes);
+    expect(project).toContain("groupadd -g 2375 docker");
+    const plain = await createNativeRecipe(spec(), serializationBundleFixture);
+    if (!plain.ok) throw plain.error;
+    expect(
+      text(plain.value.files.find((f) => f.path.endsWith("project-install.sh"))?.bytes),
+    ).not.toContain("groupadd -g 2375 docker");
+    // The drop-in is part of the agent: a Docker image has another manifest digest.
+    expect(planned.value.agentManifestDigest).not.toBe(plain.value.agentManifestDigest);
+    expect(planned.value.hash).not.toBe(plain.value.hash);
+  });
+  it("preserves Boat's base systemd family and installs what the agent and the tunnel need", async () => {
     for (const family of ["ubuntu", "nix"] as const) {
       const recipe = await createNativeRecipe(spec(family), serializationBundleFixture);
       if (!recipe.ok) throw recipe.error;
       const script = recipe.value.installScript;
       expect(NATIVE_SUBSTRATE.systemd.version).toBe("255.4-1ubuntu8.16");
-      expect(NATIVE_SUBSTRATE.systemd.snapshot).toBe(
-        "https://snapshot.ubuntu.com/ubuntu/20260731T000000Z/",
-      );
       for (const name of [
         "systemd",
         "systemd-sysv",
@@ -69,14 +185,9 @@ describe("native recipe boundary", () => {
       expect(hold).toBeGreaterThan(0);
       expect(hold).toBeLessThan(script.indexOf("apt-get update"));
       expect(script).toContain('$2 == "systemd" && $3 == "installed"');
-      expect(script).toContain("native-systemd-snapshot-digest-mismatch");
-      expect(script).toContain("native-systemd-snapshot-package-mismatch");
-      expect(script).toContain(NATIVE_SUBSTRATE.systemd.indexSha256);
-      expect(script).toContain(NATIVE_SUBSTRATE.systemd.sha256);
       expect(script).toContain(
-        'xz-utils libstdc++6 uidmap iproute2 nftables wireguard-tools procps util-linux "$snapshot_directory/systemd-container.deb"',
+        "apt-get install -y --no-install-recommends curl xz-utils ca-certificates procps util-linux iproute2 iptables wireguard-tools",
       );
-      expect(script).toContain("apt-mark hold systemd-container");
       const unchanged =
         'test "$systemd_versions" = "$(dpkg-query -W -f=\'${binary:Package}=${Version}\\n\' "${systemd_packages[@]}")"';
       expect(script.split(unchanged)).toHaveLength(3);
@@ -85,14 +196,14 @@ describe("native recipe boundary", () => {
       expect(script).not.toContain("--allow-downgrades");
     }
   });
-  it("pins the self-contained Node binary instead of relying on Ubuntu's externalized builtins", async () => {
+  it("pins the self-contained Node binary that runs the agent", async () => {
     const recipe = await createNativeRecipe(spec(), serializationBundleFixture);
     if (!recipe.ok) throw recipe.error;
     expect(recipe.value.substrate.node.version).toBe("24.22.2");
     expect(recipe.value.installScript).toContain(NATIVE_SUBSTRATE.node.archive);
     expect(recipe.value.installScript).toContain(NATIVE_SUBSTRATE.node.sha256);
-    expect(recipe.value.installScript).toContain("native-node-archive-digest-mismatch");
     expect(recipe.value.installScript).toContain("--to-stdout node-v24.22.2-linux-x64/bin/node");
+    expect(recipe.value.installScript).toContain("/opt/sealant/node --version");
     expect(recipe.value.installScript).not.toContain("python3 nodejs");
   });
   it("does not install dotfiles without a source when applyDotfiles is enabled", async () => {
@@ -183,26 +294,23 @@ describe("native recipe boundary", () => {
       expect(() => execFileSync("sh", ["-n"], { input: nixStart?.bytes })).not.toThrow();
       expect(recipe.value.installScript).not.toContain("sshd.service");
       expect(recipe.value.installScript).not.toContain('ln -sf "$loader"');
-      const project = Buffer.from(
-        recipe.value.files.find((file) => file.path.endsWith("project-install.sh"))?.bytes ?? [],
-      ).toString();
+      const project = text(
+        recipe.value.files.find((file) => file.path.endsWith("project-install.sh"))?.bytes,
+      );
       expect(() => execFileSync("bash", ["-n"], { input: project })).not.toThrow();
       for (const cli of ["codex@", "claude-code@", "opencode-ai@", "pi-linux-"])
         expect(project).toContain(cli);
       expect(project).toContain("groupadd -g 40000 mend");
       expect(project).toContain("/etc/sealant/person-env");
+      // The install never starts the daemon: the snapshot's own boots do, through the agent.
       expect(recipe.value.installScript).not.toMatch(/sealantd.* boot/);
-      expect(
-        recipe.value.files.find((f) => f.path.endsWith("workspace.service"))?.bytes,
-      ).toBeDefined();
-      expect(recipe.value.installScript).toContain(
-        "systemctl enable sealant-held.service sealant-held-watchdog.timer",
-      );
+      expect(recipe.value.installScript).toContain("/bin/bash /opt/sealant/project-install.sh");
+      expect(recipe.value.installScript).toContain("test -f /etc/sealant/image-probe.json");
     }
     expect(nativeWorkspaceInstallation(spec("auto")).family).toBe("ubuntu");
   });
 
-  it("refuses unsupported families, workspace Docker, and unproven authenticated build staging", async () => {
+  it("refuses unsupported families and unproven authenticated build staging", async () => {
     for (const family of ["arch", "fedora"] as const)
       expect(await createNativeRecipe(spec(family), serializationBundleFixture)).toMatchObject({
         ok: false,
@@ -222,12 +330,6 @@ describe("native recipe boundary", () => {
       ok: false,
       error: { code: "native-oci-runtime-unsupported" },
     });
-    expect(
-      await createNativeRecipe(
-        { ...spec(), tooling: { packages: [], services: { docker: { enabled: true } } } },
-        serializationBundleFixture,
-      ),
-    ).toMatchObject({ ok: false, error: { code: "native-workspace-docker-unsupported" } });
     const base = spec();
     expect(
       await createNativeRecipe(
@@ -252,7 +354,7 @@ describe("native recipe boundary", () => {
     ).toMatchObject({ ok: false, error: { code: "native-dotfiles-tmpfs-unproven" } });
   });
 
-  it("hashes actual file bytes, relay identity, shell, lifecycle metadata, and immutable inputs", async () => {
+  it("hashes actual file bytes, runtime identity, shell, lifecycle metadata, and immutable inputs", async () => {
     const base = spec();
     const first = await createNativeRecipe(base, serializationBundleFixture);
     if (!first.ok) throw first.error;
@@ -270,7 +372,7 @@ describe("native recipe boundary", () => {
       ),
       createNativeRecipe(base, {
         ...serializationBundleFixture,
-        identity: { ...runtime, relay: "b".repeat(64) },
+        identity: { ...runtime, sealantctl: "b".repeat(64) },
       }),
       createNativeRecipe(base, {
         ...serializationBundleFixture,
@@ -283,14 +385,14 @@ describe("native recipe boundary", () => {
     }
     for (const f of first.value.files) expect(f.sha256).toBe(sha256(f.bytes));
     const unit = await readFile(
-      new URL("../../../boat-image/workspace.service", import.meta.url),
+      new URL("../../../boat-image/sealant-agent.service", import.meta.url),
       "utf8",
     );
-    expect(unit).toContain("guest_invocation.py");
-    expect(unit).toContain("ConditionPathExists=/run/sealant-bootstrap/execution-permit.json");
+    expect(createHash("sha256").update(unit).digest("hex")).toBe(
+      lock.files.find((file) => file.name === "sealant-agent.service")?.sha256,
+    );
     expect(unit).toContain("Restart=no");
-    expect(unit).toContain("NotifyAccess=none");
-    expect(unit).not.toContain("[Install]");
+    expect(unit).not.toContain("ConditionPathExists");
   });
 
   it("refuses Ubuntu Chromium on ARM during planning", () => {
@@ -309,8 +411,7 @@ describe("native recipe boundary", () => {
         sourceIndex: Buffer.from("{}"),
         platformManifest: Buffer.from("{}"),
         sealantd: Buffer.from("next177"),
-        socat: Buffer.from("socat"),
-        relay: Buffer.from("relay"),
+        sealantctl: Buffer.from("sealantctl"),
       }),
     ).toMatchObject({ ok: false, error: { code: "native-runtime-provenance-mismatch" } });
   });

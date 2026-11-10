@@ -340,7 +340,7 @@ describe("canonical Boat custody in migrated Postgres", () => {
     await repo(dbA, (r) => r.preservation.recordParkingSnapshot(claim, save.operationId, identity));
     const file = {
       snapshotId: identity.snapshotId,
-      path: `/var/lib/sealant/guest/capsules/${reserved.operationId}/capsule.pack`,
+      path: `/var/lib/sealant/agent/park-${reserved.operationId}.json`,
       sha256: capsule.archiveHash,
       bytes: capsule.storedBytes,
     };

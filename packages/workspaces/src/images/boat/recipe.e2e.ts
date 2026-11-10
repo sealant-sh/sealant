@@ -11,7 +11,6 @@ import { createNativeRecipe } from "./recipe.js";
 import { NATIVE_RUNTIME_PIN } from "./runtime-bundle.js";
 
 const run = promisify(execFile);
-const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 it("resolves the project's Ubuntu catalog packages inside the actual native bootstrap root", async () => {
   const base = createWorkspaceBuildSpec();
@@ -51,13 +50,15 @@ it("resolves the project's Ubuntu catalog packages inside the actual native boot
     },
   });
   const recipe = await createNativeRecipe(spec, {
-    identity: { ...NATIVE_RUNTIME_PIN, platform: "linux/amd64", relay: "a".repeat(64) },
+    identity: { ...NATIVE_RUNTIME_PIN, platform: "linux/amd64" },
     files: () => [],
   });
   if (!recipe.ok) throw recipe.error;
-  const bootstrap = recipe.value.installScript
+  // The VM is the workspace: the project installs on the Ubuntu root itself, after the agent's
+  // own packages. The same base image stands in for the VM here.
+  const agentPackages = recipe.value.installScript
     .split("\n")
-    .find((line) => line.startsWith("debootstrap "));
+    .find((line) => line.startsWith("DEBIAN_FRONTEND=noninteractive apt-get install -y "));
   const apt = nativeWorkspaceInstallation(spec)
     .shell.split("\n")
     .find(
@@ -65,7 +66,7 @@ it("resolves the project's Ubuntu catalog packages inside the actual native boot
         line.startsWith("DEBIAN_FRONTEND=noninteractive apt-get install -y ") &&
         line.split(/\s+/).includes("npm"),
     );
-  if (bootstrap === undefined || apt === undefined)
+  if (agentPackages === undefined || apt === undefined)
     throw new Error("Native Ubuntu installation commands missing");
   const name = `boat-recipe-proof-${randomUUID()}`;
   try {
@@ -75,7 +76,6 @@ it("resolves the project's Ubuntu catalog packages inside the actual native boot
         "run",
         "--name",
         name,
-        "--privileged",
         "--label",
         "sealant-dev=boat-stream",
         "ubuntu:24.04",
@@ -83,9 +83,8 @@ it("resolves the project's Ubuntu catalog packages inside the actual native boot
         "-ceu",
         [
           "apt-get update",
-          "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends debootstrap ca-certificates",
-          bootstrap,
-          `chroot ${quote(recipe.value.mappedRoot)} /bin/bash -ceu ${quote("apt-get update\n" + apt.replace("apt-get install -y", "apt-get --simulate install"))}`,
+          agentPackages,
+          apt.replace("apt-get install -y", "apt-get --simulate install"),
         ].join("\n"),
       ],
       { timeout: 240_000, maxBuffer: 8 * 1024 * 1024 },

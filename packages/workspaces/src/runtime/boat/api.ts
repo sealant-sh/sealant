@@ -703,16 +703,14 @@ export class HttpBoatApi implements BoatApi {
     );
   }
 
-  /** Streams an exact recovery pack by immutable snapshot ID, refusing redirects and mismatched bytes. */
+  /** Streams the agent's park receipt by immutable snapshot ID, refusing redirects and mismatched bytes. */
   async verifyRecoveryFile(
     input: BoatSnapshotFileReceipt,
   ): Promise<BoatResult<BoatSnapshotFileReceipt>> {
     const parsed = z
       .strictObject({
         snapshotId: z.string().regex(/^[A-Za-z0-9_-]{1,256}$/),
-        path: z
-          .string()
-          .regex(/^\/var\/lib\/sealant\/guest\/capsules\/[a-f0-9-]{36}\/capsule\.pack$/),
+        path: z.string().regex(/^\/var\/lib\/sealant\/agent\/park-[a-f0-9-]{36}\.json$/),
         bytes: z
           .number()
           .int()

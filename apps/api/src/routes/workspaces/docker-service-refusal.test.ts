@@ -89,6 +89,16 @@ describe("dockerServiceRefusal", () => {
     ).toBeNull();
   });
 
+  it("passes Docker on Boat, whose VM image carries the engine when the blueprint asks for it", () => {
+    expect(
+      dockerServiceRefusal(spec({ docker: true, family: "boat" }), {
+        defaultAdapterFamily: "k8s",
+        kubernetesDockerEnabled: false,
+        microvmDockerEnabled: false,
+      }),
+    ).toBeNull();
+  });
+
   it("refuses Docker on a runtime family that has no Docker service at all", () => {
     expect(
       dockerServiceRefusal(spec({ docker: true, family: "cloudflare" }), {

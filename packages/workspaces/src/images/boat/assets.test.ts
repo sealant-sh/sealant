@@ -9,8 +9,10 @@ import { parseWorkspaceBlueprint } from "@sealant/validators";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
+import lock from "../../../boat-image/asset-lock.json" with { type: "json" };
 import fixture from "../../../boat-image/fixtures/mend-screens.json" with { type: "json" };
-import { loadPackagedRuntime, readNativeAssets } from "./assets.js";
+import { BOAT_AGENT_FILES } from "../../runtime/boat/agent-contract.js";
+import { loadPackagedRuntime, nativeAssetDirectory, readNativeAssets } from "./assets.js";
 import { createNativeRecipe } from "./recipe.js";
 
 const roots: string[] = [];
@@ -22,35 +24,39 @@ afterEach(async () => {
     await rm(root, { recursive: true });
   }
 });
+const packageRoot = fileURLToPath(new URL("../../../", import.meta.url));
 
 describe("native packaged assets", () => {
-  it("builds the pinned relay bytes from any working directory", async () => {
-    const root = await mkdtemp(join(tmpdir(), "boat-relay-build-test-"));
-    roots.push(root);
-    const script = fileURLToPath(new URL("../../../boat-image/build-relay.mjs", import.meta.url));
-    const repository = fileURLToPath(new URL("../../../../../", import.meta.url));
-    const lock = JSON.parse(
-      await readFile(new URL("../../../boat-image/asset-lock.json", import.meta.url), "utf8"),
-    );
-    for (const [index, cwd] of [root, repository].entries()) {
-      const output = join(root, `relay-${index}.cjs`);
-      execFileSync(process.execPath, [script, output], { cwd, stdio: "pipe" });
+  it("locks every agent file the Boat image copies in, the Docker installer and the unit, by exact bytes", async () => {
+    const sources = lock.files.map((file) => file.source);
+    for (const source of BOAT_AGENT_FILES) expect(sources).toContain(source);
+    expect(sources).toContain("microvm-image/download-docker.sh");
+    expect(sources).toContain("boat-image/sealant-agent.service");
+    for (const file of lock.files)
       expect(
         createHash("sha256")
-          .update(await readFile(output))
+          .update(await readFile(join(packageRoot, file.source)))
           .digest("hex"),
-      ).toBe(lock.relay);
-    }
+        file.source,
+      ).toBe(file.sha256);
+    const assets = await readNativeAssets();
+    if (!assets.ok) throw assets.error;
+    expect([...assets.value.keys()].toSorted()).toEqual(
+      lock.files.map((file) => file.name).toSorted(),
+    );
+    expect(nativeAssetDirectory().layout).toBe("source");
   });
 
   it("refuses a manifest whose packaged files are missing", async () => {
     const root = await mkdtemp(join(tmpdir(), "boat-assets-test-"));
     roots.push(root);
-    const manifest = JSON.parse(
-      await readFile(new URL("../../../boat-image/asset-lock.json", import.meta.url), "utf8"),
-    );
-    await writeFile(join(root, "asset-lock.json"), JSON.stringify(manifest));
-    expect(await readNativeAssets(root)).toMatchObject({ ok: false });
+    await writeFile(join(root, "asset-lock.json"), JSON.stringify(lock));
+    expect(await readNativeAssets({ root, layout: "staged" })).toMatchObject({ ok: false });
+    // A runtime bundle is only ever read from a staged directory.
+    expect(await loadPackagedRuntime(nativeAssetDirectory())).toMatchObject({
+      ok: false,
+      error: { code: "native-runtime-bundle-unavailable" },
+    });
   });
 
   it.skipIf(!process.env.SEALANT_BOAT_RUNTIME_BUNDLE)(
@@ -81,18 +87,20 @@ describe("native packaged assets", () => {
             .parse(JSON.parse(line)),
         );
       expect(lines.map((line) => line.family)).toEqual(["ubuntu", "nix"]);
-      const shipped = await loadPackagedRuntime(assets);
+      const staged = { root: assets, layout: "staged" } as const;
+      const shipped = await loadPackagedRuntime(staged);
       if (!shipped.ok) throw shipped.error;
       for (const [index, family] of (["ubuntu", "nix"] as const).entries()) {
         const source = await createNativeRecipe(
           parseWorkspaceBlueprint(fixture[family].blueprint),
           shipped.value,
+          { assetsDirectory: staged },
         );
         if (!source.ok) throw source.error;
         expect(lines[index]?.hash).toBe(source.value.hash);
         expect(lines[index]?.assetsHash).toBe(source.value.assetsHash);
       }
-      const path = join(assets, "workspace-launch.py");
+      const path = join(assets, "boat-host.mjs");
       const original = await readFile(path);
       await writeFile(path, "modified");
       expect(() => execFileSync(process.execPath, [check], { cwd: root, stdio: "pipe" })).toThrow();

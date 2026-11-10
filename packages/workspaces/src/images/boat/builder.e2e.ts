@@ -193,9 +193,12 @@ describe.skipIf(!directory)(
         expect(f.posts()).toBe(0);
       },
     );
-    it("refuses an old base-image approval before save and removes its scratch VM", async () => {
-      const f = await fixture("legacy-guest-approval");
-      expect(await f.builder.build({ spec: f.spec })).toMatchObject({ ok: false });
+    it("refuses an installed agent manifest the recipe did not plan, before save, and removes its scratch VM", async () => {
+      const f = await fixture("agent-manifest-mismatch");
+      expect(await f.builder.build({ spec: f.spec })).toMatchObject({
+        ok: false,
+        error: { code: "native-agent-manifest-mismatch" },
+      });
       expect(f.deleted()).toBe(true);
       expect(f.posts()).toBe(0);
     });

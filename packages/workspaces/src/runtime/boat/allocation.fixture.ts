@@ -21,8 +21,7 @@ import {
 } from "../../resources/boat-tunnel.js";
 import type { BoatSandbox } from "./api.js";
 import { BoatSecret } from "./config.js";
-import type { BoatGuestTransport } from "./execution.js";
-const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+import type { BoatAgentReply, BoatAgentRoute, BoatGuestTransport } from "./execution.js";
 const secret = (value: string) => {
   const result = BoatSecret.parse(value);
   if (!result.ok) throw result.error;
@@ -52,7 +51,6 @@ export class ProviderFixture {
   saves = 0;
   retirements = 0;
   retirementLost = false;
-  rebinds = 0;
   childLabels: Record<string, string> | undefined;
   sandboxMissing = false;
   beforeSandboxRead: () => Promise<void> = async () => {};
@@ -305,32 +303,6 @@ export class ProviderFixture {
         } else send(result);
       };
       this.commands.push(command);
-      if (command.includes("guest_boot.py resume ")) {
-        this.rebinds++;
-        const reboundRequest = z
-          .object({
-            boot_id: z.string(),
-            identity: z.unknown(),
-            operation_id: z.string(),
-            capsule: z.unknown(),
-          })
-          .parse(JSON.parse(command.slice(command.indexOf(" resume '") + 9, -1)));
-        reply({
-          ok: true,
-          exitCode: 0,
-          timedOut: false,
-          stderr: "",
-          stdout: JSON.stringify({
-            format: "sealant-parking-rebound-v1",
-            boot_id: reboundRequest.boot_id,
-            identity: reboundRequest.identity,
-            operation_id: reboundRequest.operation_id,
-            capsule: reboundRequest.capsule,
-            admission: "held",
-          }),
-        });
-        return;
-      }
       reply({
         ok: true,
         exitCode: 0,
@@ -343,29 +315,33 @@ export class ProviderFixture {
     send({ code: "not_found" }, 404);
   }
 }
-const canonical = (value: unknown): string => {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value !== null && typeof value === "object")
-    return (
-      "{" +
-      Object.entries(value)
-        .toSorted(([a], [b]) => a.localeCompare(b))
-        .map(([key, v]) => JSON.stringify(key) + ":" + canonical(v))
-        .join(",") +
-      "}"
-    );
-  return JSON.stringify(value) ?? "null";
-};
+/** What the fake agent answers a recovery with: a typed outcome, or a refusal reason (409). */
+export type GuestRecoveryAnswer =
+  | "running"
+  | "restarted"
+  | "nothing-to-save"
+  | "recover-new-boot"
+  | "recover-binding-conflict"
+  | "recover-state-unknown"
+  | "parked";
+/**
+ * A fake of the agent as Core's transport sees it: the bind exchange answers the bootstrap wire
+ * with a fixed bearer, and each agent route answers the way `agent-contract.ts` says, with
+ * switches named for the fault they inject. It records what Core sent, so tests can read the
+ * launch body, the network intent and the order of calls.
+ */
 export class GuestFixture implements BoatGuestTransport {
   capsule = Buffer.from("faithful immutable capsule HTTP boundary");
-  recovery: "running" | "issued" | "ended" | "unresolved" = "running";
-  wrongRecoveryBinding = false;
+  recovery: GuestRecoveryAnswer = "running";
+  /** Answer recovery with a body that matches no contract shape. */
+  malformedRecovery = false;
+  /** How many launches the agent accepted (its launch record is per boot: at most one). */
   starts = 0;
-  permitCount = 0;
   readonly actions: string[] = [];
-  beforePermit: () => Promise<void> = async () => {};
+  /** Runs before the health observation readiness starts with. */
   beforeReady: () => Promise<void> = async () => {};
-
+  /** Runs before each launch push is answered. */
+  beforeLaunch: () => Promise<void> = async () => {};
   async probe() {
     return {
       runtimeId: "rt_fixture",
@@ -373,11 +349,20 @@ export class GuestFixture implements BoatGuestTransport {
       supports: ["exec.user", "dotfiles.user", "restore.owner_map", "process.secret-env.v1"],
     };
   }
-  readonly stageBodies: string[] = [];
+  /** Every launch body the agent was pushed, parsed. */
+  readonly launches: Array<{
+    version: number;
+    runId: string;
+    controlToken: string;
+    bootEnv: Record<string, string>;
+    secretEnvJson?: string | undefined;
+    services?: unknown;
+  }> = [];
   readonly targets: BoatExecutionTarget[] = [];
   fail = false;
+  /** The next launch push is accepted by the agent, but its reply never reaches Core. */
+  lostLaunchReply = false;
   target: BoatExecutionTarget | undefined;
-  admission: { epoch: number; operation_id: string } | undefined;
   readonly networkBodies: string[] = [];
   lostIsolation = false;
   beforeIsolate: () => Promise<void> = async () => {};
@@ -388,7 +373,6 @@ export class GuestFixture implements BoatGuestTransport {
     if (this.fail) throw new Error("lost bind");
     this.targets.push(target);
     this.target = target;
-    this.admission = undefined;
     this.starts = 0;
     const request = z
       .object({
@@ -432,105 +416,109 @@ export class GuestFixture implements BoatGuestTransport {
     await this.beforeHost();
     return { origin: "https://fixture-8080.on.boat.dev", cookie: secret("test-cookie-local-only") };
   }
-  async call(_host: unknown, bearer: BoatSecret, route: string, body?: Redacted.Redacted<string>) {
+  async request(
+    _host: unknown,
+    bearer: BoatSecret,
+    route: BoatAgentRoute,
+    body?: Redacted.Redacted<string>,
+  ): Promise<BoatAgentReply> {
     this.actions.push(route);
-    if (route === "park") {
-      const request: unknown = JSON.parse(Redacted.value(body ?? Redacted.make("")));
+    expect(bearer.reveal()).toBe("a".repeat(64));
+    const raw = body === undefined ? "" : Redacted.value(body);
+    if (route === "health") {
+      await this.beforeReady();
+      // Not booted until a launch was accepted: 503 with the agent's health body, as the agent.
+      // A Docker launch answers the version 2 body with its service ready.
+      const docker = this.launches.some((launch) => launch.version === 2);
+      const common = { booted: this.starts > 0, controlSocket: this.starts > 0 };
+      const health = docker
+        ? {
+            version: 2,
+            ...common,
+            services: { docker: { status: "ready", socket: "/run/docker/docker.sock" } },
+          }
+        : common;
+      return { status: this.starts > 0 ? 200 : 503, body: health };
+    }
+    if (route === "network-status")
       return {
-        format: "sealant-parking-status-v1",
-        request,
-        phase: "closed",
-        writers: "closed",
-        capsule: {
-          sha256: "a".repeat(64),
-          archive_sha256: createHash("sha256").update(this.capsule).digest("hex"),
-          bytes: 3,
-          stored_bytes: this.capsule.length,
-          entries: 1,
+        status: 200,
+        body: {
+          configured: true,
+          handshake: "verified",
+          dns: "udp-and-tcp",
+          // Where the containers' policy stands: applied once a Docker launch was accepted.
+          docker_policy: this.launches.some((launch) => launch.version === 2)
+            ? "applied"
+            : "absent",
         },
       };
+    if (route === "launch") {
+      await this.beforeLaunch();
+      const launch = z
+        .object({
+          version: z.number(),
+          runId: z.string(),
+          controlToken: z.string(),
+          bootEnv: z.record(z.string(), z.string()),
+          secretEnvJson: z.string().optional(),
+          services: z.unknown().optional(),
+        })
+        .parse(JSON.parse(raw));
+      expect(launch.controlToken).toBe(bearer.reveal());
+      if (this.starts > 0) return { status: 409, body: { message: "already booted" } };
+      this.starts = 1;
+      this.launches.push(launch);
+      if (this.lostLaunchReply) {
+        this.lostLaunchReply = false;
+        throw new Error("lost hosted launch reply");
+      }
+      return { status: 200, body: { outcome: "booting" } };
     }
-    if (route === "recover") {
-      const request = z
-        .object({ binding: z.unknown() })
-        .parse(JSON.parse(Redacted.value(body ?? Redacted.make(""))));
-      return {
-        format: "sealant-capture-recovery-status-v1",
-        binding: request.binding,
-        execution: this.recovery,
-        mode: this.recovery === "running" ? "original" : "recovery",
-        ...(this.wrongRecoveryBinding ? { binding: {} } : {}),
-      };
-    }
-    if (route === "stage") {
-      this.stageBodies.push(Redacted.value(body ?? Redacted.make("")));
-      this.admission = z
-        .object({ epoch: z.number(), operation_id: z.string() })
-        .parse(JSON.parse(Redacted.value(body ?? Redacted.make(""))));
-    }
-    if (route === "isolate") {
+    if (route === "network") {
       await this.beforeIsolate();
-      const raw = Redacted.value(body ?? Redacted.make(""));
       this.networkBodies.push(raw);
       if (this.lostIsolation) {
         this.lostIsolation = false;
         throw new Error("lost");
       }
       return {
-        format: "sealant-guest-network-status-v1",
-        binding: z.object({ binding: z.unknown() }).parse(JSON.parse(raw)).binding,
-        receipt: "e".repeat(64),
-        configured: true,
-        handshake: "unverified",
-        admission: "held",
+        status: 200,
+        body: {
+          format: "sealant-guest-network-status-v1",
+          binding: z.object({ binding: z.unknown() }).parse(JSON.parse(raw)).binding,
+          receipt: "e".repeat(64),
+          configured: true,
+          handshake: "unverified",
+        },
       };
     }
-    if (route === "permit" || route === "readiness") {
-      const raw = Redacted.value(body ?? Redacted.make(""));
-      const value = z
-        .object({ binding: z.unknown(), permit_receipt: z.string().optional() })
-        .parse(JSON.parse(raw));
-      if (route === "permit") {
-        this.permitCount++;
-        await this.beforePermit();
+    if (route === "recover") {
+      if (this.malformedRecovery) return { status: 200, body: { outcome: "whatever" } };
+      if (this.recovery === "running" || this.recovery === "restarted")
+        return { status: 200, body: { outcome: this.recovery } };
+      if (this.recovery === "nothing-to-save")
         return {
-          format: "sealant-execution-permitted-v1",
-          binding: value.binding,
-          receipt: hash(canonical(JSON.parse(raw))),
-          handshake: "verified",
-          dns: "udp-and-tcp",
-          admission: "held",
+          status: 200,
+          body: {
+            outcome: "nothing-to-save",
+            basis: "daemon",
+            detail: "sealant boot: nothing to save: never materialized (/workspace/repo)",
+          },
         };
-      }
-      await this.beforeReady();
-      return {
-        format: "sealant-readiness-status-v1",
-        binding: value.binding,
-        permit_receipt: value.permit_receipt,
-        invocation: "d".repeat(32),
-        limits: { memory_bytes: 2147483648, cpu_millicores: 1000, tasks: 512 },
-        handshake: "verified",
-        dns: "udp-and-tcp",
-        admission: "held",
-      };
+      return { status: 409, body: { reason: this.recovery } };
     }
-    if (route === "start") this.starts = 1;
-    expect(["status", "stage", "start"]).toContain(route);
-    expect(bearer.reveal()).toBe("a".repeat(64));
-    if (this.target === undefined) throw new Error("missing target");
+    const park = z.object({ operationId: z.string() }).parse(JSON.parse(raw));
     return {
-      format: "sealant-receiver-status-v1",
-      identity: {
-        deployment_id: this.target.deploymentId,
-        instance_id: this.target.sandboxId,
-        disk_lineage: this.target.diskLineage,
+      status: 200,
+      body: {
+        outcome: "closed",
+        receipt: {
+          path: `/var/lib/sealant/agent/park-${park.operationId}.json`,
+          sha256: createHash("sha256").update(this.capsule).digest("hex"),
+          bytes: this.capsule.length,
+        },
       },
-      boot_id: this.target.bootId,
-      admission: "held",
-      execution: this.starts > 0 ? "running" : "unavailable",
-      epoch: this.admission?.epoch ?? null,
-      operation_id: this.admission?.operation_id ?? null,
-      stage: this.admission === undefined ? "empty" : "installed",
     };
   }
 }

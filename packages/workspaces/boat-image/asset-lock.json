@@ -1,102 +1,35 @@
 {
-  "format": "sealant-native-assets-v1",
-  "relay": "4702feb2b541f4af9afd2a67e7cf28fdbdf378c7fb706cb311d831f5213e4869",
+  "format": "sealant-native-assets-v2",
   "files": [
     {
-      "name": "guest_boot.py",
-      "sha256": "1ca8897c0ecfdc8ca4e76d23cbefff09dc3b14b9f3855e6ec7507d74fc5d3399"
+      "name": "agent.mjs",
+      "source": "microvm-image/agent.mjs",
+      "sha256": "c2f2d17b82ceef8b1fe9e01f473bb248ce73e218d1aa3f17750d260a58224840"
     },
     {
-      "name": "guest_contract.py",
-      "sha256": "2607a22028d890dab8dc9835489eaa0cb35e8385b74cc12e1004721b313585b3"
+      "name": "docker-service.mjs",
+      "source": "microvm-image/docker-service.mjs",
+      "sha256": "0d3cc460967c36d523a26201f870ee554d9c62efd576878a0abb4e68bb225acc"
     },
     {
-      "name": "build_guest.py",
-      "sha256": "31532f1b93f075bee1fe21e5b3bf0964e7ff9ef480dc105f584c857461c9f66b"
+      "name": "boat-host.mjs",
+      "source": "microvm-image/boat-host.mjs",
+      "sha256": "573ff46349899220bae6e74c3cc245848eb7bfc15cba0a08b429dab816c2576d"
     },
     {
-      "name": "workspace-launch.py",
-      "sha256": "a219e82d8bf56392f07fd45ae9e07455633db61a56c588308ae00e77cf63ae4e"
+      "name": "boat-bind.mjs",
+      "source": "microvm-image/boat-bind.mjs",
+      "sha256": "572fad31fd8f2c0acebb637c1b45149261a0c039cc40c9d27ba0e6e2a8a6a2c8"
     },
     {
-      "name": "workspace.service",
-      "sha256": "1ddd7cf4ba0d662e3f891de8166ca7041c51db941180eda8f39c9e741253193a"
+      "name": "download-docker.sh",
+      "source": "microvm-image/download-docker.sh",
+      "sha256": "0987238d7ded4a002bda925c7887c66ca1adc7363b86a5e2f82cec1f1cd6dd55"
     },
     {
-      "name": "held.service",
-      "sha256": "b3a990b4aee86ce9329759aee714b29d8d5f8a7ae12ba1ed5a90d770b721fb42"
-    },
-    {
-      "name": "watchdog.service",
-      "sha256": "193b8193354987385577387b0910d8bca72ff56990cc1c571500c26d383999d4"
-    },
-    {
-      "name": "watchdog.timer",
-      "sha256": "022a73ff19b25a51f3c421dd386b78a97294f59fc9b08c0af76d041e7e016a3c"
-    },
-    {
-      "name": "boot-policy.json",
-      "sha256": "f02d79763ab0af43d00259b38f1e1d2a1349337ea5c7fe49e9c9361de01317ef"
-    },
-    {
-      "name": "guest_receiver.py",
-      "sha256": "6e83cb81af45febda0064bb95e8ab7dcdb3d837387a45b14dff33627e3853a9b"
-    },
-    {
-      "name": "receiver-routes.json",
-      "sha256": "5b18ecc17803275e9f1b8dd825a8fd13ad9abdc0b243fac1855f91265b7edbeb"
-    },
-    {
-      "name": "bootstrap-crypto.mjs",
-      "sha256": "8a866c211ccd7208399b9f94a38c1f62303750cb4211821d6544eac5bbb3b8ea"
-    },
-    {
-      "name": "bootstrap.service",
-      "sha256": "9ef7c936881060c5252e3c9bc5606106baab84cdf2385fa7ba5cede0c3a4c396"
-    },
-    {
-      "name": "relay.service",
-      "sha256": "ef2b0b5c58bc1fb8036848b2506b961a177d2212610c67df3d1a71dfbb9d46a9"
-    },
-    {
-      "name": "guest_invocation.py",
-      "sha256": "34b3f321ceeb3df09d0eb1fc862f251f33c7b55fac160b5aa44347507c26543e"
-    },
-    {
-      "name": "guest_network.py",
-      "sha256": "3bbfa6030258d8bc47f4e72fd9cb6b2c53e85a007aba255c903f94de527663f6"
-    },
-    {
-      "name": "guest_readiness.py",
-      "sha256": "988f5fa6ec987ebb20e30ac027995c9057304a000b7eec1f781db26d276a85fb"
-    },
-    {
-      "name": "guest_control.py",
-      "sha256": "0eeba1d9c49b6b7ab7f2206a26664e39a5d457448ea9f03c30786a5955f2e70a"
-    },
-    {
-      "name": "workspace.slice",
-      "sha256": "fa55621871ad78a1a2a06c9afb171fbe38da3dfab93ea910b99a03bf04c7f74b"
-    },
-    {
-      "name": "guest_recovery.py",
-      "sha256": "9253b3c0bb0ad29b521e0db8aeec02304221518e94d0e33838b215a46d340c8b"
-    },
-    {
-      "name": "recovery.service",
-      "sha256": "c14013536e06a0b31c616a61d3441c6a275cec39447c32b8b7e4b38b1c0f4388"
-    },
-    {
-      "name": "guest_capsule.py",
-      "sha256": "a2161694ac0e61d0828c9a5cbb8fc6a09737c3c4b208556aa75d38b18d207d2b"
-    },
-    {
-      "name": "guest_parking.py",
-      "sha256": "a8d74ca5c8cacd092c02e66b905b52b2c94e2e7a779efc27352e43a3a964dba2"
-    },
-    {
-      "name": "guest_resume.py",
-      "sha256": "95d7f348f25f1b556e5eaf88138c068739db25b807f94dcff7e37e7087b82a45"
+      "name": "sealant-agent.service",
+      "source": "boat-image/sealant-agent.service",
+      "sha256": "62fea6ddd54e436716d2e154729d15c92fd6ab80659d82ca253a3340cbab3902"
     }
   ]
 }

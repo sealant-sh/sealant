@@ -11,7 +11,8 @@ import { createWorkspaceBuildSpec } from "../../buildkit/docker-parity.fixture.j
 import { HttpBoatApi, type BoatApi } from "../../runtime/boat/api.js";
 import { BoatSecret } from "../../runtime/boat/config.js";
 import { BoatSnapshotBuilder } from "./builder.js";
-import { sha256, VerifiedRuntimeBundle } from "./runtime-bundle.js";
+import { createNativeRecipe } from "./recipe.js";
+import { VerifiedRuntimeBundle } from "./runtime-bundle.js";
 
 const directory = process.env.SEALANT_BOAT_RUNTIME_BUNDLE;
 const assertNonemptyBundleBytes: BoatApi["uploadFile"] = async (_id, _path, bytes) => {
@@ -46,45 +47,6 @@ export const nativeBuilderProbe = {
   sealantd: { schemaVersion: 1, supports: ["exec.user", "dotfiles.user", "restore.owner_map"] },
 };
 
-const manifest = JSON.stringify({
-  format: "sealant-guest-manifest-v1",
-  files: {
-    "/var/lib/sealant/guest/bundle/usr/bin/python3": {
-      sha256: "a".repeat(64),
-      device: 7,
-      inode: 9,
-      uid: 0,
-      gid: 0,
-      mode: 493,
-    },
-  },
-  inputs: { policy: "b".repeat(64) },
-  bundle_paths: ["/var/lib/sealant/guest/bundle/usr/bin/python3"],
-});
-const constructionInputs = JSON.stringify({
-  format: "sealant-bundle-inputs-v1",
-  source_files: {
-    "/usr/bin/python3": { sha256: "a".repeat(64), mode: 493 },
-  },
-  cache_policy: "source-only-zip-no-bytecode",
-  stdlib: "/usr/lib/python3.12",
-});
-const guestEvidence = {
-  manifest,
-  manifestDigest: sha256(manifest),
-  constructionInputs,
-  constructionInputsDigest: sha256(constructionInputs),
-  approval: {
-    format: "sealant-source-profile-approval-v2",
-    profile: "sealant-shipped-guest-v1",
-    manifest_digest: sha256(manifest),
-    policy_digest: "b".repeat(64),
-    semantic_checks: "passed-with-shipped-assets",
-    semantic_receipt_digest: "d".repeat(64),
-    source_boot_id: "faithful-source-boot",
-  },
-};
-
 export const nativeBuilderFixture = async (
   mode:
     | "normal"
@@ -97,18 +59,25 @@ export const nativeBuilderFixture = async (
     | "transport-failed"
     | "provider-http-failed"
     | "status-http-failed"
-    | "legacy-guest-approval",
+    | "agent-manifest-mismatch",
 ) => {
   if (!directory) throw new Error("exact runtime bundle required");
   const bundle = VerifiedRuntimeBundle.parse({
     sourceIndex: await readFile(join(directory, "source-index.json")),
     platformManifest: await readFile(join(directory, "platform-manifest.json")),
     sealantd: await readFile(join(directory, "sealantd")),
-    socat: await readFile(join(directory, "socat")),
-    relay: await readFile(join(directory, "control-relay.cjs")),
+    sealantctl: await readFile(join(directory, "sealantctl")),
   });
   if (!bundle.ok) throw bundle.error;
   const root = await mkdtemp(join(tmpdir(), "boat-builder-http-"));
+  const spec = createWorkspaceBuildSpec({
+    target: {
+      os: { family: "ubuntu", mode: "require" },
+      runtime: { family: "auto", mode: "prefer" },
+    },
+  });
+  const planned = await createNativeRecipe(spec, bundle.value);
+  const plannedManifestDigest = planned.ok ? planned.value.agentManifestDigest : undefined;
   resources.push(async () => {
     await readdir(root);
     await rm(root, { recursive: true, force: true });
@@ -244,22 +213,15 @@ export const nativeBuilderFixture = async (
           exitCode: 0,
           timedOut: false,
           stdout:
-            body.command ===
-            "set -eu\n/usr/bin/sudo cat /var/lib/sealant/workspace-root/etc/sealant/image-probe.json"
+            body.command === "set -eu\n/usr/bin/sudo cat /etc/sealant/image-probe.json"
               ? JSON.stringify(nativeBuilderProbe)
-              : body.command.includes("constructionInputsDigest")
-                ? JSON.stringify(
-                    mode === "legacy-guest-approval"
-                      ? {
-                          ...guestEvidence,
-                          approval: {
-                            ...guestEvidence.approval,
-                            format: "sealant-source-profile-approval-v1",
-                            profile: "clean-installed-255.4-1ubuntu8.18",
-                          },
-                        }
-                      : guestEvidence,
-                  )
+              : body.command === "set -eu\n/usr/bin/sudo cat /var/lib/sealant/agent/manifest.json"
+                ? JSON.stringify({
+                    digest:
+                      mode === "agent-manifest-mismatch"
+                        ? "0".repeat(64)
+                        : (plannedManifestDigest ?? ""),
+                  })
                 : "",
           stderr: "",
         });
@@ -361,12 +323,6 @@ export const nativeBuilderFixture = async (
     owner: builderOwner,
     pollIntervalMs: 1,
     cleanupTimeoutMs: 3000,
-  });
-  const spec = createWorkspaceBuildSpec({
-    target: {
-      os: { family: "ubuntu", mode: "require" },
-      runtime: { family: "auto", mode: "prefer" },
-    },
   });
   return {
     builder,

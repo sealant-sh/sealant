@@ -1,3 +1,7 @@
+// Stage what the worker ships for Boat image builds into one flat directory: the agent files the
+// recipe copies into a VM (from `microvm-image/` and this directory, checked against
+// `asset-lock.json`) and the pinned sealantd runtime (daemon and client, extracted from the
+// pinned OCI image or copied from a directory a caller verified earlier).
 import { createHash } from "node:crypto";
 import { chmod, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -9,28 +13,23 @@ const [destination, bundleDirectory] = process.argv.slice(2);
 if (!destination)
   throw new Error("Usage: stage-assets.mjs /absolute/destination [/absolute/verified-bundle]");
 const output = resolve(destination);
-const source = fileURLToPath(new URL("./", import.meta.url));
+const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 const lock = JSON.parse(await readFile(new URL("./asset-lock.json", import.meta.url), "utf8"));
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 await mkdir(output, { mode: 0o700 });
 for (const file of lock.files) {
-  const bytes = await readFile(resolve(source, file.name));
+  const bytes = await readFile(resolve(packageRoot, file.source));
   if (hash(bytes) !== file.sha256) throw new Error("Native asset mismatch: " + file.name);
   await writeFile(resolve(output, file.name), bytes, { mode: 0o644 });
 }
+const RUNTIME_FILES = ["source-index.json", "platform-manifest.json", "sealantd", "sealantctl"];
+const pin = JSON.parse(
+  await readFile(new URL("../src/images/boat/runtime-pin.json", import.meta.url), "utf8"),
+);
 if (bundleDirectory) {
-  for (const name of [
-    "source-index.json",
-    "platform-manifest.json",
-    "sealantd",
-    "socat",
-    "control-relay.cjs",
-  ])
+  for (const name of RUNTIME_FILES)
     await copyFile(resolve(bundleDirectory, name), resolve(output, name));
 } else {
-  const pin = JSON.parse(
-    await readFile(new URL("../src/images/boat/runtime-pin.json", import.meta.url), "utf8"),
-  );
   const repository = "sealant-sh/sealantd-next";
   const { token } = await (
     await fetch(`https://ghcr.io/token?service=ghcr.io&scope=repository:${repository}:pull`)
@@ -72,7 +71,9 @@ if (bundleDirectory) {
       const type = tar[offset + 156];
       if (!Number.isSafeInteger(size) || size < 0 || offset + 512 + size > tar.length)
         throw new Error("Invalid pinned layer");
-      if (["usr/local/bin/sealantd", "usr/local/bin/socat"].includes(name.replace(/^\.\//, ""))) {
+      if (
+        ["usr/local/bin/sealantd", "usr/local/bin/sealantctl"].includes(name.replace(/^\.\//, ""))
+      ) {
         if (type !== 0 && type !== 48) throw new Error("Pinned binary is not a regular file");
         await writeFile(
           resolve(output, name.split("/").at(-1)),
@@ -82,27 +83,12 @@ if (bundleDirectory) {
       offset += 512 + Math.ceil(size / 512) * 512;
     }
   }
-  await build({
-    absWorkingDir: fileURLToPath(new URL("../../../", import.meta.url)),
-    entryPoints: [resolve(source, "control-relay.mjs")],
-    outfile: resolve(output, "control-relay.cjs"),
-    bundle: true,
-    platform: "node",
-    target: "node24",
-    format: "cjs",
-    packages: "bundle",
-    logLevel: "silent",
-  });
 }
-const pin = JSON.parse(
-  await readFile(new URL("../src/images/boat/runtime-pin.json", import.meta.url), "utf8"),
-);
 for (const [name, expected] of Object.entries({
   "source-index.json": pin.index,
   "platform-manifest.json": pin.manifest,
   sealantd: pin.sealantd,
-  socat: pin.socat,
-  "control-relay.cjs": lock.relay,
+  sealantctl: pin.sealantctl,
 })) {
   if (hash(await readFile(resolve(output, name))) !== expected)
     throw new Error("Native runtime mismatch: " + name);
@@ -110,10 +96,12 @@ for (const [name, expected] of Object.entries({
 }
 await copyFile(new URL("./asset-lock.json", import.meta.url), resolve(output, "asset-lock.json"));
 await writeFile(resolve(output, "runtime-pin.json"), JSON.stringify(pin) + "\n", { mode: 0o644 });
-console.log(JSON.stringify({ staged: output, files: lock.files.length + 7 }));
+console.log(
+  JSON.stringify({ staged: output, files: lock.files.length + RUNTIME_FILES.length + 2 }),
+);
 await mkdir(resolve(output, "../dist"), { recursive: true });
 await build({
-  entryPoints: [resolve(source, "packaged-check.ts")],
+  entryPoints: [resolve(fileURLToPath(new URL("./", import.meta.url)), "packaged-check.ts")],
   outfile: resolve(output, "../dist/boat-assets-check.mjs"),
   bundle: true,
   platform: "node",

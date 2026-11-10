@@ -65,8 +65,7 @@ const transitions: Readonly<
   Record<BoatExecutionRecord["phase"], readonly BoatExecutionRecord["phase"][]>
 > = {
   exchange: ["control"],
-  control: ["prepared"],
-  prepared: ["installed"],
+  control: ["installed"],
   installed: ["issued"],
   issued: ["running", "held"],
   running: ["held"],
@@ -192,7 +191,7 @@ const make: Effect.Effect<BoatExecutionRepo["Service"], never, SealantDB> = Effe
       if (
         before !== undefined &&
         (!sameTarget(before.target, target) ||
-          !["exchange", "control", "prepared", "installed", "aborted"].includes(before.phase))
+          !["exchange", "control", "installed", "aborted"].includes(before.phase))
       )
         return yield* Effect.fail(new BoatExecutionStoreError("stale-transition"));
       if (before?.phase === "aborted") return;

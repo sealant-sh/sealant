@@ -41,7 +41,7 @@ import {
 import type { BoatApi, BoatDeletion } from "./api.js";
 import { boatSandboxIdSchema, boatDeletionIdSchema, type BoatResult } from "./config.js";
 import { BoatDischarge, boatDischargeLayer } from "./discharge.js";
-import { BoatExecution } from "./execution.js";
+import { BoatExecution, BoatExecutionError } from "./execution.js";
 import { BoatObserver, boatObserverLayer } from "./observation.js";
 import { BoatAllocationProvider } from "./provider.js";
 
@@ -261,8 +261,7 @@ const make: Effect.Effect<
     const presence = yield* observer.observe(stored).pipe(Effect.mapError(observeError));
     const state = yield* exchanges.get(target.runtimeInstanceId);
     const preIssue =
-      state === undefined ||
-      ["exchange", "control", "prepared", "installed", "aborted"].includes(state.phase);
+      state === undefined || ["exchange", "control", "installed", "aborted"].includes(state.phase);
     if (presence.kind === "absent") {
       // Fence any launch still racing toward start, then settle on absence alone.
       if (preIssue) yield* exchanges.abort(target);
@@ -301,9 +300,27 @@ const make: Effect.Effect<
     };
     const evidence = recordedDeletionEvidence(yield* ledger.read(target.runId), executor);
     const decided = evidence.discarded || evidence.attestedComplete;
+    // The agent's word that the daemon never materialized a capture (sealantd exit 76): nothing
+    // ran on the VM, so nothing is lost by removing it. Typed by the agent, never inferred.
+    let nothingToSave = false;
     if (root?.deletionState !== "deleting-issued" && !decided) {
-      const available = yield* execution.recover(target);
-      if (available !== "running") return "retained" as const;
+      // The agent's typed refusals (another boot, a parked disk, an agent that did not launch
+      // this boot) are definite answers: the capture cannot be recovered here, the VM is kept.
+      const available = yield* execution
+        .recover(target)
+        .pipe(
+          Effect.catch((error) =>
+            error instanceof BoatExecutionError && error.code === "agent-refused"
+              ? Effect.logWarning(
+                  `Boat FINAL close · run ${target.runId}: the agent refused the recovery (${error.diagnostic?.agent?.reason ?? "unknown"}); the VM is retained.`,
+                ).pipe(Effect.as("held" as const))
+              : Effect.fail(error),
+          ),
+        );
+      if (available === "nothing-to-save") nothingToSave = true;
+      else if (available !== "running") return "retained" as const;
+    }
+    if (root?.deletionState !== "deleting-issued" && !decided && !nothingToSave) {
       const control = yield* execution.control(target);
       const outcome = yield* drainCaptureBeforeStop({
         runId: target.runId,
@@ -329,15 +346,20 @@ const make: Effect.Effect<
           ? { delete: true, basis: "discarded" }
           : now.attestedComplete
             ? { delete: true, basis: "attested-complete" }
-            : complete(entry)
-              ? { delete: true, basis: "observed-complete" }
-              : { delete: false, reason: "FINAL evidence changed" };
+            : nothingToSave
+              ? { delete: true, basis: "nothing-to-save" }
+              : complete(entry)
+                ? { delete: true, basis: "observed-complete" }
+                : { delete: false, reason: "FINAL evidence changed" };
       },
     });
-    // Evidence-based removals hold a ticket; the owner's discard rests on no evidence to revoke.
+    // Evidence-based removals hold a ticket; the owner's discard and the daemon's nothing-to-save
+    // rest on no recorded evidence a later observation could revoke.
     if (
       !deletion.decision.delete ||
-      (deletion.ticket === undefined && deletion.decision.basis !== "discarded")
+      (deletion.ticket === undefined &&
+        deletion.decision.basis !== "discarded" &&
+        deletion.decision.basis !== "nothing-to-save")
     )
       return yield* Effect.fail(new BoatFinalCloseError("held"));
     const removed = yield* removeUnderDeletion({

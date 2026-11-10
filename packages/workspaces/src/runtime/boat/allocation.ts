@@ -93,21 +93,21 @@ const provider = <A>(step: BoatLaunchDiagnostic["step"], run: () => Promise<Boat
           ),
     ),
   );
+/** The agent manifest digest the installation receipt recorded: what every bind request names. */
 const manifestOf = (input: BoatAllocationInput) => {
   const publication = input.publication;
   const receipt = z
     .object({
-      version: z.literal(3),
-      guest: z.object({ manifest: z.string(), manifestDigest: z.string().regex(/^[a-f0-9]{64}$/) }),
+      version: z.literal(4),
+      agent: z.object({ manifestDigest: z.string().regex(/^[a-f0-9]{64}$/) }),
     })
     .parse(JSON.parse(publication.evidence.receipt));
   if (
     hash(publication.evidence.receipt) !== publication.evidence.receiptHash ||
-    publication.snapshot.receiptHash !== publication.evidence.receiptHash ||
-    hash(receipt.guest.manifest) !== receipt.guest.manifestDigest
+    publication.snapshot.receiptHash !== publication.evidence.receiptHash
   )
     throw new Error("receipt-mismatch");
-  return receipt.guest.manifestDigest;
+  return receipt.agent.manifestDigest;
 };
 const make: Effect.Effect<
   BoatAllocation["Service"],

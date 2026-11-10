@@ -301,7 +301,7 @@ describe.skipIf(!enabled)("native publication ownership in migrated disposable P
       test((repo, db) =>
         Effect.gen(function* () {
           const owner = yield* seed(db);
-          const f = yield* Effect.promise(() => nativeBuilderFixture("legacy-guest-approval"));
+          const f = yield* Effect.promise(() => nativeBuilderFixture("agent-manifest-mismatch"));
           const original = yield* consumer(db, owner);
           yield* throughCatalog(db, f, (catalog) =>
             Effect.gen(function* () {

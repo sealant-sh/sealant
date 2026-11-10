@@ -22,6 +22,7 @@ import { boatTargetIsCurrent } from "../../worker/boat-current.js";
 import { BoatReadiness } from "../../worker/boat-readiness.js";
 import { BoatResourcesHost } from "../../worker/boat-resources.js";
 import { DEFAULT_CAPTURE_DRAIN_SETTINGS, finalFlushRequest } from "../../worker/capture-drain.js";
+import { BOAT_AGENT_DATA_DIR } from "./agent-contract.js";
 import type { BoatParkingApi } from "./api.js";
 import {
   boatSandboxIdSchema,
@@ -30,7 +31,7 @@ import {
   type BoatResult,
 } from "./config.js";
 import { BoatOwnership } from "./config.js";
-import { boatGuestPublicCommand, BoatExecution } from "./execution.js";
+import { BoatExecution } from "./execution.js";
 import { parkingResumeLaunch } from "./parking-launch.js";
 
 /** Failed observations retain their exact source, artifact, operation and tunnel reservation. */
@@ -138,24 +139,7 @@ const make: Effect.Effect<BoatParking["Service"], never, ParkingDependencies> = 
     const material = (target: BoatExecutionTarget) =>
       Effect.gen(function* () {
         const sealed = yield* execution.parkingMaterial(target);
-        const files = Redacted.value(sealed);
-        const launchFile = files.files.find((file) => file.name === "launch");
-        const secretFile = files.files.find((file) => file.name === "secret-env");
-        if (launchFile === undefined || secretFile === undefined) return yield* held();
-        const launch = yield* parse(() =>
-          z
-            .object({
-              format: z.literal("sealant-daemon-launch-v1"),
-              boot_env: z.record(z.string(), z.string()),
-            })
-            .parse(JSON.parse(Buffer.from(launchFile.bytes).toString("utf8"))),
-        );
-        const secrets = yield* parse(() =>
-          z
-            .record(z.string(), z.string())
-            .parse(JSON.parse(Buffer.from(secretFile.bytes).toString("utf8"))),
-        );
-        const env = launch.boot_env;
+        const kept = Redacted.value(sealed);
         const credentials = yield* parse(() =>
           z
             .object({
@@ -165,19 +149,14 @@ const make: Effect.Effect<BoatParking["Service"], never, ParkingDependencies> = 
               launchId: z.string().min(1),
             })
             .parse({
-              endpoint: env.SEALANT_CAPTURE_ENDPOINT,
-              token: secrets.SEALANT_CAPTURE_TOKEN,
-              worktreeId: env.SEALANT_CAPTURE_WORKTREE_ID,
-              launchId: env.SEALANT_CAPTURE_LAUNCH_ID,
+              endpoint: kept.bootEnv["SEALANT_CAPTURE_ENDPOINT"],
+              token: kept.secretEnv["SEALANT_CAPTURE_TOKEN"],
+              worktreeId: kept.bootEnv["SEALANT_CAPTURE_WORKTREE_ID"],
+              launchId: kept.bootEnv["SEALANT_CAPTURE_LAUNCH_ID"],
             }),
         );
-        if (env.SEALANT_WORKSPACE_SOURCE !== "capture") return yield* held();
-        return {
-          sealed,
-          launchFile,
-          secrets: Redacted.make(secrets),
-          credentials: Redacted.make(credentials),
-        };
+        if (kept.bootEnv["SEALANT_WORKSPACE_SOURCE"] !== "capture") return yield* held();
+        return { sealed, credentials: Redacted.make(credentials) };
       });
     const retain = (target: BoatExecutionTarget) =>
       Effect.gen(function* () {
@@ -305,101 +284,37 @@ const make: Effect.Effect<BoatParking["Service"], never, ParkingDependencies> = 
         );
         if (target.bootId === source.target.bootId) return yield* held();
         yield* custody.recordRecoveryChild(claim, work.operationId, target);
-        const request = {
-          format: "sealant-parking-rebind-v1",
-          source_request: {
-            format: "sealant-parking-close-v1",
-            binding: {
-              identity: {
-                deployment_id: source.target.deploymentId,
-                instance_id: source.target.sandboxId,
-                disk_lineage: source.target.diskLineage,
-              },
-              boot_id: source.target.bootId,
-              epoch: source.admission.epoch,
-              operation_id: source.admission.operationId,
-            },
-            operation_id: work.capsule.operationId,
-          },
-          capsule: {
-            sha256: work.capsule.capsuleHash,
-            archive_sha256: work.capsule.archiveHash,
-            bytes: work.capsule.contentBytes,
-            entries: work.capsule.entries,
-            stored_bytes: work.capsule.storedBytes,
-          },
-          identity: {
-            deployment_id: target.deploymentId,
-            instance_id: id,
-            disk_lineage: target.diskLineage,
-          },
-          boot_id: target.bootId,
-          operation_id: work.operationId,
-          capture_launch_id: work.source.captureLaunchId,
-        };
-        let rebindHash = work.rebindHash;
-        if (rebindHash === undefined) {
-          const command = yield* parse(() => boatGuestPublicCommand("resume", request));
-          const result = yield* call(() =>
-            provider.api.execute(id, command, { timeoutSeconds: 90 }),
-          );
-          if (
-            result.exitCode !== 0 ||
-            result.timedOut ||
-            result.stderr !== "" ||
-            result.stdout.length > 65536
-          )
-            return yield* held();
-          const rebound = yield* parse(() => JSON.parse(result.stdout));
-          if (
-            !isDeepStrictEqual(rebound, {
-              format: "sealant-parking-rebound-v1",
-              boot_id: target.bootId,
-              identity: request.identity,
-              operation_id: work.operationId,
-              capsule: request.capsule,
-              admission: "held",
-            })
-          )
-            return yield* held();
-          rebindHash = createHash("sha256").update(JSON.stringify(rebound)).digest("hex");
-        }
+        // The restored disk was parked on its last boot: the agent binds it once more, as this new
+        // instance of the same deployment. The binding receipt is the rebind's durable identity.
+        const bindingReceipt = yield* execution.exchange(target);
         const admissionId = yield* custody.prepareRecoveryAdmission(
           claim,
           work.operationId,
-          rebindHash,
+          work.rebindHash ?? bindingReceipt,
         );
         const admission = yield* custody.issue(claim, admissionId);
         if (admission.kind !== "issued" && admission.kind !== "observe-only") return yield* held();
-        yield* execution.exchange(target);
         // Mend capture-store's lease is 30 seconds. Wait after positive writer closure before the
         // first plan, then require a strictly newer epoch. A changed server policy fails closed.
         const quiescent = work.closedAt.getTime() + 31_000;
         const now = yield* Clock.currentTimeMillis;
         if (now < quiescent) yield* Effect.sleep(quiescent - now);
         const kept = yield* material(source.target);
-        const resumed = Redacted.value(
-          yield* parkingResumeLaunch(Redacted.make(kept.launchFile.bytes), kept.credentials),
-        );
         const original = Redacted.value(kept.sealed);
-        const freshFiles = original.files.filter(
-          (file) => file.name !== "launch" && file.name !== "secret-env",
-        );
-        const secretEnv = Buffer.from(
-          JSON.stringify({
-            ...Redacted.value(kept.secrets),
-            SEALANT_CAPTURE_TOKEN: Redacted.value(kept.credentials).token,
-          }),
+        const bootEnv = yield* parkingResumeLaunch(
+          Redacted.make(original.bootEnv),
+          kept.credentials,
         );
         const ready = yield* readiness.launch(
           target,
           Redacted.make({
+            bootEnv: Redacted.value(bootEnv),
+            secretEnv: {
+              ...original.secretEnv,
+              SEALANT_CAPTURE_TOKEN: Redacted.value(kept.credentials).token,
+            },
             pins: original.pins,
-            files: [
-              ...freshFiles,
-              { name: "launch", bytes: resumed.launch },
-              { name: "secret-env", bytes: secretEnv },
-            ],
+            docker: original.docker,
           }),
         );
         const control = yield* execution.control(target);
@@ -419,8 +334,8 @@ const make: Effect.Effect<BoatParking["Service"], never, ParkingDependencies> = 
           return yield* held();
         yield* custody.promoteRecovery(claim, admissionId, {
           runtimeId: ready.runtimeId,
-          invocation: ready.invocation,
-          permitReceipt: ready.permitReceipt,
+          bootId: ready.bootId,
+          isolationReceipt: ready.isolationReceipt,
         });
         return target;
       });
@@ -534,7 +449,7 @@ const make: Effect.Effect<BoatParking["Service"], never, ParkingDependencies> = 
           const file = yield* call(() =>
             provider.api.verifyRecoveryFile({
               snapshotId,
-              path: `/var/lib/sealant/guest/capsules/${work.capsule.operationId}/capsule.pack`,
+              path: `${BOAT_AGENT_DATA_DIR}/park-${work.capsule.operationId}.json`,
               sha256: work.capsule.archiveHash,
               bytes: work.capsule.storedBytes,
             }),

@@ -323,7 +323,7 @@ describe("operator checker against Mend HTTP and terminal protocol", () => {
 
   it("stops waiting as soon as Core fails a launch before the agent starts, and reports Core's cause", async () => {
     const cause =
-      'Boat runtime: launch-held; diagnostic {"code":"receiver-refused","receiver":{"reason":"network-receipt-changed"}}';
+      'Boat runtime: launch-held; diagnostic {"code":"agent-refused","agent":{"reason":"network-binding-conflict"}}';
     const f = await fixture({
       coreFailure: {
         attemptStatus: "failed",

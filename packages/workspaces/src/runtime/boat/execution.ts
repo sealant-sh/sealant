@@ -6,7 +6,6 @@ import {
   privateDecrypt,
   randomUUID,
 } from "node:crypto";
-import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 
 import { CredentialCipher, type CredentialCipherError } from "@sealant/credentials";
@@ -30,7 +29,6 @@ import {
 import { Cause, Context, Effect, Layer, Redacted } from "effect";
 import { z } from "zod";
 
-import receiverRoutes from "../../../boat-image/receiver-routes.json" with { type: "json" };
 import { safeCommandTail } from "../../images/boat/command-diagnostics.js";
 import {
   SealantControlError,
@@ -39,6 +37,31 @@ import {
   type SealantRuntimeService,
   type SealantTarget,
 } from "../../sealantd/runtime.js";
+import {
+  AGENT_CONTRACT_VERSION,
+  AGENT_HEALTH_ROUTE,
+  AGENT_LAUNCH_ROUTE,
+  AGENT_RECOVER_CONTRACT_VERSION,
+  AGENT_RECOVER_ROUTE,
+  DOCKER_AGENT_CONTRACT_VERSION,
+  agentHealthResponseSchema,
+  agentLaunchResponseSchema,
+  type AgentLaunchRequest,
+} from "../microvm/agent-contract.js";
+import {
+  BOAT_AGENT_BIND_REFUSALS,
+  BOAT_AGENT_NETWORK_ROUTE,
+  BOAT_AGENT_PARK_ROUTE,
+  BOAT_AGENT_RECOVER_REFUSALS,
+  boatAgentBindReplySchema,
+  boatAgentIdentitySchema,
+  boatAgentNetworkResponseSchema,
+  boatAgentNetworkStatusSchema,
+  boatAgentParkResponseSchema,
+  boatAgentRecoverResponseSchema,
+  boatAgentRefusalSchema,
+  type BoatAgentBindRequest,
+} from "./agent-contract.js";
 import type { BoatApi } from "./api.js";
 import { BoatApiError, BoatSecret, boatSandboxIdSchema, parseBoatUrl } from "./config.js";
 import { boatControlConnection, type BoatHostedControl } from "./connection.js";
@@ -48,41 +71,27 @@ import {
   type BoatLaunchDiagnostic,
 } from "./launch-diagnostics.js";
 
-const name = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/);
-const identitySchema = z.strictObject({
-  deployment_id: name,
-  instance_id: name,
-  disk_lineage: name,
+/** The agent's kill switch for a hung capture flush in its lifecycle hooks; none run on Boat. */
+const BOAT_FLUSH_TIMEOUT_MS = 30_000;
+/** The daemon capabilities a Boat workspace needs before it is reported ready. */
+const REQUIRED_CAPABILITIES = [
+  "exec.user",
+  "dotfiles.user",
+  "restore.owner_map",
+  "process.secret-env.v1",
+] as const;
+
+const envName = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
+/** What a launch is made of, sealed as the admission envelope and pushed to the agent once. */
+const envelopeSchema = z.strictObject({
+  bootEnv: z.record(envName, z.string()),
+  secretEnv: z.record(z.string(), z.string()),
+  pins: boatAdmissionPinsSchema,
+  docker: z.boolean(),
 });
-const statusSchema = z.strictObject({
-  format: z.literal("sealant-receiver-status-v1"),
-  identity: identitySchema,
-  boot_id: z.uuid(),
-  admission: z.literal("held"),
-  execution: z.enum(["unavailable", "issued", "running", "ended", "unresolved"]),
-  epoch: z.number().int().positive().nullable(),
-  operation_id: z.string().nullable(),
-  stage: z.enum(["empty", "prepared", "installed", "previous-boot"]),
-});
-type Status = z.infer<typeof statusSchema>;
-const fileSchema = z.strictObject({
-  name: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/),
-  data: z.string().max((2 * 1024 * 1024 * 4) / 3 + 4),
-  size: z.number().int().min(0),
-  sha256: z.string().regex(/^[a-f0-9]{64}$/),
-});
-const stageSchema = z.strictObject({
-  format: z.literal("sealant-admission-stage-v1"),
-  identity: identitySchema,
-  boot_id: z.uuid(),
-  epoch: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  operation_id: z.uuid(),
-  files: z.array(fileSchema).min(1).max(16),
-});
-const envelopeSchema = z.strictObject({ wire: stageSchema, pins: boatAdmissionPinsSchema });
 const bootstrapSchema = z.strictObject({
   format: z.literal("sealant-bootstrap-v1"),
-  identity: identitySchema,
+  identity: boatAgentIdentitySchema,
   boot_id: z.uuid(),
   manifest_digest: z.string().regex(/^[a-f0-9]{64}$/),
   operation_id: z.uuid(),
@@ -99,103 +108,95 @@ const controlSchema = z.strictObject({
 });
 const exchangeSchema = z.strictObject({ privateKey: z.string() });
 
-const receiverRouteNames = [
-  "status",
-  "stage",
-  "start",
-  "isolate",
-  "permit",
-  "readiness",
-  "recover",
-  "park",
-] as const;
-export type BoatReceiverRoute = (typeof receiverRouteNames)[number];
-const reasonCode = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
-const receiverContract = z
-  .strictObject({
-    format: z.literal("sealant-receiver-routes-v1"),
-    routes: z.array(
-      z.strictObject({
-        name: z.enum(receiverRouteNames),
-        path: z.string(),
-        method: z.enum(["GET", "POST"]),
-        budgetMs: z.number().int().positive(),
-      }),
-    ),
-    transientReasons: z.array(reasonCode),
-  })
-  .parse(receiverRoutes);
-/** Receiver reasons that report an observation which may change on retry, not a policy refusal. */
-export const boatReceiverTransientReasons: ReadonlySet<string> = new Set(
-  receiverContract.transientReasons,
-);
-/** Budgets come from the route list the relay and the guest receiver also read. */
-export const boatReceiverRoutes: ReadonlyMap<
-  BoatReceiverRoute,
-  { readonly method: "GET" | "POST"; readonly budgetMs: number }
-> = (() => {
-  const routes = receiverContract.routes;
-  const table = new Map(routes.map((route) => [route.name, route]));
-  if (
-    table.size !== routes.length ||
-    table.size !== receiverRouteNames.length ||
-    routes.some((route) => route.path !== `/sealant/bootstrap/${route.name}`)
-  )
-    throw new Error("Boat receiver route list does not match Core's routes");
-  return table;
-})();
-const receiverRoute = (route: BoatReceiverRoute) => {
-  const found = boatReceiverRoutes.get(route);
-  if (found === undefined) throw new BoatExecutionError("invalid-input");
-  return found;
+/**
+ * The agent routes Core calls over the hosted proxy, each with the budget Core gives one request
+ * and the statuses whose body the caller reads itself (every other status is a typed failure).
+ */
+export type BoatAgentRoute =
+  | "launch"
+  | "health"
+  | "network"
+  | "network-status"
+  | "recover"
+  | "park";
+interface BoatAgentRouteSpec {
+  readonly method: "GET" | "POST";
+  readonly pathClass: NonNullable<BoatLaunchDiagnostic["agent"]>["pathClass"];
+  readonly budgetMs: number;
+  readonly answered: readonly number[];
+}
+export const boatAgentRoutes: Readonly<Record<BoatAgentRoute, BoatAgentRouteSpec>> = {
+  launch: { method: "POST", pathClass: AGENT_LAUNCH_ROUTE, budgetMs: 30_000, answered: [200, 409] },
+  health: { method: "GET", pathClass: AGENT_HEALTH_ROUTE, budgetMs: 10_000, answered: [200, 503] },
+  network: {
+    method: "POST",
+    pathClass: BOAT_AGENT_NETWORK_ROUTE,
+    budgetMs: 30_000,
+    answered: [200],
+  },
+  "network-status": {
+    method: "GET",
+    pathClass: BOAT_AGENT_NETWORK_ROUTE,
+    budgetMs: 10_000,
+    answered: [200],
+  },
+  // The agent waits for a recovery boot to settle (15 s by default) before it answers.
+  recover: {
+    method: "POST",
+    pathClass: AGENT_RECOVER_ROUTE,
+    budgetMs: 45_000,
+    answered: [200, 409],
+  },
+  // A park kills the daemon, stops Docker and runs `sync` (bounded at 60 s in the agent).
+  park: {
+    method: "POST",
+    pathClass: BOAT_AGENT_PARK_ROUTE,
+    budgetMs: 120_000,
+    answered: [200, 409],
+  },
 };
 
+/** An answered agent request: a status the caller reads, with its parsed JSON body. */
+export interface BoatAgentReply {
+  readonly status: number;
+  readonly body: unknown;
+}
+
 /**
- * The receiver's reason decides, not its status alone: a transient observation such as a lost DNS
- * answer stays retryable, a policy refusal is final. No reply and 5xx stay transport failures.
+ * The agent's status decides, never its text: 400 is a request Core built wrong, 401 a bearer the
+ * agent does not hold, 404 an agent without the route, 409 a refusal whose reason the body names.
+ * 502/503/504 (the proxy's VM still booting, an agent not yet listening, or the agent's own
+ * `503 {reason: docker-stop-unverified}` on a park or recovery it could not finish) and lost
+ * transport are the only retryable failures; their reason, when the body names one, is kept.
  */
-export type BoatReceiverFailureCode =
-  | "receiver-rejected"
-  | "receiver-unauthorized"
-  | "receiver-route-missing"
-  | "receiver-refused"
-  | "receiver-not-ready"
+export type BoatAgentFailureCode =
+  | "agent-rejected"
+  | "agent-unauthorized"
+  | "agent-route-missing"
+  | "agent-refused"
+  | "agent-not-ready"
   | "transport-unavailable";
-export const boatReceiverFailureCode = (status: number, reason?: string): BoatReceiverFailureCode =>
-  (status === 400 || status === 409) &&
-  reason !== undefined &&
-  boatReceiverTransientReasons.has(reason)
-    ? "receiver-not-ready"
-    : status === 400
-      ? "receiver-rejected"
-      : status === 401 || status === 403
-        ? "receiver-unauthorized"
-        : status === 404
-          ? "receiver-route-missing"
-          : status === 409
-            ? "receiver-refused"
+export const boatAgentFailureCode = (status: number): BoatAgentFailureCode =>
+  status === 400
+    ? "agent-rejected"
+    : status === 401 || status === 403
+      ? "agent-unauthorized"
+      : status === 404
+        ? "agent-route-missing"
+        : status === 409
+          ? "agent-refused"
+          : status === 502 || status === 503 || status === 504
+            ? "agent-not-ready"
             : "transport-unavailable";
-/** The one retry rule for guest work: lost transport or a receiver that is not ready yet. */
+/** The one retry rule for guest work: lost transport or an agent that is not ready yet. */
 export const boatExecutionRetryable = (error: unknown): boolean =>
   error instanceof BoatExecutionError &&
-  (error.code === "transport-unavailable" || error.code === "receiver-not-ready");
-const receiverReasonSchema = z.object({
-  error: reasonCode,
-  detail: z
-    .string()
-    .regex(/^[A-Za-z0-9_./,=+-]{1,256}$/)
-    .optional(),
-});
-/** The receiver's classified reason code, never its free text. */
-const receiverReason = (tail: string): { reason?: string; detail?: string } => {
+  (error.code === "transport-unavailable" || error.code === "agent-not-ready");
+/** The agent's classified reason code (`{reason}`), never its free text. */
+const agentReason = (tail: string): { reason?: string } => {
   try {
-    const parsed = receiverReasonSchema.safeParse(JSON.parse(tail));
-    return parsed.success
-      ? {
-          reason: parsed.data.error,
-          ...(parsed.data.detail === undefined ? {} : { detail: parsed.data.detail }),
-        }
-      : {};
+    const parsed = boatAgentRefusalSchema.safeParse(JSON.parse(tail));
+    return parsed.success ? { reason: parsed.data.reason } : {};
   } catch {
     return {};
   }
@@ -213,7 +214,9 @@ export class BoatExecutionError extends Error {
       | "invalid-reply"
       | "seal-context-mismatch"
       | "invocation-held"
-      | BoatReceiverFailureCode,
+      /** The agent's health named a daemon exit or a failed guest service: the launch is lost. */
+      | "guest-failed"
+      | BoatAgentFailureCode,
     diagnostic?: BoatLaunchDiagnostic,
   ) {
     const safe =
@@ -227,7 +230,7 @@ const attempt = <A>(code: BoatExecutionError["code"], run: () => A) =>
   Effect.try({ try: run, catch: () => new BoatExecutionError(code) });
 const io = <A>(
   run: (signal: AbortSignal) => Promise<A>,
-  step: BoatLaunchDiagnostic["step"] = "receiver-request",
+  step: BoatLaunchDiagnostic["step"] = "agent-request",
 ) =>
   Effect.tryPromise({
     try: run,
@@ -257,7 +260,7 @@ const canonical = (value: unknown): string => {
 const sha256 = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 
 /** Read a bounded failure prefix; cancel even an infinite or oversized response. */
-const receiverFailureTail = async (
+const agentFailureTail = async (
   response: Response,
   redactions: readonly string[],
   body: Redacted.Redacted<string> | undefined,
@@ -294,7 +297,7 @@ const receiverFailureTail = async (
     const raw = Redacted.value(body);
     scrub(raw);
     try {
-      // A failed upstream may echo staging data, including base64 files and credential values.
+      // A failed upstream may echo launch material, including the boot env and secret values.
       const request: unknown = JSON.parse(raw);
       scrub(request);
     } catch {
@@ -306,21 +309,22 @@ const receiverFailureTail = async (
 
 /** Public commands and hosted HTTPS only. Implementations must authenticate the exact provider target. */
 export interface BoatGuestTransport {
+  /** The bind exchange: `boat-bind.mjs` over Boat exec. A refusal is a typed `agent-refused`. */
   readonly bind: (target: BoatExecutionTarget, request: unknown) => Promise<unknown>;
   readonly host: (target: BoatExecutionTarget) => Promise<BoatHostedControl>;
-  /** Only read-only status probes retry transient startup failures: at most 20 reads / 20 seconds. */
-  readonly call: (
+  /** One authenticated agent request; the caller reads the statuses the route lists as answered. */
+  readonly request: (
     access: BoatHostedControl,
     bearer: BoatSecret,
-    route: BoatReceiverRoute,
+    route: BoatAgentRoute,
     body?: Redacted.Redacted<string>,
     signal?: AbortSignal,
-  ) => Promise<unknown>;
-  /** Round-trips daemon health and capabilities through the authenticated relay. */
+  ) => Promise<BoatAgentReply>;
+  /** Round-trips daemon health and capabilities through the agent's control relay. */
   readonly probe: (access: BoatHostedControl, bearer: BoatSecret) => Promise<BoatDaemonReady>;
 }
 
-/** Safe daemon observation. The generated runtime ID is correlated by the surrounding invocation reads. */
+/** Safe daemon observation. The generated runtime ID is correlated by the surrounding reads. */
 export interface BoatDaemonReady {
   readonly runtimeId: string;
   readonly healthy: boolean;
@@ -351,12 +355,14 @@ export const boatControlFailure = (error: SealantError | Cause.TimeoutError) =>
           : { errorClass: "SealantUnexpectedError", control: { operation: error.operation } }),
   });
 
-/** Only public identity requests use the provider command channel. Launch secrets use hosted HTTPS. */
-export const boatGuestPublicCommand = (action: "bind" | "resume", request: unknown) => {
+/**
+ * The one provider command Core runs in a workspace VM: the bind exchange, with its public JSON
+ * request as the only argument. Launch secrets never travel this way; they go over hosted HTTPS.
+ */
+export const boatGuestPublicCommand = (request: BoatAgentBindRequest) => {
   const raw = JSON.stringify(request);
   if (raw.length > 8192) throw new BoatExecutionError("invalid-input");
-  const root = "/var/lib/sealant/guest";
-  return `/usr/bin/sudo -n -- ${root}/bundle/lib64/ld-linux-x86-64.so.2 --inhibit-cache --library-path ${root}/bundle/lib/x86_64-linux-gnu:${root}/bundle/usr/lib/x86_64-linux-gnu:${root}/bundle/usr/lib/x86_64-linux-gnu/systemd ${root}/bundle/usr/bin/python3 -I -S -B ${root}/guest_boot.py ${action} '${raw.replaceAll("'", "'\\''")}'`;
+  return `/usr/bin/sudo -n -- /opt/sealant/node /opt/sealant/boat-bind.mjs '${raw.replaceAll("'", "'\\''")}'`;
 };
 
 /** The only production transport: no provider upload or command receives launch secrets. */
@@ -387,80 +393,6 @@ export const createBoatGuestTransport = (
     )
       throw new BoatExecutionError("target-mismatch");
     return id;
-  };
-  const receiverRequest: BoatGuestTransport["call"] = async (
-    access,
-    bearer,
-    route,
-    body,
-    signal,
-  ) => {
-    const origin = parseBoatUrl(access.origin);
-    if (!origin.ok || origin.value.href !== `${access.origin}/`)
-      throw new BoatExecutionError("invalid-input");
-    const pathClass = `/sealant/bootstrap/${route}` as const;
-    const { method, budgetMs } = receiverRoute(route);
-    let response: Response;
-    try {
-      response = await fetch(`${access.origin}${pathClass}`, {
-        method,
-        redirect: "error",
-        signal: signal ?? AbortSignal.timeout(budgetMs),
-        headers: {
-          Cookie: `_port_auth=${access.cookie.reveal()}`,
-          Authorization: `Bearer ${bearer.reveal()}`,
-          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-        },
-        ...(body === undefined ? {} : { body: Redacted.value(body) }),
-      });
-    } catch (error) {
-      throw new BoatExecutionError("transport-unavailable", {
-        ...boatLaunchDiagnostic(
-          new BoatApiError(`receiver-${route}`, null, "transport_error", error),
-          "receiver-request",
-        ),
-        receiver: { pathClass, responseTail: "" },
-      });
-    }
-    if (!response.ok) {
-      const responseTail = await receiverFailureTail(
-        response,
-        [access.cookie.reveal(), bearer.reveal()],
-        body,
-      );
-      const reason = receiverReason(responseTail);
-      const code = boatReceiverFailureCode(response.status, reason.reason);
-      throw new BoatExecutionError(code, {
-        step: "receiver-request",
-        errorClass: "BoatExecutionError",
-        code,
-        provider: { operation: `receiver-${route}`, status: response.status, causeClass: null },
-        receiver: { pathClass, responseTail, ...reason },
-      });
-    }
-    const reader = response.body?.getReader();
-    if (reader === undefined) throw new BoatExecutionError("invalid-reply");
-    let raw = "";
-    try {
-      while (true) {
-        const part = await reader.read();
-        if (part.done) break;
-        raw += Buffer.from(part.value).toString("utf8");
-        if (raw.length > 65536) throw new BoatExecutionError("invalid-reply");
-      }
-      return JSON.parse(raw);
-    } catch (error) {
-      if (error instanceof BoatExecutionError) throw error;
-      throw new BoatExecutionError("invalid-reply", {
-        ...boatLaunchDiagnostic(
-          new BoatApiError(`receiver-${route}`, response.status, "invalid_reply", error),
-          "receiver-request",
-        ),
-        receiver: { pathClass, responseTail: "" },
-      });
-    } finally {
-      await reader.cancel().catch(() => {});
-    }
   };
   return {
     probe: (access, bearer) =>
@@ -496,7 +428,7 @@ export const createBoatGuestTransport = (
       const key = createPublicKey(publicRequest.data.public_key);
       if (key.asymmetricKeyType !== "rsa" || key.asymmetricKeyDetails?.modulusLength !== 3072)
         throw new BoatExecutionError("invalid-input");
-      const command = boatGuestPublicCommand("bind", publicRequest.data);
+      const command = boatGuestPublicCommand(publicRequest.data);
       const result = await api.execute(id, command, { timeoutSeconds: 90 });
       if (!result.ok)
         throw new BoatExecutionError(
@@ -507,17 +439,25 @@ export const createBoatGuestTransport = (
         result.value.timedOut ||
         result.value.exitCode !== 0 ||
         result.value.stdout.length > 65536
-      )
-        throw new BoatExecutionError("transport-unavailable", {
-          step: "bind-exchange",
-          errorClass: "BoatExecutionError",
-          command: {
-            exitCode: result.value.exitCode,
-            timedOut: result.value.timedOut,
-            stdoutTail: safeCommandTail(result.value.stdout),
-            stderrTail: safeCommandTail(result.value.stderr),
+      ) {
+        // The bind CLI's stderr is one reason code on a refusal; anything else is a lost exchange.
+        const stderr = result.value.stderr.trim();
+        const refusal = BOAT_AGENT_BIND_REFUSALS.find((reason) => reason === stderr);
+        throw new BoatExecutionError(
+          refusal === undefined ? "transport-unavailable" : "agent-refused",
+          {
+            step: "bind-exchange",
+            errorClass: "BoatExecutionError",
+            code: refusal === undefined ? "transport-unavailable" : "agent-refused",
+            command: {
+              exitCode: result.value.exitCode,
+              timedOut: result.value.timedOut,
+              stdoutTail: safeCommandTail(result.value.stdout),
+              stderrTail: safeCommandTail(result.value.stderr),
+            },
           },
-        });
+        );
+      }
       return JSON.parse(result.value.stdout);
     },
     host: async (target) => {
@@ -525,47 +465,76 @@ export const createBoatGuestTransport = (
       if (!result.ok)
         throw new BoatExecutionError(
           "transport-unavailable",
-          boatLaunchDiagnostic(result.error, "host-receiver"),
+          boatLaunchDiagnostic(result.error, "host-agent"),
         );
       return result.value;
     },
-    call: async (access, bearer, route, body, signal) => {
-      if (route !== "status") return receiverRequest(access, bearer, route, body, signal);
-      // Only this read-only authenticated probe may retry. No POST is replayed by the transport.
-      const budget = AbortSignal.any([
-        AbortSignal.timeout(20_000),
-        ...(signal === undefined ? [] : [signal]),
-      ]);
-      let last: BoatExecutionError | undefined;
-      for (let count = 0; count < 20; count++) {
-        try {
-          return await receiverRequest(
-            access,
-            bearer,
-            route,
-            body,
-            AbortSignal.any([budget, AbortSignal.timeout(receiverRoute("status").budgetMs)]),
-          );
-        } catch (error) {
-          const provider =
-            error instanceof BoatExecutionError ? error.diagnostic?.provider : undefined;
-          if (
-            !(error instanceof BoatExecutionError) ||
-            !provider ||
-            provider.operation !== "receiver-status" ||
-            !(provider.status === null || [502, 503, 504].includes(provider.status))
-          )
-            throw error;
-          last = error;
-          if (budget.aborted || count === 19) throw error;
-          try {
-            await delay(500, undefined, { signal: budget });
-          } catch {
-            throw error;
-          }
-        }
+    request: async (access, bearer, route, body, signal) => {
+      const origin = parseBoatUrl(access.origin);
+      if (!origin.ok || origin.value.href !== `${access.origin}/`)
+        throw new BoatExecutionError("invalid-input");
+      const { method, pathClass, budgetMs, answered } = boatAgentRoutes[route];
+      let response: Response;
+      try {
+        response = await fetch(`${access.origin}${pathClass}`, {
+          method,
+          redirect: "error",
+          signal: signal ?? AbortSignal.timeout(budgetMs),
+          headers: {
+            Cookie: `_port_auth=${access.cookie.reveal()}`,
+            Authorization: `Bearer ${bearer.reveal()}`,
+            ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+          },
+          ...(body === undefined ? {} : { body: Redacted.value(body) }),
+        });
+      } catch (error) {
+        throw new BoatExecutionError("transport-unavailable", {
+          ...boatLaunchDiagnostic(
+            new BoatApiError(`agent-${route}`, null, "transport_error", error),
+            "agent-request",
+          ),
+          agent: { pathClass, responseTail: "" },
+        });
       }
-      throw last ?? new BoatExecutionError("transport-unavailable");
+      if (!answered.includes(response.status)) {
+        const responseTail = await agentFailureTail(
+          response,
+          [access.cookie.reveal(), bearer.reveal()],
+          body,
+        );
+        const reason = agentReason(responseTail);
+        const code = boatAgentFailureCode(response.status);
+        throw new BoatExecutionError(code, {
+          step: "agent-request",
+          errorClass: "BoatExecutionError",
+          code,
+          provider: { operation: `agent-${route}`, status: response.status, causeClass: null },
+          agent: { pathClass, responseTail, ...reason },
+        });
+      }
+      const reader = response.body?.getReader();
+      if (reader === undefined) throw new BoatExecutionError("invalid-reply");
+      let raw = "";
+      try {
+        while (true) {
+          const part = await reader.read();
+          if (part.done) break;
+          raw += Buffer.from(part.value).toString("utf8");
+          if (raw.length > 65536) throw new BoatExecutionError("invalid-reply");
+        }
+        return { status: response.status, body: JSON.parse(raw) };
+      } catch (error) {
+        if (error instanceof BoatExecutionError) throw error;
+        throw new BoatExecutionError("invalid-reply", {
+          ...boatLaunchDiagnostic(
+            new BoatApiError(`agent-${route}`, response.status, "invalid_reply", error),
+            "agent-request",
+          ),
+          agent: { pathClass, responseTail: "" },
+        });
+      } finally {
+        await reader.cancel().catch(() => {});
+      }
     },
   };
 };
@@ -575,58 +544,61 @@ export class BoatGuestTransportService extends Context.Service<
   BoatGuestTransportService,
   BoatGuestTransport
 >()("@sealant/workspaces/boat/BoatGuestTransport") {}
-/** Owns sealed bootstrap and one frozen admission. Running acknowledges an invocation, not daemon readiness. */
+
+/** What a launch is made of; sealed once and pushed to the agent as the launch body. */
+export type BoatLaunchMaterial = z.infer<typeof envelopeSchema>;
+
+/** What the agent said of a held workspace's capture when asked to recover it. */
+export type BoatRecoveryOutcome = "running" | "pending" | "nothing-to-save" | "held";
+
+/** Owns sealed bootstrap and one frozen admission. Running acknowledges an accepted launch, not daemon readiness. */
 export interface BoatExecutionService {
-  /** Reopens only the original encrypted payload for its canonical custody owner. Never reads guest disk secrets. */
-  readonly parkingMaterial: (target: BoatExecutionTarget) => Effect.Effect<
-    Redacted.Redacted<{
-      readonly files: readonly { readonly name: string; readonly bytes: Uint8Array }[];
-      readonly pins: BoatAdmissionPins;
-    }>,
-    Failure
-  >;
-  /** Replays only the reserved exchange; a different target or boot refuses. */
-  readonly exchange: (target: BoatExecutionTarget) => Effect.Effect<void, Failure>;
-  /** The payload is used only on first preparation. Later calls deliver the original sealed envelope. */
+  /** Reopens only the original launch material for its canonical custody owner. Never reads guest disk secrets. */
+  readonly parkingMaterial: (
+    target: BoatExecutionTarget,
+  ) => Effect.Effect<Redacted.Redacted<BoatLaunchMaterial>, Failure>;
+  /**
+   * Replays only the reserved exchange; a different target or boot refuses. Returns the binding
+   * receipt: a digest of the public bind (identity, boot, operation), the same on every replay.
+   */
+  readonly exchange: (target: BoatExecutionTarget) => Effect.Effect<string, Failure>;
+  /** The material is sealed on first call. Later calls keep the original sealed envelope. */
   readonly stage: (
     id: string,
-    payload: Redacted.Redacted<{
-      readonly files: readonly { readonly name: string; readonly bytes: Uint8Array }[];
-      readonly pins: BoatAdmissionPins;
-    }>,
+    material: Redacted.Redacted<BoatLaunchMaterial>,
   ) => Effect.Effect<void, Failure>;
-  /** A lost reply may adopt the exact running invocation. Ended or ambiguous disks remain held. */
-  readonly start: (id: string) => Effect.Effect<"running", Failure>;
-  /** Authenticated network setup for the installed epoch only. It never issues an execution permit. */
+  /** Freezes the isolation receipts a launch was prepared under; the record is the only reader. */
+  readonly recordIsolation: (
+    target: BoatExecutionTarget,
+    receipts: NonNullable<BoatExecutionRecord["isolation"]>,
+  ) => Effect.Effect<void, Failure>;
+  /** Pushes the sealed launch to the agent once. A lost reply adopts the agent's durable launch record. */
+  readonly launch: (id: string) => Effect.Effect<"running", Failure>;
+  /** Authenticated network setup for the admitted epoch only. */
   readonly isolate: (
     target: BoatExecutionTarget,
     input: BoatGuestNetworkInput,
   ) => Effect.Effect<BoatGuestNetworkReceipt, Failure>;
-
-  /** Authenticated capture control for the original running or terminally held invocation. */
+  /** Authenticated capture control for the original running or terminally held launch. */
   readonly control: (
     target: BoatExecutionTarget,
   ) => Effect.Effect<Redacted.Redacted<SealantTarget>, Failure>;
   /** Irreversibly prevents new worker starts, issued or running, without disturbing FINAL's daemon. */
   readonly hold: (target: BoatExecutionTarget) => Effect.Effect<void, Failure>;
-  /** Capture-only restart on the original boot. Missing original tmpfs remains held. */
-  readonly recover: (
-    target: BoatExecutionTarget,
-  ) => Effect.Effect<"running" | "pending" | "held", Failure>;
-  /** Closes the held invocation's writers and returns its durable volatile-data capsule. */
+  /** Capture-only restart on the original boot, with the capture token Core kept for it. */
+  readonly recover: (target: BoatExecutionTarget) => Effect.Effect<BoatRecoveryOutcome, Failure>;
+  /** Closes the held workspace for parking and returns the agent's receipt of it. */
   readonly park: (
     target: BoatExecutionTarget,
     operationId: string,
   ) => Effect.Effect<BoatParkingReceipt, Failure>;
-  /** Freezes isolation receipts before authenticated, replay-safe permit issuance. */
-  readonly permit: (
-    target: BoatExecutionTarget,
-    receipts: NonNullable<BoatExecutionRecord["isolation"]>,
-  ) => Effect.Effect<void, Failure>;
-  /** Fresh observation only. Never starts, grants a permit or publishes a runtime row. */
+  /** Fresh observation only: agent health, the tunnel's handshake and DNS, then daemon health. */
   readonly readiness: (target: BoatExecutionTarget) => Effect.Effect<BoatReadyReceipt, Failure>;
 }
-/** Correlated guest evidence only. Provider stop, snapshot custody and deletion are separate. */
+/**
+ * The agent's park receipt, in the custody ledger's fields: the receipt file is the one artifact
+ * the saved snapshot must carry, so both digests and both sizes are its own and it is one entry.
+ */
 export interface BoatParkingReceipt {
   readonly operationId: string;
   readonly capsuleHash: string;
@@ -637,10 +609,13 @@ export interface BoatParkingReceipt {
 }
 /** A current observation, never durable authority to admit a later request. */
 export interface BoatReadyReceipt {
-  readonly invocation: string;
   readonly runtimeId: string;
-  readonly permitReceipt: string;
+  /** The boot the launch was accepted on: the agent's launch record is per boot. */
+  readonly bootId: string;
+  /** Digest of the binding and the frozen resource and tunnel receipts the launch ran under. */
+  readonly isolationReceipt: string;
   readonly handshake: "verified";
+  readonly dns: "udp-and-tcp";
   readonly admission: "held";
 }
 /** Private key stays redacted until the authenticated HTTPS body is serialized. */
@@ -661,6 +636,44 @@ export interface BoatGuestNetworkReceipt {
 export class BoatExecution extends Context.Service<BoatExecution, BoatExecutionService>()(
   "@sealant/workspaces/boat/BoatExecution",
 ) {}
+
+/** The launch body the agent contract names, from the sealed material and the exchanged bearer. */
+export const boatLaunchRequest = (
+  material: BoatLaunchMaterial,
+  runId: string,
+  bearer: string,
+): AgentLaunchRequest => {
+  const common = {
+    runId,
+    controlToken: bearer,
+    flushTimeoutMs: BOAT_FLUSH_TIMEOUT_MS,
+    bootEnv: material.bootEnv,
+    secretEnvJson: JSON.stringify(material.secretEnv),
+  };
+  return material.docker
+    ? { version: DOCKER_AGENT_CONTRACT_VERSION, ...common, services: { docker: "required" } }
+    : { version: AGENT_CONTRACT_VERSION, ...common };
+};
+
+const bindingOf = (record: BoatExecutionRecord) => ({
+  identity: identity(record.target),
+  boot_id: record.target.bootId,
+  epoch: record.admission?.epoch,
+  operation_id: record.admission?.operationId,
+});
+/** What the readiness receipt digests: the binding and the frozen isolation receipts. */
+const isolationReceiptOf = (record: BoatExecutionRecord) =>
+  sha256(
+    canonical({
+      binding: bindingOf(record),
+      resource_receipt: record.isolation?.resourceReceipt,
+      tunnel_receipt: record.isolation?.tunnelReceipt,
+    }),
+  );
+const bindingReceiptOf = (target: BoatExecutionTarget, exchangeId: string) =>
+  sha256(
+    canonical({ identity: identity(target), boot_id: target.bootId, operation_id: exchangeId }),
+  );
 
 const make: Effect.Effect<
   BoatExecution["Service"],
@@ -717,25 +730,32 @@ const make: Effect.Effect<
             : Effect.succeed(record),
         ),
       );
-  const checkStatus = (record: BoatExecutionRecord, value: unknown, staged: boolean) =>
-    attempt("invalid-reply", () => {
-      const result = statusSchema.parse(value);
-      if (
-        !isDeepStrictEqual(result.identity, identity(record.target)) ||
-        result.boot_id !== record.target.bootId ||
-        result.stage === "previous-boot" ||
-        (!staged &&
-          (result.stage !== "empty" ||
-            result.epoch !== null ||
-            result.operation_id !== null ||
-            result.execution !== "unavailable")) ||
-        (staged &&
-          (result.epoch !== record.admission?.epoch ||
-            result.operation_id !== record.admission?.operationId))
-      )
-        throw new Error();
-      return result;
-    });
+  const loadTarget = (target: BoatExecutionTarget) =>
+    load(target.runtimeInstanceId).pipe(
+      Effect.flatMap((record) =>
+        isDeepStrictEqual(record.target, target)
+          ? Effect.succeed(record)
+          : Effect.fail(new BoatExecutionError("target-mismatch")),
+      ),
+    );
+  /** The record must not have moved under an external call that read it. */
+  const unchanged = (record: BoatExecutionRecord) =>
+    load(record.target.runtimeInstanceId).pipe(
+      Effect.flatMap((now) =>
+        isDeepStrictEqual(now, record)
+          ? Effect.void
+          : Effect.fail(new BoatExecutionError("target-mismatch")),
+      ),
+    );
+  /** The sealed admission envelope: the launch material, checked against the frozen digest. */
+  const openMaterial = (record: BoatExecutionRecord, sealed: string) =>
+    open(record, "admission", sealed, envelopeSchema).pipe(
+      Effect.flatMap((envelope) =>
+        sha256(canonical(Redacted.value(envelope))) === record.admission?.digest
+          ? Effect.succeed(envelope)
+          : Effect.fail(new BoatExecutionError("seal-context-mismatch")),
+      ),
+    );
   const access = (record: BoatExecutionRecord) =>
     Effect.gen(function* () {
       if (record.sealedControl === null)
@@ -743,7 +763,7 @@ const make: Effect.Effect<
       const opened = yield* open(record, "control", record.sealedControl, controlSchema);
       const stored = Redacted.value(opened);
       // Hosted cookies may expire; each request refreshes access without repeating bootstrap.
-      const hosted = yield* io(() => transport.host(record.target), "host-receiver");
+      const hosted = yield* io(() => transport.host(record.target), "host-agent");
       const bearer = yield* attempt("seal-context-mismatch", () => {
         const parsed = BoatSecret.parse(stored.bearer);
         if (!parsed.ok) throw new Error();
@@ -751,6 +771,33 @@ const make: Effect.Effect<
       });
       return { hosted, bearer };
     });
+  const call = (
+    connection: { hosted: BoatHostedControl; bearer: BoatSecret },
+    route: BoatAgentRoute,
+    body?: Redacted.Redacted<string>,
+  ) => io((signal) => transport.request(connection.hosted, connection.bearer, route, body, signal));
+  /** A 409 whose body names a reason is the agent's refusal; typed, so it reads as one. */
+  const refusal = (
+    route: BoatAgentRoute,
+    reply: BoatAgentReply,
+    known: readonly string[],
+  ): BoatExecutionError => {
+    const parsed = boatAgentRefusalSchema.safeParse(reply.body);
+    if (!parsed.success || !known.includes(parsed.data.reason))
+      return new BoatExecutionError("invalid-reply");
+    return new BoatExecutionError("agent-refused", {
+      step: "agent-request",
+      errorClass: "BoatExecutionError",
+      code: "agent-refused",
+      provider: { operation: `agent-${route}`, status: reply.status, causeClass: null },
+      agent: {
+        pathClass: boatAgentRoutes[route].pathClass,
+        responseTail: "",
+        reason: parsed.data.reason,
+      },
+    });
+  };
+
   const exchange = Effect.fn("BoatExecution.exchange")(function* (input: BoatExecutionTarget) {
     const target = yield* attempt("invalid-input", () => boatExecutionTargetSchema.parse(input));
     let record = yield* repo.get(target.runtimeInstanceId);
@@ -781,10 +828,10 @@ const make: Effect.Effect<
     }
     if (record.phase === "aborted")
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
-    if (record.phase !== "exchange") return;
+    if (record.phase !== "exchange") return bindingReceiptOf(target, record.exchangeId);
     if (record.sealedExchange === null)
       return yield* Effect.fail(new BoatExecutionError("invalid-input"));
-    const request = {
+    const request: BoatAgentBindRequest = {
       format: "sealant-bootstrap-v1",
       identity: identity(target),
       boot_id: target.bootId,
@@ -794,17 +841,7 @@ const make: Effect.Effect<
     };
     const raw = yield* io(() => transport.bind(target, request), "bind-exchange");
     const reply = yield* attempt("invalid-reply", () => {
-      const parsed = z
-        .object({
-          format: z.literal("sealant-bootstrap-reply-v1"),
-          identity: identitySchema,
-          boot_id: z.uuid(),
-          operation_id: z.uuid(),
-          ciphertext: z.string().regex(/^[A-Za-z0-9+/]{512}$/),
-          admission: z.literal("held"),
-          boot: z.object({ status: z.literal("compatible") }),
-        })
-        .parse(raw);
+      const parsed = boatAgentBindReplySchema.parse(raw);
       if (
         !isDeepStrictEqual(parsed.identity, request.identity) ||
         parsed.boot_id !== target.bootId ||
@@ -838,12 +875,14 @@ const make: Effect.Effect<
       if (!parsed.ok) throw new Error();
       return parsed.value;
     });
-    const hosted = yield* io(() => transport.host(target), "host-receiver");
-    yield* checkStatus(
-      record,
-      yield* io((signal) => transport.call(hosted, bearer, "status", undefined, signal)),
-      false,
-    );
+    const hosted = yield* io(() => transport.host(target), "host-agent");
+    // The bearer is proven end to end before it is sealed: the agent answers health to it (503
+    // before a launch, as nothing is booted) and refuses any other bearer.
+    const health = yield* call({ hosted, bearer }, "health");
+    yield* attempt("invalid-reply", () => {
+      const parsed = agentHealthResponseSchema.parse(health.body);
+      if (parsed.booted) throw new Error();
+    });
     const sealedControl = yield* seal(
       record,
       "control",
@@ -859,96 +898,44 @@ const make: Effect.Effect<
       sealedExchange: null,
       sealedControl,
     });
+    return bindingReceiptOf(target, record.exchangeId);
   });
   const stage = Effect.fn("BoatExecution.stage")(function* (
     id: string,
-    payload: Parameters<BoatExecutionService["stage"]>[1],
+    payload: Redacted.Redacted<BoatLaunchMaterial>,
   ) {
-    let record = yield* load(id);
+    const record = yield* load(id);
     if (record.phase === "exchange" || record.phase === "aborted")
       return yield* Effect.fail(new BoatExecutionError("invalid-input"));
-    if (record.phase === "control") {
-      const wire = yield* attempt("invalid-input", () => {
-        const value = Redacted.value(payload);
-        const files = value.files.map((file) => ({
-          name: file.name,
-          data: Buffer.from(file.bytes).toString("base64"),
-          size: file.bytes.byteLength,
-          sha256: sha256(file.bytes),
-        }));
-        if (
-          new Set(files.map((file) => file.name)).size !== files.length ||
-          files.reduce((sum, file) => sum + file.size, 0) > 2 * 1024 * 1024
-        )
-          throw new Error();
-        const pins = boatAdmissionPinsSchema.parse(value.pins);
-        if (
-          pins.dotfiles.some(
-            (pin) => !files.some((file) => file.name === pin.name && file.sha256 === pin.sha256),
-          ) ||
-          new Set(pins.credentialVersions.map((pin) => pin.id)).size !==
-            pins.credentialVersions.length ||
-          new Set(pins.dotfiles.map((pin) => pin.name)).size !== pins.dotfiles.length
-        )
-          throw new Error();
-        return envelopeSchema.parse({
-          wire: {
-            format: "sealant-admission-stage-v1",
-            identity: identity(record.target),
-            boot_id: record.target.bootId,
-            epoch: 1,
-            operation_id:
-              record.target.runtimeInstanceId === record.target.runId
-                ? randomUUID()
-                : record.target.launchAttemptId,
-            files,
-          },
-          pins,
-        });
-      });
-      const sealedEnvelope = yield* seal(record, "admission", Redacted.make(wire));
-      record = yield* repo.advance(record, {
-        ...record,
-        phase: "prepared",
-        admission: {
-          epoch: wire.wire.epoch,
-          operationId: wire.wire.operation_id,
-          digest: sha256(canonical(wire)),
-          sealedEnvelope,
-          sealedResumeEnvelope: sealedEnvelope,
-        },
-      });
-    }
-    if (record.phase !== "prepared") return;
-    if (record.admission?.sealedEnvelope === null || record.admission === null)
-      return yield* Effect.fail(new BoatExecutionError("invalid-input"));
-    const envelope = yield* open(
-      record,
-      "admission",
-      record.admission.sealedEnvelope,
-      envelopeSchema,
-    );
-    const wire = Redacted.value(envelope);
-    if (sha256(canonical(wire)) !== record.admission.digest)
-      return yield* Effect.fail(new BoatExecutionError("seal-context-mismatch"));
-    const connection = yield* access(record);
-    const result = yield* checkStatus(
-      record,
-      yield* io(() =>
-        transport.call(
-          connection.hosted,
-          connection.bearer,
-          "stage",
-          Redacted.make(JSON.stringify(wire.wire)),
-        ),
-      ),
-      true,
-    );
-    if (result.stage !== "installed")
-      return yield* Effect.fail(new BoatExecutionError("invalid-reply"));
-    yield* repo.advance(record, { ...record, phase: "installed" });
+    if (record.phase !== "control") return;
+    const material = yield* attempt("invalid-input", () => {
+      const value = envelopeSchema.parse(Redacted.value(payload));
+      if (
+        new Set(value.pins.credentialVersions.map((pin) => pin.id)).size !==
+          value.pins.credentialVersions.length ||
+        new Set(value.pins.dotfiles.map((pin) => pin.name)).size !== value.pins.dotfiles.length
+      )
+        throw new Error();
+      return value;
+    });
+    const sealedEnvelope = yield* seal(record, "admission", Redacted.make(material));
+    yield* repo.advance(record, {
+      ...record,
+      phase: "installed",
+      admission: {
+        epoch: 1,
+        operationId:
+          record.target.runtimeInstanceId === record.target.runId
+            ? randomUUID()
+            : record.target.launchAttemptId,
+        digest: sha256(canonical(material)),
+        docker: material.docker,
+        sealedEnvelope,
+        sealedResumeEnvelope: sealedEnvelope,
+      },
+    });
   });
-  const start = Effect.fn("BoatExecution.start")(function* (id: string) {
+  const launch = Effect.fn("BoatExecution.launch")(function* (id: string) {
     let record = yield* load(id);
     if (record.phase === "held")
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
@@ -956,52 +943,40 @@ const make: Effect.Effect<
       return yield* Effect.fail(new BoatExecutionError("invalid-input"));
     if (record.isolation === undefined)
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
+    // The agent's launch record is durable per boot: a running execution is the launch it adopted.
+    if (record.phase === "running") return "running" as const;
     if (record.phase === "installed")
       record = yield* repo.advance(record, { ...record, phase: "issued" });
+    if (record.admission?.sealedEnvelope == null)
+      return yield* Effect.fail(new BoatExecutionError("invalid-input"));
+    const material = yield* openMaterial(record, record.admission.sealedEnvelope);
     const connection = yield* access(record);
-    const result: Status = yield* checkStatus(
-      record,
-      yield* io(() =>
-        transport.call(
-          connection.hosted,
-          connection.bearer,
-          "start",
-          Redacted.make(
-            JSON.stringify({
-              format: "sealant-invocation-start-v1",
-              identity: identity(record.target),
-              boot_id: record.target.bootId,
-              epoch: record.admission?.epoch,
-              operation_id: record.admission?.operationId,
-            }),
-          ),
-        ),
-      ),
-      true,
+    const body = boatLaunchRequest(
+      Redacted.value(material),
+      record.target.runId,
+      connection.bearer.reveal(),
     );
-    if (result.execution === "issued")
-      return yield* Effect.fail(new BoatExecutionError("transport-unavailable"));
-    if (
-      (record.phase === "issued" ||
-        (record.phase === "running" && result.execution !== "running")) &&
-      record.admission !== null
-    )
-      yield* repo.advance(record, {
-        ...record,
-        phase: result.execution === "running" ? "running" : "held",
-        admission: { ...record.admission, sealedEnvelope: null },
-      });
-    if (result.execution !== "running")
-      return yield* Effect.fail(new BoatExecutionError("invocation-held"));
+    const reply = yield* call(connection, "launch", Redacted.make(JSON.stringify(body)));
+    if (reply.status === 409) {
+      // `{reason}` is a refusal (a parked disk); the agent's "already booted" is this launch,
+      // accepted by an earlier push whose reply was lost: adopted, never pushed again.
+      if (boatAgentRefusalSchema.safeParse(reply.body).success)
+        return yield* Effect.fail(refusal("launch", reply, ["parked"]));
+    } else {
+      yield* attempt("invalid-reply", () => agentLaunchResponseSchema.parse(reply.body));
+    }
+    yield* repo.advance(record, {
+      ...record,
+      phase: "running",
+      admission: { ...record.admission, sealedEnvelope: null },
+    });
     return "running" as const;
   });
   const isolate = Effect.fn("BoatExecution.isolate")(function* (
     target: BoatExecutionTarget,
     input: BoatGuestNetworkInput,
   ) {
-    const record = yield* load(target.runtimeInstanceId);
-    if (!isDeepStrictEqual(record.target, target))
-      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    const record = yield* loadTarget(target);
     if (!["installed", "issued", "running"].includes(record.phase) || record.admission === null)
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
     const network = yield* attempt("invalid-input", () =>
@@ -1012,12 +987,7 @@ const make: Effect.Effect<
       network.operationId !== record.admission.operationId
     )
       return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
-    const binding = {
-      identity: identity(target),
-      boot_id: target.bootId,
-      epoch: network.epoch,
-      operation_id: network.operationId,
-    };
+    const binding = bindingOf(record);
     const body = yield* attempt("invalid-input", () =>
       Redacted.make(
         JSON.stringify({
@@ -1033,136 +1003,87 @@ const make: Effect.Effect<
       ),
     );
     const connection = yield* access(record);
-    const current = yield* checkStatus(
-      record,
-      yield* io(() => transport.call(connection.hosted, connection.bearer, "status")),
-      true,
-    );
-    if (
-      current.stage !== "installed" ||
-      current.execution === "ended" ||
-      current.execution === "unresolved"
-    )
-      return yield* Effect.fail(new BoatExecutionError("invocation-held"));
-    const result = yield* io(() =>
-      transport.call(connection.hosted, connection.bearer, "isolate", body),
-    );
+    const reply = yield* call(connection, "network", body);
     const receipt = yield* attempt("invalid-reply", () => {
-      const parsed = z
-        .strictObject({
-          format: z.literal("sealant-guest-network-status-v1"),
-          binding: z.unknown(),
-          receipt: z.string().regex(/^[a-f0-9]{64}$/),
-          configured: z.literal(true),
-          handshake: z.literal("unverified"),
-          admission: z.literal("held"),
-        })
-        .parse(result);
+      const parsed = boatAgentNetworkResponseSchema.parse(reply.body);
       if (!isDeepStrictEqual(parsed.binding, binding)) throw new Error();
-      return { receipt: parsed.receipt, handshake: parsed.handshake, admission: parsed.admission };
+      return { receipt: parsed.receipt, handshake: parsed.handshake, admission: "held" as const };
     });
-    if (!isDeepStrictEqual(yield* load(target.runtimeInstanceId), record))
-      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    yield* unchanged(record);
     return receipt;
   });
-  const permitWire = (record: BoatExecutionRecord) => ({
-    format: "sealant-execution-permit-v2",
-    binding: {
-      identity: identity(record.target),
-      boot_id: record.target.bootId,
-      epoch: record.admission?.epoch,
-      operation_id: record.admission?.operationId,
-    },
-    resource_receipt: record.isolation?.resourceReceipt,
-    tunnel_receipt: record.isolation?.tunnelReceipt,
-    limits: { memory_bytes: 2147483648, cpu_millicores: 1000, tasks: 512 },
-  });
-  const permit = Effect.fn("BoatExecution.permit")(function* (
+  const recordIsolation = Effect.fn("BoatExecution.recordIsolation")(function* (
     target: BoatExecutionTarget,
     receipts: NonNullable<BoatExecutionRecord["isolation"]>,
   ) {
-    let record = yield* load(target.runtimeInstanceId);
-    if (!isDeepStrictEqual(record.target, target))
-      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
-    record = yield* repo.isolate(record, receipts);
-    const wire = permitWire(record);
-    const connection = yield* access(record);
-    const result = yield* io(() =>
-      transport.call(
-        connection.hosted,
-        connection.bearer,
-        "permit",
-        Redacted.make(JSON.stringify(wire)),
-      ),
-    );
-    yield* attempt("invalid-reply", () => {
-      const parsed = z
-        .strictObject({
-          format: z.literal("sealant-execution-permitted-v1"),
-          binding: z.unknown(),
-          receipt: z.string(),
-          handshake: z.literal("verified"),
-          dns: z.literal("udp-and-tcp"),
-          admission: z.literal("held"),
-        })
-        .parse(result);
-      if (
-        !isDeepStrictEqual(parsed.binding, wire.binding) ||
-        parsed.receipt !== sha256(canonical(wire))
-      )
-        throw new Error();
-    });
-    if (!isDeepStrictEqual(yield* load(target.runtimeInstanceId), record))
-      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    const record = yield* loadTarget(target);
+    yield* repo.isolate(record, receipts);
   });
   const readiness = Effect.fn("BoatExecution.readiness")(function* (target: BoatExecutionTarget) {
-    const record = yield* load(target.runtimeInstanceId);
-    if (!isDeepStrictEqual(record.target, target))
-      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
-    if (record.phase !== "running" || record.isolation === undefined)
+    const record = yield* loadTarget(target);
+    if (record.phase !== "running" || record.isolation === undefined || record.admission === null)
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
-    const wire = permitWire(record);
-    const receipt = sha256(canonical(wire));
+    const docker = record.admission.docker;
     const connection = yield* access(record);
-    const observe = () =>
-      io(() =>
-        transport.call(
-          connection.hosted,
-          connection.bearer,
-          "readiness",
-          Redacted.make(
-            JSON.stringify({
-              format: "sealant-readiness-v1",
-              binding: wire.binding,
-              permit_receipt: receipt,
-            }),
-          ),
-        ),
-      ).pipe(
-        Effect.flatMap((result) =>
-          attempt("invalid-reply", () => {
-            const parsed = z
-              .strictObject({
-                format: z.literal("sealant-readiness-status-v1"),
-                binding: z.unknown(),
-                permit_receipt: z.literal(receipt),
-                invocation: z.string().regex(/^[a-f0-9]{32}$/),
-                handshake: z.literal("verified"),
-                dns: z.literal("udp-and-tcp"),
-                limits: z.unknown(),
-                admission: z.literal("held"),
-              })
-              .parse(result);
-            if (
-              !isDeepStrictEqual(parsed.binding, wire.binding) ||
-              !isDeepStrictEqual(parsed.limits, wire.limits)
-            )
-              throw new Error();
-            return parsed;
-          }),
-        ),
+    // 1. The agent: the daemon it started is up with its control socket, and Docker when asked.
+    const health = yield* call(connection, "health");
+    const observed = yield* attempt("invalid-reply", () =>
+      agentHealthResponseSchema.parse(health.body),
+    );
+    const guestFailure = (guest: NonNullable<BoatLaunchDiagnostic["guest"]>) =>
+      new BoatExecutionError("guest-failed", {
+        step: "readiness",
+        errorClass: "BoatExecutionError",
+        code: "guest-failed",
+        guest,
+      });
+    if (observed.daemonExit !== undefined)
+      return yield* Effect.fail(
+        guestFailure({ service: "sealantd", exitCode: observed.daemonExit.code }),
       );
-    const before = yield* observe();
+    if (docker && !("version" in observed))
+      return yield* Effect.fail(new BoatExecutionError("invalid-reply"));
+    if ("version" in observed && observed.services.docker.status === "failed")
+      return yield* Effect.fail(
+        guestFailure({
+          service: "docker",
+          exitCode: observed.services.docker.code,
+          reason: observed.services.docker.reason,
+        }),
+      );
+    const dockerReady =
+      !docker || ("version" in observed && observed.services.docker.status === "ready");
+    if (!observed.booted || !observed.controlSocket || !dockerReady)
+      return yield* Effect.fail(
+        new BoatExecutionError("agent-not-ready", {
+          step: "readiness",
+          errorClass: "BoatExecutionError",
+          code: "agent-not-ready",
+          agent: { pathClass: AGENT_HEALTH_ROUTE, responseTail: "" },
+        }),
+      );
+    // 2. The tunnel: the gateway shook hands and its resolver answers over UDP and TCP, and the
+    //    containers' network policy is where this image puts it (applied on a Docker image, absent
+    //    otherwise). `pending` and `failed` are not ready: never fail open.
+    const network = yield* call(connection, "network-status");
+    const tunnel = yield* attempt("invalid-reply", () =>
+      boatAgentNetworkStatusSchema.parse(network.body),
+    );
+    if (
+      !tunnel.configured ||
+      tunnel.handshake !== "verified" ||
+      tunnel.dns !== "udp-and-tcp" ||
+      tunnel.docker_policy !== (docker ? "applied" : "absent")
+    )
+      return yield* Effect.fail(
+        new BoatExecutionError("agent-not-ready", {
+          step: "readiness",
+          errorClass: "BoatExecutionError",
+          code: "agent-not-ready",
+          agent: { pathClass: BOAT_AGENT_NETWORK_ROUTE, responseTail: "" },
+        }),
+      );
+    // 3. The daemon itself, through the agent's authenticated control relay.
     const daemon = yield* io(
       () => transport.probe(connection.hosted, connection.bearer),
       "readiness",
@@ -1170,30 +1091,22 @@ const make: Effect.Effect<
     if (
       !daemon.healthy ||
       !/^rt_[a-zA-Z0-9_-]+$/.test(daemon.runtimeId) ||
-      !["exec.user", "dotfiles.user", "restore.owner_map", "process.secret-env.v1"].every(
-        (capability) => daemon.supports.includes(capability),
-      )
+      !REQUIRED_CAPABILITIES.every((capability) => daemon.supports.includes(capability))
     )
       return yield* Effect.fail(new BoatExecutionError("invalid-reply"));
-    const after = yield* observe();
-    if (
-      !isDeepStrictEqual(before, after) ||
-      !isDeepStrictEqual(yield* load(target.runtimeInstanceId), record)
-    )
-      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    yield* unchanged(record);
     return {
-      invocation: after.invocation,
       runtimeId: daemon.runtimeId,
-      permitReceipt: receipt,
-      handshake: after.handshake,
-      admission: after.admission,
+      bootId: target.bootId,
+      isolationReceipt: isolationReceiptOf(record),
+      handshake: "verified" as const,
+      dns: "udp-and-tcp" as const,
+      admission: "held" as const,
     };
   });
 
   const control = Effect.fn("BoatExecution.control")(function* (target: BoatExecutionTarget) {
-    const record = yield* load(target.runtimeInstanceId);
-    if (!isDeepStrictEqual(record.target, target))
-      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    const record = yield* loadTarget(target);
     if (record.phase !== "running" && record.phase !== "held")
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
     const connection = yield* access(record);
@@ -1204,12 +1117,10 @@ const make: Effect.Effect<
     });
   });
   const hold = Effect.fn("BoatExecution.hold")(function* (target: BoatExecutionTarget) {
-    const record = yield* load(target.runtimeInstanceId);
-    if (!isDeepStrictEqual(record.target, target))
-      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    const record = yield* loadTarget(target);
     if (record.phase === "held") return;
-    // An issued start whose reply never came is fenced too: Core never sends start again, and the
-    // guest only ever observes an invocation it already recorded (audit S5).
+    // An issued launch whose reply never came is fenced too: Core never pushes it again, and the
+    // agent only ever adopts a launch it already recorded (audit S5).
     if ((record.phase !== "running" && record.phase !== "issued") || record.admission === null)
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
     yield* repo.advance(record, {
@@ -1219,152 +1130,88 @@ const make: Effect.Effect<
     });
   });
   const recover = Effect.fn("BoatExecution.recover")(function* (target: BoatExecutionTarget) {
-    const record = yield* load(target.runtimeInstanceId);
-    if (!isDeepStrictEqual(record.target, target))
-      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    const record = yield* loadTarget(target);
     if (record.phase !== "held" || record.admission === null || record.isolation === undefined)
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
-    const binding = {
-      identity: identity(target),
-      boot_id: target.bootId,
-      epoch: record.admission.epoch,
-      operation_id: record.admission.operationId,
-    };
+    // The capture token travels with the recovery: without the resume envelope (erased once Boat
+    // reported the VM absent) there is nothing a recovery boot could ship with.
+    if (record.admission.sealedResumeEnvelope === undefined) return "held" as const;
+    const material = yield* openMaterial(record, record.admission.sealedResumeEnvelope);
+    const token = Redacted.value(material).secretEnv["SEALANT_CAPTURE_TOKEN"];
+    if (token === undefined || token.length === 0)
+      return yield* Effect.fail(new BoatExecutionError("invalid-input"));
     const connection = yield* access(record);
-    const result = yield* io(() =>
-      transport.call(
-        connection.hosted,
-        connection.bearer,
-        "recover",
-        Redacted.make(
-          JSON.stringify({
-            format: "sealant-capture-recovery-v1",
-            binding,
-          }),
-        ),
+    const reply = yield* call(
+      connection,
+      "recover",
+      Redacted.make(
+        JSON.stringify({
+          version: AGENT_RECOVER_CONTRACT_VERSION,
+          runId: target.runId,
+          secretEnvJson: JSON.stringify({ SEALANT_CAPTURE_TOKEN: token }),
+        }),
       ),
     );
-    const reply = yield* attempt("invalid-reply", () => {
-      const parsed = z
-        .strictObject({
-          format: z.literal("sealant-capture-recovery-status-v1"),
-          binding: z.unknown(),
-          execution: z.enum(["unavailable", "issued", "running", "ended", "unresolved"]),
-          mode: z.enum(["original", "recovery"]),
-        })
-        .parse(result);
-      if (
-        !isDeepStrictEqual(parsed.binding, binding) ||
-        (parsed.mode === "original" && parsed.execution !== "running")
-      )
-        throw new Error();
-      return parsed;
-    });
-    if (!isDeepStrictEqual(yield* load(target.runtimeInstanceId), record))
-      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
-    return reply.execution === "running"
-      ? "running"
-      : reply.execution === "issued"
-        ? "pending"
-        : "held";
+    if (reply.status === 409)
+      return yield* Effect.fail(refusal("recover", reply, BOAT_AGENT_RECOVER_REFUSALS));
+    const outcome = yield* attempt("invalid-reply", () =>
+      boatAgentRecoverResponseSchema.parse(reply.body),
+    );
+    yield* unchanged(record);
+    return outcome.outcome === "running"
+      ? ("running" as const)
+      : outcome.outcome === "restarted"
+        ? ("pending" as const)
+        : ("nothing-to-save" as const);
   });
   const park = Effect.fn("BoatExecution.park")(function* (
     target: BoatExecutionTarget,
     operationId: string,
   ) {
-    const record = yield* load(target.runtimeInstanceId);
-    if (!isDeepStrictEqual(record.target, target))
-      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    const record = yield* loadTarget(target);
     if (record.phase !== "held" || record.admission === null || record.isolation === undefined)
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
     const request = yield* attempt("invalid-input", () => ({
-      format: "sealant-parking-close-v1",
-      binding: {
-        identity: identity(target),
-        boot_id: target.bootId,
-        epoch: record.admission?.epoch,
-        operation_id: record.admission?.operationId,
-      },
-      operation_id: z.uuid().parse(operationId),
+      format: "sealant-agent-park-v1" as const,
+      operationId: z.uuid().parse(operationId),
     }));
     const connection = yield* access(record);
-    const result = yield* io(() =>
-      transport.call(
-        connection.hosted,
-        connection.bearer,
-        "park",
-        Redacted.make(JSON.stringify(request)),
-      ),
-    );
+    const reply = yield* call(connection, "park", Redacted.make(JSON.stringify(request)));
+    if (reply.status === 409) return yield* Effect.fail(refusal("park", reply, ["parked"]));
     const receipt = yield* attempt("invalid-reply", () => {
-      const parsed = z
-        .strictObject({
-          format: z.literal("sealant-parking-status-v1"),
-          request: z.unknown(),
-          phase: z.literal("closed"),
-          writers: z.literal("closed"),
-          capsule: z.strictObject({
-            sha256: z.string().regex(/^[a-f0-9]{64}$/),
-            archive_sha256: z.string().regex(/^[a-f0-9]{64}$/),
-            bytes: z
-              .number()
-              .int()
-              .nonnegative()
-              .max(16 * 1024 ** 3),
-            stored_bytes: z
-              .number()
-              .int()
-              .positive()
-              .max(16 * 1024 ** 3 + 64 * 1024 ** 2),
-            entries: z.number().int().nonnegative().max(200_000),
-          }),
-        })
-        .parse(result);
-      if (!isDeepStrictEqual(parsed.request, request)) throw new Error();
+      const parsed = boatAgentParkResponseSchema.parse(reply.body);
+      // The receipt is this operation's, in the agent's data directory (whatever the agent was
+      // given as its data directory: the path's directory is the agent's to name).
+      if (
+        !parsed.receipt.path.endsWith(`/park-${request.operationId}.json`) ||
+        parsed.receipt.bytes === 0
+      )
+        throw new Error();
       return {
-        operationId,
-        capsuleHash: parsed.capsule.sha256,
-        archiveHash: parsed.capsule.archive_sha256,
-        contentBytes: parsed.capsule.bytes,
-        storedBytes: parsed.capsule.stored_bytes,
-        entries: parsed.capsule.entries,
+        operationId: request.operationId,
+        capsuleHash: parsed.receipt.sha256,
+        archiveHash: parsed.receipt.sha256,
+        contentBytes: parsed.receipt.bytes,
+        storedBytes: parsed.receipt.bytes,
+        entries: 1,
       };
     });
-    if (!isDeepStrictEqual(yield* load(target.runtimeInstanceId), record))
-      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    yield* unchanged(record);
     return receipt;
   });
   return BoatExecution.of({
     parkingMaterial: (target) =>
       Effect.gen(function* () {
-        const record = yield* load(target.runtimeInstanceId);
-        if (
-          !isDeepStrictEqual(record.target, target) ||
-          record.admission?.sealedResumeEnvelope == null
-        )
+        const record = yield* loadTarget(target);
+        if (record.admission?.sealedResumeEnvelope == null)
           return yield* Effect.fail(new BoatExecutionError("invocation-held"));
-        const envelope = yield* open(
-          record,
-          "admission",
-          record.admission.sealedResumeEnvelope,
-          envelopeSchema,
-        );
-        const value = Redacted.value(envelope);
-        if (sha256(canonical(value)) !== record.admission.digest)
-          return yield* Effect.fail(new BoatExecutionError("seal-context-mismatch"));
-        return Redacted.make({
-          pins: value.pins,
-          files: value.wire.files.map((file) => ({
-            name: file.name,
-            bytes: Buffer.from(file.data, "base64"),
-          })),
-        });
+        return yield* openMaterial(record, record.admission.sealedResumeEnvelope);
       }),
     exchange,
     stage,
-    start,
+    recordIsolation,
+    launch,
     isolate,
-    permit,
     readiness,
     control,
     hold,
@@ -1384,3 +1231,5 @@ export const boatExecutionLayer: Layer.Layer<
   never,
   SealantDB | CredentialCipher | BoatGuestTransportService
 > = boatExecutionLayerNoDeps.pipe(Layer.provide(BoatExecutionRepoLive));
+
+export type { BoatAdmissionPins };

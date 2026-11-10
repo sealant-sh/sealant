@@ -98,7 +98,12 @@ import { BoatAllocation, boatAllocationLayer, boatAllocationLayerNoDeps } from "
 import { HttpBoatApi } from "./api.js";
 import { BoatOwnership, BoatSecret } from "./config.js";
 import { boatDischargeLayerNoDeps } from "./discharge.js";
-import { BoatExecution, BoatGuestTransportService, boatExecutionLayer } from "./execution.js";
+import {
+  BoatExecution,
+  BoatGuestTransportService,
+  boatExecutionLayer,
+  type BoatLaunchMaterial,
+} from "./execution.js";
 import {
   BoatFinalClose,
   BoatFinalCloseProvider,
@@ -115,6 +120,8 @@ import { RecordedBoat } from "./recorded-boat.fixture.js";
 
 const databaseUrl = process.env.SEALANT_TEST_DATABASE_URL;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+/** The agent manifest digest the seeded publication's receipt records. */
+const AGENT_MANIFEST_DIGEST = hash("boat agent manifest");
 const secret = (value: string) => {
   const parsed = BoatSecret.parse(value);
   if (!parsed.ok) throw parsed.error;
@@ -154,8 +161,7 @@ const seed = (db: DB, catalog: NativePublicationRepo["Service"]) =>
       platform: "linux/amd64",
       manifest: "a".repeat(64),
       sealantd: "b".repeat(64),
-      socat: "c".repeat(64),
-      relay: "d".repeat(64),
+      sealantctl: "c".repeat(64),
     };
     const key = nativePublicationKeySchema.parse({
       deploymentId: "test",
@@ -171,14 +177,8 @@ const seed = (db: DB, catalog: NativePublicationRepo["Service"]) =>
     });
     const reserved = yield* catalog.reserve(key, consumer);
     const ownership = reserved.ownership;
-    const manifest = JSON.stringify({
-      format: "sealant-guest-manifest-v1",
-      files: {},
-      inputs: {},
-      bundle_paths: ["/var/lib/sealant/guest/sealantd"],
-    });
     const receipt = JSON.stringify({
-      version: 3,
+      version: 4,
       ownership,
       owner: randomUUID(),
       build: ownership.buildId,
@@ -186,7 +186,7 @@ const seed = (db: DB, catalog: NativePublicationRepo["Service"]) =>
       assetsHash: key.assetsHash,
       runtime: key.runtime,
       probe,
-      guest: { manifest, manifestDigest: hash(manifest) },
+      agent: { manifestDigest: AGENT_MANIFEST_DIGEST },
     });
     const receiptValue = z.object({ owner: z.string() }).parse(JSON.parse(receipt));
     const publication = nativePublicationSchema.parse({
@@ -504,14 +504,7 @@ const execute = Effect.runPromise;
 const reservation = (input: BoatAllocationInput): BoatAllocationRecord =>
   boatAllocationRecordSchema.parse({
     input,
-    manifestDigest: hash(
-      JSON.stringify({
-        format: "sealant-guest-manifest-v1",
-        files: {},
-        inputs: {},
-        bundle_paths: ["/var/lib/sealant/guest/sealantd"],
-      }),
-    ),
+    manifestDigest: AGENT_MANIFEST_DIGEST,
     idempotencyKey: randomUUID(),
     diskLineage: randomUUID(),
     phase: "reserved",
@@ -522,17 +515,16 @@ const reservation = (input: BoatAllocationInput): BoatAllocationRecord =>
   });
 
 type AllocationFixture = Parameters<Parameters<typeof test>[0]>[0];
+/** The launch material a test pushes: a capture-sourced boot environment and no secrets. */
+const launchMaterial = (): BoatLaunchMaterial => ({
+  bootEnv: { SEALANT_WORKSPACE_SOURCE: "capture" },
+  secretEnv: { SEALANT_CAPTURE_TOKEN: "local-proof-token" },
+  pins: { credentialVersions: [], dotfiles: [] },
+  docker: false,
+});
 const launched = async (s: AllocationFixture) => {
   const target = await execute(s.allocations.prepare(s.input));
-  await execute(
-    s.readiness.launch(
-      target,
-      Redacted.make({
-        files: [{ name: "launch", bytes: Buffer.from("launch") }],
-        pins: { credentialVersions: [], dotfiles: [] },
-      }),
-    ),
-  );
+  await execute(s.readiness.launch(target, Redacted.make(launchMaterial())));
   return target;
 };
 const linkedResource = async (s: AllocationFixture) => {
@@ -934,7 +926,7 @@ describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () =>
         });
         s.guest.fail = false;
         await expect(execute(s.executor.exchange(target))).rejects.toThrow("invocation-held");
-        await expect(execute(s.executor.start(target.runtimeInstanceId))).rejects.toThrow();
+        await expect(execute(s.executor.launch(target.runtimeInstanceId))).rejects.toThrow();
         expect(s.guest.starts).toBe(0);
       } finally {
         await f.runtime.dispose();
@@ -943,15 +935,7 @@ describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () =>
   it("positively deletes a pre-issued guest, then retries host cleanup before releasing the slot and pin", () =>
     test(async (s) => {
       const target = await execute(s.allocations.prepare(s.input));
-      await execute(
-        s.executor.stage(
-          target.runtimeInstanceId,
-          Redacted.make({
-            files: [{ name: "test", bytes: Buffer.from("payload") }],
-            pins: { credentialVersions: [], dotfiles: [] },
-          }),
-        ),
-      );
+      await execute(s.executor.stage(target.runtimeInstanceId, Redacted.make(launchMaterial())));
       await execute(s.resourceOwner.prepare(target));
       expect((await execute(s.executions.get(target.runId)))?.phase).toBe("installed");
       const { owner, daemon } = await execute(s.final([]));
@@ -1012,15 +996,7 @@ describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () =>
   it("keeps a durably issued invocation in custody even before readiness", () =>
     test(async (s) => {
       const target = await execute(s.allocations.prepare(s.input));
-      await execute(
-        s.executor.stage(
-          target.runtimeInstanceId,
-          Redacted.make({
-            files: [{ name: "test", bytes: Buffer.from("payload") }],
-            pins: { credentialVersions: [], dotfiles: [] },
-          }),
-        ),
-      );
+      await execute(s.executor.stage(target.runtimeInstanceId, Redacted.make(launchMaterial())));
       const stored = await execute(s.executions.get(target.runId));
       if (stored === undefined) throw new Error("missing execution");
       // Models the durable issuance boundary before its network response, using the real repository CAS.
@@ -1214,19 +1190,14 @@ describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () =>
           status: "ready",
         });
         expect(hooks).toEqual(["started", "ready"]);
-        const stage = z
-          .object({ files: z.array(z.object({ name: z.string(), data: z.string() })) })
-          .parse(JSON.parse(s.guest.stageBodies[0] ?? ""));
-        const launch = stage.files.find((file) => file.name === "launch");
-        const boot = z
-          .object({ boot_env: z.record(z.string(), z.string()) })
-          .parse(JSON.parse(Buffer.from(launch?.data ?? "", "base64").toString("utf8")));
-        expect(boot.boot_env).toMatchObject({
+        expect(s.guest.launches).toHaveLength(1);
+        expect(s.guest.launches[0]).toMatchObject({ version: 1, runId: f.input.runId });
+        expect(s.guest.launches[0]?.bootEnv).toMatchObject({
           SEALANT_OS_FAMILY: "ubuntu",
           SEALANT_LOGIN_SHELL_PATH: "/bin/bash",
           SEALANT_BASH_SHELL_PATH: "/bin/bash",
           SEALANT_WORKSPACE_SOURCE: "capture",
-          SEALANT_SECRET_ENV_FILE: "/run/sealant-inputs/secret-env",
+          SEALANT_SECRET_ENV_FILE: "/run/sealant/secrets/env.json",
         });
         expect(s.provider.creates).toHaveLength(1);
         await execute(s.runtimes.markStopRequested({ runId: f.input.runId, stopReason: "user" }));
@@ -1510,7 +1481,15 @@ describe.runIf(databaseUrl !== undefined)("Boat canonical FINAL close", () => {
     test(async (s) => {
       const target = await stopLaunched(s);
       const { owner, daemon } = await execute(s.final([savedStatus()]));
-      for (const state of ["issued", "ended", "unresolved"] as const) {
+      // A restarted recovery boot is pending; the typed refusals (another boot, a parked disk,
+      // an agent that did not launch this boot) keep the VM too, never read as nothing to save.
+      for (const state of [
+        "restarted",
+        "recover-new-boot",
+        "recover-state-unknown",
+        "recover-binding-conflict",
+        "parked",
+      ] as const) {
         s.guest.recovery = state;
         expect(await execute(owner.close(target))).toBe("retained");
         expect(daemon.calls).toEqual([]);
@@ -1518,10 +1497,10 @@ describe.runIf(databaseUrl !== undefined)("Boat canonical FINAL close", () => {
         expect((await tunnelRecord(s, target)).released).toBeUndefined();
       }
       s.guest.recovery = "running";
-      s.guest.wrongRecoveryBinding = true;
+      s.guest.malformedRecovery = true;
       await expect(execute(owner.close(target))).rejects.toThrow("unavailable");
       expect(daemon.calls).toEqual([]);
-      s.guest.wrongRecoveryBinding = false;
+      s.guest.malformedRecovery = false;
       expect(await execute(owner.close(target))).toBe("closed");
       expect(s.guest.starts).toBe(1);
     }));
@@ -1835,15 +1814,7 @@ describe.runIf(databaseUrl !== undefined)(
           { runId: target.runId, outcome: "pending" },
         ]);
         expect(s.gateway.requests).toHaveLength(0);
-        await execute(
-          s.executor.stage(
-            target.runId,
-            Redacted.make({
-              files: [{ name: "launch", bytes: Buffer.from("launch") }],
-              pins: { credentialVersions: [], dotfiles: [] },
-            }),
-          ),
-        );
+        await execute(s.executor.stage(target.runId, Redacted.make(launchMaterial())));
         s.guest.lostIsolation = true;
         expect((await execute(s.resourceOwner.reconcile({ limit: 20 }))).entries[0]?.outcome).toBe(
           "unavailable",
@@ -1899,14 +1870,10 @@ describe.runIf(databaseUrl !== undefined)(
         s.readiness.launch(
           target,
           Redacted.make({
-            files: [
-              { name: "launch", bytes: Buffer.from(JSON.stringify(launch)) },
-              {
-                name: "secret-env",
-                bytes: Buffer.from(JSON.stringify({ SEALANT_CAPTURE_TOKEN: "local-proof-token" })),
-              },
-            ],
+            bootEnv: launch.boot_env,
+            secretEnv: { SEALANT_CAPTURE_TOKEN: "local-proof-token" },
             pins: { credentialVersions: [], dotfiles: [] },
+            docker: false,
           }),
         ),
       );
@@ -2042,16 +2009,10 @@ describe.runIf(databaseUrl !== undefined)(
           s.readiness.launch(
             target,
             Redacted.make({
-              files: [
-                { name: "launch", bytes: Buffer.from(JSON.stringify(launch)) },
-                {
-                  name: "secret-env",
-                  bytes: Buffer.from(
-                    JSON.stringify({ SEALANT_CAPTURE_TOKEN: "local-proof-token" }),
-                  ),
-                },
-              ],
+              bootEnv: launch.boot_env,
+              secretEnv: { SEALANT_CAPTURE_TOKEN: "local-proof-token" },
               pins: { credentialVersions: [], dotfiles: [] },
+              docker: false,
             }),
           ),
         );
@@ -2095,7 +2056,6 @@ describe.runIf(databaseUrl !== undefined)(
           (await execute(s.runtimes.getRuntimeInstanceByRunId(target.runId)))?.resourceId,
         ).toBe(target.sandboxId);
         expect(s.provider.creates).toHaveLength(2);
-        expect(s.provider.rebinds).toBe(1);
         await expect(execute(s.resourceOwner.prepare(target))).rejects.toThrow("held");
       }));
     it("parks the resumed child after its own idle delay and discharges every saved ancestor on discard", () =>
@@ -2151,15 +2111,7 @@ describe.runIf(databaseUrl !== undefined)(
         const target = await execute(s.allocations.prepare(s.input));
         s.guest.lostIsolation = true;
         await expect(
-          execute(
-            s.readiness.launch(
-              target,
-              Redacted.make({
-                files: [{ name: "launch", bytes: Buffer.from("launch") }],
-                pins: { credentialVersions: [], dotfiles: [] },
-              }),
-            ),
-          ),
+          execute(s.readiness.launch(target, Redacted.make(launchMaterial()))),
         ).rejects.toThrow("unavailable");
         // Gateway setup settled normally before guest isolation failed. FINAL needs no
         // resource setup or manual settlement to close this pre-invocation execution.
@@ -2188,15 +2140,7 @@ describe.runIf(databaseUrl !== undefined)(
         const target = await execute(s.allocations.prepare(s.input));
         s.gateway.unavailable = true;
         try {
-          await execute(
-            s.readiness.launch(
-              target,
-              Redacted.make({
-                files: [{ name: "launch", bytes: Buffer.from("launch") }],
-                pins: { credentialVersions: [], dotfiles: [] },
-              }),
-            ),
-          );
+          await execute(s.readiness.launch(target, Redacted.make(launchMaterial())));
           throw new Error("expected gateway refusal");
         } catch (error) {
           expect(error).toMatchObject({
@@ -2220,15 +2164,7 @@ describe.runIf(databaseUrl !== undefined)(
       ({ absent, capture }) =>
         test(async (s) => {
           const target = await execute(s.allocations.prepare(s.input));
-          await execute(
-            s.executor.stage(
-              target.runId,
-              Redacted.make({
-                files: [{ name: "launch", bytes: Buffer.from("launch") }],
-                pins: { credentialVersions: [], dotfiles: [] },
-              }),
-            ),
-          );
+          await execute(s.executor.stage(target.runId, Redacted.make(launchMaterial())));
           await execute(s.resourceOwner.prepare(target));
           if (capture)
             await execute(
@@ -2295,21 +2231,24 @@ describe.runIf(databaseUrl !== undefined)(
     it("launches only after current isolation and observes authenticated readiness without another invocation", () =>
       test(async (s) => {
         const target = await execute(s.allocations.prepare(s.input));
-        const payload = Redacted.make({
-          files: [{ name: "launch", bytes: Buffer.from("launch") }],
-          pins: { credentialVersions: [], dotfiles: [] },
-        });
+        const payload = Redacted.make(launchMaterial());
         expect(await execute(s.readiness.launch(target, payload))).toMatchObject({
           runtimeId: "rt_fixture",
           handshake: "verified",
           admission: "held",
         });
         expect(await execute(s.readiness.observe(target))).toMatchObject({
-          invocation: "d".repeat(32),
+          bootId: target.bootId,
         });
-        expect(s.guest.actions.indexOf("stage")).toBeLessThan(s.guest.actions.indexOf("isolate"));
-        expect(s.guest.actions.indexOf("isolate")).toBeLessThan(s.guest.actions.indexOf("permit"));
-        expect(s.guest.actions.indexOf("permit")).toBeLessThan(s.guest.actions.indexOf("start"));
+        // The exchange proves the bearer on health; the tunnel is configured before the launch is
+        // pushed; readiness reads health, then the tunnel's handshake, after it.
+        const launchAt = s.guest.actions.indexOf("launch");
+        expect(s.guest.actions[0]).toBe("health");
+        expect(s.guest.actions.indexOf("network")).toBeLessThan(launchAt);
+        expect(s.guest.actions.indexOf("health", launchAt)).toBeGreaterThan(launchAt);
+        expect(s.guest.actions.indexOf("network-status", launchAt)).toBeGreaterThan(
+          s.guest.actions.indexOf("health", launchAt),
+        );
         expect(s.guest.starts).toBe(1);
         const before = s.guest.actions.length;
         await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
@@ -2324,18 +2263,10 @@ describe.runIf(databaseUrl !== undefined)(
           s.gateway.receipt = "d".repeat(64);
         };
         await expect(
-          execute(
-            s.readiness.launch(
-              target,
-              Redacted.make({
-                files: [{ name: "launch", bytes: Buffer.from("launch") }],
-                pins: { credentialVersions: [], dotfiles: [] },
-              }),
-            ),
-          ),
+          execute(s.readiness.launch(target, Redacted.make(launchMaterial()))),
         ).rejects.toThrow("held");
         expect(s.guest.starts).toBe(1);
-        expect(s.guest.permitCount).toBe(1);
+        expect(s.guest.launches).toHaveLength(1);
       }));
     it("a stop accepted during authenticated readiness keeps the result held", () =>
       test(async (s) => {
@@ -2345,51 +2276,27 @@ describe.runIf(databaseUrl !== undefined)(
             () => undefined,
           );
         await expect(
-          execute(
-            s.readiness.launch(
-              target,
-              Redacted.make({
-                files: [{ name: "launch", bytes: Buffer.from("launch") }],
-                pins: { credentialVersions: [], dotfiles: [] },
-              }),
-            ),
-          ),
+          execute(s.readiness.launch(target, Redacted.make(launchMaterial()))),
         ).rejects.toThrow("held");
         expect(s.guest.starts).toBe(1);
       }));
-    it("a stop accepted during permit delivery prevents invocation issuance", () =>
+    it("a stop accepted during network setup prevents the launch push", () =>
       test(async (s) => {
         const target = await execute(s.allocations.prepare(s.input));
-        s.guest.beforePermit = () =>
+        s.guest.beforeIsolate = () =>
           execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" })).then(
             () => undefined,
           );
         await expect(
-          execute(
-            s.readiness.launch(
-              target,
-              Redacted.make({
-                files: [{ name: "launch", bytes: Buffer.from("launch") }],
-                pins: { credentialVersions: [], dotfiles: [] },
-              }),
-            ),
-          ),
+          execute(s.readiness.launch(target, Redacted.make(launchMaterial()))),
         ).rejects.toThrow("held");
-        expect(s.guest.permitCount).toBe(1);
+        expect(s.guest.networkBodies).toHaveLength(1);
         expect(s.guest.starts).toBe(0);
       }));
     it("bounds a stalled gateway and retries only the same durable network intent", () =>
       test(async (s) => {
         const target = await execute(s.allocations.prepare(s.input));
-        await execute(
-          s.executor.stage(
-            target.runId,
-            Redacted.make({
-              files: [{ name: "launch", bytes: Buffer.from("launch") }],
-              pins: { credentialVersions: [], dotfiles: [] },
-            }),
-          ),
-        );
+        await execute(s.executor.stage(target.runId, Redacted.make(launchMaterial())));
         const entered = Promise.withResolvers<void>();
         const release = Promise.withResolvers<void>();
         s.gateway.beforeReply = async () => {
@@ -2451,15 +2358,7 @@ describe.runIf(databaseUrl !== undefined)(
     it("keeps current linked resources reached and applies unlinks without releasing the gateway", () =>
       test(async (s) => {
         const target = await execute(s.allocations.prepare(s.input));
-        await execute(
-          s.executor.stage(
-            target.runId,
-            Redacted.make({
-              files: [{ name: "launch", bytes: Buffer.from("launch") }],
-              pins: { credentialVersions: [], dotfiles: [] },
-            }),
-          ),
-        );
+        await execute(s.executor.stage(target.runId, Redacted.make(launchMaterial())));
         if (s.input.scope.kind !== "owner") throw new Error("expected owner scope");
         const domainId = `rdm:${randomUUID()}`;
         await execute(
@@ -2547,15 +2446,7 @@ describe.runIf(databaseUrl !== undefined)(
     it("retains exact gateway obligations after unknown outcomes and refuses a stop before guest delivery", () =>
       test(async (s) => {
         const target = await execute(s.allocations.prepare(s.input));
-        await execute(
-          s.executor.stage(
-            target.runId,
-            Redacted.make({
-              files: [{ name: "launch", bytes: Buffer.from("launch") }],
-              pins: { credentialVersions: [], dotfiles: [] },
-            }),
-          ),
-        );
+        await execute(s.executor.stage(target.runId, Redacted.make(launchMaterial())));
         s.gateway.unavailable = true;
         await expect(execute(s.resourceOwner.prepare(target))).rejects.toThrow("unavailable");
         const frozen = await execute(s.tunnels.get(target.runId));
@@ -3614,15 +3505,7 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
   it("fences an issued start whose reply never came, keeps its VM, and lets discard remove it (audit S5)", () =>
     test(async (s) => {
       const target = await execute(s.allocations.prepare(s.input));
-      await execute(
-        s.executor.stage(
-          target.runtimeInstanceId,
-          Redacted.make({
-            files: [{ name: "test", bytes: Buffer.from("payload") }],
-            pins: { credentialVersions: [], dotfiles: [] },
-          }),
-        ),
-      );
+      await execute(s.executor.stage(target.runtimeInstanceId, Redacted.make(launchMaterial())));
       await execute(s.resourceOwner.prepare(target));
       const installed = await execute(s.executions.get(target.runId));
       if (installed === undefined) throw new Error("missing execution");
@@ -3636,7 +3519,7 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
       expect(s.provider.deleteCalls).toBe(0);
       // The start is fenced: Core can never send it again.
       expect((await execute(s.executions.get(target.runId)))?.phase).toBe("held");
-      await expect(execute(s.executor.start(target.runtimeInstanceId))).rejects.toThrow(
+      await expect(execute(s.executor.launch(target.runtimeInstanceId))).rejects.toThrow(
         "invocation-held",
       );
       await execute(s.canonical.requestDiscard({ runId: target.runId, requestedBy: "usr_owner" }));
@@ -3739,31 +3622,17 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
   it("closes a start whose reply was lost once its worker is gone and the guest answers again (review of #494)", () =>
     test(async (s) => {
       const target = await execute(s.allocations.prepare(s.input));
-      await execute(
-        s.executor.stage(
-          target.runtimeInstanceId,
-          Redacted.make({
-            files: [{ name: "launch", bytes: Buffer.from("launch") }],
-            pins: { credentialVersions: [], dotfiles: [] },
-          }),
-        ),
-      );
+      await execute(s.executor.stage(target.runtimeInstanceId, Redacted.make(launchMaterial())));
       const prepared = await execute(s.resourceOwner.prepare(target));
       await execute(
-        s.executor.permit(target, {
+        s.executor.recordIsolation(target, {
           resourceReceipt: prepared.guest.receipt,
           tunnelReceipt: prepared.gateway.receipt,
         }),
       );
-      // The guest accepts start; its reply never reaches Core.
-      const original = s.guest.call.bind(s.guest);
-      s.guest.call = async (...args) => {
-        const answer = await original(...args);
-        if (args[2] === "start") throw new Error("lost hosted start reply");
-        return answer;
-      };
-      await expect(execute(s.executor.start(target.runId))).rejects.toThrow();
-      s.guest.call = original;
+      // The agent accepts the launch; its reply never reaches Core.
+      s.guest.lostLaunchReply = true;
+      await expect(execute(s.executor.launch(target.runId))).rejects.toThrow();
       expect((await execute(s.executions.get(target.runId)))?.phase).toBe("issued");
       expect(s.guest.starts).toBe(1);
       // The launching worker is lost; connectivity returns.

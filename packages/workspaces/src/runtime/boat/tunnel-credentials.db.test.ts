@@ -184,19 +184,19 @@ describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
       );
       const control = await execute(executions.get(binding.target.runId));
       if (control === undefined) throw new Error("missing control");
-      const prepared = await execute(
+      await execute(
         executions.advance(control, {
           ...control,
-          phase: "prepared",
+          phase: "installed",
           admission: {
             epoch: network.epoch,
             operationId: network.operationId,
             digest: "a".repeat(64),
+            docker: false,
             sealedEnvelope: "test-envelope",
           },
         }),
       );
-      await execute(executions.advance(prepared, { ...prepared, phase: "installed" }));
       const saved = await execute(repo.configure(before, network));
       expect(await execute(repo.configure(before, network))).toEqual(saved);
       expect(await execute(owner.prepare(binding))).toMatchObject({
@@ -224,12 +224,10 @@ describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
         epoch: 1,
         operationId: randomUUID(),
         digest: "a".repeat(64),
+        docker: false,
         sealedEnvelope: "sealed",
       };
-      const prepared = await execute(
-        executions.advance(control, { ...control, phase: "prepared", admission }),
-      );
-      await execute(executions.advance(prepared, { ...prepared, phase: "installed" }));
+      await execute(executions.advance(control, { ...control, phase: "installed", admission }));
       const network = {
         epoch: admission.epoch,
         operationId: admission.operationId,
@@ -387,6 +385,7 @@ describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
             operationId: randomUUID(),
             epoch: 1,
             digest: "d".repeat(64),
+            docker: false,
             sealedEnvelope: null,
           },
         }),

@@ -11,9 +11,9 @@ enrolled in custody contract 3 are refused until the incarnation-aware parking e
 The owner requires the same bound allocation, execution, provider sandbox, run, publication source,
 boot, disk lineage and physical gateway host. The runtime row must still name that sandbox and have
 an explicit stop reason. It holds an execution that was previously positively running, preserving
-its sealed capture control but erasing its launch envelope. The guest's existing immutable
-invocation record means a delayed start can only adopt that invocation, never start another after
-FINAL. Unissued or ambiguous first launches are retained for a separate close/recovery path.
+its sealed capture control but erasing its launch envelope. The agent's durable launch record means
+a delayed push can only adopt that launch, never start another after FINAL. Unissued or ambiguous
+first launches are retained for a separate close/recovery path.
 
 Every host mutation is recorded before dispatch. A UUID fences subnet allocation and gateway ensure;
 only its winning database transition permits dispatch. The UUID remains outstanding if the request
@@ -58,27 +58,22 @@ retention.
 
 ## Capture-only recovery
 
-Before FINAL, the authenticated receiver observes the original invocation. If it is still running,
-it returns that observation without stopping or starting anything. Otherwise it can issue one
-capture-only recovery on the same disk and boot. Its immutable original admission must still be
-present on protected tmpfs, including the exact launch and secret files. Every file is opened
-without following symlinks, must be private and root-owned, and must match its admitted size and
-hash. A missing file, changed boot, changed epoch or non-capture source refuses before closure.
+Before FINAL, close asks the [guest agent](boat-guest-agent.md) to recover the capture
+(`POST /sealant/recover`, with the capture token Core kept sealed in the resume envelope). The agent
+answers from its durable records, never from a guess: `running` (the daemon is up; FINAL drains it),
+`restarted` (sealantd had exited 75 and was started again in recovery mode on the VM's own disk: the
+VM is retained and the next pass observes it), or `nothing-to-save` (the daemon's recovery boot
+exited 76 because it never materialized a capture, or this boot was bound and never launched). The
+recovery boot runs no dotfiles, lifecycle step or harness, admits nothing, and resumes its own
+staging.
 
-The receiver durably closes ordinary launch replay before stopping the original service and its
-mapped native child. It requires an empty workspace process census, the same isolation permit and
-network, and a fresh shipped-code check. The separate `sealant-recovery.service` is static, has
-`Restart=no`, uses the same resource slice and peer, and runs only `sealantd boot --recovery`. The
-pinned daemon's recovery mode excludes materialization, dotfiles, lifecycle steps and harness
-execution. No fresh launch payload is accepted. The original invocation record stays unchanged.
-
-Recovery intent and invocation issuance are durable before dispatch. A lost start reply is
-observe-only; neither a new request nor a new service invocation can replay it. A crash in the
-pre-dispatch gap can retain an issued intent rather than infer that no start happened. Recovery
-status and the control proxy pin the separate recovery process identities. Pending, ended,
-unresolved or unreadable recovery retains the VM, native pin and port. FINAL proceeds only through
-the exact running original or recovery daemon. A cold boot cannot reconstruct tmpfs through this
-path. Snapshot hydration and fresh-epoch recovery belong to the canonical parking owner.
+`nothing-to-save` is a distinct execution result: nothing ran on the VM, so close removes it under
+the `nothing-to-save` deletion basis, which rests on no recorded evidence a later observation could
+revoke (like the owner's discard). The agent's refusals are typed (`recover-new-boot` after a
+reboot, `recover-binding-conflict`, `recover-state-unknown` from an agent that did not launch this
+boot, `parked`) and classified through the launch diagnostics; each retains the VM and can never be
+read as nothing to save. A malformed answer or lost transport keeps the VM too and is retried.
+Snapshot hydration and fresh-epoch recovery belong to the canonical parking owner.
 
 ## Exact cleanup and retry
 
@@ -93,7 +88,7 @@ outcomes keep the port and host gateway. Observation of that operation can resum
 without another FINAL or DELETE. Changed operation IDs or target IDs refuse. Once exact completion
 is recorded, an older pending response cannot downgrade it.
 
-Provider deletion completion proves that the guest and its peer are gone. The host owner then
+Provider deletion completion proves that the VM and its tunnel peer are gone. The host owner then
 removes the exact owned gateway, detaches the reach network, and removes its egress network. It
 positively rechecks all three names for absence. Only after that return can the canonical
 transaction release the port. The transaction also requires a deleted capture root, held exact

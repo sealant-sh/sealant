@@ -1124,10 +1124,12 @@ describe("createWorkspace image scope and Boat admission", () => {
       }),
       "runtime-requirement-unsupported",
     ],
+    // Docker is no refusal on Boat: the VM's image carries the engine. The capability gate below
+    // is what stops this unregistered deployment.
     [
       "Docker",
       nativeRequirements("ubuntu", { tooling: { services: { docker: { enabled: true } } } }),
-      "workspace-docker-unsupported",
+      "boat-production-capability-unverified",
     ],
     ["Ubuntu registration", nativeRequirements("ubuntu"), "boat-production-capability-unverified"],
     ["Nix registration", nativeRequirements("nix"), "boat-production-capability-unverified"],

@@ -40,21 +40,14 @@ export const boatExecutionRecordSchema = z
         operationId: z.uuid(),
         epoch: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
         digest: hash,
+        /** Whether the launch asks the agent for the workspace's own Docker (launch contract v2). */
+        docker: z.boolean(),
         sealedEnvelope: z.string().min(1).nullable(),
         sealedResumeEnvelope: z.string().min(1).optional(),
       })
       .nullable(),
     isolation: z.strictObject({ resourceReceipt: hash, tunnelReceipt: hash }).optional(),
-    phase: z.enum([
-      "exchange",
-      "control",
-      "prepared",
-      "installed",
-      "issued",
-      "running",
-      "held",
-      "aborted",
-    ]),
+    phase: z.enum(["exchange", "control", "installed", "issued", "running", "held", "aborted"]),
   })
   .superRefine((record, context) => {
     const valid =
