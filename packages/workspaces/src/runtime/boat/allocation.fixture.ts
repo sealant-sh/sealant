@@ -232,6 +232,8 @@ export class GuestFixture implements BoatGuestTransport {
   readonly actions: string[] = [];
   /** Runs before the health observation readiness starts with. */
   beforeReady: () => Promise<void> = async () => {};
+  /** The agent's health answer in place of the one its launch record gives, when it returns one. */
+  health: () => BoatAgentReply | undefined = () => undefined;
   /** Runs before each launch push is answered. */
   beforeLaunch: () => Promise<void> = async () => {};
   async probe() {
@@ -319,6 +321,8 @@ export class GuestFixture implements BoatGuestTransport {
     const raw = body === undefined ? "" : Redacted.value(body);
     if (route === "health") {
       await this.beforeReady();
+      const answer = this.health();
+      if (answer !== undefined) return answer;
       // Not booted until a launch was accepted: 503 with the agent's health body, as the agent.
       // A Docker launch answers the version 2 body with its service ready.
       const docker = this.launches.some((launch) => launch.version === 2);
