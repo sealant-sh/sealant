@@ -92,4 +92,30 @@ describe("expected-failure markers", () => {
       ),
     ).rejects.toThrow(/UDP slot still reserved/);
   });
+
+  it("tell the release checks whether the body threw, even when a marker excused it", async () => {
+    const seen: boolean[] = [];
+    const record = async (bodyFailed: boolean) => {
+      seen.push(bodyFailed);
+      return [];
+    };
+    await runScenario(undefined, async () => {}, record);
+    await runScenario(
+      SLOW_CLOSE,
+      async () => {
+        throw new Error(terminalTimeout(runtime({ allocation: "deleting" })));
+      },
+      record,
+    );
+    await expect(
+      runScenario(
+        undefined,
+        async () => {
+          throw new Error("step shell: exit 1");
+        },
+        record,
+      ),
+    ).rejects.toThrow(/step shell/);
+    expect(seen).toEqual([false, true, true]);
+  });
 });

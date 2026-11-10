@@ -21,6 +21,7 @@ import {
   assertReleased,
   assertSettled,
   awaitOutcome,
+  cleanStop,
   guestEvidence,
   launch,
   openProject,
@@ -108,7 +109,7 @@ const happyPath = async () => {
     ),
   );
   const stoppedAt = Date.now();
-  await step("Stop", () => first.workspace.stop());
+  await step("Stop", () => cleanStop(first));
   await step("FINAL, deletion and release", async () => {
     await assertSettled(stack, first, stoppedAt, { terminal: ["stopped"] });
     await assertReleased(stack, first, { discard: false });
@@ -129,7 +130,7 @@ const happyPath = async () => {
     expect(await sh(resumed, "cat boat-harness-proof.txt")).toBe(marker);
   });
   const finalAt = Date.now();
-  await step("final Stop", () => resumed.workspace.stop());
+  await step("final Stop", () => cleanStop(resumed));
   await step("final release", async () => {
     await assertSettled(stack, resumed, finalAt, { terminal: ["stopped"] });
     await assertReleased(stack, resumed, { discard: false });
@@ -145,6 +146,39 @@ const happyPath = async () => {
       60_000,
     ),
   );
+};
+
+/** Live VMs and Boat gateway objects on this host, whatever run (or none) they are labelled with. */
+const inventory = async () => {
+  const owned = await stack.ownedObjects();
+  return {
+    vms: stack.boat.liveSandboxes(),
+    gateways: [...owned.containers, ...owned.networks].filter((name) =>
+      name.startsWith("boat-tunnel-"),
+    ),
+  };
+};
+
+/**
+ * Scenarios run one at a time, so after each the whole inventory must empty within 60 s: no live
+ * VM and no gateway, including ones no tracked run is labelled with (a build VM, a VM a recover
+ * path made under a new run, a changed label). A leftover fails the scenario; its VMs are then
+ * removed outside Boat's API so the next scenario starts clean. Returns the leak, if any.
+ */
+const emptyInventory = async (): Promise<string | undefined> => {
+  const empty = await until(
+    "an empty inventory",
+    async () => {
+      const now = await inventory();
+      return now.vms.length === 0 && now.gateways.length === 0 ? true : undefined;
+    },
+    60_000,
+    2000,
+  ).catch(() => false);
+  if (empty) return undefined;
+  const left = await inventory();
+  for (const vm of left.vms) await stack.boat.forceRemove(vm.id);
+  return `inventory not empty 60 s after the scenario (no marker excuses this): live VMs ${left.vms.map((vm) => `${vm.id}:${vm.state}:${vm.labels["sealant-run"] ?? "no run"}`).join(", ") || "none"}; gateway objects ${left.gateways.join(", ") || "none"}`;
 };
 
 /**
@@ -163,12 +197,14 @@ const scenario = (
       : `${name} [${defect.intermittent === true ? "intermittent" : "expected failure"} ${defect.id}: ${defect.title}]`,
     async () => {
       takeLaunched();
-      await runScenario(defect, body, async () => {
+      await runScenario(defect, body, async (bodyFailed) => {
         const leaks: string[] = [];
         for (const run of takeLaunched())
-          await assertReleased(stack, run).catch((error: unknown) => {
+          await assertReleased(stack, run, { bodyFailed }).catch((error: unknown) => {
             leaks.push(`${run.runId}: ${error instanceof Error ? error.message : String(error)}`);
           });
+        const leftOver = await emptyInventory();
+        if (leftOver !== undefined) leaks.push(leftOver);
         return leaks;
       });
     },
@@ -206,7 +242,7 @@ const dockerInTheWorkspace = async () => {
   );
   await step("docker scenario", () => dockerScenario(stack, run, transcript));
   const stoppedAt = Date.now();
-  await step("Stop", () => run.workspace.stop());
+  await step("Stop", () => cleanStop(run));
   await step("FINAL, deletion and release", async () => {
     await assertSettled(stack, run, stoppedAt, { terminal: ["stopped"] });
     await assertReleased(stack, run, { discard: false });

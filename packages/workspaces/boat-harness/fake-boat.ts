@@ -827,6 +827,19 @@ export class FakeBoat {
     return { ...deletion, kind: "sandbox" };
   }
 
+  /**
+   * Removes a VM outside Boat's API: only after a scenario has already failed for leaving it, so
+   * the next scenario starts from an empty inventory.
+   */
+  async forceRemove(id: string): Promise<void> {
+    const sandbox = this.sandboxes.get(id);
+    if (sandbox === undefined || sandbox.removed) return;
+    await this.#docker(["rm", "-f", "-v", sandbox.container]);
+    sandbox.removed = true;
+    sandbox.ip = undefined;
+    this.#record("harness:force-removed", id);
+  }
+
   /** Lets a stuck deletion finish, for scenarios that release a fault mid-way. */
   async completeDeletion(id: string): Promise<void> {
     const sandbox = this.sandboxes.get(id);

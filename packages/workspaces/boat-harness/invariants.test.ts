@@ -70,7 +70,9 @@ const register = (at: number, n = 3): CaptureRegister => ({
 describe("invariants checked after every scenario", () => {
   it("hold for a clean Stop whose FINAL head was registered before the delete", async () => {
     const { stack, run } = world({ registers: [register(1400, 2), register(1500)] });
-    await expect(assertInvariants(stack, run, { discarded: false })).resolves.toBeUndefined();
+    await expect(assertInvariants(stack, run, { discarded: false })).resolves.toEqual({
+      final: "checked",
+    });
   });
 
   it("fail when the delete came before the FINAL head, or Core's FINAL never completed", async () => {
@@ -93,19 +95,31 @@ describe("invariants checked after every scenario", () => {
   it("accept a resumed run's FINAL with nothing new: its head registered earlier, or none", async () => {
     for (const input of [{ registers: [register(500)] }, { drain: { head_n: null } }]) {
       const { stack, run } = world(input);
-      await expect(assertInvariants(stack, run, { discarded: false })).resolves.toBeUndefined();
+      await expect(assertInvariants(stack, run, { discarded: false })).resolves.toEqual({
+        final: "checked",
+      });
     }
   });
 
-  it("do not require a FINAL of a failed launch or an owner's discard", async () => {
-    const failed = world({ row: { error_code: "launch-retained", stop_reason: null } });
-    await expect(
-      assertInvariants(failed.stack, failed.run, { discarded: false }),
-    ).resolves.toBeUndefined();
+  it("say why the FINAL check did not apply, never pass it silently", async () => {
+    // The review's probes: no stop reason with an incomplete drain, and an expired run. These are
+    // skips the caller sees; `assertReleased` fails one for a launch its scenario stopped cleanly.
+    for (const [input, reason] of [
+      [{ row: { stop_reason: null }, drain: { complete: "false" } }, "stop_reason null"],
+      [{ row: { stop_reason: "expired" } }, 'stop_reason "expired"'],
+      [{ row: { error_code: "launch-retained" } }, 'error_code "launch-retained"'],
+      [{ events: [] }, "Boat was never asked to delete its VM"],
+    ] as const) {
+      const { stack, run } = world(input);
+      await expect(assertInvariants(stack, run, { discarded: false })).resolves.toEqual({
+        final: "skipped",
+        reason,
+      });
+    }
     const discarded = world({});
     await expect(
       assertInvariants(discarded.stack, discarded.run, { discarded: true }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ final: "skipped", reason: "released by the owner's discard" });
   });
 
   it("fail when one run ever had two VMs, whatever else happened", async () => {

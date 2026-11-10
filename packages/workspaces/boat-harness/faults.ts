@@ -13,6 +13,7 @@ import type { FakeBoatFaults, FakeSandbox } from "./fake-boat.js";
 import {
   assertSettled,
   awaitOutcome,
+  cleanStop,
   guestEvidence,
   launch,
   runtimeView,
@@ -70,7 +71,7 @@ export const readyThenStop = async (stack: HarnessStack, project: Project): Prom
       `launch ended ${outcome.status} with ${JSON.stringify(outcome.view)}; guest: ${await guestEvidence(stack, run.runId)}`,
     );
   const stoppedAt = Date.now();
-  await run.workspace.stop();
+  await cleanStop(run);
   await assertSettled(stack, run, stoppedAt, { terminal: ["stopped"] });
   return run;
 };
@@ -190,7 +191,7 @@ export const scenarios = {
             `launch ended ${outcome.status} with ${JSON.stringify(outcome.view)}; guest: ${await guestEvidence(stack, run.runId)}`,
           );
         const at = Date.now();
-        await run.workspace.stop();
+        await cleanStop(run);
         await assertSettled(stack, run, at, { terminal: ["stopped"] });
       },
     );
@@ -330,7 +331,7 @@ export const scenarios = {
             `launch became ready after the gateway crash, but db:5432 is unreachable: ${reached.stderr.slice(-500)}`,
           );
         const stoppedAt = Date.now();
-        await run.workspace.stop();
+        await cleanStop(run);
         await assertSettled(stack, run, stoppedAt, { terminal: ["stopped"] });
       },
     );
@@ -390,7 +391,7 @@ export const scenarios = {
         await killed;
         if (outcome.status === "ready") {
           const at = Date.now();
-          await run.workspace.stop();
+          await cleanStop(run);
           await assertSettled(stack, run, at, { terminal: ["stopped"] });
         } else await assertSettled(stack, run, outcome.at);
       },

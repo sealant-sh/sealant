@@ -12,7 +12,7 @@ import { z } from "zod";
 
 import { boatTunnelName } from "../src/resources/boat-tunnel.js";
 import type { FakeBoatEvent, FakeSandbox } from "./fake-boat.js";
-import type { CaptureSession, CaptureState, HarnessStack } from "./stack.js";
+import { QueryError, type CaptureSession, type CaptureState, type HarnessStack } from "./stack.js";
 
 export const POSTGRES_IMAGE =
   "postgres:17-alpine@sha256:eee6c6e1b0894fa4fe0075eb054af9fd1cf39a35321c2d4110626cfe506411fb";
@@ -187,6 +187,7 @@ export const until = async <T>(
       const value = await probe();
       if (value !== undefined) return value;
     } catch (error) {
+      if (error instanceof QueryError) throw error;
       last = error;
     }
     if (Date.now() > deadline)
@@ -298,29 +299,63 @@ const TERMINAL: ReadonlySet<WorkspaceStatus> = new Set(["stopped", "failed"]);
 export const assertReleased = async (
   stack: HarnessStack,
   run: Launch,
-  options: { readonly discard?: boolean } = {},
+  options: {
+    /** Give the owner's discard after a minute; false for a scenario's own release step. */
+    readonly discard?: boolean;
+    /** The scenario body already failed: a discard is cleanup for the next scenario. */
+    readonly bodyFailed?: boolean;
+  } = {},
 ): Promise<void> => {
   const started = Date.now();
-  let discarded = false;
+  let discarded: { readonly status: string; readonly problems: readonly string[] } | undefined;
   let last = { status: "", problems: [""] };
   for (;;) {
     const status = await run.workspace.status();
     const problems = await leftovers(stack, run, await runtimeView(stack, run.runId));
     last = { status, problems };
     if (TERMINAL.has(status) && problems.length === 0) {
-      await assertInvariants(stack, run, { discarded });
+      const checked = await assertInvariants(stack, run, { discarded: discarded !== undefined });
+      if (cleanStops.has(run.runId) && checked.final === "skipped")
+        throw new Error(
+          `invariant not checked (no marker excuses this): run ${run.runId} was stopped cleanly by its scenario, but its FINAL check was skipped: ${checked.reason}`,
+        );
+      // A passing scenario whose launch needed the owner's discard to release left it behind.
+      if (discarded !== undefined && options.bodyFailed !== true)
+        throw new Error(
+          `left behind (no marker excuses this): run ${run.runId} released only after the owner's discard; 60 s after the scenario it was ${discarded.status} with ${discarded.problems.join("; ") || "nothing else"}`,
+        );
       return;
     }
-    if (options.discard !== false && !discarded && Date.now() - started > 60_000) {
-      discarded = true;
+    if (options.discard !== false && discarded === undefined && Date.now() - started > 60_000) {
+      discarded = { status, problems };
+      process.stderr.write(
+        `[boat-harness] owner discard for run ${run.runId}: ${status}; ${problems.join("; ") || "nothing else"}${options.bodyFailed === true ? " (the scenario already failed)" : ""}\n`,
+      );
       await run.workspace.stop({ discardUnsaved: true }).catch(() => undefined);
     }
     if (Date.now() - started > 5 * 60_000)
       throw new Error(
-        `left behind (no marker excuses this): public status ${last.status}${discarded ? " after an owner discard" : ""}; ${last.problems.join("; ") || "nothing else"}; runtime ${JSON.stringify(await runtimeView(stack, run.runId))}`,
+        `left behind (no marker excuses this): public status ${last.status}${discarded === undefined ? "" : " after an owner discard"}; ${last.problems.join("; ") || "nothing else"}; runtime ${JSON.stringify(await runtimeView(stack, run.runId))}`,
       );
     await new Promise((done) => setTimeout(done, 3000));
   }
+};
+
+/** Whether the FINAL invariant ran for a launch, or why it did not apply. */
+export type FinalCheck =
+  | { readonly final: "checked" }
+  | { readonly final: "skipped"; readonly reason: string };
+
+/** Launches a scenario stopped itself after they were ready: their FINAL check must run. */
+const cleanStops = new Set<string>();
+
+/**
+ * The owner's Stop of a ready launch. `assertReleased` then fails if the FINAL invariant did not
+ * run for it, so a change to who writes the stop columns cannot make the check skip silently.
+ */
+export const cleanStop = async (run: Launch): Promise<void> => {
+  cleanStops.add(run.runId);
+  await run.workspace.stop();
 };
 
 /**
@@ -342,7 +377,7 @@ export const assertInvariants = async (
     readonly capture: { readonly state: () => Promise<Pick<CaptureState, "registers">> };
   },
   options: { readonly discarded: boolean },
-): Promise<void> => {
+): Promise<FinalCheck> => {
   const vms = [...stack.boat.sandboxes.values()].filter(
     (sandbox) => sandbox.labels["sealant-run"] === run.runId,
   );
@@ -351,12 +386,17 @@ export const assertInvariants = async (
       `invariant broken (no marker excuses this): run ${run.runId} had ${vms.length} VMs (${vms.map((vm) => vm.id).join(", ")}); a run has at most one`,
     );
   const view = await runtimeView(stack, run.runId);
-  if (options.discarded || view.stop_reason !== "user" || view.error_code !== null) return;
+  if (options.discarded) return { final: "skipped", reason: "released by the owner's discard" };
+  if (view.stop_reason !== "user")
+    return { final: "skipped", reason: `stop_reason ${JSON.stringify(view.stop_reason)}` };
+  if (view.error_code !== null)
+    return { final: "skipped", reason: `error_code ${JSON.stringify(view.error_code)}` };
   const ids = new Set(vms.map((vm) => vm.id));
   const deletedAt = stack.boat.events.find(
     (event) => event.kind === "delete" && ids.has(event.sandboxId ?? ""),
   )?.at;
-  if (deletedAt === undefined) return;
+  if (deletedAt === undefined)
+    return { final: "skipped", reason: "Boat was never asked to delete its VM" };
   // Core recorded the FINAL drain complete before it asked Boat to delete; when that FINAL names a
   // head, the channel answered that register before the delete too. Heads only grow on a session,
   // so the number also covers a head a resumed run restored and left unchanged (no new register).
@@ -384,6 +424,7 @@ export const assertInvariants = async (
     throw new Error(
       `invariant broken (no marker excuses this): run ${run.runId} was stopped cleanly, but no FINAL was captured before Boat was asked to delete ${[...ids].join(", ")} at ${new Date(deletedAt).toISOString()}; Core's drain ${JSON.stringify(status ?? null)}; registers ${JSON.stringify(registers.filter((register) => register.at >= run.startedAt))}`,
     );
+  return { final: "checked" };
 };
 
 /** The guest's answers through the hosted proxy for a run's VMs, newest last. */

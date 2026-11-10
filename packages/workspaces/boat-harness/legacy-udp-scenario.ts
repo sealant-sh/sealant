@@ -5,7 +5,14 @@
  */
 import { expect } from "vitest";
 
-import { assertSettled, awaitOutcome, guestEvidence, launch, type Project } from "./scenario.js";
+import {
+  assertSettled,
+  awaitOutcome,
+  cleanStop,
+  guestEvidence,
+  launch,
+  type Project,
+} from "./scenario.js";
 import type { HarnessStack } from "./stack.js";
 
 export const legacyUdpTunnel = async (stack: HarnessStack, project: Project) => {
@@ -34,7 +41,7 @@ export const legacyUdpTunnel = async (stack: HarnessStack, project: Project) => 
       ),
     ).toBe(false);
     const stoppedAt = Date.now();
-    await run.workspace.stop();
+    await cleanStop(run);
     await assertSettled(stack, run, stoppedAt, { terminal: ["stopped"] });
   } finally {
     await stack.restartWorker();

@@ -109,15 +109,24 @@ never `retained`) within 60 s (`assertSettled`).
 
 Then, after every scenario and whatever it did, each launch it made must be released
 (`assertReleased`): the workspace terminal, and the UDP slot, publication pin, VM and gateway gone.
-A launch Core keeps (`retained`) gets the owner's discard after a minute, as Mend would give it, and
-must then release too. No marker excuses a failure here.
+Each owner's discard is logged. A launch still not released after a minute gets the owner's discard
+only to clean up after a scenario whose body already failed; in a passing scenario, a launch that
+needed the discard to release is a leak, and the scenario fails. No marker excuses a failure here.
+
+Then the whole inventory must empty within 60 s: no live VM in the fake Boat and no `boat-tunnel-*`
+container or network, whatever run they are labelled with (a build VM, a VM a recover path made
+under a new run id, a changed label). Scenarios run one at a time, so this is exact. A leftover
+fails the scenario, and its VMs are then removed outside Boat's API so the next scenario starts
+clean.
 
 Two invariants are checked in the same place, for every launch: a run never had two VMs, and a Stop
 that ended cleanly (the owner's Stop, no error, no discard) captured its FINAL before the fake Boat
-was asked to delete the VM. That is: Core recorded the FINAL drain complete before the fake Boat
-recorded the delete, and the capture channel answered the head that FINAL names (if any; a resumed
-run with no changes names its restored head or none) before it too. The capture channel's proxy
-records when each `capture.register` was answered.
+was asked to delete the VM. Every Stop a scenario makes of a ready launch goes through `cleanStop`,
+and for those launches a skipped FINAL check fails the scenario, so a change to who writes the stop
+columns cannot turn the check off silently. That is: Core recorded the FINAL drain complete before
+the fake Boat recorded the delete, and the capture channel answered the head that FINAL names (if
+any; a resumed run with no changes names its restored head or none) before it too. The capture
+channel's proxy records when each `capture.register` was answered.
 
 A scenario that hits a known defect on main is an expected failure (`defects.ts`, `markers.ts`). A
 marker names the failure: where the scenario fails and what the runtime row says (on the happy path,

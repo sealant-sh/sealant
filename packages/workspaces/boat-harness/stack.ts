@@ -61,6 +61,14 @@ export interface CaptureRegister {
   readonly sealRecorded: boolean;
 }
 
+/**
+ * Core's database refused a harness query (e.g. a table or column a change dropped). Waits fail at
+ * once on it rather than retrying until their timeout.
+ */
+export class QueryError extends Error {
+  override readonly name = "QueryError";
+}
+
 /** Worker environment overrides; `undefined` removes a variable. */
 export type WorkerOverrides = Readonly<Record<string, string | undefined>>;
 
@@ -487,7 +495,13 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
         sql,
       ]);
     const query = async (sql: string): Promise<unknown[]> => {
-      const out = (await psql(`select coalesce(json_agg(t), '[]'::json) from (${sql}) t`)).trim();
+      const out = (
+        await psql(`select coalesce(json_agg(t), '[]'::json) from (${sql}) t`).catch(
+          (error: unknown) => {
+            throw new QueryError(error instanceof Error ? error.message : String(error));
+          },
+        )
+      ).trim();
       const rows: unknown = JSON.parse(out);
       return Array.isArray(rows) ? rows : [];
     };

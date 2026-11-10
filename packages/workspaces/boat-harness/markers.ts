@@ -77,15 +77,25 @@ export const expectDefect = async (defect: Defect, body: () => Promise<void>): P
 export const runScenario = async (
   defect: Defect | undefined,
   body: () => Promise<void>,
-  releaseChecks: () => Promise<readonly string[]>,
+  /** Told whether the body threw, even when a marker excused it: then a discard is cleanup. */
+  releaseChecks: (bodyFailed: boolean) => Promise<readonly string[]>,
 ): Promise<void> => {
   let failure: unknown;
+  let threw = false;
+  const tracked = async () => {
+    try {
+      await body();
+    } catch (error) {
+      threw = true;
+      throw error;
+    }
+  };
   try {
-    await (defect === undefined ? body() : expectDefect(defect, body));
+    await (defect === undefined ? tracked() : expectDefect(defect, tracked));
   } catch (error) {
     failure = error;
   }
-  const leaks = await releaseChecks();
+  const leaks = await releaseChecks(threw);
   if (failure !== undefined) {
     if (leaks.length > 0 && failure instanceof Error)
       failure.message = `${failure.message}\nand left behind: ${leaks.join("\n")}`;
