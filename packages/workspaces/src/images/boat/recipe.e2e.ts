@@ -12,7 +12,65 @@ import { NATIVE_RUNTIME_PIN } from "./runtime-bundle.js";
 
 const run = promisify(execFile);
 
-it("resolves the project's Ubuntu catalog packages inside the actual native bootstrap root", async () => {
+/**
+ * Where apt reads Ubuntu 24.04 from: the image's own archive first, then a full mirror of it. A
+ * mirror carries the same suites (noble, -updates, -security) and components, so what resolves
+ * there is what the archive resolves: the proof is unchanged, only the host it downloads from.
+ */
+const UBUNTU_ARCHIVES = [
+  "http://archive.ubuntu.com/ubuntu",
+  "http://mirrors.edge.kernel.org/ubuntu",
+] as const;
+const ARCHIVE_PROBE_MS = 20_000;
+
+/** The first archive that serves noble's release file in time, or why none did. */
+const reachableArchive = async (): Promise<
+  { readonly ok: true; readonly url: string } | { readonly ok: false; readonly reason: string }
+> => {
+  const failures: string[] = [];
+  for (const url of UBUNTU_ARCHIVES) {
+    try {
+      const response = await fetch(`${url}/dists/noble/InRelease`, {
+        method: "HEAD",
+        signal: AbortSignal.timeout(ARCHIVE_PROBE_MS),
+      });
+      if (response.ok) return { ok: true, url };
+      failures.push(`${new URL(url).host}: HTTP ${String(response.status)}`);
+    } catch (error) {
+      const cause = error instanceof Error && error.cause instanceof Error ? error.cause : error;
+      failures.push(
+        `${new URL(url).host}: ${cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause)}`,
+      );
+    }
+  }
+  return { ok: false, reason: failures.join("; ") };
+};
+
+it("resolves the project's Ubuntu catalog packages inside the actual native bootstrap root", async ({
+  annotate,
+  skip,
+}) => {
+  const archive = await reachableArchive();
+  if (!archive.ok) {
+    // An outage of Ubuntu's archive and its mirror says nothing about the recipe: skipped, never
+    // passed, and said where CI shows it.
+    const note = `skipped: Ubuntu archive unreachable (${archive.reason})`;
+    process.stdout.write(
+      process.env["GITHUB_ACTIONS"] === "true"
+        ? `::warning title=recipe.e2e::${note}\n`
+        : `${note}\n`,
+    );
+    return skip(note);
+  }
+  const sources =
+    archive.url === UBUNTU_ARCHIVES[0]
+      ? []
+      : [
+          // The image's deb822 sources name the archive and the security host; both move.
+          `sed -i -e 's|http://archive.ubuntu.com/ubuntu|${archive.url}|g' -e 's|http://security.ubuntu.com/ubuntu|${archive.url}|g' /etc/apt/sources.list.d/ubuntu.sources`,
+        ];
+  if (sources.length > 0)
+    await annotate(`Ubuntu archive unreachable; resolved from ${archive.url}`);
   const base = createWorkspaceBuildSpec();
   const spec = newWorkspaceSchema.parse({
     ...base,
@@ -82,6 +140,7 @@ it("resolves the project's Ubuntu catalog packages inside the actual native boot
         "/bin/bash",
         "-ceu",
         [
+          ...sources,
           "apt-get update",
           agentPackages,
           apt.replace("apt-get install -y", "apt-get --simulate install"),
@@ -96,4 +155,4 @@ it("resolves the project's Ubuntu catalog packages inside the actual native boot
   } finally {
     await run("docker", ["rm", "--force", name], { timeout: 30_000 });
   }
-}, 270_000);
+}, 310_000);
