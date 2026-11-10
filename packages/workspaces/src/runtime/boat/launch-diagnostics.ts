@@ -20,7 +20,10 @@ const URL_PATTERN = /\b(https?|wss?|ssh|git):\/\/(?:[^\s/?#<>"'@]*@)?([^\s/?#<>"
  */
 const safeGuestOutput = (raw: string): string => {
   const text = safeCommandTail(
-    raw.replace(URL_PATTERN, (_url, scheme: string, host: string) => `[url ${scheme} ${host}]`),
+    // JSON serializers may escape `/` as `\/`; unescape first so such a URL loses its query too.
+    raw
+      .replaceAll("\\/", "/")
+      .replace(URL_PATTERN, (_url, scheme: string, host: string) => `[url ${scheme} ${host}]`),
   )
     .trim()
     .split("\n")
@@ -39,10 +42,20 @@ const safeGuestOutput = (raw: string): string => {
  */
 export const boatGuestOutput = (raw: string, secrets: readonly string[]): string => {
   let text = raw;
-  for (const secret of [...new Set(secrets)]
+  // A daemon may print a value as it is, JSON-escaped (with or without `\/`), or base64-encoded.
+  const forms = [...new Set(secrets)]
     .filter((value) => value.length >= MIN_REDACTED_LENGTH)
-    .toSorted((a, b) => b.length - a.length)) {
-    text = text.split(secret).join("[REDACTED]");
+    .flatMap((value) => {
+      const escaped = JSON.stringify(value).slice(1, -1);
+      return [
+        value,
+        escaped,
+        escaped.replaceAll("/", "\\/"),
+        Buffer.from(value).toString("base64").replace(/=+$/, ""),
+      ];
+    });
+  for (const form of [...new Set(forms)].toSorted((a, b) => b.length - a.length)) {
+    text = text.split(form).join("[REDACTED]");
   }
   return text;
 };

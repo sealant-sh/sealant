@@ -92,6 +92,40 @@ describe("Boat launch diagnostics", () => {
     ])
       expect(summary).not.toContain(forbidden);
   });
+  it("removes a secret printed JSON-escaped or base64, and the query of a `\\/`-escaped URL", () => {
+    const secret = 'provider"credential\\0123456789/x';
+    const output = [
+      `invalid configuration value ${JSON.stringify(secret)}`,
+      `escaped ${JSON.stringify(secret).replaceAll("/", "\\/")}`,
+      `encoded ${Buffer.from(secret).toString("base64")}`,
+      String.raw`plan {"url":"https:\/\/capture.example\/get?sig=signature-value"}`,
+    ].join("\n");
+    const diagnostic = boatLaunchDiagnostic(
+      {
+        diagnostic: {
+          step: "readiness",
+          errorClass: "BoatExecutionError",
+          code: "guest-failed",
+          guest: {
+            service: "sealantd",
+            exitCode: 1,
+            outputTail: boatGuestOutput(output, [secret]),
+          },
+        },
+      },
+      "readiness",
+    );
+    const summary = boatLaunchSummary(diagnostic);
+    expect(diagnostic.guest?.outputTail).toContain("[url https capture.example]");
+    for (const forbidden of [
+      "credential",
+      "0123456789",
+      Buffer.from(secret).toString("base64").replace(/=+$/, ""),
+      "signature-value",
+      "/get",
+    ])
+      expect(summary).not.toContain(forbidden);
+  });
   it("bounds the output tail however it is reached, even past an untrusted wrapper", () => {
     const diagnostic = boatLaunchDiagnostic(
       {
