@@ -59,7 +59,8 @@ minutes. CI runs it on pull requests that touch Boat code, nightly, and on deman
   own systemd executable and rewrites `.bashrc` to different bytes of the same length (the sandbox
   ID; Boat's exact substitution is unrecorded).
 - The hosted proxy for `*.on.boat.dev` answers 403 without `_port_auth` and 302 for `_token`. It
-  forwards HTTP and WebSocket to the guest's port 8080.
+  forwards HTTP and WebSocket to the guest's port 8080, a WebSocket as raw bytes after the upgrade.
+  Proxy faults apply to upgrades too, and each upgrade is recorded (`proxy-upgrade <path>`).
 
 Core reaches it without production changes. `preload.mjs`, loaded with `node --import`, sends TLS
 connections for `boat.dev` and `*.on.boat.dev` to the fake on 127.0.0.1 and keeps SNI and
@@ -77,13 +78,21 @@ workspace's own dockerd needs an upper directory that is not itself overlayfs, w
 and a container's root is not. (`vm-probe.sh`'s overlayfs check fails in a twin for the same reason;
 a VM passes it.)
 
+The resource tunnel is carried by default, the production shape for a deployment with no inbound UDP
+path (#540, #542, #543). The worker runs with `SEALANT_BOAT_GATEWAY_RELAY_HOST=127.0.0.1` and no
+`SEALANT_BOAT_GATEWAY_ENDPOINT`. It opens the agent's `/sealant/tunnel` WebSocket through the hosted
+proxy and relays WireGuard to the gateway's port, which is published on 127.0.0.1 only. The happy
+path checks that its tunnel was carried. One scenario, "legacy UDP tunnel", restarts the worker with
+an endpoint and no relay host, so the guest dials the gateway over UDP. That keeps the fallback
+covered.
+
 The networking follows what the guest enforces:
 
 - The twins sit on a 192.0.X.0/24 bridge, because the guest's workspace namespace refuses private
   and special-purpose destinations (`DENIED` in `guest_network.py`).
-- The workspace namespace also refuses the WireGuard endpoint's own address. On Boat the gateway
-  host and Mend's capture endpoint are different addresses, so the gateway endpoint here is the host
-  address of a second, otherwise empty bridge.
+- In the legacy UDP mode, the workspace namespace also refuses the WireGuard endpoint's own address.
+  On Boat the gateway host and Mend's capture endpoint are different addresses, so the gateway
+  endpoint here is the host address of a second, otherwise empty bridge.
 - Each capture channel runs in its own container on the twins' bridge. A host firewall commonly
   drops bridge-to-host connections, and the Docker daemon may not see the checkout (for example
   `ProtectHome`), so the channel ships as an esbuild bundle through `docker cp`.
@@ -186,6 +195,8 @@ That changes what the guest resolves, so CI never sets it.
   quirks, real provisioning times, capacity, rate limits, archive timers, cold restore semantics.
 - What the hosted proxy answers when nothing listens on the port. It is unrecorded; the fake
   answers 502.
+- The real hosted edge's WebSocket behaviour for the carried tunnel: framing, idle timeouts, frame
+  size limits. The fake pipes the upgraded connection's bytes unchanged.
 - Boat's exact sudoers, kernel and module set. The twin shares the host kernel.
 - Mend itself and `boat-live-check`. The SDK and the capture-channel fixture stand in for Mend.
 - VM 131: disk, pruned images, Funnel paths, UDP 40000 to 40015 from Boat, Garage.

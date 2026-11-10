@@ -85,6 +85,16 @@ const happyPath = async () => {
     execution: "running",
     status: "ready",
   });
+  await step("tunnel carried over the agent's WebSocket", async () => {
+    expect(
+      stack.boat.events.some(
+        (event) =>
+          event.kind === "proxy-upgrade" &&
+          event.sandboxId === view.sandbox &&
+          event.detail === "/sealant/tunnel",
+      ),
+    ).toBe(true);
+  });
   await step("shell", async () => {
     expect((await sh(first, "id -un")).trim()).not.toBe("");
   });
@@ -220,11 +230,13 @@ describe("one fault per step", () => {
   fault("agent answers 503 on launch", scenarios.agentRefuses(503));
   fault("gateway dnsmasq starts 8 s late", scenarios.gatewaySlow);
   fault("gateway crashes before the guest joins", scenarios.gatewayCrashes);
-  fault("UDP to the gateway blocked", scenarios.udpBlocked);
+  fault("tunnel carrier refused", scenarios.carrierRefused);
   fault("db stopped by a person", scenarios.resourceStopped);
   fault("worker killed after bind", scenarios.workerKilled);
   fault("Stop after the launch", scenarios.stopAfterLaunch);
   fault("deletion stuck in processing", scenarios.deletionStuck);
+  // Restarts the worker in the legacy UDP mode, and back to the default when it ends.
+  fault("legacy UDP tunnel", scenarios.legacyUdpTunnel);
 });
 
 // Last: it restarts the worker with automatic parking on, and back off when it ends.

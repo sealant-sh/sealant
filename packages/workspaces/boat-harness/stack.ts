@@ -54,6 +54,9 @@ export interface CaptureState {
   readonly refusedUploads: number;
 }
 
+/** Worker environment overrides; `undefined` removes a variable. */
+export type WorkerOverrides = Readonly<Record<string, string | undefined>>;
+
 export interface CaptureSession {
   readonly endpoint: string;
   readonly token: string;
@@ -77,8 +80,14 @@ export interface HarnessStack {
   readonly scratch: string;
   readonly network: string;
   readonly hostIp: string;
-  /** The WireGuard endpoint the guests dial: a host address of its own (see `startStack`). */
+  /**
+   * The WireGuard endpoint a guest dials in the legacy UDP mode: a host address of its own (see
+   * `startStack`). By default the worker carries every tunnel over the agent's HTTPS WebSocket
+   * (`SEALANT_BOAT_GATEWAY_RELAY_HOST`), and no guest dials this.
+   */
   readonly gatewayEndpoint: string;
+  /** Worker overrides for the legacy UDP mode: guests dial `gatewayEndpoint`, nothing is carried. */
+  readonly legacyUdpTunnel: Readonly<Record<string, string | undefined>>;
   readonly databaseUrl: string;
   readonly boat: FakeBoat;
   /** Opens a capture session channel (Mend's role) for one worktree, closed with the stack. */
@@ -100,9 +109,9 @@ export interface HarnessStack {
   /** Everything labelled with this run, Core's objects included (see `bin/docker`). */
   readonly ownedObjects: () => Promise<LabelledObjects>;
   /** Starts the worker, optionally with environment overrides (e.g. another gateway image). */
-  readonly startWorker: (overrides?: Readonly<Record<string, string>>) => Promise<void>;
+  readonly startWorker: (overrides?: WorkerOverrides) => Promise<void>;
   /** Stops the worker as a deploy would (SIGTERM), then starts it with these overrides. */
-  readonly restartWorker: (overrides?: Readonly<Record<string, string>>) => Promise<void>;
+  readonly restartWorker: (overrides?: WorkerOverrides) => Promise<void>;
   /** The gateway image digest the worker was started with. */
   readonly gatewayImage: string;
   readonly stop: () => Promise<void>;
@@ -431,10 +440,11 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
     const { range: subnet, host: hostIp } = await bridge(network);
     // Runs after the worker and API stop. Core's objects carry the label too (`bin/docker`).
     cleanups.push(() => removeLabelled(label, { images: true }));
-    // The guest refuses workspace egress to the WireGuard endpoint's address, and on Boat the
-    // gateway host and Mend's capture endpoint are different addresses. Give the gateway endpoint a
-    // host address of its own: the gateway IP of an otherwise unused bridge. Twins reach it through
-    // the host; the gateway publishes its UDP port on every host address.
+    // Legacy UDP mode only. The guest refuses workspace egress to the WireGuard endpoint's address,
+    // and on Boat the gateway host and Mend's capture endpoint are different addresses. Give the
+    // gateway endpoint a host address of its own: the gateway IP of an otherwise unused bridge.
+    // Twins reach it through the host; in that mode the gateway publishes its UDP port on every
+    // host address.
     const edge = `${network}-edge`;
     const { host: gatewayEndpoint } = await bridge(edge);
 
@@ -647,7 +657,10 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       SEALANT_BOAT_API_KEY: credential,
       SEALANT_BOAT_DEPLOYMENT_ID: deploymentId,
       SEALANT_BOAT_GATEWAY_HOST_ID: randomUUID(),
-      SEALANT_BOAT_GATEWAY_ENDPOINT: gatewayEndpoint,
+      // The production shape for a deployment with no inbound UDP path (#540, #542, #543): the
+      // worker carries each tunnel over the agent's WebSocket through the hosted proxy, to the
+      // gateway port published on this address. No guest dials the gateway.
+      SEALANT_BOAT_GATEWAY_RELAY_HOST: "127.0.0.1",
       SEALANT_BOAT_GATEWAY_IMAGE: gatewayImage,
       SEALANT_BOAT_BUILDER_OWNER: randomUUID(),
       SEALANT_BOAT_STATE_DIRECTORY: stateDir,
@@ -666,11 +679,18 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
     });
     const worker = managed("worker");
     const api = managed("api");
-    const startWorker = async (overrides: Readonly<Record<string, string>> = {}) => {
-      launchProcess(worker, ["--enable-source-maps", join(workerDir, "dist/index.js")], workerDir, {
-        ...workerEnv,
-        ...overrides,
-      });
+    const startWorker = async (overrides: WorkerOverrides = {}) => {
+      const env: NodeJS.ProcessEnv = { ...workerEnv };
+      for (const [key, value] of Object.entries(overrides)) {
+        if (value === undefined) delete env[key];
+        else env[key] = value;
+      }
+      launchProcess(
+        worker,
+        ["--enable-source-maps", join(workerDir, "dist/index.js")],
+        workerDir,
+        env,
+      );
     };
     cleanups.push(() => stopProcess(worker, "SIGTERM"));
     cleanups.push(() => stopProcess(api, "SIGTERM"));
@@ -752,6 +772,10 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       network,
       hostIp,
       gatewayEndpoint,
+      legacyUdpTunnel: {
+        SEALANT_BOAT_GATEWAY_ENDPOINT: gatewayEndpoint,
+        SEALANT_BOAT_GATEWAY_RELAY_HOST: undefined,
+      },
       databaseUrl,
       boat,
       openCapture,

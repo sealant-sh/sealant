@@ -97,11 +97,12 @@ export const DEFECTS = {
     "agent answers 503 on launch": undefined,
     "gateway dnsmasq starts 8 s late": undefined,
     "gateway crashes before the guest joins": undefined,
-    "UDP to the gateway blocked": undefined,
+    "tunnel carrier refused": undefined,
     "db stopped by a person": undefined,
     "worker killed after bind": undefined,
     "Stop after the launch": undefined,
     "deletion stuck in processing": undefined,
+    "legacy UDP tunnel": undefined,
   },
 } as const satisfies {
   readonly happyPath: Defect | undefined;

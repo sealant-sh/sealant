@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 import { expect } from "vitest";
 
-import { CACHE_LABEL, HARNESS_LABEL, docker, dockerOk } from "./docker.js";
+import { CACHE_LABEL, docker, dockerOk } from "./docker.js";
 import type { FakeBoatFaults, FakeSandbox } from "./fake-boat.js";
 import {
   assertSettled,
@@ -336,34 +336,59 @@ export const scenarios = {
     );
   },
 
-  /** The WireGuard UDP path from the VM to the gateway is blocked. */
-  async udpBlocked(stack: HarnessStack, project: Project) {
+  /**
+   * The agent refuses the tunnel's WebSocket carrier (`/sealant/tunnel` answers 503 through the
+   * hosted proxy). The carried tunnel never attaches, so the launch must fail with that cause.
+   */
+  async carrierRefused(stack: HarnessStack, project: Project) {
     await withFaults(
       stack,
       {
-        beforeCommand: async (command, sandbox) => {
-          if (!isSession(sandbox) || !BIND.test(command)) return;
-          // From outside the VM, in its network namespace: a guest need not carry nft (the agent's
-          // image does not), and a path blocked on the network is what this fault stands for.
-          await dockerOk([
-            "run",
-            "--rm",
-            "--label",
-            `${HARNESS_LABEL}=${stack.runId}`,
-            "--network",
-            `container:${sandbox.container}`,
-            "--cap-add",
-            "NET_ADMIN",
-            "--entrypoint",
-            "/bin/sh",
-            stack.gatewayImage,
-            "-c",
-            "nft add table inet boat_harness && nft add chain inet boat_harness out '{ type filter hook output priority -100; }' && nft add rule inet boat_harness out udp dport 40000-40015 drop",
-          ]);
-        },
+        proxy: (path, _method, sandbox) =>
+          isSession(sandbox) && path === "/sealant/tunnel"
+            ? { kind: "status", status: 503, body: JSON.stringify({ error: "harness-refused" }) }
+            : undefined,
       },
-      () => failedLaunch(stack, project, { cause: /handshake|tunnel/i }),
+      () => failedLaunch(stack, project, { cause: /carrier|tunnel|handshake/i }),
     );
+    expect(stack.boat.events.some((event) => event.kind === "fault:proxy-status")).toBe(true);
+  },
+
+  /**
+   * The legacy UDP mode, kept so the fallback stays covered: the worker has a public gateway
+   * endpoint and no relay host, so the guest dials the gateway over UDP and nothing is carried.
+   */
+  async legacyUdpTunnel(stack: HarnessStack, project: Project) {
+    await stack.restartWorker(stack.legacyUdpTunnel);
+    try {
+      const run = await launch(stack, project);
+      const outcome = await awaitOutcome(stack, run, 10 * 60_000);
+      if (outcome.status !== "ready")
+        throw new Error(
+          `launch ended ${outcome.status} with ${JSON.stringify(outcome.view)}; guest: ${await guestEvidence(stack, run.runId)}`,
+        );
+      const reached = await run.workspace.exec([
+        "/bin/sh",
+        "-c",
+        "timeout 5 bash -c 'exec 3<>/dev/tcp/db/5432' && echo reached",
+      ]);
+      if (reached.exitCode !== 0)
+        throw new Error(`db:5432 unreachable over the UDP tunnel: ${reached.stderr.slice(-500)}`);
+      const sandbox = outcome.view.sandbox;
+      expect(
+        stack.boat.events.some(
+          (event) =>
+            event.kind === "proxy-upgrade" &&
+            event.sandboxId === sandbox &&
+            event.detail === "/sealant/tunnel",
+        ),
+      ).toBe(false);
+      const stoppedAt = Date.now();
+      await run.workspace.stop();
+      await assertSettled(stack, run, stoppedAt, { terminal: ["stopped"] });
+    } finally {
+      await stack.restartWorker();
+    }
   },
 
   /** Run 9's preflight case: a person stopped `db`. The launch must not depend on it. */

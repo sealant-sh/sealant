@@ -1227,10 +1227,22 @@ export class FakeBoat {
     if (route === undefined || route === "upload") return refuse(404, "Not Found");
     const { sandbox, port } = route;
     if (!this.#authorized(request, sandbox)) return refuse(403, "Forbidden");
+    const path = new URL(request.url ?? "/", "https://proxy.invalid").pathname;
+    // The same faults as plain requests: Core's tunnel carrier is a WebSocket through this proxy.
+    const fault = this.faults.proxy?.(path, "GET", sandbox);
+    if (fault !== undefined) {
+      this.#record(`fault:proxy-${fault.kind}`, sandbox.id, `upgrade ${path}`);
+      if (fault.kind === "destroy") {
+        socket.destroy();
+        return;
+      }
+      return refuse(fault.status, "Refused");
+    }
     if (sandbox.ip === undefined)
       return refuse(this.options.closedPortStatus ?? 502, "Bad Gateway");
     const upstream = net.connect({ host: sandbox.ip, port });
     upstream.once("connect", () => {
+      this.#record("proxy-upgrade", sandbox.id, path);
       const lines = [`${request.method} ${request.url} HTTP/1.1`];
       for (let index = 0; index < request.rawHeaders.length; index += 2) {
         const key = request.rawHeaders[index] ?? "";
