@@ -1,8 +1,8 @@
 /**
  * The workspace's own Docker on Boat (`tooling.services.docker.enabled`): a root dockerd the agent
  * starts in the VM, driven as the owner's person through the SDK exec path. Runs hello-world, a
- * build, a compose service that reaches the project's `db` through the tunnel, checks what a
- * container may and may not reach, builds a two-stage Node image with `npm ci`, and records the
+ * build, a compose service that reaches the project's `db` through the tunnel, checks a container
+ * reaches the Internet, builds a two-stage Node image with `npm ci`, and records the
  * VM's and the session's peak memory and task counts so a VM size can be judged. Also runs the
  * image's `vm-probe.sh` in the twin, as root, and keeps its output.
  *
@@ -211,7 +211,10 @@ export const nodeApp = async () => {
   }
 };
 
-/** Runs the image's VM probe in the twin as root, with the host-network container pass. */
+/**
+ * Runs the image's VM probe in the twin as root, with its container pass. Recorded, not asserted:
+ * the probe's kernel section fails in a twin for reasons a VM does not have (an overlayfs root).
+ */
 export const vmProbe = async (vm: FakeSandbox, transcript: Transcript, outFile: string) => {
   const script = join(here, "../boat-image/vm-probe.sh");
   await dockerOk(["cp", script, `${vm.container}:/tmp/vm-probe.sh`]);
@@ -223,7 +226,7 @@ export const vmProbe = async (vm: FakeSandbox, transcript: Transcript, outFile: 
       vm.container,
       "/bin/bash",
       "/tmp/vm-probe.sh",
-      "--host-network-container",
+      "--container",
       "ubuntu:24.04",
     ],
     { timeoutMs: 10 * 60_000 },
@@ -300,7 +303,7 @@ export const dockerScenario = async (
   );
   expect(compose).toMatch(/accepting connections/);
 
-  // Egress: the Internet yes; metadata, the VM itself and the tunnel's endpoint no.
+  // Egress: a container reaches the Internet. (No in-VM network policy since #586.)
   const internet = await asPerson(
     run_,
     transcript,
@@ -308,23 +311,7 @@ export const dockerScenario = async (
     "docker run --rm alpine sh -c 'wget -S -q -O /dev/null https://registry-1.docker.io/v2/ 2>&1 | head -1'",
   );
   expect(internet).toMatch(/HTTP\/1\.[01] \d{3}/);
-  const denied = await asPerson(
-    run_,
-    transcript,
-    "container cannot reach private addresses",
-    [
-      "docker run --rm alpine sh -c '",
-      // The metadata address and the VM's own agent port. (Not the legacy UDP gateway endpoint:
-      // a carried VM is never told it, and to the VM it is just a public host.)
-      "for target in 169.254.169.254:80 " +
-        `${vm.ip ?? "127.0.0.1"}:8080; do ` +
-        "host=${target%:*}; port=${target#*:}; " +
-        'if nc -z -w 3 $host $port 2>/dev/null; then echo "$target reachable"; else echo "$target blocked"; fi; done\'',
-    ].join(""),
-  );
-  expect(denied).not.toContain("reachable");
-  expect(denied.split("\n").filter((line) => line.endsWith("blocked"))).toHaveLength(2);
-  await measure("after hello-world, build, compose and egress checks");
+  await measure("after hello-world, build, compose and egress");
 
   // Limits: a two-stage Node build with `npm ci`, the heaviest ordinary thing a session does.
   const app = await nodeApp();

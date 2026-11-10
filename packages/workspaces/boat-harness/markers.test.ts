@@ -88,9 +88,9 @@ describe("expected-failure markers", () => {
       runScenario(
         undefined,
         async () => {},
-        async () => ["UDP slot still reserved"],
+        async () => ["tunnel slot still reserved"],
       ),
-    ).rejects.toThrow(/UDP slot still reserved/);
+    ).rejects.toThrow(/tunnel slot still reserved/);
   });
 
   it("tell the release checks whether the body threw, even when a marker excused it", async () => {
